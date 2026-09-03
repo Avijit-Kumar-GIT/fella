@@ -1,0 +1,48 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "Fella",
+  "version": "../package.json",
+  "identifier": "dev.fella.app",
+  "build": {
+    "frontendDist": "../build",
+    "devUrl": "http://localhost:1420",
+    "beforeDevCommand": "pnpm dev",
+    "beforeBuildCommand": "pnpm build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Fella",
+        "width": 1080,
+        "height": 760,
+        "minWidth": 560,
+        "minHeight": 400,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: asset: http://asset.localhost; font-src 'self'; connect-src 'self' ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app", "dmg", "deb", "appimage", "nsis", "msi"],
+    "publisher": "Avijit Kumar",
+    "category": "Utility",
+    "copyright": "Copyright © 2026 Avijit Kumar",
+    "licenseFile": "../LICENSE",
+    "shortDescription": "Ask questions about your own files.",
+    "longDescription": "A small local-first desktop app for personal analytics. Point it at a folder of your own files and ask questions in plain language. Every answer is deterministic computation and shows its working.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "10.15"
+    }
+  }
+}

@@ -1,0 +1,54 @@
+node_modules
+
+# Output
+.output
+.vercel
+.netlify
+.wrangler
+/.svelte-kit
+/build
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+.env.*
+
+# Credentials / temp (never committed; the app writes these to the OS data dir)
+auth.json
+auth.json.tmp
+*.tmp
+
+# Vite
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
+
+# Rust / Tauri
+/src-tauri/target
+/src-tauri/gen/schemas
+
+# Local databases / app state
+*.db
+*.sqlite
+*.sqlite3
+*.duckdb
+
+# Logs
+*.log
+
+# Local scratch data used while developing
+/demo-data
+
+# Personal notes
+/STUDY.md
+
+# Local tooling / editor / AI-assistant config (not part of the project)
+/.vscode
+/.idea
+/.agents
+/.claude
+/CLAUDE.md
+/skills-lock.json
+

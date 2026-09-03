@@ -1,0 +1,99 @@
+[package]
+name = "fella"
+version = "0.1.0"
+description = "Ask questions about your own files"
+authors = ["Avijit Kumar and contributors"]
+license = "MIT"
+edition = "2021"
+rust-version = "1.88"   # the `mcp` feature pulls `rmcp`, which needs 1.88
+
+[lib]
+name = "fella_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+# The shipped desktop app builds with these on; all are removable. The data
+# engine is SQLite; `--features duckdb` swaps in DuckDB (Parquet, big files).
+default = ["pdf", "xlsx", "mcp"]
+pdf = ["dep:pdf-extract"]           # PDF text extraction (~28 crates)
+xlsx = ["dep:calamine"]             # Excel ingest (~8 crates)
+# MCP connector packs (`mcp` pack kind). `rmcp` client + the pluggable
+# Streamable-HTTP transport (we supply the reqwest 0.13 backend, so this does
+# NOT pull reqwest 0.12 / quinn). ~10 small crates, ~12s cold build. In the
+# shipped app; `--no-default-features` drops it and connector packs then say
+# "this build has no connector support".
+mcp = ["dep:rmcp", "dep:sse-stream", "dep:futures", "dep:bytes", "tokio/sync"]
+# Opt-in "power" build: swap the SQLite data engine for DuckDB adds Parquet,
+# faster queries on large files, ~30 MB, ~15 min cold build.
+duckdb = ["dep:duckdb"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-log = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+log = "0.4"
+thiserror = "2"
+anyhow = "1"
+rusqlite = { version = "0.40.2", features = ["bundled", "window"] }
+csv = "1"
+walkdir = "2.5.0"
+regex = "1"
+reqwest = { version = "0.13.4", default-features = false, features = ["json", "stream", "rustls-no-provider"] }
+futures-util = { version = "0.3", default-features = false }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+ring = "0.17"
+async-trait = "0.1.92"
+nix = { version = "0.31.3", features = ["resource"] }
+tokio = { version = "1.53.1", features = ["rt", "time", "macros"] }
+
+# optional
+duckdb = { version = "1.4.0", features = ["bundled"], optional = true }
+calamine = { version = "0.36", optional = true }
+pdf-extract = { version = "0.12.0", optional = true }
+rmcp = { version = "3.1", default-features = false, features = [
+    "client",
+    "transport-streamable-http-client",
+], optional = true }
+sse-stream = { version = "0.2", optional = true }
+futures = { version = "0.3", optional = true }
+bytes = { version = "1", optional = true }
+
+[profile.dev]
+opt-level = 0
+
+# The bundled C engine is slow at opt 0; keep it optimised in dev builds.
+# `debug = false` drops the `-g` flag `cc` would otherwise pass: DuckDB's C++
+# amalgamation debug info is multi-GB per build and useless here (DuckDB is
+# CI-only; Rust code keeps its own symbols).
+[profile.dev.package.libsqlite3-sys]
+opt-level = 2
+debug = false
+[profile.dev.package.libduckdb-sys]
+opt-level = 2
+debug = false
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = "debuginfo"     # drop DWARF (~8 MB) but keep the symbol table so
+                       # cargo-bloat and backtraces still work. Was `false`;
+                       # the deb/AppImage bundler does not strip.
+
+# Not the default. `scripts/measure.sh --min` builds this to report a
+# "smallest possible" binary size.
+[profile.release-min]
+inherits = "release"
+opt-level = "z"
+lto = "fat"
+strip = true
+
+[dev-dependencies]
+tokio = { version = "1.53.1", features = ["macros", "rt", "rt-multi-thread"] }

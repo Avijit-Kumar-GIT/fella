@@ -1,0 +1,357 @@
+/* Fella one hand-written stylesheet. Calm and uncluttered, with room to
+   breathe a lightweight macOS register. Sans for the conversation; monospace
+   only where data lines up (tables, SQL, output, identifiers).
+
+   Tokens come in two groups:
+   - PACK-OVERRIDABLE: a theme pack may replace these (see THEME_TOKEN_KEYS in
+     src/lib/prefs.svelte.ts and src-tauri/src/engine/extensions.rs keep both in
+     sync). All colors, plus --radius and --pad.
+   - FIXED: the type scale, fonts, spacing scale, shadows, radii, motion. Not
+     overridable; changing them would break layout a pack can't reason about.
+
+   Rules of the house:
+   - Monochrome first. Color (--ok / --warn / --err / --link) only carries
+     meaning state, a link, a result and is always paired with a word or shape,
+     never color alone.
+   - Hierarchy comes from type and spacing before borders or fills. Earn a
+     border/surface only for selection, grouping, or a raised layer.
+   - One focus ring: a soft --link glow (:focus-visible below).
+   - One primary action per screen (.pill.primary); everything else is quieter.
+   - Motion is gentle and short, and disappears entirely under
+     prefers-reduced-motion. */
+
+@font-face {
+	font-family: 'Geist';
+	font-weight: 100 900;
+	font-display: swap;
+	src:
+		local('Geist'),
+		url('/fonts/Geist-Variable.woff2') format('woff2-variations');
+}
+@font-face {
+	font-family: 'Geist Mono';
+	font-weight: 100 900;
+	font-display: swap;
+	src:
+		local('Geist Mono'),
+		url('/fonts/GeistMono-Variable.woff2') format('woff2-variations');
+}
+
+:root {
+	/* --- pack-overridable ------------------------------------------------ */
+	/* Warm neutrals with real depth: --bg is the window tint, --bg-raised the
+	   writing surface (they differ now), --bg-inset the recessed fill. */
+	--bg: #fcfcfb;
+	--bg-raised: #ffffff;
+	--bg-inset: #f2f2f0;
+	--border: #e9e8e4;
+	--border-strong: #d7d5d0;
+	--text: #1a1a17;
+	--text-dim: #605e58;
+	/* faint text still carries real content (status line, evidence summary,
+	   completion hints), so it holds WCAG AA (>= 4.5:1 on --bg). */
+	--text-faint: #6c6a63;
+	--accent: #1a1a17;
+	--link: #3a5c8a;
+	--ok: #3f7d3f;
+	--warn: #855800;
+	--err: #b23b3b;
+	--radius: 8px;
+	--pad: 28px;
+
+	/* --- fixed --------------------------------------------------------- */
+	--sans: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+		'Helvetica Neue', Arial, 'Noto Sans', sans-serif;
+	--mono: 'Geist Mono', ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo,
+		Consolas, 'DejaVu Sans Mono', monospace;
+	/* type scale: two small steps for chrome/dense data, two up for headings */
+	--fs: 14px;
+	--fs-sm: 12.5px;
+	--fs-xs: 11.5px;
+	--fs-lg: 15.5px;
+	--fs-xl: 22px;
+	--lh: 1.55;
+
+	/* spacing scale everything vertical/inset should land on one of these */
+	--space-1: 4px;
+	--space-2: 8px;
+	--space-3: 12px;
+	--space-4: 16px;
+	--space-5: 24px;
+	--space-6: 32px;
+
+	--radius-sm: 6px;
+	--radius-chip: 4px;
+
+	/* soft, diffuse, layered the macOS elevation feel */
+	--shadow-sm: 0 1px 2px rgba(20, 20, 26, 0.05), 0 4px 12px rgba(20, 20, 26, 0.06);
+	--shadow-pop: 0 4px 12px rgba(20, 20, 26, 0.08), 0 16px 48px rgba(20, 20, 26, 0.16);
+	--focus-ring: 0 0 0 3px color-mix(in srgb, var(--link) 38%, transparent);
+
+	--dur-fast: 110ms;
+	--dur: 170ms;
+	--ease: cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+@media (prefers-color-scheme: dark) {
+	:root {
+		--bg: #0e0e10;
+		--bg-raised: #17171a;
+		--bg-inset: #1e1e22;
+		--border: #26262a;
+		--border-strong: #37373d;
+		--text: #ededec;
+		--text-dim: #8f8d88;
+		--text-faint: #838079;
+		--accent: #ededec;
+		--link: #8fb0dd;
+		--ok: #7cc07c;
+		--warn: #d8a640;
+		--err: #e06c6c;
+		--shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 12px rgba(0, 0, 0, 0.35);
+		--shadow-pop: 0 4px 12px rgba(0, 0, 0, 0.4), 0 20px 56px rgba(0, 0, 0, 0.55);
+	}
+}
+
+* {
+	box-sizing: border-box;
+}
+
+html,
+body {
+	margin: 0;
+	padding: 0;
+	height: 100%;
+}
+
+body {
+	background: var(--bg);
+	color: var(--text);
+	font-family: var(--sans);
+	font-size: var(--fs);
+	line-height: var(--lh);
+	letter-spacing: -0.006em;
+	-webkit-font-smoothing: antialiased;
+	text-rendering: optimizeLegibility;
+	overflow: hidden;
+}
+
+#app {
+	height: 100%;
+}
+
+a {
+	color: var(--link);
+	text-decoration: none;
+}
+a:hover {
+	text-decoration: underline;
+}
+
+button {
+	font: inherit;
+	color: inherit;
+	background: transparent;
+	border: none;
+	padding: 0;
+	cursor: pointer;
+}
+
+/* Keyboard focus must always be visible one soft --link glow. Components that
+   set `outline: none` still get this when focused by keyboard. */
+:focus-visible {
+	outline: none;
+	box-shadow: var(--focus-ring);
+	border-radius: var(--radius-sm);
+}
+
+/* Gentle, short motion and nothing at all when the OS asks for less. */
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		animation-duration: 0.01ms !important;
+		animation-iteration-count: 1 !important;
+		transition-duration: 0.01ms !important;
+		scroll-behavior: auto !important;
+	}
+}
+
+/* Present for screen readers, off-screen visually. */
+.sr-only {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	margin: -1px;
+	padding: 0;
+	border: 0;
+	overflow: hidden;
+	clip: rect(0 0 0 0);
+	clip-path: inset(50%);
+	white-space: nowrap;
+}
+
+kbd {
+	font-family: var(--mono);
+	font-size: 0.85em;
+	color: var(--text-dim);
+}
+
+::selection {
+	background: color-mix(in srgb, var(--link) 26%, transparent);
+}
+
+/* --- shared primitives -----------------------------------------------------
+   Defined once here so a look isn't re-typed (and quietly drifting) in every
+   component. Components add only what's genuinely local. */
+
+/* A bordered, low-emphasis action button (onboarding CTAs, provider chips). */
+.pill {
+	color: var(--text);
+	background: var(--bg-raised);
+	border: 1px solid var(--border-strong);
+	border-radius: var(--radius-sm);
+	padding: 7px 14px;
+	font: inherit;
+	transition:
+		background var(--dur-fast) var(--ease),
+		border-color var(--dur-fast) var(--ease),
+		box-shadow var(--dur-fast) var(--ease);
+}
+.pill:hover {
+	background: var(--bg-inset);
+}
+.pill:active {
+	transform: translateY(0.5px);
+}
+.pill.ghost {
+	background: transparent;
+	border-color: var(--border);
+	color: var(--text-dim);
+}
+/* The one primary action on a screen filled, not outlined. */
+.pill.primary {
+	background: var(--text);
+	color: var(--bg-raised);
+	border-color: var(--text);
+}
+.pill.primary:hover {
+	background: color-mix(in srgb, var(--text) 88%, var(--bg));
+}
+
+/* A full-width row inside a drop-up / palette list. Selection is marked by the
+   caller with .sel or aria-selected. */
+.rowbtn {
+	width: 100%;
+	display: flex;
+	gap: var(--space-3);
+	align-items: baseline;
+	border: none;
+	background: transparent;
+	padding: var(--space-2) var(--space-3);
+	border-radius: var(--radius-chip);
+	text-align: left;
+	font: inherit;
+	color: var(--text);
+	transition: background var(--dur-fast) var(--ease);
+}
+.rowbtn:hover,
+.rowbtn.sel,
+.rowbtn[aria-selected='true'] {
+	background: var(--bg-inset);
+}
+
+/* "Working" indicator three dots that pulse together. Inherits color. */
+.thinking {
+	display: inline-block;
+	width: 3px;
+	height: 3px;
+	border-radius: 50%;
+	background: currentColor;
+	box-shadow:
+		6px 0 currentColor,
+		-6px 0 currentColor;
+	animation: thinking 1.3s var(--ease) infinite;
+	vertical-align: middle;
+	margin: 0 8px;
+	flex: none;
+}
+@keyframes thinking {
+	0%,
+	70%,
+	100% {
+		opacity: 0.28;
+	}
+	35% {
+		opacity: 1;
+	}
+}
+
+/* Rendered-markdown / evidence blocks: code, pre, and tables share one look.
+   Add class="rich" to the container that holds this content. */
+.rich code {
+	font-family: var(--mono);
+	font-size: 0.92em;
+	background: var(--bg-inset);
+	border-radius: var(--radius-chip);
+	padding: 0.1em 0.35em;
+}
+.rich pre {
+	font-family: var(--mono);
+	font-size: var(--fs-xs);
+	margin: var(--space-1) 0;
+	padding: var(--space-2) var(--space-3);
+	background: var(--bg-inset);
+	border-radius: var(--radius);
+	overflow-x: auto;
+	white-space: pre;
+}
+.rich pre code {
+	background: none;
+	padding: 0;
+	font-size: inherit;
+}
+.rich table {
+	border-collapse: collapse;
+	font-family: var(--mono);
+	font-size: var(--fs-xs);
+	font-variant-numeric: tabular-nums;
+}
+.rich th,
+.rich td {
+	border: 1px solid var(--border);
+	padding: 1px 7px;
+	text-align: left;
+}
+.rich th {
+	background: var(--bg-inset);
+	color: var(--text-dim);
+}
+
+/* Auto-hiding scrollbars invisible until you interact with the scroll area. */
+* {
+	scrollbar-width: thin;
+	scrollbar-color: transparent transparent;
+}
+:hover::-webkit-scrollbar-thumb,
+:focus-within::-webkit-scrollbar-thumb,
+:active::-webkit-scrollbar-thumb {
+	background: var(--border-strong);
+}
+:hover {
+	scrollbar-color: var(--border-strong) transparent;
+}
+*::-webkit-scrollbar {
+	width: 9px;
+	height: 9px;
+}
+*::-webkit-scrollbar-thumb {
+	background: transparent;
+	border-radius: 5px;
+	border: 2px solid transparent;
+	background-clip: padding-box;
+	transition: background var(--dur) var(--ease);
+}
+*::-webkit-scrollbar-track {
+	background: transparent;
+}

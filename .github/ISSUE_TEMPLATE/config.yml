@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Submit or request a pack (theme, skill, MCP connector)
+    url: https://github.com/Avijit-Kumar-GIT/fella-extensions
+    about: Packs are reviewed and listed in the marketplace repo, not here.
+  - name: Questions and ideas
+    url: https://github.com/Avijit-Kumar-GIT/fella/discussions
+    about: For open-ended discussion before it becomes an issue.
