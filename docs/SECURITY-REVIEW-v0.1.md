@@ -20,7 +20,7 @@ Reviewed against commit at branch cut. Re-confirm the checklist items marked
 
 | Destination | When | Where |
 |---|---|---|
-| The configured model provider (`localhost:11434` Ollama by default; or OpenAI / Vercel AI Gateway / xAI / OpenRouter / a custom base URL) | every question, plus a health probe and a warm-up | `engine/llm.rs`, `engine/provider.rs` |
+| The configured model provider (`localhost:11434` Ollama by default; or OpenAI / Vercel AI Gateway / xAI / Ollama Cloud / OpenRouter / a custom base URL) | every question, plus a health probe and a warm-up | `engine/llm.rs`, `engine/provider.rs` |
 | `raw.githubusercontent.com/…/fella-extensions/main/catalog.json` and each pack file it lists | only on `/packs install <id>` | `engine/extensions.rs` (`FELLA_CATALOG_URL` overrides). Every file SHA-256-checked against the catalog before it touches disk. |
 | A user-configured MCP server URL | only when an enabled `mcp` connector pack's tool is called | `engine/mcp.rs` |
 

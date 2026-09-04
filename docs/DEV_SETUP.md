@@ -57,7 +57,7 @@ ollama pull llama3.1  # chat + tool calling
 ollama serve           # if not already running as a service
 ```
 
-### Hosted (Vercel AI Gateway / OpenAI / xAI)
+### Hosted providers
 
 In the app:
 
@@ -74,6 +74,7 @@ In the app:
 | `openai` | API key | `https://api.openai.com/v1` | yes | broadest audience |
 | `vercel` | API key | `https://ai-gateway.vercel.sh/v1` | **yes** | one key → hundreds of models; `creator/model` ids |
 | `xai` | API key | `https://api.x.ai/v1` | **no** | Grok |
+| `ollama-cloud` | API key | `https://ollama.com` | **no** | hosted Ollama models (same wire as local); key from `ollama.com/settings/keys`; no `default_model`, pick with `/model` |
 | `openrouter` | API key | `https://openrouter.ai/api/v1` | **no** | one key → many models; `creator/model` ids (e.g. `google/gemma-2-9b-it:free`); no `default_model`, pick with `/model` |
 | `custom` | API key + your own base URL | set via `/model` | depends | any other OpenAI-compatible endpoint |
 
@@ -104,10 +105,15 @@ with backoff); buying AI Gateway credits raises the limits.
 openrouter` and paste it. Like `vercel` it has **no** `default_model` run
 `/model` after signing in to pick from the live list. No embeddings endpoint.
 
+**Ollama Cloud:** the same wire as local Ollama, just hosted and behind a key.
+Get one from <https://ollama.com/settings/keys>, then `/login ollama-cloud`.
+`/api/tags` with the key lists what your account can run (browse
+`ollama.com/search?c=cloud`); no `default_model`, so pick with `/model`.
+
 **Doc search doesn't need embeddings.** `grep_files`/`read_file` read your
 documents directly no index to build, so document search works the same on
 every provider, including the ones with no embeddings endpoint (`xAI`,
-`OpenRouter`). The `embeddings` column above is still accurate per-provider
+`Ollama Cloud`, `OpenRouter`). The `embeddings` column above is still accurate per-provider
 capability info, just currently unused by any feature (see `docs/DECISIONS.md`,
 2026-08-29).
 

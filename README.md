@@ -66,9 +66,9 @@ Then give Fella a model:
 - **Local, private (default):** install [Ollama](https://ollama.com) and
   `ollama pull llama3.1`. Fella uses it on `localhost:11434` automatically.
 - **Hosted:** on first run type `/login`, pick a provider (Vercel AI Gateway,
-  OpenAI, xAI, OpenRouter, or any OpenAI-compatible endpoint), and paste an API
-  key it's kept in a `0600` file, never the database or the browser. Then
-  `/model` picks the model.
+  OpenAI, xAI, Ollama Cloud, OpenRouter, or any OpenAI-compatible endpoint), and
+  paste an API key it's kept in a `0600` file, never the database or the
+  browser. Then `/model` picks the model.
 
 Everything including questions about your PDFs and notes works on every
 provider (Fella reads documents directly, no embedding step). Builds are
@@ -113,7 +113,7 @@ power-user shortcut; you never need them.
 | `/files` | List detected files and tables |
 | `/schema <name>` | Show a table's columns, types and null rates |
 | `/sql <query>` | Run SQL directly, bypassing the model (still recorded as evidence) |
-| `/login` `/logout` `/auth` | Sign in to a hosted provider (Vercel AI Gateway, OpenAI, xAI, OpenRouter, or a custom OpenAI-compatible endpoint); list what's signed in |
+| `/login` `/logout` `/auth` | Sign in to a hosted provider (Vercel AI Gateway, OpenAI, xAI, Ollama Cloud, OpenRouter, or a custom OpenAI-compatible endpoint); list what's signed in |
 | `/model` | Show or change the LLM provider, base URL and model (for a custom endpoint) |
 | `/reindex` | Check the folder again for new or changed files |
 | `/packs` | Themes and skills you've added. `/packs add <path>` for a local one, `/packs install <id>` from the seed catalog ([`docs/EXTENSIBILITY.md`](docs/EXTENSIBILITY.md)) |

@@ -30,8 +30,8 @@ folder of your own files with deterministic SQL / Python, and shows its working.
 - **Documents** are read directly `grep_files` (regex search) and `read_file`
   (full text). No index, works on every model provider.
 - **Models.** Local Ollama by default (nothing leaves the machine); hosted
-  providers (Vercel AI Gateway, OpenAI, xAI, OpenRouter, any OpenAI-compatible
-  endpoint) via `/login` + a pasted key kept in a `0600` file.
+  providers (Vercel AI Gateway, OpenAI, xAI, Ollama Cloud, OpenRouter, any
+  OpenAI-compatible endpoint) via `/login` + a pasted key kept in a `0600` file.
 - **Packs** opt-in extensions, none bundled: `theme` (colour schemes),
   `skill` (vocabulary/rules fed to the model), and `mcp` (connect a remote data
   source over the Model Context Protocol). Install by id with hash-checked
