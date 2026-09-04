@@ -3,7 +3,7 @@
 # build and puts the app in place. An unofficial convenience the same thing
 # you'd do by hand from https://github.com/Avijit-Kumar-GIT/fella/releases
 #
-#   curl -fsSL https://raw.githubusercontent.com/Avijit-Kumar-GIT/fella/main/scripts/install.sh | sh
+#   curl -fsSL https://lilfella.app/install.sh | sh
 #
 # Experimental: builds are unsigned, and this is not yet smoke-tested on every
 # OS. Read the script before piping it to a shell.

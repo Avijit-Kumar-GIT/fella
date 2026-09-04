@@ -2,7 +2,7 @@
 # runs it. An unofficial convenience the same thing you'd do by hand from
 # https://github.com/Avijit-Kumar-GIT/fella/releases
 #
-#   irm https://raw.githubusercontent.com/Avijit-Kumar-GIT/fella/main/scripts/install.ps1 | iex
+#   irm https://lilfella.app/install.ps1 | iex
 #
 # Experimental: builds are unsigned, and this is not yet smoke-tested on every
 # OS. Read the script before piping it to iex.
