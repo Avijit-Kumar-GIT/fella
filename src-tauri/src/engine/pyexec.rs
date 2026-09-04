@@ -35,16 +35,26 @@ pub struct PyResult {
 
 /// `bridge` is how the generated `sql()` helper reaches the workspace data —
 /// a read-only SQLite file (default), or DuckDB file-reader expressions.
-/// The `PATH` the sandboxed child gets. Extended with the caller's `PATH` so a
-/// Homebrew / Nix / pyenv `python3` (not in `/usr/bin`) is still found; the
-/// resolved interpreter is passed by absolute path, so the availability check
-/// and the spawn can't disagree.
-fn child_path() -> String {
-    let base = "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin";
-    match std::env::var("PATH") {
-        Ok(p) if !p.is_empty() => format!("{base}:{p}"),
-        _ => base.to_string(),
+/// Directories to search for `python3`/`python`, and the `PATH` the sandboxed
+/// child gets: common install locations (a no-op on platforms they don't
+/// apply to) plus the caller's own `PATH`, so a Homebrew / Nix / pyenv /
+/// python.org install not in the OS default path is still found. Built and
+/// read with `join_paths`/`split_paths` the platform list separator (`:` on
+/// Unix, `;` on Windows), never a hardcoded `:` a previous version used `:`
+/// unconditionally, so Python was never found on Windows even when installed
+/// (splitting `C:\Python312\...` on `:` doesn't yield a real directory).
+fn search_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    #[cfg(unix)]
+    dirs.extend(["/usr/bin", "/bin", "/usr/local/bin", "/opt/homebrew/bin"].map(PathBuf::from));
+    if let Some(path) = std::env::var_os("PATH") {
+        dirs.extend(std::env::split_paths(&path));
     }
+    dirs
+}
+
+fn child_path() -> std::ffi::OsString {
+    std::env::join_paths(search_dirs()).unwrap_or_default()
 }
 
 pub fn run(code: &str, bridge: PythonBridge) -> EngineResult<PyResult> {
@@ -129,12 +139,17 @@ pub fn run(code: &str, bridge: PythonBridge) -> EngineResult<PyResult> {
     })
 }
 
-/// First `python3` on `child_path()` that answers `--version`. Returned as an
-/// absolute path so `run()` spawns exactly what it checked.
+/// First `python3` (or `python`) on `search_dirs()` that answers `--version`.
+/// Returned as an absolute path so `run()` spawns exactly what it checked.
 fn resolve_python() -> Option<PathBuf> {
-    for dir in child_path().split(':').filter(|d| !d.is_empty()) {
-        for name in ["python3", "python"] {
-            let cand = PathBuf::from(dir).join(name);
+    let names: &[&str] = if cfg!(windows) {
+        &["python3.exe", "python.exe", "python3", "python"]
+    } else {
+        &["python3", "python"]
+    };
+    for dir in search_dirs() {
+        for name in names {
+            let cand = dir.join(name);
             let ok = Command::new(&cand)
                 .arg("--version")
                 .stdout(Stdio::null())
