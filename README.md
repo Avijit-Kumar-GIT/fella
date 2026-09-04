@@ -36,8 +36,9 @@ by one person. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 - **macOS** 10.15+, **Windows** 10+, or **Linux** with WebKitGTK 4.1
   (`libwebkit2gtk-4.1`, present on current GNOME/KDE desktops).
 - **A model.** A local [Ollama](https://ollama.com) works out of the box and
-  keeps everything on your machine; or bring an API key for a hosted provider
-  (`/login`).
+  keeps everything on your machine; no local machine to run one on? `/login`
+  with [Ollama Cloud](https://ollama.com/settings/keys) for free-tier hosted
+  models. Other providers (`/login`) are there if you want them, usually paid.
 - No account, no sign-up. The app is a single small binary.
 
 ## Install
@@ -65,10 +66,15 @@ Then give Fella a model:
 
 - **Local, private (default):** install [Ollama](https://ollama.com) and
   `ollama pull llama3.1`. Fella uses it on `localhost:11434` automatically.
-- **Hosted:** on first run type `/login`, pick a provider (Vercel AI Gateway,
-  OpenAI, xAI, Ollama Cloud, OpenRouter, or any OpenAI-compatible endpoint), and
-  paste an API key it's kept in a `0600` file, never the database or the
-  browser. Then `/model` picks the model.
+- **Hosted, free:** no local install needed. On first run type `/login`, pick
+  **Ollama Cloud**, and paste an API key from
+  [ollama.com/settings/keys](https://ollama.com/settings/keys) its free tier
+  covers a set of starter models at no cost (1 request at a time; more models
+  and concurrency need paid credits). Then `/model` picks the model.
+- **Hosted, other providers:** Vercel AI Gateway, OpenAI, xAI, OpenRouter, or
+  any OpenAI-compatible endpoint the same way (`/login`), at your discretion
+  these are typically paid per token. An API key is kept in a `0600` file,
+  never the database or the browser, regardless of provider.
 
 Everything including questions about your PDFs and notes works on every
 provider (Fella reads documents directly, no embedding step). Builds are
