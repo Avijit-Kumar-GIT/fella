@@ -575,6 +575,33 @@ display during the RC smoke test** (`docs/RELEASE.md` §1).
 
 ### `agent_bench` baseline
 
-Not captured needs a running Ollama with a pulled model. Run
-`cargo run --release --example agent_bench` against local Ollama during the
-pre-flight and paste the summary table here.
+Captured 2026-09-04 (commit 69d46c4): `provider=ollama-cloud`
+`model=gemma4:31b`, `num_ctx=8192`, `keep_alive=30m`, 3 iterations/question,
+against the fixtures `examples/agent_bench.rs` builds (tiny/medium/large CSVs
++ notes, `agg_large` = 120k rows). Every question resolved in a single
+tool-call round trip and passed full verification; `agg_large` is as fast as
+`agg_tiny` because the model pushes the aggregation into `run_sql` instead of
+reading rows itself.
+
+| question | n | total s | model s | tool s | model calls | tool calls | verif |
+|---|--:|--:|--:|--:|--:|--:|:-:|
+| chitchat | 2 | 2.2 | 2.2 | 0.0 | 1.0 | 0.0 | 1/1 |
+| agg_tiny | 2 | 1.4 | 1.3 | 0.1 | 2.0 | 1.0 | 2/2 |
+| agg_medium | 2 | 1.2 | 1.2 | 0.1 | 2.0 | 1.0 | 2/2 |
+| group_medium | 2 | 1.8 | 1.7 | 0.1 | 2.0 | 1.0 | 2/2 |
+| multi_step | 2 | 1.3 | 1.3 | 0.1 | 2.0 | 1.0 | 2/2 |
+| agg_large (120k rows) | 2 | 1.6 | 1.5 | 0.1 | 2.0 | 1.0 | 2/2 |
+| doc_lookup | 2 | 2.2 | 2.2 | 0.0 | 2.0 | 1.0 | 1/1 |
+
+(`n` = warm iterations averaged; cold-start deltas were all within ±0.9s of
+warm, no meaningful cold penalty at this context size.)
+
+Session-memory follow-up (same conversation, second question reuses the first
+turn's context): turn 1 (fresh) 2.7s, turn 2 (follow-up) 2.7s no measurable
+discount against a hosted cloud model network + inference time dominate over
+the small context-reuse savings visible against a local model.
+
+Run against **local** Ollama still not captured the numbers above are a
+hosted-cloud model over the network, not the "local, private (default)" path
+most users will actually run. Worth a second row here once measured on a real
+machine with local Ollama and a comparable model size.
