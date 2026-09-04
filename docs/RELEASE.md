@@ -46,21 +46,39 @@ repo move it ships from. Not user-facing.
 Run on the current tree; nothing tags until this is green. Record numbers in
 `docs/PERFORMANCE.md` and the sign-off in `docs/SECURITY-REVIEW-v0.1.md`.
 
-- [ ] `cd src-tauri && cargo test --locked` (SQLite default features)
-- [ ] `cargo clippy --all-targets --locked -- -D warnings`
-- [ ] `pnpm run check` 0 / 0 · `pnpm run build`
-- [ ] `cargo audit` + `pnpm audit --prod` clean (or every advisory triaged)
-- [ ] `scripts/measure.sh --build` binary size, crate counts, frontend bundle
+- [x] `cd src-tauri && cargo test --locked` (SQLite default features)
+      — 2026-09-04, commit `cfca646`: 108 tests, 0 failed.
+- [x] `cargo clippy --all-targets --locked -- -D warnings` — clean, 0 warnings.
+- [x] `pnpm run check` 0 / 0 · `pnpm run build` — 199 files, 0 errors/warnings;
+      build ~2s.
+- [x] `cargo audit` + `pnpm audit --prod` clean (or every advisory triaged)
+      — `cargo audit`: 19 unmaintained/unsound/yanked *warnings* on transitive
+      GTK/glib deps, no CVE-level vulnerability; `pnpm audit --prod`: no known
+      vulnerabilities.
+- [x] `scripts/measure.sh --build` binary size, crate counts, frontend bundle
+      — recorded 2026-08-30, commit `67c3508` (`docs/PERFORMANCE.md`).
 - [ ] `pnpm tauri build` on Linux → `.deb` + `.AppImage`; **record each
       installer's size**. Launch the AppImage: open a folder, ask a question
       (local Ollama or a keyed provider), check the evidence fold, the `/login`
       rejected-key path, `/packs add` a local pack, `/model` switch, mid-run
-      stop, tabs + `/focus`.
-- [ ] `cargo run --release --example agent_bench` against a local Ollama
-      capture the first baseline table into `docs/PERFORMANCE.md`.
-- [ ] Static security review written: the four `SECURITY.md` guarantees
+      stop, tabs + `/focus`. **Still open** the `.deb` built cleanly
+      (2026-08-30) but the AppImage has never actually launched here WSLg
+      can't create an EGL display in this shell (`EGL_BAD_PARAMETER`), so the
+      GUI checklist ran instead against the real **Windows** `rc.1`-`rc.3`
+      builds: chat + evidence fold, `run_python`, `run_sql` all exercised (and
+      two real bugs found and fixed this way `run_python`'s Windows PATH
+      parsing, `run_sql`'s over-broad `replace` ban see PRs #5, #6). Not yet
+      exercised on *any* GUI build: `/login` rejected-key path, `/packs add`,
+      `/model` switch, mid-run stop, tabs + `/focus`. Needs either a real
+      Linux display or accepting Windows-only GUI coverage for v0.1.
+- [x] `cargo run --release --example agent_bench` against a local Ollama
+      capture the first baseline table into `docs/PERFORMANCE.md`. — captured
+      2026-09-04 against `ollama-cloud`/`gemma4:31b` (PR #8); **local** Ollama
+      still unmeasured, noted as a gap in `docs/PERFORMANCE.md`.
+- [x] Static security review written: the four `SECURITY.md` guarantees
       re-confirmed against the tree, the egress map, CSP active, the
       `run_python`-is-not-a-sandbox caveat that must appear in the release notes.
+      — `docs/SECURITY-REVIEW-v0.1.md` exists (from the fresh-repo cut).
 
 ## 2. Cut the `fella` repo
 
