@@ -84,4 +84,16 @@ jobs:
           cargo audit --file src-tauri/Cargo.lock
 
       - name: pnpm audit
-        run: pnpm audit --prod
+        shell: bash
+        run: |
+          set +e
+          out=$(pnpm audit --prod 2>&1); rc=$?
+          echo "$out"
+          [ "$rc" -eq 0 ] && exit 0
+          # exit 1 means "found advisories" OR "couldn't reach the registry".
+          # Only fail the (advisory-only) job for a real finding.
+          if echo "$out" | grep -qiE "TimeoutError|ENOTFOUND|ECONNRESET|EAI_AGAIN|ETIMEDOUT|Will retry|socket hang up|request to .* failed"; then
+            echo "::warning::pnpm audit could not reach the npm registry skipped this run."
+            exit 0
+          fi
+          exit "$rc"
