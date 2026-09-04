@@ -177,9 +177,15 @@ pub fn ensure_read_only(sql: &str) -> EngineResult<()> {
         return Err(EngineError::Forbidden("that PRAGMA is not allowed".into()));
     }
 
+    // `replace` (the mutating `REPLACE INTO ...` statement) is deliberately not
+    // listed here: any statement starting with that keyword is already rejected
+    // above by the "must start with SELECT/WITH" check, so banning the bare
+    // token here would only catch the harmless read-only `REPLACE(str, from,
+    // to)` *function* inside a SELECT the standard way to strip currency
+    // formatting (commas, `$`) before CAST/SUM.
     const BANNED: &[&str] = &[
         "attach", "detach", "copy", "install", "load", "export", "import", "vacuum", "reindex",
-        "analyze", "call", "create", "drop", "alter", "insert", "update", "delete", "replace",
+        "analyze", "call", "create", "drop", "alter", "insert", "update", "delete",
         "truncate", "begin", "commit", "rollback", "savepoint", "read_text", "read_blob", "glob",
         // DuckDB file/DB-reading table functions: the catalog builds the views
         // Fella needs; the model never calls these directly, and left open they
@@ -420,5 +426,19 @@ mod tests {
         ] {
             assert!(ensure_read_only(bad).is_err(), "should reject: {bad}");
         }
+    }
+
+    #[test]
+    fn read_only_guard_allows_replace_function_but_rejects_replace_into() {
+        // REPLACE(str, from, to) is a read-only string function the standard
+        // way to strip currency formatting (commas, `$`) before CAST/SUM and
+        // must not be caught by the mutating-statement ban.
+        assert!(ensure_read_only(
+            "SELECT SUM(CAST(REPLACE(amount, ',', '') AS REAL)) FROM t"
+        )
+        .is_ok());
+        // The mutating `REPLACE INTO ...` statement is still rejected because
+        // it fails the "must start with SELECT/WITH" check, not the token ban.
+        assert!(ensure_read_only("REPLACE INTO t VALUES (1)").is_err());
     }
 }
