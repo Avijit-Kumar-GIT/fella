@@ -42,8 +42,20 @@ Invoke-WebRequest -UseBasicParsing $asset.browser_download_url -OutFile $tmp
 # SHA256SUMS is a loud warning; a mismatch is fatal.
 $sums = $rel.assets | Where-Object { $_.name -eq 'SHA256SUMS' } | Select-Object -First 1
 if ($sums) {
-    $sumsText = (Invoke-WebRequest -UseBasicParsing $sums.browser_download_url).Content
-    $line = ($sumsText -split "`n") | Where-Object { $_ -match "[ \*]$([regex]::Escape($asset.name))\s*$" } | Select-Object -First 1
+    # GitHub serves an extensionless asset like SHA256SUMS as
+    # application/octet-stream. On Windows PowerShell 5.1, Invoke-WebRequest's
+    # .Content for a non-text content-type is a raw byte[], not a string a
+    # previous version read .Content directly and matched against it, which
+    # silently stringified the byte array (`-split` on a byte[] does not
+    # produce real lines) so the checksum entry could never be found, for
+    # any asset, regardless of what SHA256SUMS actually contained. Downloading
+    # to a file and reading it back as text like the installer download
+    # itself already does sidesteps the content-type guessing entirely.
+    $sumsFile = Join-Path $env:TEMP 'Fella_SHA256SUMS'
+    Invoke-WebRequest -UseBasicParsing $sums.browser_download_url -OutFile $sumsFile
+    $sumsText = Get-Content -Raw -Path $sumsFile
+    Remove-Item $sumsFile -ErrorAction SilentlyContinue
+    $line = ($sumsText -split "\r?\n") | Where-Object { $_ -match "[ \*]$([regex]::Escape($asset.name))\s*$" } | Select-Object -First 1
     if (-not $line) { Remove-Item $tmp -ErrorAction SilentlyContinue; Fail "SHA256SUMS has no entry for $($asset.name)" }
     $want = ($line -split '\s+')[0].ToLower()
     $got = (Get-FileHash -Algorithm SHA256 $tmp).Hash.ToLower()
