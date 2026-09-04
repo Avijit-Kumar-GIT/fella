@@ -45,13 +45,13 @@ by one person. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 **macOS / Linux**
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Avijit-Kumar-GIT/fella/main/scripts/install.sh | sh
+curl -fsSL https://lilfella.app/install.sh | sh
 ```
 
 **Windows** (PowerShell)
 
 ```powershell
-irm https://raw.githubusercontent.com/Avijit-Kumar-GIT/fella/main/scripts/install.ps1 | iex
+irm https://lilfella.app/install.ps1 | iex
 ```
 
 Prefer to do it by hand? Grab the build for your OS from the

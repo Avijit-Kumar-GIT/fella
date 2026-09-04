@@ -101,11 +101,25 @@ Run on the current tree; nothing tags until this is green. Record numbers in
   release, not a prerelease** the install scripts resolve `/releases/latest`,
   which skips prereleases. (The RC stays a prerelease; it is fetched by tag.)
 
-## 5. Publish
+## 5. Website + install domain
+
+- Domain: **`lilfella.app`** (marketing). The `fella-web` repo carries the
+  static site; `marketing/_redirects` 302s `/install.sh` and `/install.ps1` to
+  `raw.githubusercontent.com/Avijit-Kumar-GIT/fella/main/scripts/…`, so the
+  README/DEV_SETUP one-liners are `https://lilfella.app/install.{sh,ps1}`.
+- That redirect target needs `fella` **public** (step 6) — until then it 404s.
+- Cloudflare Pages: connect `fella-web`, output dir `marketing`, custom domains
+  `lilfella.app` + `www`. Render `marketing/og.svg` → `og.png` first. Full steps
+  in `fella-web/DEPLOY.md`.
+- `.app` is HSTS-preloaded HTTPS only; every host CF/Netlify/Vercel does this
+  automatically.
+
+## 6. Publish
 
 - Final `git log -p` / secret scan on `fella` and `fella-extensions`.
 - `gh repo edit Avijit-Kumar-GIT/fella --visibility public` (and
   `fella-extensions`). This is the point of no return.
+- Smoke `curl -fsSL https://lilfella.app/install.sh | sh` once both are live.
 - File the "Hosted pack marketplace" issue on `fella` from the `docs/ROADMAP.md`
   bullet (labels `enhancement`, `help wanted`).
 
