@@ -1,7 +1,10 @@
 name: Release
 
 # Push a tag like v0.1.0 (or v0.1.0-rc.1 to shake out the workflow first).
-# Produces a DRAFT prerelease with per-OS installers; review and publish by hand.
+# Produces a DRAFT GitHub release with per-OS installers + SHA256SUMS, which you
+# review and publish by hand. An `-rc.N` tag is flagged prerelease; a clean tag
+# is a normal release (so the install scripts, which read /releases/latest,
+# can see it).
 on:
   push:
     tags:
@@ -62,11 +65,18 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: v__VERSION__
-          releaseName: "Fella v__VERSION__"
+          # Use the pushed tag verbatim. `v__VERSION__` expands to the
+          # package.json version and would ignore an `-rc.N` suffix, so an RC
+          # tag would publish as `v0.1.0` and the checksums job (which looks up
+          # the pushed tag) would find nothing.
+          tagName: ${{ github.ref_name }}
+          releaseName: "Fella ${{ github.ref_name }}"
           releaseBody: "Unsigned early build. Verify your download against SHA256SUMS (attached). See the README for install and open steps."
           releaseDraft: true
-          prerelease: true
+          # A hyphenated tag (v0.1.0-rc.1) is a prerelease; a clean tag
+          # (v0.1.0) publishes as a normal release so the install scripts,
+          # which read /releases/latest, can see it.
+          prerelease: ${{ contains(github.ref_name, '-') }}
           args: ${{ matrix.args }}
 
   # After all three platform builds have attached their installers to the draft
