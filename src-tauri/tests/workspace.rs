@@ -418,3 +418,78 @@ fn csv_preamble_above_the_header_is_skipped() {
     let _ = fs::remove_dir_all(&ws);
     let _ = fs::remove_dir_all(&data);
 }
+
+#[test]
+fn reindex_re_ingests_a_table_it_already_loaded() {
+    // Regression: add_rows/drop_source used to run `DROP VIEW IF EXISTS
+    // {ident}` before `DROP TABLE IF EXISTS {ident}` on every source, even
+    // though this engine only ever creates tables. SQLite's `IF EXISTS`
+    // suppresses "doesn't exist", not a type mismatch, so DROP VIEW on a
+    // table name errors with "use DROP TABLE to delete table X" the moment
+    // the same source name is ingested a second time reindex() calling
+    // open_workspace() again on an already-open EngineState reproduced this
+    // exactly, and it applies to any tabular file, not just xlsx.
+    let ws = scratch("reindex-reingest-ws");
+    let data = scratch("reindex-reingest-data");
+    fs::write(ws.join("t.csv"), "a,b\n1,2\n3,4\n").unwrap();
+
+    let engine = EngineState::new(&data).unwrap();
+    let first = engine.open_workspace(&ws).unwrap();
+    assert!(first.skipped.is_empty(), "first open: {:?}", first.skipped);
+    let t = first.sources.iter().find(|s| s.name == "t.csv").unwrap();
+    assert_eq!(t.row_count, Some(2));
+
+    // A query in between, the way a live session would use the table before
+    // /reindex is typed does not matter to the bug, but exercises the same
+    // path a real session takes.
+    let view = t.view.as_deref().unwrap();
+    engine.run_sql(&format!("SELECT count(*) FROM {view}")).unwrap();
+
+    let second = engine.reindex().unwrap();
+    assert!(
+        second.skipped.is_empty(),
+        "reindex should re-ingest the same file cleanly, got: {:?}",
+        second.skipped
+    );
+    let t2 = second.sources.iter().find(|s| s.name == "t.csv").unwrap();
+    assert_eq!(t2.row_count, Some(2));
+
+    let _ = fs::remove_dir_all(&ws);
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[cfg(feature = "xlsx")]
+#[test]
+fn a_workbook_with_no_usable_sheet_gives_a_specific_reason() {
+    // A workbook whose only sheet has zero rows leaves nothing to ingest.
+    // The skip reason must say *why* (not the old bare "no readable sheets"
+    // that threw the real cause away, see the /reindex "no readable sheets"
+    // regression this test guards).
+    let ws = scratch("empty-sheet-ws");
+    let data = scratch("empty-sheet-data");
+    let fixture =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/empty_sheet.xlsx");
+    fs::copy(&fixture, ws.join("empty_sheet.xlsx")).unwrap();
+
+    let engine = EngineState::new(&data).unwrap();
+    let catalog = engine.open_workspace(&ws).unwrap();
+
+    assert!(
+        catalog.sources.iter().all(|s| !s.name.contains("empty_sheet")),
+        "no source should have been created from an unusable workbook"
+    );
+    let skipped = catalog
+        .skipped
+        .iter()
+        .find(|s| s.name == "empty_sheet.xlsx")
+        .expect("the file is reported as skipped");
+    assert_ne!(skipped.reason, "no readable sheets", "must not be the old generic reason");
+    assert!(
+        skipped.reason.contains("empty sheet"),
+        "reason should name the actual cause: {:?}",
+        skipped.reason
+    );
+
+    let _ = fs::remove_dir_all(&ws);
+    let _ = fs::remove_dir_all(&data);
+}
