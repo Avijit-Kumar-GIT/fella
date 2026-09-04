@@ -90,16 +90,19 @@ Run on the current tree; nothing tags until this is green. Record numbers in
 
 ## 4. RC and release
 
-- On `fella`: `git tag v0.1.0-rc.1 && git push --tags` → `release.yml` → draft
-  prerelease with the six installers + `SHA256SUMS`.
+- On `fella`: `git tag v0.1.0-rc.1 && git push origin v0.1.0-rc.1` → `release.yml`
+  → **draft prerelease** `Fella v0.1.0-rc.1` with the six installers +
+  `SHA256SUMS`. (`release.yml` uses the pushed tag verbatim and flags any
+  hyphenated tag as a prerelease.)
 - Download every artifact; smoke-test on each reachable OS (Linux certain;
   macOS / Windows if available otherwise note the gap and rely on the public
   RC). Run `scripts/install.sh` (Linux, macOS) and `scripts/install.ps1`
   (Windows) end to end against the RC, including the checksum step.
 - Fix + `-rc.2` as needed.
-- `git tag v0.1.0 && git push --tags`. **Publish the v0.1.0 release as a normal
-  release, not a prerelease** the install scripts resolve `/releases/latest`,
-  which skips prereleases. (The RC stays a prerelease; it is fetched by tag.)
+- `git tag v0.1.0 && git push origin v0.1.0` → **draft** release `Fella v0.1.0`,
+  already flagged as a normal release (not prerelease). Review the assets and
+  **un-draft it** the install scripts read `/releases/latest`, which skips
+  drafts and prereleases.
 
 ## 5. Website + install domain
 
