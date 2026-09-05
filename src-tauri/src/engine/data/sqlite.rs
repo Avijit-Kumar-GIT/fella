@@ -82,8 +82,16 @@ impl DataEngine for SqliteEngine {
             .map(|(c, t)| format!("{} {}", quote_ident(c), t.sqlite()))
             .collect::<Vec<_>>()
             .join(", ");
+        // Every source this engine loads is a TABLE, never a VIEW (nothing
+        // here ever does CREATE VIEW). `DROP VIEW IF EXISTS` on a name that
+        // exists as a table is not the no-op it looks like `IF EXISTS` only
+        // suppresses "no such view", not a type mismatch, so SQLite raises
+        // "use DROP TABLE to delete table X" the moment a second ingest of
+        // the same source name (e.g. /reindex) runs this. Plain
+        // `DROP TABLE IF EXISTS` is already correct and idempotent on its
+        // own for the only kind of object this engine ever creates.
         self.conn.execute_batch(&format!(
-            "DROP VIEW IF EXISTS {ident}; DROP TABLE IF EXISTS {ident};
+            "DROP TABLE IF EXISTS {ident};
              CREATE TABLE {ident} ({cols_sql});"
         ))?;
 
@@ -104,10 +112,13 @@ impl DataEngine for SqliteEngine {
     }
 
     fn drop_source(&mut self, name: &str) {
+        // See add_rows: every source is a TABLE, and `DROP VIEW IF EXISTS`
+        // on a table name errors rather than no-opping, which used to make
+        // this whole call fail (silently the Result is discarded) and skip
+        // the DROP TABLE that follows it leaving the old table in place
+        // for the next ingest's own DROP VIEW IF EXISTS to fail on for real.
         let ident = quote_ident(name);
-        let _ = self
-            .conn
-            .execute_batch(&format!("DROP VIEW IF EXISTS {ident}; DROP TABLE IF EXISTS {ident};"));
+        let _ = self.conn.execute_batch(&format!("DROP TABLE IF EXISTS {ident};"));
     }
 
     fn describe(&self, name: &str) -> EngineResult<Vec<ColumnInfo>> {

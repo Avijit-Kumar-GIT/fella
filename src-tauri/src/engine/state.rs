@@ -650,7 +650,7 @@ impl EngineState {
                             stem,
                             &mut used,
                         ) {
-                            Ok(sheets) if !sheets.is_empty() => {
+                            Ok((sheets, _)) if !sheets.is_empty() => {
                                 for sh in sheets {
                                     sources.push(SourceInfo {
                                         name: format!("{} \u{b7} {}", info.name, sh.sheet),
@@ -667,11 +667,16 @@ impl EngineState {
                                 }
                                 continue;
                             }
-                            Ok(_) => {
-                                log::warn!("{path_str}: no usable sheets");
+                            Ok((_, reasons)) => {
+                                log::warn!("{path_str}: no usable sheets ({reasons:?})");
+                                let reason = if reasons.is_empty() {
+                                    "no readable sheets".to_string()
+                                } else {
+                                    format!("no readable sheets ({})", reasons.join("; "))
+                                };
                                 skipped.push(catalog::SkippedFile {
                                     name: info.name.clone(),
-                                    reason: "no readable sheets".into(),
+                                    reason,
                                 });
                                 continue;
                             }
@@ -679,7 +684,7 @@ impl EngineState {
                                 log::warn!("skipping {path_str}: {e}");
                                 skipped.push(catalog::SkippedFile {
                                     name: info.name.clone(),
-                                    reason: "couldn't be opened as a spreadsheet".into(),
+                                    reason: format!("couldn't be opened as a spreadsheet: {e}"),
                                 });
                                 continue;
                             }

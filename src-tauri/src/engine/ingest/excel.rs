@@ -23,29 +23,35 @@ pub struct SheetIngest {
 }
 
 /// Load every non-empty sheet of `path` into the engine. One failing sheet is
-/// logged and skipped, not fatal.
+/// logged and skipped, not fatal a human-readable reason is returned for
+/// every sheet that didn't make it into the first element, so a caller can
+/// tell a user why (rather than a bare "no readable sheets" that throws the
+/// real cause away).
 pub fn ingest_workbook(
     engine: &mut dyn DataEngine,
     path: &str,
     stem: &str,
     used: &mut HashSet<String>,
-) -> EngineResult<Vec<SheetIngest>> {
+) -> EngineResult<(Vec<SheetIngest>, Vec<String>)> {
     let mut workbook =
         open_workbook_auto(path).map_err(|e| EngineError::msg(format!("open {path}: {e}")))?;
 
     let sheet_names = workbook.sheet_names().to_vec();
     let multi = sheet_names.len() > 1;
     let mut out = Vec::new();
+    let mut skip_reasons: Vec<String> = Vec::new();
 
     for sheet in sheet_names {
         let range = match workbook.worksheet_range(&sheet) {
             Ok(r) => r,
             Err(e) => {
                 log::warn!("{path} [{sheet}]: {e}");
+                skip_reasons.push(format!("{sheet}: couldn't read the sheet ({e})"));
                 continue;
             }
         };
         if range.is_empty() || range.height() == 0 || range.width() == 0 {
+            skip_reasons.push(format!("{sheet}: empty sheet"));
             continue;
         }
 
@@ -53,6 +59,7 @@ pub fn ingest_workbook(
         let (headers, data_start) = header_row(&rows);
         let mut data: &[&[Data]] = &rows[data_start..];
         if data.is_empty() {
+            skip_reasons.push(format!("{sheet}: no data rows after the header"));
             continue;
         }
 
@@ -117,11 +124,14 @@ pub fn ingest_workbook(
                     Some(sheet_notes.join("; "))
                 },
             }),
-            Err(e) => log::warn!("{path} [{sheet}]: {e}"),
+            Err(e) => {
+                log::warn!("{path} [{sheet}]: {e}");
+                skip_reasons.push(format!("{sheet}: {e}"));
+            }
         }
     }
 
-    Ok(out)
+    Ok((out, skip_reasons))
 }
 
 /// How many cells in a row carry real content (not empty, not a blank-ish
