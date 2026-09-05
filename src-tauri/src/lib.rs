@@ -74,6 +74,8 @@ pub fn run() {
             commands::mcp_clear_token,
             commands::archive_conversation,
             commands::conversations_info,
+            commands::conversations_list,
+            commands::conversation_load,
             commands::update,
         ])
         .run(tauri::generate_context!())

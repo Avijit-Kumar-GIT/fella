@@ -51,6 +51,17 @@ pub struct ConversationsInfo {
     pub count: usize,
 }
 
+/// One row of `/history`'s list enough to recognize and pick a past
+/// conversation without knowing its id.
+#[derive(Debug, Serialize)]
+pub struct ConversationSummary {
+    pub id: String,
+    pub saved_at_ms: i64,
+    pub workspace: Option<String>,
+    pub preview: String,
+    pub message_count: usize,
+}
+
 /// One row of the provider list shown by `/login` and `/auth`.
 #[derive(Debug, Serialize)]
 pub struct ProviderInfo {
@@ -260,6 +271,74 @@ impl EngineState {
             path: dir.display().to_string(),
             count,
         }
+    }
+
+    /// Every archived conversation, newest first, with enough to pick one
+    /// from without knowing its id: when, what folder it was about, its
+    /// first question, and how long it ran. Best-effort a file that
+    /// doesn't parse as the expected shape is skipped, not an error, since
+    /// this is a browse list, not a data-integrity check.
+    pub fn conversations_list(&self) -> Vec<ConversationSummary> {
+        let dir = self.data_dir.join("conversations");
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            return Vec::new();
+        };
+        let mut out: Vec<ConversationSummary> = entries
+            .flatten()
+            .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("json"))
+            .filter_map(|e| std::fs::read_to_string(e.path()).ok())
+            .filter_map(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+            .filter_map(|v| {
+                let id = v.get("id")?.as_str()?.to_string();
+                let saved_at_ms = v.get("saved_at_ms").and_then(|x| x.as_i64()).unwrap_or(0);
+                let workspace = v
+                    .get("workspace")
+                    .and_then(|x| x.as_str())
+                    .map(str::to_string);
+                let messages = v.get("messages")?.as_array()?;
+                let preview = messages
+                    .iter()
+                    .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
+                    .and_then(|m| m.get("text")?.as_str())
+                    .map(|s| cap_chars(s, 80))
+                    .unwrap_or_else(|| "(empty conversation)".to_string());
+                Some(ConversationSummary {
+                    id,
+                    saved_at_ms,
+                    workspace,
+                    preview,
+                    message_count: messages.len(),
+                })
+            })
+            .collect();
+        out.sort_by_key(|c| std::cmp::Reverse(c.saved_at_ms));
+        out
+    }
+
+    /// Raw JSON text of one archived conversation `{id, workspace, messages}`,
+    /// by id looked up the same slug-suffix way `archive_conversation` writes
+    /// it. The frontend parses this itself (same shape it wrote when it was
+    /// archived); no need to round-trip every message/evidence field through
+    /// a typed Rust struct just to pass it straight back through.
+    pub fn conversation_load(&self, id: &str) -> EngineResult<String> {
+        let dir = self.data_dir.join("conversations");
+        let slug: String = id
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .take(32)
+            .collect();
+        let suffix = format!("_{slug}.json");
+        let entries = std::fs::read_dir(&dir)
+            .map_err(|e| EngineError::io(format!("read {}", dir.display()), e))?;
+        for entry in entries.flatten() {
+            if entry.file_name().to_string_lossy().ends_with(&suffix) {
+                return std::fs::read_to_string(entry.path())
+                    .map_err(|e| EngineError::io(format!("read {}", entry.path().display()), e));
+            }
+        }
+        Err(EngineError::msg(
+            "that conversation couldn't be found it may have been deleted",
+        ))
     }
 
     pub fn catalog(&self) -> Catalog {
@@ -1271,6 +1350,15 @@ fn first_line_synopsis(path: &str) -> Option<String> {
         None
     } else {
         Some(s)
+    }
+}
+
+/// Truncate to at most `cap` characters (not bytes), for a short preview
+/// line no ellipsis added; the caller decides whether one reads better.
+fn cap_chars(s: &str, cap: usize) -> String {
+    match s.char_indices().nth(cap) {
+        Some((i, _)) => s[..i].to_string(),
+        None => s.to_string(),
     }
 }
 

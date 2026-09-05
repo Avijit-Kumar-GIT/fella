@@ -8,6 +8,7 @@ import type {
 	Answer,
 	AskEvent,
 	Catalog,
+	ConversationSummary,
 	InstalledPack,
 	OllamaHealth,
 	ProviderInfo,
@@ -102,6 +103,11 @@ export const ipc = {
 		invoke<string>('archive_conversation', { id, body }),
 	/** Where archived conversations live, and how many there are. */
 	conversationsInfo: () => invoke<{ path: string; count: number }>('conversations_info'),
+	/** Every archived conversation, newest first, for `/history` to list. */
+	conversationsList: () => invoke<ConversationSummary[]>('conversations_list'),
+	/** Raw JSON of one archived conversation `{id, workspace, messages}`,
+	 * matching what `archiveConversation` originally wrote. */
+	conversationLoad: (id: string) => invoke<string>('conversation_load', { id }),
 
 	/**
 	 * Ask a question. Streams progress through `onEvent`; resolves with the
