@@ -4,11 +4,15 @@
 
 use std::path::{Path, PathBuf};
 
+use rusqlite::functions::FunctionFlags;
+use rusqlite::types::ValueRef;
 use rusqlite::{Connection, OpenFlags};
 use serde_json::Value as Json;
 
 use crate::engine::catalog::{ColumnInfo, SourceKind};
-use crate::engine::data::{quote_ident, Cell, ColType, DataEngine, PythonBridge, QueryOutcome, SourceLoad};
+use crate::engine::data::{
+    parse_numeric, quote_ident, Cell, ColType, DataEngine, PythonBridge, QueryOutcome, SourceLoad,
+};
 use crate::engine::error::{EngineError, EngineResult};
 
 pub struct SqliteEngine {
@@ -30,12 +34,47 @@ impl SqliteEngine {
     }
 
     fn ro(&self) -> EngineResult<Connection> {
-        Connection::open_with_flags(
+        let conn = Connection::open_with_flags(
             &self.path,
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
         )
-        .map_err(|e| EngineError::msg(format!("open read-only: {e}")))
+        .map_err(|e| EngineError::msg(format!("open read-only: {e}")))?;
+        register_parse_num(&conn)?;
+        Ok(conn)
     }
+}
+
+/// `parse_num(x)`: read-only SQL escape hatch for a column ingest left as
+/// TEXT because it's a mix of numbers and something else (see the
+/// "looks numeric but is mixed" column note). A bare `CAST(x AS REAL)`
+/// silently truncates at the first non-numeric character `CAST('1,200'
+/// AS REAL)` is `1.0`, not an error, which is how a messy column turns into
+/// a confidently wrong total. `parse_num` instead reuses the same tolerant
+/// parser the ingest side already trusts (currency signs, thousands
+/// separators, `%`, accounting negatives — see `parse_numeric`'s own doc),
+/// and returns NULL for anything it can't make sense of, so `SUM`/`AVG`
+/// quietly skip it instead of the query lying. Not specific to currency or
+/// to any one ingest path deliberately general, so the model has one real
+/// tool for "this column is mixed" instead of a bigger pile of heuristics.
+fn register_parse_num(conn: &Connection) -> EngineResult<()> {
+    conn.create_scalar_function(
+        "parse_num",
+        1,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+        |ctx| {
+            let parsed = match ctx.get_raw(0) {
+                ValueRef::Null => None,
+                ValueRef::Integer(i) => Some(i as f64),
+                ValueRef::Real(r) => Some(r),
+                ValueRef::Text(t) => {
+                    std::str::from_utf8(t).ok().and_then(parse_numeric)
+                }
+                ValueRef::Blob(_) => None,
+            };
+            Ok(parsed)
+        },
+    )?;
+    Ok(())
 }
 
 impl DataEngine for SqliteEngine {
@@ -584,7 +623,12 @@ fn sniff_strings<'a>(cells: impl Iterator<Item = &'a str>) -> (ColType, Option<S
     if n_nonblank >= 3 && n_numeric * 100 >= n_nonblank * 60 {
         return (
             ColType::Text,
-            Some("looks numeric but has non-number values; kept as text - CAST it for a total".into()),
+            Some(format!(
+                "{n_numeric} of {n_nonblank} values parse as numbers; kept as text. Use \
+                 parse_num(col) for a reliable total (CAST silently truncates text like \
+                 \"1,200\" instead of erroring); COUNT(*) - COUNT(parse_num(col)) shows how \
+                 many rows didn't parse"
+            )),
         );
     }
     (ColType::Text, None)
@@ -763,6 +807,48 @@ mod tests {
         // A genuine category column with a few stray numbers stays text.
         let (ty, _) = sniff_strings(["rent", "deposit", "rent", "rent", "500"].into_iter());
         assert_eq!(ty, ColType::Text);
+    }
+
+    #[test]
+    fn mixed_column_note_points_at_parse_num_not_cast() {
+        // A column that's mostly-but-not-cleanly numeric (60-100%) stays TEXT;
+        // the note must steer toward parse_num(), not the bare CAST that
+        // silently truncates comma-formatted text instead of erroring.
+        let (ty, note) =
+            sniff_strings(["$1,200.00", "$1,300.00", "$1,300.00 (paid)", "500", "600"].into_iter());
+        assert_eq!(ty, ColType::Text);
+        let note = note.expect("a mixed column should be noted");
+        assert!(note.contains("parse_num"), "note should mention parse_num: {note:?}");
+        assert!(!note.contains("CAST it for a total"), "note should not tell the model to CAST: {note:?}");
+    }
+
+    #[test]
+    fn parse_num_sql_function_matches_parse_numeric() {
+        let conn = Connection::open_in_memory().unwrap();
+        register_parse_num(&conn).unwrap();
+        let get = |sql: &str| -> Option<f64> {
+            conn.query_row(sql, [], |r| r.get(0)).unwrap()
+        };
+        assert_eq!(get("SELECT parse_num('$1,200.00')"), Some(1200.0));
+        assert_eq!(get("SELECT parse_num('1,300.00 (paid)')"), None);
+        assert_eq!(get("SELECT parse_num(42)"), Some(42.0));
+        assert_eq!(get("SELECT parse_num(42.5)"), Some(42.5));
+        assert_eq!(get("SELECT parse_num(NULL)"), None);
+        // A mixed column: SUM skips the NULLs from unparseable rows rather
+        // than erroring or silently truncating them like CAST would.
+        conn.execute_batch(
+            "CREATE TABLE t (amount TEXT);
+             INSERT INTO t VALUES ('$1,200.00'), ('$1,300.00 (paid)'), ('500');",
+        )
+        .unwrap();
+        let total: f64 = conn
+            .query_row("SELECT SUM(parse_num(amount)) FROM t", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(total, 1700.0, "the unparseable row should be skipped, not truncated to 1.0");
+        let parsed_count: i64 = conn
+            .query_row("SELECT COUNT(parse_num(amount)) FROM t", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(parsed_count, 2, "exactly the two clean rows should have parsed");
     }
 
     #[test]
