@@ -27,5 +27,5 @@ pub use evidence::{Answer, AskEvent};
 pub use llm::ProviderHealth;
 pub use provider::{AuthKind, Provider, PROVIDERS};
 pub use sqlite::Settings;
-pub use state::{ConversationsInfo, EngineState, ProviderInfo, QueryResult};
+pub use state::{ConversationSummary, ConversationsInfo, EngineState, ProviderInfo, QueryResult};
 pub use update::UpdateStatus;

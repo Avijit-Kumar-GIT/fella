@@ -3,7 +3,7 @@
 import { ipc, isTauri, openExternal, pickFolder } from './ipc';
 import { prefs } from './prefs.svelte';
 import { Conversation, session } from './session.svelte';
-import type { AskEvent, InstalledPack, OllamaHealth, ProviderInfo } from './types';
+import type { AskEvent, InstalledPack, Message, OllamaHealth, ProviderInfo } from './types';
 
 const HELP = `Ask a question in plain language and Fella answers from your files,
 showing the exact steps it took. You never need these commands, but here they are:
@@ -24,7 +24,7 @@ showing the exact steps it took. You never need these commands, but here they ar
   /tab             open another conversation in a new tab
   /focus           hide the tabs and header for a plain view (again to undo)
   /clear           start this conversation over (the old one is saved)
-  /history         find your saved conversations
+  /history         list your saved conversations, /history <n> to reopen one
   /retry           ask the last question again
   /help            this list
 
@@ -77,7 +77,7 @@ export const COMMAND_DESCRIPTIONS: Record<string, string> = {
 	'/tab': 'open another conversation in a new tab',
 	'/focus': 'hide the tabs and header for a plain view',
 	'/clear': 'start this conversation over (the old one is saved)',
-	'/history': 'find your saved conversations',
+	'/history': 'list your saved conversations, /history <n> to reopen one',
 	'/retry': 'ask the last question again',
 	'/help': 'show all commands'
 };
@@ -366,11 +366,39 @@ async function runCommand(text: string): Promise<void> {
 				return;
 			}
 			try {
-				const { path, count } = await ipc.conversationsInfo();
+				const list = await ipc.conversationsList();
+				if (list.length === 0) {
+					session.addSystem("No past conversations yet — they're saved here once you /clear or close a tab.");
+					return;
+				}
+				const n = arg ? Number.parseInt(arg, 10) : NaN;
+				if (Number.isInteger(n)) {
+					const chosen = list[n - 1];
+					if (!chosen) {
+						session.addSystem(`No conversation #${n}. Type /history to see the list again.`);
+						return;
+					}
+					const raw = await ipc.conversationLoad(chosen.id);
+					const saved: { workspace?: string | null; messages?: unknown } = JSON.parse(raw);
+					const messages = Array.isArray(saved.messages) ? (saved.messages as Message[]) : [];
+					session.loadArchivedTab(messages);
+					session.addSystem(`Reopened: "${chosen.preview}" (${dateLabel(chosen.saved_at_ms)}).`);
+					const current = session.catalog.workspace;
+					if (saved.workspace && current && saved.workspace !== current) {
+						session.addSystem(
+							`This conversation was about a different folder (${baseName(saved.workspace)}). ` +
+								`Fella is pointed at ${baseName(current)} right now, so a new question here answers ` +
+								`from that folder, not the original one. /open ${saved.workspace} first if you want the original.`
+						);
+					}
+					return;
+				}
+				const lines = list.map((c, i) => {
+					const where = c.workspace ? ` · ${baseName(c.workspace)}` : '';
+					return `  ${i + 1}. "${c.preview}" · ${c.message_count} message${c.message_count === 1 ? '' : 's'} · ${dateLabel(c.saved_at_ms)}${where}`;
+				});
 				session.addSystem(
-					count
-						? `Your ${count} past conversation${count === 1 ? '' : 's'} ${count === 1 ? 'is' : 'are'} saved as files here:\n${path}`
-						: `Past conversations are saved as files here (none yet):\n${path}`
+					`Your past conversations, newest first — /history <n> to reopen one:\n${lines.join('\n')}`
 				);
 			} catch (e) {
 				session.addSystem(`error: ${errMsg(e)}`);
@@ -1072,6 +1100,28 @@ function renderTable(
 	const body = rows.map(fmt).join('\n');
 	const foot = `${rowCount} row${rowCount === 1 ? '' : 's'}${truncated ? ' (truncated)' : ''}, ${ms}ms`;
 	return `${head}\n${sep}\n${body}\n\n${foot}`;
+}
+
+/** Last path segment, either separator — workspace paths come from the Rust
+ *  backend in the OS's own form, so a saved conversation from Windows can
+ *  still show up readably here. */
+function baseName(path: string): string {
+	const parts = path.split(/[/\\]+/).filter(Boolean);
+	return parts[parts.length - 1] ?? path;
+}
+
+/** A short, local-time label for `/history`'s list — just a date once it's
+ *  not today, so the list stays scannable. */
+function dateLabel(ms: number): string {
+	const d = new Date(ms);
+	const now = new Date();
+	const sameDay =
+		d.getFullYear() === now.getFullYear() &&
+		d.getMonth() === now.getMonth() &&
+		d.getDate() === now.getDate();
+	return sameDay
+		? d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+		: d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
 /** The engine serialises errors as `{ kind, message }`; older / Tauri-internal

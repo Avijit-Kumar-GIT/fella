@@ -8,8 +8,9 @@ use tauri::ipc::Channel;
 use tauri::State;
 
 use crate::engine::{
-    Answer, AskEvent, Catalog, ConversationsInfo, EngineError, EngineResult, EngineState,
-    InstalledPack, ProviderHealth, ProviderInfo, QueryResult, Settings, SourceInfo, UpdateStatus,
+    Answer, AskEvent, Catalog, ConversationSummary, ConversationsInfo, EngineError, EngineResult,
+    EngineState, InstalledPack, ProviderHealth, ProviderInfo, QueryResult, Settings, SourceInfo,
+    UpdateStatus,
 };
 use crate::AppState;
 
@@ -241,6 +242,19 @@ pub fn archive_conversation(
 #[tauri::command]
 pub fn conversations_info(engine: State<'_, EngineState>) -> ConversationsInfo {
     engine.conversations_info()
+}
+
+/// Every archived conversation, newest first, enough to pick one from
+/// without knowing its id.
+#[tauri::command]
+pub fn conversations_list(engine: State<'_, EngineState>) -> Vec<ConversationSummary> {
+    engine.conversations_list()
+}
+
+/// Raw JSON of one archived conversation, by id (see `conversations_list`).
+#[tauri::command]
+pub fn conversation_load(id: String, engine: State<'_, EngineState>) -> Result<String, EngineError> {
+    engine.conversation_load(&id)
 }
 
 /// Stop the in-progress `ask` for one conversation (tab).
