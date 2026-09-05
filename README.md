@@ -132,7 +132,7 @@ own model. Slash commands below are a power-user shortcut; you never need them.
 | `/tab` | Open another conversation in a new tab |
 | `/focus` | Hide the tabs and header for a plain view (again to undo) |
 | `/clear` | Start a new conversation (the old one is saved) |
-| `/history` | Find your saved conversations |
+| `/history` | List your saved conversations; `/history <n>` reopens one in a new tab |
 | `/retry` | Ask your last question again |
 | `/help` | Show all commands |
 
