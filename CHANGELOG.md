@@ -6,6 +6,56 @@ All notable changes to Fella are recorded here. Format follows
 
 ## [Unreleased]
 
+## [0.1.2]
+
+### Added
+
+- **`/history <n>` reopens a past conversation.** `/history` now lists your
+  saved conversations a preview of the first question, the message count, the
+  date, and which folder it was about instead of only a count and a file
+  path. `/history <n>` loads that conversation back into a new tab. If the
+  reopened conversation was about a different folder than the one currently
+  open, a note explains that a new question will answer from the current
+  folder.
+- **`parse_num()` in `/sql` and model queries.** A general helper that reads a
+  number a person wrote tolerating a currency sign, thousands separators, a
+  trailing `%`, and accounting-style negatives `(1,234)` and returns nothing
+  for anything it can't parse, so `SUM`/`AVG` over a partly-messy text column
+  skip the unreadable rows instead of a bare `CAST` silently returning a wrong
+  total. When a column is imported as text because it's only mostly numeric,
+  the schema note now points at `parse_num` and a way to count what didn't
+  parse.
+
+### Changed
+
+- **Custom app icon.** The default Tauri template icon is replaced with a real
+  Fella mark a soft dome character in the brand teal across every platform's
+  icon set.
+- **Default window is 760×720** (was 1080×760), sized to the reading column so
+  the welcome screen and conversations don't sit in a narrow strip with wide
+  empty margins on first launch. Still resizable, and the OS remembers a size
+  you set.
+- **README** brought back in line with the shipped app: five commands that
+  weren't listed (`/tab`, `/focus`, `/history`, `/retry`, `/help`), the tab
+  keyboard shortcuts, the per-tab model, the full set of verification checks,
+  all three pack kinds, and the follow-up/session memory are now documented,
+  and the app icon is shown.
+
+### Fixed
+
+- **Windows: the mouse cursor went invisible while navigating the `/open`
+  folder picker** when `/open` was run by typing it and pressing Enter.
+  Windows hides the pointer while you type and normally restores it on the
+  next mouse move, but the modal picker takes the message loop before that
+  happens. Fella now restores the pointer before opening the picker, matching
+  what the welcome-screen "Choose a folder" button already did.
+
+### Removed
+
+- The unused `anyhow` dependency declaration. Also an internal de-duplication
+  of the `FELLA_*` environment-knob parsing and the removal of a dead
+  scaffold file no behaviour change.
+
 ## [0.1.1]
 
 ### Added
@@ -87,6 +137,7 @@ folder of your own files with deterministic SQL / Python, and shows its working.
 - The hosted pack browser isn't live yet: `/packs add <path>` works offline, and
   `/packs install <id>` pulls from a small seed catalog.
 
-[Unreleased]: https://github.com/Avijit-Kumar-GIT/fella/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/Avijit-Kumar-GIT/fella/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/Avijit-Kumar-GIT/fella/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/Avijit-Kumar-GIT/fella/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Avijit-Kumar-GIT/fella/releases/tag/v0.1.0
