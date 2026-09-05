@@ -178,6 +178,22 @@ class Session {
 		this.#writeIndex();
 	}
 
+	/** Open an archived conversation (`/history <n>`) in a new tab, its
+	 *  transcript exactly as saved. If `workspace` doesn't match the folder
+	 *  open right now, the caller is responsible for warning that new
+	 *  questions here will run against the current folder, not the
+	 *  original one there's only ever one open folder for every tab. */
+	loadArchivedTab(messages: Message[]): void {
+		const inherit = this.model; // same convention as newTab()
+		const c = new Conversation();
+		c.model = inherit;
+		// A reloaded transcript never has a run in flight.
+		c.messages = messages.map((m) => (m.pending ? { ...m, pending: false } : m));
+		this.tabs.push(c);
+		this.active = this.tabs.length - 1;
+		this.#writeIndex();
+	}
+
 	async closeTab(i: number): Promise<void> {
 		const tab = this.tabs[i];
 		if (!tab) return;

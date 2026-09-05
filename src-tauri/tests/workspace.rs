@@ -458,6 +458,60 @@ fn reindex_re_ingests_a_table_it_already_loaded() {
     let _ = fs::remove_dir_all(&data);
 }
 
+#[test]
+fn parse_num_sums_a_mixed_currency_column_correctly() {
+    // Shaped after a real reported bug: a ledger "Amount" column mixes clean
+    // currency values with ones carrying a trailing annotation (a payment
+    // fee note), landing the whole column in the "mixed; kept as text"
+    // bucket. A bare CAST either truncates or reads as 0 depending on the
+    // exact text; parse_num must give the true total regardless.
+    let ws = scratch("mixed-currency-ws");
+    let data = scratch("mixed-currency-data");
+    fs::write(
+        ws.join("ledger.csv"),
+        "Date,Amount,Method\n\
+         2026-01-01,\"$1,316.00\",eCheck\n\
+         2026-01-01,\"$1,316.00 (fee $1.95)\",eCheck\n\
+         2026-02-01,\"$1,316.00\",eCheck\n\
+         2026-02-01,\"$1,316.00 (fee $1.95)\",eCheck\n\
+         2026-03-01,100.00,cash\n",
+    )
+    .unwrap();
+
+    let engine = EngineState::new(&data).unwrap();
+    let catalog = engine.open_workspace(&ws).unwrap();
+
+    let ledger = catalog.sources.iter().find(|s| s.name == "ledger.csv").unwrap();
+    let amount = ledger
+        .columns
+        .as_ref()
+        .unwrap()
+        .iter()
+        .find(|c| c.name == "Amount")
+        .unwrap();
+    assert_eq!(amount.type_, "TEXT", "a mixed column stays TEXT, not silently coerced");
+    let note = amount.note.as_deref().expect("the mix should be noted");
+    assert!(note.contains("parse_num"), "note should point at parse_num: {note:?}");
+
+    let view = ledger.view.as_deref().unwrap();
+    let out = engine
+        .run_sql(&format!(r#"SELECT SUM(parse_num("Amount")) AS total FROM {view}"#))
+        .unwrap();
+    // The 3 clean values (1316 + 1316 + 100); the 2 annotated ones are
+    // skipped, not truncated into a wrong-but-plausible number.
+    assert_eq!(out.rows[0][0], serde_json::json!(2732.0));
+
+    let out = engine
+        .run_sql(&format!(
+            r#"SELECT COUNT(*) - COUNT(parse_num("Amount")) AS unparsed FROM {view}"#
+        ))
+        .unwrap();
+    assert_eq!(out.rows[0][0], serde_json::json!(2), "exactly the 2 annotated rows should be unparsed");
+
+    let _ = fs::remove_dir_all(&ws);
+    let _ = fs::remove_dir_all(&data);
+}
+
 #[cfg(feature = "xlsx")]
 #[test]
 fn a_workbook_with_no_usable_sheet_gives_a_specific_reason() {
