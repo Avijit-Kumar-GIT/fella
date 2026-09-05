@@ -13,8 +13,8 @@
     "windows": [
       {
         "title": "Fella",
-        "width": 1080,
-        "height": 760,
+        "width": 760,
+        "height": 720,
         "minWidth": 560,
         "minHeight": 400,
         "resizable": true,
