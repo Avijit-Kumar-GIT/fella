@@ -250,27 +250,34 @@ pub async fn apply(http: &reqwest::Client, app: tauri::AppHandle) -> EngineResul
 }
 
 /// The PowerShell script `/update` runs on Windows *after* Fella exits: wait
-/// for the file lock on the running .exe to release, run the installer to
+/// for Fella to release the lock on its own `.exe`, run the installer to
 /// completion, then relaunch from the same path (an in-place upgrade keeps
-/// `current_exe()` valid).
+/// `current_exe()` valid). Every step appends a line to `update.log` next to
+/// the installer, so a stalled or failed apply is diagnosable rather than
+/// silent.
 ///
 /// Kept as a plain function, not inlined into the win32-only `platform::apply`,
 /// so its shape is testable on any host. What each piece is defending against
-/// (all of which broke the pre-0.1.3 `cmd`-based version):
+/// (the `cmd`-based version before 0.1.3, and the first 0.1.3 cut's
+/// fixed-2s-wait that proved too short on a real machine):
 ///
 /// - **PowerShell, not a `cmd /C` string.** The old code passed a multi-quote
 ///   `/C` string through `Command::args`; Rust's arg quoting and `cmd`'s
 ///   parsing disagree on embedded quotes, so the installer and relaunch paths
 ///   arrived mangled and neither ran. A `powershell -File <path>` invocation
 ///   quotes cleanly.
-/// - **`Start-Sleep`, not `timeout`.** `timeout` aborts immediately ("input
-///   redirection is not supported") when there's no console, so the old grace
-///   period never happened.
-/// - **`-Wait` on the installer.** The old `&`-chain fired the installer and
-///   relaunched Fella in the same breath, so a successful update still
-///   relaunched the *old* binary.
-///
-/// Installer failures are appended to `update.log` next to the installer.
+/// - **Poll for the exe lock, not a fixed `Start-Sleep`.** Fella can take
+///   more than a couple of seconds to exit; a fixed 2s let the silent
+///   installer start while `fella.exe` was still locked, so it couldn't
+///   overwrite the binary and — having no UI — just aborted, installing
+///   nothing with no error. The loop tries to open `fella.exe` for exclusive
+///   write, which is what the installer needs, and gives up after 60s.
+/// - **`-PassThru` + `.WaitForExit()`, not `-Wait`.** `Start-Process -Wait`
+///   from the windowless, detached host returns without actually running or
+///   waiting on the child; waiting on the returned process object is reliable
+///   there. `timeout` (the pre-0.1.3 delay) likewise aborts with no console.
+/// - **Relaunch only after the installer exits**, not chained with `&`, so a
+///   successful update doesn't relaunch the old binary.
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn windows_update_script(
     installer: &std::path::Path,
@@ -280,23 +287,25 @@ fn windows_update_script(
     // Values are embedded in single-quoted PowerShell strings; a literal
     // apostrophe in a path is escaped by doubling it.
     let q = |p: &std::path::Path| p.display().to_string().replace('\'', "''");
-    let run_installer = if installer.extension().and_then(|e| e.to_str()) == Some("msi") {
-        format!(
-            "Start-Process -FilePath 'msiexec' -ArgumentList '/i','{}','/passive' -Wait",
-            q(installer)
+    let (file, args) = if installer.extension().and_then(|e| e.to_str()) == Some("msi") {
+        (
+            "msiexec".to_string(),
+            format!("'/i','{}','/passive'", q(installer)),
         )
     } else {
-        format!(
-            "Start-Process -FilePath '{}' -ArgumentList '/S' -Wait",
-            q(installer)
-        )
+        (q(installer), "'/S'".to_string())
     };
     format!(
-        "Start-Sleep -Seconds 2\r\n\
-         try {{ {run_installer} }} catch {{ $_ | Out-File -Append '{log}' }}\r\n\
-         Start-Process -FilePath '{exe}'\r\n",
-        log = q(log),
+        "$ErrorActionPreference = 'Stop'\r\n\
+         $exe = '{exe}'\r\n\
+         $log = '{log}'\r\n\
+         function Log($m) {{ \"$((Get-Date).ToString('o')) $m\" | Out-File -Append -Encoding utf8 $log }}\r\n\
+         for ($i = 0; $i -lt 120; $i++) {{ try {{ $f = [IO.File]::Open($exe, 'Open', 'ReadWrite', 'None'); $f.Close(); break }} catch {{ Start-Sleep -Milliseconds 500 }} }}\r\n\
+         Log \"waited $([int]($i * 0.5))s for exe lock\"\r\n\
+         try {{ $p = Start-Process -FilePath '{file}' -ArgumentList {args} -PassThru; $p.WaitForExit(); Log \"installer exit $($p.ExitCode)\" }} catch {{ Log \"installer error: $_\" }}\r\n\
+         try {{ Start-Process -FilePath $exe; Log 'relaunched' }} catch {{ Log \"relaunch error: $_\" }}\r\n",
         exe = q(exe),
+        log = q(log),
     )
 }
 
@@ -515,23 +524,25 @@ mod tests {
     }
 
     #[test]
-    fn windows_update_script_waits_then_installs_to_completion_then_relaunches() {
+    fn windows_update_script_waits_for_the_lock_then_installs_then_relaunches() {
         use std::path::Path;
         let s = windows_update_script(
             Path::new(r"C:\Temp\fella-update\Fella_0.1.3_x64-setup.exe"),
             Path::new(r"C:\Program Files\Fella\fella.exe"),
             Path::new(r"C:\Temp\fella-update\update.log"),
         );
-        // A real delay, not `timeout` (which aborts with no console).
-        assert!(s.contains("Start-Sleep -Seconds 2"));
+        // Polls for the exe lock to release, not a fixed sleep, and never `timeout`.
+        assert!(s.contains("[IO.File]::Open($exe, 'Open', 'ReadWrite', 'None')"));
         assert!(!s.contains("timeout"));
-        // Installer runs silently and to completion...
+        assert!(!s.contains("Start-Sleep -Seconds 2"));
+        // Installer runs silently, waited on via the process object (not -Wait)...
         assert!(s.contains(
-            r"Start-Process -FilePath 'C:\Temp\fella-update\Fella_0.1.3_x64-setup.exe' -ArgumentList '/S' -Wait"
+            r"Start-Process -FilePath 'C:\Temp\fella-update\Fella_0.1.3_x64-setup.exe' -ArgumentList '/S' -PassThru"
         ));
+        assert!(s.contains("$p.WaitForExit()"));
         // ...before the relaunch line, not racing it.
-        let install_at = s.find("-ArgumentList '/S' -Wait").unwrap();
-        let relaunch_at = s.find(r"Start-Process -FilePath 'C:\Program Files\Fella\fella.exe'").unwrap();
+        let install_at = s.find("-ArgumentList '/S' -PassThru").unwrap();
+        let relaunch_at = s.find("Start-Process -FilePath $exe").unwrap();
         assert!(install_at < relaunch_at, "relaunch must come after the install");
         // Written out as a .ps1 file.
         assert!(s.ends_with("\r\n"));
@@ -546,7 +557,7 @@ mod tests {
             Path::new(r"C:\Temp\update.log"),
         );
         assert!(s.contains(
-            r"Start-Process -FilePath 'msiexec' -ArgumentList '/i','C:\Temp\Fella_0.1.3_x64_en-US.msi','/passive' -Wait"
+            r"Start-Process -FilePath 'msiexec' -ArgumentList '/i','C:\Temp\Fella_0.1.3_x64_en-US.msi','/passive' -PassThru"
         ));
     }
 

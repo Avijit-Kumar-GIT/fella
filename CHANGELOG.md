@@ -17,12 +17,16 @@ All notable changes to Fella are recorded here. Format follows
   relaunch commands both arrived mangled and neither ran. It also used
   `timeout` for its grace delay (which aborts immediately with no console)
   and chained the relaunch with `&` (which fires it *before* the install
-  finishes). The hand-off is now a `powershell -File` script that sleeps,
-  runs the installer to completion, then relaunches and it breaks away from
-  any job object so exiting Fella can't take it down. The download and
-  checksum half were always fine; a failed install still can't produce a
-  broken one. If it still doesn't take, the already-verified installer is
-  left at `%TEMP%\fella-update\` to run by hand.
+  finishes). The hand-off is now a `powershell -File` script that **waits
+  for Fella to release the lock on its own `.exe`** (a silent installer
+  can't overwrite a running binary and, with no window to show an error,
+  just aborts — a fixed short delay wasn't enough), runs the installer via
+  its process handle, then relaunches; it breaks away from any job object so
+  exiting Fella can't take it down. Every step is logged to
+  `%TEMP%\fella-update\update.log`. The download and checksum half were
+  always fine; a failed install still can't produce a broken one, and the
+  verified installer is left at `%TEMP%\fella-update\` to run by hand if the
+  automatic step doesn't take.
 
 ## [0.1.2]
 
