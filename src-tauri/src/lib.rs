@@ -74,6 +74,7 @@ pub fn run() {
             commands::mcp_clear_token,
             commands::archive_conversation,
             commands::conversations_info,
+            commands::update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

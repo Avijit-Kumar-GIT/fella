@@ -18,6 +18,7 @@ showing the exact steps it took. You never need these commands, but here they ar
   /auth            see which model services you're connected to
   /model           see or change which model answers
   /reindex         check the folder again for new or changed files
+  /update          check for a newer version of Fella and install it
   /packs           themes and skills you've added (/packs browse to find more)
   /connect         connect a data source you've added
   /tab             open another conversation in a new tab
@@ -41,6 +42,7 @@ export const SLASH_COMMANDS = [
 	'/auth',
 	'/model',
 	'/reindex',
+	'/update',
 	'/packs',
 	'/connect',
 	'/tab',
@@ -69,6 +71,7 @@ export const COMMAND_DESCRIPTIONS: Record<string, string> = {
 	'/auth': "see which model services you're connected to",
 	'/model': 'see or change which model answers',
 	'/reindex': 'check the folder again for new or changed files',
+	'/update': 'check for a newer version of Fella and install it',
 	'/packs': "themes and skills you've added",
 	'/connect': "connect a data source you've added",
 	'/tab': 'open another conversation in a new tab',
@@ -652,6 +655,31 @@ async function runCommand(text: string): Promise<void> {
 					conv.activity = 'checking the folder…';
 					session.catalog = await ipc.reindex();
 					conv.addSystem(`Checked the folder again.\n${summarizeCatalog()}`);
+				} catch (e) {
+					conv.addSystem(`error: ${errMsg(e)}`);
+				} finally {
+					conv.busy = false;
+					conv.activity = '';
+				}
+			}
+			return;
+
+		case '/update':
+			if (!requireEngine()) return;
+			{
+				const conv = session.activeTab;
+				try {
+					conv.busy = true;
+					conv.activity = 'checking for an update…';
+					const status = await ipc.update();
+					// A found update is applied immediately (no separate confirm
+					// step) the app exits as part of that, so this message may
+					// never actually be seen before the window closes.
+					conv.addSystem(
+						status.available
+							? `Updating to ${status.latest}… Fella will close; reopen it once the installer finishes.`
+							: `You're up to date (${status.current}).`
+					);
 				} catch (e) {
 					conv.addSystem(`error: ${errMsg(e)}`);
 				} finally {

@@ -13,7 +13,8 @@ import type {
 	ProviderInfo,
 	QueryResult,
 	Settings,
-	SourceInfo
+	SourceInfo,
+	UpdateStatus
 } from './types';
 
 export function isTauri(): boolean {
@@ -91,6 +92,10 @@ export const ipc = {
 	mcpClearToken: (id: string) => invoke<boolean>('mcp_clear_token', { id }),
 	/** CSS token map of the active theme pack, or null. */
 	packsTheme: () => invoke<Record<string, string> | null>('packs_theme'),
+
+	/** Check for a newer release and, if one exists, download + verify +
+	 * install it and exit. Only ever called by `/update`; never automatic. */
+	update: () => invoke<UpdateStatus>('update'),
 
 	/** Archive a finished transcript to a file; resolves with its path. */
 	archiveConversation: (id: string, body: string) =>
