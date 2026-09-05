@@ -6,6 +6,8 @@ All notable changes to Fella are recorded here. Format follows
 
 ## [Unreleased]
 
+## [0.1.1]
+
 ### Added
 
 - **`/update`** checks the latest GitHub release and, if it's newer,
@@ -21,20 +23,17 @@ All notable changes to Fella are recorded here. Format follows
   `/reindex` ran in that session a SQLite `DROP VIEW IF EXISTS` on a name
   that only ever existed as a table errored instead of no-opping. Affected
   any tabular source (CSV, TSV, JSON, NDJSON, XLSX), not just one file type.
-- **`run_sql` rejected the read-only `REPLACE()` string function**, blocking
-  the standard way to strip currency formatting (commas, `$`) from a text
-  column before summing it a blanket ban on the word "replace" caught the
-  harmless function along with the mutating `REPLACE INTO` statement it was
-  meant to stop (which was already blocked another way).
 - **`scripts/install.ps1`'s checksum check always failed** on Windows
   PowerShell 5.1: `SHA256SUMS` is served as `application/octet-stream`, and
   `Invoke-WebRequest`'s `.Content` for that content-type is a raw byte
   array, not text, so the checksum could never be found regardless of what
-  the file actually contained.
-- **`run_python` could never find Python on Windows.** The interpreter
-  search hardcoded the POSIX `PATH`-list separator `:`, which breaks on
-  Windows both because the real separator is `;` and because Windows paths
-  themselves contain `:` (drive letters).
+  the file actually contained. (Already live before this release the
+  install scripts aren't versioned artifacts.)
+
+## [0.1.0] first public build
+
+The initial release: a local-first desktop app that answers questions about a
+folder of your own files with deterministic SQL / Python, and shows its working.
 
 ### Changed
 
@@ -43,10 +42,17 @@ All notable changes to Fella are recorded here. Format follows
   carries an existing `dev.woody.app` data dir over, so keys and saved
   conversations are kept.
 
-## [0.1.0] first public build
+### Fixed
 
-The initial release: a local-first desktop app that answers questions about a
-folder of your own files with deterministic SQL / Python, and shows its working.
+- **`run_sql` rejected the read-only `REPLACE()` string function**, blocking
+  the standard way to strip currency formatting (commas, `$`) from a text
+  column before summing it a blanket ban on the word "replace" caught the
+  harmless function along with the mutating `REPLACE INTO` statement it was
+  meant to stop (which was already blocked another way).
+- **`run_python` could never find Python on Windows.** The interpreter
+  search hardcoded the POSIX `PATH`-list separator `:`, which breaks on
+  Windows both because the real separator is `;` and because Windows paths
+  themselves contain `:` (drive letters).
 
 ### Added
 
@@ -81,5 +87,6 @@ folder of your own files with deterministic SQL / Python, and shows its working.
 - The hosted pack browser isn't live yet: `/packs add <path>` works offline, and
   `/packs install <id>` pulls from a small seed catalog.
 
-[Unreleased]: https://github.com/Avijit-Kumar-GIT/fella/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Avijit-Kumar-GIT/fella/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/Avijit-Kumar-GIT/fella/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Avijit-Kumar-GIT/fella/releases/tag/v0.1.0
