@@ -1,3 +1,5 @@
+<p align="center"><img src="src-tauri/icons/icon.png" width="96" alt="Fella"></p>
+
 # Fella
 
 **Ask questions about your own files.**
@@ -111,8 +113,9 @@ is SQLite-only to stay small.
 One window: choose a folder, then type questions. Calm and compact a dim header, the
 conversation, an input box, a quiet status line with the fast, no-chrome feel of
 [fx](https://fx.sh) but plain-language and non-technical, not a terminal. Monospace
-shows up only where data lines up (tables, queries). Slash commands below are a
-power-user shortcut; you never need them.
+shows up only where data lines up (tables, queries). Open more than one thing at
+once with tabs (`Ctrl+T`) — each keeps its own conversation, and can even run its
+own model. Slash commands below are a power-user shortcut; you never need them.
 
 | Command | What it does |
 |---------|--------------|
@@ -121,15 +124,21 @@ power-user shortcut; you never need them.
 | `/schema <name>` | Show a table's columns, types and null rates |
 | `/sql <query>` | Run SQL directly, bypassing the model (still recorded as evidence) |
 | `/login` `/logout` `/auth` | Sign in to a hosted provider (Vercel AI Gateway, OpenAI, xAI, Ollama Cloud, OpenRouter, or a custom OpenAI-compatible endpoint); list what's signed in |
-| `/model` | Show or change the LLM provider, base URL and model (for a custom endpoint) |
+| `/model` | Show or change the LLM provider, base URL and model. Per-tab: each tab can run a different model, but all tabs share one login |
 | `/reindex` | Check the folder again for new or changed files |
 | `/update` | Check for a newer release and install it (checksum-verified, same as the install scripts); Fella closes and you reopen it once the installer finishes |
 | `/packs` | Themes and skills you've added. `/packs add <path>` for a local one, `/packs install <id>` from the seed catalog ([`docs/EXTENSIBILITY.md`](docs/EXTENSIBILITY.md)) |
 | `/connect` | Connect a data source you installed as an `mcp` pack (paste its token) |
-| `/clear` | Start a new conversation |
+| `/tab` | Open another conversation in a new tab |
+| `/focus` | Hide the tabs and header for a plain view (again to undo) |
+| `/clear` | Start a new conversation (the old one is saved) |
+| `/history` | List your saved conversations; `/history <n>` reopens one in a new tab |
+| `/retry` | Ask your last question again |
+| `/help` | Show all commands |
 
 **Keys:** `Enter` send · `Shift+Enter` newline · `↑` recall last input ·
-`Ctrl+L` clear screen · `Ctrl+K` command palette · `Esc` stop a running
+`Ctrl+K` command palette · `Ctrl+T` new tab · `Ctrl+W` close tab ·
+`Ctrl+1`…`9` switch tab · `Ctrl+L` clear screen · `Esc` stop a running
 answer, otherwise collapse all evidence.
 
 You can also click the pulsing dot next to the composer to stop a run. A stopped
@@ -139,16 +148,22 @@ run keeps whatever evidence it had gathered and answers `Stopped.`
 
 Under each answer is a fold-away line like `▸ working · 3 steps · 412 rows · 0.7s`.
 Open it to see every tool the model called, the SQL or Python it ran, a sample of the
-rows that came back, timings, and the self-checks Fella ran afterwards it re-executes
-the queries the answer cites and confirms every figure appears in a real result.
+rows that came back, timings, and the self-checks Fella ran afterwards: it confirms
+every table the answer cites is real, re-executes the queries and confirms every
+figure appears in a real result, and flags a total computed over a column that isn't
+actually numeric (SQLite reads non-numeric text as `0`, which would otherwise look
+like a real, if wrong, answer). Follow-up questions in the same conversation reuse
+what earlier turns already established — the schema, the queries that already
+worked — instead of starting over each time.
 
 ### Personalizing
 
 Fella works with nothing set up. If you want more: drop a `fella.md` in your folder to
-tell it how your files are organised and what your terms mean, or add a theme or skill
-pack from a local folder with `/packs add <path>`. A small seed catalog is installable
-by id (`/packs install <id>`); a browsable gallery of packs comes later. All optional.
-See [`docs/EXTENSIBILITY.md`](docs/EXTENSIBILITY.md).
+tell it how your files are organised and what your terms mean, or add a pack — a
+`theme` (colours), a `skill` (vocabulary/rules for the model), or an `mcp` connector
+(a remote data source) — from a local folder with `/packs add <path>`. A small seed
+catalog is installable by id (`/packs install <id>`); a browsable gallery of packs
+comes later. All optional. See [`docs/EXTENSIBILITY.md`](docs/EXTENSIBILITY.md).
 
 ## Contributing
 
