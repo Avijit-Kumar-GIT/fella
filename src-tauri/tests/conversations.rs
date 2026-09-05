@@ -63,6 +63,57 @@ fn a_second_archive_for_the_same_id_is_a_no_op() {
 }
 
 #[test]
+fn lists_conversations_newest_first_with_a_preview() {
+    let data = scratch("conv-list");
+    let engine = EngineState::new(&data).unwrap();
+
+    engine
+        .archive_conversation(
+            "older",
+            r#"{"id":"older","saved_at_ms":100,"workspace":"/w1",
+                "messages":[{"role":"user","text":"How did my spending change?"},
+                            {"role":"assistant","text":"Up 12%."}]}"#,
+        )
+        .unwrap();
+    engine
+        .archive_conversation(
+            "newer",
+            r#"{"id":"newer","saved_at_ms":200,"workspace":null,"messages":[]}"#,
+        )
+        .unwrap();
+
+    let list = engine.conversations_list();
+    assert_eq!(list.len(), 2);
+    assert_eq!(list[0].id, "newer", "newest saved_at_ms should come first");
+    assert_eq!(list[1].id, "older");
+    assert_eq!(list[1].preview, "How did my spending change?");
+    assert_eq!(list[1].message_count, 2);
+    assert_eq!(list[1].workspace.as_deref(), Some("/w1"));
+    assert_eq!(list[0].preview, "(empty conversation)");
+    assert_eq!(list[0].workspace, None);
+
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[test]
+fn loads_a_conversation_by_id_and_rejects_an_unknown_one() {
+    let data = scratch("conv-load");
+    let engine = EngineState::new(&data).unwrap();
+
+    let body = r#"{"id":"loadme","saved_at_ms":1,"workspace":"/w","messages":[{"role":"user","text":"hi"}]}"#;
+    engine.archive_conversation("loadme", body).unwrap();
+
+    let loaded = engine.conversation_load("loadme").unwrap();
+    let v: serde_json::Value = serde_json::from_str(&loaded).unwrap();
+    assert_eq!(v["messages"][0]["text"], "hi");
+    assert_eq!(v["workspace"], "/w");
+
+    assert!(engine.conversation_load("no-such-id").is_err());
+
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[test]
 fn a_weird_id_is_sanitized_and_bad_json_is_rejected() {
     let data = scratch("conv-edge");
     let engine = EngineState::new(&data).unwrap();
