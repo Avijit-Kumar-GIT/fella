@@ -153,6 +153,16 @@ export interface UpdateStatus {
 	available: boolean;
 }
 
+/** One row of `/history`'s list — enough to recognize and pick a past
+ * conversation without knowing its id. */
+export interface ConversationSummary {
+	id: string;
+	saved_at_ms: number;
+	workspace: string | null;
+	preview: string;
+	message_count: number;
+}
+
 /** A pack: a theme, a skill, or an mcp connector. See docs/EXTENSIBILITY.md. */
 export type PackKind = 'theme' | 'skill' | 'mcp';
 

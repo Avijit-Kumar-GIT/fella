@@ -64,6 +64,12 @@ sse-stream = { version = "0.2", optional = true }
 futures = { version = "0.3", optional = true }
 bytes = { version = "1", optional = true }
 
+# Windows-only: one Win32 call (ShowCursor) in `commands::unhide_cursor`.
+# Already in the tree transitively via tauri/wry at this exact version, so this
+# adds a direct edge, not a crate.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging"] }
+
 [profile.dev]
 opt-level = 0
 

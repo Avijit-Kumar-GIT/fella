@@ -8,6 +8,7 @@ import type {
 	Answer,
 	AskEvent,
 	Catalog,
+	ConversationSummary,
 	InstalledPack,
 	OllamaHealth,
 	ProviderInfo,
@@ -97,11 +98,21 @@ export const ipc = {
 	 * install it and exit. Only ever called by `/update`; never automatic. */
 	update: () => invoke<UpdateStatus>('update'),
 
+	/** Windows: pull the OS cursor-visibility counter back to >= 0 before a
+	 * modal native dialog, so "hide pointer while typing" can't leave the
+	 * pointer invisible inside the folder picker. No-op on other platforms. */
+	unhideCursor: () => invoke<void>('unhide_cursor'),
+
 	/** Archive a finished transcript to a file; resolves with its path. */
 	archiveConversation: (id: string, body: string) =>
 		invoke<string>('archive_conversation', { id, body }),
 	/** Where archived conversations live, and how many there are. */
 	conversationsInfo: () => invoke<{ path: string; count: number }>('conversations_info'),
+	/** Every archived conversation, newest first, for `/history` to list. */
+	conversationsList: () => invoke<ConversationSummary[]>('conversations_list'),
+	/** Raw JSON of one archived conversation `{id, workspace, messages}`,
+	 * matching what `archiveConversation` originally wrote. */
+	conversationLoad: (id: string) => invoke<string>('conversation_load', { id }),
 
 	/**
 	 * Ask a question. Streams progress through `onEvent`; resolves with the
