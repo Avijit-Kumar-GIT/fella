@@ -249,6 +249,57 @@ pub async fn apply(http: &reqwest::Client, app: tauri::AppHandle) -> EngineResul
     Ok(status)
 }
 
+/// The PowerShell script `/update` runs on Windows *after* Fella exits: wait
+/// for the file lock on the running .exe to release, run the installer to
+/// completion, then relaunch from the same path (an in-place upgrade keeps
+/// `current_exe()` valid).
+///
+/// Kept as a plain function, not inlined into the win32-only `platform::apply`,
+/// so its shape is testable on any host. What each piece is defending against
+/// (all of which broke the pre-0.1.3 `cmd`-based version):
+///
+/// - **PowerShell, not a `cmd /C` string.** The old code passed a multi-quote
+///   `/C` string through `Command::args`; Rust's arg quoting and `cmd`'s
+///   parsing disagree on embedded quotes, so the installer and relaunch paths
+///   arrived mangled and neither ran. A `powershell -File <path>` invocation
+///   quotes cleanly.
+/// - **`Start-Sleep`, not `timeout`.** `timeout` aborts immediately ("input
+///   redirection is not supported") when there's no console, so the old grace
+///   period never happened.
+/// - **`-Wait` on the installer.** The old `&`-chain fired the installer and
+///   relaunched Fella in the same breath, so a successful update still
+///   relaunched the *old* binary.
+///
+/// Installer failures are appended to `update.log` next to the installer.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn windows_update_script(
+    installer: &std::path::Path,
+    exe: &std::path::Path,
+    log: &std::path::Path,
+) -> String {
+    // Values are embedded in single-quoted PowerShell strings; a literal
+    // apostrophe in a path is escaped by doubling it.
+    let q = |p: &std::path::Path| p.display().to_string().replace('\'', "''");
+    let run_installer = if installer.extension().and_then(|e| e.to_str()) == Some("msi") {
+        format!(
+            "Start-Process -FilePath 'msiexec' -ArgumentList '/i','{}','/passive' -Wait",
+            q(installer)
+        )
+    } else {
+        format!(
+            "Start-Process -FilePath '{}' -ArgumentList '/S' -Wait",
+            q(installer)
+        )
+    };
+    format!(
+        "Start-Sleep -Seconds 2\r\n\
+         try {{ {run_installer} }} catch {{ $_ | Out-File -Append '{log}' }}\r\n\
+         Start-Process -FilePath '{exe}'\r\n",
+        log = q(log),
+        exe = q(exe),
+    )
+}
+
 #[cfg(target_os = "windows")]
 mod platform {
     use std::os::windows::process::CommandExt;
@@ -259,30 +310,49 @@ mod platform {
 
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     const DETACHED_PROCESS: u32 = 0x0000_0008;
+    // Some launchers put us in a job object with KILL_ON_JOB_CLOSE; without
+    // this flag, `app.exit` closes the job and takes the updater down with it,
+    // so nothing installs. Ignored when we're not in a job.
+    const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
 
-    /// Windows won't let the new installer overwrite the running .exe. Spawn
-    /// a detached shell that waits a couple of seconds (for this process to
-    /// fully exit and release the file lock), runs the installer silently,
-    /// then relaunches Fella from the same path it's running from today
-    /// (an upgrade installs in place, so `current_exe()` is still correct
-    /// afterward) then exit immediately so the wait has something to wait
-    /// for. Best-effort: not verified against a real Windows install yet.
+    /// Windows won't let the installer overwrite the running .exe, so the work
+    /// happens in a detached PowerShell process that outlives us. See
+    /// [`super::windows_update_script`] for what the script does and why.
+    /// Still best-effort the fallback is re-running the install command by
+    /// hand and a failed install never leaves a broken one (nothing is
+    /// touched until the download passes its checksum).
     pub fn apply(installer: &Path, app: &tauri::AppHandle) -> EngineResult<()> {
         let exe = std::env::current_exe().map_err(|e| EngineError::io("find current exe", e))?;
-        let installer_cmd = if installer.extension().and_then(|e| e.to_str()) == Some("msi") {
-            format!("msiexec /i \"{}\" /passive", installer.display())
-        } else {
-            format!("\"{}\" /S", installer.display())
+        let dir = installer.parent().unwrap_or_else(|| Path::new("."));
+        let script_path = dir.join("apply-update.ps1");
+        let log = dir.join("update.log");
+        std::fs::write(
+            &script_path,
+            super::windows_update_script(installer, &exe, &log),
+        )
+        .map_err(|e| EngineError::io("write the update script", e))?;
+
+        let base = CREATE_NO_WINDOW | DETACHED_PROCESS;
+        let spawn = |extra: u32| {
+            Command::new("powershell")
+                .args([
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-WindowStyle",
+                    "Hidden",
+                    "-File",
+                ])
+                .arg(&script_path)
+                .creation_flags(base | extra)
+                .spawn()
         };
-        let script = format!(
-            "timeout /t 2 /nobreak >nul & {installer_cmd} & \"{}\"",
-            exe.display()
-        );
-        Command::new("cmd")
-            .args(["/C", &script])
-            .creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS)
-            .spawn()
-            .map_err(|e| EngineError::io("launch the installer", e))?;
+        // Prefer breaking away from a job object; if the job forbids it the
+        // spawn is refused, so retry without (the common case no job at all).
+        if spawn(CREATE_BREAKAWAY_FROM_JOB).is_err() {
+            spawn(0).map_err(|e| EngineError::io("launch the updater", e))?;
+        }
         app.exit(0);
         Ok(())
     }
@@ -442,5 +512,53 @@ mod tests {
         // platforms there must be at least one candidate name to look for.
         #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
         assert!(!asset_candidates("0.1.1").is_empty());
+    }
+
+    #[test]
+    fn windows_update_script_waits_then_installs_to_completion_then_relaunches() {
+        use std::path::Path;
+        let s = windows_update_script(
+            Path::new(r"C:\Temp\fella-update\Fella_0.1.3_x64-setup.exe"),
+            Path::new(r"C:\Program Files\Fella\fella.exe"),
+            Path::new(r"C:\Temp\fella-update\update.log"),
+        );
+        // A real delay, not `timeout` (which aborts with no console).
+        assert!(s.contains("Start-Sleep -Seconds 2"));
+        assert!(!s.contains("timeout"));
+        // Installer runs silently and to completion...
+        assert!(s.contains(
+            r"Start-Process -FilePath 'C:\Temp\fella-update\Fella_0.1.3_x64-setup.exe' -ArgumentList '/S' -Wait"
+        ));
+        // ...before the relaunch line, not racing it.
+        let install_at = s.find("-ArgumentList '/S' -Wait").unwrap();
+        let relaunch_at = s.find(r"Start-Process -FilePath 'C:\Program Files\Fella\fella.exe'").unwrap();
+        assert!(install_at < relaunch_at, "relaunch must come after the install");
+        // Written out as a .ps1 file.
+        assert!(s.ends_with("\r\n"));
+    }
+
+    #[test]
+    fn windows_update_script_uses_msiexec_for_an_msi() {
+        use std::path::Path;
+        let s = windows_update_script(
+            Path::new(r"C:\Temp\Fella_0.1.3_x64_en-US.msi"),
+            Path::new(r"C:\a\fella.exe"),
+            Path::new(r"C:\Temp\update.log"),
+        );
+        assert!(s.contains(
+            r"Start-Process -FilePath 'msiexec' -ArgumentList '/i','C:\Temp\Fella_0.1.3_x64_en-US.msi','/passive' -Wait"
+        ));
+    }
+
+    #[test]
+    fn windows_update_script_escapes_an_apostrophe_in_a_path() {
+        use std::path::Path;
+        let s = windows_update_script(
+            Path::new(r"C:\Users\O'Brien\Fella_0.1.3_x64-setup.exe"),
+            Path::new(r"C:\Users\O'Brien\App\fella.exe"),
+            Path::new(r"C:\Users\O'Brien\update.log"),
+        );
+        assert!(s.contains(r"C:\Users\O''Brien\Fella_0.1.3_x64-setup.exe"));
+        assert!(!s.contains(r"O'Brien\Fella"));
     }
 }

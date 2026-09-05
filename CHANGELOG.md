@@ -6,6 +6,24 @@ All notable changes to Fella are recorded here. Format follows
 
 ## [Unreleased]
 
+## [0.1.3]
+
+### Fixed
+
+- **Windows: `/update` closed the app but never installed anything.** The
+  detached hand-off that runs the downloaded installer was built as a
+  `cmd /C` string with several quoted paths in it; Rust's argument quoting
+  and `cmd`'s own parsing disagree on embedded quotes, so the installer and
+  relaunch commands both arrived mangled and neither ran. It also used
+  `timeout` for its grace delay (which aborts immediately with no console)
+  and chained the relaunch with `&` (which fires it *before* the install
+  finishes). The hand-off is now a `powershell -File` script that sleeps,
+  runs the installer to completion, then relaunches and it breaks away from
+  any job object so exiting Fella can't take it down. The download and
+  checksum half were always fine; a failed install still can't produce a
+  broken one. If it still doesn't take, the already-verified installer is
+  left at `%TEMP%\fella-update\` to run by hand.
+
 ## [0.1.2]
 
 ### Added
@@ -137,7 +155,8 @@ folder of your own files with deterministic SQL / Python, and shows its working.
 - The hosted pack browser isn't live yet: `/packs add <path>` works offline, and
   `/packs install <id>` pulls from a small seed catalog.
 
-[Unreleased]: https://github.com/Avijit-Kumar-GIT/fella/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/Avijit-Kumar-GIT/fella/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/Avijit-Kumar-GIT/fella/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/Avijit-Kumar-GIT/fella/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/Avijit-Kumar-GIT/fella/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Avijit-Kumar-GIT/fella/releases/tag/v0.1.0
