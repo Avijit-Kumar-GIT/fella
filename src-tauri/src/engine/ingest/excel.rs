@@ -318,7 +318,12 @@ fn infer_columns(data: &[&[Data]], width: usize) -> Vec<ColInfer> {
             if numeric * 2 > nonblank {
                 return ColInfer {
                     ty: ColType::Text,
-                    note: Some("looks numeric but is mixed; kept as text - CAST it for a total".into()),
+                    note: Some(format!(
+                        "{numeric} of {nonblank} values parse as numbers; kept as text. Use \
+                         parse_num(col) for a reliable total (CAST silently truncates text like \
+                         \"1,200\" instead of erroring); COUNT(*) - COUNT(parse_num(col)) shows \
+                         how many rows didn't parse"
+                    )),
                 };
             }
             ColInfer { ty: ColType::Text, note: None }
@@ -436,6 +441,24 @@ mod tests {
         assert!(c[0].note.is_some());
         assert_eq!(cell_to_json(&Data::String("$1,200.00".into()), ColType::Float), Json::from(1200.0));
         assert_eq!(cell_to_json(&Data::String("N/A".into()), ColType::Float), Json::Null);
+    }
+
+    #[test]
+    fn mixed_column_note_points_at_parse_num_not_cast() {
+        // Mostly-numeric-but-not-cleanly-so (>50%, not the few-stragglers
+        // tier) stays TEXT; the note must steer toward parse_num(), not the
+        // bare CAST that silently truncates comma-formatted text.
+        let r1 = [Data::String("$1,200.00".into())];
+        let r2 = [Data::String("1,150".into())];
+        let r3 = [Data::String("1200".into())];
+        let r4 = [Data::String("rent".into())];
+        let r5 = [Data::String("deposit".into())];
+        let rows: Vec<&[Data]> = vec![&r1, &r2, &r3, &r4, &r5];
+        let c = infer_columns(&rows, 1);
+        assert_eq!(c[0].ty, ColType::Text);
+        let note = c[0].note.as_deref().expect("a mixed column should be noted");
+        assert!(note.contains("parse_num"), "note should mention parse_num: {note:?}");
+        assert!(!note.contains("CAST it for a total"), "note should not tell the model to CAST: {note:?}");
     }
 
     #[test]
