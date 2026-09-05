@@ -6,6 +6,36 @@ All notable changes to Fella are recorded here. Format follows
 
 ## [Unreleased]
 
+### Added
+
+- **`/update`** checks the latest GitHub release and, if it's newer,
+  downloads + checksum-verifies the right installer for your OS and
+  installs it (Fella closes; reopen it once the installer finishes). Manual
+  only there's still no automatic or background check. See `SECURITY.md`
+  and `docs/SECURITY-REVIEW-v0.1.md` for the egress entry this adds.
+
+### Fixed
+
+- **`/reindex` broke every already-loaded table.** A workspace that opened
+  fine reported the exact same, unchanged file as unreadable the moment
+  `/reindex` ran in that session a SQLite `DROP VIEW IF EXISTS` on a name
+  that only ever existed as a table errored instead of no-opping. Affected
+  any tabular source (CSV, TSV, JSON, NDJSON, XLSX), not just one file type.
+- **`run_sql` rejected the read-only `REPLACE()` string function**, blocking
+  the standard way to strip currency formatting (commas, `$`) from a text
+  column before summing it a blanket ban on the word "replace" caught the
+  harmless function along with the mutating `REPLACE INTO` statement it was
+  meant to stop (which was already blocked another way).
+- **`scripts/install.ps1`'s checksum check always failed** on Windows
+  PowerShell 5.1: `SHA256SUMS` is served as `application/octet-stream`, and
+  `Invoke-WebRequest`'s `.Content` for that content-type is a raw byte
+  array, not text, so the checksum could never be found regardless of what
+  the file actually contained.
+- **`run_python` could never find Python on Windows.** The interpreter
+  search hardcoded the POSIX `PATH`-list separator `:`, which breaks on
+  Windows both because the real separator is `;` and because Windows paths
+  themselves contain `:` (drive letters).
+
 ### Changed
 
 - **Renamed Woody → Fella** throughout (app name, `dev.fella.app` identifier,

@@ -12,7 +12,7 @@ Reviewed against commit at branch cut. Re-confirm the checklist items marked
 | Guarantee | Evidence |
 |---|---|
 | **Read-only workspace** | No `fs` capability is exposed to the webview (`src-tauri/capabilities/default.json` has `core:default` + `dialog:allow-open` + `opener` only). All file access is Rust-side behind the engine. The `run_sql` connection is opened read-only and gated by an allowlist (`engine/data/mod.rs` `ensure_read_only`: single statement, must start SELECT/WITH/…; bans `attach/copy/read_csv/…`). `read_file` resolves a name against the catalogued document list, not a path no traversal. Tests: `workspace.rs`, `fs_tools.rs`, `data/mod.rs`. |
-| **Local-first** | One shared `reqwest` client. Every outbound call enumerated below only the model provider is reached on a normal run. No telemetry, update-check, or analytics anywhere in `src-tauri/src`. |
+| **Local-first** | One shared `reqwest` client. Every outbound call enumerated below only the model provider is reached on a normal run. No telemetry or analytics anywhere in `src-tauri/src`; the one update-check call exists (`/update`, added post-v0.1.0) but is user-invoked only, never on startup or in the background. |
 | **Credentials isolated** | `auth.json` written atomically (`auth.json.tmp` + rename) with mode `0600` set on both the temp and final file (`engine/secrets.rs`; test `file_is_owner_only`). Keys are read only to build the `Authorization` header (`engine/llm.rs` `bearer_auth`, `engine/mcp.rs`). `sqlite::save_settings` writes only `provider/base_url/model/embed_model` (test asserts a key in the patch never serializes). Never returned to the frontend (`set_api_key` → `Settings` with a `has_credential: bool`). Never in the conversation archive. |
 | **Deterministic, verified answers** | Figures come from tool results; the verification pass re-runs cited queries and checks every number appears in a real result (`engine/verify.rs`; tests in `qc.rs`, `verify.rs`). |
 
@@ -23,6 +23,7 @@ Reviewed against commit at branch cut. Re-confirm the checklist items marked
 | The configured model provider (`localhost:11434` Ollama by default; or OpenAI / Vercel AI Gateway / xAI / Ollama Cloud / OpenRouter / a custom base URL) | every question, plus a health probe and a warm-up | `engine/llm.rs`, `engine/provider.rs` |
 | `raw.githubusercontent.com/…/fella-extensions/main/catalog.json` and each pack file it lists | only on `/packs install <id>` | `engine/extensions.rs` (`FELLA_CATALOG_URL` overrides). Every file SHA-256-checked against the catalog before it touches disk. |
 | A user-configured MCP server URL | only when an enabled `mcp` connector pack's tool is called | `engine/mcp.rs` |
+| `api.github.com/repos/Avijit-Kumar-GIT/fella/releases/latest`, the chosen installer's `browser_download_url`, and `SHA256SUMS` | only on `/update` | `engine/update.rs` (`FELLA_RELEASE_API_URL` overrides). The installer is checksum-verified before it's handed off; a mismatch aborts with nothing installed, matching `scripts/install.sh`/`install.ps1`'s own check. |
 
 `run_python` may itself open sockets or read outside the workspace Fella issues
 no request on its behalf, and this is a documented limitation, not a regression
@@ -71,6 +72,15 @@ no request on its behalf, and this is a documented limitation, not a regression
    a GUI build to verify hydration tracked for v0.1.1.
 5. **No frontend test harness.** `svelte-check` plus the manual smoke list is
    the v0.1 gate; vitest is a v0.1.1 candidate.
+6. **`/update`'s per-OS apply step is best-effort, not live-verified on every
+   platform.** The version-check, download, and checksum-verify logic is unit-
+   and integration-tested (`engine/update.rs`, `tests/update_check.rs`); the
+   part that actually replaces the running binary and relaunches (spawn a
+   detached installer/shell script, then exit) has only been reasoned through
+   per OS, not exercised against a real install on each one before shipping.
+   A failure here means the update doesn't apply the same `re-run the install
+   command by hand` fallback as always, never a broken install, since nothing
+   is touched until after the checksum passes.
 
 ## Not changed (by decision)
 

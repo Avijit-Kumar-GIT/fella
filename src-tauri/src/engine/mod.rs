@@ -17,6 +17,7 @@ pub mod secrets;
 pub mod sqlite;
 pub mod state;
 pub mod tools;
+pub mod update;
 pub mod verify;
 
 pub use catalog::{Catalog, SourceInfo};
@@ -27,3 +28,4 @@ pub use llm::ProviderHealth;
 pub use provider::{AuthKind, Provider, PROVIDERS};
 pub use sqlite::Settings;
 pub use state::{ConversationsInfo, EngineState, ProviderInfo, QueryResult};
+pub use update::UpdateStatus;

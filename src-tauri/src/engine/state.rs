@@ -21,6 +21,7 @@ use crate::engine::pyexec;
 use crate::engine::secrets::Secrets;
 use crate::engine::sqlite::{self, Settings};
 use crate::engine::tools::Registry;
+use crate::engine::update;
 
 pub struct EngineState {
     data: Mutex<Box<dyn DataEngine>>,
@@ -442,6 +443,15 @@ impl EngineState {
         let conn = self.sqlite.lock().unwrap_or_else(|e| e.into_inner());
         extensions::install_downloaded(&self.data_dir, &conn, &downloaded)?;
         Ok(extensions::list(&conn))
+    }
+
+    /// Check the latest GitHub release and, if it's newer, download +
+    /// checksum-verify the right installer for this OS and hand off to it
+    /// (the app exits as part of that handoff see `engine::update`).
+    /// Returns without exiting when already up to date, or on any failure
+    /// before the handoff.
+    pub async fn update(&self, app: tauri::AppHandle) -> EngineResult<update::UpdateStatus> {
+        update::apply(&self.http, app).await
     }
 
     /// CSS token map of the active theme pack, for the frontend to apply.

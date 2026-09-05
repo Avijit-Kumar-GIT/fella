@@ -7,6 +7,21 @@ this app repo (now **`fella`**; `fella-ai` is a private pre-v0.1 archive),
 `fella-marketplace` to mean the browse-site half of the **`fella-web`** repo,
 and any `CODE_OF_CONDUCT.md` mention as folded into `CONTRIBUTING.md` (§Conduct).
 
+- **2026-09-05** **`/update` reuses the install-script checksum pattern
+  instead of `tauri-plugin-updater`.** Post-v0.1.0 bugs (`fella#13` and
+  others found via real usage) made "redownload and reinstall by hand for
+  every fix" clearly not sustainable, but the official signed auto-updater
+  is a real project of its own: a signing keypair to generate and keep
+  secret, a `latest.json` manifest, and `release.yml` changes, none of which
+  exist yet, and a broken or misconfigured signing setup is a worse failure
+  mode than no updater. `/update` gets most of the value today with none of
+  that: it checks `/releases/latest`, downloads the matching installer,
+  verifies it against `SHA256SUMS` (exactly what `install.sh`/`install.ps1`
+  already do), and hands off to it same integrity story, no new
+  infrastructure. Manual only, no background/startup check, so the
+  documented "no update-check" network story stays true except when the
+  user explicitly asks. The real auto-updater is still open (`fella#14`) for
+  when unattended/silent updates are actually wanted.
 - **2026-09-02** **Hosted pack marketplace paused until there's demand; the
   in-app feature ships as-is.** The pack system in the app is done and tested and
   stays: `/packs add` (local folder, offline), `/packs install <id>` (by id,

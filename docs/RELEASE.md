@@ -13,9 +13,10 @@ repo move it ships from. Not user-facing.
 - **Installers** are built by the `release.yml` matrix (macOS universal +
   Windows + Linux x86_64) via `tauri-apps/tauri-action`, on a pushed `v*` tag.
   No local cross-compiling.
-- **Unsigned, no auto-updater.** A `SHA256SUMS` file (attached by `release.yml`,
-  verified by the install scripts) is the integrity check. Re-download to
-  update. See "Not in v0.1".
+- **Unsigned.** A `SHA256SUMS` file (attached by `release.yml`, verified by
+  the install scripts and by `/update`) is the integrity check. `/update`
+  (post-v0.1.0) checks GitHub for a newer tag and installs it when the user
+  runs it; there's still no automatic/background check see "Not in v0.1".
 - **`fella-extensions`** ships as a **public stub** the schema, the pack
   rules, `scripts/build-catalog.mjs`, and `catalog.json` with `"packs": []`. No
   real packs. `/packs install` therefore returns a clean "no pack" message; the
@@ -154,7 +155,11 @@ Run on the current tree; nothing tags until this is green. Record numbers in
 
 - Code signing / notarization ship unsigned; `SHA256SUMS` + HTTPS are the
   integrity story.
-- Auto-updater (`tauri-plugin-updater`, a signing keypair, `latest.json`).
+- The official signed auto-updater (`tauri-plugin-updater`, a signing
+  keypair, `latest.json`). `/update` (post-v0.1.0) covers the common case
+  the same way without that infrastructure: it reuses the `SHA256SUMS` check
+  the install scripts already do, manually triggered, not a background
+  updater. See `fella#14` for the tradeoffs.
 - Homebrew cask / winget / AUR / Flatpak / Snap.
 - A `--features duckdb` bundle (CI-only path).
 - The hosted marketplace website, real packs, the install-counter proxy.

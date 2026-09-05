@@ -9,7 +9,7 @@ use tauri::State;
 
 use crate::engine::{
     Answer, AskEvent, Catalog, ConversationsInfo, EngineError, EngineResult, EngineState,
-    InstalledPack, ProviderHealth, ProviderInfo, QueryResult, Settings, SourceInfo,
+    InstalledPack, ProviderHealth, ProviderInfo, QueryResult, Settings, SourceInfo, UpdateStatus,
 };
 use crate::AppState;
 
@@ -156,6 +156,17 @@ pub async fn packs_install(
     engine: State<'_, EngineState>,
 ) -> Result<Vec<InstalledPack>, EngineError> {
     engine.packs_install(&id).await
+}
+
+/// Check for a newer release and, if one exists, download + verify +
+/// install it and exit. Only ever called by the user typing `/update` no
+/// background/startup check.
+#[tauri::command]
+pub async fn update(
+    app: tauri::AppHandle,
+    engine: State<'_, EngineState>,
+) -> Result<UpdateStatus, EngineError> {
+    engine.update(app).await
 }
 
 /// Store the token an `mcp` connector pack needs.
