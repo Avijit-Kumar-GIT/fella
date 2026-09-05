@@ -26,11 +26,7 @@ pub const QUERY_TIMEOUT_SECS: u64 = 15;
 /// default a power-user escape hatch, and how the tests exercise the path
 /// without waiting 15 s.
 pub fn query_timeout_secs() -> u64 {
-    std::env::var("FELLA_QUERY_TIMEOUT_SECS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .filter(|&n| n > 0)
-        .unwrap_or(QUERY_TIMEOUT_SECS)
+    super::env::positive("FELLA_QUERY_TIMEOUT_SECS", QUERY_TIMEOUT_SECS)
 }
 
 /// Most rows we'll pull into memory from one delimited file at ingest. Generous
@@ -41,11 +37,7 @@ pub fn query_timeout_secs() -> u64 {
 pub const INGEST_ROW_CAP: usize = 2_000_000;
 
 pub fn ingest_row_cap() -> usize {
-    std::env::var("FELLA_INGEST_ROW_CAP")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .filter(|&n| n > 0)
-        .unwrap_or(INGEST_ROW_CAP)
+    super::env::positive("FELLA_INGEST_ROW_CAP", INGEST_ROW_CAP)
 }
 
 /// A neutral cell value used for bulk inserts and query results.
