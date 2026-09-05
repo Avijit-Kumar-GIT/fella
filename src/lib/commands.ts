@@ -153,7 +153,22 @@ export async function openFolder(path?: string): Promise<void> {
 		session.addSystem('Fella needs the desktop app to do that.');
 		return;
 	}
-	const chosen = path ?? (await pickFolder());
+
+	let chosen = path;
+	if (chosen == null) {
+		// The native picker inherits the OS cursor state from the instant it
+		// opens. Reached by a mouse click (the welcome-screen button) that's
+		// fine. Reached by `Enter` in the composer, Windows has just hidden the
+		// pointer ("hide pointer while typing") and the modal dialog seizes the
+		// message loop before a mouse-move restores it, so the cursor stays
+		// invisible for the life of the picker. Drop the text caret and let the
+		// webview settle its own cursor first, then have the OS re-show the
+		// pointer (no-op off Windows) matching what the click path gets for free.
+		(document.activeElement as HTMLElement | null)?.blur();
+		await new Promise((r) => requestAnimationFrame(r));
+		await ipc.unhideCursor().catch(() => {}); // best-effort; never block the picker
+		chosen = (await pickFolder()) ?? undefined;
+	}
 	if (!chosen) return;
 	try {
 		session.busy = true;

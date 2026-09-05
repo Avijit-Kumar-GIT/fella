@@ -97,6 +97,11 @@ export const ipc = {
 	 * install it and exit. Only ever called by `/update`; never automatic. */
 	update: () => invoke<UpdateStatus>('update'),
 
+	/** Windows: pull the OS cursor-visibility counter back to >= 0 before a
+	 * modal native dialog, so "hide pointer while typing" can't leave the
+	 * pointer invisible inside the folder picker. No-op on other platforms. */
+	unhideCursor: () => invoke<void>('unhide_cursor'),
+
 	/** Archive a finished transcript to a file; resolves with its path. */
 	archiveConversation: (id: string, body: string) =>
 		invoke<string>('archive_conversation', { id, body }),
