@@ -19,8 +19,10 @@ rather than including a working exploit.
 
 - **Read-only.** Fella reads the folder you point it at; it never writes,
   moves, or deletes anything there.
-- **Local-first.** The only network call the base app makes is the request to
-  the model provider you chose (a local Ollama by default).
+- **Local-first.** The only network call the base app makes on its own is the
+  request to the model provider you chose (a local Ollama by default).
+  `/packs install` and `/update` reach GitHub, but only when you type one of
+  those commands never automatically, never on startup.
 - **Credentials** (API keys, and tokens for `mcp` connector packs) live in
   `auth.json` (mode `0600`) in the OS app-data directory never in the
   settings database, `localStorage`, or the transcript, and never echoed.

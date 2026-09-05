@@ -78,9 +78,10 @@ Then give Fella a model:
 
 Everything including questions about your PDFs and notes works on every
 provider (Fella reads documents directly, no embedding step). Builds are
-**unsigned** and there is no auto-updater yet re-run the install command (or
-re-download) to update, and verify the download against the `SHA256SUMS` on the
-release. Signing, notarisation, an updater and Homebrew/winget are planned.
+**unsigned** type `/update` any time to check for and install a newer
+release yourself (it verifies the download against `SHA256SUMS` first,
+same as the install scripts); there's no automatic background check.
+Signing, notarisation, and Homebrew/winget are planned.
 
 ## Build from source
 
@@ -122,6 +123,7 @@ power-user shortcut; you never need them.
 | `/login` `/logout` `/auth` | Sign in to a hosted provider (Vercel AI Gateway, OpenAI, xAI, Ollama Cloud, OpenRouter, or a custom OpenAI-compatible endpoint); list what's signed in |
 | `/model` | Show or change the LLM provider, base URL and model (for a custom endpoint) |
 | `/reindex` | Check the folder again for new or changed files |
+| `/update` | Check for a newer release and install it (checksum-verified, same as the install scripts); Fella closes and you reopen it once the installer finishes |
 | `/packs` | Themes and skills you've added. `/packs add <path>` for a local one, `/packs install <id>` from the seed catalog ([`docs/EXTENSIBILITY.md`](docs/EXTENSIBILITY.md)) |
 | `/connect` | Connect a data source you installed as an `mcp` pack (paste its token) |
 | `/clear` | Start a new conversation |

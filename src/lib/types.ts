@@ -144,6 +144,15 @@ export interface QueryResult {
 	truncated: boolean;
 }
 
+/** Result of `/update` checking (and possibly applying) a new release. */
+export interface UpdateStatus {
+	current: string;
+	latest: string;
+	/** True only if a newer release exists; false once an update has been
+	 * kicked off (the app is about to exit) or when already up to date. */
+	available: boolean;
+}
+
 /** A pack: a theme, a skill, or an mcp connector. See docs/EXTENSIBILITY.md. */
 export type PackKind = 'theme' | 'skill' | 'mcp';
 
