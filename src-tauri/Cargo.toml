@@ -1,6 +1,6 @@
 [package]
 name = "fella"
-version = "0.1.0"
+version = "0.1.1"
 description = "Ask questions about your own files"
 authors = ["Avijit Kumar and contributors"]
 license = "MIT"
