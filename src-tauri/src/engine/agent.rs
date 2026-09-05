@@ -19,11 +19,7 @@ use crate::engine::{verify, Catalog};
 const MAX_STEPS: usize = 20;
 
 fn max_steps() -> usize {
-    std::env::var("FELLA_MAX_STEPS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .filter(|&n: &usize| n > 0)
-        .unwrap_or(MAX_STEPS)
+    super::env::positive("FELLA_MAX_STEPS", MAX_STEPS)
 }
 
 /// Resolves once `flag` is set used to race against `llm.chat`.

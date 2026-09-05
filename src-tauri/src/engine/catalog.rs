@@ -12,11 +12,7 @@ use crate::engine::error::{EngineError, EngineResult};
 /// How deep below the workspace root we look for files. `FELLA_SCAN_DEPTH`
 /// overrides. People nest a year or two of subfolders; 3 was too shallow.
 fn max_depth() -> usize {
-    std::env::var("FELLA_SCAN_DEPTH")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .filter(|&n: &usize| n > 0)
-        .unwrap_or(8)
+    super::env::positive("FELLA_SCAN_DEPTH", 8)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -4,6 +4,7 @@
 pub mod agent;
 pub mod catalog;
 pub mod data;
+mod env;
 pub mod error;
 pub mod evidence;
 pub mod extensions;
