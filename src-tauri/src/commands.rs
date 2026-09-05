@@ -254,3 +254,27 @@ pub fn cancel(conversation_id: String, engine: State<'_, EngineState>) {
 pub fn forget_conversation(conversation_id: String, engine: State<'_, EngineState>) {
     engine.forget_conversation(&conversation_id);
 }
+
+/// Make sure the OS mouse cursor is visible before the UI opens a modal native
+/// dialog (the folder picker). On Windows, "hide pointer while typing" lowers an
+/// internal per-thread counter and normally raises it again on the next
+/// mouse-move but a modal dialog opened straight from a keystroke (`/open` +
+/// Enter) grabs the message loop first, so the pointer stays invisible for the
+/// whole time the picker is up. Raise the counter back to non-negative here.
+/// Every non-Windows target compiles this to an empty body.
+#[tauri::command]
+pub fn unhide_cursor() {
+    #[cfg(windows)]
+    // SAFETY: ShowCursor is a thread-safe Win32 call with no preconditions.
+    unsafe {
+        use windows::Win32::UI::WindowsAndMessaging::ShowCursor;
+        // ShowCursor(TRUE) increments the counter and returns the new value;
+        // the cursor is shown once it's >= 0. Stop as soon as it is, and bound
+        // the loop so a pathological starting value can't spin.
+        for _ in 0..16 {
+            if ShowCursor(true.into()) >= 0 {
+                break;
+            }
+        }
+    }
+}
