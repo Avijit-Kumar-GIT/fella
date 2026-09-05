@@ -64,6 +64,7 @@ pub fn run() {
             commands::ask,
             commands::cancel,
             commands::forget_conversation,
+            commands::unhide_cursor,
             commands::packs_list,
             commands::packs_add,
             commands::packs_remove,
