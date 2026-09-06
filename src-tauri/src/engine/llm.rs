@@ -56,8 +56,9 @@ fn ollama_num_ctx() -> u32 {
 }
 
 /// Cap on tokens the model may generate in one turn (`num_predict` on Ollama,
-/// `max_tokens` on the OpenAI wire). A tool call or a normal answer fits well
-/// under 1024; this only bounds a runaway. `FELLA_MODEL_MAX_OUTPUT` overrides.
+/// `max_tokens` / `max_completion_tokens` on the OpenAI wire). A tool call or a
+/// normal answer fits well under 1024; this only bounds a runaway.
+/// `FELLA_MODEL_MAX_OUTPUT` overrides.
 fn max_output_tokens() -> u32 {
     std::env::var("FELLA_MODEL_MAX_OUTPUT")
         .ok()
@@ -75,6 +76,76 @@ fn ollama_think() -> bool {
         std::env::var("FELLA_OLLAMA_THINK").ok().as_deref(),
         Some("1") | Some("true") | Some("yes")
     )
+}
+
+/// OpenAI's reasoning families (`o1`/`o3`/`o4-*`, `gpt-5*` including `gpt-5.6`)
+/// reject `max_tokens` (they want `max_completion_tokens`) and any `temperature`
+/// but the default. Match by name prefix it's the only wire-visible signal,
+/// and new entries in each family keep the prefix. The id can arrive
+/// gateway-namespaced (`openai/gpt-5.6-luna` via Vercel / OpenRouter), so match
+/// the part after the last `/`. Other models (gpt-4o, Grok) are unaffected.
+fn openai_reasoning_model(model: &str) -> bool {
+    let m = model.trim().rsplit('/').next().unwrap_or_default();
+    m.starts_with("o1") || m.starts_with("o3") || m.starts_with("o4") || openai_gpt5_family(m)
+}
+
+/// The `gpt-5` family (`gpt-5`, `gpt-5-mini`, `gpt-5.6-luna`, …) a subset of
+/// [`openai_reasoning_model`]. It defaults `reasoning_effort` to a non-`none`
+/// level, which OpenAI refuses together with function tools on
+/// `/chat/completions`; only `gpt-5*` accepts `reasoning_effort: "none"` to opt
+/// back out (the o-series does not). Fella never surfaces a reasoning trace and
+/// wants the fast path, so it always asks for `none` on these.
+fn openai_gpt5_family(model: &str) -> bool {
+    model
+        .trim()
+        .rsplit('/')
+        .next()
+        .unwrap_or_default()
+        .starts_with("gpt-5")
+}
+
+/// Whether a model id names something you can send a chat completion to.
+/// Providers' `/models` lists mix in embeddings, image, audio/TTS/transcribe,
+/// moderation/guard, rerankers and the legacy base-completion models none of
+/// which work as the answering model. Denylist by id substring (the lists
+/// carry no capability field); any instruct/chat id passes, including
+/// multimodal ones like `gpt-4o` that also read images.
+fn is_text_generation_model(id: &str) -> bool {
+    let id = id.to_ascii_lowercase();
+    const NON_CHAT: &[&str] = &[
+        "embed",          // text-embedding-3-*, nomic-embed-text, mxbai-embed-large
+        "dall-e",
+        "gpt-image",
+        "-image-",        // …-image-generation
+        "stable-diffusion",
+        "sora",
+        "tts",            // tts-1, gpt-4o-mini-tts
+        "whisper",
+        "transcribe",
+        "speech",
+        "-audio",         // gpt-4o-audio-preview
+        "-realtime",      // gpt-4o-realtime-preview
+        "moderation",
+        "-guard",         // llama-guard-*
+        "rerank",
+        "davinci-",       // legacy base completion
+        "babbage-",
+    ];
+    !NON_CHAT.iter().any(|p| id.contains(p))
+}
+
+/// A response body that plainly says the key is wrong, whatever status code
+/// carried it. OpenAI-compatible servers disagree on the status: OpenAI/Vercel
+/// use 401, xAI answers `400 {"code":"invalid-argument","error":"Incorrect API
+/// key provided…"}`. Match the message so a bad key reads as a bad key, not as
+/// "couldn't reach the service".
+fn body_says_bad_key(body: &str) -> bool {
+    let b = body.to_ascii_lowercase();
+    b.contains("incorrect api key")
+        || b.contains("invalid api key")
+        || b.contains("invalid_api_key")
+        || b.contains("api key not valid")
+        || b.contains("no api key provided")
 }
 
 /// Worth another attempt: rate limiting and transient upstream errors.
@@ -216,6 +287,10 @@ impl LlmClient {
                                 // it. Ollama's `/api/tags` has only `name`.
                                 m["id"].as_str().or_else(|| m["name"].as_str()).map(String::from)
                             })
+                            // Only models you can actually chat with the
+                            // `/models` list also carries embeddings, image,
+                            // audio, moderation and base-completion ids.
+                            .filter(|id| is_text_generation_model(id))
                             .collect()
                     })
                     .unwrap_or_default();
@@ -223,10 +298,12 @@ impl LlmClient {
             }
             Ok(r) => {
                 let status = r.status();
+                let body = r.text().await.unwrap_or_default();
                 log::warn!("health: {url} returned {status}");
                 ProviderHealth {
                     reachable: false,
-                    rejected: matches!(status.as_u16(), 401 | 403),
+                    rejected: matches!(status.as_u16(), 401 | 403)
+                        || body_says_bad_key(&body),
                     models: Vec::new(),
                 }
             }
@@ -343,10 +420,23 @@ impl LlmClient {
         let mut body = json!({
             "model": self.model,
             "messages": messages.iter().map(openai_message).collect::<Vec<_>>(),
-            "temperature": 0.2,
-            "max_tokens": max_output_tokens(),
             "stream": true,
         });
+        if openai_reasoning_model(&self.model) {
+            // `temperature` omitted only the default is accepted. Hidden
+            // reasoning tokens count against this budget, so the usual 1024
+            // cap would starve the visible answer; floor it at 8192 so the
+            // runaway guard stays without clipping normal replies.
+            body["max_completion_tokens"] = json!(max_output_tokens().max(8192));
+            if openai_gpt5_family(&self.model) {
+                // Its default `reasoning_effort` is rejected alongside function
+                // tools here; `"none"` is the fast, trace-free path Fella wants.
+                body["reasoning_effort"] = json!("none");
+            }
+        } else {
+            body["temperature"] = json!(0.2);
+            body["max_tokens"] = json!(max_output_tokens());
+        }
         if !tools.is_empty() {
             body["tools"] = Json::Array(tools.iter().map(tool_schema_json).collect());
         }
@@ -445,21 +535,35 @@ impl LlmClient {
         let provider = crate::engine::provider::get(&self.provider)
             .map(|p| p.display)
             .unwrap_or(self.provider.as_str());
+        // xAI (and some other OpenAI-compatible servers) put "Incorrect API
+        // key" behind a 400, not a 401 catch it by body first.
+        if body_says_bad_key(snippet) {
+            return EngineError::msg(format!(
+                "{provider} rejected the API key. Run /login to paste a fresh one, or /auth to \
+                 see what's signed in."
+            ));
+        }
         match status {
             reqwest::StatusCode::TOO_MANY_REQUESTS => EngineError::msg(format!(
                 "the model service is limiting how many requests it will take right now, even \
                  after {attempt} attempt(s). Wait a moment and try again, or pick a different \
                  model with /model. ({snippet})"
             )),
-            // A refused / missing key. The health probe classifies these as
-            // `rejected` and shows a panel, but a question in flight only gets
-            // here, so say what to do.
-            reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN => {
-                EngineError::msg(format!(
-                    "{provider} refused the API key. Run /login to paste a fresh one, or /auth to \
-                     see what's signed in."
-                ))
-            }
+            // Key rejected outright generate/paste a new one. (The health
+            // probe flags this as `rejected` with a panel; a question in
+            // flight only reaches here.)
+            reqwest::StatusCode::UNAUTHORIZED => EngineError::msg(format!(
+                "{provider} rejected the API key. Run /login to paste a fresh one, or /auth to \
+                 see what's signed in."
+            )),
+            // Forbidden: the endpoint answered but won't serve this request,
+            // and it's usually *not* a bad key an account/plan/credit policy
+            // (Vercel AI Gateway restricts free credits), an unverified org, a
+            // region block. Re-pasting the key won't help; the body says why.
+            reqwest::StatusCode::FORBIDDEN => EngineError::msg(format!(
+                "{provider} refused this request (403) usually an account or plan limit, not a \
+                 bad key. What {provider} said: {snippet}"
+            )),
             // The key is valid but the account can't use this model (a paid tier,
             // or Ollama Cloud's per-model gating).
             reqwest::StatusCode::PAYMENT_REQUIRED => EngineError::msg(format!(
@@ -849,6 +953,53 @@ mod tests {
         }
     }
 
+    #[test]
+    fn reasoning_models_are_matched_by_family_prefix() {
+        for m in [
+            "o1", "o1-mini", "o3", "o3-mini", "o4-mini", "gpt-5", "gpt-5-mini",
+            "gpt-5.6-luna", "gpt-5.6-sol", "openai/gpt-5.6-luna", "openai/o3-mini",
+        ] {
+            assert!(openai_reasoning_model(m), "{m} should be a reasoning model");
+        }
+        for m in [
+            "gpt-4o", "gpt-4o-mini", "gpt-4.1", "grok-2-latest", "grok-4.3",
+            "x-ai/grok-4.3", "llama3.1",
+        ] {
+            assert!(!openai_reasoning_model(m), "{m} should not be");
+        }
+    }
+
+    #[test]
+    fn gpt5_family_is_the_reasoning_effort_none_subset() {
+        for m in ["gpt-5", "gpt-5-mini", "gpt-5.6-luna", "openai/gpt-5.6-sol"] {
+            assert!(openai_gpt5_family(m), "{m} is gpt-5 family");
+        }
+        // o-series is reasoning but NOT gpt-5 family (doesn't take effort "none").
+        for m in ["o3-mini", "openai/o4-mini", "gpt-4o", "grok-4.3"] {
+            assert!(!openai_gpt5_family(m), "{m} is not gpt-5 family");
+        }
+    }
+
+    #[test]
+    fn model_list_keeps_only_chat_models() {
+        for m in [
+            "gpt-4o", "gpt-4o-mini", "gpt-4.1", "o3-mini", "gpt-5", "gpt-5-nano",
+            "grok-2-latest", "deepseek/deepseek-chat", "google/gemini-2.5-flash",
+            "gemma4:31b", "qwen3", "llama3.1:8b", "meta-llama/llama-3.2-11b-vision-instruct",
+        ] {
+            assert!(is_text_generation_model(m), "{m} should be kept");
+        }
+        for m in [
+            "text-embedding-3-small", "nomic-embed-text", "mxbai-embed-large",
+            "dall-e-3", "gpt-image-1", "tts-1", "gpt-4o-mini-tts", "whisper-1",
+            "gpt-4o-transcribe", "omni-moderation-latest", "text-moderation-latest",
+            "gpt-4o-audio-preview", "gpt-4o-realtime-preview", "davinci-002", "babbage-002",
+            "meta-llama/llama-guard-3-8b", "gemini-2.0-flash-exp-image-generation",
+        ] {
+            assert!(!is_text_generation_model(m), "{m} should be filtered out");
+        }
+    }
+
     /// `base_url` is the API root (with any `/v1`); the OpenAI wire appends only
     /// `/models`, `/chat/completions`, `/embeddings` never a second `/v1`.
     #[tokio::test]
@@ -954,6 +1105,46 @@ mod tests {
         assert!(!health.reachable);
         assert!(health.rejected);
         assert!(health.models.is_empty());
+    }
+
+    /// xAI returns a bad key as `400 {"error":"Incorrect API key provided…"}`,
+    /// not a 401 the body, not just the status, decides `rejected`.
+    #[tokio::test]
+    async fn a_bad_key_behind_a_400_is_still_a_rejected_key() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            let mut line = String::new();
+            std::io::BufReader::new(&s).read_line(&mut line).unwrap();
+            let body =
+                r#"{"code":"invalid-argument","error":"Incorrect API key provided."}"#;
+            write!(
+                s,
+                "HTTP/1.1 400 Bad Request\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .unwrap();
+        });
+
+        let base = format!("http://127.0.0.1:{port}/v1");
+        let client = LlmClient::new(
+            reqwest::Client::new(),
+            &settings("xai", &base),
+            Some("xai-bad".into()),
+        );
+        let health = client.health().await;
+        server.join().unwrap();
+
+        assert!(!health.reachable);
+        assert!(health.rejected, "a 400 'Incorrect API key' must read as rejected");
+
+        // …and an in-flight question gets the key message, not a raw 400 dump.
+        assert!(body_says_bad_key(r#"{"error":"Incorrect API key provided."}"#));
+        assert!(!body_says_bad_key(r#"{"error":"Model not found: grok-9"}"#));
     }
 
     /// Nothing listening is unreachable, but not `rejected` there was no
@@ -1091,8 +1282,15 @@ mod tests {
         }
 
         let e401 = err_for("401 Unauthorized", "openai").await;
-        assert!(e401.contains("refused the API key") && e401.contains("/login"), "{e401}");
+        assert!(e401.contains("rejected the API key") && e401.contains("/login"), "{e401}");
         assert!(!e401.contains("\"error\""), "raw body leaked: {e401}");
+
+        // 403 is not treated as a bad key it's an account/plan/credit block
+        // (e.g. Vercel AI Gateway free-credit restrictions), and the provider's
+        // own words are passed through so the user can act on them.
+        let e403 = err_for("403 Forbidden", "vercel").await;
+        assert!(e403.contains("403") && e403.contains("not a bad key"), "{e403}");
+        assert!(!e403.contains("/login"), "403 should not send them back to /login: {e403}");
 
         let e402 = err_for("402 Payment Required", "vercel").await;
         assert!(e402.contains("plan doesn't cover") && e402.contains("/model"), "{e402}");

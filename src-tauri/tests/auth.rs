@@ -45,8 +45,12 @@ fn set_key_switches_provider_and_persists_outside_the_db() {
     assert_eq!(s.provider, "vercel");
     assert_eq!(s.base_url, "https://ai-gateway.vercel.sh/v1");
     assert!(s.has_credential);
-    // the row has no default chat model switching must not inherit ollama's
-    assert_eq!(s.model, "");
+    // switching moves to the target provider's default, not ollama's
+    assert_eq!(
+        s.model,
+        fella_lib::engine::provider::get("vercel").unwrap().default_model
+    );
+    assert!(!s.model.is_empty());
 
     // the key lives in auth.json, not fella.db
     let auth = fs::read_to_string(data.join("auth.json")).unwrap();
@@ -63,15 +67,19 @@ fn set_key_switches_provider_and_persists_outside_the_db() {
 }
 
 #[test]
-fn logout_forgets_only_that_provider() {
+fn logout_keeps_the_key_unless_forget_and_touches_only_that_provider() {
     let data = scratch("auth-logout");
     let engine = EngineState::new(&data).unwrap();
 
     engine.set_api_key("openai", "sk-openai").unwrap();
-    engine.set_api_key("xai", "xai-key").unwrap();
+    engine.set_api_key("xai", "xai-key").unwrap(); // xai is now active
 
-    let s = engine.logout("openai").unwrap();
-    // xai is still the active provider and still signed in
+    // Plain logout of a non-active provider: key stays, nothing else moves.
+    engine.logout("openai", false).unwrap();
+    assert!(engine.list_providers().iter().any(|p| p.id == "openai" && p.authed));
+
+    // `forget` deletes openai's key; xai's is untouched.
+    let s = engine.logout("openai", true).unwrap();
     assert_eq!(s.provider, "xai");
     assert!(s.has_credential);
     assert!(engine.list_providers().iter().any(|p| p.id == "openai" && !p.authed));
@@ -136,7 +144,35 @@ fn switching_provider_through_settings_moves_the_address_and_model() {
 
     assert_eq!(s.provider, "openai");
     assert_eq!(s.base_url, "https://api.openai.com/v1");
-    assert_eq!(s.model, "gpt-4o-mini");
+    assert_eq!(
+        s.model,
+        fella_lib::engine::provider::get("openai").unwrap().default_model
+    );
+
+    let _ = fs::remove_dir_all(&data);
+}
+
+/// `/login <provider>` when a key for it is already in `auth.json`: switching
+/// by provider id alone is enough no re-paste, and `has_credential` comes
+/// back true so the caller can go straight to `announceSignedIn`.
+#[test]
+fn switching_to_a_provider_with_a_saved_key_needs_no_re_entry() {
+    let data = scratch("auth-reuse-key");
+    let engine = EngineState::new(&data).unwrap();
+
+    engine.set_api_key("openai", "sk-openai").unwrap();
+    engine.set_api_key("xai", "xai-key").unwrap(); // now active
+
+    // `/login openai` with a key already on file -> { "provider": "openai" }.
+    let s = engine
+        .save_settings(serde_json::json!({ "provider": "openai" }).as_object().unwrap())
+        .unwrap();
+    assert_eq!(s.provider, "openai");
+    assert!(s.has_credential, "the saved key should make this a signed-in switch");
+    assert!(engine
+        .list_providers()
+        .iter()
+        .any(|p| p.id == "openai" && p.authed && p.current));
 
     let _ = fs::remove_dir_all(&data);
 }
@@ -151,11 +187,16 @@ fn logout_of_the_active_provider_resets_to_the_local_default() {
     assert_eq!(before.provider, "openai");
     assert_eq!(before.base_url, "https://api.openai.com/v1");
 
-    let s = engine.logout("openai").unwrap();
-    // Back on the local default, with its address / model, and no stale key.
+    // Plain logout of the active provider: back on the local default...
+    let s = engine.logout("openai", false).unwrap();
     assert_eq!(s.provider, "ollama");
     assert_eq!(s.base_url, "http://localhost:11434");
     assert_eq!(s.model, "llama3.1");
+    // ...but the key is kept, so /login openai reconnects with no re-paste.
+    assert!(engine.list_providers().iter().any(|p| p.id == "openai" && p.authed));
+
+    // `forget` is what actually removes it.
+    engine.logout("openai", true).unwrap();
     assert!(!engine.list_providers().iter().any(|p| p.id == "openai" && p.authed));
 
     let _ = fs::remove_dir_all(&data);

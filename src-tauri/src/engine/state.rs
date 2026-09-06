@@ -639,17 +639,22 @@ impl EngineState {
     /// back to the local default so the app isn't left pointed at a service it
     /// can no longer reach. Logging out of any other provider only forgets its
     /// key.
-    pub fn logout(&self, provider_id: &str) -> EngineResult<Settings> {
+    /// Stop using `provider_id`. If it's the active provider, drop back to the
+    /// local default. The saved API key is **kept** so `/login <provider>` can
+    /// reuse it unless `forget`, which also clears it from `auth.json`.
+    pub fn logout(&self, provider_id: &str, forget: bool) -> EngineResult<Settings> {
         let id = provider::normalize_id(provider_id);
         let is_current = provider::normalize_id(&self.settings().provider) == id;
         let had_key = self.secrets.has(id);
 
         // Only a genuine typo (not registered, not the active provider, no key
-        // on file) is an error otherwise there's something real to clear.
+        // on file) is an error otherwise there's something real to do.
         if provider::get(id).is_none() && !is_current && !had_key {
             return Err(EngineError::msg(format!("unknown provider: {provider_id}")));
         }
-        self.secrets.clear(id)?;
+        if forget {
+            self.secrets.clear(id)?;
+        }
 
         if is_current {
             let d = provider::get(provider::DEFAULT_ID)

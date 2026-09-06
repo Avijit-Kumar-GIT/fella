@@ -70,24 +70,31 @@ In the app:
 
 | id | auth | base URL | embeddings | notes |
 |----|------|----------|-----------|-------|
-| `ollama` | none local | `http://localhost:11434` | yes | default; the privacy path |
-| `openai` | API key | `https://api.openai.com/v1` | yes | broadest audience |
-| `vercel` | API key | `https://ai-gateway.vercel.sh/v1` | **yes** | one key → hundreds of models; `creator/model` ids |
-| `xai` | API key | `https://api.x.ai/v1` | **no** | Grok |
-| `ollama-cloud` | API key | `https://ollama.com` | **no** | hosted Ollama models (same wire as local); key from `ollama.com/settings/keys`; no `default_model`, pick with `/model` |
-| `openrouter` | API key | `https://openrouter.ai/api/v1` | **no** | one key → many models; `creator/model` ids (e.g. `google/gemma-2-9b-it:free`); no `default_model`, pick with `/model` |
-| `custom` | API key + your own base URL | set via `/model` | depends | any other OpenAI-compatible endpoint |
+| id | auth | base URL | embeddings | `default_model` on `/login` |
+|----|------|----------|-----------|-------|
+| `ollama` | none local | `http://localhost:11434` | yes | `llama3.1` (reconciled to a pulled model) |
+| `openai` | API key | `https://api.openai.com/v1` | yes | `gpt-5.6-luna` (cheapest current-gen) |
+| `vercel` | API key | `https://ai-gateway.vercel.sh/v1` | **yes** | `openai/gpt-5.6-luna` |
+| `xai` | API key | `https://api.x.ai/v1` | **no** | `grok-4.3` (cheapest current grok) |
+| `ollama-cloud` | API key | `https://ollama.com` | **no** | `gemma4:31b` (`gemma4:31b-cloud` if that stops resolving) |
+| `openrouter` | API key | `https://openrouter.ai/api/v1` | **no** | `openai/gpt-5.6-luna` |
+| `custom` | API key + your own base URL | set via `/model` | depends | — (set with `/model`) |
+
+Every default is a cheap, current model; hosted ids drift, so if one 404s after
+`/login`, `/model <name>` picks from the live `/models` list. Only text-generation
+models appear in that list embeddings, image, audio and moderation ids are
+filtered out (you can still name one explicitly with `/model <id>`).
 
 Keys are stored in `auth.json` (mode `0600`) in Fella's data directory **not**
 in the SQLite database, and never in the browser. An API key that was previously
 saved in `settings` is migrated into `auth.json` on first launch.
 
 **Vercel AI Gateway:** get a key from the Vercel dashboard → *AI Gateway → API
-Keys* (never expires), then `/login vercel` and paste it. The `vercel` row has
-**no** `default_model` model ids are provider-namespaced (`openai/gpt-4o-mini`,
-`anthropic/…`) and drift so after signing in, run `/model` to see the live list
-and pick one. The free tier is rate-limited per model (a `429` that Fella retries
-with backoff); buying AI Gateway credits raises the limits.
+Keys* (never expires), then `/login vercel` and paste it. Defaults to
+`openai/gpt-5.6-luna`; ids are provider-namespaced (`creator/model`) and drift,
+so `/model` shows the live list to switch. The free tier is rate-limited per
+model (a `429` that Fella retries with backoff); buying AI Gateway credits raises
+the limits.
 
 **Why API key and not "Sign in with ChatGPT / Claude":**
 
@@ -102,13 +109,13 @@ with backoff); buying AI Gateway credits raises the limits.
   fallback is mandatory regardless. OAuth for Grok is deferred; use a key.
 
 **OpenRouter:** get a key from <https://openrouter.ai/keys>, then `/login
-openrouter` and paste it. Like `vercel` it has **no** `default_model` run
-`/model` after signing in to pick from the live list. No embeddings endpoint.
+openrouter` and paste it. Defaults to `openai/gpt-5.6-luna`; `/model` switches to
+anything in the catalogue. No embeddings endpoint.
 
 **Ollama Cloud:** the same wire as local Ollama, just hosted and behind a key.
 Get one from <https://ollama.com/settings/keys>, then `/login ollama-cloud`.
-`/api/tags` with the key lists what your account can run (browse
-`ollama.com/search?c=cloud`); no `default_model`, so pick with `/model`.
+Defaults to `gemma4:31b`; `/api/tags` with the key lists your account's cloud
+catalogue (browse `ollama.com/search?c=cloud`) to switch with `/model`.
 
 **Doc search doesn't need embeddings.** `grep_files`/`read_file` read your
 documents directly no index to build, so document search works the same on

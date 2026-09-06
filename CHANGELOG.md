@@ -6,6 +6,54 @@ All notable changes to Fella are recorded here. Format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Modern default model per provider.** `/login` now lands on a cheap,
+  current model instead of an empty pick or a dated one: OpenAI and the
+  gateways default to `gpt-5.6-luna`, xAI to `grok-4.3`, Ollama Cloud to
+  `gemma4:31b`. `/model` still switches to anything the provider lists; a
+  default that later 404s is fixed the same way.
+
+### Changed
+
+- **`/login <provider>` reuses a saved key.** If you've signed in to that
+  provider before, `/login <provider>` now just switches to it the key is
+  already in `auth.json`. It only asks for a key on the first sign-in, or
+  when you explicitly type `/login <provider> key` to replace one. `/login`
+  with no argument still lists every provider and marks which are connected.
+- **`/logout <provider>` keeps the key.** It now just stops using the
+  service (and drops back to local Ollama if that was the active one); the
+  key stays in `auth.json` so `/login <provider>` reconnects with no
+  re-paste. `/logout <provider> forget` is the new way to actually delete a
+  saved key.
+- **`/model` lists only text-generation models.** A provider's `/models`
+  response also carries embeddings, image, audio/TTS, moderation and legacy
+  base-completion ids none of which work as the answering model. Those are
+  filtered from the list and its autocomplete; you can still select one by
+  typing its exact id.
+- **A `403` from a provider no longer reads as "bad API key".** It's almost
+  always an account, plan or credit limit (Vercel AI Gateway restricts free
+  credits, an OpenAI org isn't verified, a region is blocked) re-pasting the
+  key won't help. The message now says so and passes through what the
+  provider itself said. `401` still points you to `/login`.
+- **A genuinely wrong key is now recognised whatever status code it hides
+  behind.** xAI answers a bad key with `400 "Incorrect API key provided"`,
+  not `401`, so `/login` used to say "couldn't reach xAI just now; it should
+  work once it's reachable" the opposite of the truth. Fella now reads the
+  body, so that key is reported as rejected on the spot.
+
+### Fixed
+
+- **OpenAI reasoning models (`o1`/`o3`/`o4`, `gpt-5` incl. `gpt-5.6`) failed
+  with a 400.** They reject `max_tokens` (they want `max_completion_tokens`)
+  and any `temperature` but the default; the `gpt-5` family additionally
+  rejects its own default `reasoning_effort` when function tools are in play
+  on `/chat/completions`. Fella now sends `max_completion_tokens`, drops
+  `temperature`, and asks `gpt-5*` for `reasoning_effort: "none"` (it never
+  shows a reasoning trace anyway). Every other model and provider (`gpt-4o`,
+  Grok, OpenRouter, custom) is unchanged, and the fix also applies to
+  gateway-namespaced ids like `openai/gpt-5.6-luna`.
+
 ## [0.1.3]
 
 ### Fixed

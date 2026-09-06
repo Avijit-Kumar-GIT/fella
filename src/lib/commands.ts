@@ -13,8 +13,9 @@ showing the exact steps it took. You never need these commands, but here they ar
   /schema <name>   see the columns in a table
   /sql <query>     run a query yourself, without the AI
   /login           connect Fella to a model (lists the options)
-  /login <name>    connect to one, then paste an API key (or /login <name> key <key>)
-  /logout <name>   disconnect from a model service
+  /login <name>    switch to one; reuses a saved key, or asks for one the first
+                   time (/login <name> key [<key>] to replace a saved key)
+  /logout <name>   stop using a service; the key stays saved (add "forget" to delete it)
   /auth            see which model services you're connected to
   /model           see or change which model answers
   /reindex         check the folder again for new or changed files
@@ -67,7 +68,7 @@ export const COMMAND_DESCRIPTIONS: Record<string, string> = {
 	'/schema': 'see the columns in a table',
 	'/sql': 'run a query yourself, without the AI',
 	'/login': 'connect Fella to a model (lists the options)',
-	'/logout': 'disconnect from a model service',
+	'/logout': 'stop using a service (keeps the key; "forget" deletes it)',
 	'/auth': "see which model services you're connected to",
 	'/model': 'see or change which model answers',
 	'/reindex': 'check the folder again for new or changed files',
@@ -138,6 +139,11 @@ export function completionsFor(input: string): string[] {
 		// `/login <provider> …` the only meaningful trailing word is `key`.
 		const p = session.providers.find((x) => x.id === parts[1].toLowerCase());
 		return p && p.auth !== 'none' ? pick(['key']) : [];
+	}
+	if (parts.length === 3 && cmd === '/logout') {
+		// `/logout <provider> forget` also deletes the saved key.
+		const p = session.providers.find((x) => x.id === parts[1].toLowerCase());
+		return p && p.auth !== 'none' ? pick(['forget']) : [];
 	}
 	if (parts.length === 3 && cmd === '/model') {
 		const field = parts[1].toLowerCase();
@@ -532,9 +538,28 @@ async function runCommand(text: string): Promise<void> {
 				}
 				return;
 			}
+
+			// Bare `/login <provider>` and a key is already on file: switch to
+			// it, no re-paste. `/login <provider> key` (no value) forces a
+			// replacement prompt; so does the first sign-in.
+			if (p.authed && !saidKey) {
+				if (p.current) {
+					session.addSystem(`Already signed in to ${p.display}.`);
+					return;
+				}
+				try {
+					session.settings = await ipc.setSettings({ provider: p.id });
+					await announceSignedIn(p.display);
+				} catch (e) {
+					session.addSystem(`error: ${errMsg(e)}`);
+				}
+				return;
+			}
+
 			session.pendingKey = { provider: p.id, display: p.display };
 			session.addSystem(
-				`Paste your ${p.display} API key and press Enter.` +
+				`${p.authed ? `Replacing your saved ${p.display} key. ` : ''}` +
+					`Paste your ${p.display} API key and press Enter.` +
 					(p.get_key_url ? `\nGet one at ${p.get_key_url}` : '') +
 					`\nThe key is not shown or written to the transcript. Esc to cancel.`
 			);
@@ -551,9 +576,15 @@ async function runCommand(text: string): Promise<void> {
 				return;
 			}
 
-			const named = arg.split(/\s+/)[0]?.toLowerCase();
+			// `forget` (anywhere) also deletes the saved key; without it,
+			// /logout just stops using the service and keeps the key for /login.
+			const words = arg.split(/\s+/).filter(Boolean).map((w) => w.toLowerCase());
+			const forget = words.includes('forget');
+			const named = words.find((w) => w !== 'forget');
 			const signedIn = list.filter((p) => p.authed && p.auth !== 'none');
 			const active = list.find((p) => p.current);
+			const kept = (id: string) =>
+				forget ? '' : ` Its key is still saved  /login ${id} to use it again.`;
 
 			// Work out which provider to disconnect.
 			let target: ProviderInfo | undefined;
@@ -564,9 +595,11 @@ async function runCommand(text: string): Promise<void> {
 					// at (a stray id from an older build), let the engine clear it.
 					if (named === session.settings?.provider) {
 						try {
-							session.settings = await ipc.logout(named);
+							session.settings = await ipc.logout(named, forget);
 							session.providers = await ipc.listProviders();
-							session.addSystem(`Disconnected from ${named}. Fella is back on the local default.`);
+							session.addSystem(
+								`Stopped using ${named}. Fella is back on the local default.` + kept(named)
+							);
 							await refreshHealthSoon();
 						} catch (e) {
 							session.addSystem(`error: ${errMsg(e)}`);
@@ -600,14 +633,17 @@ async function runCommand(text: string): Promise<void> {
 
 			try {
 				const hadKey = target.authed;
-				session.settings = await ipc.logout(target.id);
+				session.settings = await ipc.logout(target.id, forget);
 				session.providers = await ipc.listProviders();
 				const resetToOllama = session.settings?.provider === 'ollama' && target.id !== 'ollama';
 				const ollama = session.providers.find((x) => x.id === 'ollama')?.display ?? 'Ollama';
+				const head = !hadKey
+					? `${target.display} had no saved key.`
+					: forget
+						? `Disconnected from ${target.display} and deleted its saved key.`
+						: `Stopped using ${target.display}.${kept(target.id)}`;
 				session.addSystem(
-					(hadKey
-						? `Disconnected from ${target.display}.`
-						: `${target.display} had no saved key.`) +
+					head +
 						(resetToOllama
 							? ` Fella is back on ${ollama}; start it, or /login to another service.`
 							: '')

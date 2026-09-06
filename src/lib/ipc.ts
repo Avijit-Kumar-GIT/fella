@@ -68,7 +68,8 @@ export const ipc = {
 	listProviders: () => invoke<ProviderInfo[]>('list_providers'),
 	setApiKey: (provider: string, key: string) =>
 		invoke<Settings>('set_api_key', { provider, key }),
-	logout: (provider: string) => invoke<Settings>('logout', { provider }),
+	logout: (provider: string, forget = false) =>
+		invoke<Settings>('logout', { provider, forget }),
 
 	ollamaHealth: () => invoke<OllamaHealth>('ollama_health'),
 	/** Is a local Ollama running, regardless of the configured provider? */

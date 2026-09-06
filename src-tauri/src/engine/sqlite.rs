@@ -247,7 +247,10 @@ mod tests {
         assert_eq!(s.provider, "openai");
         assert_eq!(s.base_url, "https://api.openai.com/v1");
         // model falls back to the provider default when unset
-        assert_eq!(s.model, "gpt-4o-mini");
+        assert_eq!(
+            s.model,
+            crate::engine::provider::get("openai").unwrap().default_model
+        );
     }
 
     #[test]
