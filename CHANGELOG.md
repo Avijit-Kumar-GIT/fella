@@ -16,6 +16,11 @@ All notable changes to Fella are recorded here. Format follows
 
 ### Changed
 
+- **`/login <provider>` reuses a saved key.** If you've signed in to that
+  provider before, `/login <provider>` now just switches to it the key is
+  already in `auth.json`. It only asks for a key on the first sign-in, or
+  when you explicitly type `/login <provider> key` to replace one. `/login`
+  with no argument still lists every provider and marks which are connected.
 - **`/model` lists only text-generation models.** A provider's `/models`
   response also carries embeddings, image, audio/TTS, moderation and legacy
   base-completion ids none of which work as the answering model. Those are

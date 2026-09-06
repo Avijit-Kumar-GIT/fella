@@ -13,7 +13,8 @@ showing the exact steps it took. You never need these commands, but here they ar
   /schema <name>   see the columns in a table
   /sql <query>     run a query yourself, without the AI
   /login           connect Fella to a model (lists the options)
-  /login <name>    connect to one, then paste an API key (or /login <name> key <key>)
+  /login <name>    switch to one; reuses a saved key, or asks for one the first
+                   time (/login <name> key [<key>] to replace a saved key)
   /logout <name>   disconnect from a model service
   /auth            see which model services you're connected to
   /model           see or change which model answers
@@ -532,9 +533,28 @@ async function runCommand(text: string): Promise<void> {
 				}
 				return;
 			}
+
+			// Bare `/login <provider>` and a key is already on file: switch to
+			// it, no re-paste. `/login <provider> key` (no value) forces a
+			// replacement prompt; so does the first sign-in.
+			if (p.authed && !saidKey) {
+				if (p.current) {
+					session.addSystem(`Already signed in to ${p.display}.`);
+					return;
+				}
+				try {
+					session.settings = await ipc.setSettings({ provider: p.id });
+					await announceSignedIn(p.display);
+				} catch (e) {
+					session.addSystem(`error: ${errMsg(e)}`);
+				}
+				return;
+			}
+
 			session.pendingKey = { provider: p.id, display: p.display };
 			session.addSystem(
-				`Paste your ${p.display} API key and press Enter.` +
+				`${p.authed ? `Replacing your saved ${p.display} key. ` : ''}` +
+					`Paste your ${p.display} API key and press Enter.` +
 					(p.get_key_url ? `\nGet one at ${p.get_key_url}` : '') +
 					`\nThe key is not shown or written to the transcript. Esc to cancel.`
 			);

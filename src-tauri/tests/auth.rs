@@ -148,6 +148,31 @@ fn switching_provider_through_settings_moves_the_address_and_model() {
     let _ = fs::remove_dir_all(&data);
 }
 
+/// `/login <provider>` when a key for it is already in `auth.json`: switching
+/// by provider id alone is enough no re-paste, and `has_credential` comes
+/// back true so the caller can go straight to `announceSignedIn`.
+#[test]
+fn switching_to_a_provider_with_a_saved_key_needs_no_re_entry() {
+    let data = scratch("auth-reuse-key");
+    let engine = EngineState::new(&data).unwrap();
+
+    engine.set_api_key("openai", "sk-openai").unwrap();
+    engine.set_api_key("xai", "xai-key").unwrap(); // now active
+
+    // `/login openai` with a key already on file -> { "provider": "openai" }.
+    let s = engine
+        .save_settings(serde_json::json!({ "provider": "openai" }).as_object().unwrap())
+        .unwrap();
+    assert_eq!(s.provider, "openai");
+    assert!(s.has_credential, "the saved key should make this a signed-in switch");
+    assert!(engine
+        .list_providers()
+        .iter()
+        .any(|p| p.id == "openai" && p.authed && p.current));
+
+    let _ = fs::remove_dir_all(&data);
+}
+
 #[test]
 fn logout_of_the_active_provider_resets_to_the_local_default() {
     let data = scratch("auth-logout-active");
