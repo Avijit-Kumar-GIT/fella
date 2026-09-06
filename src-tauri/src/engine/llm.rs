@@ -56,8 +56,9 @@ fn ollama_num_ctx() -> u32 {
 }
 
 /// Cap on tokens the model may generate in one turn (`num_predict` on Ollama,
-/// `max_tokens` on the OpenAI wire). A tool call or a normal answer fits well
-/// under 1024; this only bounds a runaway. `FELLA_MODEL_MAX_OUTPUT` overrides.
+/// `max_tokens` / `max_completion_tokens` on the OpenAI wire). A tool call or a
+/// normal answer fits well under 1024; this only bounds a runaway.
+/// `FELLA_MODEL_MAX_OUTPUT` overrides.
 fn max_output_tokens() -> u32 {
     std::env::var("FELLA_MODEL_MAX_OUTPUT")
         .ok()
@@ -75,6 +76,16 @@ fn ollama_think() -> bool {
         std::env::var("FELLA_OLLAMA_THINK").ok().as_deref(),
         Some("1") | Some("true") | Some("yes")
     )
+}
+
+/// OpenAI's reasoning families (`o1`/`o3`/`o4-*`, `gpt-5*`) reject `max_tokens`
+/// (they want `max_completion_tokens`) and any `temperature` but the default.
+/// Match by name prefix it's the only thing that distinguishes them on the
+/// wire, and new entries in each family keep the prefix. Other OpenAI-wire
+/// models and providers (gpt-4o, xAI, OpenRouter, custom) are unaffected.
+fn openai_reasoning_model(model: &str) -> bool {
+    let m = model.trim();
+    m.starts_with("o1") || m.starts_with("o3") || m.starts_with("o4") || m.starts_with("gpt-5")
 }
 
 /// Worth another attempt: rate limiting and transient upstream errors.
@@ -343,10 +354,18 @@ impl LlmClient {
         let mut body = json!({
             "model": self.model,
             "messages": messages.iter().map(openai_message).collect::<Vec<_>>(),
-            "temperature": 0.2,
-            "max_tokens": max_output_tokens(),
             "stream": true,
         });
+        if openai_reasoning_model(&self.model) {
+            // `temperature` omitted only the default is accepted. Hidden
+            // reasoning tokens count against this budget, so the usual 1024
+            // cap would starve the visible answer; floor it at 8192 so the
+            // runaway guard stays without clipping normal replies.
+            body["max_completion_tokens"] = json!(max_output_tokens().max(8192));
+        } else {
+            body["temperature"] = json!(0.2);
+            body["max_tokens"] = json!(max_output_tokens());
+        }
         if !tools.is_empty() {
             body["tools"] = Json::Array(tools.iter().map(tool_schema_json).collect());
         }
@@ -846,6 +865,16 @@ mod tests {
             model: "m".into(),
             embed_model: "e".into(),
             has_credential: false,
+        }
+    }
+
+    #[test]
+    fn reasoning_models_are_matched_by_family_prefix() {
+        for m in ["o1", "o1-mini", "o3", "o3-mini", "o4-mini", "gpt-5", "gpt-5-mini"] {
+            assert!(openai_reasoning_model(m), "{m} should be a reasoning model");
+        }
+        for m in ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "grok-2-latest", "llama3.1"] {
+            assert!(!openai_reasoning_model(m), "{m} should not be");
         }
     }
 
