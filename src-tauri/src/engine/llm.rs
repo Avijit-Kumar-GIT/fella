@@ -525,15 +525,21 @@ impl LlmClient {
                  after {attempt} attempt(s). Wait a moment and try again, or pick a different \
                  model with /model. ({snippet})"
             )),
-            // A refused / missing key. The health probe classifies these as
-            // `rejected` and shows a panel, but a question in flight only gets
-            // here, so say what to do.
-            reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN => {
-                EngineError::msg(format!(
-                    "{provider} refused the API key. Run /login to paste a fresh one, or /auth to \
-                     see what's signed in."
-                ))
-            }
+            // Key rejected outright generate/paste a new one. (The health
+            // probe flags this as `rejected` with a panel; a question in
+            // flight only reaches here.)
+            reqwest::StatusCode::UNAUTHORIZED => EngineError::msg(format!(
+                "{provider} rejected the API key. Run /login to paste a fresh one, or /auth to \
+                 see what's signed in."
+            )),
+            // Forbidden: the endpoint answered but won't serve this request,
+            // and it's usually *not* a bad key an account/plan/credit policy
+            // (Vercel AI Gateway restricts free credits), an unverified org, a
+            // region block. Re-pasting the key won't help; the body says why.
+            reqwest::StatusCode::FORBIDDEN => EngineError::msg(format!(
+                "{provider} refused this request (403) usually an account or plan limit, not a \
+                 bad key. What {provider} said: {snippet}"
+            )),
             // The key is valid but the account can't use this model (a paid tier,
             // or Ollama Cloud's per-model gating).
             reqwest::StatusCode::PAYMENT_REQUIRED => EngineError::msg(format!(
@@ -1212,8 +1218,15 @@ mod tests {
         }
 
         let e401 = err_for("401 Unauthorized", "openai").await;
-        assert!(e401.contains("refused the API key") && e401.contains("/login"), "{e401}");
+        assert!(e401.contains("rejected the API key") && e401.contains("/login"), "{e401}");
         assert!(!e401.contains("\"error\""), "raw body leaked: {e401}");
+
+        // 403 is not treated as a bad key it's an account/plan/credit block
+        // (e.g. Vercel AI Gateway free-credit restrictions), and the provider's
+        // own words are passed through so the user can act on them.
+        let e403 = err_for("403 Forbidden", "vercel").await;
+        assert!(e403.contains("403") && e403.contains("not a bad key"), "{e403}");
+        assert!(!e403.contains("/login"), "403 should not send them back to /login: {e403}");
 
         let e402 = err_for("402 Payment Required", "vercel").await;
         assert!(e402.contains("plan doesn't cover") && e402.contains("/model"), "{e402}");

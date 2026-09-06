@@ -21,6 +21,11 @@ All notable changes to Fella are recorded here. Format follows
   base-completion ids none of which work as the answering model. Those are
   filtered from the list and its autocomplete; you can still select one by
   typing its exact id.
+- **A `403` from a provider no longer reads as "bad API key".** It's almost
+  always an account, plan or credit limit (Vercel AI Gateway restricts free
+  credits, an OpenAI org isn't verified, a region is blocked) re-pasting the
+  key won't help. The message now says so and passes through what the
+  provider itself said. `401` still points you to `/login`.
 
 ### Fixed
 
