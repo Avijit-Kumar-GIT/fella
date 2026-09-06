@@ -75,8 +75,8 @@
 	}
 
 	function onKey(e: KeyboardEvent) {
-		// While the menu is open it owns the arrows / Tab / Esc, and Enter too
-		// but only once something is highlighted.
+		// While the menu is open it owns the arrows / Tab / Esc, and Enter
+		// only when a row is highlighted; otherwise Enter submits.
 		if (menuOpen) {
 			if (e.key === 'ArrowDown') {
 				menuSel = menuSel + 1 >= shown.length ? -1 : menuSel + 1;
@@ -100,20 +100,14 @@
 				e.stopPropagation();
 				return;
 			}
-			if (e.key === 'Enter' && !e.shiftKey) {
-				const last = value.split(/\s+/).pop() ?? '';
-				// Accept the highlighted row, or a lone candidate that only
-				// extends what's typed; otherwise fall through and submit.
-				if (menuSel >= 0) {
-					e.preventDefault();
-					acceptItem(shown[menuSel]);
-					return;
-				}
-				if (shown.length === 1 && shown[0] !== last) {
-					e.preventDefault();
-					acceptItem(shown[0]);
-					return;
-				}
+			// Enter accepts a row only if you arrowed to one; with nothing
+			// highlighted it submits what's typed (Tab is for completing).
+			// Otherwise `/login xai` with `key` still in the menu could never
+			// be sent it kept completing to `/login xai key`.
+			if (e.key === 'Enter' && !e.shiftKey && menuSel >= 0) {
+				e.preventDefault();
+				acceptItem(shown[menuSel]);
+				return;
 			}
 		}
 
