@@ -6,6 +6,8 @@ All notable changes to Fella are recorded here. Format follows
 
 ## [Unreleased]
 
+## [0.1.4]
+
 ### Added
 
 - **Modern default model per provider.** `/login` now lands on a cheap,
@@ -207,7 +209,8 @@ folder of your own files with deterministic SQL / Python, and shows its working.
 - The hosted pack browser isn't live yet: `/packs add <path>` works offline, and
   `/packs install <id>` pulls from a small seed catalog.
 
-[Unreleased]: https://github.com/Avijit-Kumar-GIT/fella/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/Avijit-Kumar-GIT/fella/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/Avijit-Kumar-GIT/fella/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/Avijit-Kumar-GIT/fella/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/Avijit-Kumar-GIT/fella/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/Avijit-Kumar-GIT/fella/compare/v0.1.0...v0.1.1
