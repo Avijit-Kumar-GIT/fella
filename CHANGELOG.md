@@ -10,7 +10,7 @@ All notable changes to Fella are recorded here. Format follows
 
 - **Modern default model per provider.** `/login` now lands on a cheap,
   current model instead of an empty pick or a dated one: OpenAI and the
-  gateways default to `gpt-5.6-luna`, xAI to `grok-4.1-fast`, Ollama Cloud to
+  gateways default to `gpt-5.6-luna`, xAI to `grok-4.3`, Ollama Cloud to
   `gemma4:31b`. `/model` still switches to anything the provider lists; a
   default that later 404s is fixed the same way.
 
@@ -26,6 +26,11 @@ All notable changes to Fella are recorded here. Format follows
   credits, an OpenAI org isn't verified, a region is blocked) re-pasting the
   key won't help. The message now says so and passes through what the
   provider itself said. `401` still points you to `/login`.
+- **A genuinely wrong key is now recognised whatever status code it hides
+  behind.** xAI answers a bad key with `400 "Incorrect API key provided"`,
+  not `401`, so `/login` used to say "couldn't reach xAI just now; it should
+  work once it's reachable" the opposite of the truth. Fella now reads the
+  body, so that key is reported as rejected on the spot.
 
 ### Fixed
 

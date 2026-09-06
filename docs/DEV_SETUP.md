@@ -75,7 +75,7 @@ In the app:
 | `ollama` | none local | `http://localhost:11434` | yes | `llama3.1` (reconciled to a pulled model) |
 | `openai` | API key | `https://api.openai.com/v1` | yes | `gpt-5.6-luna` (cheapest current-gen) |
 | `vercel` | API key | `https://ai-gateway.vercel.sh/v1` | **yes** | `openai/gpt-5.6-luna` |
-| `xai` | API key | `https://api.x.ai/v1` | **no** | `grok-4.1-fast` (cheap, 2M ctx) |
+| `xai` | API key | `https://api.x.ai/v1` | **no** | `grok-4.3` (cheapest current grok) |
 | `ollama-cloud` | API key | `https://ollama.com` | **no** | `gemma4:31b` (`gemma4:31b-cloud` if that stops resolving) |
 | `openrouter` | API key | `https://openrouter.ai/api/v1` | **no** | `openai/gpt-5.6-luna` |
 | `custom` | API key + your own base URL | set via `/model` | depends | — (set with `/model`) |

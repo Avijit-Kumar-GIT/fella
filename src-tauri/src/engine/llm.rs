@@ -134,6 +134,20 @@ fn is_text_generation_model(id: &str) -> bool {
     !NON_CHAT.iter().any(|p| id.contains(p))
 }
 
+/// A response body that plainly says the key is wrong, whatever status code
+/// carried it. OpenAI-compatible servers disagree on the status: OpenAI/Vercel
+/// use 401, xAI answers `400 {"code":"invalid-argument","error":"Incorrect API
+/// key provided…"}`. Match the message so a bad key reads as a bad key, not as
+/// "couldn't reach the service".
+fn body_says_bad_key(body: &str) -> bool {
+    let b = body.to_ascii_lowercase();
+    b.contains("incorrect api key")
+        || b.contains("invalid api key")
+        || b.contains("invalid_api_key")
+        || b.contains("api key not valid")
+        || b.contains("no api key provided")
+}
+
 /// Worth another attempt: rate limiting and transient upstream errors.
 fn is_retryable(status: reqwest::StatusCode) -> bool {
     status == reqwest::StatusCode::TOO_MANY_REQUESTS
@@ -284,10 +298,12 @@ impl LlmClient {
             }
             Ok(r) => {
                 let status = r.status();
+                let body = r.text().await.unwrap_or_default();
                 log::warn!("health: {url} returned {status}");
                 ProviderHealth {
                     reachable: false,
-                    rejected: matches!(status.as_u16(), 401 | 403),
+                    rejected: matches!(status.as_u16(), 401 | 403)
+                        || body_says_bad_key(&body),
                     models: Vec::new(),
                 }
             }
@@ -519,6 +535,14 @@ impl LlmClient {
         let provider = crate::engine::provider::get(&self.provider)
             .map(|p| p.display)
             .unwrap_or(self.provider.as_str());
+        // xAI (and some other OpenAI-compatible servers) put "Incorrect API
+        // key" behind a 400, not a 401 catch it by body first.
+        if body_says_bad_key(snippet) {
+            return EngineError::msg(format!(
+                "{provider} rejected the API key. Run /login to paste a fresh one, or /auth to \
+                 see what's signed in."
+            ));
+        }
         match status {
             reqwest::StatusCode::TOO_MANY_REQUESTS => EngineError::msg(format!(
                 "the model service is limiting how many requests it will take right now, even \
@@ -938,8 +962,8 @@ mod tests {
             assert!(openai_reasoning_model(m), "{m} should be a reasoning model");
         }
         for m in [
-            "gpt-4o", "gpt-4o-mini", "gpt-4.1", "grok-2-latest", "grok-4.1-fast",
-            "x-ai/grok-4.1-fast", "llama3.1",
+            "gpt-4o", "gpt-4o-mini", "gpt-4.1", "grok-2-latest", "grok-4.3",
+            "x-ai/grok-4.3", "llama3.1",
         ] {
             assert!(!openai_reasoning_model(m), "{m} should not be");
         }
@@ -951,7 +975,7 @@ mod tests {
             assert!(openai_gpt5_family(m), "{m} is gpt-5 family");
         }
         // o-series is reasoning but NOT gpt-5 family (doesn't take effort "none").
-        for m in ["o3-mini", "openai/o4-mini", "gpt-4o", "grok-4.1-fast"] {
+        for m in ["o3-mini", "openai/o4-mini", "gpt-4o", "grok-4.3"] {
             assert!(!openai_gpt5_family(m), "{m} is not gpt-5 family");
         }
     }
@@ -1081,6 +1105,46 @@ mod tests {
         assert!(!health.reachable);
         assert!(health.rejected);
         assert!(health.models.is_empty());
+    }
+
+    /// xAI returns a bad key as `400 {"error":"Incorrect API key provided…"}`,
+    /// not a 401 the body, not just the status, decides `rejected`.
+    #[tokio::test]
+    async fn a_bad_key_behind_a_400_is_still_a_rejected_key() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            let mut line = String::new();
+            std::io::BufReader::new(&s).read_line(&mut line).unwrap();
+            let body =
+                r#"{"code":"invalid-argument","error":"Incorrect API key provided."}"#;
+            write!(
+                s,
+                "HTTP/1.1 400 Bad Request\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .unwrap();
+        });
+
+        let base = format!("http://127.0.0.1:{port}/v1");
+        let client = LlmClient::new(
+            reqwest::Client::new(),
+            &settings("xai", &base),
+            Some("xai-bad".into()),
+        );
+        let health = client.health().await;
+        server.join().unwrap();
+
+        assert!(!health.reachable);
+        assert!(health.rejected, "a 400 'Incorrect API key' must read as rejected");
+
+        // …and an in-flight question gets the key message, not a raw 400 dump.
+        assert!(body_says_bad_key(r#"{"error":"Incorrect API key provided."}"#));
+        assert!(!body_says_bad_key(r#"{"error":"Model not found: grok-9"}"#));
     }
 
     /// Nothing listening is unreachable, but not `rejected` there was no

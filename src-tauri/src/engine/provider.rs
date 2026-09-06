@@ -101,9 +101,10 @@ pub const PROVIDERS: &[Provider] = &[
         display: "xAI (Grok)",
         auth: AuthKind::ApiKey,
         base_url: "https://api.x.ai/v1",
-        // xAI's cheap volume tier ($0.20/$0.50 per 1M, 2M context, strong
-        // tool-calling). Plain OpenAI-wire params.
-        default_model: "grok-4.1-fast",
+        // Cheapest current general model on xAI's own API ($1.25/$2.50 per 1M).
+        // Older `grok-4-fast` / `grok-2*` slugs were retired; `/model` lists the
+        // rest (`grok-4.5`, `grok-4.6`, …). Plain OpenAI-wire params.
+        default_model: "grok-4.3",
         default_embed_model: "",
         wire: Wire::OpenAi,
         embeddings: false,
