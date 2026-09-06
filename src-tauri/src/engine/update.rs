@@ -273,9 +273,10 @@ pub async fn apply(http: &reqwest::Client, app: tauri::AppHandle) -> EngineResul
 ///   nothing with no error. The loop tries to open `fella.exe` for exclusive
 ///   write, which is what the installer needs, and gives up after 60s.
 /// - **`-PassThru` + `.WaitForExit()`, not `-Wait`.** `Start-Process -Wait`
-///   from the windowless, detached host returns without actually running or
-///   waiting on the child; waiting on the returned process object is reliable
-///   there. `timeout` (the pre-0.1.3 delay) likewise aborts with no console.
+///   from this hidden-console host was seen to return without actually
+///   running or waiting on the child; waiting on the returned process object
+///   is reliable. `timeout` (the pre-0.1.3 delay) likewise aborts with no
+///   console.
 /// - **Relaunch only after the installer exits**, not chained with `&`, so a
 ///   successful update doesn't relaunch the old binary.
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
@@ -317,15 +318,20 @@ mod platform {
 
     use crate::engine::error::{EngineError, EngineResult};
 
+    // A new console for the updater, kept hidden. NOT `DETACHED_PROCESS`:
+    // that gives the child no console at all (and makes `CREATE_NO_WINDOW` a
+    // no-op, per the Win32 docs), and `powershell.exe` dies during host
+    // startup with no console, before it runs a single line no `update.log`,
+    // no install, no relaunch. Its own hidden console lets it initialise and
+    // still outlive us (it isn't sharing ours).
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    const DETACHED_PROCESS: u32 = 0x0000_0008;
     // Some launchers put us in a job object with KILL_ON_JOB_CLOSE; without
     // this flag, `app.exit` closes the job and takes the updater down with it,
     // so nothing installs. Ignored when we're not in a job.
     const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
 
     /// Windows won't let the installer overwrite the running .exe, so the work
-    /// happens in a detached PowerShell process that outlives us. See
+    /// happens in a separate PowerShell process that outlives us. See
     /// [`super::windows_update_script`] for what the script does and why.
     /// Still best-effort the fallback is re-running the install command by
     /// hand and a failed install never leaves a broken one (nothing is
@@ -341,7 +347,7 @@ mod platform {
         )
         .map_err(|e| EngineError::io("write the update script", e))?;
 
-        let base = CREATE_NO_WINDOW | DETACHED_PROCESS;
+        let base = CREATE_NO_WINDOW;
         let spawn = |extra: u32| {
             Command::new("powershell")
                 .args([
