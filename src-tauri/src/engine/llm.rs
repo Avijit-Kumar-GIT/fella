@@ -86,7 +86,22 @@ fn ollama_think() -> bool {
 /// the part after the last `/`. Other models (gpt-4o, Grok) are unaffected.
 fn openai_reasoning_model(model: &str) -> bool {
     let m = model.trim().rsplit('/').next().unwrap_or_default();
-    m.starts_with("o1") || m.starts_with("o3") || m.starts_with("o4") || m.starts_with("gpt-5")
+    m.starts_with("o1") || m.starts_with("o3") || m.starts_with("o4") || openai_gpt5_family(m)
+}
+
+/// The `gpt-5` family (`gpt-5`, `gpt-5-mini`, `gpt-5.6-luna`, …) a subset of
+/// [`openai_reasoning_model`]. It defaults `reasoning_effort` to a non-`none`
+/// level, which OpenAI refuses together with function tools on
+/// `/chat/completions`; only `gpt-5*` accepts `reasoning_effort: "none"` to opt
+/// back out (the o-series does not). Fella never surfaces a reasoning trace and
+/// wants the fast path, so it always asks for `none` on these.
+fn openai_gpt5_family(model: &str) -> bool {
+    model
+        .trim()
+        .rsplit('/')
+        .next()
+        .unwrap_or_default()
+        .starts_with("gpt-5")
 }
 
 /// Whether a model id names something you can send a chat completion to.
@@ -397,6 +412,11 @@ impl LlmClient {
             // cap would starve the visible answer; floor it at 8192 so the
             // runaway guard stays without clipping normal replies.
             body["max_completion_tokens"] = json!(max_output_tokens().max(8192));
+            if openai_gpt5_family(&self.model) {
+                // Its default `reasoning_effort` is rejected alongside function
+                // tools here; `"none"` is the fast, trace-free path Fella wants.
+                body["reasoning_effort"] = json!("none");
+            }
         } else {
             body["temperature"] = json!(0.2);
             body["max_tokens"] = json!(max_output_tokens());
@@ -916,6 +936,17 @@ mod tests {
             "x-ai/grok-4.1-fast", "llama3.1",
         ] {
             assert!(!openai_reasoning_model(m), "{m} should not be");
+        }
+    }
+
+    #[test]
+    fn gpt5_family_is_the_reasoning_effort_none_subset() {
+        for m in ["gpt-5", "gpt-5-mini", "gpt-5.6-luna", "openai/gpt-5.6-sol"] {
+            assert!(openai_gpt5_family(m), "{m} is gpt-5 family");
+        }
+        // o-series is reasoning but NOT gpt-5 family (doesn't take effort "none").
+        for m in ["o3-mini", "openai/o4-mini", "gpt-4o", "grok-4.1-fast"] {
+            assert!(!openai_gpt5_family(m), "{m} is not gpt-5 family");
         }
     }
 

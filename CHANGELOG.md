@@ -26,10 +26,13 @@ All notable changes to Fella are recorded here. Format follows
 
 - **OpenAI reasoning models (`o1`/`o3`/`o4`, `gpt-5` incl. `gpt-5.6`) failed
   with a 400.** They reject `max_tokens` (they want `max_completion_tokens`)
-  and any `temperature` but the default. Fella now sends the right parameters
-  for those model families and leaves every other model and provider
-  (`gpt-4o`, Grok, OpenRouter, custom) unchanged. Also handled when the id
-  arrives gateway-namespaced, e.g. `openai/gpt-5.6-luna`.
+  and any `temperature` but the default; the `gpt-5` family additionally
+  rejects its own default `reasoning_effort` when function tools are in play
+  on `/chat/completions`. Fella now sends `max_completion_tokens`, drops
+  `temperature`, and asks `gpt-5*` for `reasoning_effort: "none"` (it never
+  shows a reasoning trace anyway). Every other model and provider (`gpt-4o`,
+  Grok, OpenRouter, custom) is unchanged, and the fix also applies to
+  gateway-namespaced ids like `openai/gpt-5.6-luna`.
 
 ## [0.1.3]
 
