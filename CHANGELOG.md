@@ -21,6 +21,11 @@ All notable changes to Fella are recorded here. Format follows
   already in `auth.json`. It only asks for a key on the first sign-in, or
   when you explicitly type `/login <provider> key` to replace one. `/login`
   with no argument still lists every provider and marks which are connected.
+- **`/logout <provider>` keeps the key.** It now just stops using the
+  service (and drops back to local Ollama if that was the active one); the
+  key stays in `auth.json` so `/login <provider>` reconnects with no
+  re-paste. `/logout <provider> forget` is the new way to actually delete a
+  saved key.
 - **`/model` lists only text-generation models.** A provider's `/models`
   response also carries embeddings, image, audio/TTS, moderation and legacy
   base-completion ids none of which work as the answering model. Those are

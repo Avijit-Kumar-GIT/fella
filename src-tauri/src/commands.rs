@@ -112,10 +112,14 @@ pub fn set_api_key(
     engine.set_api_key(&provider, &key)
 }
 
-/// Forget the stored credential for `provider`.
+/// Stop using `provider`; `forget` also deletes its stored key.
 #[tauri::command]
-pub fn logout(provider: String, engine: State<'_, EngineState>) -> Result<Settings, EngineError> {
-    engine.logout(&provider)
+pub fn logout(
+    provider: String,
+    forget: bool,
+    engine: State<'_, EngineState>,
+) -> Result<Settings, EngineError> {
+    engine.logout(&provider, forget)
 }
 
 // --- packs (installed extensions) --------------------------------------

@@ -67,15 +67,19 @@ fn set_key_switches_provider_and_persists_outside_the_db() {
 }
 
 #[test]
-fn logout_forgets_only_that_provider() {
+fn logout_keeps_the_key_unless_forget_and_touches_only_that_provider() {
     let data = scratch("auth-logout");
     let engine = EngineState::new(&data).unwrap();
 
     engine.set_api_key("openai", "sk-openai").unwrap();
-    engine.set_api_key("xai", "xai-key").unwrap();
+    engine.set_api_key("xai", "xai-key").unwrap(); // xai is now active
 
-    let s = engine.logout("openai").unwrap();
-    // xai is still the active provider and still signed in
+    // Plain logout of a non-active provider: key stays, nothing else moves.
+    engine.logout("openai", false).unwrap();
+    assert!(engine.list_providers().iter().any(|p| p.id == "openai" && p.authed));
+
+    // `forget` deletes openai's key; xai's is untouched.
+    let s = engine.logout("openai", true).unwrap();
     assert_eq!(s.provider, "xai");
     assert!(s.has_credential);
     assert!(engine.list_providers().iter().any(|p| p.id == "openai" && !p.authed));
@@ -183,11 +187,16 @@ fn logout_of_the_active_provider_resets_to_the_local_default() {
     assert_eq!(before.provider, "openai");
     assert_eq!(before.base_url, "https://api.openai.com/v1");
 
-    let s = engine.logout("openai").unwrap();
-    // Back on the local default, with its address / model, and no stale key.
+    // Plain logout of the active provider: back on the local default...
+    let s = engine.logout("openai", false).unwrap();
     assert_eq!(s.provider, "ollama");
     assert_eq!(s.base_url, "http://localhost:11434");
     assert_eq!(s.model, "llama3.1");
+    // ...but the key is kept, so /login openai reconnects with no re-paste.
+    assert!(engine.list_providers().iter().any(|p| p.id == "openai" && p.authed));
+
+    // `forget` is what actually removes it.
+    engine.logout("openai", true).unwrap();
     assert!(!engine.list_providers().iter().any(|p| p.id == "openai" && p.authed));
 
     let _ = fs::remove_dir_all(&data);
