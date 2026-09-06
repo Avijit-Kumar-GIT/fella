@@ -7,6 +7,17 @@ this app repo (now **`fella`**; `fella-ai` is a private pre-v0.1 archive),
 `fella-marketplace` to mean the browse-site half of the **`fella-web`** repo,
 and any `CODE_OF_CONDUCT.md` mention as folded into `CONTRIBUTING.md` (§Conduct).
 
+- **2026-09-06** **`/login <provider>` reuses a stored key; `/logout` keeps
+  it (`/logout <provider> forget` deletes).** `auth.json` is a per-provider
+  map, so keys already persist across switches the commands just didn't use
+  that. `/login xai` with a key on file now switches straight in (no
+  re-paste); it prompts only on first sign-in or explicit `/login xai key`.
+  `/logout` became "stop using this service" (reset to local Ollama if
+  active) with the key retained; `forget` is the destructive path, mirroring
+  `/connect <id> off` vs `forget`. Also fixed the composer: Enter with no
+  completion row highlighted now submits instead of force-accepting a lone
+  candidate (which made `/login xai` un-sendable when `key` was the only
+  suggestion).
 - **2026-09-06** **Every provider gets a cheap modern `default_model`, and
   `/model` shows text-generation models only.** Earlier reasoning that
   `vercel`/`openrouter` ids "drift too much for a default" held back a good
