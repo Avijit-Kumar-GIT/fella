@@ -6,6 +6,31 @@ All notable changes to Fella are recorded here. Format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Modern default model per provider.** `/login` now lands on a cheap,
+  current model instead of an empty pick or a dated one: OpenAI and the
+  gateways default to `gpt-5.6-luna`, xAI to `grok-4.1-fast`, Ollama Cloud to
+  `gemma4:31b`. `/model` still switches to anything the provider lists; a
+  default that later 404s is fixed the same way.
+
+### Changed
+
+- **`/model` lists only text-generation models.** A provider's `/models`
+  response also carries embeddings, image, audio/TTS, moderation and legacy
+  base-completion ids none of which work as the answering model. Those are
+  filtered from the list and its autocomplete; you can still select one by
+  typing its exact id.
+
+### Fixed
+
+- **OpenAI reasoning models (`o1`/`o3`/`o4`, `gpt-5` incl. `gpt-5.6`) failed
+  with a 400.** They reject `max_tokens` (they want `max_completion_tokens`)
+  and any `temperature` but the default. Fella now sends the right parameters
+  for those model families and leaves every other model and provider
+  (`gpt-4o`, Grok, OpenRouter, custom) unchanged. Also handled when the id
+  arrives gateway-namespaced, e.g. `openai/gpt-5.6-luna`.
+
 ## [0.1.3]
 
 ### Fixed

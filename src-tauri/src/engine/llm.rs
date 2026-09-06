@@ -78,14 +78,45 @@ fn ollama_think() -> bool {
     )
 }
 
-/// OpenAI's reasoning families (`o1`/`o3`/`o4-*`, `gpt-5*`) reject `max_tokens`
-/// (they want `max_completion_tokens`) and any `temperature` but the default.
-/// Match by name prefix it's the only thing that distinguishes them on the
-/// wire, and new entries in each family keep the prefix. Other OpenAI-wire
-/// models and providers (gpt-4o, xAI, OpenRouter, custom) are unaffected.
+/// OpenAI's reasoning families (`o1`/`o3`/`o4-*`, `gpt-5*` including `gpt-5.6`)
+/// reject `max_tokens` (they want `max_completion_tokens`) and any `temperature`
+/// but the default. Match by name prefix it's the only wire-visible signal,
+/// and new entries in each family keep the prefix. The id can arrive
+/// gateway-namespaced (`openai/gpt-5.6-luna` via Vercel / OpenRouter), so match
+/// the part after the last `/`. Other models (gpt-4o, Grok) are unaffected.
 fn openai_reasoning_model(model: &str) -> bool {
-    let m = model.trim();
+    let m = model.trim().rsplit('/').next().unwrap_or_default();
     m.starts_with("o1") || m.starts_with("o3") || m.starts_with("o4") || m.starts_with("gpt-5")
+}
+
+/// Whether a model id names something you can send a chat completion to.
+/// Providers' `/models` lists mix in embeddings, image, audio/TTS/transcribe,
+/// moderation/guard, rerankers and the legacy base-completion models none of
+/// which work as the answering model. Denylist by id substring (the lists
+/// carry no capability field); any instruct/chat id passes, including
+/// multimodal ones like `gpt-4o` that also read images.
+fn is_text_generation_model(id: &str) -> bool {
+    let id = id.to_ascii_lowercase();
+    const NON_CHAT: &[&str] = &[
+        "embed",          // text-embedding-3-*, nomic-embed-text, mxbai-embed-large
+        "dall-e",
+        "gpt-image",
+        "-image-",        // …-image-generation
+        "stable-diffusion",
+        "sora",
+        "tts",            // tts-1, gpt-4o-mini-tts
+        "whisper",
+        "transcribe",
+        "speech",
+        "-audio",         // gpt-4o-audio-preview
+        "-realtime",      // gpt-4o-realtime-preview
+        "moderation",
+        "-guard",         // llama-guard-*
+        "rerank",
+        "davinci-",       // legacy base completion
+        "babbage-",
+    ];
+    !NON_CHAT.iter().any(|p| id.contains(p))
 }
 
 /// Worth another attempt: rate limiting and transient upstream errors.
@@ -227,6 +258,10 @@ impl LlmClient {
                                 // it. Ollama's `/api/tags` has only `name`.
                                 m["id"].as_str().or_else(|| m["name"].as_str()).map(String::from)
                             })
+                            // Only models you can actually chat with the
+                            // `/models` list also carries embeddings, image,
+                            // audio, moderation and base-completion ids.
+                            .filter(|id| is_text_generation_model(id))
                             .collect()
                     })
                     .unwrap_or_default();
@@ -870,11 +905,37 @@ mod tests {
 
     #[test]
     fn reasoning_models_are_matched_by_family_prefix() {
-        for m in ["o1", "o1-mini", "o3", "o3-mini", "o4-mini", "gpt-5", "gpt-5-mini"] {
+        for m in [
+            "o1", "o1-mini", "o3", "o3-mini", "o4-mini", "gpt-5", "gpt-5-mini",
+            "gpt-5.6-luna", "gpt-5.6-sol", "openai/gpt-5.6-luna", "openai/o3-mini",
+        ] {
             assert!(openai_reasoning_model(m), "{m} should be a reasoning model");
         }
-        for m in ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "grok-2-latest", "llama3.1"] {
+        for m in [
+            "gpt-4o", "gpt-4o-mini", "gpt-4.1", "grok-2-latest", "grok-4.1-fast",
+            "x-ai/grok-4.1-fast", "llama3.1",
+        ] {
             assert!(!openai_reasoning_model(m), "{m} should not be");
+        }
+    }
+
+    #[test]
+    fn model_list_keeps_only_chat_models() {
+        for m in [
+            "gpt-4o", "gpt-4o-mini", "gpt-4.1", "o3-mini", "gpt-5", "gpt-5-nano",
+            "grok-2-latest", "deepseek/deepseek-chat", "google/gemini-2.5-flash",
+            "gemma4:31b", "qwen3", "llama3.1:8b", "meta-llama/llama-3.2-11b-vision-instruct",
+        ] {
+            assert!(is_text_generation_model(m), "{m} should be kept");
+        }
+        for m in [
+            "text-embedding-3-small", "nomic-embed-text", "mxbai-embed-large",
+            "dall-e-3", "gpt-image-1", "tts-1", "gpt-4o-mini-tts", "whisper-1",
+            "gpt-4o-transcribe", "omni-moderation-latest", "text-moderation-latest",
+            "gpt-4o-audio-preview", "gpt-4o-realtime-preview", "davinci-002", "babbage-002",
+            "meta-llama/llama-guard-3-8b", "gemini-2.0-flash-exp-image-generation",
+        ] {
+            assert!(!is_text_generation_model(m), "{m} should be filtered out");
         }
     }
 

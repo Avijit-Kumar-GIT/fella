@@ -73,7 +73,10 @@ pub const PROVIDERS: &[Provider] = &[
         display: "OpenAI",
         auth: AuthKind::ApiKey,
         base_url: "https://api.openai.com/v1",
-        default_model: "gpt-4o-mini",
+        // Cheapest current-gen chat model ($0.20/$1.20 per 1M, Sep 2026). A
+        // `gpt-5*` id, so `llm::openai_reasoning_model` sends it
+        // `max_completion_tokens` and no `temperature`.
+        default_model: "gpt-5.6-luna",
         default_embed_model: "text-embedding-3-small",
         wire: Wire::OpenAi,
         embeddings: true,
@@ -84,9 +87,10 @@ pub const PROVIDERS: &[Provider] = &[
         display: "Vercel AI Gateway",
         auth: AuthKind::ApiKey,
         base_url: "https://ai-gateway.vercel.sh/v1",
-        // Chat ids drift and are provider-namespaced (`creator/model`); leave it
-        // unset so `/login` prompts the user to pick one from `/models`.
-        default_model: "",
+        // Namespaced `creator/model`. Default to the same cheap OpenAI model as
+        // the direct `openai` row; `/model` switches to any of the gateway's
+        // catalogue. If the id ever 404s, `/model <name>` fixes it.
+        default_model: "openai/gpt-5.6-luna",
         default_embed_model: "openai/text-embedding-3-small",
         wire: Wire::OpenAi,
         embeddings: true,
@@ -97,7 +101,9 @@ pub const PROVIDERS: &[Provider] = &[
         display: "xAI (Grok)",
         auth: AuthKind::ApiKey,
         base_url: "https://api.x.ai/v1",
-        default_model: "grok-2-latest",
+        // xAI's cheap volume tier ($0.20/$0.50 per 1M, 2M context, strong
+        // tool-calling). Plain OpenAI-wire params.
+        default_model: "grok-4.1-fast",
         default_embed_model: "",
         wire: Wire::OpenAi,
         embeddings: false,
@@ -109,10 +115,13 @@ pub const PROVIDERS: &[Provider] = &[
         auth: AuthKind::ApiKey,
         // Same wire as local Ollama, just hosted and behind a key. `/api/tags`
         // with the bearer lists the models your account can run; browse the
-        // catalogue at ollama.com/search?c=cloud. No `default_model` pick
-        // one with `/model` after signing in.
+        // catalogue at ollama.com/search?c=cloud.
         base_url: "https://ollama.com",
-        default_model: "",
+        // A mid-size, tool-capable cloud model that matches what
+        // `docs/PERFORMANCE.md` benchmarks against. `/model` lists the rest of
+        // your account's cloud catalogue; `gemma4:31b-cloud` is the explicit
+        // hosted tag if the bare name ever stops resolving.
+        default_model: "gemma4:31b",
         default_embed_model: "",
         wire: Wire::Ollama,
         embeddings: false,
@@ -123,9 +132,10 @@ pub const PROVIDERS: &[Provider] = &[
         display: "OpenRouter",
         auth: AuthKind::ApiKey,
         base_url: "https://openrouter.ai/api/v1",
-        // One key, a large catalogue of `creator/model` ids that drift leave it
-        // unset so `/login` prompts a `/model` pick, same as the Vercel row.
-        default_model: "",
+        // One key, a large catalogue of `creator/model` ids. Default to the
+        // cheap OpenAI model (its OpenRouter id); `/model` switches to anything
+        // else in the catalogue.
+        default_model: "openai/gpt-5.6-luna",
         default_embed_model: "",
         wire: Wire::OpenAi,
         embeddings: false,

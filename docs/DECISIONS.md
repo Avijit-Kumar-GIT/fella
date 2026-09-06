@@ -7,6 +7,18 @@ this app repo (now **`fella`**; `fella-ai` is a private pre-v0.1 archive),
 `fella-marketplace` to mean the browse-site half of the **`fella-web`** repo,
 and any `CODE_OF_CONDUCT.md` mention as folded into `CONTRIBUTING.md` (§Conduct).
 
+- **2026-09-06** **Every provider gets a cheap modern `default_model`, and
+  `/model` shows text-generation models only.** Earlier reasoning that
+  `vercel`/`openrouter` ids "drift too much for a default" held back a good
+  first run for one wrong guess that `/model <name>` already fixes; all rows
+  now default to a current cheap model (`gpt-5.6-luna` / `grok-4.1-fast` /
+  `gemma4:31b`). Separately, `llm::health` filters the model list to chat
+  models a denylist of id substrings (`embed`, `dall-e`, `tts`, `whisper`,
+  `moderation`, `-audio`, `davinci-`, …), not an allowlist, so any real
+  instruct model (including multimodal ones like `gpt-4o`) still shows and an
+  off-list id can still be set explicitly. Same change added
+  `llm::openai_reasoning_model`: `o1`/`o3`/`o4`/`gpt-5*` need
+  `max_completion_tokens` and reject non-default `temperature`.
 - **2026-09-05** **`/update` reuses the install-script checksum pattern
   instead of `tauri-plugin-updater`.** Post-v0.1.0 bugs (`fella#13` and
   others found via real usage) made "redownload and reinstall by hand for

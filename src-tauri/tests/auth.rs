@@ -45,8 +45,12 @@ fn set_key_switches_provider_and_persists_outside_the_db() {
     assert_eq!(s.provider, "vercel");
     assert_eq!(s.base_url, "https://ai-gateway.vercel.sh/v1");
     assert!(s.has_credential);
-    // the row has no default chat model switching must not inherit ollama's
-    assert_eq!(s.model, "");
+    // switching moves to the target provider's default, not ollama's
+    assert_eq!(
+        s.model,
+        fella_lib::engine::provider::get("vercel").unwrap().default_model
+    );
+    assert!(!s.model.is_empty());
 
     // the key lives in auth.json, not fella.db
     let auth = fs::read_to_string(data.join("auth.json")).unwrap();
@@ -136,7 +140,10 @@ fn switching_provider_through_settings_moves_the_address_and_model() {
 
     assert_eq!(s.provider, "openai");
     assert_eq!(s.base_url, "https://api.openai.com/v1");
-    assert_eq!(s.model, "gpt-4o-mini");
+    assert_eq!(
+        s.model,
+        fella_lib::engine::provider::get("openai").unwrap().default_model
+    );
 
     let _ = fs::remove_dir_all(&data);
 }
