@@ -713,11 +713,24 @@ case regressed. grok stays 16/18: its baseline misses (`refusal` flaky,
   schema's sample rows sends waste from 0 to 11 (the model re-discovers what
   it was told). The shipped prompt is already at its Pareto point here.
 
+**Where it holds (measured 2026-09-07, gemma4:31b, no action needed)**
+
+- **Folder size.** `folder-scale` 1 → 120 tables: accuracy is flat at 18/18
+  through **40 tables**, easing to 17–16/18 at 120. The step cap is never hit;
+  first-token latency doesn't move. Past ~13 tables the schema block drops to
+  names-only and the model peeks columns legitimately (the "waste" column
+  jumps but those calls are real). The **adaptive `num_ctx` floor carries the
+  top end**: at 120 tables it's 17/18 vs `fixed 8192`'s 16/18 with half the
+  peeking. `trim_history` by token budget is *not* warranted nothing shows
+  history bloat causing a miss.
+- **Messy data.** `robustness` text-formatted amounts (`$1,200`), a trailing
+  totals row, mixed date formats, cumulative: **6/6 at every level**,
+  closeness 0.91. The ingest-time coercion (`parse_num`, totals-row drop) and
+  the `run_sql` text-column warning absorb it before the model has to reason
+  about it.
+
 #### Still queued
 
 - **Few-shot** deferred: ablation shows no prompt slack to trade for it.
-- **Folder-scale.** `folder-scale --models "ollama-cloud/gemma4:31b"` adaptive
-  vs `fixed 8192`. If long runs flail on history bloat, then `trim_history`
-  by token budget.
 - **Older/cheaper models.** `model-ladder` down a dated list the point where
   bad SQL/arithmetic (model decay) overtakes a correct refusal (tool ceiling).
