@@ -23,6 +23,7 @@
 //!
 //! Opts: --models "a,b,c"  --judge <model>  --iters N (default 1)
 //!       --only <id-substr>  --json <path>  --compare <old.json>
+//! Env:  EVAL_SHOW_ANSWERS=1  print every answer + its evidence to stderr
 //!
 //! A --models entry is a bare model on the configured provider (`gemma4:31b`)
 //! or `provider/model` to switch provider too (`xai/grok-4.3`,
@@ -197,7 +198,17 @@ fn grade(r: &RunResult, gold: &Gold) -> bool {
             let got = numbers_in(&r.text);
             want.iter().all(|w| got.iter().any(|g| close(*g, *w)))
         }
-        Gold::Contains(subs) => subs.iter().all(|s| low.contains(&s.to_lowercase())),
+        Gold::Contains(subs) => {
+            let got = numbers_in(&r.text);
+            subs.iter().all(|s| {
+                // an all-digit sub matches the *number* (so "1250" == "1,250"
+                // == "£1,250"); anything else is a literal substring
+                match s.parse::<f64>() {
+                    Ok(want) => got.iter().any(|g| close(*g, want)),
+                    Err(_) => low.contains(&s.to_lowercase()),
+                }
+            })
+        }
         Gold::Refusal => {
             numbers_in(&r.text).iter().all(|n| (1900.0..=2100.0).contains(n))
                 && (low.contains("can't")
@@ -551,10 +562,30 @@ async fn score_case(
     let mut any_hard = false;
     let mut last_err = None;
 
+    let show = std::env::var_os("EVAL_SHOW_ANSWERS").is_some();
     for it in 0..iters {
         let r = run_case(engine, &format!("{conv}-{it}"), &case.question, None).await;
-        if grade(&r, &case.gold) {
+        let ok = grade(&r, &case.gold);
+        if ok {
             oks += 1;
+        }
+        if show {
+            eprintln!(
+                "\n[{} {model} it{it}] {}\n  Q: {}\n  A: {}",
+                case.id,
+                if ok { "PASS" } else { "FAIL" },
+                case.question,
+                r.text.replace('\n', "\n     ")
+            );
+            for e in &r.evidence {
+                eprintln!(
+                    "     · {} {}ms{}{}",
+                    e.tool,
+                    e.ms,
+                    e.sql.as_deref().map(|s| format!("  {s}")).unwrap_or_default(),
+                    e.error.as_deref().map(|s| format!("  ERR {s}")).unwrap_or_default(),
+                );
+            }
         }
         cd += closeness_det(&r, case);
         if let (Some(jm), true) = (judge, r.err.is_none()) {
