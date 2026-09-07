@@ -201,6 +201,15 @@ fn table_text(q: &QueryResult, max_rows: usize) -> String {
     if extra > 0 {
         out.push_str(&format!("… {extra} more rows\n"));
     }
+    // A bare aggregate over an empty set comes back as one all-NULL row, which
+    // renders as a blank cell; a smaller model reads that as "the query failed"
+    // and starts probing whether the category/filter exists. Say plainly that
+    // nothing matched so an empty SUM/COUNT is taken as the answer (0 / none).
+    let nothing_matched = q.row_count == 0
+        || (q.rows.len() == 1 && q.rows[0].iter().all(|c| c.is_null()));
+    if nothing_matched {
+        out.push_str("nothing matched this query an empty SUM/COUNT is 0, an empty MIN/MAX/AVG is none; that is the answer\n");
+    }
     out.push_str(&format!("({} rows total)", q.row_count));
     out
 }
@@ -649,5 +658,39 @@ fn truncate_chars(s: &str, n: usize) -> String {
     match s.char_indices().nth(n) {
         Some((i, _)) => format!("{}…", &s[..i]),
         None => s.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn qr(columns: &[&str], rows: Vec<Vec<Json>>) -> QueryResult {
+        QueryResult {
+            columns: columns.iter().map(|s| s.to_string()).collect(),
+            row_count: rows.len(),
+            rows,
+            ms: 0,
+            truncated: false,
+        }
+    }
+
+    #[test]
+    fn table_text_spells_out_an_empty_aggregate() {
+        // SUM over no matching rows -> one all-NULL row.
+        let t = table_text(&qr(&["SUM(amount)"], vec![vec![Json::Null]]), 30);
+        assert!(t.contains("nothing matched"), "{t}");
+
+        // GROUP BY with no matches -> zero rows.
+        let t0 = table_text(&qr(&["category", "n"], vec![]), 30);
+        assert!(t0.contains("nothing matched"), "{t0}");
+
+        // A real zero (COUNT) is unambiguous already leave it alone.
+        let c = table_text(&qr(&["n"], vec![vec![Json::from(0)]]), 30);
+        assert!(!c.contains("nothing matched"), "{c}");
+
+        // A normal result is untouched.
+        let r = table_text(&qr(&["x"], vec![vec![Json::from(5)]]), 30);
+        assert!(!r.contains("nothing matched"), "{r}");
     }
 }
