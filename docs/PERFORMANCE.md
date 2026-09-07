@@ -671,17 +671,18 @@ where it breaks (folder scale, older models, traps). `luna` is the reference
 row cheapest priced, zero waste, fewest tokens. Every harness change from
 here is `--compare`d against this file's JSON (`/tmp/baseline.json`).
 
-#### After 2026-09-07 (same frozen battery, `--iters 5`, `--compare` vs the baseline above)
+#### After 2026-09-07 (same frozen battery, `--compare` vs the baseline above)
 
-| model | acc | close(det) | waste/case | tok/correct | Δ tok/correct |
-|---|:-:|--:|--:|--:|--:|
-| ollama-cloud/gemma4:31b | 18/18 | 0.85 | 0.00 | 3650 | **−14%** |
-| openai/gpt-5.6-luna | 18/18 | 0.87 | 0.00 | 3175 | −3% |
+| model | iters | acc | close(det) | waste/case | tok/correct | Δ tok/correct |
+|---|:-:|:-:|--:|--:|--:|--:|
+| ollama-cloud/gemma4:31b | 5 | 18/18 | 0.85 | 0.00 | 3650 | **−14%** |
+| openai/gpt-5.6-luna | 5 | 18/18 | 0.87 | 0.00 | 3175 | −3% |
+| xai/grok-4.3 | 3 | 16/18 | 0.82 | 0.06 | 4544 | ≈0 |
 
 Per-case correctness is unchanged everywhere except `time_series` (a grader
-fix it accepts "2021-11" as well as "November 2021"; the model always
-computed the right month) and `empty_cat` (a real fix, below). No case
-regressed. The gemma token drop is almost entirely one case.
+fix all three models compute the right month, some render it "2021-11"). No
+case regressed. grok stays 16/18: its baseline misses (`refusal` flaky,
+`max_txn` low closeness) are unchanged and model-side, not harness.
 
 **What moved it**
 
@@ -690,22 +691,27 @@ regressed. The gemma token drop is almost entirely one case.
   read that as a failed query and fired 2-3 more calls to check the category
   existed. The tool result now says "nothing matched an empty SUM/COUNT is
   0". `empty_cat` on gemma: **4 tool calls → 1, ~10.3K tokens → ~3.9K**, still
-  correct. luna's baseline miss on this case is now fixed.
-- **Three `verify.rs` precision fixes.** Making the deterministic self-check
-  *actionable* (the corrective re-ask, also 2026-09-07) turned three
-  long-standing imprecisions from harmless fold-warnings into re-asks that
-  cost a model call each: (a) a NULL aggregate isn't the number 0, (b) a
-  float `SUM` re-serialises with a low bit different on re-run, (c) a digit
-  inside an identifier (`txns_00`) was read as a stated figure. Each fixed;
-  the re-ask now fires on **nothing** in the battery it's a dormant safety
-  net for a genuine unbacked figure, at zero cost when the answer is sound.
+  correct. It was luna's one baseline miss; now fixed. Smaller win on grok.
+- **Three `verify.rs` precision fixes.** Making the self-check *actionable*
+  (the corrective re-ask) turned three long-standing imprecisions from
+  harmless fold-warnings into re-asks that cost a model call each: (a) a NULL
+  aggregate isn't the number 0, (b) a float `SUM` re-serialises with a low bit
+  different on re-run, (c) a digit inside an identifier (`txns_00`) was read
+  as a stated figure. Each fixed the fold shows fewer bogus warnings now too.
+- **The corrective re-ask is narrowed to the re-run checks.** Measured across
+  all three models, triggering it on the fuzzy "a figure appears in no result"
+  check was net-negative: on grok it turned a correct "≈18%" into the raw
+  ratio `0.176…` (grounded, but wrong and unreadable), and it caused every
+  false positive above. It now fires only on "different result now" / "no
+  longer runs" a query that demonstrably changed, where "restate to match the
+  re-run" is a safe tool-free fix. On a read-only workspace that's basically
+  never, so the re-ask is effectively a dormant net rather than a live cost.
 - **Prompt minimalism: tested, no change.** `prompt-ablation` on gemma every
   section above the core rules + schema either loses a case
   (`background_rule`), drives a shipped feature (`note_rule` the activity
   display), or is under-tested by the battery (`docs_rule`). Dropping the
   schema's sample rows sends waste from 0 to 11 (the model re-discovers what
-  it was told). The shipped prompt is already at its Pareto point for these
-  cases.
+  it was told). The shipped prompt is already at its Pareto point here.
 
 #### Still queued
 
