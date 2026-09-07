@@ -91,17 +91,20 @@ correctness, answer-closeness, wasted tool calls, tokens/correct-answer
 across prompt ablations, folder sizes and models (`docs/PERFORMANCE.md`).
 Decide from its output, not from a hunch:
 
-- **Few-shot worked examples** in the system prompt for small local models the
-  `PromptProfile` machinery is in place; add the examples if `prompt-ablation`
-  shows the scaffolding earns its tokens.
+- **Few-shot worked examples** in the system prompt for small local models
+  *deferred:* `prompt-ablation` on gemma4:31b (2026-09-07) shows no prompt slack
+  to trade the shipped prompt already loses a case or a feature at every cut
+  above the core rules + schema.
 - **Terser prompt for `o1`/`o3`/`o4`/`gpt-5*`** a second `PromptProfile` preset,
-  gated on the eval agreeing.
+  gated on the eval agreeing. gpt-5.6-luna is already the leanest of the three
+  measured models on the shipped prompt, so this is low priority.
 - **Corrective re-ask on `verify::hard_fail`** *(shipped 2026-09-07, default on,
   `FELLA_VERIFY_REASK=0` to disable; [`DECISIONS.md`](DECISIONS.md) amended).* One
   tool-free turn to reconcile or withdraw a figure whose query no longer
-  reproduces it. Confirm the gain with `model-ladder --compare` (baseline was
-  captured before it) and keep an eye on the hard-fail cross-tab for false
-  positives that cost a call for nothing.
+  reproduces it. Confirmed on the frozen battery: after fixing three `verify`
+  imprecisions it exposed (NULL-vs-0, float jitter, identifier digits) it fires
+  on nothing there a dormant net at zero cost. Real value needs a genuine
+  unbacked figure, which the battery's models don't currently produce.
 - **`trim_history` by token budget** if `folder-scale` shows long multi-step
   runs flailing on history bloat (`num_ctx` is already a growing floor).
 

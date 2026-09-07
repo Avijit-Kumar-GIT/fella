@@ -671,19 +671,47 @@ where it breaks (folder scale, older models, traps). `luna` is the reference
 row cheapest priced, zero waste, fewest tokens. Every harness change from
 here is `--compare`d against this file's JSON (`/tmp/baseline.json`).
 
-#### Experiment queue (run in a dev env, one at a time, `--compare /tmp/baseline.json`)
+#### After 2026-09-07 (same frozen battery, `--iters 5`, `--compare` vs the baseline above)
 
-1. **Corrective re-ask** *(code shipped 2026-09-07, default on).* The baseline
-   predates it, so re-run `model-ladder` as above and `--compare`. Then run it
-   once with `FELLA_VERIFY_REASK=0` for the clean A/B. Keep if acc holds/rises
-   and the extra calls land only on genuine hard-fails (watch tok/correct and
-   the hard-fail cross-tab in `--json`).
-2. **Prompt minimalism.** `prompt-ablation --models "ollama-cloud/gemma4:31b"`
-   then `"openai/gpt-5.6-luna"`. Cut from `PromptProfile::full()` the sections
-   above the lowest ladder rung that still matches `full` on acc + closeness.
-3. **Few-shot** only if (2) shows the prompt has slack: add 2 exemplars behind a
-   `PromptProfile.few_shot` flag, ablation-test on gemma (small models gain
-   most).
-4. **Folder-scale.** `folder-scale --models "ollama-cloud/gemma4:31b"` adaptive
-   vs `fixed 8192`. If long runs flail on history bloat, then `trim_history`
-   by token budget.
+| model | acc | close(det) | waste/case | tok/correct | Δ tok/correct |
+|---|:-:|--:|--:|--:|--:|
+| ollama-cloud/gemma4:31b | 18/18 | 0.85 | 0.00 | 3650 | **−14%** |
+| openai/gpt-5.6-luna | 18/18 | 0.87 | 0.00 | 3175 | −3% |
+
+Per-case correctness is unchanged everywhere except `time_series` (a grader
+fix it accepts "2021-11" as well as "November 2021"; the model always
+computed the right month) and `empty_cat` (a real fix, below). No case
+regressed. The gemma token drop is almost entirely one case.
+
+**What moved it**
+
+- **`run_sql` spells out an empty aggregate.** A `SUM`/`AVG` over no matching
+  rows is one all-NULL row, which rendered as a blank cell; a smaller model
+  read that as a failed query and fired 2-3 more calls to check the category
+  existed. The tool result now says "nothing matched an empty SUM/COUNT is
+  0". `empty_cat` on gemma: **4 tool calls → 1, ~10.3K tokens → ~3.9K**, still
+  correct. luna's baseline miss on this case is now fixed.
+- **Three `verify.rs` precision fixes.** Making the deterministic self-check
+  *actionable* (the corrective re-ask, also 2026-09-07) turned three
+  long-standing imprecisions from harmless fold-warnings into re-asks that
+  cost a model call each: (a) a NULL aggregate isn't the number 0, (b) a
+  float `SUM` re-serialises with a low bit different on re-run, (c) a digit
+  inside an identifier (`txns_00`) was read as a stated figure. Each fixed;
+  the re-ask now fires on **nothing** in the battery it's a dormant safety
+  net for a genuine unbacked figure, at zero cost when the answer is sound.
+- **Prompt minimalism: tested, no change.** `prompt-ablation` on gemma every
+  section above the core rules + schema either loses a case
+  (`background_rule`), drives a shipped feature (`note_rule` the activity
+  display), or is under-tested by the battery (`docs_rule`). Dropping the
+  schema's sample rows sends waste from 0 to 11 (the model re-discovers what
+  it was told). The shipped prompt is already at its Pareto point for these
+  cases.
+
+#### Still queued
+
+- **Few-shot** deferred: ablation shows no prompt slack to trade for it.
+- **Folder-scale.** `folder-scale --models "ollama-cloud/gemma4:31b"` adaptive
+  vs `fixed 8192`. If long runs flail on history bloat, then `trim_history`
+  by token budget.
+- **Older/cheaper models.** `model-ladder` down a dated list the point where
+  bad SQL/arithmetic (model decay) overtakes a correct refusal (tool ceiling).

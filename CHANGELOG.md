@@ -19,6 +19,18 @@ All notable changes to Fella are recorded here. Format follows
   to reconcile against what it already ran or drop the figure, then re-checks.
   Still no number comes from the model itself; the pass is still deterministic.
   Set `FELLA_VERIFY_REASK=0` to keep the old behaviour (warn and ship).
+- **An empty total reads as "0", not a failed query.** A `SUM`/`AVG`/`MIN`/`MAX`
+  over rows that matched nothing used to come back as a blank cell; some models
+  read that as "the query broke" and ran two or three more to double-check the
+  category exists. The result now says plainly that nothing matched and an
+  empty sum or count is 0. On one measured model a "how much did I spend on X"
+  where the answer is zero went from four queries to one.
+- **Fewer false alarms in the self-check.** The verification fold no longer
+  flags: a correct "0" answer backed by an empty aggregate; a floating-point
+  total that re-serialises with a last-digit difference when re-run; a number
+  that's actually part of a filename (`txns_00`). These were always cosmetic,
+  but with the new corrective re-ask a false alarm now costs a model call, so
+  they're fixed.
 
 ## [0.1.4]
 
