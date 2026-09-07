@@ -670,3 +670,20 @@ about holding that accuracy while cutting tokens and wasted calls, and about
 where it breaks (folder scale, older models, traps). `luna` is the reference
 row cheapest priced, zero waste, fewest tokens. Every harness change from
 here is `--compare`d against this file's JSON (`/tmp/baseline.json`).
+
+#### Experiment queue (run in a dev env, one at a time, `--compare /tmp/baseline.json`)
+
+1. **Corrective re-ask** *(code shipped 2026-09-07, default on).* The baseline
+   predates it, so re-run `model-ladder` as above and `--compare`. Then run it
+   once with `FELLA_VERIFY_REASK=0` for the clean A/B. Keep if acc holds/rises
+   and the extra calls land only on genuine hard-fails (watch tok/correct and
+   the hard-fail cross-tab in `--json`).
+2. **Prompt minimalism.** `prompt-ablation --models "ollama-cloud/gemma4:31b"`
+   then `"openai/gpt-5.6-luna"`. Cut from `PromptProfile::full()` the sections
+   above the lowest ladder rung that still matches `full` on acc + closeness.
+3. **Few-shot** only if (2) shows the prompt has slack: add 2 exemplars behind a
+   `PromptProfile.few_shot` flag, ablation-test on gemma (small models gain
+   most).
+4. **Folder-scale.** `folder-scale --models "ollama-cloud/gemma4:31b"` adaptive
+   vs `fixed 8192`. If long runs flail on history bloat, then `trim_history`
+   by token budget.

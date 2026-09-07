@@ -96,10 +96,12 @@ Decide from its output, not from a hunch:
   shows the scaffolding earns its tokens.
 - **Terser prompt for `o1`/`o3`/`o4`/`gpt-5*`** a second `PromptProfile` preset,
   gated on the eval agreeing.
-- **Corrective re-ask on `verify::hard_fail`** one bounded extra model turn when
-  a self-check fails hard. Needs a dated [`DECISIONS.md`](DECISIONS.md) amendment
-  of "verification does no extra LLM call"; `agent_eval`'s hard-fail cross-tab is
-  the go/no-go evidence.
+- **Corrective re-ask on `verify::hard_fail`** *(shipped 2026-09-07, default on,
+  `FELLA_VERIFY_REASK=0` to disable; [`DECISIONS.md`](DECISIONS.md) amended).* One
+  tool-free turn to reconcile or withdraw a figure whose query no longer
+  reproduces it. Confirm the gain with `model-ladder --compare` (baseline was
+  captured before it) and keep an eye on the hard-fail cross-tab for false
+  positives that cost a call for nothing.
 - **`trim_history` by token budget** if `folder-scale` shows long multi-step
   runs flailing on history bloat (`num_ctx` is already a growing floor).
 
