@@ -13,12 +13,14 @@ All notable changes to Fella are recorded here. Format follows
   much will") has no answer in past records the model says so instead of
   computing an average and presenting it as a projection. (Found by the new
   agent-eval harness: one model was doing exactly that.)
-- **A failed self-check now gets one shot at a fix.** When the deterministic
-  verification pass finds a figure whose query no longer reproduces it (or a
-  number backed by nothing), Fella spends one tool-free turn asking the model
-  to reconcile against what it already ran or drop the figure, then re-checks.
-  Still no number comes from the model itself; the pass is still deterministic.
-  Set `FELLA_VERIFY_REASK=0` to keep the old behaviour (warn and ship).
+- **A stale figure now gets one shot at a fix.** When the deterministic
+  verification pass re-runs a query behind the answer and gets a *different
+  result*, Fella spends one tool-free turn asking the model to restate its
+  answer to match the re-run, then re-checks. Still no number comes from the
+  model itself; the pass is still deterministic. (It does *not* re-ask over the
+  fuzzier "this number isn't in a result" check that one stays a warning in
+  the fold, because a tool-free reconcile there tends to mangle a correct
+  answer.) Set `FELLA_VERIFY_REASK=0` to turn it off.
 - **An empty total reads as "0", not a failed query.** A `SUM`/`AVG`/`MIN`/`MAX`
   over rows that matched nothing used to come back as a blank cell; some models
   read that as "the query broke" and ran two or three more to double-check the

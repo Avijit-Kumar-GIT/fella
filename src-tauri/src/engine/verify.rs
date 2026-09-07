@@ -21,30 +21,40 @@ pub fn run(engine: &EngineState, answer: &str, evidence: &[EvidenceItem]) -> Vec
     checks
 }
 
-/// The subset of failures that mean the answer is probably *wrong*, not merely
-/// worth a look: a cited query that now re-runs to a different result or won't
-/// run, or a figure in the answer that appears in no tool result. A stray-year
-/// nudge or a text-column-aggregation caution is a soft warning and does not
-/// count. Returns the first such check's `detail` (else its `label`).
-///
-/// Matched on the label string, the same altitude as `is_schema_error` and the
-/// rest of this module. Used by the eval harness to separate hard misses from
-/// soft warnings, and by the agent loop's corrective re-ask. Returns the label
-/// with its `detail` (the offending SQL, or the stray figures) folded in, since
-/// the re-ask needs the specifics, not just "a query".
-pub fn hard_fail(checks: &[VerificationCheck]) -> Option<String> {
-    const HARD: [&str; 3] = [
-        "different result now",
-        "no longer runs",
-        "not found in any result",
-    ];
+fn first_bad(checks: &[VerificationCheck], labels: &[&str]) -> Option<String> {
     checks
         .iter()
-        .find(|c| !c.ok && HARD.iter().any(|h| c.label.contains(h)))
+        .find(|c| !c.ok && labels.iter().any(|h| c.label.contains(h)))
         .map(|c| match &c.detail {
             Some(d) => format!("{} ({d})", c.label),
             None => c.label.clone(),
         })
+}
+
+/// The subset of failures that mean the answer is probably *wrong*, not merely
+/// worth a look: a cited query that now re-runs to a different result or won't
+/// run, or a figure in the answer that appears in no tool result. A stray-year
+/// nudge or a text-column-aggregation caution is a soft warning and does not
+/// count. Returns the first such check's `label` with its `detail` folded in.
+///
+/// Matched on the label string, the same altitude as `is_schema_error`. Used by
+/// the eval harness to separate hard misses from soft warnings.
+pub fn hard_fail(checks: &[VerificationCheck]) -> Option<String> {
+    first_bad(
+        checks,
+        &["different result now", "no longer runs", "not found in any result"],
+    )
+}
+
+/// The narrower subset the agent loop's corrective re-ask acts on: a cited query
+/// that now re-runs differently, or no longer runs. These are precise the query
+/// is re-executed so "restate your answer to match the re-run" is a safe,
+/// tool-free fix. The fuzzier "a figure appears in no result" is deliberately
+/// *not* here: it's a number-shape heuristic, and a tool-free reconcile there
+/// tends to make the model parrot a raw evidence value (the ratio 0.176 instead
+/// of the "18%" it correctly derived). That stays a fold warning only.
+pub fn rerun_regression(checks: &[VerificationCheck]) -> Option<String> {
+    first_bad(checks, &["different result now", "no longer runs"])
 }
 
 // --- 4. aggregates over a text column --------------------------------------
@@ -527,6 +537,10 @@ mod tests {
             hard_fail(&stray).as_deref(),
             Some("the answer mentions 999 not found in any result")
         );
+
+        // ...but the corrective re-ask only acts on the re-run checks.
+        assert_eq!(rerun_regression(&stray), None, "unbacked figure is fold-only");
+        assert!(rerun_regression(&hard).is_some(), "a changed re-run does trigger it");
     }
 
     #[test]

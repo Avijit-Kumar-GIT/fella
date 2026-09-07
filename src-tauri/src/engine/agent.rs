@@ -136,16 +136,19 @@ you did not get from a tool.\n",
                 resp.content
             };
             let mut checks = verify::run(engine, &text, &evidence);
-            // One tool-free corrective turn when the deterministic check finds a
-            // cited figure that no longer reproduces. The re-run value the model
-            // reconciles against still comes from a real query, so the answer
-            // stays checkable. `FELLA_VERIFY_REASK=0` opts out.
+            // One tool-free corrective turn when a cited query re-runs to a
+            // different result (or no longer runs). The value the model
+            // reconciles against comes from that re-run, so the answer stays
+            // checkable. Only the re-run checks trigger this a fuzzier
+            // "figure appears in no result" is left as a fold warning, since a
+            // tool-free reconcile there tends to degrade a correct answer.
+            // `FELLA_VERIFY_REASK=0` opts out.
             if reask_enabled() && !evidence.is_empty() && !cancel.load(Ordering::Relaxed) {
-                if let Some(detail) = verify::hard_fail(&checks) {
+                if let Some(detail) = verify::rerun_regression(&checks) {
                     messages.push(ChatMessage::User(format!(
-                        "Self-check failed: {detail}. A figure in that answer isn't backed by a \
-query that reproduces it. Using only what you've already gathered no new tools give the \
-corrected answer, fixing or withdrawing that figure."
+                        "Self-check: {detail}. Re-running the query behind your answer gives a \
+different result now. Using only what you've already gathered no new tools give the \
+corrected answer to match the re-run."
                     )));
                     let r = tokio::select! {
                         r = llm.chat(&messages, &[], &notify, &on_delta) => r.unwrap_or_default(),
