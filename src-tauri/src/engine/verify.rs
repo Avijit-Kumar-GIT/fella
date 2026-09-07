@@ -200,7 +200,7 @@ fn rerun_queries(engine: &EngineState, evidence: &[EvidenceItem], out: &mut Vec<
         match engine.run_sql(sql) {
             Ok(fresh) => {
                 let same = e.row_count == Some(fresh.row_count)
-                    && e.rows.as_ref().map(|r| r == &fresh.rows).unwrap_or(true);
+                    && e.rows.as_ref().map(|r| rows_match(r, &fresh.rows)).unwrap_or(true);
                 if same {
                     matched += 1;
                 } else {
@@ -363,6 +363,31 @@ fn is_probable_year(v: f64) -> bool {
 }
 
 /// Loose numeric match: exact, within a rounding step, or within 0.5%.
+/// A JSON number, or a string that is wholly a number.
+fn num_of(v: &Json) -> Option<f64> {
+    match v {
+        Json::Number(n) => n.as_f64(),
+        Json::String(s) => s.trim().parse::<f64>().ok(),
+        _ => None,
+    }
+}
+
+/// Two result sets are "the same" for the re-run check if every cell matches
+/// exactly, or is a number within `close()` tolerance. A float SUM/AVG can
+/// serialise with a low-bit difference when the query runs again a
+/// microseconds-later `738022.3` vs `738022.30000000001` is not a changed
+/// answer, and shouldn't trip the corrective re-ask.
+fn rows_match(a: &[Vec<Json>], b: &[Vec<Json>]) -> bool {
+    a.len() == b.len()
+        && a.iter().zip(b).all(|(ra, rb)| {
+            ra.len() == rb.len()
+                && ra.iter().zip(rb).all(|(ca, cb)| match (num_of(ca), num_of(cb)) {
+                    (Some(x), Some(y)) => close(x, y),
+                    _ => ca == cb,
+                })
+        })
+}
+
 fn close(a: f64, b: f64) -> bool {
     if a == b {
         return true;
@@ -390,6 +415,23 @@ mod tests {
     fn extracts_table_names() {
         let r = referenced_relations("SELECT * FROM sales s JOIN people p ON s.id = p.id");
         assert!(r.contains("sales") && r.contains("people"));
+    }
+
+    #[test]
+    fn rows_match_tolerates_float_jitter_only() {
+        let a = vec![vec![Json::from(738022.3)]];
+        let b = vec![vec![Json::from(738022.3 + 1e-6)]];
+        assert!(rows_match(&a, &b), "sub-cent float drift is the same result");
+
+        let c = vec![vec![Json::from(752000.0)]];
+        assert!(!rows_match(&a, &c), "a result past close() tolerance still trips");
+
+        // non-numeric cells must still match exactly
+        let m1 = vec![vec![Json::from("2024-03"), Json::from(10.0)]];
+        let m2 = vec![vec![Json::from("2024-04"), Json::from(10.0)]];
+        assert!(!rows_match(&m1, &m2));
+        let n = vec![vec![Json::from("2024-03"), Json::from(10.0001)]];
+        assert!(rows_match(&m1, &n));
     }
 
     #[test]
