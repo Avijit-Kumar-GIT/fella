@@ -605,3 +605,32 @@ Run against **local** Ollama still not captured the numbers above are a
 hosted-cloud model over the network, not the "local, private (default)" path
 most users will actually run. Worth a second row here once measured on a real
 machine with local Ollama and a comparable model size.
+
+### `agent_eval` the scored harness
+
+`agent_bench` times the loop; **`agent_eval` scores it** correctness,
+answer-closeness, wasted tool calls, tokens per correct answer and sweeps
+that across prompt ablations, folder sizes and models. Dev-only, behind the
+`eval` Cargo feature, never run in CI.
+
+```
+cd src-tauri
+AGENT_EVAL_DATA_DIR=/path/to/copied/data-dir \
+  cargo run --release --features eval --example agent_eval -- <subcommand> [opts]
+```
+
+Subcommands: `accuracy`, `prompt-ablation`, `folder-scale`, `model-ladder`,
+`robustness`, `session-memory`, `all`. Opts: `--models "a,b,c"`,
+`--judge <model>` (opt-in LLM rubric on top of the deterministic closeness
+score), `--only <id-substr>`, `--json <path>`, `--compare <old.json>` (Δ acc
+/ tokens vs a prior run the "did my change help" answer).
+
+Fixtures are deterministic (`engine::testkit`), so the golden answers are
+exact. The grader matches the answer's **headline figure(s)** within
+tolerance; multi-row tables and prose are not parsed. "number present" can
+false-pass if the model prints the right value for the wrong reason
+acceptable for a local dev tool.
+
+**Baseline: not yet captured** run `accuracy` and `model-ladder` against
+`gemma4:31b`/`ollama-cloud` and a local model, then record `acc n/N` per
+question here next to the latency table above.

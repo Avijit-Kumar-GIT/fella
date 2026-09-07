@@ -84,6 +84,25 @@ that shows its working. See [`DECISIONS.md`](DECISIONS.md) and
   and the scaffold + tutorial above. See [`DECISIONS.md`](DECISIONS.md),
   2026-09-02.
 
+## Harness quality, measured
+
+`examples/agent_eval` (dev-only, `--features eval`) now scores the agent loop
+correctness, answer-closeness, wasted tool calls, tokens/correct-answer
+across prompt ablations, folder sizes and models (`docs/PERFORMANCE.md`).
+Decide from its output, not from a hunch:
+
+- **Few-shot worked examples** in the system prompt for small local models the
+  `PromptProfile` machinery is in place; add the examples if `prompt-ablation`
+  shows the scaffolding earns its tokens.
+- **Terser prompt for `o1`/`o3`/`o4`/`gpt-5*`** a second `PromptProfile` preset,
+  gated on the eval agreeing.
+- **Corrective re-ask on `verify::hard_fail`** one bounded extra model turn when
+  a self-check fails hard. Needs a dated [`DECISIONS.md`](DECISIONS.md) amendment
+  of "verification does no extra LLM call"; `agent_eval`'s hard-fail cross-tab is
+  the go/no-go evidence.
+- **`trim_history` by token budget** if `folder-scale` shows long multi-step
+  runs flailing on history bloat (`num_ctx` is already a growing floor).
+
 ## Small engine and UI niceties
 
 - **Streaming Markdown that does not flicker.** Render partial tables and lists
