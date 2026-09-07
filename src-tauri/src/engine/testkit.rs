@@ -51,8 +51,12 @@ pub struct TableGold {
     pub total: f64,
     /// spend per category, descending is `top3()`
     pub by_category: BTreeMap<String, f64>,
+    /// spend per `YYYY-MM`
+    pub by_month: BTreeMap<String, f64>,
     /// (merchant, spend) for the single biggest-spend merchant
     pub top_merchant: (String, f64),
+    /// the single largest `amount` in the table
+    pub max_amount: f64,
 }
 
 impl TableGold {
@@ -66,6 +70,14 @@ impl TableGold {
         v.sort_by(|a, b| b.1.total_cmp(&a.1));
         v.truncate(3);
         v
+    }
+    /// `YYYY-MM` of the highest-spend month, and that amount.
+    pub fn top_month(&self) -> (String, f64) {
+        self.by_month
+            .iter()
+            .map(|(k, v)| (k.clone(), *v))
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+            .unwrap_or_default()
     }
 }
 
@@ -119,6 +131,9 @@ pub struct Goldens {
     /// notes-budget.md: (rent target, month it changed)
     pub rent_target: f64,
     pub rent_changed: &'static str,
+    /// workouts.csv a non-financial table, for domain diversity
+    pub workout_total_minutes: u64,
+    pub workout_top_activity: (String, u64),
 }
 
 impl Goldens {
@@ -190,7 +205,9 @@ fn gen_table(path: &Path, rows: usize, spec: &WorkspaceSpec, table_seed: u64) ->
 
         gold.rows += 1;
         gold.total += amount;
+        gold.max_amount = gold.max_amount.max(amount);
         *gold.by_category.entry(cat.to_string()).or_default() += amount;
+        *gold.by_month.entry(format!("{year:04}-{month:02}")).or_default() += amount;
         *per_merchant.entry(merch.to_string()).or_default() += amount;
 
         s.push_str(&date_cell(&mut rng, year, month, dom, spec.messiness.mixed_dates()));
@@ -200,9 +217,14 @@ fn gen_table(path: &Path, rows: usize, spec: &WorkspaceSpec, table_seed: u64) ->
     }
 
     // Round the golden aggregates the way an answer would be read back.
-    gold.total = (gold.total * 100.0).round() / 100.0;
+    let r2 = |x: f64| (x * 100.0).round() / 100.0;
+    gold.total = r2(gold.total);
+    gold.max_amount = r2(gold.max_amount);
     for v in gold.by_category.values_mut() {
-        *v = (*v * 100.0).round() / 100.0;
+        *v = r2(*v);
+    }
+    for v in gold.by_month.values_mut() {
+        *v = r2(*v);
     }
     gold.top_merchant = per_merchant
         .into_iter()
@@ -247,7 +269,38 @@ pub fn synth_workspace(dir: &Path, spec: &WorkspaceSpec) -> Goldens {
     )
     .unwrap();
 
+    // A non-financial table so the battery isn't all money.
+    let (mins, top) = gen_workouts(&dir.join("workouts.csv"), spec.seed);
+    goldens.workout_total_minutes = mins;
+    goldens.workout_top_activity = top;
+
     goldens
+}
+
+/// 400 rows of a deterministic workout log; returns (total minutes, (top
+/// activity, its minutes)).
+fn gen_workouts(path: &Path, seed: u64) -> (u64, (String, u64)) {
+    const ACTS: [&str; 5] = ["run", "cycle", "swim", "yoga", "lift"];
+    let mut rng = Rng::new(seed ^ 0x0000_0000_00F1_7000);
+    let mut s = String::from("date,activity,minutes,calories\n");
+    let mut total = 0u64;
+    let mut by_act: BTreeMap<String, u64> = BTreeMap::new();
+    for i in 0..400u64 {
+        let day = i % 700;
+        let (y, m, d) = (2023 + day / 365, (day % 365) / 31 + 1, (day % 28) + 1);
+        let act = ACTS[(rng.below(ACTS.len() as u64)) as usize];
+        let minutes = 15 + rng.below(75); // 15..90
+        let calories = minutes * (4 + rng.below(6)); // rough
+        total += minutes;
+        *by_act.entry(act.to_string()).or_default() += minutes;
+        s.push_str(&format!("{y:04}-{m:02}-{d:02},{act},{minutes},{calories}\n"));
+    }
+    std::fs::write(path, s).unwrap();
+    let top = by_act
+        .into_iter()
+        .max_by_key(|(_, v)| *v)
+        .unwrap_or_default();
+    (total, top)
 }
 
 /// The hand-typed 5-row rent ledger `agent_bench.rs` uses amounts as text with

@@ -639,6 +639,21 @@ tolerance; multi-row tables and prose are not parsed. "number present" can
 false-pass if the model prints the right value for the wrong reason
 acceptable for a local dev tool.
 
-**Baseline: not yet captured** run `accuracy` and `model-ladder` against
-`gemma4:31b`/`ollama-cloud` and a local model, then record `acc n/N` per
-question here next to the latency table above.
+The ~18-case battery spans question kinds, not just spending: a single
+aggregate, a filter, min/max, a top-N group, a time-series month, a rounded
+ratio, a two-figure multi-step, a `parse_num` trap (AVG over text amounts), a
+cross-file total, a **non-financial** table (`workouts.csv`), two document
+questions, an honest empty result (a category with no rows), a
+needs-no-tool definition, and a must-decline "how much will I spend next
+month".
+
+**Methodology the battery is frozen.** The `EvalCase` list and every `gold`
+value are the spec of what a good answer is you don't edit a case or its
+expectation to make a number move (that's teaching to the test). A grader
+(`grade()`) fix needs a trace of the model's actual behaviour and an argument
+that it makes the grader match ground truth. Improve Fella against the
+baseline, not the baseline against Fella.
+
+**Baseline: not yet captured** run `model-ladder --iters 5` against
+`ollama-cloud/gemma4:31b`, `openai/gpt-5.6-luna`, `xai/grok-4.3`, then record
+`acc n/N`, closeness, tokens/correct and $/100 here.

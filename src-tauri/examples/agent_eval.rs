@@ -47,11 +47,15 @@ use fella_lib::engine::{verify, AskEvent, EngineState};
 
 #[derive(Clone)]
 enum Gold {
-    /// every figure must appear in the answer, within tolerance
+    /// every figure must appear in the answer, within `close()` tolerance
     Figures(Vec<f64>),
-    /// each substring must be present (case-insensitive)
+    /// one figure within an explicit absolute tolerance (ratios, rounded
+    /// numbers, an exact 0). `Approx(0.0, ..)` also passes on "none / nothing".
+    Approx(f64, f64),
+    /// each substring must be present (case-insensitive; a bare integer matches
+    /// the number, so "1250" == "1,250")
     Contains(Vec<&'static str>),
-    /// the answer must decline (no figures, says it can't)
+    /// the answer must decline (no computed figure, says it can't)
     Refusal,
     /// the answer must need no tool call at all
     NoTool,
@@ -204,6 +208,21 @@ fn grade(r: &RunResult, gold: &Gold) -> bool {
             let got = numbers_in(&r.text);
             want.iter().all(|w| got.iter().any(|g| close(*g, *w)))
         }
+        Gold::Approx(want, tol) => {
+            let non_year: Vec<f64> = numbers_in(&r.text)
+                .into_iter()
+                .filter(|n| !(1900.0..=2100.0).contains(n))
+                .collect();
+            if *want == 0.0
+                && non_year.is_empty()
+                && ["none", "nothing", "zero", "no ", "n/a", "not have any"]
+                    .iter()
+                    .any(|p| low.contains(p))
+            {
+                return true; // "no healthcare transactions" == 0
+            }
+            non_year.iter().any(|g| (g - want).abs() <= *tol)
+        }
         Gold::Contains(subs) => {
             let got = numbers_in(&r.text);
             subs.iter().all(|s| {
@@ -253,6 +272,7 @@ fn token_f1(a: &str, b: &str) -> f32 {
 fn closeness_det(r: &RunResult, case: &EvalCase) -> f32 {
     let want: Vec<f64> = match &case.gold {
         Gold::Figures(w) => w.clone(),
+        Gold::Approx(w, _) => vec![*w],
         _ => Vec::new(),
     };
     let got = numbers_in(&r.text);
@@ -308,11 +328,20 @@ impl Waste {
     }
 }
 
-/// Count the tool calls that did no useful work. A single successful `run_sql`
-/// that feeds the answer, or one orientation `describe_schema` before any
-/// query, is *not* waste. Deliberately conservative: `speculative` only fires
-/// once a run has made 3+ successful queries, so a normal 2-query multi-step
-/// isn't penalised for its intermediate result.
+/// Count the tool calls that did no useful work.
+///
+/// Confidence per kind:
+/// - `duplicate` / `errored` — always accurate.
+/// - `redundant_schema` — every `describe_schema` / `sample_rows` / `list_files`
+///   call. Accurate on the default and other small workspaces, where the system
+///   prompt's schema block already lists the tables, their columns and sample
+///   rows so any such call is the model re-discovering what it was told.
+///   Over-counts on a large `folder-scale` workspace (schema block is names
+///   only there, so a peek can be legitimate); read that column with the table
+///   count in mind.
+/// - `speculative` — a `run_sql` whose numbers the answer never uses, and only
+///   once the run has made 3+ successful queries. Below that we can't tell an
+///   intermediate step from a dead end, so we don't guess.
 fn classify_waste(r: &RunResult) -> Waste {
     let ans = numbers_in(&r.text);
     let n_ok_sql = r
@@ -322,8 +351,6 @@ fn classify_waste(r: &RunResult) -> Waste {
         .count();
     let mut w = Waste::default();
     let mut seen: Vec<(String, String)> = Vec::new();
-    let mut ran_sql_ok = false;
-    let mut inspects = 0usize;
 
     for e in &r.evidence {
         let key = (e.tool.clone(), e.args.to_string());
@@ -332,27 +359,15 @@ fn classify_waste(r: &RunResult) -> Waste {
 
         if e.result_summary == "skipped (duplicate call)" || repeat {
             w.duplicate += 1;
-            continue;
-        }
-        if e.error.is_some() {
+        } else if e.error.is_some() {
             w.errored += 1;
-            continue;
-        }
-        if matches!(e.tool.as_str(), "describe_schema" | "sample_rows" | "list_files") {
-            inspects += 1;
-            if inspects > 1 || ran_sql_ok {
-                w.redundant_schema += 1;
-            }
-            continue;
-        }
-        if e.tool == "run_sql" {
-            ran_sql_ok = true;
-            if n_ok_sql >= 3 {
-                let produced = numbers_in(&e.result_summary);
-                let feeds_answer = produced.iter().any(|p| ans.iter().any(|a| close(*a, *p)));
-                if !produced.is_empty() && !feeds_answer {
-                    w.speculative += 1;
-                }
+        } else if matches!(e.tool.as_str(), "describe_schema" | "sample_rows" | "list_files") {
+            w.redundant_schema += 1;
+        } else if e.tool == "run_sql" && n_ok_sql >= 3 {
+            let produced = numbers_in(&e.result_summary);
+            let feeds_answer = produced.iter().any(|p| ans.iter().any(|a| close(*a, *p)));
+            if !produced.is_empty() && !feeds_answer {
+                w.speculative += 1;
             }
         }
     }
@@ -392,95 +407,158 @@ appropriate; 3 = roughly right but missing or muddled something; 1 = wrong or ev
 }
 
 // --- battery ---------------------------------------------------------
+//
+// FROZEN. These cases and their `gold` values are the specification of what a
+// good answer is. Do NOT edit a case or its expected value to make a number
+// move that is teaching to the test. A new case or a changed expectation is
+// its own commit, argued on its own merits. `grade()` may be fixed only with a
+// trace showing the model's actual behaviour and an argument that the change
+// makes the grader match ground truth (see the note above `grade`).
 
 fn battery(g: &Goldens, rent_total: f64) -> Vec<EvalCase> {
     let t0 = "txns_00";
     let tg: &TableGold = &g.tables[t0];
     let top3 = tg.top3_categories();
-    let (top_cat, top_cat_amt) = top3.first().cloned().unwrap_or_default();
+    let top_cat_amt = top3.first().map(|(_, v)| *v).unwrap_or_default();
     let (top_merch, top_merch_amt) = tg.top_merchant.clone();
+    let transport = *tg.by_category.get("transport").unwrap_or(&0.0);
+    let rent_cat = *tg.by_category.get("rent").unwrap_or(&0.0);
+    let rent_share = rent_cat / tg.total * 100.0;
+    let (top_month, _top_month_amt) = tg.top_month(); // "YYYY-MM"
+    let top_month_name = month_name(&top_month);
+    let top_month_year = &top_month[..4];
+    let avg_rent = rent_total / 5.0;
+    let (wk_top_act, wk_top_min) = g.workout_top_activity.clone();
+
+    let c = |id, category, question: String, gold, reference: String| EvalCase {
+        id,
+        category,
+        question: question.trim().to_string(),
+        gold,
+        min_tools: 1,
+        reference,
+    };
+
     vec![
-        EvalCase {
-            id: "chitchat",
-            category: "NoTool",
-            question: "what kinds of questions can you help me with?".into(),
-            gold: Gold::NoTool,
-            min_tools: 0,
-            reference: "I answer questions about the files in your folder by running SQL/Python and showing the working.".into(),
-        },
-        EvalCase {
-            id: "agg_rent",
-            category: "Aggregate",
-            question: "what's the total amount I paid in rent.csv?".into(),
-            gold: Gold::Figures(vec![rent_total]),
-            min_tools: 1,
-            reference: format!("You paid {rent_total:.2} in total."),
-        },
-        EvalCase {
-            id: "agg_total",
-            category: "Aggregate",
-            question: format!("what was my total spending in {t0}.csv?"),
-            gold: Gold::Figures(vec![tg.total]),
-            min_tools: 1,
-            reference: format!("Total spending in {t0}.csv was {:.2}.", tg.total),
-        },
-        EvalCase {
-            id: "group_top3",
-            category: "GroupTopN",
-            question: format!("in {t0}.csv, what did I spend per category? give the top 3."),
-            gold: Gold::Figures(vec![top_cat_amt]),
-            min_tools: 1,
-            reference: format!(
-                "Top categories: {} {:.0}, {} {:.0}, {} {:.0}.",
-                top3[0].0, top3[0].1, top3[1].0, top3[1].1, top3[2].0, top3[2].1
-            ),
-        },
-        EvalCase {
-            id: "multi_step",
-            category: "MultiStep",
-            question: format!(
-                "in {t0}.csv, which merchant did I spend the most at overall, and roughly how much?"
-            ),
-            gold: Gold::Figures(vec![top_merch_amt]),
-            min_tools: 1,
-            reference: format!("Your biggest merchant was {top_merch} at about {top_merch_amt:.0}."),
-        },
-        EvalCase {
-            id: "grand_total",
-            category: "Aggregate",
-            question: "across every transactions table in the folder, how many rows and what total?".into(),
-            gold: Gold::Figures(vec![g.grand_rows() as f64, g.grand_total()]),
-            min_tools: 1,
-            reference: format!(
-                "{} rows totalling {:.2} across the folder.",
-                g.grand_rows(),
-                g.grand_total()
-            ),
-        },
-        EvalCase {
-            id: "doc_lookup",
-            category: "DocLookup",
-            question: "according to my notes, what is the monthly rent target and when did it change?".into(),
-            gold: Gold::Contains(vec!["1250", "march 2024"]),
-            min_tools: 1,
-            reference: "The monthly rent target is 1250, raised in March 2024.".into(),
-        },
-        EvalCase {
-            id: "refusal",
-            category: "Refusal",
-            question: "how much will I spend next month?".into(),
-            gold: Gold::Refusal,
-            min_tools: 0,
-            reference: "Your files don't say anything about the future, so I can't tell.".into(),
-        },
+        // --- no tool needed ---
+        c("chitchat", "NoTool",
+          "what kinds of questions can you help me with?".into(),
+          Gold::NoTool,
+          "I answer questions about the files in your folder by running SQL/Python, and I show the working.".into()),
+        c("define_term", "NoTool",
+          "what does \"trailing twelve months\" mean?".into(),
+          Gold::NoTool,
+          "It's the sum over the most recent 12 months a rolling one-year window ending today.".into()),
+
+        // --- single aggregate ---
+        c("agg_rent", "Aggregate",
+          "what's the total amount I paid in rent.csv?".into(),
+          Gold::Figures(vec![rent_total]),
+          format!("You paid {rent_total:.2} in total.")),
+        c("agg_total", "Aggregate",
+          format!("what was my total spending in {t0}.csv?"),
+          Gold::Figures(vec![tg.total]),
+          format!("Total spending in {t0} was {:.2}.", tg.total)),
+        c("filter_agg", "Filter",
+          format!("how much did I spend on transport in {t0}.csv?"),
+          Gold::Figures(vec![transport]),
+          format!("Transport spending was {transport:.2}.")),
+
+        // --- the parse_num trap: AVG over a text amount column ---
+        c("avg_rent_text", "Trap",
+          "what's my average rent payment in rent.csv?".into(),
+          Gold::Approx(avg_rent, 1.0),
+          format!("Your average rent payment was {avg_rent:.2}.")),
+
+        // --- min / max ---
+        c("max_txn", "MinMax",
+          format!("what was my single largest transaction in {t0}.csv?"),
+          Gold::Approx(tg.max_amount, 0.5),
+          format!("Your largest single transaction was {:.2}.", tg.max_amount)),
+
+        // --- group / top-N ---
+        c("group_top3", "GroupTopN",
+          format!("in {t0}.csv, what did I spend per category? give the top 3."),
+          Gold::Figures(vec![top_cat_amt]),
+          format!("Top categories: {} {:.0}, {} {:.0}, {} {:.0}.",
+                  top3[0].0, top3[0].1, top3[1].0, top3[1].1, top3[2].0, top3[2].1)),
+
+        // --- time series ---
+        c("time_series", "TimeSeries",
+          format!("which month had the highest total spending in {t0}.csv?"),
+          Gold::Contains(vec![leak(top_month_year), leak(&top_month_name)]),
+          format!("{top_month_name} {top_month_year} was your highest-spending month.")),
+
+        // --- ratio / share (rounded) ---
+        c("share", "Ratio",
+          format!("what share of my {t0}.csv spending was rent?"),
+          Gold::Approx(rent_share, 1.5),
+          format!("Rent was about {rent_share:.0}% of your spending.")),
+
+        // --- multi-step (two figures, dependent) ---
+        c("multi_step", "MultiStep",
+          format!("in {t0}.csv, which merchant did I spend the most at, and roughly how much?"),
+          Gold::Figures(vec![top_merch_amt]),
+          format!("Your biggest merchant was {top_merch}, about {top_merch_amt:.0}.")),
+
+        // --- cross-file: transactions + folder ---
+        c("grand_total", "Aggregate",
+          "across every transactions table in the folder, how many rows and what total?".into(),
+          Gold::Figures(vec![g.grand_rows() as f64, g.grand_total()]),
+          format!("{} rows totalling {:.2} across the folder.", g.grand_rows(), g.grand_total())),
+
+        // --- non-financial table (domain diversity) ---
+        c("workout_total", "Aggregate",
+          "how many minutes did I exercise in total, per workouts.csv?".into(),
+          Gold::Figures(vec![g.workout_total_minutes as f64]),
+          format!("You exercised {} minutes in total.", g.workout_total_minutes)),
+        c("workout_top", "GroupTopN",
+          "which activity did I spend the most minutes on, in workouts.csv?".into(),
+          Gold::Contains(vec![leak(&wk_top_act)]),
+          format!("You spent the most minutes on {wk_top_act} ({wk_top_min}).")),
+
+        // --- documents ---
+        c("doc_lookup", "DocLookup",
+          "according to my notes, what is the monthly rent target and when did it change?".into(),
+          Gold::Contains(vec!["1250", "march 2024"]),
+          "The monthly rent target is 1250, raised in March 2024.".into()),
+        c("doc_summary", "DocSummary",
+          "what does my 2024 notes file mention happened that year?".into(),
+          Gold::Contains(vec!["gym", "insurance", "flights"]),
+          "The 2024 notes mention switching gym, annual insurance in April, and flights in July.".into()),
+
+        // --- honest empty result ---
+        c("empty_cat", "EmptyResult",
+          format!("how much did I spend on healthcare in {t0}.csv?"),
+          Gold::Approx(0.0, 0.5),
+          "There are no healthcare transactions, so 0.".into()),
+
+        // --- must decline: about the future ---
+        c("refusal", "Refusal",
+          "how much will I spend next month?".into(),
+          Gold::Refusal,
+          "Your files only hold past records, so I can't tell you next month's spend.".into()),
     ]
-    .into_iter()
-    .map(|mut c| {
-        let _ = top_cat; // silence unused in some cfgs
-        c.question = c.question.trim().to_string();
-        c
-    })
-    .collect()
+}
+
+/// Leak a `String` to `&'static str` the battery is built once at startup and
+/// lives for the whole run, so a few tiny leaks are fine and let `Gold::Contains`
+/// keep its `&'static` shape.
+fn leak(s: &str) -> &'static str {
+    Box::leak(s.to_string().into_boxed_str())
+}
+
+fn month_name(yyyy_mm: &str) -> String {
+    const M: [&str; 12] = [
+        "January", "February", "March", "April", "May", "June", "July", "August", "September",
+        "October", "November", "December",
+    ];
+    yyyy_mm
+        .get(5..7)
+        .and_then(|mm| mm.parse::<usize>().ok())
+        .and_then(|m| M.get(m.wrapping_sub(1)))
+        .map(|s| s.to_string())
+        .unwrap_or_default()
 }
 
 // --- shared setup -------------------------------------------------------
@@ -636,8 +714,8 @@ async fn score_case(
 }
 
 fn acc(scores: &[CaseScore]) -> (usize, usize) {
-    let n = scores.iter().filter(|s| s.id != "chitchat").count();
-    let ok = scores.iter().filter(|s| s.id != "chitchat" && s.correct).count();
+    let n = scores.len();
+    let ok = scores.iter().filter(|s| s.correct).count();
     (ok, n)
 }
 fn mean_closeness(scores: &[CaseScore]) -> f32 {
@@ -803,7 +881,7 @@ async fn cmd_folder_scale(engine: &EngineState, model: &str, ws: &Path, iters: u
 async fn cmd_model_ladder(engine: &EngineState, cases: &[EvalCase], models: &[String], judge: Option<&str>, iters: usize) -> Vec<CaseScore> {
     println!("\n# Model ladder   ({iters} iter(s)/case)\n");
     legend();
-    let n_cases = cases.iter().filter(|c| c.id != "chitchat").count();
+    let n_cases = cases.len();
     // "clears the bar" thresholds: >=80% accuracy, <= ~0.5 wasted calls/case
     let waste_bar = (n_cases as f64 * 0.5).ceil() as usize;
     println!("| model | acc | close(det) | waste/case | tok/correct-ans | $/100 | mean wall s |");
@@ -1182,40 +1260,67 @@ mod tests {
         ));
         assert!(grade(&rr("I answer questions about your files.", vec![]), &Gold::NoTool));
         assert!(!grade(&rr("...", vec![ev("run_sql", "1 row: 5", None)]), &Gold::NoTool));
+
+        // Approx: within the band; a year in the text doesn't count
+        assert!(grade(&rr("Rent was about 18% of spending (2024).", vec![]), &Gold::Approx(17.6, 1.5)));
+        assert!(!grade(&rr("Rent was about 25%.", vec![]), &Gold::Approx(17.6, 1.5)));
+        // Approx(0): a literal 0 or a plain "no / none"
+        assert!(grade(&rr("Healthcare spending was $0.00.", vec![]), &Gold::Approx(0.0, 0.5)));
+        assert!(grade(&rr("There are no healthcare transactions.", vec![]), &Gold::Approx(0.0, 0.5)));
+        assert!(!grade(&rr("You spent 120 on healthcare.", vec![]), &Gold::Approx(0.0, 0.5)));
     }
 
     #[test]
-    fn waste_is_conservative() {
+    fn battery_is_frozen_and_diverse() {
+        // dummy goldens so battery() builds
+        let mut g = Goldens { workout_total_minutes: 20_000, ..Default::default() };
+        let mut tg = TableGold { rows: 6000, total: 738_022.30, max_amount: 242.98, ..Default::default() };
+        for c in ["rent", "groceries", "transport", "dining", "utilities", "shopping"] {
+            tg.by_category.insert(c.into(), 123_000.0);
+        }
+        tg.by_month.insert("2021-05".into(), 90_000.0);
+        tg.top_merchant = ("Aldi".into(), 51_986.22);
+        g.tables.insert("txns_00".into(), tg);
+        g.workout_top_activity = ("run".into(), 5000);
+
+        let cases = battery(&g, 6100.0);
+        assert!(cases.len() >= 15, "battery should be broad");
+        // spread across question kinds, not all "spending"
+        let cats: std::collections::HashSet<_> = cases.iter().map(|c| c.category).collect();
+        for want in ["NoTool", "Filter", "MinMax", "TimeSeries", "Ratio", "DocSummary", "EmptyResult", "Refusal"] {
+            assert!(cats.contains(want), "missing a {want} case");
+        }
+        // ids unique
+        let mut ids: Vec<_> = cases.iter().map(|c| c.id).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), cases.len(), "duplicate case id");
+    }
+
+    #[test]
+    fn waste_classification() {
         // one run_sql that feeds the answer -> nothing wasted
         let clean = rr("The total is 450.", vec![ev("run_sql", "1 row: total 450", None)]);
         assert_eq!(classify_waste(&clean).total(), 0);
 
-        // one orientation describe_schema before any query is FREE
-        let oriented = rr(
-            "The total is 450.",
-            vec![
-                ev("describe_schema", "ledger: 3 cols", None),
-                ev("run_sql", "1 row: total 450", None),
-            ],
-        );
-        assert_eq!(classify_waste(&oriented).total(), 0);
-
-        // a describe_schema AFTER a query already worked is redundant;
-        // an errored call and an exact repeat each count once
+        // any schema/sample/list peek is redundant on a small workspace (the
+        // schema block already had it); errored + exact-repeat count once each
         let messy = rr(
             "The total is 450.",
             vec![
-                ev("run_sql", "1 row: total 450", None),
-                ev("describe_schema", "ledger: 3 cols", None), // after a query -> redundant
+                ev("describe_schema", "ledger: 3 cols", None),   // redundant
+                ev("run_sql", "1 row: total 450", None),         // legit
                 ev("run_sql", "err", Some("no such column: x")), // errored
-                ev("run_sql", "1 row: total 450", None),        // exact repeat of call #1
+                ev("run_sql", "1 row: total 450", None),         // repeat of #2
             ],
         );
         let w = classify_waste(&messy);
-        assert_eq!(w.redundant_schema, 1, "{:?}", w.breakdown());
-        assert_eq!(w.errored, 1, "{:?}", w.breakdown());
-        assert_eq!(w.duplicate, 1, "{:?}", w.breakdown());
-        assert_eq!(w.total(), 3);
+        assert_eq!(
+            (w.redundant_schema, w.errored, w.duplicate, w.total()),
+            (1, 1, 1, 3),
+            "{}",
+            w.breakdown()
+        );
 
         // speculative only fires once a run has 3+ successful queries
         let spec = rr(
@@ -1226,8 +1331,17 @@ mod tests {
                 ev("run_sql", "3 rows: max 99", None),  // feeds nothing
             ],
         );
-        let w = classify_waste(&spec);
-        assert_eq!(w.speculative, 2, "{:?}", w.breakdown());
+        assert_eq!(classify_waste(&spec).speculative, 2);
+
+        // two queries, one intermediate -> NOT speculative (can't tell)
+        let two = rr(
+            "The answer is 450.",
+            vec![
+                ev("run_sql", "12 rows: subtotal 37", None),
+                ev("run_sql", "1 row: total 450", None),
+            ],
+        );
+        assert_eq!(classify_waste(&two).total(), 0);
     }
 
     #[test]
