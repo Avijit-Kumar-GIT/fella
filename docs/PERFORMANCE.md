@@ -654,6 +654,19 @@ expectation to make a number move (that's teaching to the test). A grader
 that it makes the grader match ground truth. Improve Fella against the
 baseline, not the baseline against Fella.
 
-**Baseline: not yet captured** run `model-ladder --iters 5` against
-`ollama-cloud/gemma4:31b`, `openai/gpt-5.6-luna`, `xai/grok-4.3`, then record
-`acc n/N`, closeness, tokens/correct and $/100 here.
+#### Baseline 2026-09-07 (frozen battery, 18 cases, `--iters 5`)
+
+`model-ladder --models "ollama-cloud/gemma4:31b,openai/gpt-5.6-luna,xai/grok-4.3" --iters 5`
+
+| model | acc | close(det) | waste/case | tok/correct | $/100 | mean wall s |
+|---|:-:|--:|--:|--:|--:|--:|
+| ollama-cloud/gemma4:31b | 17/18 | 0.84 | 0.17 | 4249 | n/a | 1.5 |
+| openai/gpt-5.6-luna | 17/18 | 0.84 | 0.00 | 3333 | $1.28 | 2.0 |
+| xai/grok-4.3 | 16/18 | 0.80 | 0.06 | 4550 | $9.21 | 2.9 |
+
+Read: three different models land within one case of each other on a frozen
+battery, so headline accuracy has little room to move the harness work is
+about holding that accuracy while cutting tokens and wasted calls, and about
+where it breaks (folder scale, older models, traps). `luna` is the reference
+row cheapest priced, zero waste, fewest tokens. Every harness change from
+here is `--compare`d against this file's JSON (`/tmp/baseline.json`).
