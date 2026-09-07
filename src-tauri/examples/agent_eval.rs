@@ -170,8 +170,15 @@ fn numbers_in(text: &str) -> Vec<f64> {
             continue;
         }
         let start = i;
+        // a digit run glued to a letter or underscore is an identifier
+        // fragment (txns_00.csv, q1, gpt-5), not a figure the model stated
+        let in_identifier = start > 0
+            && (b[start - 1].is_ascii_alphabetic() || b[start - 1] == b'_');
         while i < b.len() && (b[i].is_ascii_digit() || b[i] == b',' || b[i] == b'.') {
             i += 1;
+        }
+        if in_identifier {
+            continue;
         }
         let raw = &text[start..i];
         let cleaned: String = raw.chars().filter(|c| *c != ',').collect();
@@ -213,12 +220,7 @@ fn grade(r: &RunResult, gold: &Gold) -> bool {
                 .into_iter()
                 .filter(|n| !(1900.0..=2100.0).contains(n))
                 .collect();
-            if *want == 0.0
-                && non_year.is_empty()
-                && ["none", "nothing", "zero", "no ", "n/a", "not have any"]
-                    .iter()
-                    .any(|p| low.contains(p))
-            {
+            if *want == 0.0 && non_year.is_empty() && says_zero(&low) {
                 return true; // "no healthcare transactions" == 0
             }
             non_year.iter().any(|g| (g - want).abs() <= *tol)
@@ -227,10 +229,12 @@ fn grade(r: &RunResult, gold: &Gold) -> bool {
             let got = numbers_in(&r.text);
             subs.iter().all(|s| {
                 // an all-digit sub matches the *number* (so "1250" == "1,250"
-                // == "£1,250"); anything else is a literal substring
+                // == "£1,250"); anything else is a literal substring, and a
+                // `|` in it means "any of these forms" (e.g. a month written
+                // "November 2021" or "2021-11")
                 match s.parse::<f64>() {
                     Ok(want) => got.iter().any(|g| close(*g, want)),
-                    Err(_) => low.contains(&s.to_lowercase()),
+                    Err(_) => s.to_lowercase().split('|').any(|alt| low.contains(alt.trim())),
                 }
             })
         }
@@ -245,6 +249,15 @@ fn grade(r: &RunResult, gold: &Gold) -> bool {
         }
         Gold::NoTool => r.evidence.is_empty() && !r.text.trim().is_empty(),
     }
+}
+
+/// A spelled-out zero ("no healthcare transactions", "nothing", "n/a") standing
+/// in for the figure 0. Shared by `grade` and `closeness_det` a model that
+/// correctly answers "you spent nothing" shouldn't score as if it missed 0.
+fn says_zero(low: &str) -> bool {
+    ["none", "nothing", "zero", "no ", "n/a", "not have any"]
+        .iter()
+        .any(|p| low.contains(p))
 }
 
 fn token_f1(a: &str, b: &str) -> f32 {
@@ -276,10 +289,16 @@ fn closeness_det(r: &RunResult, case: &EvalCase) -> f32 {
         _ => Vec::new(),
     };
     let got = numbers_in(&r.text);
+    let low = r.text.to_lowercase();
     let figure_recall = if want.is_empty() {
         1.0
     } else {
-        want.iter().filter(|w| got.iter().any(|g| close(*g, **w))).count() as f32 / want.len() as f32
+        want.iter()
+            .filter(|w| {
+                got.iter().any(|g| close(*g, **w)) || ((**w).abs() < 1e-9 && says_zero(&low))
+            })
+            .count() as f32
+            / want.len() as f32
     };
     // a figure is grounded if it shows up in some evidence cell / summary
     let grounded = |n: f64| {
@@ -484,9 +503,11 @@ fn battery(g: &Goldens, rent_total: f64) -> Vec<EvalCase> {
                   top3[0].0, top3[0].1, top3[1].0, top3[1].1, top3[2].0, top3[2].1)),
 
         // --- time series ---
+        // Accept either "November 2021" or the ISO "2021-11" both name the
+        // right month; the grader shouldn't punish the ISO rendering.
         c("time_series", "TimeSeries",
           format!("which month had the highest total spending in {t0}.csv?"),
-          Gold::Contains(vec![leak(top_month_year), leak(&top_month_name)]),
+          Gold::Contains(vec![leak(&format!("{top_month_name} {top_month_year}|{top_month}"))]),
           format!("{top_month_name} {top_month_year} was your highest-spending month.")),
 
         // --- ratio / share (rounded) ---
@@ -1234,6 +1255,9 @@ mod tests {
     #[test]
     fn numbers_and_close() {
         assert_eq!(numbers_in("total $6,100.00 up 12% since 2024"), vec![6100.0, 12.0, 2024.0]);
+        // identifier fragments aren't figures
+        assert_eq!(numbers_in("nothing in txns_00.csv or v2 tables"), Vec::<f64>::new());
+        assert_eq!(numbers_in("file_9 and q12 aside, the total is 4200"), vec![4200.0]);
         assert!(close(6100.0, 6100.4));
         assert!(close(1000.0, 1009.0)); // within 1%
         assert!(!close(6100.0, 6300.0));
@@ -1245,6 +1269,11 @@ mod tests {
         assert!(!grade(&rr("Your total was 5,900.", vec![]), &Gold::Figures(vec![6100.0])));
         assert!(grade(&rr("Target 1250, raised in March 2024.", vec![]),
             &Gold::Contains(vec!["1250", "march 2024"])));
+        // `|` in a Contains sub = accept any of the forms
+        let month = Gold::Contains(vec!["november 2021|2021-11"]);
+        assert!(grade(&rr("Highest was November 2021.", vec![]), &month));
+        assert!(grade(&rr("Highest was 2021-11.", vec![]), &month));
+        assert!(!grade(&rr("Highest was 2021-09.", vec![]), &month));
         assert!(grade(&rr("Your files can't tell the future.", vec![]), &Gold::Refusal));
         // a curly apostrophe (what many models emit) still counts as "can't"
         assert!(grade(
