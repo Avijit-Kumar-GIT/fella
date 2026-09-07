@@ -21,8 +21,8 @@
 //!   session-memory   turn-2 accuracy with the recent-turns block on vs off
 //!   all              accuracy + robustness + session-memory
 //!
-//! Opts: --models "a,b,c"  --judge <model>  --only <id-substr>
-//!       --json <path>  --compare <old.json>
+//! Opts: --models "a,b,c"  --judge <model>  --iters N (default 1)
+//!       --only <id-substr>  --json <path>  --compare <old.json>
 //!
 //! A --models entry is a bare model on the configured provider (`gemma4:31b`)
 //! or `provider/model` to switch provider too (`xai/grok-4.3`,
@@ -62,7 +62,10 @@ struct EvalCase {
     category: &'static str,
     question: String,
     gold: Gold,
-    /// how many tool calls a clean run needs (for the waste metric)
+    /// How many tool calls a clean run needs. Documented per case; the waste
+    /// classifier is currently structural (it doesn't subtract this), kept for
+    /// a future per-case "extra calls" metric.
+    #[allow(dead_code)]
     min_tools: usize,
     /// the ideal answer, for closeness scoring
     reference: String,
@@ -260,73 +263,97 @@ fn closeness_det(r: &RunResult, case: &EvalCase) -> f32 {
         .clamp(0.0, 1.0)
 }
 
+/// A count, in **tool calls**, of the ones that did no useful work. Four kinds,
+/// each call counted once.
 #[derive(Default, Clone, Copy)]
 struct Waste {
+    /// an exact `(tool, args)` repeat, or the engine's "skipped (duplicate call)"
     duplicate: usize,
+    /// a `describe_schema` / `sample_rows` / `list_files` peek that wasn't the
+    /// one free orientation call it came 2nd, or after a query already worked
     redundant_schema: usize,
+    /// one of 3+ `run_sql` calls whose result the answer never uses
     speculative: usize,
-    error_retry: usize,
+    /// a call that returned an error (a well-oriented run rarely hits one)
+    errored: usize,
 }
 impl Waste {
     fn total(&self) -> usize {
-        self.duplicate + self.redundant_schema + self.speculative + self.error_retry
+        self.duplicate + self.redundant_schema + self.speculative + self.errored
+    }
+    /// compact per-kind, e.g. `d0 r1 s0 e0`
+    fn breakdown(&self) -> String {
+        format!(
+            "d{} r{} s{} e{}",
+            self.duplicate, self.redundant_schema, self.speculative, self.errored
+        )
     }
 }
 
-/// Classify each *extra* tool call (beyond the `min_tools` a clean run needs)
-/// into at most one waste bucket, priority: error-retry > duplicate >
-/// redundant-schema > speculative. So `Waste::total()` is a count of distinct
-/// wasteful calls it can't exceed the number of extra calls.
-///
-/// `redundant_schema` here assumes the schema block already shows the table
-/// (true for the default ≤4-table workspace); on a large `folder-scale`
-/// workspace a `describe_schema` call is legitimate, so read that column with
-/// the table count in mind.
-fn classify_waste(r: &RunResult, case: &EvalCase) -> Waste {
+/// Count the tool calls that did no useful work. A single successful `run_sql`
+/// that feeds the answer, or one orientation `describe_schema` before any
+/// query, is *not* waste. Deliberately conservative: `speculative` only fires
+/// once a run has made 3+ successful queries, so a normal 2-query multi-step
+/// isn't penalised for its intermediate result.
+fn classify_waste(r: &RunResult) -> Waste {
     let ans = numbers_in(&r.text);
+    let n_ok_sql = r
+        .evidence
+        .iter()
+        .filter(|e| e.tool == "run_sql" && e.error.is_none())
+        .count();
     let mut w = Waste::default();
     let mut seen: Vec<(String, String)> = Vec::new();
-    // The first `necessary` non-error calls are "free"; only classify the rest.
-    let mut budget = case.min_tools;
+    let mut ran_sql_ok = false;
+    let mut inspects = 0usize;
 
-    for (i, e) in r.evidence.iter().enumerate() {
+    for e in &r.evidence {
         let key = (e.tool.clone(), e.args.to_string());
-        let first_time = !seen.contains(&key);
-        seen.push(key.clone());
+        let repeat = seen.contains(&key);
+        seen.push(key);
 
-        let is_dup = e.result_summary == "skipped (duplicate call)" || !first_time;
-        let is_retry = e.error.is_some()
-            && r.evidence[i + 1..]
-                .iter()
-                .any(|f| f.error.is_none() && (f.tool.clone(), f.args.to_string()) == key);
-        let is_schema =
-            matches!(e.tool.as_str(), "describe_schema" | "sample_rows" | "list_files");
-        let is_spec = e.tool == "run_sql" && e.error.is_none() && {
-            let produced = numbers_in(&e.result_summary);
-            !produced.is_empty() && !produced.iter().any(|p| ans.iter().any(|a| close(*a, *p)))
-        };
-
-        // A first-seen, non-error, answer-feeding call is legitimate work spend
-        // the necessary-call budget on it and move on.
-        let wasteful = is_dup || is_retry || is_schema || is_spec;
-        if !wasteful {
-            if budget > 0 && e.error.is_none() {
-                budget -= 1;
+        if e.result_summary == "skipped (duplicate call)" || repeat {
+            w.duplicate += 1;
+            continue;
+        }
+        if e.error.is_some() {
+            w.errored += 1;
+            continue;
+        }
+        if matches!(e.tool.as_str(), "describe_schema" | "sample_rows" | "list_files") {
+            inspects += 1;
+            if inspects > 1 || ran_sql_ok {
+                w.redundant_schema += 1;
             }
             continue;
         }
-
-        if is_retry {
-            w.error_retry += 1;
-        } else if is_dup {
-            w.duplicate += 1;
-        } else if is_schema {
-            w.redundant_schema += 1;
-        } else {
-            w.speculative += 1;
+        if e.tool == "run_sql" {
+            ran_sql_ok = true;
+            if n_ok_sql >= 3 {
+                let produced = numbers_in(&e.result_summary);
+                let feeds_answer = produced.iter().any(|p| ans.iter().any(|a| close(*a, *p)));
+                if !produced.is_empty() && !feeds_answer {
+                    w.speculative += 1;
+                }
+            }
         }
     }
     w
+}
+
+/// Element-wise mean of several runs' waste, rounded.
+fn fold_waste(ws: &[Waste]) -> Waste {
+    if ws.is_empty() {
+        return Waste::default();
+    }
+    let n = ws.len();
+    let m = |f: &dyn Fn(&Waste) -> usize| (ws.iter().map(f).sum::<usize>() + n / 2) / n;
+    Waste {
+        duplicate: m(&|w| w.duplicate),
+        redundant_schema: m(&|w| w.redundant_schema),
+        speculative: m(&|w| w.speculative),
+        errored: m(&|w| w.errored),
+    }
 }
 
 // --- LLM judge (opt-in) ----------------------------------------------
@@ -487,7 +514,11 @@ struct CaseScore {
     id: String,
     model: String,
     profile: String,
+    /// `iters == 1`: this run. `> 1`: the majority verdict.
     correct: bool,
+    /// fraction of `iters` that were correct (1.0 when `iters == 1` and correct)
+    correct_rate: f32,
+    iters: usize,
     closeness_det: f32,
     closeness_judge: Option<f32>,
     waste: Waste,
@@ -500,6 +531,8 @@ struct CaseScore {
     err: Option<String>,
 }
 
+/// Run one case `iters` times and fold: `correct` = majority, everything
+/// numeric = mean.
 async fn score_case(
     engine: &EngineState,
     case: &EvalCase,
@@ -507,28 +540,60 @@ async fn score_case(
     profile: &str,
     judge: Option<&str>,
     conv: &str,
+    iters: usize,
 ) -> CaseScore {
-    let r = run_case(engine, conv, &case.question, None).await;
-    let correct = grade(&r, &case.gold);
-    let closeness_judge = match judge {
-        Some(jm) if r.err.is_none() => judge_closeness(engine, jm, &case.reference, &r.text).await,
-        _ => None,
-    };
+    let iters = iters.max(1);
+    let mut oks = 0usize;
+    let (mut cd, mut cj_sum, mut cj_n) = (0f32, 0f32, 0usize);
+    let (mut ptok, mut ctok, mut secs, mut steps) = (0u64, 0u64, 0f64, 0usize);
+    let mut first_toks: Vec<f64> = Vec::new();
+    let mut wastes: Vec<Waste> = Vec::new();
+    let mut any_hard = false;
+    let mut last_err = None;
+
+    for it in 0..iters {
+        let r = run_case(engine, &format!("{conv}-{it}"), &case.question, None).await;
+        if grade(&r, &case.gold) {
+            oks += 1;
+        }
+        cd += closeness_det(&r, case);
+        if let (Some(jm), true) = (judge, r.err.is_none()) {
+            if let Some(j) = judge_closeness(engine, jm, &case.reference, &r.text).await {
+                cj_sum += j;
+                cj_n += 1;
+            }
+        }
+        ptok += r.prompt_tok as u64;
+        ctok += r.completion_tok as u64;
+        secs += r.total.as_secs_f64();
+        steps += r.steps;
+        if let Some(ft) = r.first_token {
+            first_toks.push(ft.as_secs_f64());
+        }
+        wastes.push(classify_waste(&r));
+        any_hard |= r.hard_fail;
+        last_err = r.err;
+    }
+
+    let n = iters as f32;
     CaseScore {
         id: case.id.to_string(),
         model: model.to_string(),
         profile: profile.to_string(),
-        correct,
-        closeness_det: closeness_det(&r, case),
-        closeness_judge,
-        waste: classify_waste(&r, case),
-        prompt_tok: r.prompt_tok,
-        completion_tok: r.completion_tok,
-        total_s: r.total.as_secs_f64(),
-        first_tok_s: r.first_token.map(|d| d.as_secs_f64()),
-        steps: r.steps,
-        hard_fail: r.hard_fail,
-        err: r.err,
+        correct: oks * 2 > iters,
+        correct_rate: oks as f32 / n,
+        iters,
+        closeness_det: cd / n,
+        closeness_judge: (cj_n > 0).then(|| cj_sum / cj_n as f32),
+        waste: fold_waste(&wastes),
+        prompt_tok: (ptok / iters as u64) as u32,
+        completion_tok: (ctok / iters as u64) as u32,
+        total_s: secs / n as f64,
+        first_tok_s: (!first_toks.is_empty())
+            .then(|| first_toks.iter().sum::<f64>() / first_toks.len() as f64),
+        steps: steps / iters,
+        hard_fail: any_hard,
+        err: last_err,
     }
 }
 
@@ -552,6 +617,7 @@ fn tokens_per_correct(scores: &[CaseScore]) -> f64 {
 
 // --- subcommands -----------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 async fn run_battery(
     engine: &EngineState,
     cases: &[EvalCase],
@@ -559,36 +625,40 @@ async fn run_battery(
     profile: &str,
     judge: Option<&str>,
     tag: &str,
+    iters: usize,
 ) -> Vec<CaseScore> {
     let mut out = Vec::new();
     for c in cases {
         let conv = format!("{tag}-{model}-{profile}-{}", c.id);
-        out.push(score_case(engine, c, model, profile, judge, &conv).await);
+        out.push(score_case(engine, c, model, profile, judge, &conv, iters).await);
         std::io::stdout().flush().ok();
     }
     out
 }
 
-async fn cmd_accuracy(engine: &EngineState, cases: &[EvalCase], models: &[String], judge: Option<&str>) -> Vec<CaseScore> {
-    println!("\n# Accuracy\n");
-    println!("| model | case | correct | close(det) | close(judge) | waste | in tok | out tok | s |");
-    println!("|---|---|:-:|--:|--:|--:|--:|--:|--:|");
+async fn cmd_accuracy(engine: &EngineState, cases: &[EvalCase], models: &[String], judge: Option<&str>, iters: usize) -> Vec<CaseScore> {
+    println!("\n# Accuracy   ({iters} iter(s)/case)\n");
+    legend();
+    println!("| model | case | correct | rate | close(det) | close(judge) | waste (calls) | in tok | out tok | wall s |");
+    println!("|---|---|:-:|--:|--:|--:|--:|--:|--:|--:|");
     let mut all = Vec::new();
     for m in models {
         if !set_model(engine, m) {
-            println!("| {m} | | | | | | | | save failed |");
+            println!("| {m} | | | | | | | | | save failed |");
             continue;
         }
-        let scores = run_battery(engine, cases, m, "full", judge, "acc").await;
+        let scores = run_battery(engine, cases, m, "full", judge, "acc", iters).await;
         for s in &scores {
             println!(
-                "| {} | {} | {} | {:.2} | {} | {} | {} | {} | {:.1} |",
+                "| {} | {} | {} | {:.0}% | {:.2} | {} | {} `{}` | {} | {} | {:.1} |",
                 s.model,
                 s.id,
                 if s.err.is_some() { "ERR".into() } else { yn(s.correct) },
+                s.correct_rate * 100.0,
                 s.closeness_det,
                 s.closeness_judge.map(|c| format!("{c:.2}")).unwrap_or_else(|| "-".into()),
                 s.waste.total(),
+                s.waste.breakdown(),
                 s.prompt_tok,
                 s.completion_tok,
                 s.total_s,
@@ -596,7 +666,7 @@ async fn cmd_accuracy(engine: &EngineState, cases: &[EvalCase], models: &[String
         }
         let (ok, n) = acc(&scores);
         println!(
-            "| **{m}** | **summary** | **{ok}/{n}** | **{:.2}** | | **{}** | | | **{:.0} tok/correct** |",
+            "| **{m}** | **summary** | **{ok}/{n} correct** | | **{:.2}** | | **{} calls** | | | **{:.0} tok/correct-ans** |",
             mean_closeness(&scores),
             total_waste(&scores),
             tokens_per_correct(&scores),
@@ -606,7 +676,17 @@ async fn cmd_accuracy(engine: &EngineState, cases: &[EvalCase], models: &[String
     all
 }
 
-async fn cmd_prompt_ablation(engine: &EngineState, cases: &[EvalCase], model: &str, judge: Option<&str>) -> Vec<CaseScore> {
+/// One-line unit key, printed above each table.
+fn legend() {
+    println!(
+        "_units — **correct**: majority over iters · **rate**: % of iters correct · \
+**close(det/judge)**: 0.00–1.00 · **waste**: # tool calls that did no useful work \
+(`d`up `r`edundant-peek `s`peculative `e`rrored) · **tok**: tokens (prompt+completion) · \
+**$/100**: USD per 100 answers, list price · **wall s / first-tok s**: seconds · **steps**: tool-call rounds_\n"
+    );
+}
+
+async fn cmd_prompt_ablation(engine: &EngineState, cases: &[EvalCase], model: &str, judge: Option<&str>, iters: usize) -> Vec<CaseScore> {
     // cumulative-drop ladder: each row drops one more section than the last.
     let ladder: &[(&str, &[&str])] = &[
         ("full", &[]),
@@ -628,7 +708,7 @@ async fn cmd_prompt_ablation(engine: &EngineState, cases: &[EvalCase], model: &s
     let mut all = Vec::new();
     for (name, drop) in ladder {
         std::env::set_var("FELLA_PROMPT_DROP", drop.join(","));
-        let scores = run_battery(engine, cases, model, name, judge, "ablate").await;
+        let scores = run_battery(engine, cases, model, name, judge, "ablate", iters).await;
         std::env::remove_var("FELLA_PROMPT_DROP");
         let (ok, n) = acc(&scores);
         let mean_in = scores.iter().map(|s| s.prompt_tok as f64).sum::<f64>() / scores.len().max(1) as f64;
@@ -643,7 +723,7 @@ async fn cmd_prompt_ablation(engine: &EngineState, cases: &[EvalCase], model: &s
     all
 }
 
-async fn cmd_folder_scale(engine: &EngineState, model: &str, ws: &Path) -> Vec<CaseScore> {
+async fn cmd_folder_scale(engine: &EngineState, model: &str, ws: &Path, iters: usize) -> Vec<CaseScore> {
     set_model(engine, model);
     println!("\n# Folder scale  ·  model `{model}`\n");
     println!("| tables | rows/table | num_ctx | acc | first tok s | hit cap | waste |");
@@ -666,7 +746,7 @@ async fn cmd_folder_scale(engine: &EngineState, model: &str, ws: &Path) -> Vec<C
             } else {
                 std::env::remove_var("FELLA_OLLAMA_NUM_CTX_FIXED");
             }
-            let scores = run_battery(engine, &cases, model, label, None, "scale").await;
+            let scores = run_battery(engine, &cases, model, label, None, "scale", iters).await;
             std::env::remove_var("FELLA_OLLAMA_NUM_CTX_FIXED");
             let (ok, n) = acc(&scores);
             let ft: Vec<f64> = scores.iter().filter_map(|s| s.first_tok_s).collect();
@@ -682,9 +762,13 @@ async fn cmd_folder_scale(engine: &EngineState, model: &str, ws: &Path) -> Vec<C
     all
 }
 
-async fn cmd_model_ladder(engine: &EngineState, cases: &[EvalCase], models: &[String], judge: Option<&str>) -> Vec<CaseScore> {
-    println!("\n# Model ladder\n");
-    println!("| model | acc | close(det) | waste | tok/correct | $/100 | mean s |");
+async fn cmd_model_ladder(engine: &EngineState, cases: &[EvalCase], models: &[String], judge: Option<&str>, iters: usize) -> Vec<CaseScore> {
+    println!("\n# Model ladder   ({iters} iter(s)/case)\n");
+    legend();
+    let n_cases = cases.iter().filter(|c| c.id != "chitchat").count();
+    // "clears the bar" thresholds: >=80% accuracy, <= ~0.5 wasted calls/case
+    let waste_bar = (n_cases as f64 * 0.5).ceil() as usize;
+    println!("| model | acc | close(det) | waste/case | tok/correct-ans | $/100 | mean wall s |");
     println!("|---|:-:|--:|--:|--:|--:|--:|");
     let mut all = Vec::new();
     let mut best: Option<(String, f64)> = None;
@@ -693,39 +777,41 @@ async fn cmd_model_ladder(engine: &EngineState, cases: &[EvalCase], models: &[St
             println!("| {m} | save failed | | | | | |");
             continue;
         }
-        let scores = run_battery(engine, cases, m, "full", judge, "ladder").await;
+        let scores = run_battery(engine, cases, m, "full", judge, "ladder", iters).await;
         let (ok, n) = acc(&scores);
         let a = ok as f64 / n.max(1) as f64;
         let mean_s = scores.iter().map(|s| s.total_s).sum::<f64>() / scores.len().max(1) as f64;
-        let pin: f64 = scores.iter().map(|s| s.prompt_tok as f64).sum::<f64>() / scores.len().max(1) as f64;
-        let pout: f64 = scores.iter().map(|s| s.completion_tok as f64).sum::<f64>() / scores.len().max(1) as f64;
-        let cost = price_per_100(m, pin * scores.len() as f64, pout * scores.len() as f64)
+        let pin: f64 = scores.iter().map(|s| s.prompt_tok as f64).sum::<f64>();
+        let pout: f64 = scores.iter().map(|s| s.completion_tok as f64).sum::<f64>();
+        let cost = price_per_100(m, pin, pout)
             .map(|c| format!("${c:.2}"))
-            .unwrap_or_else(|| "local".into());
+            .unwrap_or_else(|| "n/a".into());
+        let waste_per_case = total_waste(&scores) as f64 / scores.len().max(1) as f64;
         println!(
-            "| {m} | {ok}/{n} | {:.2} | {} | {:.0} | {cost} | {mean_s:.1} |",
+            "| {m} | {ok}/{n} | {:.2} | {:.2} | {:.0} | {cost} | {mean_s:.1} |",
             mean_closeness(&scores),
-            total_waste(&scores),
+            waste_per_case,
             tokens_per_correct(&scores),
         );
-        // "cheapest that clears the bar": acc >= 0.8 and waste <= 2
-        if a >= 0.8 && total_waste(&scores) <= 2 {
-            let c = price_per_100(m, pin * scores.len() as f64, pout * scores.len() as f64).unwrap_or(0.0);
+        if a >= 0.8 && total_waste(&scores) <= waste_bar {
+            let c = price_per_100(m, pin, pout).unwrap_or(0.0);
             if best.as_ref().map(|(_, bc)| c < *bc).unwrap_or(true) {
                 best = Some((m.clone(), c));
             }
         }
         all.extend(scores);
     }
-    if let Some((m, c)) = best {
-        println!("\n**Cheapest model with acc ≥ 0.8 and waste ≤ 2: `{m}` (${c:.2}/100 answers).**");
-    } else {
-        println!("\n_No model cleared acc ≥ 0.8 / waste ≤ 2._");
+    match best {
+        Some((m, c)) => println!(
+            "\n**Cheapest model with acc ≥ 0.8 and ≤ {:.1} wasted calls/case: `{m}` (${c:.2}/100 answers).**",
+            waste_bar as f64 / n_cases.max(1) as f64
+        ),
+        None => println!("\n_No model cleared the bar (acc ≥ 0.8, ≤ ~0.5 wasted calls/case)._"),
     }
     all
 }
 
-async fn cmd_robustness(engine: &EngineState, model: &str, ws: &Path) -> Vec<CaseScore> {
+async fn cmd_robustness(engine: &EngineState, model: &str, ws: &Path, iters: usize) -> Vec<CaseScore> {
     set_model(engine, model);
     println!("\n# Robustness (data traps)  ·  model `{model}`\n");
     println!("| trap | acc | close(det) | verify caught misses |");
@@ -745,7 +831,7 @@ async fn cmd_robustness(engine: &EngineState, model: &str, ws: &Path) -> Vec<Cas
             .into_iter()
             .filter(|c| matches!(c.category, "Aggregate" | "GroupTopN"))
             .collect();
-        let scores = run_battery(engine, &cases, model, label, None, "trap").await;
+        let scores = run_battery(engine, &cases, model, label, None, "trap", iters).await;
         let (ok, n) = acc(&scores);
         let caught = scores.iter().filter(|s| !s.correct && s.hard_fail).count();
         let missed = scores.iter().filter(|s| !s.correct).count();
@@ -758,7 +844,7 @@ async fn cmd_robustness(engine: &EngineState, model: &str, ws: &Path) -> Vec<Cas
     all
 }
 
-async fn cmd_session_memory(engine: &EngineState, model: &str, g: &Goldens) -> Vec<CaseScore> {
+async fn cmd_session_memory(engine: &EngineState, model: &str, g: &Goldens, iters: usize) -> Vec<CaseScore> {
     set_model(engine, model);
     let tg = &g.tables["txns_00"];
     let by_cat = tg.by_category.clone();
@@ -766,46 +852,68 @@ async fn cmd_session_memory(engine: &EngineState, model: &str, g: &Goldens) -> V
     let (c2, a2) = by_cat.iter().nth(1).map(|(k, v)| (k.clone(), *v)).unwrap_or_default();
     let q1 = format!("in txns_00.csv, what did I spend on {c1} in total?");
     let q2 = format!("and what about {c2}?");
-    println!("\n# Session memory  ·  model `{model}`\n");
-    println!("| condition | turn-2 correct | turn-2 close(det) | turn-2 steps |");
-    println!("|---|:-:|--:|--:|");
+    let iters = iters.max(1);
+    println!("\n# Session memory  ·  model `{model}`   ({iters} iter(s))\n");
+    legend();
+    println!("| condition | turn-2 correct | rate | turn-2 close(det) | turn-2 steps |");
+    println!("|---|:-:|--:|--:|--:|");
+    let case2 = |a: f64, c: &str| EvalCase {
+        id: "sm_turn2",
+        category: "Aggregate",
+        question: q2.clone(),
+        gold: Gold::Figures(vec![a]),
+        min_tools: 1,
+        reference: format!("You spent {a:.2} on {c}."),
+    };
     let mut all = Vec::new();
     for (label, keep) in [("memory on", true), ("memory off", false)] {
-        let conv = format!("sm-{label}");
-        run_case(engine, &conv, &q1, None).await; // turn 1
-        if !keep {
-            engine.forget_conversation(&conv);
+        let c2case = case2(a2, &c2);
+        let mut oks = 0usize;
+        let (mut cd, mut steps, mut ptok, mut ctok) = (0f32, 0usize, 0u64, 0u64);
+        for it in 0..iters {
+            let conv = format!("sm-{label}-{it}");
+            run_case(engine, &conv, &q1, None).await; // turn 1 primes memory
+            if !keep {
+                engine.forget_conversation(&conv);
+            }
+            let r2 = run_case(engine, &conv, &q2, None).await;
+            if grade(&r2, &c2case.gold) {
+                oks += 1;
+            }
+            cd += closeness_det(&r2, &c2case);
+            steps += r2.steps;
+            ptok += r2.prompt_tok as u64;
+            ctok += r2.completion_tok as u64;
         }
-        let r2 = run_case(engine, &conv, &q2, None).await;
-        let case2 = EvalCase {
-            id: "sm_turn2",
-            category: "Aggregate",
-            question: q2.clone(),
-            gold: Gold::Figures(vec![a2]),
-            min_tools: 1,
-            reference: format!("You spent {a2:.2} on {c2}."),
-        };
-        let correct = grade(&r2, &case2.gold);
-        let cd = closeness_det(&r2, &case2);
-        println!("| {label} | {} | {cd:.2} | {} |", yn(correct), r2.steps);
+        let n = iters as f32;
+        let correct = oks * 2 > iters;
+        println!(
+            "| {label} | {} | {:.0}% | {:.2} | {} |",
+            yn(correct),
+            oks as f32 / n * 100.0,
+            cd / n,
+            steps / iters
+        );
         all.push(CaseScore {
             id: format!("sm_turn2_{label}"),
             model: model.into(),
             profile: label.into(),
             correct,
-            closeness_det: cd,
+            correct_rate: oks as f32 / n,
+            iters,
+            closeness_det: cd / n,
             closeness_judge: None,
-            waste: classify_waste(&r2, &case2),
-            prompt_tok: r2.prompt_tok,
-            completion_tok: r2.completion_tok,
-            total_s: r2.total.as_secs_f64(),
-            first_tok_s: r2.first_token.map(|d| d.as_secs_f64()),
-            steps: r2.steps,
-            hard_fail: r2.hard_fail,
-            err: r2.err,
+            waste: Waste::default(),
+            prompt_tok: (ptok / iters as u64) as u32,
+            completion_tok: (ctok / iters as u64) as u32,
+            total_s: 0.0,
+            first_tok_s: None,
+            steps: steps / iters,
+            hard_fail: false,
+            err: None,
         });
-        let _ = (a1, &q1);
     }
+    let _ = (a1, &q1, tg);
     all
 }
 
@@ -821,7 +929,8 @@ fn write_json(path: &str, scores: &[CaseScore]) {
         .map(|s| {
             serde_json::json!({
                 "id": s.id, "model": s.model, "profile": s.profile,
-                "correct": s.correct, "closeness_det": s.closeness_det,
+                "correct": s.correct, "correct_rate": s.correct_rate, "iters": s.iters,
+                "closeness_det": s.closeness_det,
                 "closeness_judge": s.closeness_judge,
                 "waste": s.waste.total(), "prompt_tok": s.prompt_tok,
                 "completion_tok": s.completion_tok, "total_s": s.total_s,
@@ -887,6 +996,7 @@ async fn main() {
         args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned()
     };
     let judge = opt("--judge");
+    let iters: usize = opt("--iters").and_then(|s| s.parse().ok()).unwrap_or(1).max(1);
     let json_out = opt("--json");
     let compare_to = opt("--compare");
     let only = opt("--only");
@@ -932,16 +1042,16 @@ async fn main() {
     let judge = judge.as_deref();
 
     let scores = match cmd.as_str() {
-        "accuracy" => cmd_accuracy(&engine, &cases, &models, judge).await,
-        "prompt-ablation" => cmd_prompt_ablation(&engine, &cases, &models[0], judge).await,
-        "folder-scale" => cmd_folder_scale(&engine, &models[0], &ws).await,
-        "model-ladder" => cmd_model_ladder(&engine, &cases, &models, judge).await,
-        "robustness" => cmd_robustness(&engine, &models[0], &ws).await,
-        "session-memory" => cmd_session_memory(&engine, &models[0], &g).await,
+        "accuracy" => cmd_accuracy(&engine, &cases, &models, judge, iters).await,
+        "prompt-ablation" => cmd_prompt_ablation(&engine, &cases, &models[0], judge, iters).await,
+        "folder-scale" => cmd_folder_scale(&engine, &models[0], &ws, iters).await,
+        "model-ladder" => cmd_model_ladder(&engine, &cases, &models, judge, iters).await,
+        "robustness" => cmd_robustness(&engine, &models[0], &ws, iters).await,
+        "session-memory" => cmd_session_memory(&engine, &models[0], &g, iters).await,
         "all" => {
-            let mut v = cmd_accuracy(&engine, &cases, &models, judge).await;
-            v.extend(cmd_robustness(&engine, &models[0], &ws).await);
-            v.extend(cmd_session_memory(&engine, &models[0], &g).await);
+            let mut v = cmd_accuracy(&engine, &cases, &models, judge, iters).await;
+            v.extend(cmd_robustness(&engine, &models[0], &ws, iters).await);
+            v.extend(cmd_session_memory(&engine, &models[0], &g, iters).await);
             v
         }
         other => {
@@ -1014,27 +1124,49 @@ mod tests {
     }
 
     #[test]
-    fn waste_flags_the_extra_calls_only() {
-        let case = EvalCase {
-            id: "x", category: "Aggregate", question: "q".into(),
-            gold: Gold::Figures(vec![450.0]), min_tools: 1, reference: "450".into(),
-        };
-        // one necessary run_sql that feeds the answer -> no waste
+    fn waste_is_conservative() {
+        // one run_sql that feeds the answer -> nothing wasted
         let clean = rr("The total is 450.", vec![ev("run_sql", "1 row: total 450", None)]);
-        assert_eq!(classify_waste(&clean, &case).total(), 0);
+        assert_eq!(classify_waste(&clean).total(), 0);
 
-        // + a redundant describe_schema and a speculative query -> 2 waste
-        let messy = rr(
+        // one orientation describe_schema before any query is FREE
+        let oriented = rr(
             "The total is 450.",
             vec![
                 ev("describe_schema", "ledger: 3 cols", None),
                 ev("run_sql", "1 row: total 450", None),
-                ev("run_sql", "12 rows: avg 37", None), // its numbers feed nothing
             ],
         );
-        let w = classify_waste(&messy, &case);
-        assert!(w.redundant_schema >= 1 && w.speculative >= 1, "{w:?}", w = (w.redundant_schema, w.speculative));
-        assert!(w.total() <= 2, "capped at the 2 extra calls");
+        assert_eq!(classify_waste(&oriented).total(), 0);
+
+        // a describe_schema AFTER a query already worked is redundant;
+        // an errored call and an exact repeat each count once
+        let messy = rr(
+            "The total is 450.",
+            vec![
+                ev("run_sql", "1 row: total 450", None),
+                ev("describe_schema", "ledger: 3 cols", None), // after a query -> redundant
+                ev("run_sql", "err", Some("no such column: x")), // errored
+                ev("run_sql", "1 row: total 450", None),        // exact repeat of call #1
+            ],
+        );
+        let w = classify_waste(&messy);
+        assert_eq!(w.redundant_schema, 1, "{:?}", w.breakdown());
+        assert_eq!(w.errored, 1, "{:?}", w.breakdown());
+        assert_eq!(w.duplicate, 1, "{:?}", w.breakdown());
+        assert_eq!(w.total(), 3);
+
+        // speculative only fires once a run has 3+ successful queries
+        let spec = rr(
+            "The answer is 450.",
+            vec![
+                ev("run_sql", "1 row: total 450", None),
+                ev("run_sql", "12 rows: avg 37", None), // feeds nothing
+                ev("run_sql", "3 rows: max 99", None),  // feeds nothing
+            ],
+        );
+        let w = classify_waste(&spec);
+        assert_eq!(w.speculative, 2, "{:?}", w.breakdown());
     }
 
     #[test]
