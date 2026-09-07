@@ -238,6 +238,15 @@ fn check_numbers(answer: &str, evidence: &[EvidenceItem], out: &mut Vec<Verifica
             collect_numbers(output, &mut supported);
         }
         if let Some(rows) = &e.rows {
+            // An aggregate over no matching rows comes back as one all-NULL row
+            // (or zero rows). That result backs the answer "0" / "none" - so
+            // the model reporting 0 here isn't an ungrounded figure.
+            let empty_aggregate = e.tool == "run_sql"
+                && e.error.is_none()
+                && (rows.is_empty() || (rows.len() == 1 && rows[0].iter().all(Json::is_null)));
+            if empty_aggregate {
+                supported.push(0.0);
+            }
             for row in rows {
                 for cell in row {
                     match cell {
@@ -489,5 +498,28 @@ mod tests {
         let warns: Vec<_> = out.iter().filter(|c| !c.ok).collect();
         assert_eq!(warns.len(), 1, "only the body's stray 999 should warn: {out:?}");
         assert!(warns[0].label.contains("999"), "{}", warns[0].label);
+    }
+
+    #[test]
+    fn an_empty_aggregate_backs_the_answer_zero() {
+        let ev = vec![EvidenceItem {
+            tool: "run_sql".into(),
+            args: Json::Object(Default::default()),
+            note: None,
+            sql: Some("SELECT SUM(amount) FROM t WHERE category = 'healthcare'".into()),
+            result_summary: "1 row".into(),
+            columns: Some(vec!["SUM(amount)".into()]),
+            rows: Some(vec![vec![Json::Null]]),
+            row_count: Some(1),
+            output: None,
+            ms: 1,
+            error: None,
+        }];
+        let mut out = Vec::new();
+        check_numbers("You spent $0 on healthcare.", &ev, &mut out);
+        assert!(
+            out.iter().all(|c| c.ok),
+            "0 is backed by the empty aggregate, not a stray figure: {out:?}"
+        );
     }
 }
