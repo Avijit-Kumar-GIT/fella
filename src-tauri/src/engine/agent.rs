@@ -569,7 +569,12 @@ short. Use grep_files only to locate one specific term across many documents."
         );
     }
     if profile.refuse_rule {
-        rules.push("If the files can't answer a data question, say so plainly; don't guess.".into());
+        rules.push(
+            "If the files can't answer, say so plainly don't guess, forecast, or project. \
+A question about the future (\"next month\", \"will I\", \"how much will\") has no answer \
+in past records; say so instead of estimating one."
+                .into(),
+        );
     }
     if profile.background_rule {
         rules.push(
@@ -710,7 +715,9 @@ a sql() helper.\n\
 line, so don't call list_files for them. For a question about their content, \
 call read_file directly (pass `names: [...]` to read several at once); they are \
 short. Use grep_files only to locate one specific term across many documents.\n\
-- If the files can't answer a data question, say so plainly; don't guess.\n\
+- If the files can't answer, say so plainly don't guess, forecast, or \
+project. A question about the future (\"next month\", \"will I\", \"how much \
+will\") has no answer in past records; say so instead of estimating one.\n\
 - A definition or plain \"what does X mean\" needs no tool. You may add one \
 confident sentence of general background on its own line starting with \
 `Background:`, with no specific figures in it. If unsure, say so.\n\

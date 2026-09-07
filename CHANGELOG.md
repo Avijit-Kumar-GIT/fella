@@ -6,6 +6,14 @@ All notable changes to Fella are recorded here. Format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **Fella won't forecast.** The "if the files can't answer, say so" rule now
+  spells out that a question about the future ("next month", "will I", "how
+  much will") has no answer in past records the model says so instead of
+  computing an average and presenting it as a projection. (Found by the new
+  agent-eval harness: one model was doing exactly that.)
+
 ## [0.1.4]
 
 ### Added
