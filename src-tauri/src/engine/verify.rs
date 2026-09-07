@@ -21,6 +21,27 @@ pub fn run(engine: &EngineState, answer: &str, evidence: &[EvidenceItem]) -> Vec
     checks
 }
 
+/// The subset of failures that mean the answer is probably *wrong*, not merely
+/// worth a look: a cited query that now re-runs to a different result or won't
+/// run, or a figure in the answer that appears in no tool result. A stray-year
+/// nudge or a text-column-aggregation caution is a soft warning and does not
+/// count. Returns the first such check's `detail` (else its `label`).
+///
+/// Matched on the label string, the same altitude as `is_schema_error` and the
+/// rest of this module. Used by the eval harness to separate hard misses from
+/// soft warnings; a future corrective re-ask would trigger on this.
+pub fn hard_fail(checks: &[VerificationCheck]) -> Option<String> {
+    const HARD: [&str; 3] = [
+        "different result now",
+        "no longer runs",
+        "not found in any result",
+    ];
+    checks
+        .iter()
+        .find(|c| !c.ok && HARD.iter().any(|h| c.label.contains(h)))
+        .map(|c| c.detail.clone().unwrap_or_else(|| c.label.clone()))
+}
+
 // --- 4. aggregates over a text column --------------------------------------
 
 /// `(lowercased, original-case)` names of every catalogued `TEXT` column.
@@ -408,6 +429,33 @@ mod tests {
         assert!(is_probable_year(2024.0));
         assert!(!is_probable_year(2024.5));
         assert!(!is_probable_year(450.0));
+    }
+
+    #[test]
+    fn hard_fail_separates_wrong_from_merely_noteworthy() {
+        // A soft warning only -> no hard fail.
+        let soft = vec![
+            warn("a total here is computed over the text column `amount`", None),
+            ok("every number in the answer came from the data above"),
+        ];
+        assert_eq!(hard_fail(&soft), None);
+
+        // A re-run mismatch is a hard fail; its detail is returned.
+        let hard = vec![
+            ok("re-checked the queries behind this answer  same results"),
+            warn(
+                "a query behind this answer gives a different result now",
+                Some("SELECT sum(amount) FROM t".into()),
+            ),
+        ];
+        assert_eq!(hard_fail(&hard).as_deref(), Some("SELECT sum(amount) FROM t"));
+
+        // An unbacked figure is a hard fail; label used when there's no detail.
+        let stray = vec![warn("the answer mentions 999 not found in any result", None)];
+        assert_eq!(
+            hard_fail(&stray).as_deref(),
+            Some("the answer mentions 999 not found in any result")
+        );
     }
 
     #[test]

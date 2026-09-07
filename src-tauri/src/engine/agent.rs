@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::engine::error::{EngineError, EngineResult};
-use crate::engine::evidence::{Answer, AskEvent, EvidenceItem};
+use crate::engine::evidence::{Answer, AskEvent, EvidenceItem, Usage};
 use crate::engine::llm::{ChatMessage, LlmClient, ToolCall};
 use crate::engine::state::EngineState;
 use crate::engine::tools::Registry;
@@ -81,6 +81,7 @@ you did not get from a tool.\n",
     let run_start = Instant::now();
     let mut model_calls = 0usize;
     let mut tool_calls_total = 0usize;
+    let mut usage: Option<Usage> = None;
     let steps = max_steps();
     for step in 0..steps {
         log::info!("agent step {}/{steps}", step + 1);
@@ -102,14 +103,16 @@ you did not get from a tool.\n",
                              Here's what I gathered so far."
                         ),
                         evidence,
-                        emit,
-                    ));
+                        usage,
+                    emit,
+));
                 }
                 Err(e) => return Err(e),
             },
-            _ = cancelled(cancel) => return Ok(stopped(engine, evidence, emit)),
+            _ = cancelled(cancel) => return Ok(stopped(engine, evidence, usage, emit)),
         };
         model_calls += 1;
+        usage = Usage::merge(usage, resp.usage);
 
         if resp.tool_calls.is_empty() {
             log::info!(
@@ -126,7 +129,7 @@ you did not get from a tool.\n",
             } else {
                 resp.content
             };
-            return Ok(finish(engine, text, evidence, emit));
+            return Ok(finish(engine, text, evidence, usage, emit));
         }
         tool_calls_total += resp.tool_calls.len();
 
@@ -216,7 +219,7 @@ not run again. Its result is repeated below - use it, refine the call, or give y
         }
 
         if cancel.load(Ordering::Relaxed) {
-            return Ok(stopped(engine, evidence, emit));
+            return Ok(stopped(engine, evidence, usage, emit));
         }
         trim_history(&mut messages);
         log::info!(
@@ -239,9 +242,10 @@ you're not confident, say so plainly rather than guessing."
     ));
     let resp = tokio::select! {
         r = llm.chat(&messages, &[], &notify, &on_delta) => r.unwrap_or_default(),
-        _ = cancelled(cancel) => return Ok(stopped(engine, evidence, emit)),
+        _ = cancelled(cancel) => return Ok(stopped(engine, evidence, usage, emit)),
     };
     model_calls += 1;
+    usage = Usage::merge(usage, resp.usage);
     let text = if resp.content.trim().is_empty() {
         "I ran out of analysis steps before reaching a confident answer.".to_string()
     } else {
@@ -252,21 +256,23 @@ you're not confident, say so plainly rather than guessing."
         run_start.elapsed(),
         evidence.len()
     );
-    Ok(finish(engine, text, evidence, emit))
+    Ok(finish(engine, text, evidence, usage, emit))
 }
 
 fn stopped(
     engine: &EngineState,
     evidence: Vec<EvidenceItem>,
+    usage: Option<Usage>,
     emit: &(dyn Fn(AskEvent) + Send + Sync),
 ) -> Answer {
-    finish(engine, "Stopped.".to_string(), evidence, emit)
+    finish(engine, "Stopped.".to_string(), evidence, usage, emit)
 }
 
 fn finish(
     engine: &EngineState,
     text: String,
     evidence: Vec<EvidenceItem>,
+    usage: Option<Usage>,
     emit: &(dyn Fn(AskEvent) + Send + Sync),
 ) -> Answer {
     log::info!(
@@ -279,6 +285,7 @@ fn finish(
         text,
         evidence,
         verification,
+        usage,
     };
     emit(AskEvent::AnswerDone {
         answer: answer.clone(),

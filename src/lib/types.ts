@@ -34,6 +34,8 @@ export interface Answer {
 	text: string;
 	evidence: EvidenceItem[];
 	verification: VerificationCheck[];
+	/** Token counts for the whole run, when the provider reported them. */
+	usage?: { prompt_tokens: number; completion_tokens: number };
 }
 
 export interface Message {
