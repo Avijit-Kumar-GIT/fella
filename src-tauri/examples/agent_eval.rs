@@ -300,15 +300,24 @@ fn closeness_det(r: &RunResult, case: &EvalCase) -> f32 {
             .count() as f32
             / want.len() as f32
     };
+    // an aggregate over no rows (one all-NULL row, or none) grounds the answer 0
+    let empty_agg = r.evidence.iter().any(|e| {
+        e.tool == "run_sql"
+            && e.error.is_none()
+            && e.rows.as_ref().is_some_and(|rs| {
+                rs.is_empty() || (rs.len() == 1 && rs[0].iter().all(|c| c.is_null()))
+            })
+    });
     // a figure is grounded if it shows up in some evidence cell / summary
     let grounded = |n: f64| {
-        r.evidence.iter().any(|e| {
-            numbers_in(&e.result_summary).iter().any(|x| close(*x, n))
-                || e.output.as_deref().map(|o| numbers_in(o).iter().any(|x| close(*x, n))).unwrap_or(false)
-                || e.rows.as_ref().map(|rs| {
-                    rs.iter().flatten().filter_map(|c| c.as_f64()).any(|x| close(x, n))
-                }).unwrap_or(false)
-        })
+        (n.abs() < 1e-9 && empty_agg)
+            || r.evidence.iter().any(|e| {
+                numbers_in(&e.result_summary).iter().any(|x| close(*x, n))
+                    || e.output.as_deref().map(|o| numbers_in(o).iter().any(|x| close(*x, n))).unwrap_or(false)
+                    || e.rows.as_ref().map(|rs| {
+                        rs.iter().flatten().filter_map(|c| c.as_f64()).any(|x| close(x, n))
+                    }).unwrap_or(false)
+            })
     };
     let ungrounded_rate = if got.is_empty() {
         0.0
