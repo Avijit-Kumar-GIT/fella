@@ -26,6 +26,16 @@ mcp = ["dep:rmcp", "dep:sse-stream", "dep:futures", "dep:bytes", "tokio/sync"]
 # Opt-in "power" build: swap the SQLite data engine for DuckDB adds Parquet,
 # faster queries on large files, ~30 MB, ~15 min cold build.
 duckdb = ["dep:duckdb"]
+# Dev-only: compiles `engine::testkit` (deterministic eval fixtures + goldens)
+# and enables the `agent_eval` harness example. Never in the shipped app.
+eval = []
+
+# The scored eval harness pulls `engine::testkit`, which is behind `eval`.
+# Without this, `cargo build --all-targets` (and CI clippy) would try to
+# compile the example unconditionally and fail.
+[[example]]
+name = "agent_eval"
+required-features = ["eval"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

@@ -43,7 +43,7 @@ pub async fn run(
     let schema = engine.schema_block();
     let recent = engine.session_block(conversation_id);
     let mut sys = system_prompt(
-        &PromptProfile::full(),
+        &PromptProfile::from_env(),
         &catalog,
         &user_context,
         &schema,
@@ -433,6 +433,36 @@ pub struct PromptProfile {
 }
 
 impl PromptProfile {
+    /// `full()`, minus any section named (comma-separated) in `FELLA_PROMPT_DROP`
+    /// the eval harness's prompt-minimalism ablation sets this per run. Unset
+    /// (the normal case) is exactly `full()`. Unknown names are ignored.
+    pub fn from_env() -> Self {
+        let mut p = Self::full();
+        let Ok(drop) = std::env::var("FELLA_PROMPT_DROP") else {
+            return p;
+        };
+        for name in drop.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+            match name {
+                "persona" => p.persona = false,
+                "core_rules" => p.core_rules = false,
+                "plan_rule" => p.plan_rule = false,
+                "parallel_rule" => p.parallel_rule = false,
+                "stop_early_rule" => p.stop_early_rule = false,
+                "dialect_rule" => p.dialect_rule = false,
+                "python_rule" => p.python_rule = false,
+                "docs_rule" => p.docs_rule = false,
+                "refuse_rule" => p.refuse_rule = false,
+                "background_rule" => p.background_rule = false,
+                "note_rule" => p.note_rule = false,
+                "user_context" => p.user_context = false,
+                "schema" => p.schema = false,
+                "session_block" => p.session_block = false,
+                _ => log::warn!("FELLA_PROMPT_DROP: unknown section {name:?}"),
+            }
+        }
+        p
+    }
+
     /// Exactly the prompt Fella ships today.
     pub fn full() -> Self {
         Self {
@@ -628,6 +658,15 @@ mod tests {
         // No recent block on the first turn.
         let p0 = system_prompt(&full, &open_catalog(), &[], schema, None);
         assert!(!p0.contains("Earlier in this conversation"));
+    }
+
+    #[test]
+    fn prompt_drop_env_clears_named_sections() {
+        std::env::set_var("FELLA_PROMPT_DROP", "persona, docs_rule ,session_block");
+        let p = PromptProfile::from_env();
+        std::env::remove_var("FELLA_PROMPT_DROP");
+        assert!(!p.persona && !p.docs_rule && !p.session_block);
+        assert!(p.core_rules && p.schema, "unnamed sections stay");
     }
 
     /// `PromptProfile::full()` must render byte-for-byte the prompt Fella

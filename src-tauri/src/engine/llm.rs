@@ -405,7 +405,13 @@ impl LlmClient {
         let messages_json = Json::Array(messages.iter().map(ollama_message).collect());
         let tools_json = (!tools.is_empty())
             .then(|| Json::Array(tools.iter().map(tool_schema_json).collect()));
-        let num_ctx = fit_num_ctx(&messages_json, tools_json.as_ref());
+        // `FELLA_OLLAMA_NUM_CTX_FIXED` pins num_ctx to the floor (no growth) so
+        // the eval harness can measure fixed-vs-adaptive on a big workspace.
+        let num_ctx = if std::env::var_os("FELLA_OLLAMA_NUM_CTX_FIXED").is_some() {
+            ollama_num_ctx()
+        } else {
+            fit_num_ctx(&messages_json, tools_json.as_ref())
+        };
         if num_ctx == 32768 {
             log::warn!(
                 "ollama prompt is large enough to hit the num_ctx ceiling ({num_ctx}); \
