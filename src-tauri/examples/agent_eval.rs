@@ -192,7 +192,13 @@ fn grade(r: &RunResult, gold: &Gold) -> bool {
     if r.err.is_some() {
         return false;
     }
-    let low = r.text.to_lowercase();
+    // normalise typographic punctuation many models emit "can't" with a
+    // curly apostrophe (U+2019), which a naive substring match misses.
+    let low = r
+        .text
+        .to_lowercase()
+        .replace(['\u{2019}', '\u{02BC}'], "'")
+        .replace(['\u{201C}', '\u{201D}'], "\"");
     match gold {
         Gold::Figures(want) => {
             let got = numbers_in(&r.text);
@@ -210,12 +216,13 @@ fn grade(r: &RunResult, gold: &Gold) -> bool {
             })
         }
         Gold::Refusal => {
-            numbers_in(&r.text).iter().all(|n| (1900.0..=2100.0).contains(n))
-                && (low.contains("can't")
-                    || low.contains("cannot")
-                    || low.contains("no ")
-                    || low.contains("not in")
-                    || low.contains("don't have"))
+            // no computed figure (years excused), and it plainly declines
+            let no_figures = numbers_in(&r.text).iter().all(|n| (1900.0..=2100.0).contains(n));
+            const DECLINES: [&str; 12] = [
+                "can't", "cannot", "can not", "unable", "no data", "not available",
+                "no way to", "don't have", "isn't in", "doesn't", "no records", "not in the",
+            ];
+            no_figures && DECLINES.iter().any(|p| low.contains(p))
         }
         Gold::NoTool => r.evidence.is_empty() && !r.text.trim().is_empty(),
     }
@@ -1161,7 +1168,18 @@ mod tests {
         assert!(grade(&rr("Target 1250, raised in March 2024.", vec![]),
             &Gold::Contains(vec!["1250", "march 2024"])));
         assert!(grade(&rr("Your files can't tell the future.", vec![]), &Gold::Refusal));
+        // a curly apostrophe (what many models emit) still counts as "can't"
+        assert!(grade(
+            &rr("I can\u{2019}t determine future spending from past records.", vec![]),
+            &Gold::Refusal
+        ));
+        assert!(grade(&rr("No data on future spending is available.", vec![]), &Gold::Refusal));
         assert!(!grade(&rr("You'll spend 4200 next month.", vec![]), &Gold::Refusal));
+        // declines but cites a computed figure -> not a clean refusal
+        assert!(!grade(
+            &rr("I can't project it, but your monthly average is 3900.", vec![]),
+            &Gold::Refusal
+        ));
         assert!(grade(&rr("I answer questions about your files.", vec![]), &Gold::NoTool));
         assert!(!grade(&rr("...", vec![ev("run_sql", "1 row: 5", None)]), &Gold::NoTool));
     }
