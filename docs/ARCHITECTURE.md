@@ -36,7 +36,9 @@ it produces answers, not files. The read-only boundary is the safety story.
 
 The microharness principles in `AUDIT.md` (thin UI, local-first, token efficiency,
 smallest useful tool set, interchangeable models, extensions at the edges, testable
-headless, anti-bloat) are the standing design constraints.
+headless, anti-bloat) are the standing design constraints. `HARNESS.md` is the
+engineering log for the reasoning loop what's been measured and changed, and why
+each choice holds across weak and strong models.
 
 ## Stack
 

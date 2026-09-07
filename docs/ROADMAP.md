@@ -88,8 +88,9 @@ that shows its working. See [`DECISIONS.md`](DECISIONS.md) and
 
 `examples/agent_eval` (dev-only, `--features eval`) now scores the agent loop
 correctness, answer-closeness, wasted tool calls, tokens/correct-answer
-across prompt ablations, folder sizes and models (`docs/PERFORMANCE.md`).
-Decide from its output, not from a hunch:
+across prompt ablations, folder sizes and models (`docs/PERFORMANCE.md`; the
+running log and the design rationale are in `docs/HARNESS.md`). Decide from its
+output, not from a hunch:
 
 - **Few-shot worked examples** in the system prompt for small local models
   *deferred:* `prompt-ablation` on gemma4:31b (2026-09-07) shows no prompt slack
