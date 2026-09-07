@@ -29,7 +29,9 @@ pub fn run(engine: &EngineState, answer: &str, evidence: &[EvidenceItem]) -> Vec
 ///
 /// Matched on the label string, the same altitude as `is_schema_error` and the
 /// rest of this module. Used by the eval harness to separate hard misses from
-/// soft warnings; a future corrective re-ask would trigger on this.
+/// soft warnings, and by the agent loop's corrective re-ask. Returns the label
+/// with its `detail` (the offending SQL, or the stray figures) folded in, since
+/// the re-ask needs the specifics, not just "a query".
 pub fn hard_fail(checks: &[VerificationCheck]) -> Option<String> {
     const HARD: [&str; 3] = [
         "different result now",
@@ -39,7 +41,10 @@ pub fn hard_fail(checks: &[VerificationCheck]) -> Option<String> {
     checks
         .iter()
         .find(|c| !c.ok && HARD.iter().any(|h| c.label.contains(h)))
-        .map(|c| c.detail.clone().unwrap_or_else(|| c.label.clone()))
+        .map(|c| match &c.detail {
+            Some(d) => format!("{} ({d})", c.label),
+            None => c.label.clone(),
+        })
 }
 
 // --- 4. aggregates over a text column --------------------------------------
@@ -440,7 +445,7 @@ mod tests {
         ];
         assert_eq!(hard_fail(&soft), None);
 
-        // A re-run mismatch is a hard fail; its detail is returned.
+        // A re-run mismatch is a hard fail; label + detail (the SQL) come back.
         let hard = vec![
             ok("re-checked the queries behind this answer  same results"),
             warn(
@@ -448,7 +453,10 @@ mod tests {
                 Some("SELECT sum(amount) FROM t".into()),
             ),
         ];
-        assert_eq!(hard_fail(&hard).as_deref(), Some("SELECT sum(amount) FROM t"));
+        assert_eq!(
+            hard_fail(&hard).as_deref(),
+            Some("a query behind this answer gives a different result now (SELECT sum(amount) FROM t)")
+        );
 
         // An unbacked figure is a hard fail; label used when there's no detail.
         let stray = vec![warn("the answer mentions 999 not found in any result", None)];
