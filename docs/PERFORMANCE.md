@@ -625,6 +625,14 @@ Subcommands: `accuracy`, `prompt-ablation`, `folder-scale`, `model-ladder`,
 score), `--only <id-substr>`, `--json <path>`, `--compare <old.json>` (Δ acc
 / tokens vs a prior run the "did my change help" answer).
 
+A `--models` entry is a bare model on the configured provider, or
+`provider/model` to switch provider too so one run can compare across
+providers if the data dir's `auth.json` has each key:
+
+```
+--models "ollama-cloud/gemma4:31b,openai/gpt-5.6-luna,xai/grok-4.3"
+```
+
 Fixtures are deterministic (`engine::testkit`), so the golden answers are
 exact. The grader matches the answer's **headline figure(s)** within
 tolerance; multi-row tables and prose are not parsed. "number present" can

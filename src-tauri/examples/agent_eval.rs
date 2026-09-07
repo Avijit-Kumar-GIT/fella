@@ -21,8 +21,14 @@
 //!   session-memory   turn-2 accuracy with the recent-turns block on vs off
 //!   all              accuracy + robustness + session-memory
 //!
-//! Opts: --models "a,b,c"  --judge <model>  --iters N  --only <id-substr>
+//! Opts: --models "a,b,c"  --judge <model>  --only <id-substr>
 //!       --json <path>  --compare <old.json>
+//!
+//! A --models entry is a bare model on the configured provider (`gemma4:31b`)
+//! or `provider/model` to switch provider too (`xai/grok-4.3`,
+//! `openai/gpt-5.6-luna`, `ollama-cloud/gemma4:31b`) the data dir's
+//! auth.json must hold each provider's key. Only the first `/` is the
+//! separator, so `gemma4:31b` keeps its colon.
 
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -438,9 +444,24 @@ fn env(k: &str, d: &str) -> String {
     std::env::var(k).unwrap_or_else(|_| d.to_string())
 }
 
-fn set_model(engine: &EngineState, m: &str) -> bool {
+/// Point the engine at a model. `"grok-4.3"` keeps the current provider;
+/// `"xai/grok-4.3"` (a known provider id, then `/`, then the model) also
+/// switches provider + base_url so one run can sweep across providers as long
+/// as the data dir's `auth.json` holds each provider's key. `gemma4:31b` keeps
+/// its colon; only the first `/` is the provider separator.
+fn set_model(engine: &EngineState, spec: &str) -> bool {
     let mut patch = serde_json::Map::new();
-    patch.insert("model".into(), serde_json::Value::String(m.to_string()));
+    if let Some((prov, model)) = spec.split_once('/') {
+        if let Some(p) = fella_lib::engine::provider::get(prov) {
+            patch.insert("provider".into(), prov.into());
+            if !p.base_url.is_empty() {
+                patch.insert("base_url".into(), p.base_url.into());
+            }
+            patch.insert("model".into(), model.into());
+            return engine.save_settings(&patch).is_ok();
+        }
+    }
+    patch.insert("model".into(), spec.into());
     engine.save_settings(&patch).is_ok()
 }
 
