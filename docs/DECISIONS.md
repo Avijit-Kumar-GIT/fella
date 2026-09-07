@@ -7,6 +7,18 @@ this app repo (now **`fella`**; `fella-ai` is a private pre-v0.1 archive),
 `fella-marketplace` to mean the browse-site half of the **`fella-web`** repo,
 and any `CODE_OF_CONDUCT.md` mention as folded into `CONTRIBUTING.md` (§Conduct).
 
+- **2026-09-07** **One corrective re-ask when the deterministic check catches a
+  cited figure that no longer reproduces.** Amends the 2026-08-27 "no extra LLM
+  call in verification" line: the verify pass is still deterministic and still
+  never supplies a number, but if `verify::hard_fail` fires (a cited query
+  re-runs to a different result, won't run, or a figure appears in no result)
+  the loop now spends **one** tool-free turn asking the model to reconcile
+  against what already ran or withdraw the figure, then re-verifies once. Bounded
+  to a single extra call, only on the normal completion path, only when a hard
+  check fails (rare). `FELLA_VERIFY_REASK=0` disables it. Rationale: the harness
+  was already catching these and doing nothing but printing a warning next to a
+  wrong answer; WHY.md's own bet is that the wrapper, not the model, is where
+  correctness is won. Measured via `agent_eval`'s `hard_fail` cross-tab.
 - **2026-09-06** **`/login <provider>` reuses a stored key; `/logout` keeps
   it (`/logout <provider> forget` deletes).** `auth.json` is a per-provider
   map, so keys already persist across switches the commands just didn't use

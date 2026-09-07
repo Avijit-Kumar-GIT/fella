@@ -13,6 +13,12 @@ All notable changes to Fella are recorded here. Format follows
   much will") has no answer in past records the model says so instead of
   computing an average and presenting it as a projection. (Found by the new
   agent-eval harness: one model was doing exactly that.)
+- **A failed self-check now gets one shot at a fix.** When the deterministic
+  verification pass finds a figure whose query no longer reproduces it (or a
+  number backed by nothing), Fella spends one tool-free turn asking the model
+  to reconcile against what it already ran or drop the figure, then re-checks.
+  Still no number comes from the model itself; the pass is still deterministic.
+  Set `FELLA_VERIFY_REASK=0` to keep the old behaviour (warn and ship).
 
 ## [0.1.4]
 

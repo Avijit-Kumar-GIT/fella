@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::engine::error::{EngineError, EngineResult};
-use crate::engine::evidence::{Answer, AskEvent, EvidenceItem, Usage};
+use crate::engine::evidence::{Answer, AskEvent, EvidenceItem, Usage, VerificationCheck};
 use crate::engine::llm::{ChatMessage, LlmClient, ToolCall};
 use crate::engine::state::EngineState;
 use crate::engine::tools::Registry;
@@ -128,14 +128,37 @@ you did not get from a tool.\n",
             );
             // A model that returns neither text nor a tool call would otherwise
             // leave a blank reply. Give the user something to act on.
-            let text = if resp.content.trim().is_empty() && evidence.is_empty() {
+            let mut text = if resp.content.trim().is_empty() && evidence.is_empty() {
                 "The model returned an empty reply. Try rephrasing the question, or switch model \
                  with /model."
                     .to_string()
             } else {
                 resp.content
             };
-            return Ok(finish(engine, text, evidence, usage, emit));
+            let mut checks = verify::run(engine, &text, &evidence);
+            // One tool-free corrective turn when the deterministic check finds a
+            // cited figure that no longer reproduces. The re-run value the model
+            // reconciles against still comes from a real query, so the answer
+            // stays checkable. `FELLA_VERIFY_REASK=0` opts out.
+            if reask_enabled() && !evidence.is_empty() && !cancel.load(Ordering::Relaxed) {
+                if let Some(detail) = verify::hard_fail(&checks) {
+                    messages.push(ChatMessage::User(format!(
+                        "Self-check failed: {detail}. A figure in that answer isn't backed by a \
+query that reproduces it. Using only what you've already gathered no new tools give the \
+corrected answer, fixing or withdrawing that figure."
+                    )));
+                    let r = tokio::select! {
+                        r = llm.chat(&messages, &[], &notify, &on_delta) => r.unwrap_or_default(),
+                        _ = cancelled(cancel) => Default::default(),
+                    };
+                    usage = Usage::merge(usage, r.usage);
+                    if !r.content.trim().is_empty() {
+                        text = r.content;
+                        checks = verify::run(engine, &text, &evidence);
+                    }
+                }
+            }
+            return Ok(finish_with(text, evidence, usage, checks, emit));
         }
         tool_calls_total += resp.tool_calls.len();
 
@@ -274,6 +297,11 @@ fn stopped(
     finish(engine, "Stopped.".to_string(), evidence, usage, emit)
 }
 
+/// The corrective re-ask fires unless `FELLA_VERIFY_REASK=0`.
+fn reask_enabled() -> bool {
+    !matches!(std::env::var("FELLA_VERIFY_REASK").as_deref(), Ok("0"))
+}
+
 fn finish(
     engine: &EngineState,
     text: String,
@@ -281,12 +309,22 @@ fn finish(
     usage: Option<Usage>,
     emit: &(dyn Fn(AskEvent) + Send + Sync),
 ) -> Answer {
+    let checks = verify::run(engine, &text, &evidence);
+    finish_with(text, evidence, usage, checks, emit)
+}
+
+fn finish_with(
+    text: String,
+    evidence: Vec<EvidenceItem>,
+    usage: Option<Usage>,
+    verification: Vec<VerificationCheck>,
+    emit: &(dyn Fn(AskEvent) + Send + Sync),
+) -> Answer {
     log::info!(
         "agent done: {} char answer, {} evidence item(s)",
         text.len(),
         evidence.len()
     );
-    let verification = verify::run(engine, &text, &evidence);
     let answer = Answer {
         text,
         evidence,
@@ -733,6 +771,17 @@ Workspace: /tmp/ws\n{}\n{}",
             recent,
         );
         assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn reask_enabled_defaults_on_and_env_opts_out() {
+        std::env::remove_var("FELLA_VERIFY_REASK");
+        assert!(reask_enabled());
+        std::env::set_var("FELLA_VERIFY_REASK", "0");
+        assert!(!reask_enabled());
+        std::env::set_var("FELLA_VERIFY_REASK", "1");
+        assert!(reask_enabled());
+        std::env::remove_var("FELLA_VERIFY_REASK");
     }
 
     #[test]
