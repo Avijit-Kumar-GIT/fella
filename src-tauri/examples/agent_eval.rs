@@ -771,7 +771,8 @@ async fn cmd_model_ladder(engine: &EngineState, cases: &[EvalCase], models: &[St
     println!("| model | acc | close(det) | waste/case | tok/correct-ans | $/100 | mean wall s |");
     println!("|---|:-:|--:|--:|--:|--:|--:|");
     let mut all = Vec::new();
-    let mut best: Option<(String, f64)> = None;
+    let mut best_priced: Option<(String, f64)> = None; // (model, $/100)
+    let mut cleared_unpriced: Vec<String> = Vec::new();
     for m in models {
         if !set_model(engine, m) {
             println!("| {m} | save failed | | | | | |");
@@ -783,9 +784,8 @@ async fn cmd_model_ladder(engine: &EngineState, cases: &[EvalCase], models: &[St
         let mean_s = scores.iter().map(|s| s.total_s).sum::<f64>() / scores.len().max(1) as f64;
         let pin: f64 = scores.iter().map(|s| s.prompt_tok as f64).sum::<f64>();
         let pout: f64 = scores.iter().map(|s| s.completion_tok as f64).sum::<f64>();
-        let cost = price_per_100(m, pin, pout)
-            .map(|c| format!("${c:.2}"))
-            .unwrap_or_else(|| "n/a".into());
+        let price = price_per_100(m, pin, pout);
+        let cost = price.map(|c| format!("${c:.2}")).unwrap_or_else(|| "n/a".into());
         let waste_per_case = total_waste(&scores) as f64 / scores.len().max(1) as f64;
         println!(
             "| {m} | {ok}/{n} | {:.2} | {:.2} | {:.0} | {cost} | {mean_s:.1} |",
@@ -794,19 +794,31 @@ async fn cmd_model_ladder(engine: &EngineState, cases: &[EvalCase], models: &[St
             tokens_per_correct(&scores),
         );
         if a >= 0.8 && total_waste(&scores) <= waste_bar {
-            let c = price_per_100(m, pin, pout).unwrap_or(0.0);
-            if best.as_ref().map(|(_, bc)| c < *bc).unwrap_or(true) {
-                best = Some((m.clone(), c));
+            match price {
+                Some(c) if best_priced.as_ref().map(|(_, bc)| c < *bc).unwrap_or(true) => {
+                    best_priced = Some((m.clone(), c));
+                }
+                Some(_) => {}
+                None => cleared_unpriced.push(m.clone()),
             }
         }
         all.extend(scores);
     }
-    match best {
+    let per_case_bar = waste_bar as f64 / n_cases.max(1) as f64;
+    match &best_priced {
         Some((m, c)) => println!(
-            "\n**Cheapest model with acc ≥ 0.8 and ≤ {:.1} wasted calls/case: `{m}` (${c:.2}/100 answers).**",
-            waste_bar as f64 / n_cases.max(1) as f64
+            "\n**Cheapest priced model at acc ≥ 0.8 and ≤ {per_case_bar:.1} wasted calls/case: `{m}` (${c:.2}/100).**"
         ),
-        None => println!("\n_No model cleared the bar (acc ≥ 0.8, ≤ ~0.5 wasted calls/case)._"),
+        None if cleared_unpriced.is_empty() => {
+            println!("\n_No model cleared the bar (acc ≥ 0.8, ≤ {per_case_bar:.1} wasted calls/case)._")
+        }
+        None => {}
+    }
+    if !cleared_unpriced.is_empty() {
+        println!(
+            "_Also cleared the bar (no list price in the table): {}._",
+            cleared_unpriced.join(", ")
+        );
     }
     all
 }
