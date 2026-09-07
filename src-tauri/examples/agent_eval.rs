@@ -267,48 +267,59 @@ impl Waste {
     }
 }
 
+/// Classify each *extra* tool call (beyond the `min_tools` a clean run needs)
+/// into at most one waste bucket, priority: error-retry > duplicate >
+/// redundant-schema > speculative. So `Waste::total()` is a count of distinct
+/// wasteful calls it can't exceed the number of extra calls.
+///
+/// `redundant_schema` here assumes the schema block already shows the table
+/// (true for the default ≤4-table workspace); on a large `folder-scale`
+/// workspace a `describe_schema` call is legitimate, so read that column with
+/// the table count in mind.
 fn classify_waste(r: &RunResult, case: &EvalCase) -> Waste {
+    let ans = numbers_in(&r.text);
     let mut w = Waste::default();
     let mut seen: Vec<(String, String)> = Vec::new();
+    // The first `necessary` non-error calls are "free"; only classify the rest.
+    let mut budget = case.min_tools;
+
     for (i, e) in r.evidence.iter().enumerate() {
         let key = (e.tool.clone(), e.args.to_string());
-        if e.result_summary == "skipped (duplicate call)" || seen.contains(&key) {
-            w.duplicate += 1;
-        }
+        let first_time = !seen.contains(&key);
         seen.push(key.clone());
 
-        // a describe/sample/list call the shipped schema block already covers
-        if matches!(e.tool.as_str(), "describe_schema" | "sample_rows" | "list_files") {
-            w.redundant_schema += 1;
-        }
-
-        // an error later re-issued with the same args
-        if e.error.is_some()
+        let is_dup = e.result_summary == "skipped (duplicate call)" || !first_time;
+        let is_retry = e.error.is_some()
             && r.evidence[i + 1..]
                 .iter()
-                .any(|f| f.error.is_none() && (f.tool.clone(), f.args.to_string()) == key)
-        {
-            w.error_retry += 1;
+                .any(|f| f.error.is_none() && (f.tool.clone(), f.args.to_string()) == key);
+        let is_schema =
+            matches!(e.tool.as_str(), "describe_schema" | "sample_rows" | "list_files");
+        let is_spec = e.tool == "run_sql" && e.error.is_none() && {
+            let produced = numbers_in(&e.result_summary);
+            !produced.is_empty() && !produced.iter().any(|p| ans.iter().any(|a| close(*a, *p)))
+        };
+
+        // A first-seen, non-error, answer-feeding call is legitimate work spend
+        // the necessary-call budget on it and move on.
+        let wasteful = is_dup || is_retry || is_schema || is_spec;
+        if !wasteful {
+            if budget > 0 && e.error.is_none() {
+                budget -= 1;
+            }
+            continue;
         }
 
-        // a run_sql whose numbers feed no figure in the answer
-        if e.tool == "run_sql" && e.error.is_none() {
-            let ans = numbers_in(&r.text);
-            let produced = numbers_in(&e.result_summary);
-            let fed = produced.iter().any(|p| ans.iter().any(|a| close(*a, *p)));
-            if !fed && !produced.is_empty() {
-                w.speculative += 1;
-            }
+        if is_retry {
+            w.error_retry += 1;
+        } else if is_dup {
+            w.duplicate += 1;
+        } else if is_schema {
+            w.redundant_schema += 1;
+        } else {
+            w.speculative += 1;
         }
     }
-    // don't count the calls a clean run legitimately needs
-    let necessary = case.min_tools.min(r.evidence.len());
-    let extra = r.evidence.len().saturating_sub(necessary);
-    // waste can't exceed the extra calls (guards double-counting)
-    let cap = extra;
-    w.duplicate = w.duplicate.min(cap);
-    w.redundant_schema = w.redundant_schema.min(cap);
-    w.speculative = w.speculative.min(cap);
     w
 }
 
@@ -925,4 +936,96 @@ async fn main() {
         compare(p, &scores);
     }
     eprintln!("eval: done ({} scored)", scores.len());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rr(text: &str, ev: Vec<EvidenceItem>) -> RunResult {
+        RunResult {
+            text: text.into(),
+            evidence: ev,
+            hard_fail: false,
+            prompt_tok: 0,
+            completion_tok: 0,
+            total: Duration::ZERO,
+            first_token: None,
+            steps: 0,
+            err: None,
+        }
+    }
+    fn ev(tool: &str, summary: &str, err: Option<&str>) -> EvidenceItem {
+        EvidenceItem {
+            tool: tool.into(),
+            // distinct args so two calls aren't seen as an exact repeat
+            args: serde_json::json!({ "q": summary }),
+            note: None,
+            sql: Some(format!("SELECT /*{summary}*/ 1")),
+            result_summary: summary.into(),
+            columns: None,
+            rows: None,
+            row_count: None,
+            output: None,
+            ms: 1,
+            error: err.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn numbers_and_close() {
+        assert_eq!(numbers_in("total $6,100.00 up 12% since 2024"), vec![6100.0, 12.0, 2024.0]);
+        assert!(close(6100.0, 6100.4));
+        assert!(close(1000.0, 1009.0)); // within 1%
+        assert!(!close(6100.0, 6300.0));
+    }
+
+    #[test]
+    fn grade_by_gold_kind() {
+        assert!(grade(&rr("Your total was 6,100.", vec![]), &Gold::Figures(vec![6100.0])));
+        assert!(!grade(&rr("Your total was 5,900.", vec![]), &Gold::Figures(vec![6100.0])));
+        assert!(grade(&rr("Target 1250, raised in March 2024.", vec![]),
+            &Gold::Contains(vec!["1250", "march 2024"])));
+        assert!(grade(&rr("Your files can't tell the future.", vec![]), &Gold::Refusal));
+        assert!(!grade(&rr("You'll spend 4200 next month.", vec![]), &Gold::Refusal));
+        assert!(grade(&rr("I answer questions about your files.", vec![]), &Gold::NoTool));
+        assert!(!grade(&rr("...", vec![ev("run_sql", "1 row: 5", None)]), &Gold::NoTool));
+    }
+
+    #[test]
+    fn waste_flags_the_extra_calls_only() {
+        let case = EvalCase {
+            id: "x", category: "Aggregate", question: "q".into(),
+            gold: Gold::Figures(vec![450.0]), min_tools: 1, reference: "450".into(),
+        };
+        // one necessary run_sql that feeds the answer -> no waste
+        let clean = rr("The total is 450.", vec![ev("run_sql", "1 row: total 450", None)]);
+        assert_eq!(classify_waste(&clean, &case).total(), 0);
+
+        // + a redundant describe_schema and a speculative query -> 2 waste
+        let messy = rr(
+            "The total is 450.",
+            vec![
+                ev("describe_schema", "ledger: 3 cols", None),
+                ev("run_sql", "1 row: total 450", None),
+                ev("run_sql", "12 rows: avg 37", None), // its numbers feed nothing
+            ],
+        );
+        let w = classify_waste(&messy, &case);
+        assert!(w.redundant_schema >= 1 && w.speculative >= 1, "{w:?}", w = (w.redundant_schema, w.speculative));
+        assert!(w.total() <= 2, "capped at the 2 extra calls");
+    }
+
+    #[test]
+    fn closeness_rewards_grounded_figures() {
+        let case = EvalCase {
+            id: "x", category: "Aggregate", question: "q".into(),
+            gold: Gold::Figures(vec![450.0]), min_tools: 1,
+            reference: "Your total spending was 450.".into(),
+        };
+        let good = rr("Your total spending was 450.", vec![ev("run_sql", "1 row: total 450", None)]);
+        let bad = rr("Your total was 999.", vec![ev("run_sql", "1 row: total 450", None)]);
+        assert!(closeness_det(&good, &case) > 0.8);
+        assert!(closeness_det(&bad, &case) < 0.5);
+    }
 }
