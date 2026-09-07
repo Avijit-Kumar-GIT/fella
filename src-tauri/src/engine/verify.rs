@@ -316,6 +316,10 @@ fn number_tokens(text: &str) -> impl Iterator<Item = (String, f64)> + '_ {
             let c = bytes[i];
             if c.is_ascii_digit() {
                 let start = i;
+                // A digit run glued to a letter or underscore is an identifier
+                // fragment (txns_00.csv, q1), not a figure the model stated.
+                let in_identifier = start > 0
+                    && (bytes[start - 1].is_ascii_alphabetic() || bytes[start - 1] == b'_');
                 while i < bytes.len()
                     && (bytes[i].is_ascii_digit() || bytes[i] == b',' || bytes[i] == b'.')
                 {
@@ -339,16 +343,18 @@ fn number_tokens(text: &str) -> impl Iterator<Item = (String, f64)> + '_ {
                     i -= 1;
                 }
                 let cleaned: String = raw.chars().filter(|c| *c != ',' && *c != ' ').collect();
-                if let Ok(v) = cleaned.parse::<f64>() {
-                    let mut display = raw.clone();
-                    if start > 0 && bytes[start - 1] == b'$' {
-                        display = format!("${raw}");
+                if !in_identifier {
+                    if let Ok(v) = cleaned.parse::<f64>() {
+                        let mut display = raw.clone();
+                        if start > 0 && bytes[start - 1] == b'$' {
+                            display = format!("${raw}");
+                        }
+                        if i < bytes.len() && bytes[i] == b'%' {
+                            display = format!("{raw}%");
+                            i += 1;
+                        }
+                        return Some((display, v));
                     }
-                    if i < bytes.len() && bytes[i] == b'%' {
-                        display = format!("{raw}%");
-                        i += 1;
-                    }
-                    return Some((display, v));
                 }
             } else {
                 i += 1;
@@ -470,6 +476,12 @@ mod tests {
             .map(|(_, v)| v)
             .collect();
         assert_eq!(got, vec![1234.5, 12.0, 2024.0, 450.0]);
+
+        // a digit run inside an identifier (txns_00) is not a figure
+        let got2: Vec<_> = number_tokens("Total spending in txns_00 was 738,022.3.")
+            .map(|(_, v)| v)
+            .collect();
+        assert_eq!(got2, vec![738022.3]);
     }
 
     #[test]
