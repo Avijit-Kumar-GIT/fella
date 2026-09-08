@@ -108,6 +108,7 @@ src-tauri/src/
     evidence.rs              EvidenceItem / Answer / AskEvent types
     tools.rs                 Tool trait, Registry, JSON-Schema export; the 7 built-ins
     verify.rs                re-run cited SQL, check every figure came from a tool
+    memory.rs                per-folder learned notes (memory.md); FELLA_MEMORY
 ```
 
 ## Data layer
@@ -193,10 +194,12 @@ headline and pick whatever shape fits. A "Your context" block from `fella.md` +
 enabled `skill` packs is prepended; a line about `connector__tool` names is
 added when an `mcp` pack is connected.
 
-**Verification pass** (no extra LLM call): re-execute any SQL cited in the answer and
-confirm the headline value is unchanged; confirm every table named in cited SQL exists
-in the catalog; flag numerals in the answer that appear in no tool result. Rendered as
-a ✓/⚠ checklist in the evidence block.
+**Verification pass** (deterministic; one bounded re-ask on a hard fail —
+`FELLA_VERIFY_REASK`): re-execute any SQL cited in the answer and confirm the
+headline value is unchanged; confirm every table named in cited SQL exists in the
+catalog; flag numerals in the answer that appear in no tool result; flag a `SUM`/`AVG`
+over a text column, and an exact-case filter on a column whose values differ only in
+capitalisation. Rendered as a ✓/⚠ checklist in the evidence block.
 
 ## Tools
 

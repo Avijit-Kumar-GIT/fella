@@ -12,6 +12,7 @@ pub mod ingest;
 pub mod llm;
 #[cfg(feature = "mcp")]
 pub mod mcp;
+pub mod memory;
 pub mod provider;
 pub mod pyexec;
 pub mod secrets;

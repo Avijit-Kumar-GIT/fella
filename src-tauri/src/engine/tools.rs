@@ -401,7 +401,8 @@ impl Tool for RunSql {
         let sql = str_arg(args, "sql")?;
         let q = engine.run_sql(sql)?;
         let table = table_text(&q, 30);
-        let llm_text = match text_agg_warning(engine, sql) {
+        let warning = text_agg_warning(engine, sql).or_else(|| case_filter_warning(engine, sql));
+        let llm_text = match warning {
             Some(w) => format!("{w}\n{table}"),
             None => table,
         };
@@ -439,6 +440,20 @@ fn text_agg_warning(engine: &EngineState, sql: &str) -> Option<String> {
         "NOTE: \"{name}\" is a TEXT column SUM/AVG reads non-numeric text \
 (currency signs, commas, \"N/A\") as 0, so the total can be silently wrong. Cast it, e.g. \
 SUM(CAST(REPLACE(REPLACE(\"{name}\", '$', ''), ',', '') AS REAL))."
+    ))
+}
+
+/// If `sql` filters a mixed-case label column by exact case, tell the model to
+/// fold case values like `Rent` and `rent` won't all match otherwise.
+fn case_filter_warning(engine: &EngineState, sql: &str) -> Option<String> {
+    let cols = crate::engine::verify::mixed_case_columns(engine);
+    let lowered: Vec<String> = cols.iter().map(|(l, _)| l.clone()).collect();
+    let hit = crate::engine::verify::case_sensitive_label_filter(sql, &lowered)?;
+    let name = cols.iter().find(|(l, _)| l == hit).map_or(hit, |(_, n)| n.as_str());
+    Some(format!(
+        "NOTE: \"{name}\" has values that differ only in capitalisation (e.g. Rent / rent). \
+This filter matches exact case fold it: lower(\"{name}\") = lower('value'), or \
+\"{name}\" = 'value' COLLATE NOCASE."
     ))
 }
 

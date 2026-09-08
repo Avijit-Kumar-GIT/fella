@@ -1,8 +1,11 @@
-# Per-folder memory — design exploration
+# Per-folder memory
 
-Status: exploration for GitHub #42. Not a spec. Ships as its own PR after the
-`agent_eval` branch. Constraints from `WHY.md`: local, auditable, no new
-dependency, small enough that one person can read all of it.
+GitHub #42. Constraints from `WHY.md`: local, auditable, no new dependency,
+small enough that one person can read all of it.
+
+**Status: v1 built** on `feat/folder-memory` (`engine::memory`). What's below is
+the full design; the [Implementation](#implementation-v1) section at the end
+says what v1 does, what it defers, and what the first benchmark showed.
 
 ## The goal
 
@@ -215,3 +218,88 @@ reference the model may use, never a rule it must follow.
   the user ever sees the raw log or only the distilled `memory.md`.
 - **Multi-folder.** A user with `~/money` and `~/health` — memory is strictly
   per-folder, no cross-folder sharing (matches the folder-is-the-world model).
+
+## Implementation (v1)
+
+`engine::memory` (`FolderMemory`), ~560 lines, no new dependency. Wired into
+`agent.rs` (a `PromptProfile.folder_memory` section, byte-identical when empty)
+and `state.rs` (`folder_memory_block()` read each turn; a record hook in
+`ask()`). `FELLA_MEMORY=0` turns read+write off; `=ro` reads but records nothing.
+
+**What v1 does**
+
+- **Store.** One `.md` per workspace under `<data_dir>/memory/`, plus an
+  append-only `<mem>.episodes.jsonl` (raw record, capped at 200; not read back
+  yet). The `.md` is the source of truth — lenient parse (an unreadable line in
+  a managed section is kept), authoritative re-render of the managed sections,
+  a user `## Notes` section and any unknown sections preserved verbatim. Read
+  fresh from disk every turn, so a hand edit lands immediately.
+- **Deterministic writer**, no per-turn LLM call:
+  - a `run_sql` answer that `verify::reran_clean` confirmed on **one** query →
+    a recipe (`question → SQL`, use-counted, superseded by normalised question,
+    least-used trimmed past 40);
+  - a follow-up that `is_correction()` flags (starts with "no,", "actually",
+    "that's wrong", …) → a vocabulary note keyed on the corrected topic.
+- **Semantic core** (`semantic_core()`): preferences + all vocabulary + table
+  notes + the top-5 recipes by use, within ~1.6 KB, prepended after the schema
+  block. **Empty memory renders nothing** — a fresh folder pays zero tokens.
+- **Staleness.** `mark_stale()` flags recipes whose tables left the catalog;
+  stale recipes drop out of the core.
+
+**Deferred**
+
+- **`recall()` tool / episodic retrieval.** The core-block half is built; the
+  long-tail-via-tool half is not. The episode log is written but unread.
+- **Ingest-note sync.** Considered and cut: coercion / totals-row notes are
+  *already* in the schema block (small folders) or in `describe_schema` on
+  demand (names-only folders). Duplicating them into memory is redundant and
+  was the main source of prompt-token cost. Memory holds only what the schema
+  doesn't: vocabulary, recipes, corrections.
+- **End-of-session tidy pass**, `<folder>/.fella/` opt-in location, `/memory`
+  command.
+
+**Benchmarks** (`agent_eval memory`).
+
+*Same-conversation, clean folder* — prime an aggregate, cold-ask a different
+aggregate on the same table (gemma4:31b, synthetic workspace): **no accuracy /
+step / waste difference; ~+130 prompt tokens** for the primed recipe. Clean
+synthetic tables with guessable column names → a recipe isn't load-bearing, the
+model writes the right SQL from the schema block alone.
+
+*Cross-session, messy folder* — the case memory is actually for. One file
+(`spend.csv`) with cryptic columns (`txn_dt`, `amt`, `cat`) and rent showing up
+as `Rent` / `rent` / `HOUSING` / `mortgage` / `housing`. **Session 1**: the user
+lists the categories, then corrects Fella — "actually, for rent totals count
+HOUSING and mortgage as rent too". The correction lands as a vocabulary note.
+**Session 2** is a *cold conversation* (memory is the only carry) asking for
+total rent spending; gold is 7 350 (all rent-ish rows), literal-`rent`-only is
+3 700.
+
+Two rounds: `[a]` memory alone, `[b]` memory + the case-sensitivity flag added
+after (`case_collision` — a label column whose values collapse under
+case-folding gets a schema/`run_sql` note).
+
+Round `[a]` = memory alone. Round `[b]` = memory + the case-sensitivity flag.
+
+| model | round | memory on | memory off |
+|---|---|---|---|
+| **gpt-5.6-luna** | [b] | **✓ 7 350** · `WHERE lower(cat) IN ('rent','housing','mortgage')` · +199 tok | ✗ 3 700 · `WHERE lower(cat) = 'rent'` |
+| **xai/grok-4.3** | [b] | **✓ 7 350** · `WHERE lower(cat) IN ('rent','housing','mortgage')` · +167 tok | ✗ 3 700 · `WHERE lower(cat) = 'rent'` |
+| **gemma4:31b** | [a] | ✗ 4 850 · `WHERE cat IN ('Rent','HOUSING','mortgage')` (case-sensitive) | ✗ 6 150 |
+| **gemma4:31b** | [b] | **✓ 7 350** · `WHERE cat COLLATE NOCASE IN ('Rent','Housing','Mortgage')` · +187 tok | ✗ 6 150 |
+
+The mechanism **conveys** the idea across the session boundary every time — the
+correction text is in the prompt. **Interpret + apply**, with the flag in
+place: **all three models go memory-on ✓ 100 % (7 350), memory-off ✗ 0 %**, for
+~+180 prompt tokens. Every model folds case (`lower(cat)` or `COLLATE NOCASE`)
+and applies the carried `IN ('rent','housing','mortgage')`; without memory none
+can know `mortgage` counts, so all three are correctly wrong.
+
+Round `[a]` (gemma4, no flag) is kept above to show what the flag fixed: gemma
+carried the correction and added the synonyms but wrote a case-sensitive `IN`
+and missed the lowercase rows.
+
+**Reading:** memory earns its keep on the exact cross-session messy-folder case
+it was designed for — on a frontier model *and* the `gemma4` floor — once the
+correction is paired with a schema flag that removes the case ambiguity. v1
+ships default-on (a fresh folder costs nothing).

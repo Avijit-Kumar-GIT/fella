@@ -87,6 +87,34 @@ The running list of open design questions from shaping this work is in
   "≈18%" as the raw ratio "0.176…". `FELLA_VERIFY_REASK=0` disables. Dormant on
   read-only data by design.
 
+- **2026-09-08 · Case-sensitivity flag** (`case_collision` at ingest;
+  `case_sensitive_label_filter` in `verify` + `run_sql`). A label column whose
+  distinct values collapse under case-folding (`Rent` / `rent` / `RENT`) gets a
+  note; a bare `= '…'` / `IN (…)` filter on it that isn't `lower()`-wrapped
+  gets an inline warning. *Remove-ambiguity* — surfaces a real property of the
+  data, forces no rewrite. It's what let the `gemma4` floor turn a carried
+  memory correction into a correct query (below): ✗ 4 850 → ✓ 7 350.
+
+- **2026-09-08 · Per-folder memory v1** (`engine::memory`, branch
+  `feat/folder-memory`, [`FOLDER-MEMORY.md`](FOLDER-MEMORY.md)). A plain-text
+  `memory.md` per folder, written from deterministic signals (a `verify`-clean
+  one-query answer → a recipe; a correction → a vocabulary note), a semantic
+  core prepended after the schema block, empty for a fresh folder.
+  `FELLA_MEMORY=0`/`ro`. *This is an add-scaffolding change, so it has to buy
+  correctness.* Two `agent_eval memory` runs:
+  - *Same-conversation, clean folder* — no accuracy/step/waste change, ~+130
+    prompt tokens. Neutral-to-slightly-negative; clean synthetic tables don't
+    need a recipe.
+  - *Cross-session, messy folder* (session 1 corrects "rent"; a cold session 2
+    asks the total) — with the case-sensitivity flag in place, **all three
+    models go memory-on ✓ 100 % (7 350) vs memory-off ✗ 0 %**, for ~+180
+    prompt tokens. Each folds case and applies the carried
+    `IN ('rent','housing','mortgage')`. (gemma4 without the flag was ✗ 4 850 —
+    right synonyms, case-sensitive `IN` — so the flag is what closed it.)
+  Ships default-on: a fresh folder costs nothing, and it earns its tokens on
+  the cross-session messy-folder case it exists for, across frontier and floor
+  models.
+
 ### Measured, no change
 
 - **2026-09-07 · Prompt minimalism.** `prompt-ablation` on gemma4:31b: every

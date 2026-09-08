@@ -128,13 +128,79 @@ that's still open. Newest section last.
   change **buys correctness**, spend the tokens. And keep prompts permissive —
   no rigid step lock-step, no forbidding exploration; give room to reason.
 
-### Still open (decide from the eval)
+### v1 built (2026-09-08, branch `feat/folder-memory`)
 
+`engine::memory` — plain-text `memory.md` per folder, deterministic writer
+(verified query → recipe; correction → vocab note), semantic core in the
+prompt, empty for a fresh folder. `FELLA_MEMORY=0`/`ro`. Details:
+`FOLDER-MEMORY.md` §Implementation.
+
+`agent_eval memory` — two runs:
+- *same-conversation, clean folder* → no accuracy/step change, ~+130 tokens.
+- *cross-session, messy folder* (session 1 corrects "rent"; cold session 2 asks
+  the total) → **luna 0 % → 100 %** (carried correction becomes the right
+  `LOWER(cat) IN (…)` filter). gemma4 alone botched the case-fold; **with the
+  case-sensitivity flag (added 2026-09-08) gemma4 goes ✗ 4 850 → ✓ 7 350**.
+
+**"Can our memory system accurately convey ideas from previous sessions and
+apply them in new sessions?"** (2026-09-08)
+→ **Convey: yes** — the correction text crosses the session boundary intact.
+**Apply: yes on a capable model** (luna turns a loose note into the correct
+query), **partially on the `gemma4` floor** (it reads the note and moves in the
+right direction but mis-executes on case-inconsistent data — a SQL ceiling, not
+a memory failure).
+
+### Still open
+
+- **Close the `gemma4` gap** with more *actionable* notes: the deferred
+  end-of-session tidy pass turns "count HOUSING and mortgage as rent" +
+  observed categories into `rent → lower(cat) IN ('rent','housing','mortgage')`.
 - Core-block token budget vs. the prompt-minimalism finding — maybe the core is
   *only* vocabulary + preferences, with even the top recipes behind `recall()`.
 - `recall()` reliability on `gemma4` — does a weak model reach for it when it
-  should? If not, pre-inject the top-K instead.
+  should? If not, pre-inject the top-K instead. (`recall()` not built in v1.)
 - Recipe-match precision — a "2024 spend" recipe pulled for "2023 spend" and
   reused with the stale filter. How aggressively to genericise stored recipes.
 - Episodic log retention — how many sessions / how much before it rotates, and
-  whether the user ever sees it directly.
+  whether the user ever sees it directly. (Log written in v1, not read.)
+- The correction heuristic (`is_correction()` keyword match) — measure its
+  false-positive rate on real follow-ups before trusting it.
+
+---
+
+## Data quality (2026-09-08, prompted by the memory benchmark)
+
+- **"How often does case sensitivity actually matter in data and queries? Is it
+  worth forcing case-insensitivity, or too strict?"**
+  → *Forcing* it is too strict — it would break the rare case-significant column
+  (SKUs, codes, slugs) silently, and a silent rewrite is against "shows its
+  working". But for **Fella's domain** (personal data: category / status / type
+  / merchant labels) case is almost always data-entry noise — `Rent` = `rent` =
+  `RENT`. Direction: **surface, don't force.**
+  1. *Ingest / schema (remove-ambiguity).* Fella already counts distinct values
+     per column. When distinct-case-insensitive < distinct, flag it in the
+     schema block: `"cat" TEXT [mixed case: Rent / rent / HOUSING …]`. The model
+     then knows to `lower()`-fold. No rule, no rewrite.
+  2. *verify + `run_sql`.* `case_sensitive_label_filter`: a bare `= '…'` /
+     `IN (…)` on such a column that isn't `lower()`-wrapped gets an inline NOTE
+     mid-loop and a soft warning post-answer.
+  **DONE 2026-09-08.** On `agent_eval memory` (cross-session) it took gemma4
+  from ✗ 4 850 → ✓ 7 350 — folds case *and* keeps the carried memory correction.
+
+## External memory products (2026-09-08)
+
+- **"Supermemory — a FUSE filesystem mount where `grep` becomes semantic search,
+  a live `profile.md` synthesises context, any format auto-indexed, knowledge
+  graph + a custom user-understanding model. Worth considering?"**
+  → **No, not to adopt or depend on.** It conflicts with the constitution on
+  nearly every axis: a hosted "user-understanding model" is a second thing
+  leaving the machine (or a heavy local ML stack) vs. "one small binary, local
+  by default"; a writable FUSE mount is a new dependency + failure + permission
+  surface vs. "the folder is the boundary, read-only is the whole safety
+  story"; "grep → semantic search" is a ranked non-deterministic result you
+  can't re-run and check vs. Fella's literal-regex `grep_files`; a knowledge
+  graph is the "memory system" #42 explicitly isn't building. **The one
+  transferable idea** — a synthesised, human-readable `profile.md` — Fella
+  already has as `memory.md`, minus the ML layer. Worth watching as a reference
+  for the synthesised-profile pattern and the plain-`ls`/`cat`/`grep` ergonomic
+  (Fella's tools are already close). Not a direction.

@@ -19,7 +19,8 @@
 //!   model-ladder     battery across a model list, with $/100 answers
 //!   robustness       the trap battery (text amounts, totals row, mixed dates)
 //!   session-memory   turn-2 accuracy with the recent-turns block on vs off
-//!   all              accuracy + robustness + session-memory
+//!   memory           cold-run accuracy after priming, per-folder memory on vs off
+//!   all              accuracy + robustness + session-memory + memory
 //!
 //! Opts: --models "a,b,c"  --judge <model>  --iters N (default 1)
 //!       --only <id-substr>  --json <path>  --compare <old.json>
@@ -41,7 +42,7 @@ use fella_lib::engine::evidence::EvidenceItem;
 use fella_lib::engine::testkit::{
     self, Goldens, Messiness, TableGold, WorkspaceSpec,
 };
-use fella_lib::engine::{verify, AskEvent, EngineState};
+use fella_lib::engine::{memory, verify, AskEvent, EngineState};
 
 // --- what a correct answer looks like -------------------------------------
 
@@ -1079,6 +1080,170 @@ fn yn(b: bool) -> String {
     if b { "✓".into() } else { "✗".into() }
 }
 
+fn first_line(s: &str) -> String {
+    s.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("").to_string()
+}
+
+/// A deliberately messy one-file folder: cryptic column names, amounts as text,
+/// and a `cat` column whose rent shows up as `Rent` / `rent` / `HOUSING` /
+/// `mortgage` / `housing`. Returns (rent incl. housing+mortgage, literal-rent-only).
+fn write_messy_spend(dir: &Path) -> (f64, f64) {
+    std::fs::create_dir_all(dir).unwrap();
+    let rows: &[(&str, &str, &str)] = &[
+        ("2024-01-03", "\"$1,200.00\"", "Rent"),
+        ("2024-01-14", "45.20", "groceries"),
+        ("2024-02-03", "\"1,200\"", "HOUSING"),
+        ("2024-02-19", "88.10", "Groceries"),
+        ("2024-03-03", "1200", "mortgage"),
+        ("2024-03-11", "12.00", "transport"),
+        ("2024-04-03", "\"$1,250.00\"", "rent"),
+        ("2024-04-22", "52.00", "groceries"),
+        ("2024-05-03", "\"$1,250.00\"", "Rent"),
+        ("2024-05-18", "9.50", "transport"),
+        ("2024-06-03", "1250", "housing"),
+    ];
+    let mut s = String::from("txn_dt,amt,cat,memo\n");
+    for (d, a, c) in rows {
+        s.push_str(&format!("{d},{a},{c},\n"));
+    }
+    std::fs::write(dir.join("spend.csv"), s).unwrap();
+    let rent_all = 1200.0 + 1200.0 + 1200.0 + 1250.0 + 1250.0 + 1250.0;
+    let rent_literal = 1200.0 + 1250.0 + 1250.0;
+    (rent_all, rent_literal)
+}
+
+/// Per-folder memory, cross-session: in session 1 the user asks about rent and
+/// then *corrects* Fella ("housing and mortgage count as rent too"). Session 2
+/// is a **cold conversation** (memory is the only carry) that asks for total
+/// rent. Memory on should apply the correction and include housing+mortgage;
+/// memory off can only match the literal `rent` rows.
+async fn cmd_memory(
+    engine: &EngineState,
+    model: &str,
+    data_dir: &Path,
+    iters: usize,
+) -> Vec<CaseScore> {
+    set_model(engine, model);
+    let iters = iters.max(1);
+
+    let ws = std::env::temp_dir().join("fella-mem-bench");
+    let _ = std::fs::remove_dir_all(&ws);
+    let (rent_all, rent_literal) = write_messy_spend(&ws);
+    std::env::set_var("FELLA_MEMORY", "1");
+    let mem = memory::path_for(data_dir, &ws);
+    let _ = std::fs::remove_file(&mem);
+    let _ = std::fs::remove_file(mem.with_extension("episodes.jsonl"));
+    if engine.open_workspace(&ws).is_err() {
+        println!("(memory) could not open workspace");
+        return Vec::new();
+    }
+
+    // Session 1: look at the categories, then correct Fella's model of "rent".
+    let prime = "xs-prime";
+    engine.forget_conversation(prime);
+    let p1 = run_case(engine, prime, "what spending categories are in spend.csv?", None).await;
+    let p2 = run_case(
+        engine,
+        prime,
+        "actually, for rent totals count HOUSING and mortgage as rent too",
+        None,
+    )
+    .await;
+    println!("\n# Per-folder memory (cross-session)  \u{b7}  `{model}`   ({iters} iter(s))\n");
+    println!("_session 1, turn 1_: {}", first_line(&p1.text));
+    println!("_session 1, turn 2 (correction)_: {}", first_line(&p2.text));
+    println!("\n_learned `memory.md` after session 1:_\n```");
+    print!("{}", std::fs::read_to_string(&mem).unwrap_or_default());
+    println!("```\n");
+
+    let q = "what's my total rent spending in spend.csv?";
+    let gold = Gold::Approx(rent_all, 1.0);
+    let case = EvalCase {
+        id: "mem_cold",
+        category: "Aggregate",
+        question: q.to_string(),
+        gold: gold.clone(),
+        min_tools: 1,
+        reference: format!("You spent {rent_all:.2} on rent (rent + housing + mortgage)."),
+    };
+    println!(
+        "session 2 gold: {rent_all:.0} (rent+housing+mortgage); literal `rent` only = {rent_literal:.0}\n"
+    );
+    legend();
+    println!("| condition | cold correct | rate | close(det) | steps | in tok | out tok | sample answer |");
+    println!("|---|:-:|--:|--:|--:|--:|--:|---|");
+
+    let mut all = Vec::new();
+    // `ro`: read the primed memory, record nothing so every cold iteration is
+    // an identical first encounter (not one that benefits from the last).
+    for (label, on) in [("memory on", true), ("memory off", false)] {
+        std::env::set_var("FELLA_MEMORY", if on { "ro" } else { "0" });
+        let (mut oks, mut cd, mut steps) = (0usize, 0f32, 0usize);
+        let (mut ptok, mut ctok) = (0u64, 0u64);
+        let mut sample = String::new();
+        for it in 0..iters {
+            let conv = format!("xs-cold-{}-{it}", if on { "on" } else { "off" });
+            engine.forget_conversation(&conv);
+            let r = run_case(engine, &conv, q, None).await;
+            if grade(&r, &gold) {
+                oks += 1;
+            }
+            if it == 0 {
+                let sql: String = r
+                    .evidence
+                    .iter()
+                    .filter(|e| e.tool == "run_sql")
+                    .filter_map(|e| e.sql.as_deref())
+                    .next_back()
+                    .unwrap_or("(no sql)")
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                sample = format!(
+                    "{} — `{}`",
+                    first_line(&r.text).chars().take(60).collect::<String>(),
+                    sql.chars().take(120).collect::<String>()
+                );
+            }
+            cd += closeness_det(&r, &case);
+            steps += r.steps;
+            ptok += r.prompt_tok as u64;
+            ctok += r.completion_tok as u64;
+        }
+        std::env::set_var("FELLA_MEMORY", "1");
+        let n = iters as f32;
+        let correct = oks * 2 > iters;
+        println!(
+            "| {label} | {} | {:.0}% | {:.2} | {} | {} | {} | {sample} |",
+            yn(correct),
+            oks as f32 / n * 100.0,
+            cd / n,
+            steps / iters,
+            ptok / iters as u64,
+            ctok / iters as u64,
+        );
+        all.push(CaseScore {
+            id: format!("mem_cold_{}", if on { "on" } else { "off" }),
+            model: model.into(),
+            profile: label.into(),
+            correct,
+            correct_rate: oks as f32 / n,
+            iters,
+            closeness_det: cd / n,
+            closeness_judge: None,
+            waste: Waste::default(),
+            prompt_tok: (ptok / iters as u64) as u32,
+            completion_tok: (ctok / iters as u64) as u32,
+            total_s: 0.0,
+            first_tok_s: None,
+            steps: steps / iters,
+            hard_fail: false,
+            err: None,
+        });
+    }
+    all
+}
+
 // --- json out / compare -------------------------------------------
 
 fn write_json(path: &str, scores: &[CaseScore]) {
@@ -1206,14 +1371,18 @@ async fn main() {
         "model-ladder" => cmd_model_ladder(&engine, &cases, &models, judge, iters).await,
         "robustness" => cmd_robustness(&engine, &models[0], &ws, iters).await,
         "session-memory" => cmd_session_memory(&engine, &models[0], &g, iters).await,
+        "memory" => {
+            cmd_memory(&engine, &models[0], &data_dir, iters).await
+        }
         "all" => {
             let mut v = cmd_accuracy(&engine, &cases, &models, judge, iters).await;
             v.extend(cmd_robustness(&engine, &models[0], &ws, iters).await);
             v.extend(cmd_session_memory(&engine, &models[0], &g, iters).await);
+            v.extend(cmd_memory(&engine, &models[0], &data_dir, iters).await);
             v
         }
         other => {
-            eprintln!("unknown subcommand {other:?}. one of: accuracy prompt-ablation folder-scale model-ladder robustness session-memory all");
+            eprintln!("unknown subcommand {other:?}. one of: accuracy prompt-ablation folder-scale model-ladder robustness session-memory memory all");
             std::process::exit(2);
         }
     };
