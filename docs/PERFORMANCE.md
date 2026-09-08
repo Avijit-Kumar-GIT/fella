@@ -729,11 +729,43 @@ case regressed. grok stays 16/18: its baseline misses (`refusal` flaky,
   the `run_sql` text-column warning absorb it before the model has to reason
   about it.
 
-#### Still queued
+#### Older / cheaper models (2026-09-08, `model-ladder --iters 3`, frozen battery)
 
-- **Few-shot** deferred: ablation shows no prompt slack to trade for it.
-- **Older/cheaper models.** `model-ladder` down a dated list the point where
-  bad SQL/arithmetic (model decay) overtakes a correct refusal (tool ceiling).
+| model | acc | close(det) | waste/case | tok/correct | $/100 | mean wall s |
+|---|:-:|--:|--:|--:|--:|--:|
+| ollama-cloud/gemma4:31b | 10/18 | 0.66 | 0.50 | 32826 | n/a | 2.7 |
+| openai/gpt-4o-mini | 9/18 | 0.65 | 3.61 | 19744 | $2.89 | 3.8 |
+| openai/gpt-4.1-mini | 12/18 | 0.70 | 0.56 | 24433 | $12.34 | 4.2 |
+| xai/grok-3-mini | 18/18 | 0.81 | 2.67 | 13872 | n/a | 5.0 |
+| openai/gpt-5.6-luna | 16/18 | 0.83 | 0.11 | 11591 | $4.17 | 3.5 |
+
+The floor Fella refuses to regress is **`gemma4:31b`** (`harness-tuning`); the
+model most users will actually run is around **`luna`**'s intelligence. This run
+was not about either it deliberately steps *below* the floor — `gpt-4o-mini`
+and `gpt-4.1-mini`, older and cheaper than anything a real Fella user would pick
+— to find where the *model itself* decays versus where the *data* runs out.
+
+Run on a noisier day than the 2026-09-07 baseline (gemma 10/18 here vs 17-18/18
+there, same binary the ollama-cloud endpoint was flaky, `waste 0.50`, three
+timeouts). Read the *shape*, not the absolute rates:
+
+- **The decay cliff is below the floor.** `gpt-4o-mini` / `gpt-4.1-mini` sit
+  ~9-12/18 with waste 1.5-2 orders above the modern rows they burn calls
+  re-deriving schema and retrying bad SQL. `4o-mini` at **$2.89/100** is cheap
+  but its 3.6 wasted calls/case are the model, not the harness the tool loop
+  can't rescue an answer the model won't compute. `4.1-mini` is both worse
+  *and* 4x dearer. `gemma4:31b` its usual 17-18/18, ~0.2 waste sits well
+  above this cliff, so the floor has real headroom.
+- **Model decay vs tool ceiling.** The extra misses down here are decay
+  (arithmetic slips, malformed `run_sql`, ignored fold-warnings), not the data
+  hitting a wall the same battery is 16-18/18 on every 2025-H2+ model. Nothing
+  to fix in the harness this just marks how far the model can fall before the
+  harness stops carrying it.
+- **`grok-3-mini` is the surprise** 18/18, but 2.67 waste/case and 5s wall
+  it gets there by brute force. `luna` remains the reference: fewest tokens,
+  near-zero waste, correct and it's where the typical user sits.
+
+**Few-shot** stays deferred: ablation shows no prompt slack to trade for it.
 
 ---
 
@@ -788,18 +820,77 @@ shortcut, or a native folder dialog.
 - **Login's 5× range** (1 → ~5) is entirely inline-vs-menu discovery.
 - **The command palette doesn't complete anything** it pre-fills the composer.
 
-### Metrics to capture (not yet measured)
+### Metrics tracked per release (#47)
 
-| metric | how | status |
-|---|---|---|
-| keypress → render p95 (per TUI interaction) | instrument the Svelte components; log like `appReady` ms already is | **not captured** |
-| `appReady` ms distribution | already `console.info`'d in `+page.svelte`; collect + record a baseline | logged, not recorded |
-| installed binary size, per release | `ls -l` the bundle in `RELEASE.md` checklist; track the delta | **not tracked** |
-| agent-loop latency (`total` / `first_token` / model-vs-tool) | `agent_bench` | recorded (see `agent_bench` baseline above) |
+`scripts/measure.sh` already collects sizes, dependency counts, cold-start time
+and idle memory and **appends the results here under a dated heading**. Run it
+in the pre-flight gate (`RELEASE.md` §1) every release and eyeball the delta
+against the previous run. Reference point (`main` @ `ea8d883`, 2026-09-08, this
+machine, default features `pdf`+`xlsx`+`mcp`):
+
+| metric | value | source |
+|---|--:|---|
+| **`fella` binary, fully stripped (the reported number)** | **16,872,936 B (16.09 MiB)** | `strip -s` then `stat` |
+| `fella` binary, as-shipped (`cargo build --release`, `strip=debuginfo`) | 20,000,184 B (19.07 MiB) | `stat -c%s src-tauri/target/release/fella` |
+| `.text` (machine code) | 16,154,475 B (15.4 MiB) | `size` |
+| unique crates (runtime) / direct deps | 386 / 25 | `cargo tree -e normal` |
+| frontend bundle, all JS gzipped | 66 KB | `find build -name '*.js' \| gzip \| wc -c` |
+| `.deb` installer | 7,711,452 B (7.35 MiB) at `edba382`; not re-measured since | `pnpm tauri build` |
+| release profile | `lto=thin`, `codegen-units=1`, `panic=abort`, `strip=debuginfo` | `Cargo.toml`; `release-min` (`opt-level=z`, `lto=fat`, full strip) exists for a squeeze |
+| agent-loop latency | see `agent_bench` baseline above + `mean wall s` in the model tables | `agent_bench` / `agent_eval` |
+| cold start (`appReady` ms) | **still not captured** — the webview doesn't render under this WSL shell, so `onMount → app_ready` never fires; needs a real display (`RELEASE.md` §1) | `+page.svelte` logs it; `commands::app_ready` prints to stderr |
+
+### Metrics timeline
+
+One row per measured point, oldest first — the source for a fella-web changelog
+graph. **The reported size is "stripped"** — fully stripped, no separate debug
+file, the fair analogue of a single-binary tool's headline number (fx-style:
+"fella binary is X% smaller, current N MiB"). "ships" = what `cargo build
+--release` emits (`strip=debuginfo`, keeps a symbol table on purpose), tracked
+alongside. Blank = not measured at that commit (release tags weren't
+re-measured — the numbers move with dependencies and features, not version
+bumps). Bytes where known.
+
+| date | commit | milestone | binary ships | binary stripped | crates | JS gz | `.deb` |
+|---|---|---|--:|--:|--:|--:|--:|
+| 2026-08-26 | `d057220` | DuckDB default (pre-migration) | 67 MB | 54 MB | 359 | 39 KB | |
+| 2026-08-27 | `6f849bf` | **SQLite becomes the default** | 18,321,976 | 11,529,928 | 336 | 39 KB | |
+| 2026-08-28 | `d0dd675` | | 18,391,888 | 11,583,240 | 337 | 41 KB | |
+| 2026-08-30 | `67c3508` | **+`pdf` +`xlsx` +`mcp`** built in | 24,396,568 | 16,525,672 | 385 | 60 KB | |
+| 2026-09-03 | `edba382` | v0.1 pre-flight; `strip=debuginfo` set | 19,828,968 | 16,935,016 | 386 | ~60 KB | 7,711,452 |
+| 2026-09-04 | `cfca646` | **v0.1.0** — first public build | | | | | |
+| 2026-09-05 | `0b79a9b` | **v0.1.3** — Windows `/update` fix | | | | | |
+| 2026-09-06 | `a22f833` | **v0.1.4** — provider-connection patch | | | | | |
+| 2026-09-08 | `ea8d883` | `main`: per-folder memory, case-sensitivity flag | 20,000,184 | 16,872,936 | 386 | 66 KB | |
+
+Reading it: the DuckDB→SQLite migration cut the shipped binary **67→18 MB** and
+crates **359→336**; adding `pdf`+`xlsx`+`mcp` put ~5 MB and ~48 crates back
+(`67c3508`); **flat since** — four patch releases moved the fully-stripped
+binary by −62 KB (−0.4%). Frontend JS grew 39→66 KB, all of it the markdown
+renderer added at `67c3508`.
+
+Agent-loop scores (frozen 18-case battery, `agent_eval`; only exists from
+2026-09-07):
+
+| date | ref | gemma4:31b acc / tok-per-correct | luna acc / tok-per-correct | what changed |
+|---|---|--:|--:|---|
+| 2026-09-07 | baseline | 17/18 · 4249 | 17/18 · 3333 | first frozen-battery run |
+| 2026-09-07 | after | 18/18 · 3650 (−14%) | 18/18 · 3175 (−3%) | empty-aggregate spelled out; 3 verify-precision fixes |
+| 2026-09-08 | `#46` branch | 17/18 · 4212 | 18/18 · 3410 | `inspect_table` merge (5 sample rows by default vs 3) — token win clawed back, +1 case on luna sticks |
+
+**The one real gap: per-interaction latency** (keypress → next paint for menu
+open, completion accept, tab switch, submit). Not measured — and deliberately
+not built yet: nobody's reported the UI as laggy, and a keystroke-timing
+harness for a small local Svelte app is speculative. Add it only if the app
+starts to feel slow.
 
 ### Log
 
-- **2026-09-08** — first interaction-cost trace (above). Issues **#44–47**
-  opened. **#44 shipped** (last folder reopens on start). Still open: #45
-  mid-run steer, #46 merge the inspect tools, #47 latency + binary-size
-  metrics.
+- **2026-09-08** — first interaction-cost trace (above). `#44` shipped (last
+  folder reopens on start); `#45` shipped (mid-run steer). `#47` = this
+  section: track `measure.sh` numbers per release; per-interaction latency
+  left as YAGNI. `#46` (merge the inspect tools) still open.
+- **2026-09-08** — re-measured binary size on `main` @ `ea8d883`: 20,000,184 B
+  ships / 16,872,936 B stripped, flat vs the `edba382` pre-flight (−0.4%
+  stripped). Added the metrics timeline above. Cold start still unmeasurable
+  under WSL (no webview render) — deferred to a real-display RC smoke test.
