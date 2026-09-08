@@ -605,3 +605,132 @@ Run against **local** Ollama still not captured the numbers above are a
 hosted-cloud model over the network, not the "local, private (default)" path
 most users will actually run. Worth a second row here once measured on a real
 machine with local Ollama and a comparable model size.
+
+### `agent_eval` the scored harness
+
+`agent_bench` times the loop; **`agent_eval` scores it** correctness,
+answer-closeness, wasted tool calls, tokens per correct answer and sweeps
+that across prompt ablations, folder sizes and models. Dev-only, behind the
+`eval` Cargo feature, never run in CI.
+
+```
+cd src-tauri
+AGENT_EVAL_DATA_DIR=/path/to/copied/data-dir \
+  cargo run --release --features eval --example agent_eval -- <subcommand> [opts]
+```
+
+Subcommands: `accuracy`, `prompt-ablation`, `folder-scale`, `model-ladder`,
+`robustness`, `session-memory`, `all`. Opts: `--models "a,b,c"`,
+`--judge <model>` (opt-in LLM rubric on top of the deterministic closeness
+score), `--only <id-substr>`, `--json <path>`, `--compare <old.json>` (Δ acc
+/ tokens vs a prior run the "did my change help" answer).
+
+A `--models` entry is a bare model on the configured provider, or
+`provider/model` to switch provider too so one run can compare across
+providers if the data dir's `auth.json` has each key:
+
+```
+--models "ollama-cloud/gemma4:31b,openai/gpt-5.6-luna,xai/grok-4.3"
+```
+
+Fixtures are deterministic (`engine::testkit`), so the golden answers are
+exact. The grader matches the answer's **headline figure(s)** within
+tolerance; multi-row tables and prose are not parsed. "number present" can
+false-pass if the model prints the right value for the wrong reason
+acceptable for a local dev tool.
+
+The ~18-case battery spans question kinds, not just spending: a single
+aggregate, a filter, min/max, a top-N group, a time-series month, a rounded
+ratio, a two-figure multi-step, a `parse_num` trap (AVG over text amounts), a
+cross-file total, a **non-financial** table (`workouts.csv`), two document
+questions, an honest empty result (a category with no rows), a
+needs-no-tool definition, and a must-decline "how much will I spend next
+month".
+
+**Methodology the battery is frozen.** The `EvalCase` list and every `gold`
+value are the spec of what a good answer is you don't edit a case or its
+expectation to make a number move (that's teaching to the test). A grader
+(`grade()`) fix needs a trace of the model's actual behaviour and an argument
+that it makes the grader match ground truth. Improve Fella against the
+baseline, not the baseline against Fella.
+
+#### Baseline 2026-09-07 (frozen battery, 18 cases, `--iters 5`)
+
+`model-ladder --models "ollama-cloud/gemma4:31b,openai/gpt-5.6-luna,xai/grok-4.3" --iters 5`
+
+| model | acc | close(det) | waste/case | tok/correct | $/100 | mean wall s |
+|---|:-:|--:|--:|--:|--:|--:|
+| ollama-cloud/gemma4:31b | 17/18 | 0.84 | 0.17 | 4249 | n/a | 1.5 |
+| openai/gpt-5.6-luna | 17/18 | 0.84 | 0.00 | 3333 | $1.28 | 2.0 |
+| xai/grok-4.3 | 16/18 | 0.80 | 0.06 | 4550 | $9.21 | 2.9 |
+
+Read: three different models land within one case of each other on a frozen
+battery, so headline accuracy has little room to move the harness work is
+about holding that accuracy while cutting tokens and wasted calls, and about
+where it breaks (folder scale, older models, traps). `luna` is the reference
+row cheapest priced, zero waste, fewest tokens. Every harness change from
+here is `--compare`d against this file's JSON (`/tmp/baseline.json`).
+
+#### After 2026-09-07 (same frozen battery, `--compare` vs the baseline above)
+
+| model | iters | acc | close(det) | waste/case | tok/correct | Δ tok/correct |
+|---|:-:|:-:|--:|--:|--:|--:|
+| ollama-cloud/gemma4:31b | 5 | 18/18 | 0.85 | 0.00 | 3650 | **−14%** |
+| openai/gpt-5.6-luna | 5 | 18/18 | 0.87 | 0.00 | 3175 | −3% |
+| xai/grok-4.3 | 3 | 16/18 | 0.82 | 0.06 | 4544 | ≈0 |
+
+Per-case correctness is unchanged everywhere except `time_series` (a grader
+fix all three models compute the right month, some render it "2021-11"). No
+case regressed. grok stays 16/18: its baseline misses (`refusal` flaky,
+`max_txn` low closeness) are unchanged and model-side, not harness.
+
+**What moved it**
+
+- **`run_sql` spells out an empty aggregate.** A `SUM`/`AVG` over no matching
+  rows is one all-NULL row, which rendered as a blank cell; a smaller model
+  read that as a failed query and fired 2-3 more calls to check the category
+  existed. The tool result now says "nothing matched an empty SUM/COUNT is
+  0". `empty_cat` on gemma: **4 tool calls → 1, ~10.3K tokens → ~3.9K**, still
+  correct. It was luna's one baseline miss; now fixed. Smaller win on grok.
+- **Three `verify.rs` precision fixes.** Making the self-check *actionable*
+  (the corrective re-ask) turned three long-standing imprecisions from
+  harmless fold-warnings into re-asks that cost a model call each: (a) a NULL
+  aggregate isn't the number 0, (b) a float `SUM` re-serialises with a low bit
+  different on re-run, (c) a digit inside an identifier (`txns_00`) was read
+  as a stated figure. Each fixed the fold shows fewer bogus warnings now too.
+- **The corrective re-ask is narrowed to the re-run checks.** Measured across
+  all three models, triggering it on the fuzzy "a figure appears in no result"
+  check was net-negative: on grok it turned a correct "≈18%" into the raw
+  ratio `0.176…` (grounded, but wrong and unreadable), and it caused every
+  false positive above. It now fires only on "different result now" / "no
+  longer runs" a query that demonstrably changed, where "restate to match the
+  re-run" is a safe tool-free fix. On a read-only workspace that's basically
+  never, so the re-ask is effectively a dormant net rather than a live cost.
+- **Prompt minimalism: tested, no change.** `prompt-ablation` on gemma every
+  section above the core rules + schema either loses a case
+  (`background_rule`), drives a shipped feature (`note_rule` the activity
+  display), or is under-tested by the battery (`docs_rule`). Dropping the
+  schema's sample rows sends waste from 0 to 11 (the model re-discovers what
+  it was told). The shipped prompt is already at its Pareto point here.
+
+**Where it holds (measured 2026-09-07, gemma4:31b, no action needed)**
+
+- **Folder size.** `folder-scale` 1 → 120 tables: accuracy is flat at 18/18
+  through **40 tables**, easing to 17–16/18 at 120. The step cap is never hit;
+  first-token latency doesn't move. Past ~13 tables the schema block drops to
+  names-only and the model peeks columns legitimately (the "waste" column
+  jumps but those calls are real). The **adaptive `num_ctx` floor carries the
+  top end**: at 120 tables it's 17/18 vs `fixed 8192`'s 16/18 with half the
+  peeking. `trim_history` by token budget is *not* warranted nothing shows
+  history bloat causing a miss.
+- **Messy data.** `robustness` text-formatted amounts (`$1,200`), a trailing
+  totals row, mixed date formats, cumulative: **6/6 at every level**,
+  closeness 0.91. The ingest-time coercion (`parse_num`, totals-row drop) and
+  the `run_sql` text-column warning absorb it before the model has to reason
+  about it.
+
+#### Still queued
+
+- **Few-shot** deferred: ablation shows no prompt slack to trade for it.
+- **Older/cheaper models.** `model-ladder` down a dated list the point where
+  bad SQL/arithmetic (model decay) overtakes a correct refusal (tool ceiling).

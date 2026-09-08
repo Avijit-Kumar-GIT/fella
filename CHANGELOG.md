@@ -6,6 +6,34 @@ All notable changes to Fella are recorded here. Format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **Fella won't forecast.** The "if the files can't answer, say so" rule now
+  spells out that a question about the future ("next month", "will I", "how
+  much will") has no answer in past records the model says so instead of
+  computing an average and presenting it as a projection. (Found by the new
+  agent-eval harness: one model was doing exactly that.)
+- **A stale figure now gets one shot at a fix.** When the deterministic
+  verification pass re-runs a query behind the answer and gets a *different
+  result*, Fella spends one tool-free turn asking the model to restate its
+  answer to match the re-run, then re-checks. Still no number comes from the
+  model itself; the pass is still deterministic. (It does *not* re-ask over the
+  fuzzier "this number isn't in a result" check that one stays a warning in
+  the fold, because a tool-free reconcile there tends to mangle a correct
+  answer.) Set `FELLA_VERIFY_REASK=0` to turn it off.
+- **An empty total reads as "0", not a failed query.** A `SUM`/`AVG`/`MIN`/`MAX`
+  over rows that matched nothing used to come back as a blank cell; some models
+  read that as "the query broke" and ran two or three more to double-check the
+  category exists. The result now says plainly that nothing matched and an
+  empty sum or count is 0. On one measured model a "how much did I spend on X"
+  where the answer is zero went from four queries to one.
+- **Fewer false alarms in the self-check.** The verification fold no longer
+  flags: a correct "0" answer backed by an empty aggregate; a floating-point
+  total that re-serialises with a last-digit difference when re-run; a number
+  that's actually part of a filename (`txns_00`). These were always cosmetic,
+  but with the new corrective re-ask a false alarm now costs a model call, so
+  they're fixed.
+
 ## [0.1.4]
 
 ### Added

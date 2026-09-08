@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::engine::error::{EngineError, EngineResult};
-use crate::engine::evidence::{Answer, AskEvent, EvidenceItem};
+use crate::engine::evidence::{Answer, AskEvent, EvidenceItem, Usage, VerificationCheck};
 use crate::engine::llm::{ChatMessage, LlmClient, ToolCall};
 use crate::engine::state::EngineState;
 use crate::engine::tools::Registry;
@@ -42,7 +42,13 @@ pub async fn run(
     let user_context = engine.user_context();
     let schema = engine.schema_block();
     let recent = engine.session_block(conversation_id);
-    let mut sys = system_prompt(&catalog, &user_context, &schema, recent.as_deref());
+    let mut sys = system_prompt(
+        &PromptProfile::from_env(),
+        &catalog,
+        &user_context,
+        &schema,
+        recent.as_deref(),
+    );
     if registry.has_mcp() {
         sys.push_str(
             "\nSome tools are named `connector__tool` these reach an outside service \
@@ -81,6 +87,7 @@ you did not get from a tool.\n",
     let run_start = Instant::now();
     let mut model_calls = 0usize;
     let mut tool_calls_total = 0usize;
+    let mut usage: Option<Usage> = None;
     let steps = max_steps();
     for step in 0..steps {
         log::info!("agent step {}/{steps}", step + 1);
@@ -102,14 +109,16 @@ you did not get from a tool.\n",
                              Here's what I gathered so far."
                         ),
                         evidence,
-                        emit,
-                    ));
+                        usage,
+                    emit,
+));
                 }
                 Err(e) => return Err(e),
             },
-            _ = cancelled(cancel) => return Ok(stopped(engine, evidence, emit)),
+            _ = cancelled(cancel) => return Ok(stopped(engine, evidence, usage, emit)),
         };
         model_calls += 1;
+        usage = Usage::merge(usage, resp.usage);
 
         if resp.tool_calls.is_empty() {
             log::info!(
@@ -119,14 +128,40 @@ you did not get from a tool.\n",
             );
             // A model that returns neither text nor a tool call would otherwise
             // leave a blank reply. Give the user something to act on.
-            let text = if resp.content.trim().is_empty() && evidence.is_empty() {
+            let mut text = if resp.content.trim().is_empty() && evidence.is_empty() {
                 "The model returned an empty reply. Try rephrasing the question, or switch model \
                  with /model."
                     .to_string()
             } else {
                 resp.content
             };
-            return Ok(finish(engine, text, evidence, emit));
+            let mut checks = verify::run(engine, &text, &evidence);
+            // One tool-free corrective turn when a cited query re-runs to a
+            // different result (or no longer runs). The value the model
+            // reconciles against comes from that re-run, so the answer stays
+            // checkable. Only the re-run checks trigger this a fuzzier
+            // "figure appears in no result" is left as a fold warning, since a
+            // tool-free reconcile there tends to degrade a correct answer.
+            // `FELLA_VERIFY_REASK=0` opts out.
+            if reask_enabled() && !evidence.is_empty() && !cancel.load(Ordering::Relaxed) {
+                if let Some(detail) = verify::rerun_regression(&checks) {
+                    messages.push(ChatMessage::User(format!(
+                        "Self-check: {detail}. Re-running the query behind your answer gives a \
+different result now. Using only what you've already gathered no new tools give the \
+corrected answer to match the re-run."
+                    )));
+                    let r = tokio::select! {
+                        r = llm.chat(&messages, &[], &notify, &on_delta) => r.unwrap_or_default(),
+                        _ = cancelled(cancel) => Default::default(),
+                    };
+                    usage = Usage::merge(usage, r.usage);
+                    if !r.content.trim().is_empty() {
+                        text = r.content;
+                        checks = verify::run(engine, &text, &evidence);
+                    }
+                }
+            }
+            return Ok(finish_with(text, evidence, usage, checks, emit));
         }
         tool_calls_total += resp.tool_calls.len();
 
@@ -216,7 +251,7 @@ not run again. Its result is repeated below - use it, refine the call, or give y
         }
 
         if cancel.load(Ordering::Relaxed) {
-            return Ok(stopped(engine, evidence, emit));
+            return Ok(stopped(engine, evidence, usage, emit));
         }
         trim_history(&mut messages);
         log::info!(
@@ -239,9 +274,10 @@ you're not confident, say so plainly rather than guessing."
     ));
     let resp = tokio::select! {
         r = llm.chat(&messages, &[], &notify, &on_delta) => r.unwrap_or_default(),
-        _ = cancelled(cancel) => return Ok(stopped(engine, evidence, emit)),
+        _ = cancelled(cancel) => return Ok(stopped(engine, evidence, usage, emit)),
     };
     model_calls += 1;
+    usage = Usage::merge(usage, resp.usage);
     let text = if resp.content.trim().is_empty() {
         "I ran out of analysis steps before reaching a confident answer.".to_string()
     } else {
@@ -252,21 +288,39 @@ you're not confident, say so plainly rather than guessing."
         run_start.elapsed(),
         evidence.len()
     );
-    Ok(finish(engine, text, evidence, emit))
+    Ok(finish(engine, text, evidence, usage, emit))
 }
 
 fn stopped(
     engine: &EngineState,
     evidence: Vec<EvidenceItem>,
+    usage: Option<Usage>,
     emit: &(dyn Fn(AskEvent) + Send + Sync),
 ) -> Answer {
-    finish(engine, "Stopped.".to_string(), evidence, emit)
+    finish(engine, "Stopped.".to_string(), evidence, usage, emit)
+}
+
+/// The corrective re-ask fires unless `FELLA_VERIFY_REASK=0`.
+fn reask_enabled() -> bool {
+    !matches!(std::env::var("FELLA_VERIFY_REASK").as_deref(), Ok("0"))
 }
 
 fn finish(
     engine: &EngineState,
     text: String,
     evidence: Vec<EvidenceItem>,
+    usage: Option<Usage>,
+    emit: &(dyn Fn(AskEvent) + Send + Sync),
+) -> Answer {
+    let checks = verify::run(engine, &text, &evidence);
+    finish_with(text, evidence, usage, checks, emit)
+}
+
+fn finish_with(
+    text: String,
+    evidence: Vec<EvidenceItem>,
+    usage: Option<Usage>,
+    verification: Vec<VerificationCheck>,
     emit: &(dyn Fn(AskEvent) + Send + Sync),
 ) -> Answer {
     log::info!(
@@ -274,11 +328,11 @@ fn finish(
         text.len(),
         evidence.len()
     );
-    let verification = verify::run(engine, &text, &evidence);
     let answer = Answer {
         text,
         evidence,
         verification,
+        usage,
     };
     emit(AskEvent::AnswerDone {
         answer: answer.clone(),
@@ -397,7 +451,82 @@ fn tool_error(
     )
 }
 
+/// Which sections of the system prompt to emit. `PromptProfile::full()` is the
+/// prompt Fella ships; the eval harness flips flags to measure what each
+/// section is worth. `core_rules` gates the three load-bearing rules
+/// (never-untooled-figure, figures-only + shape, prefer-`run_sql`).
+#[derive(Debug, Clone, Copy)]
+pub struct PromptProfile {
+    pub persona: bool,
+    pub core_rules: bool,
+    pub plan_rule: bool,
+    pub parallel_rule: bool,
+    pub stop_early_rule: bool,
+    pub dialect_rule: bool,
+    pub python_rule: bool,
+    pub docs_rule: bool,
+    pub refuse_rule: bool,
+    pub background_rule: bool,
+    pub note_rule: bool,
+    pub user_context: bool,
+    pub schema: bool,
+    pub session_block: bool,
+}
+
+impl PromptProfile {
+    /// `full()`, minus any section named (comma-separated) in `FELLA_PROMPT_DROP`
+    /// the eval harness's prompt-minimalism ablation sets this per run. Unset
+    /// (the normal case) is exactly `full()`. Unknown names are ignored.
+    pub fn from_env() -> Self {
+        let mut p = Self::full();
+        let Ok(drop) = std::env::var("FELLA_PROMPT_DROP") else {
+            return p;
+        };
+        for name in drop.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+            match name {
+                "persona" => p.persona = false,
+                "core_rules" => p.core_rules = false,
+                "plan_rule" => p.plan_rule = false,
+                "parallel_rule" => p.parallel_rule = false,
+                "stop_early_rule" => p.stop_early_rule = false,
+                "dialect_rule" => p.dialect_rule = false,
+                "python_rule" => p.python_rule = false,
+                "docs_rule" => p.docs_rule = false,
+                "refuse_rule" => p.refuse_rule = false,
+                "background_rule" => p.background_rule = false,
+                "note_rule" => p.note_rule = false,
+                "user_context" => p.user_context = false,
+                "schema" => p.schema = false,
+                "session_block" => p.session_block = false,
+                _ => log::warn!("FELLA_PROMPT_DROP: unknown section {name:?}"),
+            }
+        }
+        p
+    }
+
+    /// Exactly the prompt Fella ships today.
+    pub fn full() -> Self {
+        Self {
+            persona: true,
+            core_rules: true,
+            plan_rule: true,
+            parallel_rule: true,
+            stop_early_rule: true,
+            dialect_rule: true,
+            python_rule: true,
+            docs_rule: true,
+            refuse_rule: true,
+            background_rule: true,
+            note_rule: true,
+            user_context: true,
+            schema: true,
+            session_block: true,
+        }
+    }
+}
+
 fn system_prompt(
+    profile: &PromptProfile,
     catalog: &Catalog,
     user_context: &[String],
     schema: &str,
@@ -405,43 +534,115 @@ fn system_prompt(
 ) -> String {
     let dialect = if cfg!(feature = "duckdb") { "DuckDB" } else { "SQLite" };
     let steps = max_steps();
-    let mut p = format!(
-        "You are Fella, a careful data analyst. You answer questions about the \
-user's local files by calling tools that run real computations.\n\n\
-Rules:\n\
-- Never state a figure (number, total, count, date range, trend) you did not \
+    let mut p = String::new();
+
+    if profile.persona {
+        p.push_str(
+            "You are Fella, a careful data analyst. You answer questions about the \
+user's local files by calling tools that run real computations.\n\n",
+        );
+    }
+
+    // Rules, in the shipped order; `core_rules` gates the non-contiguous set.
+    let mut rules: Vec<String> = Vec::new();
+    if profile.core_rules {
+        rules.push(
+            "Never state a figure (number, total, count, date range, trend) you did not \
 get from a tool result. A question that asks for a total, count, average, \
 share, min/max, or \"how much / how many\" ALWAYS needs a run_sql call; the \
-sample rows below are not enough to compute one.\n\
-- Answer with only the figures a tool returned. Don't add row counts, rounded \
+sample rows below are not enough to compute one."
+                .into(),
+        );
+        rules.push(
+            "Answer with only the figures a tool returned. Don't add row counts, rounded \
 or approximate numbers, or restate the query; the evidence panel shows the \
 working. Lead with the answer; keep it to a sentence or two, or a small table \
-only when it genuinely helps.\n\
-- Before your first tool call, write one short plain sentence of what you're \
-about to do, then make the call(s) in the same reply.\n\
-- Prefer run_sql. Each table below shows its columns, types and sample rows, \
+only when it genuinely helps."
+                .into(),
+        );
+    }
+    if profile.plan_rule {
+        rules.push(
+            "Before your first tool call, write one short plain sentence of what you're \
+about to do, then make the call(s) in the same reply."
+                .into(),
+        );
+    }
+    if profile.core_rules {
+        rules.push(
+            "Prefer run_sql. Each table below shows its columns, types and sample rows, \
 usually enough to query directly. Use describe_schema or sample_rows only for \
-something you can't see below.\n\
-- Independent lookups go in one reply as several tool calls; they run together.\n\
-- Stop as soon as you can answer. Most questions are one or two run_sql calls; \
-you have at most {steps} tool-calling steps, so don't wander past the question.\n\
-- {dialect} SQL, one SELECT / WITH per call. Dates are ISO-8601 text, so use \
-strftime()/date() (e.g. strftime('%Y-%m', d)).\n\
-- run_python for stats SQL can't do (median, correlation, regression); it has \
-a sql() helper.\n\
-- Documents (notes, PDFs) are already listed below with their names and first \
+something you can't see below."
+                .into(),
+        );
+    }
+    if profile.parallel_rule {
+        rules.push(
+            "Independent lookups go in one reply as several tool calls; they run together.".into(),
+        );
+    }
+    if profile.stop_early_rule {
+        rules.push(format!(
+            "Stop as soon as you can answer. Most questions are one or two run_sql calls; \
+you have at most {steps} tool-calling steps, so don't wander past the question."
+        ));
+    }
+    if profile.dialect_rule {
+        rules.push(format!(
+            "{dialect} SQL, one SELECT / WITH per call. Dates are ISO-8601 text, so use \
+strftime()/date() (e.g. strftime('%Y-%m', d))."
+        ));
+    }
+    if profile.python_rule {
+        rules.push(
+            "run_python for stats SQL can't do (median, correlation, regression); it has \
+a sql() helper."
+                .into(),
+        );
+    }
+    if profile.docs_rule {
+        rules.push(
+            "Documents (notes, PDFs) are already listed below with their names and first \
 line, so don't call list_files for them. For a question about their content, \
 call read_file directly (pass `names: [...]` to read several at once); they are \
-short. Use grep_files only to locate one specific term across many documents.\n\
-- If the files can't answer a data question, say so plainly; don't guess.\n\
-- A definition or plain \"what does X mean\" needs no tool. You may add one \
+short. Use grep_files only to locate one specific term across many documents."
+                .into(),
+        );
+    }
+    if profile.refuse_rule {
+        rules.push(
+            "If the files can't answer, say so plainly don't guess, forecast, or project. \
+A question about the future (\"next month\", \"will I\", \"how much will\") has no answer \
+in past records; say so instead of estimating one."
+                .into(),
+        );
+    }
+    if profile.background_rule {
+        rules.push(
+            "A definition or plain \"what does X mean\" needs no tool. You may add one \
 confident sentence of general background on its own line starting with \
-`Background:`, with no specific figures in it. If unsure, say so.\n\
-- You may pass a short `note` (4-8 plain words) on a tool call for the activity \
-display, e.g. \"Add up spending by month\".\n\n"
-    );
+`Background:`, with no specific figures in it. If unsure, say so."
+                .into(),
+        );
+    }
+    if profile.note_rule {
+        rules.push(
+            "You may pass a short `note` (4-8 plain words) on a tool call for the activity \
+display, e.g. \"Add up spending by month\"."
+                .into(),
+        );
+    }
+    if !rules.is_empty() {
+        p.push_str("Rules:\n");
+        for r in &rules {
+            p.push_str("- ");
+            p.push_str(r);
+            p.push('\n');
+        }
+        p.push('\n');
+    }
 
-    if !user_context.is_empty() {
+    if profile.user_context && !user_context.is_empty() {
         p.push_str(
             "Your context, written by the user (fella.md) and any skills they enabled. \
 Use it for the user's vocabulary, how their files are organised, and caveats to \
@@ -463,11 +664,15 @@ apply. It is background, not data: never take a figure from it.\n",
         }
     }
 
-    p.push_str(schema);
+    if profile.schema {
+        p.push_str(schema);
+    }
 
-    if let Some(recent) = recent {
-        p.push('\n');
-        p.push_str(recent);
+    if profile.session_block {
+        if let Some(recent) = recent {
+            p.push('\n');
+            p.push_str(recent);
+        }
     }
 
     p
@@ -490,14 +695,96 @@ mod tests {
     fn prompt_carries_schema_and_recent_turns() {
         let schema = "Tables (columns and types shown; use sample_rows for values):\n  ledger  (12 rows)\n    \"Amount Paid\" REAL  [coerced]\n";
         let recent = "Earlier in this conversation (reuse what still applies):\n- Q: \"total?\"  A: \"$4,850\"\n  used: SELECT SUM(\"Amount Paid\") FROM ledger\n";
-        let p = system_prompt(&open_catalog(), &[], schema, Some(recent));
+        let full = PromptProfile::full();
+        let p = system_prompt(&full, &open_catalog(), &[], schema, Some(recent));
         assert!(p.contains("\"Amount Paid\" REAL  [coerced]"));
         assert!(p.contains("Earlier in this conversation"));
         assert!(p.contains("SELECT SUM(\"Amount Paid\") FROM ledger"));
 
         // No recent block on the first turn.
-        let p0 = system_prompt(&open_catalog(), &[], schema, None);
+        let p0 = system_prompt(&full, &open_catalog(), &[], schema, None);
         assert!(!p0.contains("Earlier in this conversation"));
+    }
+
+    #[test]
+    fn prompt_drop_env_clears_named_sections() {
+        std::env::set_var("FELLA_PROMPT_DROP", "persona, docs_rule ,session_block");
+        let p = PromptProfile::from_env();
+        std::env::remove_var("FELLA_PROMPT_DROP");
+        assert!(!p.persona && !p.docs_rule && !p.session_block);
+        assert!(p.core_rules && p.schema, "unnamed sections stay");
+    }
+
+    /// `PromptProfile::full()` must render byte-for-byte the prompt Fella
+    /// shipped before the section split any drift is a silent behaviour change.
+    #[test]
+    fn full_profile_matches_the_shipped_prompt() {
+        let schema = "Tables:\n  ledger  (12 rows)\n";
+        let recent = "Earlier in this conversation (reuse what still applies):\n- Q: \"x\"  A: \"y\"\n";
+        let got = system_prompt(
+            &PromptProfile::full(),
+            &open_catalog(),
+            &["amounts are GBP".to_string()],
+            schema,
+            Some(recent),
+        );
+        let expected = format!(
+            "You are Fella, a careful data analyst. You answer questions about the \
+user's local files by calling tools that run real computations.\n\n\
+Rules:\n\
+- Never state a figure (number, total, count, date range, trend) you did not \
+get from a tool result. A question that asks for a total, count, average, \
+share, min/max, or \"how much / how many\" ALWAYS needs a run_sql call; the \
+sample rows below are not enough to compute one.\n\
+- Answer with only the figures a tool returned. Don't add row counts, rounded \
+or approximate numbers, or restate the query; the evidence panel shows the \
+working. Lead with the answer; keep it to a sentence or two, or a small table \
+only when it genuinely helps.\n\
+- Before your first tool call, write one short plain sentence of what you're \
+about to do, then make the call(s) in the same reply.\n\
+- Prefer run_sql. Each table below shows its columns, types and sample rows, \
+usually enough to query directly. Use describe_schema or sample_rows only for \
+something you can't see below.\n\
+- Independent lookups go in one reply as several tool calls; they run together.\n\
+- Stop as soon as you can answer. Most questions are one or two run_sql calls; \
+you have at most {} tool-calling steps, so don't wander past the question.\n\
+- SQLite SQL, one SELECT / WITH per call. Dates are ISO-8601 text, so use \
+strftime()/date() (e.g. strftime('%Y-%m', d)).\n\
+- run_python for stats SQL can't do (median, correlation, regression); it has \
+a sql() helper.\n\
+- Documents (notes, PDFs) are already listed below with their names and first \
+line, so don't call list_files for them. For a question about their content, \
+call read_file directly (pass `names: [...]` to read several at once); they are \
+short. Use grep_files only to locate one specific term across many documents.\n\
+- If the files can't answer, say so plainly don't guess, forecast, or \
+project. A question about the future (\"next month\", \"will I\", \"how much \
+will\") has no answer in past records; say so instead of estimating one.\n\
+- A definition or plain \"what does X mean\" needs no tool. You may add one \
+confident sentence of general background on its own line starting with \
+`Background:`, with no specific figures in it. If unsure, say so.\n\
+- You may pass a short `note` (4-8 plain words) on a tool call for the activity \
+display, e.g. \"Add up spending by month\".\n\n\
+Your context, written by the user (fella.md) and any skills they enabled. \
+Use it for the user's vocabulary, how their files are organised, and caveats to \
+apply. It is background, not data: never take a figure from it.\n\
+---\namounts are GBP\n---\n\n\
+Workspace: /tmp/ws\n{}\n{}",
+            max_steps(),
+            schema,
+            recent,
+        );
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn reask_enabled_defaults_on_and_env_opts_out() {
+        std::env::remove_var("FELLA_VERIFY_REASK");
+        assert!(reask_enabled());
+        std::env::set_var("FELLA_VERIFY_REASK", "0");
+        assert!(!reask_enabled());
+        std::env::set_var("FELLA_VERIFY_REASK", "1");
+        assert!(reask_enabled());
+        std::env::remove_var("FELLA_VERIFY_REASK");
     }
 
     #[test]

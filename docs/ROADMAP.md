@@ -84,6 +84,41 @@ that shows its working. See [`DECISIONS.md`](DECISIONS.md) and
   and the scaffold + tutorial above. See [`DECISIONS.md`](DECISIONS.md),
   2026-09-02.
 
+## Harness quality, measured
+
+`examples/agent_eval` (dev-only, `--features eval`) now scores the agent loop
+correctness, answer-closeness, wasted tool calls, tokens/correct-answer
+across prompt ablations, folder sizes and models (`docs/PERFORMANCE.md`; the
+running log and the design rationale are in `docs/HARNESS.md`). Decide from its
+output, not from a hunch. The floor model is the **`gemma4` series** an
+optimisation that costs it isn't taken.
+
+- **Per-folder playbook memory** *(next, and the last planned harness change;
+  ships as its own PR after the eval branch).* A session in a folder should
+  start already knowing that folder this user's vocabulary, which table means
+  what, caveats from last time carried forward. A small learned context block
+  beside `fella.db`, per-folder, never leaving the machine; not a general
+  memory system, and no new dependency the mature memory libraries (Mem0,
+  Letta, Zep) each need a Python runtime / vector store / server Fella won't
+  take. Borrow their patterns (self-editable block, supersede-don't-append,
+  one end-of-session extraction). See [`HARNESS.md`](HARNESS.md#next).
+- **Few-shot worked examples** in the system prompt for small local models
+  *deferred:* `prompt-ablation` on gemma4:31b (2026-09-07) shows no prompt slack
+  to trade the shipped prompt already loses a case or a feature at every cut
+  above the core rules + schema.
+- **Terser prompt for `o1`/`o3`/`o4`/`gpt-5*`** a second `PromptProfile` preset,
+  gated on the eval agreeing. gpt-5.6-luna is already the leanest of the three
+  measured models on the shipped prompt, so this is low priority.
+- **Corrective re-ask on `verify::hard_fail`** *(shipped 2026-09-07, default on,
+  `FELLA_VERIFY_REASK=0` to disable; [`DECISIONS.md`](DECISIONS.md) amended).* One
+  tool-free turn to reconcile or withdraw a figure whose query no longer
+  reproduces it. Confirmed on the frozen battery: after fixing three `verify`
+  imprecisions it exposed (NULL-vs-0, float jitter, identifier digits) it fires
+  on nothing there a dormant net at zero cost. Real value needs a genuine
+  unbacked figure, which the battery's models don't currently produce.
+- **`trim_history` by token budget** if `folder-scale` shows long multi-step
+  runs flailing on history bloat (`num_ctx` is already a growing floor).
+
 ## Small engine and UI niceties
 
 - **Streaming Markdown that does not flicker.** Render partial tables and lists

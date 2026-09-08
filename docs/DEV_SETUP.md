@@ -180,3 +180,21 @@ See [`PERFORMANCE.md`](PERFORMANCE.md). Short version:
 cargo install cargo-bloat hyperfine   # one-time, no sudo
 ./scripts/measure.sh                   # numbers + a dated entry in PERFORMANCE.md
 ```
+
+## Evaluating the agent loop
+
+`examples/agent_bench` times the loop; `examples/agent_eval` **scores** it
+(correctness, answer-closeness, wasted tool calls, tokens/correct-answer,
+across prompt ablations / folder sizes / models). Both need a data dir with a
+**copy** of your real `fella.db` + `auth.json` so they use your provider and
+never touch live state.
+
+```sh
+cd src-tauri
+BENCH_DATA_DIR=/tmp/eval-data cargo run --release --example agent_bench
+AGENT_EVAL_DATA_DIR=/tmp/eval-data \
+  cargo run --release --features eval --example agent_eval -- accuracy --models "gemma4:31b"
+```
+
+Neither runs in CI (they need a live model). See
+[`PERFORMANCE.md`](PERFORMANCE.md) for the subcommands and baselines.

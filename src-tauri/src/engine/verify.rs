@@ -21,6 +21,42 @@ pub fn run(engine: &EngineState, answer: &str, evidence: &[EvidenceItem]) -> Vec
     checks
 }
 
+fn first_bad(checks: &[VerificationCheck], labels: &[&str]) -> Option<String> {
+    checks
+        .iter()
+        .find(|c| !c.ok && labels.iter().any(|h| c.label.contains(h)))
+        .map(|c| match &c.detail {
+            Some(d) => format!("{} ({d})", c.label),
+            None => c.label.clone(),
+        })
+}
+
+/// The subset of failures that mean the answer is probably *wrong*, not merely
+/// worth a look: a cited query that now re-runs to a different result or won't
+/// run, or a figure in the answer that appears in no tool result. A stray-year
+/// nudge or a text-column-aggregation caution is a soft warning and does not
+/// count. Returns the first such check's `label` with its `detail` folded in.
+///
+/// Matched on the label string, the same altitude as `is_schema_error`. Used by
+/// the eval harness to separate hard misses from soft warnings.
+pub fn hard_fail(checks: &[VerificationCheck]) -> Option<String> {
+    first_bad(
+        checks,
+        &["different result now", "no longer runs", "not found in any result"],
+    )
+}
+
+/// The narrower subset the agent loop's corrective re-ask acts on: a cited query
+/// that now re-runs differently, or no longer runs. These are precise the query
+/// is re-executed so "restate your answer to match the re-run" is a safe,
+/// tool-free fix. The fuzzier "a figure appears in no result" is deliberately
+/// *not* here: it's a number-shape heuristic, and a tool-free reconcile there
+/// tends to make the model parrot a raw evidence value (the ratio 0.176 instead
+/// of the "18%" it correctly derived). That stays a fold warning only.
+pub fn rerun_regression(checks: &[VerificationCheck]) -> Option<String> {
+    first_bad(checks, &["different result now", "no longer runs"])
+}
+
 // --- 4. aggregates over a text column --------------------------------------
 
 /// `(lowercased, original-case)` names of every catalogued `TEXT` column.
@@ -174,7 +210,7 @@ fn rerun_queries(engine: &EngineState, evidence: &[EvidenceItem], out: &mut Vec<
         match engine.run_sql(sql) {
             Ok(fresh) => {
                 let same = e.row_count == Some(fresh.row_count)
-                    && e.rows.as_ref().map(|r| r == &fresh.rows).unwrap_or(true);
+                    && e.rows.as_ref().map(|r| rows_match(r, &fresh.rows)).unwrap_or(true);
                 if same {
                     matched += 1;
                 } else {
@@ -212,6 +248,15 @@ fn check_numbers(answer: &str, evidence: &[EvidenceItem], out: &mut Vec<Verifica
             collect_numbers(output, &mut supported);
         }
         if let Some(rows) = &e.rows {
+            // An aggregate over no matching rows comes back as one all-NULL row
+            // (or zero rows). That result backs the answer "0" / "none" - so
+            // the model reporting 0 here isn't an ungrounded figure.
+            let empty_aggregate = e.tool == "run_sql"
+                && e.error.is_none()
+                && (rows.is_empty() || (rows.len() == 1 && rows[0].iter().all(Json::is_null)));
+            if empty_aggregate {
+                supported.push(0.0);
+            }
             for row in rows {
                 for cell in row {
                     match cell {
@@ -281,6 +326,10 @@ fn number_tokens(text: &str) -> impl Iterator<Item = (String, f64)> + '_ {
             let c = bytes[i];
             if c.is_ascii_digit() {
                 let start = i;
+                // A digit run glued to a letter or underscore is an identifier
+                // fragment (txns_00.csv, q1), not a figure the model stated.
+                let in_identifier = start > 0
+                    && (bytes[start - 1].is_ascii_alphabetic() || bytes[start - 1] == b'_');
                 while i < bytes.len()
                     && (bytes[i].is_ascii_digit() || bytes[i] == b',' || bytes[i] == b'.')
                 {
@@ -304,16 +353,18 @@ fn number_tokens(text: &str) -> impl Iterator<Item = (String, f64)> + '_ {
                     i -= 1;
                 }
                 let cleaned: String = raw.chars().filter(|c| *c != ',' && *c != ' ').collect();
-                if let Ok(v) = cleaned.parse::<f64>() {
-                    let mut display = raw.clone();
-                    if start > 0 && bytes[start - 1] == b'$' {
-                        display = format!("${raw}");
+                if !in_identifier {
+                    if let Ok(v) = cleaned.parse::<f64>() {
+                        let mut display = raw.clone();
+                        if start > 0 && bytes[start - 1] == b'$' {
+                            display = format!("${raw}");
+                        }
+                        if i < bytes.len() && bytes[i] == b'%' {
+                            display = format!("{raw}%");
+                            i += 1;
+                        }
+                        return Some((display, v));
                     }
-                    if i < bytes.len() && bytes[i] == b'%' {
-                        display = format!("{raw}%");
-                        i += 1;
-                    }
-                    return Some((display, v));
                 }
             } else {
                 i += 1;
@@ -328,6 +379,31 @@ fn is_probable_year(v: f64) -> bool {
 }
 
 /// Loose numeric match: exact, within a rounding step, or within 0.5%.
+/// A JSON number, or a string that is wholly a number.
+fn num_of(v: &Json) -> Option<f64> {
+    match v {
+        Json::Number(n) => n.as_f64(),
+        Json::String(s) => s.trim().parse::<f64>().ok(),
+        _ => None,
+    }
+}
+
+/// Two result sets are "the same" for the re-run check if every cell matches
+/// exactly, or is a number within `close()` tolerance. A float SUM/AVG can
+/// serialise with a low-bit difference when the query runs again a
+/// microseconds-later `738022.3` vs `738022.30000000001` is not a changed
+/// answer, and shouldn't trip the corrective re-ask.
+fn rows_match(a: &[Vec<Json>], b: &[Vec<Json>]) -> bool {
+    a.len() == b.len()
+        && a.iter().zip(b).all(|(ra, rb)| {
+            ra.len() == rb.len()
+                && ra.iter().zip(rb).all(|(ca, cb)| match (num_of(ca), num_of(cb)) {
+                    (Some(x), Some(y)) => close(x, y),
+                    _ => ca == cb,
+                })
+        })
+}
+
 fn close(a: f64, b: f64) -> bool {
     if a == b {
         return true;
@@ -355,6 +431,23 @@ mod tests {
     fn extracts_table_names() {
         let r = referenced_relations("SELECT * FROM sales s JOIN people p ON s.id = p.id");
         assert!(r.contains("sales") && r.contains("people"));
+    }
+
+    #[test]
+    fn rows_match_tolerates_float_jitter_only() {
+        let a = vec![vec![Json::from(738022.3)]];
+        let b = vec![vec![Json::from(738022.3 + 1e-6)]];
+        assert!(rows_match(&a, &b), "sub-cent float drift is the same result");
+
+        let c = vec![vec![Json::from(752000.0)]];
+        assert!(!rows_match(&a, &c), "a result past close() tolerance still trips");
+
+        // non-numeric cells must still match exactly
+        let m1 = vec![vec![Json::from("2024-03"), Json::from(10.0)]];
+        let m2 = vec![vec![Json::from("2024-04"), Json::from(10.0)]];
+        assert!(!rows_match(&m1, &m2));
+        let n = vec![vec![Json::from("2024-03"), Json::from(10.0001)]];
+        assert!(rows_match(&m1, &n));
     }
 
     #[test]
@@ -393,6 +486,12 @@ mod tests {
             .map(|(_, v)| v)
             .collect();
         assert_eq!(got, vec![1234.5, 12.0, 2024.0, 450.0]);
+
+        // a digit run inside an identifier (txns_00) is not a figure
+        let got2: Vec<_> = number_tokens("Total spending in txns_00 was 738,022.3.")
+            .map(|(_, v)| v)
+            .collect();
+        assert_eq!(got2, vec![738022.3]);
     }
 
     #[test]
@@ -408,6 +507,40 @@ mod tests {
         assert!(is_probable_year(2024.0));
         assert!(!is_probable_year(2024.5));
         assert!(!is_probable_year(450.0));
+    }
+
+    #[test]
+    fn hard_fail_separates_wrong_from_merely_noteworthy() {
+        // A soft warning only -> no hard fail.
+        let soft = vec![
+            warn("a total here is computed over the text column `amount`", None),
+            ok("every number in the answer came from the data above"),
+        ];
+        assert_eq!(hard_fail(&soft), None);
+
+        // A re-run mismatch is a hard fail; label + detail (the SQL) come back.
+        let hard = vec![
+            ok("re-checked the queries behind this answer  same results"),
+            warn(
+                "a query behind this answer gives a different result now",
+                Some("SELECT sum(amount) FROM t".into()),
+            ),
+        ];
+        assert_eq!(
+            hard_fail(&hard).as_deref(),
+            Some("a query behind this answer gives a different result now (SELECT sum(amount) FROM t)")
+        );
+
+        // An unbacked figure is a hard fail; label used when there's no detail.
+        let stray = vec![warn("the answer mentions 999 not found in any result", None)];
+        assert_eq!(
+            hard_fail(&stray).as_deref(),
+            Some("the answer mentions 999 not found in any result")
+        );
+
+        // ...but the corrective re-ask only acts on the re-run checks.
+        assert_eq!(rerun_regression(&stray), None, "unbacked figure is fold-only");
+        assert!(rerun_regression(&hard).is_some(), "a changed re-run does trigger it");
     }
 
     #[test]
@@ -433,5 +566,28 @@ mod tests {
         let warns: Vec<_> = out.iter().filter(|c| !c.ok).collect();
         assert_eq!(warns.len(), 1, "only the body's stray 999 should warn: {out:?}");
         assert!(warns[0].label.contains("999"), "{}", warns[0].label);
+    }
+
+    #[test]
+    fn an_empty_aggregate_backs_the_answer_zero() {
+        let ev = vec![EvidenceItem {
+            tool: "run_sql".into(),
+            args: Json::Object(Default::default()),
+            note: None,
+            sql: Some("SELECT SUM(amount) FROM t WHERE category = 'healthcare'".into()),
+            result_summary: "1 row".into(),
+            columns: Some(vec!["SUM(amount)".into()]),
+            rows: Some(vec![vec![Json::Null]]),
+            row_count: Some(1),
+            output: None,
+            ms: 1,
+            error: None,
+        }];
+        let mut out = Vec::new();
+        check_numbers("You spent $0 on healthcare.", &ev, &mut out);
+        assert!(
+            out.iter().all(|c| c.ok),
+            "0 is backed by the empty aggregate, not a stray figure: {out:?}"
+        );
     }
 }

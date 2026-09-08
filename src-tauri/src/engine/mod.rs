@@ -17,6 +17,10 @@ pub mod pyexec;
 pub mod secrets;
 pub mod sqlite;
 pub mod state;
+/// Deterministic fixtures + golden answers for `examples/agent_eval`.
+/// Dev-only: compiled under test or `--features eval`, never in the app.
+#[cfg(any(test, feature = "eval"))]
+pub mod testkit;
 pub mod tools;
 pub mod update;
 pub mod verify;

@@ -9,6 +9,7 @@ use serde_json::{json, Value as Json};
 use std::time::Duration;
 
 use crate::engine::error::{EngineError, EngineResult};
+use crate::engine::evidence::Usage;
 use crate::engine::sqlite::Settings;
 
 /// Per-call ceiling for a model request. A healthy chat turn is a few seconds;
@@ -41,18 +42,33 @@ fn ollama_keep_alive() -> String {
         .unwrap_or_else(|| "30m".to_string())
 }
 
-/// Ollama context window (`num_ctx`). Ollama's own default is 2-4k tokens
-/// smaller than Fella's system prompt + tool schemas + history, so the tail
-/// (the schema, or the question) is silently truncated and the model looks
-/// dumb. 8192 fits the prompt with room for a few tool-result rounds.
-/// `FELLA_OLLAMA_NUM_CTX` overrides (bigger = smarter but slower first token
-/// and more RAM).
+/// Floor for Ollama's context window (`num_ctx`). Ollama's own default is 2-4k
+/// tokens smaller than Fella's system prompt + tool schemas + history, so the
+/// tail (the schema, or the question) is silently truncated and the model looks
+/// dumb. 8192 fits a typical prompt with room for a few tool-result rounds;
+/// `fit_num_ctx` grows past this when the actual payload needs it.
+/// `FELLA_OLLAMA_NUM_CTX` raises (or lowers, min 512) the floor.
 fn ollama_num_ctx() -> u32 {
     std::env::var("FELLA_OLLAMA_NUM_CTX")
         .ok()
         .and_then(|v| v.parse().ok())
         .filter(|&n: &u32| n >= 512)
         .unwrap_or(8192)
+}
+
+/// Pick `num_ctx` for this request: never below the floor, but grown to fit an
+/// oversized prompt (many tables, a long `fella.md`, deep history) which would
+/// otherwise be silently truncated. `chars/4` is a crude token estimate; the
+/// 5/4 headroom and 2048 rounding absorb its error. Clamped at 32k the point
+/// past which the first-token stall on a local model isn't worth it; the caller
+/// logs a warning when the estimate still crowds that ceiling.
+/// ponytail: chars/4, swap for a real tokenizer only if the clamp/warn misfires.
+fn fit_num_ctx(messages_json: &Json, tools_json: Option<&Json>) -> u32 {
+    let len = |v: &Json| serde_json::to_string(v).map(|s| s.len()).unwrap_or(0);
+    let approx_tok = ((len(messages_json) + tools_json.map(len).unwrap_or(0)) / 4) as u32;
+    ((approx_tok * 5 / 4) + max_output_tokens())
+        .next_multiple_of(2048)
+        .clamp(ollama_num_ctx(), 32768)
 }
 
 /// Cap on tokens the model may generate in one turn (`num_predict` on Ollama,
@@ -205,6 +221,8 @@ pub struct ToolCall {
 pub struct ChatResponse {
     pub content: String,
     pub tool_calls: Vec<ToolCall>,
+    /// Token counts for this one call, when the provider reported them.
+    pub usage: Option<Usage>,
 }
 
 #[derive(Debug, Clone)]
@@ -384,27 +402,43 @@ impl LlmClient {
         on_delta: RetryNotify<'_>,
     ) -> EngineResult<ChatResponse> {
         let url = format!("{}/api/chat", self.base_url);
+        let messages_json = Json::Array(messages.iter().map(ollama_message).collect());
+        let tools_json = (!tools.is_empty())
+            .then(|| Json::Array(tools.iter().map(tool_schema_json).collect()));
+        // `FELLA_OLLAMA_NUM_CTX_FIXED` pins num_ctx to the floor (no growth) so
+        // the eval harness can measure fixed-vs-adaptive on a big workspace.
+        let num_ctx = if std::env::var_os("FELLA_OLLAMA_NUM_CTX_FIXED").is_some() {
+            ollama_num_ctx()
+        } else {
+            fit_num_ctx(&messages_json, tools_json.as_ref())
+        };
+        if num_ctx == 32768 {
+            log::warn!(
+                "ollama prompt is large enough to hit the num_ctx ceiling ({num_ctx}); \
+                 the model may be truncating the tail of the schema or history"
+            );
+        }
         let mut body = json!({
             "model": self.model,
-            "messages": messages.iter().map(ollama_message).collect::<Vec<_>>(),
+            "messages": messages_json,
             "stream": true,
             "keep_alive": ollama_keep_alive(),
             "think": ollama_think(),
             "options": {
                 "temperature": 0.2,
-                "num_ctx": ollama_num_ctx(),
+                "num_ctx": num_ctx,
                 "num_predict": max_output_tokens(),
             },
         });
-        if !tools.is_empty() {
-            body["tools"] = Json::Array(tools.iter().map(tool_schema_json).collect());
+        if let Some(t) = tools_json {
+            body["tools"] = t;
         }
 
         let v = self.send_stream(&url, &body, on_retry, on_delta).await?;
         let msg = &v["message"];
         let content = msg["content"].as_str().unwrap_or_default().to_string();
         let tool_calls = parse_tool_calls(msg["tool_calls"].as_array(), false);
-        Ok(ChatResponse { content, tool_calls })
+        Ok(ChatResponse { content, tool_calls, usage: parse_usage(&v) })
     }
 
     // --- OpenAI-compatible {base_url}/chat/completions -------------------
@@ -421,6 +455,9 @@ impl LlmClient {
             "model": self.model,
             "messages": messages.iter().map(openai_message).collect::<Vec<_>>(),
             "stream": true,
+            // Ask for a trailing usage chunk; endpoints that don't support it
+            // ignore the field and `usage` just stays `None`.
+            "stream_options": { "include_usage": true },
         });
         if openai_reasoning_model(&self.model) {
             // `temperature` omitted only the default is accepted. Hidden
@@ -450,7 +487,7 @@ impl LlmClient {
         let msg = &v["message"];
         let content = msg["content"].as_str().unwrap_or_default().to_string();
         let tool_calls = parse_tool_calls(msg["tool_calls"].as_array(), true);
-        Ok(ChatResponse { content, tool_calls })
+        Ok(ChatResponse { content, tool_calls, usage: parse_usage(&v) })
     }
 
     /// POST `body` to `url`, retrying transient failures (429, 5xx, timeouts,
@@ -672,6 +709,7 @@ impl LlmClient {
             let mut content = String::new();
             let mut tool_calls: Option<Json> = None;
             let mut oai_tools: Vec<OaiToolAccum> = Vec::new();
+            let mut usage: Option<Usage> = None;
 
             while let Some(chunk) = stream.next().await {
                 let chunk = chunk.map_err(|e| {
@@ -682,9 +720,9 @@ impl LlmClient {
                     let raw: Vec<u8> = buf.drain(..=nl).collect();
                     let line = String::from_utf8_lossy(&raw);
                     if openai {
-                        absorb_openai_line(&line, on_delta, &mut content, &mut oai_tools);
+                        absorb_openai_line(&line, on_delta, &mut content, &mut oai_tools, &mut usage);
                     } else {
-                        absorb_stream_line(&line, on_delta, &mut content, &mut tool_calls);
+                        absorb_stream_line(&line, on_delta, &mut content, &mut tool_calls, &mut usage);
                     }
                 }
             }
@@ -693,9 +731,9 @@ impl LlmClient {
                 // JSON object) still needs the leftover flushed.
                 let line = String::from_utf8_lossy(&buf);
                 if openai {
-                    absorb_openai_line(&line, on_delta, &mut content, &mut oai_tools);
+                    absorb_openai_line(&line, on_delta, &mut content, &mut oai_tools, &mut usage);
                 } else {
-                    absorb_stream_line(&line, on_delta, &mut content, &mut tool_calls);
+                    absorb_stream_line(&line, on_delta, &mut content, &mut tool_calls, &mut usage);
                 }
             }
             log::info!(
@@ -723,7 +761,14 @@ impl LlmClient {
             if let Some(tc) = tool_calls {
                 message["tool_calls"] = tc;
             }
-            return Ok(json!({ "message": message }));
+            let mut out = json!({ "message": message });
+            if let Some(u) = usage {
+                out["usage"] = json!({
+                    "prompt_tokens": u.prompt_tokens,
+                    "completion_tokens": u.completion_tokens,
+                });
+            }
+            return Ok(out);
         }
     }
 }
@@ -735,6 +780,7 @@ fn absorb_stream_line(
     on_delta: RetryNotify<'_>,
     content: &mut String,
     tool_calls: &mut Option<Json>,
+    usage: &mut Option<Usage>,
 ) {
     let line = line.trim();
     if line.is_empty() {
@@ -753,6 +799,16 @@ fn absorb_stream_line(
         if !arr.is_empty() {
             *tool_calls = Some(Json::Array(arr.clone()));
         }
+    }
+    // The `done: true` summary line carries the token counts.
+    if let (Some(p), Some(c)) = (
+        v["prompt_eval_count"].as_u64(),
+        v["eval_count"].as_u64(),
+    ) {
+        *usage = Some(Usage {
+            prompt_tokens: p as u32,
+            completion_tokens: c as u32,
+        });
     }
 }
 
@@ -775,6 +831,7 @@ fn absorb_openai_line(
     on_delta: RetryNotify<'_>,
     content: &mut String,
     tools: &mut Vec<OaiToolAccum>,
+    usage: &mut Option<Usage>,
 ) {
     let line = line.trim();
     if line.is_empty() {
@@ -788,6 +845,17 @@ fn absorb_openai_line(
     let Ok(v) = serde_json::from_str::<Json>(payload) else {
         return;
     };
+    // The final chunk (with `stream_options.include_usage`) or a whole
+    // non-streamed reply carries `usage` at the top level.
+    if let (Some(p), Some(c)) = (
+        v["usage"]["prompt_tokens"].as_u64(),
+        v["usage"]["completion_tokens"].as_u64(),
+    ) {
+        *usage = Some(Usage {
+            prompt_tokens: p as u32,
+            completion_tokens: c as u32,
+        });
+    }
     let choice = &v["choices"][0];
     // `delta` for a streamed chunk, `message` for a whole non-streamed reply.
     let node = if choice.get("message").is_some() {
@@ -842,6 +910,16 @@ fn tool_schema_json(t: &ToolSchema) -> Json {
             "description": t.description,
             "parameters": t.parameters,
         }
+    })
+}
+
+/// Read the normalised `usage` block `send_stream` attaches (`{prompt_tokens,
+/// completion_tokens}`). `None` when the provider reported nothing.
+fn parse_usage(v: &Json) -> Option<Usage> {
+    let u = v.get("usage")?;
+    Some(Usage {
+        prompt_tokens: u["prompt_tokens"].as_u64()? as u32,
+        completion_tokens: u["completion_tokens"].as_u64()? as u32,
     })
 }
 
@@ -978,6 +1056,53 @@ mod tests {
         for m in ["o3-mini", "openai/o4-mini", "gpt-4o", "grok-4.3"] {
             assert!(!openai_gpt5_family(m), "{m} is not gpt-5 family");
         }
+    }
+
+    #[test]
+    fn usage_is_read_from_both_wire_shapes() {
+        // Ollama: the `done:true` summary line.
+        let mut u = None;
+        absorb_stream_line(
+            r#"{"done":true,"prompt_eval_count":812,"eval_count":41}"#,
+            &|_| {},
+            &mut String::new(),
+            &mut None,
+            &mut u,
+        );
+        assert_eq!(u, Some(Usage { prompt_tokens: 812, completion_tokens: 41 }));
+
+        // OpenAI: the trailing usage chunk from `stream_options.include_usage`.
+        let mut u = None;
+        absorb_openai_line(
+            r#"data: {"choices":[],"usage":{"prompt_tokens":900,"completion_tokens":50}}"#,
+            &|_| {},
+            &mut String::new(),
+            &mut Vec::new(),
+            &mut u,
+        );
+        assert_eq!(u, Some(Usage { prompt_tokens: 900, completion_tokens: 50 }));
+
+        // `parse_usage` reads the normalised block `send_stream` attaches.
+        assert_eq!(
+            parse_usage(&json!({ "usage": { "prompt_tokens": 5, "completion_tokens": 7 } })),
+            Some(Usage { prompt_tokens: 5, completion_tokens: 7 })
+        );
+        assert_eq!(parse_usage(&json!({ "message": {} })), None);
+    }
+
+    #[test]
+    fn num_ctx_is_a_floor_that_grows_for_big_prompts() {
+        // A small prompt stays at the 8192 floor (the tuned default).
+        let small = json!([{ "role": "user", "content": "how much did I spend?" }]);
+        assert_eq!(fit_num_ctx(&small, None), 8192);
+
+        // A big prompt grows past the floor, on a 2048 boundary, capped at 32k.
+        let huge_line = "x".repeat(400_000); // ~100k tok
+        let big = json!([{ "role": "system", "content": huge_line }]);
+        let got = fit_num_ctx(&big, None);
+        assert!(got > 8192, "should grow past the floor, got {got}");
+        assert_eq!(got % 2048, 0, "should land on a 2048 boundary, got {got}");
+        assert!(got <= 32768, "should be clamped at 32k, got {got}");
     }
 
     #[test]

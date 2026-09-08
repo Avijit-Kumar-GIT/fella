@@ -7,6 +7,30 @@ this app repo (now **`fella`**; `fella-ai` is a private pre-v0.1 archive),
 `fella-marketplace` to mean the browse-site half of the **`fella-web`** repo,
 and any `CODE_OF_CONDUCT.md` mention as folded into `CONTRIBUTING.md` (§Conduct).
 
+- **2026-09-07** **Performance over prompt minimalism, within reason.** The
+  `agent_eval` "don't add scaffolding, remove ambiguity" rule (`HARNESS.md`)
+  applies to *correctness-neutral* changes. When added context measurably buys
+  correctness — the motivating case is per-folder memory — the tokens are
+  accepted. Guards: it must not regress the questions that don't need it, and
+  the prompt stays permissive (no lock-step, no banning exploration; added
+  context is reference the model may use, not a rule). The floor model
+  (`gemma4`) and the frozen-battery `--compare` check still gate it.
+- **2026-09-07** **One corrective re-ask when a cited query no longer
+  reproduces.** Amends the 2026-08-27 "no extra LLM call in verification" line:
+  the verify pass is still deterministic and still never supplies a number, but
+  if `verify::rerun_regression` fires (a cited query re-runs to a different
+  result, or no longer runs) the loop spends **one** tool-free turn asking the
+  model to restate its answer to match the re-run, then re-verifies once.
+  Bounded to a single extra call, normal completion path only.
+  `FELLA_VERIFY_REASK=0` disables it. *Deliberately narrower than
+  `verify::hard_fail`:* the third hard-fail kind, "a figure appears in no
+  result", is a number-shape heuristic left as a fold warning only measuring it
+  (`agent_eval`, gemma/luna/grok) showed a tool-free reconcile there degrades a
+  correct answer as often as it fixes a wrong one (grok restated "18%" as the
+  raw ratio "0.176..."), and it produced several false positives that the
+  re-ask then charged a model call for. Rationale for keeping the re-run half:
+  the harness was catching a genuinely stale figure and only printing a warning
+  next to it; WHY.md's bet is that the wrapper is where correctness is won.
 - **2026-09-06** **`/login <provider>` reuses a stored key; `/logout` keeps
   it (`/logout <provider> forget` deletes).** `auth.json` is a per-provider
   map, so keys already persist across switches the commands just didn't use
