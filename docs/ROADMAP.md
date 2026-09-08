@@ -93,11 +93,15 @@ running log and the design rationale are in `docs/HARNESS.md`). Decide from its
 output, not from a hunch. The floor model is the **`gemma4` series** an
 optimisation that costs it isn't taken.
 
-- **Per-folder playbook memory** *(next, and the last planned harness change).*
-  A session in a folder should start already knowing that folder this user's
-  vocabulary, which table means what, caveats from last time carried forward. A
-  small learned context block beside `fella.db`, per-folder, never leaving the
-  machine; not a general memory system. See [`HARNESS.md`](HARNESS.md#next).
+- **Per-folder playbook memory** *(next, and the last planned harness change;
+  ships as its own PR after the eval branch).* A session in a folder should
+  start already knowing that folder this user's vocabulary, which table means
+  what, caveats from last time carried forward. A small learned context block
+  beside `fella.db`, per-folder, never leaving the machine; not a general
+  memory system, and no new dependency the mature memory libraries (Mem0,
+  Letta, Zep) each need a Python runtime / vector store / server Fella won't
+  take. Borrow their patterns (self-editable block, supersede-don't-append,
+  one end-of-session extraction). See [`HARNESS.md`](HARNESS.md#next).
 - **Few-shot worked examples** in the system prompt for small local models
   *deferred:* `prompt-ablation` on gemma4:31b (2026-09-07) shows no prompt slack
   to trade the shipped prompt already loses a case or a feature at every cut

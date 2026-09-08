@@ -94,15 +94,30 @@ at `--iters 3` is usually variance).
 
 ### Next
 
-- **Per-folder playbook memory.** The one add the maintainer considers
-  essential: a session in a folder should feel like Fella already knows that
-  folder this user's vocabulary, which table means what, caveats learned last
-  time carried forward without re-deriving. Compatible with the local/scoped
-  model (the memory lives beside `fella.db`, never leaves the machine, is
-  per-folder). Scope is bounded: a small learned context block prepended to the
-  prompt, not a general memory system. Treated as the last planned harness
-  change before the tuning is called done, to stay inside the app's core
-  philosophy.
+- **Per-folder playbook memory** (GitHub #42; **its own PR**, off `main`, after
+  #39 — the line between harness tuning and agent memory). The one add the
+  maintainer considers essential: a session in a folder should feel like Fella
+  already knows that folder this user's vocabulary, which table means what,
+  caveats learned last time carried forward without re-deriving. Compatible
+  with the local/scoped model (lives beside `fella.db`, never leaves the
+  machine, per-folder). Bounded: a small *learned* context block prepended to
+  the prompt small enough to include verbatim, so there is no retrieval
+  problem to solve. The last planned harness change before the tuning is
+  called done, to stay inside the app's core philosophy.
+
+  **Build it custom, no new dependency.** The mature memory libraries (Mem0,
+  Letta/MemGPT, Zep/Graphiti, Cognee, LangMem) each solve a bigger problem
+  than this a query-time retrieval layer over thousands of memories and each
+  brings a Python runtime, a vector/graph store, an external server, or a
+  per-turn LLM extraction call, all of which Fella's constitution refuses.
+  Borrow the *patterns*, not the code: Letta's fixed-size self-editable
+  **memory block**; Zep's **supersede, don't append** (a corrected caveat
+  replaces the old one it doesn't pile up contradictions); Mem0's
+  **extract → reconcile → store** as *one* end-of-session pass, not per turn;
+  memweave's **file is the truth, any index is a rebuildable cache** (so it's
+  hand-editable and `git`-able, and composes with the user-authored
+  `fella.md`). Measured against the frozen battery + `agent_eval
+  session-memory`; gated on not regressing `gemma4`.
 
 ### Open
 
