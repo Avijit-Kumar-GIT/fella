@@ -413,9 +413,15 @@ fn read_delimited(path: &str, default_delim: u8) -> EngineResult<Parsed> {
     let mut types = vec![ColType::Text; width];
     let mut notes = vec![None; width];
     for i in 0..width {
-        let (ty, cnote) = sniff_strings(data.iter().map(|r| r.get(i).unwrap_or("")));
+        let cells = || data.iter().map(move |r| r.get(i).unwrap_or(""));
+        let (ty, cnote) = sniff_strings(cells());
         types[i] = ty;
-        notes[i] = cnote;
+        // A label column whose values collapse under case-folding (Rent / rent):
+        // tell the model to match case-insensitively.
+        notes[i] = match (ty, case_collision(cells())) {
+            (ColType::Text, Some(cc)) => Some(merge_note(cnote, cc).unwrap_or_default()),
+            _ => cnote,
+        };
     }
 
     let rows: Vec<Vec<Cell>> = data
@@ -634,6 +640,47 @@ fn sniff_strings<'a>(cells: impl Iterator<Item = &'a str>) -> (ColType, Option<S
     (ColType::Text, None)
 }
 
+/// If a text column's distinct values collapse under case-folding (`Rent` and
+/// `rent` both present), return a note. Bounded: gives up once a column has too
+/// many distinct values to be a label (free text, ids), and stops at 5000 rows.
+fn case_collision<'a>(cells: impl Iterator<Item = &'a str>) -> Option<String> {
+    use crate::engine::data::is_blankish;
+    use std::collections::BTreeSet;
+
+    let mut raw: BTreeSet<String> = BTreeSet::new();
+    let mut folded: BTreeSet<String> = BTreeSet::new();
+    let mut example: Option<(String, String)> = None;
+    for (n, c) in cells.enumerate() {
+        if n >= 5000 {
+            break;
+        }
+        let c = c.trim();
+        if is_blankish(c) {
+            continue;
+        }
+        if raw.len() > 60 {
+            return None; // not a label column
+        }
+        let lc = c.to_lowercase();
+        if !raw.contains(c) && folded.contains(&lc) && example.is_none() {
+            if let Some(prev) = raw.iter().find(|v| v.to_lowercase() == lc) {
+                example = Some((prev.clone(), c.to_string()));
+            }
+        }
+        raw.insert(c.to_string());
+        folded.insert(lc);
+    }
+    if raw.len() > folded.len() {
+        let eg = example.map(|(a, b)| format!(" (e.g. {a} / {b})")).unwrap_or_default();
+        Some(format!(
+            "values differ only in capitalisation{eg}; when filtering by a value, fold case \
+             (lower(col) = lower('value'), or col = 'value' COLLATE NOCASE)"
+        ))
+    } else {
+        None
+    }
+}
+
 fn sniff_json<'a>(vals: impl Iterator<Item = &'a Json>) -> (ColType, Option<String>) {
     use crate::engine::data::{is_blankish, parse_numeric};
 
@@ -820,6 +867,22 @@ mod tests {
         let note = note.expect("a mixed column should be noted");
         assert!(note.contains("parse_num"), "note should mention parse_num: {note:?}");
         assert!(!note.contains("CAST it for a total"), "note should not tell the model to CAST: {note:?}");
+    }
+
+    #[test]
+    fn case_collision_flags_a_label_that_folds() {
+        let c = case_collision(["Rent", "rent", "food", "RENT", "food"].into_iter());
+        let c = c.expect("Rent/rent/RENT collide under case-fold");
+        assert!(c.contains("capitalisation"), "{c}");
+        assert!(c.contains("lower(") || c.contains("NOCASE"), "steers to case-fold: {c}");
+
+        // consistent casing -> no note
+        assert!(case_collision(["rent", "food", "transport", "rent"].into_iter()).is_none());
+        // blanks ignored, single value -> no note
+        assert!(case_collision(["rent", "", "N/A", "rent"].into_iter()).is_none());
+        // a high-cardinality column (free text / ids) -> not a label, no note
+        let many: Vec<String> = (0..80).map(|i| format!("Item{i}")).collect();
+        assert!(case_collision(many.iter().map(String::as_str)).is_none());
     }
 
     #[test]

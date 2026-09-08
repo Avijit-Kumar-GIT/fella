@@ -17,6 +17,7 @@ pub fn run(engine: &EngineState, answer: &str, evidence: &[EvidenceItem]) -> Vec
     rerun_queries(engine, evidence, &mut checks);
     check_numbers(answer, evidence, &mut checks);
     check_text_agg(engine, evidence, &mut checks);
+    check_case_filter(engine, evidence, &mut checks);
 
     checks
 }
@@ -123,6 +124,82 @@ pub(crate) fn aggregates_text_column<'a>(sql: &str, text_cols: &'a [String]) -> 
         }
     }
     None
+}
+
+// --- 5. case-sensitive filter on a mixed-case label column ----------------
+
+/// `(lowercased, original)` names of catalogued `TEXT` columns whose ingest note
+/// says the values differ only in capitalisation (`case_collision`).
+pub(crate) fn mixed_case_columns(engine: &EngineState) -> Vec<(String, String)> {
+    engine
+        .catalog()
+        .sources
+        .iter()
+        .filter_map(|s| s.columns.as_ref())
+        .flatten()
+        .filter(|c| c.type_.eq_ignore_ascii_case("text"))
+        .filter(|c| c.note.as_deref().is_some_and(|n| n.contains("capitalisation")))
+        .map(|c| (c.name.to_lowercase(), c.name.clone()))
+        .collect()
+}
+
+/// If `sql` filters one of `cols` (already lowercased) with an exact-case
+/// `= '…'` or `IN (…)` that isn't wrapped in `lower(`/`upper(`, return that
+/// column. Crude scan, same altitude as `aggregates_text_column`.
+pub(crate) fn case_sensitive_label_filter<'a>(sql: &str, cols: &'a [String]) -> Option<&'a str> {
+    let lower = sql.to_lowercase();
+    for col in cols {
+        for pat in [format!(" {col}"), format!("\"{col}\""), format!(".{col}"), format!("({col}")] {
+            let mut from = 0;
+            while let Some(rel) = lower[from..].find(&pat) {
+                let start = from + rel;
+                let end = start + pat.len();
+                from = end;
+                // not part of a longer identifier on either side
+                if lower[end..].starts_with(|c: char| c.is_alphanumeric() || c == '_') {
+                    continue;
+                }
+                let before = lower[..start + 1].trim_end();
+                if before.ends_with("lower(") || before.ends_with("upper(") {
+                    continue; // already case-folded
+                }
+                let after = lower[end..].trim_start().trim_start_matches('"').trim_start();
+                let is_filter = after.starts_with("= '")
+                    || after.starts_with("='")
+                    || after.starts_with("in ('")
+                    || after.starts_with("in('");
+                if is_filter && !after.contains("collate nocase") {
+                    return Some(col);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Flag a cited query that filters a mixed-case label column by exact case one
+/// `Rent` vs `rent` row silently drops out. A soft warning; the schema note is
+/// where the model is meant to have folded case in the first place.
+fn check_case_filter(engine: &EngineState, evidence: &[EvidenceItem], out: &mut Vec<VerificationCheck>) {
+    let cols = mixed_case_columns(engine);
+    if cols.is_empty() {
+        return;
+    }
+    let lowered: Vec<String> = cols.iter().map(|(l, _)| l.clone()).collect();
+    for e in evidence.iter().filter(|e| e.tool == "run_sql" && e.error.is_none()) {
+        let Some(sql) = &e.sql else { continue };
+        if let Some(hit) = case_sensitive_label_filter(sql, &lowered) {
+            let name = cols.iter().find(|(l, _)| l == hit).map_or(hit, |(_, n)| n.as_str());
+            out.push(warn(
+                format!("a filter on `{name}` matches exact case"),
+                Some(format!(
+                    "`{name}` has values that differ only in capitalisation; \
+                     rows like `Rent` vs `rent` may be excluded unless the filter folds case"
+                )),
+            ));
+            return;
+        }
+    }
 }
 
 /// Flag any cited query that sums/averages a column the catalog reports as
@@ -489,6 +566,25 @@ mod tests {
             aggregates_text_column("select avg(distinct method) from x", &cols),
             Some("method")
         );
+    }
+
+    #[test]
+    fn spots_case_sensitive_label_filter() {
+        let cols = vec!["cat".to_string()];
+        let f = |s: &str| case_sensitive_label_filter(s, &cols);
+
+        assert_eq!(f("SELECT sum(amt) FROM s WHERE cat = 'rent'"), Some("cat"));
+        assert_eq!(f("... WHERE cat IN ('Rent','HOUSING')"), Some("cat"));
+        assert_eq!(f("... WHERE s.cat='rent'"), Some("cat"));
+        assert_eq!(f(r#"... WHERE "cat" = 'rent'"#), Some("cat"));
+
+        // already case-folded -> no flag
+        assert_eq!(f("... WHERE lower(cat) = 'rent'"), None);
+        assert_eq!(f("... WHERE cat = 'rent' COLLATE NOCASE"), None);
+        assert_eq!(f("... WHERE UPPER(cat) IN ('RENT')"), None);
+        // not an equality filter, and a longer identifier that merely contains "cat"
+        assert_eq!(f("SELECT cat, sum(amt) FROM s GROUP BY cat"), None);
+        assert_eq!(f("... WHERE category_code = 'x'"), None);
     }
 
     #[test]
