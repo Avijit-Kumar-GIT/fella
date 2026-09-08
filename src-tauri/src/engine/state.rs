@@ -514,32 +514,6 @@ impl EngineState {
             .collect()
     }
 
-    /// Pull ingest notes (a coerced column, a dropped totals row) into the
-    /// folder's learned notes, keyed by `view` / `view."col"` so a later open
-    /// replaces rather than duplicates.
-    fn sync_memory_schema_notes(&self, mem_path: &Path) {
-        let sources = {
-            let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-            inner.sources.clone()
-        };
-        let mut mem = FolderMemory::load(mem_path);
-        for s in &sources {
-            let Some(view) = &s.view else { continue };
-            if let Some(note) = &s.note {
-                mem.set_table_note(view, note);
-            }
-            for c in s.columns.iter().flatten() {
-                if let Some(n) = &c.note {
-                    mem.set_table_note(&format!("{view}.\"{}\"", c.name), n);
-                }
-            }
-        }
-        let views: Vec<String> = sources.iter().filter_map(|s| s.view.clone()).collect();
-        mem.prune_tables(&views);
-        mem.mark_stale(&views);
-        mem.save();
-    }
-
     /// After a completed turn: append an episode, and if the answer verified
     /// cleanly on one query, learn that query as a recipe. A follow-up that
     /// plainly corrects the previous answer becomes a vocabulary note instead.
@@ -950,18 +924,11 @@ impl EngineState {
             inner.sources = sources;
             inner.skipped = skipped;
             inner.user_md = user_md;
-            inner.memory_path = Some(mem_path.clone());
+            inner.memory_path = Some(mem_path);
             // The sources changed, so every conversation's distilled memory
             // (schema hints, prior queries) is now stale.
             inner.sessions.clear();
             inner.schema_cache = None;
-        }
-        // Fold this open's ingest notes (coerced columns, dropped totals rows)
-        // into the folder's learned notes, and re-check recipe staleness against
-        // the tables that actually loaded. Best-effort; a memory write never
-        // blocks opening a folder.
-        if memory::writes_enabled() {
-            self.sync_memory_schema_notes(&mem_path);
         }
         // The user is about to ask something: warm the model now so the first
         // question doesn't wait on a cold load.

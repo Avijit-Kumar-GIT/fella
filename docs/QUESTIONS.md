@@ -128,13 +128,31 @@ that's still open. Newest section last.
   change **buys correctness**, spend the tokens. And keep prompts permissive —
   no rigid step lock-step, no forbidding exploration; give room to reason.
 
-### Still open (decide from the eval)
+### v1 built (2026-09-08, branch `feat/folder-memory`)
 
+`engine::memory` — plain-text `memory.md` per folder, deterministic writer
+(verified query → recipe; correction → vocab note), semantic core in the
+prompt, empty for a fresh folder. `FELLA_MEMORY=0`/`ro`. Details:
+`FOLDER-MEMORY.md` §Implementation.
+
+First `agent_eval memory` run (gemma4:31b, synthetic 13-table workspace): **no
+accuracy / step / waste change, small prompt-token cost.** `testkit` folders
+are too clean and guessable for a recipe to matter. Ships default-on (a fresh
+folder costs nothing).
+
+### Still open (decide from a real folder / harder scenario)
+
+- **Does memory ever earn its tokens?** The synthetic harness can't build the
+  ambiguous-schema / learned-vocabulary / correction cases where it should pay
+  off. Needs a real folder run, or a `testkit` workspace with genuinely cryptic
+  column names.
 - Core-block token budget vs. the prompt-minimalism finding — maybe the core is
   *only* vocabulary + preferences, with even the top recipes behind `recall()`.
 - `recall()` reliability on `gemma4` — does a weak model reach for it when it
-  should? If not, pre-inject the top-K instead.
+  should? If not, pre-inject the top-K instead. (`recall()` not built in v1.)
 - Recipe-match precision — a "2024 spend" recipe pulled for "2023 spend" and
   reused with the stale filter. How aggressively to genericise stored recipes.
 - Episodic log retention — how many sessions / how much before it rotates, and
-  whether the user ever sees it directly.
+  whether the user ever sees it directly. (Log written in v1, not read.)
+- The correction heuristic (`is_correction()` keyword match) — measure its
+  false-positive rate on real follow-ups before trusting it.

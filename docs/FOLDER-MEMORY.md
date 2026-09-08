@@ -1,8 +1,11 @@
-# Per-folder memory — design exploration
+# Per-folder memory
 
-Status: exploration for GitHub #42. Not a spec. Ships as its own PR after the
-`agent_eval` branch. Constraints from `WHY.md`: local, auditable, no new
-dependency, small enough that one person can read all of it.
+GitHub #42. Constraints from `WHY.md`: local, auditable, no new dependency,
+small enough that one person can read all of it.
+
+**Status: v1 built** on `feat/folder-memory` (`engine::memory`). What's below is
+the full design; the [Implementation](#implementation-v1) section at the end
+says what v1 does, what it defers, and what the first benchmark showed.
 
 ## The goal
 
@@ -215,3 +218,55 @@ reference the model may use, never a rule it must follow.
   the user ever sees the raw log or only the distilled `memory.md`.
 - **Multi-folder.** A user with `~/money` and `~/health` — memory is strictly
   per-folder, no cross-folder sharing (matches the folder-is-the-world model).
+
+## Implementation (v1)
+
+`engine::memory` (`FolderMemory`), ~560 lines, no new dependency. Wired into
+`agent.rs` (a `PromptProfile.folder_memory` section, byte-identical when empty)
+and `state.rs` (`folder_memory_block()` read each turn; a record hook in
+`ask()`). `FELLA_MEMORY=0` turns read+write off; `=ro` reads but records nothing.
+
+**What v1 does**
+
+- **Store.** One `.md` per workspace under `<data_dir>/memory/`, plus an
+  append-only `<mem>.episodes.jsonl` (raw record, capped at 200; not read back
+  yet). The `.md` is the source of truth — lenient parse (an unreadable line in
+  a managed section is kept), authoritative re-render of the managed sections,
+  a user `## Notes` section and any unknown sections preserved verbatim. Read
+  fresh from disk every turn, so a hand edit lands immediately.
+- **Deterministic writer**, no per-turn LLM call:
+  - a `run_sql` answer that `verify::reran_clean` confirmed on **one** query →
+    a recipe (`question → SQL`, use-counted, superseded by normalised question,
+    least-used trimmed past 40);
+  - a follow-up that `is_correction()` flags (starts with "no,", "actually",
+    "that's wrong", …) → a vocabulary note keyed on the corrected topic.
+- **Semantic core** (`semantic_core()`): preferences + all vocabulary + table
+  notes + the top-5 recipes by use, within ~1.6 KB, prepended after the schema
+  block. **Empty memory renders nothing** — a fresh folder pays zero tokens.
+- **Staleness.** `mark_stale()` flags recipes whose tables left the catalog;
+  stale recipes drop out of the core.
+
+**Deferred**
+
+- **`recall()` tool / episodic retrieval.** The core-block half is built; the
+  long-tail-via-tool half is not. The episode log is written but unread.
+- **Ingest-note sync.** Considered and cut: coercion / totals-row notes are
+  *already* in the schema block (small folders) or in `describe_schema` on
+  demand (names-only folders). Duplicating them into memory is redundant and
+  was the main source of prompt-token cost. Memory holds only what the schema
+  doesn't: vocabulary, recipes, corrections.
+- **End-of-session tidy pass**, `<folder>/.fella/` opt-in location, `/memory`
+  command.
+
+**First benchmark** (`agent_eval memory`, gemma4:31b, 13-table synthetic
+workspace, prime one aggregate → cold-ask a different aggregate on the same
+table): **no accuracy, step, or waste difference; memory on cost a small number
+of extra prompt tokens** (the one primed recipe). The synthetic `testkit`
+workspaces are deliberately clean and their column names are guessable, so a
+recipe isn't load-bearing — `gemma4` writes the right SQL from the schema block
+alone. The value case (cryptic column codes, learned vocabulary the model can't
+guess, a correction, a non-obvious join) needs a real folder or a harder
+scenario to demonstrate. v1 ships default-on because a fresh folder costs
+nothing and the cost scales with what's actually been learned; revisit the
+default if a real-folder measurement shows a persistent regression with no
+matching gain.

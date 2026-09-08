@@ -108,6 +108,7 @@ src-tauri/src/
     evidence.rs              EvidenceItem / Answer / AskEvent types
     tools.rs                 Tool trait, Registry, JSON-Schema export; the 7 built-ins
     verify.rs                re-run cited SQL, check every figure came from a tool
+    memory.rs                per-folder learned notes (memory.md); FELLA_MEMORY
 ```
 
 ## Data layer

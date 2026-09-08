@@ -6,6 +6,19 @@ All notable changes to Fella are recorded here. Format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Per-folder memory (experimental).** Fella now keeps a small plain-text
+  `memory.md` for each folder — the *learned* companion to `fella.md`. It fills
+  itself in from what already happens: a query that passed the self-check
+  becomes a reusable "recipe", and a correction you give ("no, gym is under
+  health") becomes a note about your words. Nothing is guessed and no extra
+  model call is made. The file lives in Fella's data dir, is yours to read and
+  edit, and a fresh folder with nothing learned adds nothing to the prompt.
+  `FELLA_MEMORY=0` turns it off. Early: it doesn't yet show a measurable gain
+  on clean test folders — the payoff is meant for messy real ones and for
+  carrying your corrections across sessions.
+
 ### Changed
 
 - **Fella won't forecast.** The "if the files can't answer, say so" rule now
