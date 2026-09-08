@@ -59,16 +59,6 @@
 		"Summarise what's in these files"
 	];
 
-	// figlet "ANSI Shadow". Shown only on the empty screen.
-	const WORDMARK = [
-		'███████╗███████╗██╗     ██╗      █████╗ ',
-		'██╔════╝██╔════╝██║     ██║     ██╔══██╗',
-		'█████╗  █████╗  ██║     ██║     ███████║',
-		'██╔══╝  ██╔══╝  ██║     ██║     ██╔══██║',
-		'██║     ███████╗███████╗███████╗██║  ██║',
-		'╚═╝     ╚══════╝╚══════╝╚══════╝╚═╝  ╚═╝'
-	].join('\n');
-
 	let scroller: HTMLDivElement;
 	let expanded = $state<Record<string, boolean>>({});
 
@@ -114,7 +104,7 @@
 >
 	{#if session.messages.length === 0}
 		<div class="onboard">
-			<pre class="wordmark" role="img" aria-label="fella">{WORDMARK}</pre>
+			<div class="wordmark" aria-label="Fella">Fella</div>
 			<h1 class="hero">Ask about your own files</h1>
 
 			{#if !hasFolder}
@@ -344,23 +334,18 @@
 		color: var(--text-dim);
 	}
 	.wordmark {
-		font-family: var(--mono);
-		font-size: var(--fs-xs);
-		line-height: 1.15;
-		color: var(--text-faint);
-		margin: 0 0 var(--space-4);
-		padding: 0;
-		border: 0;
-		background: transparent;
-		overflow-x: auto;
-		white-space: pre;
+		font-size: var(--fs-xl);
+		font-weight: 560;
+		letter-spacing: -0.02em;
+		color: var(--text);
+		margin: 0 0 var(--space-2);
 	}
 	.hero {
-		font-size: var(--fs-xl);
+		font-size: var(--fs-lg);
 		font-weight: 600;
-		letter-spacing: -0.02em;
+		letter-spacing: -0.01em;
 		text-wrap: balance;
-		color: var(--text);
+		color: var(--text-dim);
 		margin: 0 0 var(--space-3);
 	}
 	.onboard p {
