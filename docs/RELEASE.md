@@ -29,6 +29,9 @@ repo move it ships from. Not user-facing.
 
 - `LICENSE` present (MIT, © 2026 Avijit Kumar). `Cargo.toml` `authors`,
   `tauri.conf.json` `publisher`/`copyright`, `package.json` `license` all agree.
+- `tauri.macos.conf.json` / `tauri.linux.conf.json` override only the window
+  frame (custom titlebar); version/publisher/bundle metadata live in the base
+  `tauri.conf.json` only — the pre-flight lint reads that file.
 - Versions aligned at `0.1.0` (`package.json`, `Cargo.toml`, `Cargo.lock`;
   `tauri.conf.json` derives from `package.json`). MSRV `1.88` everywhere.
 - `.github/workflows/{ci.yml,release.yml}` exist, actions SHA-pinned.

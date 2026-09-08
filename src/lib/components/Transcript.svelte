@@ -3,6 +3,7 @@
 	import { session } from '$lib/session.svelte';
 	import { isTauri, openExternal } from '$lib/ipc';
 	import { fadeQuick } from '$lib/motion';
+	import Icon from './Icon.svelte';
 	import Message from './Message.svelte';
 
 	// The empty screen adapts to what's already set up, so a non-technical user
@@ -103,21 +104,23 @@
 	aria-live="off"
 >
 	{#if session.messages.length === 0}
-		<div class="onboard">
+		<div class="onboard" class:center={!hasFolder && !showSetup}>
 			<div class="wordmark" aria-label="Fella">Fella</div>
 			<h1 class="hero">Ask about your own files</h1>
 
 			{#if !hasFolder}
 				<p class="lead">
-					Spending, health, workouts, notes anything you keep in a folder. Fella
-					works entirely on your computer, reads your files, and never changes them.
+					Spreadsheets, PDFs, notes anything you keep in one folder. Answered on
+					your computer, from your files, never changed.
 				</p>
 				<div class="cta">
-					<button class="pill primary" onclick={() => void openFolder()}>Choose a folder</button>
-					<span class="or">{isTauri() ? 'or drag one onto this window' : ''}</span>
+					<button class="pill primary" onclick={() => void openFolder()}>
+						<Icon name="folder" size={14} /> Choose a folder
+					</button>
 				</div>
+				{#if isTauri()}<p class="drophint">or drag a folder onto this window</p>{/if}
 				<p class="egs">
-					Then ask things like <em>“how did my spending change this year?”</em> or
+					e.g. <em>“how did my spending change this year?”</em> ·
 					<em>“what stands out in my workout log?”</em>
 				</p>
 			{:else if fileCount === 0}
@@ -171,7 +174,7 @@
 							<button class="pill" onclick={() => void dispatch(`/login ${providerId}`)}>Enter a new key</button>
 							{#if getKeyUrl}
 								<button class="pill ghost" onclick={() => void openExternal(getKeyUrl)}>
-									Get a new key ↗
+									Get a new key <Icon name="arrow-up-right" size={13} />
 								</button>
 							{/if}
 						</div>
@@ -329,9 +332,20 @@
 		margin-inline: auto;
 	}
 	.onboard {
-		max-width: 60ch;
+		max-width: 52ch;
 		margin: var(--space-6) auto 0;
 		color: var(--text-dim);
+	}
+	/* First run, nothing to set up: a centred hero rather than a top-aligned
+	   wall. Drops back to top-aligned as soon as the setup card appears. */
+	.onboard.center {
+		min-height: 100%;
+		margin: 0 auto;
+		display: flex;
+		flex-direction: column;
+		justify-content: center;
+		align-items: center;
+		text-align: center;
 	}
 	.wordmark {
 		font-size: var(--fs-xl);
@@ -374,9 +388,17 @@
 		flex-wrap: wrap;
 		align-items: center;
 		gap: var(--space-3);
-		margin: var(--space-5) 0;
+		margin: var(--space-5) 0 var(--space-2);
 	}
-	.or {
+	.onboard.center .cta {
+		justify-content: center;
+	}
+	.cta .pill {
+		display: inline-flex;
+		align-items: center;
+		gap: var(--space-2);
+	}
+	.drophint {
 		color: var(--text-faint);
 		font-size: var(--fs-sm);
 	}

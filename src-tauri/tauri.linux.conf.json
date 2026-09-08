@@ -1,5 +1,4 @@
 {
-  "$comment": "Linux keeps its native window frame: frameless + client-side decorations is unreliable across compositors (missing resize border, CSD/SSD mismatch). Our Titlebar still renders as a slim identity strip below the OS frame, without min/max/close.",
   "app": {
     "windows": [
       {

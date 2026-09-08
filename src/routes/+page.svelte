@@ -2,18 +2,21 @@
 	import { onMount } from 'svelte';
 	import CommandPalette from '$lib/components/CommandPalette.svelte';
 	import Composer from '$lib/components/Composer.svelte';
+	import Icon from '$lib/components/Icon.svelte';
 	import StatusBar from '$lib/components/StatusBar.svelte';
 	import TabBar from '$lib/components/TabBar.svelte';
 	import Titlebar from '$lib/components/Titlebar.svelte';
 	import Transcript from '$lib/components/Transcript.svelte';
 	import { dispatch, reconcileModel, stop } from '$lib/commands';
 	import { ipc, isTauri } from '$lib/ipc';
+	import { fadeQuick } from '$lib/motion';
 	import { prefs } from '$lib/prefs.svelte';
 	import { session } from '$lib/session.svelte';
 
 	let transcript: Transcript;
 	let composer: Composer;
 	let paletteOpen = $state(false);
+	let dragging = $state(false);
 
 	async function refreshHealth() {
 		if (!isTauri()) return;
@@ -64,12 +67,15 @@
 		document.addEventListener('visibilitychange', onVisible);
 		window.addEventListener('focus', onVisible);
 
-		// Native folder drop -> /open
+		// Native folder drop -> /open, with a full-window drop target while a
+		// drag is over the window.
 		let unlisten: (() => void) | undefined;
 		void import('@tauri-apps/api/webview')
 			.then(({ getCurrentWebview }) =>
 				getCurrentWebview().onDragDropEvent((e) => {
-					if (e.payload.type === 'drop' && e.payload.paths.length) {
+					const t = e.payload.type;
+					dragging = t === 'enter' || t === 'over';
+					if (t === 'drop' && e.payload.paths.length) {
 						void dispatch(`/open ${e.payload.paths[0]}`);
 					}
 				})
@@ -169,6 +175,12 @@
 
 <div class="sr-only" role="status" aria-live="polite">{live}</div>
 
+{#if dragging}
+	<div class="dropzone" transition:fadeQuick aria-hidden="true">
+		<div class="dropcard"><Icon name="folder" size={20} /> Drop a folder to open it</div>
+	</div>
+{/if}
+
 <CommandPalette bind:open={paletteOpen} onpick={pickCommand} />
 
 <style>
@@ -185,5 +197,27 @@
 		flex-direction: column;
 		background: var(--bg-raised);
 		border-top: 1px solid var(--border);
+	}
+	.dropzone {
+		position: fixed;
+		inset: 0;
+		z-index: 40;
+		display: grid;
+		place-items: center;
+		background: color-mix(in srgb, var(--bg) 68%, transparent);
+		outline: 2px dashed var(--border-strong);
+		outline-offset: -12px;
+	}
+	.dropcard {
+		display: inline-flex;
+		align-items: center;
+		gap: var(--space-2);
+		padding: var(--space-3) var(--space-4);
+		background: var(--bg-raised);
+		border: 1px solid var(--border);
+		border-radius: var(--radius);
+		box-shadow: var(--shadow-sm);
+		color: var(--text-dim);
+		font-size: var(--fs-sm);
 	}
 </style>

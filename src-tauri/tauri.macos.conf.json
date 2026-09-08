@@ -1,5 +1,4 @@
 {
-  "$comment": "macOS keeps a native window frame but hides its bar and title, so our own titlebar draws under the traffic lights. See src/lib/components/Titlebar.svelte (78px left gutter). The base tauri.conf.json sets decorations:false for Windows/Linux; this override wins on macOS.",
   "app": {
     "windows": [
       {
