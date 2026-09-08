@@ -7,6 +7,14 @@ this app repo (now **`fella`**; `fella-ai` is a private pre-v0.1 archive),
 `fella-marketplace` to mean the browse-site half of the **`fella-web`** repo,
 and any `CODE_OF_CONDUCT.md` mention as folded into `CONTRIBUTING.md` (§Conduct).
 
+- **2026-09-07** **Performance over prompt minimalism, within reason.** The
+  `agent_eval` "don't add scaffolding, remove ambiguity" rule (`HARNESS.md`)
+  applies to *correctness-neutral* changes. When added context measurably buys
+  correctness — the motivating case is per-folder memory — the tokens are
+  accepted. Guards: it must not regress the questions that don't need it, and
+  the prompt stays permissive (no lock-step, no banning exploration; added
+  context is reference the model may use, not a rule). The floor model
+  (`gemma4`) and the frozen-battery `--compare` check still gate it.
 - **2026-09-07** **One corrective re-ask when a cited query no longer
   reproduces.** Amends the 2026-08-27 "no extra LLM call in verification" line:
   the verify pass is still deterministic and still never supplies a number, but

@@ -25,6 +25,25 @@ deterministically every time; a cached total is a stale total and breaks the
 "every number is fresh arithmetic" contract. Cache the *question → query*, never
 the *result*.
 
+## Episodic and semantic
+
+Two layers, the way most cognitive-memory designs split it:
+
+- **Episodic** — a capped, timestamped log of *what happened*: the question
+  asked, the query that ran, the answer reached, any correction. Append-only,
+  rotated (keep ~the last N sessions or ~M events). Cheap to write (it's the
+  evidence Fella already produces). Used for "what did we conclude last time
+  about X", as the raw material the semantic layer is distilled from, and as
+  the audit trail for *why* a semantic fact exists.
+- **Semantic** — the curated `memory.md`: vocabulary, schema notes, preferences,
+  validated recipes. Distilled from episodic + ingest + corrections; deduped;
+  superseded on change. This is the small, stable, always-useful part.
+
+Semantic is **always-on and small**; episodic is **recall-only** (below). A
+correction writes to both — an episode ("user said gym is under health") and a
+semantic note (the mapping). The optional end-of-session pass is what promotes
+recurring episodes into semantic notes.
+
 ## Does size actually make this a retrieval problem?
 
 Partly. Rows don't matter — memory never looks at row data. What scales is
@@ -128,19 +147,35 @@ this? [yes] [edit] [no]" — one confirm, then it's in the editable file. A
 per-workspace toggle switches to "learn silently" for users who'd rather not be
 asked.
 
-## Retrieval: two-tier
+## Retrieval: split by memory type ("static first, dynamic last")
 
-1. **Core block, always prepended** (~300–500 tokens): preferences, all
-   vocabulary, the top ~5 recipes by use-count. Cheap, covers the common case.
-2. **The tail, selected per question**: FTS5 over recipes + notes, top-K by
-   lexical overlap with the question and the tables it touches. Either
-   pre-injected ("recipes that worked for similar questions: …") or behind a
-   `recall(topic)` **tool** the model calls when it wants one. The tool form is
-   honest about cost but leans on a weak model remembering to call it — decide
-   from `agent_eval` on `gemma4`.
+The recall-tool-vs-`memory.md` fork resolves to **both, split by what the memory
+is**:
 
-Schema notes are not in either tier — they're part of the catalog / schema
-block, tiered as that already is.
+| layer | delivery | why |
+|---|---|---|
+| **Semantic core** — preferences, all vocabulary, the top ~5 recipes by use-count (~300–500 tok) | **In the system prompt.** Static, so it's prompt-cached after turn 1. | Always available, and on repeat turns it costs ~10% of its tokens. No round-trip, no reliance on the model choosing to fetch it. |
+| **Episodic log + the long semantic tail** — specific past interactions, the 40+ rarely-used recipes/notes | **Behind a `recall(topic)` tool.** FTS5 lookup, kept *out* of the cached prefix. | Paid only when the model reaches for it. Scales without bound. Keeps the dynamic part after the cache boundary so it doesn't invalidate the cached core. |
+
+Reasoning behind the split — **tool use is the more expensive axis**, not token
+use:
+
+- A `recall()` call is a full extra round-trip (~1–3 s on the tested models);
+  agentic workflows already run 2–30× the tokens of a plain chat, and every
+  step is a fresh chance for a weak model to derail. Prompt tokens on a *stable*
+  prefix are cheap and, with prompt caching, ~90% off on repeat.
+- So the always-useful part belongs in the cached prompt (cheap, reliable), and
+  only the rarely-needed, unbounded part pays the round-trip.
+- If a performance gain is real, the delivery cost is noise either way — see
+  §Measuring it. The split is about *default* efficiency, not gating the
+  feature.
+
+**Still to decide from the eval:** whether `gemma4` reliably calls `recall()`
+when it should. If not, pre-inject the top-K tail matches instead of exposing a
+tool — same FTS lookup, no round-trip, at the cost of some cache churn.
+
+Schema notes are in neither layer — they attach to the catalog and ride the
+schema block's existing size-tiering (full → names+notes → names-only).
 
 ## Staleness — self-healing
 
@@ -155,18 +190,28 @@ block, tiered as that already is.
 Extend `agent_eval session-memory`: two runs on one workspace — run 1 has a
 correction turn, run 2 is a *cold* conversation with memory loaded. Gold: run 2
 applies the correction unprompted. Report run-2 accuracy/closeness with memory
-on vs off, and the token cost of the core block. **Gate:** `gemma4` must not
-regress on the base battery with memory enabled — the core block can't tax the
-questions that don't need it.
+on vs off, and the token cost of the core block.
+
+**The bar, per the maintainer's stated preference** (`DECISIONS.md`
+2026-09-07): performance beats token minimalism. If memory improves correctness
+on `gemma4`, the always-on core's tokens are accepted — the "don't add
+scaffolding" rule is for *correctness-neutral* additions. What we still watch:
+the core block must not *regress* the base battery (a distraction cost on
+questions that don't need memory), and the design stays permissive — memory is
+reference the model may use, never a rule it must follow.
 
 ## Open questions
 
-- Core-block budget vs. the prompt-minimalism finding — every always-on token
-  is scrutinised. Maybe the core block is *only* vocabulary + prefs, and even
-  the top recipes are FTS-gated.
-- `recall()` tool vs. pre-injection — a real fork; `gemma4` behaviour decides.
-- Recipe matching precision — a "2024 spend" recipe pulled for "2023 spend" and
-  reused with the stale year filter. `verify` catches the wrong answer, but
-  it's a wasted turn. How aggressively to genericise stored recipe text.
-- Multi-folder: a user with `~/money` and `~/health` — memory is strictly
+- **Core-block contents.** Vocabulary + preferences are clearly worth always-on.
+  The top recipes are the marginal call — include the top ~5, or FTS-gate all
+  recipes and keep the core to vocab + prefs? Decide from `session-memory`.
+- **`recall()` vs. pre-inject the tail.** Does `gemma4` call the tool when it
+  should? If not, pre-inject the top-K (no round-trip, some cache churn).
+- **Recipe-match precision.** A "2024 spend" recipe pulled for "2023 spend" and
+  reused with the stale filter. `verify` catches the wrong answer but it's a
+  wasted turn. How aggressively to genericise stored recipe text (strip literal
+  years/dates/file names to placeholders on store?).
+- **Episodic retention.** How many sessions / events before it rotates; whether
+  the user ever sees the raw log or only the distilled `memory.md`.
+- **Multi-folder.** A user with `~/money` and `~/health` — memory is strictly
   per-folder, no cross-folder sharing (matches the folder-is-the-world model).

@@ -50,9 +50,21 @@ precise. Two caveats:
   across a weak, a mid, and a frontier model on a **frozen** battery and keeps a
   change only if **no model regresses**. That check is what enforces the rule.
 
+- **"Don't add scaffolding" is about correctness-neutral additions, not a token
+  cap.** When a change *buys correctness* — per-folder memory is the case in
+  point — the tokens are accepted; performance beats minimalism
+  (`DECISIONS.md` 2026-09-07). Two guards remain: it must not *regress* the
+  questions that don't need it (a distraction cost), and prompts stay
+  **permissive** — no rigid step lock-step, no forbidding the model from
+  exploring or reasoning its own way to a correct answer. Added context is
+  reference the model *may* use, not a rule it *must* follow.
+
 Mechanics: `docs/PERFORMANCE.md` §`agent_eval`. Frozen 18-case battery,
 `--compare` two JSON runs, `--iters 5` (fewer is noisy — a single case flipping
 at `--iters 3` is usually variance).
+
+The running list of open design questions from shaping this work is in
+`docs/QUESTIONS.md`.
 
 ## Log
 
