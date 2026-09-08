@@ -62,15 +62,11 @@
 		white-space: pre-wrap;
 		word-break: break-word;
 	}
+	/* The user's turn is marked like a shell prompt; Fella's reply is unprefixed. */
 	.you::before {
-		content: '';
-		display: inline-block;
-		width: 3px;
-		height: 1em;
-		margin-right: var(--space-2);
-		border-radius: 1px;
-		background: var(--border-strong);
-		vertical-align: -2px;
+		content: '❯ ';
+		font-family: var(--mono);
+		color: var(--text-dim);
 	}
 	.text {
 		word-break: break-word;
