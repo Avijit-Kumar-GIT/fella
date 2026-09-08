@@ -165,3 +165,42 @@ a memory failure).
   whether the user ever sees it directly. (Log written in v1, not read.)
 - The correction heuristic (`is_correction()` keyword match) — measure its
   false-positive rate on real follow-ups before trusting it.
+
+---
+
+## Data quality (2026-09-08, prompted by the memory benchmark)
+
+- **"How often does case sensitivity actually matter in data and queries? Is it
+  worth forcing case-insensitivity, or too strict?"**
+  → *Forcing* it is too strict — it would break the rare case-significant column
+  (SKUs, codes, slugs) silently, and a silent rewrite is against "shows its
+  working". But for **Fella's domain** (personal data: category / status / type
+  / merchant labels) case is almost always data-entry noise — `Rent` = `rent` =
+  `RENT`. Direction: **surface, don't force.**
+  1. *Ingest / schema (remove-ambiguity).* Fella already counts distinct values
+     per column. When distinct-case-insensitive < distinct, flag it in the
+     schema block: `"cat" TEXT [mixed case: Rent / rent / HOUSING …]`. The model
+     then knows to `lower()`-fold. No rule, no rewrite.
+  2. *verify (optional).* A check like `text_agg_warning`: an `=` / `IN` filter
+     on such a column where a case-fold would have matched more rows →
+     "your filter matched N rows; case-insensitive would match M". Catches
+     exactly the gemma `IN ('Rent',…)` miss without forcing anything.
+  Candidate for the next memory-adjacent change; measure on `agent_eval memory`.
+
+## External memory products (2026-09-08)
+
+- **"Supermemory — a FUSE filesystem mount where `grep` becomes semantic search,
+  a live `profile.md` synthesises context, any format auto-indexed, knowledge
+  graph + a custom user-understanding model. Worth considering?"**
+  → **No, not to adopt or depend on.** It conflicts with the constitution on
+  nearly every axis: a hosted "user-understanding model" is a second thing
+  leaving the machine (or a heavy local ML stack) vs. "one small binary, local
+  by default"; a writable FUSE mount is a new dependency + failure + permission
+  surface vs. "the folder is the boundary, read-only is the whole safety
+  story"; "grep → semantic search" is a ranked non-deterministic result you
+  can't re-run and check vs. Fella's literal-regex `grep_files`; a knowledge
+  graph is the "memory system" #42 explicitly isn't building. **The one
+  transferable idea** — a synthesised, human-readable `profile.md` — Fella
+  already has as `memory.md`, minus the ML layer. Worth watching as a reference
+  for the synthesised-profile pattern and the plain-`ls`/`cat`/`grep` ergonomic
+  (Fella's tools are already close). Not a direction.
