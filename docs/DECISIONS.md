@@ -7,6 +7,11 @@ this app repo (now **`fella`**; `fella-ai` is a private pre-v0.1 archive),
 `fella-marketplace` to mean the browse-site half of the **`fella-web`** repo,
 and any `CODE_OF_CONDUCT.md` mention as folded into `CONTRIBUTING.md` (§Conduct).
 
+- **2026-09-08** **`web_search` / `web_fetch` ship as an opt-in pack, not a base
+  tool.** Reaching outward stays opt-in, one vetted piece at a time (`WHY.md`),
+  and the zero-config app stays vertical. Any web-access tool is an `mcp` or
+  `skill` pack in `fella-extensions`, never in the base seven. (Closes the
+  standing GitHub #19 design question.)
 - **2026-09-08** **The base build is vertical, not horizontal.** The app you
   install with zero configuration stays deliberately small in *feature count*
   and spends its weight on *intelligence* and *quality-of-life*: better answers,

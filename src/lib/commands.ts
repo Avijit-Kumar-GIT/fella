@@ -189,6 +189,28 @@ export async function openFolder(path?: string): Promise<void> {
 	}
 }
 
+/** On launch, reopen the folder from the last session so it's ready without a
+ *  manual `/open`. Silent if there's nothing to reopen or it's gone (the
+ *  welcome screen stays). Called once from the page's onMount. */
+export async function reopenLastFolder(): Promise<void> {
+	if (!isTauri() || session.catalog.workspace) return;
+	try {
+		const cat = await ipc.reopenLastWorkspace();
+		if (cat?.workspace) {
+			session.catalog = cat;
+			session.addSystem(`Reopened ${baseName(cat.workspace)}.\n${summarizeCatalog()}`);
+			return;
+		}
+	} catch {
+		/* fall through to a plain catalog read */
+	}
+	try {
+		session.catalog = await ipc.getCatalog();
+	} catch {
+		/* no engine yet the welcome screen handles it */
+	}
+}
+
 /** Ask the engine to stop one tab's in-progress run (the active tab by
  *  default). The `ask` promise then resolves normally (a "Stopped." answer) and
  *  clears that tab's `busy`. */
