@@ -17,6 +17,12 @@ it produces answers, not files. The read-only boundary is the safety story.
 
 ## Non-goals ("why not X")
 
+- **Vertical, not horizontal.** The zero-config base build stays small in
+  feature count and spends its weight on intelligence and quality-of-life
+  better answers, fewer interactions, faster and lighter not more commands.
+  A capability earns its place by making the existing job better or shorter,
+  not by adding a parallel thing to do; breadth lives in extensions.
+  (`DECISIONS.md` 2026-09-08.)
 - **Not a task agent.** No write/move/delete tools, no generated artifacts, no
   permission dialogs see `AUDIT.md`. Fella answers questions; it doesn't do chores.
 - **A fixed, small tool set in the base.** Adding a built-in tool or a file-format

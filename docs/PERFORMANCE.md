@@ -734,3 +734,73 @@ case regressed. grok stays 16/18: its baseline misses (`refusal` flaky,
 - **Few-shot** deferred: ablation shows no prompt slack to trade for it.
 - **Older/cheaper models.** `model-ladder` down a dated list the point where
   bad SQL/arithmetic (model decay) overtakes a correct refusal (tool ceiling).
+
+---
+
+## Interaction cost & perceived performance
+
+An ongoing track (`DECISIONS.md` 2026-09-08, vertical-not-horizontal): make the
+base build **truthfully faster** *and* **feel faster and smaller**, and keep the
+number of steps to do anything low. Prompted by `fx` v0.0.8 publishing p95 TUI
+latency and binary-size deltas as headline metrics (`QUESTIONS.md`).
+
+### Interactions per flow (2026-09-08, from a code trace of `src/lib/`)
+
+An *interaction* = one deliberate act: compose-a-line + Enter, a button click,
+one arrow-key in a menu, accept-a-completion, paste + Enter, a keyboard
+shortcut, or a native folder dialog.
+
+| flow | min | typical | max | notes |
+|---|:-:|:-:|:-:|---|
+| App start → ready to ask | 1 | **2** | 2 | drag-drop / `/open <path>` = 1; button or `/open` → native picker = 2. **No auto-reopen of the last folder** every launch needs an explicit open. |
+| Login → connected | 1 | 2–3 | ~5 | 1 = re-login (key on file) or `/login p key <KEY>`. Max = bare `/login` → read list → `/login p` via menu → paste. |
+| Choose model → set | 0 | 1–3 | ~6 | 0 = Ollama auto-reconcile; 1 = exact name or setup-panel button (≤12 models). Max = hosted gateway, name unknown. |
+| Ask a question | 1 | 1 | 1 | |
+| `/reindex` `/files` `/help` `/clear` `/retry` `/focus` `/tab` `/auth` `/update` | 1 | 1 | 1 | several have a `Ctrl`-shortcut |
+| `/sql <query>` | 1 | 1 | 1 | one keystroke burst |
+| `/schema <table>` | 1 | 2 | 3 | table-name completion menu |
+| `/history` → reopen | 2 | 2 | 2 | list, then `/history <n>` |
+| `/logout` | 1 | 1 | 2 | disambiguate if signed in to >1 |
+| `/packs enable <id>` | 1 | 2 | 3 | id completion menu |
+| `/connect <id>` | 2 | 2 | 2 | command + paste token |
+| Switch tab | 1 | 1 | 1 | click or `Ctrl+1-9` |
+| Command palette (`Ctrl+K`) | 2 | 2–3 | 19 | **pre-fills a command, doesn't run it** an intermediary step |
+
+**Aggregate:** ~20 distinct flows, ~28 interactions to exercise each once →
+~1.4 per flow. Min mostly 1 (a few 0). Max ~6.
+
+**Onboarding chain (cold start → first answer):**
+
+| scenario | interactions |
+|---|:-:|
+| Ollama installed + a chat model pulled | **3** (open 2 + ask 1; login/model are 0) |
+| Hosted provider, names known | **5** (open 2 + `/login p key <KEY>` 1 + `/model name` 1 + ask 1) |
+| Hosted provider, first run, discovering | **~11–14** |
+
+**Findings**
+
+- **The model picker is already capped.** The composer completion menu shows
+  **8 items** with "+N more keep typing" and no way to arrow past them a
+  provider with hundreds of models forces *typing to narrow*, not scrolling.
+  Worst realistic model pick is ~6 interactions, not dozens.
+- **Every launch re-opens the folder.** `recent_workspaces` is written to SQLite
+  but never read on boot. A "reopen last folder" removes one interaction from
+  *every* session → issue.
+- **Login's 5× range** (1 → ~5) is entirely inline-vs-menu discovery.
+- **The command palette doesn't complete anything** it pre-fills the composer.
+
+### Metrics to capture (not yet measured)
+
+| metric | how | status |
+|---|---|---|
+| keypress → render p95 (per TUI interaction) | instrument the Svelte components; log like `appReady` ms already is | **not captured** |
+| `appReady` ms distribution | already `console.info`'d in `+page.svelte`; collect + record a baseline | logged, not recorded |
+| installed binary size, per release | `ls -l` the bundle in `RELEASE.md` checklist; track the delta | **not tracked** |
+| agent-loop latency (`total` / `first_token` / model-vs-tool) | `agent_bench` | recorded (see `agent_bench` baseline above) |
+
+### Log
+
+- **2026-09-08** — first interaction-cost trace (above). No code changes yet.
+  Issues opened: **#44** reopen last folder on start, **#45** mid-run steer,
+  **#46** merge the inspect tools, **#47** publish latency + binary-size
+  metrics.
