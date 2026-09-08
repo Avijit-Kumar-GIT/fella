@@ -204,3 +204,45 @@ a memory failure).
   already has as `memory.md`, minus the ML layer. Worth watching as a reference
   for the synthesised-profile pattern and the plain-`ls`/`cat`/`grep` ergonomic
   (Fella's tools are already close). Not a direction.
+
+## Comparable tools we watch — `fx` v0.0.8 (2026-09-08)
+
+`vercel-labs/fx` (an AI-agent CLI / `libfx`) shipped an almost entirely
+*subtractive* release. Mapped to Fella:
+
+**Validates**
+
+- **fx removed its memory *tool*** (kept the saved memories). This is direct
+  support for `feat/folder-memory`'s choice: memory is a deterministic
+  prompt-injected block written from signals Fella already produces, **not a
+  tool the model decides to call**. The deferred `recall()` tool is deferred
+  for exactly the unresolved "does a weak model reach for it" reason. Keep the
+  store (`memory.md`) decoupled from retrieval so `recall()`, if ever added, is
+  cheap to remove. See #42, [`FOLDER-MEMORY.md`](FOLDER-MEMORY.md).
+- **12 → 3 shell actions, 6 → 2 subagent commands.** Reinforces "smallest
+  useful tool set" and the [vertical-not-horizontal](DECISIONS.md) principle.
+
+**Actionable — issues #44–47**
+
+- **Merge the inspect tools (#46).** `describe_schema` + `sample_rows` (and maybe
+  `list_files`) → one `inspect_table(name)`. `prompt-ablation` already shows
+  those calls are mostly `redundant_schema` waste; fewer inspect options = fewer
+  wrong picks. Measure waste/accuracy in `agent_eval`.
+- **Mid-run steer (#45).** fx: "Enter now steers active turns instead of queuing." In
+  Fella `submit()` bails while `session.busy` — the only mid-run option is
+  Stop → wait → retype. A message sent while busy should cancel + re-ask with
+  the text appended. Removes a full round-trip from the correction loop (see the
+  interaction-cost table in `PERFORMANCE.md`).
+- **Publish latency percentiles + binary size (#47)** as tracked
+  release metrics, alongside `agent_bench`'s loop timings. fx headlines "all 22
+  TUI interactions <15 ms p95" and "-7.49% binary".
+- **Reopen the last folder on start (#44).** From the same interaction trace:
+  `recent_workspaces` is written but never read, so every launch needs an
+  explicit `/open`.
+
+**Deferred**
+
+- **Compaction shape.** fx: keep recent tool exchanges verbatim + preserve the
+  full transcript + continue the turn in a fresh window. More sophisticated
+  than Fella's count-based `trim_history`. `folder-scale` says it's not needed
+  yet; this is the reference if long multi-step runs ever flail.

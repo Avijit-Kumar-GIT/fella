@@ -7,6 +7,17 @@ this app repo (now **`fella`**; `fella-ai` is a private pre-v0.1 archive),
 `fella-marketplace` to mean the browse-site half of the **`fella-web`** repo,
 and any `CODE_OF_CONDUCT.md` mention as folded into `CONTRIBUTING.md` (§Conduct).
 
+- **2026-09-08** **The base build is vertical, not horizontal.** The app you
+  install with zero configuration stays deliberately small in *feature count*
+  and spends its weight on *intelligence* and *quality-of-life*: better answers,
+  fewer interactions, faster and lighter, not more commands or surfaces. A new
+  capability earns its place by making the existing job better (or removing
+  steps from it), not by adding a parallel thing to do. Extensions
+  (`EXTENSIBILITY.md`) are where breadth lives, opt-in and at the edges. This is
+  the lens for every "should we add X" the answer is usually "make what's there
+  better" or "an extension". Prompted partly by watching `fx` v0.0.8 ship an
+  almost entirely *subtractive* release (12→3 shell actions, removed its memory
+  tool, simpler compaction, smaller binary) and land better for it.
 - **2026-09-07** **Performance over prompt minimalism, within reason.** The
   `agent_eval` "don't add scaffolding, remove ambiguity" rule (`HARNESS.md`)
   applies to *correctness-neutral* changes. When added context measurably buys
