@@ -40,9 +40,11 @@ ceiling and a cost.
 This is roughly the maintainer's "optimise the worst case" intuition, made
 precise. Two caveats:
 
-- The "worst case" is *the worst model you'd actually run* — for Fella, a small
-  local model, matching the shipped default. Tuning for a model nobody uses is
-  waste.
+- The "worst case" is *the worst model you'd actually run*. For Fella that is
+  fixed: **the `gemma4` series** the shipped Ollama-Cloud default, the most
+  tested model, and the floor the maintainer is willing to ship on. An
+  optimisation that helps a model weaker than `gemma4` but costs `gemma4` or a
+  frontier model is not taken. Tuning for a model nobody uses is waste.
 - It only compounds upward for the *remove-ambiguity* class. The
   *add-scaffolding* class regresses the strong model, so the eval compares
   across a weak, a mid, and a frontier model on a **frozen** battery and keeps a
@@ -90,6 +92,18 @@ at `--iters 3` is usually variance).
   dates, cumulative): 6/6 at every level. Ingest-time coercion (`parse_num`,
   totals-row drop) absorbs it before the model reasons about it.
 
+### Next
+
+- **Per-folder playbook memory.** The one add the maintainer considers
+  essential: a session in a folder should feel like Fella already knows that
+  folder this user's vocabulary, which table means what, caveats learned last
+  time carried forward without re-deriving. Compatible with the local/scoped
+  model (the memory lives beside `fella.db`, never leaves the machine, is
+  per-folder). Scope is bounded: a small learned context block prepended to the
+  prompt, not a general memory system. Treated as the last planned harness
+  change before the tuning is called done, to stay inside the app's core
+  philosophy.
+
 ### Open
 
 - **Older / cheaper models.** `model-ladder` down a dated list — the point where
@@ -104,7 +118,7 @@ are worth revisiting.
 
 | Technique | Elsewhere | Fella's position |
 |---|---|---|
-| **Cross-session memory / learned playbook** | ChatGPT "memory"; persistent strategy memory keyed to a project | Only a per-conversation `recent` block. A *per-folder* learned playbook (this user's vocabulary, which tables mean what) is compatible with the local/scoped model and is the most promising add. Not yet built. |
+| **Cross-session memory / learned playbook** | ChatGPT "memory"; persistent strategy memory keyed to a project | Only a per-conversation `recent` block. A *per-folder* learned playbook (this user's vocabulary, which tables mean what) is the [next planned change](#next) local, per-folder, bounded to a small prompt block. |
 | **Code-as-orchestration (CodeAct)** | Model writes one Python program that calls several tools, runs once, returns a consolidated result — fewer round-trips, fewer places to derail | Fella *has* the pieces: `run_python` with a `sql()` helper. It isn't the encouraged default. Making it the pattern for multi-step questions is a model-agnostic round-trip cut. Candidate. |
 | **Progressive context compaction** | LLM-summarise the transcript at token thresholds; structured handoffs; full context resets | `trim_history` only elides old tool results by count. `folder-scale` says Fella doesn't need more yet; this is the standard next tier if long multi-step runs start failing. |
 | **Generator–evaluator separation** | A distinct critic model grades the worker's output against a rubric | Against "powerfully tiny". The deterministic `verify` pass plus the one narrow re-ask is the most Fella will do here. |
