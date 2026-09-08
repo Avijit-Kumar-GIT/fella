@@ -275,24 +275,27 @@ HOUSING and mortgage as rent too". The correction lands as a vocabulary note.
 total rent spending; gold is 7 350 (all rent-ish rows), literal-`rent`-only is
 3 700.
 
-| model | memory on | memory off |
-|---|---|---|
-| **gpt-5.6-luna** | **✓ 7 350** · `WHERE LOWER(cat) IN ('rent','housing','mortgage')` | ✗ 3 700 · `WHERE lower(cat) = 'rent'` |
-| **gemma4:31b** | ✗ 4 850 · `WHERE cat IN ('Rent','HOUSING','mortgage')` | ✗ 6 150 · `WHERE cat LIKE '%Rent%' OR cat LIKE '%HOUSING%'` |
+Two rounds: `[a]` memory alone, `[b]` memory + the case-sensitivity flag added
+after (`case_collision` — a label column whose values collapse under
+case-folding gets a schema/`run_sql` note).
 
-The mechanism **conveys** the idea across the session boundary in every case —
-the correction text is in the prompt. luna **interprets and applies** it: a
-loosely-phrased note becomes the right case-folded `IN (…)` filter — a clean
-0 % → 100 % swing for +172 tokens. gemma4 also **shifts in the right
-direction** — memory-on it explicitly adds `HOUSING` and `mortgage` because of
-the note — but botches the case (`IN ('Rent',…)` misses the lowercase rows).
-Its memory-*off* query is wrong a different way, so gemma's ceiling is
-SQL-on-messy-data, not the memory carry.
+| model | round | memory on | memory off |
+|---|---|---|---|
+| **gpt-5.6-luna** | [a] | **✓ 7 350** · `WHERE LOWER(cat) IN ('rent','housing','mortgage')` | ✗ 3 700 · `WHERE lower(cat) = 'rent'` |
+| **gemma4:31b** | [a] | ✗ 4 850 · `WHERE cat IN ('Rent','HOUSING','mortgage')` (case-sensitive) | ✗ 6 150 |
+| **gemma4:31b** | [b] | **✓ 7 350** · `WHERE cat COLLATE NOCASE IN ('Rent','Housing','Mortgage')` | ✗ 6 150 · `lower(cat)='rent' OR lower(cat)='housing'` (no `mortgage`) |
 
-**Reading:** memory earns its keep on a capable model for exactly the
-cross-session, messy-folder case it was designed for. On the `gemma4` floor it
-carries the knowledge but the model can't always act on it. v1 ships default-on
-(a fresh folder costs nothing); the open work is making notes more *actionable*
-(the deferred end-of-session tidy pass — turn "count HOUSING and mortgage as
-rent" + the observed categories into `rent → lower(cat) IN ('rent','housing',
-'mortgage')`), which should close some of the gemma gap.
+The mechanism **conveys** the idea across the session boundary every time — the
+correction text is in the prompt. **Interpret + apply:**
+
+- luna applies a loosely-phrased note directly: 0 % → 100 % for +172 tokens.
+- gemma4 alone shifts the right way (adds `HOUSING`/`mortgage`) but writes a
+  case-sensitive `IN` and stays wrong — a SQL-execution ceiling, not a memory
+  failure. With the **case-sensitivity flag** it folds case *and* keeps the
+  synonyms: **✗ 4 850 → ✓ 7 350**. Memory-*off* it now folds case too but has
+  no way to know `mortgage` counts → still wrong, correctly.
+
+**Reading:** memory earns its keep on the exact cross-session messy-folder case
+it was designed for, on both a frontier and the floor model, once the
+correction is paired with a schema flag that removes the case ambiguity. v1
+ships default-on (a fresh folder costs nothing).

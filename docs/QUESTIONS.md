@@ -138,9 +138,9 @@ prompt, empty for a fresh folder. `FELLA_MEMORY=0`/`ro`. Details:
 `agent_eval memory` — two runs:
 - *same-conversation, clean folder* → no accuracy/step change, ~+130 tokens.
 - *cross-session, messy folder* (session 1 corrects "rent"; cold session 2 asks
-  the total) → **luna 0 % → 100 %** correct, the carried correction becomes the
-  right `LOWER(cat) IN (…)` filter; gemma4 shifts right but botches the
-  case-fold and stays wrong.
+  the total) → **luna 0 % → 100 %** (carried correction becomes the right
+  `LOWER(cat) IN (…)` filter). gemma4 alone botched the case-fold; **with the
+  case-sensitivity flag (added 2026-09-08) gemma4 goes ✗ 4 850 → ✓ 7 350**.
 
 **"Can our memory system accurately convey ideas from previous sessions and
 apply them in new sessions?"** (2026-09-08)
@@ -181,11 +181,11 @@ a memory failure).
      per column. When distinct-case-insensitive < distinct, flag it in the
      schema block: `"cat" TEXT [mixed case: Rent / rent / HOUSING …]`. The model
      then knows to `lower()`-fold. No rule, no rewrite.
-  2. *verify (optional).* A check like `text_agg_warning`: an `=` / `IN` filter
-     on such a column where a case-fold would have matched more rows →
-     "your filter matched N rows; case-insensitive would match M". Catches
-     exactly the gemma `IN ('Rent',…)` miss without forcing anything.
-  Candidate for the next memory-adjacent change; measure on `agent_eval memory`.
+  2. *verify + `run_sql`.* `case_sensitive_label_filter`: a bare `= '…'` /
+     `IN (…)` on such a column that isn't `lower()`-wrapped gets an inline NOTE
+     mid-loop and a soft warning post-answer.
+  **DONE 2026-09-08.** On `agent_eval memory` (cross-session) it took gemma4
+  from ✗ 4 850 → ✓ 7 350 — folds case *and* keeps the carried memory correction.
 
 ## External memory products (2026-09-08)
 

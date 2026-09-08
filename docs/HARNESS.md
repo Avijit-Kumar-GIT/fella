@@ -87,6 +87,14 @@ The running list of open design questions from shaping this work is in
   "≈18%" as the raw ratio "0.176…". `FELLA_VERIFY_REASK=0` disables. Dormant on
   read-only data by design.
 
+- **2026-09-08 · Case-sensitivity flag** (`case_collision` at ingest;
+  `case_sensitive_label_filter` in `verify` + `run_sql`). A label column whose
+  distinct values collapse under case-folding (`Rent` / `rent` / `RENT`) gets a
+  note; a bare `= '…'` / `IN (…)` filter on it that isn't `lower()`-wrapped
+  gets an inline warning. *Remove-ambiguity* — surfaces a real property of the
+  data, forces no rewrite. It's what let the `gemma4` floor turn a carried
+  memory correction into a correct query (below): ✗ 4 850 → ✓ 7 350.
+
 - **2026-09-08 · Per-folder memory v1** (`engine::memory`, branch
   `feat/folder-memory`, [`FOLDER-MEMORY.md`](FOLDER-MEMORY.md)). A plain-text
   `memory.md` per folder, written from deterministic signals (a `verify`-clean
@@ -99,12 +107,13 @@ The running list of open design questions from shaping this work is in
     need a recipe.
   - *Cross-session, messy folder* (session 1 corrects "rent"; a cold session 2
     asks the total) — **luna 0 % → 100 %** (the carried correction becomes the
-    right `LOWER(cat) IN (…)` filter) for +172 tokens; gemma4 shifts in the
-    right direction but botches the case-fold and stays wrong (an SQL-execution
-    ceiling, not a memory failure).
-  Ships default-on: a fresh folder costs nothing, and it decisively earns its
-  tokens on the case it exists for. Open: making notes more actionable (the
-  deferred end-of-session tidy pass) to close the `gemma4` gap.
+    right `LOWER(cat) IN (…)` filter) for +172 tokens. gemma4 alone shifted the
+    right way but botched the case-fold; **with the case-sensitivity flag
+    (2026-09-08) it goes ✗ 4 850 → ✓ 7 350** — folds case *and* keeps the
+    carried synonyms.
+  Ships default-on: a fresh folder costs nothing, and it earns its tokens on
+  the cross-session messy-folder case it exists for, on both a frontier and the
+  floor model.
 
 ### Measured, no change
 

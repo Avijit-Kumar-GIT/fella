@@ -21,6 +21,12 @@ All notable changes to Fella are recorded here. Format follows
 
 ### Changed
 
+- **A column whose values differ only in capitalisation is now flagged.** If a
+  category-style column holds `Rent`, `rent`, and `RENT` as if they were
+  different, Fella notes it on the column and, if a query filters that column
+  by exact case, says so — so a `Rent` row and a `rent` row don't silently fall
+  on opposite sides of a filter. It doesn't rewrite your query; it points out
+  where folding case (`lower(col)`, `COLLATE NOCASE`) would matter.
 - **Fella won't forecast.** The "if the files can't answer, say so" rule now
   spells out that a question about the future ("next month", "will I", "how
   much will") has no answer in past records the model says so instead of
