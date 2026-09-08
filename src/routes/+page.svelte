@@ -2,9 +2,9 @@
 	import { onMount } from 'svelte';
 	import CommandPalette from '$lib/components/CommandPalette.svelte';
 	import Composer from '$lib/components/Composer.svelte';
-	import Header from '$lib/components/Header.svelte';
 	import StatusBar from '$lib/components/StatusBar.svelte';
 	import TabBar from '$lib/components/TabBar.svelte';
+	import Titlebar from '$lib/components/Titlebar.svelte';
 	import Transcript from '$lib/components/Transcript.svelte';
 	import { dispatch, reconcileModel, stop } from '$lib/commands';
 	import { ipc, isTauri } from '$lib/ipc';
@@ -156,13 +156,9 @@
 <svelte:window onkeydown={onKey} />
 
 <div class="app">
-	<!-- Always grabbable: moves the window even when the chrome is hidden. -->
-	<div class="draghandle" data-tauri-drag-region></div>
+	<Titlebar onpalette={() => (paletteOpen = true)} />
 	{#if !session.focus}
 		<TabBar />
-		{#if session.catalog.workspace}
-			<Header />
-		{/if}
 	{/if}
 	<main>
 		<Transcript bind:this={transcript} />
@@ -181,12 +177,6 @@
 		flex-direction: column;
 		height: 100%;
 		background: var(--bg);
-	}
-	/* A thin move strip under the OS title bar, so the window is draggable from
-	   the app's own top edge (and still is in focus mode). */
-	.draghandle {
-		flex: none;
-		height: 8px;
 	}
 	main {
 		flex: 1;
