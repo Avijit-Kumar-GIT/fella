@@ -169,8 +169,10 @@
 	<main>
 		<Transcript bind:this={transcript} />
 	</main>
-	<Composer bind:this={composer} onafterrun={refreshHealth} />
-	<StatusBar />
+	<div class="dock">
+		<StatusBar />
+		<Composer bind:this={composer} onafterrun={refreshHealth} />
+	</div>
 </div>
 
 <div class="sr-only" role="status" aria-live="polite">{live}</div>
@@ -197,6 +199,13 @@
 		flex-direction: column;
 		background: var(--bg-raised);
 		border-top: 1px solid var(--border);
+	}
+	/* Status line + composer read as one calm footer zone, not two stacked
+	   full-width bars. */
+	.dock {
+		flex: none;
+		background: var(--bg);
+		padding-bottom: var(--space-2);
 	}
 	.dropzone {
 		position: fixed;

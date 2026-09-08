@@ -18,6 +18,19 @@
 	let history = $derived(session.activeTab.history);
 	let histIx = -1;
 
+	let folderName = $derived(
+		session.catalog.workspace?.replace(/[/\\]+$/, '').replace(/^.*[/\\]/, '') ?? ''
+	);
+	let placeholder = $derived(
+		session.pendingKey
+			? `Paste your ${session.pendingKey.display} API key…`
+			: session.pendingConnect
+				? `Paste the ${session.pendingConnect.id} key…`
+				: folderName
+					? `Ask about ${folderName}…`
+					: 'Open a folder to ask, or type /help'
+	);
+
 	// --- completion menu -------------------------------------------------
 	const MAX_ITEMS = 8;
 	let menuSel = $state(-1); // -1 = nothing highlighted; Enter still submits
@@ -203,14 +216,8 @@
 			aria-controls="composer-completions"
 			aria-autocomplete="list"
 			aria-activedescendant={menuOpen && menuSel >= 0 ? 'composer-opt-' + menuSel : undefined}
-			aria-label={session.catalog.workspace ? 'Ask about your files' : 'Ask a question'}
-			placeholder={session.pendingKey
-				? `Paste your ${session.pendingKey.display} API key…`
-				: session.pendingConnect
-					? `Paste the ${session.pendingConnect.id} key…`
-					: session.catalog.workspace
-						? 'Ask about your files…'
-						: 'Ask a question, or type /help'}
+			aria-label={folderName ? `Ask about ${folderName}` : 'Ask a question'}
+			{placeholder}
 			oninput={onInput}
 			onkeydown={onKey}
 			onfocus={() => (menuOff = false)}
@@ -232,16 +239,17 @@
 		position: relative;
 		flex: none;
 		background: var(--bg);
-		padding: var(--space-3) var(--pad) var(--space-4);
+		padding: var(--space-1) var(--pad) var(--space-2);
 	}
-	/* The composer is a distinct raised surface a real input, not a bare line. */
+	/* A distinct raised surface floating in the footer a real input, not a
+	   bare line. Softly rounded; stays sane when the textarea grows tall. */
 	.field {
 		display: flex;
 		align-items: flex-end;
 		gap: var(--space-2);
 		background: var(--bg-raised);
 		border: 1px solid var(--border-strong);
-		border-radius: var(--radius);
+		border-radius: 18px;
 		box-shadow: var(--shadow-sm);
 		padding: var(--space-2) var(--space-2) var(--space-2) var(--space-4);
 		transition:
@@ -282,17 +290,21 @@
 		flex: none;
 		display: grid;
 		place-items: center;
-		width: 26px;
-		height: 26px;
-		border-radius: var(--radius-sm);
+		width: 28px;
+		height: 28px;
+		border-radius: 50%;
 		color: var(--text-faint);
 		transition:
 			background var(--dur-fast) var(--ease),
 			color var(--dur-fast) var(--ease);
 	}
-	.act.send:hover {
-		color: var(--text);
+	.act.send {
 		background: var(--bg-inset);
+		color: var(--text-dim);
+	}
+	.act.send:hover {
+		color: var(--bg-raised);
+		background: var(--text);
 	}
 	.act.stop {
 		color: var(--err);

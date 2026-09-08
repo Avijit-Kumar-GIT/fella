@@ -67,11 +67,10 @@
 		display: flex;
 		align-items: center;
 		gap: var(--space-2);
-		padding: var(--space-2) var(--pad);
+		padding: var(--space-2) calc(var(--pad) + var(--space-4)) var(--space-1);
 		background: var(--bg);
-		border-top: 1px solid var(--border);
 		color: var(--text-faint);
-		font-size: var(--fs-sm);
+		font-size: var(--fs-xs);
 		letter-spacing: 0.005em;
 		white-space: nowrap;
 		overflow: hidden;
