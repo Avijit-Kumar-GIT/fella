@@ -112,7 +112,7 @@ src-tauri/src/
     mcp.rs                   #[cfg(feature="mcp")] rmcp client + our HTTP backend
     agent.rs                 reasoning loop + deterministic verification pass
     evidence.rs              EvidenceItem / Answer / AskEvent types
-    tools.rs                 Tool trait, Registry, JSON-Schema export; the 7 built-ins
+    tools.rs                 Tool trait, Registry, JSON-Schema export; the 6 built-ins
     verify.rs                re-run cited SQL, check every figure came from a tool
     memory.rs                per-folder learned notes (memory.md); FELLA_MEMORY
 ```
@@ -138,7 +138,7 @@ suffix); recorded in `fella.db` `sources`.
   clear "rebuild with `--features duckdb`" on query.
 - XLSX → `calamine` reads each sheet → inferred rows → `DataEngine::add_rows`.
 
-`describe` (the `describe_schema` tool): SQLite composes `count(*) / count(col) /
+`describe` (the `inspect_table` tool): SQLite composes `count(*) / count(col) /
 count(DISTINCT col) / min / max` per column; DuckDB uses `SUMMARIZE`.
 
 **Documents** (`ingest/docs.rs`): `.pdf` / `.txt` / `.md` / `.log` are catalogued
@@ -209,14 +209,13 @@ capitalisation. Rendered as a ✓/⚠ checklist in the evidence block.
 
 ## Tools
 
-Seven built-ins (`tools.rs`), plus any namespaced `connector__tool` from an
+Six built-ins (`tools.rs`), plus any namespaced `connector__tool` from an
 enabled `mcp` pack (`mcp.rs`, held in a separate `Registry.mcp` list).
 
 | Tool | Args | Returns / guardrails |
 |------|------|----------------------|
 | `list_files` | | workspace files: kind, row count / size, which table each maps to |
-| `describe_schema` | `name` | per column: type, null %, distinct, min/max |
-| `sample_rows` | `name`, `n=10` | first N rows as JSON |
+| `inspect_table` | `name`, `rows=5` | per column: type, null %, distinct, min/max; plus the first `rows` rows (0-50). Merged `describe_schema` + `sample_rows` (2026-09-08) |
 | `run_sql` | `sql` | columns + rows (capped), row_count, ms. Read-only guard: single SELECT/WITH statement; rejects DDL/DML/`ATTACH`/`COPY`/`INSTALL`, `read_text`/`read_blob`/`glob`; a watchdog interrupts a runaway query (`FELLA_QUERY_TIMEOUT_SECS`, 15 s) |
 | `grep_files` | `pattern`, `max_hits=30` | matching lines (file + line) from every catalogued document, case-insensitive regex. No index |
 | `read_file` | `name` | full extracted text of one document, capped ~12k chars |

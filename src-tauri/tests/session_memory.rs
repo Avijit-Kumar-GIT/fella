@@ -202,7 +202,7 @@ async fn ollama_request_carries_tuning_and_budget() {
 }
 
 #[tokio::test]
-async fn describe_schema_now_includes_sample_rows() {
+async fn inspect_table_includes_sample_rows() {
     let ws = scratch("desc-ws");
     let data = scratch("desc-data");
     fs::write(ws.join("ledger.csv"), "month,amount\n2024-01,1200\n2024-02,1300\n").unwrap();
@@ -213,7 +213,7 @@ async fn describe_schema_now_includes_sample_rows() {
                 "role": "assistant",
                 "content": "",
                 "tool_calls": [
-                    { "function": { "name": "describe_schema", "arguments": { "name": "ledger" } } }
+                    { "function": { "name": "inspect_table", "arguments": { "name": "ledger" } } }
                 ]
             }
         }),
@@ -223,7 +223,7 @@ async fn describe_schema_now_includes_sample_rows() {
     engine.ask("c", "what's in the ledger?", None, |_| {}).await.unwrap();
     server.join().unwrap();
 
-    // The post-tool request carries the describe_schema result as a tool message.
+    // The post-tool request carries the inspect_table result as a tool message.
     let reqs = seen.lock().unwrap();
     let tool_msg = reqs[1]["messages"]
         .as_array()
@@ -233,8 +233,8 @@ async fn describe_schema_now_includes_sample_rows() {
         .and_then(|m| m["content"].as_str())
         .unwrap_or("");
     assert!(
-        tool_msg.contains("sample rows"),
-        "describe_schema should fold in samples so no follow-up call is needed:\n{tool_msg}"
+        tool_msg.contains("row(s):"),
+        "inspect_table folds in the first rows so no follow-up call is needed:\n{tool_msg}"
     );
 
     let _ = fs::remove_dir_all(&ws);

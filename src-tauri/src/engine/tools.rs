@@ -57,8 +57,7 @@ impl Registry {
         Self {
             tools: vec![
                 Box::new(ListFiles),
-                Box::new(DescribeSchema),
-                Box::new(SampleRows),
+                Box::new(InspectTable),
                 Box::new(RunSql),
                 Box::new(GrepFiles),
                 Box::new(ReadFile),
@@ -270,29 +269,39 @@ impl Tool for ListFiles {
     }
 }
 
-// --- describe_schema -------------------------------------------------
+// --- inspect_table -----------------------------------------------------
+//
+// One tool for "look at a table": per-column stats + sample rows. Merged from
+// the old `describe_schema` + `sample_rows` (the former already folded in three
+// rows, so the pair was mostly one thing with two names).
 
-pub struct DescribeSchema;
+pub struct InspectTable;
 
 #[async_trait]
-impl Tool for DescribeSchema {
+impl Tool for InspectTable {
     fn name(&self) -> &'static str {
-        "describe_schema"
+        "inspect_table"
     }
     fn description(&self) -> &'static str {
         "Per-column stats for a table (type, null fraction, distinct count, min, max) \
-plus a few sample rows. One call to see everything about a table."
+and its first few rows. One call to see everything about a table. `rows` sets how \
+many sample rows to return (default 5, max 50)."
     }
     fn parameters(&self) -> Json {
         json!({
             "type": "object",
-            "properties": { "name": { "type": "string" } },
+            "properties": {
+                "name": { "type": "string" },
+                "rows": { "type": "integer", "minimum": 0, "maximum": 50 }
+            },
             "required": ["name"],
             "additionalProperties": false
         })
     }
     async fn run(&self, engine: &EngineState, args: &Json) -> EngineResult<ToolOutput> {
         let name = str_arg(args, "name")?;
+        let n = args.get("rows").and_then(|v| v.as_u64()).unwrap_or(5).clamp(0, 50) as usize;
+
         let info = engine.describe_source(name)?;
         let cols = info.columns.unwrap_or_default();
         let mut lines = vec![format!(
@@ -318,60 +327,23 @@ plus a few sample rows. One call to see everything about a table."
                 c.note.as_deref().map(|n| format!("  [{n}]")).unwrap_or_default(),
             ));
         }
-        // Fold in a few sample rows so the model doesn't need a follow-up
-        // sample_rows call to see what the data actually looks like.
-        if let Ok(sample) = engine.sample(name, 3) {
-            if !sample.rows.is_empty() {
+
+        let sample = if n > 0 { engine.sample(name, n).ok() } else { None };
+        if let Some(s) = &sample {
+            if !s.rows.is_empty() {
                 lines.push(String::new());
-                lines.push("sample rows:".to_string());
-                lines.push(table_text(&sample, 3));
+                lines.push(format!("first {} row(s):", s.rows.len()));
+                lines.push(table_text(s, n));
             }
         }
-        Ok(ToolOutput::text(
-            format!("schema of {name}"),
-            lines.join("\n"),
-        ))
-    }
-}
 
-// --- sample_rows ---------------------------------------------------------
-
-pub struct SampleRows;
-
-#[async_trait]
-impl Tool for SampleRows {
-    fn name(&self) -> &'static str {
-        "sample_rows"
-    }
-    fn description(&self) -> &'static str {
-        "Return the first N rows of a table (default 10, max 50)."
-    }
-    fn parameters(&self) -> Json {
-        json!({
-            "type": "object",
-            "properties": {
-                "name": { "type": "string" },
-                "n": { "type": "integer", "minimum": 1, "maximum": 50 }
-            },
-            "required": ["name"],
-            "additionalProperties": false
-        })
-    }
-    async fn run(&self, engine: &EngineState, args: &Json) -> EngineResult<ToolOutput> {
-        let name = str_arg(args, "name")?;
-        let n = args
-            .get("n")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(10)
-            .clamp(1, 50) as usize;
-        let q = engine.sample(name, n)?;
         Ok(ToolOutput {
-            summary: format!("{} sample rows from {name}", q.rows.len()),
-            llm_text: table_text(&q, n),
+            summary: format!("inspected {name}"),
+            llm_text: lines.join("\n"),
             sql: None,
-            columns: Some(q.columns),
-            rows: Some(q.rows),
-            row_count: Some(q.row_count),
+            columns: sample.as_ref().map(|s| s.columns.clone()),
+            rows: sample.as_ref().map(|s| s.rows.clone()),
+            row_count: sample.as_ref().map(|s| s.row_count),
             output: None,
         })
     }
