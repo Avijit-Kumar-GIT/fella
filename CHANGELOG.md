@@ -8,10 +8,10 @@ All notable changes to Fella are recorded here. Format follows
 
 ### Added
 
-- **`/memory` shows what Fella has learned about a folder.** Prints the
-  folder's `memory.md` (the learned notes it's built from your questions and
-  corrections) and its path so you can edit it directly. `/memory forget`
-  clears it and starts over.
+- **Fella reopens your last folder on start.** No more picking the same folder
+  every launch — Fella opens the one from your last session automatically (and
+  says so). The welcome screen still shows if that folder has moved or you've
+  never opened one.
 - **Per-folder memory (experimental).** Fella now keeps a small plain-text
   `memory.md` for each folder — the *learned* companion to `fella.md`. It fills
   itself in from what already happens: a query that passed the self-check

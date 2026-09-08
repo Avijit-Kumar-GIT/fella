@@ -61,6 +61,7 @@ export const ipc = {
 	appReady: () => invoke<number>('app_ready'),
 	openWorkspace: (path: string) => invoke<Catalog>('open_workspace', { path }),
 	getCatalog: () => invoke<Catalog>('get_catalog'),
+	reopenLastWorkspace: () => invoke<Catalog | null>('reopen_last_workspace'),
 	describe: (name: string) => invoke<SourceInfo>('describe', { name }),
 	runSqlDirect: (sql: string) => invoke<QueryResult>('run_sql_direct', { sql }),
 	getSettings: () => invoke<Settings>('get_settings'),

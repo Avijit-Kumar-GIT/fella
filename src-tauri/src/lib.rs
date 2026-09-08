@@ -51,6 +51,7 @@ pub fn run() {
             commands::app_ready,
             commands::open_workspace,
             commands::get_catalog,
+            commands::reopen_last_workspace,
             commands::describe,
             commands::run_sql_direct,
             commands::reindex,

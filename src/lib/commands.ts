@@ -194,6 +194,28 @@ export async function openFolder(path?: string): Promise<void> {
 	}
 }
 
+/** On launch, reopen the folder from the last session so it's ready without a
+ *  manual `/open`. Silent if there's nothing to reopen or it's gone (the
+ *  welcome screen stays). Called once from the page's onMount. */
+export async function reopenLastFolder(): Promise<void> {
+	if (!isTauri() || session.catalog.workspace) return;
+	try {
+		const cat = await ipc.reopenLastWorkspace();
+		if (cat?.workspace) {
+			session.catalog = cat;
+			session.addSystem(`Reopened ${baseName(cat.workspace)}.\n${summarizeCatalog()}`);
+			return;
+		}
+	} catch {
+		/* fall through to a plain catalog read */
+	}
+	try {
+		session.catalog = await ipc.getCatalog();
+	} catch {
+		/* no engine yet the welcome screen handles it */
+	}
+}
+
 /** Ask the engine to stop one tab's in-progress run (the active tab by
  *  default). The `ask` promise then resolves normally (a "Stopped." answer) and
  *  clears that tab's `busy`. */
@@ -205,6 +227,20 @@ export async function stop(conv: Conversation = session.activeTab): Promise<void
 	} catch {
 		/* the run may have already finished nothing to stop */
 	}
+}
+
+/** Correct a running answer: cancel it, then re-ask the same question with the
+ *  new line appended. Only reached from a deliberate Enter in the composer while
+ *  a run is live (see `Composer.submit`); the transcript shows what happened. */
+export async function steerRun(conv: Conversation, extra: string): Promise<void> {
+	const prior = [...conv.messages].reverse().find((m) => m.role === 'user');
+	if (!prior?.text) return;
+	conv.addSystem('↻ Cancelled the current answer and re-asking with your addition.');
+	await stop(conv);
+	// Let the cancelled run unwind (its `ask` resolves "Stopped." and clears busy).
+	for (let i = 0; i < 60 && conv.busy; i++) await new Promise((r) => setTimeout(r, 50));
+	conv.addUser(extra);
+	await ask(`${prior.text}\n\nAlso: ${extra}`, conv);
 }
 
 /** Entry point: called with the raw composer text. */
