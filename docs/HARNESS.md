@@ -105,19 +105,20 @@ at `--iters 3` is usually variance).
   problem to solve. The last planned harness change before the tuning is
   called done, to stay inside the app's core philosophy.
 
-  **Build it custom, no new dependency.** The mature memory libraries (Mem0,
-  Letta/MemGPT, Zep/Graphiti, Cognee, LangMem) each solve a bigger problem
-  than this a query-time retrieval layer over thousands of memories and each
-  brings a Python runtime, a vector/graph store, an external server, or a
-  per-turn LLM extraction call, all of which Fella's constitution refuses.
-  Borrow the *patterns*, not the code: Letta's fixed-size self-editable
-  **memory block**; Zep's **supersede, don't append** (a corrected caveat
-  replaces the old one it doesn't pile up contradictions); Mem0's
-  **extract → reconcile → store** as *one* end-of-session pass, not per turn;
-  memweave's **file is the truth, any index is a rebuildable cache** (so it's
-  hand-editable and `git`-able, and composes with the user-authored
-  `fella.md`). Measured against the frozen battery + `agent_eval
-  session-memory`; gated on not regressing `gemma4`.
+  **Build it custom, no new dependency.** Design exploration in
+  [`FOLDER-MEMORY.md`](FOLDER-MEMORY.md). Shape: a `MEMORY.md`-style plain-text
+  artifact per folder (the *learned* sibling of `fella.md`), written mostly
+  from signals Fella already has (`verify` passed → a recipe; a correction → a
+  vocabulary note; ingest coercion → a schema note), with FTS5 (already
+  bundled) for the selective tail and no embeddings. The mature libraries
+  (Mem0, Letta/MemGPT, Zep/Graphiti, Cognee, LangMem) each solve a bigger
+  problem and each need a Python runtime, a vector/graph store, a server, or a
+  per-turn LLM extraction call Fella's constitution refuses all four. Borrow
+  the *patterns*: Letta's self-editable **memory block**; Zep's **supersede,
+  don't append**; Mem0's **extract → reconcile** as *one* end-of-session pass;
+  memweave's **file is the truth, the index is a rebuildable cache**. Measured
+  against the frozen battery + `agent_eval session-memory`; gated on not
+  regressing `gemma4`.
 
 ### Open
 
