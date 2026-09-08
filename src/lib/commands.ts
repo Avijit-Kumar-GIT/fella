@@ -224,6 +224,20 @@ export async function stop(conv: Conversation = session.activeTab): Promise<void
 	}
 }
 
+/** Correct a running answer: cancel it, then re-ask the same question with the
+ *  new line appended. Only reached from a deliberate Enter in the composer while
+ *  a run is live (see `Composer.submit`); the transcript shows what happened. */
+export async function steerRun(conv: Conversation, extra: string): Promise<void> {
+	const prior = [...conv.messages].reverse().find((m) => m.role === 'user');
+	if (!prior?.text) return;
+	conv.addSystem('↻ Cancelled the current answer and re-asking with your addition.');
+	await stop(conv);
+	// Let the cancelled run unwind (its `ask` resolves "Stopped." and clears busy).
+	for (let i = 0; i < 60 && conv.busy; i++) await new Promise((r) => setTimeout(r, 50));
+	conv.addUser(extra);
+	await ask(`${prior.text}\n\nAlso: ${extra}`, conv);
+}
+
 /** Entry point: called with the raw composer text. */
 export async function dispatch(raw: string): Promise<void> {
 	const text = raw.trim();

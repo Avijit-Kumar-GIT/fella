@@ -788,18 +788,30 @@ shortcut, or a native folder dialog.
 - **Login's 5× range** (1 → ~5) is entirely inline-vs-menu discovery.
 - **The command palette doesn't complete anything** it pre-fills the composer.
 
-### Metrics to capture (not yet measured)
+### Metrics tracked per release (#47)
 
-| metric | how | status |
-|---|---|---|
-| keypress → render p95 (per TUI interaction) | instrument the Svelte components; log like `appReady` ms already is | **not captured** |
-| `appReady` ms distribution | already `console.info`'d in `+page.svelte`; collect + record a baseline | logged, not recorded |
-| installed binary size, per release | `ls -l` the bundle in `RELEASE.md` checklist; track the delta | **not tracked** |
-| agent-loop latency (`total` / `first_token` / model-vs-tool) | `agent_bench` | recorded (see `agent_bench` baseline above) |
+`scripts/measure.sh` already collects sizes, dependency counts, cold-start time
+and idle memory and **appends the results here under a dated heading**. Run it
+in the pre-flight gate (`RELEASE.md` §1) every release and eyeball the delta
+against the previous run. Reference point (0.1.3 build, this machine):
+
+| metric | value | source |
+|---|--:|---|
+| `fella` binary (release, symtab kept on purpose) | ~19.0 MiB | `ls -l src-tauri/target/release/fella` |
+| `.deb` installer | ~7.4 MiB | `pnpm tauri build` |
+| release profile | `lto=thin`, `codegen-units=1`, `panic=abort`, `strip=debuginfo` | `Cargo.toml`; `release-min` (`opt-level=z`, `lto=fat`, full strip) exists for a squeeze |
+| agent-loop latency | see `agent_bench` baseline above + `mean wall s` in the model tables | `agent_bench` / `agent_eval` |
+| cold start (`appReady` ms) | measured by `measure.sh` (needs a display) | `+page.svelte` logs it; `commands::app_ready` prints to stderr |
+
+**The one real gap: per-interaction latency** (keypress → next paint for menu
+open, completion accept, tab switch, submit). Not measured — and deliberately
+not built yet: nobody's reported the UI as laggy, and a keystroke-timing
+harness for a small local Svelte app is speculative. Add it only if the app
+starts to feel slow.
 
 ### Log
 
-- **2026-09-08** — first interaction-cost trace (above). Issues **#44–47**
-  opened. **#44 shipped** (last folder reopens on start). Still open: #45
-  mid-run steer, #46 merge the inspect tools, #47 latency + binary-size
-  metrics.
+- **2026-09-08** — first interaction-cost trace (above). `#44` shipped (last
+  folder reopens on start); `#45` shipped (mid-run steer). `#47` = this
+  section: track `measure.sh` numbers per release; per-interaction latency
+  left as YAGNI. `#46` (merge the inspect tools) still open.
