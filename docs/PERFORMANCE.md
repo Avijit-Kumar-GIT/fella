@@ -752,7 +752,7 @@ shortcut, or a native folder dialog.
 
 | flow | min | typical | max | notes |
 |---|:-:|:-:|:-:|---|
-| App start → ready to ask | 1 | **2** | 2 | drag-drop / `/open <path>` = 1; button or `/open` → native picker = 2. **No auto-reopen of the last folder** every launch needs an explicit open. |
+| App start → ready to ask | **0** | **0** | 2 | last folder reopens on start (#44, shipped). First run / folder moved: button or `/open` → native picker = 2. |
 | Login → connected | 1 | 2–3 | ~5 | 1 = re-login (key on file) or `/login p key <KEY>`. Max = bare `/login` → read list → `/login p` via menu → paste. |
 | Choose model → set | 0 | 1–3 | ~6 | 0 = Ollama auto-reconcile; 1 = exact name or setup-panel button (≤12 models). Max = hosted gateway, name unknown. |
 | Ask a question | 1 | 1 | 1 | |
@@ -783,9 +783,8 @@ shortcut, or a native folder dialog.
   **8 items** with "+N more keep typing" and no way to arrow past them a
   provider with hundreds of models forces *typing to narrow*, not scrolling.
   Worst realistic model pick is ~6 interactions, not dozens.
-- **Every launch re-opens the folder.** `recent_workspaces` is written to SQLite
-  but never read on boot. A "reopen last folder" removes one interaction from
-  *every* session → issue.
+- **~~Every launch re-opens the folder.~~** Fixed (#44): the last folder now
+  reopens on start, removing one interaction from every returning session.
 - **Login's 5× range** (1 → ~5) is entirely inline-vs-menu discovery.
 - **The command palette doesn't complete anything** it pre-fills the composer.
 
@@ -800,7 +799,7 @@ shortcut, or a native folder dialog.
 
 ### Log
 
-- **2026-09-08** — first interaction-cost trace (above). No code changes yet.
-  Issues opened: **#44** reopen last folder on start, **#45** mid-run steer,
-  **#46** merge the inspect tools, **#47** publish latency + binary-size
+- **2026-09-08** — first interaction-cost trace (above). Issues **#44–47**
+  opened. **#44 shipped** (last folder reopens on start). Still open: #45
+  mid-run steer, #46 merge the inspect tools, #47 latency + binary-size
   metrics.

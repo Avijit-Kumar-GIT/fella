@@ -61,6 +61,13 @@ pub fn get_catalog(engine: State<'_, EngineState>) -> Catalog {
     engine.catalog()
 }
 
+/// Reopen the folder from the last session (launch only). `null` if there's
+/// nothing to reopen or it's gone.
+#[tauri::command]
+pub fn reopen_last_workspace(engine: State<'_, EngineState>) -> Option<Catalog> {
+    engine.reopen_last_workspace()
+}
+
 #[tauri::command]
 pub fn describe(name: String, engine: State<'_, EngineState>) -> EngineResult<SourceInfo> {
     engine.describe_source(&name)

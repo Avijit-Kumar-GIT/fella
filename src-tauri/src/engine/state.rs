@@ -936,6 +936,31 @@ impl EngineState {
         Ok(self.catalog())
     }
 
+    /// On launch: reopen the folder from the last session so the user doesn't
+    /// re-pick it every time. `None` (and the welcome screen) if there's no
+    /// history, the folder is gone, or it won't open no error is surfaced.
+    /// A no-op if a workspace is already open.
+    pub fn reopen_last_workspace(&self) -> Option<Catalog> {
+        if self.inner.lock().unwrap_or_else(|e| e.into_inner()).workspace.is_some() {
+            return None;
+        }
+        let path = {
+            let conn = self.sqlite.lock().unwrap_or_else(|e| e.into_inner());
+            sqlite::most_recent_workspace(&conn)?
+        };
+        let p = std::path::PathBuf::from(&path);
+        if !p.is_dir() {
+            return None;
+        }
+        match self.open_workspace(&p) {
+            Ok(cat) => Some(cat),
+            Err(e) => {
+                log::info!("reopen_last_workspace: {path}: {e}");
+                None
+            }
+        }
+    }
+
     /// Re-open the current workspace (used by `/reindex`).
     pub fn reindex(&self) -> EngineResult<Catalog> {
         let ws = {

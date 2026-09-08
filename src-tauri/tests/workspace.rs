@@ -547,3 +547,32 @@ fn a_workbook_with_no_usable_sheet_gives_a_specific_reason() {
     let _ = fs::remove_dir_all(&ws);
     let _ = fs::remove_dir_all(&data);
 }
+
+#[test]
+fn reopens_the_last_workspace_on_a_fresh_engine() {
+    let ws = scratch("reopen-ws");
+    let data = scratch("reopen-data");
+    fs::write(ws.join("sales.csv"), "month,amount\n2024-01,100\n2024-02,150\n").unwrap();
+
+    // Session 1: open the folder (records it in recent_workspaces).
+    {
+        let engine = EngineState::new(&data).unwrap();
+        engine.open_workspace(&ws).unwrap();
+    }
+
+    // Session 2: a fresh engine on the same data dir reopens it on request.
+    let engine = EngineState::new(&data).unwrap();
+    assert!(engine.catalog().workspace.is_none(), "starts with no folder");
+    let cat = engine.reopen_last_workspace().expect("reopens the last folder");
+    assert_eq!(cat.workspace.as_deref(), Some(ws.to_str().unwrap()));
+    assert!(cat.sources.iter().any(|s| s.name == "sales.csv"));
+    // A second call is a no-op (a folder is already open).
+    assert!(engine.reopen_last_workspace().is_none());
+
+    // Session 3: the folder is gone -> None, no error.
+    let _ = fs::remove_dir_all(&ws);
+    let engine3 = EngineState::new(&data).unwrap();
+    assert!(engine3.reopen_last_workspace().is_none());
+
+    let _ = fs::remove_dir_all(&data);
+}
