@@ -258,15 +258,41 @@ and `state.rs` (`folder_memory_block()` read each turn; a record hook in
 - **End-of-session tidy pass**, `<folder>/.fella/` opt-in location, `/memory`
   command.
 
-**First benchmark** (`agent_eval memory`, gemma4:31b, 13-table synthetic
-workspace, prime one aggregate → cold-ask a different aggregate on the same
-table): **no accuracy, step, or waste difference; memory on cost a small number
-of extra prompt tokens** (the one primed recipe). The synthetic `testkit`
-workspaces are deliberately clean and their column names are guessable, so a
-recipe isn't load-bearing — `gemma4` writes the right SQL from the schema block
-alone. The value case (cryptic column codes, learned vocabulary the model can't
-guess, a correction, a non-obvious join) needs a real folder or a harder
-scenario to demonstrate. v1 ships default-on because a fresh folder costs
-nothing and the cost scales with what's actually been learned; revisit the
-default if a real-folder measurement shows a persistent regression with no
-matching gain.
+**Benchmarks** (`agent_eval memory`).
+
+*Same-conversation, clean folder* — prime an aggregate, cold-ask a different
+aggregate on the same table (gemma4:31b, synthetic workspace): **no accuracy /
+step / waste difference; ~+130 prompt tokens** for the primed recipe. Clean
+synthetic tables with guessable column names → a recipe isn't load-bearing, the
+model writes the right SQL from the schema block alone.
+
+*Cross-session, messy folder* — the case memory is actually for. One file
+(`spend.csv`) with cryptic columns (`txn_dt`, `amt`, `cat`) and rent showing up
+as `Rent` / `rent` / `HOUSING` / `mortgage` / `housing`. **Session 1**: the user
+lists the categories, then corrects Fella — "actually, for rent totals count
+HOUSING and mortgage as rent too". The correction lands as a vocabulary note.
+**Session 2** is a *cold conversation* (memory is the only carry) asking for
+total rent spending; gold is 7 350 (all rent-ish rows), literal-`rent`-only is
+3 700.
+
+| model | memory on | memory off |
+|---|---|---|
+| **gpt-5.6-luna** | **✓ 7 350** · `WHERE LOWER(cat) IN ('rent','housing','mortgage')` | ✗ 3 700 · `WHERE lower(cat) = 'rent'` |
+| **gemma4:31b** | ✗ 4 850 · `WHERE cat IN ('Rent','HOUSING','mortgage')` | ✗ 6 150 · `WHERE cat LIKE '%Rent%' OR cat LIKE '%HOUSING%'` |
+
+The mechanism **conveys** the idea across the session boundary in every case —
+the correction text is in the prompt. luna **interprets and applies** it: a
+loosely-phrased note becomes the right case-folded `IN (…)` filter — a clean
+0 % → 100 % swing for +172 tokens. gemma4 also **shifts in the right
+direction** — memory-on it explicitly adds `HOUSING` and `mortgage` because of
+the note — but botches the case (`IN ('Rent',…)` misses the lowercase rows).
+Its memory-*off* query is wrong a different way, so gemma's ceiling is
+SQL-on-messy-data, not the memory carry.
+
+**Reading:** memory earns its keep on a capable model for exactly the
+cross-session, messy-folder case it was designed for. On the `gemma4` floor it
+carries the knowledge but the model can't always act on it. v1 ships default-on
+(a fresh folder costs nothing); the open work is making notes more *actionable*
+(the deferred end-of-session tidy pass — turn "count HOUSING and mortgage as
+rent" + the observed categories into `rent → lower(cat) IN ('rent','housing',
+'mortgage')`), which should close some of the gemma gap.

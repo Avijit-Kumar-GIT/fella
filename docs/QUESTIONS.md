@@ -135,17 +135,26 @@ that's still open. Newest section last.
 prompt, empty for a fresh folder. `FELLA_MEMORY=0`/`ro`. Details:
 `FOLDER-MEMORY.md` §Implementation.
 
-First `agent_eval memory` run (gemma4:31b, synthetic 13-table workspace): **no
-accuracy / step / waste change, small prompt-token cost.** `testkit` folders
-are too clean and guessable for a recipe to matter. Ships default-on (a fresh
-folder costs nothing).
+`agent_eval memory` — two runs:
+- *same-conversation, clean folder* → no accuracy/step change, ~+130 tokens.
+- *cross-session, messy folder* (session 1 corrects "rent"; cold session 2 asks
+  the total) → **luna 0 % → 100 %** correct, the carried correction becomes the
+  right `LOWER(cat) IN (…)` filter; gemma4 shifts right but botches the
+  case-fold and stays wrong.
 
-### Still open (decide from a real folder / harder scenario)
+**"Can our memory system accurately convey ideas from previous sessions and
+apply them in new sessions?"** (2026-09-08)
+→ **Convey: yes** — the correction text crosses the session boundary intact.
+**Apply: yes on a capable model** (luna turns a loose note into the correct
+query), **partially on the `gemma4` floor** (it reads the note and moves in the
+right direction but mis-executes on case-inconsistent data — a SQL ceiling, not
+a memory failure).
 
-- **Does memory ever earn its tokens?** The synthetic harness can't build the
-  ambiguous-schema / learned-vocabulary / correction cases where it should pay
-  off. Needs a real folder run, or a `testkit` workspace with genuinely cryptic
-  column names.
+### Still open
+
+- **Close the `gemma4` gap** with more *actionable* notes: the deferred
+  end-of-session tidy pass turns "count HOUSING and mortgage as rent" +
+  observed categories into `rent → lower(cat) IN ('rent','housing','mortgage')`.
 - Core-block token budget vs. the prompt-minimalism finding — maybe the core is
   *only* vocabulary + preferences, with even the top recipes behind `recall()`.
 - `recall()` reliability on `gemma4` — does a weak model reach for it when it
