@@ -830,8 +830,8 @@ machine, default features `pdf`+`xlsx`+`mcp`):
 
 | metric | value | source |
 |---|--:|---|
-| `fella` binary, ships (`cargo build --release`, `strip=debuginfo`) | 20,000,184 B (19.1 MiB) | `stat -c%s src-tauri/target/release/fella` |
-| `fella` binary, fully stripped (reference) | 16,872,936 B (16.1 MiB) | `strip -s` then `stat` |
+| **`fella` binary, fully stripped (the reported number)** | **16,872,936 B (16.09 MiB)** | `strip -s` then `stat` |
+| `fella` binary, as-shipped (`cargo build --release`, `strip=debuginfo`) | 20,000,184 B (19.07 MiB) | `stat -c%s src-tauri/target/release/fella` |
 | `.text` (machine code) | 16,154,475 B (15.4 MiB) | `size` |
 | unique crates (runtime) / direct deps | 386 / 25 | `cargo tree -e normal` |
 | frontend bundle, all JS gzipped | 66 KB | `find build -name '*.js' \| gzip \| wc -c` |
@@ -843,10 +843,13 @@ machine, default features `pdf`+`xlsx`+`mcp`):
 ### Metrics timeline
 
 One row per measured point, oldest first — the source for a fella-web changelog
-graph. "ships" = the binary as `cargo build --release` emits it
-(`strip=debuginfo`); "stripped" = fully stripped, a stable reference. Blank =
-not measured at that commit (release tags weren't re-measured — the numbers
-move with dependencies and features, not version bumps). Bytes where known.
+graph. **The reported size is "stripped"** — fully stripped, no separate debug
+file, the fair analogue of a single-binary tool's headline number (fx-style:
+"fella binary is X% smaller, current N MiB"). "ships" = what `cargo build
+--release` emits (`strip=debuginfo`, keeps a symbol table on purpose), tracked
+alongside. Blank = not measured at that commit (release tags weren't
+re-measured — the numbers move with dependencies and features, not version
+bumps). Bytes where known.
 
 | date | commit | milestone | binary ships | binary stripped | crates | JS gz | `.deb` |
 |---|---|---|--:|--:|--:|--:|--:|
