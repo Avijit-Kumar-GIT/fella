@@ -8,6 +8,10 @@ All notable changes to Fella are recorded here. Format follows
 
 ### Added
 
+- **`/memory` shows what Fella has learned about a folder.** Prints the
+  folder's `memory.md` (the learned notes it's built from your questions and
+  corrections) and its path so you can edit it directly. `/memory forget`
+  clears it and starts over.
 - **Per-folder memory (experimental).** Fella now keeps a small plain-text
   `memory.md` for each folder — the *learned* companion to `fella.md`. It fills
   itself in from what already happens: a query that passed the self-check

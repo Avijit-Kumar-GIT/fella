@@ -54,6 +54,8 @@ pub fn run() {
             commands::describe,
             commands::run_sql_direct,
             commands::reindex,
+            commands::memory_file,
+            commands::forget_memory,
             commands::get_settings,
             commands::set_settings,
             commands::list_providers,

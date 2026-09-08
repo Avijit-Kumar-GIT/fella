@@ -255,8 +255,14 @@ and `state.rs` (`folder_memory_block()` read each turn; a record hook in
   demand (names-only folders). Duplicating them into memory is redundant and
   was the main source of prompt-token cost. Memory holds only what the schema
   doesn't: vocabulary, recipes, corrections.
-- **End-of-session tidy pass**, `<folder>/.fella/` opt-in location, `/memory`
-  command.
+- **End-of-session tidy pass** (still deferred — an LLM call + dedup design).
+  Would rewrite a vague correction note into a precise one (`rent →
+  lower(cat) IN ('rent','housing','mortgage')`) and fold duplicates. The gap
+  the `agent_eval memory` cross-session run pointed at for the weaker model.
+- `<folder>/.fella/` opt-in location.
+
+**Shipped since:** `/memory` (show the folder's `memory.md` + its path) and
+`/memory forget` (clear it).
 
 **Benchmarks** (`agent_eval memory`).
 

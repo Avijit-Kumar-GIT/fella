@@ -78,6 +78,8 @@ export const ipc = {
 	forgetConversation: (conversationId: string) =>
 		invoke<void>('forget_conversation', { conversationId }),
 	reindex: () => invoke<Catalog>('reindex'),
+	memoryFile: () => invoke<[string, string | null] | null>('memory_file'),
+	forgetMemory: () => invoke<boolean>('forget_memory'),
 
 	/** Installed packs (themes, skills, mcp connectors). */
 	packsList: () => invoke<InstalledPack[]>('packs_list'),
