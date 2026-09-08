@@ -534,7 +534,9 @@ impl EngineState {
                 }
             }
         }
-        mem.mark_stale(&sources.iter().filter_map(|s| s.view.clone()).collect::<Vec<_>>());
+        let views: Vec<String> = sources.iter().filter_map(|s| s.view.clone()).collect();
+        mem.prune_tables(&views);
+        mem.mark_stale(&views);
         mem.save();
     }
 
@@ -543,7 +545,7 @@ impl EngineState {
     /// plainly corrects the previous answer becomes a vocabulary note instead.
     /// `prior_q` is the previous question in this conversation, if any.
     fn record_turn_memory(&self, prior_q: Option<&str>, question: &str, answer: &Answer) {
-        if !memory::enabled() {
+        if !memory::writes_enabled() {
             return;
         }
         let Some(path) = self.memory_path() else { return };
@@ -958,7 +960,7 @@ impl EngineState {
         // into the folder's learned notes, and re-check recipe staleness against
         // the tables that actually loaded. Best-effort; a memory write never
         // blocks opening a folder.
-        if memory::enabled() {
+        if memory::writes_enabled() {
             self.sync_memory_schema_notes(&mem_path);
         }
         // The user is about to ask something: warm the model now so the first

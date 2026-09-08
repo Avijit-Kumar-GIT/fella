@@ -1080,38 +1080,51 @@ fn yn(b: bool) -> String {
     if b { "✓".into() } else { "✗".into() }
 }
 
-/// Per-folder memory: prime a folder with two rent questions that verify on the
-/// messy text-amount column (so it learns the `CAST` recipe), then ask a *cold*
-/// conversation a third rent question with memory on vs `FELLA_MEMORY=0`.
+/// Per-folder memory: prime a folder with one aggregate over `txns_00`, then a
+/// *cold* conversation asks a different aggregate over the same table with
+/// memory on vs `FELLA_MEMORY=0`. The workspace has 13 tables, so the schema
+/// block is names-only a run without memory has to `describe_schema` to find
+/// the `amount` column; the learned recipe hands it over.
 async fn cmd_memory(
     engine: &EngineState,
     model: &str,
     data_dir: &Path,
-    ws: &Path,
     iters: usize,
 ) -> Vec<CaseScore> {
     set_model(engine, model);
     let iters = iters.max(1);
 
+    // A clean, isolated 13-table workspace, *outside* the eval's default
+    // workspace tree (which is recursively scanned) so nothing leaks in; the
+    // schema block tiers down to names-only at 13 tables.
+    let ws = std::env::temp_dir().join("fella-mem-bench");
+    let _ = std::fs::remove_dir_all(&ws);
+    let spec = WorkspaceSpec { n_tables: 13, rows_per_table: 800, messiness: Messiness::Clean, seed: 7 };
+    let g = testkit::synth_workspace(&ws, &spec);
+    let tg = &g.tables["txns_00"];
     std::env::set_var("FELLA_MEMORY", "1");
-    let mem = memory::path_for(data_dir, ws);
+    let mem = memory::path_for(data_dir, &ws);
     let _ = std::fs::remove_file(&mem);
     let _ = std::fs::remove_file(mem.with_extension("episodes.jsonl"));
+    if engine.open_workspace(&ws).is_err() {
+        println!("(memory) could not open workspace");
+        return Vec::new();
+    }
 
     let prime = "mem-prime";
     engine.forget_conversation(prime);
-    run_case(engine, prime, "what's my average rent payment in rent.csv?", None).await;
-    run_case(engine, prime, "what's the total I have paid in rent.csv?", None).await;
+    run_case(engine, prime, "what was my total spending in txns_00?", None).await;
+    run_case(engine, prime, "what was my total spending in txns_00?", None).await;
 
-    let q = "in rent.csv, what was my single largest rent payment?";
-    let gold = Gold::Approx(1250.0, 0.5);
+    let q = "in txns_00, what was my single largest transaction?";
+    let gold = Gold::Approx(tg.max_amount, 0.5);
     let case = EvalCase {
         id: "mem_cold",
         category: "MinMax",
         question: q.to_string(),
         gold: gold.clone(),
         min_tools: 1,
-        reference: "Your largest rent payment was 1250.00.".to_string(),
+        reference: format!("Your largest transaction was {:.2}.", tg.max_amount),
     };
 
     println!("\n# Per-folder memory  \u{b7}  model `{model}`   ({iters} iter(s))\n");
@@ -1120,8 +1133,10 @@ async fn cmd_memory(
     println!("|---|:-:|--:|--:|--:|--:|--:|--:|");
 
     let mut all = Vec::new();
+    // `ro`: read the primed memory, record nothing so every cold iteration is
+    // an identical first encounter (not one that benefits from the last).
     for (label, on) in [("memory on", true), ("memory off", false)] {
-        std::env::set_var("FELLA_MEMORY", if on { "1" } else { "0" });
+        std::env::set_var("FELLA_MEMORY", if on { "ro" } else { "0" });
         let (mut oks, mut cd, mut steps) = (0usize, 0f32, 0usize);
         let (mut ptok, mut ctok, mut waste) = (0u64, 0u64, 0usize);
         for it in 0..iters {
@@ -1299,12 +1314,14 @@ async fn main() {
         "model-ladder" => cmd_model_ladder(&engine, &cases, &models, judge, iters).await,
         "robustness" => cmd_robustness(&engine, &models[0], &ws, iters).await,
         "session-memory" => cmd_session_memory(&engine, &models[0], &g, iters).await,
-        "memory" => cmd_memory(&engine, &models[0], &data_dir, &ws, iters).await,
+        "memory" => {
+            cmd_memory(&engine, &models[0], &data_dir, iters).await
+        }
         "all" => {
             let mut v = cmd_accuracy(&engine, &cases, &models, judge, iters).await;
             v.extend(cmd_robustness(&engine, &models[0], &ws, iters).await);
             v.extend(cmd_session_memory(&engine, &models[0], &g, iters).await);
-            v.extend(cmd_memory(&engine, &models[0], &data_dir, &ws, iters).await);
+            v.extend(cmd_memory(&engine, &models[0], &data_dir, iters).await);
             v
         }
         other => {

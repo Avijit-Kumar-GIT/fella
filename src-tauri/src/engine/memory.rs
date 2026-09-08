@@ -23,9 +23,16 @@ const CORE_BUDGET: usize = 1600;
 /// How many recipes (most-used first) go in that block.
 const CORE_RECIPES: usize = 5;
 
-/// On unless `FELLA_MEMORY=0`.
+/// Reading learned notes is on unless `FELLA_MEMORY=0`.
 pub fn enabled() -> bool {
     !matches!(std::env::var("FELLA_MEMORY").as_deref(), Ok("0"))
+}
+
+/// Writing (recipes, notes, episodes) is on unless `FELLA_MEMORY` is `0` or
+/// `ro` `ro` reads existing notes but records nothing (used by the eval so
+/// every cold run sees the same primed memory).
+pub fn writes_enabled() -> bool {
+    !matches!(std::env::var("FELLA_MEMORY").as_deref(), Ok("0") | Ok("ro"))
 }
 
 /// `<data_dir>/memory/<basename>-<hash>.md` for a workspace path. Stable across
@@ -242,6 +249,16 @@ The \"## Notes\" section and any sections you add are left untouched. -->\n",
         for r in &mut self.recipes {
             r.stale = !r.tables.iter().all(|t| known_views.iter().any(|k| k == t));
         }
+    }
+
+    /// Drop table notes whose view is no longer in the workspace (a renamed or
+    /// removed file). The key is `view` or `view."col"`; the view is the part
+    /// before the first `.` or `."`.
+    pub fn prune_tables(&mut self, known_views: &[String]) {
+        self.tables.retain(|n| {
+            let view = n.key.split(['.', '"']).next().unwrap_or(&n.key).trim();
+            view.is_empty() || known_views.iter().any(|k| k == view)
+        });
     }
 
     /// Replace-or-insert a `key`ed note (vocabulary or table); newest text wins.
@@ -521,6 +538,13 @@ mod tests {
         assert!(m2.recipes[0].stale);
         m2.mark_stale(&["ledger".into()]);
         assert!(!m2.recipes[0].stale);
+
+        // pruning table notes for a view that's gone
+        m2.set_table_note("gone_view.\"x\"", "note");
+        assert_eq!(m2.tables.len(), 2);
+        m2.prune_tables(&["ledger".into()]);
+        assert_eq!(m2.tables.len(), 1);
+        assert!(m2.tables[0].key.starts_with("ledger"));
 
         let core = m2.semantic_core().unwrap();
         assert!(core.contains("amounts are GBP"));
