@@ -491,6 +491,25 @@ impl EngineState {
         self.inner.lock().unwrap_or_else(|e| e.into_inner()).memory_path.clone()
     }
 
+    /// `(file path, contents)` of the current folder's `memory.md` for the
+    /// `/memory` command. `contents` is `None` if the file doesn't exist yet.
+    /// `None` overall when no folder is open.
+    pub fn folder_memory_file(&self) -> Option<(String, Option<String>)> {
+        let path = self.memory_path()?;
+        let text = std::fs::read_to_string(&path).ok();
+        Some((path.display().to_string(), text))
+    }
+
+    /// Delete the current folder's learned notes (and its episode log).
+    /// `Ok(false)` if there was nothing to delete; `Err` on no folder open.
+    pub fn forget_folder_memory(&self) -> EngineResult<bool> {
+        let path = self.memory_path().ok_or(EngineError::NoWorkspace)?;
+        let had = path.exists();
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("episodes.jsonl"));
+        Ok(had)
+    }
+
     /// The learned-notes block for the system prompt, or `None` when memory is
     /// off, no folder is open, or nothing's been learned. Re-read from disk so a
     /// hand edit to `memory.md` lands on the next question.

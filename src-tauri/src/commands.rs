@@ -83,6 +83,19 @@ pub async fn reindex(engine: State<'_, EngineState>) -> Result<Catalog, EngineEr
     engine.reindex()
 }
 
+/// `[path, contents_or_null]` for the current folder's `memory.md` (`/memory`).
+/// `null` when no folder is open.
+#[tauri::command]
+pub fn memory_file(engine: State<'_, EngineState>) -> Option<(String, Option<String>)> {
+    engine.folder_memory_file()
+}
+
+/// Delete the current folder's learned notes. `true` if a file was removed.
+#[tauri::command]
+pub fn forget_memory(engine: State<'_, EngineState>) -> EngineResult<bool> {
+    engine.forget_folder_memory()
+}
+
 // --- settings --------------------------------------------------------------
 
 #[tauri::command]

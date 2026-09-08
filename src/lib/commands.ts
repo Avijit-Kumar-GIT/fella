@@ -19,6 +19,7 @@ showing the exact steps it took. You never need these commands, but here they ar
   /auth            see which model services you're connected to
   /model           see or change which model answers
   /reindex         check the folder again for new or changed files
+  /memory          see what Fella has learned about this folder (/memory forget to clear)
   /update          check for a newer version of Fella and install it
   /packs           themes and skills you've added (/packs browse to find more)
   /connect         connect a data source you've added
@@ -43,6 +44,7 @@ export const SLASH_COMMANDS = [
 	'/auth',
 	'/model',
 	'/reindex',
+	'/memory',
 	'/update',
 	'/packs',
 	'/connect',
@@ -72,6 +74,7 @@ export const COMMAND_DESCRIPTIONS: Record<string, string> = {
 	'/auth': "see which model services you're connected to",
 	'/model': 'see or change which model answers',
 	'/reindex': 'check the folder again for new or changed files',
+	'/memory': 'see what Fella has learned about this folder',
 	'/update': 'check for a newer version of Fella and install it',
 	'/packs': "themes and skills you've added",
 	'/connect': "connect a data source you've added",
@@ -120,6 +123,8 @@ export function completionsFor(input: string): string[] {
 				return pick([...MODEL_FIELDS, ...models()]);
 			case '/schema':
 				return pick(tables());
+			case '/memory':
+				return pick(['forget']);
 			case '/packs':
 				return pick(['browse', 'install', 'add', 'enable', 'disable', 'remove']);
 			case '/connect':
@@ -778,6 +783,35 @@ async function runCommand(text: string): Promise<void> {
 				}
 			}
 			return;
+
+		case '/memory': {
+			if (!requireEngine()) return;
+			try {
+				if (arg.trim().toLowerCase() === 'forget') {
+					const had = await ipc.forgetMemory();
+					session.addSystem(
+						had
+							? 'Cleared what Fella had learned about this folder.'
+							: 'Nothing learned about this folder yet.'
+					);
+					return;
+				}
+				const res = await ipc.memoryFile();
+				if (!res) {
+					session.addSystem('Open a folder first, then /memory shows what Fella has learned about it.');
+					return;
+				}
+				const [path, contents] = res;
+				session.addSystem(
+					contents?.trim()
+						? `What Fella has learned about this folder (edit this file directly; /memory forget clears it):\n${path}\n\n${contents.trim()}`
+						: `Nothing learned about this folder yet — Fella fills this in as you ask and correct it.\nFile (once it exists): ${path}`
+				);
+			} catch (e) {
+				session.addSystem(`error: ${errMsg(e)}`);
+			}
+			return;
+		}
 
 		case '/update':
 			if (!requireEngine()) return;
