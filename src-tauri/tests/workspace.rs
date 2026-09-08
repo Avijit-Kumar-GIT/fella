@@ -565,7 +565,7 @@ fn memory_file_and_forget() {
     // Simulate a written notes file + episode log.
     fs::create_dir_all(std::path::Path::new(&path).parent().unwrap()).unwrap();
     fs::write(&path, "# notes\n\n## Preferences\n- x\n").unwrap();
-    fs::write(format!("{path}").replace(".md", ".episodes.jsonl"), "{}\n").unwrap();
+    fs::write(path.replace(".md", ".episodes.jsonl"), "{}\n").unwrap();
 
     let (_, contents) = engine.folder_memory_file().unwrap();
     assert!(contents.unwrap().contains("## Preferences"));
