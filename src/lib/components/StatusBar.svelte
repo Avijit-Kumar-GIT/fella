@@ -68,7 +68,6 @@
 		align-items: center;
 		gap: var(--space-2);
 		padding: var(--space-2) calc(var(--pad) + var(--space-4)) var(--space-1);
-		background: var(--bg);
 		color: var(--text-faint);
 		font-size: var(--fs-xs);
 		letter-spacing: 0.005em;

@@ -2,8 +2,11 @@
 	import { session } from '$lib/session.svelte';
 	import { isTauri, win } from '$lib/ipc';
 	import Icon from './Icon.svelte';
+	import TabBar from './TabBar.svelte';
 
 	let { onpalette }: { onpalette: () => void } = $props();
+
+	let multiTab = $derived(session.tabs.length > 1);
 
 	// macOS keeps its native traffic lights (titleBarStyle: Overlay), so leave a
 	// gutter for them. Windows/Linux draw nothing on the left.
@@ -19,23 +22,33 @@
 	);
 </script>
 
-<div class="titlebar" class:mac={isMac} data-tauri-drag-region>
+<div class="titlebar" class:mac={isMac} class:focus={session.focus} data-tauri-drag-region>
 	{#if isMac}<span class="lights" aria-hidden="true"></span>{/if}
 
-	<span class="id" data-tauri-drag-region>
-		{#if folder}
-			<span class="prompt" aria-hidden="true">❯</span>
-			<span class="folder" title={session.catalog.workspace}>{folder}</span>
+	{#if session.focus}
+		<span class="spacer" data-tauri-drag-region></span>
+		{#if folder}<span class="folder faint" title={session.catalog.workspace}>{folder}</span>{/if}
+		<span class="spacer" data-tauri-drag-region></span>
+	{:else}
+		{#if multiTab}
+			<TabBar />
 		{:else}
-			<span class="wordmark">Fella</span>
+			<span class="id" data-tauri-drag-region>
+				{#if folder}
+					<span class="prompt" aria-hidden="true">❯</span>
+					<span class="folder" title={session.catalog.workspace}>{folder}</span>
+				{:else}
+					<span class="wordmark">Fella</span>
+				{/if}
+			</span>
 		{/if}
-	</span>
 
-	<span class="spacer" data-tauri-drag-region></span>
+		<span class="spacer" data-tauri-drag-region></span>
 
-	<button class="hint" data-tauri-drag-region="false" onclick={onpalette} title="Command palette">
-		<kbd>Ctrl</kbd><kbd>K</kbd>
-	</button>
+		<button class="hint" data-tauri-drag-region="false" onclick={onpalette} title="Command palette">
+			<kbd>Ctrl</kbd><kbd>K</kbd>
+		</button>
+	{/if}
 
 	{#if isWindows && isTauri()}
 		<div class="winctl" data-tauri-drag-region="false">
@@ -95,6 +108,9 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 		min-width: 0;
+	}
+	.folder.faint {
+		color: var(--text-faint);
 	}
 	.spacer {
 		flex: 1;

@@ -238,19 +238,17 @@
 	.wrap {
 		position: relative;
 		flex: none;
-		background: var(--bg);
 		padding: var(--space-1) var(--pad) var(--space-2);
 	}
-	/* A distinct raised surface floating in the footer a real input, not a
-	   bare line. Softly rounded; stays sane when the textarea grows tall. */
+	/* Outlined but unfilled it sits on the footer surface, no card colour.
+	   Softly rounded; stays sane when the textarea grows tall. */
 	.field {
 		display: flex;
 		align-items: flex-end;
 		gap: var(--space-2);
-		background: var(--bg-raised);
+		background: transparent;
 		border: 1px solid var(--border-strong);
 		border-radius: 18px;
-		box-shadow: var(--shadow-sm);
 		padding: var(--space-2) var(--space-2) var(--space-2) var(--space-4);
 		transition:
 			border-color var(--dur-fast) var(--ease),
@@ -258,7 +256,7 @@
 	}
 	.field:focus-within {
 		border-color: var(--link);
-		box-shadow: var(--shadow-sm), var(--focus-ring);
+		box-shadow: var(--focus-ring);
 	}
 	textarea {
 		flex: 1;

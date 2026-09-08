@@ -73,9 +73,11 @@
 		stick = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 40;
 	}
 	// Switching tabs shows a different transcript jump it to the latest and
-	// drop any stale expanded-evidence state from the previous tab.
+	// drop any stale expanded-evidence state from the previous tab. Entering
+	// focus mode collapses evidence too, so it's just the answers.
 	$effect(() => {
 		session.active;
+		session.focus;
 		stick = true;
 		expanded = {};
 	});
@@ -97,6 +99,7 @@
      visually-hidden status line in +page.svelte does the announcing instead. -->
 <div
 	class="transcript"
+	class:focus={session.focus}
 	bind:this={scroller}
 	onscroll={onScroll}
 	role="log"
@@ -124,36 +127,19 @@
 					<em>“what stands out in my workout log?”</em>
 				</p>
 			{:else if fileCount === 0}
-				<p class="lead"><strong>{folderName}</strong> is open, but Fella can't read anything in it yet.</p>
-				<p>It works with spreadsheets, CSVs, Excel files, PDFs, and plain text.</p>
-				{#if skipped.length}
-					<p class="alt">
-						{skipped.length} file{skipped.length === 1 ? '' : 's'} found but not used:
-					</p>
-					<ul class="skipped">
-						{#each skipped.slice(0, 8) as f (f.name)}
-							<li>{f.name} <span class="reason">{f.reason}</span></li>
-						{/each}
-						{#if skipped.length > 8}<li>and {skipped.length - 8} more</li>{/if}
-					</ul>
-				{/if}
+				<p class="lead"><strong>{folderName}</strong> is open, but nothing in it is readable yet.</p>
+				<p>
+					Fella works with spreadsheets, CSVs, Excel, PDFs and plain text.{#if skipped.length}
+						<code>/files</code> shows what was skipped and why.{/if}
+				</p>
 				<div class="cta">
-					<button class="pill primary" onclick={() => void openFolder()}>Choose a different folder</button>
+					<button class="pill primary" onclick={() => void openFolder()}>
+						<Icon name="folder" size={14} /> Choose a different folder
+					</button>
 				</div>
 			{:else}
 				<p class="lead">
-					<strong>{folderName}</strong> is open. {fileCount} file{fileCount === 1 ? '' : 's'} Fella
-					can read.
-				</p>
-				{#if skipped.length}
-					<p class="alt">
-						{skipped.length} other file{skipped.length === 1 ? '' : 's'} couldn't be used
-						(see <code>/files</code>).
-					</p>
-				{/if}
-				<p>
-					Ask a question in plain language. Every answer shows the exact files and steps behind
-					it.
+					<strong>{folderName}</strong> · {fileCount} file{fileCount === 1 ? '' : 's'} ready.
 				</p>
 				{#if showExamples}
 					<p class="egs">Try one:</p>
@@ -324,12 +310,21 @@
 		overflow-y: auto;
 		padding: var(--space-5) var(--pad) var(--space-6);
 		min-height: 0;
+		transition: padding var(--dur) var(--ease);
+	}
+	/* Focus mode: a calmer, tighter reading column with more air around it. */
+	.transcript.focus {
+		padding: var(--space-6) var(--pad) var(--space-6);
 	}
 	/* Cap the reading column so long lines don't sprawl the "app not terminal"
 	   cue. Centred in the scroller. */
 	.stream {
 		max-width: 76ch;
 		margin-inline: auto;
+		transition: max-width var(--dur) var(--ease);
+	}
+	.transcript.focus .stream {
+		max-width: 68ch;
 	}
 	.onboard {
 		max-width: 52ch;
@@ -408,15 +403,6 @@
 	.egs em {
 		font-style: italic;
 		color: var(--text-dim);
-	}
-	.skipped {
-		margin: 4px 0 0;
-		padding-left: 1.1em;
-		color: var(--text-dim);
-		font-size: var(--fs-sm);
-	}
-	.skipped .reason {
-		color: var(--text-faint);
 	}
 	.personalize {
 		margin-top: 22px;

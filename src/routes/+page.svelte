@@ -4,7 +4,6 @@
 	import Composer from '$lib/components/Composer.svelte';
 	import Icon from '$lib/components/Icon.svelte';
 	import StatusBar from '$lib/components/StatusBar.svelte';
-	import TabBar from '$lib/components/TabBar.svelte';
 	import Titlebar from '$lib/components/Titlebar.svelte';
 	import Transcript from '$lib/components/Transcript.svelte';
 	import { dispatch, reconcileModel, stop } from '$lib/commands';
@@ -161,16 +160,15 @@
 
 <svelte:window onkeydown={onKey} />
 
-<div class="app">
+<div class="app" class:focus={session.focus}>
 	<Titlebar onpalette={() => (paletteOpen = true)} />
-	{#if !session.focus}
-		<TabBar />
-	{/if}
 	<main>
 		<Transcript bind:this={transcript} />
 	</main>
 	<div class="dock">
-		<StatusBar />
+		{#if !session.focus}
+			<StatusBar />
+		{/if}
 		<Composer bind:this={composer} onafterrun={refreshHealth} />
 	</div>
 </div>
@@ -200,11 +198,11 @@
 		background: var(--bg-raised);
 		border-top: 1px solid var(--border);
 	}
-	/* Status line + composer read as one calm footer zone, not two stacked
-	   full-width bars. */
+	/* Status line + composer read as one calm footer zone, continuous with the
+	   transcript surface above it no rule, no colour change. */
 	.dock {
 		flex: none;
-		background: var(--bg);
+		background: var(--bg-raised);
 		padding-bottom: var(--space-2);
 	}
 	.dropzone {
