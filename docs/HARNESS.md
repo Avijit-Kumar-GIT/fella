@@ -106,14 +106,14 @@ The running list of open design questions from shaping this work is in
     prompt tokens. Neutral-to-slightly-negative; clean synthetic tables don't
     need a recipe.
   - *Cross-session, messy folder* (session 1 corrects "rent"; a cold session 2
-    asks the total) — **luna 0 % → 100 %** (the carried correction becomes the
-    right `LOWER(cat) IN (…)` filter) for +172 tokens. gemma4 alone shifted the
-    right way but botched the case-fold; **with the case-sensitivity flag
-    (2026-09-08) it goes ✗ 4 850 → ✓ 7 350** — folds case *and* keeps the
-    carried synonyms.
+    asks the total) — with the case-sensitivity flag in place, **all three
+    models go memory-on ✓ 100 % (7 350) vs memory-off ✗ 0 %**, for ~+180
+    prompt tokens. Each folds case and applies the carried
+    `IN ('rent','housing','mortgage')`. (gemma4 without the flag was ✗ 4 850 —
+    right synonyms, case-sensitive `IN` — so the flag is what closed it.)
   Ships default-on: a fresh folder costs nothing, and it earns its tokens on
-  the cross-session messy-folder case it exists for, on both a frontier and the
-  floor model.
+  the cross-session messy-folder case it exists for, across frontier and floor
+  models.
 
 ### Measured, no change
 

@@ -279,23 +279,27 @@ Two rounds: `[a]` memory alone, `[b]` memory + the case-sensitivity flag added
 after (`case_collision` — a label column whose values collapse under
 case-folding gets a schema/`run_sql` note).
 
+Round `[a]` = memory alone. Round `[b]` = memory + the case-sensitivity flag.
+
 | model | round | memory on | memory off |
 |---|---|---|---|
-| **gpt-5.6-luna** | [a] | **✓ 7 350** · `WHERE LOWER(cat) IN ('rent','housing','mortgage')` | ✗ 3 700 · `WHERE lower(cat) = 'rent'` |
+| **gpt-5.6-luna** | [b] | **✓ 7 350** · `WHERE lower(cat) IN ('rent','housing','mortgage')` · +199 tok | ✗ 3 700 · `WHERE lower(cat) = 'rent'` |
+| **xai/grok-4.3** | [b] | **✓ 7 350** · `WHERE lower(cat) IN ('rent','housing','mortgage')` · +167 tok | ✗ 3 700 · `WHERE lower(cat) = 'rent'` |
 | **gemma4:31b** | [a] | ✗ 4 850 · `WHERE cat IN ('Rent','HOUSING','mortgage')` (case-sensitive) | ✗ 6 150 |
-| **gemma4:31b** | [b] | **✓ 7 350** · `WHERE cat COLLATE NOCASE IN ('Rent','Housing','Mortgage')` | ✗ 6 150 · `lower(cat)='rent' OR lower(cat)='housing'` (no `mortgage`) |
+| **gemma4:31b** | [b] | **✓ 7 350** · `WHERE cat COLLATE NOCASE IN ('Rent','Housing','Mortgage')` · +187 tok | ✗ 6 150 |
 
 The mechanism **conveys** the idea across the session boundary every time — the
-correction text is in the prompt. **Interpret + apply:**
+correction text is in the prompt. **Interpret + apply**, with the flag in
+place: **all three models go memory-on ✓ 100 % (7 350), memory-off ✗ 0 %**, for
+~+180 prompt tokens. Every model folds case (`lower(cat)` or `COLLATE NOCASE`)
+and applies the carried `IN ('rent','housing','mortgage')`; without memory none
+can know `mortgage` counts, so all three are correctly wrong.
 
-- luna applies a loosely-phrased note directly: 0 % → 100 % for +172 tokens.
-- gemma4 alone shifts the right way (adds `HOUSING`/`mortgage`) but writes a
-  case-sensitive `IN` and stays wrong — a SQL-execution ceiling, not a memory
-  failure. With the **case-sensitivity flag** it folds case *and* keeps the
-  synonyms: **✗ 4 850 → ✓ 7 350**. Memory-*off* it now folds case too but has
-  no way to know `mortgage` counts → still wrong, correctly.
+Round `[a]` (gemma4, no flag) is kept above to show what the flag fixed: gemma
+carried the correction and added the synonyms but wrote a case-sensitive `IN`
+and missed the lowercase rows.
 
 **Reading:** memory earns its keep on the exact cross-session messy-folder case
-it was designed for, on both a frontier and the floor model, once the
+it was designed for — on a frontier model *and* the `gemma4` floor — once the
 correction is paired with a schema flag that removes the case ambiguity. v1
 ships default-on (a fresh folder costs nothing).
