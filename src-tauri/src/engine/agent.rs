@@ -42,12 +42,14 @@ pub async fn run(
     let user_context = engine.user_context();
     let schema = engine.schema_block();
     let recent = engine.session_block(conversation_id);
+    let learned = engine.folder_memory_block();
     let mut sys = system_prompt(
         &PromptProfile::from_env(),
         &catalog,
         &user_context,
         &schema,
         recent.as_deref(),
+        learned.as_deref(),
     );
     if registry.has_mcp() {
         sys.push_str(
@@ -471,6 +473,8 @@ pub struct PromptProfile {
     pub user_context: bool,
     pub schema: bool,
     pub session_block: bool,
+    /// The per-folder learned-notes block (`engine::memory`).
+    pub folder_memory: bool,
 }
 
 impl PromptProfile {
@@ -498,6 +502,7 @@ impl PromptProfile {
                 "user_context" => p.user_context = false,
                 "schema" => p.schema = false,
                 "session_block" => p.session_block = false,
+                "folder_memory" => p.folder_memory = false,
                 _ => log::warn!("FELLA_PROMPT_DROP: unknown section {name:?}"),
             }
         }
@@ -521,6 +526,7 @@ impl PromptProfile {
             user_context: true,
             schema: true,
             session_block: true,
+            folder_memory: true,
         }
     }
 }
@@ -531,6 +537,7 @@ fn system_prompt(
     user_context: &[String],
     schema: &str,
     recent: Option<&str>,
+    learned: Option<&str>,
 ) -> String {
     let dialect = if cfg!(feature = "duckdb") { "DuckDB" } else { "SQLite" };
     let steps = max_steps();
@@ -668,6 +675,14 @@ apply. It is background, not data: never take a figure from it.\n",
         p.push_str(schema);
     }
 
+    if profile.folder_memory {
+        if let Some(learned) = learned {
+            p.push('\n');
+            p.push_str(learned.trim_end());
+            p.push('\n');
+        }
+    }
+
     if profile.session_block {
         if let Some(recent) = recent {
             p.push('\n');
@@ -696,22 +711,28 @@ mod tests {
         let schema = "Tables (columns and types shown; use sample_rows for values):\n  ledger  (12 rows)\n    \"Amount Paid\" REAL  [coerced]\n";
         let recent = "Earlier in this conversation (reuse what still applies):\n- Q: \"total?\"  A: \"$4,850\"\n  used: SELECT SUM(\"Amount Paid\") FROM ledger\n";
         let full = PromptProfile::full();
-        let p = system_prompt(&full, &open_catalog(), &[], schema, Some(recent));
+        let learned = "Learned notes for this folder (reference, not rules):\nPreferences:\n- amounts are GBP\n";
+        let p = system_prompt(&full, &open_catalog(), &[], schema, Some(recent), Some(learned));
         assert!(p.contains("\"Amount Paid\" REAL  [coerced]"));
         assert!(p.contains("Earlier in this conversation"));
         assert!(p.contains("SELECT SUM(\"Amount Paid\") FROM ledger"));
+        assert!(p.contains("Learned notes for this folder"));
+        // learned block sits after the schema, before the session block
+        assert!(p.find("Learned notes").unwrap() > p.find("Amount Paid").unwrap());
+        assert!(p.find("Learned notes").unwrap() < p.find("Earlier in this conversation").unwrap());
 
-        // No recent block on the first turn.
-        let p0 = system_prompt(&full, &open_catalog(), &[], schema, None);
+        // Nothing learned, first turn: neither block.
+        let p0 = system_prompt(&full, &open_catalog(), &[], schema, None, None);
         assert!(!p0.contains("Earlier in this conversation"));
+        assert!(!p0.contains("Learned notes for this folder"));
     }
 
     #[test]
     fn prompt_drop_env_clears_named_sections() {
-        std::env::set_var("FELLA_PROMPT_DROP", "persona, docs_rule ,session_block");
+        std::env::set_var("FELLA_PROMPT_DROP", "persona, docs_rule ,session_block, folder_memory");
         let p = PromptProfile::from_env();
         std::env::remove_var("FELLA_PROMPT_DROP");
-        assert!(!p.persona && !p.docs_rule && !p.session_block);
+        assert!(!p.persona && !p.docs_rule && !p.session_block && !p.folder_memory);
         assert!(p.core_rules && p.schema, "unnamed sections stay");
     }
 
@@ -727,6 +748,7 @@ mod tests {
             &["amounts are GBP".to_string()],
             schema,
             Some(recent),
+            None,
         );
         let expected = format!(
             "You are Fella, a careful data analyst. You answer questions about the \

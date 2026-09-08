@@ -46,6 +46,16 @@ pub fn hard_fail(checks: &[VerificationCheck]) -> Option<String> {
     )
 }
 
+/// True when a query behind the answer was actually re-executed and matched,
+/// and nothing failed hard. The signal for "this answer is safe to learn from"
+/// (per-folder memory records a recipe only when this holds).
+pub fn reran_clean(checks: &[VerificationCheck]) -> bool {
+    hard_fail(checks).is_none()
+        && checks
+            .iter()
+            .any(|c| c.ok && c.label.contains("re-checked the queries behind this answer"))
+}
+
 /// The narrower subset the agent loop's corrective re-ask acts on: a cited query
 /// that now re-runs differently, or no longer runs. These are precise the query
 /// is re-executed so "restate your answer to match the re-run" is a safe,
@@ -171,8 +181,9 @@ fn check_tables(engine: &EngineState, evidence: &[EvidenceItem], out: &mut Vec<V
 }
 
 /// Tokens that follow FROM / JOIN, lowercased and de-punctuated. Crude only
-/// used to flag obviously-wrong table names.
-fn referenced_relations(sql: &str) -> HashSet<String> {
+/// used to flag obviously-wrong table names, and to tag a learned recipe with
+/// the tables it touches.
+pub(crate) fn referenced_relations(sql: &str) -> HashSet<String> {
     let lower = sql.to_lowercase();
     let toks: Vec<&str> = lower.split(|c: char| c.is_whitespace()).filter(|s| !s.is_empty()).collect();
     let mut out = HashSet::new();

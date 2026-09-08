@@ -16,6 +16,7 @@ use crate::engine::evidence::{Answer, AskEvent};
 use crate::engine::extensions::{self, InstalledPack};
 use crate::engine::ingest::docs;
 use crate::engine::llm::{LlmClient, ProviderHealth};
+use crate::engine::memory::{self, FolderMemory};
 use crate::engine::provider::{self, AuthKind, PROVIDERS};
 use crate::engine::pyexec;
 use crate::engine::secrets::Secrets;
@@ -99,6 +100,10 @@ struct Inner {
     schema_cache: Option<String>,
     /// Files the last scan/ingest noticed but couldn't load.
     skipped: Vec<catalog::SkippedFile>,
+    /// `<data_dir>/memory/<key>.md` for the open workspace (per-folder learned
+    /// notes). `None` with no workspace. The file itself is the source of truth
+    /// re-read each turn so a hand edit takes effect immediately.
+    memory_path: Option<PathBuf>,
 }
 
 /// Most conversations we keep distilled memory for at once.
@@ -480,6 +485,122 @@ impl EngineState {
         out
     }
 
+    // --- per-folder memory ---------------------------------------------------
+
+    fn memory_path(&self) -> Option<PathBuf> {
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).memory_path.clone()
+    }
+
+    /// The learned-notes block for the system prompt, or `None` when memory is
+    /// off, no folder is open, or nothing's been learned. Re-read from disk so a
+    /// hand edit to `memory.md` lands on the next question.
+    pub(crate) fn folder_memory_block(&self) -> Option<String> {
+        if !memory::enabled() {
+            return None;
+        }
+        let path = self.memory_path()?;
+        let mut mem = FolderMemory::load(&path);
+        mem.mark_stale(&self.known_views());
+        mem.semantic_core()
+    }
+
+    fn known_views(&self) -> Vec<String> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .sources
+            .iter()
+            .filter_map(|s| s.view.clone())
+            .collect()
+    }
+
+    /// Pull ingest notes (a coerced column, a dropped totals row) into the
+    /// folder's learned notes, keyed by `view` / `view."col"` so a later open
+    /// replaces rather than duplicates.
+    fn sync_memory_schema_notes(&self, mem_path: &Path) {
+        let sources = {
+            let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+            inner.sources.clone()
+        };
+        let mut mem = FolderMemory::load(mem_path);
+        for s in &sources {
+            let Some(view) = &s.view else { continue };
+            if let Some(note) = &s.note {
+                mem.set_table_note(view, note);
+            }
+            for c in s.columns.iter().flatten() {
+                if let Some(n) = &c.note {
+                    mem.set_table_note(&format!("{view}.\"{}\"", c.name), n);
+                }
+            }
+        }
+        mem.mark_stale(&sources.iter().filter_map(|s| s.view.clone()).collect::<Vec<_>>());
+        mem.save();
+    }
+
+    /// After a completed turn: append an episode, and if the answer verified
+    /// cleanly on one query, learn that query as a recipe. A follow-up that
+    /// plainly corrects the previous answer becomes a vocabulary note instead.
+    /// `prior_q` is the previous question in this conversation, if any.
+    fn record_turn_memory(&self, prior_q: Option<&str>, question: &str, answer: &Answer) {
+        if !memory::enabled() {
+            return;
+        }
+        let Some(path) = self.memory_path() else { return };
+
+        let sqls: Vec<&str> = answer
+            .evidence
+            .iter()
+            .filter(|e| e.tool == "run_sql" && e.error.is_none())
+            .filter_map(|e| e.sql.as_deref())
+            .collect();
+        let corrected = prior_q.is_some() && memory::is_correction(question);
+
+        let at_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        memory::record_episode(
+            &path,
+            &serde_json::json!({
+                "at": at_ms,
+                "q": question.chars().take(300).collect::<String>(),
+                "headline": answer.text.lines().find(|l| !l.trim().is_empty()).unwrap_or("").chars().take(200).collect::<String>(),
+                "queries": sqls.iter().take(3).collect::<Vec<_>>(),
+                "verified": crate::engine::verify::reran_clean(&answer.verification),
+                "corrected_prior": corrected,
+            }),
+        );
+
+        let mut mem = FolderMemory::load(&path);
+        if corrected {
+            // Key the note on the corrected topic, not the whole sentence.
+            let topic: String = question
+                .split_whitespace()
+                .skip_while(|w| {
+                    matches!(
+                        w.trim_end_matches(&[',', ':'][..]).to_lowercase().as_str(),
+                        "no" | "actually" | "correction" | "wrong" | "that's" | "it's"
+                    )
+                })
+                .take(3)
+                .collect::<Vec<_>>()
+                .join(" ");
+            mem.set_vocab(if topic.is_empty() { question } else { &topic }, question.trim());
+        } else if sqls.len() == 1 && crate::engine::verify::reran_clean(&answer.verification) {
+            let sql = sqls[0];
+            let tables: Vec<String> = crate::engine::verify::referenced_relations(sql)
+                .into_iter()
+                .filter(|t| !t.contains('('))
+                .collect();
+            mem.record_recipe(question, sql, &tables);
+        } else {
+            return; // nothing to write
+        }
+        mem.mark_stale(&self.known_views());
+        mem.save();
+    }
+
     // --- packs (installed extensions) ------------------------------------
 
     pub fn packs_list(&self) -> Vec<InstalledPack> {
@@ -820,16 +941,25 @@ impl EngineState {
 
         skipped.sort_by(|a, b| a.name.cmp(&b.name));
         skipped.dedup_by(|a, b| a.name == b.name);
+        let mem_path = memory::path_for(&self.data_dir, path);
         {
             let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
             inner.workspace = Some(path.to_path_buf());
             inner.sources = sources;
             inner.skipped = skipped;
             inner.user_md = user_md;
+            inner.memory_path = Some(mem_path.clone());
             // The sources changed, so every conversation's distilled memory
             // (schema hints, prior queries) is now stale.
             inner.sessions.clear();
             inner.schema_cache = None;
+        }
+        // Fold this open's ingest notes (coerced columns, dropped totals rows)
+        // into the folder's learned notes, and re-check recipe staleness against
+        // the tables that actually loaded. Best-effort; a memory write never
+        // blocks opening a folder.
+        if memory::enabled() {
+            self.sync_memory_schema_notes(&mem_path);
         }
         // The user is about to ask something: warm the model now so the first
         // question doesn't wait on a cold load.
@@ -1027,6 +1157,22 @@ impl EngineState {
             }
         }
         let answer = answer?;
+
+        // Fold this turn into the folder's learned notes (a verified recipe, or
+        // a correction). Needs the previous question in this conversation for
+        // the correction check, so read it before the distil step below pushes
+        // this one.
+        if !cancel.load(Ordering::Relaxed) {
+            let prior_q = {
+                let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+                inner
+                    .sessions
+                    .get(conversation_id)
+                    .and_then(|s| s.turns.last())
+                    .map(|t| t.question.clone())
+            };
+            self.record_turn_memory(prior_q.as_deref(), question, &answer);
+        }
 
         // Distil this turn for the next question in the conversation - but not a
         // cancelled or content-free run, which would only evict a useful earlier
