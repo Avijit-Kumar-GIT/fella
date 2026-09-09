@@ -38,16 +38,29 @@ construction — that contrast is the point.
 
 ## The battery
 
-**`bench/folder-qa/`** — 24 hand-built cases across five life domains, so it
-isn't a finance benchmark: spending + budget, workouts (minutes and km), a
-reading log + an authors table, trips, and a plain-text journal. Question
-shapes: numeric aggregate / filter / average / multi-step, categorical
-group-by / top-N / distinct-count, boolean filter, free-text lookup / count /
-search, one refusal (no forecasting), one no-tool, and a 4-case multi-file
-tier where each needs a JOIN or a table + a document (two of them non-finance:
-pages by British authors = books ⋈ authors; minutes on journal-noted run days
-= journal ∩ workouts). Deterministic gold (`gen.py`, stdlib). Runs free on
-`gemma4:31b` and any ollama-cloud model.
+**`bench/folder-qa/`** — 36 hand-built cases across life domains, so it isn't a
+finance benchmark: spending + budget, workouts (minutes and km), a reading log
++ an authors table, trips, a plain-text journal, screen-time, sleep, contacts,
+a goals note, subscriptions, and a lease. Question shapes: numeric aggregate /
+filter / average / multi-step, categorical group-by / top-N / distinct-count,
+boolean filter, free-text lookup / count / search, one refusal (no
+forecasting), one no-tool, and an 8-case multi-file tier where each needs a
+JOIN or a table + a document (most of them non-finance: pages by British
+authors = books ⋈ authors; minutes on journal-noted run days = journal ∩
+workouts; contacts in visited countries = contacts ⋈ trips; km short of the
+goal = goals.md + workouts).
+
+**Every file type Fella ingests is covered**, one file per format: CSV, TSV
+(`screen_time.tsv`), JSON array (`contacts.json`), NDJSON (`sleep.jsonl`),
+Markdown (`goals.md`), XLSX (`subscriptions.xlsx`), PDF (`lease.pdf`). Four of
+the multi-file cases join *across* formats (JSON×CSV, MD+CSV, NDJSON×TSV,
+PDF+CSV). `--harness bare` can't parse the two binary formats (xlsx, pdf) — it
+embeds them as a "binary file, not readable" stub, so those two single-file
+cases are effectively Fella-only; exclude them from Δacc.
+
+Deterministic gold (`gen.py`, stdlib — the xlsx/pdf writers are hand-rolled
+OOXML / PDF, no third-party deps). Runs free on `gemma4:31b` and any
+ollama-cloud model.
 
 ## Running it
 

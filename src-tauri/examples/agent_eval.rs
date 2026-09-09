@@ -718,11 +718,19 @@ enum Runner<'a> {
 fn embed_files(dir: &Path, files: &[String]) -> Result<String, String> {
     let mut blob = String::new();
     for f in files {
-        match std::fs::read_to_string(dir.join(f)) {
-            Ok(c) if blob.len() + c.len() <= CI_MAX_EMBED => {
-                blob.push_str(&format!("### {f}\n```\n{c}\n```\n\n"));
-            }
-            Ok(_) => return Err(format!("{f} too large to embed")),
+        match std::fs::read(dir.join(f)) {
+            Ok(bytes) => match String::from_utf8(bytes) {
+                Ok(c) if blob.len() + c.len() <= CI_MAX_EMBED => {
+                    blob.push_str(&format!("### {f}\n```\n{c}\n```\n\n"));
+                }
+                Ok(_) => return Err(format!("{f} too large to embed")),
+                // A binary format (xlsx, pdf). `bare` has no parser — say so and
+                // let the model answer "can't" rather than hard-erroring the case.
+                Err(e) => blob.push_str(&format!(
+                    "### {f}\n(binary file, {} bytes — not readable without tools)\n\n",
+                    e.as_bytes().len()
+                )),
+            },
             Err(e) => return Err(format!("read {f}: {e}")),
         }
     }
