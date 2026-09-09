@@ -216,13 +216,18 @@ fn grade(r: &RunResult, gold: &Gold) -> bool {
     if r.err.is_some() {
         return false;
     }
-    // normalise typographic punctuation many models emit "can't" with a
-    // curly apostrophe (U+2019), which a naive substring match misses.
+    // normalise typographic punctuation: a curly apostrophe (U+2019) in
+    // "can't", and — the one that bit a real run — a non-breaking / en / em
+    // dash where a model wrote a date like "2024‑11" instead of "2024-11".
     let low = r
         .text
         .to_lowercase()
         .replace(['\u{2019}', '\u{02BC}'], "'")
-        .replace(['\u{201C}', '\u{201D}'], "\"");
+        .replace(['\u{201C}', '\u{201D}'], "\"")
+        .replace(
+            ['\u{2010}', '\u{2011}', '\u{2012}', '\u{2013}', '\u{2014}', '\u{2212}'],
+            "-",
+        );
     match gold {
         Gold::Figures(want) => {
             let got = numbers_in(&r.text);

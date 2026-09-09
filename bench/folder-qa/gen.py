@@ -11,7 +11,7 @@ no-tool). Run it with:
 
     agent_eval bench --dir bench/folder-qa --models "ollama-cloud/gemma4:31b" --iters 3
 """
-import csv, json, random
+import calendar, csv, json, random
 
 random.seed(7)
 
@@ -26,7 +26,9 @@ for y in (2023, 2024):
                 + (60 if (c == "rent" and y == 2024) else 0),
                 2,
             )
-            rows.append({"month": f"{y}-{mo:02d}", "category": c, "amount": amt})
+            # full ISO date (not bare "YYYY-MM") so strftime()-style queries
+            # work too — the easy tier shouldn't hinge on a date-format trap
+            rows.append({"month": f"{y}-{mo:02d}-01", "category": c, "amount": amt})
 with open("spend.csv", "w", newline="") as f:
     w = csv.DictWriter(f, ["month", "category", "amount"])
     w.writeheader()
@@ -85,7 +87,11 @@ cases = [
     ("groceries", "How much did I spend on groceries in total?", ["spend.csv"], {"figures": [groceries_all]}, "filter"),
     ("top-cat", "Which category did I spend the most on overall?", ["spend.csv"], {"contains": [top_cat]}, "groupby"),
     ("yoy", "Did my spending go up or down from 2023 to 2024, and by how much?", ["spend.csv"], {"figures": [round(total_2024 - total_2023, 2)]}, "multi-step"),
-    ("peak-month", "Which month had the highest total spend?", ["spend.csv"], {"contains": [peak_month]}, "groupby"),
+    ("peak-month", "Which month had the highest total spend?", ["spend.csv"],
+     {"contains": [
+         f"{peak_month[:7]}|{peak_month}|"
+         f"{calendar.month_name[int(peak_month[5:7])].lower()} {peak_month[:4]}"
+     ]}, "groupby"),
     ("wk-total", "How many minutes did I work out in total?", ["workouts.csv"], {"figures": [wk_total_min]}, "aggregate"),
     ("wk-run", "How many minutes of running did I do?", ["workouts.csv"], {"figures": [run_min]}, "filter"),
     ("wk-top", "What activity did I spend the most time on?", ["workouts.csv"], {"contains": [top_act]}, "groupby"),
