@@ -1,0 +1,16 @@
+# Hand-built folder-QA battery. Gold computed by bench/folder-qa/gen.py.
+{"id": "fqa-total-all", "question": "What is the total amount across all of spend.csv?", "files": ["spend.csv"], "gold": {"figures": [49939.58]}, "tier": "aggregate"}
+{"id": "fqa-total-2024", "question": "How much did I spend in 2024?", "files": ["spend.csv"], "gold": {"figures": [25409.77]}, "tier": "aggregate"}
+{"id": "fqa-rent-2024", "question": "What was my total rent in 2024?", "files": ["spend.csv"], "gold": {"figures": [15013.23]}, "tier": "filter"}
+{"id": "fqa-groceries", "question": "How much did I spend on groceries in total?", "files": ["spend.csv"], "gold": {"figures": [10021.35]}, "tier": "filter"}
+{"id": "fqa-top-cat", "question": "Which category did I spend the most on overall?", "files": ["spend.csv"], "gold": {"contains": ["rent"]}, "tier": "groupby"}
+{"id": "fqa-yoy", "question": "Did my spending go up or down from 2023 to 2024, and by how much?", "files": ["spend.csv"], "gold": {"figures": [879.96]}, "tier": "multi-step"}
+{"id": "fqa-peak-month", "question": "Which month had the highest total spend?", "files": ["spend.csv"], "gold": {"contains": ["2024-11"]}, "tier": "groupby"}
+{"id": "fqa-wk-total", "question": "How many minutes did I work out in total?", "files": ["workouts.csv"], "gold": {"figures": [2776]}, "tier": "aggregate"}
+{"id": "fqa-wk-run", "question": "How many minutes of running did I do?", "files": ["workouts.csv"], "gold": {"figures": [647]}, "tier": "filter"}
+{"id": "fqa-wk-top", "question": "What activity did I spend the most time on?", "files": ["workouts.csv"], "gold": {"contains": ["swim"]}, "tier": "groupby"}
+{"id": "fqa-doc-rent", "question": "According to notes.txt, what is the monthly rent starting Jan 2024?", "files": ["notes.txt"], "gold": {"contains": ["1,260"]}, "tier": "doc-lookup"}
+{"id": "fqa-doc-deposit", "question": "What is the security deposit on the lease?", "files": ["notes.txt"], "gold": {"contains": ["2,400"]}, "tier": "doc-lookup"}
+{"id": "fqa-cross", "question": "Combine spend.csv and the lease in notes.txt: does my recorded 2024 rent match 12 months at the lease rate?", "files": ["spend.csv", "notes.txt"], "gold": {"contains": ["no"]}, "tier": "multi-step"}
+{"id": "fqa-refusal", "question": "Based on spend.csv, how much will I spend next year?", "files": ["spend.csv"], "gold": "refusal", "tier": "refusal"}
+{"id": "fqa-notool", "question": "What does the word 'ledger' mean?", "files": [], "gold": "notool", "tier": "no-tool"}

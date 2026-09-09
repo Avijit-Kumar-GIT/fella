@@ -21,7 +21,10 @@
 //!   session-memory   turn-2 accuracy with the recent-turns block on vs off
 //!   memory           cold-run accuracy after priming, per-folder memory on vs off
 //!   bench --dir <d>  an external JSONL battery of real tasks (DABStep-easy,
-//!                    InfiAgent-DABench, …), same engine + metrics, with $/100
+//!                    InfiAgent-DABench, …), same grader + metrics, with $/100.
+//!                    --harness fella (default) | openai-ci  — the latter runs
+//!                    each case through the OpenAI Responses code_interpreter
+//!                    tool instead of Fella's engine (locked-harness compare).
 //!   all              accuracy + robustness + session-memory + memory
 //!
 //! Opts: --models "a,b,c"  --judge <model>  --iters N (default 1)
@@ -335,6 +338,14 @@ fn closeness_det(r: &RunResult, case: &EvalCase) -> f32 {
         got.iter().filter(|n| !(1900.0..=2100.0).contains(*n) && !grounded(**n)).count() as f32
             / got.len() as f32
     };
+    // Grounding needs an evidence trail. A harness that cites figures but
+    // doesn't expose one (the `openai-ci` comparison) would be capped at 0.7
+    // for a perfect answer, so drop that term and renormalise recall + wording.
+    // Fella runs always have evidence; a no-figure answer is unaffected either
+    // way, so this only moves the CI rows.
+    if r.evidence.is_empty() && !got.is_empty() {
+        return (0.71 * figure_recall + 0.29 * token_f1(&r.text, &case.reference)).clamp(0.0, 1.0);
+    }
     (0.5 * figure_recall + 0.3 * (1.0 - ungrounded_rate) + 0.2 * token_f1(&r.text, &case.reference))
         .clamp(0.0, 1.0)
 }
@@ -667,8 +678,139 @@ struct CaseScore {
     err: Option<String>,
 }
 
+// --- comparison harness: OpenAI code_interpreter -------------------------
+//
+// `bench --harness openai-ci` runs each case through the OpenAI Responses API
+// with the `code_interpreter` tool instead of Fella's engine — a locked-harness
+// comparison on the same task set + grader. Small files are embedded in the
+// prompt (no multipart upload, no extra reqwest feature); a case whose files
+// exceed `CI_MAX_EMBED` bytes is skipped with an error.
+
+const CI_MAX_EMBED: usize = 100 * 1024;
+
+struct CiHarness {
+    http: reqwest::Client,
+    base: String,
+    key: String,
+    model: String,
+}
+
+/// Runner for one case iteration: Fella's engine, or an external harness that
+/// needs the case's staged files.
+enum Runner<'a> {
+    Fella,
+    OpenAiCi { h: &'a CiHarness, dir: &'a Path, files: &'a [String] },
+}
+
+fn ci_text(v: &serde_json::Value) -> String {
+    if let Some(t) = v.get("output_text").and_then(|t| t.as_str()) {
+        if !t.trim().is_empty() {
+            return t.trim().to_string();
+        }
+    }
+    // walk output[] for the assistant message's text parts
+    let mut out = String::new();
+    if let Some(items) = v.get("output").and_then(|o| o.as_array()) {
+        for it in items {
+            if it.get("type").and_then(|t| t.as_str()) != Some("message") {
+                continue;
+            }
+            for part in it.get("content").and_then(|c| c.as_array()).into_iter().flatten() {
+                if let Some(t) = part.get("text").and_then(|t| t.as_str()) {
+                    out.push_str(t);
+                }
+            }
+        }
+    }
+    out.trim().to_string()
+}
+
+fn ci_steps(v: &serde_json::Value) -> usize {
+    v.get("output")
+        .and_then(|o| o.as_array())
+        .map(|a| {
+            a.iter()
+                .filter(|it| {
+                    it.get("type")
+                        .and_then(|t| t.as_str())
+                        .is_some_and(|t| t.contains("code_interpreter"))
+                })
+                .count()
+        })
+        .unwrap_or(0)
+}
+
+async fn run_openai_ci(h: &CiHarness, dir: &Path, question: &str, files: &[String]) -> RunResult {
+    let empty = |err: Option<String>, total: Duration| RunResult {
+        text: String::new(),
+        evidence: Vec::new(),
+        hard_fail: false,
+        prompt_tok: 0,
+        completion_tok: 0,
+        total,
+        first_token: None,
+        steps: 0,
+        err,
+    };
+    let t0 = Instant::now();
+
+    let mut blob = String::new();
+    for f in files {
+        match std::fs::read_to_string(dir.join(f)) {
+            Ok(c) if blob.len() + c.len() <= CI_MAX_EMBED => {
+                blob.push_str(&format!("### {f}\n```\n{c}\n```\n\n"));
+            }
+            Ok(_) => return empty(Some(format!("ci: {f} too large to embed")), t0.elapsed()),
+            Err(e) => return empty(Some(format!("ci: read {f}: {e}")), t0.elapsed()),
+        }
+    }
+
+    let body = serde_json::json!({
+        "model": h.model,
+        "instructions": "You are a careful data analyst. The user's files are included in the message. \
+Use the code_interpreter tool to compute the answer from them. Reply with only the final number or \
+short phrase — no explanation, no restating the question. If the files cannot answer it, say so plainly.",
+        "input": format!("{blob}Question: {question}"),
+        "tools": [{ "type": "code_interpreter", "container": { "type": "auto" } }],
+    });
+
+    let resp = h
+        .http
+        .post(format!("{}/responses", h.base))
+        .bearer_auth(&h.key)
+        .json(&body)
+        .send()
+        .await;
+    let total = t0.elapsed();
+    let resp = match resp {
+        Ok(r) => r,
+        Err(e) => return empty(Some(format!("ci send: {e}")), total),
+    };
+    if !resp.status().is_success() {
+        let s = resp.status();
+        let b = resp.text().await.unwrap_or_default();
+        return empty(Some(format!("ci {s}: {}", b.chars().take(200).collect::<String>())), total);
+    }
+    let v: serde_json::Value = match resp.json().await {
+        Ok(v) => v,
+        Err(e) => return empty(Some(format!("ci parse: {e}")), total),
+    };
+    RunResult {
+        text: ci_text(&v),
+        evidence: Vec::new(),
+        hard_fail: false,
+        prompt_tok: v["usage"]["input_tokens"].as_u64().unwrap_or(0) as u32,
+        completion_tok: v["usage"]["output_tokens"].as_u64().unwrap_or(0) as u32,
+        total,
+        first_token: None,
+        steps: ci_steps(&v),
+        err: None,
+    }
+}
+
 /// Run one case `iters` times and fold: `correct` = majority, everything
 /// numeric = mean.
+#[allow(clippy::too_many_arguments)]
 async fn score_case(
     engine: &EngineState,
     case: &EvalCase,
@@ -677,6 +819,7 @@ async fn score_case(
     judge: Option<&str>,
     conv: &str,
     iters: usize,
+    runner: &Runner<'_>,
 ) -> CaseScore {
     let iters = iters.max(1);
     let mut oks = 0usize;
@@ -689,7 +832,14 @@ async fn score_case(
 
     let show = std::env::var_os("EVAL_SHOW_ANSWERS").is_some();
     for it in 0..iters {
-        let r = run_case(engine, &format!("{conv}-{it}"), &case.question, None).await;
+        let r = match runner {
+            Runner::Fella => {
+                run_case(engine, &format!("{conv}-{it}"), &case.question, None).await
+            }
+            Runner::OpenAiCi { h, dir, files } => {
+                run_openai_ci(h, dir, &case.question, files).await
+            }
+        };
         let ok = grade(&r, &case.gold);
         if ok {
             oks += 1;
@@ -786,7 +936,7 @@ async fn run_battery(
     let mut out = Vec::new();
     for c in cases {
         let conv = format!("{tag}-{model}-{profile}-{}", c.id);
-        out.push(score_case(engine, c, model, profile, judge, &conv, iters).await);
+        out.push(score_case(engine, c, model, profile, judge, &conv, iters, &Runner::Fella).await);
         std::io::stdout().flush().ok();
     }
     out
@@ -1074,20 +1224,45 @@ fn safe_dirname(s: &str) -> String {
         .collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn cmd_bench(
     engine: &EngineState,
     dir: &Path,
+    data_dir: &Path,
     models: &[String],
     judge: Option<&str>,
     iters: usize,
     only: Option<&str>,
+    harness: &str,
 ) -> Vec<CaseScore> {
     let mut cases = load_bench_dir(dir);
     if let Some(sub) = only {
         cases.retain(|(_, c)| c.id.contains(sub));
     }
+
+    // Comparison harness setup (once).
+    let ci = if harness == "openai-ci" {
+        let auth = std::fs::read_to_string(data_dir.join("auth.json")).unwrap_or_default();
+        let key = serde_json::from_str::<serde_json::Value>(&auth)
+            .ok()
+            .and_then(|v| v.get("apikey:openai").and_then(|k| k.as_str()).map(str::to_string))
+            .or_else(|| std::env::var("OPENAI_API_KEY").ok())
+            .unwrap_or_else(|| {
+                eprintln!("bench --harness openai-ci: no `apikey:openai` in {}/auth.json and no OPENAI_API_KEY", data_dir.display());
+                std::process::exit(2);
+            });
+        Some(CiHarness {
+            http: reqwest::Client::new(),
+            base: env("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+            key,
+            model: String::new(), // set per model below
+        })
+    } else {
+        None
+    };
+
     println!(
-        "\n# External benchmark  ·  `{}`  ({iters} iter(s)/case, {} cases)\n",
+        "\n# External benchmark  ·  `{}`  ·  harness `{harness}`  ({iters} iter(s)/case, {} cases)\n",
         dir.display(),
         cases.len()
     );
@@ -1096,40 +1271,58 @@ async fn cmd_bench(
     println!("|---|---|:-:|--:|--:|--:|--:|--:|--:|--:|");
 
     let staging = std::env::temp_dir().join("fella-bench-ext");
+    // A hosted endpoint (ollama-cloud especially) degrades under 15+ cases
+    // back-to-back — the model starts emitting broken SQL. A short breather
+    // between cases keeps a single-iter run honest; `--iters 3` + majority is
+    // the real defence. `BENCH_PAUSE_MS=0` disables.
+    let pause_ms: u64 = env("BENCH_PAUSE_MS", "400").parse().unwrap_or(400);
     let mut all = Vec::new();
 
     for m in models {
-        if !set_model(engine, m) {
+        // Fella drives the engine; the CI harness carries its own model string.
+        let ci_for_model = ci.as_ref().map(|c| CiHarness {
+            http: c.http.clone(),
+            base: c.base.clone(),
+            key: c.key.clone(),
+            model: m.rsplit('/').next().unwrap_or(m).to_string(),
+        });
+        if ci_for_model.is_none() && !set_model(engine, m) {
             println!("| {m} | | | | | | | | | save failed |");
             continue;
         }
         let mut scores: Vec<CaseScore> = Vec::new();
         for (files, case) in &cases {
-            let ws = staging.join(safe_dirname(case.id));
-            let _ = std::fs::remove_dir_all(&ws);
-            if std::fs::create_dir_all(&ws).is_err() {
-                println!("| {m} | {} | ERR | | | | | | | mkdir failed |", case.id);
-                continue;
-            }
-            let mut staged = true;
-            for f in files {
-                let src = dir.join(f);
-                let name = Path::new(f).file_name().unwrap_or(std::ffi::OsStr::new(f));
-                if std::fs::copy(&src, ws.join(name)).is_err() {
-                    println!("| {m} | {} | ERR | | | | | | | missing {} |", case.id, f);
-                    staged = false;
-                    break;
-                }
-            }
-            if !staged {
-                continue;
-            }
-            if engine.open_workspace(&ws).is_err() {
-                println!("| {m} | {} | ERR | | | | | | | open_workspace failed |", case.id);
-                continue;
-            }
             let conv = format!("bench-{m}-{}", safe_dirname(case.id));
-            let s = score_case(engine, case, m, "bench", judge, &conv, iters).await;
+            let runner = if let Some(h) = &ci_for_model {
+                Runner::OpenAiCi { h, dir, files }
+            } else {
+                // Fella: stage a fresh workspace with just this case's files.
+                let ws = staging.join(safe_dirname(case.id));
+                let _ = std::fs::remove_dir_all(&ws);
+                if std::fs::create_dir_all(&ws).is_err() {
+                    println!("| {m} | {} | ERR | | | | | | | mkdir failed |", case.id);
+                    continue;
+                }
+                let mut staged = true;
+                for f in files {
+                    let src = dir.join(f);
+                    let name = Path::new(f).file_name().unwrap_or(std::ffi::OsStr::new(f));
+                    if std::fs::copy(&src, ws.join(name)).is_err() {
+                        println!("| {m} | {} | ERR | | | | | | | missing {} |", case.id, f);
+                        staged = false;
+                        break;
+                    }
+                }
+                if !staged {
+                    continue;
+                }
+                if engine.open_workspace(&ws).is_err() {
+                    println!("| {m} | {} | ERR | | | | | | | open_workspace failed |", case.id);
+                    continue;
+                }
+                Runner::Fella
+            };
+            let s = score_case(engine, case, m, "bench", judge, &conv, iters, &runner).await;
             let price = price_per_100(m, s.prompt_tok as f64, s.completion_tok as f64);
             println!(
                 "| {} | {} | {} | {:.0}% | {:.2} | {} `{}` | {} | {} | {} | {:.1} |",
@@ -1147,6 +1340,9 @@ async fn cmd_bench(
             );
             std::io::stdout().flush().ok();
             scores.push(s);
+            if pause_ms > 0 {
+                tokio::time::sleep(Duration::from_millis(pause_ms)).await;
+            }
         }
 
         let (ok, n) = acc(&scores);
@@ -1519,6 +1715,7 @@ async fn main() {
     let compare_to = opt("--compare");
     let only = opt("--only");
     let bench_dir = opt("--dir");
+    let harness = opt("--harness").unwrap_or_else(|| "fella".into());
     let models: Vec<String> = opt("--models")
         .map(|s| s.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect())
         .unwrap_or_default();
@@ -1575,7 +1772,7 @@ async fn main() {
                 eprintln!("bench: pass --dir <path-to-benchmark-dir> (holds cases.jsonl + data files)");
                 std::process::exit(2);
             };
-            cmd_bench(&engine, Path::new(d), &models, judge, iters, only.as_deref()).await
+            cmd_bench(&engine, Path::new(d), &data_dir, &models, judge, iters, only.as_deref(), &harness).await
         }
         "all" => {
             let mut v = cmd_accuracy(&engine, &cases, &models, judge, iters).await;

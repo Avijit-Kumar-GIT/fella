@@ -19,10 +19,16 @@ on the same task set, with the same budget.
 
 | harness | what it is | how it's driven |
 |---|---|---|
-| **Fella** | this repo's 6-tool read-only loop + verifier | `agent_eval bench` (below) |
-| **OpenAI `code_interpreter`** | ChatGPT Advanced Data Analysis, via the API | adapter — *not built yet* |
+| **Fella** | this repo's 6-tool read-only loop + verifier | `agent_eval bench --dir <d>` (default) |
+| **OpenAI `code_interpreter`** | ChatGPT Advanced Data Analysis, via the Responses API | `agent_eval bench --dir <d> --harness openai-ci` |
 | **Claude analysis tool** | Anthropic code execution, via the API | adapter — *not built yet* |
 | **Julius AI** | funded data-analyst product ($11M, 2M+ users) | hand-run ~15 tasks, dot + error bar on the chart |
+
+The `openai-ci` harness embeds each case's (small) files in the prompt and calls
+`POST /v1/responses` with the `code_interpreter` tool. The key comes from
+`<AGENT_EVAL_DATA_DIR>/auth.json` (`apikey:openai`) or `OPENAI_API_KEY`; base
+URL from `OPENAI_BASE_URL`. It costs money — a code_interpreter session is
+~$0.03 plus tokens, so run a subset (`--only`) on a cheap model first.
 
 Models: `gemma4:31b → 12b → 4b`, `qwen3:8b`, one mid open model, one frontier
 closed model as the ceiling reference.
@@ -31,8 +37,12 @@ closed model as the ceiling reference.
 
 Scored only on the simple-question tier:
 
-- **Fella's own frozen battery** (`agent_eval accuracy`) — the "messy personal
-  folder" shape nobody else has.
+- **`bench/folder-qa/`** — a hand-built 15-case battery in this repo: spending,
+  workouts, a lease note; totals / filters / group-by / top-N / a trend / doc
+  lookups / one refusal / one no-tool. Deterministic gold (`gen.py`). Runs on
+  `gemma4` for free and is the shared set for the paid `openai-ci` pilot.
+- **Fella's own frozen battery** (`agent_eval accuracy`) — the synthetic
+  "messy personal folder" shape.
 - **DABStep — *easy* tier** ([Adyen/HF](https://huggingface.co/spaces/adyen/DABstep),
   arXiv:2506.23719). Single dataset + minimal context, numeric/word answer.
 - **InfiAgent-DABench** ([site](https://infiagent.github.io/), arXiv:2401.05507)
@@ -91,18 +101,18 @@ from `price_per_100`). `--json` / `--compare` work as elsewhere.
 
 ## Converting the public sets
 
-Both ship a manifest + data. A small converter (Python is fine, keep it out of
-the Rust) writes `cases.jsonl`:
+`bench/convert.py` (stdlib only) turns a download into `cases.jsonl`:
 
-- **DABStep**: each task has `question`, `level` (→ `tier`), `guidance`
-  (formatting), and a shared `context/` dir of CSV/JSON + `manual.md`. Gold
-  answers grade with adaptive numeric tolerance → `{"figures": […]}` for
-  numbers, `{"contains": […]}` for strings/multiple-choice. Point every
-  easy-tier case's `files` at the shared context files it needs.
-- **InfiAgent-DABench**: each question names one CSV and a
-  `format` + `answer` (often `@key[value]` pairs). One CSV per case →
-  `"files": ["<that>.csv"]`; parse the expected values into `figures` /
-  `contains`.
+```
+python3 bench/convert.py dabstep  <tasks.jsonl> <context_dir> > bench/dabstep-easy/cases.jsonl
+python3 bench/convert.py infiagent <da-dev-questions.jsonl> <csv_dir> > bench/infiagent/cases.jsonl
+```
+
+then copy the data files next to the `cases.jsonl`. It filters DABStep to the
+easy tier, folds `guidance`/`format` into the question, and parses gold into
+`{"figures":[…]}` / `{"contains":[…]}`. The field names come from each set's
+published schema — eyeball the first few rows after fetching, since neither
+download was available to test against here.
 
 ## The chart (once the adapters land)
 
@@ -112,9 +122,31 @@ the Rust) writes `cases.jsonl`:
 - **C** — the tiny-and-open table: binary size, deps, offline?, license,
   $/1k-answers. The funded tools leave cells blank.
 
+## Running the pilot
+
+```
+DATA=/copy/of/fella.db+auth.json
+
+# Fella down the model ladder (gemma is free) — the primary experiment
+AGENT_EVAL_DATA_DIR=$DATA cargo run --release --features eval --example agent_eval -- \
+  bench --dir bench/folder-qa --models "ollama-cloud/gemma4:31b" --iters 3 --json fella-gemma.json
+
+# OpenAI code_interpreter on the same set (costs ~$0.03/case in sessions) —
+# start with a subset on a cheap model
+AGENT_EVAL_DATA_DIR=$DATA cargo run --release --features eval --example agent_eval -- \
+  bench --dir bench/folder-qa --harness openai-ci --models "openai/gpt-5.6-luna" \
+        --iters 1 --json ci-luna.json --only fqa-total
+```
+
+`BENCH_PAUSE_MS` (default 400) spaces cases so a hosted endpoint doesn't
+degrade mid-run; `--iters 3` majority-votes over transient flakiness.
+
 ## Status
 
 - [x] `bench --dir` subcommand + JSONL loader + `$/100` column + unit test
-- [ ] Python converters for DABStep-easy and InfiAgent-DABench
-- [ ] `code_interpreter` / Claude-analysis adapters (a `Harness` seam in `run_case`)
-- [ ] first pilot run + the chart
+- [x] `--harness openai-ci` — Responses API + `code_interpreter`, same grader
+- [x] `bench/folder-qa/` — 15-case hand battery + `gen.py`
+- [x] `bench/convert.py` — DABStep-easy / InfiAgent-DABench → `cases.jsonl` (untested vs a live download)
+- [ ] Claude-analysis adapter (`--harness claude-analysis`)
+- [ ] fetch DABStep-easy + InfiAgent, run the converters
+- [ ] the full pilot run + the 3-panel chart
