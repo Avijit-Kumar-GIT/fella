@@ -27,12 +27,14 @@ PRICES = {
     "inkling-small": (0.45, 1.20),
     "muse-spark-1.3": (1.25, 4.25),
     "nemotron-3.5-lightning": (0.08, 0.20),
-    "deepseek-v4-flash:0731": (0.0, 0.0),  # FREE on ollama-cloud
-    "glm-5.3-flash": (0.0, 0.0),           # FREE
-    "gemma4:31b": (0.0, 0.0),              # FREE
-    "gpt-oss:120b": (0.0, 0.0),            # FREE
-    "gpt-oss:20b": (0.0, 0.0),             # FREE
-    "deepseek-v4-pro:0813": (0.0, 0.0),    # FREE
+    # free on a plain ollama-cloud key (the rest of ollama-cloud is gated):
+    "gemma4:31b": (0.0, 0.0),
+    "gpt-oss:120b": (0.0, 0.0),
+    "gpt-oss:20b": (0.0, 0.0),
+    "nemotron-3-nano:30b": (0.0, 0.0),
+    # OpenRouter (not free on ollama-cloud despite being listed there):
+    "deepseek-v4-flash:0731": (0.05, 0.16),
+    "glm-5.3-flash": (0.075, 0.25),
 }
 
 

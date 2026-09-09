@@ -69,23 +69,30 @@ python3 bench/aggregate.py "bare / gemma=bare.json:ollama-cloud/gemma4:31b" \
 
 ## Model ladder (revealed-preference cheap models, Sept 2026)
 
-From OpenRouter usage rankings + pricing. Several are **free on an ollama-cloud
-key**; the rest via OpenRouter with one key.
+From OpenRouter usage rankings + pricing. **ollama-cloud lists many models but
+gates most behind credits** — on a plain key only these four are actually free:
+`gemma4:31b`, `gpt-oss:20b`, `gpt-oss:120b`, `nemotron-3-nano:30b`. Everything
+else is OpenRouter (one key).
 
-| model | OR $/1M in–out | on ollama-cloud |
+| model | OR $/1M in–out | free tier |
 |---|--:|:-:|
-| DeepSeek V4 Flash (0731) | 0.05 / 0.16 | ✅ |
-| GLM 5.3 Flash | 0.075 / 0.25 | ✅ |
-| Nemotron 3.5 Lightning | 0.08 / 0.20 | — |
-| Gemma4:31b | ~0.10 / 0.20 | ✅ |
-| GPT-5.6 Luna | 0.20 / 1.20 | — |
-| Muse Glimmer 30B | 0.30 / 1.10 | — |
-| Inkling Small (Thinking Machines) | 0.45 / 1.20 (`:free` tier exists) | — |
-| Grok 4.3 | 1.25 / 2.50 | — |
-| Muse Spark 1.3 | 1.25 / 4.25 | — |
+| GPT-OSS 20B | ~free | ollama-cloud ✅ |
+| Nemotron 3 Nano 30B | ~free | ollama-cloud ✅ |
+| Gemma4:31b | ~0.10 / 0.20 | ollama-cloud ✅ |
+| GPT-OSS 120B | ~free | ollama-cloud ✅ |
+| DeepSeek V4 Flash (0731) | 0.05 / 0.16 | OpenRouter |
+| GLM 5.3 Flash | 0.075 / 0.25 | OpenRouter |
+| Nemotron 3.5 Lightning | 0.08 / 0.20 | OpenRouter |
+| GPT-5.6 Luna | 0.20 / 1.20 | OpenAI direct |
+| Gemini 3.8 Flash | 0.75 / 3.75 | OpenRouter |
+| Muse Glimmer 30B | 0.30 / 1.10 | OpenRouter |
+| Inkling Small (Thinking Machines) | 0.45 / 1.20 (`:free` exists) | OpenRouter |
+| Grok 4.3 | 1.25 / 2.50 | xAI direct |
+| Muse Spark 1.3 | 1.25 / 4.25 | OpenRouter |
 
-Full ladder × {bare, fella} × `--iters 3` on the 15-case battery ≈ **$1** (see
-`git log` for the worked estimate); ~half of that is Grok + Muse Spark.
+Full ladder × {bare, fella} × `--iters 3` on the 15-case battery ≈ **$1** via
+OpenRouter (4 rungs free on ollama-cloud); ~half of the paid part is Grok +
+Muse Spark.
 
 ## Not in scope
 
