@@ -61,6 +61,13 @@ pub fn get_catalog(engine: State<'_, EngineState>) -> Catalog {
     engine.catalog()
 }
 
+/// Reopen the folder from the last session (launch only). `null` if there's
+/// nothing to reopen or it's gone.
+#[tauri::command]
+pub fn reopen_last_workspace(engine: State<'_, EngineState>) -> Option<Catalog> {
+    engine.reopen_last_workspace()
+}
+
 #[tauri::command]
 pub fn describe(name: String, engine: State<'_, EngineState>) -> EngineResult<SourceInfo> {
     engine.describe_source(&name)
@@ -74,6 +81,19 @@ pub fn run_sql_direct(sql: String, engine: State<'_, EngineState>) -> EngineResu
 #[tauri::command]
 pub async fn reindex(engine: State<'_, EngineState>) -> Result<Catalog, EngineError> {
     engine.reindex()
+}
+
+/// `[path, contents_or_null]` for the current folder's `memory.md` (`/memory`).
+/// `null` when no folder is open.
+#[tauri::command]
+pub fn memory_file(engine: State<'_, EngineState>) -> Option<(String, Option<String>)> {
+    engine.folder_memory_file()
+}
+
+/// Delete the current folder's learned notes. `true` if a file was removed.
+#[tauri::command]
+pub fn forget_memory(engine: State<'_, EngineState>) -> EngineResult<bool> {
+    engine.forget_folder_memory()
 }
 
 // --- settings --------------------------------------------------------------

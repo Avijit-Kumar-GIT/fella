@@ -336,7 +336,7 @@ fn closeness_det(r: &RunResult, case: &EvalCase) -> f32 {
 struct Waste {
     /// an exact `(tool, args)` repeat, or the engine's "skipped (duplicate call)"
     duplicate: usize,
-    /// a `describe_schema` / `sample_rows` / `list_files` peek that wasn't the
+    /// an `inspect_table` / `list_files` peek that wasn't the
     /// one free orientation call it came 2nd, or after a query already worked
     redundant_schema: usize,
     /// one of 3+ `run_sql` calls whose result the answer never uses
@@ -361,7 +361,7 @@ impl Waste {
 ///
 /// Confidence per kind:
 /// - `duplicate` / `errored` — always accurate.
-/// - `redundant_schema` — every `describe_schema` / `sample_rows` / `list_files`
+/// - `redundant_schema` — every `inspect_table` / `list_files`
 ///   call. Accurate on the default and other small workspaces, where the system
 ///   prompt's schema block already lists the tables, their columns and sample
 ///   rows so any such call is the model re-discovering what it was told.
@@ -390,7 +390,7 @@ fn classify_waste(r: &RunResult) -> Waste {
             w.duplicate += 1;
         } else if e.error.is_some() {
             w.errored += 1;
-        } else if matches!(e.tool.as_str(), "describe_schema" | "sample_rows" | "list_files") {
+        } else if matches!(e.tool.as_str(), "inspect_table" | "list_files") {
             w.redundant_schema += 1;
         } else if e.tool == "run_sql" && n_ok_sql >= 3 {
             let produced = numbers_in(&e.result_summary);
@@ -1515,7 +1515,7 @@ mod tests {
         let messy = rr(
             "The total is 450.",
             vec![
-                ev("describe_schema", "ledger: 3 cols", None),   // redundant
+                ev("inspect_table", "ledger: 3 cols", None),     // redundant
                 ev("run_sql", "1 row: total 450", None),         // legit
                 ev("run_sql", "err", Some("no such column: x")), // errored
                 ev("run_sql", "1 row: total 450", None),         // repeat of #2

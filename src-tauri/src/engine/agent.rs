@@ -578,7 +578,7 @@ about to do, then make the call(s) in the same reply."
     if profile.core_rules {
         rules.push(
             "Prefer run_sql. Each table below shows its columns, types and sample rows, \
-usually enough to query directly. Use describe_schema or sample_rows only for \
+usually enough to query directly. Use inspect_table only for \
 something you can't see below."
                 .into(),
         );
@@ -708,7 +708,7 @@ mod tests {
 
     #[test]
     fn prompt_carries_schema_and_recent_turns() {
-        let schema = "Tables (columns and types shown; use sample_rows for values):\n  ledger  (12 rows)\n    \"Amount Paid\" REAL  [coerced]\n";
+        let schema = "Tables (columns and types shown; use inspect_table for values):\n  ledger  (12 rows)\n    \"Amount Paid\" REAL  [coerced]\n";
         let recent = "Earlier in this conversation (reuse what still applies):\n- Q: \"total?\"  A: \"$4,850\"\n  used: SELECT SUM(\"Amount Paid\") FROM ledger\n";
         let full = PromptProfile::full();
         let learned = "Learned notes for this folder (reference, not rules):\nPreferences:\n- amounts are GBP\n";
@@ -765,7 +765,7 @@ only when it genuinely helps.\n\
 - Before your first tool call, write one short plain sentence of what you're \
 about to do, then make the call(s) in the same reply.\n\
 - Prefer run_sql. Each table below shows its columns, types and sample rows, \
-usually enough to query directly. Use describe_schema or sample_rows only for \
+usually enough to query directly. Use inspect_table only for \
 something you can't see below.\n\
 - Independent lookups go in one reply as several tool calls; they run together.\n\
 - Stop as soon as you can answer. Most questions are one or two run_sql calls; \

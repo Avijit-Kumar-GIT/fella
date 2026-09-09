@@ -4,6 +4,7 @@
 		COMMAND_DESCRIPTIONS,
 		completionsFor,
 		dispatch,
+		steerRun,
 		stop
 	} from '$lib/commands';
 	import { session } from '$lib/session.svelte';
@@ -76,7 +77,21 @@
 
 	async function submit() {
 		const text = value.trim();
-		if (!text || session.busy) return;
+		if (!text) return;
+		// Mid-run: a plain line (not a command, not a key paste) steers the live
+		// answer — cancel and re-ask with it appended. A command or key still
+		// waits for the run to end.
+		if (session.busy) {
+			if (pendingInput || text.startsWith('/')) return;
+			if (!carriesSecret(text)) history.unshift(text);
+			histIx = -1;
+			value = '';
+			menuSel = -1;
+			queueMicrotask(grow);
+			await steerRun(session.activeTab, text);
+			onafterrun?.();
+			return;
+		}
 		// Don't keep a pasted secret in the ↑-recall history.
 		if (!pendingInput && !carriesSecret(text)) history.unshift(text);
 		histIx = -1;
@@ -222,7 +237,16 @@
 			onkeydown={onKey}
 			onfocus={() => (menuOff = false)}
 		></textarea>
-		{#if session.busy}
+		{#if session.busy && value.trim() && !pendingInput && !value.startsWith('/')}
+			<button
+				class="act send"
+				title="Cancel and re-ask with this (Enter)"
+				aria-label="Cancel and re-ask with this"
+				onclick={() => void submit()}
+			>
+				<Icon name="corner-down-left" size={15} />
+			</button>
+		{:else if session.busy}
 			<button class="act stop" title="Stop (Esc)" aria-label="Stop" onclick={() => stop()}>
 				<Icon name="stop" fill size={13} />
 			</button>

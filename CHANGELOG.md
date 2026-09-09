@@ -8,6 +8,10 @@ All notable changes to Fella are recorded here. Format follows
 
 ### Added
 
+- **Fella reopens your last folder on start.** No more picking the same folder
+  every launch — Fella opens the one from your last session automatically (and
+  says so). The welcome screen still shows if that folder has moved or you've
+  never opened one.
 - **Per-folder memory (experimental).** Fella now keeps a small plain-text
   `memory.md` for each folder — the *learned* companion to `fella.md`. It fills
   itself in from what already happens: a query that passed the self-check
@@ -21,6 +25,13 @@ All notable changes to Fella are recorded here. Format follows
 
 ### Changed
 
+- **One `/inspect_table` tool instead of two.** The model used to have separate
+  "show me the columns" and "show me some rows" tools; they were nearly the same
+  thing (the first already included a few rows) and a weaker model sometimes
+  called both. They're now a single `inspect_table` — column stats plus the
+  first few rows, with a `rows` count if you want more. Fewer tools, fewer
+  redundant calls; measured against the eval suite to confirm answers are
+  unchanged.
 - **A column whose values differ only in capitalisation is now flagged.** If a
   category-style column holds `Rent`, `rent`, and `RENT` as if they were
   different, Fella notes it on the column and, if a query filters that column

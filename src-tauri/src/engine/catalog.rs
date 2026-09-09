@@ -69,7 +69,7 @@ pub struct ColumnInfo {
     pub example: Option<String>,
     /// Ingest-time caveat about this column, e.g. amounts that were stored as
     /// text and coerced to numbers, or a column that looks numeric but was
-    /// left as text. Surfaced in the schema digest and `describe_schema`.
+    /// left as text. Surfaced in the schema digest and `inspect_table`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
 }

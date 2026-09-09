@@ -19,6 +19,7 @@ showing the exact steps it took. You never need these commands, but here they ar
   /auth            see which model services you're connected to
   /model           see or change which model answers
   /reindex         check the folder again for new or changed files
+  /memory          see what Fella has learned about this folder (/memory forget to clear)
   /update          check for a newer version of Fella and install it
   /packs           themes and skills you've added (/packs browse to find more)
   /connect         connect a data source you've added
@@ -43,6 +44,7 @@ export const SLASH_COMMANDS = [
 	'/auth',
 	'/model',
 	'/reindex',
+	'/memory',
 	'/update',
 	'/packs',
 	'/connect',
@@ -72,6 +74,7 @@ export const COMMAND_DESCRIPTIONS: Record<string, string> = {
 	'/auth': "see which model services you're connected to",
 	'/model': 'see or change which model answers',
 	'/reindex': 'check the folder again for new or changed files',
+	'/memory': 'see what Fella has learned about this folder',
 	'/update': 'check for a newer version of Fella and install it',
 	'/packs': "themes and skills you've added",
 	'/connect': "connect a data source you've added",
@@ -120,6 +123,8 @@ export function completionsFor(input: string): string[] {
 				return pick([...MODEL_FIELDS, ...models()]);
 			case '/schema':
 				return pick(tables());
+			case '/memory':
+				return pick(['forget']);
 			case '/packs':
 				return pick(['browse', 'install', 'add', 'enable', 'disable', 'remove']);
 			case '/connect':
@@ -189,6 +194,28 @@ export async function openFolder(path?: string): Promise<void> {
 	}
 }
 
+/** On launch, reopen the folder from the last session so it's ready without a
+ *  manual `/open`. Silent if there's nothing to reopen or it's gone (the
+ *  welcome screen stays). Called once from the page's onMount. */
+export async function reopenLastFolder(): Promise<void> {
+	if (!isTauri() || session.catalog.workspace) return;
+	try {
+		const cat = await ipc.reopenLastWorkspace();
+		if (cat?.workspace) {
+			session.catalog = cat;
+			session.addSystem(`Reopened ${baseName(cat.workspace)}.\n${summarizeCatalog()}`);
+			return;
+		}
+	} catch {
+		/* fall through to a plain catalog read */
+	}
+	try {
+		session.catalog = await ipc.getCatalog();
+	} catch {
+		/* no engine yet the welcome screen handles it */
+	}
+}
+
 /** Ask the engine to stop one tab's in-progress run (the active tab by
  *  default). The `ask` promise then resolves normally (a "Stopped." answer) and
  *  clears that tab's `busy`. */
@@ -200,6 +227,20 @@ export async function stop(conv: Conversation = session.activeTab): Promise<void
 	} catch {
 		/* the run may have already finished nothing to stop */
 	}
+}
+
+/** Correct a running answer: cancel it, then re-ask the same question with the
+ *  new line appended. Only reached from a deliberate Enter in the composer while
+ *  a run is live (see `Composer.submit`); the transcript shows what happened. */
+export async function steerRun(conv: Conversation, extra: string): Promise<void> {
+	const prior = [...conv.messages].reverse().find((m) => m.role === 'user');
+	if (!prior?.text) return;
+	conv.addSystem('↻ Cancelled the current answer and re-asking with your addition.');
+	await stop(conv);
+	// Let the cancelled run unwind (its `ask` resolves "Stopped." and clears busy).
+	for (let i = 0; i < 60 && conv.busy; i++) await new Promise((r) => setTimeout(r, 50));
+	conv.addUser(extra);
+	await ask(`${prior.text}\n\nAlso: ${extra}`, conv);
 }
 
 /** Entry point: called with the raw composer text. */
@@ -742,6 +783,35 @@ async function runCommand(text: string): Promise<void> {
 				}
 			}
 			return;
+
+		case '/memory': {
+			if (!requireEngine()) return;
+			try {
+				if (arg.trim().toLowerCase() === 'forget') {
+					const had = await ipc.forgetMemory();
+					session.addSystem(
+						had
+							? 'Cleared what Fella had learned about this folder.'
+							: 'Nothing learned about this folder yet.'
+					);
+					return;
+				}
+				const res = await ipc.memoryFile();
+				if (!res) {
+					session.addSystem('Open a folder first, then /memory shows what Fella has learned about it.');
+					return;
+				}
+				const [path, contents] = res;
+				session.addSystem(
+					contents?.trim()
+						? `What Fella has learned about this folder (edit this file directly; /memory forget clears it):\n${path}\n\n${contents.trim()}`
+						: `Nothing learned about this folder yet — Fella fills this in as you ask and correct it.\nFile (once it exists): ${path}`
+				);
+			} catch (e) {
+				session.addSystem(`error: ${errMsg(e)}`);
+			}
+			return;
+		}
 
 		case '/update':
 			if (!requireEngine()) return;

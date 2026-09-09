@@ -125,7 +125,7 @@ fn row_count(conn: &Connection, view: &str) -> EngineResult<i64> {
 // note. Not done yet: this feature is `--features duckdb`, which nothing builds
 // or tests (local box OOMs, CI skips it), so unverified parsing logic is not
 // worth shipping blind. Until then the `run_sql` TEXT-aggregation warning
-// (engine/tools.rs) and `describe_schema` still steer the model to CAST.
+// (engine/tools.rs) and `inspect_table` still steer the model to CAST.
 fn columns(conn: &Connection, view: &str) -> EngineResult<Vec<ColumnInfo>> {
     let out = query(conn, &format!("DESCRIBE SELECT * FROM {}", quote_ident(view)), 10_000)?;
     let ix = col_index(&out.columns);

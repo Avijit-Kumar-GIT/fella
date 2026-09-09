@@ -401,7 +401,7 @@ impl EngineState {
         if tables.is_empty() {
             p.push_str("No tables were detected.\n");
         } else if full {
-            p.push_str("Tables (columns and types shown; use sample_rows for values):\n");
+            p.push_str("Tables (columns and types shown; use inspect_table for values):\n");
             for s in &tables {
                 let view = s.view.as_deref().unwrap_or("");
                 let rows = s.row_count.map(|n| n.to_string()).unwrap_or_else(|| "?".into());
@@ -428,7 +428,7 @@ impl EngineState {
                 }
             }
         } else {
-            p.push_str("Tables (use describe_schema or sample_rows for their columns):\n");
+            p.push_str("Tables (use inspect_table for their columns):\n");
             for s in &tables {
                 let ncols = s.columns.as_ref().map(|c| c.len()).unwrap_or(0);
                 p.push_str(&format!(
@@ -489,6 +489,25 @@ impl EngineState {
 
     fn memory_path(&self) -> Option<PathBuf> {
         self.inner.lock().unwrap_or_else(|e| e.into_inner()).memory_path.clone()
+    }
+
+    /// `(file path, contents)` of the current folder's `memory.md` for the
+    /// `/memory` command. `contents` is `None` if the file doesn't exist yet.
+    /// `None` overall when no folder is open.
+    pub fn folder_memory_file(&self) -> Option<(String, Option<String>)> {
+        let path = self.memory_path()?;
+        let text = std::fs::read_to_string(&path).ok();
+        Some((path.display().to_string(), text))
+    }
+
+    /// Delete the current folder's learned notes (and its episode log).
+    /// `Ok(false)` if there was nothing to delete; `Err` on no folder open.
+    pub fn forget_folder_memory(&self) -> EngineResult<bool> {
+        let path = self.memory_path().ok_or(EngineError::NoWorkspace)?;
+        let had = path.exists();
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("episodes.jsonl"));
+        Ok(had)
     }
 
     /// The learned-notes block for the system prompt, or `None` when memory is
@@ -936,6 +955,31 @@ impl EngineState {
         Ok(self.catalog())
     }
 
+    /// On launch: reopen the folder from the last session so the user doesn't
+    /// re-pick it every time. `None` (and the welcome screen) if there's no
+    /// history, the folder is gone, or it won't open no error is surfaced.
+    /// A no-op if a workspace is already open.
+    pub fn reopen_last_workspace(&self) -> Option<Catalog> {
+        if self.inner.lock().unwrap_or_else(|e| e.into_inner()).workspace.is_some() {
+            return None;
+        }
+        let path = {
+            let conn = self.sqlite.lock().unwrap_or_else(|e| e.into_inner());
+            sqlite::most_recent_workspace(&conn)?
+        };
+        let p = std::path::PathBuf::from(&path);
+        if !p.is_dir() {
+            return None;
+        }
+        match self.open_workspace(&p) {
+            Ok(cat) => Some(cat),
+            Err(e) => {
+                log::info!("reopen_last_workspace: {path}: {e}");
+                None
+            }
+        }
+    }
+
     /// Re-open the current workspace (used by `/reindex`).
     pub fn reindex(&self) -> EngineResult<Catalog> {
         let ws = {
@@ -1020,7 +1064,7 @@ impl EngineState {
         })
     }
 
-    /// First `n` rows of a source (used by the `sample_rows` tool).
+    /// First `n` rows of a source (used by the `inspect_table` tool).
     pub fn sample(&self, name: &str, n: usize) -> EngineResult<QueryResult> {
         let view = self.view_for(name)?;
         self.run_sql(&format!(
