@@ -439,6 +439,16 @@ impl EngineState {
             }
         }
 
+        if !tables.is_empty() {
+            let hints = shared_column_hints(&tables);
+            if !hints.is_empty() {
+                p.push_str("Shared columns (JOIN or align on these):\n");
+                for h in hints {
+                    p.push_str(&format!("  {h}\n"));
+                }
+            }
+        }
+
         let docs: Vec<&SourceInfo> = sources.iter().filter(|s| s.view.is_none()).collect();
         if !docs.is_empty() {
             p.push_str("Documents (list_files/grep_files/read_file):\n");
@@ -1572,6 +1582,38 @@ fn mini_table(q: &QueryResult) -> Vec<String> {
         .collect()
 }
 
+/// One-line hints for `schema_block`: any column name shared by 2+ tables is a
+/// likely join / align key, and the model can't always spot the relationship
+/// from per-table column lists (especially when the case differs). A short
+/// stoplist drops names that are almost never cross-table keys.
+fn shared_column_hints(tables: &[&SourceInfo]) -> Vec<String> {
+    const STOP: &[&str] = &[
+        "id", "name", "title", "description", "note", "notes", "memo", "comment",
+        "comments", "type", "status", "value", "amount", "total", "subtotal",
+        "count", "price", "cost", "qty", "quantity", "label",
+    ];
+    let mut by_col: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
+    for t in tables {
+        let view = t.view.as_deref().unwrap_or("");
+        for c in t.columns.iter().flatten() {
+            let low = c.name.to_lowercase();
+            if STOP.contains(&low.as_str()) {
+                continue;
+            }
+            by_col
+                .entry(low)
+                .or_default()
+                .push(format!("{view}.\"{}\"", c.name));
+        }
+    }
+    by_col
+        .into_values()
+        .filter(|refs| refs.len() >= 2)
+        .map(|refs| refs.join(" \u{2194} "))
+        .take(10)
+        .collect()
+}
+
 /// Open `fella.db`, or, if it's corrupt (a truncated write, a bad disk),
 /// move it aside as `fella.db.corrupt-<unix>` and start fresh. Losing it costs
 /// the user their settings and pack list, not their API keys (`auth.json` is
@@ -1648,5 +1690,43 @@ fn reconcile_provider(conn: &rusqlite::Connection, secrets: &Secrets) {
     patch.insert("embed_model".into(), d.default_embed_model.into());
     if sqlite::save_settings(conn, &patch).is_ok() {
         log::info!("no usable credential for provider {stored:?}; reset to {}", d.id);
+    }
+}
+
+#[cfg(test)]
+mod schema_hint_tests {
+    use super::*;
+    use crate::engine::catalog::{ColumnInfo, SourceInfo, SourceKind};
+
+    fn tbl(view: &str, cols: &[&str]) -> SourceInfo {
+        SourceInfo {
+            name: format!("{view}.csv"),
+            path: String::new(),
+            kind: SourceKind::Csv,
+            view: Some(view.into()),
+            row_count: Some(1),
+            columns: Some(cols.iter().map(|c| ColumnInfo::bare(*c, "TEXT")).collect()),
+            size_bytes: 0,
+            mtime: 0,
+            synopsis: None,
+            note: None,
+        }
+    }
+
+    #[test]
+    fn shared_columns_become_join_hints() {
+        let orders = tbl("orders", &["order_id", "customer_id", "amount"]);
+        let customers = tbl("customers", &["Customer_ID", "name", "region"]);
+        let hints = shared_column_hints(&[&orders, &customers]);
+        // matched case-insensitively; each side shown with its own casing
+        assert_eq!(hints, vec![r#"orders."customer_id" ↔ customers."Customer_ID""#]);
+    }
+
+    #[test]
+    fn stoplist_and_singletons_are_dropped() {
+        let a = tbl("a", &["id", "name", "amount", "sku"]);
+        let b = tbl("b", &["id", "name", "amount", "note"]);
+        // id/name/amount are stoplisted; sku/note appear in only one table
+        assert!(shared_column_hints(&[&a, &b]).is_empty());
     }
 }

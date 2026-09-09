@@ -25,6 +25,13 @@ All notable changes to Fella are recorded here. Format follows
 
 ### Changed
 
+- **Multi-file questions get combined, not answered from one file.** A new rule
+  tells the model that when a question spans two tables (or a table and a
+  document) it should JOIN them in a single query, or read the document and
+  reconcile its figure with the query. The schema digest now also lists any
+  column name shared by two or more tables — `orders."customer_id" ↔
+  customers."customer_id"` — so the model can see the join key even when the
+  case differs across files.
 - **One `/inspect_table` tool instead of two.** The model used to have separate
   "show me the columns" and "show me some rows" tools; they were nearly the same
   thing (the first already included a few rows) and a weaker model sometimes

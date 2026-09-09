@@ -582,6 +582,13 @@ usually enough to query directly. Use inspect_table only for \
 something you can't see below."
                 .into(),
         );
+        rules.push(
+            "If a question spans more than one file, combine them don't answer from just \
+one. Two tables: JOIN them in a single run_sql (any shared columns are listed \
+below). A table and a document: read_file the document, take the figure you \
+need from it, and reconcile it with the query result."
+                .into(),
+        );
     }
     if profile.parallel_rule {
         rules.push(
@@ -767,6 +774,10 @@ about to do, then make the call(s) in the same reply.\n\
 - Prefer run_sql. Each table below shows its columns, types and sample rows, \
 usually enough to query directly. Use inspect_table only for \
 something you can't see below.\n\
+- If a question spans more than one file, combine them don't answer from just \
+one. Two tables: JOIN them in a single run_sql (any shared columns are listed \
+below). A table and a document: read_file the document, take the figure you \
+need from it, and reconcile it with the query result.\n\
 - Independent lookups go in one reply as several tool calls; they run together.\n\
 - Stop as soon as you can answer. Most questions are one or two run_sql calls; \
 you have at most {} tool-calling steps, so don't wander past the question.\n\
