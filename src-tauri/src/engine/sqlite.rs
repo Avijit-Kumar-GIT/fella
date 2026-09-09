@@ -74,6 +74,17 @@ fn put(conn: &Connection, key: &str, value: &str) -> EngineResult<()> {
     Ok(())
 }
 
+/// The folder opened most recently (by `opened_at`), if any. Used on launch to
+/// reopen the last workspace so the user doesn't re-pick it every time.
+pub fn most_recent_workspace(conn: &Connection) -> Option<String> {
+    conn.query_row(
+        "SELECT path FROM recent_workspaces ORDER BY opened_at DESC LIMIT 1",
+        [],
+        |r| r.get::<_, String>(0),
+    )
+    .ok()
+}
+
 /// A legacy plaintext API key, if a pre-keychain build left one here. Used only
 /// by the one-shot migration into the credential store; not part of the normal
 /// read path.

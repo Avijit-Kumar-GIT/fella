@@ -236,9 +236,9 @@ a memory failure).
 - **Publish latency percentiles + binary size (#47)** as tracked
   release metrics, alongside `agent_bench`'s loop timings. fx headlines "all 22
   TUI interactions <15 ms p95" and "-7.49% binary".
-- **Reopen the last folder on start (#44).** From the same interaction trace:
-  `recent_workspaces` is written but never read, so every launch needs an
-  explicit `/open`.
+- **Reopen the last folder on start (#44)** — *shipped 2026-09-08.*
+  `recent_workspaces` was written but never read; now the last folder reopens
+  on launch.
 
 **Deferred**
 

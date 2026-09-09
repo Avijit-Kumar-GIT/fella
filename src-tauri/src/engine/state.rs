@@ -491,6 +491,25 @@ impl EngineState {
         self.inner.lock().unwrap_or_else(|e| e.into_inner()).memory_path.clone()
     }
 
+    /// `(file path, contents)` of the current folder's `memory.md` for the
+    /// `/memory` command. `contents` is `None` if the file doesn't exist yet.
+    /// `None` overall when no folder is open.
+    pub fn folder_memory_file(&self) -> Option<(String, Option<String>)> {
+        let path = self.memory_path()?;
+        let text = std::fs::read_to_string(&path).ok();
+        Some((path.display().to_string(), text))
+    }
+
+    /// Delete the current folder's learned notes (and its episode log).
+    /// `Ok(false)` if there was nothing to delete; `Err` on no folder open.
+    pub fn forget_folder_memory(&self) -> EngineResult<bool> {
+        let path = self.memory_path().ok_or(EngineError::NoWorkspace)?;
+        let had = path.exists();
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("episodes.jsonl"));
+        Ok(had)
+    }
+
     /// The learned-notes block for the system prompt, or `None` when memory is
     /// off, no folder is open, or nothing's been learned. Re-read from disk so a
     /// hand edit to `memory.md` lands on the next question.
@@ -934,6 +953,31 @@ impl EngineState {
         // question doesn't wait on a cold load.
         self.warm_model();
         Ok(self.catalog())
+    }
+
+    /// On launch: reopen the folder from the last session so the user doesn't
+    /// re-pick it every time. `None` (and the welcome screen) if there's no
+    /// history, the folder is gone, or it won't open no error is surfaced.
+    /// A no-op if a workspace is already open.
+    pub fn reopen_last_workspace(&self) -> Option<Catalog> {
+        if self.inner.lock().unwrap_or_else(|e| e.into_inner()).workspace.is_some() {
+            return None;
+        }
+        let path = {
+            let conn = self.sqlite.lock().unwrap_or_else(|e| e.into_inner());
+            sqlite::most_recent_workspace(&conn)?
+        };
+        let p = std::path::PathBuf::from(&path);
+        if !p.is_dir() {
+            return None;
+        }
+        match self.open_workspace(&p) {
+            Ok(cat) => Some(cat),
+            Err(e) => {
+                log::info!("reopen_last_workspace: {path}: {e}");
+                None
+            }
+        }
     }
 
     /// Re-open the current workspace (used by `/reindex`).
