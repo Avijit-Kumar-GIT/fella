@@ -141,6 +141,13 @@ AGENT_EVAL_DATA_DIR=$DATA cargo run --release --features eval --example agent_ev
 `BENCH_PAUSE_MS` (default 400) spaces cases so a hosted endpoint doesn't
 degrade mid-run; `--iters 3` majority-votes over transient flakiness.
 
+**Don't run two `bench` (or `accuracy`/`model-ladder`) processes against the
+same `AGENT_EVAL_DATA_DIR` at once** — they share `fella.db` and race on the
+provider/model row, so requests go to the wrong endpoint and every SQL call
+errors. Put all models in one `--models "a,b,c"` list (they run in series) or
+use a separate data-dir copy per process. `--harness openai-ci` is exempt (it
+never writes settings).
+
 ## Status
 
 - [x] `bench --dir` subcommand + JSONL loader + `$/100` column + unit test
