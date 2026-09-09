@@ -20,11 +20,13 @@
 //!   robustness       the trap battery (text amounts, totals row, mixed dates)
 //!   session-memory   turn-2 accuracy with the recent-turns block on vs off
 //!   memory           cold-run accuracy after priming, per-folder memory on vs off
-//!   bench --dir <d>  an external JSONL battery of real tasks (DABStep-easy,
-//!                    InfiAgent-DABench, …), same grader + metrics, with $/100.
-//!                    --harness fella (default) | openai-ci  — the latter runs
-//!                    each case through the OpenAI Responses code_interpreter
-//!                    tool instead of Fella's engine (locked-harness compare).
+//!   bench --dir <d>  a JSONL battery of real folder-QA tasks, same grader +
+//!                    metrics as `accuracy`, with $/100. --harness:
+//!                      fella (default) — the full loop
+//!                      bare            — one chat call, files in the prompt,
+//!                                        no tools; the baseline that isolates
+//!                                        the harness's lift (Δacc = fella-bare)
+//!                      openai-ci       — OpenAI Responses code_interpreter
 //!   all              accuracy + robustness + session-memory + memory
 //!
 //! Opts: --models "a,b,c"  --judge <model>  --iters N (default 1)
@@ -700,11 +702,75 @@ struct CiHarness {
     model: String,
 }
 
-/// Runner for one case iteration: Fella's engine, or an external harness that
-/// needs the case's staged files.
+/// Runner for one case iteration.
 enum Runner<'a> {
+    /// Fella's full loop: tools, schema block, verification.
     Fella,
+    /// No harness — the case's files pasted into one chat completion, no
+    /// tools, no execution. The baseline that isolates the harness's lift.
+    Bare { dir: &'a Path, files: &'a [String] },
+    /// OpenAI Responses API + code_interpreter (a comparison harness).
     OpenAiCi { h: &'a CiHarness, dir: &'a Path, files: &'a [String] },
+}
+
+/// Read a case's files into a fenced blob for a prompt-only runner. `Err` if a
+/// file is missing or exceeds `CI_MAX_EMBED`.
+fn embed_files(dir: &Path, files: &[String]) -> Result<String, String> {
+    let mut blob = String::new();
+    for f in files {
+        match std::fs::read_to_string(dir.join(f)) {
+            Ok(c) if blob.len() + c.len() <= CI_MAX_EMBED => {
+                blob.push_str(&format!("### {f}\n```\n{c}\n```\n\n"));
+            }
+            Ok(_) => return Err(format!("{f} too large to embed")),
+            Err(e) => return Err(format!("read {f}: {e}")),
+        }
+    }
+    Ok(blob)
+}
+
+/// No-harness baseline: one chat completion, files in the prompt, no tools.
+/// The model is whatever `set_model` last configured on the engine.
+async fn run_bare(engine: &EngineState, dir: &Path, question: &str, files: &[String]) -> RunResult {
+    let t0 = Instant::now();
+    let blob = match embed_files(dir, files) {
+        Ok(b) => b,
+        Err(e) => {
+            return RunResult {
+                text: String::new(), evidence: Vec::new(), hard_fail: false,
+                prompt_tok: 0, completion_tok: 0, total: t0.elapsed(),
+                first_token: None, steps: 0, err: Some(format!("bare: {e}")),
+            }
+        }
+    };
+    let sys = "You are a careful analyst. Any files the user has are included in the message. \
+Answer the question directly from them — reason it out yourself, no tools. Reply with ONLY the final \
+number or short phrase, no explanation. If the files can't answer it, say so plainly.";
+    let user = if blob.is_empty() {
+        question.to_string()
+    } else {
+        format!("{blob}Question: {question}")
+    };
+    let res = engine.ask_once_usage(None, sys, &user).await;
+    let total = t0.elapsed();
+    match res {
+        Ok((text, usage)) => {
+            let (p, c) = usage
+                .map(|u| (u.prompt_tokens, u.completion_tokens))
+                // chars/4 estimate when the provider gave nothing
+                .unwrap_or(((sys.len() + user.len()) as u32 / 4, text.len() as u32 / 4));
+            RunResult {
+                text, evidence: Vec::new(), hard_fail: false,
+                prompt_tok: p, completion_tok: c, total,
+                first_token: None, steps: 0, err: None,
+            }
+        }
+        Err(e) => RunResult {
+            text: String::new(), evidence: Vec::new(), hard_fail: false,
+            prompt_tok: 0, completion_tok: 0, total, first_token: None,
+            steps: 0, err: Some(format!("bare: {e}")),
+        },
+    }
 }
 
 fn ci_text(v: &serde_json::Value) -> String {
@@ -759,16 +825,10 @@ async fn run_openai_ci(h: &CiHarness, dir: &Path, question: &str, files: &[Strin
     };
     let t0 = Instant::now();
 
-    let mut blob = String::new();
-    for f in files {
-        match std::fs::read_to_string(dir.join(f)) {
-            Ok(c) if blob.len() + c.len() <= CI_MAX_EMBED => {
-                blob.push_str(&format!("### {f}\n```\n{c}\n```\n\n"));
-            }
-            Ok(_) => return empty(Some(format!("ci: {f} too large to embed")), t0.elapsed()),
-            Err(e) => return empty(Some(format!("ci: read {f}: {e}")), t0.elapsed()),
-        }
-    }
+    let blob = match embed_files(dir, files) {
+        Ok(b) => b,
+        Err(e) => return empty(Some(format!("ci: {e}")), t0.elapsed()),
+    };
 
     let body = serde_json::json!({
         "model": h.model,
@@ -841,6 +901,7 @@ async fn score_case(
             Runner::Fella => {
                 run_case(engine, &format!("{conv}-{it}"), &case.question, None).await
             }
+            Runner::Bare { dir, files } => run_bare(engine, dir, &case.question, files).await,
             Runner::OpenAiCi { h, dir, files } => {
                 run_openai_ci(h, dir, &case.question, files).await
             }
@@ -1300,6 +1361,8 @@ async fn cmd_bench(
             let conv = format!("bench-{m}-{}", safe_dirname(case.id));
             let runner = if let Some(h) = &ci_for_model {
                 Runner::OpenAiCi { h, dir, files }
+            } else if harness == "bare" {
+                Runner::Bare { dir, files }
             } else {
                 // Fella: stage a fresh workspace with just this case's files.
                 let ws = staging.join(safe_dirname(case.id));
