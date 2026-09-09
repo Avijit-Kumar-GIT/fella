@@ -1,16 +1,25 @@
-# Hand-built folder-QA battery. Gold computed by bench/folder-qa/gen.py.
-{"id": "fqa-total-all", "question": "What is the total amount across all of spend.csv?", "files": ["spend.csv"], "gold": {"figures": [49939.58]}, "tier": "aggregate"}
-{"id": "fqa-total-2024", "question": "How much did I spend in 2024?", "files": ["spend.csv"], "gold": {"figures": [25409.77]}, "tier": "aggregate"}
-{"id": "fqa-rent-2024", "question": "What was my total rent in 2024?", "files": ["spend.csv"], "gold": {"figures": [15013.23]}, "tier": "filter"}
-{"id": "fqa-groceries", "question": "How much did I spend on groceries in total?", "files": ["spend.csv"], "gold": {"figures": [10021.35]}, "tier": "filter"}
-{"id": "fqa-top-cat", "question": "Which category did I spend the most on overall?", "files": ["spend.csv"], "gold": {"contains": ["rent"]}, "tier": "groupby"}
-{"id": "fqa-yoy", "question": "Did my spending go up or down from 2023 to 2024, and by how much?", "files": ["spend.csv"], "gold": {"figures": [879.96]}, "tier": "multi-step"}
-{"id": "fqa-peak-month", "question": "Which month had the highest total spend?", "files": ["spend.csv"], "gold": {"contains": ["2024-11|2024-11-01|november 2024"]}, "tier": "groupby"}
-{"id": "fqa-wk-total", "question": "How many minutes did I work out in total?", "files": ["workouts.csv"], "gold": {"figures": [2776]}, "tier": "aggregate"}
-{"id": "fqa-wk-run", "question": "How many minutes of running did I do?", "files": ["workouts.csv"], "gold": {"figures": [647]}, "tier": "filter"}
-{"id": "fqa-wk-top", "question": "What activity did I spend the most time on?", "files": ["workouts.csv"], "gold": {"contains": ["swim"]}, "tier": "groupby"}
-{"id": "fqa-doc-rent", "question": "According to notes.txt, what is the monthly rent starting Jan 2024?", "files": ["notes.txt"], "gold": {"contains": ["1,260"]}, "tier": "doc-lookup"}
-{"id": "fqa-doc-deposit", "question": "What is the security deposit on the lease?", "files": ["notes.txt"], "gold": {"contains": ["2,400"]}, "tier": "doc-lookup"}
-{"id": "fqa-cross", "question": "Combine spend.csv and the lease in notes.txt: does my recorded 2024 rent match 12 months at the lease rate?", "files": ["spend.csv", "notes.txt"], "gold": {"contains": ["no"]}, "tier": "multi-step"}
-{"id": "fqa-refusal", "question": "Based on spend.csv, how much will I spend next year?", "files": ["spend.csv"], "gold": "refusal", "tier": "refusal"}
-{"id": "fqa-notool", "question": "What does the word 'ledger' mean?", "files": [], "gold": "notool", "tier": "no-tool"}
+# folder-QA battery across life domains. Gold computed by bench/folder-qa/gen.py.
+{"id": "fqa-fin-total-2024", "question": "How much did I spend in 2024?", "files": ["spend.csv"], "gold": {"figures": [25409.77]}, "tier": "num-aggregate"}
+{"id": "fqa-fin-rent-2024", "question": "What was my total rent in 2024?", "files": ["spend.csv"], "gold": {"figures": [15013.23]}, "tier": "num-filter"}
+{"id": "fqa-fin-top-cat", "question": "Which category did I spend the most on overall?", "files": ["spend.csv"], "gold": {"contains": ["rent"]}, "tier": "cat-groupby"}
+{"id": "fqa-fin-yoy", "question": "Did my spending go up or down from 2023 to 2024, and by how much?", "files": ["spend.csv"], "gold": {"figures": [879.96]}, "tier": "num-multistep"}
+{"id": "fqa-fit-total-min", "question": "How many minutes did I work out in total?", "files": ["workouts.csv"], "gold": {"figures": [4443]}, "tier": "num-aggregate"}
+{"id": "fqa-fit-run-km", "question": "How many kilometres did I run in total?", "files": ["workouts.csv"], "gold": {"figures": [150.8]}, "tier": "num-filter"}
+{"id": "fqa-fit-top-activity", "question": "Which activity did I spend the most time on?", "files": ["workouts.csv"], "gold": {"contains": ["run"]}, "tier": "cat-groupby"}
+{"id": "fqa-read-finished-count", "question": "How many books have I finished?", "files": ["books.csv"], "gold": {"figures": [5]}, "tier": "bool-filter"}
+{"id": "fqa-read-avg-rating", "question": "What is my average rating for the books I've finished?", "files": ["books.csv"], "gold": {"approx": [4.2, 0.05]}, "tier": "num-avg"}
+{"id": "fqa-read-top-genre-pages", "question": "Across the books I finished, which genre did I read the most pages of?", "files": ["books.csv"], "gold": {"contains": ["scifi"]}, "tier": "cat-groupby"}
+{"id": "fqa-read-longest", "question": "What is the longest book in my list, by page count?", "files": ["books.csv"], "gold": {"contains": ["half of a yellow sun"]}, "tier": "text-max"}
+{"id": "fqa-read-unfinished", "question": "Which books have I not finished? List the titles.", "files": ["books.csv"], "gold": {"contains": ["the left hand of darkness", "intimations", "cosmicomics"]}, "tier": "text-list"}
+{"id": "fqa-trip-total-nights", "question": "How many nights did I spend travelling in total?", "files": ["trips.csv"], "gold": {"figures": [27]}, "tier": "num-aggregate"}
+{"id": "fqa-trip-leisure-nights", "question": "How many of my travel nights were for leisure rather than work?", "files": ["trips.csv"], "gold": {"figures": [19]}, "tier": "cat-filter"}
+{"id": "fqa-trip-countries", "question": "How many different countries have I visited?", "files": ["trips.csv"], "gold": {"figures": [7]}, "tier": "distinct-count"}
+{"id": "fqa-jrnl-stressed", "question": "How many days in the journal do I describe my mood as stressed?", "files": ["journal.txt"], "gold": {"figures": [1]}, "tier": "text-count"}
+{"id": "fqa-jrnl-apr19", "question": "What did I do on 2024-04-19 according to the journal?", "files": ["journal.txt"], "gold": {"contains": ["dentist|dal|kyoto|flight"]}, "tier": "text-lookup"}
+{"id": "fqa-jrnl-kyoto", "question": "Does the journal mention planning or booking a trip to Kyoto?", "files": ["journal.txt"], "gold": {"contains": ["yes|does|mentions|plann|book"]}, "tier": "text-search"}
+{"id": "fqa-mf-most-over-budget", "question": "Compare spend.csv against budget.csv (a monthly budget per category). In 2024, which single category was the most over its annual budget (actual minus 12x the monthly budget)?", "files": ["spend.csv", "budget.csv"], "gold": {"contains": ["rent"]}, "tier": "mf-join-compare"}
+{"id": "fqa-mf-pages-british", "question": "Using books.csv and authors.csv, how many pages of books by British authors are in my list (finished or not)?", "files": ["books.csv", "authors.csv"], "gold": {"figures": [400]}, "tier": "mf-join-aggregate"}
+{"id": "fqa-mf-run-days-minutes", "question": "The journal notes some days I went for a run. On those dates, how many workout minutes does workouts.csv record in total?", "files": ["journal.txt", "workouts.csv"], "gold": {"figures": [35]}, "tier": "mf-doc-join"}
+{"id": "fqa-mf-rent-vs-budget", "question": "Using spend.csv and budget.csv, was my 2024 rent over or under the yearly rent budget, and by how much?", "files": ["spend.csv", "budget.csv"], "gold": {"figures": [613.23]}, "tier": "mf-join-compare"}
+{"id": "fqa-refusal", "question": "Based on my reading log, how many books will I finish next year?", "files": ["books.csv"], "gold": "refusal", "tier": "refusal"}
+{"id": "fqa-notool", "question": "What does the word 'anthology' mean?", "files": [], "gold": "notool", "tier": "no-tool"}

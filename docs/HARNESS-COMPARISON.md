@@ -12,8 +12,9 @@ isn't a bake-off against funded products. It answers two questions:
    across a ladder of cheap/small models; find where the model, not the
    scaffold, becomes the bottleneck.
 
-Scoped to the simple-question tier Fella targets: totals, filters, group-by,
-top-N, a trend, doc lookups, one "don't forecast" refusal, one no-tool.
+Scoped to the everyday-question tier Fella targets — numeric and categorical
+lookups, free-text search, and small multi-file joins across a person's own
+files — not multi-step data-science workflows.
 
 ## First-class metrics
 
@@ -37,9 +38,16 @@ construction — that contrast is the point.
 
 ## The battery
 
-**`bench/folder-qa/`** — 15 hand-built cases: a spending CSV, a workouts CSV, a
-lease note. Deterministic gold (`gen.py`, stdlib). Runs free on `gemma4:31b`
-and any ollama-cloud model.
+**`bench/folder-qa/`** — 24 hand-built cases across five life domains, so it
+isn't a finance benchmark: spending + budget, workouts (minutes and km), a
+reading log + an authors table, trips, and a plain-text journal. Question
+shapes: numeric aggregate / filter / average / multi-step, categorical
+group-by / top-N / distinct-count, boolean filter, free-text lookup / count /
+search, one refusal (no forecasting), one no-tool, and a 4-case multi-file
+tier where each needs a JOIN or a table + a document (two of them non-finance:
+pages by British authors = books ⋈ authors; minutes on journal-noted run days
+= journal ∩ workouts). Deterministic gold (`gen.py`, stdlib). Runs free on
+`gemma4:31b` and any ollama-cloud model.
 
 ## Running it
 
@@ -90,7 +98,7 @@ else is OpenRouter (one key).
 | Grok 4.3 | 1.25 / 2.50 | xAI direct |
 | Muse Spark 1.3 | 1.25 / 4.25 | OpenRouter |
 
-Full ladder × {bare, fella} × `--iters 3` on the 15-case battery ≈ **$1** via
+Full ladder × {bare, fella} × `--iters 3` on the 24-case battery ≈ **$1** via
 OpenRouter (4 rungs free on ollama-cloud); ~half of the paid part is Grok +
 Muse Spark.
 
@@ -110,5 +118,5 @@ smolagents baseline is the number to cite if an external anchor is ever needed.
 - [x] `--harness openai-ci` — kept, not the focus
 - [x] `bench/folder-qa/` battery + `gen.py`; `bench/convert.py` (DABStep/InfiAgent, untested)
 - [x] `bench/aggregate.py` — roll dumps into a comparison table
-- [ ] Δacc column in `aggregate.py` (pair a bare + fella dump, emit the lift)
+- [x] `aggregate.py --lift` — pair a bare + fella dump, emit Δacc per model
 - [ ] the ladder run + the chart
