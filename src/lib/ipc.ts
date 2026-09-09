@@ -41,6 +41,22 @@ export async function openExternal(url: string): Promise<void> {
 	}
 }
 
+/** Window controls for the custom titlebar. No-op outside the app. */
+async function windowAction(fn: 'minimize' | 'toggleMaximize' | 'close'): Promise<void> {
+	if (!isTauri()) return;
+	try {
+		const { getCurrentWindow } = await import('@tauri-apps/api/window');
+		await getCurrentWindow()[fn]();
+	} catch {
+		/* window API unavailable ignore */
+	}
+}
+export const win = {
+	minimize: () => windowAction('minimize'),
+	toggleMaximize: () => windowAction('toggleMaximize'),
+	close: () => windowAction('close')
+};
+
 type InvokeFn = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
 
 let _invoke: InvokeFn | null = null;

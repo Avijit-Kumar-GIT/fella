@@ -32,7 +32,7 @@
 		<span class="sr-only">You asked: </span>
 		<div class="you">{message.text}</div>
 	{:else if message.role === 'assistant'}
-		<div class="speaker">Fella</div>
+		<span class="sr-only">Fella replied: </span>
 		{#if message.plan}
 			<div class="plan">{message.plan}</div>
 		{/if}
@@ -57,30 +57,16 @@
 	.msg.user {
 		padding-top: var(--space-4);
 	}
-	/* Faint attribution above Fella's answer (the user's turn is marked by its
-	   rule instead). */
-	.speaker {
-		font-size: var(--fs-xs);
-		font-weight: 550;
-		letter-spacing: 0.02em;
-		text-transform: uppercase;
-		color: var(--text-faint);
-		margin-bottom: var(--space-2);
-	}
 	.you {
 		color: var(--text-dim);
 		white-space: pre-wrap;
 		word-break: break-word;
 	}
+	/* The user's turn is marked like a shell prompt; Fella's reply is unprefixed. */
 	.you::before {
-		content: '';
-		display: inline-block;
-		width: 3px;
-		height: 1em;
-		margin-right: var(--space-2);
-		border-radius: 1px;
-		background: var(--border-strong);
-		vertical-align: -2px;
+		content: '❯ ';
+		font-family: var(--mono);
+		color: var(--text-dim);
 	}
 	.text {
 		word-break: break-word;

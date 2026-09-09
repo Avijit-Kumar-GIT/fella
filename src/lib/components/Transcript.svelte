@@ -3,6 +3,7 @@
 	import { session } from '$lib/session.svelte';
 	import { isTauri, openExternal } from '$lib/ipc';
 	import { fadeQuick } from '$lib/motion';
+	import Icon from './Icon.svelte';
 	import Message from './Message.svelte';
 
 	// The empty screen adapts to what's already set up, so a non-technical user
@@ -59,16 +60,6 @@
 		"Summarise what's in these files"
 	];
 
-	// figlet "ANSI Shadow". Shown only on the empty screen.
-	const WORDMARK = [
-		'███████╗███████╗██╗     ██╗      █████╗ ',
-		'██╔════╝██╔════╝██║     ██║     ██╔══██╗',
-		'█████╗  █████╗  ██║     ██║     ███████║',
-		'██╔══╝  ██╔══╝  ██║     ██║     ██╔══██║',
-		'██║     ███████╗███████╗███████╗██║  ██║',
-		'╚═╝     ╚══════╝╚══════╝╚══════╝╚═╝  ╚═╝'
-	].join('\n');
-
 	let scroller: HTMLDivElement;
 	let expanded = $state<Record<string, boolean>>({});
 
@@ -82,9 +73,11 @@
 		stick = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 40;
 	}
 	// Switching tabs shows a different transcript jump it to the latest and
-	// drop any stale expanded-evidence state from the previous tab.
+	// drop any stale expanded-evidence state from the previous tab. Entering
+	// focus mode collapses evidence too, so it's just the answers.
 	$effect(() => {
 		session.active;
+		session.focus;
 		stick = true;
 		expanded = {};
 	});
@@ -106,6 +99,7 @@
      visually-hidden status line in +page.svelte does the announcing instead. -->
 <div
 	class="transcript"
+	class:focus={session.focus}
 	bind:this={scroller}
 	onscroll={onScroll}
 	role="log"
@@ -113,54 +107,39 @@
 	aria-live="off"
 >
 	{#if session.messages.length === 0}
-		<div class="onboard">
-			<pre class="wordmark" role="img" aria-label="fella">{WORDMARK}</pre>
+		<div class="onboard" class:center={!hasFolder && !showSetup}>
+			<div class="wordmark" aria-label="Fella">Fella</div>
 			<h1 class="hero">Ask about your own files</h1>
 
 			{#if !hasFolder}
 				<p class="lead">
-					Spending, health, workouts, notes anything you keep in a folder. Fella
-					works entirely on your computer, reads your files, and never changes them.
+					Spreadsheets, PDFs, notes anything you keep in one folder. Answered on
+					your computer, from your files, never changed.
 				</p>
 				<div class="cta">
-					<button class="pill primary" onclick={() => void openFolder()}>Choose a folder</button>
-					<span class="or">{isTauri() ? 'or drag one onto this window' : ''}</span>
+					<button class="pill primary" onclick={() => void openFolder()}>
+						<Icon name="folder" size={14} /> Choose a folder
+					</button>
 				</div>
+				{#if isTauri()}<p class="drophint">or drag a folder onto this window</p>{/if}
 				<p class="egs">
-					Then ask things like <em>“how did my spending change this year?”</em> or
+					e.g. <em>“how did my spending change this year?”</em> ·
 					<em>“what stands out in my workout log?”</em>
 				</p>
 			{:else if fileCount === 0}
-				<p class="lead"><strong>{folderName}</strong> is open, but Fella can't read anything in it yet.</p>
-				<p>It works with spreadsheets, CSVs, Excel files, PDFs, and plain text.</p>
-				{#if skipped.length}
-					<p class="alt">
-						{skipped.length} file{skipped.length === 1 ? '' : 's'} found but not used:
-					</p>
-					<ul class="skipped">
-						{#each skipped.slice(0, 8) as f (f.name)}
-							<li>{f.name} <span class="reason">{f.reason}</span></li>
-						{/each}
-						{#if skipped.length > 8}<li>and {skipped.length - 8} more</li>{/if}
-					</ul>
-				{/if}
+				<p class="lead"><strong>{folderName}</strong> is open, but nothing in it is readable yet.</p>
+				<p>
+					Fella works with spreadsheets, CSVs, Excel, PDFs and plain text.{#if skipped.length}
+						<code>/files</code> shows what was skipped and why.{/if}
+				</p>
 				<div class="cta">
-					<button class="pill primary" onclick={() => void openFolder()}>Choose a different folder</button>
+					<button class="pill primary" onclick={() => void openFolder()}>
+						<Icon name="folder" size={14} /> Choose a different folder
+					</button>
 				</div>
 			{:else}
 				<p class="lead">
-					<strong>{folderName}</strong> is open. {fileCount} file{fileCount === 1 ? '' : 's'} Fella
-					can read.
-				</p>
-				{#if skipped.length}
-					<p class="alt">
-						{skipped.length} other file{skipped.length === 1 ? '' : 's'} couldn't be used
-						(see <code>/files</code>).
-					</p>
-				{/if}
-				<p>
-					Ask a question in plain language. Every answer shows the exact files and steps behind
-					it.
+					<strong>{folderName}</strong> · {fileCount} file{fileCount === 1 ? '' : 's'} ready.
 				</p>
 				{#if showExamples}
 					<p class="egs">Try one:</p>
@@ -181,7 +160,7 @@
 							<button class="pill" onclick={() => void dispatch(`/login ${providerId}`)}>Enter a new key</button>
 							{#if getKeyUrl}
 								<button class="pill ghost" onclick={() => void openExternal(getKeyUrl)}>
-									Get a new key ↗
+									Get a new key <Icon name="arrow-up-right" size={13} />
 								</button>
 							{/if}
 						</div>
@@ -331,36 +310,51 @@
 		overflow-y: auto;
 		padding: var(--space-5) var(--pad) var(--space-6);
 		min-height: 0;
+		transition: padding var(--dur) var(--ease);
+	}
+	/* Focus mode: a calmer, tighter reading column with more air around it. */
+	.transcript.focus {
+		padding: var(--space-6) var(--pad) var(--space-6);
 	}
 	/* Cap the reading column so long lines don't sprawl the "app not terminal"
 	   cue. Centred in the scroller. */
 	.stream {
 		max-width: 76ch;
 		margin-inline: auto;
+		transition: max-width var(--dur) var(--ease);
+	}
+	.transcript.focus .stream {
+		max-width: 68ch;
 	}
 	.onboard {
-		max-width: 60ch;
+		max-width: 52ch;
 		margin: var(--space-6) auto 0;
 		color: var(--text-dim);
 	}
+	/* First run, nothing to set up: a centred hero rather than a top-aligned
+	   wall. Drops back to top-aligned as soon as the setup card appears. */
+	.onboard.center {
+		min-height: 100%;
+		margin: 0 auto;
+		display: flex;
+		flex-direction: column;
+		justify-content: center;
+		align-items: center;
+		text-align: center;
+	}
 	.wordmark {
-		font-family: var(--mono);
-		font-size: var(--fs-xs);
-		line-height: 1.15;
-		color: var(--text-faint);
-		margin: 0 0 var(--space-4);
-		padding: 0;
-		border: 0;
-		background: transparent;
-		overflow-x: auto;
-		white-space: pre;
+		font-size: var(--fs-xl);
+		font-weight: 560;
+		letter-spacing: -0.02em;
+		color: var(--text);
+		margin: 0 0 var(--space-2);
 	}
 	.hero {
-		font-size: var(--fs-xl);
+		font-size: var(--fs-lg);
 		font-weight: 600;
-		letter-spacing: -0.02em;
+		letter-spacing: -0.01em;
 		text-wrap: balance;
-		color: var(--text);
+		color: var(--text-dim);
 		margin: 0 0 var(--space-3);
 	}
 	.onboard p {
@@ -389,9 +383,17 @@
 		flex-wrap: wrap;
 		align-items: center;
 		gap: var(--space-3);
-		margin: var(--space-5) 0;
+		margin: var(--space-5) 0 var(--space-2);
 	}
-	.or {
+	.onboard.center .cta {
+		justify-content: center;
+	}
+	.cta .pill {
+		display: inline-flex;
+		align-items: center;
+		gap: var(--space-2);
+	}
+	.drophint {
 		color: var(--text-faint);
 		font-size: var(--fs-sm);
 	}
@@ -401,15 +403,6 @@
 	.egs em {
 		font-style: italic;
 		color: var(--text-dim);
-	}
-	.skipped {
-		margin: 4px 0 0;
-		padding-left: 1.1em;
-		color: var(--text-dim);
-		font-size: var(--fs-sm);
-	}
-	.skipped .reason {
-		color: var(--text-faint);
 	}
 	.personalize {
 		margin-top: 22px;

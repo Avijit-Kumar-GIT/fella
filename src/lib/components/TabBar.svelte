@@ -8,7 +8,7 @@
 		const first = tab.messages.find((m) => m.role === 'user');
 		const t = first?.text.replace(/\s+/g, ' ').trim();
 		if (!t) return 'New conversation';
-		return t.length > 28 ? t.slice(0, 27) + '…' : t;
+		return t.length > 24 ? t.slice(0, 23) + '…' : t;
 	}
 
 	function onKey(e: KeyboardEvent, i: number) {
@@ -23,76 +23,64 @@
 	}
 </script>
 
-{#if session.tabs.length > 1}
-	<div class="tabbar" role="tablist" aria-label="Conversations" data-tauri-drag-region>
-		{#each session.tabs as tab, i (tab.id)}
-			<div
-				class="tab"
-				class:active={i === session.active}
-				role="tab"
-				aria-selected={i === session.active}
-				tabindex={i === session.active ? 0 : -1}
-				onclick={() => (session.active = i)}
-				onkeydown={(e) => onKey(e, i)}
-				data-tauri-drag-region="false"
-			>
-				{#if tab.busy}
-					<span class="thinking" aria-hidden="true"></span>
-				{/if}
-				<span class="label">{label(tab)}</span>
-				<button
-					class="close"
-					aria-label="Close this conversation"
-					tabindex="-1"
-					onclick={(e) => {
-						e.stopPropagation();
-						void session.closeTab(i);
-					}}
-				>
-					<Icon name="x" size={13} />
-				</button>
-			</div>
-		{/each}
-		<button
-			class="add"
-			aria-label="New conversation"
+<div class="tabs" role="tablist" aria-label="Conversations">
+	{#each session.tabs as tab, i (tab.id)}
+		<div
+			class="tab"
+			class:active={i === session.active}
+			role="tab"
+			aria-selected={i === session.active}
+			tabindex={i === session.active ? 0 : -1}
+			onclick={() => (session.active = i)}
+			onkeydown={(e) => onKey(e, i)}
 			data-tauri-drag-region="false"
-			onclick={() => session.newTab()}
 		>
-			<Icon name="plus" size={15} />
-		</button>
-		<span class="filler" data-tauri-drag-region></span>
-	</div>
-{/if}
+			{#if tab.busy}
+				<span class="thinking" aria-hidden="true"></span>
+			{/if}
+			<span class="label">{label(tab)}</span>
+			<button
+				class="close"
+				aria-label="Close this conversation"
+				tabindex="-1"
+				onclick={(e) => {
+					e.stopPropagation();
+					void session.closeTab(i);
+				}}
+			>
+				<Icon name="x" size={12} />
+			</button>
+		</div>
+	{/each}
+	<button
+		class="add"
+		aria-label="New conversation"
+		data-tauri-drag-region="false"
+		onclick={() => session.newTab()}
+	>
+		<Icon name="plus" size={14} />
+	</button>
+</div>
 
 <style>
-	.tabbar {
-		flex: none;
+	.tabs {
 		display: flex;
-		align-items: flex-end;
-		gap: var(--space-1);
-		padding: var(--space-2) var(--pad) 0;
-		background: var(--bg);
+		align-items: center;
+		gap: 2px;
+		min-width: 0;
 		overflow-x: auto;
 		scrollbar-width: none;
 	}
-	.tabbar::-webkit-scrollbar {
+	.tabs::-webkit-scrollbar {
 		display: none;
-	}
-	.filler {
-		flex: 1;
-		align-self: stretch;
-		min-width: var(--space-4);
 	}
 	.tab {
 		display: flex;
 		align-items: center;
-		gap: var(--space-2);
-		max-width: 22ch;
-		padding: var(--space-2) var(--space-1) var(--space-2) var(--space-3);
-		border: 1px solid transparent;
-		border-bottom: none;
-		border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+		gap: var(--space-1);
+		max-width: 20ch;
+		padding: 3px var(--space-1) 3px var(--space-2);
+		border-radius: var(--radius-chip);
 		color: var(--text-faint);
 		font-size: var(--fs-sm);
 		cursor: pointer;
@@ -107,9 +95,7 @@
 	}
 	.tab.active {
 		color: var(--text);
-		border-color: var(--border);
-		background: var(--bg-raised);
-		box-shadow: 0 -1px 3px rgba(20, 20, 26, 0.04);
+		background: var(--bg-inset);
 	}
 	.label {
 		overflow: hidden;
@@ -127,8 +113,8 @@
 			opacity var(--dur-fast) var(--ease);
 	}
 	.close {
-		width: 18px;
-		height: 18px;
+		width: 16px;
+		height: 16px;
 		opacity: 0;
 	}
 	.tab:hover .close,
@@ -141,9 +127,8 @@
 		background: var(--border);
 	}
 	.add {
-		width: 24px;
-		height: 24px;
-		margin-bottom: var(--space-1);
+		width: 22px;
+		height: 22px;
 	}
 	.add:hover {
 		color: var(--text);

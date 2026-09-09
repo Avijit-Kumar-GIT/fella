@@ -28,6 +28,19 @@ pub fn run() {
         .setup(|app| {
             use tauri::Manager;
 
+            // The window's static backgroundColor (tauri.conf.json) is the dark
+            // default, so a light-theme user briefly sees dark at the window
+            // edges before the webview's first paint. Repaint it to match the OS
+            // theme here.
+            if let Some(win) = app.get_webview_window("main") {
+                let color = if matches!(win.theme(), Ok(tauri::Theme::Light)) {
+                    tauri::webview::Color(252, 252, 251, 255)
+                } else {
+                    tauri::webview::Color(14, 14, 16, 255)
+                };
+                let _ = win.set_background_color(Some(color));
+            }
+
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()

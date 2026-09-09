@@ -60,10 +60,10 @@
 			<Icon name="chevron-right" size={13} />
 		</span>
 		{#if stepCount === 0}
-			how Fella got this · answered from general knowledge
+			Evidence · general knowledge
 		{:else}
-			how Fella got this · {stepCount} step{stepCount === 1 ? '' : 's'} · {(ms / 1000).toFixed(1)}s
-			{#if hasBackground}<span class="bg">· includes background</span>{/if}
+			Evidence · {stepCount} step{stepCount === 1 ? '' : 's'} · {(ms / 1000).toFixed(1)}s
+			{#if hasBackground}<span class="bg">· background</span>{/if}
 		{/if}
 		{#if warns > 0}<span class="warn">· {warns} to check</span>{/if}
 	</button>
@@ -100,7 +100,12 @@
 								{#if e.sql}
 									<pre class="sql">{e.sql}</pre>
 								{:else if Object.keys(shownArgs).length > 0}
-									<pre class="args">{JSON.stringify(shownArgs, null, 2)}</pre>
+									<dl class="args">
+										{#each Object.entries(shownArgs) as [k, v] (k)}
+											<dt>{k}</dt>
+											<dd>{typeof v === 'string' ? v : JSON.stringify(v)}</dd>
+										{/each}
+									</dl>
 								{/if}
 								{#if !e.error}
 									<div class="result">{e.result_summary}</div>
@@ -158,6 +163,9 @@
 		display: inline-flex;
 		align-items: center;
 		gap: var(--space-1);
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
+		font-size: var(--fs-xs);
 	}
 	.summary:hover {
 		background: transparent;
@@ -221,6 +229,24 @@
 	}
 	.detail {
 		margin-top: 4px;
+	}
+	.args {
+		display: grid;
+		grid-template-columns: auto 1fr;
+		gap: 1px var(--space-3);
+		margin: var(--space-1) 0;
+	}
+	.args dt {
+		font-family: var(--mono);
+		font-size: var(--fs-xs);
+		color: var(--text-faint);
+	}
+	.args dd {
+		margin: 0;
+		font-family: var(--mono);
+		font-size: var(--fs-xs);
+		color: var(--text-dim);
+		overflow-wrap: anywhere;
 	}
 	/* pre / table / th / td come from the shared `.rich` rules in app.css;
 	   only these overrides are local. */

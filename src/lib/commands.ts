@@ -479,7 +479,7 @@ async function runCommand(text: string): Promise<void> {
 				session.catalog = await ipc.getCatalog();
 				session.addSystem(
 					session.catalog.workspace
-						? summarizeCatalog()
+						? summarizeCatalog(true)
 						: 'No folder open yet. Choose one with /open, or the button on the welcome screen.'
 				);
 			} catch (e) {
@@ -1184,11 +1184,18 @@ function skippedLines(): string[] {
 	return out;
 }
 
-function summarizeCatalog(): string {
+/** Short by default ("<folder>: N files ready.") the user knows what's in
+ *  their folder. `full` lists every file and is only used by `/files`. */
+function summarizeCatalog(full = false): string {
 	const s = session.catalog.sources;
 	const folder = session.catalog.workspace?.replace(/^.*[/\\]/, '') ?? 'folder';
 	if (s.length === 0)
 		return `${folder}: nothing Fella can read here yet. It works with spreadsheets, CSVs, PDFs, and text files.`;
+	const skipped = session.catalog.skipped ?? [];
+	if (!full) {
+		const tail = skipped.length ? `  ${skipped.length} skipped — /files for details.` : '';
+		return `${folder}: ${s.length} file${s.length === 1 ? '' : 's'} ready.${tail}  Ask a question, or /help.`;
+	}
 	const tables = s.filter((f) => f.view);
 	const docs = s.filter((f) => !f.view);
 	const lines = [`${folder}: ${s.length} file${s.length === 1 ? '' : 's'}`];

@@ -4,6 +4,38 @@
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<title>Fella</title>
+		<!-- Paint the themed window background on the first frame, before the app
+		     stylesheet loads, so there's no white flash on a dark system. The two
+		     values mirror --bg in src/app.css. -->
+		<style>
+			:root {
+				color-scheme: light dark;
+			}
+			html {
+				background: #fcfcfb;
+			}
+			@media (prefers-color-scheme: dark) {
+				html {
+					background: #0e0e10;
+				}
+			}
+		</style>
+		<!-- Start the UI fonts downloading alongside the JS bundle instead of
+		     after the stylesheet is parsed, so text doesn't swap in late. -->
+		<link
+			rel="preload"
+			as="font"
+			type="font/woff2"
+			crossorigin
+			href="/fonts/Geist-Variable.woff2"
+		/>
+		<link
+			rel="preload"
+			as="font"
+			type="font/woff2"
+			crossorigin
+			href="/fonts/GeistMono-Variable.woff2"
+		/>
 		%sveltekit.head%
 	</head>
 	<body data-sveltekit-preload-data="hover">

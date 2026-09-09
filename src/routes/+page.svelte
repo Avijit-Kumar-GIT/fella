@@ -2,18 +2,20 @@
 	import { onMount } from 'svelte';
 	import CommandPalette from '$lib/components/CommandPalette.svelte';
 	import Composer from '$lib/components/Composer.svelte';
-	import Header from '$lib/components/Header.svelte';
+	import Icon from '$lib/components/Icon.svelte';
 	import StatusBar from '$lib/components/StatusBar.svelte';
-	import TabBar from '$lib/components/TabBar.svelte';
+	import Titlebar from '$lib/components/Titlebar.svelte';
 	import Transcript from '$lib/components/Transcript.svelte';
 	import { dispatch, reconcileModel, reopenLastFolder, stop } from '$lib/commands';
 	import { ipc, isTauri } from '$lib/ipc';
+	import { fadeQuick } from '$lib/motion';
 	import { prefs } from '$lib/prefs.svelte';
 	import { session } from '$lib/session.svelte';
 
 	let transcript: Transcript;
 	let composer: Composer;
 	let paletteOpen = $state(false);
+	let dragging = $state(false);
 
 	async function refreshHealth() {
 		if (!isTauri()) return;
@@ -64,12 +66,15 @@
 		document.addEventListener('visibilitychange', onVisible);
 		window.addEventListener('focus', onVisible);
 
-		// Native folder drop -> /open
+		// Native folder drop -> /open, with a full-window drop target while a
+		// drag is over the window.
 		let unlisten: (() => void) | undefined;
 		void import('@tauri-apps/api/webview')
 			.then(({ getCurrentWebview }) =>
 				getCurrentWebview().onDragDropEvent((e) => {
-					if (e.payload.type === 'drop' && e.payload.paths.length) {
+					const t = e.payload.type;
+					dragging = t === 'enter' || t === 'over';
+					if (t === 'drop' && e.payload.paths.length) {
 						void dispatch(`/open ${e.payload.paths[0]}`);
 					}
 				})
@@ -155,23 +160,26 @@
 
 <svelte:window onkeydown={onKey} />
 
-<div class="app">
-	<!-- Always grabbable: moves the window even when the chrome is hidden. -->
-	<div class="draghandle" data-tauri-drag-region></div>
-	{#if !session.focus}
-		<TabBar />
-		{#if session.catalog.workspace}
-			<Header />
-		{/if}
-	{/if}
+<div class="app" class:focus={session.focus}>
+	<Titlebar onpalette={() => (paletteOpen = true)} />
 	<main>
 		<Transcript bind:this={transcript} />
 	</main>
-	<Composer bind:this={composer} onafterrun={refreshHealth} />
-	<StatusBar />
+	<div class="dock">
+		{#if !session.focus}
+			<StatusBar />
+		{/if}
+		<Composer bind:this={composer} onafterrun={refreshHealth} />
+	</div>
 </div>
 
 <div class="sr-only" role="status" aria-live="polite">{live}</div>
+
+{#if dragging}
+	<div class="dropzone" transition:fadeQuick aria-hidden="true">
+		<div class="dropcard"><Icon name="folder" size={20} /> Drop a folder to open it</div>
+	</div>
+{/if}
 
 <CommandPalette bind:open={paletteOpen} onpick={pickCommand} />
 
@@ -182,12 +190,6 @@
 		height: 100%;
 		background: var(--bg);
 	}
-	/* A thin move strip under the OS title bar, so the window is draggable from
-	   the app's own top edge (and still is in focus mode). */
-	.draghandle {
-		flex: none;
-		height: 8px;
-	}
 	main {
 		flex: 1;
 		min-height: 0;
@@ -195,5 +197,34 @@
 		flex-direction: column;
 		background: var(--bg-raised);
 		border-top: 1px solid var(--border);
+	}
+	/* Status line + composer read as one calm footer zone, continuous with the
+	   transcript surface above it no rule, no colour change. */
+	.dock {
+		flex: none;
+		background: var(--bg-raised);
+		padding-bottom: var(--space-2);
+	}
+	.dropzone {
+		position: fixed;
+		inset: 0;
+		z-index: 40;
+		display: grid;
+		place-items: center;
+		background: color-mix(in srgb, var(--bg) 68%, transparent);
+		outline: 2px dashed var(--border-strong);
+		outline-offset: -12px;
+	}
+	.dropcard {
+		display: inline-flex;
+		align-items: center;
+		gap: var(--space-2);
+		padding: var(--space-3) var(--space-4);
+		background: var(--bg-raised);
+		border: 1px solid var(--border);
+		border-radius: var(--radius);
+		box-shadow: var(--shadow-sm);
+		color: var(--text-dim);
+		font-size: var(--fs-sm);
 	}
 </style>
