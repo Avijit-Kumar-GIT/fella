@@ -7,6 +7,24 @@ this app repo (now **`fella`**; `fella-ai` is a private pre-v0.1 archive),
 `fella-marketplace` to mean the browse-site half of the **`fella-web`** repo,
 and any `CODE_OF_CONDUCT.md` mention as folded into `CONTRIBUTING.md` (§Conduct).
 
+- **2026-09-09** **Pack-marketplace rollout resumed, minus the proxy.** The
+  2026-09-02 pause is lifted: `web_search`/`web_fetch`-as-a-pack (2026-09-08) and
+  "breadth lives in extensions" (2026-09-08) are demand enough. `fella-extensions`
+  now carries a `packs/_template/<theme,skill,mcp>/` scaffold (the build script
+  skips `_`-prefixed dirs) and a `docs/WRITING-A-PACK.md` walkthrough;
+  `fella-web`'s browse page and copy are readied. **Not done, on purpose:**
+  (1) no starter packs yet — the product owner picks them, and the `fella-web`
+  `/packs` route stays 302'd to `/` until the catalog has ≥1; (2) the
+  install-counter proxy (`fella-web/packs-proxy/`) stays written-not-deployed —
+  `installs` is `null`, the site shows a "New" badge, deploy it only when counts
+  are actually asked for. **Catalog delivery to the site is the committed
+  snapshot** (`marketing/packs/catalog.json` + `sync-catalog.sh`), not a runtime
+  fetch: the site CSP is `connect-src 'self'`, so pointing `DEFAULT_CATALOG` at
+  `raw.githubusercontent.com` or the proxy would be blocked. The app is
+  unchanged; `DEFAULT_CATALOG_URL` in `engine/extensions.rs` already targets the
+  raw catalog, and `MARKETPLACE_URL` in `commands.ts` flips to the site when the
+  route goes live. Design (`EXTENSIBILITY.md`) is untouched — only the rollout
+  moved.
 - **2026-09-08** **`web_search` / `web_fetch` ship as an opt-in pack, not a base
   tool.** Reaching outward stays opt-in, one vetted piece at a time (`WHY.md`),
   and the zero-config app stays vertical. Any web-access tool is an `mcp` or
