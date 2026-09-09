@@ -20,10 +20,19 @@
 //!   robustness       the trap battery (text amounts, totals row, mixed dates)
 //!   session-memory   turn-2 accuracy with the recent-turns block on vs off
 //!   memory           cold-run accuracy after priming, per-folder memory on vs off
+//!   bench --dir <d>  an external JSONL battery of real tasks (DABStep-easy,
+//!                    InfiAgent-DABench, …), same engine + metrics, with $/100
 //!   all              accuracy + robustness + session-memory + memory
 //!
 //! Opts: --models "a,b,c"  --judge <model>  --iters N (default 1)
-//!       --only <id-substr>  --json <path>  --compare <old.json>
+//!       --only <id-substr>  --json <path>  --compare <old.json>  --dir <path>
+//!
+//! `bench` dir layout: `<d>/cases.jsonl` (one JSON object per line) + the data
+//! files it names (paths relative to `<d>`). Each line:
+//!   {"id": "...", "question": "...", "files": ["payments.csv"],
+//!    "gold": {"figures": [123.45]} | {"approx": [0.18, 0.005]}
+//!          | {"contains": ["Rent"]} | "refusal" | "notool",
+//!    "tier": "easy", "reference": "..."}
 //! Env:  EVAL_SHOW_ANSWERS=1  print every answer + its evidence to stderr
 //!
 //! A --models entry is a bare model on the configured provider (`gemma4:31b`)
@@ -970,6 +979,192 @@ async fn cmd_model_ladder(engine: &EngineState, cases: &[EvalCase], models: &[St
     all
 }
 
+// --- external benchmark (`bench --dir`) -----------------------------------
+//
+// Runs a JSONL battery of real tasks through the same engine + metrics as
+// `accuracy`, so Fella's purpose-built folder-QA loop can be compared, on a
+// neutral task set, against a general data-analysis agent. Each case gets a
+// fresh workspace holding only its own files.
+
+#[derive(serde::Deserialize)]
+struct BenchSpec {
+    id: String,
+    question: String,
+    #[serde(default)]
+    files: Vec<String>,
+    gold: BenchGold,
+    #[serde(default)]
+    category: Option<String>,
+    #[serde(default)]
+    tier: Option<String>,
+    #[serde(default)]
+    reference: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum BenchGold {
+    Figures { figures: Vec<f64> },
+    /// `[value, absolute tolerance]`
+    Approx { approx: [f64; 2] },
+    Contains { contains: Vec<String> },
+    /// `"refusal"` | `"notool"`
+    Tag(String),
+}
+
+impl BenchGold {
+    fn into_gold(self) -> Result<Gold, String> {
+        Ok(match self {
+            BenchGold::Figures { figures } => Gold::Figures(figures),
+            BenchGold::Approx { approx: [v, tol] } => Gold::Approx(v, tol),
+            BenchGold::Contains { contains } => {
+                Gold::Contains(contains.iter().map(|s| leak(s)).collect())
+            }
+            BenchGold::Tag(t) => match t.to_ascii_lowercase().as_str() {
+                "refusal" => Gold::Refusal,
+                "notool" | "no_tool" => Gold::NoTool,
+                other => return Err(format!("unknown gold {other:?}")),
+            },
+        })
+    }
+}
+
+/// Parse `<dir>/cases.jsonl`; blank lines and `#` comments are skipped.
+/// Returns `(files, case)` pairs so the runner can stage each workspace.
+fn load_bench_dir(dir: &Path) -> Vec<(Vec<String>, EvalCase)> {
+    let path = dir.join("cases.jsonl");
+    let txt = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("bench: can't read {}: {e}", path.display()));
+    let mut out = Vec::new();
+    for (n, line) in txt.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let spec: BenchSpec = serde_json::from_str(line)
+            .unwrap_or_else(|e| panic!("bench: {}:{}: {e}", path.display(), n + 1));
+        let cat = leak(
+            spec.tier
+                .as_deref()
+                .or(spec.category.as_deref())
+                .unwrap_or("bench"),
+        );
+        let gold = spec
+            .gold
+            .into_gold()
+            .unwrap_or_else(|e| panic!("bench: {}:{}: {e}", path.display(), n + 1));
+        out.push((
+            spec.files,
+            EvalCase {
+                id: leak(&spec.id),
+                category: cat,
+                question: spec.question,
+                gold,
+                min_tools: 1,
+                reference: spec.reference.unwrap_or_default(),
+            },
+        ));
+    }
+    out
+}
+
+fn safe_dirname(s: &str) -> String {
+    s.chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect()
+}
+
+async fn cmd_bench(
+    engine: &EngineState,
+    dir: &Path,
+    models: &[String],
+    judge: Option<&str>,
+    iters: usize,
+    only: Option<&str>,
+) -> Vec<CaseScore> {
+    let mut cases = load_bench_dir(dir);
+    if let Some(sub) = only {
+        cases.retain(|(_, c)| c.id.contains(sub));
+    }
+    println!(
+        "\n# External benchmark  ·  `{}`  ({iters} iter(s)/case, {} cases)\n",
+        dir.display(),
+        cases.len()
+    );
+    legend();
+    println!("| model | case | correct | rate | close(det) | waste | in tok | out tok | $/100 | wall s |");
+    println!("|---|---|:-:|--:|--:|--:|--:|--:|--:|--:|");
+
+    let staging = std::env::temp_dir().join("fella-bench-ext");
+    let mut all = Vec::new();
+
+    for m in models {
+        if !set_model(engine, m) {
+            println!("| {m} | | | | | | | | | save failed |");
+            continue;
+        }
+        let mut scores: Vec<CaseScore> = Vec::new();
+        for (files, case) in &cases {
+            let ws = staging.join(safe_dirname(case.id));
+            let _ = std::fs::remove_dir_all(&ws);
+            if std::fs::create_dir_all(&ws).is_err() {
+                println!("| {m} | {} | ERR | | | | | | | mkdir failed |", case.id);
+                continue;
+            }
+            let mut staged = true;
+            for f in files {
+                let src = dir.join(f);
+                let name = Path::new(f).file_name().unwrap_or(std::ffi::OsStr::new(f));
+                if std::fs::copy(&src, ws.join(name)).is_err() {
+                    println!("| {m} | {} | ERR | | | | | | | missing {} |", case.id, f);
+                    staged = false;
+                    break;
+                }
+            }
+            if !staged {
+                continue;
+            }
+            if engine.open_workspace(&ws).is_err() {
+                println!("| {m} | {} | ERR | | | | | | | open_workspace failed |", case.id);
+                continue;
+            }
+            let conv = format!("bench-{m}-{}", safe_dirname(case.id));
+            let s = score_case(engine, case, m, "bench", judge, &conv, iters).await;
+            let price = price_per_100(m, s.prompt_tok as f64, s.completion_tok as f64);
+            println!(
+                "| {} | {} | {} | {:.0}% | {:.2} | {} `{}` | {} | {} | {} | {:.1} |",
+                s.model,
+                s.id,
+                if s.err.is_some() { "ERR".into() } else { yn(s.correct) },
+                s.correct_rate * 100.0,
+                s.closeness_det,
+                s.waste.total(),
+                s.waste.breakdown(),
+                s.prompt_tok,
+                s.completion_tok,
+                price.map(|c| format!("${c:.2}")).unwrap_or_else(|| "n/a".into()),
+                s.total_s,
+            );
+            std::io::stdout().flush().ok();
+            scores.push(s);
+        }
+
+        let (ok, n) = acc(&scores);
+        let pin: f64 = scores.iter().map(|s| s.prompt_tok as f64).sum();
+        let pout: f64 = scores.iter().map(|s| s.completion_tok as f64).sum();
+        let avg_price = price_per_100(m, pin / n.max(1) as f64, pout / n.max(1) as f64);
+        println!(
+            "| **{m}** | **summary** | **{ok}/{n} correct** | | **{:.2}** | **{} waste** | | | **{}** | **{:.0} tok/correct** |",
+            mean_closeness(&scores),
+            total_waste(&scores),
+            avg_price.map(|c| format!("${c:.2}/100 avg")).unwrap_or_else(|| "n/a".into()),
+            tokens_per_correct(&scores),
+        );
+        all.extend(scores);
+    }
+    all
+}
+
 async fn cmd_robustness(engine: &EngineState, model: &str, ws: &Path, iters: usize) -> Vec<CaseScore> {
     set_model(engine, model);
     println!("\n# Robustness (data traps)  ·  model `{model}`\n");
@@ -1323,6 +1518,7 @@ async fn main() {
     let json_out = opt("--json");
     let compare_to = opt("--compare");
     let only = opt("--only");
+    let bench_dir = opt("--dir");
     let models: Vec<String> = opt("--models")
         .map(|s| s.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect())
         .unwrap_or_default();
@@ -1374,6 +1570,13 @@ async fn main() {
         "memory" => {
             cmd_memory(&engine, &models[0], &data_dir, iters).await
         }
+        "bench" => {
+            let Some(d) = &bench_dir else {
+                eprintln!("bench: pass --dir <path-to-benchmark-dir> (holds cases.jsonl + data files)");
+                std::process::exit(2);
+            };
+            cmd_bench(&engine, Path::new(d), &models, judge, iters, only.as_deref()).await
+        }
         "all" => {
             let mut v = cmd_accuracy(&engine, &cases, &models, judge, iters).await;
             v.extend(cmd_robustness(&engine, &models[0], &ws, iters).await);
@@ -1382,7 +1585,7 @@ async fn main() {
             v
         }
         other => {
-            eprintln!("unknown subcommand {other:?}. one of: accuracy prompt-ablation folder-scale model-ladder robustness session-memory memory all");
+            eprintln!("unknown subcommand {other:?}. one of: accuracy prompt-ablation folder-scale model-ladder robustness session-memory memory bench all");
             std::process::exit(2);
         }
     };
@@ -1562,5 +1765,24 @@ mod tests {
         let bad = rr("Your total was 999.", vec![ev("run_sql", "1 row: total 450", None)]);
         assert!(closeness_det(&good, &case) > 0.8);
         assert!(closeness_det(&bad, &case) < 0.5);
+    }
+
+    #[test]
+    fn bench_gold_shapes_parse() {
+        let g = |s: &str| serde_json::from_str::<BenchGold>(s).unwrap().into_gold().unwrap();
+        assert!(matches!(g(r#"{"figures":[600,42]}"#), Gold::Figures(v) if v == vec![600.0, 42.0]));
+        assert!(matches!(g(r#"{"approx":[0.18,0.005]}"#), Gold::Approx(v, t) if v == 0.18 && t == 0.005));
+        assert!(matches!(g(r#"{"contains":["Rent","1250"]}"#), Gold::Contains(v) if v == vec!["Rent", "1250"]));
+        assert!(matches!(g(r#""refusal""#), Gold::Refusal));
+        assert!(matches!(g(r#""notool""#), Gold::NoTool));
+        assert!(serde_json::from_str::<BenchGold>(r#""bogus""#).unwrap().into_gold().is_err());
+
+        let spec: BenchSpec = serde_json::from_str(
+            r#"{"id":"a","question":"q?","files":["x.csv"],"gold":{"figures":[1]},"tier":"easy"}"#,
+        )
+        .unwrap();
+        assert_eq!(spec.id, "a");
+        assert_eq!(spec.files, vec!["x.csv"]);
+        assert_eq!(spec.tier.as_deref(), Some("easy"));
     }
 }
