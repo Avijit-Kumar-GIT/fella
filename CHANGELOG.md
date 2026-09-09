@@ -25,6 +25,13 @@ All notable changes to Fella are recorded here. Format follows
 
 ### Changed
 
+- **One `/inspect_table` tool instead of two.** The model used to have separate
+  "show me the columns" and "show me some rows" tools; they were nearly the same
+  thing (the first already included a few rows) and a weaker model sometimes
+  called both. They're now a single `inspect_table` — column stats plus the
+  first few rows, with a `rows` count if you want more. Fewer tools, fewer
+  redundant calls; measured against the eval suite to confirm answers are
+  unchanged.
 - **A column whose values differ only in capitalisation is now flagged.** If a
   category-style column holds `Rent`, `rent`, and `RENT` as if they were
   different, Fella notes it on the column and, if a query filters that column

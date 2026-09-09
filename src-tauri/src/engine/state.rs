@@ -401,7 +401,7 @@ impl EngineState {
         if tables.is_empty() {
             p.push_str("No tables were detected.\n");
         } else if full {
-            p.push_str("Tables (columns and types shown; use sample_rows for values):\n");
+            p.push_str("Tables (columns and types shown; use inspect_table for values):\n");
             for s in &tables {
                 let view = s.view.as_deref().unwrap_or("");
                 let rows = s.row_count.map(|n| n.to_string()).unwrap_or_else(|| "?".into());
@@ -428,7 +428,7 @@ impl EngineState {
                 }
             }
         } else {
-            p.push_str("Tables (use describe_schema or sample_rows for their columns):\n");
+            p.push_str("Tables (use inspect_table for their columns):\n");
             for s in &tables {
                 let ncols = s.columns.as_ref().map(|c| c.len()).unwrap_or(0);
                 p.push_str(&format!(
@@ -1064,7 +1064,7 @@ impl EngineState {
         })
     }
 
-    /// First `n` rows of a source (used by the `sample_rows` tool).
+    /// First `n` rows of a source (used by the `inspect_table` tool).
     pub fn sample(&self, name: &str, n: usize) -> EngineResult<QueryResult> {
         let view = self.view_for(name)?;
         self.run_sql(&format!(
