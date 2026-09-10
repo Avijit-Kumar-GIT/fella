@@ -39,33 +39,47 @@ construction — that contrast is the point.
 
 ### Reading Δacc and its 95% CI
 
-**Δacc** = acc(fella) − acc(bare) for one model, in percentage points, on the
-*same* 64 cases — a paired difference, so only the harness changes. e.g. gemma:
-bare 34/64 (53%) → fella 64/64 (100%) → **Δacc = +47**.
+**The metric underneath is `acc`** — the fraction of the battery a model gets
+right: `acc = cases correct / 64`, written as a percent. `bare` and `fella` each
+have their own `acc` per model (the two left columns of the results table).
 
-Those 64 cases are one sample of "questions someone might ask a folder"; a
-different 64 would move the number. The **95% CI** says how far. `aggregate.py`
+**Δacc** = acc(fella) − acc(bare) for one model, on the *same* 64 cases — a
+paired difference, so the model is held fixed and only the harness changes. Its
+unit is **percentage points of that accuracy**, not "percent of": with 64 cases
+one case ≈ 1.6 points, so `+22` ≈ 14 more questions right, `+45` ≈ 29 more.
+`+22` on a 67% baseline means 89%, not 67 × 1.22. e.g. gemma: bare 34/64 (53%) →
+fella 64/64 (100%) → **Δacc = +47 points**.
+
+The 64 cases are one sample of "questions someone might ask a folder"; a
+different 64 would move Δacc. The **95% CI** says how far. `aggregate.py`
 computes it by **paired bootstrap**: resample 64 of the 64 per-case
 `(bare-right?, fella-right?)` pairs *with replacement*, recompute Δacc, 2000
 times; the 2.5th–97.5th percentile of those 2000 values is the interval (seeded,
 so it's reproducible). Read it as: rerun the benchmark with fresh question
 samples and ~95% of the intervals would contain the true lift.
 
-- **CI excludes 0** — deepseek-v4-flash `[+22%, +45%]`: the lift is real. Even an
-  unlucky draw of cases still shows the harness adding ≥ 22 points. 9 of 10
-  models are here.
+- **Same unit as Δacc** — percentage points of battery accuracy. `[+22%, +45%]`
+  is "the lift is plausibly anywhere from +22 to +45 points, best estimate the
+  observed Δacc (+33)."
+- **The endpoints are gain sizes, not accuracies.** `[+22%, +45%]` does **not**
+  mean "fella scored 89%". deepseek's fella `acc` is a measured 100/100%; `+22`
+  is the gap in a resample where *bare* happened to score 78%.
+- **CI excludes 0** — deepseek-v4-flash `[+22%, +45%]`: the lift is real, even an
+  unlucky draw of cases still shows ≥ +22 points. 9 of 10 models are here.
 - **CI straddles 0** — muse-glimmer-30b `+6%`, `[−9%, +22%]`: *cannot* conclude
-  the harness helps this model; the observed +6 is inside the noise. This is why
-  muse-glimmer is called out as the one non-result.
-- **The endpoints are sizes of the gain, not accuracies.** `[+22%, +45%]` does
-  **not** mean "fella scored 89%". deepseek's fella accuracy is a measured 100%;
-  `+22` is the gap in a resample where *bare* happened to score 78%.
+  the harness helps this model; the observed +6 is inside the noise. The one
+  non-result.
 - **Width ≈ ±12 points** here because n = 64 is modest — a bigger battery
   tightens the intervals.
 
-Why it's first-class: without it, a +6% and a +33% look like the same kind of
-result. The CI is what separates "the loop earns its place for this model" from
-"we can't tell."
+The other metrics are *not* deltas: `acc`, `consistency`, `tok / correct`,
+`$ / 100-correct` and `waste / case` are each reported per condition (`bare` and
+`fella` columns). Only `Δacc` and its CI compare the two, which is why they
+carry the "is the lift real" question.
+
+Why it's first-class: without the CI, a +6% and a +33% look like the same kind
+of result. The CI is what separates "the loop earns its place for this model"
+from "we can't tell."
 
 ## The battery
 
