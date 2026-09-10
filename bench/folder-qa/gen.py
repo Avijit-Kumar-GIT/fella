@@ -88,7 +88,10 @@ def dump_xlsx(name, sheet, header, rows):
     }
     with zipfile.ZipFile(name, "w", zipfile.ZIP_DEFLATED) as z:
         for p, content in parts.items():
-            z.writestr(p, content)
+            # fixed timestamp so regenerating the battery is byte-reproducible
+            zi = zipfile.ZipInfo(p, date_time=(1980, 1, 1, 0, 0, 0))
+            zi.compress_type = zipfile.ZIP_DEFLATED
+            z.writestr(zi, content)
 
 
 def dump_pdf(name, lines):
@@ -229,12 +232,17 @@ run_journal_dates = {ln[:10] for ln in journal_lines if " run" in ln.lower()}
 mins_on_journal_run_days = sum(r["minutes"] for r in workouts if r["date"] in run_journal_dates)
 
 # --- screen time (TSV) -------------------------------------------------
-apps = ["browser", "messages", "maps", "news", "music", "podcasts"]
+# per-app ranges so the top-N by minutes is well separated (not a coin flip):
+# browser > music > messages > news > maps > podcasts by a clear margin.
+app_range = {"browser": (30, 65), "music": (25, 55), "messages": (15, 45),
+             "news": (10, 35), "maps": (2, 22), "podcasts": (0, 18)}
+apps = list(app_range)
 screen = []
 for d in range(60):
     day = f"2024-{(d // 28) + 1:02d}-{(d % 28) + 1:02d}"
     for ap in apps:
-        screen.append({"date": day, "app": ap, "minutes": random.randint(0, 55)})
+        lo, hi = app_range[ap]
+        screen.append({"date": day, "app": ap, "minutes": random.randint(lo, hi)})
 dump("screen_time.tsv", ["date", "app", "minutes"], screen, delim="\t")
 screen_total_min = sum(r["minutes"] for r in screen)
 screen_by_app = {a: sum(r["minutes"] for r in screen if r["app"] == a) for a in apps}
@@ -321,6 +329,104 @@ dump_pdf("lease.pdf", [
 rent_paid_avg_month = R(rent_2024 / 12, 2)
 lease_vs_paid = R(rent_paid_avg_month - lease_rent, 2)
 
+# --- extra golds (no new files, no new random draws) -----------------
+import calendar
+
+# spending
+spend_2024_by_month = {}
+for r in spend:
+    if r["month"][:4] == "2024":
+        spend_2024_by_month[r["month"]] = R(spend_2024_by_month.get(r["month"], 0) + r["amount"], 2)
+_mo_sorted = sorted(spend_2024_by_month.items(), key=lambda kv: -kv[1])
+peak_month_2024, peak_month_2024_amt = _mo_sorted[0]
+peak_month_gap = R(peak_month_2024_amt - _mo_sorted[1][1], 2)
+peak_mn = calendar.month_name[int(peak_month_2024[5:7])].lower()
+peak_month_alts = f"{peak_month_2024[:7]}|{peak_month_2024}|{peak_mn}"
+avg_month_2024 = R(total_2024 / 12, 2)
+cat_rank = sorted(by_cat, key=by_cat.get, reverse=True)
+second_cat = cat_rank[1]
+groceries_2023 = sp(lambda r: r["category"] == "groceries" and r["month"][:4] == "2023")
+groceries_2024 = sp(lambda r: r["category"] == "groceries" and r["month"][:4] == "2024")
+groceries_delta = R(groceries_2024 - groceries_2023, 2)
+q1_2024 = sp(lambda r: r["month"][:4] == "2024" and r["month"][5:7] in ("01", "02", "03"))
+dining_2024_rows = [r for r in spend if r["category"] == "dining" and r["month"][:4] == "2024"]
+dining_over_cap = sum(1 for r in dining_2024_rows if r["amount"] > 150)
+
+# workouts
+n_activities = len({r["activity"] for r in workouts})
+avg_session_min = R(wk_total_min / len(workouts), 1)
+total_distance = R(sum(r["distance_km"] for r in workouts), 1)
+longest_workout_min = max(r["minutes"] for r in workouts)
+n_runs = sum(1 for r in workouts if r["activity"] == "run")
+
+# reading
+finished_pages = sum(b["pages"] for b in finished_books)
+n_genres = len({b["genre"] for b in books})
+n_rated5 = sum(1 for b in books if b["rating"] == 5)
+pages_by_nat = {}
+for b in books:
+    pages_by_nat[nat_of.get(b["author"], "?")] = pages_by_nat.get(nat_of.get(b["author"], "?"), 0) + b["pages"]
+top_nat_pages = max(pages_by_nat, key=pages_by_nat.get)
+
+# trips
+avg_nights = R(trip_nights_total / len(trips), 2)
+longest_trip_place = max(trips, key=lambda t: t[2])[0]
+visited_contact_countries = {c["country"] for c in contacts if c["country"] in visited_countries}
+nights_visited_contacts = sum(t[2] for t in trips if t[1] in visited_contact_countries)
+
+# journal
+n_journal_entries = len(journal_lines)
+
+# screen / sleep
+screen_days_over_150 = sum(1 for v in screen_by_date.values() if v > 150)
+screen_second_app = sorted(screen_by_app, key=screen_by_app.get, reverse=True)[1]
+sleep_at_least_8 = sum(1 for r in sleep if r["hours"] >= 8.0)
+
+# contacts
+n_contact_countries = len({c["country"] for c in contacts})
+n_close = sum(1 for c in contacts if c["tier"] == "close")
+
+# subscriptions
+n_subs_inactive = len(subs) - len(subs_active)
+cheapest_active = min(subs_active, key=lambda s: s[1])[0]
+
+# lease
+lease_parking = 17
+
+# --- distractor files (real-looking, no question needs them) --------
+receipts_old = [
+    {"date": f"2019-{random.randint(1, 12):02d}-{random.randint(1, 28):02d}",
+     "vendor": random.choice(["hardware store", "cafe", "pharmacy", "bookshop", "petrol"]),
+     "total": R(random.uniform(4, 90), 2)}
+    for _ in range(40)
+]
+dump("receipts_2019.csv", ["date", "vendor", "total"], receipts_old)
+with open("old_notes.md", "w") as f:
+    f.write(
+        "# Scratch notes (archive)\n\n"
+        "Old apartment checklist, mostly done. Call the internet company. Return "
+        "the library books. Cancel the gym trial before the 30th.\n\n"
+        "Ideas parking lot: learn to make bread, repot the plants, digitise the "
+        "photo box.\n"
+    )
+with open("playlist.json", "w") as f:
+    json.dump([
+        {"track": "Teardrop", "artist": "Massive Attack", "plays": 42},
+        {"track": "Redbone", "artist": "Childish Gambino", "plays": 31},
+        {"track": "Nightcall", "artist": "Kavinsky", "plays": 27},
+        {"track": "Roygbiv", "artist": "Boards of Canada", "plays": 55},
+        {"track": "Svefn-g-englar", "artist": "Sigur Ros", "plays": 19},
+    ], f, indent=2)
+
+# extra files that no case names, dropped into ~1/6 of cases as clutter so
+# the model has to pick the right files rather than being handed only them.
+DISTRACT = ["receipts_2019.csv", "old_notes.md", "playlist.json"]
+
+
+def clut(files, *extra):
+    return list(files) + list(extra) + DISTRACT
+
+
 # -----------------------------------------------------------------------
 cases = [
     # finance
@@ -370,6 +476,46 @@ cases = [
     ("xf-run-goal", "My goals note sets a running target for the year. Based on workouts.csv, how many kilometres short of it am I?", ["goals.md", "workouts.csv"], {"figures": [run_short_km]}, "mf-doc-join"),
     ("xf-sleep-screen", "On the nights I rated sleep quality 1, what was my average total screen time that day? Use sleep.jsonl and screen_time.tsv.", ["sleep.jsonl", "screen_time.tsv"], {"approx": [avg_screen_worst, 2.0]}, "mf-join-aggregate"),
     ("xf-lease-vs-spend", "My lease PDF states a monthly rent. Across 2024, spend.csv records what I actually paid for rent each month. On average per month, did I pay more or less than the lease amount, and by how much?", ["lease.pdf", "spend.csv"], {"approx": [abs(lease_vs_paid), 0.6]}, "mf-doc-join"),
+
+    # --- batch 2: more shapes, ~1/6 with a cluttered folder ---
+    # spending
+    ("fin-avg-month-2024", "On average, how much did I spend per month in 2024?", clut(["spend.csv"]), {"approx": [avg_month_2024, 1.0]}, "num-avg"),
+    ("fin-peak-month-2024", "Which month of 2024 did I spend the most in?", clut(["spend.csv"], "budget.csv"), {"contains": [peak_month_alts]}, "temporal-max"),
+    ("fin-second-cat", "Which category is my second-biggest area of spending overall?", ["spend.csv"], {"contains": [second_cat]}, "cat-rank"),
+    ("fin-groceries-delta", "How did my grocery spending change from 2023 to 2024, in dollars?", ["spend.csv"], {"figures": [groceries_delta]}, "num-multistep"),
+    ("fin-q1-2024", "How much did I spend in the first quarter of 2024 (January through March)?", ["spend.csv"], {"figures": [q1_2024]}, "num-filter"),
+    # workouts
+    ("fit-distinct-activities", "How many different types of activity are in my workout log?", ["workouts.csv"], {"figures": [n_activities]}, "distinct-count"),
+    ("fit-avg-session", "On average, how many minutes is one of my workouts?", ["workouts.csv"], {"approx": [avg_session_min, 0.5]}, "num-avg"),
+    ("fit-total-distance", "What is the total distance, in km, across every workout that logged one?", clut(["workouts.csv"]), {"approx": [total_distance, 1.0]}, "num-aggregate"),
+    ("fit-longest", "What was my single longest workout, in minutes?", ["workouts.csv"], {"figures": [longest_workout_min]}, "num-max"),
+    ("fit-run-count", "How many separate runs are in the log?", ["workouts.csv"], {"figures": [n_runs]}, "num-filter"),
+    # reading
+    ("read-finished-pages", "How many pages have I read in total across the books I finished?", ["books.csv"], {"figures": [finished_pages]}, "num-aggregate"),
+    ("read-genres", "How many distinct genres are in my reading list?", clut(["books.csv"], "authors.csv"), {"figures": [n_genres]}, "distinct-count"),
+    ("read-rated5", "How many books did I rate 5?", ["books.csv"], {"figures": [n_rated5]}, "num-filter"),
+    # trips
+    ("trip-avg-nights", "On average, how many nights was each of my trips?", ["trips.csv"], {"approx": [avg_nights, 0.1]}, "num-avg"),
+    ("trip-longest", "Which trip was the longest?", clut(["trips.csv"]), {"contains": [longest_trip_place.lower()]}, "text-max"),
+    # journal
+    ("jrnl-entries", "How many dated entries are in the journal?", clut(["journal.txt"]), {"figures": [n_journal_entries]}, "text-count"),
+    # screen / sleep
+    ("screen-days-over-150", "On how many days did my total screen time (all apps combined) exceed 150 minutes?", ["screen_time.tsv"], {"figures": [screen_days_over_150]}, "num-filter"),
+    ("screen-second-app", "Which app is my second-heaviest by total screen time?", clut(["screen_time.tsv"]), {"contains": [screen_second_app]}, "cat-rank"),
+    ("sleep-at-least-8", "How many nights did I sleep at least 8 hours?", ["sleep.jsonl"], {"figures": [sleep_at_least_8]}, "num-filter"),
+    # contacts
+    ("contacts-countries", "How many different countries do my contacts live in?", clut(["contacts.json"]), {"figures": [n_contact_countries]}, "distinct-count"),
+    ("contacts-close-count", "How many of my contacts are in the 'close' tier?", ["contacts.json"], {"figures": [n_close]}, "cat-filter"),
+    # subscriptions
+    ("subs-inactive-count", "How many of my subscriptions are inactive?", ["subscriptions.xlsx"], {"figures": [n_subs_inactive]}, "num-filter"),
+    ("subs-cheapest", "What is my cheapest active subscription?", clut(["subscriptions.xlsx"]), {"contains": [cheapest_active]}, "text-min"),
+    # lease
+    ("pdf-deposit", "How much was the security deposit on my lease?", ["lease.pdf"], {"figures": [lease_deposit]}, "text-lookup"),
+    ("pdf-parking", "Which parking space number is assigned to me in the lease?", clut(["lease.pdf"]), {"figures": [lease_parking]}, "text-lookup"),
+    # cross-format multi-file
+    ("xf-nationality-pages", "Using books.csv and authors.csv, which author nationality accounts for the most pages in my reading list?", ["books.csv", "authors.csv"], {"contains": [top_nat_pages.lower()]}, "mf-join-groupby"),
+    ("xf-contacts-nights", "For the contacts who live in a country I have visited, how many trip-nights did I spend in those countries in total? Use contacts.json and trips.csv.", clut(["contacts.json", "trips.csv"]), {"figures": [nights_visited_contacts]}, "mf-join-aggregate"),
+    ("xf-dining-cap-months", "My goals note sets a monthly dining-out cap. In how many months of 2024 did my dining spend break it? Use goals.md and spend.csv.", ["goals.md", "spend.csv"], {"figures": [dining_over_cap]}, "mf-doc-join"),
     # refusal + no-tool
     ("refusal", "Based on my reading log, how many books will I finish next year?", ["books.csv"], "refusal", "refusal"),
     ("notool", "What does the word 'anthology' mean?", [], "notool", "no-tool"),
@@ -380,8 +526,22 @@ with open("cases.jsonl", "w") as f:
     for cid, q, files, gold, tier in cases:
         f.write(json.dumps({"id": f"fqa-{cid}", "question": q, "files": files, "gold": gold, "tier": tier}) + "\n")
 
-print(f"wrote {len(cases)} cases across "
-      f"{len({t.split('-')[0] for _, _, _, _, t in cases})} metric shapes")
+n_clut = sum(1 for _, _, files, _, _ in cases if any(d in files for d in DISTRACT))
+print(f"wrote {len(cases)} cases ({len({t for _, _, _, _, t in cases})} tier labels, "
+      f"{n_clut} with a cluttered folder); 3 distractor files")
+print(f"  b2: peak_month={peak_month_2024}(${peak_month_2024_amt}, gap to #2 ${peak_month_gap}) "
+      f"avg_month={avg_month_2024} 2nd_cat={second_cat}(${by_cat[second_cat]} vs top ${by_cat[cat_rank[0]]}) "
+      f"groc_delta={groceries_delta} q1={q1_2024} dining_over_cap={dining_over_cap}")
+print(f"  b2: n_acts={n_activities} avg_session={avg_session_min} total_dist={total_distance} "
+      f"longest_wk={longest_workout_min} n_runs={n_runs}")
+print(f"  b2: fin_pages={finished_pages} n_genres={n_genres} n_rated5={n_rated5} "
+      f"top_nat={top_nat_pages}({pages_by_nat})")
+print(f"  b2: avg_nights={avg_nights} longest_trip={longest_trip_place} n_entries={n_journal_entries}")
+print(f"  b2: screen_over150={screen_days_over_150} 2nd_app={screen_second_app}"
+      f"({screen_by_app[screen_second_app]} vs top {screen_by_app[sorted(screen_by_app, key=screen_by_app.get, reverse=True)[0]]}) "
+      f"sleep_ge8={sleep_at_least_8}")
+print(f"  b2: n_countries={n_contact_countries} n_close={n_close} subs_inactive={n_subs_inactive} "
+      f"cheapest={cheapest_active!r} nights_visited_contacts={nights_visited_contacts}")
 print(f"  fin: total_2024={total_2024} rent_2024={rent_2024} top_cat={top_cat}")
 print(f"  fit: min={wk_total_min} run_km={run_km} top_act={top_act}")
 print(f"  read: finished={n_finished} avg_rating={avg_rating_finished} top_genre={top_genre_pages} "

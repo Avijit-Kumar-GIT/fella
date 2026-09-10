@@ -15,10 +15,12 @@ Generic table (any set of dumps):
 import json
 import sys
 
-# $ / 1M (input, output), Sept-2026 list prices (OpenRouter / provider direct).
+# $ / 1M (input, output). Verified 2026-09-09 against OpenRouter's
+# /api/v1/models and per-model /endpoints APIs; representative (headline) rate —
+# OpenRouter load-balances across providers, so the real spend is the dashboard.
 # Models free on an ollama-cloud key are marked FREE and cost $0 here.
 PRICES = {
-    "gpt-5.6-luna": (0.20, 1.20),
+    "gpt-5.6-luna": (0.20, 1.20),          # OpenRouter openai/gpt-5.6-luna (Pro is 1.00/6.00)
     "gpt-5-nano": (0.05, 0.40),
     "gpt-4o-mini": (0.15, 0.60),
     "grok-4.3": (1.25, 2.50),
@@ -26,14 +28,17 @@ PRICES = {
     "muse-glimmer-30b": (0.30, 1.10),
     "inkling-small": (0.45, 1.20),
     "muse-spark-1.3": (1.25, 4.25),
+    "muse-spark-1.3-contributor": (0.10, 0.20),
     "nemotron-3.5-lightning": (0.08, 0.20),
+    "deepseek-v4-pro-0813": (1.0494, 3.1482),
     # free on a plain ollama-cloud key (the rest of ollama-cloud is gated):
     "gemma4:31b": (0.0, 0.0),
     "gpt-oss:120b": (0.0, 0.0),
     "gpt-oss:20b": (0.0, 0.0),
     "nemotron-3-nano:30b": (0.0, 0.0),
-    # OpenRouter (not free on ollama-cloud despite being listed there):
-    "deepseek-v4-flash:0731": (0.05, 0.16),
+    # OpenRouter (not free on ollama-cloud despite being listed there). Key is
+    # the slug's last "/"-segment: deepseek/deepseek-v4-flash-0731 -> this.
+    "deepseek-v4-flash-0731": (0.065, 0.18),
     "glm-5.3-flash": (0.075, 0.25),
 }
 

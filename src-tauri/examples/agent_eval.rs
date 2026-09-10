@@ -658,6 +658,16 @@ fn price_per_100(model: &str, prompt_tok: f64, completion_tok: f64) -> Option<f6
         ("gpt-4.1-mini", 0.40, 1.60),
         ("grok-4.3", 1.25, 2.50),
         ("grok-4.1-fast", 0.20, 0.50),
+        // OpenRouter model ladder (folder-qa bench), Sept 2026 list prices
+        ("deepseek-v4-flash-0731", 0.065, 0.18),
+        ("deepseek-v4-pro-0813", 1.0494, 3.1482),
+        ("glm-5.3-flash", 0.075, 0.25),
+        ("nemotron-3.5-lightning", 0.08, 0.20),
+        ("muse-spark-1.3-contributor", 0.10, 0.20),
+        ("muse-glimmer-30b", 0.30, 1.10),
+        ("inkling-small", 0.45, 1.20),
+        ("gemini-3.8-flash", 0.75, 3.75),
+        ("gemma4:31b", 0.0, 0.0),
     ];
     let stem = model.rsplit('/').next().unwrap_or(model);
     let (pin, pout) = P.iter().find(|(m, ..)| *m == stem).map(|(_, a, b)| (*a, *b))?;
