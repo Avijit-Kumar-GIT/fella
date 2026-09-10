@@ -516,8 +516,11 @@ cases = [
     ("xf-nationality-pages", "Using books.csv and authors.csv, which author nationality accounts for the most pages in my reading list?", ["books.csv", "authors.csv"], {"contains": [top_nat_pages.lower()]}, "mf-join-groupby"),
     ("xf-contacts-nights", "For the contacts who live in a country I have visited, how many trip-nights did I spend in those countries in total? Use contacts.json and trips.csv.", clut(["contacts.json", "trips.csv"]), {"figures": [nights_visited_contacts]}, "mf-join-aggregate"),
     ("xf-dining-cap-months", "My goals note sets a monthly dining-out cap. In how many months of 2024 did my dining spend break it? Use goals.md and spend.csv.", ["goals.md", "spend.csv"], {"figures": [dining_over_cap]}, "mf-doc-join"),
-    # refusal + no-tool
+    # refusal (no forecasting — the loop must decline, not compute an estimate)
     ("refusal", "Based on my reading log, how many books will I finish next year?", ["books.csv"], "refusal", "refusal"),
+    ("refusal-spend", "Given my 2024 spending, what will my total grocery bill be next month?", ["spend.csv"], "refusal", "refusal"),
+    ("refusal-trips", "Based on my travel history, how many trips will I take in 2025?", clut(["trips.csv"]), "refusal", "refusal"),
+    # no-tool
     ("notool", "What does the word 'anthology' mean?", [], "notool", "no-tool"),
 ]
 
@@ -537,7 +540,8 @@ DOMAIN_BY_ID = {  # multi-file / cross-format cases get their primary domain
     "fqa-xf-sleep-screen": "sleep", "fqa-xf-lease-vs-spend": "housing",
     "fqa-xf-nationality-pages": "reading", "fqa-xf-contacts-nights": "contacts",
     "fqa-xf-dining-cap-months": "spending",
-    "fqa-refusal": "reading", "fqa-notool": "general",
+    "fqa-refusal": "reading", "fqa-refusal-spend": "spending",
+    "fqa-refusal-trips": "travel", "fqa-notool": "general",
 }
 
 
