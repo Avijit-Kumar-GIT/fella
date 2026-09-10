@@ -1,0 +1,195 @@
+<!doctype html><html><head><meta charset="utf-8">
+<title>Folder-QA harness lift</title><style>
+body{font:14px ui-sans-serif,system-ui,sans-serif;margin:24px;max-width:820px;color:#111}
+h1{font-size:19px} .sub{color:#667;margin:-6px 0 18px}
+svg{border:1px solid #eee;border-radius:8px;margin:10px 0;background:#fff;width:100%;height:auto}
+table{border-collapse:collapse;width:100%;font-size:12.5px;margin-top:10px}
+th,td{border:1px solid #e3e3e3;padding:4px 7px;text-align:right}
+th:nth-child(2),td:nth-child(2){text-align:left}
+thead th{background:#f6f6f6}
+</style></head><body>
+<h1>Does the Fella loop lift a cheap model at reading a folder?</h1>
+<div class="sub">64-case folder-QA battery · bare (files in the prompt, no tools) vs
+the full Fella loop · 3 iterations/case, strict-majority correct.</div>
+<svg viewBox="0 0 720 348" xmlns="http://www.w3.org/2000/svg" font-family="ui-sans-serif,system-ui,sans-serif" font-size="12">
+<text x="12" y="20" font-size="13" font-weight="600" fill="#111">Δaccuracy from the Fella loop (fella − bare), % of 64 cases, 95% CI</text>
+<line x1="268.1" y1="28" x2="268.1" y2="334" stroke="#999" stroke-dasharray="3 3"/>
+<text x="182" y="53" text-anchor="end" fill="#333">deepseek-v4-flash-0731</text>
+<rect x="268.1" y="39" width="191.7" height="18" rx="2" fill="#2a7"/>
+<line x1="395.9" y1="49.0" x2="523.7" y2="49.0" stroke="#111" stroke-width="1.2"/>
+<line x1="395.9" y1="45.0" x2="395.9" y2="53.0" stroke="#111" stroke-width="1.2"/>
+<line x1="523.7" y1="45.0" x2="523.7" y2="53.0" stroke="#111" stroke-width="1.2"/>
+<text x="465.8" y="53" fill="#111" text-anchor="start">+33</text>
+<text x="182" y="83" text-anchor="end" fill="#333">glm-5.3-flash</text>
+<rect x="268.1" y="69" width="164.3" height="18" rx="2" fill="#2a7"/>
+<line x1="359.4" y1="79.0" x2="505.4" y2="79.0" stroke="#111" stroke-width="1.2"/>
+<line x1="359.4" y1="75.0" x2="359.4" y2="83.0" stroke="#111" stroke-width="1.2"/>
+<line x1="505.4" y1="75.0" x2="505.4" y2="83.0" stroke="#111" stroke-width="1.2"/>
+<text x="438.4" y="83" fill="#111" text-anchor="start">+28</text>
+<text x="182" y="113" text-anchor="end" fill="#333">gemma4:31b</text>
+<rect x="268.1" y="99" width="273.8" height="18" rx="2" fill="#2a7"/>
+<line x1="478.0" y1="109.0" x2="615.0" y2="109.0" stroke="#111" stroke-width="1.2"/>
+<line x1="478.0" y1="105.0" x2="478.0" y2="113.0" stroke="#111" stroke-width="1.2"/>
+<line x1="615.0" y1="105.0" x2="615.0" y2="113.0" stroke="#111" stroke-width="1.2"/>
+<text x="547.9" y="113" fill="#111" text-anchor="start">+47</text>
+<text x="182" y="143" text-anchor="end" fill="#333">gpt-5.6-luna</text>
+<rect x="268.1" y="129" width="228.2" height="18" rx="2" fill="#2a7"/>
+<line x1="423.3" y1="139.0" x2="569.3" y2="139.0" stroke="#111" stroke-width="1.2"/>
+<line x1="423.3" y1="135.0" x2="423.3" y2="143.0" stroke="#111" stroke-width="1.2"/>
+<line x1="569.3" y1="135.0" x2="569.3" y2="143.0" stroke="#111" stroke-width="1.2"/>
+<text x="502.3" y="143" fill="#111" text-anchor="start">+39</text>
+<text x="182" y="173" text-anchor="end" fill="#333">muse-glimmer-30b</text>
+<rect x="268.1" y="159" width="36.5" height="18" rx="2" fill="#2a7"/>
+<line x1="213.4" y1="169.0" x2="395.9" y2="169.0" stroke="#111" stroke-width="1.2"/>
+<line x1="213.4" y1="165.0" x2="213.4" y2="173.0" stroke="#111" stroke-width="1.2"/>
+<line x1="395.9" y1="165.0" x2="395.9" y2="173.0" stroke="#111" stroke-width="1.2"/>
+<text x="310.6" y="173" fill="#111" text-anchor="start">+6</text>
+<text x="182" y="203" text-anchor="end" fill="#333">inkling-small</text>
+<rect x="268.1" y="189" width="173.4" height="18" rx="2" fill="#2a7"/>
+<line x1="377.7" y1="199.0" x2="514.6" y2="199.0" stroke="#111" stroke-width="1.2"/>
+<line x1="377.7" y1="195.0" x2="377.7" y2="203.0" stroke="#111" stroke-width="1.2"/>
+<line x1="514.6" y1="195.0" x2="514.6" y2="203.0" stroke="#111" stroke-width="1.2"/>
+<text x="447.5" y="203" fill="#111" text-anchor="start">+30</text>
+<text x="182" y="233" text-anchor="end" fill="#333">gemini-3.8-flash</text>
+<rect x="268.1" y="219" width="91.3" height="18" rx="2" fill="#2a7"/>
+<line x1="304.6" y1="229.0" x2="414.2" y2="229.0" stroke="#111" stroke-width="1.2"/>
+<line x1="304.6" y1="225.0" x2="304.6" y2="233.0" stroke="#111" stroke-width="1.2"/>
+<line x1="414.2" y1="225.0" x2="414.2" y2="233.0" stroke="#111" stroke-width="1.2"/>
+<text x="365.4" y="233" fill="#111" text-anchor="start">+16</text>
+<text x="182" y="263" text-anchor="end" fill="#333">deepseek-v4-pro-0813</text>
+<rect x="268.1" y="249" width="219.0" height="18" rx="2" fill="#2a7"/>
+<line x1="423.3" y1="259.0" x2="560.2" y2="259.0" stroke="#111" stroke-width="1.2"/>
+<line x1="423.3" y1="255.0" x2="423.3" y2="263.0" stroke="#111" stroke-width="1.2"/>
+<line x1="560.2" y1="255.0" x2="560.2" y2="263.0" stroke="#111" stroke-width="1.2"/>
+<text x="493.2" y="263" fill="#111" text-anchor="start">+38</text>
+<text x="182" y="293" text-anchor="end" fill="#333">muse-spark-1.3</text>
+<rect x="268.1" y="279" width="182.5" height="18" rx="2" fill="#2a7"/>
+<line x1="377.7" y1="289.0" x2="523.7" y2="289.0" stroke="#111" stroke-width="1.2"/>
+<line x1="377.7" y1="285.0" x2="377.7" y2="293.0" stroke="#111" stroke-width="1.2"/>
+<line x1="523.7" y1="285.0" x2="523.7" y2="293.0" stroke="#111" stroke-width="1.2"/>
+<text x="456.7" y="293" fill="#111" text-anchor="start">+31</text>
+<text x="182" y="323" text-anchor="end" fill="#333">grok-4.3</text>
+<rect x="268.1" y="309" width="45.6" height="18" rx="2" fill="#2a7"/>
+<line x1="277.3" y1="319.0" x2="359.4" y2="319.0" stroke="#111" stroke-width="1.2"/>
+<line x1="277.3" y1="315.0" x2="277.3" y2="323.0" stroke="#111" stroke-width="1.2"/>
+<line x1="359.4" y1="315.0" x2="359.4" y2="323.0" stroke="#111" stroke-width="1.2"/>
+<text x="319.8" y="323" fill="#111" text-anchor="start">+8</text>
+</svg><svg viewBox="0 0 720 354" xmlns="http://www.w3.org/2000/svg" font-family="ui-sans-serif,system-ui,sans-serif" font-size="12">
+<text x="12" y="20" font-size="13" font-weight="600" fill="#111">Tokens per correct answer</text>
+<rect x="190" y="6" width="10" height="10" fill="#bb5"/>
+<text x="204" y="15" fill="#333">bare</text>
+<rect x="280" y="6" width="10" height="10" fill="#47c"/>
+<text x="294" y="15" fill="#333">fella</text>
+<text x="182" y="53" text-anchor="end" fill="#333">deepseek-v4-flash-0731</text>
+<rect x="190" y="37" width="136.0" height="14" rx="2" fill="#bb5"/>
+<text x="331.0" y="49" fill="#111">2,634</text>
+<rect x="190" y="52" width="225.3" height="14" rx="2" fill="#47c"/>
+<text x="420.3" y="64" fill="#111">4,364</text>
+<text x="182" y="83" text-anchor="end" fill="#333">glm-5.3-flash</text>
+<rect x="190" y="67" width="123.9" height="14" rx="2" fill="#bb5"/>
+<text x="318.9" y="79" fill="#111">2,400</text>
+<rect x="190" y="82" width="207.9" height="14" rx="2" fill="#47c"/>
+<text x="402.9" y="94" fill="#111">4,028</text>
+<text x="182" y="113" text-anchor="end" fill="#333">gemma4:31b</text>
+<rect x="190" y="97" width="175.3" height="14" rx="2" fill="#bb5"/>
+<text x="370.3" y="109" fill="#111">3,396</text>
+<rect x="190" y="112" width="191.3" height="14" rx="2" fill="#47c"/>
+<text x="386.3" y="124" fill="#111">3,706</text>
+<text x="182" y="143" text-anchor="end" fill="#333">gpt-5.6-luna</text>
+<rect x="190" y="127" width="108.3" height="14" rx="2" fill="#bb5"/>
+<text x="303.3" y="139" fill="#111">2,098</text>
+<rect x="190" y="142" width="159.6" height="14" rx="2" fill="#47c"/>
+<text x="354.6" y="154" fill="#111">3,092</text>
+<text x="182" y="173" text-anchor="end" fill="#333">muse-glimmer-30b</text>
+<rect x="190" y="157" width="159.4" height="14" rx="2" fill="#bb5"/>
+<text x="354.4" y="169" fill="#111">3,087</text>
+<rect x="190" y="172" width="400.0" height="14" rx="2" fill="#47c"/>
+<text x="595.0" y="184" fill="#111">7,748</text>
+<text x="182" y="203" text-anchor="end" fill="#333">inkling-small</text>
+<rect x="190" y="187" width="127.1" height="14" rx="2" fill="#bb5"/>
+<text x="322.1" y="199" fill="#111">2,463</text>
+<rect x="190" y="202" width="201.3" height="14" rx="2" fill="#47c"/>
+<text x="396.3" y="214" fill="#111">3,900</text>
+<text x="182" y="233" text-anchor="end" fill="#333">gemini-3.8-flash</text>
+<rect x="190" y="217" width="137.6" height="14" rx="2" fill="#bb5"/>
+<text x="332.6" y="229" fill="#111">2,666</text>
+<rect x="190" y="232" width="184.6" height="14" rx="2" fill="#47c"/>
+<text x="379.6" y="244" fill="#111">3,575</text>
+<text x="182" y="263" text-anchor="end" fill="#333">deepseek-v4-pro-0813</text>
+<rect x="190" y="247" width="139.9" height="14" rx="2" fill="#bb5"/>
+<text x="334.9" y="259" fill="#111">2,710</text>
+<rect x="190" y="262" width="225.9" height="14" rx="2" fill="#47c"/>
+<text x="420.9" y="274" fill="#111">4,375</text>
+<text x="182" y="293" text-anchor="end" fill="#333">muse-spark-1.3</text>
+<rect x="190" y="277" width="149.8" height="14" rx="2" fill="#bb5"/>
+<text x="344.8" y="289" fill="#111">2,902</text>
+<rect x="190" y="292" width="292.9" height="14" rx="2" fill="#47c"/>
+<text x="487.9" y="304" fill="#111">5,673</text>
+<text x="182" y="323" text-anchor="end" fill="#333">grok-4.3</text>
+<rect x="190" y="307" width="119.1" height="14" rx="2" fill="#bb5"/>
+<text x="314.1" y="319" fill="#111">2,307</text>
+<rect x="190" y="322" width="218.7" height="14" rx="2" fill="#47c"/>
+<text x="413.7" y="334" fill="#111">4,237</text>
+</svg><svg viewBox="0 0 720 354" xmlns="http://www.w3.org/2000/svg" font-family="ui-sans-serif,system-ui,sans-serif" font-size="12">
+<text x="12" y="20" font-size="13" font-weight="600" fill="#111">USD per 100 correct answers (list price; $0 = free tier)</text>
+<rect x="190" y="6" width="10" height="10" fill="#bb5"/>
+<text x="204" y="15" fill="#333">bare</text>
+<rect x="280" y="6" width="10" height="10" fill="#47c"/>
+<text x="294" y="15" fill="#333">fella</text>
+<text x="182" y="53" text-anchor="end" fill="#333">deepseek-v4-flash-0731</text>
+<rect x="190" y="37" width="9.9" height="14" rx="2" fill="#bb5"/>
+<text x="204.9" y="49" fill="#111">$0.02</text>
+<rect x="190" y="52" width="12.8" height="14" rx="2" fill="#47c"/>
+<text x="207.8" y="64" fill="#111">$0.03</text>
+<text x="182" y="83" text-anchor="end" fill="#333">glm-5.3-flash</text>
+<rect x="190" y="67" width="11.7" height="14" rx="2" fill="#bb5"/>
+<text x="206.7" y="79" fill="#111">$0.03</text>
+<rect x="190" y="82" width="14.1" height="14" rx="2" fill="#47c"/>
+<text x="209.1" y="94" fill="#111">$0.03</text>
+<text x="182" y="113" text-anchor="end" fill="#333">gemma4:31b</text>
+<rect x="190" y="97" width="1.0" height="14" rx="2" fill="#bb5"/>
+<text x="195.0" y="109" fill="#111">$0.00</text>
+<rect x="190" y="112" width="1.0" height="14" rx="2" fill="#47c"/>
+<text x="195.0" y="124" fill="#111">$0.00</text>
+<text x="182" y="143" text-anchor="end" fill="#333">gpt-5.6-luna</text>
+<rect x="190" y="127" width="18.3" height="14" rx="2" fill="#bb5"/>
+<text x="213.3" y="139" fill="#111">$0.04</text>
+<rect x="190" y="142" width="30.1" height="14" rx="2" fill="#47c"/>
+<text x="225.1" y="154" fill="#111">$0.07</text>
+<text x="182" y="173" text-anchor="end" fill="#333">muse-glimmer-30b</text>
+<rect x="190" y="157" width="73.2" height="14" rx="2" fill="#bb5"/>
+<text x="268.2" y="169" fill="#111">$0.17</text>
+<rect x="190" y="172" width="126.1" height="14" rx="2" fill="#47c"/>
+<text x="321.1" y="184" fill="#111">$0.30</text>
+<text x="182" y="203" text-anchor="end" fill="#333">inkling-small</text>
+<rect x="190" y="187" width="66.9" height="14" rx="2" fill="#bb5"/>
+<text x="261.9" y="199" fill="#111">$0.16</text>
+<rect x="190" y="202" width="77.5" height="14" rx="2" fill="#47c"/>
+<text x="272.5" y="214" fill="#111">$0.18</text>
+<text x="182" y="233" text-anchor="end" fill="#333">gemini-3.8-flash</text>
+<rect x="190" y="217" width="161.8" height="14" rx="2" fill="#bb5"/>
+<text x="356.8" y="229" fill="#111">$0.38</text>
+<rect x="190" y="232" width="140.0" height="14" rx="2" fill="#47c"/>
+<text x="335.0" y="244" fill="#111">$0.33</text>
+<text x="182" y="263" text-anchor="end" fill="#333">deepseek-v4-pro-0813</text>
+<rect x="190" y="247" width="164.5" height="14" rx="2" fill="#bb5"/>
+<text x="359.5" y="259" fill="#111">$0.39</text>
+<rect x="190" y="262" width="209.1" height="14" rx="2" fill="#47c"/>
+<text x="404.1" y="274" fill="#111">$0.49</text>
+<text x="182" y="293" text-anchor="end" fill="#333">muse-spark-1.3</text>
+<rect x="190" y="277" width="279.5" height="14" rx="2" fill="#bb5"/>
+<text x="474.5" y="289" fill="#111">$0.66</text>
+<rect x="190" y="292" width="400.0" height="14" rx="2" fill="#47c"/>
+<text x="595.0" y="304" fill="#111">$0.94</text>
+<text x="182" y="323" text-anchor="end" fill="#333">grok-4.3</text>
+<rect x="190" y="307" width="164.2" height="14" rx="2" fill="#bb5"/>
+<text x="359.2" y="319" fill="#111">$0.39</text>
+<rect x="190" y="322" width="238.8" height="14" rx="2" fill="#47c"/>
+<text x="433.8" y="334" fill="#111">$0.56</text>
+</svg>
+<table><thead><tr>
+<th>#</th><th>model</th><th>bare</th><th>fella</th><th>Δacc</th><th>95% CI</th>
+<th>3/3</th><th>tok/ok bare</th><th>tok/ok fella</th><th>$/100ok fella</th>
+<th>self-catch</th><th>steps</th><th>waste</th>
+</tr></thead><tbody><tr><td>1</td><td>deepseek-v4-flash-0731</td><td>67%</td><td>100%</td><td><b>+33%</b></td><td>[+22, +44]</td><td>98%</td><td>2,634</td><td>4,364</td><td>$0.03</td><td>0%</td><td>1.0</td><td>0.00</td></tr><tr><td>2</td><td>glm-5.3-flash</td><td>69%</td><td>97%</td><td><b>+28%</b></td><td>[+16, +41]</td><td>95%</td><td>2,400</td><td>4,028</td><td>$0.03</td><td>0%</td><td>1.0</td><td>0.00</td></tr><tr><td>4</td><td>gemma4:31b</td><td>53%</td><td>100%</td><td><b>+47%</b></td><td>[+36, +59]</td><td>100%</td><td>3,396</td><td>3,706</td><td>$0.00</td><td>0%</td><td>1.0</td><td>0.00</td></tr><tr><td>5</td><td>gpt-5.6-luna</td><td>59%</td><td>98%</td><td><b>+39%</b></td><td>[+27, +52]</td><td>97%</td><td>2,098</td><td>3,092</td><td>$0.07</td><td>0%</td><td>1.0</td><td>0.00</td></tr><tr><td>6</td><td>muse-glimmer-30b</td><td>61%</td><td>67%</td><td><b>+6%</b></td><td>[-9, +22]</td><td>47%</td><td>3,087</td><td>7,748</td><td>$0.30</td><td>0%</td><td>0.9</td><td>0.28</td></tr><tr><td>7</td><td>inkling-small</td><td>69%</td><td>98%</td><td><b>+30%</b></td><td>[+19, +42]</td><td>98%</td><td>2,463</td><td>3,900</td><td>$0.18</td><td>0%</td><td>1.2</td><td>0.08</td></tr><tr><td>8</td><td>gemini-3.8-flash</td><td>83%</td><td>98%</td><td><b>+16%</b></td><td>[+6, +25]</td><td>97%</td><td>2,666</td><td>3,575</td><td>$0.33</td><td>0%</td><td>1.0</td><td>0.00</td></tr><tr><td>9</td><td>deepseek-v4-pro-0813</td><td>62%</td><td>100%</td><td><b>+38%</b></td><td>[+27, +50]</td><td>100%</td><td>2,710</td><td>4,375</td><td>$0.49</td><td>0%</td><td>1.0</td><td>0.00</td></tr><tr><td>10</td><td>muse-spark-1.3</td><td>66%</td><td>97%</td><td><b>+31%</b></td><td>[+19, +44]</td><td>95%</td><td>2,902</td><td>5,673</td><td>$0.94</td><td>0%</td><td>1.1</td><td>0.08</td></tr><tr><td>11</td><td>grok-4.3</td><td>92%</td><td>100%</td><td><b>+8%</b></td><td>[+2, +16]</td><td>100%</td><td>2,307</td><td>4,237</td><td>$0.56</td><td>0%</td><td>1.0</td><td>0.00</td></tr></tbody></table>
+</body></html>
