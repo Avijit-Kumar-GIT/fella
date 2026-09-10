@@ -114,11 +114,11 @@ def load_tiers(path="bench/folder-qa/cases.jsonl"):
     return out
 
 
+# ladder order, cheapest input $/1M first (gemma free, slotted by capability)
 RUNGS = [
     "deepseek-v4-flash-0731", "glm-5.3-flash", "nemotron-3.5-lightning",
-    "gemma4:31b", "muse-spark-1.3-contributor", "muse-glimmer-30b",
-    "inkling-small", "gemini-3.8-flash", "deepseek-v4-pro-0813",
-    "gpt-5.6-luna", "grok-4.3",
+    "gemma4:31b", "gpt-5.6-luna", "muse-glimmer-30b", "inkling-small",
+    "gemini-3.8-flash", "deepseek-v4-pro-0813", "muse-spark-1.3", "grok-4.3",
 ]
 
 
@@ -169,25 +169,33 @@ def lift(bare_path, fella_path, prices):
         sep += "|--:|--:"
     print(hdr + " |")
     print(sep + "|")
-    for m in F:
-        f = agg(F[m])
+    # models in fella order, then any bare-only model (fella not measurable)
+    models = list(F) + [m for m in B if stem(m) not in {stem(x) for x in F}]
+    for m in models:
+        has_f = m in F
+        f = agg(F[m]) if has_f else None
         b = agg(B.get(m, []))
-        dacc = f["ok"] / f["n"] - (b["ok"] / b["n"] if b["n"] else 0)
-        lo, hi = bootstrap_dacc_ci(B.get(m, []), F[m]) if b["n"] else (None, None)
-        ci = f"[{lo:+.0%}, {hi:+.0%}]" if lo is not None else "—"
+        if has_f and b["n"]:
+            dacc = f["ok"] / f["n"] - b["ok"] / b["n"]
+            lo, hi = bootstrap_dacc_ci(B.get(m, []), F[m])
+            ci = f"[{lo:+.0%}, {hi:+.0%}]" if lo is not None else "—"
+            dacc_s = f"{dacc:+.0%}"
+        else:
+            ci, dacc_s = "—", "—"
         cells = [
             stem(m),
             f"{b['ok']}/{b['n']}" if b["n"] else "—",
-            f"{f['ok']}/{f['n']}",
-            f"{dacc:+.0%}",
+            f"{f['ok']}/{f['n']}" if has_f else "—",
+            dacc_s,
             ci,
-            f"{f['allk']}/{f['n']}",
-            f"{f['tok']/max(f['ok'],1):,.0f}",
+            f"{f['allk']}/{f['n']}" if has_f else "—",
+            f"{f['tok']/max(f['ok'],1):,.0f}" if has_f else "—",
             f"{b['tok']/max(b['ok'],1):,.0f}" if b["n"] else "—",
-            f"{f['caught']}/{f['wrong']}" if f["wrong"] else "0/0",
+            (f"{f['caught']}/{f['wrong']}" if f["wrong"] else "0/0") if has_f else "—",
         ]
         if prices:
-            fu, bu = usd_per_correct(f, m), (usd_per_correct(b, m) if b["n"] else None)
+            fu = usd_per_correct(f, m) if has_f else None
+            bu = usd_per_correct(b, m) if b["n"] else None
             cells += [f"${fu*100:.2f}" if fu is not None else "n/a",
                       f"${bu*100:.2f}" if bu is not None else "n/a"]
         print("| " + " | ".join(cells) + " |")
