@@ -20,10 +20,24 @@
 //!   robustness       the trap battery (text amounts, totals row, mixed dates)
 //!   session-memory   turn-2 accuracy with the recent-turns block on vs off
 //!   memory           cold-run accuracy after priming, per-folder memory on vs off
+//!   bench --dir <d>  a JSONL battery of real folder-QA tasks, same grader +
+//!                    metrics as `accuracy`, with $/100. --harness:
+//!                      fella (default) — the full loop
+//!                      bare            — one chat call, files in the prompt,
+//!                                        no tools; the baseline that isolates
+//!                                        the harness's lift (Δacc = fella-bare)
+//!                      openai-ci       — OpenAI Responses code_interpreter
 //!   all              accuracy + robustness + session-memory + memory
 //!
 //! Opts: --models "a,b,c"  --judge <model>  --iters N (default 1)
-//!       --only <id-substr>  --json <path>  --compare <old.json>
+//!       --only <id-substr>  --json <path>  --compare <old.json>  --dir <path>
+//!
+//! `bench` dir layout: `<d>/cases.jsonl` (one JSON object per line) + the data
+//! files it names (paths relative to `<d>`). Each line:
+//!   {"id": "...", "question": "...", "files": ["payments.csv"],
+//!    "gold": {"figures": [123.45]} | {"approx": [0.18, 0.005]}
+//!          | {"contains": ["Rent"]} | "refusal" | "notool",
+//!    "tier": "easy", "reference": "..."}
 //! Env:  EVAL_SHOW_ANSWERS=1  print every answer + its evidence to stderr
 //!
 //! A --models entry is a bare model on the configured provider (`gemma4:31b`)
@@ -204,13 +218,18 @@ fn grade(r: &RunResult, gold: &Gold) -> bool {
     if r.err.is_some() {
         return false;
     }
-    // normalise typographic punctuation many models emit "can't" with a
-    // curly apostrophe (U+2019), which a naive substring match misses.
+    // normalise typographic punctuation: a curly apostrophe (U+2019) in
+    // "can't", and — the one that bit a real run — a non-breaking / en / em
+    // dash where a model wrote a date like "2024‑11" instead of "2024-11".
     let low = r
         .text
         .to_lowercase()
         .replace(['\u{2019}', '\u{02BC}'], "'")
-        .replace(['\u{201C}', '\u{201D}'], "\"");
+        .replace(['\u{201C}', '\u{201D}'], "\"")
+        .replace(
+            ['\u{2010}', '\u{2011}', '\u{2012}', '\u{2013}', '\u{2014}', '\u{2212}'],
+            "-",
+        );
     match gold {
         Gold::Figures(want) => {
             let got = numbers_in(&r.text);
@@ -326,6 +345,14 @@ fn closeness_det(r: &RunResult, case: &EvalCase) -> f32 {
         got.iter().filter(|n| !(1900.0..=2100.0).contains(*n) && !grounded(**n)).count() as f32
             / got.len() as f32
     };
+    // Grounding needs an evidence trail. A harness that cites figures but
+    // doesn't expose one (the `openai-ci` comparison) would be capped at 0.7
+    // for a perfect answer, so drop that term and renormalise recall + wording.
+    // Fella runs always have evidence; a no-figure answer is unaffected either
+    // way, so this only moves the CI rows.
+    if r.evidence.is_empty() && !got.is_empty() {
+        return (0.71 * figure_recall + 0.29 * token_f1(&r.text, &case.reference)).clamp(0.0, 1.0);
+    }
     (0.5 * figure_recall + 0.3 * (1.0 - ungrounded_rate) + 0.2 * token_f1(&r.text, &case.reference))
         .clamp(0.0, 1.0)
 }
@@ -658,8 +685,205 @@ struct CaseScore {
     err: Option<String>,
 }
 
+// --- comparison harness: OpenAI code_interpreter -------------------------
+//
+// `bench --harness openai-ci` runs each case through the OpenAI Responses API
+// with the `code_interpreter` tool instead of Fella's engine — a locked-harness
+// comparison on the same task set + grader. Small files are embedded in the
+// prompt (no multipart upload, no extra reqwest feature); a case whose files
+// exceed `CI_MAX_EMBED` bytes is skipped with an error.
+
+const CI_MAX_EMBED: usize = 100 * 1024;
+
+struct CiHarness {
+    http: reqwest::Client,
+    base: String,
+    key: String,
+    model: String,
+}
+
+/// Runner for one case iteration.
+enum Runner<'a> {
+    /// Fella's full loop: tools, schema block, verification.
+    Fella,
+    /// No harness — the case's files pasted into one chat completion, no
+    /// tools, no execution. The baseline that isolates the harness's lift.
+    Bare { dir: &'a Path, files: &'a [String] },
+    /// OpenAI Responses API + code_interpreter (a comparison harness).
+    OpenAiCi { h: &'a CiHarness, dir: &'a Path, files: &'a [String] },
+}
+
+/// Read a case's files into a fenced blob for a prompt-only runner. `Err` if a
+/// file is missing or exceeds `CI_MAX_EMBED`.
+fn embed_files(dir: &Path, files: &[String]) -> Result<String, String> {
+    let mut blob = String::new();
+    for f in files {
+        match std::fs::read(dir.join(f)) {
+            Ok(bytes) => match String::from_utf8(bytes) {
+                Ok(c) if blob.len() + c.len() <= CI_MAX_EMBED => {
+                    blob.push_str(&format!("### {f}\n```\n{c}\n```\n\n"));
+                }
+                Ok(_) => return Err(format!("{f} too large to embed")),
+                // A binary format (xlsx, pdf). `bare` has no parser — say so and
+                // let the model answer "can't" rather than hard-erroring the case.
+                Err(e) => blob.push_str(&format!(
+                    "### {f}\n(binary file, {} bytes — not readable without tools)\n\n",
+                    e.as_bytes().len()
+                )),
+            },
+            Err(e) => return Err(format!("read {f}: {e}")),
+        }
+    }
+    Ok(blob)
+}
+
+/// No-harness baseline: one chat completion, files in the prompt, no tools.
+/// The model is whatever `set_model` last configured on the engine.
+async fn run_bare(engine: &EngineState, dir: &Path, question: &str, files: &[String]) -> RunResult {
+    let t0 = Instant::now();
+    let blob = match embed_files(dir, files) {
+        Ok(b) => b,
+        Err(e) => {
+            return RunResult {
+                text: String::new(), evidence: Vec::new(), hard_fail: false,
+                prompt_tok: 0, completion_tok: 0, total: t0.elapsed(),
+                first_token: None, steps: 0, err: Some(format!("bare: {e}")),
+            }
+        }
+    };
+    let sys = "You are a careful analyst. Any files the user has are included in the message. \
+Answer the question directly from them — reason it out yourself, no tools. Reply with ONLY the final \
+number or short phrase, no explanation. If the files can't answer it, say so plainly.";
+    let user = if blob.is_empty() {
+        question.to_string()
+    } else {
+        format!("{blob}Question: {question}")
+    };
+    let res = engine.ask_once_usage(None, sys, &user).await;
+    let total = t0.elapsed();
+    match res {
+        Ok((text, usage)) => {
+            let (p, c) = usage
+                .map(|u| (u.prompt_tokens, u.completion_tokens))
+                // chars/4 estimate when the provider gave nothing
+                .unwrap_or(((sys.len() + user.len()) as u32 / 4, text.len() as u32 / 4));
+            RunResult {
+                text, evidence: Vec::new(), hard_fail: false,
+                prompt_tok: p, completion_tok: c, total,
+                first_token: None, steps: 0, err: None,
+            }
+        }
+        Err(e) => RunResult {
+            text: String::new(), evidence: Vec::new(), hard_fail: false,
+            prompt_tok: 0, completion_tok: 0, total, first_token: None,
+            steps: 0, err: Some(format!("bare: {e}")),
+        },
+    }
+}
+
+fn ci_text(v: &serde_json::Value) -> String {
+    if let Some(t) = v.get("output_text").and_then(|t| t.as_str()) {
+        if !t.trim().is_empty() {
+            return t.trim().to_string();
+        }
+    }
+    // walk output[] for the assistant message's text parts
+    let mut out = String::new();
+    if let Some(items) = v.get("output").and_then(|o| o.as_array()) {
+        for it in items {
+            if it.get("type").and_then(|t| t.as_str()) != Some("message") {
+                continue;
+            }
+            for part in it.get("content").and_then(|c| c.as_array()).into_iter().flatten() {
+                if let Some(t) = part.get("text").and_then(|t| t.as_str()) {
+                    out.push_str(t);
+                }
+            }
+        }
+    }
+    out.trim().to_string()
+}
+
+fn ci_steps(v: &serde_json::Value) -> usize {
+    v.get("output")
+        .and_then(|o| o.as_array())
+        .map(|a| {
+            a.iter()
+                .filter(|it| {
+                    it.get("type")
+                        .and_then(|t| t.as_str())
+                        .is_some_and(|t| t.contains("code_interpreter"))
+                })
+                .count()
+        })
+        .unwrap_or(0)
+}
+
+async fn run_openai_ci(h: &CiHarness, dir: &Path, question: &str, files: &[String]) -> RunResult {
+    let empty = |err: Option<String>, total: Duration| RunResult {
+        text: String::new(),
+        evidence: Vec::new(),
+        hard_fail: false,
+        prompt_tok: 0,
+        completion_tok: 0,
+        total,
+        first_token: None,
+        steps: 0,
+        err,
+    };
+    let t0 = Instant::now();
+
+    let blob = match embed_files(dir, files) {
+        Ok(b) => b,
+        Err(e) => return empty(Some(format!("ci: {e}")), t0.elapsed()),
+    };
+
+    let body = serde_json::json!({
+        "model": h.model,
+        "instructions": "You are a careful data analyst. The user's files are included in the message. \
+Use the code_interpreter tool to compute the answer from them. Reply with only the final number or \
+short phrase — no explanation, no restating the question. If the files cannot answer it, say so plainly.",
+        "input": format!("{blob}Question: {question}"),
+        "tools": [{ "type": "code_interpreter", "container": { "type": "auto" } }],
+    });
+
+    let resp = h
+        .http
+        .post(format!("{}/responses", h.base))
+        .bearer_auth(&h.key)
+        .json(&body)
+        .send()
+        .await;
+    let total = t0.elapsed();
+    let resp = match resp {
+        Ok(r) => r,
+        Err(e) => return empty(Some(format!("ci send: {e}")), total),
+    };
+    if !resp.status().is_success() {
+        let s = resp.status();
+        let b = resp.text().await.unwrap_or_default();
+        return empty(Some(format!("ci {s}: {}", b.chars().take(200).collect::<String>())), total);
+    }
+    let v: serde_json::Value = match resp.json().await {
+        Ok(v) => v,
+        Err(e) => return empty(Some(format!("ci parse: {e}")), total),
+    };
+    RunResult {
+        text: ci_text(&v),
+        evidence: Vec::new(),
+        hard_fail: false,
+        prompt_tok: v["usage"]["input_tokens"].as_u64().unwrap_or(0) as u32,
+        completion_tok: v["usage"]["output_tokens"].as_u64().unwrap_or(0) as u32,
+        total,
+        first_token: None,
+        steps: ci_steps(&v),
+        err: None,
+    }
+}
+
 /// Run one case `iters` times and fold: `correct` = majority, everything
 /// numeric = mean.
+#[allow(clippy::too_many_arguments)]
 async fn score_case(
     engine: &EngineState,
     case: &EvalCase,
@@ -668,6 +892,7 @@ async fn score_case(
     judge: Option<&str>,
     conv: &str,
     iters: usize,
+    runner: &Runner<'_>,
 ) -> CaseScore {
     let iters = iters.max(1);
     let mut oks = 0usize;
@@ -680,7 +905,15 @@ async fn score_case(
 
     let show = std::env::var_os("EVAL_SHOW_ANSWERS").is_some();
     for it in 0..iters {
-        let r = run_case(engine, &format!("{conv}-{it}"), &case.question, None).await;
+        let r = match runner {
+            Runner::Fella => {
+                run_case(engine, &format!("{conv}-{it}"), &case.question, None).await
+            }
+            Runner::Bare { dir, files } => run_bare(engine, dir, &case.question, files).await,
+            Runner::OpenAiCi { h, dir, files } => {
+                run_openai_ci(h, dir, &case.question, files).await
+            }
+        };
         let ok = grade(&r, &case.gold);
         if ok {
             oks += 1;
@@ -777,7 +1010,7 @@ async fn run_battery(
     let mut out = Vec::new();
     for c in cases {
         let conv = format!("{tag}-{model}-{profile}-{}", c.id);
-        out.push(score_case(engine, c, model, profile, judge, &conv, iters).await);
+        out.push(score_case(engine, c, model, profile, judge, &conv, iters, &Runner::Fella).await);
         std::io::stdout().flush().ok();
     }
     out
@@ -966,6 +1199,240 @@ async fn cmd_model_ladder(engine: &EngineState, cases: &[EvalCase], models: &[St
             "_Also cleared the bar (no list price in the table): {}._",
             cleared_unpriced.join(", ")
         );
+    }
+    all
+}
+
+// --- external benchmark (`bench --dir`) -----------------------------------
+//
+// Runs a JSONL battery of real tasks through the same engine + metrics as
+// `accuracy`, so Fella's purpose-built folder-QA loop can be compared, on a
+// neutral task set, against a general data-analysis agent. Each case gets a
+// fresh workspace holding only its own files.
+
+#[derive(serde::Deserialize)]
+struct BenchSpec {
+    id: String,
+    question: String,
+    #[serde(default)]
+    files: Vec<String>,
+    gold: BenchGold,
+    #[serde(default)]
+    category: Option<String>,
+    #[serde(default)]
+    tier: Option<String>,
+    #[serde(default)]
+    reference: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum BenchGold {
+    Figures { figures: Vec<f64> },
+    /// `[value, absolute tolerance]`
+    Approx { approx: [f64; 2] },
+    Contains { contains: Vec<String> },
+    /// `"refusal"` | `"notool"`
+    Tag(String),
+}
+
+impl BenchGold {
+    fn into_gold(self) -> Result<Gold, String> {
+        Ok(match self {
+            BenchGold::Figures { figures } => Gold::Figures(figures),
+            BenchGold::Approx { approx: [v, tol] } => Gold::Approx(v, tol),
+            BenchGold::Contains { contains } => {
+                Gold::Contains(contains.iter().map(|s| leak(s)).collect())
+            }
+            BenchGold::Tag(t) => match t.to_ascii_lowercase().as_str() {
+                "refusal" => Gold::Refusal,
+                "notool" | "no_tool" => Gold::NoTool,
+                other => return Err(format!("unknown gold {other:?}")),
+            },
+        })
+    }
+}
+
+/// Parse `<dir>/cases.jsonl`; blank lines and `#` comments are skipped.
+/// Returns `(files, case)` pairs so the runner can stage each workspace.
+fn load_bench_dir(dir: &Path) -> Vec<(Vec<String>, EvalCase)> {
+    let path = dir.join("cases.jsonl");
+    let txt = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("bench: can't read {}: {e}", path.display()));
+    let mut out = Vec::new();
+    for (n, line) in txt.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let spec: BenchSpec = serde_json::from_str(line)
+            .unwrap_or_else(|e| panic!("bench: {}:{}: {e}", path.display(), n + 1));
+        let cat = leak(
+            spec.tier
+                .as_deref()
+                .or(spec.category.as_deref())
+                .unwrap_or("bench"),
+        );
+        let gold = spec
+            .gold
+            .into_gold()
+            .unwrap_or_else(|e| panic!("bench: {}:{}: {e}", path.display(), n + 1));
+        out.push((
+            spec.files,
+            EvalCase {
+                id: leak(&spec.id),
+                category: cat,
+                question: spec.question,
+                gold,
+                min_tools: 1,
+                reference: spec.reference.unwrap_or_default(),
+            },
+        ));
+    }
+    out
+}
+
+fn safe_dirname(s: &str) -> String {
+    s.chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn cmd_bench(
+    engine: &EngineState,
+    dir: &Path,
+    data_dir: &Path,
+    models: &[String],
+    judge: Option<&str>,
+    iters: usize,
+    only: Option<&str>,
+    harness: &str,
+) -> Vec<CaseScore> {
+    let mut cases = load_bench_dir(dir);
+    if let Some(sub) = only {
+        cases.retain(|(_, c)| c.id.contains(sub));
+    }
+
+    // Comparison harness setup (once).
+    let ci = if harness == "openai-ci" {
+        let auth = std::fs::read_to_string(data_dir.join("auth.json")).unwrap_or_default();
+        let key = serde_json::from_str::<serde_json::Value>(&auth)
+            .ok()
+            .and_then(|v| v.get("apikey:openai").and_then(|k| k.as_str()).map(str::to_string))
+            .or_else(|| std::env::var("OPENAI_API_KEY").ok())
+            .unwrap_or_else(|| {
+                eprintln!("bench --harness openai-ci: no `apikey:openai` in {}/auth.json and no OPENAI_API_KEY", data_dir.display());
+                std::process::exit(2);
+            });
+        Some(CiHarness {
+            http: reqwest::Client::new(),
+            base: env("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+            key,
+            model: String::new(), // set per model below
+        })
+    } else {
+        None
+    };
+
+    println!(
+        "\n# External benchmark  ·  `{}`  ·  harness `{harness}`  ({iters} iter(s)/case, {} cases)\n",
+        dir.display(),
+        cases.len()
+    );
+    legend();
+    println!("| model | case | correct | rate | close(det) | waste | in tok | out tok | $/100 | wall s |");
+    println!("|---|---|:-:|--:|--:|--:|--:|--:|--:|--:|");
+
+    let staging = std::env::temp_dir().join("fella-bench-ext");
+    // A hosted endpoint (ollama-cloud especially) degrades under 15+ cases
+    // back-to-back — the model starts emitting broken SQL. A short breather
+    // between cases keeps a single-iter run honest; `--iters 3` + majority is
+    // the real defence. `BENCH_PAUSE_MS=0` disables.
+    let pause_ms: u64 = env("BENCH_PAUSE_MS", "400").parse().unwrap_or(400);
+    let mut all = Vec::new();
+
+    for m in models {
+        // Fella drives the engine; the CI harness carries its own model string.
+        let ci_for_model = ci.as_ref().map(|c| CiHarness {
+            http: c.http.clone(),
+            base: c.base.clone(),
+            key: c.key.clone(),
+            model: m.rsplit('/').next().unwrap_or(m).to_string(),
+        });
+        if ci_for_model.is_none() && !set_model(engine, m) {
+            println!("| {m} | | | | | | | | | save failed |");
+            continue;
+        }
+        let mut scores: Vec<CaseScore> = Vec::new();
+        for (files, case) in &cases {
+            let conv = format!("bench-{m}-{}", safe_dirname(case.id));
+            let runner = if let Some(h) = &ci_for_model {
+                Runner::OpenAiCi { h, dir, files }
+            } else if harness == "bare" {
+                Runner::Bare { dir, files }
+            } else {
+                // Fella: stage a fresh workspace with just this case's files.
+                let ws = staging.join(safe_dirname(case.id));
+                let _ = std::fs::remove_dir_all(&ws);
+                if std::fs::create_dir_all(&ws).is_err() {
+                    println!("| {m} | {} | ERR | | | | | | | mkdir failed |", case.id);
+                    continue;
+                }
+                let mut staged = true;
+                for f in files {
+                    let src = dir.join(f);
+                    let name = Path::new(f).file_name().unwrap_or(std::ffi::OsStr::new(f));
+                    if std::fs::copy(&src, ws.join(name)).is_err() {
+                        println!("| {m} | {} | ERR | | | | | | | missing {} |", case.id, f);
+                        staged = false;
+                        break;
+                    }
+                }
+                if !staged {
+                    continue;
+                }
+                if engine.open_workspace(&ws).is_err() {
+                    println!("| {m} | {} | ERR | | | | | | | open_workspace failed |", case.id);
+                    continue;
+                }
+                Runner::Fella
+            };
+            let s = score_case(engine, case, m, "bench", judge, &conv, iters, &runner).await;
+            let price = price_per_100(m, s.prompt_tok as f64, s.completion_tok as f64);
+            println!(
+                "| {} | {} | {} | {:.0}% | {:.2} | {} `{}` | {} | {} | {} | {:.1} |",
+                s.model,
+                s.id,
+                if s.err.is_some() { "ERR".into() } else { yn(s.correct) },
+                s.correct_rate * 100.0,
+                s.closeness_det,
+                s.waste.total(),
+                s.waste.breakdown(),
+                s.prompt_tok,
+                s.completion_tok,
+                price.map(|c| format!("${c:.2}")).unwrap_or_else(|| "n/a".into()),
+                s.total_s,
+            );
+            std::io::stdout().flush().ok();
+            scores.push(s);
+            if pause_ms > 0 {
+                tokio::time::sleep(Duration::from_millis(pause_ms)).await;
+            }
+        }
+
+        let (ok, n) = acc(&scores);
+        let pin: f64 = scores.iter().map(|s| s.prompt_tok as f64).sum();
+        let pout: f64 = scores.iter().map(|s| s.completion_tok as f64).sum();
+        let avg_price = price_per_100(m, pin / n.max(1) as f64, pout / n.max(1) as f64);
+        println!(
+            "| **{m}** | **summary** | **{ok}/{n} correct** | | **{:.2}** | **{} waste** | | | **{}** | **{:.0} tok/correct** |",
+            mean_closeness(&scores),
+            total_waste(&scores),
+            avg_price.map(|c| format!("${c:.2}/100 avg")).unwrap_or_else(|| "n/a".into()),
+            tokens_per_correct(&scores),
+        );
+        all.extend(scores);
     }
     all
 }
@@ -1323,6 +1790,8 @@ async fn main() {
     let json_out = opt("--json");
     let compare_to = opt("--compare");
     let only = opt("--only");
+    let bench_dir = opt("--dir");
+    let harness = opt("--harness").unwrap_or_else(|| "fella".into());
     let models: Vec<String> = opt("--models")
         .map(|s| s.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect())
         .unwrap_or_default();
@@ -1374,6 +1843,13 @@ async fn main() {
         "memory" => {
             cmd_memory(&engine, &models[0], &data_dir, iters).await
         }
+        "bench" => {
+            let Some(d) = &bench_dir else {
+                eprintln!("bench: pass --dir <path-to-benchmark-dir> (holds cases.jsonl + data files)");
+                std::process::exit(2);
+            };
+            cmd_bench(&engine, Path::new(d), &data_dir, &models, judge, iters, only.as_deref(), &harness).await
+        }
         "all" => {
             let mut v = cmd_accuracy(&engine, &cases, &models, judge, iters).await;
             v.extend(cmd_robustness(&engine, &models[0], &ws, iters).await);
@@ -1382,7 +1858,7 @@ async fn main() {
             v
         }
         other => {
-            eprintln!("unknown subcommand {other:?}. one of: accuracy prompt-ablation folder-scale model-ladder robustness session-memory memory all");
+            eprintln!("unknown subcommand {other:?}. one of: accuracy prompt-ablation folder-scale model-ladder robustness session-memory memory bench all");
             std::process::exit(2);
         }
     };
@@ -1562,5 +2038,24 @@ mod tests {
         let bad = rr("Your total was 999.", vec![ev("run_sql", "1 row: total 450", None)]);
         assert!(closeness_det(&good, &case) > 0.8);
         assert!(closeness_det(&bad, &case) < 0.5);
+    }
+
+    #[test]
+    fn bench_gold_shapes_parse() {
+        let g = |s: &str| serde_json::from_str::<BenchGold>(s).unwrap().into_gold().unwrap();
+        assert!(matches!(g(r#"{"figures":[600,42]}"#), Gold::Figures(v) if v == vec![600.0, 42.0]));
+        assert!(matches!(g(r#"{"approx":[0.18,0.005]}"#), Gold::Approx(v, t) if v == 0.18 && t == 0.005));
+        assert!(matches!(g(r#"{"contains":["Rent","1250"]}"#), Gold::Contains(v) if v == vec!["Rent", "1250"]));
+        assert!(matches!(g(r#""refusal""#), Gold::Refusal));
+        assert!(matches!(g(r#""notool""#), Gold::NoTool));
+        assert!(serde_json::from_str::<BenchGold>(r#""bogus""#).unwrap().into_gold().is_err());
+
+        let spec: BenchSpec = serde_json::from_str(
+            r#"{"id":"a","question":"q?","files":["x.csv"],"gold":{"figures":[1]},"tier":"easy"}"#,
+        )
+        .unwrap();
+        assert_eq!(spec.id, "a");
+        assert_eq!(spec.files, vec!["x.csv"]);
+        assert_eq!(spec.tier.as_deref(), Some("easy"));
     }
 }

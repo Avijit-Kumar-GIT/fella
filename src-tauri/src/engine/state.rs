@@ -1331,6 +1331,27 @@ impl EngineState {
         Ok(resp.content)
     }
 
+    /// Like [`ask_once`](Self::ask_once) but also returns token usage. The eval
+    /// harness's no-harness baseline needs the token count to compare
+    /// efficiency against a full run. Not on any product path.
+    pub async fn ask_once_usage(
+        &self,
+        model: Option<&str>,
+        system: &str,
+        user: &str,
+    ) -> EngineResult<(String, Option<crate::engine::evidence::Usage>)> {
+        let msgs = [
+            crate::engine::llm::ChatMessage::System(system.to_string()),
+            crate::engine::llm::ChatMessage::User(user.to_string()),
+        ];
+        let noop = |_: &str| {};
+        let resp = self
+            .llm_with_model(model.unwrap_or(""))
+            .chat(&msgs, &[], &noop, &noop)
+            .await?;
+        Ok((resp.content, resp.usage))
+    }
+
     /// Probe a local Ollama regardless of which provider is configured, so the
     /// UI can offer "use Ollama" when someone installs it after signing in
     /// somewhere else. Returns `reachable: false` when nothing is listening.
