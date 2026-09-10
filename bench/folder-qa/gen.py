@@ -521,14 +521,50 @@ cases = [
     ("notool", "What does the word 'anthology' mean?", [], "notool", "no-tool"),
 ]
 
+# --- taxonomy: primary life-data domain per case ----------------------
+# so a future, harder battery slots into the same schema and difficulty
+# (which is *measured* from results, not assigned here) stays comparable.
+DOMAIN_BY_PREFIX = {
+    "fin": "spending", "fit": "fitness", "read": "reading", "trip": "travel",
+    "jrnl": "journal", "screen": "screen-time", "sleep": "sleep",
+    "contacts": "contacts", "goals": "goals", "subs": "subscriptions",
+    "pdf": "housing",
+}
+DOMAIN_BY_ID = {  # multi-file / cross-format cases get their primary domain
+    "fqa-mf-most-over-budget": "spending", "fqa-mf-pages-british": "reading",
+    "fqa-mf-run-days-minutes": "fitness", "fqa-mf-rent-vs-budget": "spending",
+    "fqa-xf-contacts-visited": "contacts", "fqa-xf-run-goal": "fitness",
+    "fqa-xf-sleep-screen": "sleep", "fqa-xf-lease-vs-spend": "housing",
+    "fqa-xf-nationality-pages": "reading", "fqa-xf-contacts-nights": "contacts",
+    "fqa-xf-dining-cap-months": "spending",
+    "fqa-refusal": "reading", "fqa-notool": "general",
+}
+
+
+def _ext(name):
+    return name.rsplit(".", 1)[-1].lower() if "." in name else ""
+
+
 with open("cases.jsonl", "w") as f:
-    f.write("# folder-QA battery across life domains. Gold computed by bench/folder-qa/gen.py.\n")
+    f.write("# folder-QA battery across life domains. Gold + taxonomy from bench/folder-qa/gen.py.\n")
     for cid, q, files, gold, tier in cases:
-        f.write(json.dumps({"id": f"fqa-{cid}", "question": q, "files": files, "gold": gold, "tier": tier}) + "\n")
+        fid = f"fqa-{cid}"
+        real = [x for x in files if x not in DISTRACT]
+        rec = {
+            "id": fid, "question": q, "files": files, "gold": gold, "tier": tier,
+            "domain": DOMAIN_BY_ID.get(fid) or DOMAIN_BY_PREFIX[cid.split("-")[0]],
+            "multifile": tier.startswith("mf"),
+            "n_files": len(real),
+            "cluttered": any(d in files for d in DISTRACT),
+            "formats": sorted({_ext(x) for x in real if _ext(x)}),
+        }
+        f.write(json.dumps(rec) + "\n")
 
 n_clut = sum(1 for _, _, files, _, _ in cases if any(d in files for d in DISTRACT))
-print(f"wrote {len(cases)} cases ({len({t for _, _, _, _, t in cases})} tier labels, "
-      f"{n_clut} with a cluttered folder); 3 distractor files")
+n_mf = sum(1 for _, _, _, _, t in cases if t.startswith("mf"))
+_doms = {DOMAIN_BY_ID.get(f"fqa-{c}") or DOMAIN_BY_PREFIX[c.split("-")[0]] for c, *_ in cases}
+print(f"wrote {len(cases)} cases · {len({t for _, _, _, _, t in cases})} tier labels · "
+      f"{len(_doms)} domains · {n_mf} multi-file · {n_clut} cluttered · 3 distractor files")
 print(f"  b2: peak_month={peak_month_2024}(${peak_month_2024_amt}, gap to #2 ${peak_month_gap}) "
       f"avg_month={avg_month_2024} 2nd_cat={second_cat}(${by_cat[second_cat]} vs top ${by_cat[cat_rank[0]]}) "
       f"groc_delta={groceries_delta} q1={q1_2024} dining_over_cap={dining_over_cap}")

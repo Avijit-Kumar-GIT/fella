@@ -183,6 +183,68 @@ What it says:
   muse-spark-1.3 fabricated a forecast despite the prompt's no-forecasting
   rule. `fqa-notool` (a definition question): 10/10 answered with no tool call.
 
+## Task taxonomy & measured difficulty
+
+`cases.jsonl` carries `domain` / `tier` / `multifile` / `cluttered` / `formats`
+per case; `python3 bench/taxonomy.py bench/folder-qa/out/results.csv` joins them
+with the run and writes `by_domain.csv`, `by_tier.csv`, `by_cut.csv`,
+`by_case.csv` (hardest first) and `taxonomy.md`. **Difficulty is measured** —
+mean accuracy across the 10 models — not assigned, so it stays comparable as the
+battery gets harder.
+
+**By life-data domain** (bare → fella):
+
+| domain | n | bare | fella | Δ | | domain | n | bare | fella | Δ |
+|---|--:|--:|--:|--:|---|---|--:|--:|--:|--:|
+| subscriptions *(xlsx)* | 4 | 0% | 95% | **+95** | | spending | 12 | 56% | 98% | +42 |
+| screen-time *(tsv)* | 4 | 30% | 98% | **+68** | | housing *(pdf)* | 4 | 92% | 100% | +8 |
+| sleep *(jsonl)* | 3 | 40% | 97% | **+57** | | contacts / travel / journal | 14 | ~97% | ~98% | ~0 |
+| fitness | 10 | 48% | 95% | **+47** | | reading | 11 | 94% | **89%** | **−6** |
+
+- **`subscriptions` bare = 0%** because `bare` can't parse `.xlsx` at all — the
+  whole domain is an ingestion result. `touches xlsx or pdf`: bare 46% → fella
+  98% (+51); `plain csv/txt only`: 74% → 95%.
+- **`reading` is the one domain where the loop *hurts* (−6%)** — its tables are
+  tiny (8 books), so `bare` already nails them and the loop occasionally
+  over-works a question that needed no SQL.
+
+**By task shape** — biggest lifts on computation (`num-multistep` +60,
+`cat-rank` +55, `num-aggregate` +50, `cat-groupby` +48); flat-to-slightly-negative
+on already-trivial text lookups (`text-max` −7, `text-list` −10). **`refusal`
+80% → 50%**: the tool loop's "compute an answer" pull makes models *fabricate*
+the "books next year" forecast more than bare does — a guardrail regression worth
+fixing in the prompt.
+
+**Structural cuts:** multi-file (+27) ≈ single-file (+28); cluttered folder
+(+30) ≈ clean (+27) — distractor files don't dent Fella's retrieval.
+
+**This battery is now too easy for the harness.** Only **2 of 64** cases land
+under 90% fella accuracy (`fqa-refusal`, `fqa-read-top-genre-pages`) and **18 are
+saturated** at bare-100% / fella-100%. It cleanly separates *bare* (34–59/64) and
+proves the lift, but it no longer stresses *Fella*.
+
+## Toward harder batteries
+
+Keep the schema (`domain`/`tier`/`multifile`/`cluttered`/`formats` + deterministic
+`gen.py` gold + measured difficulty) and raise the difficulty along these axes:
+
+- **Scale** — tables of 10k–100k rows (the `folder-scale` cmd already synths
+  these), 30–60 files in the folder, documents of many pages.
+- **Ambiguity** — questions with an implicit filter or a term the data defines
+  loosely ("my big trips", "recently"); questions answerable two defensible ways.
+- **Multi-hop** — 3+ files, or a join whose key needs deriving (name→id via a
+  third table), or a figure from a PDF that must be reconciled against two tables.
+- **Adversarial data** — the `robustness` traps (amounts as text, totals rows,
+  mixed date formats), duplicated rows, unit mismatches, a distractor file whose
+  schema *looks* like the answer's.
+- **Trust** — cases with a knowably-wrong premise the model should push back on;
+  cases where `verify` *should* fire (self-catch is 0% here).
+- **Retire the 18 saturated cases** or fold them into harder compound questions.
+
+Track each new battery as its own `bench/folder-qa-v2/` (etc.) with the same
+tooling; `taxonomy.py` + `aggregate.py --lift` give a like-for-like difficulty
+and Δacc history.
+
 ## Not in scope
 
 Comparison against funded data-analysis harnesses (ChatGPT code_interpreter,
@@ -202,5 +264,8 @@ smolagents baseline is the number to cite if an external anchor is ever needed.
 - [x] `aggregate.py --lift` — pair a bare + fella dump, emit Δacc per model + a
   paired bootstrap 95% CI; `--csv` writes a tidy per-case table
 - [x] `bench/chart.py` — `summary.csv` + `lift.html` (stdlib inline-SVG, no deps)
+- [x] `bench/taxonomy.py` — per-domain / per-tier / per-cut / per-case difficulty
+  from `cases.jsonl` taxonomy + `results.csv`
 - [x] the ladder run + the chart — 11 rungs, 64 cases, `--iters 3`; see
-  **Results** above and `bench/folder-qa/out/`
+  **Results** + **Task taxonomy** above and `bench/folder-qa/out/`
+- [ ] harder battery v2 (see **Toward harder batteries**)

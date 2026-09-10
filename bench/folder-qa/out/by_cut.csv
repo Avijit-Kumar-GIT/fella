@@ -1,0 +1,8 @@
+cut,n_cases,bare_acc,fella_acc,delta
+single-file,53,0.675,0.951,0.275
+multi-file,11,0.709,0.982,0.273
+clean folder,53,0.687,0.957,0.27
+cluttered folder,11,0.655,0.955,0.3
+plain csv/txt only,41,0.739,0.946,0.207
+uses tsv/json/jsonl/md/xlsx/pdf,23,0.578,0.974,0.396
+touches xlsx or pdf,8,0.463,0.975,0.512
