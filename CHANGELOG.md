@@ -45,11 +45,15 @@ All notable changes to Fella are recorded here. Format follows
   by exact case, says so — so a `Rent` row and a `rent` row don't silently fall
   on opposite sides of a filter. It doesn't rewrite your query; it points out
   where folding case (`lower(col)`, `COLLATE NOCASE`) would matter.
-- **Fella won't forecast.** The "if the files can't answer, say so" rule now
-  spells out that a question about the future ("next month", "will I", "how
-  much will") has no answer in past records the model says so instead of
-  computing an average and presenting it as a projection. (Found by the new
-  agent-eval harness: one model was doing exactly that.)
+- **Fella won't forecast — not even with tools in hand.** The "if the files
+  can't answer, say so" rule spells out that a question about the future ("next
+  month", "next year", "will I", "how many will I") has no answer in past
+  records the model declines instead of computing an average and presenting it
+  as a projection. The rule now also says outright *not to run a query to
+  estimate one*: the folder-QA harness showed that under the full tool loop,
+  models that decline a forecast in plain chat were computing one instead
+  (bare 80% → fella 50% on the forecast case). After the fix, on a 3-case
+  forecast check the two models that had been fabricating decline every time.
 - **A stale figure now gets one shot at a fix.** When the deterministic
   verification pass re-runs a query behind the answer and gets a *different
   result*, Fella spends one tool-free turn asking the model to restate its

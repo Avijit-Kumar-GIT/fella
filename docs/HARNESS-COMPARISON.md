@@ -83,20 +83,25 @@ from "we can't tell."
 
 ## The battery
 
-**`bench/folder-qa/`** — 64 hand-built cases across ~11 life domains, so it isn't
+**`bench/folder-qa/`** — 66 hand-built cases across ~11 life domains, so it isn't
 a finance benchmark: spending + budget, workouts (minutes and km), a reading log
 + an authors table, trips, a plain-text journal, screen-time, sleep, contacts, a
 goals note, subscriptions, and a lease. Question shapes: numeric aggregate /
 filter / average / multi-step / delta, categorical group-by / top-N / rank-2 /
 distinct-count, boolean filter, temporal max, free-text lookup / count / search,
-one refusal (no forecasting), one no-tool, and a 12-case multi-file tier where
+three "what will I…" forecasts (must decline), one no-tool, and a 12-case
+multi-file tier where
 each needs a JOIN or a table + a document (most non-finance: pages by British
 authors = books ⋈ authors; minutes on journal-noted run days = journal ∩
 workouts; contacts in visited countries = contacts ⋈ trips; nationality with the
 most pages = books ⋈ authors; km short of the goal = goals.md + workouts). Three
 **distractor files** nothing asks for (`receipts_2019.csv`, `old_notes.md`,
-`playlist.json`); 11 cases stage a *cluttered* folder so the model has to pick
+`playlist.json`); 12 cases stage a *cluttered* folder so the model has to pick
 the right files, not just be handed them.
+
+The **Results** below are from the 64-case version; two more forecast cases
+(`fqa-refusal-spend`, `fqa-refusal-trips`) were added afterward when the run
+surfaced the forecast-fabrication bug (see below) — a re-run would be on 66.
 
 **Every file type Fella ingests is covered**, one file per format: CSV, TSV
 (`screen_time.tsv`), JSON array (`contacts.json`), NDJSON (`sleep.jsonl`),
@@ -236,8 +241,13 @@ errors; **`verify` flagged none of them**. By failure mode:
 reading log, how many books will I finish next year?" — glm-5.3-flash,
 muse-spark-1.3, muse-glimmer-30b, inkling-small and gemini-3.8-flash each
 computed a number instead of declining. `bare` 80% → `fella` 50%: the tool
-loop's "you have `run_sql`, go compute" framing overrides the no-forecast rule
-(`agent.rs` `refuse_rule`). **The one guardrail regression — fix in the prompt.**
+loop's "you have `run_sql`, go compute" framing overrode the no-forecast rule
+(`agent.rs` `refuse_rule`). **Fixed** — the rule now says outright not to run a
+query to estimate a future value and covers more phrasings; on a 3-case
+forecast check (`fqa-refusal` + the two new cases) the two models that were
+fabricating (glm-5.3-flash, gemini-3.8-flash) now decline every time, with
+gemma unchanged. A full re-run on the 66-case battery would confirm it across
+the ladder.
 
 **2 — Value errors (23 answers): a valid query, a real number, faithfully
 reported — but the wrong computation.** These are *concentrated in one model*:
@@ -289,9 +299,9 @@ battery gets harder.
 **By task shape** — biggest lifts on computation (`num-multistep` +60,
 `cat-rank` +55, `num-aggregate` +50, `cat-groupby` +48); flat-to-slightly-negative
 on already-trivial text lookups (`text-max` −7, `text-list` −10). **`refusal`
-80% → 50%**: the tool loop's "compute an answer" pull makes models *fabricate*
-the "books next year" forecast more than bare does — a guardrail regression worth
-fixing in the prompt.
+80% → 50%**: the tool loop's "compute an answer" pull made models *fabricate*
+the "books next year" forecast more than bare did — a guardrail regression, now
+**fixed** in the `refuse_rule` prompt (see failure modes above).
 
 **Structural cuts:** multi-file (+27) ≈ single-file (+28); cluttered folder
 (+30) ≈ clean (+27) — distractor files don't dent Fella's retrieval.
