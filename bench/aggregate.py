@@ -165,7 +165,7 @@ def lift(bare_path, fella_path, prices):
     hdr = "| model | bare acc | fella acc | Δacc | Δacc 95% CI | fella all-iters | fella tok/correct | bare tok/correct | self-catch"
     sep = "|---|--:|--:|--:|:-:|--:|--:|--:|--:"
     if prices:
-        hdr += " | fella $/correct | bare $/correct"
+        hdr += " | fella $/100-correct | bare $/100-correct"
         sep += "|--:|--:"
     print(hdr + " |")
     print(sep + "|")
@@ -188,8 +188,8 @@ def lift(bare_path, fella_path, prices):
         ]
         if prices:
             fu, bu = usd_per_correct(f, m), (usd_per_correct(b, m) if b["n"] else None)
-            cells += [f"${fu:.3f}" if fu is not None else "n/a",
-                      f"${bu:.3f}" if bu is not None else "n/a"]
+            cells += [f"${fu*100:.2f}" if fu is not None else "n/a",
+                      f"${bu*100:.2f}" if bu is not None else "n/a"]
         print("| " + " | ".join(cells) + " |")
 
 

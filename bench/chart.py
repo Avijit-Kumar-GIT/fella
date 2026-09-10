@@ -216,11 +216,11 @@ def build_html(rows):
 
     priced = [r for r in rows if r["usdpc_fella"] is not None]
     p3 = _grouped(
-        "USD per correct answer (list price; $0 = free tier)",
+        "USD per 100 correct answers (list price; $0 = free tier)",
         [r["model"] for r in priced],
-        [("bare", {r["model"]: r["usdpc_bare"] for r in priced}, "bare"),
-         ("fella", {r["model"]: r["usdpc_fella"] for r in priced}, "fella")],
-        lambda v: f"${v:.3f}", C)
+        [("bare", {r["model"]: (r["usdpc_bare"] or 0) * 100 for r in priced}, "bare"),
+         ("fella", {r["model"]: (r["usdpc_fella"] or 0) * 100 for r in priced}, "fella")],
+        lambda v: f"${v:.2f}", C)
 
     def pct(v):
         return "—" if v is None else f"{v*100:.0f}%"
@@ -241,7 +241,7 @@ def build_html(rows):
             f"<td>{pct(r['consistency'])}</td>"
             f"<td>{num(r['tokpc_bare'], '{:,.0f}')}</td>"
             f"<td>{num(r['tokpc_fella'], '{:,.0f}')}</td>"
-            f"<td>{'—' if r['usdpc_fella'] is None else f'${r['usdpc_fella']:.3f}'}</td>"
+            f"<td>{'—' if r['usdpc_fella'] is None else f'${r['usdpc_fella']*100:.2f}'}</td>"
             f"<td>{pct(r['selfcatch'])}</td>"
             f"<td>{r['avg_steps']:.1f}</td><td>{r['avg_waste']:.2f}</td>"
             "</tr>"
@@ -263,7 +263,7 @@ the full Fella loop · 3 iterations/case, strict-majority correct.</div>
 {p1}{p2}{p3}
 <table><thead><tr>
 <th>#</th><th>model</th><th>bare</th><th>fella</th><th>Δacc</th><th>95% CI</th>
-<th>3/3</th><th>tok/ok bare</th><th>tok/ok fella</th><th>$/ok fella</th>
+<th>3/3</th><th>tok/ok bare</th><th>tok/ok fella</th><th>$/100ok fella</th>
 <th>self-catch</th><th>steps</th><th>waste</th>
 </tr></thead><tbody>{trows}</tbody></table>
 </body></html>"""
