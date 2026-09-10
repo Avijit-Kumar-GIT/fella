@@ -6,8 +6,19 @@ All notable changes to Fella are recorded here. Format follows
 
 ## [Unreleased]
 
+## [0.1.5]
+
 ### Added
 
+- **`/memory` shows and clears a folder's learned notes.** `/memory` prints the
+  current `memory.md` for the open folder (its recipes and your-words
+  corrections); `/memory clear` wipes it. The companion to the per-folder memory
+  below — you can always see and reset what Fella has picked up.
+- **Correct an answer while it's still being written.** A plain line typed and
+  sent *during* a run now cancels it and immediately re-asks the same question
+  with your addition appended — "↻ Cancelled … and re-asking with your addition"
+  in the transcript — instead of Stop → wait → retype. A slash-command or a
+  pasted key still waits for the run to finish; Esc still just stops.
 - **One-click return to your last folder.** The welcome screen now shows a
   "Reopen ‹folder›" button (Enter is a shortcut for it) instead of Fella
   silently opening the previous folder for you — so you can switch folders,
@@ -26,6 +37,17 @@ All notable changes to Fella are recorded here. Format follows
 
 ### Changed
 
+- **A refreshed window and a calmer interface.** A custom titlebar replaces the
+  stock OS window frame: macOS keeps its native traffic lights, Windows gets a
+  matching minimise / maximise / close cluster, Linux keeps its native frame. The
+  ASCII-art wordmark is now plain "Fella"; the status line is a single dim
+  `provider/model · folder · N files · state` row folded into the footer; your
+  turns are marked with a `❯` glyph and the uppercase "FELLA" speaker label is
+  gone; the evidence fold reads as `EVIDENCE · 3 STEPS · 1.2s` with tool
+  arguments shown key/value instead of raw JSON; onboarding is a centred card
+  with a "drop a folder" overlay while you drag one over the window; the themed
+  background and fonts paint before the app's own CSS, so there's no flash of
+  unstyled content on launch.
 - **Multi-file questions get combined, not answered from one file.** A new rule
   tells the model that when a question spans two tables (or a table and a
   document) it should JOIN them in a single query, or read the document and
@@ -279,7 +301,8 @@ folder of your own files with deterministic SQL / Python, and shows its working.
 - The hosted pack browser isn't live yet: `/packs add <path>` works offline, and
   `/packs install <id>` pulls from a small seed catalog.
 
-[Unreleased]: https://github.com/Avijit-Kumar-GIT/fella/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/Avijit-Kumar-GIT/fella/compare/v0.1.5...HEAD
+[0.1.5]: https://github.com/Avijit-Kumar-GIT/fella/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/Avijit-Kumar-GIT/fella/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/Avijit-Kumar-GIT/fella/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/Avijit-Kumar-GIT/fella/compare/v0.1.1...v0.1.2
