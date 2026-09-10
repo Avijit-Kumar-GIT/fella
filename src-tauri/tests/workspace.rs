@@ -576,3 +576,38 @@ fn reopens_the_last_workspace_on_a_fresh_engine() {
 
     let _ = fs::remove_dir_all(&data);
 }
+
+#[test]
+fn memory_file_and_forget() {
+    let ws = scratch("mem-ws");
+    let data = scratch("mem-data");
+    fs::write(ws.join("sales.csv"), "month,amount\n2024-01,100\n").unwrap();
+
+    let engine = EngineState::new(&data).unwrap();
+
+    // No folder open yet.
+    assert!(engine.folder_memory_file().is_none());
+
+    engine.open_workspace(&ws).unwrap();
+    let (path, contents) = engine.folder_memory_file().expect("path once a folder is open");
+    assert!(contents.is_none(), "no notes learned yet");
+
+    // Simulate a written notes file + episode log.
+    fs::create_dir_all(std::path::Path::new(&path).parent().unwrap()).unwrap();
+    fs::write(&path, "# notes\n\n## Preferences\n- x\n").unwrap();
+    fs::write(path.replace(".md", ".episodes.jsonl"), "{}\n").unwrap();
+
+    let (_, contents) = engine.folder_memory_file().unwrap();
+    assert!(contents.unwrap().contains("## Preferences"));
+
+    assert!(engine.forget_folder_memory().unwrap(), "removed the file");
+    assert!(!std::path::Path::new(&path).exists());
+    assert!(
+        !std::path::Path::new(&path.replace(".md", ".episodes.jsonl")).exists(),
+        "episode log removed too"
+    );
+    assert!(!engine.forget_folder_memory().unwrap(), "nothing left to remove");
+
+    let _ = fs::remove_dir_all(&ws);
+    let _ = fs::remove_dir_all(&data);
+}
