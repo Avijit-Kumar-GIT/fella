@@ -24,9 +24,10 @@ Always shown, and what rolls up to a chart:
 |---|---|
 | **acc** = correct / n (majority over `--iters`) | headline |
 | **consistency** = fraction of cases correct on *all* k iters | right 3/5 ≠ right 5/5 |
-| **Δacc vs bare** | the harness's lift, per model — *the thesis number* |
+| **Δacc vs bare** = acc(fella) − acc(bare), same cases | the harness's lift, per model — *the thesis number* |
+| **Δacc 95% CI** (paired bootstrap over cases) | does the lift survive resampling — excludes 0 = real, straddles 0 = noise |
 | **tok / correct** (in + out) | efficiency |
-| **$ / correct** | the money version (list price) |
+| **$ / 100-correct** | the money version (list price) |
 | **wasted calls / case** | the loop's own overhead; small models flail here |
 | **round trips / answer** | provider-independent latency proxy (Fella targets ≤ 2) |
 | **wall s** | reported, caveated (network + provider load) |
@@ -35,6 +36,36 @@ Always shown, and what rolls up to a chart:
 
 `bare` has no evidence trail, so self-catch / grounding / waste are 0 for it by
 construction — that contrast is the point.
+
+### Reading Δacc and its 95% CI
+
+**Δacc** = acc(fella) − acc(bare) for one model, in percentage points, on the
+*same* 64 cases — a paired difference, so only the harness changes. e.g. gemma:
+bare 34/64 (53%) → fella 64/64 (100%) → **Δacc = +47**.
+
+Those 64 cases are one sample of "questions someone might ask a folder"; a
+different 64 would move the number. The **95% CI** says how far. `aggregate.py`
+computes it by **paired bootstrap**: resample 64 of the 64 per-case
+`(bare-right?, fella-right?)` pairs *with replacement*, recompute Δacc, 2000
+times; the 2.5th–97.5th percentile of those 2000 values is the interval (seeded,
+so it's reproducible). Read it as: rerun the benchmark with fresh question
+samples and ~95% of the intervals would contain the true lift.
+
+- **CI excludes 0** — deepseek-v4-flash `[+22%, +45%]`: the lift is real. Even an
+  unlucky draw of cases still shows the harness adding ≥ 22 points. 9 of 10
+  models are here.
+- **CI straddles 0** — muse-glimmer-30b `+6%`, `[−9%, +22%]`: *cannot* conclude
+  the harness helps this model; the observed +6 is inside the noise. This is why
+  muse-glimmer is called out as the one non-result.
+- **The endpoints are sizes of the gain, not accuracies.** `[+22%, +45%]` does
+  **not** mean "fella scored 89%". deepseek's fella accuracy is a measured 100%;
+  `+22` is the gap in a resample where *bare* happened to score 78%.
+- **Width ≈ ±12 points** here because n = 64 is modest — a bigger battery
+  tightens the intervals.
+
+Why it's first-class: without it, a +6% and a +33% look like the same kind of
+result. The CI is what separates "the loop earns its place for this model" from
+"we can't tell."
 
 ## The battery
 
