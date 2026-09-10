@@ -78,11 +78,14 @@ that shows its working. See [`DECISIONS.md`](DECISIONS.md) and
   contributors can add them without touching the base.
 - **Hosted pack marketplace.** The in-app `/packs` flow works today: local
   `/packs add`, and by-id `/packs install` with hash-checked downloads against
-  the `fella-extensions` catalog. Held until there's demand for customisation:
-  deploy the browse site (`fella-web/marketplace/`), make `fella-extensions`
-  public with real packs, the install-counter proxy (`fella-web/packs-proxy/`),
-  and the scaffold + tutorial above. See [`DECISIONS.md`](DECISIONS.md),
-  2026-09-02.
+  the `fella-extensions` catalog. `fella-extensions` is public and now carries
+  the `packs/_template/<kind>/` scaffold + `docs/WRITING-A-PACK.md`; the
+  `fella-web` browse page is built and its copy is ready. What remains: choose
+  starter packs, then flip the `fella-web` `/packs` route on (sync the catalog
+  snapshot, drop the two `_redirects` lines, add the nav link) and point the
+  app's `MARKETPLACE_URL` at the site. The install-counter proxy
+  (`fella-web/packs-proxy/`) stays deferred until counts are wanted. See
+  [`DECISIONS.md`](DECISIONS.md), 2026-09-02 and 2026-09-09.
 
 ## Harness quality, measured
 

@@ -83,18 +83,22 @@ may contribute.
 
 ## The marketplace — three repos
 
-**Rollout status (2026-09-02):** the hosted side is paused until there's demand
-for customisation — the browse site isn't deployed, `fella-extensions` is still
-private, and the install-counter proxy is written but not running. What works
-today: local `/packs add <path>` (offline) and by-id `/packs install <id>`
-against the `fella-extensions` catalog. The design below is unchanged; only the
-rollout is held. See [`DECISIONS.md`](DECISIONS.md), 2026-09-02.
+**Rollout status (2026-09-09):** `fella-extensions` is public with the schema,
+the build script, CI, a `packs/_template/<kind>/` scaffold, and a
+`docs/WRITING-A-PACK.md` walkthrough — but no listed packs yet (starter packs
+still being chosen). The `fella-web` browse page and copy are ready; its
+`/packs` route stays 302'd to `/` until the catalog has ≥1 pack. The
+install-counter proxy is written but not deployed — `installs` stays `null` and
+the site shows a "New" badge; deploy it only when counts are actually wanted.
+What works today regardless: local `/packs add <path>` (offline) and by-id
+`/packs install <id>` against the `fella-extensions` catalog. The design below
+is unchanged. See [`DECISIONS.md`](DECISIONS.md), 2026-09-02 and 2026-09-09.
 
 | Repo | Visibility | Holds |
 |------|-----------|-------|
 | `fella` (this repo) | public | the app. Reads `catalog.json` from a stable URL; installs a pack by id. |
 | `fella-extensions` | **public** | `packs/<id>/` (manifest + `README.md` + `LICENSE` + payload), the `fella-pack.json` schema, the pack rules, and a **generated** `catalog.json` (`scripts/build-catalog.mjs`; CI fails if it's stale). Pack PRs land here; the app fetches the raw `catalog.json`. |
-| `fella-web` | private | the front-end sites `marketing/` (the landing page + docs) and `marketplace/` (a gallery that renders `catalog.json`). Presentation only; the app never depends on it. |
+| `fella-web` | private | the front-end site under `marketing/` — the landing page, docs, and `marketing/packs/` (a gallery that renders a committed snapshot of `catalog.json`; the site CSP forbids a runtime cross-origin fetch). Presentation only; the app never depends on it. |
 
 `fella-extensions` is public for two reasons: community packs arrive as PRs, and
 the app fetches `catalog.json` over an unauthenticated URL. Presentation has
