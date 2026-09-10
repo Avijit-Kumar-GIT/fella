@@ -94,6 +94,9 @@ export class Conversation {
 
 class Session {
 	catalog = $state<Catalog>({ workspace: null, sources: [] });
+	/** Folder from the last session, if it still exists shown on the welcome
+	 *  screen as a one-click "reopen". Fella no longer opens it automatically. */
+	lastFolder = $state<string | null>(null);
 	settings = $state<Settings | null>(null);
 	health = $state<OllamaHealth | null>(null);
 	/** A local Ollama probed regardless of the configured provider so the empty

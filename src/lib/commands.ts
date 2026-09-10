@@ -194,26 +194,27 @@ export async function openFolder(path?: string): Promise<void> {
 	}
 }
 
-/** On launch, reopen the folder from the last session so it's ready without a
- *  manual `/open`. Silent if there's nothing to reopen or it's gone (the
- *  welcome screen stays). Called once from the page's onMount. */
-export async function reopenLastFolder(): Promise<void> {
+/** On launch, load the (empty) catalog and note the last session's folder so
+ *  the welcome screen can offer a one-click reopen. Fella no longer opens that
+ *  folder automatically the user picks. Called once from the page's onMount. */
+export async function loadStartupCatalog(): Promise<void> {
 	if (!isTauri() || session.catalog.workspace) return;
-	try {
-		const cat = await ipc.reopenLastWorkspace();
-		if (cat?.workspace) {
-			session.catalog = cat;
-			session.addSystem(`Reopened ${baseName(cat.workspace)}.\n${summarizeCatalog()}`);
-			return;
-		}
-	} catch {
-		/* fall through to a plain catalog read */
-	}
 	try {
 		session.catalog = await ipc.getCatalog();
 	} catch {
 		/* no engine yet the welcome screen handles it */
 	}
+	try {
+		session.lastFolder = await ipc.lastWorkspacePath();
+	} catch {
+		session.lastFolder = null;
+	}
+}
+
+/** Reopen the folder from the last session (the welcome screen's "Reopen"
+ *  button, and Enter on an empty composer with no folder open). */
+export async function resumeLastFolder(): Promise<void> {
+	if (session.lastFolder) await openFolder(session.lastFolder);
 }
 
 /** Ask the engine to stop one tab's in-progress run (the active tab by
