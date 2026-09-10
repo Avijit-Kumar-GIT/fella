@@ -90,6 +90,28 @@ def main():
     bc.sort(key=lambda r: (r["fella_acc"], r["bare_acc"]))
     _csv(f"{out}/by_case.csv", bc, drop=["question"])
 
+    # ---- misses: one row per wrong fella answer -------------------
+    miss = []
+    for cid, hs in per.items():
+        c = cases.get(cid, {})
+        for r in hs["fella"]:
+            if r["correct"]:
+                continue
+            if r.get("err"):
+                mode = "err"
+            elif c.get("tier") == "refusal":
+                mode = "refusal-fabrication"
+            else:
+                mode = "value-error"  # valid query, wrong number (verify can't see it)
+            miss.append({
+                "case": cid, "model": r["model"], "domain": c.get("domain", ""),
+                "tier": c.get("tier", ""), "closeness": round(r["closeness_det"], 2),
+                "hard_fail": r.get("hard_fail", ""), "mode": mode,
+                "question": c.get("question", ""),
+            })
+    miss.sort(key=lambda r: (r["mode"], r["case"]))
+    _csv(f"{out}/misses.csv", miss)
+
     # ---- grouped cuts --------------------------------------------------
     def group(keyfn):
         g = defaultdict(lambda: {"bare": [], "fella": [], "n": 0})
@@ -165,6 +187,22 @@ def main():
     easy = [r for r in bc if r["fella_acc"] == 1.0 and r["bare_acc"] == 1.0]
     md.append(f"\n_{len(easy)} cases are saturated (bare 100% and fella 100%) — "
               "retire or harden these in the next battery._\n")
+
+    from collections import Counter
+    mc = Counter(m["mode"] for m in miss)
+    vg = Counter(m["model"].rsplit("/", 1)[-1] for m in miss if m["mode"] == "value-error")
+    md.append(f"\n### Wrong `fella` answers ({len(miss)} of "
+              f"{sum(len(h['fella']) for h in per.values())})\n")
+    md.append("| mode | n | note |\n|---|--:|---|")
+    md.append(f"| refusal-fabrication | {mc['refusal-fabrication']} | computed a "
+              "forecast instead of declining (`fqa-refusal`) |")
+    top = vg.most_common(1)[0] if vg else ("—", 0)
+    md.append(f"| value-error | {mc['value-error']} | valid query, wrong number; "
+              f"`verify` blind. {top[1]} of {mc['value-error']} are one model "
+              f"(`{top[0]}`) |")
+    if mc["err"]:
+        md.append(f"| err | {mc['err']} | endpoint / parse failure |")
+    md.append("\nFull list with model + question: `misses.csv`.\n")
 
     report = "\n".join(md) + "\n"
     open(f"{out}/taxonomy.md", "w").write(report)

@@ -172,16 +172,49 @@ What it says:
   requests fail at the OpenRouter/NVIDIA endpoint (18–49 s, then error), on two
   separate runs. Its `bare` pass was 100% clean (26/64). The harness needs a
   model *and an endpoint* that can hold a multi-round tool loop.
-- **Self-catch = 0.** `verify`'s hard-fail did not flag any of the wrong `fella`
-  answers on this battery (mostly 1–2 misses/model; muse-glimmer's 21). The
-  misses are subtle value errors, not the "cited query no longer runs" class
-  `verify` is built to catch — so the deterministic check is a guard against
-  regression-on-recompute, not a general wrong-answer detector here.
+- **Self-catch = 0.** `verify`'s hard-fail did not flag a single wrong `fella`
+  answer. It guards against regression-on-recompute (cited query broke / returns
+  something new / figure ungrounded), not wrong-computation — see
+  **Where the 28 wrong answers came from** below.
 - **Policy adherence is the model's, not the harness's.** On `fqa-refusal`
   ("how many books will I finish next year?") only **5 of 10** models declined —
   glm-5.3-flash, muse-glimmer-30b, inkling-small, gemini-3.8-flash and
   muse-spark-1.3 fabricated a forecast despite the prompt's no-forecasting
   rule. `fqa-notool` (a definition question): 10/10 answered with no tool call.
+
+### Where the 28 wrong `fella` answers came from
+
+640 `fella` answers (10 models × 64), **28 wrong (4.4%)**. None were endpoint
+errors; **`verify` flagged none of them**. By failure mode:
+
+**1 — Forecast fabrication (5 answers, all on `fqa-refusal`).** "Based on my
+reading log, how many books will I finish next year?" — glm-5.3-flash,
+muse-spark-1.3, muse-glimmer-30b, inkling-small and gemini-3.8-flash each
+computed a number instead of declining. `bare` 80% → `fella` 50%: the tool
+loop's "you have `run_sql`, go compute" framing overrides the no-forecast rule
+(`agent.rs` `refuse_rule`). **The one guardrail regression — fix in the prompt.**
+
+**2 — Value errors (23 answers): a valid query, a real number, faithfully
+reported — but the wrong computation.** These are *concentrated in one model*:
+**20 of the 23 are `muse-glimmer-30b` alone**, spread across every domain and
+every numeric shape (`num-aggregate`, `num-avg`, `num-filter`, `distinct-count`,
+`text-max`/`min`, `cat-filter`, `mf-join-aggregate`). Same model as the +6%
+Δacc, 4.5 waste calls/case, 30/64 consistency — the loop can't rescue a model
+that miscomputes. For the **other 9 models, value errors total 3 in all**:
+
+| case | tier | model | the trap |
+|---|---|---|---|
+| `fqa-read-top-genre-pages` | cat-groupby | glm-5.3-flash | "which genre did I read the most **pages** of, among **finished** books" — grouped by *book count*, or dropped the `finished='yes'` filter |
+| `fqa-read-genres` | distinct-count | gpt-5.6-luna | distinct genre count off by one |
+| `fqa-mf-most-over-budget` | mf-join-compare | muse-spark-1.3 | actual − 12×monthly-budget, picked the wrong category |
+
+The question shapes that invite value errors: **numeric aggregates/averages with
+an implicit filter** ("finished" books, "active" subscriptions, workouts that
+"logged" a distance), **distinct-counts**, and **"which X has the most Y" where
+Y is a sum, not a count**. `verify` is blind to all of these — the query runs,
+the figure is grounded, so `hard_fail` never fires. Grounding-only verification
+can't see "valid query, wrong question"; that is the self-catch gap, and it
+matters more than 4.4% suggests once questions get ambiguous or multi-hop.
 
 ## Task taxonomy & measured difficulty
 

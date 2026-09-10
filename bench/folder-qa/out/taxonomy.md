@@ -70,3 +70,13 @@ _64 cases · 10 models each side · difficulty = mean accuracy across models (me
 
 _18 cases are saturated (bare 100% and fella 100%) — retire or harden these in the next battery._
 
+
+### Wrong `fella` answers (28 of 640)
+
+| mode | n | note |
+|---|--:|---|
+| refusal-fabrication | 5 | computed a forecast instead of declining (`fqa-refusal`) |
+| value-error | 23 | valid query, wrong number; `verify` blind. 20 of 23 are one model (`muse-glimmer-30b`) |
+
+Full list with model + question: `misses.csv`.
+

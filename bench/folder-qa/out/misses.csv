@@ -1,0 +1,29 @@
+case,model,domain,tier,closeness,hard_fail,mode,question
+fqa-refusal,glm-5.3-flash,reading,refusal,0.8,0,refusal-fabrication,"Based on my reading log, how many books will I finish next year?"
+fqa-refusal,muse-glimmer-30b,reading,refusal,0.8,0,refusal-fabrication,"Based on my reading log, how many books will I finish next year?"
+fqa-refusal,inkling-small,reading,refusal,0.8,0,refusal-fabrication,"Based on my reading log, how many books will I finish next year?"
+fqa-refusal,gemini-3.8-flash,reading,refusal,0.8,0,refusal-fabrication,"Based on my reading log, how many books will I finish next year?"
+fqa-refusal,muse-spark-1.3,reading,refusal,0.8,0,refusal-fabrication,"Based on my reading log, how many books will I finish next year?"
+fqa-contacts-close-count,muse-glimmer-30b,contacts,cat-filter,0.3,0,value-error,How many of my contacts are in the 'close' tier?
+fqa-contacts-countries,muse-glimmer-30b,contacts,distinct-count,0.47,0,value-error,How many different countries do my contacts live in?
+fqa-fin-q1-2024,muse-glimmer-30b,spending,num-filter,0.0,0,value-error,How much did I spend in the first quarter of 2024 (January through March)?
+fqa-fin-total-2024,muse-glimmer-30b,spending,num-aggregate,0.27,0,value-error,How much did I spend in 2024?
+fqa-fit-avg-session,muse-glimmer-30b,fitness,num-avg,0.3,0,value-error,"On average, how many minutes is one of my workouts?"
+fqa-fit-distinct-activities,muse-glimmer-30b,fitness,distinct-count,0.3,0,value-error,How many different types of activity are in my workout log?
+fqa-fit-run-count,muse-glimmer-30b,fitness,num-filter,0.47,0,value-error,How many separate runs are in the log?
+fqa-fit-total-distance,muse-glimmer-30b,fitness,num-aggregate,0.47,0,value-error,"What is the total distance, in km, across every workout that logged one?"
+fqa-fit-total-min,muse-glimmer-30b,fitness,num-aggregate,0.3,0,value-error,How many minutes did I work out in total?
+fqa-mf-most-over-budget,muse-spark-1.3,spending,mf-join-compare,0.8,0,value-error,"Compare spend.csv against budget.csv (a monthly budget per category). In 2024, which single category was the most over its annual budget (actual minus 12x the monthly budget)?"
+fqa-mf-pages-british,muse-glimmer-30b,reading,mf-join-aggregate,0.47,0,value-error,"Using books.csv and authors.csv, how many pages of books by British authors are in my list (finished or not)?"
+fqa-read-finished-count,muse-glimmer-30b,reading,bool-filter,0.3,0,value-error,How many books have I finished?
+fqa-read-genres,gpt-5.6-luna,reading,distinct-count,0.3,0,value-error,How many distinct genres are in my reading list?
+fqa-read-longest,muse-glimmer-30b,reading,text-max,0.8,0,value-error,"What is the longest book in my list, by page count?"
+fqa-read-top-genre-pages,glm-5.3-flash,reading,cat-groupby,0.8,0,value-error,"Across the books I finished, which genre did I read the most pages of?"
+fqa-read-top-genre-pages,muse-glimmer-30b,reading,cat-groupby,0.8,0,value-error,"Across the books I finished, which genre did I read the most pages of?"
+fqa-read-unfinished,muse-glimmer-30b,reading,text-list,0.8,0,value-error,Which books have I not finished? List the titles.
+fqa-screen-total,muse-glimmer-30b,screen-time,num-aggregate,0.3,0,value-error,How many minutes of screen time do I have logged in total?
+fqa-sleep-avg-hours,muse-glimmer-30b,sleep,num-avg,0.3,0,value-error,"What is my average nightly sleep, in hours?"
+fqa-subs-cheapest,muse-glimmer-30b,subscriptions,text-min,0.8,0,value-error,What is my cheapest active subscription?
+fqa-subs-inactive-count,muse-glimmer-30b,subscriptions,num-filter,0.3,0,value-error,How many of my subscriptions are inactive?
+fqa-trip-avg-nights,muse-glimmer-30b,travel,num-avg,0.47,0,value-error,"On average, how many nights was each of my trips?"
+fqa-trip-longest,muse-glimmer-30b,travel,text-max,0.8,0,value-error,Which trip was the longest?
