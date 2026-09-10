@@ -6,7 +6,7 @@
 	import StatusBar from '$lib/components/StatusBar.svelte';
 	import Titlebar from '$lib/components/Titlebar.svelte';
 	import Transcript from '$lib/components/Transcript.svelte';
-	import { dispatch, reconcileModel, reopenLastFolder, stop } from '$lib/commands';
+	import { dispatch, loadStartupCatalog, reconcileModel, stop } from '$lib/commands';
 	import { ipc, isTauri } from '$lib/ipc';
 	import { fadeQuick } from '$lib/motion';
 	import { prefs } from '$lib/prefs.svelte';
@@ -45,7 +45,7 @@
 			.then((ms) => console.info('fella interactive in', ms, 'ms'))
 			.catch(() => {});
 		void ipc.getSettings().then((s) => { session.settings = s; }).catch(() => {});
-		void reopenLastFolder();
+		void loadStartupCatalog();
 		void ipc.listProviders().then((p) => { session.providers = p; }).catch(() => {});
 		void ipc.packsList().then((p) => { session.packs = p; }).catch(() => {});
 		void prefs.load();

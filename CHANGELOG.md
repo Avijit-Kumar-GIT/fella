@@ -8,10 +8,11 @@ All notable changes to Fella are recorded here. Format follows
 
 ### Added
 
-- **Fella reopens your last folder on start.** No more picking the same folder
-  every launch — Fella opens the one from your last session automatically (and
-  says so). The welcome screen still shows if that folder has moved or you've
-  never opened one.
+- **One-click return to your last folder.** The welcome screen now shows a
+  "Reopen ‹folder›" button (Enter is a shortcut for it) instead of Fella
+  silently opening the previous folder for you — so you can switch folders,
+  read the onboarding, or start fresh without fighting past an auto-load. The
+  button is absent if that folder has moved or you've never opened one.
 - **Per-folder memory (experimental).** Fella now keeps a small plain-text
   `memory.md` for each folder — the *learned* companion to `fella.md`. It fills
   itself in from what already happens: a query that passed the self-check

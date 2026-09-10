@@ -4,6 +4,7 @@
 		COMMAND_DESCRIPTIONS,
 		completionsFor,
 		dispatch,
+		resumeLastFolder,
 		steerRun,
 		stop
 	} from '$lib/commands';
@@ -141,6 +142,12 @@
 
 		if (e.key === 'Enter' && !e.shiftKey) {
 			e.preventDefault();
+			// On the welcome screen (no folder, nothing typed) Enter reopens the
+			// last folder if there is one otherwise it's the normal submit.
+			if (!value.trim() && !session.catalog.workspace && session.lastFolder) {
+				void resumeLastFolder();
+				return;
+			}
 			void submit();
 			return;
 		}

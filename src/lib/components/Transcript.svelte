@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { dispatch, openFolder } from '$lib/commands';
+	import { dispatch, openFolder, resumeLastFolder } from '$lib/commands';
 	import { session } from '$lib/session.svelte';
 	import { isTauri, openExternal } from '$lib/ipc';
 	import { fadeQuick } from '$lib/motion';
@@ -50,6 +50,9 @@
 	let hasFolder = $derived(!!session.catalog.workspace);
 	let folderName = $derived(
 		session.catalog.workspace?.replace(/[/\\]+$/, '').replace(/^.*[/\\]/, '') ?? ''
+	);
+	let lastFolderName = $derived(
+		session.lastFolder?.replace(/[/\\]+$/, '').replace(/^.*[/\\]/, '') ?? ''
 	);
 	let fileCount = $derived(session.catalog.sources.length);
 	let skipped = $derived(session.catalog.skipped ?? []);
@@ -117,9 +120,20 @@
 					your computer, from your files, never changed.
 				</p>
 				<div class="cta">
-					<button class="pill primary" onclick={() => void openFolder()}>
-						<Icon name="folder" size={14} /> Choose a folder
-					</button>
+					{#if session.lastFolder}
+						<button
+							class="pill primary"
+							title="Reopen your last folder (Enter)"
+							onclick={() => void resumeLastFolder()}
+						>
+							<Icon name="folder" size={14} /> Reopen {lastFolderName}
+						</button>
+						<button class="pill" onclick={() => void openFolder()}>Choose another</button>
+					{:else}
+						<button class="pill primary" onclick={() => void openFolder()}>
+							<Icon name="folder" size={14} /> Choose a folder
+						</button>
+					{/if}
 				</div>
 				{#if isTauri()}<p class="drophint">or drag a folder onto this window</p>{/if}
 				<p class="egs">

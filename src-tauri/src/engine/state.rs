@@ -965,6 +965,17 @@ impl EngineState {
         Ok(self.catalog())
     }
 
+    /// The folder from the last session, if it still exists on disk not opened,
+    /// just the path so the welcome screen can offer a one-click "reopen".
+    /// `None` if there's no history or the folder is gone.
+    pub fn last_workspace_path(&self) -> Option<String> {
+        let path = {
+            let conn = self.sqlite.lock().unwrap_or_else(|e| e.into_inner());
+            sqlite::most_recent_workspace(&conn)?
+        };
+        std::path::Path::new(&path).is_dir().then_some(path)
+    }
+
     /// On launch: reopen the folder from the last session so the user doesn't
     /// re-pick it every time. `None` (and the welcome screen) if there's no
     /// history, the folder is gone, or it won't open no error is surfaced.

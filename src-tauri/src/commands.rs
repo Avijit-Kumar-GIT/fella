@@ -61,11 +61,12 @@ pub fn get_catalog(engine: State<'_, EngineState>) -> Catalog {
     engine.catalog()
 }
 
-/// Reopen the folder from the last session (launch only). `null` if there's
-/// nothing to reopen or it's gone.
+/// Path of the folder from the last session, if it still exists. The welcome
+/// screen uses it for a one-click "reopen" button; Fella no longer opens it
+/// automatically on launch. `null` if there's no history or it's gone.
 #[tauri::command]
-pub fn reopen_last_workspace(engine: State<'_, EngineState>) -> Option<Catalog> {
-    engine.reopen_last_workspace()
+pub fn last_workspace_path(engine: State<'_, EngineState>) -> Option<String> {
+    engine.last_workspace_path()
 }
 
 #[tauri::command]
