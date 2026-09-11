@@ -511,9 +511,11 @@ pub struct PromptProfile {
     pub stop_early_rule: bool,
     pub dialect_rule: bool,
     pub python_rule: bool,
+    pub chart_rule: bool,
     pub docs_rule: bool,
     pub refuse_rule: bool,
     pub background_rule: bool,
+    pub structure_rule: bool,
     pub note_rule: bool,
     pub user_context: bool,
     pub schema: bool,
@@ -540,9 +542,11 @@ impl PromptProfile {
                 "stop_early_rule" => p.stop_early_rule = false,
                 "dialect_rule" => p.dialect_rule = false,
                 "python_rule" => p.python_rule = false,
+                "chart_rule" => p.chart_rule = false,
                 "docs_rule" => p.docs_rule = false,
                 "refuse_rule" => p.refuse_rule = false,
                 "background_rule" => p.background_rule = false,
+                "structure_rule" => p.structure_rule = false,
                 "note_rule" => p.note_rule = false,
                 "user_context" => p.user_context = false,
                 "schema" => p.schema = false,
@@ -564,9 +568,11 @@ impl PromptProfile {
             stop_early_rule: true,
             dialect_rule: true,
             python_rule: true,
+            chart_rule: true,
             docs_rule: true,
             refuse_rule: true,
             background_rule: true,
+            structure_rule: true,
             note_rule: true,
             user_context: true,
             schema: true,
@@ -659,6 +665,14 @@ a sql() helper."
                 .into(),
         );
     }
+    if profile.chart_rule {
+        rules.push(
+            "make_chart draws a bar or line chart from labels + numeric series you already \
+have; it renders itself, so don't describe it in prose. Use it for a breakdown across \
+categories or a trend over time skip it for a single figure or a yes/no answer."
+                .into(),
+        );
+    }
     if profile.docs_rule {
         rules.push(
             "Documents (notes, PDFs) are already listed below with their names and first \
@@ -682,6 +696,14 @@ even though you have tools."
             "A definition or plain \"what does X mean\" needs no tool. You may add one \
 confident sentence of general background on its own line starting with \
 `Background:`, with no specific figures in it. If unsure, say so."
+                .into(),
+        );
+    }
+    if profile.structure_rule {
+        rules.push(
+            "An open-ended or \"tell me about\" question can run longer than the terse-answer \
+rule above a few short headed sections or a bulleted list of findings, each figure still \
+from a tool. Don't pad it with filler; every line should say something."
                 .into(),
         );
     }
@@ -789,6 +811,15 @@ mod tests {
         assert!(p.core_rules && p.schema, "unnamed sections stay");
     }
 
+    #[test]
+    fn chart_and_structure_rules_are_droppable() {
+        std::env::set_var("FELLA_PROMPT_DROP", "chart_rule, structure_rule");
+        let p = PromptProfile::from_env();
+        std::env::remove_var("FELLA_PROMPT_DROP");
+        assert!(!p.chart_rule && !p.structure_rule);
+        assert!(p.python_rule && p.background_rule, "unnamed sections stay");
+    }
+
     /// `PromptProfile::full()` must render byte-for-byte the prompt Fella
     /// shipped before the section split any drift is a silent behaviour change.
     #[test]
@@ -831,6 +862,10 @@ you have at most {} tool-calling steps, so don't wander past the question.\n\
 strftime()/date() (e.g. strftime('%Y-%m', d)).\n\
 - run_python for stats SQL can't do (median, correlation, regression); it has \
 a sql() helper.\n\
+- make_chart draws a bar or line chart from labels + numeric series you \
+already have; it renders itself, so don't describe it in prose. Use it for a \
+breakdown across categories or a trend over time skip it for a single figure \
+or a yes/no answer.\n\
 - Documents (notes, PDFs) are already listed below with their names and first \
 line, so don't call list_files for them. For a question about their content, \
 call read_file directly (pass `names: [...]` to read several at once); they are \
@@ -842,6 +877,10 @@ past records; decline it even though you have tools.\n\
 - A definition or plain \"what does X mean\" needs no tool. You may add one \
 confident sentence of general background on its own line starting with \
 `Background:`, with no specific figures in it. If unsure, say so.\n\
+- An open-ended or \"tell me about\" question can run longer than the \
+terse-answer rule above a few short headed sections or a bulleted list of \
+findings, each figure still from a tool. Don't pad it with filler; every line \
+should say something.\n\
 - You may pass a short `note` (4-8 plain words) on a tool call for the activity \
 display, e.g. \"Add up spending by month\".\n\n\
 Your context, written by the user (fella.md) and any skills they enabled. \
