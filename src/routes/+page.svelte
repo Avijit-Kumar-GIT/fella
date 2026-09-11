@@ -51,6 +51,7 @@
 		void loadStartupCatalog();
 		void ipc.listProviders().then((p) => { session.providers = p; }).catch(() => {});
 		void ipc.packsList().then((p) => { session.packs = p; }).catch(() => {});
+		void ipc.augmentCapabilities().then((c) => { session.augmentCapabilities = c; }).catch(() => {});
 		void prefs.load();
 
 		// Poll quickly while disconnected so a freshly-started Ollama or a

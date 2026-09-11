@@ -120,6 +120,8 @@ export const ipc = {
 		invoke<void>('augment_save', { capability, file, contents }),
 	/** Read an augment file back for its editor; null if it doesn't exist yet. */
 	augmentLoad: (file: string) => invoke<string | null>('augment_load', { file }),
+	/** Augment capabilities this build ships (so the UI carries no copy). */
+	augmentCapabilities: () => invoke<string[]>('augment_capabilities'),
 
 	/** Check for a newer release and, if one exists, download + verify +
 	 * install it and exit. Only ever called by `/update`; never automatic. */

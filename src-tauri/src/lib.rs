@@ -91,6 +91,7 @@ pub fn run() {
             commands::mcp_clear_token,
             commands::augment_save,
             commands::augment_load,
+            commands::augment_capabilities,
             commands::archive_conversation,
             commands::conversations_info,
             commands::conversations_list,

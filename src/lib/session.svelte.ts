@@ -145,6 +145,9 @@ class Session {
 	/** Installed packs, cached so `/packs` completion can offer ids without an
 	 *  await. */
 	packs = $state<InstalledPack[]>([]);
+	/** Augment capabilities this build ships (from the engine, not a hardcoded
+	 *  list) an augment pack is only reachable if its capability is here. */
+	augmentCapabilities = $state<string[]>([]);
 
 	/** The open tabs (conversations, and augment views), and the focused index. */
 	tabs = $state<Tab[]>([new Conversation()]);

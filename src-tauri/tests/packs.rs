@@ -216,6 +216,40 @@ fn augment_pack_install_and_config() {
 }
 
 #[test]
+fn installing_a_pack_touches_only_the_extensions_table() {
+    // A pack drops into existing scaffolding; it must not move any other engine
+    // state settings, the open workspace, model config.
+    let src = scratch("pk-iso-src");
+    let data = scratch("pk-iso-data");
+    let engine = EngineState::new(&data).unwrap();
+
+    let before = format!("{:?}", engine.settings());
+
+    write_pack(
+        &src,
+        "notes",
+        &augment_manifest("notes"),
+        "augment.json",
+        r#"{"capability":"buffer","command":"note","file":"notes.md","syntax":"markdown"}"#,
+    );
+    engine.packs_add(&src.join("notes")).unwrap();
+    engine.packs_set_enabled("notes", true).unwrap();
+
+    assert_eq!(before, format!("{:?}", engine.settings()), "settings unchanged");
+    // Install didn't conjure a workspace no folder is open.
+    assert!(engine.augment_save("buffer", "notes.md", "x").is_err());
+    // Enabling an augment adds no system prompt context (that's skills only).
+    assert!(engine.user_context().is_empty());
+
+    engine.packs_remove("notes").unwrap();
+    assert_eq!(before, format!("{:?}", engine.settings()), "settings unchanged after remove");
+    assert!(engine.packs_list().is_empty());
+
+    let _ = fs::remove_dir_all(&src);
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[test]
 fn augment_save_writes_only_into_the_open_folder() {
     let ws = scratch("pk-aug-ws");
     let data = scratch("pk-aug-wsdata");

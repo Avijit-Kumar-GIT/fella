@@ -41,9 +41,20 @@ file. No app code. No archive format, no package manager.
 
 An augment pack ships **no behaviour of its own** it names one of the app's
 built-in capabilities and configures it. The app owns the closed allowlist
-(`buffer`, `grid` at v1); a manifest naming an unknown capability still loads
+(`engine::augment::CAPABILITIES` `buffer`, `grid` at v1; the UI reads it from
+the engine, keeping no copy). A manifest naming an unknown capability still loads
 but reports "this build doesn't support the 'X' augment", the way `mcp` does
-under `--no-default-features`. New capabilities arrive in app releases.
+under `--no-default-features`.
+
+**Installing a pack never needs app code, and never moves other state.** Install
+writes one row in the `extensions` table plus the pack's own
+`<app-data>/extensions/<id>/` directory nothing else (not settings, not the
+open workspace, not conversations, not the agent's tool registry). Enabling a
+pack is additive and reversible: a theme sets CSS variables on `<html>`, a skill
+appends prompt text per `ask`, an `mcp` connector attaches tools per `ask`, an
+augment makes one slash command resolve. A genuinely new capability *is* app
+code one `CAPABILITIES` entry plus its view but that is a rare first-party
+change, not something a pack install triggers.
 
 - `command` the slash command that opens the view (`note`, `table`, …),
   `^[a-z][a-z0-9-]{0,15}$`, and not one of the built-in commands. If a future

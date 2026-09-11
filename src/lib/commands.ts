@@ -56,11 +56,9 @@ export const SLASH_COMMANDS = [
 	'/help'
 ] as const;
 
-/** Augment capabilities this build's views implement. Keep in sync with
- *  `CAPABILITIES` in `src-tauri/src/engine/augment.rs`. */
-const AUGMENT_CAPABILITIES = ['buffer', 'grid'];
-
-/** `/`-prefixed commands contributed by enabled, supported augment packs. */
+/** `/`-prefixed commands contributed by enabled augment packs whose capability
+ *  this build actually ships (`session.augmentCapabilities`, from the engine
+ *  the UI keeps no list of its own). */
 function augmentCommands(): { cmd: string; pack: InstalledPack }[] {
 	return session.packs
 		.filter(
@@ -68,7 +66,7 @@ function augmentCommands(): { cmd: string; pack: InstalledPack }[] {
 				p.enabled &&
 				p.kind === 'augment' &&
 				p.augment &&
-				AUGMENT_CAPABILITIES.includes(p.augment.capability)
+				session.augmentCapabilities.includes(p.augment.capability)
 		)
 		.map((p) => ({ cmd: '/' + (p.augment as NonNullable<InstalledPack['augment']>).command, pack: p }));
 }

@@ -243,6 +243,14 @@ pub fn augment_load(
     engine.augment_load(&file)
 }
 
+/// The augment capabilities this build ships. The UI reads this instead of
+/// carrying its own copy of the list, so a new capability is one Rust entry
+/// plus its view no per-pack code, ever.
+#[tauri::command]
+pub fn augment_capabilities() -> Vec<&'static str> {
+    crate::engine::augment::CAPABILITIES.to_vec()
+}
+
 // --- ask (the agent loop) -------------------------------------------------
 
 /// `model` is the calling tab's chosen model (of the one signed-in provider);
