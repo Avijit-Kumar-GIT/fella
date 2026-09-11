@@ -129,7 +129,7 @@ own model. Slash commands below are a power-user shortcut; you never need them.
 | `/update` | Check for a newer release and install it (checksum-verified, same as the install scripts); Fella closes and you reopen it once the installer finishes |
 | `/packs` | Packs you've added themes, skills, mcp connectors, augments. `/packs add <path>` for a local one, `/packs install <id>` from the seed catalog ([`docs/EXTENSIBILITY.md`](docs/EXTENSIBILITY.md)) |
 | `/connect` | Connect a data source you installed as an `mcp` pack (paste its token) |
-| _(augment)_ | An installed `augment` pack adds its own command e.g. `/note` opens a notes tab, `/table` a small editable table, each saved into the open folder |
+| _(augment)_ | An installed `augment` pack adds its own command e.g. `/note` opens a notes tab, `/table` a small editable table, each saved into the open folder. Add a name to use a different file: `/note shopping` → `shopping.md`, default is `/note` alone → `notes.md` |
 | `/tab` | Open another conversation in a new tab |
 | `/focus` | Hide the tabs and header for a plain view (again to undo) |
 | `/clear` | Start a new conversation (the old one is saved) |

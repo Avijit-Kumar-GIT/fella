@@ -71,10 +71,16 @@ idea reduces to free text or a table; most new augment ideas should be new
 - `command` the slash command that opens the view (`note`, `table`, …),
   `^[a-z][a-z0-9-]{0,15}$`, and not one of the built-in commands. If a future
   built-in ever takes that name, the built-in wins and `/packs` marks the
-  augment unreachable.
+  augment unreachable. **`/<command> [name]`** opens `name` instead of the
+  pack's default `file` (its extension appended if `name` has none), so one
+  installed augment can hold many independently-named notes/tables `/note`
+  alone still opens `notes.md`, `/note shopping` opens `shopping.md`. Resolved
+  frontend-side (`resolveAugmentFile`, `src/lib/commands.ts`); the same path
+  guard applies to the result as to the pack's own `file`.
 - `file` a workspace-relative path (no `..`, no leading `/`), extension in
-  `{md, txt, csv, tsv}`. This is where the tab autosaves; Fella then reads it
-  like any other file in the folder (`/reindex` runs when you close the tab).
+  `{md, txt, csv, tsv}`. This is where the tab autosaves by default; Fella then
+  reads it like any other file in the folder (`/reindex` runs when you close
+  the tab).
 - `syntax` `markdown` / `plain` / `csv`, an editor hint only.
 
 The **agent's** tool set is unchanged there is still no write tool. Only a

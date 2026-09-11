@@ -56,6 +56,20 @@ export const SLASH_COMMANDS = [
 	'/help'
 ] as const;
 
+/** Resolve `/<command> [name]` to the file an augment view should open: the
+ *  pack's default file when no name is given, else `name` with the pack's
+ *  default extension appended if `name` has none of its own (so `/note` still
+ *  opens `notes.md`, `/note shopping` opens `shopping.md`, and `/note x.txt`
+ *  is honoured as-is). Any path safety (no `..`, no absolute path, extension
+ *  allowlist) is still enforced backend-side, same as the pack's own file. */
+function resolveAugmentFile(defaultFile: string, arg: string): string {
+	const name = arg.trim();
+	if (!name) return defaultFile;
+	if (/\.[^./\\]+$/.test(name)) return name;
+	const dot = defaultFile.lastIndexOf('.');
+	return name + (dot >= 0 ? defaultFile.slice(dot) : '');
+}
+
 /** `/`-prefixed commands contributed by enabled augment packs whose capability
  *  this build actually ships (`session.augmentCapabilities`, from the engine
  *  the UI keeps no list of its own). */
@@ -1009,7 +1023,9 @@ async function runCommand(text: string): Promise<void> {
 		}
 
 		default: {
-			// A slash command contributed by an enabled augment pack?
+			// A slash command contributed by an enabled augment pack? An argument
+			// names a different file than the pack's default, so one `buffer`/
+			// `grid` augment can hold many independently-named notes/tables.
 			const aug = augmentCommands().find((a) => a.cmd === cmd)?.pack.augment;
 			if (aug) {
 				if (!requireEngine()) return;
@@ -1017,7 +1033,7 @@ async function runCommand(text: string): Promise<void> {
 					session.addSystem('Open a folder first with /open — the file saves into it.');
 					return;
 				}
-				await session.openAugment(aug);
+				await session.openAugment({ ...aug, file: resolveAugmentFile(aug.file, arg) });
 				return;
 			}
 			session.addSystem(`unknown command: ${cmd}\n\n${HELP}`);
@@ -1153,7 +1169,7 @@ function renderPacks(list: InstalledPack[]): string {
 		const unver = p.verified ? '' : '  (unverified)';
 		const extra =
 			p.kind === 'augment' && p.augment
-				? `  →  /${p.augment.command} edits ${p.augment.file}`
+				? `  →  /${p.augment.command} [name]  (default: ${p.augment.file})`
 				: '';
 		return `${mark} ${p.id.padEnd(20)} ${p.kind.padEnd(7)} ${(p.enabled ? 'on' : 'off').padEnd(3)}  ${p.name}${unver}${extra}`;
 	});
