@@ -150,7 +150,15 @@ the "No MCP" non-goal.
   wants a hand-rolled stripper or a small parser.
 - **Export a result.** Save a query result as CSV or Parquet. Against "Fella
   produces answers, not files" and "no generated artifacts"
-  ([`AUDIT.md`](AUDIT.md), [`ARCHITECTURE.md`](ARCHITECTURE.md)).
+  ([`AUDIT.md`](AUDIT.md), [`ARCHITECTURE.md`](ARCHITECTURE.md)). Distinct from
+  the 2026-09-10 `augment` amendment: an augment saves a file **you** type into
+  a tab; this item is the agent's own *computed output* becoming a file, which
+  is still undecided.
+- **A new `augment` capability.** `engine/augment.rs`'s `CAPABILITIES` is
+  `buffer` and `grid` only. A third capability is app code shipped to every
+  install regardless of who uses it, so it's gated exactly like a new built-in
+  tool or the item below: a GitHub issue, real demand, and a `DECISIONS.md`
+  entry first (2026-09-10) not something a pack idea gets to add on its own.
 - **stdio MCP transport.** Connect local-subprocess MCP servers, not only remote
   HTTP ones ([`DECISIONS.md`](DECISIONS.md), 2026-08-29 deferred this). Pulls a few
   more `rmcp` transport crates, the only item here with a real, if modest, size

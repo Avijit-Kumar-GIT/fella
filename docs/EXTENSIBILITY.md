@@ -52,9 +52,21 @@ writes one row in the `extensions` table plus the pack's own
 open workspace, not conversations, not the agent's tool registry). Enabling a
 pack is additive and reversible: a theme sets CSS variables on `<html>`, a skill
 appends prompt text per `ask`, an `mcp` connector attaches tools per `ask`, an
-augment makes one slash command resolve. A genuinely new capability *is* app
-code one `CAPABILITIES` entry plus its view but that is a rare first-party
-change, not something a pack install triggers.
+augment makes one slash command resolve.
+
+**A genuinely new capability *is* app code, and is deliberately rare.** Packs
+vs. built-in commands make no difference to binary size a capability ships
+to every install the moment it lands, whether or not any pack ever uses it, so
+the pack layer cannot make the capability set "free" to grow. What it buys
+instead: a fresh install stays at zero augment commands until you opt in, and
+many packs can remix one capability for free (a `journal` pack and a `todo`
+pack can both be `capability: buffer`, just a different command/file). So a new
+`CAPABILITIES` entry is held to the same bar as a new built-in tool or the MCP
+transport (`ROADMAP.md`): a GitHub issue, real demand, and a `DECISIONS.md`
+entry first (2026-09-10) never added just because a pack idea wants one.
+`buffer` and `grid` are expected to cover nearly everything a "quick capture"
+idea reduces to free text or a table; most new augment ideas should be new
+*packs*, not new capabilities.
 
 - `command` the slash command that opens the view (`note`, `table`, …),
   `^[a-z][a-z0-9-]{0,15}$`, and not one of the built-in commands. If a future

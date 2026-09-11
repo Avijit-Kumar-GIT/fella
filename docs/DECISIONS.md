@@ -7,6 +7,24 @@ this app repo (now **`fella`**; `fella-ai` is a private pre-v0.1 archive),
 `fella-marketplace` to mean the browse-site half of the **`fella-web`** repo,
 and any `CODE_OF_CONDUCT.md` mention as folded into `CONTRIBUTING.md` (§Conduct).
 
+- **2026-09-10** **A new augment capability is gated like a new built-in
+  tool: an issue, real demand, a `DECISIONS.md` entry first.** Packs vs.
+  built-in commands make *no difference* to base binary size a capability
+  is app code either way, shipped to every install the moment it lands,
+  whether or not any pack ever references it. The pack layer's real value is
+  narrower: (1) opt-in reachability (`/note` doesn't exist until installed,
+  keeping a fresh install's feature count at zero the "vertical, not
+  horizontal" promise), and (2) letting many packs remix one small capability
+  at zero extra app-code cost (a `journal` pack and a `todo` pack can both be
+  `capability: buffer` with a different command/file). Neither benefit needs
+  or justifies a growing capability count. So `CAPABILITIES`
+  (`engine/augment.rs`) is held to the same bar as the tool set (6 tools,
+  "smallest useful set") and the MCP transport (`ROADMAP.md` "would need a
+  positioning decision"): adding an entry needs a GitHub issue, demonstrated
+  demand, and a dated amendment here first not a pack author's idea. Working
+  assumption: `buffer` (free text) and `grid` (a table) already cover nearly
+  everything a "quick capture" idea reduces to: new augment ideas should
+  almost always be new *packs*, not new *capabilities*.
 - **2026-09-10** **`augment` — a 4th pack kind that adds a small opt-in
   surface, not just data.** `theme`/`skill`/`mcp` are inert data fed to the
   existing app; an `augment` pack turns on a **first-party capability the app
