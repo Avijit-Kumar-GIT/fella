@@ -422,9 +422,18 @@ async fn a_turns_tool_calls_run_concurrently() {
     assert!(last_start < first_end, "both tools should start before either finishes: {kinds:?}");
 
     if answer.evidence.iter().all(|e| e.error.is_none()) {
+        // A fixed-ms bound here is flaky on a loaded/shared CI runner: Python
+        // subprocess spawn overhead alone can eat the slack a hardcoded
+        // threshold assumed. Compare against the *actually measured* per-call
+        // durations instead (`evidence[i].ms`, real wall-clock per tool call)
+        // concurrent is ~= max(durations), sequential is ~= their sum, so a
+        // bound partway between the two (75% of the sum) still clearly tells
+        // them apart while scaling with however fast/slow this run's
+        // subprocess overhead happens to be.
+        let sum_ms: u64 = answer.evidence.iter().map(|e| e.ms).sum();
         assert!(
-            elapsed < std::time::Duration::from_millis(750),
-            "two 0.4s sleeps took {elapsed:?}; expected concurrent (~0.4s), not sequential"
+            (elapsed.as_millis() as u64) < sum_ms * 3 / 4,
+            "two tool calls (summed {sum_ms}ms) took {elapsed:?} wall time; expected concurrent, not sequential"
         );
     }
 

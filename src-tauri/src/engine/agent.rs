@@ -22,6 +22,41 @@ fn max_steps() -> usize {
     super::env::positive("FELLA_MAX_STEPS", MAX_STEPS)
 }
 
+/// Round trips above which a run gets a live nudge to wrap up.
+/// docs/HARNESS-COMPARISON.md targets <= 2 round trips/answer; this sits one
+/// step above that so a normal two-round answer is never touched, only a run
+/// that's already run past it. `FELLA_SOFT_STOP` overrides it for eval sweeps.
+const SOFT_STOP_ROUND_TRIPS: usize = 3;
+
+fn soft_stop_round_trips() -> usize {
+    super::env::positive("FELLA_SOFT_STOP", SOFT_STOP_ROUND_TRIPS)
+}
+
+/// A live nudge for the round trip about to start, once a run has already
+/// made `soft_threshold` or more tool-calling round trips escalates in tone
+/// the further past it a run gets, rather than waiting for the hard
+/// `max_steps` ceiling or hoping the static "stop early" prompt rule takes.
+/// `None` below the threshold. Pure and testable without a real run, same
+/// pattern as `trim_history`.
+fn stop_pressure_nudge(rounds_done: usize, soft_threshold: usize, evidence_count: usize) -> Option<String> {
+    if rounds_done < soft_threshold {
+        return None;
+    }
+    let overage = rounds_done - soft_threshold + 1;
+    Some(if overage == 1 {
+        format!(
+            "You've made {evidence_count} tool call(s) so far most questions need at most \
+2. If you already have enough to answer, do so now rather than gathering more."
+        )
+    } else {
+        format!(
+            "You've made {evidence_count} tool call(s) well past what this kind of question \
+usually needs. Unless something you truly need is still missing, stop and answer now with \
+what you have don't keep exploring."
+        )
+    })
+}
+
 /// Resolves once `flag` is set used to race against `llm.chat`.
 async fn cancelled(flag: &AtomicBool) {
     while !flag.load(Ordering::Relaxed) {
@@ -91,6 +126,7 @@ you did not get from a tool.\n",
     let mut tool_calls_total = 0usize;
     let mut usage: Option<Usage> = None;
     let steps = max_steps();
+    let soft_stop = soft_stop_round_trips();
     for step in 0..steps {
         log::info!("agent step {}/{steps}", step + 1);
         let step_start = Instant::now();
@@ -106,18 +142,19 @@ you did not get from a tool.\n",
                     log::warn!("agent: model call failed mid-run: {e}");
                     return Ok(finish(
                         engine,
+                        question,
                         format!(
                             "I couldn't finish the model call failed ({e}). \
                              Here's what I gathered so far."
                         ),
                         evidence,
                         usage,
-                    emit,
-));
+                        emit,
+                    ));
                 }
                 Err(e) => return Err(e),
             },
-            _ = cancelled(cancel) => return Ok(stopped(engine, evidence, usage, emit)),
+            _ = cancelled(cancel) => return Ok(stopped(engine, question, evidence, usage, emit)),
         };
         model_calls += 1;
         usage = Usage::merge(usage, resp.usage);
@@ -137,7 +174,7 @@ you did not get from a tool.\n",
             } else {
                 resp.content
             };
-            let mut checks = verify::run(engine, &text, &evidence);
+            let mut checks = verify::run(engine, question, &text, &evidence);
             // One tool-free corrective turn when a cited query re-runs to a
             // different result (or no longer runs). The value the model
             // reconciles against comes from that re-run, so the answer stays
@@ -159,7 +196,7 @@ corrected answer to match the re-run."
                     usage = Usage::merge(usage, r.usage);
                     if !r.content.trim().is_empty() {
                         text = r.content;
-                        checks = verify::run(engine, &text, &evidence);
+                        checks = verify::run(engine, question, &text, &evidence);
                     }
                 }
             }
@@ -253,9 +290,12 @@ not run again. Its result is repeated below - use it, refine the call, or give y
         }
 
         if cancel.load(Ordering::Relaxed) {
-            return Ok(stopped(engine, evidence, usage, emit));
+            return Ok(stopped(engine, question, evidence, usage, emit));
         }
         trim_history(&mut messages);
+        if let Some(nudge) = stop_pressure_nudge(step + 1, soft_stop, evidence.len()) {
+            messages.push(ChatMessage::User(nudge));
+        }
         log::info!(
             "agent step {}/{steps} done in {:?} ({} tool call(s))",
             step + 1,
@@ -276,7 +316,7 @@ you're not confident, say so plainly rather than guessing."
     ));
     let resp = tokio::select! {
         r = llm.chat(&messages, &[], &notify, &on_delta) => r.unwrap_or_default(),
-        _ = cancelled(cancel) => return Ok(stopped(engine, evidence, usage, emit)),
+        _ = cancelled(cancel) => return Ok(stopped(engine, question, evidence, usage, emit)),
     };
     model_calls += 1;
     usage = Usage::merge(usage, resp.usage);
@@ -290,16 +330,17 @@ you're not confident, say so plainly rather than guessing."
         run_start.elapsed(),
         evidence.len()
     );
-    Ok(finish(engine, text, evidence, usage, emit))
+    Ok(finish(engine, question, text, evidence, usage, emit))
 }
 
 fn stopped(
     engine: &EngineState,
+    question: &str,
     evidence: Vec<EvidenceItem>,
     usage: Option<Usage>,
     emit: &(dyn Fn(AskEvent) + Send + Sync),
 ) -> Answer {
-    finish(engine, "Stopped.".to_string(), evidence, usage, emit)
+    finish(engine, question, "Stopped.".to_string(), evidence, usage, emit)
 }
 
 /// The corrective re-ask fires unless `FELLA_VERIFY_REASK=0`.
@@ -309,12 +350,13 @@ fn reask_enabled() -> bool {
 
 fn finish(
     engine: &EngineState,
+    question: &str,
     text: String,
     evidence: Vec<EvidenceItem>,
     usage: Option<Usage>,
     emit: &(dyn Fn(AskEvent) + Send + Sync),
 ) -> Answer {
-    let checks = verify::run(engine, &text, &evidence);
+    let checks = verify::run(engine, question, &text, &evidence);
     finish_with(text, evidence, usage, checks, emit)
 }
 
@@ -859,5 +901,23 @@ Workspace: /tmp/ws\n{}\n{}",
         assert_eq!(tool_contents.last(), Some(&"result 8"));
         // Non-tool messages untouched.
         assert!(matches!(&msgs[0], ChatMessage::System(s) if s == "sys"));
+    }
+
+    #[test]
+    fn stop_pressure_escalates_past_the_soft_threshold() {
+        // Below threshold: a normal one/two-round answer is left alone.
+        assert_eq!(stop_pressure_nudge(1, 3, 1), None);
+        assert_eq!(stop_pressure_nudge(2, 3, 2), None);
+        // At the threshold: first, milder nudge.
+        let first = stop_pressure_nudge(3, 3, 3).unwrap();
+        assert!(first.contains("3 tool call"));
+        assert!(!first.contains("well past"));
+        // One round further: stronger wording, distinct from the first.
+        let second = stop_pressure_nudge(4, 3, 4).unwrap();
+        assert!(second.contains("well past"));
+        assert_ne!(first, second);
+        // A custom soft threshold (env override) is honoured.
+        assert_eq!(stop_pressure_nudge(2, 5, 2), None);
+        assert!(stop_pressure_nudge(5, 5, 5).is_some());
     }
 }
