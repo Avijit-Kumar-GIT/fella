@@ -130,6 +130,55 @@ and books your travel, a platform with a plugin runtime, or an account you log
 into. The scope is deliberate, and the full "no" list is in `docs/NON-GOALS.md`,
 each one with its reason.
 
+## Why the frontier can't follow
+
+OpenAI, Anthropic, and Google run their economics on inference happening on
+servers they own. That's the balance sheet, not a preference they're free to
+reconsider. Every query gets metered, logged for safety and improvement, and
+increasingly folded back into training the next model. A lab whose margin and
+whose moat both depend on centralizing your data is never going to lead with
+keep it on your own machine, we'll get nothing from you. They can eventually
+bolt on a local mode as an enterprise checkbox, years late and buried three
+menus deep, the way a big company always ships the feature the smaller one
+made popular first. They can't make it the product, because the product is the
+data flywheel.
+
+That's the innovator's dilemma, sharper than usual. Normally an incumbent
+could cannibalize itself if it had the will. Here it structurally can't
+without walking away from the thing its valuation is priced on. The biggest
+labs can see this door. Walking through it means giving up the thing they're
+funded on, so they won't, and that's exactly the gap Fella sits in.
+
+## The mainframe, again
+
+Computing already ran this arc once. Mainframes were centralized,
+institutional, rented by the hour. Then came the personal computer, on the
+insurgent bet that a regular person could own the whole stack with no
+institution mediating. IBM didn't lead that shift. Mainframes were IBM's
+entire business, so the company sitting at the center of gravity was never
+going to be the one that dismantled it.
+
+AI is in its mainframe phase right now. Every meaningful model lives in
+someone else's datacenter, and nearly every dollar of funding is going toward
+a bigger, more centralized version of that. The personal-computer move, a
+model good enough to do real work on your own machine, only became technically
+possible in the last year or so, and almost nobody funded at scale is building
+for it, because scale funding wants the metered, recurring version.
+
+## Trust doesn't creep, it snaps
+
+Privacy sentiment moves in snaps, not a slow creep. Nobody cared much about
+mass surveillance until Snowden. Nobody thought twice about how Facebook used
+their behavior until Cambridge Analytica. Both practices existed for years
+before the reaction arrived all at once.
+
+People are already handing AI companies things they never handed Facebook:
+bank statements, health questions, the actual texture of a private life, not
+just clicks. That category of data hasn't had its Snowden moment yet. When it
+does, whoever already exists as the thing that was never on anyone else's
+servers to begin with gets a decade of trust overnight, and everyone else
+spends that decade explaining themselves.
+
 ## The bet
 
 The big models are a bet that people want one agent that can do everything. I'm
@@ -168,5 +217,13 @@ underneath the folder and the SQL and the read-only boundary.
   of what was removed.
 - Restraint only counts if it's structural. A safe setting is not the same as a
   tool that cannot.
+- The biggest labs can't follow here without giving up the thing their
+  valuation is priced on. Centralizing your data is their revenue, not a
+  preference.
+- AI is repeating computing's mainframe-to-PC arc, and almost nobody funded at
+  scale is building the personal-computer version.
+- Privacy sentiment doesn't creep, it snaps. The data people now hand AI is
+  more intimate than anything social platforms ever got, and that reckoning
+  hasn't happened yet.
 - Personal software used to mean something you owned. Fella is a bet on
   bringing that back.
