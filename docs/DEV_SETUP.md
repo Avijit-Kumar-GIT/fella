@@ -140,6 +140,23 @@ pnpm install
 pnpm tauri dev
 ```
 
+**WSLg:** if the window opens but the layout looks broken CSS variables/fonts
+loading, but no centering, no spacing, flex layout not applying while
+individual component styles (buttons) partly do launch with the DMA-BUF
+renderer disabled:
+
+```sh
+WEBKIT_DISABLE_DMABUF_RENDERER=1 pnpm tauri dev
+```
+
+WSLg's virtualised GPU doesn't get along with WebKitGTK's default compositing
+path; this forces a fallback that renders correctly. Confirmed working
+2026-09-11. If that alone doesn't fully fix it, also try
+`WEBKIT_DISABLE_COMPOSITING_MODE=1` alongside it. A harder failure a window
+that never opens at all, `EGL_BAD_PARAMETER` is a separate, still-open
+problem (`docs/RELEASE.md`, "Not yet exercised") this env var is for a
+window that opens but paints wrong, not for that.
+
 Verify gates before a PR (see `CONTRIBUTING.md`), all from a clean tree:
 `cargo test --locked` and `cargo clippy --all-targets --locked -- -D warnings`
 from `src-tauri/` (SQLite default features, which include `mcp`),
