@@ -137,6 +137,22 @@ betting that for your own life's data, people want the opposite: an agent that
 can do one thing and be trusted with it completely. Both can pay off. They are
 not the same product, and they can't be.
 
+## Personal software, reclaimed
+
+Forty years ago "personal computer" was a genuinely radical phrase. It meant
+the machine was yours: it worked for you, it kept your secrets, and there was
+no institution standing between you and it. Somewhere in fifteen years of
+renting everything, that idea got quietly retired. Every piece of software
+became a subscription, every subscription became someone else's server, and
+"personal" shrank down to meaning your login. AI had the chance to bring that
+word back to life and instead it built the most centralized software category
+there's ever been, an intelligence that knows you more intimately than
+anything before it and answers to someone else's shareholders.
+
+I want Fella to put "personal" back in front of software and mean it the old
+way: not a login, something that's actually yours. That's the whole project,
+underneath the folder and the SQL and the read-only boundary.
+
 ## The gist
 
 - Capability and exposure are one axis. Every power an agent has is a power it
@@ -152,3 +168,5 @@ not the same product, and they can't be.
   of what was removed.
 - Restraint only counts if it's structural. A safe setting is not the same as a
   tool that cannot.
+- Personal software used to mean something you owned. Fella is a bet on
+  bringing that back.
