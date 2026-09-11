@@ -106,18 +106,19 @@ you did not get from a tool.\n",
                     log::warn!("agent: model call failed mid-run: {e}");
                     return Ok(finish(
                         engine,
+                        question,
                         format!(
                             "I couldn't finish the model call failed ({e}). \
                              Here's what I gathered so far."
                         ),
                         evidence,
                         usage,
-                    emit,
-));
+                        emit,
+                    ));
                 }
                 Err(e) => return Err(e),
             },
-            _ = cancelled(cancel) => return Ok(stopped(engine, evidence, usage, emit)),
+            _ = cancelled(cancel) => return Ok(stopped(engine, question, evidence, usage, emit)),
         };
         model_calls += 1;
         usage = Usage::merge(usage, resp.usage);
@@ -137,7 +138,7 @@ you did not get from a tool.\n",
             } else {
                 resp.content
             };
-            let mut checks = verify::run(engine, &text, &evidence);
+            let mut checks = verify::run(engine, question, &text, &evidence);
             // One tool-free corrective turn when a cited query re-runs to a
             // different result (or no longer runs). The value the model
             // reconciles against comes from that re-run, so the answer stays
@@ -159,7 +160,7 @@ corrected answer to match the re-run."
                     usage = Usage::merge(usage, r.usage);
                     if !r.content.trim().is_empty() {
                         text = r.content;
-                        checks = verify::run(engine, &text, &evidence);
+                        checks = verify::run(engine, question, &text, &evidence);
                     }
                 }
             }
@@ -253,7 +254,7 @@ not run again. Its result is repeated below - use it, refine the call, or give y
         }
 
         if cancel.load(Ordering::Relaxed) {
-            return Ok(stopped(engine, evidence, usage, emit));
+            return Ok(stopped(engine, question, evidence, usage, emit));
         }
         trim_history(&mut messages);
         log::info!(
@@ -276,7 +277,7 @@ you're not confident, say so plainly rather than guessing."
     ));
     let resp = tokio::select! {
         r = llm.chat(&messages, &[], &notify, &on_delta) => r.unwrap_or_default(),
-        _ = cancelled(cancel) => return Ok(stopped(engine, evidence, usage, emit)),
+        _ = cancelled(cancel) => return Ok(stopped(engine, question, evidence, usage, emit)),
     };
     model_calls += 1;
     usage = Usage::merge(usage, resp.usage);
@@ -290,16 +291,17 @@ you're not confident, say so plainly rather than guessing."
         run_start.elapsed(),
         evidence.len()
     );
-    Ok(finish(engine, text, evidence, usage, emit))
+    Ok(finish(engine, question, text, evidence, usage, emit))
 }
 
 fn stopped(
     engine: &EngineState,
+    question: &str,
     evidence: Vec<EvidenceItem>,
     usage: Option<Usage>,
     emit: &(dyn Fn(AskEvent) + Send + Sync),
 ) -> Answer {
-    finish(engine, "Stopped.".to_string(), evidence, usage, emit)
+    finish(engine, question, "Stopped.".to_string(), evidence, usage, emit)
 }
 
 /// The corrective re-ask fires unless `FELLA_VERIFY_REASK=0`.
@@ -309,12 +311,13 @@ fn reask_enabled() -> bool {
 
 fn finish(
     engine: &EngineState,
+    question: &str,
     text: String,
     evidence: Vec<EvidenceItem>,
     usage: Option<Usage>,
     emit: &(dyn Fn(AskEvent) + Send + Sync),
 ) -> Answer {
-    let checks = verify::run(engine, &text, &evidence);
+    let checks = verify::run(engine, question, &text, &evidence);
     finish_with(text, evidence, usage, checks, emit)
 }
 
