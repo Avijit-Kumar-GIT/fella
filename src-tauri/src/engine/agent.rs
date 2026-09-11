@@ -10,7 +10,7 @@ use crate::engine::evidence::{Answer, AskEvent, EvidenceItem, Usage, Verificatio
 use crate::engine::llm::{ChatMessage, LlmClient, ToolCall};
 use crate::engine::state::EngineState;
 use crate::engine::tools::Registry;
-use crate::engine::{verify, Catalog};
+use crate::engine::{friction, verify, Catalog};
 
 /// Hard cap on tool-calling iterations per question, before the loop forces
 /// a final answer. `FELLA_MAX_STEPS` overrides it a slower or less
@@ -199,7 +199,7 @@ corrected answer to match the re-run."
                     }
                 }
             }
-            return Ok(finish_with(text, evidence, usage, checks, emit));
+            return Ok(finish_with(engine, text, evidence, usage, checks, emit));
         }
         tool_calls_total += resp.tool_calls.len();
 
@@ -354,10 +354,11 @@ fn finish(
     emit: &(dyn Fn(AskEvent) + Send + Sync),
 ) -> Answer {
     let checks = verify::run(engine, &text, &evidence);
-    finish_with(text, evidence, usage, checks, emit)
+    finish_with(engine, text, evidence, usage, checks, emit)
 }
 
 fn finish_with(
+    engine: &EngineState,
     text: String,
     evidence: Vec<EvidenceItem>,
     usage: Option<Usage>,
@@ -369,6 +370,9 @@ fn finish_with(
         text.len(),
         evidence.len()
     );
+    if let Some(reason) = friction::trigger(&verification, &evidence) {
+        engine.record_friction_signal(reason, &evidence);
+    }
     let answer = Answer {
         text,
         evidence,
