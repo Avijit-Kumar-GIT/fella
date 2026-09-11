@@ -6,6 +6,20 @@ All notable changes to Fella are recorded here. Format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Augment packs: `/note` and `/table`.** A new pack kind, `augment`, switches
+  on a first-party capability a plain-text tab (`buffer`) or a small
+  editable table (`grid`) and binds it to a slash command. Type in the tab
+  and it autosaves into the currently-open folder; Fella then reads that file
+  like any other. The pack ships no code and the agent still has no write
+  tool only your keystroke writes, and only the file the pack names. Two
+  starter packs, `notes` (`/note` → `notes.md`) and `table` (`/table` →
+  `table.csv`), are the marketplace's first listed packs (`fella-extensions`).
+  A new capability beyond `buffer`/`grid` is deliberately rare, gated the same
+  way as a new built-in tool (`docs/DECISIONS.md`, `docs/EXTENSIBILITY.md`).
+  Tracking: #74.
+
 ## [0.1.5]
 
 ### Added
