@@ -29,8 +29,8 @@ const MAX_LABEL_CHARS: usize = 18;
 
 const WIDTH: f64 = 520.0;
 const PAD_L: f64 = 150.0;
-const PAD_R: f64 = 46.0;
-const ROW: f64 = 26.0;
+const PAD_R: f64 = 52.0;
+const ROW: f64 = 30.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChartKind {
@@ -84,7 +84,40 @@ aggregate to the top few first",
             return Err(format!("series \"{}\" has a non-finite value ({bad})", s.name));
         }
     }
+    if !meaningfully_varies(data) {
+        return Err(
+            "these values are all within a couple percent of each other -- a chart won't \
+show anything a sentence wouldn't. Answer in prose or a small table instead of charting \
+flat data."
+                .into(),
+        );
+    }
     Ok(())
+}
+
+/// Below this, a series' values are close enough to flat that a chart adds
+/// nothing over a sentence -- e.g. rent at $1316/mo except one $1321 month
+/// is a >99%-flat line, not a trend worth drawing. Relative to the largest
+/// magnitude in the series (not the mean), since a mean near zero would
+/// blow the ratio up on otherwise-flat data centered near zero.
+/// `ponytail:` a fixed heuristic threshold, not learned from real charting
+/// mistakes yet -- retune from `agent_eval` feedback if it over/under-fires.
+const MIN_VARIATION: f64 = 0.02;
+
+/// True when at least one series has real spread across its values. A
+/// single category is always "fine" here -- there's nothing to compare, so
+/// flatness isn't the concern (`chart_rule`'s prompt guidance handles a
+/// single-figure chart separately, before this ever runs).
+fn meaningfully_varies(data: &ChartData) -> bool {
+    if data.labels.len() <= 1 {
+        return true;
+    }
+    data.series.iter().any(|s| {
+        let lo = s.values.iter().cloned().fold(f64::INFINITY, f64::min);
+        let hi = s.values.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        let scale = s.values.iter().fold(0.0f64, |m, v| m.max(v.abs())).max(1.0);
+        (hi - lo) / scale >= MIN_VARIATION
+    })
 }
 
 /// XML-escape: the one load-bearing safety control every interpolated
@@ -175,9 +208,9 @@ fn draw_header(p: &mut String, data: &ChartData) -> f64 {
         y += 14.0;
         let mut lx = 4.0;
         for (si, s) in data.series.iter().enumerate() {
-            let fill = if si == 0 { "var(--text)" } else { "var(--text-dim)" };
+            let fill = if si == 0 { "var(--border-strong)" } else { "var(--text-dim)" };
             p.push_str(&format!(
-                "<rect x=\"{lx:.1}\" y=\"{:.1}\" width=\"7\" height=\"7\" fill=\"{fill}\"/>",
+                "<rect x=\"{lx:.1}\" y=\"{:.1}\" width=\"7\" height=\"7\" rx=\"1.5\" fill=\"{fill}\"/>",
                 y - 7.0
             ));
             let label = short_label(&s.name, MAX_LABEL_CHARS);
@@ -219,30 +252,46 @@ stroke=\"var(--border)\" stroke-dasharray=\"3 3\"/>",
             h - 8.0
         ));
     }
+    // Slim pill bars sitting inside a track (var(--bg-inset)), not a solid
+    // block floating on nothing -- matches app.css's own rule that
+    // "hierarchy comes from type and spacing before fills." One series gets
+    // a full-height band; two share the row with a small gap between them.
     let ns = data.series.len().max(1);
-    let sub_h = ((ROW - 8.0) / ns as f64).max(3.0);
+    let band_h = if ns == 1 { 12.0 } else { 8.0 };
+    let gap = 3.0;
+    let group_h = band_h * ns as f64 + gap * (ns.saturating_sub(1)) as f64;
+
     for (i, label) in data.labels.iter().enumerate() {
         let y0 = top + i as f64 * ROW;
+        let group_y = y0 + (ROW - group_h) / 2.0;
         body.push_str(&format!(
             "<text x=\"{:.1}\" y=\"{:.1}\" text-anchor=\"end\" fill=\"var(--text-dim)\">{}</text>",
-            PAD_L - 8.0,
+            PAD_L - 10.0,
             y0 + ROW / 2.0 + 4.0,
             esc(&short_label(label, MAX_LABEL_CHARS))
         ));
+        for si in 0..ns {
+            let by = group_y + si as f64 * (band_h + gap);
+            body.push_str(&format!(
+                "<rect x=\"{PAD_L:.1}\" y=\"{by:.1}\" width=\"{plot_w:.1}\" height=\"{band_h:.1}\" \
+rx=\"{:.1}\" fill=\"var(--bg-inset)\"/>",
+                band_h / 2.0
+            ));
+        }
         for (si, s) in data.series.iter().enumerate() {
             let v = s.values[i];
             let x2 = x(v);
             let (bx, bw) = if x2 >= base { (base, x2 - base) } else { (x2, base - x2) };
-            let sy = y0 + 4.0 + si as f64 * sub_h;
-            let fill = if si == 0 { "var(--text)" } else { "var(--text-dim)" };
+            let by = group_y + si as f64 * (band_h + gap);
+            let fill = if si == 0 { "var(--border-strong)" } else { "var(--text-dim)" };
             body.push_str(&format!(
-                "<rect x=\"{bx:.1}\" y=\"{sy:.1}\" width=\"{:.1}\" height=\"{:.1}\" rx=\"1.5\" fill=\"{fill}\"/>",
-                bw.max(1.0),
-                (sub_h - 1.0).max(2.0)
+                "<rect x=\"{bx:.1}\" y=\"{by:.1}\" width=\"{:.1}\" height=\"{band_h:.1}\" rx=\"{:.1}\" fill=\"{fill}\"/>",
+                bw.max(2.0),
+                band_h / 2.0
             ));
             if si == ns - 1 {
                 let anchor = if x2 >= base { "start" } else { "end" };
-                let tx = x2 + if x2 >= base { 4.0 } else { -4.0 };
+                let tx = x2 + if x2 >= base { 6.0 } else { -6.0 };
                 body.push_str(&format!(
                     "<text x=\"{tx:.1}\" y=\"{:.1}\" text-anchor=\"{anchor}\" fill=\"var(--text)\">{}</text>",
                     y0 + ROW / 2.0 + 4.0,
@@ -558,6 +607,46 @@ mod tests {
         assert!(validate(&data).is_err());
         let data = bar(&["a"], vec![("s", vec![f64::INFINITY])]);
         assert!(validate(&data).is_err());
+    }
+
+    #[test]
+    fn validate_rejects_nearly_flat_data() {
+        // The real bug report: 11 months at $1316, one at $1321 -- under
+        // 0.4% spread, not a trend worth drawing.
+        let mut values = vec![1316.0; 11];
+        values.push(1321.0);
+        let labels: Vec<String> = (0..12).map(|i| format!("m{i}")).collect();
+        let data = ChartData {
+            kind: ChartKind::Bar,
+            title: None,
+            labels,
+            series: vec![Series { name: "rent".into(), values }],
+            unit: Some("$".into()),
+        };
+        assert!(validate(&data).is_err());
+    }
+
+    #[test]
+    fn validate_allows_a_single_category_even_though_flat() {
+        // Nothing to compare against, so flatness isn't the concern here
+        // (the prompt tells the model to skip charting a single figure).
+        let data = bar(&["only"], vec![("s", vec![42.0])]);
+        assert!(validate(&data).is_ok());
+    }
+
+    #[test]
+    fn validate_allows_data_with_real_spread() {
+        let data = bar(&["a", "b", "c"], vec![("s", vec![100.0, 250.0, 90.0])]);
+        assert!(validate(&data).is_ok());
+    }
+
+    #[test]
+    fn validate_allows_one_varying_series_even_if_another_is_flat() {
+        let data = bar(
+            &["a", "b", "c"],
+            vec![("flat", vec![10.0, 10.0, 10.0]), ("varies", vec![5.0, 50.0, 8.0])],
+        );
+        assert!(validate(&data).is_ok());
     }
 
     #[test]
