@@ -99,6 +99,13 @@ struct Inner {
     /// table, so we build it once per workspace and clear it on (re)open or
     /// when `describe_source` refreshes a table's stats.
     schema_cache: Option<String>,
+    /// Lowercased `view` names `describe_source` has computed stats for this
+    /// workspace session. On a large folder (schema_block's `full` tier, more
+    /// than the small-folder cutoff) a table's sample rows only enter the
+    /// digest once it's in this set - just-in-time instead of eagerly
+    /// sampling every table upfront. Cleared on workspace (re)open, same as
+    /// `schema_cache`.
+    inspected_tables: HashSet<String>,
     /// Files the last scan/ingest noticed but couldn't load.
     skipped: Vec<catalog::SkippedFile>,
     /// `<data_dir>/memory/<key>.md` for the open workspace (per-folder learned
@@ -383,12 +390,12 @@ impl EngineState {
     /// names + shape only (keeps the prompt small).
     pub(crate) fn schema_block(&self) -> String {
         // Clone out first: `self.sample` re-locks `inner`.
-        let sources = {
+        let (sources, inspected) = {
             let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(cached) = &inner.schema_cache {
                 return cached.clone();
             }
-            inner.sources.clone()
+            (inner.sources.clone(), inner.inspected_tables.clone())
         };
         let tables: Vec<&SourceInfo> = sources.iter().filter(|s| s.view.is_some()).collect();
         let total_cols: usize = tables
@@ -396,7 +403,11 @@ impl EngineState {
             .map(|s| s.columns.as_ref().map(|c| c.len()).unwrap_or(0))
             .sum();
         let full = tables.len() <= 12 && total_cols <= 60;
-        let with_samples = full && tables.len() <= 4;
+        // Small/typical folders (<=4 tables) see no change: samples for every
+        // table, as before. Above that, a table's samples only enter the
+        // digest once the model has actually called inspect_table on it -
+        // just-in-time instead of eagerly sampling every table upfront.
+        let small = tables.len() <= 4;
 
         let mut p = String::new();
         if tables.is_empty() {
@@ -420,7 +431,7 @@ impl EngineState {
                         }
                     }
                 }
-                if with_samples {
+                if small || inspected.contains(&view.to_lowercase()) {
                     if let Ok(sample) = self.sample(view, 3) {
                         for line in mini_table(&sample) {
                             p.push_str(&format!("    {line}\n"));
@@ -998,6 +1009,7 @@ impl EngineState {
             // (schema hints, prior queries) is now stale.
             inner.sessions.clear();
             inner.schema_cache = None;
+            inner.inspected_tables.clear();
         }
         // The user is about to ask something: warm the model now so the first
         // question doesn't wait on a cold load.
@@ -1105,6 +1117,7 @@ impl EngineState {
                     s.row_count = info.row_count;
                 }
             }
+            inner.inspected_tables.insert(view.to_lowercase());
             inner.schema_cache = None;
         }
         Ok(info)
@@ -1800,5 +1813,68 @@ mod schema_hint_tests {
         let b = tbl("b", &["id", "name", "amount", "note"]);
         // id/name/amount are stoplisted; sku/note appear in only one table
         assert!(shared_column_hints(&[&a, &b]).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod jit_schema_tests {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::*;
+
+    fn scratch(tag: &str) -> std::path::PathBuf {
+        let n = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let p = std::env::temp_dir().join(format!("fella-jit-{tag}-{n}"));
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    #[test]
+    fn samples_only_a_large_folders_inspected_tables() {
+        let ws = scratch("ws");
+        let data = scratch("data");
+        // 6 tables: past the <=4 small-folder cutoff (samples always shown),
+        // still under the <=12 tables / <=60 columns "full" ceiling (columns
+        // are shown eagerly either way).
+        for i in 0..6 {
+            std::fs::write(
+                ws.join(format!("t{i}.csv")),
+                format!("id,city\n1,town{i}\n2,town{i}\n"),
+            )
+            .unwrap();
+        }
+        let engine = EngineState::new(&data).unwrap();
+        engine.open_workspace(&ws).unwrap();
+
+        let before = engine.schema_block();
+        assert!(before.contains("t0"), "table names still listed");
+        assert!(before.contains("\"city\""), "columns still listed eagerly");
+        assert!(!before.contains("town0"), "no sample rows before any inspection");
+        assert!(!before.contains("town3"), "no sample rows before any inspection");
+
+        engine.describe_source("t0").unwrap();
+        let after = engine.schema_block();
+        assert!(after.contains("town0"), "t0's sample rows enter the digest once inspected");
+        assert!(!after.contains("town3"), "t3 wasn't inspected, still no samples for it");
+    }
+
+    #[test]
+    fn small_folders_always_show_samples() {
+        let ws = scratch("ws-small");
+        let data = scratch("data-small");
+        // Only 2 tables: at or under the <=4 cutoff, samples show up-front.
+        for i in 0..2 {
+            std::fs::write(
+                ws.join(format!("s{i}.csv")),
+                format!("id,city\n1,town{i}\n2,town{i}\n"),
+            )
+            .unwrap();
+        }
+        let engine = EngineState::new(&data).unwrap();
+        engine.open_workspace(&ws).unwrap();
+
+        let block = engine.schema_block();
+        assert!(block.contains("town0"));
+        assert!(block.contains("town1"));
     }
 }
