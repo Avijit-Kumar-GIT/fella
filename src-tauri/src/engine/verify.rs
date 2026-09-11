@@ -3,6 +3,7 @@
 //!   2. re-running each cited query still gives the same result
 //!   3. every number in the answer appears in some tool result
 //!   4. the question's wording implies a SQL aggregate no cited query used
+//!   5. a column named in the question is never mentioned in any cited query
 
 use std::collections::HashSet;
 
@@ -25,6 +26,7 @@ pub fn run(
     check_text_agg(engine, evidence, &mut checks);
     check_case_filter(engine, evidence, &mut checks);
     check_aggregate_verb(question, evidence, &mut checks);
+    check_dropped_column(engine, question, evidence, &mut checks);
 
     checks
 }
@@ -330,6 +332,103 @@ pub(crate) fn referenced_relations(sql: &str) -> HashSet<String> {
         }
     }
     out
+}
+
+/// True when `needle` occurs in `haystack` on a word boundary (not as part of
+/// a longer identifier on either side). Both are expected already lowercased.
+fn contains_word(haystack: &str, needle: &str) -> bool {
+    let bytes = haystack.as_bytes();
+    let mut from = 0;
+    while let Some(rel) = haystack[from..].find(needle) {
+        let start = from + rel;
+        let end = start + needle.len();
+        from = end;
+        let before_ok = start == 0 || !bytes[start - 1].is_ascii_alphanumeric() && bytes[start - 1] != b'_';
+        let after_ok = end == bytes.len() || !bytes[end].is_ascii_alphanumeric() && bytes[end] != b'_';
+        if before_ok && after_ok {
+            return true;
+        }
+    }
+    false
+}
+
+/// Column names too generic to mean "filter on this" just because the word
+/// shows up in the question — same list `shared_column_hints` (state.rs)
+/// already uses to drop unhelpful join-key suggestions.
+const GENERIC_COLUMN_NAMES: &[&str] = &[
+    "id", "name", "title", "description", "note", "notes", "memo", "comment", "comments", "type",
+    "status", "value", "amount", "total", "subtotal", "count", "price", "cost", "qty", "quantity",
+    "label", "date",
+];
+
+/// Which of `table_columns` (real schema names, any case) are named in the
+/// question but never mentioned anywhere in `sql_texts` — a sign the model
+/// dropped a filter or grouping the question implied (e.g. "how many books
+/// have I *finished*" answered without a `finished` filter anywhere in the
+/// query). Lexical and conservative: word-boundary matched, generic names
+/// filtered out, only meaningful for a single table (the caller resolves
+/// that). Pure so it's testable without a real `EngineState`/catalog, same
+/// pattern as `missing_aggregate_verbs`. Doesn't check filter *values*
+/// (`tier = 'close'` vs `tier = 'active'`) only that the column was
+/// referenced at all; see #67 for the harder cases this still misses.
+fn dropped_columns<'a>(question: &str, sql_texts: &[String], table_columns: &'a [String]) -> Vec<&'a str> {
+    if sql_texts.is_empty() {
+        return Vec::new();
+    }
+    let q = question.to_lowercase();
+    let sql_all = sql_texts.join(" ").to_lowercase();
+    table_columns
+        .iter()
+        .filter(|name| {
+            let n = name.to_lowercase();
+            n.len() >= 4
+                && !GENERIC_COLUMN_NAMES.contains(&n.as_str())
+                && contains_word(&q, &n)
+                && !contains_word(&sql_all, &n)
+        })
+        .map(String::as_str)
+        .collect()
+}
+
+/// A column from the single table this answer's queries touch, named in the
+/// question but never mentioned anywhere in the cited SQL. Only fires for a
+/// single-table answer — multi-table questions are #79's job, and a second
+/// table changes which column belongs where.
+fn check_dropped_column(
+    engine: &EngineState,
+    question: &str,
+    evidence: &[EvidenceItem],
+    out: &mut Vec<VerificationCheck>,
+) {
+    let sql: Vec<String> = evidence
+        .iter()
+        .filter(|e| e.tool == "run_sql" && e.error.is_none())
+        .filter_map(|e| e.sql.as_deref())
+        .map(str::to_string)
+        .collect();
+    let tables: HashSet<String> =
+        sql.iter().flat_map(|s| referenced_relations(&s.to_lowercase())).collect();
+    let [table] = tables.iter().collect::<Vec<_>>()[..] else { return };
+    let catalog = engine.catalog();
+    let Some(cols) = catalog
+        .sources
+        .iter()
+        .find(|s| s.view.as_deref().map(str::to_lowercase).as_deref() == Some(table.as_str()))
+        .and_then(|s| s.columns.as_ref())
+    else {
+        return;
+    };
+    let names: Vec<String> = cols.iter().map(|c| c.name.clone()).collect();
+    for name in dropped_columns(question, &sql, &names) {
+        out.push(warn(
+            format!("question names `{name}` but no cited query mentions it"),
+            Some(format!(
+                "the question's wording includes \"{name}\", which is a column on this table, \
+                 but none of the queries behind this answer reference it — a filter or grouping \
+                 the question implied may have been dropped"
+            )),
+        ));
+    }
 }
 
 // --- 2. re-run cited queries ------------------------------------------
@@ -680,6 +779,65 @@ mod tests {
         );
         both.sort_unstable();
         assert_eq!(both, vec!["AVG", "SUM"]);
+    }
+
+    #[test]
+    fn spots_a_dropped_column() {
+        let cols = vec!["finished".to_string(), "genre".to_string(), "title".to_string()];
+
+        // question names "finished", cited query never mentions it -> flagged
+        assert_eq!(
+            dropped_columns(
+                "how many books have I finished?",
+                &["SELECT COUNT(*) FROM books".to_string()],
+                &cols
+            ),
+            vec!["finished"]
+        );
+        // query does reference it -> not flagged
+        assert!(dropped_columns(
+            "how many books have I finished?",
+            &["SELECT COUNT(*) FROM books WHERE finished = 'yes'".to_string()],
+            &cols
+        )
+        .is_empty());
+        // short/generic-ish column not in the stoplist by name coincidence is still fine;
+        // a genuinely generic name is skipped even when dropped
+        let generic = vec!["type".to_string()];
+        assert!(dropped_columns(
+            "what type of book is this?",
+            &["SELECT * FROM books".to_string()],
+            &generic
+        )
+        .is_empty());
+        // a column name embedded in a longer word doesn't count as a real mention,
+        // on either side: "rate" inside "rated" (question), "genre" inside
+        // "subgenre" (SQL) — "genre" is still correctly flagged as dropped since
+        // "subgenre" isn't a real reference to the `genre` column.
+        assert!(dropped_columns(
+            "how is this rated?",
+            &["SELECT * FROM books".to_string()],
+            &["rate".to_string()]
+        )
+        .is_empty());
+        assert_eq!(
+            dropped_columns(
+                "which genre did I read most?",
+                &["SELECT subgenre FROM books".to_string()],
+                &["genre".to_string()]
+            ),
+            vec!["genre"]
+        );
+        // no run_sql evidence at all -> nothing to flag
+        assert!(dropped_columns("how many books have I finished?", &[], &cols).is_empty());
+    }
+
+    #[test]
+    fn word_boundaries_are_respected() {
+        assert!(contains_word("how many books have i finished?", "finished"));
+        assert!(!contains_word("unfinished business", "finished"));
+        assert!(!contains_word("the finisher", "finish"));
+        assert!(contains_word("select * from t where finished = 'yes'", "finished"));
     }
 
     #[test]
