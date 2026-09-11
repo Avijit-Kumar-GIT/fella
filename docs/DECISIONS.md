@@ -7,6 +7,38 @@ this app repo (now **`fella`**; `fella-ai` is a private pre-v0.1 archive),
 `fella-marketplace` to mean the browse-site half of the **`fella-web`** repo,
 and any `CODE_OF_CONDUCT.md` mention as folded into `CONTRIBUTING.md` (§Conduct).
 
+- **2026-09-10** **`augment` — a 4th pack kind that adds a small opt-in
+  surface, not just data.** `theme`/`skill`/`mcp` are inert data fed to the
+  existing app; an `augment` pack turns on a **first-party capability the app
+  already ships** and parameterises it (which slash command, which file). v1
+  capabilities: `buffer` (a plain-text tab that saves `.md`/`.txt`) and `grid`
+  (a minimal editable table that saves `.csv`). The pack still ships **no code**
+  — a `fella-pack.json` (`kind: "augment"`) plus an `augment.json` naming the
+  capability + config. The app owns a closed capability allowlist; an unknown
+  capability degrades gracefully ("this build doesn't support the 'X' augment"),
+  the way `mcp` does under `--no-default-features`. Off by default; default
+  answer quality never depends on one.
+  **This amends two locked lines** (like the 2026-08-29 MCP amendment):
+  (1) "no generated artifacts / produces answers, not files" (2026-08-27,
+  `AUDIT.md`, `ARCHITECTURE.md`) — the **app** now writes a file into the
+  workspace, but **only on an explicit user keystroke in an augment view**; the
+  **agent's** tool set is unchanged and still has no write tool
+  (`Registry::standard()`), so the model never writes. (2) `EXTENSIBILITY.md`
+  "there is no plugin runtime" — now "no *arbitrary-code* plugin runtime; a pack
+  may enable one curated first-party capability".
+  **Compatibility contract:** a pack carries no code, so the app may change
+  internally (UI, tabs, engine) without breaking any pack. The only stable
+  surface is (a) `fella-pack.json` schema 1 fields, (b) a capability's name +
+  its `augment.json` keys, (c) the file-extension allowlist (`md/txt/csv/tsv`).
+  A "drastic change" that can break a pack is narrow: bump manifest `schema` to
+  `2`, or remove/rename a shipped capability. Adding kinds, capabilities, config
+  keys or catalog fields never breaks an existing pack; `catalog.json` `schema`
+  stays `1`. To hold this, `kind` parsing is made tolerant of unknown values
+  (older Fella meeting a future kind says "needs a newer Fella", doesn't crash),
+  `augment.json` has no `deny_unknown_fields`, and a built-in command always
+  wins a collision with an augment's command (the augment then shows as
+  unreachable). `docs/WHY.md` (unmerged branch `docs/why-thesis`) contradicts
+  this and must be reconciled when that branch lands.
 - **2026-09-09** **Pack-marketplace rollout resumed, minus the proxy.** The
   2026-09-02 pause is lifted: `web_search`/`web_fetch`-as-a-pack (2026-09-08) and
   "breadth lives in extensions" (2026-09-08) are demand enough. `fella-extensions`

@@ -12,8 +12,11 @@ who don't write SQL or Python. Answers are grounded in **deterministic computati
 (SQL, or Python when SQL isn't enough) and are **fully auditable** every answer
 carries the steps, queries and rows behind it.
 
-**Read-only.** Fella reads the folder; it never writes, moves or deletes anything, and
-it produces answers, not files. The read-only boundary is the safety story.
+**Read-only agent.** The agent reads the folder; it never writes, moves or deletes
+anything, and it produces answers, not files. The read-only boundary is the safety
+story, and it is structural there is no write tool to disable. An opt-in
+`augment` pack (`EXTENSIBILITY.md`) adds a tab where *you* save a note or table you
+typed; that is a user keystroke writing one named file, never the model.
 
 ## Non-goals ("why not X")
 
@@ -23,11 +26,13 @@ it produces answers, not files. The read-only boundary is the safety story.
   A capability earns its place by making the existing job better or shorter,
   not by adding a parallel thing to do; breadth lives in extensions.
   (`DECISIONS.md` 2026-09-08.)
-- **Not a task agent.** No write/move/delete tools, no generated artifacts, no
-  permission dialogs see `AUDIT.md`. Fella answers questions; it doesn't do chores.
+- **Not a task agent.** The agent has no write/move/delete tools and emits no
+  artifacts; no permission dialogs see `AUDIT.md`. Fella answers questions; it
+  doesn't do chores. (An opt-in `augment` pack adds a note/table tab the *user*
+  saves from `EXTENSIBILITY.md`; the agent's tools are unchanged.)
 - **A fixed, small tool set in the base.** Adding a built-in tool or a file-format
   parser is a code change, not a plugin. Beyond the base, users can install vetted
-  themes, skills, and MCP connectors themselves see `EXTENSIBILITY.md`.
+  themes, skills, MCP connectors, and augments themselves see `EXTENSIBILITY.md`.
 - **MCP is opt-in, not bundled.** Fella ships an MCP client so a user can connect an
   external source (Notion, a notes repo); no connector ships by default and none is a
   core dependency. (Reversed 2026-08-29; was "No MCP".)
@@ -240,13 +245,16 @@ question, channel)` streams `assistant_delta` / `tool_start` / `tool_end` /
 
 ## Packs (extensions)
 
-`engine/extensions.rs` + `engine/mcp.rs`. A pack is one of three kinds
-`theme` (CSS-token JSON), `skill` (Markdown into the system prompt), or `mcp`
-(a `connector.json` for a remote MCP server). Installed under
-`<app-data>/extensions/<id>/`; tracked in the `extensions` table. Browsed on an
-external website, installed by id (`/packs install`), hash-checked. Connectors
-use `rmcp` behind the `mcp` feature, connected lazily per `ask`, token in
-`auth.json`. Full design: `docs/EXTENSIBILITY.md`.
+`engine/extensions.rs` + `engine/mcp.rs` + `engine/augment.rs`. A pack is one of
+four kinds `theme` (CSS-token JSON), `skill` (Markdown into the system
+prompt), `mcp` (a `connector.json` for a remote MCP server), or `augment` (an
+`augment.json` that switches on a first-party capability `buffer`/`grid` and
+binds it to a slash command; the tab saves a user-typed file into the open
+folder). Installed under `<app-data>/extensions/<id>/`; tracked in the
+`extensions` table. Browsed on an external website, installed by id
+(`/packs install`), hash-checked. Connectors use `rmcp` behind the `mcp`
+feature, connected lazily per `ask`, token in `auth.json`. The agent's tool set
+is unchanged by any pack. Full design: `docs/EXTENSIBILITY.md`.
 
 ## UI
 

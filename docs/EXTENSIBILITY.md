@@ -25,16 +25,56 @@ the marketplace is marked unverified.
 
 ## What a pack is
 
-A pack is **exactly one of three kinds**. Nothing else is a pack.
+A pack is **exactly one of four kinds**. Nothing else is a pack.
 
 | Kind | Payload | What it does | Cost when active |
 |------|---------|--------------|------------------|
 | **`theme`** | `theme.json` a map of the app's `:root` CSS tokens (`src/app.css`), optionally an `appearance` hint | changes colours and spacing; one theme active at a time | none; inert data |
 | **`skill`** | `skill.md` Markdown, size-capped | text injected into the system prompt as a "Your context" section: vocabulary, file conventions, caveats the model should always apply. Several can be enabled at once. It can only shape how Fella words and interprets an answer there is no tool for it to call. | none; inert text |
 | **`mcp`** | `connector.json` (`{ "transport": "http", "url", "auth", "setup" }`) | lets Fella read a source outside the local folder (Notion, a notes repo, a wiki) via a **remote** [Model Context Protocol](https://modelcontextprotocol.io) server. The server's tools appear in the agent loop and evidence panel like the built-ins, namespaced `<id>__<tool>`. The token goes in `auth.json` (`Secrets`); you paste it with `/connect <id>`. | a live connection only while an enabled `mcp` pack is used |
+| **`augment`** | `augment.json` (`{ "capability", "command", "file", "syntax" }`) | turns on a small **first-party capability the app already ships** and binds it to a slash command: `buffer` (a plain-text tab saving `.md`/`.txt`) or `grid` (a minimal editable table saving `.csv`). The tab saves a file **into the open folder when you type in it** the agent still never writes. | a tab you can open; no cost otherwise |
 
 A pack is a directory with a `fella-pack.json` manifest plus its one payload
 file. No app code. No archive format, no package manager.
+
+### `augment` packs in detail
+
+An augment pack ships **no behaviour of its own** it names one of the app's
+built-in capabilities and configures it. The app owns the closed allowlist
+(`buffer`, `grid` at v1); a manifest naming an unknown capability still loads
+but reports "this build doesn't support the 'X' augment", the way `mcp` does
+under `--no-default-features`. New capabilities arrive in app releases.
+
+- `command` the slash command that opens the view (`note`, `table`, …),
+  `^[a-z][a-z0-9-]{0,15}$`, and not one of the built-in commands. If a future
+  built-in ever takes that name, the built-in wins and `/packs` marks the
+  augment unreachable.
+- `file` a workspace-relative path (no `..`, no leading `/`), extension in
+  `{md, txt, csv, tsv}`. This is where the tab autosaves; Fella then reads it
+  like any other file in the folder (`/reindex` runs when you close the tab).
+- `syntax` `markdown` / `plain` / `csv`, an editor hint only.
+
+The **agent's** tool set is unchanged there is still no write tool. Only a
+person typing in an augment view writes anything, and only to the file the
+manifest names.
+
+### The compatibility contract
+
+A pack carries no code, so the app is free to change internally UI, tab
+plumbing, the engine without breaking any installed pack. The only surface a
+pack depends on:
+
+1. `fella-pack.json` **schema 1** fields (`schema` / `id` / `kind` / `name` /
+   `version` / `description` / `payload`).
+2. For an augment, a **capability's name** and its `augment.json` **keys**.
+3. The **file-extension allowlist** (`md` / `txt` / `csv` / `tsv`).
+
+Everything else may change. A "drastic change" that can break a pack is narrow
+and deliberate: bumping manifest `schema` to `2`, or removing/renaming a shipped
+capability. Adding kinds, capabilities, config keys, or catalog fields never
+breaks an existing pack, and `catalog.json`'s `schema` stays `1`. The app parses
+an unknown `kind` as "needs a newer Fella" rather than erroring, ignores unknown
+`augment.json` keys, and falls back to `plain` for an unknown `syntax`.
 
 ### `mcp` connectors in detail
 
@@ -162,14 +202,18 @@ read-only tools) is not portable to those tools anyway.
   or PR on `fella` (lane 1).
 - **Anything the base needs for a good first run.** If a non-technical user
   would want it out of the box, it belongs in the base.
-- **A "full feature" delivered as an add-on.** There is no plugin runtime and
-  no package-manager ecosystem; the three kinds above are the whole surface.
+- **Arbitrary code as an add-on.** There is no *arbitrary-code* plugin runtime
+  and no package-manager ecosystem. An `augment` pack can only switch on a
+  capability the app already ships and reviewed; it cannot bring its own.
 
 ## How this squares with the non-negotiables
 
-- **Read-only workspace** is unchanged and unconditional. Fella's own tools
-  never write, move, or delete anything in your folder. An `mcp` connector is a
-  separate data source, surfaced as evidence, not a way to write the folder.
+- **The agent is read-only**, unchanged and unconditional. Fella's tools never
+  write, move, or delete anything in your folder, and the model never emits a
+  file. An `augment` pack adds a surface where **you** save a note or a table
+  you typed nothing is written without your keystroke, and only to the file
+  the manifest names. An `mcp` connector is a separate data source, surfaced as
+  evidence, not a way to write the folder.
 - **Nothing leaves the machine** describes the base. An enabled `mcp` connector
   talks to its own service because you set it up to.
 - **Credentials** for a connector use the same `auth.json` store and rules.

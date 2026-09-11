@@ -28,9 +28,9 @@ binary with nothing bundled. Local-first. Minimal dependencies. It's for a regul
 person doing personal analytics not analysts, not developers so it's plain-language
 throughout and copes with a messy real-world folder. It is deliberately *not* a general
 task agent: no file-management, no chores, and the base has a fixed, small tool set.
-Customisation is opt-in and stays out of the base: vetted themes, skills, and
-MCP connectors a user can install themselves (see
-[`docs/EXTENSIBILITY.md`](docs/EXTENSIBILITY.md)). The whole thing stays understandable
+Customisation is opt-in and stays out of the base: vetted themes, skills, MCP
+connectors, and augments (a notes tab, a small table) a user can install
+themselves (see [`docs/EXTENSIBILITY.md`](docs/EXTENSIBILITY.md)). The whole thing stays understandable
 by one person. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ## Requirements
@@ -127,8 +127,9 @@ own model. Slash commands below are a power-user shortcut; you never need them.
 | `/model` | Show or change the LLM provider, base URL and model. Per-tab: each tab can run a different model, but all tabs share one login |
 | `/reindex` | Check the folder again for new or changed files |
 | `/update` | Check for a newer release and install it (checksum-verified, same as the install scripts); Fella closes and you reopen it once the installer finishes |
-| `/packs` | Themes and skills you've added. `/packs add <path>` for a local one, `/packs install <id>` from the seed catalog ([`docs/EXTENSIBILITY.md`](docs/EXTENSIBILITY.md)) |
+| `/packs` | Packs you've added themes, skills, mcp connectors, augments. `/packs add <path>` for a local one, `/packs install <id>` from the seed catalog ([`docs/EXTENSIBILITY.md`](docs/EXTENSIBILITY.md)) |
 | `/connect` | Connect a data source you installed as an `mcp` pack (paste its token) |
+| _(augment)_ | An installed `augment` pack adds its own command e.g. `/note` opens a notes tab, `/table` a small editable table, each saved into the open folder |
 | `/tab` | Open another conversation in a new tab |
 | `/focus` | Hide the tabs and header for a plain view (again to undo) |
 | `/clear` | Start a new conversation (the old one is saved) |
@@ -160,16 +161,18 @@ worked — instead of starting over each time.
 
 Fella works with nothing set up. If you want more: drop a `fella.md` in your folder to
 tell it how your files are organised and what your terms mean, or add a pack — a
-`theme` (colours), a `skill` (vocabulary/rules for the model), or an `mcp` connector
-(a remote data source) — from a local folder with `/packs add <path>`. A small seed
+`theme` (colours), a `skill` (vocabulary/rules for the model), an `mcp` connector
+(a remote data source), or an `augment` (a notes tab or a small table, saved into
+the folder) — from a local folder with `/packs add <path>`. A small seed
 catalog is installable by id (`/packs install <id>`); a browsable gallery of packs
 comes later. All optional. See [`docs/EXTENSIBILITY.md`](docs/EXTENSIBILITY.md).
 
 ## Contributing
 
 Fella is open source and takes contributions two ways: to the **app** (features,
-fixes, new file formats, engine or UI work) here, and to **packs** (themes,
-skills, MCP connectors) in the `fella-extensions` repo. Start with
+fixes, new file formats, engine or UI work, new augment capabilities) here, and
+to **packs** (themes, skills, MCP connectors, augments) in the `fella-extensions`
+repo. Start with
 [`CONTRIBUTING.md`](CONTRIBUTING.md); the pack model is in
 [`docs/EXTENSIBILITY.md`](docs/EXTENSIBILITY.md).
 

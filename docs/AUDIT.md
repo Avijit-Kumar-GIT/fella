@@ -113,10 +113,12 @@ people.** Not the general task agent.
   pointing Fella at their own messy folder (statements, health exports, notes) and
   asking about their own life. Fella must cope with a real-world folder, not expect
   a clean dataset.
-- **Read-only. No code-writing, no file changes, no generated artifacts.** SQL and
-  Python stay as internal engines the person never sees. This makes the spec's
-  write/move/delete tools, permission dialogs, and `Results/` area **out of scope**
-  the read-only boundary *is* the safety story.
+- **Read-only agent. No code-writing, no file changes, no generated artifacts.**
+  SQL and Python stay as internal engines the person never sees. This makes the
+  spec's write/move/delete tools, permission dialogs, and `Results/` area **out
+  of scope** the read-only boundary *is* the safety story. (Amended 2026-09-10:
+  an opt-in `augment` pack adds a note/table tab the *user* saves one named file
+  from; the agent's tools are unchanged. `DECISIONS.md` 2026-09-10.)
 - **The audit's "portable principles" list was judged over-engineering.** No
   cancellation token, no `run_sql` timeout, no token-accounting UI, no per-task
   tool-relevance selection. Keep only what a small personal tool genuinely needs.
@@ -160,7 +162,7 @@ evidence. Covered by `tests/sql_timeout.rs` and
 **Update (2026-08-29):** extensibility direction set. "Any real customisation
 comes from editing the repo" (Resolution, above) is superseded. The base stays
 a minimal single binary with nothing bundled, but users can install vetted
-themes, skills, and MCP connectors themselves, distributed through a
+themes, skills, MCP connectors, and augments themselves, distributed through a
 GitHub-reviewed catalog. This ships an MCP *client* (amending principle 18) and
 rescopes "nothing leaves the machine" to the base an installed connector talks
 to its own service by the user's choice. Full note: `docs/EXTENSIBILITY.md`;
