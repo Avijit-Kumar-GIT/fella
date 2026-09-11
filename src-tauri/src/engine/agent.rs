@@ -272,7 +272,7 @@ not run again. Its result is repeated below - use it, refine the call, or give y
             // treat a gap as a broken invariant that ends the run cleanly.
             let (item, llm_text) = outcome
                 .ok_or_else(|| EngineError::msg("internal error: a tool call produced no outcome"))?;
-            emit(AskEvent::ToolEnd { item: item.clone() });
+            emit(AskEvent::ToolEnd { item: Box::new(item.clone()) });
             // Remember a fresh, successful built-in result so a later exact
             // repeat is answered from the memo rather than re-run.
             if !call.name.contains("__")

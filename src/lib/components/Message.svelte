@@ -1,11 +1,11 @@
 <script lang="ts">
 	import type { Message } from '$lib/types';
 	import EvidenceBlock from './EvidenceBlock.svelte';
+	import Chart from './Chart.svelte';
 	import Icon from './Icon.svelte';
 	import { renderMarkdown } from '$lib/markdown';
 	import { enterUp } from '$lib/motion';
 	import { hardFail } from '$lib/verify';
-	import { sanitizeSvg } from '$lib/svg';
 
 	let { message, expanded = false, ontoggle }: {
 		message: Message;
@@ -68,7 +68,7 @@
 					class="thinking" aria-hidden="true"></span
 				>{/if}</div>
 		{#each chartItems as e, i (i)}
-			<div class="chart">{@html sanitizeSvg(e.chart ?? '')}</div>
+			{#if e.chart}<Chart spec={e.chart} />{/if}
 		{/each}
 	{:else}
 		<div class="text">{message.text}</div>
@@ -184,16 +184,5 @@
 	.text .thinking {
 		margin-left: 10px;
 		color: var(--text-faint);
-	}
-	/* A make_chart evidence item's sanitized SVG, rendered live in the DOM so
-	   it can use the theme vars above (not a frozen snapshot). */
-	.chart {
-		margin: 6px 0;
-		max-width: 100%;
-	}
-	.chart :global(svg) {
-		display: block;
-		width: 100%;
-		height: auto;
 	}
 </style>

@@ -19,8 +19,9 @@ pub struct ToolOutput {
     pub rows: Option<Vec<Vec<Json>>>,
     pub row_count: Option<usize>,
     pub output: Option<String>,
-    /// Sanitized-safe inline SVG from a chart tool (e.g. `make_chart`).
-    pub chart: Option<String>,
+    /// Structured chart data from a chart tool (e.g. `make_chart`) -- labels
+    /// and numbers only, no markup. Rendered client-side.
+    pub chart: Option<crate::engine::chart::ChartData>,
 }
 
 impl ToolOutput {
