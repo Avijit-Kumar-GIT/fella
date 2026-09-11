@@ -20,6 +20,18 @@ All notable changes to Fella are recorded here. Format follows
   way as a new built-in tool (`docs/DECISIONS.md`, `docs/EXTENSIBILITY.md`).
   Tracking: #74.
 
+### Changed
+
+- **The self-check now catches a wrong aggregate, not just an ungrounded
+  number.** If a question says "how many"/"how much"/"average" and none of the
+  queries behind the answer actually used `COUNT`/`SUM`/`AVG`, the evidence
+  fold now flags it — the answer may have come from a precomputed column or a
+  different computation than the question asked for. A soft warning, same
+  tier as the existing case-sensitivity and text-aggregate checks; it doesn't
+  block the answer or trigger a re-ask. First of a few checks aimed at the
+  "valid query, wrong question" class of miss the folder-QA benchmark found
+  (#67); tracking: #78.
+
 ## [0.1.5]
 
 ### Added
