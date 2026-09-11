@@ -6,6 +6,8 @@
 
 	let { tab }: { tab: AugmentTab } = $props();
 
+	let isGrid = $derived(tab.capability === 'grid');
+
 	let ta = $state<HTMLTextAreaElement | undefined>();
 	let saveTimer: ReturnType<typeof setTimeout> | undefined;
 	let rescanTimer: ReturnType<typeof setTimeout> | undefined;
@@ -14,6 +16,87 @@
 	const SAVE_DEBOUNCE = 600;
 	const RESCAN_IDLE = 3000;
 
+	// --- csv (grid only) ------------------------------------------------
+	function parseCsv(s: string): string[][] {
+		const rows: string[][] = [];
+		let row: string[] = [];
+		let cell = '';
+		let q = false;
+		for (let i = 0; i < s.length; i++) {
+			const c = s[i];
+			if (q) {
+				if (c === '"') {
+					if (s[i + 1] === '"') {
+						cell += '"';
+						i++;
+					} else q = false;
+				} else cell += c;
+			} else if (c === '"') q = true;
+			else if (c === ',') {
+				row.push(cell);
+				cell = '';
+			} else if (c === '\n') {
+				row.push(cell);
+				rows.push(row);
+				row = [];
+				cell = '';
+			} else if (c !== '\r') cell += c;
+		}
+		if (cell !== '' || row.length) {
+			row.push(cell);
+			rows.push(row);
+		}
+		return rows;
+	}
+	function toCsv(rows: string[][]): string {
+		return (
+			rows
+				.map((r) =>
+					r.map((c) => (/[",\n]/.test(c) ? '"' + c.replace(/"/g, '""') + '"' : c)).join(',')
+				)
+				.join('\n') + '\n'
+		);
+	}
+
+	let rows = $state<string[][]>([]);
+	let gridReady = false;
+	$effect(() => {
+		if (!isGrid || gridReady) return;
+		const parsed = parseCsv(tab.text).filter((r) => r.length);
+		rows = parsed.length ? normalize(parsed) : [['', ''], ['', '']];
+		gridReady = true;
+	});
+	function normalize(r: string[][]): string[][] {
+		const w = Math.max(1, ...r.map((row) => row.length));
+		return r.map((row) => [...row, ...Array(w - row.length).fill('')]);
+	}
+	function pushGrid(): void {
+		tab.text = toCsv(rows);
+		schedule();
+	}
+	function addRow(): void {
+		rows.push(Array(rows[0]?.length ?? 1).fill(''));
+		pushGrid();
+	}
+	function addCol(): void {
+		for (const row of rows) row.push('');
+		pushGrid();
+	}
+	function onCellKey(e: KeyboardEvent, ri: number, ci: number): void {
+		if (e.key !== 'Enter') return;
+		e.preventDefault();
+		const next = e.currentTarget as HTMLElement;
+		const table = next.closest('table');
+		if (ri + 1 >= rows.length) addRow();
+		queueMicrotask(() => {
+			table
+				?.querySelectorAll<HTMLInputElement>('tbody tr')
+				[ri + 1]?.querySelectorAll('input')
+				[ci]?.focus();
+		});
+	}
+
+	// --- save + rescan -------------------------------------------------
 	async function save(): Promise<void> {
 		if (!isTauri() || !tab.dirty) return;
 		const snapshot = tab.text;
@@ -29,7 +112,6 @@
 			tab.saving = false;
 		}
 	}
-
 	async function rescan(): Promise<void> {
 		if (!isTauri()) return;
 		try {
@@ -38,10 +120,9 @@
 			/* the user can still run /reindex by hand */
 		}
 	}
-
-	// Debounced autosave, then a longer idle before asking the engine to
-	// re-scan the folder a full re-scan is O(folder), too heavy per keystroke.
-	function onInput(): void {
+	// Debounced autosave, then a longer idle before a folder re-scan
+	// (a full re-scan is O(folder), too heavy per keystroke).
+	function schedule(): void {
 		clearTimeout(saveTimer);
 		clearTimeout(rescanTimer);
 		saveTimer = setTimeout(save, SAVE_DEBOUNCE);
@@ -76,8 +157,11 @@
 		return { text: 'Saved', cls: 'dim' };
 	});
 
-	// A rows × cols readout for a csv-ish buffer.
 	let dims = $derived.by(() => {
+		if (isGrid) {
+			const cols = rows[0]?.length ?? 0;
+			return `${rows.length} row${rows.length === 1 ? '' : 's'} · ${cols} col${cols === 1 ? '' : 's'}`;
+		}
 		if (tab.syntax !== 'csv') return null;
 		const lines = tab.text.split('\n').filter((l) => l.trim() !== '');
 		if (!lines.length) return null;
@@ -86,7 +170,7 @@
 	});
 
 	$effect(() => {
-		if (ta) ta.focus();
+		if (!isGrid && ta) ta.focus();
 	});
 </script>
 
@@ -94,17 +178,46 @@
 	<div class="head">
 		<span class="file">{tab.file}</span>
 		<span class="hint">saved into this folder as you type</span>
+		{#if isGrid}
+			<span class="spacer"></span>
+			<button class="pill ghost" onclick={addRow}>+ row</button>
+			<button class="pill ghost" onclick={addCol}>+ column</button>
+		{/if}
 	</div>
-	<textarea
-		bind:this={ta}
-		bind:value={tab.text}
-		oninput={onInput}
-		spellcheck={tab.syntax === 'markdown'}
-		class:mono={tab.syntax === 'csv'}
-		placeholder={tab.syntax === 'csv'
-			? 'one row per line, values separated by commas'
-			: 'type here it saves into the folder as you go'}
-	></textarea>
+
+	{#if isGrid}
+		<div class="gridwrap">
+			<table>
+				<tbody>
+					{#each rows as row, ri (ri)}
+						<tr>
+							{#each row as _cell, ci (ci)}
+								<td>
+									<input
+										bind:value={rows[ri][ci]}
+										oninput={pushGrid}
+										onkeydown={(e) => onCellKey(e, ri, ci)}
+									/>
+								</td>
+							{/each}
+						</tr>
+					{/each}
+				</tbody>
+			</table>
+		</div>
+	{:else}
+		<textarea
+			bind:this={ta}
+			bind:value={tab.text}
+			oninput={schedule}
+			spellcheck={tab.syntax === 'markdown'}
+			class:mono={tab.syntax === 'csv'}
+			placeholder={tab.syntax === 'csv'
+				? 'one row per line, values separated by commas'
+				: 'type here it saves into the folder as you go'}
+		></textarea>
+	{/if}
+
 	<div class="foot">
 		<span class={status.cls}>{status.text}</span>
 		{#if dims}<span class="dim">· {dims}</span>{/if}
@@ -159,6 +272,36 @@
 		outline: none;
 		border-color: var(--link);
 		box-shadow: var(--focus-ring);
+	}
+	.gridwrap {
+		flex: 1;
+		min-height: 0;
+		overflow: auto;
+		border: 1px solid var(--border);
+		border-radius: var(--radius);
+	}
+	table {
+		border-collapse: collapse;
+		width: 100%;
+	}
+	td {
+		border: 1px solid var(--border);
+		padding: 0;
+	}
+	td input {
+		width: 100%;
+		min-width: 8ch;
+		border: none;
+		background: transparent;
+		color: var(--text);
+		font-family: var(--mono);
+		font-size: var(--fs-sm);
+		padding: 4px 7px;
+	}
+	td input:focus {
+		outline: 2px solid var(--link);
+		outline-offset: -2px;
+		background: var(--bg-inset);
 	}
 	.foot {
 		display: flex;

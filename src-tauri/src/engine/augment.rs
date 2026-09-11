@@ -15,7 +15,11 @@ use crate::engine::extensions::AUGMENT_FILE_EXTS;
 /// Capabilities this build ships. An `augment.json` naming anything else still
 /// loads, but is reported unsupported the compatibility contract in
 /// `docs/EXTENSIBILITY.md`.
-pub const CAPABILITIES: &[&str] = &["buffer"]; // `grid` lands in phase 2
+///
+/// `buffer` is a plain-text tab; `grid` is a small editable table. Both persist
+/// through `write_buffer` the frontend serialises the grid to CSV text before
+/// it gets here so the capability only picks which view renders.
+pub const CAPABILITIES: &[&str] = &["buffer", "grid"];
 
 /// Resolve `rel` to an absolute path inside `workspace`, or refuse. Guards
 /// against `..`, absolute paths, a disallowed extension, and a symlinked parent

@@ -58,7 +58,7 @@ export const SLASH_COMMANDS = [
 
 /** Augment capabilities this build's views implement. Keep in sync with
  *  `CAPABILITIES` in `src-tauri/src/engine/augment.rs`. */
-const AUGMENT_CAPABILITIES = ['buffer'];
+const AUGMENT_CAPABILITIES = ['buffer', 'grid'];
 
 /** `/`-prefixed commands contributed by enabled, supported augment packs. */
 function augmentCommands(): { cmd: string; pack: InstalledPack }[] {

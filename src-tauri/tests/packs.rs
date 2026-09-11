@@ -235,7 +235,12 @@ fn augment_save_writes_only_into_the_open_folder() {
     assert_eq!(engine.augment_load("absent.md").unwrap(), None);
 
     assert!(engine.augment_save("buffer", "../evil.md", "x").is_err());
-    assert!(engine.augment_save("grid", "t.csv", "x").is_err(), "grid not in this build");
+    engine.augment_save("grid", "table.csv", "a,b\n1,2\n").unwrap();
+    assert_eq!(fs::read_to_string(ws.join("table.csv")).unwrap(), "a,b\n1,2\n");
+    assert!(
+        engine.augment_save("hologram", "t.csv", "x").is_err(),
+        "an unknown capability is refused"
+    );
 
     let _ = fs::remove_dir_all(&ws);
     let _ = fs::remove_dir_all(&data);

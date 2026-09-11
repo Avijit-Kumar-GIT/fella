@@ -169,7 +169,9 @@
 	<Titlebar onpalette={() => (paletteOpen = true)} />
 	<main>
 		{#if activeTab.kind === 'augment'}
-			<AugmentView tab={activeTab} />
+			{#key activeTab.id}
+				<AugmentView tab={activeTab} />
+			{/key}
 		{:else}
 			<Transcript bind:this={transcript} />
 		{/if}

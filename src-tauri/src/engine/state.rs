@@ -669,7 +669,9 @@ impl EngineState {
             .clone()
             .ok_or(EngineError::NoWorkspace)?;
         match capability {
-            "buffer" => augment::write_buffer(&ws, file, contents).map(|_| ()),
+            // The grid is serialised to CSV text by the UI, so both persist the
+            // same way; `capability` is only the compatibility checkpoint.
+            "buffer" | "grid" => augment::write_buffer(&ws, file, contents).map(|_| ()),
             other => Err(EngineError::msg(format!(
                 "this build doesn't support the '{other}' augment update Fella"
             ))),
