@@ -25,6 +25,11 @@ pub struct EvidenceItem {
     /// Free-form text output (e.g. Python stdout/stderr).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output: Option<String>,
+    /// Sanitized-safe inline SVG from a chart tool (e.g. `make_chart`).
+    /// Rust-generated, not model-authored; the frontend still runs it
+    /// through an allow-list before `{@html}` (see `src/lib/svg.ts`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chart: Option<String>,
     pub ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,

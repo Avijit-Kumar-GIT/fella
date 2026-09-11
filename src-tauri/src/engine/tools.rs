@@ -19,6 +19,8 @@ pub struct ToolOutput {
     pub rows: Option<Vec<Vec<Json>>>,
     pub row_count: Option<usize>,
     pub output: Option<String>,
+    /// Sanitized-safe inline SVG from a chart tool (e.g. `make_chart`).
+    pub chart: Option<String>,
 }
 
 impl ToolOutput {
@@ -31,6 +33,7 @@ impl ToolOutput {
             rows: None,
             row_count: None,
             output: None,
+            chart: None,
         }
     }
 }
@@ -62,6 +65,7 @@ impl Registry {
                 Box::new(GrepFiles),
                 Box::new(ReadFile),
                 Box::new(RunPython),
+                Box::new(crate::engine::chart::MakeChart),
             ],
             #[cfg(feature = "mcp")]
             mcp: Vec::new(),
@@ -345,6 +349,7 @@ many sample rows to return (default 5, max 50)."
             rows: sample.as_ref().map(|s| s.rows.clone()),
             row_count: sample.as_ref().map(|s| s.row_count),
             output: None,
+            chart: None,
         })
     }
 }
@@ -392,6 +397,7 @@ impl Tool for RunSql {
             rows: Some(q.rows),
             row_count: Some(q.row_count),
             output: None,
+            chart: None,
         })
     }
 }
@@ -491,6 +497,7 @@ different word.",
             ),
             row_count: Some(hits.len()),
             output: None,
+            chart: None,
         })
     }
 }
@@ -570,6 +577,7 @@ summarization question needs the documents' actual content."
             rows: None,
             row_count: None,
             output: Some(combined),
+            chart: None,
         })
     }
 }
@@ -637,6 +645,7 @@ to compute over the workspace data, not to fetch anything."
             rows: None,
             row_count: None,
             output: Some(combined),
+            chart: None,
         })
     }
 }
