@@ -6,16 +6,19 @@
 	import StatusBar from '$lib/components/StatusBar.svelte';
 	import Titlebar from '$lib/components/Titlebar.svelte';
 	import Transcript from '$lib/components/Transcript.svelte';
+	import AugmentView from '$lib/components/AugmentView.svelte';
 	import { dispatch, loadStartupCatalog, reconcileModel, stop } from '$lib/commands';
 	import { ipc, isTauri } from '$lib/ipc';
 	import { fadeQuick } from '$lib/motion';
 	import { prefs } from '$lib/prefs.svelte';
 	import { session } from '$lib/session.svelte';
 
-	let transcript: Transcript;
-	let composer: Composer;
+	let transcript = $state<Transcript | undefined>();
+	let composer = $state<Composer | undefined>();
 	let paletteOpen = $state(false);
 	let dragging = $state(false);
+
+	let activeTab = $derived(session.activeTab);
 
 	async function refreshHealth() {
 		if (!isTauri()) return;
@@ -125,10 +128,12 @@
 		}
 	}
 
-	// Persist every tab's transcript as it changes.
+	// Persist every conversation tab's transcript as it changes. Augment tabs
+	// have no transcript and aren't persisted.
 	$effect(() => {
 		session.tabs.length;
 		for (const t of session.tabs) {
+			if (t.kind !== 'chat') continue;
 			t.messages.length;
 			t.messages.at(-1)?.text;
 			t.messages.at(-1)?.pending;
@@ -163,13 +168,19 @@
 <div class="app" class:focus={session.focus}>
 	<Titlebar onpalette={() => (paletteOpen = true)} />
 	<main>
-		<Transcript bind:this={transcript} />
+		{#if activeTab.kind === 'augment'}
+			<AugmentView tab={activeTab} />
+		{:else}
+			<Transcript bind:this={transcript} />
+		{/if}
 	</main>
 	<div class="dock">
 		{#if !session.focus}
 			<StatusBar />
 		{/if}
-		<Composer bind:this={composer} onafterrun={refreshHealth} />
+		{#if activeTab.kind !== 'augment'}
+			<Composer bind:this={composer} onafterrun={refreshHealth} />
+		{/if}
 	</div>
 </div>
 

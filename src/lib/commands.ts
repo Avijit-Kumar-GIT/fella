@@ -56,6 +56,23 @@ export const SLASH_COMMANDS = [
 	'/help'
 ] as const;
 
+/** Augment capabilities this build's views implement. Keep in sync with
+ *  `CAPABILITIES` in `src-tauri/src/engine/augment.rs`. */
+const AUGMENT_CAPABILITIES = ['buffer'];
+
+/** `/`-prefixed commands contributed by enabled, supported augment packs. */
+function augmentCommands(): { cmd: string; pack: InstalledPack }[] {
+	return session.packs
+		.filter(
+			(p) =>
+				p.enabled &&
+				p.kind === 'augment' &&
+				p.augment &&
+				AUGMENT_CAPABILITIES.includes(p.augment.capability)
+		)
+		.map((p) => ({ cmd: '/' + (p.augment as NonNullable<InstalledPack['augment']>).command, pack: p }));
+}
+
 const MODEL_FIELDS = ['provider', 'base_url', 'model', 'embed_model'];
 
 /** Where `/packs browse` sends you to find packs and their ids. Points at the
@@ -100,8 +117,9 @@ export function completionsFor(input: string): string[] {
 
 	// Still on the command word itself.
 	if (parts.length === 1) {
-		const m = SLASH_COMMANDS.filter((c) => c.startsWith(cmd));
-		return m.length === 1 && m[0] === cmd ? [] : [...m];
+		const all = [...SLASH_COMMANDS, ...augmentCommands().map((a) => a.cmd)];
+		const m = all.filter((c) => c.startsWith(cmd));
+		return m.length === 1 && m[0] === cmd ? [] : [...new Set(m)];
 	}
 
 	const models = () => session.health?.models ?? [];
@@ -220,8 +238,8 @@ export async function resumeLastFolder(): Promise<void> {
 /** Ask the engine to stop one tab's in-progress run (the active tab by
  *  default). The `ask` promise then resolves normally (a "Stopped." answer) and
  *  clears that tab's `busy`. */
-export async function stop(conv: Conversation = session.activeTab): Promise<void> {
-	if (!conv.busy || !isTauri()) return;
+export async function stop(conv: Conversation | null = session.activeChat): Promise<void> {
+	if (!conv || !conv.busy || !isTauri()) return;
 	conv.activity = 'stopping…';
 	try {
 		await ipc.cancel(conv.id);
@@ -288,7 +306,7 @@ export async function dispatch(raw: string): Promise<void> {
 		return;
 	}
 
-	const conv = session.activeTab;
+	const conv = session.ensureChat();
 	conv.addUser(text);
 	await ask(text, conv);
 }
@@ -338,10 +356,11 @@ export async function reconcileModel(): Promise<void> {
 			/* leave it the empty-screen prompt still guides a manual pick */
 		}
 	}
-	// And each tab that has explicitly picked a now-unavailable model. A tab
-	// with no pick uses the (just-reconciled) default, so leave those alone.
+	// And each conversation tab that has explicitly picked a now-unavailable
+	// model. A tab with no pick uses the (just-reconciled) default, so leave
+	// those alone; augment tabs have no model.
 	for (const t of session.tabs) {
-		if (t.model && !models.includes(t.model)) t.model = chat[0];
+		if (t.kind === 'chat' && t.model && !models.includes(t.model)) t.model = chat[0];
 	}
 }
 
@@ -419,7 +438,7 @@ async function runCommand(text: string): Promise<void> {
 				session.addSystem('Nothing to retry yet. Ask a question first.');
 				return;
 			}
-			await ask(q, session.activeTab);
+			await ask(q, session.ensureChat());
 			return;
 		}
 
@@ -527,7 +546,7 @@ async function runCommand(text: string): Promise<void> {
 				return;
 			}
 			{
-				const conv = session.activeTab;
+				const conv = session.ensureChat();
 				try {
 					conv.busy = true;
 					conv.activity = 'running your query…';
@@ -731,12 +750,13 @@ async function runCommand(text: string): Promise<void> {
 					if (Object.keys(rest).length > 0) {
 						session.settings = await ipc.setSettings(rest);
 						// A provider / endpoint change invalidates every tab's model.
-						if (rest.provider || rest.base_url) for (const t of session.tabs) t.model = '';
+						if (rest.provider || rest.base_url)
+							for (const t of session.tabs) if (t.kind === 'chat') t.model = '';
 					}
 					if (newModel !== undefined) {
 						// Per-tab: only the focused conversation switches. Also remember
 						// it as the default a fresh tab / next launch starts from.
-						session.activeTab.model = newModel;
+						session.ensureChat().model = newModel;
 						session.settings = await ipc.setSettings({ model: newModel });
 					}
 				}
@@ -770,7 +790,7 @@ async function runCommand(text: string): Promise<void> {
 		case '/reindex':
 			if (!requireEngine()) return;
 			{
-				const conv = session.activeTab;
+				const conv = session.ensureChat();
 				try {
 					conv.busy = true;
 					conv.activity = 'checking the folder…';
@@ -817,7 +837,7 @@ async function runCommand(text: string): Promise<void> {
 		case '/update':
 			if (!requireEngine()) return;
 			{
-				const conv = session.activeTab;
+				const conv = session.ensureChat();
 				try {
 					conv.busy = true;
 					conv.activity = 'checking for an update…';
@@ -871,6 +891,7 @@ async function runCommand(text: string): Promise<void> {
 					session.addSystem(
 						`Added from a local folder, so it's marked unverified (nobody reviewed it but you).\n${renderPacks(session.packs)}`
 					);
+					warnAugmentCollisions();
 					return;
 				}
 				if (sub === 'install') {
@@ -901,6 +922,7 @@ async function runCommand(text: string): Promise<void> {
 					}
 					await prefs.load();
 					session.addSystem(`Installed ${id}. Enable it with /packs enable ${id}.\n${renderPacks(session.packs)}`);
+					warnAugmentCollisions();
 					return;
 				}
 				if (sub === 'enable' || sub === 'disable' || sub === 'remove') {
@@ -988,8 +1010,20 @@ async function runCommand(text: string): Promise<void> {
 			return;
 		}
 
-		default:
+		default: {
+			// A slash command contributed by an enabled augment pack?
+			const aug = augmentCommands().find((a) => a.cmd === cmd)?.pack.augment;
+			if (aug) {
+				if (!requireEngine()) return;
+				if (!session.catalog.workspace) {
+					session.addSystem('Open a folder first with /open — the file saves into it.');
+					return;
+				}
+				await session.openAugment(aug);
+				return;
+			}
 			session.addSystem(`unknown command: ${cmd}\n\n${HELP}`);
+		}
 	}
 }
 
@@ -1097,6 +1131,21 @@ function parseModelArg(arg: string): SettingsPatch | null {
 	return { model: arg };
 }
 
+/** Warn when an installed augment's command is shadowed by a built-in it
+ *  stays installed but can't be opened by that name. */
+function warnAugmentCollisions(): void {
+	const builtins = new Set<string>(SLASH_COMMANDS);
+	const clashes = session.packs
+		.filter((p) => p.kind === 'augment' && p.augment && builtins.has('/' + p.augment.command))
+		.map((p) => `/${p.augment?.command} (${p.id})`);
+	if (clashes.length) {
+		session.addSystem(
+			`Note: ${clashes.join(', ')} — that name is a built-in command, so the augment can't be ` +
+				`opened by it. It stays installed.`
+		);
+	}
+}
+
 function renderPacks(list: InstalledPack[]): string {
 	if (list.length === 0) {
 		return 'No packs installed.\n\n/packs browse  to find some · /packs install <id>  ·  /packs add <path>';
@@ -1104,9 +1153,13 @@ function renderPacks(list: InstalledPack[]): string {
 	const rows = list.map((p) => {
 		const mark = p.enabled ? '●' : '○';
 		const unver = p.verified ? '' : '  (unverified)';
-		return `${mark} ${p.id.padEnd(20)} ${p.kind.padEnd(6)} ${(p.enabled ? 'on' : 'off').padEnd(3)}  ${p.name}${unver}`;
+		const extra =
+			p.kind === 'augment' && p.augment
+				? `  →  /${p.augment.command} edits ${p.augment.file}`
+				: '';
+		return `${mark} ${p.id.padEnd(20)} ${p.kind.padEnd(7)} ${(p.enabled ? 'on' : 'off').padEnd(3)}  ${p.name}${unver}${extra}`;
 	});
-	const out = ['  id                   kind   state', ...rows, ''];
+	const out = ['  id                   kind    state', ...rows, ''];
 	if (list.some((p) => !p.verified)) {
 		out.push('(unverified) = added from a local folder, not the reviewed marketplace');
 	}

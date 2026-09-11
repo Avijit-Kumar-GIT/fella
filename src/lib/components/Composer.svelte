@@ -17,7 +17,8 @@
 	let value = $state('');
 	let ta: HTMLTextAreaElement;
 	// ↑-recall history lives on the active conversation, so each tab has its own.
-	let history = $derived(session.activeTab.history);
+	// (The composer is hidden on an augment tab, so activeChat is the focused tab.)
+	let history = $derived(session.activeChat?.history ?? []);
 	let histIx = -1;
 
 	let folderName = $derived(
@@ -89,7 +90,7 @@
 			value = '';
 			menuSel = -1;
 			queueMicrotask(grow);
-			await steerRun(session.activeTab, text);
+			await steerRun(session.ensureChat(), text);
 			onafterrun?.();
 			return;
 		}
