@@ -30,7 +30,8 @@
 		grep_files: 'Searched your documents for a word or phrase',
 		read_file: 'Read one of your files',
 		run_python: 'Ran a calculation',
-		list_files: 'Listed your files'
+		list_files: 'Listed your files',
+		make_chart: 'Drew a chart'
 	};
 	function stepLabel(e: EvidenceItem): string {
 		if (e.note?.trim()) return e.note.trim();

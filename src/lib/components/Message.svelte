@@ -5,6 +5,7 @@
 	import { renderMarkdown } from '$lib/markdown';
 	import { enterUp } from '$lib/motion';
 	import { hardFail } from '$lib/verify';
+	import { sanitizeSvg } from '$lib/svg';
 
 	let { message, expanded = false, ontoggle }: {
 		message: Message;
@@ -36,6 +37,13 @@
 			? hardFail(message.answer.verification)
 			: undefined
 	);
+
+	// A chart renders itself below the prose, independent of whether the
+	// model's text references it correctness shouldn't depend on a small
+	// model correctly placing a chart mention in freeform text.
+	let chartItems = $derived(
+		(message.answer?.evidence ?? []).filter((e) => e.tool === 'make_chart' && e.chart)
+	);
 </script>
 
 <div class="msg {message.role}" transition:enterUp>
@@ -59,6 +67,9 @@
 		<div class="text rich" class:pending={message.pending}>{@html bodyHtml}{#if message.pending}<span
 					class="thinking" aria-hidden="true"></span
 				>{/if}</div>
+		{#each chartItems as e, i (i)}
+			<div class="chart">{@html sanitizeSvg(e.chart ?? '')}</div>
+		{/each}
 	{:else}
 		<div class="text">{message.text}</div>
 	{/if}
@@ -173,5 +184,16 @@
 	.text .thinking {
 		margin-left: 10px;
 		color: var(--text-faint);
+	}
+	/* A make_chart evidence item's sanitized SVG, rendered live in the DOM so
+	   it can use the theme vars above (not a frozen snapshot). */
+	.chart {
+		margin: 6px 0;
+		max-width: 100%;
+	}
+	.chart :global(svg) {
+		display: block;
+		width: 100%;
+		height: auto;
 	}
 </style>
