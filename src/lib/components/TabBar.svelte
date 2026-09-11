@@ -24,7 +24,7 @@
 	}
 </script>
 
-<div class="tabs" role="tablist" aria-label="Conversations">
+<div class="tabs" role="tablist" aria-label="Tabs">
 	{#each session.tabs as tab, i (tab.id)}
 		<div
 			class="tab"
@@ -104,11 +104,13 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 	}
+	/* Same halo treatment as StatusBar's connection dot. */
 	.unsaved {
-		width: 5px;
-		height: 5px;
+		width: 6px;
+		height: 6px;
 		border-radius: 50%;
 		background: var(--warn);
+		box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 20%, transparent);
 		flex: none;
 	}
 	.close,

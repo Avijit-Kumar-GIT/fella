@@ -9,6 +9,7 @@
 	let isGrid = $derived(tab.capability === 'grid');
 
 	let ta = $state<HTMLTextAreaElement | undefined>();
+	let gridWrap = $state<HTMLDivElement | undefined>();
 	let saveTimer: ReturnType<typeof setTimeout> | undefined;
 	let rescanTimer: ReturnType<typeof setTimeout> | undefined;
 	let error = $state<string | null>(null);
@@ -65,6 +66,9 @@
 		const parsed = parseCsv(tab.text).filter((r) => r.length);
 		rows = parsed.length ? normalize(parsed) : [['', ''], ['', '']];
 		gridReady = true;
+		// Same "ready to type the moment the tab opens" behaviour as the
+		// textarea's autofocus, once the grid has rendered.
+		queueMicrotask(() => gridWrap?.querySelector('input')?.focus());
 	});
 	function normalize(r: string[][]): string[][] {
 		const w = Math.max(1, ...r.map((row) => row.length));
@@ -177,7 +181,6 @@
 <div class="augment">
 	<div class="head">
 		<span class="file">{tab.file}</span>
-		<span class="hint">saved into this folder as you type</span>
 		{#if isGrid}
 			<span class="spacer"></span>
 			<button class="pill ghost" onclick={addRow}>+ row</button>
@@ -186,7 +189,7 @@
 	</div>
 
 	{#if isGrid}
-		<div class="gridwrap">
+		<div class="editor gridwrap" bind:this={gridWrap}>
 			<table>
 				<tbody>
 					{#each rows as row, ri (ri)}
@@ -206,61 +209,89 @@
 			</table>
 		</div>
 	{:else}
-		<textarea
-			bind:this={ta}
-			bind:value={tab.text}
-			oninput={schedule}
-			spellcheck={tab.syntax === 'markdown'}
-			class:mono={tab.syntax === 'csv'}
-			placeholder={tab.syntax === 'csv'
-				? 'one row per line, values separated by commas'
-				: 'type here it saves into the folder as you go'}
-		></textarea>
+		<div class="editor">
+			<textarea
+				bind:this={ta}
+				bind:value={tab.text}
+				oninput={schedule}
+				spellcheck={tab.syntax === 'markdown'}
+				class:mono={tab.syntax === 'csv'}
+				placeholder={tab.syntax === 'csv'
+					? 'one row per line, values separated by commas'
+					: 'type here it saves into the folder as you go'}
+			></textarea>
+		</div>
 	{/if}
 
 	<div class="foot">
 		<span class={status.cls}>{status.text}</span>
 		{#if dims}<span class="dim">· {dims}</span>{/if}
-		<span class="spacer"></span>
-		<span class="dim">Fella re-checks the folder when you pause or close this tab</span>
 	</div>
 </div>
 
 <style>
 	.augment {
+		flex: 1;
+		min-height: 0;
 		display: flex;
 		flex-direction: column;
-		height: 100%;
-		min-height: 0;
-		padding: var(--space-4) var(--pad) 0;
+		padding: var(--space-5) var(--pad) 0;
 	}
 	.head {
 		display: flex;
 		align-items: baseline;
 		gap: var(--space-3);
+		min-width: 0;
 		padding-bottom: var(--space-3);
 	}
 	.file {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 		font-family: var(--mono);
 		font-size: var(--fs-sm);
 		color: var(--text);
 	}
-	.hint {
-		font-size: var(--fs-xs);
-		color: var(--text-faint);
+	/* Outlined but unfilled same "grouped surface" treatment as the composer's
+	   .field: a border for structure, no card colour, one ring on focus. */
+	.editor {
+		flex: 1;
+		min-height: 0;
+		display: flex;
+		border: 1px solid var(--border);
+		border-radius: var(--radius);
+		transition:
+			border-color var(--dur-fast) var(--ease),
+			box-shadow var(--dur-fast) var(--ease);
+	}
+	.editor:focus-within {
+		border-color: var(--link);
+		box-shadow: var(--focus-ring);
+	}
+	/* The grid rings its one focused cell instead (below) two rings at
+	   once the container's and the cell's would break "one focus ring". */
+	.editor.gridwrap:focus-within {
+		border-color: var(--border);
+		box-shadow: none;
 	}
 	textarea {
 		flex: 1;
 		min-height: 0;
 		width: 100%;
 		resize: none;
-		border: 1px solid var(--border);
-		border-radius: var(--radius);
-		background: var(--bg-inset);
+		border: none;
+		outline: none;
+		background: transparent;
 		color: var(--text);
 		font: inherit;
 		line-height: var(--lh);
 		padding: var(--space-3);
+	}
+	textarea:focus-visible {
+		box-shadow: none;
+	}
+	textarea::placeholder {
+		color: var(--text-faint);
 	}
 	textarea.mono {
 		font-family: var(--mono);
@@ -268,17 +299,8 @@
 		white-space: pre;
 		overflow-wrap: normal;
 	}
-	textarea:focus {
-		outline: none;
-		border-color: var(--link);
-		box-shadow: var(--focus-ring);
-	}
 	.gridwrap {
-		flex: 1;
-		min-height: 0;
 		overflow: auto;
-		border: 1px solid var(--border);
-		border-radius: var(--radius);
 	}
 	table {
 		border-collapse: collapse;
@@ -288,6 +310,12 @@
 		border: 1px solid var(--border);
 		padding: 0;
 	}
+	td:first-child {
+		border-left: none;
+	}
+	tr:first-child td {
+		border-top: none;
+	}
 	td input {
 		width: 100%;
 		min-width: 8ch;
@@ -296,12 +324,12 @@
 		color: var(--text);
 		font-family: var(--mono);
 		font-size: var(--fs-sm);
+		font-variant-numeric: tabular-nums;
 		padding: 4px 7px;
 	}
-	td input:focus {
-		outline: 2px solid var(--link);
-		outline-offset: -2px;
-		background: var(--bg-inset);
+	td input:focus-visible {
+		position: relative;
+		z-index: 1;
 	}
 	.foot {
 		display: flex;
