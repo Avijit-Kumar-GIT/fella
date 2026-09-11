@@ -13,15 +13,18 @@ built-in tools, engine or UI work. This is the normal path for anything that
 needs app code. Flow: open an issue, discuss the approach, send a PR, it ships
 in the next release.
 
-**2. Packs (the `fella-extensions` repo).** A pack is one of exactly three
-things: a **theme**, a **skill** (instructions/vocabulary fed to the model), or
-an **mcp** connector. Packs carry no app code. They are submitted, reviewed, and
-listed in the marketplace repo, not here. See its `CONTRIBUTING.md` for the
-rules and the per-kind bar.
+**2. Packs (the `fella-extensions` repo).** A pack is one of exactly four
+things: a **theme**, a **skill** (instructions/vocabulary fed to the model), an
+**mcp** connector, or an **augment** (a manifest that switches on a built-in
+capability like a notes tab or a small table). Packs carry no app code new
+capabilities are lane 1. They are submitted, reviewed, and listed in the
+marketplace repo, not here. See its `CONTRIBUTING.md` for the rules and the
+per-kind bar.
 
 If you are unsure which lane a change belongs in: anything that changes what the
-compiled binary can do is lane 1; anything that is only data the app reads
-(colours, prompt text, a connector config) is lane 2.
+compiled binary can do including a new augment capability is lane 1;
+anything that is only data the app reads (colours, prompt text, a connector
+config, an augment manifest) is lane 2.
 
 ## What the app will and won't take
 

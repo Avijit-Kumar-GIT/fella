@@ -8,10 +8,36 @@ All notable changes to Fella are recorded here. Format follows
 
 ### Added
 
-- **Fella reopens your last folder on start.** No more picking the same folder
-  every launch — Fella opens the one from your last session automatically (and
-  says so). The welcome screen still shows if that folder has moved or you've
-  never opened one.
+- **Augment packs: `/note` and `/table`.** A new pack kind, `augment`, switches
+  on a first-party capability a plain-text tab (`buffer`) or a small
+  editable table (`grid`) and binds it to a slash command. Type in the tab
+  and it autosaves into the currently-open folder; Fella then reads that file
+  like any other. The pack ships no code and the agent still has no write
+  tool only your keystroke writes, and only the file the pack names. Two
+  starter packs, `notes` (`/note` → `notes.md`) and `table` (`/table` →
+  `table.csv`), are the marketplace's first listed packs (`fella-extensions`).
+  A new capability beyond `buffer`/`grid` is deliberately rare, gated the same
+  way as a new built-in tool (`docs/DECISIONS.md`, `docs/EXTENSIBILITY.md`).
+  Tracking: #74.
+
+## [0.1.5]
+
+### Added
+
+- **`/memory` shows and clears a folder's learned notes.** `/memory` prints the
+  current `memory.md` for the open folder (its recipes and your-words
+  corrections); `/memory clear` wipes it. The companion to the per-folder memory
+  below — you can always see and reset what Fella has picked up.
+- **Correct an answer while it's still being written.** A plain line typed and
+  sent *during* a run now cancels it and immediately re-asks the same question
+  with your addition appended — "↻ Cancelled … and re-asking with your addition"
+  in the transcript — instead of Stop → wait → retype. A slash-command or a
+  pasted key still waits for the run to finish; Esc still just stops.
+- **One-click return to your last folder.** The welcome screen now shows a
+  "Reopen ‹folder›" button (Enter is a shortcut for it) instead of Fella
+  silently opening the previous folder for you — so you can switch folders,
+  read the onboarding, or start fresh without fighting past an auto-load. The
+  button is absent if that folder has moved or you've never opened one.
 - **Per-folder memory (experimental).** Fella now keeps a small plain-text
   `memory.md` for each folder — the *learned* companion to `fella.md`. It fills
   itself in from what already happens: a query that passed the self-check
@@ -25,6 +51,17 @@ All notable changes to Fella are recorded here. Format follows
 
 ### Changed
 
+- **A refreshed window and a calmer interface.** A custom titlebar replaces the
+  stock OS window frame: macOS keeps its native traffic lights, Windows gets a
+  matching minimise / maximise / close cluster, Linux keeps its native frame. The
+  ASCII-art wordmark is now plain "Fella"; the status line is a single dim
+  `provider/model · folder · N files · state` row folded into the footer; your
+  turns are marked with a `❯` glyph and the uppercase "FELLA" speaker label is
+  gone; the evidence fold reads as `EVIDENCE · 3 STEPS · 1.2s` with tool
+  arguments shown key/value instead of raw JSON; onboarding is a centred card
+  with a "drop a folder" overlay while you drag one over the window; the themed
+  background and fonts paint before the app's own CSS, so there's no flash of
+  unstyled content on launch.
 - **Multi-file questions get combined, not answered from one file.** A new rule
   tells the model that when a question spans two tables (or a table and a
   document) it should JOIN them in a single query, or read the document and
@@ -45,11 +82,15 @@ All notable changes to Fella are recorded here. Format follows
   by exact case, says so — so a `Rent` row and a `rent` row don't silently fall
   on opposite sides of a filter. It doesn't rewrite your query; it points out
   where folding case (`lower(col)`, `COLLATE NOCASE`) would matter.
-- **Fella won't forecast.** The "if the files can't answer, say so" rule now
-  spells out that a question about the future ("next month", "will I", "how
-  much will") has no answer in past records the model says so instead of
-  computing an average and presenting it as a projection. (Found by the new
-  agent-eval harness: one model was doing exactly that.)
+- **Fella won't forecast — not even with tools in hand.** The "if the files
+  can't answer, say so" rule spells out that a question about the future ("next
+  month", "next year", "will I", "how many will I") has no answer in past
+  records the model declines instead of computing an average and presenting it
+  as a projection. The rule now also says outright *not to run a query to
+  estimate one*: the folder-QA harness showed that under the full tool loop,
+  models that decline a forecast in plain chat were computing one instead
+  (bare 80% → fella 50% on the forecast case). After the fix, on a 3-case
+  forecast check the two models that had been fabricating decline every time.
 - **A stale figure now gets one shot at a fix.** When the deterministic
   verification pass re-runs a query behind the answer and gets a *different
   result*, Fella spends one tool-free turn asking the model to restate its
@@ -274,7 +315,8 @@ folder of your own files with deterministic SQL / Python, and shows its working.
 - The hosted pack browser isn't live yet: `/packs add <path>` works offline, and
   `/packs install <id>` pulls from a small seed catalog.
 
-[Unreleased]: https://github.com/Avijit-Kumar-GIT/fella/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/Avijit-Kumar-GIT/fella/compare/v0.1.5...HEAD
+[0.1.5]: https://github.com/Avijit-Kumar-GIT/fella/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/Avijit-Kumar-GIT/fella/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/Avijit-Kumar-GIT/fella/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/Avijit-Kumar-GIT/fella/compare/v0.1.1...v0.1.2

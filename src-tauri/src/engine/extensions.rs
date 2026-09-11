@@ -1,9 +1,10 @@
-//! Packs: user-installed themes, skills, and MCP connectors. A pack is data the
-//! app reads, never code it runs. See `docs/EXTENSIBILITY.md`.
+//! Packs: user-installed themes, skills, MCP connectors, and augments. A pack is
+//! data the app reads, never code it runs. See `docs/EXTENSIBILITY.md`.
 //!
 //! This module owns the on-disk layout (`<data_dir>/extensions/<id>/`) and the
-//! `extensions` table (via `super::sqlite`). Marketplace download lives in a
-//! later phase; today packs are added from a local directory.
+//! `extensions` table (via `super::sqlite`). An `augment` pack names a
+//! first-party capability (`engine::augment`) and binds it to a slash command;
+//! it still ships no code.
 
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
@@ -43,6 +44,12 @@ pub enum PackKind {
     Theme,
     Skill,
     Mcp,
+    Augment,
+    /// A kind this build doesn't understand a pack authored for a newer
+    /// Fella. Deserialises here instead of failing, so `validate()` can give a
+    /// clear "update Fella" message rather than a serde parse error.
+    #[serde(other)]
+    Unknown,
 }
 
 impl PackKind {
@@ -51,6 +58,8 @@ impl PackKind {
             PackKind::Theme => "theme",
             PackKind::Skill => "skill",
             PackKind::Mcp => "mcp",
+            PackKind::Augment => "augment",
+            PackKind::Unknown => "unknown",
         }
     }
 }
@@ -88,6 +97,12 @@ impl Manifest {
                 self.schema
             )));
         }
+        if matches!(self.kind, PackKind::Unknown) {
+            return Err(EngineError::msg(
+                "this pack's kind isn't one this version of Fella understands \
+                 it was written for a newer release. Update Fella.",
+            ));
+        }
         let id_ok = !self.id.is_empty()
             && self.id.len() <= 64
             && self
@@ -115,7 +130,10 @@ impl Manifest {
         }
         let ext_ok = match self.kind {
             PackKind::Skill => self.payload.ends_with(".md"),
-            PackKind::Theme | PackKind::Mcp => self.payload.ends_with(".json"),
+            PackKind::Theme | PackKind::Mcp | PackKind::Augment => {
+                self.payload.ends_with(".json")
+            }
+            PackKind::Unknown => true, // unreachable rejected above
         };
         if !ext_ok {
             return Err(EngineError::msg(format!(
@@ -145,6 +163,11 @@ pub struct InstalledPack {
     /// `EngineState::packs_list`; `false` everywhere else.
     #[serde(default)]
     pub needs_token: bool,
+    /// `augment` packs only: the parsed `augment.json`, so the UI can wire the
+    /// command and open the right file. `None` for other kinds or an
+    /// unparseable payload. Filled by `list()`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub augment: Option<AugmentConfig>,
 }
 
 impl From<ExtRow> for InstalledPack {
@@ -159,6 +182,7 @@ impl From<ExtRow> for InstalledPack {
             source: r.source,
             enabled: r.enabled,
             needs_token: false,
+            augment: None,
         }
     }
 }
@@ -171,10 +195,16 @@ fn pack_dir(data_dir: &Path, id: &str) -> PathBuf {
     extensions_dir(data_dir).join(id)
 }
 
-pub fn list(conn: &rusqlite::Connection) -> Vec<InstalledPack> {
+pub fn list(data_dir: &Path, conn: &rusqlite::Connection) -> Vec<InstalledPack> {
     sqlite::list_extensions(conn)
         .into_iter()
         .map(InstalledPack::from)
+        .map(|mut p| {
+            if p.kind == "augment" {
+                p.augment = augment_config(data_dir, &p.id).ok();
+            }
+            p
+        })
         .collect()
 }
 
@@ -190,6 +220,16 @@ fn write_pack(
     sha256: Option<String>,
 ) -> EngineResult<()> {
     let m = Manifest::parse(manifest_text)?;
+
+    // An augment's payload shape is checked at install so a broken command /
+    // file path fails now, not silently at open time. An unsupported capability
+    // is allowed through (it degrades with a message, like `mcp` under
+    // `--no-default-features`).
+    if matches!(m.kind, PackKind::Augment) {
+        let text = std::str::from_utf8(payload_bytes)
+            .map_err(|_| EngineError::msg("augment.json is not valid UTF-8"))?;
+        AugmentConfig::parse(text)?;
+    }
 
     let dest = pack_dir(data_dir, &m.id);
     if dest.exists() {
@@ -534,6 +574,102 @@ pub fn connector_config(data_dir: &Path, id: &str) -> EngineResult<ConnectorConf
     let raw = read_payload(data_dir, id)
         .ok_or_else(|| EngineError::msg(format!("no connector pack '{id}' is installed")))?;
     ConnectorConfig::parse(&raw)
+}
+
+// --- augments --------------------------------------------------------
+
+/// An `augment.json` payload (the `augment` pack kind). Names a first-party
+/// capability the app ships (`engine::augment`) and how to surface it. Unknown
+/// fields are ignored and an unrecognised `syntax` falls back to `plain`, so a
+/// manifest written for a newer Fella still loads (the compatibility contract
+/// in `docs/EXTENSIBILITY.md`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AugmentConfig {
+    /// A capability in `engine::augment::CAPABILITIES` (e.g. `buffer`, `grid`).
+    pub capability: String,
+    /// The slash command that opens the view, without the leading `/`.
+    pub command: String,
+    /// Workspace-relative file the view autosaves to.
+    pub file: String,
+    /// Editor hint: `markdown` | `plain` | `csv`. Anything else becomes `plain`.
+    #[serde(default = "default_augment_syntax")]
+    pub syntax: String,
+}
+
+fn default_augment_syntax() -> String {
+    "plain".to_string()
+}
+
+/// File extensions an augment may write. Also enforced in `engine::augment`.
+pub const AUGMENT_FILE_EXTS: &[&str] = &["md", "txt", "csv", "tsv"];
+
+impl AugmentConfig {
+    pub fn parse(text: &str) -> EngineResult<Self> {
+        let mut c: AugmentConfig = serde_json::from_str(text)
+            .map_err(|e| EngineError::msg(format!("augment.json is not valid: {e}")))?;
+
+        let cmd_ok = (1..=16).contains(&c.command.len())
+            && c.command.as_bytes()[0].is_ascii_lowercase()
+            && c.command
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+        if !cmd_ok {
+            return Err(EngineError::msg(
+                "augment command must be 1-16 lowercase letters, digits and dashes, \
+                 starting with a letter, and no leading '/'",
+            ));
+        }
+
+        let p = Path::new(&c.file);
+        let path_ok = !c.file.is_empty()
+            && !p.is_absolute()
+            && p.components().all(|comp| matches!(comp, Component::Normal(_)));
+        let ext_ok = c
+            .file
+            .rsplit('.')
+            .next()
+            .map(|e| AUGMENT_FILE_EXTS.contains(&e.to_ascii_lowercase().as_str()))
+            .unwrap_or(false);
+        if !path_ok || !ext_ok {
+            return Err(EngineError::msg(
+                "augment file must be a workspace-relative path (no '..', no leading '/') \
+                 ending in .md, .txt, .csv or .tsv",
+            ));
+        }
+
+        if !matches!(c.syntax.as_str(), "markdown" | "plain" | "csv") {
+            c.syntax = "plain".to_string();
+        }
+        Ok(c)
+    }
+
+    /// Whether this build ships the named capability.
+    pub fn supported(&self) -> bool {
+        crate::engine::augment::CAPABILITIES.contains(&self.capability.as_str())
+    }
+}
+
+/// `(pack id, config)` for every enabled `augment` pack with a parseable
+/// `augment.json`. A bad payload is skipped, not fatal.
+pub fn enabled_augments(
+    data_dir: &Path,
+    conn: &rusqlite::Connection,
+) -> Vec<(String, AugmentConfig)> {
+    sqlite::list_extensions(conn)
+        .into_iter()
+        .filter(|r| r.enabled && r.kind == "augment")
+        .filter_map(|r| {
+            let raw = read_payload(data_dir, &r.id)?;
+            AugmentConfig::parse(&raw).ok().map(|c| (r.id, c))
+        })
+        .collect()
+}
+
+/// The `augment.json` of one installed `augment` pack (enabled or not).
+pub fn augment_config(data_dir: &Path, id: &str) -> EngineResult<AugmentConfig> {
+    let raw = read_payload(data_dir, id)
+        .ok_or_else(|| EngineError::msg(format!("no augment pack '{id}' is installed")))?;
+    AugmentConfig::parse(&raw)
 }
 
 fn cap_chars(s: &str, cap: usize) -> String {

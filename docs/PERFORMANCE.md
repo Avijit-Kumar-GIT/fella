@@ -894,3 +894,147 @@ starts to feel slow.
   ships / 16,872,936 B stripped, flat vs the `edba382` pre-flight (−0.4%
   stripped). Added the metrics timeline above. Cold start still unmeasurable
   under WSL (no webview render) — deferred to a real-display RC smoke test.
+
+## 2026-09-10 17:03  ·  v0.1.5 (release build)
+
+### Toolchain
+
+rustc 1.98.0 (88d9e12ae 2026-08-18)
+cargo 1.98.0 (797e8a9bc 2026-08-05)
+v24.20.0 11.24.0
+Linux 6.6.87.2-microsoft-standard-WSL2
+
+### Dependencies
+
+unique crates in the graph : 386
+direct dependencies        : 25
+
+duplicate versions (same crate at >1 version wasted size + build time):
+base64 v0.22.1
+base64 v0.23.1
+bitflags v1.3.2
+bitflags v2.13.1
+cpufeatures v0.2.17
+cpufeatures v0.3.0
+fastrand v2.5.0
+flate2 v1.1.9
+foldhash v0.2.0
+getrandom v0.2.17
+getrandom v0.3.4
+getrandom v0.4.3
+hashbrown v0.12.3
+hashbrown v0.17.1
+hashbrown v0.17.1 (*)
+heck v0.4.1
+heck v0.5.0
+indexmap v1.9.3 (*)
+indexmap v2.14.0 (*)
+libc v0.2.189
+log v0.4.34
+miniz_oxide v0.8.9
+proc-macro-crate v1.3.1 (*)
+proc-macro-crate v2.0.2 (*)
+proc-macro-crate v3.5.0 (*)
+quick-xml v0.41.0
+semver v1.0.28
+serde v1.0.229
+serde_core v1.0.229
+serde_json v1.0.151 (*)
+serde_spanned v0.6.9 (*)
+serde_spanned v1.1.1 (*)
+simd-adler32 v0.3.10
+smallvec v1.15.2
+stable_deref_trait v1.2.1
+syn v1.0.109
+syn v2.0.119
+syn v3.0.4
+tauri-utils v2.9.3 (*)
+thiserror v1.0.69 (*)
+thiserror v2.0.20 (*)
+thiserror-impl v1.0.69 (proc-macro) (*)
+thiserror-impl v2.0.20 (proc-macro) (*)
+time v0.3.55
+time v0.3.55 (*)
+toml_datetime v0.6.3 (*)
+toml_datetime v1.1.1+spec-1.1.0 (*)
+toml_edit v0.19.15 (*)
+toml_edit v0.20.2 (*)
+toml_edit v0.25.13+spec-1.1.0 (*)
+uuid v1.26.0 (*)
+winnow v0.5.40
+winnow v1.0.4
+
+### Release build
+
+   Compiling fella v0.1.5 (/home/avi/Projects/fella-oss/src-tauri)
+    Finished `release` profile [optimized] target(s) in 1m 59s
+wall 120.03s · peak 1556160KB
+
+### Incremental rebuild time (edit one file, rebuild)
+
+Benchmark 1: cargo build --release
+  Time (mean ± σ):     112.207 s ±  3.161 s    [User: 156.461 s, System: 8.331 s]
+  Range (min … max):   108.682 s … 114.789 s    3 runs
+ 
+
+per-crate compile times: cd src-tauri && cargo build --release --timings
+  then open src-tauri/target/cargo-timings/cargo-timing.html
+
+### Binary size
+
+with symbols : 20M  (20060432 bytes)
+stripped     : 17M  (16917576 bytes)  <- what actually ships
+
+     text	   data	    bss	    dec	    hex	filename
+  16199075	 711768	  17216	16928059	1024d3b	src-tauri/target/release/fella
+
+### Binary composition (cargo-bloat)
+
+(skipped pass --bloat; it relinks the LTO binary, ~10 min)
+
+### Frontend bundle
+
+.svelte-kit/output/server/_app/immutable/assets/_page.hCxyTU_O.css     15.68 kB │ gzip:  3.14 kB
+.svelte-kit/output/server/entries/pages/_layout.ts.js                   0.15 kB │ gzip:  0.13 kB
+.svelte-kit/output/server/env.js                                        0.22 kB │ gzip:  0.14 kB
+.svelte-kit/output/server/entries/pages/_layout.svelte.js               0.23 kB │ gzip:  0.18 kB
+.svelte-kit/output/server/chunks/env.js                                 0.28 kB │ gzip:  0.17 kB
+.svelte-kit/output/server/internal.js                                   0.40 kB │ gzip:  0.19 kB
+.svelte-kit/output/server/chunks/internal.js                            0.88 kB │ gzip:  0.43 kB
+.svelte-kit/output/server/entries/fallbacks/error.svelte.js             4.77 kB │ gzip:  1.76 kB
+.svelte-kit/output/server/chunks/index-server.js                        5.08 kB │ gzip:  1.84 kB
+.svelte-kit/output/server/chunks/exports.js                             9.57 kB │ gzip:  3.06 kB
+.svelte-kit/output/server/chunks/uneval.js                             17.25 kB │ gzip:  4.78 kB
+.svelte-kit/output/server/chunks/shared.js                             29.89 kB │ gzip:  8.07 kB
+.svelte-kit/output/server/chunks/internal2.js                          36.26 kB │ gzip: 10.37 kB
+.svelte-kit/output/server/chunks/utils.js                              37.45 kB │ gzip: 10.84 kB
+.svelte-kit/output/server/remote-entry.js                              55.45 kB │ gzip: 12.13 kB
+.svelte-kit/output/server/entries/pages/_page.svelte.js                57.71 kB │ gzip: 15.14 kB
+.svelte-kit/output/server/chunks/server.js                            121.19 kB │ gzip: 31.57 kB
+.svelte-kit/output/server/index.js                                    134.75 kB │ gzip: 33.72 kB
+✓ built in 1.79s
+  Wrote site to "build"
+
+build/ on disk  : 460K
+all JS, gzipped : 69 KB
+
+### Cold start -> interactive
+
+(a window opens briefly for each run)
+run 1: no timing line (no display / WSLg?)
+run 2: no timing line (no display / WSLg?)
+run 3: no timing line (no display / WSLg?)
+
+### Idle memory
+
+main process RSS : 177 MB   (+ 2 WebKit helper process(es), not summed)
+  Elapsed (wall clock) time (h:mm:ss or m:ss): 0:08.02
+  Maximum resident set size (kbytes): 183392
+
+### Notes
+
+- GUI metrics (cold start, memory) need a display WSLg on Windows.
+- `time -v` "Maximum resident set size" is the main process only; WebKit
+  helpers add ~20-60 MB more.
+- `du --apparent-size` = file bytes, not blocks-on-disk.
+- First `cargo build --release` is slow (DuckDB C++); later ones are fast.

@@ -9,6 +9,7 @@ use std::time::Instant;
 use serde::Serialize;
 
 use crate::engine::agent;
+use crate::engine::augment;
 use crate::engine::catalog::{self, Catalog, SourceInfo, SourceKind};
 use crate::engine::data::{self, DataEngine, PythonBridge, DEFAULT_ROW_CAP};
 use crate::engine::error::{EngineError, EngineResult};
@@ -609,7 +610,10 @@ impl EngineState {
     // --- packs (installed extensions) ------------------------------------
 
     pub fn packs_list(&self) -> Vec<InstalledPack> {
-        let mut list = extensions::list(&self.sqlite.lock().unwrap_or_else(|e| e.into_inner()));
+        let mut list = extensions::list(
+            &self.data_dir,
+            &self.sqlite.lock().unwrap_or_else(|e| e.into_inner()),
+        );
         for p in &mut list {
             if p.kind == "mcp" && !self.mcp_has_token(&p.id) {
                 p.needs_token = true;
@@ -621,13 +625,13 @@ impl EngineState {
     pub fn packs_add(&self, src: &Path) -> EngineResult<Vec<InstalledPack>> {
         let conn = self.sqlite.lock().unwrap_or_else(|e| e.into_inner());
         extensions::install_local(&self.data_dir, &conn, src)?;
-        Ok(extensions::list(&conn))
+        Ok(extensions::list(&self.data_dir, &conn))
     }
 
     pub fn packs_remove(&self, id: &str) -> EngineResult<Vec<InstalledPack>> {
         let conn = self.sqlite.lock().unwrap_or_else(|e| e.into_inner());
         extensions::remove(&self.data_dir, &conn, id)?;
-        Ok(extensions::list(&conn))
+        Ok(extensions::list(&self.data_dir, &conn))
     }
 
     pub fn packs_set_enabled(
@@ -637,7 +641,7 @@ impl EngineState {
     ) -> EngineResult<Vec<InstalledPack>> {
         let conn = self.sqlite.lock().unwrap_or_else(|e| e.into_inner());
         extensions::set_enabled(&conn, id, enabled)?;
-        Ok(extensions::list(&conn))
+        Ok(extensions::list(&self.data_dir, &conn))
     }
 
     /// Install a pack from the marketplace by id (files are SHA-256 checked
@@ -647,7 +651,43 @@ impl EngineState {
             extensions::download_pack(&self.http, &extensions::catalog_url(), id).await?;
         let conn = self.sqlite.lock().unwrap_or_else(|e| e.into_inner());
         extensions::install_downloaded(&self.data_dir, &conn, &downloaded)?;
-        Ok(extensions::list(&conn))
+        Ok(extensions::list(&self.data_dir, &conn))
+    }
+
+    // --- augments (user-authored files in the open folder) --------------
+
+    /// Write a user-authored augment file into the open folder. Called by the UI
+    /// when a person types in a `buffer` / `grid` view never by the agent.
+    /// Write only; the UI calls `reindex()` (on tab close / idle) so Fella then
+    /// sees the file like any other in the folder.
+    pub fn augment_save(&self, capability: &str, file: &str, contents: &str) -> EngineResult<()> {
+        let ws = self
+            .inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .workspace
+            .clone()
+            .ok_or(EngineError::NoWorkspace)?;
+        match capability {
+            // The grid is serialised to CSV text by the UI, so both persist the
+            // same way; `capability` is only the compatibility checkpoint.
+            "buffer" | "grid" => augment::write_buffer(&ws, file, contents).map(|_| ()),
+            other => Err(EngineError::msg(format!(
+                "this build doesn't support the '{other}' augment update Fella"
+            ))),
+        }
+    }
+
+    /// Read an augment file back for the editor. `None` if it doesn't exist yet.
+    pub fn augment_load(&self, file: &str) -> EngineResult<Option<String>> {
+        let ws = self
+            .inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .workspace
+            .clone()
+            .ok_or(EngineError::NoWorkspace)?;
+        augment::read_buffer(&ws, file)
     }
 
     /// Check the latest GitHub release and, if it's newer, download +
@@ -963,6 +1003,17 @@ impl EngineState {
         // question doesn't wait on a cold load.
         self.warm_model();
         Ok(self.catalog())
+    }
+
+    /// The folder from the last session, if it still exists on disk not opened,
+    /// just the path so the welcome screen can offer a one-click "reopen".
+    /// `None` if there's no history or the folder is gone.
+    pub fn last_workspace_path(&self) -> Option<String> {
+        let path = {
+            let conn = self.sqlite.lock().unwrap_or_else(|e| e.into_inner());
+            sqlite::most_recent_workspace(&conn)?
+        };
+        std::path::Path::new(&path).is_dir().then_some(path)
     }
 
     /// On launch: reopen the folder from the last session so the user doesn't

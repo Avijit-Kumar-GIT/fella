@@ -1,10 +1,11 @@
 <script lang="ts">
 	import { session } from '$lib/session.svelte';
-	import type { Conversation } from '$lib/session.svelte';
+	import type { Tab } from '$lib/session.svelte';
 	import Icon from './Icon.svelte';
 
-	/** First user line, trimmed to a chip-sized label. */
-	function label(tab: Conversation): string {
+	/** A chip-sized label: the augment's file, or a conversation's first line. */
+	function label(tab: Tab): string {
+		if (tab.kind === 'augment') return tab.file;
 		const first = tab.messages.find((m) => m.role === 'user');
 		const t = first?.text.replace(/\s+/g, ' ').trim();
 		if (!t) return 'New conversation';
@@ -23,7 +24,7 @@
 	}
 </script>
 
-<div class="tabs" role="tablist" aria-label="Conversations">
+<div class="tabs" role="tablist" aria-label="Tabs">
 	{#each session.tabs as tab, i (tab.id)}
 		<div
 			class="tab"
@@ -35,13 +36,15 @@
 			onkeydown={(e) => onKey(e, i)}
 			data-tauri-drag-region="false"
 		>
-			{#if tab.busy}
+			{#if tab.kind === 'chat' && tab.busy}
 				<span class="thinking" aria-hidden="true"></span>
+			{:else if tab.kind === 'augment' && tab.dirty}
+				<span class="unsaved" aria-hidden="true" title="unsaved changes"></span>
 			{/if}
 			<span class="label">{label(tab)}</span>
 			<button
 				class="close"
-				aria-label="Close this conversation"
+				aria-label={tab.kind === 'augment' ? 'Close this tab' : 'Close this conversation'}
 				tabindex="-1"
 				onclick={(e) => {
 					e.stopPropagation();
@@ -100,6 +103,15 @@
 	.label {
 		overflow: hidden;
 		text-overflow: ellipsis;
+	}
+	/* Same halo treatment as StatusBar's connection dot. */
+	.unsaved {
+		width: 6px;
+		height: 6px;
+		border-radius: 50%;
+		background: var(--warn);
+		box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 20%, transparent);
+		flex: none;
 	}
 	.close,
 	.add {

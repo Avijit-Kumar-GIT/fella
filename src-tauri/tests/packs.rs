@@ -35,6 +35,12 @@ fn theme_manifest(id: &str) -> String {
     )
 }
 
+fn augment_manifest(id: &str) -> String {
+    format!(
+        r#"{{"schema":1,"id":"{id}","kind":"augment","name":"{id}","version":"1.0.0","description":"d","payload":"augment.json"}}"#
+    )
+}
+
 #[test]
 fn local_skill_install_enable_disable_roundtrip() {
     let src = scratch("pk-src");
@@ -148,6 +154,129 @@ fn only_one_theme_is_active_and_its_tokens_are_filtered() {
     assert!(!tokens.contains_key("--bogus"), "unknown tokens dropped");
 
     let _ = fs::remove_dir_all(&src);
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[test]
+fn augment_pack_install_and_config() {
+    let src = scratch("pk-aug-src");
+    let data = scratch("pk-aug-data");
+    let engine = EngineState::new(&data).unwrap();
+
+    write_pack(
+        &src,
+        "notes",
+        &augment_manifest("notes"),
+        "augment.json",
+        r#"{"capability":"buffer","command":"note","file":"notes.md","syntax":"markdown"}"#,
+    );
+    let list = engine.packs_add(&src.join("notes")).unwrap();
+    let p = list.iter().find(|p| p.id == "notes").unwrap();
+    assert_eq!(p.kind, "augment");
+    let a = p.augment.as_ref().expect("augment config populated on the row");
+    assert_eq!(a.command, "note");
+    assert_eq!(a.file, "notes.md");
+    assert_eq!(a.capability, "buffer");
+    assert!(a.supported());
+
+    // unknown capability: installs, but flagged unsupported; missing syntax -> plain
+    write_pack(
+        &src,
+        "future",
+        &augment_manifest("future"),
+        "augment.json",
+        r#"{"capability":"hologram","command":"holo","file":"h.md"}"#,
+    );
+    let list = engine.packs_add(&src.join("future")).unwrap();
+    let a = list
+        .iter()
+        .find(|p| p.id == "future")
+        .unwrap()
+        .augment
+        .as_ref()
+        .unwrap();
+    assert!(!a.supported());
+    assert_eq!(a.syntax, "plain");
+
+    // malformed augment.json -> rejected at install
+    for (id, payload) in [
+        ("bad1", r#"{"capability":"buffer","command":"/note","file":"notes.md"}"#),
+        ("bad2", r#"{"capability":"buffer","command":"note","file":"notes.exe"}"#),
+        ("bad3", r#"{"capability":"buffer","command":"note","file":"../out.md"}"#),
+    ] {
+        write_pack(&src, id, &augment_manifest(id), "augment.json", payload);
+        assert!(
+            engine.packs_add(&src.join(id)).is_err(),
+            "{id} should be rejected"
+        );
+    }
+
+    let _ = fs::remove_dir_all(&src);
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[test]
+fn installing_a_pack_touches_only_the_extensions_table() {
+    // A pack drops into existing scaffolding; it must not move any other engine
+    // state settings, the open workspace, model config.
+    let src = scratch("pk-iso-src");
+    let data = scratch("pk-iso-data");
+    let engine = EngineState::new(&data).unwrap();
+
+    let before = format!("{:?}", engine.settings());
+
+    write_pack(
+        &src,
+        "notes",
+        &augment_manifest("notes"),
+        "augment.json",
+        r#"{"capability":"buffer","command":"note","file":"notes.md","syntax":"markdown"}"#,
+    );
+    engine.packs_add(&src.join("notes")).unwrap();
+    engine.packs_set_enabled("notes", true).unwrap();
+
+    assert_eq!(before, format!("{:?}", engine.settings()), "settings unchanged");
+    // Install didn't conjure a workspace no folder is open.
+    assert!(engine.augment_save("buffer", "notes.md", "x").is_err());
+    // Enabling an augment adds no system prompt context (that's skills only).
+    assert!(engine.user_context().is_empty());
+
+    engine.packs_remove("notes").unwrap();
+    assert_eq!(before, format!("{:?}", engine.settings()), "settings unchanged after remove");
+    assert!(engine.packs_list().is_empty());
+
+    let _ = fs::remove_dir_all(&src);
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[test]
+fn augment_save_writes_only_into_the_open_folder() {
+    let ws = scratch("pk-aug-ws");
+    let data = scratch("pk-aug-wsdata");
+    fs::write(ws.join("x.csv"), "a\n1\n").unwrap();
+    let engine = EngineState::new(&data).unwrap();
+
+    // no workspace open yet
+    assert!(engine.augment_save("buffer", "notes.md", "hi").is_err());
+
+    engine.open_workspace(&ws).unwrap();
+    engine.augment_save("buffer", "notes.md", "# hello\n").unwrap();
+    assert_eq!(fs::read_to_string(ws.join("notes.md")).unwrap(), "# hello\n");
+    assert_eq!(
+        engine.augment_load("notes.md").unwrap().as_deref(),
+        Some("# hello\n")
+    );
+    assert_eq!(engine.augment_load("absent.md").unwrap(), None);
+
+    assert!(engine.augment_save("buffer", "../evil.md", "x").is_err());
+    engine.augment_save("grid", "table.csv", "a,b\n1,2\n").unwrap();
+    assert_eq!(fs::read_to_string(ws.join("table.csv")).unwrap(), "a,b\n1,2\n");
+    assert!(
+        engine.augment_save("hologram", "t.csv", "x").is_err(),
+        "an unknown capability is refused"
+    );
+
+    let _ = fs::remove_dir_all(&ws);
     let _ = fs::remove_dir_all(&data);
 }
 

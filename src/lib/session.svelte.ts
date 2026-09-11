@@ -10,6 +10,7 @@
 
 import { ipc, isTauri } from './ipc';
 import type {
+	AugmentConfig,
 	Catalog,
 	InstalledPack,
 	Message,
@@ -17,6 +18,8 @@ import type {
 	ProviderInfo,
 	Settings
 } from './types';
+
+export type { AugmentConfig };
 
 function uid(): string {
 	return Math.random().toString(36).slice(2, 10);
@@ -28,6 +31,7 @@ const INDEX_KEY = 'fella:tabs'; // JSON array of open tab ids
 
 /** One conversation tab: its transcript, its in-flight run, its input history. */
 export class Conversation {
+	readonly kind = 'chat' as const;
 	readonly id = uid();
 	messages = $state<Message[]>([]);
 	busy = $state<boolean>(false);
@@ -92,8 +96,43 @@ export class Conversation {
 	}
 }
 
+/** A non-conversation tab: an augment view (a notes buffer, later a grid)
+ *  editing one file in the open folder. Not persisted to localStorage the
+ *  file on disk is the source of truth and it isn't restored on relaunch. */
+export class AugmentTab {
+	readonly kind = 'augment' as const;
+	readonly id = uid();
+	readonly capability: string;
+	readonly command: string;
+	readonly file: string;
+	readonly syntax: string;
+	/** Current editor contents. */
+	text = $state<string>('');
+	/** Last value confirmed written to disk. */
+	saved = $state<string>('');
+	savedAt = $state<number | null>(null);
+	saving = $state<boolean>(false);
+	loadError = $state<string | null>(null);
+
+	constructor(cfg: AugmentConfig) {
+		this.capability = cfg.capability;
+		this.command = cfg.command;
+		this.file = cfg.file;
+		this.syntax = cfg.syntax;
+	}
+
+	get dirty(): boolean {
+		return this.text !== this.saved;
+	}
+}
+
+export type Tab = Conversation | AugmentTab;
+
 class Session {
 	catalog = $state<Catalog>({ workspace: null, sources: [] });
+	/** Folder from the last session, if it still exists shown on the welcome
+	 *  screen as a one-click "reopen". Fella no longer opens it automatically. */
+	lastFolder = $state<string | null>(null);
 	settings = $state<Settings | null>(null);
 	health = $state<OllamaHealth | null>(null);
 	/** A local Ollama probed regardless of the configured provider so the empty
@@ -106,66 +145,94 @@ class Session {
 	/** Installed packs, cached so `/packs` completion can offer ids without an
 	 *  await. */
 	packs = $state<InstalledPack[]>([]);
+	/** Augment capabilities this build ships (from the engine, not a hardcoded
+	 *  list) an augment pack is only reachable if its capability is here. */
+	augmentCapabilities = $state<string[]>([]);
 
-	/** The open conversation tabs, and the index of the focused one. */
-	tabs = $state<Conversation[]>([new Conversation()]);
+	/** The open tabs (conversations, and augment views), and the focused index. */
+	tabs = $state<Tab[]>([new Conversation()]);
 	active = $state<number>(0);
 	/** Focus mode: hide the tab strip and the folder header for a plain,
 	 *  single-conversation view. Toggled by `/focus` or Ctrl+Shift+F. */
 	focus = $state<boolean>(false);
 
-	get activeTab(): Conversation {
+	get activeTab(): Tab {
 		return this.tabs[this.active] ?? this.tabs[0];
+	}
+
+	/** The focused tab if it's a conversation, else the first conversation tab,
+	 *  else null. The `session.addSystem(...)` / `ask` paths route here so a
+	 *  slash command run while an augment tab is focused still lands somewhere
+	 *  sensible. */
+	get activeChat(): Conversation | null {
+		const t = this.activeTab;
+		if (t.kind === 'chat') return t;
+		return (this.tabs.find((x) => x.kind === 'chat') as Conversation | undefined) ?? null;
 	}
 
 	/** The active tab's model, or the saved default when it hasn't picked one. */
 	get model(): string {
-		return this.activeTab.model || this.settings?.model || '';
+		const m = this.activeTab.kind === 'chat' ? this.activeTab.model : '';
+		return m || this.settings?.model || '';
 	}
 
-	// --- per-conversation facade -> the active tab -------------------------
+	// --- per-conversation facade -> the active (or first) conversation ------
 	get messages(): Message[] {
-		return this.activeTab.messages;
+		return this.activeChat?.messages ?? [];
 	}
 	set messages(v: Message[]) {
-		this.activeTab.messages = v;
+		if (this.activeChat) this.activeChat.messages = v;
 	}
 	get conversationId(): string {
-		return this.activeTab.id;
+		return this.activeChat?.id ?? this.activeTab.id;
 	}
 	get busy(): boolean {
-		return this.activeTab.busy;
+		return this.activeChat?.busy ?? false;
 	}
 	set busy(v: boolean) {
-		this.activeTab.busy = v;
+		if (this.activeChat) this.activeChat.busy = v;
 	}
 	get activity(): string {
-		return this.activeTab.activity;
+		return this.activeChat?.activity ?? '';
 	}
 	set activity(v: string) {
-		this.activeTab.activity = v;
+		if (this.activeChat) this.activeChat.activity = v;
 	}
 	get pendingKey(): { provider: string; display: string } | null {
-		return this.activeTab.pendingKey;
+		return this.activeChat?.pendingKey ?? null;
 	}
 	set pendingKey(v: { provider: string; display: string } | null) {
-		this.activeTab.pendingKey = v;
+		if (this.activeChat) this.activeChat.pendingKey = v;
 	}
 	get pendingConnect(): { id: string } | null {
-		return this.activeTab.pendingConnect;
+		return this.activeChat?.pendingConnect ?? null;
 	}
 	set pendingConnect(v: { id: string } | null) {
-		this.activeTab.pendingConnect = v;
+		if (this.activeChat) this.activeChat.pendingConnect = v;
+	}
+
+	/** The conversation to act on for a slash command: the focused tab if it's a
+	 *  conversation, otherwise the first conversation tab (focusing it), or a
+	 *  fresh one. Slash commands are dispatched from the Composer, which is
+	 *  hidden on an augment tab, so in practice this is just the active tab. */
+	ensureChat(): Conversation {
+		const existing = this.activeChat;
+		if (existing) {
+			if (this.activeTab.kind !== 'chat') this.active = this.tabs.indexOf(existing);
+			return existing;
+		}
+		this.newTab();
+		return this.tabs[this.active] as Conversation;
 	}
 
 	addUser(text: string): Message {
-		return this.activeTab.addUser(text);
+		return this.ensureChat().addUser(text);
 	}
 	addAssistant(text = ''): Message {
-		return this.activeTab.addAssistant(text);
+		return this.ensureChat().addAssistant(text);
 	}
 	addSystem(text: string): Message {
-		return this.activeTab.addSystem(text);
+		return this.ensureChat().addSystem(text);
 	}
 
 	// --- tab management ---------------------------------------------------
@@ -194,12 +261,43 @@ class Session {
 		this.#writeIndex();
 	}
 
+	/** Open (or focus) an augment view for `cfg`, loading the file's current
+	 *  contents from the open folder. */
+	async openAugment(cfg: AugmentConfig): Promise<void> {
+		const existing = this.tabs.findIndex((t) => t.kind === 'augment' && t.file === cfg.file);
+		if (existing >= 0) {
+			this.active = existing;
+			return;
+		}
+		const tab = new AugmentTab(cfg);
+		this.tabs.push(tab);
+		this.active = this.tabs.length - 1;
+		this.#writeIndex();
+		if (!isTauri()) return;
+		try {
+			const cur = await ipc.augmentLoad(cfg.file);
+			tab.text = cur ?? '';
+			tab.saved = tab.text;
+		} catch (e) {
+			tab.loadError = e instanceof Error ? e.message : String(e);
+		}
+	}
+
 	async closeTab(i: number): Promise<void> {
 		const tab = this.tabs[i];
 		if (!tab) return;
-		await this.#archive(tab);
-		tab.dropSnapshot();
-		if (isTauri()) void ipc.forgetConversation(tab.id).catch(() => {});
+		if (tab.kind === 'chat') {
+			await this.#archive(tab);
+			tab.dropSnapshot();
+			if (isTauri()) void ipc.forgetConversation(tab.id).catch(() => {});
+		} else if (tab.dirty && isTauri()) {
+			// Flush a final save so nothing typed is lost on close.
+			try {
+				await ipc.augmentSave(tab.capability, tab.file, tab.text);
+			} catch (e) {
+				console.warn('augment final save failed', e);
+			}
+		}
 		this.tabs.splice(i, 1);
 		if (this.tabs.length === 0) this.tabs.push(new Conversation());
 		// Keep the focus on the same tab where possible: shift left if we closed
@@ -209,10 +307,20 @@ class Session {
 		this.#writeIndex();
 	}
 
-	/** End the active tab's conversation: archive it, then start it blank. */
+	/** End the active tab: archive a conversation / flush an augment, then start
+	 *  the slot blank. */
 	async clear(): Promise<void> {
-		await this.#archive(this.activeTab);
-		this.activeTab.dropSnapshot();
+		const tab = this.activeTab;
+		if (tab.kind === 'chat') {
+			await this.#archive(tab);
+			tab.dropSnapshot();
+		} else if (tab.dirty && isTauri()) {
+			try {
+				await ipc.augmentSave(tab.capability, tab.file, tab.text);
+			} catch {
+				/* ignore */
+			}
+		}
 		this.tabs[this.active] = new Conversation();
 		this.#writeIndex();
 	}
@@ -255,10 +363,11 @@ class Session {
 		this.active = 0;
 	}
 
-	/** Persist every tab's transcript (each debounces its own write). */
+	/** Persist every conversation tab's transcript (each debounces its own
+	 *  write). Augment tabs aren't persisted the file on disk is the truth. */
 	persist(): void {
 		const ws = this.catalog.workspace ?? null;
-		for (const t of this.tabs) t.persist(ws);
+		for (const t of this.tabs) if (t.kind === 'chat') t.persist(ws);
 		this.#writeIndex();
 	}
 

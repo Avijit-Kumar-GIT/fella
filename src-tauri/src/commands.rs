@@ -14,6 +14,23 @@ use crate::engine::{
 };
 use crate::AppState;
 
+/// Expand a leading `~` (or `~/…`, `~\…`) to the user's home directory. Typed
+/// paths come from the composer, a text field, not a shell, so nothing else
+/// expands this the way a terminal would. Used by every command that takes a
+/// user-typed filesystem path (`open_workspace`, `packs_add`).
+fn expand_tilde(path: &str) -> std::path::PathBuf {
+    if let Some(rest) = path.strip_prefix('~') {
+        if rest.is_empty() || rest.starts_with('/') || rest.starts_with('\\') {
+            if let Some(home) =
+                std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))
+            {
+                return std::path::Path::new(&home).join(rest.trim_start_matches(['/', '\\']));
+            }
+        }
+    }
+    std::path::PathBuf::from(path)
+}
+
 /// Cheap liveness check used by the UI on startup.
 #[tauri::command]
 pub fn ping() -> &'static str {
@@ -53,7 +70,7 @@ pub async fn open_workspace(
     path: String,
     engine: State<'_, EngineState>,
 ) -> Result<Catalog, EngineError> {
-    engine.open_workspace(std::path::Path::new(&path))
+    engine.open_workspace(&expand_tilde(&path))
 }
 
 #[tauri::command]
@@ -61,11 +78,12 @@ pub fn get_catalog(engine: State<'_, EngineState>) -> Catalog {
     engine.catalog()
 }
 
-/// Reopen the folder from the last session (launch only). `null` if there's
-/// nothing to reopen or it's gone.
+/// Path of the folder from the last session, if it still exists. The welcome
+/// screen uses it for a one-click "reopen" button; Fella no longer opens it
+/// automatically on launch. `null` if there's no history or it's gone.
 #[tauri::command]
-pub fn reopen_last_workspace(engine: State<'_, EngineState>) -> Option<Catalog> {
-    engine.reopen_last_workspace()
+pub fn last_workspace_path(engine: State<'_, EngineState>) -> Option<String> {
+    engine.last_workspace_path()
 }
 
 #[tauri::command]
@@ -154,7 +172,7 @@ pub fn packs_add(
     path: String,
     engine: State<'_, EngineState>,
 ) -> Result<Vec<InstalledPack>, EngineError> {
-    engine.packs_add(std::path::Path::new(&path))
+    engine.packs_add(&expand_tilde(&path))
 }
 
 #[tauri::command]
@@ -217,6 +235,37 @@ pub fn packs_theme(
     engine: State<'_, EngineState>,
 ) -> Option<std::collections::BTreeMap<String, String>> {
     engine.packs_theme()
+}
+
+// --- augments (user-authored files in the open folder) -----------------
+
+/// Write a note/table the user typed in an `augment` view into the open folder.
+/// The UI is the only caller; the agent has no path here.
+#[tauri::command]
+pub fn augment_save(
+    capability: String,
+    file: String,
+    contents: String,
+    engine: State<'_, EngineState>,
+) -> Result<(), EngineError> {
+    engine.augment_save(&capability, &file, &contents)
+}
+
+/// Read an augment file back for its editor. Null if it doesn't exist yet.
+#[tauri::command]
+pub fn augment_load(
+    file: String,
+    engine: State<'_, EngineState>,
+) -> Result<Option<String>, EngineError> {
+    engine.augment_load(&file)
+}
+
+/// The augment capabilities this build ships. The UI reads this instead of
+/// carrying its own copy of the list, so a new capability is one Rust entry
+/// plus its view no per-pack code, ever.
+#[tauri::command]
+pub fn augment_capabilities() -> Vec<&'static str> {
+    crate::engine::augment::CAPABILITIES.to_vec()
 }
 
 // --- ask (the agent loop) -------------------------------------------------
@@ -314,5 +363,26 @@ pub fn unhide_cursor() {
                 break;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tilde_tests {
+    use super::expand_tilde;
+
+    #[test]
+    fn expands_home_relative_paths_only() {
+        std::env::set_var("HOME", "/home/somebody");
+        assert_eq!(expand_tilde("~"), std::path::PathBuf::from("/home/somebody"));
+        assert_eq!(
+            expand_tilde("~/Downloads/pack"),
+            std::path::PathBuf::from("/home/somebody/Downloads/pack")
+        );
+        // A bare relative or absolute path passes through untouched.
+        assert_eq!(expand_tilde("./pack"), std::path::PathBuf::from("./pack"));
+        assert_eq!(expand_tilde("/tmp/pack"), std::path::PathBuf::from("/tmp/pack"));
+        // "~foo" (another user's home) is left alone, same as a shell with no
+        // matching user would leave it we don't try to resolve /etc/passwd.
+        assert_eq!(expand_tilde("~foo/pack"), std::path::PathBuf::from("~foo/pack"));
     }
 }
