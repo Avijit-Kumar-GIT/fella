@@ -1,8 +1,10 @@
 <script lang="ts">
 	import type { Message } from '$lib/types';
 	import EvidenceBlock from './EvidenceBlock.svelte';
+	import Icon from './Icon.svelte';
 	import { renderMarkdown } from '$lib/markdown';
 	import { enterUp } from '$lib/motion';
+	import { hardFail } from '$lib/verify';
 
 	let { message, expanded = false, ontoggle }: {
 		message: Message;
@@ -25,6 +27,15 @@
 	// its final answer, and rendering it lets that structure actually show.
 	// User input and system/`/sql` dumps stay plain text (see below).
 	let bodyHtml = $derived(renderMarkdown(split.body));
+
+	// Set when a query behind the answer still disagrees after the agent's
+	// one-shot corrective re-ask the trust gap the verification system
+	// exists to close, surfaced at the point the user actually reads it.
+	let unconfirmed = $derived(
+		message.role === 'assistant' && message.answer
+			? hardFail(message.answer.verification)
+			: undefined
+	);
 </script>
 
 <div class="msg {message.role}" transition:enterUp>
@@ -38,6 +49,12 @@
 		{/if}
 		{#if split.background}
 			<div class="background">{split.background}</div>
+		{/if}
+		{#if unconfirmed}
+			<div class="unconfirmed">
+				<Icon name="alert" size={13} />
+				<span>Fella couldn't confirm this figure against the data — here's its best answer.</span>
+			</div>
 		{/if}
 		<div class="text rich" class:pending={message.pending}>{@html bodyHtml}{#if message.pending}<span
 					class="thinking" aria-hidden="true"></span
@@ -102,6 +119,19 @@
 	}
 	.text.pending {
 		color: var(--text-dim);
+	}
+	/* A hard-failed answer (verify's re-ask still disagreed) reads distinctly
+	   from a clean one, at the point the user actually reads it. */
+	.unconfirmed {
+		display: flex;
+		align-items: baseline;
+		gap: var(--space-2);
+		color: var(--warn);
+		font-size: var(--fs-sm);
+		margin-bottom: 4px;
+	}
+	.unconfirmed :global(svg) {
+		align-self: center;
 	}
 
 	/* The assistant's answer is rendered from markdown (see markdown.ts). Code,
