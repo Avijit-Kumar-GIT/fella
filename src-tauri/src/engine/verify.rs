@@ -2,11 +2,7 @@
 //!   1. every table named in a cited query exists in the catalog
 //!   2. re-running each cited query still gives the same result
 //!   3. every number in the answer appears in some tool result
-//!
-//! Plus one cost-gated check that *does* spend an extra LLM round-trip, used
-//! sparingly (agent.rs only calls it once a cheap check above already left a
-//! warning standing):
-//!   4. a stricter, independent second opinion agrees with the first answer
+//!   4. the question's wording implies a SQL aggregate no cited query used
 
 use std::collections::HashSet;
 
@@ -15,7 +11,12 @@ use serde_json::Value as Json;
 use crate::engine::evidence::{EvidenceItem, VerificationCheck};
 use crate::engine::state::EngineState;
 
-pub fn run(engine: &EngineState, answer: &str, evidence: &[EvidenceItem]) -> Vec<VerificationCheck> {
+pub fn run(
+    engine: &EngineState,
+    question: &str,
+    answer: &str,
+    evidence: &[EvidenceItem],
+) -> Vec<VerificationCheck> {
     let mut checks = Vec::new();
 
     check_tables(engine, evidence, &mut checks);
@@ -23,6 +24,7 @@ pub fn run(engine: &EngineState, answer: &str, evidence: &[EvidenceItem]) -> Vec
     check_numbers(answer, evidence, &mut checks);
     check_text_agg(engine, evidence, &mut checks);
     check_case_filter(engine, evidence, &mut checks);
+    check_aggregate_verb(question, evidence, &mut checks);
 
     checks
 }
@@ -238,6 +240,56 @@ fn ok(label: impl Into<String>) -> VerificationCheck {
 }
 fn warn(label: impl Into<String>, detail: Option<String>) -> VerificationCheck {
     VerificationCheck { label: label.into(), ok: false, detail }
+}
+
+const AGGREGATE_VERBS: &[(&[&str], &str)] = &[
+    (&["how many", "count of", "number of"], "COUNT("),
+    (&["how much", "total ", " sum of"], "SUM("),
+    (&["average", "avg "], "AVG("),
+];
+
+/// Which SQL aggregates the question's wording implies but no query in
+/// `sql_texts` (already upper-cased) actually used. Pure so it's easy to
+/// test independent of `EvidenceItem`; `check_aggregate_verb` is the wrapper
+/// that pulls SQL text out of the evidence.
+fn missing_aggregate_verbs<'a>(question: &str, sql_texts: &[String]) -> Vec<&'a str> {
+    if sql_texts.is_empty() {
+        return Vec::new();
+    }
+    let q = question.to_lowercase();
+    AGGREGATE_VERBS
+        .iter()
+        .filter(|(phrases, func)| {
+            phrases.iter().any(|p| q.contains(p)) && !sql_texts.iter().any(|s| s.contains(func))
+        })
+        .map(|(_, func)| func.trim_end_matches('('))
+        .collect()
+}
+
+/// A question that says "how many" / "how much" / "average" implies a
+/// specific SQL aggregate. If none of the answer's successful queries used
+/// it, the model may have answered from a precomputed column or a different
+/// computation than the question actually asked for (#67's "valid query,
+/// wrong question" class — this catches only the crudest, lexical case of
+/// it; #77 is the deeper fix). Soft warning: the aggregate can legitimately
+/// be absent (e.g. the raw rows already answer it, or a subquery hides it).
+fn check_aggregate_verb(question: &str, evidence: &[EvidenceItem], out: &mut Vec<VerificationCheck>) {
+    let sql: Vec<String> = evidence
+        .iter()
+        .filter(|e| e.tool == "run_sql" && e.error.is_none())
+        .filter_map(|e| e.sql.as_deref())
+        .map(str::to_uppercase)
+        .collect();
+    for name in missing_aggregate_verbs(question, &sql) {
+        out.push(warn(
+            format!("question implies {name}() but no cited query used it"),
+            Some(format!(
+                "the wording suggests {name}, but none of the queries behind this answer \
+                 contain {name}() it may come from a precomputed column or a different \
+                 aggregate than the question asked for"
+            )),
+        ));
+    }
 }
 
 // --- 1. table existence -------------------------------------------------
@@ -635,6 +687,44 @@ mod tests {
         // not an equality filter, and a longer identifier that merely contains "cat"
         assert_eq!(f("SELECT cat, sum(amt) FROM s GROUP BY cat"), None);
         assert_eq!(f("... WHERE category_code = 'x'"), None);
+    }
+
+    #[test]
+    fn spots_missing_aggregate_verb() {
+        let sql = |s: &str| vec![s.to_uppercase()];
+
+        // wording implies COUNT, query doesn't have it -> flagged
+        assert_eq!(
+            missing_aggregate_verbs("how many books have I finished?", &sql("SELECT * FROM books")),
+            vec!["COUNT"]
+        );
+        // query does have it -> not flagged
+        assert!(missing_aggregate_verbs(
+            "how many books have I finished?",
+            &sql("SELECT COUNT(*) FROM books WHERE finished = 'yes'")
+        )
+        .is_empty());
+        // "total" implies SUM
+        assert_eq!(
+            missing_aggregate_verbs("what's my total spend?", &sql("SELECT amount FROM spend")),
+            vec!["SUM"]
+        );
+        // "average" implies AVG
+        assert_eq!(
+            missing_aggregate_verbs("what's my average rating?", &sql("SELECT MAX(rating) FROM books")),
+            vec!["AVG"]
+        );
+        // no run_sql evidence at all -> nothing to flag (e.g. answered from schema/no-tool)
+        assert!(missing_aggregate_verbs("how many books have I finished?", &[]).is_empty());
+        // wording doesn't imply any of these verbs -> nothing flagged
+        assert!(missing_aggregate_verbs("which genre did I read most?", &sql("SELECT genre FROM books")).is_empty());
+        // a compound question can flag more than one verb
+        let mut both = missing_aggregate_verbs(
+            "what's the total and average rating?",
+            &sql("SELECT rating FROM books"),
+        );
+        both.sort_unstable();
+        assert_eq!(both, vec!["AVG", "SUM"]);
     }
 
     #[test]
