@@ -669,7 +669,9 @@ a sql() helper."
         rules.push(
             "make_chart draws a bar or line chart from labels + numeric series you already \
 have; it renders itself, so don't describe it in prose. Use it for a breakdown across \
-categories or a trend over time skip it for a single figure or a yes/no answer."
+categories or a trend over time skip it for a single figure, a yes/no answer, or values \
+that barely differ (it will refuse near-flat data a sentence says more than a flat chart \
+would)."
                 .into(),
         );
     }
@@ -864,8 +866,9 @@ strftime()/date() (e.g. strftime('%Y-%m', d)).\n\
 a sql() helper.\n\
 - make_chart draws a bar or line chart from labels + numeric series you \
 already have; it renders itself, so don't describe it in prose. Use it for a \
-breakdown across categories or a trend over time skip it for a single figure \
-or a yes/no answer.\n\
+breakdown across categories or a trend over time skip it for a single figure, \
+a yes/no answer, or values that barely differ (it will refuse near-flat data \
+a sentence says more than a flat chart would).\n\
 - Documents (notes, PDFs) are already listed below with their names and first \
 line, so don't call list_files for them. For a question about their content, \
 call read_file directly (pass `names: [...]` to read several at once); they are \
