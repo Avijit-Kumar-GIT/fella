@@ -98,7 +98,7 @@ export const ipc = {
 	memoryFile: () => invoke<[string, string | null] | null>('memory_file'),
 	forgetMemory: () => invoke<boolean>('forget_memory'),
 
-	/** Installed packs (themes, skills, mcp connectors). */
+	/** Installed packs (themes, skills, mcp connectors, augments). */
 	packsList: () => invoke<InstalledPack[]>('packs_list'),
 	/** Add a pack from a local directory; returns the updated list. */
 	packsAdd: (path: string) => invoke<InstalledPack[]>('packs_add', { path }),
@@ -113,6 +113,15 @@ export const ipc = {
 	mcpClearToken: (id: string) => invoke<boolean>('mcp_clear_token', { id }),
 	/** CSS token map of the active theme pack, or null. */
 	packsTheme: () => invoke<Record<string, string> | null>('packs_theme'),
+
+	/** Write a note/table the user typed in an `augment` view into the open
+	 *  folder. Only the UI calls this; the agent has no path here. */
+	augmentSave: (capability: string, file: string, contents: string) =>
+		invoke<void>('augment_save', { capability, file, contents }),
+	/** Read an augment file back for its editor; null if it doesn't exist yet. */
+	augmentLoad: (file: string) => invoke<string | null>('augment_load', { file }),
+	/** Augment capabilities this build ships (so the UI carries no copy). */
+	augmentCapabilities: () => invoke<string[]>('augment_capabilities'),
 
 	/** Check for a newer release and, if one exists, download + verify +
 	 * install it and exit. Only ever called by `/update`; never automatic. */

@@ -17,8 +17,11 @@ rather than including a working exploit.
 
 ## What Fella guarantees (the base app)
 
-- **Read-only.** Fella reads the folder you point it at; it never writes,
-  moves, or deletes anything there.
+- **Read-only agent.** Fella's agent reads the folder you point it at; it never
+  writes, moves, or deletes anything there, and the model never emits a file.
+  There is no write tool to disable none was built. (An opt-in `augment`
+  pack adds a tab where *you* save a note or table you typed into one named
+  file; see below.)
 - **Local-first.** The only network call the base app makes on its own is the
   request to the model provider you chose (a local Ollama by default).
   `/packs install` and `/update` reach GitHub, but only when you type one of
@@ -37,9 +40,15 @@ Installing a pack is opt-in:
   cannot execute code or make network calls.
 - An **`mcp` connector** pack connects to a remote MCP server you configure.
   That server runs elsewhere with your credentials and may reach the network
-  installing one is your informed decision. Fella vouches only for the code
-  review of packs listed in the vetted catalog; anything you side-load is
-  marked **unverified**.
+  installing one is your informed decision.
+- An **`augment`** pack turns on a built-in capability (a notes tab, a small
+  table) and binds it to a slash command. It ships no code. The tab saves a
+  file **into your open folder when you type in it** the first time a pack
+  can make Fella write there. Only your keystroke writes, only the one file the
+  manifest names, and the agent's tools are unchanged (still no write tool).
+
+Fella vouches only for the code review of packs listed in the vetted catalog;
+anything you side-load is marked **unverified**.
 
 `run_python` executes code the model writes, in a restricted subprocess
 (`python3 -I`, a fresh temp working directory, a stripped environment, `RLIMIT_*`

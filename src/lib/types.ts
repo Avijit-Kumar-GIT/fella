@@ -165,8 +165,17 @@ export interface ConversationSummary {
 	message_count: number;
 }
 
-/** A pack: a theme, a skill, or an mcp connector. See docs/EXTENSIBILITY.md. */
-export type PackKind = 'theme' | 'skill' | 'mcp';
+/** A pack: a theme, a skill, an mcp connector, or an augment. See
+ *  docs/EXTENSIBILITY.md. A kind this build doesn't know arrives as a string. */
+export type PackKind = 'theme' | 'skill' | 'mcp' | 'augment' | (string & {});
+
+/** An `augment` pack's `augment.json`, parsed by the engine. */
+export interface AugmentConfig {
+	capability: string;
+	command: string;
+	file: string;
+	syntax: string;
+}
 
 /** One installed pack, as returned by the `packs_*` commands. */
 export interface InstalledPack {
@@ -182,6 +191,9 @@ export interface InstalledPack {
 	enabled: boolean;
 	/** `mcp` packs: enabled but still missing the token `/connect` needs. */
 	needs_token?: boolean;
+	/** `augment` packs: the parsed config, or absent for other kinds / an
+	 *  unparseable payload. */
+	augment?: AugmentConfig;
 }
 
 /** Streaming events emitted by the `ask` command over a Tauri Channel. */
