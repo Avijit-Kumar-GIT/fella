@@ -50,7 +50,12 @@ fn first_bad(checks: &[VerificationCheck], labels: &[&str]) -> Option<String> {
 pub fn hard_fail(checks: &[VerificationCheck]) -> Option<String> {
     first_bad(
         checks,
-        &["different result now", "no longer runs", "not found in any result"],
+        &[
+            "different result now",
+            "no longer runs",
+            "not found in any result",
+            "disagrees with this one",
+        ],
     )
 }
 
@@ -568,6 +573,46 @@ fn truncate(s: &str, n: usize) -> String {
     }
 }
 
+// --- 4. self-consistency second opinion (#80) -------------------------
+
+/// True when the numeric figures in `a` and `b` don't line up: some number in
+/// one has no `close()` counterpart in the other. Ignores probable years (a
+/// date isn't the "did we get the figure right" signal). `false` when neither
+/// text has a comparable figure at all nothing numeric to compare is not
+/// evidence of disagreement. Pure and testable without a real run.
+fn answers_disagree(a: &str, b: &str) -> bool {
+    let nums = |t: &str| -> Vec<f64> {
+        number_tokens(t).map(|(_, v)| v).filter(|v| !is_probable_year(*v)).collect()
+    };
+    let (na, nb) = (nums(a), nums(b));
+    if na.is_empty() || nb.is_empty() {
+        return false;
+    }
+    let uncovered = |xs: &[f64], ys: &[f64]| xs.iter().any(|x| !ys.iter().any(|y| close(*x, *y)));
+    uncovered(&na, &nb) || uncovered(&nb, &na)
+}
+
+/// The check pushed when a stricter, independent second opinion (the agent
+/// loop's cost-gated self-consistency re-check, #80 fired only when a cheap
+/// check above already left a warning standing) disagrees with the first
+/// answer's figures. A residual "still might be wrong" signal for cases the
+/// deterministic checks above can't fully resolve on their own (joins,
+/// multi-step, anything outside the simple single-table shape). Its label
+/// participates in `hard_fail` the point is to surface it, not bury it.
+/// `None` when the two agree, or neither has a comparable figure.
+pub fn self_consistency_check(first: &str, second: &str) -> Option<VerificationCheck> {
+    if !answers_disagree(first, second) {
+        return None;
+    }
+    Some(warn(
+        "a second, independent answer disagrees with this one",
+        Some(format!(
+            "asked again with stricter instructions, the model answered: \"{}\"",
+            truncate(second.trim(), 200)
+        )),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -743,6 +788,27 @@ mod tests {
         // ...but the corrective re-ask only acts on the re-run checks.
         assert_eq!(rerun_regression(&stray), None, "unbacked figure is fold-only");
         assert!(rerun_regression(&hard).is_some(), "a changed re-run does trigger it");
+
+        // A self-consistency disagreement is a hard fail too.
+        let disagreed = vec![self_consistency_check("Total: $450", "Total: $600").unwrap()];
+        assert!(hard_fail(&disagreed).is_some());
+    }
+
+    #[test]
+    fn spots_a_disagreeing_second_opinion() {
+        // Same figure, different wording -> no disagreement.
+        assert!(self_consistency_check("You spent $450 total.", "Total spending: 450").is_none());
+        // A close (rounding-level) figure isn't a disagreement either.
+        assert!(self_consistency_check("About $1,000.", "$1,004").is_none());
+        // A genuinely different figure -> flagged, with the second answer quoted.
+        let check = self_consistency_check("Total: $450", "Total: $600").unwrap();
+        assert!(!check.ok);
+        assert!(check.label.contains("disagrees with this one"));
+        assert!(check.detail.unwrap().contains("$600"));
+        // A year in one and not the other doesn't count as a figure mismatch.
+        assert!(self_consistency_check("In 2024, you spent $450.", "$450").is_none());
+        // Neither answer has a comparable figure (e.g. both prose) -> nothing to compare.
+        assert!(self_consistency_check("The files can't answer this.", "I'm not sure.").is_none());
     }
 
     #[test]
