@@ -4,6 +4,7 @@
 //!   3. every number in the answer appears in some tool result
 //!   4. the question's wording implies a SQL aggregate no cited query used
 //!   5. a column named in the question is never mentioned in any cited query
+//!   6. a question naming a shared join column was answered from one table
 
 use std::collections::HashSet;
 
@@ -27,6 +28,7 @@ pub fn run(
     check_case_filter(engine, evidence, &mut checks);
     check_aggregate_verb(question, evidence, &mut checks);
     check_dropped_column(engine, question, evidence, &mut checks);
+    check_multi_table_join(engine, question, evidence, &mut checks);
 
     checks
 }
@@ -431,6 +433,86 @@ fn check_dropped_column(
     }
 }
 
+// --- 6. a question that named a join key answered from one table only ------
+
+/// Lowercased names of every non-generic column that appears, by name, in at
+/// least 2 of `tables` — the same "these tables share a join key" signal
+/// `shared_column_hints` (state.rs) surfaces in the prompt, computed
+/// independently here so this check stays a pure function of simple inputs.
+/// `tables` is `(table_name, column_names)` pairs; pure and testable without a
+/// real catalog, same pattern as `missing_aggregate_verbs`/`dropped_columns`.
+fn multi_table_columns(tables: &[(&str, Vec<String>)]) -> HashSet<String> {
+    let mut counts: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    for (_, cols) in tables {
+        for c in cols {
+            let low = c.to_lowercase();
+            if low.len() < 4 || GENERIC_COLUMN_NAMES.contains(&low.as_str()) {
+                continue;
+            }
+            *counts.entry(low).or_insert(0) += 1;
+        }
+    }
+    counts.into_iter().filter(|&(_, n)| n >= 2).map(|(k, _)| k).collect()
+}
+
+/// True when the question's wording names a column shared across ≥2
+/// catalogued tables (implying a join), but the cited SQL only touched one of
+/// them. `all_tables` is every catalogued (name, columns) pair; `touched` the
+/// distinct table(s) the cited SQL actually referenced.
+fn looks_like_a_missed_join(
+    question: &str,
+    all_tables: &[(&str, Vec<String>)],
+    touched: &HashSet<String>,
+) -> bool {
+    if touched.len() != 1 || all_tables.len() < 2 {
+        return false;
+    }
+    let q = question.to_lowercase();
+    multi_table_columns(all_tables).iter().any(|c| contains_word(&q, c))
+}
+
+/// Extends #58's prompt-side join hint with a check on the answer side: when
+/// the question's wording looked like it needed a join (it names a column
+/// that lives on more than one table) but the answer's evidence trail only
+/// touched one table, that's a sign the steering didn't take. Soft warning
+/// only — a real single-table answer to a question that merely echoes a
+/// shared column name (e.g. every table has a `date`) is common and fine;
+/// generic column names are filtered out for exactly that reason.
+fn check_multi_table_join(
+    engine: &EngineState,
+    question: &str,
+    evidence: &[EvidenceItem],
+    out: &mut Vec<VerificationCheck>,
+) {
+    let sql: Vec<String> = evidence
+        .iter()
+        .filter(|e| e.tool == "run_sql" && e.error.is_none())
+        .filter_map(|e| e.sql.as_deref())
+        .map(str::to_string)
+        .collect();
+    if sql.is_empty() {
+        return;
+    }
+    let touched: HashSet<String> =
+        sql.iter().flat_map(|s| referenced_relations(&s.to_lowercase())).collect();
+    let catalog = engine.catalog();
+    let all_tables: Vec<(&str, Vec<String>)> = catalog
+        .sources
+        .iter()
+        .filter_map(|s| {
+            let view = s.view.as_deref()?;
+            let cols = s.columns.as_ref()?;
+            Some((view, cols.iter().map(|c| c.name.clone()).collect()))
+        })
+        .collect();
+    if looks_like_a_missed_join(question, &all_tables, &touched) {
+        out.push(warn(
+            "this question looked like it needed a join across tables; the answer only used one",
+            None,
+        ));
+    }
+}
+
 // --- 2. re-run cited queries ------------------------------------------
 
 fn rerun_queries(engine: &EngineState, evidence: &[EvidenceItem], out: &mut Vec<VerificationCheck>) {
@@ -830,6 +912,54 @@ mod tests {
         );
         // no run_sql evidence at all -> nothing to flag
         assert!(dropped_columns("how many books have I finished?", &[], &cols).is_empty());
+    }
+
+    #[test]
+    fn spots_a_missed_join() {
+        let orders = ("orders", vec!["customer_id".to_string(), "amount".to_string()]);
+        let customers = ("customers", vec!["customer_id".to_string(), "city".to_string()]);
+        let tables = vec![orders.clone(), customers.clone()];
+
+        // "customer_id" lives on both tables -> question naming it, answered
+        // from one table only, is flagged.
+        assert!(looks_like_a_missed_join(
+            "what's the customer_id for the biggest order?",
+            &tables,
+            &HashSet::from(["orders".to_string()]),
+        ));
+        // both tables touched -> not flagged, whatever the question says.
+        assert!(!looks_like_a_missed_join(
+            "what's the customer_id for the biggest order?",
+            &tables,
+            &HashSet::from(["orders".to_string(), "customers".to_string()]),
+        ));
+        // question doesn't name a shared column -> not flagged.
+        assert!(!looks_like_a_missed_join(
+            "what's the total amount?",
+            &tables,
+            &HashSet::from(["orders".to_string()]),
+        ));
+        // only one catalogued table -> nothing could be shared, not flagged.
+        assert!(!looks_like_a_missed_join(
+            "what's the customer_id for the biggest order?",
+            &[orders],
+            &HashSet::from(["orders".to_string()]),
+        ));
+        // no table touched at all -> not flagged (nothing to compare against).
+        assert!(!looks_like_a_missed_join(
+            "what's the customer_id for the biggest order?",
+            &tables,
+            &HashSet::new(),
+        ));
+    }
+
+    #[test]
+    fn generic_shared_columns_dont_count() {
+        // "id"/"amount"/"date" are stoplisted even though every table has one;
+        // a genuinely shared non-generic column ("vendor") is still caught.
+        let a = ("a", vec!["id".to_string(), "amount".to_string(), "vendor".to_string()]);
+        let b = ("b", vec!["id".to_string(), "date".to_string(), "vendor".to_string()]);
+        assert_eq!(multi_table_columns(&[a, b]), HashSet::from(["vendor".to_string()]));
     }
 
     #[test]
