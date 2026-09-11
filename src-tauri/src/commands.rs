@@ -220,6 +220,29 @@ pub fn packs_theme(
     engine.packs_theme()
 }
 
+// --- augments (user-authored files in the open folder) -----------------
+
+/// Write a note/table the user typed in an `augment` view into the open folder.
+/// The UI is the only caller; the agent has no path here.
+#[tauri::command]
+pub fn augment_save(
+    capability: String,
+    file: String,
+    contents: String,
+    engine: State<'_, EngineState>,
+) -> Result<(), EngineError> {
+    engine.augment_save(&capability, &file, &contents)
+}
+
+/// Read an augment file back for its editor. Null if it doesn't exist yet.
+#[tauri::command]
+pub fn augment_load(
+    file: String,
+    engine: State<'_, EngineState>,
+) -> Result<Option<String>, EngineError> {
+    engine.augment_load(&file)
+}
+
 // --- ask (the agent loop) -------------------------------------------------
 
 /// `model` is the calling tab's chosen model (of the one signed-in provider);

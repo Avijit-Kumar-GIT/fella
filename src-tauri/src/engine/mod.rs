@@ -2,6 +2,7 @@
 //! default, DuckDB behind a feature), the tool registry, and the agent loop.
 
 pub mod agent;
+pub mod augment;
 pub mod catalog;
 pub mod data;
 mod env;

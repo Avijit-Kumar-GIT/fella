@@ -89,6 +89,8 @@ pub fn run() {
             commands::packs_theme,
             commands::mcp_set_token,
             commands::mcp_clear_token,
+            commands::augment_save,
+            commands::augment_load,
             commands::archive_conversation,
             commands::conversations_info,
             commands::conversations_list,
