@@ -200,6 +200,32 @@ corrected answer to match the re-run."
                     }
                 }
             }
+            // Cost-gated self-consistency re-check (#80): the fallback tier for
+            // whatever's left once the cheap checks above have already run and
+            // fixed what they can. Only pays for a second, independent, no-tool
+            // opinion when the checks above already left a warning standing -
+            // never on a clean answer, so this can't touch the "<=2 round trips"
+            // cost target on the common path. `FELLA_SELF_CHECK=0` opts out.
+            if self_check_enabled()
+                && !evidence.is_empty()
+                && !cancel.load(Ordering::Relaxed)
+                && checks.iter().any(|c| !c.ok)
+            {
+                messages.push(ChatMessage::User(
+                    "Second opinion: answer this question again from scratch, using only the \
+tool results already gathered. Be strict and literal use only run_sql figures, honour every \
+filter word in the question exactly, and state just the number(s) don't round or estimate."
+                        .to_string(),
+                ));
+                let r = tokio::select! {
+                    r = llm.chat(&messages, &[], &notify, &on_delta) => r.unwrap_or_default(),
+                    _ = cancelled(cancel) => Default::default(),
+                };
+                usage = Usage::merge(usage, r.usage);
+                if let Some(check) = verify::self_consistency_check(&text, &r.content) {
+                    checks.push(check);
+                }
+            }
             return Ok(finish_with(engine, text, evidence, usage, checks, emit));
         }
         tool_calls_total += resp.tool_calls.len();
@@ -346,6 +372,11 @@ fn stopped(
 /// The corrective re-ask fires unless `FELLA_VERIFY_REASK=0`.
 fn reask_enabled() -> bool {
     !matches!(std::env::var("FELLA_VERIFY_REASK").as_deref(), Ok("0"))
+}
+
+/// The self-consistency second opinion (#80) fires unless `FELLA_SELF_CHECK=0`.
+fn self_check_enabled() -> bool {
+    !matches!(std::env::var("FELLA_SELF_CHECK").as_deref(), Ok("0"))
 }
 
 fn finish(
@@ -866,6 +897,17 @@ Workspace: /tmp/ws\n{}\n{}",
         std::env::set_var("FELLA_VERIFY_REASK", "1");
         assert!(reask_enabled());
         std::env::remove_var("FELLA_VERIFY_REASK");
+    }
+
+    #[test]
+    fn self_check_enabled_defaults_on_and_env_opts_out() {
+        std::env::remove_var("FELLA_SELF_CHECK");
+        assert!(self_check_enabled());
+        std::env::set_var("FELLA_SELF_CHECK", "0");
+        assert!(!self_check_enabled());
+        std::env::set_var("FELLA_SELF_CHECK", "1");
+        assert!(self_check_enabled());
+        std::env::remove_var("FELLA_SELF_CHECK");
     }
 
     #[test]
