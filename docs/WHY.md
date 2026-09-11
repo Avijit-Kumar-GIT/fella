@@ -81,11 +81,15 @@ answer the question, Fella says so and leaves it there.
 
 ### It can't look past the folder
 
-You point Fella at one folder, and that folder is the whole world it can see.
-That one line does three jobs at once: it's the data, it's the boundary, and
-it's a mental model the person already has ("everything in this folder").
-Nothing outside it is read. Nothing inside it is written, moved, or deleted.
-There is no permission dialog because there is nothing that needs permitting.
+You point Fella at one folder, and that folder is the whole world the agent
+can see. That one line does three jobs at once: it's the data, it's the
+boundary, and it's a mental model the person already has ("everything in this
+folder"). Nothing outside it is read. The agent has no tool to write, move, or
+delete anything in it, and that's structural: there is no write tool to
+disable. An opt-in augment view lets you save a note or a small table
+yourself, one keystroke, one named file, never the model. There is no
+permission dialog for the agent because there is nothing it can do that needs
+permitting.
 
 ### It can't reach the network on its own
 
