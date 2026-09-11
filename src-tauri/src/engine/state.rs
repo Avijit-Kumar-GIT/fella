@@ -521,6 +521,14 @@ impl EngineState {
         Ok(had)
     }
 
+    /// Append one coarse, telemetry-free record to `<data_dir>/signals.jsonl`
+    /// when `reason` fires (see `friction::trigger`). Never transmitted; never
+    /// contains question/answer text, file paths, or data values. Best-effort
+    /// a write failure here must never fail the actual answer.
+    pub(crate) fn record_friction_signal(&self, reason: &str, evidence: &[crate::engine::evidence::EvidenceItem]) {
+        crate::engine::friction::record(&self.data_dir, reason, evidence);
+    }
+
     /// The learned-notes block for the system prompt, or `None` when memory is
     /// off, no folder is open, or nothing's been learned. Re-read from disk so a
     /// hand edit to `memory.md` lands on the next question.
