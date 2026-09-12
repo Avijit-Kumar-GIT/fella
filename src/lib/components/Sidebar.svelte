@@ -5,6 +5,8 @@
 	import type { ConversationSummary, Message } from '$lib/types';
 	import Icon from './Icon.svelte';
 
+	let { onsettings }: { onsettings: () => void } = $props();
+
 	let list = $state<ConversationSummary[]>([]);
 	let query = $state('');
 
@@ -88,7 +90,7 @@
 
 <aside class="sidebar">
 	<button class="rowbtn new-btn" type="button" onclick={() => session.newTab()}>
-		<Icon name="plus" size={14} />
+		<Icon name="compose" size={14} />
 		<span>New conversation</span>
 	</button>
 	<div class="search">
@@ -130,6 +132,9 @@
 			</div>
 		{/if}
 	</div>
+	<button class="settings-btn" type="button" onclick={onsettings} title="Settings">
+		<Icon name="settings" size={15} />
+	</button>
 </aside>
 
 <style>
@@ -149,13 +154,8 @@
 		display: flex;
 		align-items: center;
 		gap: var(--space-2);
-		color: var(--brand);
-		font-weight: 560;
-		background: var(--bg-inset);
+		color: var(--text);
 		flex: none;
-	}
-	.new-btn:hover {
-		background: var(--border);
 	}
 	.search {
 		display: flex;
@@ -223,15 +223,13 @@
 		place-items: center;
 		width: 18px;
 		height: 18px;
-		border-radius: var(--radius-chip);
-		color: var(--text-faint);
+		color: var(--err);
 	}
 	.item-wrap:hover .del {
 		display: grid;
 	}
 	.del:hover {
-		background: var(--err);
-		color: var(--bg-raised);
+		color: var(--text);
 	}
 	.meta {
 		display: flex;
@@ -257,5 +255,20 @@
 		padding: var(--space-2);
 		color: var(--text-faint);
 		font-size: var(--fs-sm);
+	}
+	.settings-btn {
+		flex: none;
+		margin-top: auto;
+		display: grid;
+		place-items: center;
+		width: 28px;
+		height: 28px;
+		border-radius: var(--radius-chip);
+		color: var(--text-faint);
+		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+	}
+	.settings-btn:hover {
+		background: var(--bg-inset);
+		color: var(--text-dim);
 	}
 </style>

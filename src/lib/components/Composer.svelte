@@ -257,25 +257,43 @@
 	{/if}
 
 	<div class="field" class:secret={pendingInput}>
-		<div class="input-row">
-			<textarea
-				bind:this={ta}
-				bind:value
-				rows="1"
-				spellcheck="false"
-				autocapitalize="off"
-				autocomplete="off"
-				role="combobox"
-				aria-expanded={menuOpen}
-				aria-controls="composer-completions"
-				aria-autocomplete="list"
-				aria-activedescendant={menuOpen && menuSel >= 0 ? 'composer-opt-' + menuSel : undefined}
-				aria-label={folderName ? `Ask about ${folderName}` : 'Ask a question'}
-				{placeholder}
-				oninput={onInput}
-				onkeydown={onKey}
-				onfocus={() => (menuOff = false)}
-			></textarea>
+		<textarea
+			bind:this={ta}
+			bind:value
+			rows="1"
+			spellcheck="false"
+			autocapitalize="off"
+			autocomplete="off"
+			role="combobox"
+			aria-expanded={menuOpen}
+			aria-controls="composer-completions"
+			aria-autocomplete="list"
+			aria-activedescendant={menuOpen && menuSel >= 0 ? 'composer-opt-' + menuSel : undefined}
+			aria-label={folderName ? `Ask about ${folderName}` : 'Ask a question'}
+			{placeholder}
+			oninput={onInput}
+			onkeydown={onKey}
+			onfocus={() => (menuOff = false)}
+		></textarea>
+		<div class="bottom-row">
+			{#if !session.focus}
+				<div class="chips">
+					<span class="chip">
+						{#if up === true}
+							<Icon name="asterisk" size={11} />
+						{:else}
+							<span class="dot" class:down={up === false} aria-hidden="true"></span>
+						{/if}
+						{modelLabel || healthState}
+					</span>
+					{#if activityNote}
+						<span class="chip">
+							{#if session.busy}<span class="thinking" aria-hidden="true"></span>{/if}
+							{activityNote}
+						</span>
+					{/if}
+				</div>
+			{/if}
 			{#if session.busy && value.trim() && !pendingInput && !value.startsWith('/')}
 				<button
 					class="act send"
@@ -295,24 +313,6 @@
 				</button>
 			{/if}
 		</div>
-		{#if !session.focus}
-			<div class="chips">
-				<span class="pill ghost chip">
-					{#if up === true}
-						<Icon name="asterisk" size={11} />
-					{:else}
-						<span class="dot" class:down={up === false} aria-hidden="true"></span>
-					{/if}
-					{modelLabel || healthState}
-				</span>
-				{#if activityNote}
-					<span class="pill ghost chip">
-						{#if session.busy}<span class="thinking" aria-hidden="true"></span>{/if}
-						{activityNote}
-					</span>
-				{/if}
-			</div>
-		{/if}
 	</div>
 	{#if !session.focus}
 		<div class="below">
@@ -331,21 +331,21 @@
 		padding: var(--space-1) var(--pad) var(--space-2);
 	}
 	/* Live session state, moved here from the retired StatusBar so it reads
-	   as part of the composer instead of a separate strip. */
+	   as part of the composer instead of a separate strip -- plain inline
+	   labels, not bordered chips, so the box holds one surface, not nested
+	   ones. */
 	.chips {
 		display: flex;
 		flex-wrap: wrap;
 		align-items: center;
-		gap: var(--space-2);
-		margin-top: var(--space-1);
-		padding-top: var(--space-1);
-		border-top: 1px solid var(--border);
+		gap: var(--space-4);
+		min-width: 0;
 	}
 	.chip {
 		display: inline-flex;
 		align-items: center;
 		gap: 6px;
-		padding: 5px 10px;
+		color: var(--text-dim);
 		font-size: var(--fs-sm);
 		white-space: nowrap;
 	}
@@ -366,12 +366,12 @@
 	.field {
 		display: flex;
 		flex-direction: column;
-		gap: var(--space-1);
+		gap: var(--space-2);
 		background: var(--bg-raised);
 		border: 1px solid var(--border);
 		border-radius: 18px;
 		box-shadow: var(--shadow-sm);
-		padding: var(--space-2) var(--space-2) var(--space-2) var(--space-4);
+		padding: var(--space-3) var(--space-3) var(--space-2) var(--space-4);
 		transition:
 			border-color var(--dur-fast) var(--ease),
 			box-shadow var(--dur-fast) var(--ease);
@@ -380,10 +380,11 @@
 		border-color: var(--link);
 		box-shadow: var(--focus-ring);
 	}
-	.input-row {
+	.bottom-row {
 		display: flex;
-		align-items: flex-end;
-		gap: var(--space-2);
+		align-items: center;
+		gap: var(--space-3);
+		min-height: 28px;
 	}
 	.below {
 		display: flex;
@@ -404,8 +405,7 @@
 		color: var(--text-dim);
 	}
 	textarea {
-		flex: 1;
-		min-width: 0;
+		width: 100%;
 		resize: none;
 		border: none;
 		outline: none;
@@ -431,6 +431,7 @@
 	/* Trailing action send when there's text, stop while a run is live. */
 	.act {
 		flex: none;
+		margin-left: auto;
 		display: grid;
 		place-items: center;
 		width: 28px;

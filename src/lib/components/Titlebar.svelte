@@ -103,7 +103,6 @@
 		>
 			<Icon name="arrow-right" size={14} />
 		</button>
-		<span class="divider" aria-hidden="true"></span>
 	{/if}
 
 	{#if session.focus}
@@ -125,7 +124,6 @@
 
 		<span class="spacer" data-tauri-drag-region></span>
 
-		<span class="divider" aria-hidden="true"></span>
 		<div class="info-wrap" bind:this={infoWrapEl}>
 			<button
 				class="navbtn info-btn"
@@ -153,7 +151,6 @@
 		>
 			<span class="flip" aria-hidden="true"><Icon name="panel" size={14} /></span>
 		</button>
-		<span class="divider" aria-hidden="true"></span>
 		<button
 			class="navbtn"
 			data-tauri-drag-region="false"
@@ -206,13 +203,6 @@
 	.flip {
 		display: inline-flex;
 		transform: scaleX(-1);
-	}
-	.divider {
-		flex: none;
-		align-self: stretch;
-		margin: var(--space-1) 0;
-		width: 1px;
-		background: var(--border);
 	}
 	.navbtn {
 		flex: none;
