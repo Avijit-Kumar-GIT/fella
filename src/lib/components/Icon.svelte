@@ -20,9 +20,7 @@
 		info: 'M2 12a10 10 0 1 0 20 0 10 10 0 1 0-20 0M12 16v-4M12 8h.01',
 		panel: 'M3 4h18v16H3zM9 4v16',
 		compose:
-			'M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7M18.375 2.625a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4Z',
-		'arrow-left': 'M19 12H5M12 19l-7-7 7-7',
-		'arrow-right': 'M5 12h14M12 5l7 7-7 7'
+			'M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7M18.375 2.625a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4Z'
 	} as const;
 
 	export type IconName = keyof typeof ICONS;

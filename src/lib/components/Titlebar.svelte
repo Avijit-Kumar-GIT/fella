@@ -9,16 +9,6 @@
 
 	let multiTab = $derived(session.tabs.length > 1);
 
-	// --- back/forward: real tab-history nav, not a fake affordance -------
-	let canGoBack = $derived(session.active > 0);
-	let canGoForward = $derived(session.active < session.tabs.length - 1);
-	function goBack() {
-		if (canGoBack) session.active -= 1;
-	}
-	function goForward() {
-		if (canGoForward) session.active += 1;
-	}
-
 	// --- the active conversation's own title, not the workspace name -----
 	let conversationTitle = $derived.by(() => {
 		const msgs = session.activeChat?.messages ?? [];
@@ -84,24 +74,6 @@
 			onclick={() => session.toggleSidebar()}
 		>
 			<Icon name="panel" size={14} />
-		</button>
-		<button
-			class="navbtn"
-			data-tauri-drag-region="false"
-			disabled={!canGoBack}
-			title="Previous tab"
-			onclick={goBack}
-		>
-			<Icon name="arrow-left" size={14} />
-		</button>
-		<button
-			class="navbtn"
-			data-tauri-drag-region="false"
-			disabled={!canGoForward}
-			title="Next tab"
-			onclick={goForward}
-		>
-			<Icon name="arrow-right" size={14} />
 		</button>
 	{/if}
 
