@@ -113,29 +113,6 @@ optimisation that costs it isn't taken.
   `memory::is_correction()` only recognises a fixed marker-word list; whether
   it needs to recognise more natural phrasings hasn't been tested, only
   assumed. See [`HARNESS.md`](HARNESS.md#next).
-- **Distill a small model on Fella's own verified tool-use traces**
-  *(longer-horizon, unstarted).* The eval harness (`examples/agent_eval`,
-  `bench/`) now generates exactly what this needs: real recorded tool-call
-  trajectories, plus a grader that already knows which ones were actually
-  correct. The idea: run the harness (or real sessions) at volume, keep only
-  the verified-correct trajectories, and fine-tune a small open-weight model
-  (gemma-class) on them so habits Fella currently has to prompt for every
-  time such as case-insensitive text matching, checking a suspicious empty
-  result before reporting it, not over-calling tools get baked into the
-  model's weights instead. This is the concrete mechanism for the
-  longer-standing "a tiny model native to Fella" idea (the s1-mini-style
-  exploration from earlier), not a separate proposal.
-
-  Not close to a same-session task. Needs real training infrastructure
-  (LoRA/QLoRA is the realistic approach for a model this size — no full
-  fine-tune), and needs far more, and more *varied*, verified trajectories
-  than the ~150 hand-built benchmark cases currently produce — real folder
-  shapes and phrasings, or the fine-tune risks memorising the test fixtures
-  instead of learning the general habit. The grading rigor this session's
-  benchmark work put in (catching several false-positive/false-negative
-  grading bugs before trusting a result) is exactly the trustworthy "was this
-  actually right" filter this depends on — that hardening work is the real
-  prerequisite already done, not effort spent only on reporting scores.
 - **Few-shot worked examples** in the system prompt for small local models
   *deferred:* `prompt-ablation` on gemma4:31b (2026-09-07) shows no prompt slack
   to trade the shipped prompt already loses a case or a feature at every cut
@@ -167,6 +144,37 @@ optimisation that costs it isn't taken.
   path)*
 - **History search.** `/history <term>` greps the `conversations/` archive Fella
   already writes. *(`regex` plus `walkdir`)*
+
+## Would need new infrastructure
+
+Not a positioning question these don't touch a locked constraint, and the
+direction is already endorsed by the harness work itself. Recorded separately
+because each needs real tooling that doesn't exist yet, so "reuses a
+dependency Fella already ships, or is frontend-only" (this doc's own scoping
+rule, above) doesn't apply to them.
+
+- **Distill a small model on Fella's own verified tool-use traces.** The eval
+  harness (`examples/agent_eval`, `bench/`) now generates exactly what this
+  needs: real recorded tool-call trajectories, plus a grader that already
+  knows which ones were actually correct. The idea: run the harness (or real
+  sessions) at volume, keep only the verified-correct trajectories, and
+  fine-tune a small open-weight model (gemma-class) on them so habits Fella
+  currently has to prompt for every time such as case-insensitive text
+  matching, checking a suspicious empty result before reporting it, not
+  over-calling tools get baked into the model's weights instead. This is the
+  concrete mechanism for the longer-standing "a tiny model native to Fella"
+  idea (the s1-mini-style exploration from earlier), not a separate proposal.
+
+  Not close to a same-session task. Needs real training infrastructure
+  (LoRA/QLoRA is the realistic approach for a model this size — no full
+  fine-tune), and needs far more, and more *varied*, verified trajectories
+  than the ~150 hand-built benchmark cases currently produce — real folder
+  shapes and phrasings, or the fine-tune risks memorising the test fixtures
+  instead of learning the general habit. The grading rigor this session's
+  benchmark work put in (catching several false-positive/false-negative
+  grading bugs before trusting a result) is exactly the trustworthy "was this
+  actually right" filter this depends on — that hardening work is the real
+  prerequisite already done, not effort spent only on reporting scores.
 
 ## Would need a positioning decision
 

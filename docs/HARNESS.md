@@ -59,7 +59,7 @@ precise. Two caveats:
   exploring or reasoning its own way to a correct answer. Added context is
   reference the model *may* use, not a rule it *must* follow.
 
-Mechanics: `docs/PERFORMANCE.md` §`agent_eval`. Frozen 18-case battery,
+Mechanics: `docs/PERFORMANCE-LOG.md` §`agent_eval`. Frozen 18-case battery,
 `--compare` two JSON runs, `--iters 5` (fewer is noisy — a single case flipping
 at `--iters 3` is usually variance).
 
@@ -182,7 +182,7 @@ The running list of open design questions from shaping this work is in
   plain rephrased follow-up) is untested, not confirmed working. Add cases
   before calling correction-detection itself validated, not just its mechanics.
 - **Distill a small model on Fella's own verified tool-use traces.** Longer-
-  horizon, written up in full in [`ROADMAP.md`](ROADMAP.md#harness-quality-measured) —
+  horizon, written up in full in [`ROADMAP.md`](ROADMAP.md#would-need-new-infrastructure) —
   the eval harness now produces exactly the two ingredients this needs: real
   tool-call trajectories, and a reliable grader that already knows which ones
   were actually correct.
@@ -208,7 +208,7 @@ are worth revisiting.
 | **Plan-Execute-Verify with hard phase gates** | Pre-tool-call gates (known tool? valid args?); execution bounded to an approved plan | Fella has a soft plan rule and a post-hoc deterministic verify. Cheap pre-dispatch arg validation could save a round-trip; the rest (plan-bounds enforcement) needs a plan artifact Fella doesn't keep. |
 | **Retrieval config (chunking, top-k, rerankers)** | Tuned with Bayesian search over 6–10 params | N/A — no RAG. The schema block is the "retrieval" and it's deterministic. |
 | **Multi-agent / orchestrator-worker** | Declared agents with handoff edges | Explicit non-goal (`ARCHITECTURE.md`). |
-| **Tool-description optimisation (span-level scoring)** | Score tool-*selection* accuracy separately from answer quality; rewrite overlapping descriptions | Fella's seven tool descriptions are already terse and non-overlapping; low value here, but the eval *could* score tool choice separately. |
+| **Tool-description optimisation (span-level scoring)** | Score tool-*selection* accuracy separately from answer quality; rewrite overlapping descriptions | Fella's six tool descriptions (`ARCHITECTURE.md`) are already terse and non-overlapping; low value here, but the eval *could* score tool choice separately. |
 
 ## Reference
 

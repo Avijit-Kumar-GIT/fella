@@ -100,8 +100,8 @@ and any `CODE_OF_CONDUCT.md` mention as folded into `CONTRIBUTING.md` (§Conduct
   (older Fella meeting a future kind says "needs a newer Fella", doesn't crash),
   `augment.json` has no `deny_unknown_fields`, and a built-in command always
   wins a collision with an augment's command (the augment then shows as
-  unreachable). `docs/WHY.md` (unmerged branch `docs/why-thesis`) contradicts
-  this and must be reconciled when that branch lands.
+  unreachable). `docs/WHY.md`'s folder-boundary section conflicted with this;
+  reconciled when `docs/why-thesis` merged (PR #76).
 - **2026-09-09** **Pack-marketplace rollout resumed, minus the proxy.** The
   2026-09-02 pause is lifted: `web_search`/`web_fetch`-as-a-pack (2026-09-08) and
   "breadth lives in extensions" (2026-09-08) are demand enough. `fella-extensions`
@@ -176,7 +176,10 @@ and any `CODE_OF_CONDUCT.md` mention as folded into `CONTRIBUTING.md` (§Conduct
   `vercel`/`openrouter` ids "drift too much for a default" held back a good
   first run for one wrong guess that `/model <name>` already fixes; all rows
   now default to a current cheap model (`gpt-5.6-luna` / `grok-4.1-fast` /
-  `gemma4:31b`). Separately, `llm::health` filters the model list to chat
+  `gemma4:31b`). (xAI's default has since moved to `grok-4.3` `grok-4-fast`
+  was retired; see `provider.rs`. This is a point-in-time record of the
+  2026-09-06 decision, not the current default the code is always the source
+  of truth for that.) Separately, `llm::health` filters the model list to chat
   models a denylist of id substrings (`embed`, `dall-e`, `tts`, `whisper`,
   `moderation`, `-audio`, `davinci-`, …), not an allowlist, so any real
   instruct model (including multimodal ones like `gpt-4o`) still shows and an

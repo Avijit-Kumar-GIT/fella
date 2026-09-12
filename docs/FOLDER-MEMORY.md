@@ -3,9 +3,14 @@
 GitHub #42. Constraints from `WHY.md`: local, auditable, no new dependency,
 small enough that one person can read all of it.
 
-**Status: v1 built** on `feat/folder-memory` (`engine::memory`). What's below is
-the full design; the [Implementation](#implementation-v1) section at the end
-says what v1 does, what it defers, and what the first benchmark showed.
+**Status: shipped** (2026-09-08, `engine::memory`, on `main`; the doc's
+`feat/folder-memory` was the working branch and has since merged). **If you
+want current behavior, skip straight to
+[Implementation (v1)](#implementation-v1) at the end** it says what actually
+shipped, what got deferred, and what the benchmark showed. Everything between
+here and there is the *original design proposal* that preceded it, kept for
+the reasoning trail, not as a description of what runs today; where the two
+disagree, Implementation (v1) is correct.
 
 **Recipes cut (2026-09-11, `docs/DECISIONS.md`).** Every "Recipes" mention
 below is the original design and is left as written for the record, but

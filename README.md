@@ -23,7 +23,8 @@ by default).
 
 ## Philosophy
 
-Small, fast, and resistant to feature bloat *in the base version*, which ships as one
+**Reads your files, computes real answers, never writes anything back.** Small,
+fast, and resistant to feature bloat *in the base version*, which ships as one
 binary with nothing bundled. Local-first. Minimal dependencies. It's for a regular
 person doing personal analytics not analysts, not developers so it's plain-language
 throughout and copes with a messy real-world folder. It is deliberately *not* a general
@@ -31,7 +32,10 @@ task agent: no file-management, no chores, and the base has a fixed, small tool 
 Customisation is opt-in and stays out of the base: vetted themes, skills, MCP
 connectors, and augments (a notes tab, a small table) a user can install
 themselves (see [`docs/EXTENSIBILITY.md`](docs/EXTENSIBILITY.md)). The whole thing stays understandable
-by one person. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+by one person. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for how it's built,
+[`docs/WHY.md`](docs/WHY.md) for the reasoning, [`docs/PRINCIPLES.md`](docs/PRINCIPLES.md)
+for the commitments, and [`docs/NON-GOALS.md`](docs/NON-GOALS.md) for what it deliberately
+doesn't do.
 
 ## Requirements
 
