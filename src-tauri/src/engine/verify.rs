@@ -1,16 +1,19 @@
-//! Deterministic post-answer checks. Cheap, no extra LLM call:
+//! Deterministic post-answer checks. Cheap, no extra LLM call, run in this
+//! order by `run()`:
 //!   1. every table named in a cited query exists in the catalog
 //!   2. re-running each cited query still gives the same result
 //!   3. every number in the answer appears in some tool result
-//!   4. the question's wording implies a SQL aggregate no cited query used
-//!   5. a column named in the question is never mentioned in any cited query
-//!   6. a question naming a shared join column was answered from one table
+//!   4. a cited query aggregates a TEXT column (likely needs a cast/parse)
+//!   5. a cited query filters a mixed-case label column without folding case
+//!   6. the question's wording implies a SQL aggregate no cited query used
+//!   7. a column named in the question is never mentioned in any cited query
+//!   8. a question naming a shared join column was answered from one table
+//!   9. a date/time GROUP BY produced a NULL key instead of a real bucket
 //!
 //! Plus one cost-gated check that *does* spend an extra LLM round-trip, used
 //! sparingly (agent.rs only calls it once a cheap check above already left a
-//! warning standing):
-//!   7. a stricter, independent second opinion agrees with the first answer
-//!   8. a date/time GROUP BY produced a NULL key instead of a real bucket
+//! warning standing) and isn't part of `run()`'s list above:
+//!   10. a stricter, independent second opinion agrees with the first answer
 
 use std::collections::HashSet;
 
@@ -255,6 +258,8 @@ fn warn(label: impl Into<String>, detail: Option<String>) -> VerificationCheck {
     VerificationCheck { label: label.into(), ok: false, detail }
 }
 
+// --- 6. question implies an aggregate no cited query used ------------------
+
 const AGGREGATE_VERBS: &[(&[&str], &str)] = &[
     (&["how many", "count of", "number of"], "COUNT("),
     (&["how much", "total ", " sum of"], "SUM("),
@@ -367,6 +372,8 @@ fn contains_word(haystack: &str, needle: &str) -> bool {
     false
 }
 
+// --- 7. a column named in the question is missing from every cited query ---
+
 /// Column names too generic to mean "filter on this" just because the word
 /// shows up in the question — same list `shared_column_hints` (state.rs)
 /// already uses to drop unhelpful join-key suggestions.
@@ -446,7 +453,7 @@ fn check_dropped_column(
     }
 }
 
-// --- 6. a question that named a join key answered from one table only ------
+// --- 8. a question that named a join key answered from one table only ------
 
 /// Lowercased names of every non-generic column that appears, by name, in at
 /// least 2 of `tables` — the same "these tables share a join key" signal
@@ -762,7 +769,7 @@ fn truncate(s: &str, n: usize) -> String {
     }
 }
 
-// --- 4. self-consistency second opinion (#80) -------------------------
+// --- 10. self-consistency second opinion (#80), cost-gated, not in run() --
 
 /// True when the numeric figures in `a` and `b` don't line up: some number in
 /// one has no `close()` counterpart in the other. Ignores probable years (a
@@ -802,7 +809,7 @@ pub fn self_consistency_check(first: &str, second: &str) -> Option<VerificationC
     ))
 }
 
-// --- 8. a date/time GROUP BY collapsed to a NULL bucket --------------------
+// --- 9. a date/time GROUP BY collapsed to a NULL bucket --------------------
 
 /// True when `sql`'s `GROUP BY` clause groups by a date/time expression
 /// (`strftime(...)`/`date(...)`/`datetime(...)`) -- the shape every "monthly/
