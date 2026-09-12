@@ -112,12 +112,13 @@
 	{#if session.messages.length === 0}
 		<div class="onboard" class:center={!hasFolder && !showSetup}>
 			<div class="wordmark" aria-label="Fella">Fella</div>
-			{#if !hasFolder}
-				<span class="glyph" aria-hidden="true"><Icon name="asterisk" size={44} /></span>
-			{/if}
 			<h1 class="hero">Ask about your own files</h1>
 
 			{#if !hasFolder}
+				<p class="lead">
+					Spreadsheets, PDFs, notes anything you keep in one folder. Answered on
+					your computer, from your files, never changed.
+				</p>
 				<div class="cta">
 					{#if session.lastFolder}
 						<button
@@ -135,9 +136,9 @@
 					{/if}
 				</div>
 				{#if isTauri()}<p class="drophint">or drag a folder onto this window</p>{/if}
-				<p class="trust">
-					Spreadsheets, PDFs, notes anything in one folder. Answered on your
-					computer, from your files, never changed.
+				<p class="egs">
+					e.g. <em>“how did my spending change this year?”</em> ·
+					<em>“what stands out in my workout log?”</em>
 				</p>
 			{:else if fileCount === 0}
 				<p class="lead"><strong>{folderName}</strong> is open, but nothing in it is readable yet.</p>
@@ -356,23 +357,18 @@
 		text-align: center;
 	}
 	.wordmark {
-		font-size: var(--fs-sm);
-		font-weight: 500;
-		letter-spacing: 0.02em;
-		color: var(--text-faint);
-		margin: 0 0 var(--space-6);
-	}
-	.glyph {
-		display: inline-flex;
-		color: var(--brand);
-		margin: 0 0 var(--space-3);
+		font-size: var(--fs-xl);
+		font-weight: 560;
+		letter-spacing: -0.02em;
+		color: var(--text);
+		margin: 0 0 var(--space-2);
 	}
 	.hero {
-		font-size: 26px;
-		font-weight: 650;
+		font-size: var(--fs-lg);
+		font-weight: 600;
 		letter-spacing: -0.01em;
 		text-wrap: balance;
-		color: var(--text);
+		color: var(--text-dim);
 		margin: 0 0 var(--space-3);
 	}
 	.onboard p {
@@ -401,7 +397,7 @@
 		flex-wrap: wrap;
 		align-items: center;
 		gap: var(--space-3);
-		margin: var(--space-6) 0 var(--space-2);
+		margin: var(--space-5) 0 var(--space-2);
 	}
 	.onboard.center .cta {
 		justify-content: center;
@@ -415,12 +411,12 @@
 		color: var(--text-faint);
 		font-size: var(--fs-sm);
 	}
-	.trust {
-		color: var(--text-faint);
-		font-size: var(--fs-sm);
-	}
 	.egs {
 		color: var(--text-faint);
+	}
+	.egs em {
+		font-style: italic;
+		color: var(--text-dim);
 	}
 	.personalize {
 		margin-top: 22px;
