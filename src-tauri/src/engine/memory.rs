@@ -234,6 +234,13 @@ The \"## Notes\" section and any sections you add are left untouched. -->\n",
         Self::upsert(&mut self.vocabulary, key, text);
     }
 
+    /// Current vocabulary as `(key, text)` pairs -- for deciding whether a new
+    /// correction updates one of these or is genuinely new. Cloned; the list
+    /// stays small (a handful to dozens of entries over a folder's life).
+    pub fn vocabulary_entries(&self) -> Vec<(String, String)> {
+        self.vocabulary.iter().map(|n| (n.key.clone(), n.text.clone())).collect()
+    }
+
     /// The block prepended to the system prompt: preferences, all vocabulary,
     /// and all table notes. `None` if there's nothing.
     pub fn semantic_core(&self) -> Option<String> {

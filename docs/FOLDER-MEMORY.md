@@ -16,8 +16,28 @@ failure shape, and kept reproducing the same wrong answer with no fresh
 reasoning on later asks. Neither benchmark below actually showed a recipe
 earning its tokens (§Implementation), and the self-healing §Staleness called
 for a recipe demoted on a failed re-verify was never built. Memory now
-holds only preferences, vocabulary, and table notes durable facts, never a
-frozen interpretation of one question.
+holds durable facts, never a frozen interpretation of one question — though
+as of the same date, only **vocabulary** (from a correction) is actually
+written by any live code path. `preferences.push(...)` and
+`set_table_note(...)` are real, tested, round-trip correctly, and are
+user-editable by hand, but nothing in `ask()` ever calls either — a fresh
+install's memory only ever grows a `## Vocabulary` section. (The §"Writing"
+table's `verify` → recipe and ingest-coercion → schema-note rows are exactly
+as stale as the Recipes text above; ingest coercion notes were deliberately
+kept in the schema block instead, see §Implementation "Deferred".)
+
+**Vocabulary reconciliation, not keyword matching (2026-09-12,
+`docs/DECISIONS.md`).** `set_vocab`'s upsert is keyed on the correction's own
+first few words, so two different rewordings of the same correction produced
+two contradictory entries instead of one superseding the other exactly the
+failure §Writing's "supersede, don't append" rule was meant to prevent, caught
+by sandbox-testing multiple sessions end to end (`agent_eval memory-sandbox`).
+Fixed the way ChatGPT's `bio` tool and Mem0/Zep do it: an LLM call — using
+whichever model is currently configured, so the file stays legible across a
+folder worked on by different models — judges a new correction against the
+small existing vocabulary list and returns update/add/noop. Cost-gated: free
+when the list is empty, one small call only when there's something to
+reconcile against.
 
 ## The goal
 

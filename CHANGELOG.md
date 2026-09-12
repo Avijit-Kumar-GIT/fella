@@ -37,11 +37,20 @@ All notable changes to Fella are recorded here. Format follows
   now gets flagged, so a non-ISO date column doesn't quietly produce one big
   ungrouped bucket labeled as a real breakdown. Same #67/#78 tracking.
 - **Per-folder memory no longer caches a question's SQL as a reusable
-  "recipe."** It stores only durable facts — preferences, vocabulary, table
-  notes. A cached recipe could be recorded "verified" against a check set
-  that later got stronger, then keep replaying the same now-known-wrong query
-  indefinitely. `## Recipes` in an existing `memory.md` is silently dropped
-  the next time Fella touches the file. `docs/DECISIONS.md` (2026-09-11).
+  "recipe."** It stores durable facts instead. A cached recipe could be
+  recorded "verified" against a check set that later got stronger, then keep
+  replaying the same now-known-wrong query indefinitely. `## Recipes` in an
+  existing `memory.md` is silently dropped the next time Fella touches the
+  file. `docs/DECISIONS.md` (2026-09-11).
+- **A correction that overlaps something memory already learned now updates
+  it instead of adding a second, possibly contradictory note.** A follow-up
+  correction on the same topic, worded differently from the first, used to
+  land as its own vocabulary entry rather than superseding the earlier one.
+  The model currently active in the workspace now judges add-vs-update-vs-
+  restate against the short existing list before writing, so the same
+  correction typed twice, two ways, ends up as one note, not two. Verified
+  with a new sandboxed multi-session test (`agent_eval memory-sandbox`).
+  `docs/DECISIONS.md` (2026-09-12).
 
 ### Fixed
 

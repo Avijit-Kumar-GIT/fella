@@ -20,6 +20,10 @@
 //!   robustness       the trap battery (text amounts, totals row, mixed dates)
 //!   session-memory   turn-2 accuracy with the recent-turns block on vs off
 //!   memory           cold-run accuracy after priming, per-folder memory on vs off
+//!   memory-sandbox   ungraded: prints memory.md verbatim after each of several
+//!                    sessions (ordinary Q, a correction, a cold follow-up, a
+//!                    second overlapping correction) -- for eyeballing what
+//!                    gets collected, not scoring it
 //!   bench --dir <d>  a JSONL battery of real folder-QA tasks, same grader +
 //!                    metrics as `accuracy`, with $/100. --harness:
 //!                      fella (default) — the full loop
@@ -1763,6 +1767,89 @@ async fn cmd_memory(
     all
 }
 
+/// Multi-session sandbox for eyeballing what per-folder memory actually
+/// collects, turn by turn no grading, this is for human inspection of
+/// `memory.md`'s content after each session (ordinary questions, a
+/// correction, a follow-up cold session, a second overlapping correction)
+/// to check the write path collects the right thing and nothing else:
+/// - an ordinary question should leave memory untouched;
+/// - a correction should produce exactly one new vocabulary note;
+/// - that note should carry into a fresh, cold conversation;
+/// - a second correction on the same topic should supersede, not duplicate;
+/// - no `## Recipes` should ever appear (removed, `docs/DECISIONS.md`
+///   2026-09-11); `## Preferences`/`## Table notes` are printed too, since
+///   nothing in the live `ask()` path currently writes to either or
+///   `set_table_note`/`preferences.push` calls exist).
+async fn cmd_memory_sandbox(engine: &EngineState, model: &str, data_dir: &Path) {
+    set_model(engine, model);
+    let ws = std::env::temp_dir().join("fella-mem-sandbox");
+    let _ = std::fs::remove_dir_all(&ws);
+    write_messy_spend(&ws);
+    std::env::set_var("FELLA_MEMORY", "1");
+    let mem = memory::path_for(data_dir, &ws);
+    let _ = std::fs::remove_file(&mem);
+    let _ = std::fs::remove_file(mem.with_extension("episodes.jsonl"));
+    if engine.open_workspace(&ws).is_err() {
+        println!("(memory-sandbox) could not open workspace");
+        return;
+    }
+
+    let dump = |label: &str| {
+        let text = std::fs::read_to_string(&mem).unwrap_or_default();
+        println!(
+            "\n--- memory.md after {label} ---\n{}",
+            if text.is_empty() { "(absent -- nothing learned yet)".to_string() } else { text }
+        );
+    };
+
+    println!("# Per-folder memory sandbox  \u{b7}  `{model}`\n");
+
+    let s1 = "sbx-session-1";
+    engine.forget_conversation(s1);
+    let r = run_case(engine, s1, "How much did I spend on rent in spend.csv?", None).await;
+    println!("[session 1] Q: how much did I spend on rent?\n  A: {}", first_line(&r.text));
+    dump("session 1, turn 1 (ordinary question)");
+
+    let r = run_case(
+        engine,
+        s1,
+        "actually, for rent totals count HOUSING and mortgage as rent too",
+        None,
+    )
+    .await;
+    println!("\n[session 1] correction -> {}", first_line(&r.text));
+    dump("session 1, turn 2 (a correction)");
+
+    let r = run_case(engine, s1, "how much did I spend on transport?", None).await;
+    println!("\n[session 1] Q: transport spend\n  A: {}", first_line(&r.text));
+    dump("session 1, turn 3 (ordinary again -- should be unchanged)");
+
+    let s2 = "sbx-session-2";
+    engine.forget_conversation(s2);
+    let r = run_case(engine, s2, "what's my total rent spending in spend.csv?", None).await;
+    println!("\n[session 2, COLD] Q: total rent\n  A: {}", first_line(&r.text));
+
+    let r = run_case(
+        engine,
+        s2,
+        "actually, mortgage shouldn't count as rent, only housing should",
+        None,
+    )
+    .await;
+    println!("\n[session 2] correction 2 (overlapping topic, different wording) -> {}", first_line(&r.text));
+    dump("session 2 (after a second, overlapping correction)");
+
+    let s3 = "sbx-session-3";
+    engine.forget_conversation(s3);
+    let r = run_case(engine, s3, "what's my total rent spending in spend.csv?", None).await;
+    println!("\n[session 3, COLD] Q: total rent\n  A: {}", first_line(&r.text));
+
+    println!(
+        "\n(raw episode log, not read back by the model): {}",
+        mem.with_extension("episodes.jsonl").display()
+    );
+}
+
 // --- json out / compare -------------------------------------------
 
 fn write_json(path: &str, scores: &[CaseScore]) {
@@ -1894,6 +1981,10 @@ async fn main() {
         "session-memory" => cmd_session_memory(&engine, &models[0], &g, iters).await,
         "memory" => {
             cmd_memory(&engine, &models[0], &data_dir, iters).await
+        }
+        "memory-sandbox" => {
+            cmd_memory_sandbox(&engine, &models[0], &data_dir).await;
+            Vec::new()
         }
         "bench" => {
             let Some(d) = &bench_dir else {

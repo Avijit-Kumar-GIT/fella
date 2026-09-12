@@ -7,6 +7,30 @@ this app repo (now **`fella`**; `fella-ai` is a private pre-v0.1 archive),
 `fella-marketplace` to mean the browse-site half of the **`fella-web`** repo,
 and any `CODE_OF_CONDUCT.md` mention as folded into `CONTRIBUTING.md` (§Conduct).
 
+- **2026-09-12** **A correction that overlaps an existing vocabulary note is
+  reconciled by the model, not a keyword/position heuristic.** Sandboxed
+  multi-session testing (`agent_eval memory-sandbox`, new) of the 2026-09-11
+  memory change surfaced the next problem: two different rewordings of the
+  same correction ("count housing and mortgage as rent" then later "actually
+  mortgage shouldn't count") produced two separate, contradictory vocabulary
+  entries instead of the second superseding the first `FOLDER-MEMORY.md`'s
+  own "supersede, don't append" design goal, never actually implemented.
+  Researched how incumbents solve this before building: ChatGPT's `bio` tool,
+  Mem0, and Zep all resolve add-vs-update-vs-noop with an **LLM judgment
+  call** against the small existing set, not string matching — because "is
+  this the same concept, reworded?" is a language problem. Fella already has
+  precedent for a rare, cost-gated extra call (`self_consistency_check`,
+  #80); a correction is similarly rare (`FOLDER-MEMORY.md`: "~dozens over a
+  folder's life"), so `reconcile_vocab_key` spends one only when a
+  correction actually overlaps something already stored (skipped entirely
+  when the vocabulary list is empty — nothing to reconcile against). Uses
+  **whichever model is currently active in the workspace**, no override, so
+  the memory file stays legible and editable to any model that reads it
+  later, matching different sessions potentially running different models
+  against the same folder. A reply that doesn't parse, or names a key not
+  actually in the list, falls back to adding a new entry under the old
+  word-position key rather than silently overwriting or dropping the
+  correction.
 - **2026-09-11** **Per-folder memory (`engine::memory`) no longer caches
   `question → SQL` "recipes"; it stores durable facts only** (preferences,
   vocabulary, table notes). Found in the wild: a real `memory.md` had cached
