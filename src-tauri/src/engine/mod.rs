@@ -10,6 +10,7 @@ mod env;
 pub mod error;
 pub mod evidence;
 pub mod extensions;
+mod friction;
 pub mod ingest;
 pub mod llm;
 #[cfg(feature = "mcp")]
