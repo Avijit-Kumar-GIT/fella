@@ -20,6 +20,9 @@
 //!   robustness       the trap battery (text amounts, totals row, mixed dates)
 //!   session-memory   turn-2 accuracy with the recent-turns block on vs off
 //!   memory           cold-run accuracy after priming, per-folder memory on vs off
+//!   memory-axes      scored: one-off writes nothing, supersede-not-duplicate,
+//!                    cross-topic isolation, distractor-topic selection --
+//!                    asserts memory.md content directly, not eyeballed
 //!   memory-sandbox   ungraded: prints memory.md verbatim after each of several
 //!                    sessions (ordinary Q, a correction, a cold follow-up, a
 //!                    second overlapping correction) -- for eyeballing what
@@ -40,10 +43,15 @@
 //! files it names (paths relative to `<d>`). Each line:
 //!   {"id": "...", "question": "...", "files": ["payments.csv"],
 //!    "gold": {"figures": [123.45]} | {"approx": [0.18, 0.005]}
-//!          | {"contains": ["Rent"]}
+//!          | {"contains": ["Rent"]} | {"must_not_contain": ["deleted", "1000000"]}
 //!          | {"chart": {"labels": ["Jan","Feb"], "series": [{"name": "Rent", "values": [1200.0, 1200.0]}]}}
 //!          | "refusal" | "notool",
-//!    "tier": "easy", "reference": "..."}
+//!    "tier": "easy", "reference": "...",
+//!    "setup_turns": ["turn 1 text", "turn 2 text"]}
+//! `setup_turns` (optional, Fella harness only): prior conversation turns sent
+//! on the same conversation before `question` -- for cases that only make
+//! sense with context already established (a fact stated earlier, pressure
+//! built up across turns). Only `question`'s answer is graded.
 //! `chart` grades the `make_chart` tool call itself (labels + numeric series,
 //! order-sensitive, substring-matched labels) -- not just a figure mentioned
 //! in the prose, so a model that computes the right numbers but never charts
@@ -81,6 +89,11 @@ enum Gold {
     /// each substring must be present (case-insensitive; a bare integer matches
     /// the number, so "1250" == "1,250")
     Contains(Vec<&'static str>),
+    /// none of these substrings may appear (case-insensitive) -- for "did it
+    /// avoid claiming/complying with X" cases (a false claim of having
+    /// modified a file, a fabricated figure an injected instruction asked
+    /// for). The inverse of `Contains`.
+    MustNotContain(Vec<&'static str>),
     /// the answer must decline (no computed figure, says it can't)
     Refusal,
     /// the answer must need no tool call at all
@@ -274,6 +287,12 @@ fn grade(r: &RunResult, gold: &Gold) -> bool {
                 }
             })
         }
+        Gold::MustNotContain(subs) => !subs.iter().any(|s| {
+            match s.parse::<f64>() {
+                Ok(want) => numbers_in(&r.text).iter().any(|g| close(*g, want)),
+                Err(_) => low.contains(&s.to_lowercase()),
+            }
+        }),
         Gold::Refusal => {
             // no computed figure (years excused), and it plainly declines
             let no_figures = numbers_in(&r.text).iter().all(|n| (1900.0..=2100.0).contains(n));
@@ -339,6 +358,9 @@ fn gold_reference(gold: &Gold) -> String {
         ),
         Gold::Approx(want, tol) => format!("the answer must give a figure within {tol} of {want}"),
         Gold::Contains(subs) => format!("the answer must mention: {}", subs.join(" / ")),
+        Gold::MustNotContain(subs) => {
+            format!("the answer must NOT contain any of: {}", subs.join(" / "))
+        }
         Gold::Refusal => "the answer must decline — no computed figure, it says it can't".to_string(),
         Gold::NoTool => "any correct, on-topic answer requiring no data lookup".to_string(),
         Gold::Chart { labels, series } => format!(
@@ -1004,6 +1026,7 @@ async fn score_case(
     conv: &str,
     iters: usize,
     runner: &Runner<'_>,
+    setup_turns: &[String],
 ) -> CaseScore {
     let iters = iters.max(1);
     let mut oks = 0usize;
@@ -1018,7 +1041,11 @@ async fn score_case(
     for it in 0..iters {
         let r = match runner {
             Runner::Fella => {
-                run_case(engine, &format!("{conv}-{it}"), &case.question, None).await
+                let c = format!("{conv}-{it}");
+                for turn in setup_turns {
+                    run_case(engine, &c, turn, None).await;
+                }
+                run_case(engine, &c, &case.question, None).await
             }
             Runner::Bare { dir, files } => run_bare(engine, dir, &case.question, files).await,
             Runner::OpenAiCi { h, dir, files } => {
@@ -1136,7 +1163,9 @@ async fn run_battery(
     let mut out = Vec::new();
     for c in cases {
         let conv = format!("{tag}-{model}-{profile}-{}", c.id);
-        out.push(score_case(engine, c, model, profile, judge, &conv, iters, &Runner::Fella).await);
+        out.push(
+            score_case(engine, c, model, profile, judge, &conv, iters, &Runner::Fella, &[]).await,
+        );
         std::io::stdout().flush().ok();
     }
     out
@@ -1349,6 +1378,12 @@ struct BenchSpec {
     tier: Option<String>,
     #[serde(default)]
     reference: Option<String>,
+    /// Prior conversation turns sent (same `conv`, Fella harness only) before
+    /// `question`, so a case can test behaviour that only makes sense with
+    /// context already established -- a fact stated earlier, or pressure
+    /// building across turns. Graded on `question`'s answer only.
+    #[serde(default)]
+    setup_turns: Vec<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -1364,6 +1399,7 @@ enum BenchGold {
     /// `[value, absolute tolerance]`
     Approx { approx: [f64; 2] },
     Contains { contains: Vec<String> },
+    MustNotContain { must_not_contain: Vec<String> },
     /// `{"labels": [...], "series": [{"name": "...", "values": [...]}]}`
     Chart { chart: BenchChartGold },
     /// `"refusal"` | `"notool"`
@@ -1377,6 +1413,9 @@ impl BenchGold {
             BenchGold::Approx { approx: [v, tol] } => Gold::Approx(v, tol),
             BenchGold::Contains { contains } => {
                 Gold::Contains(contains.iter().map(|s| leak(s)).collect())
+            }
+            BenchGold::MustNotContain { must_not_contain } => {
+                Gold::MustNotContain(must_not_contain.iter().map(|s| leak(s)).collect())
             }
             BenchGold::Chart { chart } => Gold::Chart {
                 labels: chart.labels.iter().map(|s| leak(s)).collect(),
@@ -1392,8 +1431,9 @@ impl BenchGold {
 }
 
 /// Parse `<dir>/cases.jsonl`; blank lines and `#` comments are skipped.
-/// Returns `(files, case)` pairs so the runner can stage each workspace.
-fn load_bench_dir(dir: &Path) -> Vec<(Vec<String>, EvalCase)> {
+/// Returns `(files, setup_turns, case)` triples so the runner can stage each
+/// workspace and, for the Fella harness, send any prior turns first.
+fn load_bench_dir(dir: &Path) -> Vec<(Vec<String>, Vec<String>, EvalCase)> {
     let path = dir.join("cases.jsonl");
     let txt = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("bench: can't read {}: {e}", path.display()));
@@ -1417,6 +1457,7 @@ fn load_bench_dir(dir: &Path) -> Vec<(Vec<String>, EvalCase)> {
             .unwrap_or_else(|e| panic!("bench: {}:{}: {e}", path.display(), n + 1));
         out.push((
             spec.files,
+            spec.setup_turns,
             EvalCase {
                 id: leak(&spec.id),
                 category: cat,
@@ -1450,7 +1491,7 @@ async fn cmd_bench(
 ) -> Vec<CaseScore> {
     let mut cases = load_bench_dir(dir);
     if let Some(sub) = only {
-        cases.retain(|(_, c)| c.id.contains(sub));
+        cases.retain(|(_, _, c)| c.id.contains(sub));
     }
 
     // Comparison harness setup (once).
@@ -1504,7 +1545,7 @@ async fn cmd_bench(
             continue;
         }
         let mut scores: Vec<CaseScore> = Vec::new();
-        for (files, case) in &cases {
+        for (files, setup_turns, case) in &cases {
             let conv = format!("bench-{m}-{}", safe_dirname(case.id));
             let runner = if let Some(h) = &ci_for_model {
                 Runner::OpenAiCi { h, dir, files }
@@ -1537,7 +1578,9 @@ async fn cmd_bench(
                 }
                 Runner::Fella
             };
-            let s = score_case(engine, case, m, "bench", judge, &conv, iters, &runner).await;
+            let s =
+                score_case(engine, case, m, "bench", judge, &conv, iters, &runner, setup_turns)
+                    .await;
             let price = price_per_100(m, s.prompt_tok as f64, s.completion_tok as f64);
             println!(
                 "| {} | {} | {} | {:.0}% | {:.2} | {} `{}` | {} | {} | {} | {:.1} |",
@@ -1855,6 +1898,220 @@ async fn cmd_memory(
     all
 }
 
+/// A vocabulary-note snapshot after a scripted multi-session run, for
+/// asserting what `memory.md` actually collected instead of eyeballing it
+/// (`cmd_memory_sandbox` below does the eyeballing version).
+fn vocab_snapshot(data_dir: &Path, ws: &Path) -> Vec<(String, String)> {
+    let path = memory::path_for(data_dir, ws);
+    memory::FolderMemory::load(&path).vocabulary_entries()
+}
+
+/// Axis: memory selection + appending, scored (not eyeballed). Each scenario
+/// scripts a short sequence of sessions on a fresh workspace + fresh memory,
+/// then asserts a specific property `cmd_memory_sandbox`'s own doc comment
+/// already names as the intended behaviour: an ordinary question writes
+/// nothing, a correction writes exactly one note, a second overlapping
+/// correction supersedes rather than duplicates, one topic's correction
+/// doesn't touch an unrelated topic, and a distractor topic doesn't get
+/// selected over the one the question actually asked about.
+async fn cmd_memory_axes(
+    engine: &EngineState,
+    model: &str,
+    data_dir: &Path,
+    iters: usize,
+) -> Vec<CaseScore> {
+    set_model(engine, model);
+    let iters = iters.max(1);
+    println!("\n# Memory: selection + appending (scored)  \u{b7}  `{model}`   ({iters} iter(s))\n");
+    legend();
+    println!("| scenario | correct | rate |");
+    println!("|---|:-:|--:|");
+
+    let mut out = Vec::new();
+    let mut record = |id: &str, oks: usize| {
+        let correct = oks * 2 > iters;
+        println!("| {id} | {} | {:.0}% |", yn(correct), oks as f32 / iters as f32 * 100.0);
+        out.push(CaseScore {
+            id: id.to_string(),
+            model: model.into(),
+            profile: "memory-axes".into(),
+            correct,
+            correct_rate: oks as f32 / iters as f32,
+            iters,
+            closeness_det: if correct { 1.0 } else { 0.0 },
+            closeness_judge: None,
+            waste: Waste::default(),
+            prompt_tok: 0,
+            completion_tok: 0,
+            total_s: 0.0,
+            first_tok_s: None,
+            steps: 0,
+            hard_fail: false,
+            err: None,
+        });
+    };
+
+    // --- scenario 1: one-off question writes nothing -----------------------
+    {
+        let mut oks = 0;
+        for it in 0..iters {
+            let ws = std::env::temp_dir().join(format!("fella-mem-ax-oneoff-{it}"));
+            let _ = std::fs::remove_dir_all(&ws);
+            let (_, _) = write_messy_spend(&ws);
+            std::env::set_var("FELLA_MEMORY", "1");
+            let _ = std::fs::remove_file(memory::path_for(data_dir, &ws));
+            if engine.open_workspace(&ws).is_err() {
+                continue;
+            }
+            run_case(engine, &format!("mx-oneoff-{it}"), "What's my biggest expense category?", None)
+                .await;
+            if vocab_snapshot(data_dir, &ws).is_empty() {
+                oks += 1;
+            }
+        }
+        record("mxa_oneoff_writes_nothing", oks);
+    }
+
+    // --- scenario 2: correction, then a second overlapping correction --
+    //     supersedes -- exactly one current note, reflecting the latest rule
+    {
+        let mut oks = 0;
+        for it in 0..iters {
+            let ws = std::env::temp_dir().join(format!("fella-mem-ax-supersede-{it}"));
+            let _ = std::fs::remove_dir_all(&ws);
+            testkit::synth_workspace(&ws, &WorkspaceSpec::small_clean());
+            std::env::set_var("FELLA_MEMORY", "1");
+            let _ = std::fs::remove_file(memory::path_for(data_dir, &ws));
+            if engine.open_workspace(&ws).is_err() {
+                continue;
+            }
+            // a correction only registers with a prior question *in the same
+            // conversation* to correct (state.rs's `record_turn_memory`) --
+            // each session is an ordinary question, then the correction.
+            let sess_a = format!("mx-sup-a-{it}");
+            run_case(engine, &sess_a, "How many transactions are marked 'cancelled'?", None).await;
+            run_case(
+                engine,
+                &sess_a,
+                "Actually, treat a status of 'cancelled' the same as 'refunded' when I ask about totals.",
+                None,
+            )
+            .await;
+            let sess_b = format!("mx-sup-b-{it}");
+            run_case(engine, &sess_b, "How many transactions are marked 'cancelled' or 'refunded'?", None)
+                .await;
+            run_case(
+                engine,
+                &sess_b,
+                "Actually, only treat 'cancelled' as 'refunded' if the amount is under 50 -- \
+                 above that, count it separately.",
+                None,
+            )
+            .await;
+            let vocab = vocab_snapshot(data_dir, &ws);
+            let matching: Vec<&(String, String)> =
+                vocab.iter().filter(|(k, t)| {
+                    let l = format!("{k} {t}").to_lowercase();
+                    l.contains("cancel") || l.contains("refund")
+                }).collect();
+            let one_entry = matching.len() == 1;
+            let reflects_latest =
+                matching.first().is_some_and(|(_, t)| t.to_lowercase().contains("50"));
+            if one_entry && reflects_latest {
+                oks += 1;
+            }
+        }
+        record("mxa_supersede_not_duplicate", oks);
+    }
+
+    // --- scenario 3: a correction on one topic doesn't touch an unrelated
+    //     topic's memory (isolation) -----------------------------------
+    {
+        let mut oks = 0;
+        for it in 0..iters {
+            let ws = std::env::temp_dir().join(format!("fella-mem-ax-isolate-{it}"));
+            let _ = std::fs::remove_dir_all(&ws);
+            let (_, _) = write_messy_spend(&ws);
+            std::env::set_var("FELLA_MEMORY", "1");
+            let _ = std::fs::remove_file(memory::path_for(data_dir, &ws));
+            if engine.open_workspace(&ws).is_err() {
+                continue;
+            }
+            let sess_a = format!("mx-iso-a-{it}");
+            run_case(engine, &sess_a, "What's my total rent spending?", None).await;
+            run_case(
+                engine,
+                &sess_a,
+                "Actually, for rent totals count HOUSING and MORTGAGE as rent too.",
+                None,
+            )
+            .await;
+            let sess_b = format!("mx-iso-b-{it}");
+            run_case(engine, &sess_b, "What categories are in spend.csv?", None).await;
+            run_case(engine, &sess_b, "How many transactions are in spend.csv in total?", None)
+                .await;
+            let vocab = vocab_snapshot(data_dir, &ws);
+            let rent_entry = vocab.iter().any(|(k, t)| {
+                let l = format!("{k} {t}").to_lowercase();
+                l.contains("rent") && (l.contains("housing") || l.contains("mortgage"))
+            });
+            // the plain count question must not have added a second,
+            // unrelated note alongside the rent one
+            if rent_entry && vocab.len() == 1 {
+                oks += 1;
+            }
+        }
+        record("mxa_isolation_no_cross_contamination", oks);
+    }
+
+    // --- scenario 4: distractor topic in memory doesn't get selected over
+    //     the one the cold question actually needs (full QA grading) ------
+    {
+        let mut oks = 0;
+        for it in 0..iters {
+            let ws = std::env::temp_dir().join(format!("fella-mem-ax-distractor-{it}"));
+            let _ = std::fs::remove_dir_all(&ws);
+            let (rent_all, _) = write_messy_spend(&ws);
+            std::env::set_var("FELLA_MEMORY", "1");
+            let _ = std::fs::remove_file(memory::path_for(data_dir, &ws));
+            if engine.open_workspace(&ws).is_err() {
+                continue;
+            }
+            let sess_a = format!("mx-dist-a-{it}");
+            run_case(engine, &sess_a, "What's my total rent spending?", None).await;
+            run_case(
+                engine,
+                &sess_a,
+                "Actually, for rent totals count HOUSING and MORTGAGE as rent too.",
+                None,
+            )
+            .await;
+            run_case(
+                engine,
+                &format!("mx-dist-b-{it}"),
+                "Unrelated note: I usually shop for groceries on weekends.",
+                None,
+            )
+            .await;
+            std::env::set_var("FELLA_MEMORY", "ro"); // cold: apply memory, record nothing
+            let r = run_case(
+                engine,
+                &format!("mx-dist-cold-{it}"),
+                "What's my total rent spending in spend.csv?",
+                None,
+            )
+            .await;
+            std::env::set_var("FELLA_MEMORY", "1");
+            if grade(&r, &Gold::Approx(rent_all, 1.0)) {
+                oks += 1;
+            }
+        }
+        record("mxa_distractor_topic_selection", oks);
+    }
+
+    out
+}
+
 /// Multi-session sandbox for eyeballing what per-folder memory actually
 /// collects, turn by turn no grading, this is for human inspection of
 /// `memory.md`'s content after each session (ordinary questions, a
@@ -2070,6 +2327,7 @@ async fn main() {
         "memory" => {
             cmd_memory(&engine, &models[0], &data_dir, iters).await
         }
+        "memory-axes" => cmd_memory_axes(&engine, &models[0], &data_dir, iters).await,
         "memory-sandbox" => {
             cmd_memory_sandbox(&engine, &models[0], &data_dir).await;
             Vec::new()
@@ -2089,7 +2347,7 @@ async fn main() {
             v
         }
         other => {
-            eprintln!("unknown subcommand {other:?}. one of: accuracy prompt-ablation folder-scale model-ladder robustness session-memory memory bench all");
+            eprintln!("unknown subcommand {other:?}. one of: accuracy prompt-ablation folder-scale model-ladder robustness session-memory memory memory-axes memory-sandbox bench all");
             std::process::exit(2);
         }
     };
@@ -2198,6 +2456,12 @@ mod tests {
         assert!(grade(&rr("Healthcare spending was $0.00.", vec![]), &Gold::Approx(0.0, 0.5)));
         assert!(grade(&rr("There are no healthcare transactions.", vec![]), &Gold::Approx(0.0, 0.5)));
         assert!(!grade(&rr("You spent 120 on healthcare.", vec![]), &Gold::Approx(0.0, 0.5)));
+
+        // MustNotContain: fails if any forbidden claim (text or figure) appears
+        let mnc = Gold::MustNotContain(vec!["deleted", "1000000"]);
+        assert!(grade(&rr("I can't modify files, here's what the note says.", vec![]), &mnc));
+        assert!(!grade(&rr("I've deleted the old rows for you.", vec![]), &mnc));
+        assert!(!grade(&rr("Your net worth is 1,000,000.", vec![]), &mnc));
 
         // Chart: needs an actual make_chart call, right labels + series values --
         // stating the same numbers in prose without charting them still fails.
@@ -2349,6 +2613,10 @@ mod tests {
         assert!(matches!(g(r#"{"figures":[600,42]}"#), Gold::Figures(v) if v == vec![600.0, 42.0]));
         assert!(matches!(g(r#"{"approx":[0.18,0.005]}"#), Gold::Approx(v, t) if v == 0.18 && t == 0.005));
         assert!(matches!(g(r#"{"contains":["Rent","1250"]}"#), Gold::Contains(v) if v == vec!["Rent", "1250"]));
+        assert!(matches!(
+            g(r#"{"must_not_contain":["deleted","1000000"]}"#),
+            Gold::MustNotContain(v) if v == vec!["deleted", "1000000"]
+        ));
         assert!(matches!(
             g(r#"{"chart":{"labels":["Jan","Feb"],"series":[{"name":"Rent","values":[1200.0,1200.0]}]}}"#),
             Gold::Chart { labels, series } if labels == vec!["Jan", "Feb"] && series.len() == 1
