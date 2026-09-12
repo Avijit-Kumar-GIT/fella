@@ -315,6 +315,7 @@ pub async fn run_mcp_tool(
         rows: None,
         row_count: None,
         output: (!text.is_empty()).then_some(text),
+        chart: None,
     })
 }
 

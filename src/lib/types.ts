@@ -20,6 +20,10 @@ export interface EvidenceItem {
 	row_count?: number;
 	/** Free-form text output, e.g. Python stdout/stderr. */
 	output?: string;
+	/** Sanitized-safe inline SVG from a chart tool (e.g. `make_chart`).
+	 *  Rust-generated, not model-authored; still run through an allow-list
+	 *  (`$lib/svg.ts`) before `{@html}`. */
+	chart?: string;
 	ms: number;
 	error?: string;
 }

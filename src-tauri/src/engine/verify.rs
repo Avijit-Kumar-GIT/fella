@@ -757,6 +757,7 @@ mod tests {
             rows: None,
             row_count: Some(1),
             output: None,
+            chart: None,
             ms: 1,
             error: None,
         }];
@@ -782,6 +783,7 @@ mod tests {
             rows: Some(vec![vec![Json::Null]]),
             row_count: Some(1),
             output: None,
+            chart: None,
             ms: 1,
             error: None,
         }];

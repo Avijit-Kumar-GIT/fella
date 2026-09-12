@@ -248,6 +248,7 @@ not run again. Its result is repeated below - use it, refine the call, or give y
                             rows: None,
                             row_count: None,
                             output: None,
+                            chart: None,
                             ms: 0,
                             error: None,
                         },
@@ -447,6 +448,7 @@ async fn run_tool_call(
                 rows: out.rows,
                 row_count: out.row_count,
                 output: out.output,
+                chart: out.chart,
                 ms: started.elapsed().as_millis() as u64,
                 error: None,
             };
@@ -488,6 +490,7 @@ fn tool_error(
             rows: None,
             row_count: None,
             output: None,
+            chart: None,
             ms: started.elapsed().as_millis() as u64,
             error: Some(message.clone()),
         },
