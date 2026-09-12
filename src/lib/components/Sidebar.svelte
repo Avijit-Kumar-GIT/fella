@@ -148,7 +148,8 @@
 		display: flex;
 		align-items: center;
 		gap: var(--space-2);
-		color: var(--text-dim);
+		color: var(--brand);
+		font-weight: 560;
 		background: var(--bg-inset);
 		flex: none;
 	}

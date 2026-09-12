@@ -29,6 +29,7 @@ const PREFIX = 'fella:conversation:'; // one key per tab: fella:conversation:<id
 const LEGACY_KEY = 'fella:conversation'; // the single pre-tabs blob
 const INDEX_KEY = 'fella:tabs'; // JSON array of open tab ids
 const SIDEBAR_KEY = 'fella:sidebar-collapsed';
+const RIGHT_PANEL_KEY = 'fella:right-panel-collapsed';
 
 function readSidebarCollapsed(): boolean {
 	try {
@@ -36,6 +37,15 @@ function readSidebarCollapsed(): boolean {
 		return v === null ? false : v === '1';
 	} catch {
 		return false;
+	}
+}
+
+function readRightPanelCollapsed(): boolean {
+	try {
+		const v = localStorage.getItem(RIGHT_PANEL_KEY);
+		return v === null ? true : v === '1';
+	} catch {
+		return true;
 	}
 }
 
@@ -169,6 +179,10 @@ class Session {
 	 *  launches (open by default) it's a layout preference, not a
 	 *  per-session display mode. Toggled by the titlebar button or Ctrl+B. */
 	sidebarCollapsed = $state<boolean>(readSidebarCollapsed());
+	/** Evidence/verification detail panel on the right. Collapsed by default
+	 *  it's a drill-down, not a primary surface. Same persisted-preference
+	 *  pattern as `sidebarCollapsed`. */
+	rightPanelCollapsed = $state<boolean>(readRightPanelCollapsed());
 	/** Bumped whenever a conversation is archived, so the sidebar's list
 	 *  knows to refetch without polling. */
 	historyVersion = $state<number>(0);
@@ -177,6 +191,15 @@ class Session {
 		this.sidebarCollapsed = !this.sidebarCollapsed;
 		try {
 			localStorage.setItem(SIDEBAR_KEY, this.sidebarCollapsed ? '1' : '0');
+		} catch {
+			/* ignore */
+		}
+	}
+
+	toggleRightPanel(): void {
+		this.rightPanelCollapsed = !this.rightPanelCollapsed;
+		try {
+			localStorage.setItem(RIGHT_PANEL_KEY, this.rightPanelCollapsed ? '1' : '0');
 		} catch {
 			/* ignore */
 		}

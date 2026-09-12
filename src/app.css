@@ -10,13 +10,17 @@
      overridable; changing them would break layout a pack can't reason about.
 
    Rules of the house:
-   - Monochrome first. Color (--ok / --warn / --err / --link) only carries
-     meaning state, a link, a result and is always paired with a word or shape,
-     never color alone.
+   - Monochrome first, with one accent. Color (--ok / --warn / --err / --link)
+     only carries meaning state, a link, a result and is always paired with a
+     word or shape, never color alone. --brand is the single exception: one
+     warm hue standing in for "this is the thing to notice," reused everywhere
+     that applies (the primary action, the empty-state glyph, the top
+     hairline, a connected-status icon) rather than invented per-component.
    - Hierarchy comes from type and spacing before borders or fills. Earn a
      border/surface only for selection, grouping, or a raised layer.
    - One focus ring: a soft --link glow (:focus-visible below).
-   - One primary action per screen (.pill.primary); everything else is quieter.
+   - One primary action per screen (.pill.primary, filled with --brand);
+     everything else is quieter.
    - Motion is gentle and short, and disappears entirely under
      prefers-reduced-motion. */
 
@@ -52,9 +56,10 @@
 	   completion hints), so it holds WCAG AA (>= 4.5:1 on --bg). */
 	--text-faint: #6c6a63;
 	--accent: #1a1a17;
-	/* the one hue used outside the neutral/status palette -- spent on exactly
-	   three spots (empty-state glyph, composer connected-icon, top hairline),
-	   never on buttons/borders/selection. */
+	/* the one hue used outside the neutral/status palette: the primary-action
+	   pill, the empty-state glyph, the composer connected-icon, the top
+	   hairline -- one consistent "notice me" color, not a different one per
+	   component. */
 	--brand: #c1541f;
 	--link: #3a5c8a;
 	--ok: #3f7d3f;
@@ -234,14 +239,16 @@ kbd {
 	border-color: var(--border);
 	color: var(--text-dim);
 }
-/* The one primary action on a screen filled, not outlined. */
+/* The one primary action on a screen filled with the brand accent, the
+   same hue as the empty-state glyph and the top hairline so "this is the
+   one thing to do here" reads as one consistent color language. */
 .pill.primary {
-	background: var(--text);
-	color: var(--bg-raised);
-	border-color: var(--text);
+	background: var(--brand);
+	color: #fff;
+	border-color: var(--brand);
 }
 .pill.primary:hover {
-	background: color-mix(in srgb, var(--text) 88%, var(--bg));
+	background: color-mix(in srgb, var(--brand) 88%, var(--bg));
 }
 
 /* A full-width row inside a drop-up / palette list. Selection is marked by the

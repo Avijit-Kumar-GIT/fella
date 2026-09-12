@@ -77,15 +77,13 @@
 
 	{#if !session.focus}
 		<button
-			class="sidebar-toggle"
+			class="navbtn"
 			data-tauri-drag-region="false"
 			aria-expanded={!session.sidebarCollapsed}
 			title="Toggle sidebar (Ctrl+B)"
 			onclick={() => session.toggleSidebar()}
 		>
-			<span class="caret" class:open={!session.sidebarCollapsed} aria-hidden="true">
-				<Icon name="chevron-right" size={13} />
-			</span>
+			<Icon name="panel" size={14} />
 		</button>
 		<button
 			class="navbtn"
@@ -94,16 +92,16 @@
 			title="Previous tab"
 			onclick={goBack}
 		>
-			<Icon name="chevron-right" size={13} />
+			<Icon name="arrow-left" size={14} />
 		</button>
 		<button
-			class="navbtn fwd"
+			class="navbtn"
 			data-tauri-drag-region="false"
 			disabled={!canGoForward}
 			title="Next tab"
 			onclick={goForward}
 		>
-			<Icon name="chevron-right" size={13} />
+			<Icon name="arrow-right" size={14} />
 		</button>
 		<span class="divider" aria-hidden="true"></span>
 	{/if}
@@ -146,9 +144,18 @@
 				</div>
 			{/if}
 		</div>
+		<button
+			class="navbtn"
+			data-tauri-drag-region="false"
+			aria-expanded={!session.rightPanelCollapsed}
+			title="Toggle evidence panel"
+			onclick={() => session.toggleRightPanel()}
+		>
+			<span class="flip" aria-hidden="true"><Icon name="panel" size={14} /></span>
+		</button>
 		<span class="divider" aria-hidden="true"></span>
 		<button
-			class="navbtn settings-btn"
+			class="navbtn"
 			data-tauri-drag-region="false"
 			onclick={onpalette}
 			title="Settings (Ctrl+K)"
@@ -196,26 +203,9 @@
 		flex: none;
 		width: 78px;
 	}
-	.sidebar-toggle {
-		flex: none;
-		display: grid;
-		place-items: center;
-		width: 28px;
-		height: 28px;
-		border-radius: var(--radius-chip);
-		color: var(--text-faint);
-		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
-	}
-	.sidebar-toggle:hover {
-		background: var(--bg-inset);
-		color: var(--text-dim);
-	}
-	.caret {
+	.flip {
 		display: inline-flex;
-		transition: transform var(--dur-fast) var(--ease);
-	}
-	.caret.open {
-		transform: rotate(90deg);
+		transform: scaleX(-1);
 	}
 	.divider {
 		flex: none;
@@ -232,13 +222,7 @@
 		height: 24px;
 		border-radius: var(--radius-chip);
 		color: var(--text-faint);
-		transform: rotate(180deg);
 		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
-	}
-	.navbtn.fwd,
-	.navbtn.info-btn,
-	.navbtn.settings-btn {
-		transform: none;
 	}
 	.info-wrap {
 		position: relative;
