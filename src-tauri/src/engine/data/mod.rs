@@ -49,6 +49,12 @@ pub enum ColType {
     Float,
     Bool,
     Text,
+    /// A text column whose values were confidently parsed as a
+    /// spelled-out-month date ("Aug 1, 2026") and normalized to ISO-8601
+    /// (`YYYY-MM-DD`) at ingest, so `strftime()`/`date()` just work. Stored
+    /// as TEXT like `ColType::Text`; the distinction only matters at
+    /// ingest time (see `sqlite::string_cell`/`json_cell`).
+    Date,
 }
 
 impl ColType {
@@ -56,7 +62,7 @@ impl ColType {
         match self {
             ColType::Int | ColType::Bool => "INTEGER",
             ColType::Float => "REAL",
-            ColType::Text => "TEXT",
+            ColType::Text | ColType::Date => "TEXT",
         }
     }
     #[cfg(feature = "duckdb")]
@@ -65,7 +71,7 @@ impl ColType {
             ColType::Int => "BIGINT",
             ColType::Float => "DOUBLE",
             ColType::Bool => "BOOLEAN",
-            ColType::Text => "VARCHAR",
+            ColType::Text | ColType::Date => "VARCHAR",
         }
     }
 }
