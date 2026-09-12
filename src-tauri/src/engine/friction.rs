@@ -71,6 +71,7 @@ mod tests {
             rows: None,
             row_count: None,
             output: None,
+            chart: None,
             ms: 0,
             error: error.map(String::from),
         }

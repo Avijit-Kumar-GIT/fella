@@ -10,6 +10,7 @@
 //! sparingly (agent.rs only calls it once a cheap check above already left a
 //! warning standing):
 //!   7. a stricter, independent second opinion agrees with the first answer
+//!   8. a date/time GROUP BY produced a NULL key instead of a real bucket
 
 use std::collections::HashSet;
 
@@ -34,6 +35,7 @@ pub fn run(
     check_aggregate_verb(question, evidence, &mut checks);
     check_dropped_column(engine, question, evidence, &mut checks);
     check_multi_table_join(engine, question, evidence, &mut checks);
+    check_null_group_key(evidence, &mut checks);
 
     checks
 }
@@ -64,6 +66,7 @@ pub fn hard_fail(checks: &[VerificationCheck]) -> Option<String> {
             "no longer runs",
             "not found in any result",
             "disagrees with this one",
+            "returned no value for at least one row",
         ],
     )
 }
@@ -799,6 +802,67 @@ pub fn self_consistency_check(first: &str, second: &str) -> Option<VerificationC
     ))
 }
 
+// --- 8. a date/time GROUP BY collapsed to a NULL bucket --------------------
+
+/// True when `sql`'s `GROUP BY` clause groups by a date/time expression
+/// (`strftime(...)`/`date(...)`/`datetime(...)`) -- the shape every "monthly/
+/// weekly/yearly breakdown" question's query takes. A crude substring scan on
+/// the clause, same altitude as `referenced_relations` -- only the presence
+/// of the pattern matters, not a full parse.
+fn groups_by_date_expr(sql: &str) -> bool {
+    let lower = sql.to_lowercase();
+    let Some(gb) = lower.find("group by") else { return false };
+    let clause = &lower[gb..];
+    clause.contains("strftime(") || clause.contains("date(") || clause.contains("datetime(")
+}
+
+/// True when at least one result row's first column -- the grouping key, by
+/// the "group expression selected first" convention every case this check
+/// has ever seen follows -- is NULL.
+fn has_null_group_key(rows: &[Vec<Json>]) -> bool {
+    rows.iter().any(|r| r.first().is_some_and(Json::is_null))
+}
+
+/// Catches the "valid query, wrong question" failure mode #67 was filed for:
+/// a query that runs cleanly, reruns to the same result, and only cites
+/// numbers actually in its own output -- every earlier check in this file
+/// passes -- but a date/time `GROUP BY` produced a NULL key for at least one
+/// row, meaning rows that should have landed in separate months/weeks/years
+/// instead collapsed into one ungrouped bucket. Found from a real report: a
+/// ledger with non-ISO dates ("Aug 1, 2026") made every `strftime()` call
+/// return NULL, so "monthly breakdown of my rent" answered with the grand
+/// total under a single blank month, and nothing above caught it since the
+/// total genuinely was the number the query returned.
+///
+/// Deliberately narrow: only fires on a NULL key, never merely a single
+/// *row* (a dataset that legitimately spans one real month still has a
+/// real, non-null key in its one row and is left alone).
+fn check_null_group_key(evidence: &[EvidenceItem], out: &mut Vec<VerificationCheck>) {
+    for e in evidence {
+        if e.tool != "run_sql" || e.error.is_some() {
+            continue;
+        }
+        let Some(sql) = &e.sql else { continue };
+        if !groups_by_date_expr(sql) {
+            continue;
+        }
+        let Some(rows) = &e.rows else { continue };
+        if has_null_group_key(rows) {
+            out.push(warn(
+                "a query behind this answer groups by a date expression that returned no \
+value for at least one row",
+                Some(
+                    "the column this groups by likely isn't in a format strftime()/date() can \
+parse for every row, so those rows collapsed into one ungrouped bucket instead of their real \
+month/week/year check the raw column's values"
+                        .into(),
+                ),
+            ));
+            return;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1152,5 +1216,103 @@ mod tests {
             out.iter().all(|c| c.ok),
             "0 is backed by the empty aggregate, not a stray figure: {out:?}"
         );
+    }
+
+    fn run_sql_ev(sql: &str, columns: &[&str], rows: Vec<Vec<Json>>) -> EvidenceItem {
+        EvidenceItem {
+            tool: "run_sql".into(),
+            args: Json::Object(Default::default()),
+            note: None,
+            sql: Some(sql.to_string()),
+            result_summary: format!("{} row(s)", rows.len()),
+            columns: Some(columns.iter().map(|s| s.to_string()).collect()),
+            row_count: Some(rows.len()),
+            rows: Some(rows),
+            output: None,
+            chart: None,
+            ms: 1,
+            error: None,
+        }
+    }
+
+    #[test]
+    fn spots_a_date_group_by_that_collapsed_to_null() {
+        assert!(groups_by_date_expr(
+            "SELECT strftime('%Y-%m', Date) AS month, SUM(x) AS t FROM t \
+             GROUP BY strftime('%Y-%m', Date) ORDER BY month"
+        ));
+        assert!(groups_by_date_expr("SELECT date(d) AS day, count(*) FROM t GROUP BY date(d)"));
+        assert!(!groups_by_date_expr("SELECT category, SUM(x) FROM t GROUP BY category"));
+        assert!(!groups_by_date_expr("SELECT SUM(x) FROM t")); // no GROUP BY at all
+
+        assert!(has_null_group_key(&[vec![Json::Null, Json::from(15797)]]));
+        assert!(!has_null_group_key(&[vec![Json::from("2025-09"), Json::from(1316)]]));
+    }
+
+    #[test]
+    fn check_null_group_key_flags_the_real_reported_bug() {
+        // The exact reported failure: a rent ledger with non-ISO dates made
+        // every strftime() call return NULL, collapsing 4 months into one
+        // blank bucket holding the grand total.
+        let ev = vec![run_sql_ev(
+            r#"SELECT strftime('%Y-%m', Date) AS month, SUM(parse_num("Charges / Payments")) \
+               AS rent_total FROM full_ledger WHERE Type = 'Charge - Rent' \
+               GROUP BY strftime('%Y-%m', Date) ORDER BY month"#,
+            &["month", "rent_total"],
+            vec![vec![Json::Null, Json::from(15797)]],
+        )];
+        let mut out = Vec::new();
+        check_null_group_key(&ev, &mut out);
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert!(!out[0].ok);
+        assert!(hard_fail(&out).is_some(), "should surface as a hard fail, not just a caution");
+    }
+
+    #[test]
+    fn check_null_group_key_leaves_a_healthy_breakdown_alone() {
+        // A real multi-month breakdown -- every key is a real month.
+        let ev = vec![run_sql_ev(
+            "SELECT strftime('%Y-%m', d) AS month, SUM(x) AS t FROM t \
+             GROUP BY strftime('%Y-%m', d) ORDER BY month",
+            &["month", "t"],
+            vec![
+                vec![Json::from("2025-09"), Json::from(1316)],
+                vec![Json::from("2025-10"), Json::from(1321)],
+            ],
+        )];
+        let mut out = Vec::new();
+        check_null_group_key(&ev, &mut out);
+        assert!(out.is_empty(), "{out:?}");
+    }
+
+    #[test]
+    fn check_null_group_key_leaves_a_genuine_single_bucket_alone() {
+        // A dataset that legitimately spans one real month: one row, but a
+        // real, non-null key -- not the bug this check is for.
+        let ev = vec![run_sql_ev(
+            "SELECT strftime('%Y-%m', d) AS month, SUM(x) AS t FROM t \
+             GROUP BY strftime('%Y-%m', d)",
+            &["month", "t"],
+            vec![vec![Json::from("2025-09"), Json::from(1316)]],
+        )];
+        let mut out = Vec::new();
+        check_null_group_key(&ev, &mut out);
+        assert!(out.is_empty(), "a real single-month result is not a bug: {out:?}");
+    }
+
+    #[test]
+    fn check_null_group_key_ignores_non_date_grouping() {
+        // A NULL key from grouping by an ordinary column (e.g. an
+        // unlabelled category) isn't what this check is for -- narrow to
+        // date/time expressions only, to avoid false-positiving on
+        // legitimately-NULL categories.
+        let ev = vec![run_sql_ev(
+            "SELECT category, SUM(x) AS t FROM t GROUP BY category",
+            &["category", "t"],
+            vec![vec![Json::Null, Json::from(100)]],
+        )];
+        let mut out = Vec::new();
+        check_null_group_key(&ev, &mut out);
+        assert!(out.is_empty(), "{out:?}");
     }
 }
