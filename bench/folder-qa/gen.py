@@ -329,8 +329,28 @@ dump_pdf("lease.pdf", [
 rent_paid_avg_month = R(rent_2024 / 12, 2)
 lease_vs_paid = R(rent_paid_avg_month - lease_rent, 2)
 
-# --- extra golds (no new files, no new random draws) -----------------
 import calendar
+
+# --- rent ledger: named-month dates, not ISO — the exact shape of the
+# reported bug (strftime('%Y-%m', 'Aug 1, 2026') is NULL; ingest must
+# normalize this to ISO at sniff time so GROUP BY month actually groups) ---
+rent_ledger = []
+rent_ledger_by_month = {}
+for mo in range(1, 13):
+    amt = R(1450 + (55 if mo >= 7 else 0) + random.uniform(-20, 20), 2)
+    rent_ledger.append({"date": f"{calendar.month_abbr[mo]} 1, 2024", "rent": amt})
+    rent_ledger_by_month[f"2024-{mo:02d}"] = amt
+dump("rent_ledger.csv", ["date", "rent"], rent_ledger)
+rent_ledger_total = R(sum(r["rent"] for r in rent_ledger), 2)
+rent_ledger_avg = R(rent_ledger_total / 12, 2)
+_rl_sorted = sorted(rent_ledger_by_month.items(), key=lambda kv: -kv[1])
+rent_ledger_peak_ym, rent_ledger_peak_amt = _rl_sorted[0]
+rent_ledger_peak_mn = calendar.month_name[int(rent_ledger_peak_ym[5:7])].lower()
+rent_ledger_peak_alts = (
+    f"{rent_ledger_peak_ym}|{rent_ledger_peak_mn}|{calendar.month_abbr[int(rent_ledger_peak_ym[5:7])].lower()}"
+)
+
+# --- extra golds (no new files, no new random draws) -----------------
 
 # spending
 spend_2024_by_month = {}
@@ -392,6 +412,22 @@ cheapest_active = min(subs_active, key=lambda s: s[1])[0]
 
 # lease
 lease_parking = 17
+
+# --- batch 3 golds: hard/diverse edge cases, no new files ---------------
+# empty-result filters (category/period genuinely absent from the data —
+# the correct answer is zero/none, not a hallucinated figure)
+entertainment_spend = sp(lambda r: r["category"] == "entertainment")
+transport_2022 = sp(lambda r: r["category"] == "transport" and r["month"][:4] == "2022")
+# boolean + categorical combined filter
+scifi_unfinished = sum(1 for b in books if b["genre"] == "scifi" and b["finished"] == "no")
+rated5_titles = sorted(b["title"].lower() for b in books if b["rating"] == 5)
+# multi-year aggregate
+total_2023_2024 = R(total_2023 + total_2024, 2)
+# signed over/under budget (can land either side of zero)
+utilities_over_budget = R(actual_2024["utilities"] - 12 * monthly_budget["utilities"], 2)
+# two files sharing a column name ("minutes") with unrelated meanings —
+# stresses the join not silently summing across both
+screen_vs_workout_gap = R(abs(screen_total_min - wk_total_min), 1)
 
 # --- distractor files (real-looking, no question needs them) --------
 receipts_old = [
@@ -516,6 +552,29 @@ cases = [
     ("xf-nationality-pages", "Using books.csv and authors.csv, which author nationality accounts for the most pages in my reading list?", ["books.csv", "authors.csv"], {"contains": [top_nat_pages.lower()]}, "mf-join-groupby"),
     ("xf-contacts-nights", "For the contacts who live in a country I have visited, how many trip-nights did I spend in those countries in total? Use contacts.json and trips.csv.", clut(["contacts.json", "trips.csv"]), {"figures": [nights_visited_contacts]}, "mf-join-aggregate"),
     ("xf-dining-cap-months", "My goals note sets a monthly dining-out cap. In how many months of 2024 did my dining spend break it? Use goals.md and spend.csv.", ["goals.md", "spend.csv"], {"figures": [dining_over_cap]}, "mf-doc-join"),
+    # --- batch 3: date-normalization, charting, and hard/diverse edge cases ---
+    # rent ledger: named-month dates (the exact reported "Month: (blank)" bug)
+    ("rentl-total", "How much rent have I paid in total this year, according to rent_ledger.csv?", ["rent_ledger.csv"], {"figures": [rent_ledger_total]}, "num-aggregate-nonstd-date"),
+    ("rentl-avg", "What's the average monthly rent from rent_ledger.csv?", ["rent_ledger.csv"], {"approx": [rent_ledger_avg, 1.0]}, "num-avg-nonstd-date"),
+    ("rentl-peak-month", "Break down my rent by month from rent_ledger.csv — which month was the most expensive?", ["rent_ledger.csv"], {"contains": [rent_ledger_peak_alts]}, "temporal-groupby-nonstd-date"),
+    ("rentl-chart", "Chart my rent by month using rent_ledger.csv, and tell me the total for the year.", ["rent_ledger.csv"], {"figures": [rent_ledger_total]}, "chart-trend"),
+    # charting: category breakdown
+    ("fin-chart-cat", "Show me a chart of my spending by category in 2024, and tell me which category was the biggest.", ["spend.csv"], {"contains": [top_cat]}, "chart-breakdown"),
+    # empty results — the data genuinely has none, answer must say so not invent one
+    ("fin-empty-category", "How much did I spend on 'entertainment', according to spend.csv?", ["spend.csv"], {"approx": [entertainment_spend, 0.01]}, "empty-filter"),
+    ("fin-empty-2022", "How much did I spend on transport in 2022?", ["spend.csv"], {"approx": [transport_2022, 0.01]}, "empty-filter-date"),
+    # combined boolean + categorical filter
+    ("read-scifi-unfinished", "How many science fiction books on my list have I not finished?", ["books.csv"], {"figures": [scifi_unfinished]}, "bool-cat-filter"),
+    ("read-rated5-list", "Which books did I rate 5 out of 5? List their titles.", ["books.csv"], {"contains": rated5_titles}, "text-list-rating"),
+    # multi-year aggregate
+    ("fin-multiyear-total", "How much have I spent in total across 2023 and 2024 combined?", ["spend.csv"], {"figures": [total_2023_2024]}, "num-aggregate-multiyear"),
+    # signed join result (can land on either side of zero)
+    ("mf-utilities-signed", "Using spend.csv and budget.csv, was I over or under my annual utilities budget (actual minus 12x the monthly budget) in 2024, and by how much?", ["spend.csv", "budget.csv"], {"figures": [utilities_over_budget]}, "mf-join-compare-signed"),
+    # join across two files that share a column name ("minutes") with unrelated meanings
+    ("mf-screen-vs-workout", "Which did I spend more total time on — screen time or working out — and by how many minutes? Use screen_time.tsv and workouts.csv.", ["screen_time.tsv", "workouts.csv"], {"figures": [screen_vs_workout_gap]}, "mf-join-colliding-cols"),
+    # case-insensitive text search
+    ("subs-video-ci", "Do I have a subscription called 'VIDEO STREAMING'? If so, what does it cost per month?", ["subscriptions.xlsx"], {"contains": ["15.49"]}, "text-search-ci"),
+
     # refusal (no forecasting — the loop must decline, not compute an estimate)
     ("refusal", "Based on my reading log, how many books will I finish next year?", ["books.csv"], "refusal", "refusal"),
     ("refusal-spend", "Given my 2024 spending, what will my total grocery bill be next month?", ["spend.csv"], "refusal", "refusal"),
@@ -531,7 +590,7 @@ DOMAIN_BY_PREFIX = {
     "fin": "spending", "fit": "fitness", "read": "reading", "trip": "travel",
     "jrnl": "journal", "screen": "screen-time", "sleep": "sleep",
     "contacts": "contacts", "goals": "goals", "subs": "subscriptions",
-    "pdf": "housing",
+    "pdf": "housing", "rentl": "housing",
 }
 DOMAIN_BY_ID = {  # multi-file / cross-format cases get their primary domain
     "fqa-mf-most-over-budget": "spending", "fqa-mf-pages-british": "reading",
@@ -540,6 +599,7 @@ DOMAIN_BY_ID = {  # multi-file / cross-format cases get their primary domain
     "fqa-xf-sleep-screen": "sleep", "fqa-xf-lease-vs-spend": "housing",
     "fqa-xf-nationality-pages": "reading", "fqa-xf-contacts-nights": "contacts",
     "fqa-xf-dining-cap-months": "spending",
+    "fqa-mf-utilities-signed": "spending", "fqa-mf-screen-vs-workout": "fitness",
     "fqa-refusal": "reading", "fqa-refusal-spend": "spending",
     "fqa-refusal-trips": "travel", "fqa-notool": "general",
 }
