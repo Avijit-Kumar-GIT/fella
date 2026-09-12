@@ -59,7 +59,7 @@ precise. Two caveats:
   exploring or reasoning its own way to a correct answer. Added context is
   reference the model *may* use, not a rule it *must* follow.
 
-Mechanics: `docs/PERFORMANCE.md` §`agent_eval`. Frozen 18-case battery,
+Mechanics: `docs/PERFORMANCE-LOG.md` §`agent_eval`. Frozen 18-case battery,
 `--compare` two JSON runs, `--iters 5` (fewer is noisy — a single case flipping
 at `--iters 3` is usually variance).
 
@@ -114,6 +114,19 @@ The running list of open design questions from shaping this work is in
   Ships default-on: a fresh folder costs nothing, and it earns its tokens on
   the cross-session messy-folder case it exists for, across frontier and floor
   models.
+- **2026-09-11 · Recipes cut from per-folder memory** (`engine::memory`,
+  `docs/DECISIONS.md`). A user's real `memory.md` had cached a `strftime`
+  GROUP BY over a non-ISO date column as a "verified" recipe (before
+  `check_null_group_key` existed to catch that shape) it kept getting
+  replayed verbatim on later asks, reproducing the same wrong answer with no
+  fresh reasoning. Neither of the two `agent_eval memory` runs above actually
+  showed a recipe earning its tokens — same-conversation was neutral, and the
+  cross-session win came from the vocabulary note + case-sensitivity flag, not
+  a recipe. The self-healing this doc originally called for ("a recipe that
+  fails verify is demoted, two failures drops it") was never built; rather
+  than build it for a mechanism with no demonstrated win, it's gone. Memory
+  now stores facts only (preferences, vocabulary, table notes); `## Recipes`
+  in an existing file is silently dropped on next load.
 
 ### Measured, no change
 
@@ -130,35 +143,49 @@ The running list of open design questions from shaping this work is in
   not warranted** — no evidence of history bloat causing a miss.
 - **2026-09-07 · Messy data.** `robustness` (text amounts, totals row, mixed
   dates, cumulative): 6/6 at every level. Ingest-time coercion (`parse_num`,
-  totals-row drop) absorbs it before the model reasons about it.
+  totals-row drop) absorbs it before the model reasons about it. Scoped to
+  format-level messiness on one synthetic table; doesn't cover category-label
+  semantics or format diversity across life-domain files — see the two
+  2026-09-12 messiness findings below, a different failure mode, not a
+  regression of this one.
 
 ### Next
 
-- **Per-folder playbook memory** (GitHub #42; **its own PR**, off `main`, after
-  #39 — the line between harness tuning and agent memory). The one add the
-  maintainer considers essential: a session in a folder should feel like Fella
-  already knows that folder this user's vocabulary, which table means what,
-  caveats learned last time carried forward without re-deriving. Compatible
-  with the local/scoped model (lives beside `fella.db`, never leaves the
-  machine, per-folder). Bounded: a small *learned* context block prepended to
-  the prompt small enough to include verbatim, so there is no retrieval
-  problem to solve. The last planned harness change before the tuning is
-  called done, to stay inside the app's core philosophy.
-
-  **Build it custom, no new dependency.** Design exploration in
-  [`FOLDER-MEMORY.md`](FOLDER-MEMORY.md). Shape: a `MEMORY.md`-style plain-text
-  artifact per folder (the *learned* sibling of `fella.md`), written mostly
-  from signals Fella already has (`verify` passed → a recipe; a correction → a
-  vocabulary note; ingest coercion → a schema note), with FTS5 (already
-  bundled) for the selective tail and no embeddings. The mature libraries
-  (Mem0, Letta/MemGPT, Zep/Graphiti, Cognee, LangMem) each solve a bigger
-  problem and each need a Python runtime, a vector/graph store, a server, or a
-  per-turn LLM extraction call Fella's constitution refuses all four. Borrow
-  the *patterns*: Letta's self-editable **memory block**; Zep's **supersede,
-  don't append**; Mem0's **extract → reconcile** as *one* end-of-session pass;
-  memweave's **file is the truth, the index is a rebuildable cache**. Measured
-  against the frozen battery + `agent_eval session-memory`; gated on not
-  regressing `gemma4`.
+- **2026-09-12 · Case-mismatch on a uniformly-cased column, not caught by the
+  case-sensitivity flag.** The shipped flag (`mixed_case_columns`, above) only
+  fires when a column's *ingested data* actually has colliding case variants
+  (`Rent`/`rent`/`RENT` all present). It has nothing to check when a column is
+  internally consistent (`trips.purpose` is only ever lowercase `leisure`/
+  `work`) but the model invents a differently-cased literal anyway
+  (`= 'Leisure'`) — that's not a data collision, so no note, no warning, and
+  the query silently returns 0 rows. New eval axes built to stop naming files
+  in questions (real users don't; see `bench/out/dashboard.html`) caught this
+  live: `bench/folder-qa-hard`'s `fqah-goal-ontrack`, gemma4:31b, 2 of 3
+  iterations wrote exactly this query and concluded the wrong goal off the
+  back of it. Candidate fix, unexplored: extend `case_sensitive_label_filter`
+  to *every* bare `=`/`IN` text-column filter, not only ones gated on a
+  detected collision — `lower()`/`COLLATE NOCASE` as a default habit, not a
+  reactive flag.
+- **2026-09-12 · Semantic near-duplicate category labels.** A different, harder
+  problem from the one above — not a case mismatch but genuinely different
+  words for the same thing (`HOUSING`, `mortgage` both meaning "rent"; see
+  `bench/messiness`'s `msy-near-duplicate-labels`/`msy-categorical-casing`).
+  gemma4:31b: 5/9 on the messiness axis, the worst of the ten axes measured.
+  No candidate fix yet — `lower()`-by-default doesn't touch this.
+- **2026-09-12 · Correction-trigger breadth, unmeasured.**
+  `memory::is_correction()` fires only on a fixed marker-word list ("actually",
+  "no,", "that's wrong", …) at the start of a message, and only with a prior
+  question in the same conversation (`state.rs`'s `record_turn_memory`).
+  `bench/memory`'s scored assertions (`memory-axes`, 5/6) all pass today, but
+  every scripted correction in them deliberately used a marker phrase to
+  trigger it — a correction phrased another way ("wait, that's not it", a
+  plain rephrased follow-up) is untested, not confirmed working. Add cases
+  before calling correction-detection itself validated, not just its mechanics.
+- **Distill a small model on Fella's own verified tool-use traces.** Longer-
+  horizon, written up in full in [`ROADMAP.md`](ROADMAP.md#would-need-new-infrastructure) —
+  the eval harness now produces exactly the two ingredients this needs: real
+  tool-call trajectories, and a reliable grader that already knows which ones
+  were actually correct.
 
 ### Open
 
@@ -181,7 +208,7 @@ are worth revisiting.
 | **Plan-Execute-Verify with hard phase gates** | Pre-tool-call gates (known tool? valid args?); execution bounded to an approved plan | Fella has a soft plan rule and a post-hoc deterministic verify. Cheap pre-dispatch arg validation could save a round-trip; the rest (plan-bounds enforcement) needs a plan artifact Fella doesn't keep. |
 | **Retrieval config (chunking, top-k, rerankers)** | Tuned with Bayesian search over 6–10 params | N/A — no RAG. The schema block is the "retrieval" and it's deterministic. |
 | **Multi-agent / orchestrator-worker** | Declared agents with handoff edges | Explicit non-goal (`ARCHITECTURE.md`). |
-| **Tool-description optimisation (span-level scoring)** | Score tool-*selection* accuracy separately from answer quality; rewrite overlapping descriptions | Fella's seven tool descriptions are already terse and non-overlapping; low value here, but the eval *could* score tool choice separately. |
+| **Tool-description optimisation (span-level scoring)** | Score tool-*selection* accuracy separately from answer quality; rewrite overlapping descriptions | Fella's six tool descriptions (`ARCHITECTURE.md`) are already terse and non-overlapping; low value here, but the eval *could* score tool choice separately. |
 
 ## Reference
 

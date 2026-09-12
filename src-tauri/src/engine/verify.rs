@@ -1,8 +1,19 @@
-//! Deterministic post-answer checks. Cheap, no extra LLM call:
+//! Deterministic post-answer checks. Cheap, no extra LLM call, run in this
+//! order by `run()`:
 //!   1. every table named in a cited query exists in the catalog
 //!   2. re-running each cited query still gives the same result
 //!   3. every number in the answer appears in some tool result
-//!   4. the question's wording implies a SQL aggregate no cited query used
+//!   4. a cited query aggregates a TEXT column (likely needs a cast/parse)
+//!   5. a cited query filters a mixed-case label column without folding case
+//!   6. the question's wording implies a SQL aggregate no cited query used
+//!   7. a column named in the question is never mentioned in any cited query
+//!   8. a question naming a shared join column was answered from one table
+//!   9. a date/time GROUP BY produced a NULL key instead of a real bucket
+//!
+//! Plus one cost-gated check that *does* spend an extra LLM round-trip, used
+//! sparingly (agent.rs only calls it once a cheap check above already left a
+//! warning standing) and isn't part of `run()`'s list above:
+//!   10. a stricter, independent second opinion agrees with the first answer
 
 use std::collections::HashSet;
 
@@ -25,6 +36,9 @@ pub fn run(
     check_text_agg(engine, evidence, &mut checks);
     check_case_filter(engine, evidence, &mut checks);
     check_aggregate_verb(question, evidence, &mut checks);
+    check_dropped_column(engine, question, evidence, &mut checks);
+    check_multi_table_join(engine, question, evidence, &mut checks);
+    check_null_group_key(evidence, &mut checks);
 
     checks
 }
@@ -50,13 +64,20 @@ fn first_bad(checks: &[VerificationCheck], labels: &[&str]) -> Option<String> {
 pub fn hard_fail(checks: &[VerificationCheck]) -> Option<String> {
     first_bad(
         checks,
-        &["different result now", "no longer runs", "not found in any result"],
+        &[
+            "different result now",
+            "no longer runs",
+            "not found in any result",
+            "disagrees with this one",
+            "returned no value for at least one row",
+        ],
     )
 }
 
 /// True when a query behind the answer was actually re-executed and matched,
-/// and nothing failed hard. The signal for "this answer is safe to learn from"
-/// (per-folder memory records a recipe only when this holds).
+/// and nothing failed hard. Recorded on the folder's episode log as
+/// `"verified"` a label, not something memory acts on (`engine::memory`
+/// caches no query, however cleanly it verified).
 pub fn reran_clean(checks: &[VerificationCheck]) -> bool {
     hard_fail(checks).is_none()
         && checks
@@ -237,6 +258,8 @@ fn warn(label: impl Into<String>, detail: Option<String>) -> VerificationCheck {
     VerificationCheck { label: label.into(), ok: false, detail }
 }
 
+// --- 6. question implies an aggregate no cited query used ------------------
+
 const AGGREGATE_VERBS: &[(&[&str], &str)] = &[
     (&["how many", "count of", "number of"], "COUNT("),
     (&["how much", "total ", " sum of"], "SUM("),
@@ -315,8 +338,7 @@ fn check_tables(engine: &EngineState, evidence: &[EvidenceItem], out: &mut Vec<V
 }
 
 /// Tokens that follow FROM / JOIN, lowercased and de-punctuated. Crude only
-/// used to flag obviously-wrong table names, and to tag a learned recipe with
-/// the tables it touches.
+/// used to flag obviously-wrong table names and to check a multi-table join.
 pub(crate) fn referenced_relations(sql: &str) -> HashSet<String> {
     let lower = sql.to_lowercase();
     let toks: Vec<&str> = lower.split(|c: char| c.is_whitespace()).filter(|s| !s.is_empty()).collect();
@@ -330,6 +352,185 @@ pub(crate) fn referenced_relations(sql: &str) -> HashSet<String> {
         }
     }
     out
+}
+
+/// True when `needle` occurs in `haystack` on a word boundary (not as part of
+/// a longer identifier on either side). Both are expected already lowercased.
+fn contains_word(haystack: &str, needle: &str) -> bool {
+    let bytes = haystack.as_bytes();
+    let mut from = 0;
+    while let Some(rel) = haystack[from..].find(needle) {
+        let start = from + rel;
+        let end = start + needle.len();
+        from = end;
+        let before_ok = start == 0 || !bytes[start - 1].is_ascii_alphanumeric() && bytes[start - 1] != b'_';
+        let after_ok = end == bytes.len() || !bytes[end].is_ascii_alphanumeric() && bytes[end] != b'_';
+        if before_ok && after_ok {
+            return true;
+        }
+    }
+    false
+}
+
+// --- 7. a column named in the question is missing from every cited query ---
+
+/// Column names too generic to mean "filter on this" just because the word
+/// shows up in the question — same list `shared_column_hints` (state.rs)
+/// already uses to drop unhelpful join-key suggestions.
+const GENERIC_COLUMN_NAMES: &[&str] = &[
+    "id", "name", "title", "description", "note", "notes", "memo", "comment", "comments", "type",
+    "status", "value", "amount", "total", "subtotal", "count", "price", "cost", "qty", "quantity",
+    "label", "date",
+];
+
+/// Which of `table_columns` (real schema names, any case) are named in the
+/// question but never mentioned anywhere in `sql_texts` — a sign the model
+/// dropped a filter or grouping the question implied (e.g. "how many books
+/// have I *finished*" answered without a `finished` filter anywhere in the
+/// query). Lexical and conservative: word-boundary matched, generic names
+/// filtered out, only meaningful for a single table (the caller resolves
+/// that). Pure so it's testable without a real `EngineState`/catalog, same
+/// pattern as `missing_aggregate_verbs`. Doesn't check filter *values*
+/// (`tier = 'close'` vs `tier = 'active'`) only that the column was
+/// referenced at all; see #67 for the harder cases this still misses.
+fn dropped_columns<'a>(question: &str, sql_texts: &[String], table_columns: &'a [String]) -> Vec<&'a str> {
+    if sql_texts.is_empty() {
+        return Vec::new();
+    }
+    let q = question.to_lowercase();
+    let sql_all = sql_texts.join(" ").to_lowercase();
+    table_columns
+        .iter()
+        .filter(|name| {
+            let n = name.to_lowercase();
+            n.len() >= 4
+                && !GENERIC_COLUMN_NAMES.contains(&n.as_str())
+                && contains_word(&q, &n)
+                && !contains_word(&sql_all, &n)
+        })
+        .map(String::as_str)
+        .collect()
+}
+
+/// A column from the single table this answer's queries touch, named in the
+/// question but never mentioned anywhere in the cited SQL. Only fires for a
+/// single-table answer — multi-table questions are #79's job, and a second
+/// table changes which column belongs where.
+fn check_dropped_column(
+    engine: &EngineState,
+    question: &str,
+    evidence: &[EvidenceItem],
+    out: &mut Vec<VerificationCheck>,
+) {
+    let sql: Vec<String> = evidence
+        .iter()
+        .filter(|e| e.tool == "run_sql" && e.error.is_none())
+        .filter_map(|e| e.sql.as_deref())
+        .map(str::to_string)
+        .collect();
+    let tables: HashSet<String> =
+        sql.iter().flat_map(|s| referenced_relations(&s.to_lowercase())).collect();
+    let [table] = tables.iter().collect::<Vec<_>>()[..] else { return };
+    let catalog = engine.catalog();
+    let Some(cols) = catalog
+        .sources
+        .iter()
+        .find(|s| s.view.as_deref().map(str::to_lowercase).as_deref() == Some(table.as_str()))
+        .and_then(|s| s.columns.as_ref())
+    else {
+        return;
+    };
+    let names: Vec<String> = cols.iter().map(|c| c.name.clone()).collect();
+    for name in dropped_columns(question, &sql, &names) {
+        out.push(warn(
+            format!("question names `{name}` but no cited query mentions it"),
+            Some(format!(
+                "the question's wording includes \"{name}\", which is a column on this table, \
+                 but none of the queries behind this answer reference it — a filter or grouping \
+                 the question implied may have been dropped"
+            )),
+        ));
+    }
+}
+
+// --- 8. a question that named a join key answered from one table only ------
+
+/// Lowercased names of every non-generic column that appears, by name, in at
+/// least 2 of `tables` — the same "these tables share a join key" signal
+/// `shared_column_hints` (state.rs) surfaces in the prompt, computed
+/// independently here so this check stays a pure function of simple inputs.
+/// `tables` is `(table_name, column_names)` pairs; pure and testable without a
+/// real catalog, same pattern as `missing_aggregate_verbs`/`dropped_columns`.
+fn multi_table_columns(tables: &[(&str, Vec<String>)]) -> HashSet<String> {
+    let mut counts: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    for (_, cols) in tables {
+        for c in cols {
+            let low = c.to_lowercase();
+            if low.len() < 4 || GENERIC_COLUMN_NAMES.contains(&low.as_str()) {
+                continue;
+            }
+            *counts.entry(low).or_insert(0) += 1;
+        }
+    }
+    counts.into_iter().filter(|&(_, n)| n >= 2).map(|(k, _)| k).collect()
+}
+
+/// True when the question's wording names a column shared across ≥2
+/// catalogued tables (implying a join), but the cited SQL only touched one of
+/// them. `all_tables` is every catalogued (name, columns) pair; `touched` the
+/// distinct table(s) the cited SQL actually referenced.
+fn looks_like_a_missed_join(
+    question: &str,
+    all_tables: &[(&str, Vec<String>)],
+    touched: &HashSet<String>,
+) -> bool {
+    if touched.len() != 1 || all_tables.len() < 2 {
+        return false;
+    }
+    let q = question.to_lowercase();
+    multi_table_columns(all_tables).iter().any(|c| contains_word(&q, c))
+}
+
+/// Extends #58's prompt-side join hint with a check on the answer side: when
+/// the question's wording looked like it needed a join (it names a column
+/// that lives on more than one table) but the answer's evidence trail only
+/// touched one table, that's a sign the steering didn't take. Soft warning
+/// only — a real single-table answer to a question that merely echoes a
+/// shared column name (e.g. every table has a `date`) is common and fine;
+/// generic column names are filtered out for exactly that reason.
+fn check_multi_table_join(
+    engine: &EngineState,
+    question: &str,
+    evidence: &[EvidenceItem],
+    out: &mut Vec<VerificationCheck>,
+) {
+    let sql: Vec<String> = evidence
+        .iter()
+        .filter(|e| e.tool == "run_sql" && e.error.is_none())
+        .filter_map(|e| e.sql.as_deref())
+        .map(str::to_string)
+        .collect();
+    if sql.is_empty() {
+        return;
+    }
+    let touched: HashSet<String> =
+        sql.iter().flat_map(|s| referenced_relations(&s.to_lowercase())).collect();
+    let catalog = engine.catalog();
+    let all_tables: Vec<(&str, Vec<String>)> = catalog
+        .sources
+        .iter()
+        .filter_map(|s| {
+            let view = s.view.as_deref()?;
+            let cols = s.columns.as_ref()?;
+            Some((view, cols.iter().map(|c| c.name.clone()).collect()))
+        })
+        .collect();
+    if looks_like_a_missed_join(question, &all_tables, &touched) {
+        out.push(warn(
+            "this question looked like it needed a join across tables; the answer only used one",
+            None,
+        ));
+    }
 }
 
 // --- 2. re-run cited queries ------------------------------------------
@@ -561,10 +762,111 @@ fn close(a: f64, b: f64) -> bool {
     diff / scale < 0.005
 }
 
-fn truncate(s: &str, n: usize) -> String {
+pub(crate) fn truncate(s: &str, n: usize) -> String {
     match s.char_indices().nth(n) {
         Some((idx, _)) => format!("{}…", &s[..idx]),
         None => s.to_string(),
+    }
+}
+
+// --- 10. self-consistency second opinion (#80), cost-gated, not in run() --
+
+/// True when the numeric figures in `a` and `b` don't line up: some number in
+/// one has no `close()` counterpart in the other. Ignores probable years (a
+/// date isn't the "did we get the figure right" signal). `false` when neither
+/// text has a comparable figure at all nothing numeric to compare is not
+/// evidence of disagreement. Pure and testable without a real run.
+fn answers_disagree(a: &str, b: &str) -> bool {
+    let nums = |t: &str| -> Vec<f64> {
+        number_tokens(t).map(|(_, v)| v).filter(|v| !is_probable_year(*v)).collect()
+    };
+    let (na, nb) = (nums(a), nums(b));
+    if na.is_empty() || nb.is_empty() {
+        return false;
+    }
+    let uncovered = |xs: &[f64], ys: &[f64]| xs.iter().any(|x| !ys.iter().any(|y| close(*x, *y)));
+    uncovered(&na, &nb) || uncovered(&nb, &na)
+}
+
+/// The check pushed when a stricter, independent second opinion (the agent
+/// loop's cost-gated self-consistency re-check, #80 fired only when a cheap
+/// check above already left a warning standing) disagrees with the first
+/// answer's figures. A residual "still might be wrong" signal for cases the
+/// deterministic checks above can't fully resolve on their own (joins,
+/// multi-step, anything outside the simple single-table shape). Its label
+/// participates in `hard_fail` the point is to surface it, not bury it.
+/// `None` when the two agree, or neither has a comparable figure.
+pub fn self_consistency_check(first: &str, second: &str) -> Option<VerificationCheck> {
+    if !answers_disagree(first, second) {
+        return None;
+    }
+    Some(warn(
+        "a second, independent answer disagrees with this one",
+        Some(format!(
+            "asked again with stricter instructions, the model answered: \"{}\"",
+            truncate(second.trim(), 200)
+        )),
+    ))
+}
+
+// --- 9. a date/time GROUP BY collapsed to a NULL bucket --------------------
+
+/// True when `sql`'s `GROUP BY` clause groups by a date/time expression
+/// (`strftime(...)`/`date(...)`/`datetime(...)`) -- the shape every "monthly/
+/// weekly/yearly breakdown" question's query takes. A crude substring scan on
+/// the clause, same altitude as `referenced_relations` -- only the presence
+/// of the pattern matters, not a full parse.
+fn groups_by_date_expr(sql: &str) -> bool {
+    let lower = sql.to_lowercase();
+    let Some(gb) = lower.find("group by") else { return false };
+    let clause = &lower[gb..];
+    clause.contains("strftime(") || clause.contains("date(") || clause.contains("datetime(")
+}
+
+/// True when at least one result row's first column -- the grouping key, by
+/// the "group expression selected first" convention every case this check
+/// has ever seen follows -- is NULL.
+fn has_null_group_key(rows: &[Vec<Json>]) -> bool {
+    rows.iter().any(|r| r.first().is_some_and(Json::is_null))
+}
+
+/// Catches the "valid query, wrong question" failure mode #67 was filed for:
+/// a query that runs cleanly, reruns to the same result, and only cites
+/// numbers actually in its own output -- every earlier check in this file
+/// passes -- but a date/time `GROUP BY` produced a NULL key for at least one
+/// row, meaning rows that should have landed in separate months/weeks/years
+/// instead collapsed into one ungrouped bucket. Found from a real report: a
+/// ledger with non-ISO dates ("Aug 1, 2026") made every `strftime()` call
+/// return NULL, so "monthly breakdown of my rent" answered with the grand
+/// total under a single blank month, and nothing above caught it since the
+/// total genuinely was the number the query returned.
+///
+/// Deliberately narrow: only fires on a NULL key, never merely a single
+/// *row* (a dataset that legitimately spans one real month still has a
+/// real, non-null key in its one row and is left alone).
+fn check_null_group_key(evidence: &[EvidenceItem], out: &mut Vec<VerificationCheck>) {
+    for e in evidence {
+        if e.tool != "run_sql" || e.error.is_some() {
+            continue;
+        }
+        let Some(sql) = &e.sql else { continue };
+        if !groups_by_date_expr(sql) {
+            continue;
+        }
+        let Some(rows) = &e.rows else { continue };
+        if has_null_group_key(rows) {
+            out.push(warn(
+                "a query behind this answer groups by a date expression that returned no \
+value for at least one row",
+                Some(
+                    "the column this groups by likely isn't in a format strftime()/date() can \
+parse for every row, so those rows collapsed into one ungrouped bucket instead of their real \
+month/week/year check the raw column's values"
+                        .into(),
+                ),
+            ));
+            return;
+        }
     }
 }
 
@@ -683,6 +985,113 @@ mod tests {
     }
 
     #[test]
+    fn spots_a_dropped_column() {
+        let cols = vec!["finished".to_string(), "genre".to_string(), "title".to_string()];
+
+        // question names "finished", cited query never mentions it -> flagged
+        assert_eq!(
+            dropped_columns(
+                "how many books have I finished?",
+                &["SELECT COUNT(*) FROM books".to_string()],
+                &cols
+            ),
+            vec!["finished"]
+        );
+        // query does reference it -> not flagged
+        assert!(dropped_columns(
+            "how many books have I finished?",
+            &["SELECT COUNT(*) FROM books WHERE finished = 'yes'".to_string()],
+            &cols
+        )
+        .is_empty());
+        // short/generic-ish column not in the stoplist by name coincidence is still fine;
+        // a genuinely generic name is skipped even when dropped
+        let generic = vec!["type".to_string()];
+        assert!(dropped_columns(
+            "what type of book is this?",
+            &["SELECT * FROM books".to_string()],
+            &generic
+        )
+        .is_empty());
+        // a column name embedded in a longer word doesn't count as a real mention,
+        // on either side: "rate" inside "rated" (question), "genre" inside
+        // "subgenre" (SQL) — "genre" is still correctly flagged as dropped since
+        // "subgenre" isn't a real reference to the `genre` column.
+        assert!(dropped_columns(
+            "how is this rated?",
+            &["SELECT * FROM books".to_string()],
+            &["rate".to_string()]
+        )
+        .is_empty());
+        assert_eq!(
+            dropped_columns(
+                "which genre did I read most?",
+                &["SELECT subgenre FROM books".to_string()],
+                &["genre".to_string()]
+            ),
+            vec!["genre"]
+        );
+        // no run_sql evidence at all -> nothing to flag
+        assert!(dropped_columns("how many books have I finished?", &[], &cols).is_empty());
+    }
+
+    #[test]
+    fn spots_a_missed_join() {
+        let orders = ("orders", vec!["customer_id".to_string(), "amount".to_string()]);
+        let customers = ("customers", vec!["customer_id".to_string(), "city".to_string()]);
+        let tables = vec![orders.clone(), customers.clone()];
+
+        // "customer_id" lives on both tables -> question naming it, answered
+        // from one table only, is flagged.
+        assert!(looks_like_a_missed_join(
+            "what's the customer_id for the biggest order?",
+            &tables,
+            &HashSet::from(["orders".to_string()]),
+        ));
+        // both tables touched -> not flagged, whatever the question says.
+        assert!(!looks_like_a_missed_join(
+            "what's the customer_id for the biggest order?",
+            &tables,
+            &HashSet::from(["orders".to_string(), "customers".to_string()]),
+        ));
+        // question doesn't name a shared column -> not flagged.
+        assert!(!looks_like_a_missed_join(
+            "what's the total amount?",
+            &tables,
+            &HashSet::from(["orders".to_string()]),
+        ));
+        // only one catalogued table -> nothing could be shared, not flagged.
+        assert!(!looks_like_a_missed_join(
+            "what's the customer_id for the biggest order?",
+            &[orders],
+            &HashSet::from(["orders".to_string()]),
+        ));
+        // no table touched at all -> not flagged (nothing to compare against).
+        assert!(!looks_like_a_missed_join(
+            "what's the customer_id for the biggest order?",
+            &tables,
+            &HashSet::new(),
+        ));
+    }
+
+    #[test]
+    fn generic_shared_columns_dont_count() {
+        // "id"/"amount"/"date" are stoplisted even though every table has one;
+        // a genuinely shared non-generic column ("vendor") is still caught.
+        let a = ("a", vec!["id".to_string(), "amount".to_string(), "vendor".to_string()]);
+        let b = ("b", vec!["id".to_string(), "date".to_string(), "vendor".to_string()]);
+        assert_eq!(multi_table_columns(&[a, b]), HashSet::from(["vendor".to_string()]));
+    }
+
+    #[test]
+    fn word_boundaries_are_respected() {
+        assert!(contains_word("how many books have i finished?", "finished"));
+        assert!(!contains_word("unfinished business", "finished"));
+        assert!(!contains_word("the finisher", "finish"));
+        assert!(contains_word("select * from t where finished = 'yes'", "finished"));
+    }
+
+    #[test]
     fn parses_numbers() {
         let got: Vec<_> = number_tokens("We spent $1,234.50 (up 12%) vs 2024, total 450.")
             .map(|(_, v)| v)
@@ -743,6 +1152,27 @@ mod tests {
         // ...but the corrective re-ask only acts on the re-run checks.
         assert_eq!(rerun_regression(&stray), None, "unbacked figure is fold-only");
         assert!(rerun_regression(&hard).is_some(), "a changed re-run does trigger it");
+
+        // A self-consistency disagreement is a hard fail too.
+        let disagreed = vec![self_consistency_check("Total: $450", "Total: $600").unwrap()];
+        assert!(hard_fail(&disagreed).is_some());
+    }
+
+    #[test]
+    fn spots_a_disagreeing_second_opinion() {
+        // Same figure, different wording -> no disagreement.
+        assert!(self_consistency_check("You spent $450 total.", "Total spending: 450").is_none());
+        // A close (rounding-level) figure isn't a disagreement either.
+        assert!(self_consistency_check("About $1,000.", "$1,004").is_none());
+        // A genuinely different figure -> flagged, with the second answer quoted.
+        let check = self_consistency_check("Total: $450", "Total: $600").unwrap();
+        assert!(!check.ok);
+        assert!(check.label.contains("disagrees with this one"));
+        assert!(check.detail.unwrap().contains("$600"));
+        // A year in one and not the other doesn't count as a figure mismatch.
+        assert!(self_consistency_check("In 2024, you spent $450.", "$450").is_none());
+        // Neither answer has a comparable figure (e.g. both prose) -> nothing to compare.
+        assert!(self_consistency_check("The files can't answer this.", "I'm not sure.").is_none());
     }
 
     #[test]
@@ -793,5 +1223,103 @@ mod tests {
             out.iter().all(|c| c.ok),
             "0 is backed by the empty aggregate, not a stray figure: {out:?}"
         );
+    }
+
+    fn run_sql_ev(sql: &str, columns: &[&str], rows: Vec<Vec<Json>>) -> EvidenceItem {
+        EvidenceItem {
+            tool: "run_sql".into(),
+            args: Json::Object(Default::default()),
+            note: None,
+            sql: Some(sql.to_string()),
+            result_summary: format!("{} row(s)", rows.len()),
+            columns: Some(columns.iter().map(|s| s.to_string()).collect()),
+            row_count: Some(rows.len()),
+            rows: Some(rows),
+            output: None,
+            chart: None,
+            ms: 1,
+            error: None,
+        }
+    }
+
+    #[test]
+    fn spots_a_date_group_by_that_collapsed_to_null() {
+        assert!(groups_by_date_expr(
+            "SELECT strftime('%Y-%m', Date) AS month, SUM(x) AS t FROM t \
+             GROUP BY strftime('%Y-%m', Date) ORDER BY month"
+        ));
+        assert!(groups_by_date_expr("SELECT date(d) AS day, count(*) FROM t GROUP BY date(d)"));
+        assert!(!groups_by_date_expr("SELECT category, SUM(x) FROM t GROUP BY category"));
+        assert!(!groups_by_date_expr("SELECT SUM(x) FROM t")); // no GROUP BY at all
+
+        assert!(has_null_group_key(&[vec![Json::Null, Json::from(15797)]]));
+        assert!(!has_null_group_key(&[vec![Json::from("2025-09"), Json::from(1316)]]));
+    }
+
+    #[test]
+    fn check_null_group_key_flags_the_real_reported_bug() {
+        // The exact reported failure: a rent ledger with non-ISO dates made
+        // every strftime() call return NULL, collapsing 4 months into one
+        // blank bucket holding the grand total.
+        let ev = vec![run_sql_ev(
+            r#"SELECT strftime('%Y-%m', Date) AS month, SUM(parse_num("Charges / Payments")) \
+               AS rent_total FROM full_ledger WHERE Type = 'Charge - Rent' \
+               GROUP BY strftime('%Y-%m', Date) ORDER BY month"#,
+            &["month", "rent_total"],
+            vec![vec![Json::Null, Json::from(15797)]],
+        )];
+        let mut out = Vec::new();
+        check_null_group_key(&ev, &mut out);
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert!(!out[0].ok);
+        assert!(hard_fail(&out).is_some(), "should surface as a hard fail, not just a caution");
+    }
+
+    #[test]
+    fn check_null_group_key_leaves_a_healthy_breakdown_alone() {
+        // A real multi-month breakdown -- every key is a real month.
+        let ev = vec![run_sql_ev(
+            "SELECT strftime('%Y-%m', d) AS month, SUM(x) AS t FROM t \
+             GROUP BY strftime('%Y-%m', d) ORDER BY month",
+            &["month", "t"],
+            vec![
+                vec![Json::from("2025-09"), Json::from(1316)],
+                vec![Json::from("2025-10"), Json::from(1321)],
+            ],
+        )];
+        let mut out = Vec::new();
+        check_null_group_key(&ev, &mut out);
+        assert!(out.is_empty(), "{out:?}");
+    }
+
+    #[test]
+    fn check_null_group_key_leaves_a_genuine_single_bucket_alone() {
+        // A dataset that legitimately spans one real month: one row, but a
+        // real, non-null key -- not the bug this check is for.
+        let ev = vec![run_sql_ev(
+            "SELECT strftime('%Y-%m', d) AS month, SUM(x) AS t FROM t \
+             GROUP BY strftime('%Y-%m', d)",
+            &["month", "t"],
+            vec![vec![Json::from("2025-09"), Json::from(1316)]],
+        )];
+        let mut out = Vec::new();
+        check_null_group_key(&ev, &mut out);
+        assert!(out.is_empty(), "a real single-month result is not a bug: {out:?}");
+    }
+
+    #[test]
+    fn check_null_group_key_ignores_non_date_grouping() {
+        // A NULL key from grouping by an ordinary column (e.g. an
+        // unlabelled category) isn't what this check is for -- narrow to
+        // date/time expressions only, to avoid false-positiving on
+        // legitimately-NULL categories.
+        let ev = vec![run_sql_ev(
+            "SELECT category, SUM(x) AS t FROM t GROUP BY category",
+            &["category", "t"],
+            vec![vec![Json::Null, Json::from(100)]],
+        )];
+        let mut out = Vec::new();
+        check_null_group_key(&ev, &mut out);
+        assert!(out.is_empty(), "{out:?}");
     }
 }

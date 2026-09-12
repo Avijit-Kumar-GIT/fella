@@ -1,0 +1,6 @@
+{"id": "mem_cold_on", "question": "Cold-session recall: does a correction learned in an earlier session apply to a brand-new conversation?", "tier": "memory-selection", "domain": "general"}
+{"id": "mem_cold_off", "question": "Same cold question with memory disabled (control) -- expected to miss the correction.", "tier": "memory-selection-control", "domain": "general"}
+{"id": "mxa_oneoff_writes_nothing", "question": "An ordinary question (no correction) must leave memory.md unchanged.", "tier": "memory-append", "domain": "general"}
+{"id": "mxa_supersede_not_duplicate", "question": "A second, overlapping correction on the same topic must replace the first note, not duplicate it.", "tier": "memory-append", "domain": "general"}
+{"id": "mxa_isolation_no_cross_contamination", "question": "A correction on one topic must not spill into or get joined with an unrelated ordinary question.", "tier": "memory-append", "domain": "general"}
+{"id": "mxa_distractor_topic_selection", "question": "With one real correction and one unrelated stored note, does a cold question apply the correct, relevant one?", "tier": "memory-selection", "domain": "general"}

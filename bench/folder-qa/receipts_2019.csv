@@ -1,8 +1,5 @@
 date,vendor,total
-2019-04-05,cafe,48.92
-2019-11-04,bookshop,11.31
-2019-01-01,cafe,24.0
-2019-01-21,pharmacy,86.77
+2019-10-02,pharmacy,86.77
 2019-11-09,petrol,58.72
 2019-12-25,hardware store,12.55
 2019-05-17,petrol,20.49
@@ -39,3 +36,6 @@ date,vendor,total
 2019-11-25,bookshop,7.5
 2019-01-15,hardware store,73.09
 2019-01-09,cafe,68.27
+2019-10-11,pharmacy,27.42
+2019-10-02,pharmacy,68.19
+2019-12-11,pharmacy,29.58

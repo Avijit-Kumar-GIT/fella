@@ -18,32 +18,10 @@ story, and it is structural there is no write tool to disable. An opt-in
 `augment` pack (`EXTENSIBILITY.md`) adds a tab where *you* save a note or table you
 typed; that is a user keystroke writing one named file, never the model.
 
-## Non-goals ("why not X")
-
-- **Vertical, not horizontal.** The zero-config base build stays small in
-  feature count and spends its weight on intelligence and quality-of-life
-  better answers, fewer interactions, faster and lighter not more commands.
-  A capability earns its place by making the existing job better or shorter,
-  not by adding a parallel thing to do; breadth lives in extensions.
-  (`DECISIONS.md` 2026-09-08.)
-- **Not a task agent.** The agent has no write/move/delete tools and emits no
-  artifacts; no permission dialogs see `AUDIT.md`. Fella answers questions; it
-  doesn't do chores. (An opt-in `augment` pack adds a note/table tab the *user*
-  saves from `EXTENSIBILITY.md`; the agent's tools are unchanged.)
-- **A fixed, small tool set in the base.** Adding a built-in tool or a file-format
-  parser is a code change, not a plugin. Beyond the base, users can install vetted
-  themes, skills, MCP connectors, and augments themselves see `EXTENSIBILITY.md`.
-- **MCP is opt-in, not bundled.** Fella ships an MCP client so a user can connect an
-  external source (Notion, a notes repo); no connector ships by default and none is a
-  core dependency. (Reversed 2026-08-29; was "No MCP".)
-- **No server / cloud / Docker / Redis.** One desktop process. SQLite for app state,
-  in-process DuckDB for analysis.
-- **No generic agent framework.** One reasoning loop, purpose-built, ~one file.
-- **No terminal roleplay.** It's a REPL, but sans-serif and plain-language; monospace
-  only where data lines up.
-- **LLM never touches data directly.** It can only call deterministic tools; all
-  numbers in an answer must come from a tool result.
-- **SQL first.** Python is the escape hatch, not the default.
+The full set of positive commitments this implies is
+[`PRINCIPLES.md`](PRINCIPLES.md); what Fella deliberately doesn't do is
+[`NON-GOALS.md`](NON-GOALS.md). Both are referenced from [`WHY.md`](WHY.md),
+the reasoning behind them.
 
 The microharness principles in `AUDIT.md` (thin UI, local-first, token efficiency,
 smallest useful tool set, interchangeable models, extensions at the edges, testable

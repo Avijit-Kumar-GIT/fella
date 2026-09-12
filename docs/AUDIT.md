@@ -1,5 +1,12 @@
 # Audit: Fella vs. the "microharness" philosophy
 
+**Closed.** Resolved 2026-08-27 (see "Resolution" below), with three follow-up
+updates through 2026-08-29. The verdict table below is a point-in-time
+snapshot (tool count, data engine, etc. all describe *that* commit, not
+today's) kept for the reasoning trail, not as a live status check current
+facts are [`ARCHITECTURE.md`](ARCHITECTURE.md), current commitments are
+[`PRINCIPLES.md`](PRINCIPLES.md)/[`NON-GOALS.md`](NON-GOALS.md).
+
 Assessed 2026-08-27, at commit `609f878`. The brief being audited against is the
 general-purpose **AI agent microharness** spec (task → agent loop → artifact;
 filesystem + Python tools; workspace as security boundary; Task/Work/Result UI;

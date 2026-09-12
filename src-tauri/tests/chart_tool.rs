@@ -15,7 +15,7 @@ fn scratch(tag: &str) -> PathBuf {
 }
 
 #[tokio::test]
-async fn make_chart_returns_an_svg_evidence_field() {
+async fn make_chart_returns_structured_chart_data() {
     let data = scratch("chart-data");
     let engine = EngineState::new(&data).unwrap();
     let registry = Registry::standard();
@@ -29,10 +29,12 @@ async fn make_chart_returns_an_svg_evidence_field() {
     });
 
     let out = registry.run(&engine, "make_chart", &args).await.unwrap().unwrap();
-    let svg = out.chart.expect("chart field should be set");
-    assert!(svg.starts_with("<svg"));
-    assert!(svg.contains("</svg>"));
-    assert!(svg.contains("Groceries"));
+    let chart = out.chart.expect("chart field should be set");
+    assert_eq!(chart.title.as_deref(), Some("Spending by category"));
+    assert_eq!(chart.labels, vec!["Groceries", "Rent", "Transport"]);
+    assert_eq!(chart.series[0].name, "amount");
+    assert_eq!(chart.series[0].values, vec![412.5, 1250.0, 88.0]);
+    assert_eq!(chart.unit.as_deref(), Some("$"));
 
     let _ = fs::remove_dir_all(&data);
 }

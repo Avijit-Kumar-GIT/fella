@@ -9,7 +9,7 @@
 #   ./scripts/measure.sh --min        + build the size-minimised profile
 #
 # Everything printed is also appended, under a dated heading, to
-# docs/PERFORMANCE.md see that file for what each number means.
+# docs/PERFORMANCE-LOG.md see docs/PERFORMANCE.md for what each number means.
 #
 # One-time setup (no sudo):  cargo install cargo-bloat hyperfine
 
@@ -175,6 +175,6 @@ EOF
 }
 
 main 2>&1 | tee "$TMP/report.md"
-{ echo; cat "$TMP/report.md"; } >>"$ROOT/docs/PERFORMANCE.md"
+{ echo; cat "$TMP/report.md"; } >>"$ROOT/docs/PERFORMANCE-LOG.md"
 echo
-echo "→ appended to docs/PERFORMANCE.md"
+echo "→ appended to docs/PERFORMANCE-LOG.md"

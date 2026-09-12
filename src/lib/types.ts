@@ -3,6 +3,21 @@
 
 export type Role = 'user' | 'assistant' | 'system';
 
+export interface ChartSeries {
+	name: string;
+	values: number[];
+}
+
+/** Structured chart data from a chart tool (e.g. `make_chart`) -- labels
+ *  and numbers only, never markup. Rendered by `$lib/components/Chart.svelte`. */
+export interface ChartSpec {
+	kind: 'bar' | 'line';
+	title?: string;
+	labels: string[];
+	series: ChartSeries[];
+	unit?: string;
+}
+
 export interface EvidenceItem {
 	tool: string;
 	args: Record<string, unknown>;
@@ -20,10 +35,8 @@ export interface EvidenceItem {
 	row_count?: number;
 	/** Free-form text output, e.g. Python stdout/stderr. */
 	output?: string;
-	/** Sanitized-safe inline SVG from a chart tool (e.g. `make_chart`).
-	 *  Rust-generated, not model-authored; still run through an allow-list
-	 *  (`$lib/svg.ts`) before `{@html}`. */
-	chart?: string;
+	/** Structured chart data, when the tool was `make_chart`. */
+	chart?: ChartSpec;
 	ms: number;
 	error?: string;
 }

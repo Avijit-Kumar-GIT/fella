@@ -1301,14 +1301,14 @@ function renderTable(
 /** Last path segment, either separator — workspace paths come from the Rust
  *  backend in the OS's own form, so a saved conversation from Windows can
  *  still show up readably here. */
-function baseName(path: string): string {
+export function baseName(path: string): string {
 	const parts = path.split(/[/\\]+/).filter(Boolean);
 	return parts[parts.length - 1] ?? path;
 }
 
 /** A short, local-time label for `/history`'s list — just a date once it's
  *  not today, so the list stays scannable. */
-function dateLabel(ms: number): string {
+export function dateLabel(ms: number): string {
 	const d = new Date(ms);
 	const now = new Date();
 	const sameDay =
@@ -1320,9 +1320,20 @@ function dateLabel(ms: number): string {
 		: d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
+/** "27m" / "3h" / "5d" style relative age, for the sidebar's recency rows. */
+export function relativeAge(ms: number): string {
+	const mins = Math.round((Date.now() - ms) / 60_000);
+	if (mins < 1) return 'now';
+	if (mins < 60) return `${mins}m`;
+	const hrs = Math.round(mins / 60);
+	if (hrs < 24) return `${hrs}h`;
+	const days = Math.round(hrs / 24);
+	return `${days}d`;
+}
+
 /** The engine serialises errors as `{ kind, message }`; older / Tauri-internal
  *  errors are plain strings or `Error`s. Unwrap either. */
-function errMsg(e: unknown): string {
+export function errMsg(e: unknown): string {
 	if (e && typeof e === 'object' && typeof (e as Record<string, unknown>).message === 'string') {
 		return (e as { message: string }).message;
 	}

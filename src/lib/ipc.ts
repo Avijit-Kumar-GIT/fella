@@ -142,6 +142,8 @@ export const ipc = {
 	/** Raw JSON of one archived conversation `{id, workspace, messages}`,
 	 * matching what `archiveConversation` originally wrote. */
 	conversationLoad: (id: string) => invoke<string>('conversation_load', { id }),
+	/** Remove one archived conversation from the sidebar's history. */
+	deleteConversation: (id: string) => invoke<void>('delete_conversation', { id }),
 
 	/**
 	 * Ask a question. Streams progress through `onEvent`; resolves with the

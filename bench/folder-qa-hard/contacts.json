@@ -1,0 +1,44 @@
+[
+  {
+    "name": "Ada",
+    "country": "Portugal",
+    "tier": "close",
+    "last_seen_days": 12
+  },
+  {
+    "name": "Bruno",
+    "country": "Germany",
+    "tier": "work",
+    "last_seen_days": 40
+  },
+  {
+    "name": "Chen",
+    "country": "Japan",
+    "tier": "close",
+    "last_seen_days": 95
+  },
+  {
+    "name": "Dara",
+    "country": "USA",
+    "tier": "family",
+    "last_seen_days": 6
+  },
+  {
+    "name": "Eze",
+    "country": "Nigeria",
+    "tier": "close",
+    "last_seen_days": 210
+  },
+  {
+    "name": "Fen",
+    "country": "Canada",
+    "tier": "work",
+    "last_seen_days": 33
+  },
+  {
+    "name": "Gita",
+    "country": "India",
+    "tier": "family",
+    "last_seen_days": 18
+  }
+]

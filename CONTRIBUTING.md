@@ -28,9 +28,11 @@ config, an augment manifest) is lane 2.
 
 ## What the app will and won't take
 
-Fella's positioning is locked (`docs/EXTENSIBILITY.md`, `docs/DECISIONS.md`):
-personal analytics for non-developers, read-only, local-first, anti-bloat in the
-base. Changes are reviewed against these non-negotiables:
+Fella's positioning is locked ([`docs/PRINCIPLES.md`](docs/PRINCIPLES.md),
+[`docs/NON-GOALS.md`](docs/NON-GOALS.md), `docs/DECISIONS.md`): personal
+analytics for non-developers, read-only, local-first, anti-bloat in the base.
+Changes are reviewed against those commitments and refusals in full; the ones
+that come up most in review:
 
 - **Read-only.** Nothing writes, moves, or deletes anything in the user's folder.
 - **Local-first.** The base makes one network call, to the model the user chose.

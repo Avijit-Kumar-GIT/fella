@@ -28,6 +28,16 @@ function uid(): string {
 const PREFIX = 'fella:conversation:'; // one key per tab: fella:conversation:<id>
 const LEGACY_KEY = 'fella:conversation'; // the single pre-tabs blob
 const INDEX_KEY = 'fella:tabs'; // JSON array of open tab ids
+const SIDEBAR_KEY = 'fella:sidebar-collapsed';
+
+function readSidebarCollapsed(): boolean {
+	try {
+		const v = localStorage.getItem(SIDEBAR_KEY);
+		return v === null ? false : v === '1';
+	} catch {
+		return false;
+	}
+}
 
 /** One conversation tab: its transcript, its in-flight run, its input history. */
 export class Conversation {
@@ -155,6 +165,22 @@ class Session {
 	/** Focus mode: hide the tab strip and the folder header for a plain,
 	 *  single-conversation view. Toggled by `/focus` or Ctrl+Shift+F. */
 	focus = $state<boolean>(false);
+	/** History sidebar visibility. Unlike `focus`, this is remembered across
+	 *  launches (open by default) it's a layout preference, not a
+	 *  per-session display mode. Toggled by the titlebar button or Ctrl+B. */
+	sidebarCollapsed = $state<boolean>(readSidebarCollapsed());
+	/** Bumped whenever a conversation is archived, so the sidebar's list
+	 *  knows to refetch without polling. */
+	historyVersion = $state<number>(0);
+
+	toggleSidebar(): void {
+		this.sidebarCollapsed = !this.sidebarCollapsed;
+		try {
+			localStorage.setItem(SIDEBAR_KEY, this.sidebarCollapsed ? '1' : '0');
+		} catch {
+			/* ignore */
+		}
+	}
 
 	get activeTab(): Tab {
 		return this.tabs[this.active] ?? this.tabs[0];
@@ -361,6 +387,7 @@ class Session {
 		}
 		this.tabs = [new Conversation()];
 		this.active = 0;
+		this.historyVersion++;
 	}
 
 	/** Persist every conversation tab's transcript (each debounces its own
@@ -389,6 +416,7 @@ class Session {
 		});
 		try {
 			await ipc.archiveConversation(tab.id, body);
+			this.historyVersion++;
 		} catch (e) {
 			console.warn('archive failed', e);
 		}

@@ -8,6 +8,7 @@ use serde_json::{json, Value as Json};
 use crate::engine::error::{EngineError, EngineResult};
 use crate::engine::llm::ToolSchema;
 use crate::engine::state::{EngineState, GrepHit, QueryResult};
+use crate::engine::verify::truncate as truncate_chars;
 
 /// What a tool produces: a human-facing summary + optional tabular detail for
 /// the evidence panel, and a compact text rendering for the model.
@@ -19,8 +20,9 @@ pub struct ToolOutput {
     pub rows: Option<Vec<Vec<Json>>>,
     pub row_count: Option<usize>,
     pub output: Option<String>,
-    /// Sanitized-safe inline SVG from a chart tool (e.g. `make_chart`).
-    pub chart: Option<String>,
+    /// Structured chart data from a chart tool (e.g. `make_chart`) -- labels
+    /// and numbers only, no markup. Rendered client-side.
+    pub chart: Option<crate::engine::chart::ChartData>,
 }
 
 impl ToolOutput {
@@ -650,12 +652,6 @@ to compute over the workspace data, not to fetch anything."
     }
 }
 
-fn truncate_chars(s: &str, n: usize) -> String {
-    match s.char_indices().nth(n) {
-        Some((i, _)) => format!("{}…", &s[..i]),
-        None => s.to_string(),
-    }
-}
 
 #[cfg(test)]
 mod tests {

@@ -25,11 +25,12 @@ pub struct EvidenceItem {
     /// Free-form text output (e.g. Python stdout/stderr).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output: Option<String>,
-    /// Sanitized-safe inline SVG from a chart tool (e.g. `make_chart`).
-    /// Rust-generated, not model-authored; the frontend still runs it
-    /// through an allow-list before `{@html}` (see `src/lib/svg.ts`).
+    /// Structured chart data from a chart tool (e.g. `make_chart`) --
+    /// labels and numbers only, never markup. Rendered client-side
+    /// (`src/lib/components/Chart.svelte`), so there's no sanitizer
+    /// boundary here the way an HTML/SVG string would need.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub chart: Option<String>,
+    pub chart: Option<crate::engine::chart::ChartData>,
     pub ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -99,7 +100,10 @@ mod tests {
 pub enum AskEvent {
     AssistantDelta { text: String },
     ToolStart { tool: String, args: Json },
-    ToolEnd { item: EvidenceItem },
+    // Boxed: `EvidenceItem` grew past clippy's large-enum-variant threshold
+    // once `chart` started carrying structured data (labels/series) inline
+    // instead of a single SVG string.
+    ToolEnd { item: Box<EvidenceItem> },
     /// A transient status line for the UI (e.g. "rate limited retrying in 3s…").
     Notice { text: String },
     AnswerDone { answer: Answer },

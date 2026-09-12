@@ -7,6 +7,51 @@ this app repo (now **`fella`**; `fella-ai` is a private pre-v0.1 archive),
 `fella-marketplace` to mean the browse-site half of the **`fella-web`** repo,
 and any `CODE_OF_CONDUCT.md` mention as folded into `CONTRIBUTING.md` (§Conduct).
 
+- **2026-09-12** **A correction that overlaps an existing vocabulary note is
+  reconciled by the model, not a keyword/position heuristic.** Sandboxed
+  multi-session testing (`agent_eval memory-sandbox`, new) of the 2026-09-11
+  memory change surfaced the next problem: two different rewordings of the
+  same correction ("count housing and mortgage as rent" then later "actually
+  mortgage shouldn't count") produced two separate, contradictory vocabulary
+  entries instead of the second superseding the first `FOLDER-MEMORY.md`'s
+  own "supersede, don't append" design goal, never actually implemented.
+  Researched how incumbents solve this before building: ChatGPT's `bio` tool,
+  Mem0, and Zep all resolve add-vs-update-vs-noop with an **LLM judgment
+  call** against the small existing set, not string matching — because "is
+  this the same concept, reworded?" is a language problem. Fella already has
+  precedent for a rare, cost-gated extra call (`self_consistency_check`,
+  #80); a correction is similarly rare (`FOLDER-MEMORY.md`: "~dozens over a
+  folder's life"), so `reconcile_vocab_key` spends one only when a
+  correction actually overlaps something already stored (skipped entirely
+  when the vocabulary list is empty — nothing to reconcile against). Uses
+  **whichever model is currently active in the workspace**, no override, so
+  the memory file stays legible and editable to any model that reads it
+  later, matching different sessions potentially running different models
+  against the same folder. A reply that doesn't parse, or names a key not
+  actually in the list, falls back to adding a new entry under the old
+  word-position key rather than silently overwriting or dropping the
+  correction.
+- **2026-09-11** **Per-folder memory (`engine::memory`) no longer caches
+  `question → SQL` "recipes"; it stores durable facts only** (preferences,
+  vocabulary, table notes). Found in the wild: a real `memory.md` had cached
+  a `strftime('%Y-%m', Date)` GROUP BY over a non-ISO date column the
+  moment it was recorded, `verify` had no check for a NULL-collapsed group
+  key (that landed later as `check_null_group_key`, #67), so the wrong query
+  passed as "verified" and kept replaying on every later ask of a similar
+  question, reproducing the same wrong answer with no fresh reasoning. A
+  recipe is code frozen against one verify pass, not a fact that stays true
+  a subtly different question can silently reuse it, and a since-strengthened
+  check has no way to reach back and invalidate what's already cached.
+  `FOLDER-MEMORY.md`'s own two `agent_eval memory` benchmarks never actually
+  showed a recipe earning its tokens either (same-conversation: neutral;
+  cross-session win: the vocabulary note + case-sensitivity flag, not a
+  recipe) the self-healing that doc called for ("a recipe that fails
+  `verify` is demoted, two failures drops it") was designed but never
+  implemented. Rather than build that for a mechanism with no demonstrated
+  win and a demonstrated failure, it's removed: `mark_stale()` /
+  `record_recipe()` deleted, `## Recipes` in an existing memory file is
+  silently dropped on next load. See `FOLDER-MEMORY.md`'s "Recipes cut" note
+  and `HARNESS.md`'s Log.
 - **2026-09-10** **A new augment capability is gated like a new built-in
   tool: an issue, real demand, a `DECISIONS.md` entry first.** Packs vs.
   built-in commands make *no difference* to base binary size a capability
@@ -55,8 +100,8 @@ and any `CODE_OF_CONDUCT.md` mention as folded into `CONTRIBUTING.md` (§Conduct
   (older Fella meeting a future kind says "needs a newer Fella", doesn't crash),
   `augment.json` has no `deny_unknown_fields`, and a built-in command always
   wins a collision with an augment's command (the augment then shows as
-  unreachable). `docs/WHY.md` (unmerged branch `docs/why-thesis`) contradicts
-  this and must be reconciled when that branch lands.
+  unreachable). `docs/WHY.md`'s folder-boundary section conflicted with this;
+  reconciled when `docs/why-thesis` merged (PR #76).
 - **2026-09-09** **Pack-marketplace rollout resumed, minus the proxy.** The
   2026-09-02 pause is lifted: `web_search`/`web_fetch`-as-a-pack (2026-09-08) and
   "breadth lives in extensions" (2026-09-08) are demand enough. `fella-extensions`
@@ -131,7 +176,10 @@ and any `CODE_OF_CONDUCT.md` mention as folded into `CONTRIBUTING.md` (§Conduct
   `vercel`/`openrouter` ids "drift too much for a default" held back a good
   first run for one wrong guess that `/model <name>` already fixes; all rows
   now default to a current cheap model (`gpt-5.6-luna` / `grok-4.1-fast` /
-  `gemma4:31b`). Separately, `llm::health` filters the model list to chat
+  `gemma4:31b`). (xAI's default has since moved to `grok-4.3` `grok-4-fast`
+  was retired; see `provider.rs`. This is a point-in-time record of the
+  2026-09-06 decision, not the current default the code is always the source
+  of truth for that.) Separately, `llm::health` filters the model list to chat
   models a denylist of id substrings (`embed`, `dall-e`, `tts`, `whisper`,
   `moderation`, `-audio`, `davinci-`, …), not an allowlist, so any real
   instruct model (including multimodal ones like `gpt-4o`) still shows and an

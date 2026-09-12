@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::engine::error::{EngineError, EngineResult};
 use crate::engine::sqlite::{self, ExtRow};
+use crate::engine::state::cap_chars;
 
 /// Skill Markdown longer than this (per pack) is truncated before it reaches
 /// the system prompt, so one pack can't crowd out everything else.
@@ -30,6 +31,7 @@ const THEME_TOKEN_KEYS: &[&str] = &[
     "--text-dim",
     "--text-faint",
     "--accent",
+    "--brand",
     "--link",
     "--ok",
     "--warn",
@@ -335,7 +337,7 @@ pub struct DownloadedPack {
     manifest_sha: String,
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     ring::digest::digest(&ring::digest::SHA256, bytes)
         .as_ref()
         .iter()
@@ -672,12 +674,6 @@ pub fn augment_config(data_dir: &Path, id: &str) -> EngineResult<AugmentConfig> 
     AugmentConfig::parse(&raw)
 }
 
-fn cap_chars(s: &str, cap: usize) -> String {
-    match s.char_indices().nth(cap) {
-        Some((i, _)) => s[..i].to_string(),
-        None => s.to_string(),
-    }
-}
 
 fn now_secs() -> i64 {
     std::time::SystemTime::now()

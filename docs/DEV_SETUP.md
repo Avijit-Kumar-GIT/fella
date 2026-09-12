@@ -226,7 +226,7 @@ See [`PERFORMANCE.md`](PERFORMANCE.md). Short version:
 
 ```sh
 cargo install cargo-bloat hyperfine   # one-time, no sudo
-./scripts/measure.sh                   # numbers + a dated entry in PERFORMANCE.md
+./scripts/measure.sh                   # numbers + a dated entry in PERFORMANCE-LOG.md
 ```
 
 ## Evaluating the agent loop
@@ -245,4 +245,4 @@ AGENT_EVAL_DATA_DIR=/tmp/eval-data \
 ```
 
 Neither runs in CI (they need a live model). See
-[`PERFORMANCE.md`](PERFORMANCE.md) for the subcommands and baselines.
+[`PERFORMANCE-LOG.md`](PERFORMANCE-LOG.md) for the subcommands and baselines.

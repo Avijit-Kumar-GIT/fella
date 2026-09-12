@@ -322,7 +322,7 @@
 	.transcript {
 		flex: 1;
 		overflow-y: auto;
-		padding: var(--space-5) var(--pad) var(--space-6);
+		padding: var(--space-6) var(--pad) var(--space-6);
 		min-height: 0;
 		transition: padding var(--dur) var(--ease);
 	}
@@ -429,20 +429,18 @@
 		font-family: var(--mono);
 		color: var(--text-dim);
 	}
-	/* The setup / health panel is a grouped card, not a hairline-ruled section. */
+	/* A hairline, not a boxed card echoes the divider language used
+	   elsewhere (titlebar/sidebar) rather than looking like a bolted-on form. */
 	.setup {
-		margin-top: var(--space-5);
-		padding: var(--space-4);
-		border: 1px solid var(--border);
-		border-radius: var(--radius);
-		background: var(--bg-raised);
-		box-shadow: var(--shadow-sm);
+		margin-top: var(--space-6);
+		padding-top: var(--space-4);
+		border-top: 1px solid var(--border);
 	}
 	.setup p {
 		margin: 0 0 var(--space-3);
 	}
 	/* Mid-session health banner: not the full first-run panel, just enough to
-	   point at the fix. Sits above the transcript, not below the wordmark. */
+	   point at the fix. Sits above the transcript. */
 	.setup.compact {
 		margin: 0 auto var(--space-4);
 		padding: var(--space-3);
