@@ -115,17 +115,105 @@ Deterministic gold (`gen.py`, stdlib — the xlsx/pdf writers are hand-rolled
 OOXML / PDF, no third-party deps; regen is byte-reproducible). Runs free on
 `gemma4:31b` and any ollama-cloud model.
 
+## The hard tier — `bench/folder-qa-hard/`
+
+`bench/folder-qa/` targets the everyday-question tier on purpose (see the top
+of this doc); its own `gen.py` comment says the next step is a harder battery
+on the same schema. This is that battery: **16 cases**, same data files
+(byte-identical copies of `folder-qa/`'s CSV/JSON/MD, since they're
+deterministic — no xlsx/pdf, those formats aren't needed here), but harder
+question shapes:
+
+- **rank-2 / rank-min with a real gap** — "which category was the
+  *second*-most over its annual budget", "by the *smallest* amount" — not
+  just top-1.
+- **unit conversion the DB can't do** — "how many *miles* (not km)" forces
+  the model to convert, not just report a stored column.
+- **non-standard-date half-year boundary** — `rent_ledger.csv`'s `"Jan 1,
+  2024"` strings, split Jan–Jun vs Jul–Dec.
+- **compound-filter joins** — contacts in countries visited *for leisure, not
+  work* (not just "visited"); contacts in countries visited *only* for work.
+- **a 5-file synthesis case** — check each of 5 stated goals against its own
+  file, report the one actually on track.
+- **two-group cross-file comparison** — average screen time on
+  worst- vs best-sleep-quality nights.
+- **two traps** — a near-miss category name that doesn't exist
+  ("restaurants" vs the real "dining") and a date outside the data's range
+  (Jan 2025) — the correct answer is a plain zero/no-data, not a guess or a
+  match on the nearest real label.
+- **two chart-generation cases**, graded on the `make_chart` tool call itself
+  (see `Gold::Chart` in `agent_eval.rs`) — labels + numeric series compared
+  to gold, order- and series-name-agnostic (a model can chart categories in
+  whatever order and call its one series whatever it wants; it still has to
+  get the *numbers* right). Prior chart cases in the easy tier
+  (`fqa-rentl-chart`, `fqa-fin-chart-cat`) only graded a side numeric claim in
+  the prose — a model could describe the right numbers and never actually
+  chart them and still pass. These two can't be passed that way.
+
+All gold values are computed by `bench/folder-qa-hard/gen.py` from the copied
+files at generation time, not hand-typed, so a data edit can't silently drift
+from the grader.
+
+```
+python3 bench/folder-qa-hard/gen.py   # regen cases.jsonl if the copied data changes
+agent_eval bench --dir bench/folder-qa-hard --models "$MODELS" --harness fella --iters 3 \
+  --json bench/folder-qa-hard/out/fella.json
+```
+
+Same `Gold` shapes as the easy tier, plus:
+`{"chart": {"labels": [...], "series": [{"name": "...", "values": [...]}]}}`.
+
+**Results (2026-09-12, the actual baseline models — `ollama-cloud/gemma4:31b`
+and `openrouter/openai/gpt-5.6-luna`, `--iters 3`):** both **16/16**. Getting
+there took two rounds — the first pass showed 14/16 and 15/16 with what
+looked like real misses, but three of the four failures turned out to be bugs
+in this battery's own grading, not model gaps:
+
+- **`fqah-third-month`'s gold only matched the digits "07"**, not the word
+  "July" — both models answered correctly (right month, right $123.48 gap)
+  every single time and were marked wrong regardless.
+- **`fqah-chart-h2-line`'s gold expected abbreviated month labels** ("Jul")
+  but gemma correctly charted the ISO `YYYY-MM` labels it read straight from
+  the `month` column ("2024-07") — a reasonable, correct choice the grader
+  didn't allow for.
+- **`fqah-trap-2025`'s "says no data" check** didn't recognize the phrasing
+  "is not listed" (only "no ", "none", "n/a", etc.) — gemma's answer was
+  already correct.
+
+All three are now fixed (`gen.py`'s month-name lookup; `Gold::Chart` labels
+accept `"name|iso"` alternatives the same way `Gold::Contains` already does;
+`says_zero()`'s phrase list widened) and covered by new unit tests in
+`agent_eval.rs`. The one real, reproducible finding: on `fqah-goal-ontrack`
+(the 5-file synthesis case), gemma's SQL filtered on `'Dining out'` and
+`'Leisure'` — capitalized, not matching the actual lowercase data — got an
+empty result back, and **didn't notice**; it answered "goals.md wasn't
+provided" instead, an unrelated and incorrect excuse. Majority vote (2 of 3
+iters) saved the case, so it doesn't show as a miss in the headline number,
+but the underlying case-sensitivity-then-silent-empty-result failure mode is
+real and worth tracking separately from accuracy.
+
+**So: this particular 16-case battery isn't creating headroom on the two
+baseline models** — they're simply strong at this question class once graded
+correctly. That's a legitimate result, not a wasted effort: it says the
+*easy* tier's near-100% ceiling (see Results above) isn't a grading
+artifact, and it puts a number on how much harder "harder" has to get before
+gemma/gpt-5.6-luna actually miss something. Real headroom on *this* task
+class most likely needs either (a) genuinely deeper multi-hop chains (4+
+files, not the 2-3 used here), or (b) moving down the model ladder — the
+64-case easy-tier run already shows where accuracy actually falls off
+(`muse-glimmer-30b`, and further down toward the free/cheap end).
+
 ## Running it
 
 ```
 DATA=/copy/of/fella.db+auth.json   # must hold apikey:openrouter (+ apikey:ollama-cloud)
 
 MODELS="openrouter/deepseek/deepseek-v4-flash-0731,openrouter/z-ai/glm-5.3-flash,\
-openrouter/nvidia/nemotron-3.5-lightning,ollama-cloud/gemma4:31b,\
-openrouter/openai/gpt-5.6-luna,openrouter/meta/muse-glimmer-30b,\
+ollama-cloud/gemma4:31b,openrouter/openai/gpt-5.6-luna,\
 openrouter/thinkingmachines/inkling-small,openrouter/google/gemini-3.8-flash,\
-openrouter/deepseek/deepseek-v4-pro-0813,openrouter/meta/muse-spark-1.3,\
-openrouter/x-ai/grok-4.3"
+openrouter/deepseek/deepseek-v4-pro-0813,openrouter/x-ai/grok-4.3"
+# nemotron-3.5-lightning, muse-glimmer-30b and muse-spark-1.3 are dropped from
+# the roster (see "Model ladder" below) -- not run in the next benchmark.
 
 AGENT_EVAL_DATA_DIR=$DATA BENCH_PAUSE_MS=400 cargo run --release --features eval \
   --example agent_eval -- bench --dir bench/folder-qa --harness bare  --iters 3 \
@@ -162,20 +250,27 @@ everything except gemma runs through OpenRouter (one key).
 |--:|---|--:|
 | 1 | `openrouter/deepseek/deepseek-v4-flash-0731` | 0.065 / 0.18 |
 | 2 | `openrouter/z-ai/glm-5.3-flash` | 0.075 / 0.25 |
-| 3 | `openrouter/nvidia/nemotron-3.5-lightning` | 0.08 / 0.20 |
-| 4 | `ollama-cloud/gemma4:31b` | free |
-| 5 | `openrouter/openai/gpt-5.6-luna` | 0.20 / 1.20 |
-| 6 | `openrouter/meta/muse-glimmer-30b` | 0.30 / 1.10 |
-| 7 | `openrouter/thinkingmachines/inkling-small` | 0.45 / 1.20 |
-| 8 | `openrouter/google/gemini-3.8-flash` | 0.75 / 3.75 |
-| 9 | `openrouter/deepseek/deepseek-v4-pro-0813` | 1.0494 / 3.1482 |
-| 10 | `openrouter/meta/muse-spark-1.3` | 1.25 / 4.25 |
-| 11 | `openrouter/x-ai/grok-4.3` | 1.25 / 2.50 |
+| 3 | `ollama-cloud/gemma4:31b` | free |
+| 4 | `openrouter/openai/gpt-5.6-luna` | 0.20 / 1.20 |
+| 5 | `openrouter/thinkingmachines/inkling-small` | 0.45 / 1.20 |
+| 6 | `openrouter/google/gemini-3.8-flash` | 0.75 / 3.75 |
+| 7 | `openrouter/deepseek/deepseek-v4-pro-0813` | 1.0494 / 3.1482 |
+| 8 | `openrouter/x-ai/grok-4.3` | 1.25 / 2.50 |
 
-`muse-spark-1.3-contributor` ($0.10/$0.20) was dropped: its endpoint requires
-opting into prompt-training (OpenRouter privacy setting). The full model is
-rung 10. Actual OpenRouter spend for the whole ladder × {bare, fella} ×
-`--iters 3` on the 64-case battery: **≈ $3** (gemma free).
+**Dropped from the roster** (2026-09-12, not run in the next benchmark):
+`nemotron-3.5-lightning` (rung 3 previously) — its `fella` condition was
+already unmeasurable here (~50% of tool-calling requests failed at the
+OpenRouter/NVIDIA endpoint, see below); `muse-glimmer-30b` (rung 6) — the one
+model whose lift didn't clear the noise floor (Δacc CI straddled 0) and the
+worst offender on value errors and wasted calls; `muse-spark-1.3` (rung 10) —
+measurable but the most expensive per correct answer on the ladder, with no
+counterbalancing strength. `muse-spark-1.3-contributor` ($0.10/$0.20) was
+separately dropped before this: its endpoint requires opting into
+prompt-training (OpenRouter privacy setting).
+
+Actual OpenRouter spend for the whole ladder × {bare, fella} × `--iters 3` on
+the 64-case battery: **≈ $3** (gemma free) — the 3 dropped models are removed
+from that estimate for the next run.
 
 ## Results (2026-09-10, `main` + the 64-case battery)
 

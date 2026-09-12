@@ -40,8 +40,14 @@
 //! files it names (paths relative to `<d>`). Each line:
 //!   {"id": "...", "question": "...", "files": ["payments.csv"],
 //!    "gold": {"figures": [123.45]} | {"approx": [0.18, 0.005]}
-//!          | {"contains": ["Rent"]} | "refusal" | "notool",
+//!          | {"contains": ["Rent"]}
+//!          | {"chart": {"labels": ["Jan","Feb"], "series": [{"name": "Rent", "values": [1200.0, 1200.0]}]}}
+//!          | "refusal" | "notool",
 //!    "tier": "easy", "reference": "..."}
+//! `chart` grades the `make_chart` tool call itself (labels + numeric series,
+//! order-sensitive, substring-matched labels) -- not just a figure mentioned
+//! in the prose, so a model that computes the right numbers but never charts
+//! them still fails a chart case.
 //! Env:  EVAL_SHOW_ANSWERS=1  print every answer + its evidence to stderr
 //!
 //! A --models entry is a bare model on the configured provider (`gemma4:31b`)
@@ -56,6 +62,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use fella_lib::engine::chart::Series as ChartSeries;
 use fella_lib::engine::evidence::EvidenceItem;
 use fella_lib::engine::testkit::{
     self, Goldens, Messiness, TableGold, WorkspaceSpec,
@@ -78,6 +85,11 @@ enum Gold {
     Refusal,
     /// the answer must need no tool call at all
     NoTool,
+    /// a `make_chart` call must appear in evidence, with these labels (same
+    /// order, substring-matched) and these series (matched by name, values
+    /// within `close()` tolerance). Grades the chart *tool call*, not the
+    /// prose -- a model can describe the data correctly yet never chart it.
+    Chart { labels: Vec<&'static str>, series: Vec<ChartSeries> },
 }
 
 #[derive(Clone)]
@@ -272,6 +284,46 @@ fn grade(r: &RunResult, gold: &Gold) -> bool {
             no_figures && DECLINES.iter().any(|p| low.contains(p))
         }
         Gold::NoTool => r.evidence.is_empty() && !r.text.trim().is_empty(),
+        Gold::Chart { labels, series } => {
+            let Some(chart) = r.evidence.iter().rev().find_map(|e| e.chart.as_ref()) else {
+                return false;
+            };
+            if chart.labels.len() != labels.len() {
+                return false;
+            }
+            let fuzzy_eq = |a: &str, b: &str| {
+                let (a, b) = (a.to_lowercase(), b.to_lowercase());
+                a.contains(&b) || b.contains(&a)
+            };
+            // A gold label may list alternatives ("jul|2024-07") the same way
+            // Gold::Contains does, since a model reading a `YYYY-MM` column may
+            // reasonably label a month either way and both are correct.
+            let label_eq =
+                |got: &str, want: &str| want.split('|').any(|alt| fuzzy_eq(got, alt.trim()));
+            // Order-agnostic: a model may chart the same categories/months in a
+            // different sequence (by rank instead of chronological, say) and
+            // still be right. Each gold label just needs to appear somewhere.
+            let Some(label_at): Option<Vec<usize>> =
+                labels.iter().map(|w| chart.labels.iter().position(|g| label_eq(g, w))).collect()
+            else {
+                return false;
+            };
+            series.iter().all(|want| {
+                // A single-series chart's series name is the model's free-text
+                // choice ("Spending", "Total", ...) -- don't fail a correct
+                // chart over a label mismatch when there's nothing to confuse
+                // it with. Multiple series do need matching by name.
+                let got = if series.len() == 1 && chart.series.len() == 1 {
+                    Some(&chart.series[0])
+                } else {
+                    chart.series.iter().find(|s| fuzzy_eq(&s.name, &want.name))
+                };
+                got.is_some_and(|got| {
+                    got.values.len() == chart.labels.len()
+                        && label_at.iter().zip(&want.values).all(|(&i, w)| close(got.values[i], *w))
+                })
+            })
+        }
     }
 }
 
@@ -289,6 +341,19 @@ fn gold_reference(gold: &Gold) -> String {
         Gold::Contains(subs) => format!("the answer must mention: {}", subs.join(" / ")),
         Gold::Refusal => "the answer must decline — no computed figure, it says it can't".to_string(),
         Gold::NoTool => "any correct, on-topic answer requiring no data lookup".to_string(),
+        Gold::Chart { labels, series } => format!(
+            "the answer must include a chart with labels [{}] and series {}",
+            labels.join(", "),
+            series
+                .iter()
+                .map(|s| format!(
+                    "{}=[{}]",
+                    s.name,
+                    s.values.iter().map(|v| format!("{v}")).collect::<Vec<_>>().join(", ")
+                ))
+                .collect::<Vec<_>>()
+                .join("; ")
+        ),
     }
 }
 
@@ -296,9 +361,12 @@ fn gold_reference(gold: &Gold) -> String {
 /// in for the figure 0. Shared by `grade` and `closeness_det` a model that
 /// correctly answers "you spent nothing" shouldn't score as if it missed 0.
 fn says_zero(low: &str) -> bool {
-    ["none", "nothing", "zero", "no ", "n/a", "not have any"]
-        .iter()
-        .any(|p| low.contains(p))
+    [
+        "none", "nothing", "zero", "no ", "n/a", "not have any", "not listed", "isn't listed",
+        "not recorded", "not present", "no such", "not in the data", "no entry", "no rows",
+    ]
+    .iter()
+    .any(|p| low.contains(p))
 }
 
 fn token_f1(a: &str, b: &str) -> f32 {
@@ -327,6 +395,7 @@ fn closeness_det(r: &RunResult, case: &EvalCase) -> f32 {
     let want: Vec<f64> = match &case.gold {
         Gold::Figures(w) => w.clone(),
         Gold::Approx(w, _) => vec![*w],
+        Gold::Chart { series, .. } => series.iter().flat_map(|s| s.values.clone()).collect(),
         _ => Vec::new(),
     };
     let got = numbers_in(&r.text);
@@ -976,6 +1045,13 @@ async fn score_case(
                     e.sql.as_deref().map(|s| format!("  {s}")).unwrap_or_default(),
                     e.error.as_deref().map(|s| format!("  ERR {s}")).unwrap_or_default(),
                 );
+                if let Some(c) = &e.chart {
+                    eprintln!(
+                        "       labels={:?} series={:?}",
+                        c.labels,
+                        c.series.iter().map(|s| (&s.name, &s.values)).collect::<Vec<_>>()
+                    );
+                }
             }
         }
         cd += closeness_det(&r, case);
@@ -1276,12 +1352,20 @@ struct BenchSpec {
 }
 
 #[derive(serde::Deserialize)]
+struct BenchChartGold {
+    labels: Vec<String>,
+    series: Vec<ChartSeries>,
+}
+
+#[derive(serde::Deserialize)]
 #[serde(untagged)]
 enum BenchGold {
     Figures { figures: Vec<f64> },
     /// `[value, absolute tolerance]`
     Approx { approx: [f64; 2] },
     Contains { contains: Vec<String> },
+    /// `{"labels": [...], "series": [{"name": "...", "values": [...]}]}`
+    Chart { chart: BenchChartGold },
     /// `"refusal"` | `"notool"`
     Tag(String),
 }
@@ -1294,6 +1378,10 @@ impl BenchGold {
             BenchGold::Contains { contains } => {
                 Gold::Contains(contains.iter().map(|s| leak(s)).collect())
             }
+            BenchGold::Chart { chart } => Gold::Chart {
+                labels: chart.labels.iter().map(|s| leak(s)).collect(),
+                series: chart.series,
+            },
             BenchGold::Tag(t) => match t.to_ascii_lowercase().as_str() {
                 "refusal" => Gold::Refusal,
                 "notool" | "no_tool" => Gold::NoTool,
@@ -2044,8 +2132,24 @@ mod tests {
             rows: None,
             row_count: None,
             output: None,
+            chart: None,
             ms: 1,
             error: err.map(str::to_string),
+        }
+    }
+    fn ev_chart(labels: &[&str], series: Vec<(&str, Vec<f64>)>) -> EvidenceItem {
+        EvidenceItem {
+            chart: Some(fella_lib::engine::chart::ChartData {
+                kind: fella_lib::engine::chart::ChartKind::Bar,
+                title: None,
+                labels: labels.iter().map(|s| s.to_string()).collect(),
+                series: series
+                    .into_iter()
+                    .map(|(name, values)| ChartSeries { name: name.into(), values })
+                    .collect(),
+                unit: None,
+            }),
+            ..ev("make_chart", "chart made", None)
         }
     }
 
@@ -2094,6 +2198,62 @@ mod tests {
         assert!(grade(&rr("Healthcare spending was $0.00.", vec![]), &Gold::Approx(0.0, 0.5)));
         assert!(grade(&rr("There are no healthcare transactions.", vec![]), &Gold::Approx(0.0, 0.5)));
         assert!(!grade(&rr("You spent 120 on healthcare.", vec![]), &Gold::Approx(0.0, 0.5)));
+
+        // Chart: needs an actual make_chart call, right labels + series values --
+        // stating the same numbers in prose without charting them still fails.
+        let chart_gold = Gold::Chart {
+            labels: vec!["Jan", "Feb"],
+            series: vec![ChartSeries { name: "Rent".into(), values: vec![1200.0, 1200.0] }],
+        };
+        let charted = rr(
+            "Here's your rent by month.",
+            vec![ev_chart(&["Jan", "Feb"], vec![("Rent", vec![1200.0, 1200.0])])],
+        );
+        assert!(grade(&charted, &chart_gold));
+        assert!(!grade(&rr("Rent was 1200 in Jan and 1200 in Feb.", vec![]), &chart_gold));
+        let wrong_values = rr(
+            "Here's your rent by month.",
+            vec![ev_chart(&["Jan", "Feb"], vec![("Rent", vec![1200.0, 900.0])])],
+        );
+        assert!(!grade(&wrong_values, &chart_gold));
+        // reordered labels + an arbitrary series name: still correct, since the
+        // model isn't told what order or what to call the one series.
+        let reordered = rr(
+            "Here's your rent by month.",
+            vec![ev_chart(&["Feb", "Jan"], vec![("Monthly total", vec![1200.0, 1200.0])])],
+        );
+        assert!(grade(&reordered, &chart_gold));
+        // wrong category on a two-series chart isn't rescued by fuzzy label match
+        let two_series_gold = Gold::Chart {
+            labels: vec!["Jan", "Feb"],
+            series: vec![
+                ChartSeries { name: "Spend".into(), values: vec![2000.0, 2100.0] },
+                ChartSeries { name: "Budget".into(), values: vec![1800.0, 1800.0] },
+            ],
+        };
+        let swapped_series = rr(
+            "chart",
+            vec![ev_chart(
+                &["Jan", "Feb"],
+                vec![("Budget", vec![2000.0, 2100.0]), ("Spend", vec![1800.0, 1800.0])],
+            )],
+        );
+        assert!(!grade(&swapped_series, &two_series_gold));
+        // a gold label may list "name|iso" alternatives, matching either form
+        let alt_gold = Gold::Chart {
+            labels: vec!["jul|2024-07", "aug|2024-08"],
+            series: vec![ChartSeries { name: "spending".into(), values: vec![2234.58, 2119.09] }],
+        };
+        let iso_labeled = rr(
+            "chart",
+            vec![ev_chart(&["2024-07", "2024-08"], vec![("spending", vec![2234.58, 2119.09])])],
+        );
+        assert!(grade(&iso_labeled, &alt_gold));
+        let name_labeled = rr(
+            "chart",
+            vec![ev_chart(&["Jul", "Aug"], vec![("spending", vec![2234.58, 2119.09])])],
+        );
+        assert!(grade(&name_labeled, &alt_gold));
     }
 
     #[test]
@@ -2189,6 +2349,10 @@ mod tests {
         assert!(matches!(g(r#"{"figures":[600,42]}"#), Gold::Figures(v) if v == vec![600.0, 42.0]));
         assert!(matches!(g(r#"{"approx":[0.18,0.005]}"#), Gold::Approx(v, t) if v == 0.18 && t == 0.005));
         assert!(matches!(g(r#"{"contains":["Rent","1250"]}"#), Gold::Contains(v) if v == vec!["Rent", "1250"]));
+        assert!(matches!(
+            g(r#"{"chart":{"labels":["Jan","Feb"],"series":[{"name":"Rent","values":[1200.0,1200.0]}]}}"#),
+            Gold::Chart { labels, series } if labels == vec!["Jan", "Feb"] && series.len() == 1
+        ));
         assert!(matches!(g(r#""refusal""#), Gold::Refusal));
         assert!(matches!(g(r#""notool""#), Gold::NoTool));
         assert!(serde_json::from_str::<BenchGold>(r#""bogus""#).unwrap().into_gold().is_err());
