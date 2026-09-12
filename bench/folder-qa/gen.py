@@ -388,6 +388,12 @@ for b in books:
     pages_by_nat[nat_of.get(b["author"], "?")] = pages_by_nat.get(nat_of.get(b["author"], "?"), 0) + b["pages"]
 top_nat_pages = max(pages_by_nat, key=pages_by_nat.get)
 
+
+def genre_alts(g):
+    # "scifi" is the raw genre value, but any natural answer hyphenates it —
+    # a literal-substring gold has to allow for that spelling too.
+    return f"{g}|sci-fi" if g == "scifi" else g
+
 # trips
 avg_nights = R(trip_nights_total / len(trips), 2)
 longest_trip_place = max(trips, key=lambda t: t[2])[0]
@@ -477,7 +483,7 @@ cases = [
     # reading
     ("read-finished-count", "How many books have I finished?", ["books.csv"], {"figures": [n_finished]}, "bool-filter"),
     ("read-avg-rating", "What is my average rating for the books I've finished?", ["books.csv"], {"approx": [avg_rating_finished, 0.05]}, "num-avg"),
-    ("read-top-genre-pages", "Across the books I finished, which genre did I read the most pages of?", ["books.csv"], {"contains": [top_genre_pages]}, "cat-groupby"),
+    ("read-top-genre-pages", "Across the books I finished, which genre did I read the most pages of?", ["books.csv"], {"contains": [genre_alts(top_genre_pages)]}, "cat-groupby"),
     ("read-longest", "What is the longest book in my list, by page count?", ["books.csv"], {"contains": [longest_book["title"].lower()]}, "text-max"),
     ("read-unfinished", "Which books have I not finished? List the titles.", ["books.csv"], {"contains": [t.lower() for t in unfinished_titles]}, "text-list"),
     # trips
@@ -554,7 +560,7 @@ cases = [
     ("xf-dining-cap-months", "My goals note sets a monthly dining-out cap. In how many months of 2024 did my dining spend break it? Use goals.md and spend.csv.", ["goals.md", "spend.csv"], {"figures": [dining_over_cap]}, "mf-doc-join"),
     # --- batch 3: date-normalization, charting, and hard/diverse edge cases ---
     # rent ledger: named-month dates (the exact reported "Month: (blank)" bug)
-    ("rentl-total", "How much rent have I paid in total this year, according to rent_ledger.csv?", ["rent_ledger.csv"], {"figures": [rent_ledger_total]}, "num-aggregate-nonstd-date"),
+    ("rentl-total", "How much rent have I paid in total in 2024, according to rent_ledger.csv?", ["rent_ledger.csv"], {"figures": [rent_ledger_total]}, "num-aggregate-nonstd-date"),
     ("rentl-avg", "What's the average monthly rent from rent_ledger.csv?", ["rent_ledger.csv"], {"approx": [rent_ledger_avg, 1.0]}, "num-avg-nonstd-date"),
     ("rentl-peak-month", "Break down my rent by month from rent_ledger.csv — which month was the most expensive?", ["rent_ledger.csv"], {"contains": [rent_ledger_peak_alts]}, "temporal-groupby-nonstd-date"),
     ("rentl-chart", "Chart my rent by month using rent_ledger.csv, and tell me the total for the year.", ["rent_ledger.csv"], {"figures": [rent_ledger_total]}, "chart-trend"),
