@@ -7,6 +7,14 @@
 
 	let list = $state<ConversationSummary[]>([]);
 	let query = $state('');
+	let searchOpen = $state(false);
+	let searchInput = $state<HTMLInputElement | null>(null);
+
+	function toggleSearch() {
+		searchOpen = !searchOpen;
+		if (searchOpen) queueMicrotask(() => searchInput?.focus());
+		else query = '';
+	}
 
 	async function refresh() {
 		if (!isTauri()) return;
@@ -87,14 +95,51 @@
 </script>
 
 <aside class="sidebar">
-	<button class="rowbtn new-btn" type="button" onclick={() => session.newTab()}>
-		<Icon name="compose" size={14} />
-		<span>New conversation</span>
-	</button>
-	<div class="search">
-		<Icon name="search" size={13} />
-		<input bind:value={query} placeholder="Search…" spellcheck="false" aria-label="Search history" />
+	<div class="header">
+		<span class="logo" aria-hidden="true">
+			<svg viewBox="124 168 264 226" width="18" height="18">
+				<path
+					d="M256 178 C 330 178 378 228 378 292 C 378 340 342 384 284 384 L 228 384 C 170 384 134 340 134 292 C 134 228 182 178 256 178 Z"
+					fill="var(--brand)"
+				/>
+				<ellipse cx="211" cy="278" rx="20" ry="25" fill="var(--bg)" />
+				<ellipse cx="301" cy="278" rx="20" ry="25" fill="var(--bg)" />
+			</svg>
+		</span>
+		<div class="header-actions">
+			<button
+				class="icon-btn"
+				type="button"
+				aria-label="New conversation"
+				title="New conversation"
+				onclick={() => session.newTab()}
+			>
+				<Icon name="plus" size={15} />
+			</button>
+			<button
+				class="icon-btn"
+				type="button"
+				aria-label="Search history"
+				title="Search"
+				aria-pressed={searchOpen}
+				onclick={toggleSearch}
+			>
+				<Icon name="search" size={14} />
+			</button>
+		</div>
 	</div>
+	{#if searchOpen}
+		<div class="search">
+			<Icon name="search" size={13} />
+			<input
+				bind:this={searchInput}
+				bind:value={query}
+				placeholder="Search…"
+				spellcheck="false"
+				aria-label="Search history"
+			/>
+		</div>
+	{/if}
 	<div class="list">
 		{#each groups as group (group.label)}
 			<div class="group-label">{group.label}</div>
@@ -143,14 +188,36 @@
 		/* Same fill as the rest of the shell -- an open floor plan, not a
 		   bordered-off compartment. */
 		background: var(--bg);
+		border-right: 1px solid var(--border);
 		overflow: hidden;
 	}
-	.new-btn {
+	.header {
 		display: flex;
 		align-items: center;
-		gap: var(--space-2);
-		color: var(--text);
+		justify-content: space-between;
 		flex: none;
+		padding: var(--space-1) var(--space-2);
+	}
+	.logo {
+		display: flex;
+		align-items: center;
+	}
+	.header-actions {
+		display: flex;
+		align-items: center;
+		gap: var(--space-1);
+	}
+	.icon-btn {
+		display: grid;
+		place-items: center;
+		width: 26px;
+		height: 26px;
+		border-radius: var(--radius-sm);
+		color: var(--text-faint);
+	}
+	.icon-btn:hover {
+		color: var(--text);
+		background: var(--bg-inset);
 	}
 	.search {
 		display: flex;
