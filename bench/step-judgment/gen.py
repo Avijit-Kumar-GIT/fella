@@ -169,8 +169,8 @@ cases = [
 
     ("pair4-a", pair4_a_q, ["subscriptions.csv"],
      {"contains": [priciest_sub]}, "single-step", []),
-    ("pair4-b", "If I cancelled it, how much would I save over the full length of my lease? "
-     "Use subscriptions.csv and lease.md.", ["subscriptions.csv", "lease.md"],
+    ("pair4-b", "If I cancelled it, how much would I save over the full length of my lease?",
+     ["subscriptions.csv", "lease.md"],
      {"approx": [savings_over_lease, 1.0]}, "dependent-step", [pair4_a_q]),
 
     ("pair5-a", pair5_a_q, ["trips.csv"],
@@ -181,7 +181,7 @@ cases = [
     ("pair6-a", "What was my average sleep duration in September 2024?", ["sleep.csv"],
      {"approx": [sept_avg_sleep, 0.05]}, "single-step", []),
     ("pair6-b", "Which night in September 2024 did I sleep the least, and what does my "
-     "journal say about that day? Use sleep.csv and journal.md.", ["sleep.csv", "journal.md"],
+     "journal say about that day?", ["sleep.csv", "journal.md"],
      {"contains": ["deadline|stress|rough"]}, "dependent-step", []),
 ]
 

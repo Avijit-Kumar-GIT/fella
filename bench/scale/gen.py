@@ -153,7 +153,7 @@ cases = [
     ("wide-table-column-disambiguation", "On which date did I eat the most protein "
      "(actual intake, not my target)?",
      ["health_wide.csv"], {"contains": [max_protein_day]}, "docsize-wide-columns"),
-    ("large-csv-exact-aggregate", "How many Amazon orders are in bigledger.csv, and what's "
+    ("large-csv-exact-aggregate", "How many Amazon orders do I have on record, and what's "
      "the total amount across them?",
      ["bigledger.csv"], {"contains": [str(amazon_count), str(amazon_total)]},
      "docsize-large-row-count"),

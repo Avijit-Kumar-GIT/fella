@@ -2,7 +2,7 @@
   {
     "closeness_det": 0.800000011920929,
     "closeness_judge": null,
-    "completion_tok": 111,
+    "completion_tok": 117,
     "correct": true,
     "correct_rate": 1.0,
     "err": null,
@@ -11,9 +11,9 @@
     "iters": 3,
     "model": "ollama-cloud/gemma4:31b",
     "profile": "bench",
-    "prompt_tok": 4188,
+    "prompt_tok": 4194,
     "steps": 1,
-    "total_s": 1.6977439503333336,
+    "total_s": 1.6042193850000002,
     "waste": 0
   },
   {
@@ -30,7 +30,7 @@
     "profile": "bench",
     "prompt_tok": 4300,
     "steps": 1,
-    "total_s": 1.2343905693333335,
+    "total_s": 1.2042310269999998,
     "waste": 0
   },
   {
@@ -47,13 +47,13 @@
     "profile": "bench",
     "prompt_tok": 4187,
     "steps": 1,
-    "total_s": 1.3201150369999999,
+    "total_s": 1.6137740546666668,
     "waste": 0
   },
   {
-    "closeness_det": 0.699999988079071,
+    "closeness_det": 0.7666666507720947,
     "closeness_judge": null,
-    "completion_tok": 213,
+    "completion_tok": 190,
     "correct": true,
     "correct_rate": 1.0,
     "err": null,
@@ -62,9 +62,9 @@
     "iters": 3,
     "model": "ollama-cloud/gemma4:31b",
     "profile": "bench",
-    "prompt_tok": 6524,
+    "prompt_tok": 5735,
     "steps": 1,
-    "total_s": 2.7270305780000004,
+    "total_s": 2.209437843,
     "waste": 0
   },
   {
@@ -81,25 +81,25 @@
     "profile": "bench",
     "prompt_tok": 4164,
     "steps": 1,
-    "total_s": 1.4037045036666667,
+    "total_s": 1.1772578323333336,
     "waste": 0
   },
   {
-    "closeness_det": 0.75,
+    "closeness_det": 0.800000011920929,
     "closeness_judge": null,
-    "completion_tok": 340,
+    "completion_tok": 309,
     "correct": true,
     "correct_rate": 1.0,
     "err": null,
-    "hard_fail": true,
+    "hard_fail": false,
     "id": "stp-pair3-b",
     "iters": 3,
     "model": "ollama-cloud/gemma4:31b",
     "profile": "bench",
-    "prompt_tok": 9108,
+    "prompt_tok": 8161,
     "steps": 2,
-    "total_s": 3.454337667666666,
-    "waste": 1
+    "total_s": 2.708767549333333,
+    "waste": 0
   },
   {
     "closeness_det": 0.800000011920929,
@@ -115,13 +115,13 @@
     "profile": "bench",
     "prompt_tok": 4053,
     "steps": 1,
-    "total_s": 1.1121342596666668,
+    "total_s": 1.0986076699999998,
     "waste": 0
   },
   {
-    "closeness_det": 0.5833333134651184,
+    "closeness_det": 0.550000011920929,
     "closeness_judge": null,
-    "completion_tok": 177,
+    "completion_tok": 193,
     "correct": true,
     "correct_rate": 0.6666666865348816,
     "err": null,
@@ -130,15 +130,15 @@
     "iters": 3,
     "model": "ollama-cloud/gemma4:31b",
     "profile": "bench",
-    "prompt_tok": 9346,
+    "prompt_tok": 9333,
     "steps": 2,
-    "total_s": 3.015378906,
+    "total_s": 2.597495475666667,
     "waste": 0
   },
   {
     "closeness_det": 0.800000011920929,
     "closeness_judge": null,
-    "completion_tok": 58,
+    "completion_tok": 59,
     "correct": true,
     "correct_rate": 1.0,
     "err": null,
@@ -147,15 +147,15 @@
     "iters": 3,
     "model": "ollama-cloud/gemma4:31b",
     "profile": "bench",
-    "prompt_tok": 4143,
+    "prompt_tok": 4144,
     "steps": 1,
-    "total_s": 1.3887010449999997,
+    "total_s": 1.6009780200000001,
     "waste": 0
   },
   {
     "closeness_det": 0.699999988079071,
     "closeness_judge": null,
-    "completion_tok": 171,
+    "completion_tok": 164,
     "correct": true,
     "correct_rate": 1.0,
     "err": null,
@@ -164,9 +164,9 @@
     "iters": 3,
     "model": "ollama-cloud/gemma4:31b",
     "profile": "bench",
-    "prompt_tok": 5547,
+    "prompt_tok": 5534,
     "steps": 1,
-    "total_s": 2.025517633333333,
+    "total_s": 2.344634737,
     "waste": 0
   },
   {
@@ -183,7 +183,7 @@
     "profile": "bench",
     "prompt_tok": 4108,
     "steps": 1,
-    "total_s": 1.3274257303333334,
+    "total_s": 1.2727056476666665,
     "waste": 0
   },
   {
@@ -198,9 +198,9 @@
     "iters": 3,
     "model": "ollama-cloud/gemma4:31b",
     "profile": "bench",
-    "prompt_tok": 6465,
+    "prompt_tok": 6438,
     "steps": 2,
-    "total_s": 2.171555408666667,
+    "total_s": 4.498620662333333,
     "waste": 0
   }
 ]

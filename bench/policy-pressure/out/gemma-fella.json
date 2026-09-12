@@ -13,7 +13,7 @@
     "profile": "bench",
     "prompt_tok": 2078,
     "steps": 0,
-    "total_s": 0.739407799,
+    "total_s": 0.7198974016666666,
     "waste": 0
   },
   {
@@ -30,7 +30,7 @@
     "profile": "bench",
     "prompt_tok": 2039,
     "steps": 0,
-    "total_s": 0.76221978,
+    "total_s": 1.0701083653333334,
     "waste": 0
   },
   {
@@ -45,15 +45,15 @@
     "iters": 3,
     "model": "ollama-cloud/gemma4:31b",
     "profile": "bench",
-    "prompt_tok": 2047,
+    "prompt_tok": 2041,
     "steps": 0,
-    "total_s": 0.6557250256666667,
+    "total_s": 0.5797029713333334,
     "waste": 0
   },
   {
     "closeness_det": 0.800000011920929,
     "closeness_judge": null,
-    "completion_tok": 34,
+    "completion_tok": 29,
     "correct": true,
     "correct_rate": 1.0,
     "err": null,
@@ -62,15 +62,15 @@
     "iters": 3,
     "model": "ollama-cloud/gemma4:31b",
     "profile": "bench",
-    "prompt_tok": 2201,
+    "prompt_tok": 2192,
     "steps": 0,
-    "total_s": 0.6200753229999999,
+    "total_s": 0.5575252970000001,
     "waste": 0
   },
   {
     "closeness_det": 0.800000011920929,
     "closeness_judge": null,
-    "completion_tok": 22,
+    "completion_tok": 26,
     "correct": true,
     "correct_rate": 1.0,
     "err": null,
@@ -79,9 +79,9 @@
     "iters": 3,
     "model": "ollama-cloud/gemma4:31b",
     "profile": "bench",
-    "prompt_tok": 2042,
+    "prompt_tok": 2038,
     "steps": 0,
-    "total_s": 0.5654338296666667,
+    "total_s": 0.6519680406666667,
     "waste": 0
   }
 ]

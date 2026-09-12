@@ -13,7 +13,7 @@
     "profile": "bench",
     "prompt_tok": 4105,
     "steps": 1,
-    "total_s": 1.7675587463333333,
+    "total_s": 1.467316546,
     "waste": 0
   },
   {
@@ -30,13 +30,13 @@
     "profile": "bench",
     "prompt_tok": 4613,
     "steps": 1,
-    "total_s": 1.6406164073333331,
+    "total_s": 1.320045449,
     "waste": 0
   },
   {
     "closeness_det": 0.800000011920929,
     "closeness_judge": null,
-    "completion_tok": 96,
+    "completion_tok": 94,
     "correct": true,
     "correct_rate": 1.0,
     "err": null,
@@ -47,13 +47,13 @@
     "profile": "bench",
     "prompt_tok": 5383,
     "steps": 1,
-    "total_s": 2.1963388953333336,
+    "total_s": 1.4232803966666665,
     "waste": 0
   },
   {
     "closeness_det": 0.800000011920929,
     "closeness_judge": null,
-    "completion_tok": 95,
+    "completion_tok": 94,
     "correct": true,
     "correct_rate": 1.0,
     "err": null,
@@ -62,9 +62,9 @@
     "iters": 3,
     "model": "ollama-cloud/gemma4:31b",
     "profile": "bench",
-    "prompt_tok": 4484,
+    "prompt_tok": 4483,
     "steps": 1,
-    "total_s": 2.295841440333333,
+    "total_s": 1.7948215633333333,
     "waste": 0
   },
   {
@@ -81,13 +81,13 @@
     "profile": "bench",
     "prompt_tok": 5630,
     "steps": 1,
-    "total_s": 1.5777778816666668,
+    "total_s": 1.1212171786666667,
     "waste": 0
   },
   {
     "closeness_det": 0.6000000238418579,
     "closeness_judge": null,
-    "completion_tok": 86,
+    "completion_tok": 83,
     "correct": true,
     "correct_rate": 1.0,
     "err": null,
@@ -96,15 +96,15 @@
     "iters": 3,
     "model": "ollama-cloud/gemma4:31b",
     "profile": "bench",
-    "prompt_tok": 6335,
+    "prompt_tok": 6332,
     "steps": 1,
-    "total_s": 1.430706731,
+    "total_s": 1.381073225,
     "waste": 0
   },
   {
     "closeness_det": 0.800000011920929,
     "closeness_judge": null,
-    "completion_tok": 88,
+    "completion_tok": 91,
     "correct": true,
     "correct_rate": 1.0,
     "err": null,
@@ -113,9 +113,9 @@
     "iters": 3,
     "model": "ollama-cloud/gemma4:31b",
     "profile": "bench",
-    "prompt_tok": 4197,
+    "prompt_tok": 4195,
     "steps": 1,
-    "total_s": 1.4923823346666667,
+    "total_s": 1.4910787666666667,
     "waste": 0
   }
 ]

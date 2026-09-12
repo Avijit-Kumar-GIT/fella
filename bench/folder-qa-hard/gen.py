@@ -59,6 +59,7 @@ h1_rent = R(sum(float(r["rent"]) for r in rent_ledger if parse_ledger_date(r["da
 h2_rent = R(sum(float(r["rent"]) for r in rent_ledger if parse_ledger_date(r["date"]).month >= 7), 2)
 rent_half_diff = R(h2_rent - h1_rent, 2)
 
+n_leisure_trips = sum(1 for t in trips if t["purpose"] == "leisure")
 leisure_countries = {t["country"] for t in trips if t["purpose"] == "leisure"}
 work_only_countries = {t["country"] for t in trips if t["purpose"] == "work"} - leisure_countries
 leisure_nights_by_country = {t["country"]: int(t["nights"]) for t in trips if t["purpose"] == "leisure"}
@@ -112,24 +113,25 @@ h2_values = [R(month_total[m], 2) for m in h2_months]
 cases = [
     (
         "budget-second-over",
-        "Comparing spend.csv to budget.csv (actual minus 12x the monthly budget), "
-        "which category was the SECOND-most over its annual budget in 2024?",
+        "Comparing my actual spending against my budget (actual minus 12x the "
+        "monthly budget), which category was the SECOND-most over its annual "
+        "budget in 2024?",
         ["spend.csv", "budget.csv"],
         {"contains": [over_ranked[1][0]]},
         "mf-join-rank2",
     ),
     (
         "budget-smallest-over",
-        "Of the categories that went over their annual budget in 2024 (spend.csv vs "
-        "budget.csv), which one went over by the SMALLEST dollar amount?",
+        "Of the categories that went over their annual budget in 2024, which one "
+        "went over by the SMALLEST dollar amount?",
         ["spend.csv", "budget.csv"],
         {"contains": [min(over_by.items(), key=lambda kv: kv[1])[0]]},
         "mf-join-rank-min",
     ),
     (
         "third-month",
-        "Which month of 2024 was my THIRD-highest in total spending (all categories "
-        "combined, from spend.csv), and by how much did it trail the highest month?",
+        "Which month of 2024 was my THIRD-highest in total spending (all "
+        "categories combined), and by how much did it trail the highest month?",
         ["spend.csv"],
         {
             "contains": [
@@ -141,15 +143,15 @@ cases = [
     ),
     (
         "run-miles",
-        "How many MILES (not km) did I run in total, based on workouts.csv?",
+        "How many MILES (not km) did I run in total?",
         ["workouts.csv"],
         {"approx": [run_miles, 1.0]},
         "num-unit-convert",
     ),
     (
         "rent-half-diff",
-        "Using rent_ledger.csv, did I pay more rent in the second half of 2024 "
-        "(Jul-Dec) or the first half (Jan-Jun), and by how much?",
+        "Did I pay more rent in the second half of 2024 (Jul-Dec) or the first "
+        "half (Jan-Jun), and by how much?",
         ["rent_ledger.csv"],
         {"approx": [abs(rent_half_diff), 3.0]},
         "num-date-boundary-nonstd",
@@ -157,8 +159,7 @@ cases = [
     (
         "contacts-leisure-nights",
         "For the contacts who live in a country I've visited for LEISURE (not "
-        "work), how many total trip-nights did I spend in those countries? Use "
-        "contacts.json and trips.csv.",
+        "work), how many total trip-nights did I spend in those countries?",
         ["contacts.json", "trips.csv"],
         {"figures": [leisure_contact_nights]},
         "mf-join-compound-filter",
@@ -166,69 +167,71 @@ cases = [
     (
         "contacts-work-only",
         "Which of my contacts live in a country I've only ever visited for work, "
-        "never for leisure? Use contacts.json and trips.csv.",
+        "never for leisure?",
         ["contacts.json", "trips.csv"],
         {"contains": contacts_work_only},
         "mf-join-set-diff",
     ),
     (
         "goal-ontrack",
-        "My goals.md lists five goals for the year. Checking each one against "
-        "books.csv, workouts.csv, trips.csv, sleep.jsonl and spend.csv, which ONE "
-        "goal am I currently on track to meet?",
+        "I've set myself five goals for the year. Checking my actual data, which "
+        "ONE goal am I currently on track to meet?",
         ["goals.md", "books.csv", "workouts.csv", "trips.csv", "sleep.jsonl", "spend.csv"],
-        {"contains": ["travel"]},
+        # "travel" alone is too weak here -- a wrong answer that enumerates
+        # all five goals before picking a different one still mentions the
+        # word "travel" in passing. Require the actual trip count too, since
+        # only a genuinely correct conclusion states it.
+        {"contains": ["travel", str(n_leisure_trips)]},
         "mf-5way-synthesis",
     ),
     (
         "genre-best-rated",
-        "Among genres with at least 2 books in my reading list (books.csv), which "
-        "genre has the highest average rating?",
+        "Among genres with at least 2 books in my reading list, which genre has "
+        "the highest average rating?",
         ["books.csv"],
         {"contains": [best_genre]},
         "cat-groupby-filtered",
     ),
     (
         "screen-top-app-heavy-days",
-        "On the days my total screen time (screen_time.tsv) exceeded 150 minutes, "
-        "which single app did I use the most, on average?",
+        "On the days my total screen time exceeded 150 minutes, which single app "
+        "did I use the most, on average?",
         ["screen_time.tsv"],
         {"contains": [top_app_heavy]},
         "cat-filter-groupby",
     ),
     (
         "sleep-screen-gap",
-        "Comparing sleep.jsonl and screen_time.tsv: on nights I rated sleep "
-        "quality 1 versus nights I rated it 3, what's the difference in my "
-        "average daily screen time, in minutes?",
+        "On nights I rated my sleep quality 1 versus nights I rated it 3, what's "
+        "the difference in my average daily screen time, in minutes?",
         ["sleep.jsonl", "screen_time.tsv"],
         {"approx": [sleep_screen_gap, 3.0]},
         "mf-join-two-group-compare",
     ),
     (
         "rent-pct-of-total",
-        "What percentage of my total 2024 spending (spend.csv) went to rent?",
+        "What percentage of my total 2024 spending went to rent?",
         ["spend.csv"],
         {"approx": [rent_pct_of_total, 1.5]},
         "num-pct-composite",
     ),
     (
         "trap-nonexistent-category",
-        "How much did I spend on 'restaurants' in 2024, according to spend.csv?",
+        "How much did I spend on 'restaurants' in 2024?",
         ["spend.csv"],
         {"approx": [0.0, 0.5]},
         "trap-near-miss-label",
     ),
     (
         "trap-2025",
-        "What was my rent in January 2025, according to spend.csv?",
+        "What was my rent in January 2025?",
         ["spend.csv"],
         {"approx": [0.0, 0.5]},
         "trap-out-of-range-date",
     ),
     (
         "chart-cat-bar",
-        "Make a bar chart of my 2024 spending by category, using spend.csv.",
+        "Make a bar chart of my 2024 spending by category.",
         ["spend.csv"],
         {
             "chart": {
@@ -241,7 +244,7 @@ cases = [
     (
         "chart-h2-line",
         "Make a line chart of my total monthly spending for the second half of "
-        "2024 (Jul through Dec), using spend.csv.",
+        "2024 (Jul through Dec).",
         ["spend.csv"],
         {"chart": {"labels": h2_labels, "series": [{"name": "spending", "values": h2_values}]}},
         "chart-line-graded",

@@ -75,28 +75,28 @@ largest_order_note = next(n for oid, n in NOTES if str(oid) == largest_order[0].
 cases = [
     (
         "date-boundary-off-by-one",
-        "How much did I spend in total during August 2024, according to expenses_ts.csv?",
+        "How much did I spend in total during August 2024?",
         ["expenses_ts.csv"],
         {"approx": [august_total, 0.5]},
         "date-time-boundary",
     ),
     (
         "unit-mislabeled-column",
-        "What's the heaviest I've weighed, in kilograms, according to bodyweight.csv?",
+        "What's the heaviest I've weighed, in kilograms?",
         ["bodyweight.csv"],
         {"approx": [max_kg, 0.3]},
         "column-name-unit-metadata",
     ),
     (
         "merchant-spelling-empty-result",
-        "How much have I spent at Amazon in total, according to spend_merchant.csv?",
+        "How much have I spent at Amazon in total?",
         ["spend_merchant.csv"],
         {"approx": [amazon_total, 0.5]},
         "near-miss-text-recovery",
     ),
     (
         "join-key-type-mismatch",
-        "What note is attached to my largest order? Use orders.csv and order_notes.csv.",
+        "What note is attached to my largest order?",
         ["orders.csv", "order_notes.csv"],
         {"contains": [largest_order_note]},
         "join-key-representation",
