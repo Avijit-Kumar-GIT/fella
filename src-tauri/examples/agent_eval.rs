@@ -271,6 +271,23 @@ fn grade(r: &RunResult, gold: &Gold) -> bool {
     }
 }
 
+/// A judge-readable description of what a correct answer must contain, for
+/// bench cases (no hand-written `reference` prose) — built straight from the
+/// same `Gold` the deterministic grader uses, so the judge always has
+/// *something* concrete to compare against instead of an empty reference.
+fn gold_reference(gold: &Gold) -> String {
+    match gold {
+        Gold::Figures(want) => format!(
+            "the answer must state these figures: {}",
+            want.iter().map(|f| format!("{f}")).collect::<Vec<_>>().join(", ")
+        ),
+        Gold::Approx(want, tol) => format!("the answer must give a figure within {tol} of {want}"),
+        Gold::Contains(subs) => format!("the answer must mention: {}", subs.join(" / ")),
+        Gold::Refusal => "the answer must decline — no computed figure, it says it can't".to_string(),
+        Gold::NoTool => "any correct, on-topic answer requiring no data lookup".to_string(),
+    }
+}
+
 /// A spelled-out zero ("no healthcare transactions", "nothing", "n/a") standing
 /// in for the figure 0. Shared by `grade` and `closeness_det` a model that
 /// correctly answers "you spent nothing" shouldn't score as if it missed 0.
@@ -447,17 +464,27 @@ fn fold_waste(ws: &[Waste]) -> Waste {
 
 // --- LLM judge (opt-in) ----------------------------------------------
 
+/// `judge_model` takes the same `--models` convention (`provider/model`, or a
+/// bare model on whatever provider is already configured) — `ask_once` has no
+/// such parsing, it just drops its argument straight into `settings.model`, so
+/// a cross-provider judge needs the same `set_model` switch the outer loop
+/// uses for `--models`. The caller must restore the case's own model
+/// afterward (`set_model` persists), which is why this returns `bool` for
+/// "did the switch even work" folded into the `Option`.
 async fn judge_closeness(
     engine: &EngineState,
     judge_model: &str,
     reference: &str,
     answer: &str,
 ) -> Option<f32> {
+    if !set_model(engine, judge_model) {
+        return None;
+    }
     let sys = "You grade how well a candidate answer matches a reference answer for a data question. \
 Reply with ONLY a single digit 1-5: 5 = same facts and figures, no extra or wrong claims, confidence \
 appropriate; 3 = roughly right but missing or muddled something; 1 = wrong or evasive.";
     let user = format!("REFERENCE:\n{reference}\n\nCANDIDATE:\n{answer}\n\nScore (1-5):");
-    let reply = engine.ask_once(Some(judge_model), sys, &user).await.ok()?;
+    let reply = engine.ask_once(None, sys, &user).await.ok()?;
     let d = reply.chars().find(|c| ('1'..='5').contains(c))?;
     Some((d.to_digit(10)? as f32 - 1.0) / 4.0)
 }
@@ -949,10 +976,18 @@ async fn score_case(
         }
         cd += closeness_det(&r, case);
         if let (Some(jm), true) = (judge, r.err.is_none()) {
-            if let Some(j) = judge_closeness(engine, jm, &case.reference, &r.text).await {
+            let reference = if case.reference.is_empty() {
+                gold_reference(&case.gold)
+            } else {
+                case.reference.clone()
+            };
+            if let Some(j) = judge_closeness(engine, jm, &reference, &r.text).await {
                 cj_sum += j;
                 cj_n += 1;
             }
+            // judge_closeness switched settings to the judge's own
+            // provider/model; restore the case's before the next iter/case.
+            set_model(engine, model);
         }
         ptok += r.prompt_tok as u64;
         ctok += r.completion_tok as u64;
