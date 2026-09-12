@@ -494,14 +494,30 @@ impl LlmClient {
     /// connect errors) up to `retry_budget()` times with backoff honoring a
     /// `Retry-After` header when the server sends one. `on_retry` gets a
     /// display line before each wait.
-    async fn send(&self, url: &str, body: &Json, on_retry: RetryNotify<'_>) -> EngineResult<Json> {
+    /// POST with the shared retry policy (connection failures and
+    /// retryable/rate-limited statuses get backed off and retried up to
+    /// `retry_budget()`; anything else becomes the caller's error via
+    /// `http_error`). Returns the successful response **unconsumed** -- the
+    /// body can only be read one way (`.text()` vs `.bytes_stream()`), so
+    /// that choice is left to the caller -- plus the `Instant` the winning
+    /// attempt started, for a total-elapsed log at the caller's read site.
+    /// Shared by `send` (buffered) and `send_stream` (SSE); this loop used to
+    /// be duplicated near-verbatim in both.
+    async fn send_with_retry(
+        &self,
+        url: &str,
+        body: &Json,
+        on_retry: RetryNotify<'_>,
+        streaming: bool,
+    ) -> EngineResult<(reqwest::Response, std::time::Instant)> {
         let budget = retry_budget();
         let mut attempt: u32 = 0;
         loop {
             attempt += 1;
             log::info!(
-                "model request → {url} (model={}, attempt {attempt})",
-                self.model
+                "model request → {url} (model={}, attempt {attempt}{})",
+                self.model,
+                if streaming { ", streaming" } else { "" }
             );
             let started = std::time::Instant::now();
             let mut req = self.http.post(url).timeout(request_timeout()).json(body);
@@ -537,15 +553,14 @@ impl LlmClient {
             };
 
             let status = resp.status();
+            if status.is_success() {
+                log::info!("model response ← {status} in {:?}", started.elapsed());
+                return Ok((resp, started));
+            }
+
             let retry_after = retry_after_secs(resp.headers());
             let text = resp.text().await.unwrap_or_default();
             log::info!("model response ← {status} in {:?}", started.elapsed());
-
-            if status.is_success() {
-                return serde_json::from_str(&text).map_err(|e| {
-                    EngineError::msg(format!("could not parse the model response: {e}"))
-                });
-            }
 
             if is_retryable(status) && attempt <= budget {
                 let delay = retry_after
@@ -564,6 +579,13 @@ impl LlmClient {
             let snippet: String = text.chars().take(400).collect();
             return Err(self.http_error(status, &snippet, attempt));
         }
+    }
+
+    async fn send(&self, url: &str, body: &Json, on_retry: RetryNotify<'_>) -> EngineResult<Json> {
+        let (resp, _started) = self.send_with_retry(url, body, on_retry, false).await?;
+        let text = resp.text().await.unwrap_or_default();
+        serde_json::from_str(&text)
+            .map_err(|e| EngineError::msg(format!("could not parse the model response: {e}")))
     }
 
     /// Map a non-2xx model response to a user-facing error. Shared by the
@@ -642,134 +664,74 @@ impl LlmClient {
         on_retry: RetryNotify<'_>,
         on_delta: RetryNotify<'_>,
     ) -> EngineResult<Json> {
-        let budget = retry_budget();
-        let mut attempt: u32 = 0;
-        loop {
-            attempt += 1;
-            log::info!(
-                "model request → {url} (model={}, attempt {attempt}, streaming)",
-                self.model
-            );
-            let started = std::time::Instant::now();
-            let mut req = self.http.post(url).timeout(request_timeout()).json(body);
-            if let Some(k) = &self.api_key {
-                req = req.bearer_auth(k);
-            }
+        let (resp, started) = self.send_with_retry(url, body, on_retry, true).await?;
+        let status = resp.status();
+        let openai = self.is_openai();
+        let mut stream = resp.bytes_stream();
+        let mut buf: Vec<u8> = Vec::new();
+        let mut content = String::new();
+        let mut tool_calls: Option<Json> = None;
+        let mut oai_tools: Vec<OaiToolAccum> = Vec::new();
+        let mut usage: Option<Usage> = None;
 
-            let resp = match req.send().await {
-                Ok(r) => r,
-                Err(e) => {
-                    log::warn!("model request failed after {:?}: {e}", started.elapsed());
-                    if (e.is_timeout() || e.is_connect()) && attempt <= budget {
-                        let delay = backoff(attempt);
-                        on_retry(&format!(
-                            "connection problem retrying in {}s… ({attempt}/{budget})",
-                            delay.as_secs()
-                        ));
-                        tokio::time::sleep(delay).await;
-                        continue;
-                    }
-                    return Err(if e.is_timeout() {
-                        EngineError::msg(format!(
-                            "the model didn't respond within {}s after {attempt} attempt(s) it \
-                             may be busy or overloaded. Try again, or pick a different model with \
-                             /model (it lists them).",
-                            request_timeout().as_secs()
-                        ))
-                    } else {
-                        EngineError::msg(format!("Fella couldn't reach the model at {url}: {e}"))
-                    });
-                }
-            };
-
-            let status = resp.status();
-            if !status.is_success() {
-                let retry_after = retry_after_secs(resp.headers());
-                let text = resp.text().await.unwrap_or_default();
-                log::info!("model response ← {status} in {:?}", started.elapsed());
-                if is_retryable(status) && attempt <= budget {
-                    let delay = retry_after
-                        .map(Duration::from_secs)
-                        .unwrap_or_else(|| backoff(attempt))
-                        .min(Duration::from_secs(20));
-                    on_retry(&format!(
-                        "the model is busy retrying in {}s… ({attempt}/{budget})",
-                        delay.as_secs()
-                    ));
-                    tokio::time::sleep(delay).await;
-                    continue;
-                }
-                let snippet: String = text.chars().take(400).collect();
-                return Err(self.http_error(status, &snippet, attempt));
-            }
-
-            let openai = self.is_openai();
-            let mut stream = resp.bytes_stream();
-            let mut buf: Vec<u8> = Vec::new();
-            let mut content = String::new();
-            let mut tool_calls: Option<Json> = None;
-            let mut oai_tools: Vec<OaiToolAccum> = Vec::new();
-            let mut usage: Option<Usage> = None;
-
-            while let Some(chunk) = stream.next().await {
-                let chunk = chunk.map_err(|e| {
-                    EngineError::msg(format!("the model connection dropped mid-reply: {e}"))
-                })?;
-                buf.extend_from_slice(&chunk);
-                while let Some(nl) = buf.iter().position(|b| *b == b'\n') {
-                    let raw: Vec<u8> = buf.drain(..=nl).collect();
-                    let line = String::from_utf8_lossy(&raw);
-                    if openai {
-                        absorb_openai_line(&line, on_delta, &mut content, &mut oai_tools, &mut usage);
-                    } else {
-                        absorb_stream_line(&line, on_delta, &mut content, &mut tool_calls, &mut usage);
-                    }
-                }
-            }
-            if !buf.is_empty() {
-                // A body with no trailing newline (or a mock that sends one
-                // JSON object) still needs the leftover flushed.
-                let line = String::from_utf8_lossy(&buf);
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|e| {
+                EngineError::msg(format!("the model connection dropped mid-reply: {e}"))
+            })?;
+            buf.extend_from_slice(&chunk);
+            while let Some(nl) = buf.iter().position(|b| *b == b'\n') {
+                let raw: Vec<u8> = buf.drain(..=nl).collect();
+                let line = String::from_utf8_lossy(&raw);
                 if openai {
                     absorb_openai_line(&line, on_delta, &mut content, &mut oai_tools, &mut usage);
                 } else {
                     absorb_stream_line(&line, on_delta, &mut content, &mut tool_calls, &mut usage);
                 }
             }
-            log::info!(
-                "model response ← {status} streamed {} chars in {:?}",
-                content.len(),
-                started.elapsed()
-            );
-
-            if !oai_tools.is_empty() {
-                tool_calls = Some(Json::Array(
-                    oai_tools
-                        .iter()
-                        .enumerate()
-                        .map(|(i, t)| {
-                            let id = if t.id.is_empty() { format!("call_{i}") } else { t.id.clone() };
-                            json!({
-                                "id": id,
-                                "function": { "name": t.name, "arguments": t.arguments },
-                            })
-                        })
-                        .collect(),
-                ));
-            }
-            let mut message = json!({ "role": "assistant", "content": content });
-            if let Some(tc) = tool_calls {
-                message["tool_calls"] = tc;
-            }
-            let mut out = json!({ "message": message });
-            if let Some(u) = usage {
-                out["usage"] = json!({
-                    "prompt_tokens": u.prompt_tokens,
-                    "completion_tokens": u.completion_tokens,
-                });
-            }
-            return Ok(out);
         }
+        if !buf.is_empty() {
+            // A body with no trailing newline (or a mock that sends one
+            // JSON object) still needs the leftover flushed.
+            let line = String::from_utf8_lossy(&buf);
+            if openai {
+                absorb_openai_line(&line, on_delta, &mut content, &mut oai_tools, &mut usage);
+            } else {
+                absorb_stream_line(&line, on_delta, &mut content, &mut tool_calls, &mut usage);
+            }
+        }
+        log::info!(
+            "model response ← {status} streamed {} chars in {:?}",
+            content.len(),
+            started.elapsed()
+        );
+
+        if !oai_tools.is_empty() {
+            tool_calls = Some(Json::Array(
+                oai_tools
+                    .iter()
+                    .enumerate()
+                    .map(|(i, t)| {
+                        let id = if t.id.is_empty() { format!("call_{i}") } else { t.id.clone() };
+                        json!({
+                            "id": id,
+                            "function": { "name": t.name, "arguments": t.arguments },
+                        })
+                    })
+                    .collect(),
+            ));
+        }
+        let mut message = json!({ "role": "assistant", "content": content });
+        if let Some(tc) = tool_calls {
+            message["tool_calls"] = tc;
+        }
+        let mut out = json!({ "message": message });
+        if let Some(u) = usage {
+            out["usage"] = json!({
+                "prompt_tokens": u.prompt_tokens,
+                "completion_tokens": u.completion_tokens,
+            });
+        }
+        Ok(out)
     }
 }
 
