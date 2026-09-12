@@ -147,6 +147,14 @@
 			{/if}
 		</div>
 		<span class="divider" aria-hidden="true"></span>
+		<button
+			class="navbtn settings-btn"
+			data-tauri-drag-region="false"
+			onclick={onpalette}
+			title="Settings (Ctrl+K)"
+		>
+			<Icon name="settings" size={14} />
+		</button>
 		<button class="hint" data-tauri-drag-region="false" onclick={onpalette} title="Command palette">
 			<kbd>Ctrl</kbd><kbd>K</kbd>
 		</button>
@@ -228,7 +236,8 @@
 		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 	}
 	.navbtn.fwd,
-	.navbtn.info-btn {
+	.navbtn.info-btn,
+	.navbtn.settings-btn {
 		transform: none;
 	}
 	.info-wrap {

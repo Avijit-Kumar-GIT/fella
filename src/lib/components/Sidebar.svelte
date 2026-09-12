@@ -5,8 +5,6 @@
 	import type { ConversationSummary, Message } from '$lib/types';
 	import Icon from './Icon.svelte';
 
-	let { onsettings }: { onsettings: () => void } = $props();
-
 	let list = $state<ConversationSummary[]>([]);
 	let query = $state('');
 
@@ -132,9 +130,6 @@
 			</div>
 		{/if}
 	</div>
-	<button class="settings-btn" type="button" title="Settings" onclick={onsettings}>
-		<Icon name="settings" size={16} />
-	</button>
 </aside>
 
 <style>
@@ -260,20 +255,5 @@
 		padding: var(--space-2);
 		color: var(--text-faint);
 		font-size: var(--fs-sm);
-	}
-	.settings-btn {
-		flex: none;
-		display: grid;
-		place-items: center;
-		width: 28px;
-		height: 28px;
-		margin-top: auto;
-		border-radius: var(--radius-chip);
-		color: var(--text-faint);
-		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
-	}
-	.settings-btn:hover {
-		background: var(--bg-inset);
-		color: var(--text-dim);
 	}
 </style>

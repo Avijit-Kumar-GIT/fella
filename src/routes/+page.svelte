@@ -171,7 +171,7 @@
 
 <div class="shell">
 	{#if !session.focus && !session.sidebarCollapsed}
-		<Sidebar onsettings={() => (paletteOpen = true)} />
+		<Sidebar />
 	{/if}
 	<div class="app" class:focus={session.focus}>
 		<Titlebar onpalette={() => (paletteOpen = true)} />
