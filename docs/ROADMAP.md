@@ -96,15 +96,23 @@ running log and the design rationale are in `docs/HARNESS.md`). Decide from its
 output, not from a hunch. The floor model is the **`gemma4` series** an
 optimisation that costs it isn't taken.
 
-- **Per-folder playbook memory** *(next, and the last planned harness change;
-  ships as its own PR after the eval branch).* A session in a folder should
-  start already knowing that folder this user's vocabulary, which table means
-  what, caveats from last time carried forward. A small learned context block
-  beside `fella.db`, per-folder, never leaving the machine; not a general
-  memory system, and no new dependency the mature memory libraries (Mem0,
-  Letta, Zep) each need a Python runtime / vector store / server Fella won't
-  take. Borrow their patterns (self-editable block, supersede-don't-append,
-  one end-of-session extraction). See [`HARNESS.md`](HARNESS.md#next).
+- **Per-folder playbook memory** *(shipped 2026-09-08, `engine::memory`).* A
+  session in a folder starts already knowing that folder this user's
+  vocabulary, caveats from last time carried forward. A small learned context
+  block beside `fella.db`, per-folder, never leaving the machine — no new
+  dependency. See [`HARNESS.md`](HARNESS.md#shipped) and
+  [`FOLDER-MEMORY.md`](FOLDER-MEMORY.md).
+- **Case-mismatch on a uniformly-cased column** *(next, unfixed)* and
+  **semantic near-duplicate category labels** *(next, no candidate fix yet)*
+  two distinct gaps a new benchmark pass surfaced 2026-09-12, neither caught
+  by the shipped case-sensitivity flag (which only fires on a real collision
+  in the data, not a model-invented wrong-case literal against clean data).
+  gemma4:31b: 5/9 on the new messiness axis, the worst of ten axes measured.
+  See [`HARNESS.md`](HARNESS.md#next).
+- **Correction-trigger breadth** *(open question, unmeasured).*
+  `memory::is_correction()` only recognises a fixed marker-word list; whether
+  it needs to recognise more natural phrasings hasn't been tested, only
+  assumed. See [`HARNESS.md`](HARNESS.md#next).
 - **Few-shot worked examples** in the system prompt for small local models
   *deferred:* `prompt-ablation` on gemma4:31b (2026-09-07) shows no prompt slack
   to trade the shipped prompt already loses a case or a feature at every cut
@@ -136,6 +144,37 @@ optimisation that costs it isn't taken.
   path)*
 - **History search.** `/history <term>` greps the `conversations/` archive Fella
   already writes. *(`regex` plus `walkdir`)*
+
+## Would need new infrastructure
+
+Not a positioning question these don't touch a locked constraint, and the
+direction is already endorsed by the harness work itself. Recorded separately
+because each needs real tooling that doesn't exist yet, so "reuses a
+dependency Fella already ships, or is frontend-only" (this doc's own scoping
+rule, above) doesn't apply to them.
+
+- **Distill a small model on Fella's own verified tool-use traces.** The eval
+  harness (`examples/agent_eval`, `bench/`) now generates exactly what this
+  needs: real recorded tool-call trajectories, plus a grader that already
+  knows which ones were actually correct. The idea: run the harness (or real
+  sessions) at volume, keep only the verified-correct trajectories, and
+  fine-tune a small open-weight model (gemma-class) on them so habits Fella
+  currently has to prompt for every time such as case-insensitive text
+  matching, checking a suspicious empty result before reporting it, not
+  over-calling tools get baked into the model's weights instead. This is the
+  concrete mechanism for the longer-standing "a tiny model native to Fella"
+  idea (the s1-mini-style exploration from earlier), not a separate proposal.
+
+  Not close to a same-session task. Needs real training infrastructure
+  (LoRA/QLoRA is the realistic approach for a model this size — no full
+  fine-tune), and needs far more, and more *varied*, verified trajectories
+  than the ~150 hand-built benchmark cases currently produce — real folder
+  shapes and phrasings, or the fine-tune risks memorising the test fixtures
+  instead of learning the general habit. The grading rigor this session's
+  benchmark work put in (catching several false-positive/false-negative
+  grading bugs before trusting a result) is exactly the trustworthy "was this
+  actually right" filter this depends on — that hardening work is the real
+  prerequisite already done, not effort spent only on reporting scores.
 
 ## Would need a positioning decision
 

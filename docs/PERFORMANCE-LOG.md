@@ -1,0 +1,900 @@
+# Performance log
+
+*Dated `measure.sh` / `--bloat` runs, append-only. How to read these numbers,
+and what to run to add a new entry, is in [`PERFORMANCE.md`](PERFORMANCE.md) —
+that file stays a stable reference; this one only grows.*
+
+## 2026-08-27 15:03  ·  commit 6f849bf
+
+### Toolchain
+
+rustc 1.98.0 (88d9e12ae 2026-08-18)
+cargo 1.98.0 (797e8a9bc 2026-08-05)
+v24.20.0 11.24.0
+Linux 6.6.87.2-microsoft-standard-WSL2
+
+### Dependencies
+
+unique crates in the graph : 336
+direct dependencies        : 18
+
+duplicate versions (same crate at >1 version wasted size + build time):
+bitflags v1.3.2
+bitflags v2.13.1
+cpufeatures v0.2.17
+cpufeatures v0.3.0
+flate2 v1.1.9
+foldhash v0.2.0
+getrandom v0.2.17
+getrandom v0.3.4
+getrandom v0.4.3
+hashbrown v0.12.3
+hashbrown v0.17.1 (*)
+heck v0.4.1
+heck v0.5.0
+indexmap v1.9.3 (*)
+indexmap v2.14.0 (*)
+libc v0.2.189
+log v0.4.34
+miniz_oxide v0.8.9
+proc-macro-crate v1.3.1 (*)
+proc-macro-crate v2.0.2 (*)
+quick-xml v0.37.5
+quick-xml v0.41.0
+semver v1.0.28
+serde v1.0.229
+serde_core v1.0.229
+serde_json v1.0.151 (*)
+serde_spanned v0.6.9 (*)
+serde_spanned v1.1.1 (*)
+simd-adler32 v0.3.10
+smallvec v1.15.2
+stable_deref_trait v1.2.1
+syn v1.0.109
+syn v2.0.119
+syn v3.0.4
+tauri-utils v2.9.3 (*)
+thiserror v1.0.69 (*)
+thiserror v2.0.20 (*)
+thiserror-impl v1.0.69 (proc-macro) (*)
+thiserror-impl v2.0.20 (proc-macro) (*)
+time v0.3.55
+time v0.3.55 (*)
+toml_datetime v0.6.3 (*)
+toml_datetime v1.1.1+spec-1.1.0 (*)
+toml_edit v0.19.15 (*)
+toml_edit v0.20.2 (*)
+uuid v1.26.0 (*)
+winnow v0.5.40
+winnow v1.0.4
+
+### Release build
+
+    Finished `release` profile [optimized] target(s) in 0.28s
+wall 0.32s · peak 120700KB
+
+per-crate compile times: cd src-tauri && cargo build --release --timings
+  then open src-tauri/target/cargo-timings/cargo-timing.html
+
+### Binary size
+
+with symbols : 18M  (18321976 bytes)
+stripped     : 11M  (11529928 bytes)  <- what actually ships
+
+     text	   data	    bss	    dec	    hex	filename
+  11043726	 479120	  18072	11540918	 b019b6	src-tauri/target/release/fella
+
+### Binary composition (cargo-bloat)
+
+how many bytes of the binary each crate's code occupies:
+ File  .text     Size Crate
+ 9.1%  19.8%   1.6MiB [Unknown]
+ 7.0%  15.2%   1.2MiB std
+ 5.3%  11.5% 947.0KiB tauri
+ 3.1%   6.7% 548.3KiB tokio
+ 2.5%   5.4% 442.4KiB fella_lib
+ 1.8%   4.0% 324.4KiB rustls
+ 1.6%   3.5% 287.3KiB ring
+ 1.1%   2.4% 193.9KiB lopdf
+ 1.0%   2.1% 174.2KiB calamine
+ 0.8%   1.7% 141.8KiB tauri_runtime_wry
+ 0.6%   1.4% 112.6KiB reqwest
+ 0.6%   1.3% 110.1KiB libsqlite3_sys
+ 0.5%   1.0%  83.4KiB serde_json
+ 0.5%   1.0%  81.4KiB hyper_util
+ 0.4%   1.0%  78.8KiB x11_dl
+ 0.4%   0.9%  77.0KiB pdf_extract
+ 0.4%   0.9%  75.2KiB muda
+ 0.4%   0.8%  66.2KiB http
+ 8.4%  18.4%   1.5MiB And 139 more crates. Use -n N to show more.
+45.9% 100.0%   8.0MiB .text section size, the file size is 17.5MiB
+
+Note: numbers above are a result of guesswork. They are not 100% correct and never will be.
+
+### Frontend bundle
+
+.svelte-kit/output/server/_app/immutable/assets/_page.DInR8-w1.css      5.99 kB │ gzip:  1.67 kB
+.svelte-kit/output/server/entries/pages/_layout.ts.js                   0.15 kB │ gzip:  0.13 kB
+.svelte-kit/output/server/env.js                                        0.22 kB │ gzip:  0.14 kB
+.svelte-kit/output/server/entries/pages/_layout.svelte.js               0.23 kB │ gzip:  0.18 kB
+.svelte-kit/output/server/chunks/env.js                                 0.28 kB │ gzip:  0.17 kB
+.svelte-kit/output/server/internal.js                                   0.40 kB │ gzip:  0.19 kB
+.svelte-kit/output/server/chunks/internal.js                            0.88 kB │ gzip:  0.43 kB
+.svelte-kit/output/server/chunks/index-server.js                        4.77 kB │ gzip:  1.75 kB
+.svelte-kit/output/server/entries/fallbacks/error.svelte.js             4.77 kB │ gzip:  1.76 kB
+.svelte-kit/output/server/chunks/exports.js                             9.57 kB │ gzip:  3.06 kB
+.svelte-kit/output/server/chunks/uneval.js                             17.25 kB │ gzip:  4.78 kB
+.svelte-kit/output/server/entries/pages/_page.svelte.js                17.48 kB │ gzip:  4.64 kB
+.svelte-kit/output/server/chunks/internal2.js                          21.40 kB │ gzip:  6.56 kB
+.svelte-kit/output/server/chunks/shared.js                             29.89 kB │ gzip:  8.07 kB
+.svelte-kit/output/server/chunks/utils.js                              37.45 kB │ gzip: 10.84 kB
+.svelte-kit/output/server/remote-entry.js                              55.45 kB │ gzip: 12.13 kB
+.svelte-kit/output/server/chunks/server.js                            130.49 kB │ gzip: 33.72 kB
+.svelte-kit/output/server/index.js                                    134.75 kB │ gzip: 33.72 kB
+✓ built in 1.96s
+  Wrote site to "build"
+
+build/ on disk  : 200K
+all JS, gzipped : 39 KB
+
+### Cold start -> interactive
+
+(a window opens briefly for each run)
+run 1: no timing line (no display / WSLg?)
+run 2: no timing line (no display / WSLg?)
+run 3: no timing line (no display / WSLg?)
+
+### Idle memory
+
+main process RSS : 177 MB   (+ 2 WebKit helper process(es), not summed)
+  Elapsed (wall clock) time (h:mm:ss or m:ss): 0:08.02
+  Maximum resident set size (kbytes): 184144
+
+### Notes
+
+- GUI metrics (cold start, memory) need a display WSLg on Windows.
+- `time -v` "Maximum resident set size" is the main process only; WebKit
+  helpers add ~20-60 MB more.
+- `du --apparent-size` = file bytes, not blocks-on-disk.
+- First `cargo build --release` is slow (DuckDB C++); later ones are fast.
+
+## 2026-08-28 12:32  ·  commit d0dd675
+
+### Toolchain
+
+rustc 1.98.0 (88d9e12ae 2026-08-18)
+cargo 1.98.0 (797e8a9bc 2026-08-05)
+v24.20.0 11.24.0
+Linux 6.6.87.2-microsoft-standard-WSL2
+
+### Dependencies
+
+unique crates in the graph : 337
+direct dependencies        : 19
+
+duplicate versions (same crate at >1 version wasted size + build time):
+bitflags v1.3.2
+bitflags v2.13.1
+cpufeatures v0.2.17
+cpufeatures v0.3.0
+flate2 v1.1.9
+foldhash v0.2.0
+getrandom v0.2.17
+getrandom v0.3.4
+getrandom v0.4.3
+hashbrown v0.12.3
+hashbrown v0.17.1 (*)
+heck v0.4.1
+heck v0.5.0
+indexmap v1.9.3 (*)
+indexmap v2.14.0 (*)
+libc v0.2.189
+log v0.4.34
+miniz_oxide v0.8.9
+proc-macro-crate v1.3.1 (*)
+proc-macro-crate v2.0.2 (*)
+quick-xml v0.37.5
+quick-xml v0.41.0
+semver v1.0.28
+serde v1.0.229
+serde_core v1.0.229
+serde_json v1.0.151 (*)
+serde_spanned v0.6.9 (*)
+serde_spanned v1.1.1 (*)
+simd-adler32 v0.3.10
+smallvec v1.15.2
+stable_deref_trait v1.2.1
+syn v1.0.109
+syn v2.0.119
+syn v3.0.4
+tauri-utils v2.9.3 (*)
+thiserror v1.0.69 (*)
+thiserror v2.0.20 (*)
+thiserror-impl v1.0.69 (proc-macro) (*)
+thiserror-impl v2.0.20 (proc-macro) (*)
+time v0.3.55
+time v0.3.55 (*)
+toml_datetime v0.6.3 (*)
+toml_datetime v1.1.1+spec-1.1.0 (*)
+toml_edit v0.19.15 (*)
+toml_edit v0.20.2 (*)
+uuid v1.26.0 (*)
+winnow v0.5.40
+winnow v1.0.4
+
+### Release build
+
+   Compiling tokio-macros v2.7.2
+   Compiling fella v0.1.0 (<repo>/src-tauri)
+   Compiling tokio v1.53.1
+   Compiling hyper v1.11.0
+   Compiling tauri v2.11.5
+   Compiling tower v0.5.3
+   Compiling tokio-rustls v0.26.4
+   Compiling hyper-util v0.1.20
+   Compiling hyper-rustls v0.27.9
+   Compiling tower-http v0.6.11
+   Compiling reqwest v0.13.4
+   Compiling tauri-plugin-fs v2.5.1
+   Compiling tauri-plugin-log v2.9.0
+   Compiling tauri-plugin-dialog v2.7.2
+    Finished `release` profile [optimized] target(s) in 1m 17s
+wall 78.05s · peak 1133944KB
+
+per-crate compile times: cd src-tauri && cargo build --release --timings
+  then open src-tauri/target/cargo-timings/cargo-timing.html
+
+### Binary size
+
+with symbols : 18M  (18391888 bytes)
+stripped     : 12M  (11583240 bytes)  <- what actually ships
+
+     text	   data	    bss	    dec	    hex	filename
+  11097587	 480288	  17992	11595867	 b0f05b	src-tauri/target/release/fella
+
+### Binary composition (cargo-bloat)
+
+(skipped pass --bloat; it relinks the LTO binary, ~10 min)
+
+### Frontend bundle
+
+.svelte-kit/output/server/_app/immutable/assets/_page.B4WMUur0.css      7.74 kB │ gzip:  1.97 kB
+.svelte-kit/output/server/entries/pages/_layout.ts.js                   0.15 kB │ gzip:  0.13 kB
+.svelte-kit/output/server/env.js                                        0.22 kB │ gzip:  0.14 kB
+.svelte-kit/output/server/entries/pages/_layout.svelte.js               0.23 kB │ gzip:  0.18 kB
+.svelte-kit/output/server/chunks/env.js                                 0.28 kB │ gzip:  0.17 kB
+.svelte-kit/output/server/internal.js                                   0.40 kB │ gzip:  0.19 kB
+.svelte-kit/output/server/chunks/internal.js                            0.88 kB │ gzip:  0.43 kB
+.svelte-kit/output/server/chunks/index-server.js                        4.77 kB │ gzip:  1.75 kB
+.svelte-kit/output/server/entries/fallbacks/error.svelte.js             4.77 kB │ gzip:  1.76 kB
+.svelte-kit/output/server/chunks/exports.js                             9.57 kB │ gzip:  3.06 kB
+.svelte-kit/output/server/chunks/uneval.js                             17.25 kB │ gzip:  4.78 kB
+.svelte-kit/output/server/chunks/internal2.js                          21.40 kB │ gzip:  6.56 kB
+.svelte-kit/output/server/entries/pages/_page.svelte.js                22.79 kB │ gzip:  6.25 kB
+.svelte-kit/output/server/chunks/shared.js                             29.89 kB │ gzip:  8.07 kB
+.svelte-kit/output/server/chunks/utils.js                              37.45 kB │ gzip: 10.84 kB
+.svelte-kit/output/server/remote-entry.js                              55.45 kB │ gzip: 12.13 kB
+.svelte-kit/output/server/chunks/server.js                            130.49 kB │ gzip: 33.72 kB
+.svelte-kit/output/server/index.js                                    134.75 kB │ gzip: 33.72 kB
+✓ built in 1.55s
+  Wrote site to "build"
+
+build/ on disk  : 208K
+all JS, gzipped : 41 KB
+
+### Cold start -> interactive
+
+(a window opens briefly for each run)
+run 1: no timing line (no display / WSLg?)
+run 2: no timing line (no display / WSLg?)
+run 3: no timing line (no display / WSLg?)
+
+### Idle memory
+
+main process RSS : 177 MB   (+ 2 WebKit helper process(es), not summed)
+  Elapsed (wall clock) time (h:mm:ss or m:ss): 0:08.02
+  Maximum resident set size (kbytes): 184688
+
+### Notes
+
+- GUI metrics (cold start, memory) need a display WSLg on Windows.
+- `time -v` "Maximum resident set size" is the main process only; WebKit
+  helpers add ~20-60 MB more.
+- `du --apparent-size` = file bytes, not blocks-on-disk.
+- First `cargo build --release` is slow (DuckDB C++); later ones are fast.
+
+## 2026-08-30 04:43  ·  commit 67c3508
+
+First measurement since the `mcp` connector feature landed (`bd54898`) and the
+packs marketplace install path (`d19d0e0`, `f24c7e8`). Branch
+`feat/providers-login-sql-timeout`.
+
+### Toolchain
+
+rustc 1.98.0 (88d9e12ae 2026-08-18)
+cargo 1.98.0 (797e8a9bc 2026-08-05)
+v24.20.0 11.24.0
+Linux 6.6.87.2-microsoft-standard-WSL2
+
+### Dependencies
+
+unique crates in the graph : 385   (was 337 on d0dd675)
+direct dependencies        : 26
+
+### Release build
+
+Default features (`pdf`, `xlsx`, `mcp`) the shipped app:
+
+    Finished `release` profile [optimized] target(s) in 1m 39s (incremental)
+    wall 99.49s · peak 1503940KB
+    (from a d0dd675-era target dir the first rebuild was 3m 05s, peak 1621132KB)
+
+### Binary size the shipped app (default: pdf + xlsx + mcp)
+
+with symbols : 24M  (24396568 bytes)
+stripped     : 16M  (16525672 bytes)  <- what actually ships
+
+     text	   data	    bss	    dec	    hex	filename
+  15812834	 708440	  20128	16541402	 fc66da	src-tauri/target/release/fella
+
+Change since d0dd675 (12M stripped): +4.9 MB stripped, split below.
+
+### Isolating the `mcp` feature cost
+
+Same commit, `cargo build --release --no-default-features --features pdf,xlsx`
+(everything except `mcp`), same toolchain and target dir only the flag differs:
+
+| | no `mcp` (pdf+xlsx) | default (+ `mcp`) | `mcp` costs |
+|---|---|---|---|
+| stripped binary    | 14,668,584 B (14M) | 16,525,672 B (16M) | +1.86 MB  (+12.7%) |
+| with symbols       | 22,075,112 B (22M) | 24,396,568 B (24M) | +2.32 MB |
+| `.text`            | 13,998,542 B       | 15,812,834 B       | +1.81 MB |
+| unique crates      | 379                | 385                | +6 |
+| incremental relink | ~2m 10s            | ~3m 05s            | +~55s |
+
+Crates `mcp` pulls that a no-`mcp` build does not: `rmcp`, `sse-stream`,
+`tokio-stream`, `futures`, `chrono` (+ one transitive dep resolving to a second
+version). The pluggable Streamable-HTTP transport means no reqwest 0.12 / quinn
+the existing reqwest 0.13 client backs `FellaHttp: StreamableHttpClient`.
+
+Of the +4.9 MB since 2026-08-28: ~1.9 MB is `mcp`, ~3.0 MB is the rest of the
+branch (marketplace install + SHA-256 verification, `/connect`, markdown render).
+
+A `--no-default-features` build (drops `pdf` + `xlsx` + `mcp`) is smaller still;
+connector packs then report "this build has no connector support".
+
+### Frontend bundle
+
+nodes/2.CxHsvwP0.js (client)   89.32 kB │ gzip: 28.44 kB   (markdown render is new)
+server/chunks/server.js       130.64 kB │ gzip: 33.76 kB
+server/index.js               134.75 kB │ gzip: 33.72 kB
+✓ built in ~1.6s
+
+build/ on disk  : 276K   (was 208K)
+all JS, gzipped : 60 KB   (was 41 KB the markdown renderer in Message.svelte)
+
+### GUI metrics (cold start, idle memory)
+
+Not re-measured no display under this shell (WSLg). Last known good
+(d0dd675): main process RSS ~177 MB, no cold-start timing line.
+
+### Notes
+
+- The `mcp` number is a clean A/B on one commit: same toolchain, same target
+  dir, only the feature flag differs.
+- `cargo tree` name-dedup lists 5 added crates; the graph count moves by 6.
+
+---
+
+## 2026-09-03  ·  commit edba382  ·  v0.1 pre-flight
+
+First capture with `strip = "debuginfo"` in `[profile.release]` (was `false`;
+the deb/AppImage bundler does not strip, so the shipped binary carried ~5 MB of
+DWARF nobody needs). Symbol table kept, so `cargo bloat` and backtraces still
+work. Also the first recorded **installer** sizes.
+
+### Binary
+
+| | bytes | |
+|---|---|---|
+| release binary, `strip = false` (before) | 24,841,552 | 24 MB |
+| release binary, `strip = "debuginfo"` (**ships now**) | 19,828,968 | 19 MB |
+| fully stripped (`strip = true`, for reference) | 16,935,016 | 17 MB |
+
+`opt-level=3`, `lto="thin"`, `codegen-units=1`, `panic="abort"`, default
+features (`pdf`, `xlsx`, `mcp`). `calamine` is 0.36 here (bumped from 0.30 to
+drop the vulnerable `quick-xml 0.37`).
+
+### Installers  (Linux, `pnpm tauri build`)
+
+| Artifact | bytes | |
+|---|---|---|
+| `Fella_0.1.0_amd64.deb` (was 9,029,176 with the unstripped binary) | 7,711,452 | 7.7 MB |
+| `Fella_0.1.0_amd64.AppImage` | not measured here `xdg-open` unavailable in this shell; CI (`ubuntu-22.04`, has `xdg-utils`) builds it. Expect ~28-32 MB (bundles the ~20 MB binary + a squashfs runtime). |
+
+`.dmg` / `-setup.exe` / `.msi` are matrix-only (`release.yml`); size them from
+the first `v0.1.0-rc.1` draft.
+
+### Dependencies
+
+| | |
+|---|---|
+| unique crates in the graph | 386 (was 385; `calamine` bump net +1) |
+| direct dependencies | 26 |
+| duplicate-version crates | ~26 (53 tree lines) unaudited, mostly the Tauri stack |
+
+### Frontend bundle
+
+`build/` on disk: 452 KB. All JS+CSS gzipped: ~72 KB. `pnpm build` ~2 s.
+
+### GUI metrics (cold start, idle RSS)
+
+Still not captured no display in this shell (WSLg). Last known good
+(2026-08-28, d0dd675): main-process RSS ~177 MB. **Must be measured on a real
+display during the RC smoke test** (`docs/RELEASE.md` §1).
+
+### `agent_bench` baseline
+
+Captured 2026-09-04 (commit 69d46c4): `provider=ollama-cloud`
+`model=gemma4:31b`, `num_ctx=8192`, `keep_alive=30m`, 3 iterations/question,
+against the fixtures `examples/agent_bench.rs` builds (tiny/medium/large CSVs
++ notes, `agg_large` = 120k rows). Every question resolved in a single
+tool-call round trip and passed full verification; `agg_large` is as fast as
+`agg_tiny` because the model pushes the aggregation into `run_sql` instead of
+reading rows itself.
+
+| question | n | total s | model s | tool s | model calls | tool calls | verif |
+|---|--:|--:|--:|--:|--:|--:|:-:|
+| chitchat | 2 | 2.2 | 2.2 | 0.0 | 1.0 | 0.0 | 1/1 |
+| agg_tiny | 2 | 1.4 | 1.3 | 0.1 | 2.0 | 1.0 | 2/2 |
+| agg_medium | 2 | 1.2 | 1.2 | 0.1 | 2.0 | 1.0 | 2/2 |
+| group_medium | 2 | 1.8 | 1.7 | 0.1 | 2.0 | 1.0 | 2/2 |
+| multi_step | 2 | 1.3 | 1.3 | 0.1 | 2.0 | 1.0 | 2/2 |
+| agg_large (120k rows) | 2 | 1.6 | 1.5 | 0.1 | 2.0 | 1.0 | 2/2 |
+| doc_lookup | 2 | 2.2 | 2.2 | 0.0 | 2.0 | 1.0 | 1/1 |
+
+(`n` = warm iterations averaged; cold-start deltas were all within ±0.9s of
+warm, no meaningful cold penalty at this context size.)
+
+Session-memory follow-up (same conversation, second question reuses the first
+turn's context): turn 1 (fresh) 2.7s, turn 2 (follow-up) 2.7s no measurable
+discount against a hosted cloud model network + inference time dominate over
+the small context-reuse savings visible against a local model.
+
+Run against **local** Ollama still not captured the numbers above are a
+hosted-cloud model over the network, not the "local, private (default)" path
+most users will actually run. Worth a second row here once measured on a real
+machine with local Ollama and a comparable model size.
+
+### `agent_eval` the scored harness
+
+`agent_bench` times the loop; **`agent_eval` scores it** correctness,
+answer-closeness, wasted tool calls, tokens per correct answer and sweeps
+that across prompt ablations, folder sizes and models. Dev-only, behind the
+`eval` Cargo feature, never run in CI.
+
+```
+cd src-tauri
+AGENT_EVAL_DATA_DIR=/path/to/copied/data-dir \
+  cargo run --release --features eval --example agent_eval -- <subcommand> [opts]
+```
+
+Subcommands: `accuracy`, `prompt-ablation`, `folder-scale`, `model-ladder`,
+`robustness`, `session-memory`, `all`. Opts: `--models "a,b,c"`,
+`--judge <model>` (opt-in LLM rubric on top of the deterministic closeness
+score), `--only <id-substr>`, `--json <path>`, `--compare <old.json>` (Δ acc
+/ tokens vs a prior run the "did my change help" answer).
+
+A `--models` entry is a bare model on the configured provider, or
+`provider/model` to switch provider too so one run can compare across
+providers if the data dir's `auth.json` has each key:
+
+```
+--models "ollama-cloud/gemma4:31b,openai/gpt-5.6-luna,xai/grok-4.3"
+```
+
+Fixtures are deterministic (`engine::testkit`), so the golden answers are
+exact. The grader matches the answer's **headline figure(s)** within
+tolerance; multi-row tables and prose are not parsed. "number present" can
+false-pass if the model prints the right value for the wrong reason
+acceptable for a local dev tool.
+
+The ~18-case battery spans question kinds, not just spending: a single
+aggregate, a filter, min/max, a top-N group, a time-series month, a rounded
+ratio, a two-figure multi-step, a `parse_num` trap (AVG over text amounts), a
+cross-file total, a **non-financial** table (`workouts.csv`), two document
+questions, an honest empty result (a category with no rows), a
+needs-no-tool definition, and a must-decline "how much will I spend next
+month".
+
+**Methodology the battery is frozen.** The `EvalCase` list and every `gold`
+value are the spec of what a good answer is you don't edit a case or its
+expectation to make a number move (that's teaching to the test). A grader
+(`grade()`) fix needs a trace of the model's actual behaviour and an argument
+that it makes the grader match ground truth. Improve Fella against the
+baseline, not the baseline against Fella.
+
+#### Baseline 2026-09-07 (frozen battery, 18 cases, `--iters 5`)
+
+`model-ladder --models "ollama-cloud/gemma4:31b,openai/gpt-5.6-luna,xai/grok-4.3" --iters 5`
+
+| model | acc | close(det) | waste/case | tok/correct | $/100 | mean wall s |
+|---|:-:|--:|--:|--:|--:|--:|
+| ollama-cloud/gemma4:31b | 17/18 | 0.84 | 0.17 | 4249 | n/a | 1.5 |
+| openai/gpt-5.6-luna | 17/18 | 0.84 | 0.00 | 3333 | $1.28 | 2.0 |
+| xai/grok-4.3 | 16/18 | 0.80 | 0.06 | 4550 | $9.21 | 2.9 |
+
+Read: three different models land within one case of each other on a frozen
+battery, so headline accuracy has little room to move the harness work is
+about holding that accuracy while cutting tokens and wasted calls, and about
+where it breaks (folder scale, older models, traps). `luna` is the reference
+row cheapest priced, zero waste, fewest tokens. Every harness change from
+here is `--compare`d against this file's JSON (`/tmp/baseline.json`).
+
+#### After 2026-09-07 (same frozen battery, `--compare` vs the baseline above)
+
+| model | iters | acc | close(det) | waste/case | tok/correct | Δ tok/correct |
+|---|:-:|:-:|--:|--:|--:|--:|
+| ollama-cloud/gemma4:31b | 5 | 18/18 | 0.85 | 0.00 | 3650 | **−14%** |
+| openai/gpt-5.6-luna | 5 | 18/18 | 0.87 | 0.00 | 3175 | −3% |
+| xai/grok-4.3 | 3 | 16/18 | 0.82 | 0.06 | 4544 | ≈0 |
+
+Per-case correctness is unchanged everywhere except `time_series` (a grader
+fix all three models compute the right month, some render it "2021-11"). No
+case regressed. grok stays 16/18: its baseline misses (`refusal` flaky,
+`max_txn` low closeness) are unchanged and model-side, not harness.
+
+**What moved it**
+
+- **`run_sql` spells out an empty aggregate.** A `SUM`/`AVG` over no matching
+  rows is one all-NULL row, which rendered as a blank cell; a smaller model
+  read that as a failed query and fired 2-3 more calls to check the category
+  existed. The tool result now says "nothing matched an empty SUM/COUNT is
+  0". `empty_cat` on gemma: **4 tool calls → 1, ~10.3K tokens → ~3.9K**, still
+  correct. It was luna's one baseline miss; now fixed. Smaller win on grok.
+- **Three `verify.rs` precision fixes.** Making the self-check *actionable*
+  (the corrective re-ask) turned three long-standing imprecisions from
+  harmless fold-warnings into re-asks that cost a model call each: (a) a NULL
+  aggregate isn't the number 0, (b) a float `SUM` re-serialises with a low bit
+  different on re-run, (c) a digit inside an identifier (`txns_00`) was read
+  as a stated figure. Each fixed the fold shows fewer bogus warnings now too.
+- **The corrective re-ask is narrowed to the re-run checks.** Measured across
+  all three models, triggering it on the fuzzy "a figure appears in no result"
+  check was net-negative: on grok it turned a correct "≈18%" into the raw
+  ratio `0.176…` (grounded, but wrong and unreadable), and it caused every
+  false positive above. It now fires only on "different result now" / "no
+  longer runs" a query that demonstrably changed, where "restate to match the
+  re-run" is a safe tool-free fix. On a read-only workspace that's basically
+  never, so the re-ask is effectively a dormant net rather than a live cost.
+- **Prompt minimalism: tested, no change.** `prompt-ablation` on gemma every
+  section above the core rules + schema either loses a case
+  (`background_rule`), drives a shipped feature (`note_rule` the activity
+  display), or is under-tested by the battery (`docs_rule`). Dropping the
+  schema's sample rows sends waste from 0 to 11 (the model re-discovers what
+  it was told). The shipped prompt is already at its Pareto point here.
+
+**Where it holds (measured 2026-09-07, gemma4:31b, no action needed)**
+
+- **Folder size.** `folder-scale` 1 → 120 tables: accuracy is flat at 18/18
+  through **40 tables**, easing to 17–16/18 at 120. The step cap is never hit;
+  first-token latency doesn't move. Past ~13 tables the schema block drops to
+  names-only and the model peeks columns legitimately (the "waste" column
+  jumps but those calls are real). The **adaptive `num_ctx` floor carries the
+  top end**: at 120 tables it's 17/18 vs `fixed 8192`'s 16/18 with half the
+  peeking. `trim_history` by token budget is *not* warranted nothing shows
+  history bloat causing a miss.
+- **Messy data.** `robustness` text-formatted amounts (`$1,200`), a trailing
+  totals row, mixed date formats, cumulative: **6/6 at every level**,
+  closeness 0.91. The ingest-time coercion (`parse_num`, totals-row drop) and
+  the `run_sql` text-column warning absorb it before the model has to reason
+  about it.
+
+#### Older / cheaper models (2026-09-08, `model-ladder --iters 3`, frozen battery)
+
+| model | acc | close(det) | waste/case | tok/correct | $/100 | mean wall s |
+|---|:-:|--:|--:|--:|--:|--:|
+| ollama-cloud/gemma4:31b | 10/18 | 0.66 | 0.50 | 32826 | n/a | 2.7 |
+| openai/gpt-4o-mini | 9/18 | 0.65 | 3.61 | 19744 | $2.89 | 3.8 |
+| openai/gpt-4.1-mini | 12/18 | 0.70 | 0.56 | 24433 | $12.34 | 4.2 |
+| xai/grok-3-mini | 18/18 | 0.81 | 2.67 | 13872 | n/a | 5.0 |
+| openai/gpt-5.6-luna | 16/18 | 0.83 | 0.11 | 11591 | $4.17 | 3.5 |
+
+The floor Fella refuses to regress is **`gemma4:31b`** (`harness-tuning`); the
+model most users will actually run is around **`luna`**'s intelligence. This run
+was not about either it deliberately steps *below* the floor — `gpt-4o-mini`
+and `gpt-4.1-mini`, older and cheaper than anything a real Fella user would pick
+— to find where the *model itself* decays versus where the *data* runs out.
+
+Run on a noisier day than the 2026-09-07 baseline (gemma 10/18 here vs 17-18/18
+there, same binary the ollama-cloud endpoint was flaky, `waste 0.50`, three
+timeouts). Read the *shape*, not the absolute rates:
+
+- **The decay cliff is below the floor.** `gpt-4o-mini` / `gpt-4.1-mini` sit
+  ~9-12/18 with waste 1.5-2 orders above the modern rows they burn calls
+  re-deriving schema and retrying bad SQL. `4o-mini` at **$2.89/100** is cheap
+  but its 3.6 wasted calls/case are the model, not the harness the tool loop
+  can't rescue an answer the model won't compute. `4.1-mini` is both worse
+  *and* 4x dearer. `gemma4:31b` its usual 17-18/18, ~0.2 waste sits well
+  above this cliff, so the floor has real headroom.
+- **Model decay vs tool ceiling.** The extra misses down here are decay
+  (arithmetic slips, malformed `run_sql`, ignored fold-warnings), not the data
+  hitting a wall the same battery is 16-18/18 on every 2025-H2+ model. Nothing
+  to fix in the harness this just marks how far the model can fall before the
+  harness stops carrying it.
+- **`grok-3-mini` is the surprise** 18/18, but 2.67 waste/case and 5s wall
+  it gets there by brute force. `luna` remains the reference: fewest tokens,
+  near-zero waste, correct and it's where the typical user sits.
+
+**Few-shot** stays deferred: ablation shows no prompt slack to trade for it.
+
+---
+
+## Interaction cost & perceived performance
+
+An ongoing track (`DECISIONS.md` 2026-09-08, vertical-not-horizontal): make the
+base build **truthfully faster** *and* **feel faster and smaller**, and keep the
+number of steps to do anything low. Prompted by `fx` v0.0.8 publishing p95 TUI
+latency and binary-size deltas as headline metrics (`QUESTIONS.md`).
+
+### Interactions per flow (2026-09-08, from a code trace of `src/lib/`)
+
+An *interaction* = one deliberate act: compose-a-line + Enter, a button click,
+one arrow-key in a menu, accept-a-completion, paste + Enter, a keyboard
+shortcut, or a native folder dialog.
+
+| flow | min | typical | max | notes |
+|---|:-:|:-:|:-:|---|
+| App start → ready to ask | **0** | **0** | 2 | last folder reopens on start (#44, shipped). First run / folder moved: button or `/open` → native picker = 2. |
+| Login → connected | 1 | 2–3 | ~5 | 1 = re-login (key on file) or `/login p key <KEY>`. Max = bare `/login` → read list → `/login p` via menu → paste. |
+| Choose model → set | 0 | 1–3 | ~6 | 0 = Ollama auto-reconcile; 1 = exact name or setup-panel button (≤12 models). Max = hosted gateway, name unknown. |
+| Ask a question | 1 | 1 | 1 | |
+| `/reindex` `/files` `/help` `/clear` `/retry` `/focus` `/tab` `/auth` `/update` | 1 | 1 | 1 | several have a `Ctrl`-shortcut |
+| `/sql <query>` | 1 | 1 | 1 | one keystroke burst |
+| `/schema <table>` | 1 | 2 | 3 | table-name completion menu |
+| `/history` → reopen | 2 | 2 | 2 | list, then `/history <n>` |
+| `/logout` | 1 | 1 | 2 | disambiguate if signed in to >1 |
+| `/packs enable <id>` | 1 | 2 | 3 | id completion menu |
+| `/connect <id>` | 2 | 2 | 2 | command + paste token |
+| Switch tab | 1 | 1 | 1 | click or `Ctrl+1-9` |
+| Command palette (`Ctrl+K`) | 2 | 2–3 | 19 | **pre-fills a command, doesn't run it** an intermediary step |
+
+**Aggregate:** ~20 distinct flows, ~28 interactions to exercise each once →
+~1.4 per flow. Min mostly 1 (a few 0). Max ~6.
+
+**Onboarding chain (cold start → first answer):**
+
+| scenario | interactions |
+|---|:-:|
+| Ollama installed + a chat model pulled | **3** (open 2 + ask 1; login/model are 0) |
+| Hosted provider, names known | **5** (open 2 + `/login p key <KEY>` 1 + `/model name` 1 + ask 1) |
+| Hosted provider, first run, discovering | **~11–14** |
+
+**Findings**
+
+- **The model picker is already capped.** The composer completion menu shows
+  **8 items** with "+N more keep typing" and no way to arrow past them a
+  provider with hundreds of models forces *typing to narrow*, not scrolling.
+  Worst realistic model pick is ~6 interactions, not dozens.
+- **~~Every launch re-opens the folder.~~** Fixed (#44): the last folder now
+  reopens on start, removing one interaction from every returning session.
+- **Login's 5× range** (1 → ~5) is entirely inline-vs-menu discovery.
+- **The command palette doesn't complete anything** it pre-fills the composer.
+
+### Metrics tracked per release (#47)
+
+`scripts/measure.sh` already collects sizes, dependency counts, cold-start time
+and idle memory and **appends the results here under a dated heading**. Run it
+in the pre-flight gate (`RELEASE.md` §1) every release and eyeball the delta
+against the previous run. Reference point (`main` @ `ea8d883`, 2026-09-08, this
+machine, default features `pdf`+`xlsx`+`mcp`):
+
+| metric | value | source |
+|---|--:|---|
+| **`fella` binary, fully stripped (the reported number)** | **16,872,936 B (16.09 MiB)** | `strip -s` then `stat` |
+| `fella` binary, as-shipped (`cargo build --release`, `strip=debuginfo`) | 20,000,184 B (19.07 MiB) | `stat -c%s src-tauri/target/release/fella` |
+| `.text` (machine code) | 16,154,475 B (15.4 MiB) | `size` |
+| unique crates (runtime) / direct deps | 386 / 25 | `cargo tree -e normal` |
+| frontend bundle, all JS gzipped | 66 KB | `find build -name '*.js' \| gzip \| wc -c` |
+| `.deb` installer | 7,711,452 B (7.35 MiB) at `edba382`; not re-measured since | `pnpm tauri build` |
+| release profile | `lto=thin`, `codegen-units=1`, `panic=abort`, `strip=debuginfo` | `Cargo.toml`; `release-min` (`opt-level=z`, `lto=fat`, full strip) exists for a squeeze |
+| agent-loop latency | see `agent_bench` baseline above + `mean wall s` in the model tables | `agent_bench` / `agent_eval` |
+| cold start (`appReady` ms) | **still not captured** — the webview doesn't render under this WSL shell, so `onMount → app_ready` never fires; needs a real display (`RELEASE.md` §1) | `+page.svelte` logs it; `commands::app_ready` prints to stderr |
+
+### Metrics timeline
+
+One row per measured point, oldest first — the source for a fella-web changelog
+graph. **The reported size is "stripped"** — fully stripped, no separate debug
+file, the fair analogue of a single-binary tool's headline number (fx-style:
+"fella binary is X% smaller, current N MiB"). "ships" = what `cargo build
+--release` emits (`strip=debuginfo`, keeps a symbol table on purpose), tracked
+alongside. Blank = not measured at that commit (release tags weren't
+re-measured — the numbers move with dependencies and features, not version
+bumps). Bytes where known.
+
+| date | commit | milestone | binary ships | binary stripped | crates | JS gz | `.deb` |
+|---|---|---|--:|--:|--:|--:|--:|
+| 2026-08-26 | `d057220` | DuckDB default (pre-migration) | 67 MB | 54 MB | 359 | 39 KB | |
+| 2026-08-27 | `6f849bf` | **SQLite becomes the default** | 18,321,976 | 11,529,928 | 336 | 39 KB | |
+| 2026-08-28 | `d0dd675` | | 18,391,888 | 11,583,240 | 337 | 41 KB | |
+| 2026-08-30 | `67c3508` | **+`pdf` +`xlsx` +`mcp`** built in | 24,396,568 | 16,525,672 | 385 | 60 KB | |
+| 2026-09-03 | `edba382` | v0.1 pre-flight; `strip=debuginfo` set | 19,828,968 | 16,935,016 | 386 | ~60 KB | 7,711,452 |
+| 2026-09-04 | `cfca646` | **v0.1.0** — first public build | | | | | |
+| 2026-09-05 | `0b79a9b` | **v0.1.3** — Windows `/update` fix | | | | | |
+| 2026-09-06 | `a22f833` | **v0.1.4** — provider-connection patch | | | | | |
+| 2026-09-08 | `ea8d883` | `main`: per-folder memory, case-sensitivity flag | 20,000,184 | 16,872,936 | 386 | 66 KB | |
+
+Reading it: the DuckDB→SQLite migration cut the shipped binary **67→18 MB** and
+crates **359→336**; adding `pdf`+`xlsx`+`mcp` put ~5 MB and ~48 crates back
+(`67c3508`); **flat since** — four patch releases moved the fully-stripped
+binary by −62 KB (−0.4%). Frontend JS grew 39→66 KB, all of it the markdown
+renderer added at `67c3508`.
+
+Agent-loop scores (frozen 18-case battery, `agent_eval`; only exists from
+2026-09-07):
+
+| date | ref | gemma4:31b acc / tok-per-correct | luna acc / tok-per-correct | what changed |
+|---|---|--:|--:|---|
+| 2026-09-07 | baseline | 17/18 · 4249 | 17/18 · 3333 | first frozen-battery run |
+| 2026-09-07 | after | 18/18 · 3650 (−14%) | 18/18 · 3175 (−3%) | empty-aggregate spelled out; 3 verify-precision fixes |
+| 2026-09-08 | `#46` branch | 17/18 · 4212 | 18/18 · 3410 | `inspect_table` merge (5 sample rows by default vs 3) — token win clawed back, +1 case on luna sticks |
+
+**The one real gap: per-interaction latency** (keypress → next paint for menu
+open, completion accept, tab switch, submit). Not measured — and deliberately
+not built yet: nobody's reported the UI as laggy, and a keystroke-timing
+harness for a small local Svelte app is speculative. Add it only if the app
+starts to feel slow.
+
+### Log
+
+- **2026-09-08** — first interaction-cost trace (above). `#44` shipped (last
+  folder reopens on start); `#45` shipped (mid-run steer). `#47` = this
+  section: track `measure.sh` numbers per release; per-interaction latency
+  left as YAGNI. `#46` (merge the inspect tools) still open.
+- **2026-09-08** — re-measured binary size on `main` @ `ea8d883`: 20,000,184 B
+  ships / 16,872,936 B stripped, flat vs the `edba382` pre-flight (−0.4%
+  stripped). Added the metrics timeline above. Cold start still unmeasurable
+  under WSL (no webview render) — deferred to a real-display RC smoke test.
+
+## 2026-09-10 17:03  ·  v0.1.5 (release build)
+
+### Toolchain
+
+rustc 1.98.0 (88d9e12ae 2026-08-18)
+cargo 1.98.0 (797e8a9bc 2026-08-05)
+v24.20.0 11.24.0
+Linux 6.6.87.2-microsoft-standard-WSL2
+
+### Dependencies
+
+unique crates in the graph : 386
+direct dependencies        : 25
+
+duplicate versions (same crate at >1 version wasted size + build time):
+base64 v0.22.1
+base64 v0.23.1
+bitflags v1.3.2
+bitflags v2.13.1
+cpufeatures v0.2.17
+cpufeatures v0.3.0
+fastrand v2.5.0
+flate2 v1.1.9
+foldhash v0.2.0
+getrandom v0.2.17
+getrandom v0.3.4
+getrandom v0.4.3
+hashbrown v0.12.3
+hashbrown v0.17.1
+hashbrown v0.17.1 (*)
+heck v0.4.1
+heck v0.5.0
+indexmap v1.9.3 (*)
+indexmap v2.14.0 (*)
+libc v0.2.189
+log v0.4.34
+miniz_oxide v0.8.9
+proc-macro-crate v1.3.1 (*)
+proc-macro-crate v2.0.2 (*)
+proc-macro-crate v3.5.0 (*)
+quick-xml v0.41.0
+semver v1.0.28
+serde v1.0.229
+serde_core v1.0.229
+serde_json v1.0.151 (*)
+serde_spanned v0.6.9 (*)
+serde_spanned v1.1.1 (*)
+simd-adler32 v0.3.10
+smallvec v1.15.2
+stable_deref_trait v1.2.1
+syn v1.0.109
+syn v2.0.119
+syn v3.0.4
+tauri-utils v2.9.3 (*)
+thiserror v1.0.69 (*)
+thiserror v2.0.20 (*)
+thiserror-impl v1.0.69 (proc-macro) (*)
+thiserror-impl v2.0.20 (proc-macro) (*)
+time v0.3.55
+time v0.3.55 (*)
+toml_datetime v0.6.3 (*)
+toml_datetime v1.1.1+spec-1.1.0 (*)
+toml_edit v0.19.15 (*)
+toml_edit v0.20.2 (*)
+toml_edit v0.25.13+spec-1.1.0 (*)
+uuid v1.26.0 (*)
+winnow v0.5.40
+winnow v1.0.4
+
+### Release build
+
+   Compiling fella v0.1.5 (/home/avi/Projects/fella-oss/src-tauri)
+    Finished `release` profile [optimized] target(s) in 1m 59s
+wall 120.03s · peak 1556160KB
+
+### Incremental rebuild time (edit one file, rebuild)
+
+Benchmark 1: cargo build --release
+  Time (mean ± σ):     112.207 s ±  3.161 s    [User: 156.461 s, System: 8.331 s]
+  Range (min … max):   108.682 s … 114.789 s    3 runs
+ 
+
+per-crate compile times: cd src-tauri && cargo build --release --timings
+  then open src-tauri/target/cargo-timings/cargo-timing.html
+
+### Binary size
+
+with symbols : 20M  (20060432 bytes)
+stripped     : 17M  (16917576 bytes)  <- what actually ships
+
+     text	   data	    bss	    dec	    hex	filename
+  16199075	 711768	  17216	16928059	1024d3b	src-tauri/target/release/fella
+
+### Binary composition (cargo-bloat)
+
+(skipped pass --bloat; it relinks the LTO binary, ~10 min)
+
+### Frontend bundle
+
+.svelte-kit/output/server/_app/immutable/assets/_page.hCxyTU_O.css     15.68 kB │ gzip:  3.14 kB
+.svelte-kit/output/server/entries/pages/_layout.ts.js                   0.15 kB │ gzip:  0.13 kB
+.svelte-kit/output/server/env.js                                        0.22 kB │ gzip:  0.14 kB
+.svelte-kit/output/server/entries/pages/_layout.svelte.js               0.23 kB │ gzip:  0.18 kB
+.svelte-kit/output/server/chunks/env.js                                 0.28 kB │ gzip:  0.17 kB
+.svelte-kit/output/server/internal.js                                   0.40 kB │ gzip:  0.19 kB
+.svelte-kit/output/server/chunks/internal.js                            0.88 kB │ gzip:  0.43 kB
+.svelte-kit/output/server/entries/fallbacks/error.svelte.js             4.77 kB │ gzip:  1.76 kB
+.svelte-kit/output/server/chunks/index-server.js                        5.08 kB │ gzip:  1.84 kB
+.svelte-kit/output/server/chunks/exports.js                             9.57 kB │ gzip:  3.06 kB
+.svelte-kit/output/server/chunks/uneval.js                             17.25 kB │ gzip:  4.78 kB
+.svelte-kit/output/server/chunks/shared.js                             29.89 kB │ gzip:  8.07 kB
+.svelte-kit/output/server/chunks/internal2.js                          36.26 kB │ gzip: 10.37 kB
+.svelte-kit/output/server/chunks/utils.js                              37.45 kB │ gzip: 10.84 kB
+.svelte-kit/output/server/remote-entry.js                              55.45 kB │ gzip: 12.13 kB
+.svelte-kit/output/server/entries/pages/_page.svelte.js                57.71 kB │ gzip: 15.14 kB
+.svelte-kit/output/server/chunks/server.js                            121.19 kB │ gzip: 31.57 kB
+.svelte-kit/output/server/index.js                                    134.75 kB │ gzip: 33.72 kB
+✓ built in 1.79s
+  Wrote site to "build"
+
+build/ on disk  : 460K
+all JS, gzipped : 69 KB
+
+### Cold start -> interactive
+
+(a window opens briefly for each run)
+run 1: no timing line (no display / WSLg?)
+run 2: no timing line (no display / WSLg?)
+run 3: no timing line (no display / WSLg?)
+
+### Idle memory
+
+main process RSS : 177 MB   (+ 2 WebKit helper process(es), not summed)
+  Elapsed (wall clock) time (h:mm:ss or m:ss): 0:08.02
+  Maximum resident set size (kbytes): 183392
+
+### Notes
+
+- GUI metrics (cold start, memory) need a display WSLg on Windows.
+- `time -v` "Maximum resident set size" is the main process only; WebKit
+  helpers add ~20-60 MB more.
+- `du --apparent-size` = file bytes, not blocks-on-disk.
+- First `cargo build --release` is slow (DuckDB C++); later ones are fast.

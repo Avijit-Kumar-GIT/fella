@@ -155,6 +155,48 @@ fn messy_ledger_csv_coerces_currency_and_sums_right() {
     let _ = fs::remove_dir_all(&data);
 }
 
+#[test]
+fn named_month_dates_are_normalized_so_group_by_month_works() {
+    // The reported bug, reproduced end to end: a rent ledger with dates
+    // written "Aug 1, 2026" instead of ISO-8601. Before normalization,
+    // strftime('%Y-%m', 'Aug 1, 2026') returns NULL for every row, so
+    // GROUP BY collapses the whole ledger into one bucket -- the total
+    // gets reported as if it were a single month's rent.
+    let ws = scratch("dates-ws");
+    let data = scratch("dates-data");
+
+    fs::write(
+        ws.join("rent.csv"),
+        "Date,Rent\n\
+         \"Sep 1, 2025\",1316\n\
+         \"Oct 1, 2025\",1321\n\
+         \"Nov 1, 2025\",1316\n\
+         \"Dec 1, 2025\",1316\n",
+    )
+    .unwrap();
+
+    let engine = EngineState::new(&data).unwrap();
+    let catalog = engine.open_workspace(&ws).unwrap();
+
+    let rent = catalog.sources.iter().find(|s| s.name == "rent.csv").unwrap();
+    let date_col = rent.columns.as_ref().unwrap().iter().find(|c| c.name == "Date").unwrap();
+    assert_eq!(date_col.type_, "TEXT", "normalized dates still store as TEXT (ISO-8601)");
+    assert!(date_col.note.as_ref().is_some_and(|n| n.contains("ISO-8601")), "{:?}", date_col.note);
+
+    let out = engine
+        .run_sql(r#"SELECT strftime('%Y-%m', "Date") AS month, SUM(Rent) AS total FROM rent GROUP BY month ORDER BY month"#)
+        .unwrap();
+    // Four real months, not one NULL bucket with the grand total.
+    assert_eq!(out.row_count, 4, "rows: {:?}", out.rows);
+    assert_eq!(out.rows[0][0], serde_json::json!("2025-09"));
+    assert_eq!(out.rows[0][1], serde_json::json!(1316));
+    assert_eq!(out.rows[1][0], serde_json::json!("2025-10"));
+    assert_eq!(out.rows[1][1], serde_json::json!(1321));
+
+    let _ = fs::remove_dir_all(&ws);
+    let _ = fs::remove_dir_all(&data);
+}
+
 #[cfg(feature = "xlsx")]
 #[test]
 fn ingests_excel_sheets() {

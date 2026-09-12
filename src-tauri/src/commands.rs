@@ -330,6 +330,12 @@ pub fn conversation_load(id: String, engine: State<'_, EngineState>) -> Result<S
     engine.conversation_load(&id)
 }
 
+/// Remove one archived conversation. Used by the sidebar's per-row delete.
+#[tauri::command]
+pub fn delete_conversation(id: String, engine: State<'_, EngineState>) -> Result<(), EngineError> {
+    engine.delete_conversation(&id)
+}
+
 /// Stop the in-progress `ask` for one conversation (tab).
 #[tauri::command]
 pub fn cancel(conversation_id: String, engine: State<'_, EngineState>) {

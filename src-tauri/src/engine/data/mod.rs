@@ -49,6 +49,12 @@ pub enum ColType {
     Float,
     Bool,
     Text,
+    /// A text column whose values were confidently parsed as a
+    /// spelled-out-month date ("Aug 1, 2026") and normalized to ISO-8601
+    /// (`YYYY-MM-DD`) at ingest, so `strftime()`/`date()` just work. Stored
+    /// as TEXT like `ColType::Text`; the distinction only matters at
+    /// ingest time (see `sqlite::string_cell`/`json_cell`).
+    Date,
 }
 
 impl ColType {
@@ -56,7 +62,7 @@ impl ColType {
         match self {
             ColType::Int | ColType::Bool => "INTEGER",
             ColType::Float => "REAL",
-            ColType::Text => "TEXT",
+            ColType::Text | ColType::Date => "TEXT",
         }
     }
     #[cfg(feature = "duckdb")]
@@ -65,7 +71,7 @@ impl ColType {
             ColType::Int => "BIGINT",
             ColType::Float => "DOUBLE",
             ColType::Bool => "BOOLEAN",
-            ColType::Text => "VARCHAR",
+            ColType::Text | ColType::Date => "VARCHAR",
         }
     }
 }
@@ -336,6 +342,55 @@ pub fn parse_numeric(s: &str) -> Option<f64> {
         v = -v;
     }
     Some(v)
+}
+
+/// Parses a handful of unambiguous "month spelled out" date formats into
+/// ISO-8601 (`YYYY-MM-DD`): "Aug 1, 2026", "August 1, 2026", "1 Aug 2026",
+/// "01 August 2026", an optional ordinal suffix ("1st", "2nd", "3rd", "21st"),
+/// comma optional, case-insensitive. Deliberately does not attempt pure
+/// numeric formats (`08/01/2026`): whether that means MM/DD or DD/MM is
+/// genuinely ambiguous per-file, and a wrong guess would silently swap month
+/// and day instead of visibly failing the way an unparsed string does. Used
+/// by both the CSV/JSON sniffer (`sqlite.rs`) and the Excel ingest.
+pub fn parse_named_month_date(s: &str) -> Option<String> {
+    const MONTHS: &[(&str, u32)] = &[
+        ("jan", 1), ("january", 1),
+        ("feb", 2), ("february", 2),
+        ("mar", 3), ("march", 3),
+        ("apr", 4), ("april", 4),
+        ("may", 5),
+        ("jun", 6), ("june", 6),
+        ("jul", 7), ("july", 7),
+        ("aug", 8), ("august", 8),
+        ("sep", 9), ("sept", 9), ("september", 9),
+        ("oct", 10), ("october", 10),
+        ("nov", 11), ("november", 11),
+        ("dec", 12), ("december", 12),
+    ];
+    let cleaned: String = s.chars().filter(|&c| c != ',').collect();
+    let parts: Vec<&str> = cleaned.split_whitespace().collect();
+    let [a, b, year_str] = parts[..] else { return None };
+    let (month_str, day_str) = if a.chars().next()?.is_ascii_alphabetic() { (a, b) } else { (b, a) };
+    let month = MONTHS.iter().find(|(n, _)| n.eq_ignore_ascii_case(month_str)).map(|(_, m)| *m)?;
+    let day: u32 = day_str.trim_end_matches(|c: char| c.is_ascii_alphabetic()).parse().ok()?;
+    let year: i32 = year_str.parse().ok()?;
+    if !(1..=31).contains(&day) || !(1900..=2100).contains(&year) {
+        return None;
+    }
+    Some(format!("{year:04}-{month:02}-{day:02}"))
+}
+
+/// Whether a trimmed, case-folded cell reads as a totals/summary-row label
+/// ("Total", "Grand Total:", "Subtotal Q1", ...). Shared by the CSV and Excel
+/// ingest's "drop the trailing summary row" check so the label vocabulary
+/// can't drift apart between the two.
+pub fn is_total_label(s: &str) -> bool {
+    let l = s.trim().to_ascii_lowercase();
+    let l = l.trim_end_matches([':', '.']).trim();
+    matches!(l, "total" | "totals" | "sum" | "grand total" | "subtotal" | "sub total")
+        || l.starts_with("total ")
+        || l.starts_with("grand total ")
+        || l.starts_with("subtotal ")
 }
 
 /// Quote an identifier for interpolation into SQL: `"a""b"`.

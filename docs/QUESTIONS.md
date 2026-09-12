@@ -22,19 +22,19 @@ that's still open. Newest section last.
   drops, how far back in model age before the *model* (not the tool) decays."**
   → `agent_eval` subcommands: `accuracy`, `prompt-ablation`, `folder-scale`,
   `model-ladder`, `robustness`, `session-memory`. Metrics in
-  `docs/PERFORMANCE.md`.
+  `docs/PERFORMANCE-LOG.md`.
 
 - **"Are we editing test cases to fit the output? We should change the code to
   fit the tests, not the tests to fit the code."**
   → Battery **frozen**. Grader changes need a behaviour trace + a ground-truth
-  argument (rule in `PERFORMANCE.md` and in `grade()`'s comment). The 2026-09-07
+  argument (rule in `PERFORMANCE-LOG.md` and in `grade()`'s comment). The 2026-09-07
   grader fixes each cite the trace.
 
 - **"Diversify the cases; run more iterations; get a solid baseline *then*
   optimise the harness against it."**
   → 18 diverse cases (aggregate / filter / min-max / group / time-series /
   ratio / multi-step / trap / doc / empty / refusal / non-financial).
-  Baseline: `PERFORMANCE.md` §"Baseline 2026-09-07". Then optimised —
+  Baseline: `PERFORMANCE-LOG.md` §"Baseline 2026-09-07". Then optimised —
   §"After 2026-09-07".
 
 ---
@@ -43,7 +43,7 @@ that's still open. Newest section last.
 
 - **"As long as we're model-agnostic I don't care too much — can we record
   these improvements somewhere?"**
-  → `docs/HARNESS.md` (the running log + rationale), `PERFORMANCE.md` (numbers),
+  → `docs/HARNESS.md` (the running log + rationale), `PERFORMANCE-LOG.md` (numbers),
   `CHANGELOG.md`, `DECISIONS.md`. GitHub #40 / #41.
 
 - **"What do higher-end harnesses like ChatGPT do that we currently aren't?"**
@@ -232,7 +232,7 @@ a memory failure).
   Fella `submit()` bails while `session.busy` — the only mid-run option is
   Stop → wait → retype. A message sent while busy should cancel + re-ask with
   the text appended. Removes a full round-trip from the correction loop (see the
-  interaction-cost table in `PERFORMANCE.md`).
+  interaction-cost table in `PERFORMANCE-LOG.md`).
 - **Publish latency percentiles + binary size (#47)** as tracked
   release metrics, alongside `agent_bench`'s loop timings. fx headlines "all 22
   TUI interactions <15 ms p95" and "-7.49% binary".

@@ -4,6 +4,7 @@
 		COMMAND_DESCRIPTIONS,
 		completionsFor,
 		dispatch,
+		openFolder,
 		resumeLastFolder,
 		steerRun,
 		stop
@@ -33,6 +34,35 @@
 					? `Ask about ${folderName}…`
 					: 'Open a folder to ask, or type /help'
 	);
+
+	// --- live-state chips (moved from the retired StatusBar) -------------
+	let up = $derived(session.health?.reachable ?? null);
+	let rejected = $derived(session.health?.rejected === true);
+	let providerId = $derived(session.settings?.provider ?? 'ollama');
+	let providerName = $derived(
+		session.providers.find((p) => p.id === providerId)?.display ?? providerId
+	);
+	let hasFolder = $derived(!!session.catalog.workspace);
+	let fileCount = $derived(session.catalog.sources.length);
+	// provider/model, only once the provider has actually answered. Shows the
+	// active tab's model (each tab can pick its own).
+	let modelLabel = $derived(up === true && session.model ? `${providerName}/${session.model}` : '');
+	// The health chip's text when there's nothing to show yet, or something
+	// needs doing. Points at the fix.
+	let healthState = $derived.by(() => {
+		if (up === null) return 'connecting…';
+		if (rejected) return 'key refused — /login';
+		if (up === false) return 'offline';
+		if (up === true && !session.model) return 'pick a model — /model';
+		return '';
+	});
+	let activityNote = $derived.by(() => {
+		if (session.activity) return session.activity;
+		if (session.busy) return 'working…';
+		if ((up === false || rejected) && providerId !== 'ollama') return providerName;
+		if (session.focus) return 'focus mode · /focus to exit';
+		return null;
+	});
 
 	// --- completion menu -------------------------------------------------
 	const MAX_ITEMS = 8;
@@ -245,25 +275,53 @@
 			onkeydown={onKey}
 			onfocus={() => (menuOff = false)}
 		></textarea>
-		{#if session.busy && value.trim() && !pendingInput && !value.startsWith('/')}
-			<button
-				class="act send"
-				title="Cancel and re-ask with this (Enter)"
-				aria-label="Cancel and re-ask with this"
-				onclick={() => void submit()}
-			>
-				<Icon name="corner-down-left" size={15} />
-			</button>
-		{:else if session.busy}
-			<button class="act stop" title="Stop (Esc)" aria-label="Stop" onclick={() => stop()}>
-				<Icon name="stop" fill size={13} />
-			</button>
-		{:else if value.trim()}
-			<button class="act send" aria-label="Send" onclick={() => void submit()}>
-				<Icon name="corner-down-left" size={15} />
-			</button>
-		{/if}
+		<div class="bottom-row">
+			{#if !session.focus}
+				<div class="chips">
+					<span class="chip">
+						{#if up === true}
+							<Icon name="asterisk" size={11} />
+						{:else}
+							<span class="dot" class:down={up === false} aria-hidden="true"></span>
+						{/if}
+						{modelLabel || healthState}
+					</span>
+					{#if activityNote}
+						<span class="chip">
+							{#if session.busy}<span class="thinking" aria-hidden="true"></span>{/if}
+							{activityNote}
+						</span>
+					{/if}
+				</div>
+			{/if}
+			{#if session.busy && value.trim() && !pendingInput && !value.startsWith('/')}
+				<button
+					class="act send"
+					title="Cancel and re-ask with this (Enter)"
+					aria-label="Cancel and re-ask with this"
+					onclick={() => void submit()}
+				>
+					<Icon name="corner-down-left" size={15} />
+				</button>
+			{:else if session.busy}
+				<button class="act stop" title="Stop (Esc)" aria-label="Stop" onclick={() => stop()}>
+					<Icon name="stop" fill size={13} />
+				</button>
+			{:else if value.trim()}
+				<button class="act send" aria-label="Send" onclick={() => void submit()}>
+					<Icon name="corner-down-left" size={15} />
+				</button>
+			{/if}
+		</div>
 	</div>
+	{#if !session.focus}
+		<div class="below">
+			<button class="below-btn" type="button" onclick={() => void openFolder()}>
+				<Icon name="folder" size={12} />
+				{hasFolder ? `${folderName} · ${fileCount} file${fileCount === 1 ? '' : 's'}` : 'choose a folder'}
+			</button>
+		</div>
+	{/if}
 </div>
 
 <style>
@@ -272,16 +330,48 @@
 		flex: none;
 		padding: var(--space-1) var(--pad) var(--space-2);
 	}
+	/* Live session state, moved here from the retired StatusBar so it reads
+	   as part of the composer instead of a separate strip -- plain inline
+	   labels, not bordered chips, so the box holds one surface, not nested
+	   ones. */
+	.chips {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: var(--space-4);
+		min-width: 0;
+	}
+	.chip {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		color: var(--text-dim);
+		font-size: var(--fs-sm);
+		white-space: nowrap;
+	}
+	.chip .dot {
+		width: 6px;
+		height: 6px;
+		border-radius: 50%;
+		background: var(--text-faint);
+		flex: none;
+		box-shadow: 0 0 0 3px color-mix(in srgb, var(--text-faint) 18%, transparent);
+	}
+	.chip .dot.down {
+		background: var(--err);
+		box-shadow: 0 0 0 3px color-mix(in srgb, var(--err) 20%, transparent);
+	}
 	/* Outlined but unfilled it sits on the footer surface, no card colour.
 	   Softly rounded; stays sane when the textarea grows tall. */
 	.field {
 		display: flex;
-		align-items: flex-end;
+		flex-direction: column;
 		gap: var(--space-2);
-		background: transparent;
-		border: 1px solid var(--border-strong);
+		background: var(--bg-raised);
+		border: 1px solid var(--border);
 		border-radius: 18px;
-		padding: var(--space-2) var(--space-2) var(--space-2) var(--space-4);
+		box-shadow: var(--shadow-sm);
+		padding: var(--space-3) var(--space-3) var(--space-2) var(--space-4);
 		transition:
 			border-color var(--dur-fast) var(--ease),
 			box-shadow var(--dur-fast) var(--ease);
@@ -290,9 +380,32 @@
 		border-color: var(--link);
 		box-shadow: var(--focus-ring);
 	}
+	.bottom-row {
+		display: flex;
+		align-items: center;
+		gap: var(--space-3);
+		min-height: 28px;
+	}
+	.below {
+		display: flex;
+		margin-top: var(--space-2);
+	}
+	.below-btn {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+		padding: 3px 6px;
+		border-radius: var(--radius-chip);
+		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+	}
+	.below-btn:hover {
+		background: var(--bg-inset);
+		color: var(--text-dim);
+	}
 	textarea {
-		flex: 1;
-		min-width: 0;
+		width: 100%;
 		resize: none;
 		border: none;
 		outline: none;
@@ -318,6 +431,7 @@
 	/* Trailing action send when there's text, stop while a run is live. */
 	.act {
 		flex: none;
+		margin-left: auto;
 		display: grid;
 		place-items: center;
 		width: 28px;

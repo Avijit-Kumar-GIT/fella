@@ -60,7 +60,7 @@ Run on the current tree; nothing tags until this is green. Record numbers in
       GTK/glib deps, no CVE-level vulnerability; `pnpm audit --prod`: no known
       vulnerabilities.
 - [x] `scripts/measure.sh --build` binary size, crate counts, frontend bundle
-      — recorded 2026-08-30, commit `67c3508` (`docs/PERFORMANCE.md`).
+      — recorded 2026-08-30, commit `67c3508` (`docs/PERFORMANCE-LOG.md`).
 - [ ] `pnpm tauri build` on Linux → `.deb` + `.AppImage`; **record each
       installer's size**. Launch the AppImage: open a folder, ask a question
       (local Ollama or a keyed provider), check the evidence fold, the `/login`
@@ -76,9 +76,9 @@ Run on the current tree; nothing tags until this is green. Record numbers in
       `/model` switch, mid-run stop, tabs + `/focus`. Needs either a real
       Linux display or accepting Windows-only GUI coverage for v0.1.
 - [x] `cargo run --release --example agent_bench` against a local Ollama
-      capture the first baseline table into `docs/PERFORMANCE.md`. — captured
+      capture the first baseline table into `docs/PERFORMANCE-LOG.md`. — captured
       2026-09-04 against `ollama-cloud`/`gemma4:31b` (PR #8); **local** Ollama
-      still unmeasured, noted as a gap in `docs/PERFORMANCE.md`.
+      still unmeasured, noted as a gap in `docs/PERFORMANCE-LOG.md`.
 - [x] Static security review written: the four `SECURITY.md` guarantees
       re-confirmed against the tree, the egress map, CSP active, the
       `run_python`-is-not-a-sandbox caveat that must appear in the release notes.

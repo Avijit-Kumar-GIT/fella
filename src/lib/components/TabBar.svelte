@@ -104,7 +104,7 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 	}
-	/* Same halo treatment as StatusBar's connection dot. */
+	/* Same halo treatment as Composer's connection-status chip dot. */
 	.unsaved {
 		width: 6px;
 		height: 6px;

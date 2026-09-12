@@ -354,6 +354,29 @@ impl EngineState {
         ))
     }
 
+    /// Remove one archived conversation's file, by the same slug-suffix
+    /// lookup `conversation_load` uses. Used by the sidebar's per-row delete.
+    pub fn delete_conversation(&self, id: &str) -> EngineResult<()> {
+        let dir = self.data_dir.join("conversations");
+        let slug: String = id
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .take(32)
+            .collect();
+        let suffix = format!("_{slug}.json");
+        let entries = std::fs::read_dir(&dir)
+            .map_err(|e| EngineError::io(format!("read {}", dir.display()), e))?;
+        for entry in entries.flatten() {
+            if entry.file_name().to_string_lossy().ends_with(&suffix) {
+                return std::fs::remove_file(entry.path())
+                    .map_err(|e| EngineError::io(format!("remove {}", entry.path().display()), e));
+            }
+        }
+        Err(EngineError::msg(
+            "that conversation couldn't be found it may have been deleted",
+        ))
+    }
+
     pub fn catalog(&self) -> Catalog {
         let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         Catalog {
@@ -532,6 +555,14 @@ impl EngineState {
         Ok(had)
     }
 
+    /// Append one coarse, telemetry-free record to `<data_dir>/signals.jsonl`
+    /// when `reason` fires (see `friction::trigger`). Never transmitted; never
+    /// contains question/answer text, file paths, or data values. Best-effort
+    /// a write failure here must never fail the actual answer.
+    pub(crate) fn record_friction_signal(&self, reason: &str, evidence: &[crate::engine::evidence::EvidenceItem]) {
+        crate::engine::friction::record(&self.data_dir, reason, evidence);
+    }
+
     /// The learned-notes block for the system prompt, or `None` when memory is
     /// off, no folder is open, or nothing's been learned. Re-read from disk so a
     /// hand edit to `memory.md` lands on the next question.
@@ -541,7 +572,7 @@ impl EngineState {
         }
         let path = self.memory_path()?;
         let mut mem = FolderMemory::load(&path);
-        mem.mark_stale(&self.known_views());
+        mem.prune_tables(&self.known_views());
         mem.semantic_core()
     }
 
@@ -555,11 +586,13 @@ impl EngineState {
             .collect()
     }
 
-    /// After a completed turn: append an episode, and if the answer verified
-    /// cleanly on one query, learn that query as a recipe. A follow-up that
-    /// plainly corrects the previous answer becomes a vocabulary note instead.
-    /// `prior_q` is the previous question in this conversation, if any.
-    fn record_turn_memory(&self, prior_q: Option<&str>, question: &str, answer: &Answer) {
+    /// After a completed turn: append an episode, and if it plainly corrects
+    /// the previous answer, learn a vocabulary note from it. Deliberately
+    /// does not cache the query itself as a "recipe" (cut 2026-09-11, see
+    /// `docs/DECISIONS.md`) memory holds durable facts, not code snapshotted
+    /// against one verify pass. `prior_q` is the previous question in this
+    /// conversation, if any.
+    async fn record_turn_memory(&self, prior_q: Option<&str>, question: &str, answer: &Answer) {
         if !memory::writes_enabled() {
             return;
         }
@@ -589,33 +622,47 @@ impl EngineState {
             }),
         );
 
-        let mut mem = FolderMemory::load(&path);
-        if corrected {
-            // Key the note on the corrected topic, not the whole sentence.
-            let topic: String = question
-                .split_whitespace()
-                .skip_while(|w| {
-                    matches!(
-                        w.trim_end_matches(&[',', ':'][..]).to_lowercase().as_str(),
-                        "no" | "actually" | "correction" | "wrong" | "that's" | "it's"
-                    )
-                })
-                .take(3)
-                .collect::<Vec<_>>()
-                .join(" ");
-            mem.set_vocab(if topic.is_empty() { question } else { &topic }, question.trim());
-        } else if sqls.len() == 1 && crate::engine::verify::reran_clean(&answer.verification) {
-            let sql = sqls[0];
-            let tables: Vec<String> = crate::engine::verify::referenced_relations(sql)
-                .into_iter()
-                .filter(|t| !t.contains('('))
-                .collect();
-            mem.record_recipe(question, sql, &tables);
-        } else {
-            return; // nothing to write
+        if !corrected {
+            return; // an ordinary, uncorrected question teaches memory nothing
         }
-        mem.mark_stale(&self.known_views());
+        let mut mem = FolderMemory::load(&path);
+        let correction = question.trim();
+        let existing = mem.vocabulary_entries();
+        match self.reconcile_vocab_key(correction, &existing).await {
+            VocabAction::Update(key) | VocabAction::Add(key) => mem.set_vocab(&key, correction),
+            VocabAction::Noop => {}
+        }
+        mem.prune_tables(&self.known_views());
         mem.save();
+    }
+
+    /// Decide whether a new correction updates an existing vocabulary note,
+    /// is genuinely new, or just restates one already there -- "supersede,
+    /// don't append" (`docs/FOLDER-MEMORY.md`), done the way ChatGPT's `bio`
+    /// tool and Mem0/Zep do it: the model judges against the small existing
+    /// list, not a keyword/position heuristic (which can't tell two
+    /// rewordings of the same correction apart see `docs/DECISIONS.md`
+    /// 2026-09-12). Uses whichever model is currently active no override so
+    /// the memory file stays legible to any model that later reads it, and
+    /// costs nothing when there's nothing yet to reconcile against.
+    async fn reconcile_vocab_key(&self, correction: &str, existing: &[(String, String)]) -> VocabAction {
+        if existing.is_empty() {
+            return VocabAction::Add(default_topic_key(correction));
+        }
+        let list =
+            existing.iter().map(|(k, v)| format!("- {k}: {v}")).collect::<Vec<_>>().join("\n");
+        let sys = "You maintain a short list of facts Fella has learned from a user's corrections \
+about their own data. Given a new correction and the existing facts, decide: does it UPDATE one of \
+them (replace its text with this correction), is it genuinely a NEW fact (ADD), or does it just \
+restate one already there with nothing new (NOOP)? Reply with exactly one line, nothing else: \
+`UPDATE <key>`, `ADD <short 2-4 word key>`, or `NOOP <key>`. For UPDATE or NOOP, <key> must be copied \
+exactly, character for character, from the list below.";
+        let user = format!("EXISTING FACTS:\n{list}\n\nNEW CORRECTION:\n{correction}\n\nDecision:");
+        match self.ask_once(None, sys, &user).await {
+            Ok(reply) => parse_vocab_action(&reply, existing)
+                .unwrap_or_else(|| VocabAction::Add(default_topic_key(correction))),
+            Err(_) => VocabAction::Add(default_topic_key(correction)),
+        }
     }
 
     // --- packs (installed extensions) ------------------------------------
@@ -1245,10 +1292,10 @@ impl EngineState {
         }
         let answer = answer?;
 
-        // Fold this turn into the folder's learned notes (a verified recipe, or
-        // a correction). Needs the previous question in this conversation for
-        // the correction check, so read it before the distil step below pushes
-        // this one.
+        // Fold this turn into the folder's learned notes (a correction becomes
+        // a vocabulary note; an ordinary question teaches nothing). Needs the
+        // previous question in this conversation for the correction check, so
+        // read it before the distil step below pushes this one.
         if !cancel.load(Ordering::Relaxed) {
             let prior_q = {
                 let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
@@ -1258,7 +1305,7 @@ impl EngineState {
                     .and_then(|s| s.turns.last())
                     .map(|t| t.question.clone())
             };
-            self.record_turn_memory(prior_q.as_deref(), question, &answer);
+            self.record_turn_memory(prior_q.as_deref(), question, &answer).await;
         }
 
         // Distil this turn for the next question in the conversation - but not a
@@ -1616,6 +1663,64 @@ impl EngineState {
     }
 }
 
+/// What to do with a new correction against the existing vocabulary list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum VocabAction {
+    /// Replace this existing entry's text (same key, verbatim from the list).
+    Update(String),
+    /// A genuinely new fact under this key.
+    Add(String),
+    /// Restates an existing entry with nothing new; write nothing.
+    Noop,
+}
+
+/// The pre-reconciliation key heuristic: the first few content words of the
+/// correction, filler ("no,", "actually", ...) skipped. Used as the ADD key
+/// when there's nothing yet to reconcile against, and as the safety-net
+/// fallback if the model's reconciliation reply doesn't parse a correction
+/// is never silently dropped, worst case it lands under an approximate key
+/// instead of updating the right one.
+fn default_topic_key(correction: &str) -> String {
+    let topic: String = correction
+        .split_whitespace()
+        .skip_while(|w| {
+            matches!(
+                w.trim_end_matches(&[',', ':'][..]).to_lowercase().as_str(),
+                "no" | "actually" | "correction" | "wrong" | "that's" | "it's"
+            )
+        })
+        .take(3)
+        .collect::<Vec<_>>()
+        .join(" ");
+    if topic.is_empty() {
+        correction.to_string()
+    } else {
+        topic
+    }
+}
+
+/// Parses the model's one-line reconciliation reply (`UPDATE <key>` /
+/// `ADD <key>` / `NOOP <key>`). `None` on anything that doesn't fit the
+/// shape the caller falls back to treating the correction as new. For
+/// UPDATE/NOOP the key must exactly (case-insensitively) match one already in
+/// `existing` a hallucinated key is not trusted enough to silently overwrite
+/// or drop something.
+fn parse_vocab_action(reply: &str, existing: &[(String, String)]) -> Option<VocabAction> {
+    let line = reply.lines().find(|l| !l.trim().is_empty())?.trim();
+    let (verb, rest) = line.split_once(char::is_whitespace)?;
+    let key = rest.trim().trim_matches(['`', '"', '\''].as_slice());
+    if key.is_empty() {
+        return None;
+    }
+    let exact = |k: &str| existing.iter().find(|(ek, _)| ek.eq_ignore_ascii_case(k)).map(|(ek, _)| ek.clone());
+    match verb.to_ascii_uppercase().as_str() {
+        "UPDATE" => exact(key).map(VocabAction::Update),
+        "NOOP" => exact(key).map(|_| VocabAction::Noop),
+        "ADD" => Some(VocabAction::Add(key.to_string())),
+        _ => None,
+    }
+}
+
 /// First non-empty line of a text document, trimmed and capped, for the
 /// system-prompt document listing. Reads at most a few KB.
 fn first_line_synopsis(path: &str) -> Option<String> {
@@ -1635,7 +1740,7 @@ fn first_line_synopsis(path: &str) -> Option<String> {
 
 /// Truncate to at most `cap` characters (not bytes), for a short preview
 /// line no ellipsis added; the caller decides whether one reads better.
-fn cap_chars(s: &str, cap: usize) -> String {
+pub(crate) fn cap_chars(s: &str, cap: usize) -> String {
     match s.char_indices().nth(cap) {
         Some((i, _)) => s[..i].to_string(),
         None => s.to_string(),
@@ -1813,6 +1918,67 @@ mod schema_hint_tests {
         let b = tbl("b", &["id", "name", "amount", "note"]);
         // id/name/amount are stoplisted; sku/note appear in only one table
         assert!(shared_column_hints(&[&a, &b]).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod vocab_reconcile_tests {
+    use super::*;
+
+    #[test]
+    fn default_topic_key_skips_filler_words() {
+        assert_eq!(default_topic_key("no, actually rent should include housing"), "rent should include");
+        assert_eq!(default_topic_key("gym is under health"), "gym is under");
+    }
+
+    #[test]
+    fn default_topic_key_falls_back_to_the_whole_text_if_all_filler() {
+        assert_eq!(default_topic_key("no actually wrong"), "no actually wrong");
+    }
+
+    #[test]
+    fn parses_update_against_an_exact_existing_key() {
+        let existing = vec![("for rent totals".to_string(), "old text".to_string())];
+        assert_eq!(
+            parse_vocab_action("UPDATE for rent totals", &existing),
+            Some(VocabAction::Update("for rent totals".into()))
+        );
+        // case-insensitive match, but the returned key is copied from `existing`
+        assert_eq!(
+            parse_vocab_action("UPDATE FOR RENT TOTALS", &existing),
+            Some(VocabAction::Update("for rent totals".into()))
+        );
+    }
+
+    #[test]
+    fn parses_add_with_a_fresh_key() {
+        let existing = vec![("for rent totals".to_string(), "old text".to_string())];
+        assert_eq!(
+            parse_vocab_action("ADD gym category", &existing),
+            Some(VocabAction::Add("gym category".into()))
+        );
+    }
+
+    #[test]
+    fn parses_noop_against_an_exact_existing_key() {
+        let existing = vec![("for rent totals".to_string(), "old text".to_string())];
+        assert_eq!(parse_vocab_action("NOOP for rent totals", &existing), Some(VocabAction::Noop));
+    }
+
+    #[test]
+    fn a_hallucinated_key_on_update_or_noop_is_not_trusted() {
+        let existing = vec![("for rent totals".to_string(), "old text".to_string())];
+        // the model named a key that isn't actually in the list -- caller
+        // falls back to ADD rather than silently overwriting/dropping.
+        assert_eq!(parse_vocab_action("UPDATE some other key", &existing), None);
+        assert_eq!(parse_vocab_action("NOOP some other key", &existing), None);
+    }
+
+    #[test]
+    fn unparseable_replies_fall_back_to_none() {
+        let existing = vec![("for rent totals".to_string(), "old text".to_string())];
+        assert_eq!(parse_vocab_action("I think this updates the rent note.", &existing), None);
+        assert_eq!(parse_vocab_action("", &existing), None);
     }
 }
 

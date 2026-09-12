@@ -11,7 +11,8 @@ use serde_json::Value as Json;
 
 use crate::engine::catalog::{ColumnInfo, SourceKind};
 use crate::engine::data::{
-    parse_numeric, quote_ident, Cell, ColType, DataEngine, PythonBridge, QueryOutcome, SourceLoad,
+    parse_named_month_date, parse_numeric, quote_ident, Cell, ColType, DataEngine, PythonBridge,
+    QueryOutcome, SourceLoad,
 };
 use crate::engine::error::{EngineError, EngineResult};
 
@@ -483,14 +484,7 @@ fn find_header(records: &[csv::StringRecord], width: usize) -> (Vec<String>, usi
 /// than a data row: carries a total-ish label and is mostly empty.
 fn looks_like_total_row(row: &[&str], width: usize) -> bool {
     let filled = row.iter().filter(|c| !c.trim().is_empty()).count();
-    let has_label = row.iter().any(|c| {
-        let t = c.trim().to_ascii_lowercase();
-        let t = t.trim_end_matches([':', '.']).trim();
-        matches!(t, "total" | "totals" | "sum" | "grand total" | "subtotal" | "sub total")
-            || t.starts_with("total ")
-            || t.starts_with("grand total ")
-            || t.starts_with("subtotal ")
-    });
+    let has_label = row.iter().any(|c| crate::engine::data::is_total_label(c));
     has_label && filled * 3 <= width * 2 + 2
 }
 
@@ -578,6 +572,7 @@ fn sniff_strings<'a>(cells: impl Iterator<Item = &'a str>) -> (ColType, Option<S
     let (mut any, mut int, mut float, mut boolean) = (false, true, true, true);
     let (mut loose_ok, mut loose_used) = (true, false);
     let (mut n_nonblank, mut n_numeric) = (0usize, 0usize);
+    let (mut date_ok, mut date_used, mut date_example) = (true, false, None);
 
     for c in cells {
         let c = c.trim();
@@ -606,6 +601,14 @@ fn sniff_strings<'a>(cells: impl Iterator<Item = &'a str>) -> (ColType, Option<S
         } else {
             loose_ok = false;
         }
+        if date_ok {
+            if let Some(iso) = parse_named_month_date(c) {
+                date_used = true;
+                date_example.get_or_insert_with(|| (c.to_string(), iso));
+            } else {
+                date_ok = false;
+            }
+        }
     }
 
     if !any {
@@ -624,6 +627,20 @@ fn sniff_strings<'a>(cells: impl Iterator<Item = &'a str>) -> (ColType, Option<S
         return (
             ColType::Float,
             Some("amounts were stored as text (currency, commas, percent) and read as numbers".into()),
+        );
+    }
+    // Only when every non-blank cell parses -- a wrong guess on an ambiguous
+    // one would silently write the wrong date, worse than leaving it as text
+    // (see parse_named_month_date's own doc for why numeric MM/DD-vs-DD/MM
+    // formats are deliberately not attempted here).
+    if date_ok && date_used {
+        let (raw, iso) = date_example.unwrap_or_default();
+        return (
+            ColType::Date,
+            Some(format!(
+                "dates were stored as text (e.g. \"{raw}\") and normalized to ISO-8601 \
+                 (e.g. {iso}) for querying with strftime()/date()"
+            )),
         );
     }
     if n_nonblank >= 3 && n_numeric * 100 >= n_nonblank * 60 {
@@ -686,6 +703,7 @@ fn sniff_json<'a>(vals: impl Iterator<Item = &'a Json>) -> (ColType, Option<Stri
 
     let (mut any, mut int, mut float, mut boolean) = (false, true, true, true);
     let (mut saw_str, mut all_str_numeric) = (false, true);
+    let (mut all_str_date, mut date_example) = (true, None);
     for v in vals {
         match v {
             Json::Null => {}
@@ -711,6 +729,14 @@ fn sniff_json<'a>(vals: impl Iterator<Item = &'a Json>) -> (ColType, Option<Stri
                 if parse_numeric(s).is_none() {
                     all_str_numeric = false;
                 }
+                if all_str_date {
+                    match parse_named_month_date(s) {
+                        Some(iso) => {
+                            date_example.get_or_insert_with(|| (s.clone(), iso));
+                        }
+                        None => all_str_date = false,
+                    }
+                }
             }
             _ => {
                 any = true;
@@ -718,6 +744,7 @@ fn sniff_json<'a>(vals: impl Iterator<Item = &'a Json>) -> (ColType, Option<Stri
                 float = false;
                 boolean = false;
                 all_str_numeric = false;
+                all_str_date = false;
             }
         }
     }
@@ -737,6 +764,17 @@ fn sniff_json<'a>(vals: impl Iterator<Item = &'a Json>) -> (ColType, Option<Stri
         return (
             ColType::Float,
             Some("amounts were stored as text and read as numbers".into()),
+        );
+    }
+    // Same reasoning as sniff_strings: only when every string value parses.
+    if saw_str && all_str_date {
+        let (raw, iso) = date_example.unwrap_or_default();
+        return (
+            ColType::Date,
+            Some(format!(
+                "dates were stored as text (e.g. \"{raw}\") and normalized to ISO-8601 \
+                 (e.g. {iso}) for querying with strftime()/date()"
+            )),
         );
     }
     (ColType::Text, None)
@@ -772,6 +810,7 @@ fn string_cell(s: &str, ty: ColType) -> Cell {
             "false" => Json::from(0),
             _ => Json::Null,
         },
+        ColType::Date => parse_named_month_date(s).map(Json::from).unwrap_or(Json::Null),
     }
 }
 
@@ -798,6 +837,9 @@ fn json_cell(v: &Json, ty: ColType) -> Cell {
             .unwrap_or(Json::Null),
         (Json::String(s), ColType::Int) => {
             parse_numeric(s).map(|f| Json::from(f as i64)).unwrap_or(Json::Null)
+        }
+        (Json::String(s), ColType::Date) => {
+            parse_named_month_date(s).map(Json::from).unwrap_or(Json::Null)
         }
         (Json::String(s), _) => Json::from(s.clone()),
         (other, ColType::Text) => Json::from(other.to_string()),
@@ -867,6 +909,55 @@ mod tests {
         let note = note.expect("a mixed column should be noted");
         assert!(note.contains("parse_num"), "note should mention parse_num: {note:?}");
         assert!(!note.contains("CAST it for a total"), "note should not tell the model to CAST: {note:?}");
+    }
+
+    #[test]
+    fn parses_named_month_dates() {
+        // The reported bug: "Aug 1, 2026" made strftime() return NULL.
+        assert_eq!(parse_named_month_date("Aug 1, 2026").as_deref(), Some("2026-08-01"));
+        assert_eq!(parse_named_month_date("August 1, 2026").as_deref(), Some("2026-08-01"));
+        assert_eq!(parse_named_month_date("Aug 15 2026").as_deref(), Some("2026-08-15"));
+        // day-first, with an ordinal suffix
+        assert_eq!(parse_named_month_date("1st Aug 2026").as_deref(), Some("2026-08-01"));
+        assert_eq!(parse_named_month_date("21st August 2026").as_deref(), Some("2026-08-21"));
+        // case-insensitive
+        assert_eq!(parse_named_month_date("aug 1, 2026").as_deref(), Some("2026-08-01"));
+        // not a date at all
+        assert_eq!(parse_named_month_date("Groceries"), None);
+        assert_eq!(parse_named_month_date("$1,200.00"), None);
+        assert_eq!(parse_named_month_date("2026-08-01"), None); // already ISO, not this format
+        // out-of-range day/year rejected rather than silently wrapped
+        assert_eq!(parse_named_month_date("Aug 45, 2026"), None);
+        assert_eq!(parse_named_month_date("Aug 1, 26"), None);
+        // deliberately NOT attempted: ambiguous numeric formats
+        assert_eq!(parse_named_month_date("08/01/2026"), None);
+    }
+
+    #[test]
+    fn sniffs_named_month_dates_and_normalizes_to_iso() {
+        let (ty, note) =
+            sniff_strings(["Aug 1, 2026", "Sep 15, 2026", "Oct 1, 2026", "N/A"].into_iter());
+        assert_eq!(ty, ColType::Date);
+        let note = note.expect("a coerced date column should be noted");
+        assert!(note.contains("ISO-8601"), "{note}");
+        assert_eq!(string_cell("Aug 1, 2026", ColType::Date), Json::from("2026-08-01"));
+
+        // one genuinely unparseable value -> the whole column stays text,
+        // rather than silently mixing ISO and non-ISO dates.
+        let (ty, _) = sniff_strings(["Aug 1, 2026", "sometime in September"].into_iter());
+        assert_eq!(ty, ColType::Text);
+
+        // a plain text column is unaffected
+        assert_eq!(sniff_strings(["Groceries", "Rent", "Transport"].into_iter()).0, ColType::Text);
+    }
+
+    #[test]
+    fn sniffs_named_month_dates_from_json() {
+        let vals = [Json::from("Aug 1, 2026"), Json::from("Sep 15, 2026"), Json::Null];
+        let (ty, note) = sniff_json(vals.iter());
+        assert_eq!(ty, ColType::Date);
+        assert!(note.unwrap().contains("ISO-8601"));
+        assert_eq!(json_cell(&Json::from("Aug 1, 2026"), ColType::Date), Json::from("2026-08-01"));
     }
 
     #[test]

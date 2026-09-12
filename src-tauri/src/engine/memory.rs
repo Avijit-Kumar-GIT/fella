@@ -1,7 +1,6 @@
 //! Per-folder learned notes: a plain-Markdown file Fella keeps for a workspace,
-//! written from what it *verifies* and what the user *corrects*, and that the
-//! user can read and edit. Not a memory system it's the learned sibling of
-//! `fella.md`.
+//! written from what the user *corrects*, and that the user can read and edit.
+//! Not a memory system it's the learned sibling of `fella.md`.
 //!
 //! One `.md` per workspace under `<data_dir>/memory/`, plus an append-only
 //! `.episodes.jsonl` (the raw record; not yet read back). The `.md` is the
@@ -9,19 +8,25 @@
 //! section is kept verbatim), and a user-authored `## Notes` section and any
 //! sections we don't know are preserved on rewrite.
 //!
+//! Deliberately stores only durable *facts* (preferences, vocabulary, table
+//! notes) never a cached *query*. An earlier version also cached
+//! `question -> SQL` "recipes" reused whenever a later question looked
+//! similar enough. Cut (2026-09-11, see `docs/DECISIONS.md`): a recipe is
+//! code, not a fact, and it's recorded the moment `verify` happens to pass —
+//! so a query that only *looked* right (or that a since-strengthened check
+//! would now catch) got frozen in and replayed verbatim, which is a stronger
+//! claim than "this fact holds," and it discourages the fresh reasoning that
+//! would otherwise re-derive the right query for a subtly different
+//! question. A `## Recipes` section from an older memory file is silently
+//! dropped on next load.
+//!
 //! `FELLA_MEMORY=0` turns the whole thing off (read and write).
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
-/// Hard cap on stored recipes; the least-used is dropped past this.
-const MAX_RECIPES: usize = 40;
 /// Episodes kept in the `.jsonl` before the oldest are trimmed.
 const MAX_EPISODES: usize = 200;
-/// Character budget for the block prepended to the system prompt.
-const CORE_BUDGET: usize = 1600;
-/// How many recipes (most-used first) go in that block.
-const CORE_RECIPES: usize = 5;
 
 /// Reading learned notes is on unless `FELLA_MEMORY=0`.
 pub fn enabled() -> bool {
@@ -59,23 +64,12 @@ struct Note {
     text: String,
 }
 
-#[derive(Clone)]
-struct Recipe {
-    question: String,
-    sql: String,
-    tables: Vec<String>,
-    uses: u32,
-    date: String,
-    stale: bool,
-}
-
 #[derive(Default)]
 pub struct FolderMemory {
     path: PathBuf,
     preferences: Vec<String>,
     vocabulary: Vec<Note>,
     tables: Vec<Note>,
-    recipes: Vec<Recipe>,
     /// The user's `## Notes` section, verbatim.
     freeform: Vec<String>,
     /// Sections we don't manage, verbatim, re-emitted after ours.
@@ -88,7 +82,10 @@ enum Section {
     Pref,
     Vocab,
     Tables,
-    Recipes,
+    /// A no-longer-supported section (just `## Recipes`) silently discarded
+    /// on load rather than preserved as a `Trailer` an old memory file
+    /// self-cleans the moment Fella next touches it.
+    Dropped,
     Freeform,
     Trailer,
 }
@@ -99,8 +96,7 @@ impl FolderMemory {
         let mut m = FolderMemory { path: path.to_path_buf(), ..Default::default() };
         let Ok(text) = std::fs::read_to_string(path) else { return m };
         let mut sec = Section::None;
-        let mut lines = text.lines().peekable();
-        while let Some(raw) = lines.next() {
+        for raw in text.lines() {
             if sec == Section::Trailer {
                 m.trailer.push(raw.to_string());
                 continue;
@@ -111,8 +107,8 @@ impl FolderMemory {
                     "preferences" => Section::Pref,
                     "vocabulary" => Section::Vocab,
                     "table notes" | "tables" => Section::Tables,
-                    "recipes" => Section::Recipes,
                     "notes" => Section::Freeform,
+                    "recipes" => Section::Dropped,
                     _ => {
                         m.trailer.push(raw.to_string());
                         Section::Trailer
@@ -121,7 +117,7 @@ impl FolderMemory {
                 continue;
             }
             match sec {
-                Section::None => {} // H1, comments, blank lead-in
+                Section::None | Section::Dropped => {} // H1/comments/blank, or a discarded old section
                 Section::Pref => {
                     let t = line.strip_prefix("- ").unwrap_or(line).trim();
                     if !t.is_empty() {
@@ -136,26 +132,6 @@ impl FolderMemory {
                         m.vocabulary.push(note);
                     } else {
                         m.tables.push(note);
-                    }
-                }
-                Section::Recipes => {
-                    let Some(head) = line.strip_prefix("- ") else { continue };
-                    let mut r = parse_recipe_head(head);
-                    let mut sql = String::new();
-                    while let Some(peek) = lines.peek() {
-                        if peek.trim().is_empty() || peek.starts_with("- ") || peek.starts_with("## ")
-                        {
-                            break;
-                        }
-                        if !sql.is_empty() {
-                            sql.push('\n');
-                        }
-                        sql.push_str(peek.trim_start());
-                        lines.next();
-                    }
-                    r.sql = sql;
-                    if !r.question.is_empty() && !r.sql.is_empty() {
-                        m.recipes.push(r);
                     }
                 }
                 Section::Freeform => m.freeform.push(raw.to_string()),
@@ -179,7 +155,7 @@ impl FolderMemory {
         let mut s = String::new();
         s.push_str("# Fella  learned notes for this folder\n\n");
         s.push_str(
-            "<!-- Fella writes this from queries it verified and corrections you gave.\n     \
+            "<!-- Fella writes this from corrections you give it.\n     \
 Edit or delete anything; delete the file to start over.\n     \
 The \"## Notes\" section and any sections you add are left untouched. -->\n",
         );
@@ -199,22 +175,6 @@ The \"## Notes\" section and any sections you add are left untouched. -->\n",
             s.push_str("\n## Table notes\n");
             for n in &self.tables {
                 s.push_str(&render_note(n));
-            }
-        }
-        if !self.recipes.is_empty() {
-            s.push_str("\n## Recipes\n");
-            for r in &self.recipes {
-                let flag = if r.stale { "  (stale: a table is gone)" } else { "" };
-                s.push_str(&format!(
-                    "- {}  \u{b7}  used {}\u{d7}  \u{b7}  {}  \u{b7}  {}{flag}\n",
-                    r.question,
-                    r.uses,
-                    r.tables.join(", "),
-                    r.date,
-                ));
-                for l in r.sql.lines() {
-                    s.push_str(&format!("    {l}\n"));
-                }
             }
         }
         if !self.freeform.is_empty() {
@@ -239,16 +199,8 @@ The \"## Notes\" section and any sections you add are left untouched. -->\n",
         self.preferences.is_empty()
             && self.vocabulary.is_empty()
             && self.tables.is_empty()
-            && self.recipes.is_empty()
             && self.freeform.iter().all(|l| l.trim().is_empty())
             && self.trailer.is_empty()
-    }
-
-    /// Mark recipes whose tables are no longer in the workspace.
-    pub fn mark_stale(&mut self, known_views: &[String]) {
-        for r in &mut self.recipes {
-            r.stale = !r.tables.iter().all(|t| known_views.iter().any(|k| k == t));
-        }
     }
 
     /// Drop table notes whose view is no longer in the workspace (a renamed or
@@ -282,47 +234,15 @@ The \"## Notes\" section and any sections you add are left untouched. -->\n",
         Self::upsert(&mut self.vocabulary, key, text);
     }
 
-    /// Record a query that verified for a question. Same (normalised) question
-    /// bumps the use-count and refreshes the SQL; a new one is appended and the
-    /// least-used trimmed past `MAX_RECIPES`.
-    pub fn record_recipe(&mut self, question: &str, sql: &str, tables: &[String]) {
-        let q = normalise_question(question);
-        let sql = sql.split_whitespace().collect::<Vec<_>>().join(" ");
-        if q.is_empty() || sql.is_empty() {
-            return;
-        }
-        if let Some(r) = self.recipes.iter_mut().find(|r| normalise_question(&r.question) == q) {
-            r.uses += 1;
-            r.sql = sql;
-            r.date = today_ymd();
-            r.tables = tables.to_vec();
-            r.stale = false;
-            return;
-        }
-        self.recipes.push(Recipe {
-            question: question.trim().to_string(),
-            sql,
-            tables: tables.to_vec(),
-            uses: 1,
-            date: today_ymd(),
-            stale: false,
-        });
-        if self.recipes.len() > MAX_RECIPES {
-            // drop the least-used, oldest-on-tie
-            if let Some((i, _)) = self
-                .recipes
-                .iter()
-                .enumerate()
-                .min_by(|a, b| a.1.uses.cmp(&b.1.uses).then(a.1.date.cmp(&b.1.date)))
-            {
-                self.recipes.remove(i);
-            }
-        }
+    /// Current vocabulary as `(key, text)` pairs -- for deciding whether a new
+    /// correction updates one of these or is genuinely new. Cloned; the list
+    /// stays small (a handful to dozens of entries over a folder's life).
+    pub fn vocabulary_entries(&self) -> Vec<(String, String)> {
+        self.vocabulary.iter().map(|n| (n.key.clone(), n.text.clone())).collect()
     }
 
     /// The block prepended to the system prompt: preferences, all vocabulary,
-    /// all (non-stale) table notes, and the most-used recipes, within
-    /// `CORE_BUDGET` chars (recipes drop first). `None` if there's nothing.
+    /// and all table notes. `None` if there's nothing.
     pub fn semantic_core(&self) -> Option<String> {
         let mut p = String::new();
         if !self.preferences.is_empty() {
@@ -337,28 +257,15 @@ The \"## Notes\" section and any sections you add are left untouched. -->\n",
                 p.push_str(&format!("- {} \u{2192} {}\n", n.key, n.text));
             }
         }
-        let live_notes: Vec<&Note> = self.tables.iter().collect();
-        if !live_notes.is_empty() {
+        if !self.tables.is_empty() {
             p.push_str("Table notes:\n");
-            for n in live_notes {
+            for n in &self.tables {
                 if n.key.is_empty() {
                     p.push_str(&format!("- {}\n", n.text));
                 } else {
                     p.push_str(&format!("- {}: {}\n", n.key, n.text));
                 }
             }
-        }
-        let mut recipes: Vec<&Recipe> = self.recipes.iter().filter(|r| !r.stale).collect();
-        recipes.sort_by(|a, b| b.uses.cmp(&a.uses).then(b.date.cmp(&a.date)));
-        for (i, r) in recipes.into_iter().take(CORE_RECIPES).enumerate() {
-            let entry = format!("- \"{}\"\n    {}\n", r.question, r.sql.replace('\n', " "));
-            if i > 0 && p.len() + entry.len() > CORE_BUDGET {
-                break;
-            }
-            if i == 0 {
-                p.push_str("SQL that verified before for this folder (adapt it, don't paste blindly):\n");
-            }
-            p.push_str(&entry);
         }
         if p.is_empty() {
             return None;
@@ -422,79 +329,10 @@ fn render_note(n: &Note) -> String {
     }
 }
 
-fn parse_recipe_head(head: &str) -> Recipe {
-    let parts: Vec<&str> = head.split("  \u{b7}  ").map(str::trim).collect();
-    let question = parts.first().copied().unwrap_or("").to_string();
-    let mut uses = 1u32;
-    let mut date = String::new();
-    let mut tables: Vec<String> = Vec::new();
-    for meta in parts.iter().skip(1) {
-        let m = meta.trim_end_matches("  (stale: a table is gone)").trim();
-        if let Some(n) = m.strip_prefix("used ").and_then(|x| x.trim_end_matches('\u{d7}').parse().ok())
-        {
-            uses = n;
-        } else if m.len() == 10 && m.as_bytes().get(4) == Some(&b'-') {
-            date = m.to_string();
-        } else if !m.is_empty() {
-            tables = m.split(',').map(|t| t.trim().to_string()).filter(|t| !t.is_empty()).collect();
-        }
-    }
-    Recipe {
-        question,
-        sql: String::new(),
-        tables,
-        uses,
-        date: if date.is_empty() { today_ymd() } else { date },
-        stale: head.contains("(stale:"),
-    }
-}
-
-/// Lowercase, collapse whitespace, drop a leading `in <file>,` and trailing
-/// punctuation so "In txns_00.csv, what did I spend on rent?" and "what did i
-/// spend on rent" match.
-fn normalise_question(q: &str) -> String {
-    let mut s = q.trim().to_lowercase();
-    if let Some(rest) = s.strip_prefix("in ") {
-        if let Some((_, tail)) = rest.split_once(", ") {
-            s = tail.to_string();
-        }
-    }
-    s.split_whitespace().collect::<Vec<_>>().join(" ").trim_end_matches(['?', '.', '!']).to_string()
-}
-
-fn today_ymd() -> String {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    ymd_from_epoch(secs)
-}
-
-/// Civil date (`YYYY-MM-DD`) from Unix seconds Howard Hinnant's algorithm.
-fn ymd_from_epoch(secs: u64) -> String {
-    let z = (secs / 86_400) as i64 + 719_468;
-    let era = (if z >= 0 { z } else { z - 146_096 }) / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-    format!("{y:04}-{m:02}-{d:02}")
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn epoch_to_civil_date() {
-        assert_eq!(ymd_from_epoch(0), "1970-01-01");
-        assert_eq!(ymd_from_epoch(1_700_000_000), "2023-11-14");
-        assert_eq!(ymd_from_epoch(1_600_000_000), "2020-09-13");
-    }
 
     #[test]
     fn round_trips_and_supersedes() {
@@ -507,11 +345,6 @@ mod tests {
         m.preferences.push("amounts are GBP".into());
         m.set_vocab("rent", "category IN ('rent','housing')");
         m.set_table_note("ledger.\"Amount Paid\"", "text column; cast before SUM");
-        m.record_recipe(
-            "in txns_00.csv, what did I spend on rent?",
-            "SELECT SUM(x)\nFROM ledger",
-            &["ledger".into()],
-        );
         m.save();
 
         // reload: everything survives
@@ -520,24 +353,11 @@ mod tests {
         assert_eq!(m2.vocabulary.len(), 1);
         assert_eq!(m2.vocabulary[0].key, "rent");
         assert_eq!(m2.tables.len(), 1);
-        assert_eq!(m2.recipes.len(), 1);
-        assert_eq!(m2.recipes[0].sql, "SELECT SUM(x) FROM ledger");
-
-        // same question, different phrasing -> use-count up, not a duplicate
-        m2.record_recipe("What did I spend on rent", "SELECT SUM(y) FROM ledger", &["ledger".into()]);
-        assert_eq!(m2.recipes.len(), 1);
-        assert_eq!(m2.recipes[0].uses, 2);
 
         // superseding a vocab key replaces the text
         m2.set_vocab("RENT", "category = 'rent'");
         assert_eq!(m2.vocabulary.len(), 1);
         assert_eq!(m2.vocabulary[0].text, "category = 'rent'");
-
-        // stale marking
-        m2.mark_stale(&["other_table".into()]);
-        assert!(m2.recipes[0].stale);
-        m2.mark_stale(&["ledger".into()]);
-        assert!(!m2.recipes[0].stale);
 
         // pruning table notes for a view that's gone
         m2.set_table_note("gone_view.\"x\"", "note");
@@ -549,7 +369,32 @@ mod tests {
         let core = m2.semantic_core().unwrap();
         assert!(core.contains("amounts are GBP"));
         assert!(core.contains("rent \u{2192} category = 'rent'"));
-        assert!(core.contains("verified before"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An old memory file with a `## Recipes` section (from before recipes were
+    /// cut) loads cleanly, drops it silently, and never writes it back.
+    #[test]
+    fn drops_a_legacy_recipes_section_on_load() {
+        let dir = std::env::temp_dir().join(format!("fella-mem-legacy-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("t.md");
+        std::fs::write(
+            &path,
+            "# x\n\n## Preferences\n- amounts are GBP\n\n## Recipes\n\
+             - monthly rent  \u{b7}  used 2\u{d7}  \u{b7}  ledger  \u{b7}  2026-09-01\n    \
+             SELECT strftime('%Y-%m', date) FROM ledger\n",
+        )
+        .unwrap();
+
+        let m = FolderMemory::load(&path);
+        assert_eq!(m.preferences, vec!["amounts are GBP"]);
+        m.save();
+
+        let again = std::fs::read_to_string(&path).unwrap();
+        assert!(!again.contains("Recipes"));
+        assert!(!again.contains("strftime"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }

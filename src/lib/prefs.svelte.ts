@@ -16,6 +16,7 @@ const THEME_TOKEN_KEYS = new Set([
 	'--text-dim',
 	'--text-faint',
 	'--accent',
+	'--brand',
 	'--link',
 	'--ok',
 	'--warn',
