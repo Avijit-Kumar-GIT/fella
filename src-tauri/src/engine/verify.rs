@@ -762,7 +762,7 @@ fn close(a: f64, b: f64) -> bool {
     diff / scale < 0.005
 }
 
-fn truncate(s: &str, n: usize) -> String {
+pub(crate) fn truncate(s: &str, n: usize) -> String {
     match s.char_indices().nth(n) {
         Some((idx, _)) => format!("{}…", &s[..idx]),
         None => s.to_string(),
