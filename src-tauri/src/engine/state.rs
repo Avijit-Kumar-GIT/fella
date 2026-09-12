@@ -1717,7 +1717,7 @@ fn first_line_synopsis(path: &str) -> Option<String> {
 
 /// Truncate to at most `cap` characters (not bytes), for a short preview
 /// line no ellipsis added; the caller decides whether one reads better.
-fn cap_chars(s: &str, cap: usize) -> String {
+pub(crate) fn cap_chars(s: &str, cap: usize) -> String {
     match s.char_indices().nth(cap) {
         Some((i, _)) => s[..i].to_string(),
         None => s.to_string(),
