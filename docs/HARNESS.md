@@ -114,6 +114,19 @@ The running list of open design questions from shaping this work is in
   Ships default-on: a fresh folder costs nothing, and it earns its tokens on
   the cross-session messy-folder case it exists for, across frontier and floor
   models.
+- **2026-09-11 · Recipes cut from per-folder memory** (`engine::memory`,
+  `docs/DECISIONS.md`). A user's real `memory.md` had cached a `strftime`
+  GROUP BY over a non-ISO date column as a "verified" recipe (before
+  `check_null_group_key` existed to catch that shape) it kept getting
+  replayed verbatim on later asks, reproducing the same wrong answer with no
+  fresh reasoning. Neither of the two `agent_eval memory` runs above actually
+  showed a recipe earning its tokens — same-conversation was neutral, and the
+  cross-session win came from the vocabulary note + case-sensitivity flag, not
+  a recipe. The self-healing this doc originally called for ("a recipe that
+  fails verify is demoted, two failures drops it") was never built; rather
+  than build it for a mechanism with no demonstrated win, it's gone. Memory
+  now stores facts only (preferences, vocabulary, table notes); `## Recipes`
+  in an existing file is silently dropped on next load.
 
 ### Measured, no change
 

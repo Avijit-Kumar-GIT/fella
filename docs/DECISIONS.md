@@ -7,6 +7,27 @@ this app repo (now **`fella`**; `fella-ai` is a private pre-v0.1 archive),
 `fella-marketplace` to mean the browse-site half of the **`fella-web`** repo,
 and any `CODE_OF_CONDUCT.md` mention as folded into `CONTRIBUTING.md` (§Conduct).
 
+- **2026-09-11** **Per-folder memory (`engine::memory`) no longer caches
+  `question → SQL` "recipes"; it stores durable facts only** (preferences,
+  vocabulary, table notes). Found in the wild: a real `memory.md` had cached
+  a `strftime('%Y-%m', Date)` GROUP BY over a non-ISO date column the
+  moment it was recorded, `verify` had no check for a NULL-collapsed group
+  key (that landed later as `check_null_group_key`, #67), so the wrong query
+  passed as "verified" and kept replaying on every later ask of a similar
+  question, reproducing the same wrong answer with no fresh reasoning. A
+  recipe is code frozen against one verify pass, not a fact that stays true
+  a subtly different question can silently reuse it, and a since-strengthened
+  check has no way to reach back and invalidate what's already cached.
+  `FOLDER-MEMORY.md`'s own two `agent_eval memory` benchmarks never actually
+  showed a recipe earning its tokens either (same-conversation: neutral;
+  cross-session win: the vocabulary note + case-sensitivity flag, not a
+  recipe) the self-healing that doc called for ("a recipe that fails
+  `verify` is demoted, two failures drops it") was designed but never
+  implemented. Rather than build that for a mechanism with no demonstrated
+  win and a demonstrated failure, it's removed: `mark_stale()` /
+  `record_recipe()` deleted, `## Recipes` in an existing memory file is
+  silently dropped on next load. See `FOLDER-MEMORY.md`'s "Recipes cut" note
+  and `HARNESS.md`'s Log.
 - **2026-09-10** **A new augment capability is gated like a new built-in
   tool: an issue, real demand, a `DECISIONS.md` entry first.** Packs vs.
   built-in commands make *no difference* to base binary size a capability

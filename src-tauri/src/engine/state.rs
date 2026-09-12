@@ -549,7 +549,7 @@ impl EngineState {
         }
         let path = self.memory_path()?;
         let mut mem = FolderMemory::load(&path);
-        mem.mark_stale(&self.known_views());
+        mem.prune_tables(&self.known_views());
         mem.semantic_core()
     }
 
@@ -563,10 +563,12 @@ impl EngineState {
             .collect()
     }
 
-    /// After a completed turn: append an episode, and if the answer verified
-    /// cleanly on one query, learn that query as a recipe. A follow-up that
-    /// plainly corrects the previous answer becomes a vocabulary note instead.
-    /// `prior_q` is the previous question in this conversation, if any.
+    /// After a completed turn: append an episode, and if it plainly corrects
+    /// the previous answer, learn a vocabulary note from it. Deliberately
+    /// does not cache the query itself as a "recipe" (cut 2026-09-11, see
+    /// `docs/DECISIONS.md`) memory holds durable facts, not code snapshotted
+    /// against one verify pass. `prior_q` is the previous question in this
+    /// conversation, if any.
     fn record_turn_memory(&self, prior_q: Option<&str>, question: &str, answer: &Answer) {
         if !memory::writes_enabled() {
             return;
@@ -612,17 +614,10 @@ impl EngineState {
                 .collect::<Vec<_>>()
                 .join(" ");
             mem.set_vocab(if topic.is_empty() { question } else { &topic }, question.trim());
-        } else if sqls.len() == 1 && crate::engine::verify::reran_clean(&answer.verification) {
-            let sql = sqls[0];
-            let tables: Vec<String> = crate::engine::verify::referenced_relations(sql)
-                .into_iter()
-                .filter(|t| !t.contains('('))
-                .collect();
-            mem.record_recipe(question, sql, &tables);
         } else {
-            return; // nothing to write
+            return; // an ordinary, uncorrected question teaches memory nothing
         }
-        mem.mark_stale(&self.known_views());
+        mem.prune_tables(&self.known_views());
         mem.save();
     }
 
@@ -1253,10 +1248,10 @@ impl EngineState {
         }
         let answer = answer?;
 
-        // Fold this turn into the folder's learned notes (a verified recipe, or
-        // a correction). Needs the previous question in this conversation for
-        // the correction check, so read it before the distil step below pushes
-        // this one.
+        // Fold this turn into the folder's learned notes (a correction becomes
+        // a vocabulary note; an ordinary question teaches nothing). Needs the
+        // previous question in this conversation for the correction check, so
+        // read it before the distil step below pushes this one.
         if !cancel.load(Ordering::Relaxed) {
             let prior_q = {
                 let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());

@@ -7,6 +7,18 @@ small enough that one person can read all of it.
 the full design; the [Implementation](#implementation-v1) section at the end
 says what v1 does, what it defers, and what the first benchmark showed.
 
+**Recipes cut (2026-09-11, `docs/DECISIONS.md`).** Every "Recipes" mention
+below is the original design and is left as written for the record, but
+`engine::memory` no longer caches `question → SQL`. A real cached recipe was
+found replaying a `strftime` GROUP BY over a non-ISO date column verbatim —
+it was recorded "verified" before a later check existed to catch that exact
+failure shape, and kept reproducing the same wrong answer with no fresh
+reasoning on later asks. Neither benchmark below actually showed a recipe
+earning its tokens (§Implementation), and the self-healing §Staleness called
+for a recipe demoted on a failed re-verify was never built. Memory now
+holds only preferences, vocabulary, and table notes durable facts, never a
+frozen interpretation of one question.
+
 ## The goal
 
 A session in a folder should start already knowing that folder. Today every

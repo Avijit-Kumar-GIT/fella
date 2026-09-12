@@ -72,8 +72,9 @@ pub fn hard_fail(checks: &[VerificationCheck]) -> Option<String> {
 }
 
 /// True when a query behind the answer was actually re-executed and matched,
-/// and nothing failed hard. The signal for "this answer is safe to learn from"
-/// (per-folder memory records a recipe only when this holds).
+/// and nothing failed hard. Recorded on the folder's episode log as
+/// `"verified"` a label, not something memory acts on (`engine::memory`
+/// caches no query, however cleanly it verified).
 pub fn reran_clean(checks: &[VerificationCheck]) -> bool {
     hard_fail(checks).is_none()
         && checks
@@ -332,8 +333,7 @@ fn check_tables(engine: &EngineState, evidence: &[EvidenceItem], out: &mut Vec<V
 }
 
 /// Tokens that follow FROM / JOIN, lowercased and de-punctuated. Crude only
-/// used to flag obviously-wrong table names, and to tag a learned recipe with
-/// the tables it touches.
+/// used to flag obviously-wrong table names and to check a multi-table join.
 pub(crate) fn referenced_relations(sql: &str) -> HashSet<String> {
     let lower = sql.to_lowercase();
     let toks: Vec<&str> = lower.split(|c: char| c.is_whitespace()).filter(|s| !s.is_empty()).collect();

@@ -31,6 +31,17 @@ All notable changes to Fella are recorded here. Format follows
   block the answer or trigger a re-ask. First of a few checks aimed at the
   "valid query, wrong question" class of miss the folder-QA benchmark found
   (#67); tracking: #78.
+- **The self-check now also catches a date/time `GROUP BY` that collapsed to
+  a blank bucket.** A query grouping by `strftime()`/`date()`/`datetime()`
+  whose result has a `NULL` group key — the "Month: (blank), $X total" shape —
+  now gets flagged, so a non-ISO date column doesn't quietly produce one big
+  ungrouped bucket labeled as a real breakdown. Same #67/#78 tracking.
+- **Per-folder memory no longer caches a question's SQL as a reusable
+  "recipe."** It stores only durable facts — preferences, vocabulary, table
+  notes. A cached recipe could be recorded "verified" against a check set
+  that later got stronger, then keep replaying the same now-known-wrong query
+  indefinitely. `## Recipes` in an existing `memory.md` is silently dropped
+  the next time Fella touches the file. `docs/DECISIONS.md` (2026-09-11).
 
 ## [0.1.5]
 
