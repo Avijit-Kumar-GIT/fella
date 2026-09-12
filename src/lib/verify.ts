@@ -6,7 +6,8 @@ const HARD_FAIL_LABELS = [
 	'different result now',
 	'no longer runs',
 	'not found in any result',
-	'disagrees with this one'
+	'disagrees with this one',
+	'returned no value for at least one row'
 ];
 
 /** The first hard-failing check's label (with its detail folded in), if any. */
