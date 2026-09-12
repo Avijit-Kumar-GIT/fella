@@ -3,7 +3,6 @@
 	import CommandPalette from '$lib/components/CommandPalette.svelte';
 	import Composer from '$lib/components/Composer.svelte';
 	import Icon from '$lib/components/Icon.svelte';
-	import RightPanel from '$lib/components/RightPanel.svelte';
 	import Sidebar from '$lib/components/Sidebar.svelte';
 	import Titlebar from '$lib/components/Titlebar.svelte';
 	import Transcript from '$lib/components/Transcript.svelte';
@@ -172,7 +171,7 @@
 
 <div class="shell">
 	{#if !session.focus && !session.sidebarCollapsed}
-		<Sidebar onsettings={() => (paletteOpen = true)} />
+		<Sidebar />
 	{/if}
 	<div class="app" class:focus={session.focus}>
 		<Titlebar onpalette={() => (paletteOpen = true)} />
@@ -191,9 +190,6 @@
 			{/if}
 		</div>
 	</div>
-	{#if !session.focus && !session.rightPanelCollapsed && activeTab.kind !== 'augment'}
-		<RightPanel />
-	{/if}
 </div>
 
 <div class="sr-only" role="status" aria-live="polite">{live}</div>

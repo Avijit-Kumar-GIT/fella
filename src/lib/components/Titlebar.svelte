@@ -142,23 +142,6 @@
 				</div>
 			{/if}
 		</div>
-		<button
-			class="navbtn"
-			data-tauri-drag-region="false"
-			aria-expanded={!session.rightPanelCollapsed}
-			title="Toggle evidence panel"
-			onclick={() => session.toggleRightPanel()}
-		>
-			<span class="flip" aria-hidden="true"><Icon name="panel" size={14} /></span>
-		</button>
-		<button
-			class="navbtn"
-			data-tauri-drag-region="false"
-			onclick={onpalette}
-			title="Settings (Ctrl+K)"
-		>
-			<Icon name="settings" size={14} />
-		</button>
 		<button class="hint" data-tauri-drag-region="false" onclick={onpalette} title="Command palette">
 			<kbd>Ctrl</kbd><kbd>K</kbd>
 		</button>
@@ -199,10 +182,6 @@
 	.lights {
 		flex: none;
 		width: 78px;
-	}
-	.flip {
-		display: inline-flex;
-		transform: scaleX(-1);
 	}
 	.navbtn {
 		flex: none;
