@@ -234,8 +234,9 @@
 		min-height: 0;
 		display: flex;
 		flex-direction: column;
-		background: var(--bg-raised);
-		border-top: 1px solid var(--border);
+		/* Same fill as the titlebar/sidebar/panel so the whole shell reads as
+		   one open canvas, not stacked boxes -- no seam, no colour change. */
+		background: var(--bg);
 	}
 	/* Status line + composer read as one calm footer zone, continuous with the
 	   transcript surface above it no rule, no colour change. */

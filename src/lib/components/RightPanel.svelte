@@ -34,7 +34,8 @@
 		flex-direction: column;
 		gap: var(--space-2);
 		padding: var(--space-3);
-		border-left: 1px solid var(--border);
+		/* Same fill as the rest of the shell -- an open floor plan, not a
+		   bordered-off compartment. */
 		background: var(--bg);
 		overflow-y: auto;
 	}
