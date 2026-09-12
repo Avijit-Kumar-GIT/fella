@@ -60,7 +60,7 @@
 	   pill, the empty-state glyph, the composer connected-icon, the top
 	   hairline -- one consistent "notice me" color, not a different one per
 	   component. */
-	--brand: #3fc7bc;
+	--brand: #008080;
 	--link: #3a5c8a;
 	--ok: #3f7d3f;
 	--warn: #855800;
@@ -113,7 +113,7 @@
 		--text-dim: #8f8d88;
 		--text-faint: #838079;
 		--accent: #ededec;
-		--brand: #3fc7bc;
+		--brand: #008080;
 		--link: #8fb0dd;
 		--ok: #7cc07c;
 		--warn: #d8a640;
