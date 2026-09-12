@@ -344,6 +344,42 @@ pub fn parse_numeric(s: &str) -> Option<f64> {
     Some(v)
 }
 
+/// Parses a handful of unambiguous "month spelled out" date formats into
+/// ISO-8601 (`YYYY-MM-DD`): "Aug 1, 2026", "August 1, 2026", "1 Aug 2026",
+/// "01 August 2026", an optional ordinal suffix ("1st", "2nd", "3rd", "21st"),
+/// comma optional, case-insensitive. Deliberately does not attempt pure
+/// numeric formats (`08/01/2026`): whether that means MM/DD or DD/MM is
+/// genuinely ambiguous per-file, and a wrong guess would silently swap month
+/// and day instead of visibly failing the way an unparsed string does. Used
+/// by both the CSV/JSON sniffer (`sqlite.rs`) and the Excel ingest.
+pub fn parse_named_month_date(s: &str) -> Option<String> {
+    const MONTHS: &[(&str, u32)] = &[
+        ("jan", 1), ("january", 1),
+        ("feb", 2), ("february", 2),
+        ("mar", 3), ("march", 3),
+        ("apr", 4), ("april", 4),
+        ("may", 5),
+        ("jun", 6), ("june", 6),
+        ("jul", 7), ("july", 7),
+        ("aug", 8), ("august", 8),
+        ("sep", 9), ("sept", 9), ("september", 9),
+        ("oct", 10), ("october", 10),
+        ("nov", 11), ("november", 11),
+        ("dec", 12), ("december", 12),
+    ];
+    let cleaned: String = s.chars().filter(|&c| c != ',').collect();
+    let parts: Vec<&str> = cleaned.split_whitespace().collect();
+    let [a, b, year_str] = parts[..] else { return None };
+    let (month_str, day_str) = if a.chars().next()?.is_ascii_alphabetic() { (a, b) } else { (b, a) };
+    let month = MONTHS.iter().find(|(n, _)| n.eq_ignore_ascii_case(month_str)).map(|(_, m)| *m)?;
+    let day: u32 = day_str.trim_end_matches(|c: char| c.is_ascii_alphabetic()).parse().ok()?;
+    let year: i32 = year_str.parse().ok()?;
+    if !(1..=31).contains(&day) || !(1900..=2100).contains(&year) {
+        return None;
+    }
+    Some(format!("{year:04}-{month:02}-{day:02}"))
+}
+
 /// Quote an identifier for interpolation into SQL: `"a""b"`.
 pub fn quote_ident(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
