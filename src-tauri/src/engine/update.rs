@@ -19,6 +19,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::engine::error::{EngineError, EngineResult};
+use crate::engine::extensions::sha256_hex;
 
 const REPO: &str = "Avijit-Kumar-GIT/fella";
 
@@ -72,13 +73,6 @@ fn is_newer(current: &str, latest: &str) -> bool {
     }
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
-    ring::digest::digest(&ring::digest::SHA256, bytes)
-        .as_ref()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
-}
 
 async fn fetch_bytes(http: &reqwest::Client, url: &str) -> EngineResult<Vec<u8>> {
     let resp = http

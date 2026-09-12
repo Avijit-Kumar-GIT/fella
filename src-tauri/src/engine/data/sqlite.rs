@@ -484,14 +484,7 @@ fn find_header(records: &[csv::StringRecord], width: usize) -> (Vec<String>, usi
 /// than a data row: carries a total-ish label and is mostly empty.
 fn looks_like_total_row(row: &[&str], width: usize) -> bool {
     let filled = row.iter().filter(|c| !c.trim().is_empty()).count();
-    let has_label = row.iter().any(|c| {
-        let t = c.trim().to_ascii_lowercase();
-        let t = t.trim_end_matches([':', '.']).trim();
-        matches!(t, "total" | "totals" | "sum" | "grand total" | "subtotal" | "sub total")
-            || t.starts_with("total ")
-            || t.starts_with("grand total ")
-            || t.starts_with("subtotal ")
-    });
+    let has_label = row.iter().any(|c| crate::engine::data::is_total_label(c));
     has_label && filled * 3 <= width * 2 + 2
 }
 

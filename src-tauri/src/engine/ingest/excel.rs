@@ -216,19 +216,10 @@ fn header_row(rows: &[&[Data]]) -> (Vec<String>, usize) {
 /// which is otherwise mostly empty a summary line, not data.
 fn looks_like_total_row(row: &[Data], width: usize) -> bool {
     let label = row.iter().find_map(|c| match c {
-        Data::String(s) if !s.trim().is_empty() => Some(s.trim().to_ascii_lowercase()),
+        Data::String(s) if !s.trim().is_empty() => Some(s.as_str()),
         _ => None,
     });
-    let is_total = match label.as_deref() {
-        Some(l) => {
-            let l = l.trim_end_matches([':', '.']).trim();
-            matches!(l, "total" | "totals" | "sum" | "grand total" | "subtotal" | "sub total")
-                || l.starts_with("total ")
-                || l.starts_with("grand total ")
-                || l.starts_with("subtotal ")
-        }
-        None => false,
-    };
+    let is_total = label.is_some_and(crate::engine::data::is_total_label);
     // A summary line is label + a figure or two, not a full data row.
     is_total && filled(row) * 3 <= width * 2 + 2
 }

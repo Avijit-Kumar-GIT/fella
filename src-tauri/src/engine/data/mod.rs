@@ -380,6 +380,19 @@ pub fn parse_named_month_date(s: &str) -> Option<String> {
     Some(format!("{year:04}-{month:02}-{day:02}"))
 }
 
+/// Whether a trimmed, case-folded cell reads as a totals/summary-row label
+/// ("Total", "Grand Total:", "Subtotal Q1", ...). Shared by the CSV and Excel
+/// ingest's "drop the trailing summary row" check so the label vocabulary
+/// can't drift apart between the two.
+pub fn is_total_label(s: &str) -> bool {
+    let l = s.trim().to_ascii_lowercase();
+    let l = l.trim_end_matches([':', '.']).trim();
+    matches!(l, "total" | "totals" | "sum" | "grand total" | "subtotal" | "sub total")
+        || l.starts_with("total ")
+        || l.starts_with("grand total ")
+        || l.starts_with("subtotal ")
+}
+
 /// Quote an identifier for interpolation into SQL: `"a""b"`.
 pub fn quote_ident(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
