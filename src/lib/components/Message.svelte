@@ -83,7 +83,7 @@
 		padding: var(--space-3) 0;
 	}
 	.msg.user {
-		padding-top: var(--space-4);
+		padding-top: var(--space-5);
 	}
 	.you {
 		color: var(--text-dim);

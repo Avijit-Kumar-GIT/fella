@@ -114,6 +114,23 @@ fn loads_a_conversation_by_id_and_rejects_an_unknown_one() {
 }
 
 #[test]
+fn deletes_a_conversation_by_id_and_rejects_an_unknown_one() {
+    let data = scratch("conv-delete");
+    let engine = EngineState::new(&data).unwrap();
+
+    let body = r#"{"id":"deleteme","saved_at_ms":1,"workspace":"/w","messages":[{"role":"user","text":"hi"}]}"#;
+    engine.archive_conversation("deleteme", body).unwrap();
+    assert!(engine.conversation_load("deleteme").is_ok());
+
+    engine.delete_conversation("deleteme").unwrap();
+    assert!(engine.conversation_load("deleteme").is_err());
+
+    assert!(engine.delete_conversation("no-such-id").is_err());
+
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[test]
 fn a_weird_id_is_sanitized_and_bad_json_is_rejected() {
     let data = scratch("conv-edge");
     let engine = EngineState::new(&data).unwrap();

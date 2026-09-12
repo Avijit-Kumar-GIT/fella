@@ -31,6 +31,7 @@ const THEME_TOKEN_KEYS: &[&str] = &[
     "--text-dim",
     "--text-faint",
     "--accent",
+    "--brand",
     "--link",
     "--ok",
     "--warn",

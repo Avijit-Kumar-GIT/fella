@@ -52,6 +52,10 @@
 	   completion hints), so it holds WCAG AA (>= 4.5:1 on --bg). */
 	--text-faint: #6c6a63;
 	--accent: #1a1a17;
+	/* the one hue used outside the neutral/status palette -- spent on exactly
+	   three spots (empty-state glyph, composer connected-icon, top hairline),
+	   never on buttons/borders/selection. */
+	--brand: #c1541f;
 	--link: #3a5c8a;
 	--ok: #3f7d3f;
 	--warn: #855800;
@@ -104,6 +108,7 @@
 		--text-dim: #8f8d88;
 		--text-faint: #838079;
 		--accent: #ededec;
+		--brand: #e8763f;
 		--link: #8fb0dd;
 		--ok: #7cc07c;
 		--warn: #d8a640;

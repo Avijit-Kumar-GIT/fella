@@ -354,6 +354,29 @@ impl EngineState {
         ))
     }
 
+    /// Remove one archived conversation's file, by the same slug-suffix
+    /// lookup `conversation_load` uses. Used by the sidebar's per-row delete.
+    pub fn delete_conversation(&self, id: &str) -> EngineResult<()> {
+        let dir = self.data_dir.join("conversations");
+        let slug: String = id
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .take(32)
+            .collect();
+        let suffix = format!("_{slug}.json");
+        let entries = std::fs::read_dir(&dir)
+            .map_err(|e| EngineError::io(format!("read {}", dir.display()), e))?;
+        for entry in entries.flatten() {
+            if entry.file_name().to_string_lossy().ends_with(&suffix) {
+                return std::fs::remove_file(entry.path())
+                    .map_err(|e| EngineError::io(format!("remove {}", entry.path().display()), e));
+            }
+        }
+        Err(EngineError::msg(
+            "that conversation couldn't be found it may have been deleted",
+        ))
+    }
+
     pub fn catalog(&self) -> Catalog {
         let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         Catalog {

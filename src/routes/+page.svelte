@@ -3,7 +3,7 @@
 	import CommandPalette from '$lib/components/CommandPalette.svelte';
 	import Composer from '$lib/components/Composer.svelte';
 	import Icon from '$lib/components/Icon.svelte';
-	import StatusBar from '$lib/components/StatusBar.svelte';
+	import Sidebar from '$lib/components/Sidebar.svelte';
 	import Titlebar from '$lib/components/Titlebar.svelte';
 	import Transcript from '$lib/components/Transcript.svelte';
 	import AugmentView from '$lib/components/AugmentView.svelte';
@@ -101,6 +101,9 @@
 		} else if (e.ctrlKey && e.key === 'k') {
 			e.preventDefault();
 			paletteOpen = !paletteOpen;
+		} else if (e.ctrlKey && (e.key === 'b' || e.key === 'B')) {
+			e.preventDefault();
+			session.toggleSidebar();
 		} else if (e.ctrlKey && (e.key === 't' || e.key === 'T')) {
 			e.preventDefault();
 			session.newTab();
@@ -166,24 +169,26 @@
 
 <svelte:window onkeydown={onKey} />
 
-<div class="app" class:focus={session.focus}>
-	<Titlebar onpalette={() => (paletteOpen = true)} />
-	<main>
-		{#if activeTab.kind === 'augment'}
-			{#key activeTab.id}
-				<AugmentView tab={activeTab} />
-			{/key}
-		{:else}
-			<Transcript bind:this={transcript} />
-		{/if}
-	</main>
-	<div class="dock">
-		{#if !session.focus}
-			<StatusBar />
-		{/if}
-		{#if activeTab.kind !== 'augment'}
-			<Composer bind:this={composer} onafterrun={refreshHealth} />
-		{/if}
+<div class="shell">
+	{#if !session.focus && !session.sidebarCollapsed}
+		<Sidebar onsettings={() => (paletteOpen = true)} />
+	{/if}
+	<div class="app" class:focus={session.focus}>
+		<Titlebar onpalette={() => (paletteOpen = true)} />
+		<main>
+			{#if activeTab.kind === 'augment'}
+				{#key activeTab.id}
+					<AugmentView tab={activeTab} />
+				{/key}
+			{:else}
+				<Transcript bind:this={transcript} />
+			{/if}
+		</main>
+		<div class="dock">
+			{#if activeTab.kind !== 'augment'}
+				<Composer bind:this={composer} onafterrun={refreshHealth} />
+			{/if}
+		</div>
 	</div>
 </div>
 
@@ -198,10 +203,26 @@
 <CommandPalette bind:open={paletteOpen} onpick={pickCommand} />
 
 <style>
+	.shell {
+		position: relative;
+		display: flex;
+		height: 100%;
+	}
+	.shell::before {
+		content: '';
+		position: absolute;
+		top: 0;
+		left: 0;
+		right: 0;
+		height: 2px;
+		background: linear-gradient(90deg, transparent, var(--brand) 50%, transparent);
+		pointer-events: none;
+	}
 	.app {
 		display: flex;
 		flex-direction: column;
-		height: 100%;
+		flex: 1;
+		min-width: 0;
 		background: var(--bg);
 	}
 	main {
@@ -216,8 +237,7 @@
 	   transcript surface above it no rule, no colour change. */
 	.dock {
 		flex: none;
-		background: var(--bg-raised);
-		padding-bottom: var(--space-2);
+		padding-bottom: var(--space-4);
 	}
 	.dropzone {
 		position: fixed;
