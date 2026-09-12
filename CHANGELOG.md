@@ -43,6 +43,18 @@ All notable changes to Fella are recorded here. Format follows
   indefinitely. `## Recipes` in an existing `memory.md` is silently dropped
   the next time Fella touches the file. `docs/DECISIONS.md` (2026-09-11).
 
+### Fixed
+
+- **A date column written as text ("Aug 1, 2026" rather than a real date
+  cell) is normalized to ISO-8601 at ingest, in CSV/JSON *and* Excel.** A
+  spelled-out-month date `strftime()`/`date()` can't parse used to collapse
+  a `GROUP BY month` into one ungrouped bucket ("Month: (blank), $X total").
+  The fix originally only covered the CSV/JSON ingest path; a real `.xlsx`
+  ledger reproduced the same bug afterward because Excel ingestion has its
+  own independent column-type inference that never got the same treatment —
+  now it does. Ambiguous numeric formats (`08/01/2026`) are deliberately
+  left alone rather than guessed at.
+
 ## [0.1.5]
 
 ### Added
