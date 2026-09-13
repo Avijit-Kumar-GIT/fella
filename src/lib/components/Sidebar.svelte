@@ -77,7 +77,7 @@
 			const raw = await ipc.conversationLoad(c.id);
 			const saved: { workspace?: string | null; messages?: unknown } = JSON.parse(raw);
 			const messages = Array.isArray(saved.messages) ? (saved.messages as Message[]) : [];
-			session.loadArchivedTab(messages);
+			session.loadArchivedTab(c.id, messages);
 			const current = session.catalog.workspace;
 			if (saved.workspace && current && saved.workspace !== current) {
 				session.addSystem(

@@ -42,7 +42,7 @@ function readSidebarCollapsed(): boolean {
 /** One conversation tab: its transcript, its in-flight run, its input history. */
 export class Conversation {
 	readonly kind = 'chat' as const;
-	readonly id = uid();
+	readonly id: string;
 	messages = $state<Message[]>([]);
 	busy = $state<boolean>(false);
 	/** Transient one-line status shown while this tab's agent is working. */
@@ -58,6 +58,14 @@ export class Conversation {
 	/** The model this tab answers with. Empty = use the saved default. All tabs
 	 *  share one provider / login; only the model is per-tab. */
 	model = $state<string>('');
+
+	/** `id` defaults to a fresh one (a genuinely new conversation). Reopening
+	 *  an archived conversation passes its real id back in, so re-archiving
+	 *  it (on the next settle, or on close) overwrites the same file instead
+	 *  of forking a duplicate under a new one. */
+	constructor(id?: string) {
+		this.id = id ?? uid();
+	}
 
 	#persistTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -276,9 +284,17 @@ class Session {
 	 *  open right now, the caller is responsible for warning that new
 	 *  questions here will run against the current folder, not the
 	 *  original one there's only ever one open folder for every tab. */
-	loadArchivedTab(messages: Message[]): void {
+	loadArchivedTab(id: string, messages: Message[]): void {
+		// Already open (e.g. the very conversation you're re-clicking in the
+		// sidebar) -- focus it instead of forking a second live copy under
+		// the same id, which would collide as a duplicate tab key.
+		const existing = this.tabs.findIndex((t) => t.kind === 'chat' && t.id === id);
+		if (existing >= 0) {
+			this.active = existing;
+			return;
+		}
 		const inherit = this.model; // same convention as newTab()
-		const c = new Conversation();
+		const c = new Conversation(id);
 		c.model = inherit;
 		// A reloaded transcript never has a run in flight.
 		c.messages = messages.map((m) => (m.pending ? { ...m, pending: false } : m));

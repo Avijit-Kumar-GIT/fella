@@ -475,7 +475,7 @@ async function runCommand(text: string): Promise<void> {
 					const raw = await ipc.conversationLoad(chosen.id);
 					const saved: { workspace?: string | null; messages?: unknown } = JSON.parse(raw);
 					const messages = Array.isArray(saved.messages) ? (saved.messages as Message[]) : [];
-					session.loadArchivedTab(messages);
+					session.loadArchivedTab(chosen.id, messages);
 					session.addSystem(`Reopened: "${chosen.preview}" (${dateLabel(chosen.saved_at_ms)}).`);
 					const current = session.catalog.workspace;
 					if (saved.workspace && current && saved.workspace !== current) {
