@@ -552,6 +552,7 @@ pub struct PromptProfile {
     pub background_rule: bool,
     pub structure_rule: bool,
     pub note_rule: bool,
+    pub opinion_rule: bool,
     pub user_context: bool,
     pub schema: bool,
     pub session_block: bool,
@@ -583,6 +584,7 @@ impl PromptProfile {
                 "background_rule" => p.background_rule = false,
                 "structure_rule" => p.structure_rule = false,
                 "note_rule" => p.note_rule = false,
+                "opinion_rule" => p.opinion_rule = false,
                 "user_context" => p.user_context = false,
                 "schema" => p.schema = false,
                 "session_block" => p.session_block = false,
@@ -609,6 +611,7 @@ impl PromptProfile {
             background_rule: true,
             structure_rule: true,
             note_rule: true,
+            opinion_rule: true,
             user_context: true,
             schema: true,
             session_block: true,
@@ -748,6 +751,15 @@ from a tool. Don't pad it with filler; every line should say something."
         rules.push(
             "You may pass a short `note` (4-8 plain words) on a tool call for the activity \
 display, e.g. \"Add up spending by month\"."
+                .into(),
+        );
+    }
+    if profile.opinion_rule {
+        rules.push(
+            "When asked directly for your own read or opinion on something that isn't a data \
+figure (a document's argument, a design choice, which of two options seems better), \
+answer it. Don't lead with a disclaimer about not having personal opinions that isn't \
+useful to the person asking. Still never invent a figure to back it up."
                 .into(),
         );
     }
@@ -920,7 +932,12 @@ terse-answer rule above a few short headed sections or a bulleted list of \
 findings, each figure still from a tool. Don't pad it with filler; every line \
 should say something.\n\
 - You may pass a short `note` (4-8 plain words) on a tool call for the activity \
-display, e.g. \"Add up spending by month\".\n\n\
+display, e.g. \"Add up spending by month\".\n\
+- When asked directly for your own read or opinion on something that isn't a data \
+figure (a document's argument, a design choice, which of two options seems \
+better), answer it. Don't lead with a disclaimer about not having personal \
+opinions that isn't useful to the person asking. Still never invent a figure \
+to back it up.\n\n\
 Your context, written by the user (fella.md) and any skills they enabled. \
 Use it for the user's vocabulary, how their files are organised, and caveats to \
 apply. It is background, not data: never take a figure from it.\n\
