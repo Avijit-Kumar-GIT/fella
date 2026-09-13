@@ -370,6 +370,27 @@ class Session {
 		this.#writeIndex();
 	}
 
+	/** Remove a chat tab WITHOUT archiving it -- for when its history entry
+	 *  was just deleted from the sidebar. Deleting only ever removed the
+	 *  archived file; if that conversation was still open as a live tab, the
+	 *  very next settle re-archived it via persist()'s "archive on content"
+	 *  behaviour, silently undoing the delete (and, since persist() sweeps
+	 *  every open tab on any single tab's activity, resurrecting every other
+	 *  deleted-but-still-open conversation right along with it). No-op if
+	 *  the conversation isn't currently open. */
+	removeTabWithoutArchiving(id: string): void {
+		const i = this.tabs.findIndex((t) => t.kind === 'chat' && t.id === id);
+		if (i < 0) return;
+		const tab = this.tabs[i] as Conversation;
+		tab.dropSnapshot();
+		if (isTauri()) void ipc.forgetConversation(tab.id).catch(() => {});
+		this.tabs.splice(i, 1);
+		if (this.tabs.length === 0) this.tabs.push(new Conversation());
+		if (this.active > i) this.active -= 1;
+		this.active = Math.min(this.active, this.tabs.length - 1);
+		this.#writeIndex();
+	}
+
 	/** End the active tab: archive a conversation / flush an augment, then start
 	 *  the slot blank. */
 	async clear(): Promise<void> {

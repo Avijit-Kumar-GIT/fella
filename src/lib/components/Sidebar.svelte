@@ -127,6 +127,9 @@
 		try {
 			await ipc.deleteConversation(c.id);
 			list = list.filter((x) => x.id !== c.id);
+			// If this conversation is still open as a live tab, close it too --
+			// otherwise its very next settle re-archives it, undoing the delete.
+			session.removeTabWithoutArchiving(c.id);
 		} catch (err) {
 			session.addSystem(`error: ${errMsg(err)}`);
 		}
