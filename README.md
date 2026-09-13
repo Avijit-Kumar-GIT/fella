@@ -6,7 +6,7 @@
 
 *The more an AI can do for you, the more it can do to you.*
 
-**Ask questions about your own files — and see exactly how it got the answer.**
+**Ask questions about your own files, and see exactly how it got the answer.**
 
 <!-- TODO(demo): a ~20s GIF here, before anything else: open a folder of real-looking
      files -> ask a question -> answer streams in -> open the evidence fold -> show
@@ -15,7 +15,7 @@
 
 Most of what's being built right now is a bet that more agency is the way to
 more useful: read, write, act, and assume capability only ever adds up. Fella
-is running the opposite experiment, in public — how much can an agent
+is running the opposite experiment, in public: how much can an agent
 actually do for you if the answer to "can it act" stays permanently no? So
 far: further than it has any right to be. (The full argument, and the actual
 tradeoffs it costs, is in [`docs/WHY.md`](docs/WHY.md).)
@@ -41,10 +41,10 @@ by default).
 
 ## Philosophy
 
-"Personal computer" used to mean the machine was actually yours — it kept
+"Personal computer" used to mean the machine was actually yours. It kept
 your secrets, and no institution stood between you and it. AI has spent its
 whole existence undoing that word. Fella is a bet that the read-only,
-local-first version isn't the compromise — it's the one that gets to keep
+local-first version isn't the compromise. It's the one that gets to keep
 "personal" and actually mean it.
 
 **Reads your files, computes real answers, never writes anything back.** Small,
@@ -147,7 +147,7 @@ One window: choose a folder, then type questions. Calm and compact a dim header,
 conversation, an input box, a quiet status line with the fast, no-chrome feel of
 [fx](https://fx.sh) but plain-language and non-technical, not a terminal. Monospace
 shows up only where data lines up (tables, queries). Open more than one thing at
-once with tabs (`Ctrl+T`) — each keeps its own conversation, and can even run its
+once with tabs (`Ctrl+T`), each keeps its own conversation, and can even run its
 own model. Slash commands below are a power-user shortcut; you never need them.
 
 | Command | What it does |
@@ -187,16 +187,16 @@ every table the answer cites is real, re-executes the queries and confirms every
 figure appears in a real result, and flags a total computed over a column that isn't
 actually numeric (SQLite reads non-numeric text as `0`, which would otherwise look
 like a real, if wrong, answer). Follow-up questions in the same conversation reuse
-what earlier turns already established — the schema, the queries that already
-worked — instead of starting over each time.
+what earlier turns already established (the schema, the queries that already
+worked) instead of starting over each time.
 
 ### Personalizing
 
 Fella works with nothing set up. If you want more: drop a `fella.md` in your folder to
-tell it how your files are organised and what your terms mean, or add a pack — a
+tell it how your files are organised and what your terms mean, or add a pack: a
 `theme` (colours), a `skill` (vocabulary/rules for the model), an `mcp` connector
 (a remote data source), or an `augment` (a notes tab or a small table, saved into
-the folder) — from a local folder with `/packs add <path>`. A small seed
+the folder), from a local folder with `/packs add <path>`. A small seed
 catalog is installable by id (`/packs install <id>`); a browsable gallery of packs
 comes later. All optional. See [`docs/EXTENSIBILITY.md`](docs/EXTENSIBILITY.md).
 
