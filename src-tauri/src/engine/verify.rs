@@ -585,6 +585,14 @@ fn rerun_queries(engine: &EngineState, evidence: &[EvidenceItem], out: &mut Vec<
 // --- 3. numbers in the answer are backed by evidence ------------------
 
 fn check_numbers(answer: &str, evidence: &[EvidenceItem], out: &mut Vec<VerificationCheck>) {
+    // No tool ran at all -- a general-knowledge or conversational answer, not
+    // a data claim. Every number in it would otherwise flag as "unsupported"
+    // by definition (there's no evidence to check against), which reads as
+    // Fella distrusting its own small talk. Nothing to check, so no check.
+    if evidence.is_empty() {
+        return;
+    }
+
     let mut supported: Vec<f64> = Vec::new();
     for e in evidence {
         collect_numbers(&e.result_summary, &mut supported);
@@ -1223,6 +1231,15 @@ mod tests {
             out.iter().all(|c| c.ok),
             "0 is backed by the empty aggregate, not a stray figure: {out:?}"
         );
+    }
+
+    #[test]
+    fn no_evidence_at_all_is_not_flagged() {
+        // A general-knowledge / conversational answer, no tool ran. Its
+        // numbers aren't a data claim, so there's nothing to check.
+        let mut out = Vec::new();
+        check_numbers("A common rule of thumb is saving 20% of income.", &[], &mut out);
+        assert!(out.is_empty(), "no evidence means no check, not a warning: {out:?}");
     }
 
     fn run_sql_ev(sql: &str, columns: &[&str], rows: Vec<Vec<Json>>) -> EvidenceItem {
