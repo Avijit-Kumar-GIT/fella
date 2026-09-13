@@ -336,6 +336,18 @@ pub fn delete_conversation(id: String, engine: State<'_, EngineState>) -> Result
     engine.delete_conversation(&id)
 }
 
+/// Set (empty string clears) a custom title for one archived conversation.
+/// Used by the sidebar's per-row rename, for a conversation not necessarily
+/// open in a live tab right now.
+#[tauri::command]
+pub fn rename_conversation(
+    id: String,
+    title: String,
+    engine: State<'_, EngineState>,
+) -> Result<(), EngineError> {
+    engine.rename_conversation(&id, &title)
+}
+
 /// Stop the in-progress `ask` for one conversation (tab).
 #[tauri::command]
 pub fn cancel(conversation_id: String, engine: State<'_, EngineState>) {

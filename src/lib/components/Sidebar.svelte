@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { ipc, isTauri } from '$lib/ipc';
-	import { baseName, errMsg, relativeAge } from '$lib/commands';
+	import { baseName, errMsg, openFolder, relativeAge } from '$lib/commands';
 	import { session } from '$lib/session.svelte';
 	import type { ConversationSummary, Message } from '$lib/types';
 	import Icon from './Icon.svelte';
@@ -32,6 +32,41 @@
 		void refresh();
 	});
 
+	/** A custom name, if renamed; otherwise "folder — first message" -- the
+	 *  folder is what actually distinguishes two similarly-phrased
+	 *  conversations. */
+	function title(c: ConversationSummary): string {
+		if (c.title) return c.title;
+		const folder = c.workspace ? baseName(c.workspace) : 'No project';
+		return `${folder} — ${c.preview}`;
+	}
+
+	let renamingId = $state<string | null>(null);
+	let renameValue = $state('');
+	let renameInput = $state<HTMLInputElement | null>(null);
+
+	function startRename(c: ConversationSummary, e: MouseEvent) {
+		e.stopPropagation();
+		renamingId = c.id;
+		renameValue = c.title ?? c.preview;
+		queueMicrotask(() => renameInput?.select());
+	}
+
+	async function commitRename(c: ConversationSummary) {
+		const id = renamingId;
+		renamingId = null;
+		if (id === null) return;
+		const next = renameValue.trim();
+		const original = c.title ?? c.preview;
+		if (next === original) return; // unedited -- nothing to save
+		try {
+			await session.renameConversation(id, next); // empty clears a custom title
+			if (isTauri()) list = await ipc.conversationsList();
+		} catch (e) {
+			session.addSystem(`error: ${errMsg(e)}`);
+		}
+	}
+
 	/** Today / Yesterday / This week / Older, from local-midnight boundaries. */
 	function groupLabel(ms: number): string {
 		const startOf = (t: number) => {
@@ -52,7 +87,9 @@
 		const filtered = q
 			? list.filter(
 					(c) =>
-						c.preview.toLowerCase().includes(q) || (c.workspace ?? '').toLowerCase().includes(q)
+						c.preview.toLowerCase().includes(q) ||
+						(c.workspace ?? '').toLowerCase().includes(q) ||
+						(c.title ?? '').toLowerCase().includes(q)
 				)
 			: list;
 		const out: { label: string; items: ConversationSummary[] }[] = [];
@@ -68,16 +105,17 @@
 	async function open(c: ConversationSummary) {
 		try {
 			const raw = await ipc.conversationLoad(c.id);
-			const saved: { workspace?: string | null; messages?: unknown } = JSON.parse(raw);
+			const saved: { workspace?: string | null; messages?: unknown; title?: string | null } =
+				JSON.parse(raw);
 			const messages = Array.isArray(saved.messages) ? (saved.messages as Message[]) : [];
-			session.loadArchivedTab(messages);
-			const current = session.catalog.workspace;
-			if (saved.workspace && current && saved.workspace !== current) {
-				session.addSystem(
-					`This conversation was about a different folder (${baseName(saved.workspace)}). ` +
-						`Fella is pointed at ${baseName(current)} right now, so a new question here answers ` +
-						`from that folder, not the original one. /open ${saved.workspace} first if you want the original.`
-				);
+			session.loadArchivedTab(c.id, messages, saved.title ?? null);
+			// Auto-mount the folder this conversation was about, so a follow-up
+			// question here answers from the same files it originally did,
+			// instead of just telling the user to /open it themselves.
+			// openFolder already reports a failure (moved/deleted folder) as a
+			// system message, so no separate handling is needed for that.
+			if (saved.workspace && saved.workspace !== session.catalog.workspace) {
+				await openFolder(saved.workspace);
 			}
 		} catch (e) {
 			session.addSystem(`error: ${errMsg(e)}`);
@@ -89,6 +127,9 @@
 		try {
 			await ipc.deleteConversation(c.id);
 			list = list.filter((x) => x.id !== c.id);
+			// If this conversation is still open as a live tab, close it too --
+			// otherwise its very next settle re-archives it, undoing the delete.
+			session.removeTabWithoutArchiving(c.id);
 		} catch (err) {
 			session.addSystem(`error: ${errMsg(err)}`);
 		}
@@ -137,27 +178,48 @@
 			<div class="group-label">{group.label}</div>
 			{#each group.items as c (c.id)}
 				<div class="item-wrap">
-					<button class="rowbtn item" type="button" onclick={() => open(c)}>
-						<span class="row-top">
-							<span class="preview">{c.preview}</span>
-						</span>
-						<span class="meta">
-							<span class="proj">
-								<Icon name="folder" size={11} />
-								{c.workspace ? baseName(c.workspace) : 'No project'}
+					{#if renamingId === c.id}
+						<input
+							class="rename-input"
+							bind:this={renameInput}
+							bind:value={renameValue}
+							onkeydown={(e) => {
+								if (e.key === 'Enter') commitRename(c);
+								else if (e.key === 'Escape') renamingId = null;
+							}}
+							onblur={() => commitRename(c)}
+							aria-label="Rename conversation"
+						/>
+					{:else}
+						<button class="rowbtn item" type="button" onclick={() => open(c)} title={title(c)}>
+							<span class="row-top">
+								<span class="preview">{title(c)}</span>
 							</span>
-							<span class="age">{relativeAge(c.saved_at_ms)}</span>
-						</span>
-					</button>
-					<button
-						class="del"
-						type="button"
-						aria-label="Delete conversation"
-						title="Delete"
-						onclick={(e) => remove(c, e)}
-					>
-						<Icon name="x" size={12} />
-					</button>
+							<span class="meta">
+								<span class="age">{relativeAge(c.saved_at_ms)}</span>
+							</span>
+						</button>
+						<div class="row-actions">
+							<button
+								class="ren"
+								type="button"
+								aria-label="Rename conversation"
+								title="Rename"
+								onclick={(e) => startRename(c, e)}
+							>
+								<Icon name="pencil" size={12} />
+							</button>
+							<button
+								class="del"
+								type="button"
+								aria-label="Delete conversation"
+								title="Delete"
+								onclick={(e) => remove(c, e)}
+							>
+								<Icon name="x" size={12} />
+							</button>
+						</div>
+					{/if}
 				</div>
 			{/each}
 		{/each}
@@ -259,7 +321,7 @@
 		display: flex;
 		align-items: center;
 		gap: var(--space-2);
-		padding-right: 20px;
+		padding-right: 40px;
 	}
 	.preview {
 		flex: 1;
@@ -270,41 +332,50 @@
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
-	.del {
+	.rename-input {
+		width: 100%;
+		padding: var(--space-2) var(--space-3);
+		border: 1px solid var(--border-strong);
+		border-radius: var(--radius-chip);
+		background: var(--bg-raised);
+		color: var(--text);
+		font: inherit;
+		font-size: var(--fs-sm);
+		outline: none;
+	}
+	.row-actions {
 		position: absolute;
 		top: var(--space-2);
 		right: var(--space-2);
 		display: none;
+		align-items: center;
+		gap: 2px;
+	}
+	.item-wrap:hover .row-actions {
+		display: flex;
+	}
+	.ren,
+	.del {
+		display: grid;
 		place-items: center;
 		width: 18px;
 		height: 18px;
+		border-radius: var(--radius-chip);
+		color: var(--text-faint);
+	}
+	.del {
 		color: var(--err);
 	}
-	.item-wrap:hover .del {
-		display: grid;
-	}
+	.ren:hover,
 	.del:hover {
 		color: var(--text);
+		background: var(--bg-inset);
 	}
 	.meta {
 		display: flex;
 		align-items: center;
-		justify-content: space-between;
-		gap: var(--space-2);
 		color: var(--text-faint);
 		font-size: var(--fs-xs);
-	}
-	.proj {
-		display: inline-flex;
-		align-items: center;
-		gap: 4px;
-		min-width: 0;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-	.age {
-		flex: none;
 	}
 	.empty {
 		padding: var(--space-2);

@@ -10,13 +10,18 @@
 
 	let multiTab = $derived(session.tabs.length > 1);
 
-	// --- the active conversation's own title, not the workspace name -----
+	// --- the active conversation's own title: a custom name if renamed,
+	// otherwise folder + its first message, not just the raw message -- the
+	// folder is what actually distinguishes two similarly-phrased
+	// conversations from each other.
 	let conversationTitle = $derived.by(() => {
+		if (session.activeChat?.title) return session.activeChat.title;
 		const msgs = session.activeChat?.messages ?? [];
 		const first = msgs.find((m) => m.text?.trim());
-		if (!first) return 'New conversation';
+		if (!first) return folder || 'New conversation';
 		const t = first.text.trim();
-		return t.length > 60 ? t.slice(0, 60) + '…' : t;
+		const clipped = t.length > 60 ? t.slice(0, 60) + '…' : t;
+		return folder ? `${folder} — ${clipped}` : clipped;
 	});
 
 	// --- info popover: message count, model, last answer's verification --

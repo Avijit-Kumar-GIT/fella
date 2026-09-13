@@ -1,5 +1,7 @@
-//! Conversation archiving: one JSON file per ended conversation, under
-//! `<data dir>/conversations/`, written once per id.
+//! Conversation archiving: one JSON file per conversation, under
+//! `<data dir>/conversations/`. A conversation is archived repeatedly over
+//! its life (as soon as it has content, again on every later turn, and on a
+//! rename), always reusing the same file and writing the latest content.
 
 use std::fs;
 use std::path::PathBuf;
@@ -42,7 +44,7 @@ fn archives_a_transcript_to_a_pretty_json_file() {
 }
 
 #[test]
-fn a_second_archive_for_the_same_id_is_a_no_op() {
+fn a_second_archive_for_the_same_id_reuses_the_file_and_updates_it() {
     let data = scratch("conv-dedupe");
     let engine = EngineState::new(&data).unwrap();
 
@@ -53,11 +55,14 @@ fn a_second_archive_for_the_same_id_is_a_no_op() {
         .archive_conversation("dup777", r#"{"id":"dup777","messages":[{"role":"user","text":"changed"}]}"#)
         .unwrap();
 
+    // same file (same path, no second conv_<ms>_dup777.json created)...
     assert_eq!(first, again);
     assert_eq!(engine.conversations_info().count, 1);
-    // the original content is untouched
+    // ...but with the latest content, not frozen at the first write. A
+    // conversation still in progress needs every later turn to actually
+    // reach disk, not just its first exchange.
     let written = fs::read_to_string(&first).unwrap();
-    assert!(!written.contains("changed"));
+    assert!(written.contains("changed"));
 
     let _ = fs::remove_dir_all(&data);
 }
@@ -126,6 +131,29 @@ fn deletes_a_conversation_by_id_and_rejects_an_unknown_one() {
     assert!(engine.conversation_load("deleteme").is_err());
 
     assert!(engine.delete_conversation("no-such-id").is_err());
+
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[test]
+fn renames_a_conversation_and_an_empty_title_clears_it() {
+    let data = scratch("conv-rename");
+    let engine = EngineState::new(&data).unwrap();
+
+    let body = r#"{"id":"renameme","saved_at_ms":1,"workspace":null,"messages":[{"role":"user","text":"hi"}]}"#;
+    engine.archive_conversation("renameme", body).unwrap();
+    assert_eq!(engine.conversations_list()[0].title, None);
+
+    engine.rename_conversation("renameme", "  My trip budget  ").unwrap();
+    let list = engine.conversations_list();
+    assert_eq!(list[0].title.as_deref(), Some("My trip budget"), "trimmed");
+
+    // clearing it back to an empty title removes the field entirely, not
+    // just blanking it, so the derived folder+preview title takes back over
+    engine.rename_conversation("renameme", "   ").unwrap();
+    assert_eq!(engine.conversations_list()[0].title, None);
+
+    assert!(engine.rename_conversation("no-such-id", "x").is_err());
 
     let _ = fs::remove_dir_all(&data);
 }

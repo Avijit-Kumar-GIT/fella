@@ -180,6 +180,8 @@ export interface ConversationSummary {
 	workspace: string | null;
 	preview: string;
 	message_count: number;
+	/** A user-given name, if this conversation was renamed. */
+	title: string | null;
 }
 
 /** A pack: a theme, a skill, an mcp connector, or an augment. See

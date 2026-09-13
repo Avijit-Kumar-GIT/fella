@@ -70,6 +70,12 @@
 	let menuOff = $state(false); // dismissed with Esc until the text changes
 
 	let pendingInput = $derived(!!session.pendingKey || !!session.pendingConnect);
+	// `session.busy` alone isn't specific enough to mean "an answer is
+	// streaming, steering it makes sense" -- it's also true while a folder
+	// is still loading (openFolder reuses it for progress feedback), which
+	// has no answer in flight to steer. Only ask()'s pending assistant
+	// placeholder means there's actually something to steer.
+	let answering = $derived(session.activeChat?.messages.at(-1)?.pending === true);
 	let items = $derived(menuOff || pendingInput ? [] : completionsFor(value));
 	let shown = $derived(items.slice(0, MAX_ITEMS));
 	let menuOpen = $derived(shown.length > 0);
@@ -114,6 +120,12 @@
 		// answer — cancel and re-ask with it appended. A command or key still
 		// waits for the run to end.
 		if (session.busy) {
+			// Busy but nothing is actually answering (e.g. a folder is still
+			// being read after auto-mounting a reopened conversation) -- there's
+			// no run to steer and no workspace ready yet either; ignore the
+			// send rather than firing early against a folder that hasn't
+			// finished opening.
+			if (!answering) return;
 			if (pendingInput || text.startsWith('/')) return;
 			if (!carriesSecret(text)) history.unshift(text);
 			histIx = -1;
@@ -294,7 +306,7 @@
 					{/if}
 				</div>
 			{/if}
-			{#if session.busy && value.trim() && !pendingInput && !value.startsWith('/')}
+			{#if answering && value.trim() && !pendingInput && !value.startsWith('/')}
 				<button
 					class="act send"
 					title="Cancel and re-ask with this (Enter)"

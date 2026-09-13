@@ -159,6 +159,8 @@ own model. Slash commands below are a power-user shortcut; you never need them.
 | `/login` `/logout` `/auth` | Sign in to a hosted provider (Vercel AI Gateway, OpenAI, xAI, Ollama Cloud, OpenRouter, or a custom OpenAI-compatible endpoint); list what's signed in |
 | `/model` | Show or change the LLM provider, base URL and model. Per-tab: each tab can run a different model, but all tabs share one login |
 | `/reindex` | Check the folder again for new or changed files |
+| `/memory` | See what Fella has learned about this folder on its own (`/memory forget` clears it) |
+| `/context` | Open `fella.md` in an editor tab: tell Fella how your files are organised and what your terms mean, in your own words. Saves as you type, read at the start of every question |
 | `/update` | Check for a newer release and install it (checksum-verified, same as the install scripts); Fella closes and you reopen it once the installer finishes |
 | `/packs` | Packs you've added themes, skills, mcp connectors, augments. `/packs add <path>` for a local one, `/packs install <id>` from the seed catalog ([`docs/EXTENSIBILITY.md`](docs/EXTENSIBILITY.md)) |
 | `/connect` | Connect a data source you installed as an `mcp` pack (paste its token) |
@@ -192,8 +194,10 @@ worked) instead of starting over each time.
 
 ### Personalizing
 
-Fella works with nothing set up. If you want more: drop a `fella.md` in your folder to
-tell it how your files are organised and what your terms mean, or add a pack: a
+Fella works with nothing set up. If you want more: `/context` opens `fella.md` right
+in the app, an editor tab where you tell Fella how your files are organised and what
+your terms mean, in your own words (dropping the file in by hand works too, if you'd
+rather). Or add a pack: a
 `theme` (colours), a `skill` (vocabulary/rules for the model), an `mcp` connector
 (a remote data source), or an `augment` (a notes tab or a small table, saved into
 the folder), from a local folder with `/packs add <path>`. A small seed

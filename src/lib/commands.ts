@@ -20,6 +20,7 @@ showing the exact steps it took. You never need these commands, but here they ar
   /model           see or change which model answers
   /reindex         check the folder again for new or changed files
   /memory          see what Fella has learned about this folder (/memory forget to clear)
+  /context         open fella.md, where you tell Fella about your files
   /update          check for a newer version of Fella and install it
   /packs           themes and skills you've added (/packs browse to find more)
   /connect         connect a data source you've added
@@ -45,6 +46,7 @@ export const SLASH_COMMANDS = [
 	'/model',
 	'/reindex',
 	'/memory',
+	'/context',
 	'/update',
 	'/packs',
 	'/connect',
@@ -104,6 +106,7 @@ export const COMMAND_DESCRIPTIONS: Record<string, string> = {
 	'/model': 'see or change which model answers',
 	'/reindex': 'check the folder again for new or changed files',
 	'/memory': 'see what Fella has learned about this folder',
+	'/context': 'open fella.md, where you tell Fella about your files',
 	'/update': 'check for a newer version of Fella and install it',
 	'/packs': "themes and skills you've added",
 	'/connect': "connect a data source you've added",
@@ -473,23 +476,24 @@ async function runCommand(text: string): Promise<void> {
 						return;
 					}
 					const raw = await ipc.conversationLoad(chosen.id);
-					const saved: { workspace?: string | null; messages?: unknown } = JSON.parse(raw);
+					const saved: { workspace?: string | null; messages?: unknown; title?: string | null } =
+						JSON.parse(raw);
 					const messages = Array.isArray(saved.messages) ? (saved.messages as Message[]) : [];
-					session.loadArchivedTab(messages);
-					session.addSystem(`Reopened: "${chosen.preview}" (${dateLabel(chosen.saved_at_ms)}).`);
-					const current = session.catalog.workspace;
-					if (saved.workspace && current && saved.workspace !== current) {
-						session.addSystem(
-							`This conversation was about a different folder (${baseName(saved.workspace)}). ` +
-								`Fella is pointed at ${baseName(current)} right now, so a new question here answers ` +
-								`from that folder, not the original one. /open ${saved.workspace} first if you want the original.`
-						);
+					session.loadArchivedTab(chosen.id, messages, saved.title ?? null);
+					session.addSystem(
+						`Reopened: "${chosen.title ?? chosen.preview}" (${dateLabel(chosen.saved_at_ms)}).`
+					);
+					// Auto-mount the folder this conversation was about (openFolder
+					// reports a failure -- moved/deleted folder -- as a system
+					// message on its own, nothing extra needed here for that).
+					if (saved.workspace && saved.workspace !== session.catalog.workspace) {
+						await openFolder(saved.workspace);
 					}
 					return;
 				}
 				const lines = list.map((c, i) => {
 					const where = c.workspace ? ` · ${baseName(c.workspace)}` : '';
-					return `  ${i + 1}. "${c.preview}" · ${c.message_count} message${c.message_count === 1 ? '' : 's'} · ${dateLabel(c.saved_at_ms)}${where}`;
+					return `  ${i + 1}. "${c.title ?? c.preview}" · ${c.message_count} message${c.message_count === 1 ? '' : 's'} · ${dateLabel(c.saved_at_ms)}${where}`;
 				});
 				session.addSystem(
 					`Your past conversations, newest first — /history <n> to reopen one:\n${lines.join('\n')}`
@@ -843,6 +847,25 @@ async function runCommand(text: string): Promise<void> {
 			} catch (e) {
 				session.addSystem(`error: ${errMsg(e)}`);
 			}
+			return;
+		}
+
+		case '/context': {
+			// Not routed through the generic augment-command path: fella.md's
+			// filename is load-bearing (the engine reads that exact name as
+			// system-prompt context, see catalog.rs/state.rs), so unlike
+			// /note it can't be renamed via an argument.
+			if (!requireEngine()) return;
+			if (!session.catalog.workspace) {
+				session.addSystem('Open a folder first with /open — fella.md saves into it.');
+				return;
+			}
+			await session.openAugment({
+				capability: 'buffer',
+				command: 'context',
+				file: 'fella.md',
+				syntax: 'markdown'
+			});
 			return;
 		}
 

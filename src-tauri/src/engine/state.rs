@@ -62,6 +62,9 @@ pub struct ConversationSummary {
     pub workspace: Option<String>,
     pub preview: String,
     pub message_count: usize,
+    /// A user-given name, if this conversation was renamed. Absent for the
+    /// common case, where the UI derives a label from the folder + preview.
+    pub title: Option<String>,
 }
 
 /// One row of the provider list shown by `/login` and `/auth`.
@@ -220,11 +223,16 @@ impl EngineState {
             .remove(conversation_id);
     }
 
-    /// Write a finished transcript to `<data_dir>/conversations/`. `body` is the
-    /// JSON the UI assembled (`{id, saved_at_ms, workspace, messages}`); it is
-    /// re-serialized pretty so the file reads well when opened by hand. Returns
-    /// the file path. If an archive for `id` already exists (a double restart,
-    /// a retried call) its path is returned without rewriting.
+    /// Write a transcript to `<data_dir>/conversations/`. `body` is the JSON
+    /// the UI assembled (`{id, saved_at_ms, workspace, messages, title?}`);
+    /// it is re-serialized pretty so the file reads well when opened by
+    /// hand. Returns the file path.
+    ///
+    /// A conversation is archived repeatedly over its life -- as soon as it
+    /// has content, again on every later turn, and on a rename -- so this
+    /// always writes the latest content. If a file for `id` already exists
+    /// its own path (and original timestamp prefix) is reused rather than
+    /// creating a new one each time.
     pub fn archive_conversation(&self, id: &str, body: &str) -> EngineResult<String> {
         let value: serde_json::Value = serde_json::from_str(body)
             .map_err(|e| EngineError::msg(format!("conversation body is not JSON: {e}")))?;
@@ -241,19 +249,20 @@ impl EngineState {
         std::fs::create_dir_all(&dir)
             .map_err(|e| EngineError::io(format!("create {}", dir.display()), e))?;
 
-        if let Ok(entries) = std::fs::read_dir(&dir) {
-            for entry in entries.flatten() {
-                if entry.file_name().to_string_lossy().ends_with(&suffix) {
-                    return Ok(entry.path().display().to_string());
-                }
-            }
-        }
+        let existing = std::fs::read_dir(&dir).ok().and_then(|entries| {
+            entries
+                .flatten()
+                .find(|e| e.file_name().to_string_lossy().ends_with(&suffix))
+                .map(|e| e.path())
+        });
 
-        let ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or(0);
-        let path = dir.join(format!("conv_{ms}{suffix}"));
+        let path = existing.unwrap_or_else(|| {
+            let ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0);
+            dir.join(format!("conv_{ms}{suffix}"))
+        });
         let pretty = serde_json::to_string_pretty(&value).unwrap_or_else(|_| body.to_string());
 
         let tmp = path.with_extension("json.tmp");
@@ -263,6 +272,51 @@ impl EngineState {
             .map_err(|e| EngineError::io(format!("replace {}", path.display()), e))?;
 
         Ok(path.display().to_string())
+    }
+
+    /// Set (or, with an empty/whitespace-only title, clear) a custom display
+    /// title for one archived conversation that isn't necessarily open in a
+    /// live tab right now -- e.g. renaming a history row from the sidebar
+    /// without opening it first. Same slug-suffix lookup as `delete_conversation`.
+    pub fn rename_conversation(&self, id: &str, title: &str) -> EngineResult<()> {
+        let dir = self.data_dir.join("conversations");
+        let slug: String = id
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .take(32)
+            .collect();
+        let suffix = format!("_{slug}.json");
+        let entries = std::fs::read_dir(&dir)
+            .map_err(|e| EngineError::io(format!("read {}", dir.display()), e))?;
+        let path = entries
+            .flatten()
+            .find(|e| e.file_name().to_string_lossy().ends_with(&suffix))
+            .map(|e| e.path())
+            .ok_or_else(|| {
+                EngineError::msg("that conversation couldn't be found it may have been deleted")
+            })?;
+
+        let text = std::fs::read_to_string(&path)
+            .map_err(|e| EngineError::io(format!("read {}", path.display()), e))?;
+        let mut value: serde_json::Value = serde_json::from_str(&text)
+            .map_err(|e| EngineError::msg(format!("conversation file is not JSON: {e}")))?;
+        let trimmed = title.trim();
+        if let Some(obj) = value.as_object_mut() {
+            if trimmed.is_empty() {
+                obj.remove("title");
+            } else {
+                obj.insert("title".into(), serde_json::Value::String(trimmed.to_string()));
+            }
+        }
+        let pretty = serde_json::to_string_pretty(&value).unwrap_or(text);
+
+        let tmp = path.with_extension("json.tmp");
+        std::fs::write(&tmp, &pretty)
+            .map_err(|e| EngineError::io(format!("write {}", tmp.display()), e))?;
+        std::fs::rename(&tmp, &path)
+            .map_err(|e| EngineError::io(format!("replace {}", path.display()), e))?;
+
+        Ok(())
     }
 
     /// The conversations directory and how many `*.json` archives it holds.
@@ -315,12 +369,14 @@ impl EngineState {
                     .and_then(|m| m.get("text")?.as_str())
                     .map(|s| cap_chars(s, 80))
                     .unwrap_or_else(|| "(empty conversation)".to_string());
+                let title = v.get("title").and_then(|x| x.as_str()).map(str::to_string);
                 Some(ConversationSummary {
                     id,
                     saved_at_ms,
                     workspace,
                     preview,
                     message_count: messages.len(),
+                    title,
                 })
             })
             .collect();

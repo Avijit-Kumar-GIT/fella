@@ -3,9 +3,11 @@
 	import type { Tab } from '$lib/session.svelte';
 	import Icon from './Icon.svelte';
 
-	/** A chip-sized label: the augment's file, or a conversation's first line. */
+	/** A chip-sized label: the augment's file, a custom name if renamed, or
+	 *  a conversation's first line. */
 	function label(tab: Tab): string {
 		if (tab.kind === 'augment') return tab.file;
+		if (tab.title) return tab.title;
 		const first = tab.messages.find((m) => m.role === 'user');
 		const t = first?.text.replace(/\s+/g, ' ').trim();
 		if (!t) return 'New conversation';

@@ -13,6 +13,14 @@
 	let providerName = $derived(provider?.display ?? providerId);
 	let getKeyUrl = $derived(provider?.get_key_url ?? '');
 
+	// session.health starts null until the first probe resolves. Collapsing
+	// "haven't checked yet" into "not reachable" (the old `up` alone did
+	// this) makes a perfectly healthy, already-configured provider flash the
+	// full connect-a-provider panel for the length of one IPC round trip --
+	// on every single launch, and again if a folder opens before that first
+	// check settles. showSetup should wait for a real answer instead of
+	// assuming the worst by default.
+	let healthChecked = $derived(session.health !== null);
 	let up = $derived(session.health?.reachable === true);
 	let rejected = $derived(session.health?.rejected === true);
 	let currentModel = $derived(session.settings?.model ?? '');
@@ -34,7 +42,7 @@
 	let needModelPick = $derived(up && providerId !== 'ollama' && !currentModel);
 
 	// Show the connect panel whenever the user can't actually ask a question.
-	let showSetup = $derived(rejected || !up || ollamaNoChat || needModelPick);
+	let showSetup = $derived(healthChecked && (rejected || !up || ollamaNoChat || needModelPick));
 	let showExamples = $derived(up && !!currentModel && !ollamaNoChat && !needModelPick);
 
 	let services = $derived(
@@ -253,8 +261,8 @@
 
 			{#if hasFolder && showExamples}
 				<p class="personalize">
-					Make it yours: <code>/packs browse</code> for themes and skills, or drop a
-					<code>fella.md</code> in this folder to tell Fella how your files are organised.
+					Make it yours: <code>/context</code> to tell Fella how your files are organised,
+					or <code>/packs browse</code> for themes and skills.
 				</p>
 			{/if}
 		</div>

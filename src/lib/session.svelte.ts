@@ -42,7 +42,7 @@ function readSidebarCollapsed(): boolean {
 /** One conversation tab: its transcript, its in-flight run, its input history. */
 export class Conversation {
 	readonly kind = 'chat' as const;
-	readonly id = uid();
+	readonly id: string;
 	messages = $state<Message[]>([]);
 	busy = $state<boolean>(false);
 	/** Transient one-line status shown while this tab's agent is working. */
@@ -58,6 +58,17 @@ export class Conversation {
 	/** The model this tab answers with. Empty = use the saved default. All tabs
 	 *  share one provider / login; only the model is per-tab. */
 	model = $state<string>('');
+	/** A user-given name. null = derive one from the folder + first message,
+	 *  the same as an un-renamed conversation always has. */
+	title = $state<string | null>(null);
+
+	/** `id` defaults to a fresh one (a genuinely new conversation). Reopening
+	 *  an archived conversation passes its real id back in, so re-archiving
+	 *  it (on the next settle, or on close) overwrites the same file instead
+	 *  of forking a duplicate under a new one. */
+	constructor(id?: string) {
+		this.id = id ?? uid();
+	}
 
 	#persistTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -276,15 +287,41 @@ class Session {
 	 *  open right now, the caller is responsible for warning that new
 	 *  questions here will run against the current folder, not the
 	 *  original one there's only ever one open folder for every tab. */
-	loadArchivedTab(messages: Message[]): void {
+	loadArchivedTab(id: string, messages: Message[], title: string | null = null): void {
+		// Already open (e.g. the very conversation you're re-clicking in the
+		// sidebar) -- focus it instead of forking a second live copy under
+		// the same id, which would collide as a duplicate tab key.
+		const existing = this.tabs.findIndex((t) => t.kind === 'chat' && t.id === id);
+		if (existing >= 0) {
+			this.active = existing;
+			return;
+		}
 		const inherit = this.model; // same convention as newTab()
-		const c = new Conversation();
+		const c = new Conversation(id);
 		c.model = inherit;
+		c.title = title;
 		// A reloaded transcript never has a run in flight.
 		c.messages = messages.map((m) => (m.pending ? { ...m, pending: false } : m));
 		this.tabs.push(c);
 		this.active = this.tabs.length - 1;
 		this.#writeIndex();
+	}
+
+	/** Rename a conversation, live or archived-only. `title` empty/whitespace
+	 *  clears a custom name back to the derived folder + first-message one. */
+	async renameConversation(id: string, title: string): Promise<void> {
+		const trimmed = title.trim();
+		const tab = this.tabs.find(
+			(t): t is Conversation => t.kind === 'chat' && t.id === id
+		);
+		if (tab) {
+			tab.title = trimmed || null;
+			await this.#archive(tab);
+			return;
+		}
+		if (!isTauri()) return;
+		await ipc.renameConversation(id, trimmed);
+		this.historyVersion++;
 	}
 
 	/** Open (or focus) an augment view for `cfg`, loading the file's current
@@ -328,6 +365,27 @@ class Session {
 		if (this.tabs.length === 0) this.tabs.push(new Conversation());
 		// Keep the focus on the same tab where possible: shift left if we closed
 		// one before it, then clamp.
+		if (this.active > i) this.active -= 1;
+		this.active = Math.min(this.active, this.tabs.length - 1);
+		this.#writeIndex();
+	}
+
+	/** Remove a chat tab WITHOUT archiving it -- for when its history entry
+	 *  was just deleted from the sidebar. Deleting only ever removed the
+	 *  archived file; if that conversation was still open as a live tab, the
+	 *  very next settle re-archived it via persist()'s "archive on content"
+	 *  behaviour, silently undoing the delete (and, since persist() sweeps
+	 *  every open tab on any single tab's activity, resurrecting every other
+	 *  deleted-but-still-open conversation right along with it). No-op if
+	 *  the conversation isn't currently open. */
+	removeTabWithoutArchiving(id: string): void {
+		const i = this.tabs.findIndex((t) => t.kind === 'chat' && t.id === id);
+		if (i < 0) return;
+		const tab = this.tabs[i] as Conversation;
+		tab.dropSnapshot();
+		if (isTauri()) void ipc.forgetConversation(tab.id).catch(() => {});
+		this.tabs.splice(i, 1);
+		if (this.tabs.length === 0) this.tabs.push(new Conversation());
 		if (this.active > i) this.active -= 1;
 		this.active = Math.min(this.active, this.tabs.length - 1);
 		this.#writeIndex();
@@ -391,10 +449,22 @@ class Session {
 	}
 
 	/** Persist every conversation tab's transcript (each debounces its own
-	 *  write). Augment tabs aren't persisted the file on disk is the truth. */
+	 *  write). Augment tabs aren't persisted the file on disk is the truth.
+	 *
+	 *  Also archives a tab into history as soon as its first exchange
+	 *  settles, not just on close/clear -- otherwise a conversation you're
+	 *  still actively having doesn't show up in the sidebar until you're
+	 *  done with it, which reads as "it didn't save" rather than "it hasn't
+	 *  been archived yet". `#archive` re-runs (and just overwrites the same
+	 *  file) on every later settle too, so the sidebar's title/preview
+	 *  reflects the real conversation even if you never close the tab. */
 	persist(): void {
 		const ws = this.catalog.workspace ?? null;
-		for (const t of this.tabs) if (t.kind === 'chat') t.persist(ws);
+		for (const t of this.tabs) {
+			if (t.kind !== 'chat') continue;
+			t.persist(ws);
+			if (!t.busy && t.messages.length > 0) void this.#archive(t);
+		}
 		this.#writeIndex();
 	}
 
@@ -412,7 +482,8 @@ class Session {
 			id: tab.id,
 			saved_at_ms: Date.now(),
 			workspace: this.catalog.workspace ?? null,
-			messages: tab.messages
+			messages: tab.messages,
+			title: tab.title ?? undefined
 		});
 		try {
 			await ipc.archiveConversation(tab.id, body);
@@ -433,9 +504,13 @@ class Session {
 			return true;
 		}
 		if (!Array.isArray(saved.messages) || saved.messages.length === 0 || !isTauri()) return true;
+		// This is a previous run's leftover conversation, recovered on launch --
+		// date it by its own last message, not by "now" (the relaunch moment),
+		// or it files under today's date no matter how long ago it happened.
+		const last = saved.messages[saved.messages.length - 1] as { ts?: number } | undefined;
 		const body = JSON.stringify({
 			id: saved.id ?? '',
-			saved_at_ms: Date.now(),
+			saved_at_ms: last?.ts ?? Date.now(),
 			workspace: saved.workspace ?? this.catalog.workspace ?? null,
 			messages: saved.messages
 		});

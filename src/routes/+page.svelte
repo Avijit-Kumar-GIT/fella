@@ -152,7 +152,17 @@
 	});
 
 	function pickCommand(cmd: string) {
-		const noArg = ['/files', '/help', '/clear', '/model', '/auth', '/history', '/tab', '/focus'];
+		const noArg = [
+			'/files',
+			'/help',
+			'/clear',
+			'/model',
+			'/auth',
+			'/history',
+			'/tab',
+			'/focus',
+			'/context'
+		];
 		composer?.setText(noArg.includes(cmd) ? cmd : cmd + ' ');
 		composer?.focus();
 	}
