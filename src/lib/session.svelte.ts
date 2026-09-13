@@ -433,9 +433,13 @@ class Session {
 			return true;
 		}
 		if (!Array.isArray(saved.messages) || saved.messages.length === 0 || !isTauri()) return true;
+		// This is a previous run's leftover conversation, recovered on launch --
+		// date it by its own last message, not by "now" (the relaunch moment),
+		// or it files under today's date no matter how long ago it happened.
+		const last = saved.messages[saved.messages.length - 1] as { ts?: number } | undefined;
 		const body = JSON.stringify({
 			id: saved.id ?? '',
-			saved_at_ms: Date.now(),
+			saved_at_ms: last?.ts ?? Date.now(),
 			workspace: saved.workspace ?? this.catalog.workspace ?? null,
 			messages: saved.messages
 		});

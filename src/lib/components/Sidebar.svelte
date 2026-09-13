@@ -32,6 +32,13 @@
 		void refresh();
 	});
 
+	/** "folder — first message", not just the raw first message -- the folder
+	 *  is what actually distinguishes two similarly-phrased conversations. */
+	function title(c: ConversationSummary): string {
+		const folder = c.workspace ? baseName(c.workspace) : 'No project';
+		return `${folder} — ${c.preview}`;
+	}
+
 	/** Today / Yesterday / This week / Older, from local-midnight boundaries. */
 	function groupLabel(ms: number): string {
 		const startOf = (t: number) => {
@@ -137,15 +144,11 @@
 			<div class="group-label">{group.label}</div>
 			{#each group.items as c (c.id)}
 				<div class="item-wrap">
-					<button class="rowbtn item" type="button" onclick={() => open(c)}>
+					<button class="rowbtn item" type="button" onclick={() => open(c)} title={title(c)}>
 						<span class="row-top">
-							<span class="preview">{c.preview}</span>
+							<span class="preview">{title(c)}</span>
 						</span>
 						<span class="meta">
-							<span class="proj">
-								<Icon name="folder" size={11} />
-								{c.workspace ? baseName(c.workspace) : 'No project'}
-							</span>
 							<span class="age">{relativeAge(c.saved_at_ms)}</span>
 						</span>
 					</button>
@@ -289,22 +292,8 @@
 	.meta {
 		display: flex;
 		align-items: center;
-		justify-content: space-between;
-		gap: var(--space-2);
 		color: var(--text-faint);
 		font-size: var(--fs-xs);
-	}
-	.proj {
-		display: inline-flex;
-		align-items: center;
-		gap: 4px;
-		min-width: 0;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-	.age {
-		flex: none;
 	}
 	.empty {
 		padding: var(--space-2);
