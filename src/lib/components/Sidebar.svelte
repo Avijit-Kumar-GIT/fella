@@ -4,9 +4,18 @@
 	import { session } from '$lib/session.svelte';
 	import type { ConversationSummary, Message } from '$lib/types';
 	import Icon from './Icon.svelte';
+	import Logo from './Logo.svelte';
 
 	let list = $state<ConversationSummary[]>([]);
 	let query = $state('');
+	let searchOpen = $state(false);
+	let searchInput = $state<HTMLInputElement | null>(null);
+
+	function toggleSearch() {
+		searchOpen = !searchOpen;
+		if (searchOpen) queueMicrotask(() => searchInput?.focus());
+		else query = '';
+	}
 
 	async function refresh() {
 		if (!isTauri()) return;
@@ -87,14 +96,42 @@
 </script>
 
 <aside class="sidebar">
-	<button class="rowbtn new-btn" type="button" onclick={() => session.newTab()}>
-		<Icon name="compose" size={14} />
-		<span>New conversation</span>
-	</button>
-	<div class="search">
-		<Icon name="search" size={13} />
-		<input bind:value={query} placeholder="Search…" spellcheck="false" aria-label="Search history" />
+	<div class="header">
+		<span class="logo"><Logo size={18} /></span>
+		<div class="header-actions">
+			<button
+				class="icon-btn"
+				type="button"
+				aria-label="New conversation"
+				title="New conversation"
+				onclick={() => session.newTab()}
+			>
+				<Icon name="plus" size={15} />
+			</button>
+			<button
+				class="icon-btn"
+				type="button"
+				aria-label="Search history"
+				title="Search"
+				aria-pressed={searchOpen}
+				onclick={toggleSearch}
+			>
+				<Icon name="search" size={14} />
+			</button>
+		</div>
 	</div>
+	{#if searchOpen}
+		<div class="search">
+			<Icon name="search" size={13} />
+			<input
+				bind:this={searchInput}
+				bind:value={query}
+				placeholder="Search…"
+				spellcheck="false"
+				aria-label="Search history"
+			/>
+		</div>
+	{/if}
 	<div class="list">
 		{#each groups as group (group.label)}
 			<div class="group-label">{group.label}</div>
@@ -139,18 +176,41 @@
 		display: flex;
 		flex-direction: column;
 		gap: var(--space-1);
-		padding: var(--space-2);
-		/* Same fill as the rest of the shell -- an open floor plan, not a
-		   bordered-off compartment. */
+		padding: 0 var(--space-2) var(--space-2);
+		/* No top padding: .header is 38px flush against the top edge, to
+		   match the titlebar's height exactly across the sidebar seam. */
 		background: var(--bg);
+		border-right: 1px solid var(--border);
 		overflow: hidden;
 	}
-	.new-btn {
+	.header {
 		display: flex;
 		align-items: center;
-		gap: var(--space-2);
-		color: var(--text);
+		justify-content: space-between;
 		flex: none;
+		height: 38px;
+		padding: 0 var(--space-2);
+	}
+	.logo {
+		display: flex;
+		align-items: center;
+	}
+	.header-actions {
+		display: flex;
+		align-items: center;
+		gap: var(--space-1);
+	}
+	.icon-btn {
+		display: grid;
+		place-items: center;
+		width: 26px;
+		height: 26px;
+		border-radius: var(--radius-sm);
+		color: var(--text-faint);
+	}
+	.icon-btn:hover {
+		color: var(--text);
+		background: var(--bg-inset);
 	}
 	.search {
 		display: flex;

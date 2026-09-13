@@ -3,6 +3,7 @@
 	import { isTauri, win } from '$lib/ipc';
 	import { hardFail } from '$lib/verify';
 	import Icon from './Icon.svelte';
+	import Logo from './Logo.svelte';
 	import TabBar from './TabBar.svelte';
 
 	let { onpalette }: { onpalette: () => void } = $props();
@@ -66,6 +67,9 @@
 	{#if isMac}<span class="lights" aria-hidden="true"></span>{/if}
 
 	{#if !session.focus}
+		{#if session.sidebarCollapsed}
+			<span class="logo"><Logo size={16} /></span>
+		{/if}
 		<button
 			class="navbtn"
 			data-tauri-drag-region="false"
@@ -154,6 +158,11 @@
 	.lights {
 		flex: none;
 		width: 78px;
+	}
+	.logo {
+		display: flex;
+		align-items: center;
+		flex: none;
 	}
 	.navbtn {
 		flex: none;
