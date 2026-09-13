@@ -20,6 +20,7 @@ showing the exact steps it took. You never need these commands, but here they ar
   /model           see or change which model answers
   /reindex         check the folder again for new or changed files
   /memory          see what Fella has learned about this folder (/memory forget to clear)
+  /context         open fella.md, where you tell Fella about your files
   /update          check for a newer version of Fella and install it
   /packs           themes and skills you've added (/packs browse to find more)
   /connect         connect a data source you've added
@@ -45,6 +46,7 @@ export const SLASH_COMMANDS = [
 	'/model',
 	'/reindex',
 	'/memory',
+	'/context',
 	'/update',
 	'/packs',
 	'/connect',
@@ -104,6 +106,7 @@ export const COMMAND_DESCRIPTIONS: Record<string, string> = {
 	'/model': 'see or change which model answers',
 	'/reindex': 'check the folder again for new or changed files',
 	'/memory': 'see what Fella has learned about this folder',
+	'/context': 'open fella.md, where you tell Fella about your files',
 	'/update': 'check for a newer version of Fella and install it',
 	'/packs': "themes and skills you've added",
 	'/connect': "connect a data source you've added",
@@ -846,6 +849,25 @@ async function runCommand(text: string): Promise<void> {
 			} catch (e) {
 				session.addSystem(`error: ${errMsg(e)}`);
 			}
+			return;
+		}
+
+		case '/context': {
+			// Not routed through the generic augment-command path: fella.md's
+			// filename is load-bearing (the engine reads that exact name as
+			// system-prompt context, see catalog.rs/state.rs), so unlike
+			// /note it can't be renamed via an argument.
+			if (!requireEngine()) return;
+			if (!session.catalog.workspace) {
+				session.addSystem('Open a folder first with /open — fella.md saves into it.');
+				return;
+			}
+			await session.openAugment({
+				capability: 'buffer',
+				command: 'context',
+				file: 'fella.md',
+				syntax: 'markdown'
+			});
 			return;
 		}
 

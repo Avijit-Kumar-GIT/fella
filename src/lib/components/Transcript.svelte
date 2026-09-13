@@ -261,8 +261,8 @@
 
 			{#if hasFolder && showExamples}
 				<p class="personalize">
-					Make it yours: <code>/packs browse</code> for themes and skills, or drop a
-					<code>fella.md</code> in this folder to tell Fella how your files are organised.
+					Make it yours: <code>/context</code> to tell Fella how your files are organised,
+					or <code>/packs browse</code> for themes and skills.
 				</p>
 			{/if}
 		</div>

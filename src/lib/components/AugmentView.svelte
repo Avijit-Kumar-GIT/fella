@@ -218,7 +218,12 @@
 				class:mono={tab.syntax === 'csv'}
 				placeholder={tab.syntax === 'csv'
 					? 'one row per line, values separated by commas'
-					: 'type here it saves into the folder as you go'}
+					: tab.command === 'context'
+						? 'Tell Fella about your files, in your own words. For example:\n\n' +
+							'"groceries" means the Whole Foods and Trader Joe\'s rows in spending.csv\n' +
+							'dates in old_export.csv are DD/MM, everything else is MM/DD\n\n' +
+							'Read at the start of every question.'
+						: 'type here it saves into the folder as you go'}
 			></textarea>
 		</div>
 	{/if}
