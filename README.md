@@ -2,7 +2,14 @@
 
 # Fella
 
-**Ask questions about your own files.**
+[![CI](https://github.com/Avijit-Kumar-GIT/fella/actions/workflows/ci.yml/badge.svg)](https://github.com/Avijit-Kumar-GIT/fella/actions/workflows/ci.yml)
+
+**Ask questions about your own files — and see exactly how it got the answer.**
+
+<!-- TODO(demo): a ~20s GIF here, before anything else: open a folder of real-looking
+     files -> ask a question -> answer streams in -> open the evidence fold -> show
+     the SQL and rows behind it. This is the single highest-leverage thing missing
+     from this README. Record with the actual app; no product work needed. -->
 
 Fella is a small local-first desktop app for personal analytics. Point it at a folder
 of your own stuff bank statements, health exports, workout logs, notes, receipts
@@ -13,9 +20,11 @@ and ask questions in plain language:
 - *"Which factors affect my coffee brewing results?"*
 - *"Summarize the trends in these documents."*
 
-Every answer is produced by **deterministic computation** SQL, or Python when SQL
-can't express it never by the model guessing. And every answer shows its
-**working**: open the fold under any reply for the exact files, queries and rows.
+The model never computes anything itself. It writes SQL, or Python when SQL can't
+express the question, and every answer shows its **working**: open the fold under
+any reply for the exact files, queries and rows. A separate deterministic check
+re-runs the cited query and flags any number in the answer that doesn't actually
+appear in a result, before you ever see it.
 
 **Read-only.** Fella reads your folder; it never writes, moves or deletes anything.
 Nothing leaves your computer except the request to the model you choose (a local one
@@ -36,6 +45,11 @@ by one person. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for how it's b
 [`docs/WHY.md`](docs/WHY.md) for the reasoning, [`docs/PRINCIPLES.md`](docs/PRINCIPLES.md)
 for the commitments, and [`docs/NON-GOALS.md`](docs/NON-GOALS.md) for what it deliberately
 doesn't do.
+
+`docs/` has more than those four start with them. The rest (`DECISIONS.md`,
+`AUDIT.md`, `HARNESS.md`, `QUESTIONS.md`, `PERFORMANCE.md`, ...) is the engineering
+log we hold the project's own claims accountable against useful if you're
+contributing or curious how a specific decision got made, not required reading.
 
 ## Requirements
 
