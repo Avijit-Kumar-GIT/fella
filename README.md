@@ -4,12 +4,21 @@
 
 [![CI](https://github.com/Avijit-Kumar-GIT/fella/actions/workflows/ci.yml/badge.svg)](https://github.com/Avijit-Kumar-GIT/fella/actions/workflows/ci.yml)
 
+*The more an AI can do for you, the more it can do to you.*
+
 **Ask questions about your own files — and see exactly how it got the answer.**
 
 <!-- TODO(demo): a ~20s GIF here, before anything else: open a folder of real-looking
      files -> ask a question -> answer streams in -> open the evidence fold -> show
      the SQL and rows behind it. This is the single highest-leverage thing missing
      from this README. Record with the actual app; no product work needed. -->
+
+Most of what's being built right now is a bet that more agency is the way to
+more useful: read, write, act, and assume capability only ever adds up. Fella
+is running the opposite experiment, in public — how much can an agent
+actually do for you if the answer to "can it act" stays permanently no? So
+far: further than it has any right to be. (The full argument, and the actual
+tradeoffs it costs, is in [`docs/WHY.md`](docs/WHY.md).)
 
 Fella is a small local-first desktop app for personal analytics. Point it at a folder
 of your own stuff bank statements, health exports, workout logs, notes, receipts
@@ -31,6 +40,12 @@ Nothing leaves your computer except the request to the model you choose (a local
 by default).
 
 ## Philosophy
+
+"Personal computer" used to mean the machine was actually yours — it kept
+your secrets, and no institution stood between you and it. AI has spent its
+whole existence undoing that word. Fella is a bet that the read-only,
+local-first version isn't the compromise — it's the one that gets to keep
+"personal" and actually mean it.
 
 **Reads your files, computes real answers, never writes anything back.** Small,
 fast, and resistant to feature bloat *in the base version*, which ships as one
