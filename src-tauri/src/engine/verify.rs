@@ -1242,6 +1242,33 @@ mod tests {
         assert!(out.is_empty(), "no evidence means no check, not a warning: {out:?}");
     }
 
+    #[test]
+    fn list_files_row_counts_in_output_back_the_answer() {
+        // list_files (and inspect_table) report per-table row counts only in
+        // their detail text, stored in `output` -- a summary answer quoting
+        // one of those counts is backed, not a stray figure.
+        let ev = vec![EvidenceItem {
+            tool: "list_files".into(),
+            args: Json::Object(Default::default()),
+            note: None,
+            sql: None,
+            result_summary: "2 files".into(),
+            columns: None,
+            rows: None,
+            row_count: None,
+            output: Some("table ledger  (from ledger.csv, 30 rows)\ndocument notes.md  (Notes, 1 KB)".into()),
+            chart: None,
+            ms: 1,
+            error: None,
+        }];
+        let mut out = Vec::new();
+        check_numbers("This folder has a ledger table with 30 rows and one notes file.", &ev, &mut out);
+        assert!(
+            out.iter().all(|c| c.ok),
+            "30 came from list_files' own listing, not a stray figure: {out:?}"
+        );
+    }
+
     fn run_sql_ev(sql: &str, columns: &[&str], rows: Vec<Vec<Json>>) -> EvidenceItem {
         EvidenceItem {
             tool: "run_sql".into(),

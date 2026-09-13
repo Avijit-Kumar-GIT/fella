@@ -268,10 +268,19 @@ impl Tool for ListFiles {
         } else {
             lines.join("\n")
         };
-        Ok(ToolOutput::text(
-            format!("{} files", catalog.sources.len()),
-            text,
-        ))
+        Ok(ToolOutput {
+            summary: format!("{} files", catalog.sources.len()),
+            llm_text: text.clone(),
+            sql: None,
+            columns: None,
+            rows: None,
+            row_count: None,
+            // Row/table counts named here (e.g. "30 rows") are real figures a
+            // summary answer may quote -- stored so verify's number check
+            // finds them as backed, not "not found in any result".
+            output: Some(text),
+            chart: None,
+        })
     }
 }
 
@@ -343,14 +352,19 @@ many sample rows to return (default 5, max 50)."
             }
         }
 
+        let text = lines.join("\n");
         Ok(ToolOutput {
             summary: format!("inspected {name}"),
-            llm_text: lines.join("\n"),
+            llm_text: text.clone(),
             sql: None,
             columns: sample.as_ref().map(|s| s.columns.clone()),
             rows: sample.as_ref().map(|s| s.rows.clone()),
             row_count: sample.as_ref().map(|s| s.row_count),
-            output: None,
+            // The table's total row count and per-column stats (distinct,
+            // null%, min/max) live only in this text -- `rows`/`row_count`
+            // above are the *sample*, not the full table. Stored so a
+            // summary answer quoting the real total isn't flagged unbacked.
+            output: Some(text),
             chart: None,
         })
     }
