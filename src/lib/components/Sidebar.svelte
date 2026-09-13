@@ -4,6 +4,7 @@
 	import { session } from '$lib/session.svelte';
 	import type { ConversationSummary, Message } from '$lib/types';
 	import Icon from './Icon.svelte';
+	import Logo from './Logo.svelte';
 
 	let list = $state<ConversationSummary[]>([]);
 	let query = $state('');
@@ -96,16 +97,7 @@
 
 <aside class="sidebar">
 	<div class="header">
-		<span class="logo" aria-hidden="true">
-			<svg viewBox="124 168 264 226" width="18" height="18">
-				<path
-					d="M256 178 C 330 178 378 228 378 292 C 378 340 342 384 284 384 L 228 384 C 170 384 134 340 134 292 C 134 228 182 178 256 178 Z"
-					fill="var(--brand)"
-				/>
-				<ellipse cx="211" cy="278" rx="20" ry="25" fill="var(--bg)" />
-				<ellipse cx="301" cy="278" rx="20" ry="25" fill="var(--bg)" />
-			</svg>
-		</span>
+		<span class="logo"><Logo size={18} /></span>
 		<div class="header-actions">
 			<button
 				class="icon-btn"
@@ -184,9 +176,9 @@
 		display: flex;
 		flex-direction: column;
 		gap: var(--space-1);
-		padding: var(--space-2);
-		/* Same fill as the rest of the shell -- an open floor plan, not a
-		   bordered-off compartment. */
+		padding: 0 var(--space-2) var(--space-2);
+		/* No top padding: .header is 38px flush against the top edge, to
+		   match the titlebar's height exactly across the sidebar seam. */
 		background: var(--bg);
 		border-right: 1px solid var(--border);
 		overflow: hidden;
@@ -196,7 +188,8 @@
 		align-items: center;
 		justify-content: space-between;
 		flex: none;
-		padding: var(--space-1) var(--space-2);
+		height: 38px;
+		padding: 0 var(--space-2);
 	}
 	.logo {
 		display: flex;
