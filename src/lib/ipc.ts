@@ -144,6 +144,10 @@ export const ipc = {
 	conversationLoad: (id: string) => invoke<string>('conversation_load', { id }),
 	/** Remove one archived conversation from the sidebar's history. */
 	deleteConversation: (id: string) => invoke<void>('delete_conversation', { id }),
+	/** Set (empty string clears) a custom title, for a conversation not
+	 *  necessarily open in a live tab right now. */
+	renameConversation: (id: string, title: string) =>
+		invoke<void>('rename_conversation', { id, title }),
 
 	/**
 	 * Ask a question. Streams progress through `onEvent`; resolves with the

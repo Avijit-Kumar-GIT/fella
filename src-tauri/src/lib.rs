@@ -97,6 +97,7 @@ pub fn run() {
             commands::conversations_list,
             commands::conversation_load,
             commands::delete_conversation,
+            commands::rename_conversation,
             commands::update,
         ])
         .run(tauri::generate_context!())

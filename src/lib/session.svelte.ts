@@ -58,6 +58,9 @@ export class Conversation {
 	/** The model this tab answers with. Empty = use the saved default. All tabs
 	 *  share one provider / login; only the model is per-tab. */
 	model = $state<string>('');
+	/** A user-given name. null = derive one from the folder + first message,
+	 *  the same as an un-renamed conversation always has. */
+	title = $state<string | null>(null);
 
 	/** `id` defaults to a fresh one (a genuinely new conversation). Reopening
 	 *  an archived conversation passes its real id back in, so re-archiving
@@ -284,7 +287,7 @@ class Session {
 	 *  open right now, the caller is responsible for warning that new
 	 *  questions here will run against the current folder, not the
 	 *  original one there's only ever one open folder for every tab. */
-	loadArchivedTab(id: string, messages: Message[]): void {
+	loadArchivedTab(id: string, messages: Message[], title: string | null = null): void {
 		// Already open (e.g. the very conversation you're re-clicking in the
 		// sidebar) -- focus it instead of forking a second live copy under
 		// the same id, which would collide as a duplicate tab key.
@@ -296,11 +299,29 @@ class Session {
 		const inherit = this.model; // same convention as newTab()
 		const c = new Conversation(id);
 		c.model = inherit;
+		c.title = title;
 		// A reloaded transcript never has a run in flight.
 		c.messages = messages.map((m) => (m.pending ? { ...m, pending: false } : m));
 		this.tabs.push(c);
 		this.active = this.tabs.length - 1;
 		this.#writeIndex();
+	}
+
+	/** Rename a conversation, live or archived-only. `title` empty/whitespace
+	 *  clears a custom name back to the derived folder + first-message one. */
+	async renameConversation(id: string, title: string): Promise<void> {
+		const trimmed = title.trim();
+		const tab = this.tabs.find(
+			(t): t is Conversation => t.kind === 'chat' && t.id === id
+		);
+		if (tab) {
+			tab.title = trimmed || null;
+			await this.#archive(tab);
+			return;
+		}
+		if (!isTauri()) return;
+		await ipc.renameConversation(id, trimmed);
+		this.historyVersion++;
 	}
 
 	/** Open (or focus) an augment view for `cfg`, loading the file's current
@@ -440,7 +461,8 @@ class Session {
 			id: tab.id,
 			saved_at_ms: Date.now(),
 			workspace: this.catalog.workspace ?? null,
-			messages: tab.messages
+			messages: tab.messages,
+			title: tab.title ?? undefined
 		});
 		try {
 			await ipc.archiveConversation(tab.id, body);

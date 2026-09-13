@@ -473,10 +473,13 @@ async function runCommand(text: string): Promise<void> {
 						return;
 					}
 					const raw = await ipc.conversationLoad(chosen.id);
-					const saved: { workspace?: string | null; messages?: unknown } = JSON.parse(raw);
+					const saved: { workspace?: string | null; messages?: unknown; title?: string | null } =
+						JSON.parse(raw);
 					const messages = Array.isArray(saved.messages) ? (saved.messages as Message[]) : [];
-					session.loadArchivedTab(chosen.id, messages);
-					session.addSystem(`Reopened: "${chosen.preview}" (${dateLabel(chosen.saved_at_ms)}).`);
+					session.loadArchivedTab(chosen.id, messages, saved.title ?? null);
+					session.addSystem(
+						`Reopened: "${chosen.title ?? chosen.preview}" (${dateLabel(chosen.saved_at_ms)}).`
+					);
 					const current = session.catalog.workspace;
 					if (saved.workspace && current && saved.workspace !== current) {
 						session.addSystem(
@@ -489,7 +492,7 @@ async function runCommand(text: string): Promise<void> {
 				}
 				const lines = list.map((c, i) => {
 					const where = c.workspace ? ` · ${baseName(c.workspace)}` : '';
-					return `  ${i + 1}. "${c.preview}" · ${c.message_count} message${c.message_count === 1 ? '' : 's'} · ${dateLabel(c.saved_at_ms)}${where}`;
+					return `  ${i + 1}. "${c.title ?? c.preview}" · ${c.message_count} message${c.message_count === 1 ? '' : 's'} · ${dateLabel(c.saved_at_ms)}${where}`;
 				});
 				session.addSystem(
 					`Your past conversations, newest first — /history <n> to reopen one:\n${lines.join('\n')}`
