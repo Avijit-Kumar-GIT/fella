@@ -391,10 +391,22 @@ class Session {
 	}
 
 	/** Persist every conversation tab's transcript (each debounces its own
-	 *  write). Augment tabs aren't persisted the file on disk is the truth. */
+	 *  write). Augment tabs aren't persisted the file on disk is the truth.
+	 *
+	 *  Also archives a tab into history as soon as its first exchange
+	 *  settles, not just on close/clear -- otherwise a conversation you're
+	 *  still actively having doesn't show up in the sidebar until you're
+	 *  done with it, which reads as "it didn't save" rather than "it hasn't
+	 *  been archived yet". `#archive` re-runs (and just overwrites the same
+	 *  file) on every later settle too, so the sidebar's title/preview
+	 *  reflects the real conversation even if you never close the tab. */
 	persist(): void {
 		const ws = this.catalog.workspace ?? null;
-		for (const t of this.tabs) if (t.kind === 'chat') t.persist(ws);
+		for (const t of this.tabs) {
+			if (t.kind !== 'chat') continue;
+			t.persist(ws);
+			if (!t.busy && t.messages.length > 0) void this.#archive(t);
+		}
 		this.#writeIndex();
 	}
 
