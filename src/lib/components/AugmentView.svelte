@@ -86,6 +86,20 @@
 		for (const row of rows) row.push('');
 		pushGrid();
 	}
+
+	// A starting point for fella.md, not a default -- the base prompt stays
+	// exactly as tested either way. Only offered while the file is empty, and
+	// only inserted on an explicit click, same "nothing written without your
+	// keystroke" rule every augment already follows.
+	const CONTEXT_SEED = `Feel free to react, not just report. If spending jumps 20% in a \
+month, say so plainly, not just the number. If a trend looks good or bad, say which.
+
+Still: never guess a figure you can't compute.`;
+	function insertSeed(): void {
+		tab.text = CONTEXT_SEED;
+		schedule();
+		ta?.focus();
+	}
 	function onCellKey(e: KeyboardEvent, ri: number, ci: number): void {
 		if (e.key !== 'Enter') return;
 		e.preventDefault();
@@ -185,6 +199,9 @@
 			<span class="spacer"></span>
 			<button class="pill ghost" onclick={addRow}>+ row</button>
 			<button class="pill ghost" onclick={addCol}>+ column</button>
+		{:else if tab.command === 'context' && !tab.text}
+			<span class="spacer"></span>
+			<button class="pill ghost" onclick={insertSeed}>Start from a template</button>
 		{/if}
 	</div>
 
