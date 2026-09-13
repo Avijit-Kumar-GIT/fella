@@ -483,13 +483,11 @@ async function runCommand(text: string): Promise<void> {
 					session.addSystem(
 						`Reopened: "${chosen.title ?? chosen.preview}" (${dateLabel(chosen.saved_at_ms)}).`
 					);
-					const current = session.catalog.workspace;
-					if (saved.workspace && current && saved.workspace !== current) {
-						session.addSystem(
-							`This conversation was about a different folder (${baseName(saved.workspace)}). ` +
-								`Fella is pointed at ${baseName(current)} right now, so a new question here answers ` +
-								`from that folder, not the original one. /open ${saved.workspace} first if you want the original.`
-						);
+					// Auto-mount the folder this conversation was about (openFolder
+					// reports a failure -- moved/deleted folder -- as a system
+					// message on its own, nothing extra needed here for that).
+					if (saved.workspace && saved.workspace !== session.catalog.workspace) {
+						await openFolder(saved.workspace);
 					}
 					return;
 				}

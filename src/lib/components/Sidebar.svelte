@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { ipc, isTauri } from '$lib/ipc';
-	import { baseName, errMsg, relativeAge } from '$lib/commands';
+	import { baseName, errMsg, openFolder, relativeAge } from '$lib/commands';
 	import { session } from '$lib/session.svelte';
 	import type { ConversationSummary, Message } from '$lib/types';
 	import Icon from './Icon.svelte';
@@ -109,13 +109,13 @@
 				JSON.parse(raw);
 			const messages = Array.isArray(saved.messages) ? (saved.messages as Message[]) : [];
 			session.loadArchivedTab(c.id, messages, saved.title ?? null);
-			const current = session.catalog.workspace;
-			if (saved.workspace && current && saved.workspace !== current) {
-				session.addSystem(
-					`This conversation was about a different folder (${baseName(saved.workspace)}). ` +
-						`Fella is pointed at ${baseName(current)} right now, so a new question here answers ` +
-						`from that folder, not the original one. /open ${saved.workspace} first if you want the original.`
-				);
+			// Auto-mount the folder this conversation was about, so a follow-up
+			// question here answers from the same files it originally did,
+			// instead of just telling the user to /open it themselves.
+			// openFolder already reports a failure (moved/deleted folder) as a
+			// system message, so no separate handling is needed for that.
+			if (saved.workspace && saved.workspace !== session.catalog.workspace) {
+				await openFolder(saved.workspace);
 			}
 		} catch (e) {
 			session.addSystem(`error: ${errMsg(e)}`);
