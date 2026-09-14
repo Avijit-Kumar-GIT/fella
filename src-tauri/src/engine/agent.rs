@@ -701,11 +701,17 @@ strftime()/date() (e.g. strftime('%Y-%m', d))."
     }
     if profile.depth_rule {
         rules.push(
-            "For a change, trend, or \"why\" question, a data analyst checks whether it's \
-broad-based or a few outliers before answering, not just what the total did. Consider \
-whether grouping by a second dimension, or isolating the largest movers and recomputing \
-without them, would show something the raw total wouldn't skip this for a question that \
-only asks for one figure."
+            "For a change, trend, correlation, or comparison question, check the shape of \
+the data before answering, not just the headline number: is a change broad-based or a few \
+outliers, does a relationship actually hold or did two things just happen to move \
+together, is one thing meaningfully different or within normal range. Grouping by a \
+second dimension, isolating the largest movers and recomputing without them, or checking \
+a correlation can all show something the raw total wouldn't skip this for a question \
+that only asks for one figure. Lead with the finding in plain language (e.g. \"mostly \
+seasonal, not outliers\"), then the numbers behind it, not a bare figure first. For any \
+correlation or regression, always state how many points it's based on and say plainly \
+when that's too few to trust (under about 8) rather than stating the coefficient as if \
+it settles it."
                 .into(),
         );
     }
@@ -931,11 +937,18 @@ need from it, and reconcile it with the query result.\n\
 you have at most {} tool-calling steps, so don't wander past the question.\n\
 - SQLite SQL, one SELECT / WITH per call. Dates are ISO-8601 text, so use \
 strftime()/date() (e.g. strftime('%Y-%m', d)).\n\
-- For a change, trend, or \"why\" question, a data analyst checks whether it's \
-broad-based or a few outliers before answering, not just what the total did. \
-Consider whether grouping by a second dimension, or isolating the largest \
-movers and recomputing without them, would show something the raw total \
-wouldn't skip this for a question that only asks for one figure.\n\
+- For a change, trend, correlation, or comparison question, check the shape \
+of the data before answering, not just the headline number: is a change \
+broad-based or a few outliers, does a relationship actually hold or did two \
+things just happen to move together, is one thing meaningfully different or \
+within normal range. Grouping by a second dimension, isolating the largest \
+movers and recomputing without them, or checking a correlation can all show \
+something the raw total wouldn't skip this for a question that only asks \
+for one figure. Lead with the finding in plain language (e.g. \"mostly \
+seasonal, not outliers\"), then the numbers behind it, not a bare figure \
+first. For any correlation or regression, always state how many points \
+it's based on and say plainly when that's too few to trust (under about 8) \
+rather than stating the coefficient as if it settles it.\n\
 - run_python for stats SQL can't do: median/stdev (stdlib `statistics`), or \
 correlation/regression via the always-available `pearsonr(x, y)` / \
 `linregress(x, y)` helpers (pure stdlib, work with no scipy installed). It \
