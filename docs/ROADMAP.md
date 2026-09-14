@@ -15,6 +15,11 @@ one named identity: enterprise-grade analytics depth on a folder that
 never had a data team, not a bigger or more autonomous agent. See
 [`DECISIONS.md`](DECISIONS.md), 2026-09-13.
 
+**This whole file is a wish-list; [`GOALS.md`](GOALS.md) is the short,
+scoped answer to "what actually ships first."** Anything here that
+contradicts `GOALS.md`'s v1 line (hypothesis testing, significance
+testing, anything in that shape) is explicitly cut, not deferred.
+
 ## Answer trust, the "shows its working" promise
 
 - **Copy an answer with its evidence.** One button copies the reply plus the exact
