@@ -9,6 +9,12 @@ non-developers, read-only, local-first, every answer a deterministic computation
 that shows its working. See [`DECISIONS.md`](DECISIONS.md) and
 [`EXTENSIBILITY.md`](EXTENSIBILITY.md).
 
+The "Harness quality, measured" section below, plus the four fella-web
+`/next` initiatives it feeds (fella#121-128), is the concrete path toward
+one named identity: enterprise-grade analytics depth on a folder that
+never had a data team, not a bigger or more autonomous agent. See
+[`DECISIONS.md`](DECISIONS.md), 2026-09-13.
+
 ## Answer trust, the "shows its working" promise
 
 - **Copy an answer with its evidence.** One button copies the reply plus the exact

@@ -7,6 +7,30 @@ this app repo (now **`fella`**; `fella-ai` is a private pre-v0.1 archive),
 `fella-marketplace` to mean the browse-site half of the **`fella-web`** repo,
 and any `CODE_OF_CONDUCT.md` mention as folded into `CONTRIBUTING.md` (§Conduct).
 
+- **2026-09-13** **Named the roadmap's identity: enterprise-grade analytics
+  depth, not enterprise-grade reach.** Positioning has been locked as
+  "personal analytics for non-developers, read-only" since 2026-08-27
+  (`PRINCIPLES.md`); this doesn't change that, it names what the four
+  standing roadmap bets, the native tiny-model family (fella#121-123),
+  verification-as-library (fella#124, fella#126), retrieval-at-scale
+  (fella#125), and the public model-floor leaderboard (fella#127-128), add
+  up to as one thing. The comparison that crystallized it: Snowflake Cortex
+  Analyst sells companies a trustworthy natural-language layer over a
+  governed data warehouse, a semantic model a data engineer authors ahead
+  of time, then plain questions get verified SQL answers. fella's version
+  has no warehouse, no data engineer, and no company, it has to infer that
+  structure from one person's ungoverned folder on the fly and still hold
+  to the same bar of proof, a harder version of Cortex Analyst's problem,
+  not an easier one. **Explicitly not part of this identity**: a
+  general-purpose orchestrator dispatching to the tiny models as
+  subagents, or a persistent cross-session profile of the user (both
+  raised and set aside in the same conversation, prompted by reading
+  supermemory's Dynamic Dreaming and SMFS). Either would trade "one
+  reasoning loop, purpose-built" (`NON-GOALS.md`) and the folder-scoped,
+  no-standing-memory-of-you shape for more reach, the opposite axis from
+  what this identity is about: depth on the one bounded job, not more jobs.
+  `fella-web`'s `marketing/initiatives.html` (`/next`) states this framing
+  for a public reader.
 - **2026-09-12** **A correction that overlaps an existing vocabulary note is
   reconciled by the model, not a keyword/position heuristic.** Sandboxed
   multi-session testing (`agent_eval memory-sandbox`, new) of the 2026-09-11
