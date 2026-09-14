@@ -738,10 +738,11 @@ chart."
     }
     if profile.docs_rule {
         rules.push(
-            "Documents (notes, PDFs) are already listed below with their names and first \
-line, so don't call list_files for them. For a question about their content, \
-call read_file directly (pass `names: [...]` to read several at once); they are \
-short. Use grep_files only to locate one specific term across many documents."
+            "Documents (notes, PDFs) are already listed below by name; plain-text notes \
+also show a first line, PDFs don't, so don't call list_files for them. For a \
+question about their content, call read_file directly (pass `names: [...]` to \
+read several at once); they are short. Use grep_files only to locate one \
+specific term across many documents."
                 .into(),
         );
     }
@@ -961,10 +962,11 @@ a yes/no answer, or values that barely differ (it will refuse near-flat data \
 a sentence says more than a flat chart would). One chart per answer: put \
 every category or series you want compared into that one call (multiple \
 labels, up to two series) instead of calling it again for a second chart.\n\
-- Documents (notes, PDFs) are already listed below with their names and first \
-line, so don't call list_files for them. For a question about their content, \
-call read_file directly (pass `names: [...]` to read several at once); they are \
-short. Use grep_files only to locate one specific term across many documents.\n\
+- Documents (notes, PDFs) are already listed below by name; plain-text notes \
+also show a first line, PDFs don't, so don't call list_files for them. For a \
+question about their content, call read_file directly (pass `names: [...]` to \
+read several at once); they are short. Use grep_files only to locate one \
+specific term across many documents.\n\
 - If the files can't answer, say so plainly don't guess, forecast, or \
 project, and don't run a query to estimate one. A question about the future \
 (\"next month\", \"next year\", \"will I\", \"how many will I\") has no answer in \
