@@ -608,10 +608,12 @@ impl Tool for RunPython {
         "run_python"
     }
     fn description(&self) -> &'static str {
-        "Run a short Python 3 snippet for analysis that SQL can't express (e.g. \
-scipy stats, regressions). A helper `sql(query)` returns a pandas DataFrame of \
-the workspace tables. Print results to stdout. About 20s and 1 GB; use it only \
-to compute over the workspace data, not to fetch anything."
+        "Run a short Python 3 snippet for analysis that SQL can't express: median/stdev \
+(stdlib `statistics`), correlation (`pearsonr(x, y)`), or a simple linear regression \
+(`linregress(x, y)` -> slope, intercept, r) both always available, pure stdlib, no scipy \
+needed. A helper `sql(query)` returns a pandas DataFrame of the workspace tables (a plain \
+list of dicts if pandas isn't installed). Print results to stdout. About 20s and 1 GB; use \
+it only to compute over the workspace data, not to fetch anything."
     }
     fn parameters(&self) -> Json {
         json!({

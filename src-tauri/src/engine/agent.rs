@@ -546,6 +546,7 @@ pub struct PromptProfile {
     pub stop_early_rule: bool,
     pub dialect_rule: bool,
     pub python_rule: bool,
+    pub depth_rule: bool,
     pub chart_rule: bool,
     pub docs_rule: bool,
     pub refuse_rule: bool,
@@ -578,6 +579,7 @@ impl PromptProfile {
                 "stop_early_rule" => p.stop_early_rule = false,
                 "dialect_rule" => p.dialect_rule = false,
                 "python_rule" => p.python_rule = false,
+                "depth_rule" => p.depth_rule = false,
                 "chart_rule" => p.chart_rule = false,
                 "docs_rule" => p.docs_rule = false,
                 "refuse_rule" => p.refuse_rule = false,
@@ -605,6 +607,7 @@ impl PromptProfile {
             stop_early_rule: true,
             dialect_rule: true,
             python_rule: true,
+            depth_rule: true,
             chart_rule: true,
             docs_rule: true,
             refuse_rule: true,
@@ -696,10 +699,21 @@ you have at most {steps} tool-calling steps, so don't wander past the question."
 strftime()/date() (e.g. strftime('%Y-%m', d))."
         ));
     }
+    if profile.depth_rule {
+        rules.push(
+            "For a change, trend, or \"why\" question, a data analyst checks whether it's \
+broad-based or a few outliers before answering, not just what the total did. Consider \
+whether grouping by a second dimension, or isolating the largest movers and recomputing \
+without them, would show something the raw total wouldn't skip this for a question that \
+only asks for one figure."
+                .into(),
+        );
+    }
     if profile.python_rule {
         rules.push(
-            "run_python for stats SQL can't do (median, correlation, regression); it has \
-a sql() helper."
+            "run_python for stats SQL can't do: median/stdev (stdlib `statistics`), or \
+correlation/regression via the always-available `pearsonr(x, y)` / `linregress(x, y)` \
+helpers (pure stdlib, work with no scipy installed). It also has a sql() helper."
                 .into(),
         );
     }
@@ -792,7 +806,13 @@ apply. It is background, not data: never take a figure from it.\n",
     match &catalog.workspace {
         Some(ws) => p.push_str(&format!("Workspace: {ws}\n")),
         None => {
-            p.push_str("No workspace is open yet; tell the user to run /open <folder>.\n");
+            p.push_str(
+                "No workspace is open yet. If the user asks anything about data, files, or \
+a folder (a chart, a total, \"the ledger\", anything that sounds like it needs files), say \
+plainly: \"No folder is open yet, run /open <folder> or drop one on the window.\" Don't ask \
+what they'd like to see, guess at data, or reference a prior conversation as if a folder \
+were open only a plain greeting or a question about Fella itself gets a normal reply.\n",
+            );
             return p;
         }
     }
@@ -911,8 +931,15 @@ need from it, and reconcile it with the query result.\n\
 you have at most {} tool-calling steps, so don't wander past the question.\n\
 - SQLite SQL, one SELECT / WITH per call. Dates are ISO-8601 text, so use \
 strftime()/date() (e.g. strftime('%Y-%m', d)).\n\
-- run_python for stats SQL can't do (median, correlation, regression); it has \
-a sql() helper.\n\
+- For a change, trend, or \"why\" question, a data analyst checks whether it's \
+broad-based or a few outliers before answering, not just what the total did. \
+Consider whether grouping by a second dimension, or isolating the largest \
+movers and recomputing without them, would show something the raw total \
+wouldn't skip this for a question that only asks for one figure.\n\
+- run_python for stats SQL can't do: median/stdev (stdlib `statistics`), or \
+correlation/regression via the always-available `pearsonr(x, y)` / \
+`linregress(x, y)` helpers (pure stdlib, work with no scipy installed). It \
+also has a sql() helper.\n\
 - make_chart draws a bar or line chart from labels + numeric series you \
 already have; it renders itself, so don't describe it in prose. Use it for a \
 breakdown across categories or a trend over time skip it for a single figure, \
