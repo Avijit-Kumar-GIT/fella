@@ -5,10 +5,11 @@
 use async_trait::async_trait;
 use serde_json::{json, Value as Json};
 
+use crate::engine::analytics::chart::{self, ChartData, ChartKind, Series};
+use crate::engine::analytics::verify::truncate as truncate_chars;
 use crate::engine::error::{EngineError, EngineResult};
 use crate::engine::llm::ToolSchema;
 use crate::engine::state::{EngineState, GrepHit, QueryResult};
-use crate::engine::verify::truncate as truncate_chars;
 
 /// What a tool produces: a human-facing summary + optional tabular detail for
 /// the evidence panel, and a compact text rendering for the model.
@@ -22,7 +23,7 @@ pub struct ToolOutput {
     pub output: Option<String>,
     /// Structured chart data from a chart tool (e.g. `make_chart`) -- labels
     /// and numbers only, no markup. Rendered client-side.
-    pub chart: Option<crate::engine::chart::ChartData>,
+    pub chart: Option<ChartData>,
 }
 
 impl ToolOutput {
@@ -67,7 +68,7 @@ impl Registry {
                 Box::new(GrepFiles),
                 Box::new(ReadFile),
                 Box::new(RunPython),
-                Box::new(crate::engine::chart::MakeChart),
+                Box::new(MakeChart),
             ],
             #[cfg(feature = "mcp")]
             mcp: Vec::new(),
@@ -422,9 +423,9 @@ impl Tool for RunSql {
 /// SQLite reads non-numeric text as 0, so the total is silently wrong.
 fn text_agg_warning(engine: &EngineState, sql: &str) -> Option<String> {
     // `(lowercased, original-case)` text columns - shared collector with verify.
-    let text_cols = crate::engine::verify::text_columns(engine);
+    let text_cols = crate::engine::analytics::verify::text_columns(engine);
     let lowered: Vec<String> = text_cols.iter().map(|(l, _)| l.clone()).collect();
-    let hit = crate::engine::verify::aggregates_text_column(sql, &lowered)?;
+    let hit = crate::engine::analytics::verify::aggregates_text_column(sql, &lowered)?;
     let name = text_cols
         .iter()
         .find(|(l, _)| l == hit)
@@ -440,9 +441,9 @@ SUM(CAST(REPLACE(REPLACE(\"{name}\", '$', ''), ',', '') AS REAL))."
 /// If `sql` filters a mixed-case label column by exact case, tell the model to
 /// fold case values like `Rent` and `rent` won't all match otherwise.
 fn case_filter_warning(engine: &EngineState, sql: &str) -> Option<String> {
-    let cols = crate::engine::verify::mixed_case_columns(engine);
+    let cols = crate::engine::analytics::verify::mixed_case_columns(engine);
     let lowered: Vec<String> = cols.iter().map(|(l, _)| l.clone()).collect();
-    let hit = crate::engine::verify::case_sensitive_label_filter(sql, &lowered)?;
+    let hit = crate::engine::analytics::verify::case_sensitive_label_filter(sql, &lowered)?;
     let name = cols.iter().find(|(l, _)| l == hit).map_or(hit, |(_, n)| n.as_str());
     Some(format!(
         "NOTE: \"{name}\" has values that differ only in capitalisation (e.g. Rent / rent). \
@@ -668,6 +669,99 @@ it only to compute over the workspace data, not to fetch anything."
     }
 }
 
+// --- make_chart ------------------------------------------------------
+//
+// The data types and validation live in `analytics::chart` (plain data,
+// independent of the rest of the app); this is just the app-calling glue
+// that turns arguments into that data and hands the result back as a
+// `ToolOutput`, same as every other tool here.
+
+#[derive(serde::Deserialize)]
+struct ChartArgs {
+    kind: ChartKind,
+    #[serde(default)]
+    title: Option<String>,
+    labels: Vec<String>,
+    series: Vec<Series>,
+    #[serde(default)]
+    unit: Option<String>,
+}
+
+pub struct MakeChart;
+
+#[async_trait]
+impl Tool for MakeChart {
+    fn name(&self) -> &'static str {
+        "make_chart"
+    }
+    fn description(&self) -> &'static str {
+        "Draw a bar or line chart from labels + one or more numeric series you already have \
+(e.g. from a prior run_sql). It renders itself in the answer; don't describe it in prose."
+    }
+    fn parameters(&self) -> Json {
+        json!({
+            "type": "object",
+            "properties": {
+                "kind": { "type": "string", "enum": ["bar", "line"] },
+                "title": { "type": "string", "description": "short chart title, e.g. \"Spending by category\"" },
+                "labels": {
+                    "type": "array", "items": { "type": "string" },
+                    "description": "x-axis / category labels, in order"
+                },
+                "series": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": { "type": "string" },
+                            "values": { "type": "array", "items": { "type": "number" } }
+                        },
+                        "required": ["name", "values"],
+                        "additionalProperties": false
+                    },
+                    "description": "one or more named numeric series, each with one value per label"
+                },
+                "unit": { "type": "string", "description": "optional short suffix/prefix for values, e.g. \"$\" or \"%\"" }
+            },
+            "required": ["kind", "labels", "series"],
+            "additionalProperties": false
+        })
+    }
+    async fn run(&self, _engine: &EngineState, args: &Json) -> EngineResult<ToolOutput> {
+        let parsed: ChartArgs = serde_json::from_value(args.clone())
+            .map_err(|e| EngineError::msg(format!("invalid make_chart arguments: {e}")))?;
+        let data = ChartData {
+            kind: parsed.kind,
+            title: parsed.title,
+            labels: parsed.labels,
+            series: parsed.series,
+            unit: parsed.unit,
+        };
+        chart::validate(&data).map_err(EngineError::msg)?;
+
+        let n_series = data.series.len();
+        let n_labels = data.labels.len();
+        let kind_word = match data.kind {
+            ChartKind::Bar => "bar",
+            ChartKind::Line => "line",
+        };
+        Ok(ToolOutput {
+            summary: format!(
+                "{kind_word} chart, {n_labels} categor{}, {n_series} series",
+                if n_labels == 1 { "y" } else { "ies" }
+            ),
+            llm_text: "Chart drawn — it renders below this message; don't restate the numbers \
+in prose."
+                .to_string(),
+            sql: None,
+            columns: None,
+            rows: None,
+            row_count: None,
+            output: None,
+            chart: Some(data),
+        })
+    }
+}
 
 #[cfg(test)]
 mod tests {

@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use crate::engine::data::PythonBridge;
+use crate::engine::analytics::data::PythonBridge;
 use crate::engine::error::{EngineError, EngineResult};
 
 const TIMEOUT: Duration = Duration::from_secs(20);

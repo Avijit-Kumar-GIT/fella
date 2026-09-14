@@ -19,11 +19,11 @@ use std::collections::HashSet;
 
 use serde_json::Value as Json;
 
+use crate::engine::analytics::AnalyticsSource;
 use crate::engine::evidence::{EvidenceItem, VerificationCheck};
-use crate::engine::state::EngineState;
 
 pub fn run(
-    engine: &EngineState,
+    engine: &dyn AnalyticsSource,
     question: &str,
     answer: &str,
     evidence: &[EvidenceItem],
@@ -101,7 +101,7 @@ pub fn rerun_regression(checks: &[VerificationCheck]) -> Option<String> {
 /// `(lowercased, original-case)` names of every catalogued `TEXT` column.
 /// Shared by the `run_sql` tool's inline warning and `check_text_agg` so the
 /// "collect the text columns" logic lives in one place.
-pub(crate) fn text_columns(engine: &EngineState) -> Vec<(String, String)> {
+pub(crate) fn text_columns(engine: &dyn AnalyticsSource) -> Vec<(String, String)> {
     engine
         .catalog()
         .sources
@@ -158,7 +158,7 @@ pub(crate) fn aggregates_text_column<'a>(sql: &str, text_cols: &'a [String]) -> 
 
 /// `(lowercased, original)` names of catalogued `TEXT` columns whose ingest note
 /// says the values differ only in capitalisation (`case_collision`).
-pub(crate) fn mixed_case_columns(engine: &EngineState) -> Vec<(String, String)> {
+pub(crate) fn mixed_case_columns(engine: &dyn AnalyticsSource) -> Vec<(String, String)> {
     engine
         .catalog()
         .sources
@@ -208,7 +208,7 @@ pub(crate) fn case_sensitive_label_filter<'a>(sql: &str, cols: &'a [String]) -> 
 /// Flag a cited query that filters a mixed-case label column by exact case one
 /// `Rent` vs `rent` row silently drops out. A soft warning; the schema note is
 /// where the model is meant to have folded case in the first place.
-fn check_case_filter(engine: &EngineState, evidence: &[EvidenceItem], out: &mut Vec<VerificationCheck>) {
+fn check_case_filter(engine: &dyn AnalyticsSource, evidence: &[EvidenceItem], out: &mut Vec<VerificationCheck>) {
     let cols = mixed_case_columns(engine);
     if cols.is_empty() {
         return;
@@ -232,7 +232,7 @@ fn check_case_filter(engine: &EngineState, evidence: &[EvidenceItem], out: &mut 
 
 /// Flag any cited query that sums/averages a column the catalog reports as
 /// `TEXT` SQLite counts non-numeric text as 0, so the figure may be wrong.
-fn check_text_agg(engine: &EngineState, evidence: &[EvidenceItem], out: &mut Vec<VerificationCheck>) {
+fn check_text_agg(engine: &dyn AnalyticsSource, evidence: &[EvidenceItem], out: &mut Vec<VerificationCheck>) {
     let cols = text_columns(engine);
     if cols.is_empty() {
         return;
@@ -312,7 +312,7 @@ fn check_aggregate_verb(question: &str, evidence: &[EvidenceItem], out: &mut Vec
 
 // --- 1. table existence -------------------------------------------------
 
-fn check_tables(engine: &EngineState, evidence: &[EvidenceItem], out: &mut Vec<VerificationCheck>) {
+fn check_tables(engine: &dyn AnalyticsSource, evidence: &[EvidenceItem], out: &mut Vec<VerificationCheck>) {
     let known: HashSet<String> = engine
         .catalog()
         .sources
@@ -389,7 +389,7 @@ const GENERIC_COLUMN_NAMES: &[&str] = &[
 /// have I *finished*" answered without a `finished` filter anywhere in the
 /// query). Lexical and conservative: word-boundary matched, generic names
 /// filtered out, only meaningful for a single table (the caller resolves
-/// that). Pure so it's testable without a real `EngineState`/catalog, same
+/// that). Pure so it's testable without a real `AnalyticsSource`/catalog, same
 /// pattern as `missing_aggregate_verbs`. Doesn't check filter *values*
 /// (`tier = 'close'` vs `tier = 'active'`) only that the column was
 /// referenced at all; see #67 for the harder cases this still misses.
@@ -417,7 +417,7 @@ fn dropped_columns<'a>(question: &str, sql_texts: &[String], table_columns: &'a 
 /// single-table answer — multi-table questions are #79's job, and a second
 /// table changes which column belongs where.
 fn check_dropped_column(
-    engine: &EngineState,
+    engine: &dyn AnalyticsSource,
     question: &str,
     evidence: &[EvidenceItem],
     out: &mut Vec<VerificationCheck>,
@@ -499,7 +499,7 @@ fn looks_like_a_missed_join(
 /// shared column name (e.g. every table has a `date`) is common and fine;
 /// generic column names are filtered out for exactly that reason.
 fn check_multi_table_join(
-    engine: &EngineState,
+    engine: &dyn AnalyticsSource,
     question: &str,
     evidence: &[EvidenceItem],
     out: &mut Vec<VerificationCheck>,
@@ -535,7 +535,7 @@ fn check_multi_table_join(
 
 // --- 2. re-run cited queries ------------------------------------------
 
-fn rerun_queries(engine: &EngineState, evidence: &[EvidenceItem], out: &mut Vec<VerificationCheck>) {
+fn rerun_queries(engine: &dyn AnalyticsSource, evidence: &[EvidenceItem], out: &mut Vec<VerificationCheck>) {
     let mut matched = 0usize;
     let mut skipped_cost = 0usize;
     let mut seen: HashSet<&str> = HashSet::new();

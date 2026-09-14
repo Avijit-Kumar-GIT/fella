@@ -70,12 +70,13 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use fella_lib::engine::chart::Series as ChartSeries;
+use fella_lib::engine::analytics::chart::Series as ChartSeries;
 use fella_lib::engine::evidence::EvidenceItem;
 use fella_lib::engine::testkit::{
     self, Goldens, Messiness, TableGold, WorkspaceSpec,
 };
-use fella_lib::engine::{memory, verify, AskEvent, EngineState};
+use fella_lib::engine::analytics::verify;
+use fella_lib::engine::{memory, AskEvent, EngineState};
 
 // --- what a correct answer looks like -------------------------------------
 
@@ -201,7 +202,7 @@ async fn run_case(engine: &EngineState, conv: &str, question: &str, model: Optio
 
 // --- metrics -----------------------------------------------------------
 
-/// Number-shaped runs in `text`, parsed. Mirrors `engine::verify::number_tokens`
+/// Number-shaped runs in `text`, parsed. Mirrors `engine::analytics::verify::number_tokens`
 /// (private there); currency signs, thousands separators and a trailing `%`
 /// tolerated.
 fn numbers_in(text: &str) -> Vec<f64> {
@@ -2397,8 +2398,8 @@ mod tests {
     }
     fn ev_chart(labels: &[&str], series: Vec<(&str, Vec<f64>)>) -> EvidenceItem {
         EvidenceItem {
-            chart: Some(fella_lib::engine::chart::ChartData {
-                kind: fella_lib::engine::chart::ChartKind::Bar,
+            chart: Some(fella_lib::engine::analytics::chart::ChartData {
+                kind: fella_lib::engine::analytics::chart::ChartKind::Bar,
                 title: None,
                 labels: labels.iter().map(|s| s.to_string()).collect(),
                 series: series

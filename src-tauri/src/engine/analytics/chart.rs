@@ -1,27 +1,27 @@
-//! A deterministic chart data tool: `make_chart`. Validates labels + one or
-//! more numeric series the model already has (e.g. from a prior `run_sql`)
-//! and passes them through as structured data -- rendering happens entirely
-//! client-side (`src/lib/components/Chart.svelte`, `d3-scale`/`d3-shape` for
-//! the line-chart math), so real DOM/CSS owns layout and theming instead of
-//! Rust estimating character widths into a hand-built SVG string. This tool
-//! only ever emits data (labels, numbers, short strings); it does not
-//! generate markup, so there's no sanitizer boundary on the way out.
+//! Chart data: validates labels + one or more numeric series the model
+//! already has (e.g. from a prior `run_sql`) and passes them through as
+//! structured data -- rendering happens entirely client-side
+//! (`src/lib/components/Chart.svelte`, `d3-scale`/`d3-shape` for the
+//! line-chart math), so real DOM/CSS owns layout and theming instead of
+//! Rust estimating character widths into a hand-built SVG string. This
+//! module only ever emits data (labels, numbers, short strings); it does
+//! not generate markup, so there's no sanitizer boundary on the way out.
+//!
+//! The `make_chart` tool that wraps this for the agent loop lives in
+//! `tools.rs`, not here -- it's app-calling glue (`Tool`/`ToolOutput`),
+//! while everything in this file is plain data plus one pure validation
+//! function, independent of the rest of the app.
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value as Json;
-
-use crate::engine::error::{EngineError, EngineResult};
-use crate::engine::state::EngineState;
-use crate::engine::tools::{Tool, ToolOutput};
 
 /// A folder's worth of tables rarely needs more than this many categories in
 /// one chart before it stops being readable; past this, tell the model to
 /// aggregate first.
-const MAX_CATEGORIES: usize = 12;
+pub const MAX_CATEGORIES: usize = 12;
 /// Two series is already two colors on a near-monochrome palette (see
 /// `src/app.css`); a third would need a real color system this isn't
 /// building yet.
-const MAX_SERIES: usize = 2;
+pub const MAX_SERIES: usize = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -114,93 +114,6 @@ fn meaningfully_varies(data: &ChartData) -> bool {
         let scale = s.values.iter().fold(0.0f64, |m, v| m.max(v.abs())).max(1.0);
         (hi - lo) / scale >= MIN_VARIATION
     })
-}
-
-#[derive(Deserialize)]
-struct ChartArgs {
-    kind: ChartKind,
-    #[serde(default)]
-    title: Option<String>,
-    labels: Vec<String>,
-    series: Vec<Series>,
-    #[serde(default)]
-    unit: Option<String>,
-}
-
-pub struct MakeChart;
-
-#[async_trait::async_trait]
-impl Tool for MakeChart {
-    fn name(&self) -> &'static str {
-        "make_chart"
-    }
-    fn description(&self) -> &'static str {
-        "Draw a bar or line chart from labels + one or more numeric series you already have \
-(e.g. from a prior run_sql). It renders itself in the answer; don't describe it in prose."
-    }
-    fn parameters(&self) -> Json {
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "kind": { "type": "string", "enum": ["bar", "line"] },
-                "title": { "type": "string", "description": "short chart title, e.g. \"Spending by category\"" },
-                "labels": {
-                    "type": "array", "items": { "type": "string" },
-                    "description": "x-axis / category labels, in order"
-                },
-                "series": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "name": { "type": "string" },
-                            "values": { "type": "array", "items": { "type": "number" } }
-                        },
-                        "required": ["name", "values"],
-                        "additionalProperties": false
-                    },
-                    "description": "one or more named numeric series, each with one value per label"
-                },
-                "unit": { "type": "string", "description": "optional short suffix/prefix for values, e.g. \"$\" or \"%\"" }
-            },
-            "required": ["kind", "labels", "series"],
-            "additionalProperties": false
-        })
-    }
-    async fn run(&self, _engine: &EngineState, args: &Json) -> EngineResult<ToolOutput> {
-        let parsed: ChartArgs = serde_json::from_value(args.clone())
-            .map_err(|e| EngineError::msg(format!("invalid make_chart arguments: {e}")))?;
-        let data = ChartData {
-            kind: parsed.kind,
-            title: parsed.title,
-            labels: parsed.labels,
-            series: parsed.series,
-            unit: parsed.unit,
-        };
-        validate(&data).map_err(EngineError::msg)?;
-
-        let n_series = data.series.len();
-        let n_labels = data.labels.len();
-        let kind_word = match data.kind {
-            ChartKind::Bar => "bar",
-            ChartKind::Line => "line",
-        };
-        Ok(ToolOutput {
-            summary: format!(
-                "{kind_word} chart, {n_labels} categor{}, {n_series} series",
-                if n_labels == 1 { "y" } else { "ies" }
-            ),
-            llm_text: "Chart drawn — it renders below this message; don't restate the numbers \
-in prose."
-                .to_string(),
-            sql: None,
-            columns: None,
-            rows: None,
-            row_count: None,
-            output: None,
-            chart: Some(data),
-        })
-    }
 }
 
 #[cfg(test)]

@@ -8,7 +8,7 @@ use calamine::{open_workbook_auto, Data, Reader};
 use serde_json::Value as Json;
 
 use crate::engine::catalog::{self, ColumnInfo};
-use crate::engine::data::{ColType, DataEngine};
+use crate::engine::analytics::data::{ColType, DataEngine};
 use crate::engine::error::{EngineError, EngineResult};
 
 /// One sheet that became a queryable table.
@@ -140,7 +140,7 @@ fn filled(row: &[Data]) -> usize {
     row.iter()
         .filter(|c| match c {
             Data::Empty => false,
-            Data::String(s) => !crate::engine::data::is_blankish(s),
+            Data::String(s) => !crate::engine::analytics::data::is_blankish(s),
             _ => true,
         })
         .count()
@@ -219,7 +219,7 @@ fn looks_like_total_row(row: &[Data], width: usize) -> bool {
         Data::String(s) if !s.trim().is_empty() => Some(s.as_str()),
         _ => None,
     });
-    let is_total = label.is_some_and(crate::engine::data::is_total_label);
+    let is_total = label.is_some_and(crate::engine::analytics::data::is_total_label);
     // A summary line is label + a figure or two, not a full data row.
     is_total && filled(row) * 3 <= width * 2 + 2
 }
@@ -233,7 +233,7 @@ struct ColInfer {
 /// a column that isn't natively numeric but whose remaining cells are all
 /// written numbers (`$1,200`, `1,150`) becomes `Float` with a note.
 fn infer_columns(data: &[&[Data]], width: usize) -> Vec<ColInfer> {
-    use crate::engine::data::{is_blankish, parse_named_month_date, parse_numeric};
+    use crate::engine::analytics::data::{is_blankish, parse_named_month_date, parse_numeric};
 
     (0..width)
         .map(|i| {
@@ -353,7 +353,7 @@ fn infer_columns(data: &[&[Data]], width: usize) -> Vec<ColInfer> {
 }
 
 fn cell_to_json(cell: &Data, ty: ColType) -> Json {
-    use crate::engine::data::{is_blankish, parse_numeric};
+    use crate::engine::analytics::data::{is_blankish, parse_numeric};
 
     if let Data::Empty = cell {
         return Json::Null;
@@ -382,7 +382,7 @@ fn cell_to_json(cell: &Data, ty: ColType) -> Json {
             parse_numeric(s).map(|v| Json::from(v as i64)).unwrap_or(Json::Null)
         }
         (Data::String(s), ColType::Date) => {
-            crate::engine::data::parse_named_month_date(s).map(Json::from).unwrap_or(Json::Null)
+            crate::engine::analytics::data::parse_named_month_date(s).map(Json::from).unwrap_or(Json::Null)
         }
         (_, ColType::Text) => Json::from(cell_to_string(cell)),
         _ => Json::Null,

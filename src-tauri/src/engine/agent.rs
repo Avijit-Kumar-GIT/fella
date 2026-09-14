@@ -5,12 +5,13 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+use crate::engine::analytics::verify;
 use crate::engine::error::{EngineError, EngineResult};
 use crate::engine::evidence::{Answer, AskEvent, EvidenceItem, Usage, VerificationCheck};
 use crate::engine::llm::{ChatMessage, LlmClient, ToolCall};
 use crate::engine::state::EngineState;
 use crate::engine::tools::Registry;
-use crate::engine::{friction, verify, Catalog};
+use crate::engine::{friction, Catalog};
 
 /// Hard cap on tool-calling iterations per question, before the loop forces
 /// a final answer. `FELLA_MAX_STEPS` overrides it a slower or less

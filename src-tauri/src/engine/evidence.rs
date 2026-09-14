@@ -30,7 +30,7 @@ pub struct EvidenceItem {
     /// (`src/lib/components/Chart.svelte`), so there's no sanitizer
     /// boundary here the way an HTML/SVG string would need.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub chart: Option<crate::engine::chart::ChartData>,
+    pub chart: Option<crate::engine::analytics::chart::ChartData>,
     pub ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
