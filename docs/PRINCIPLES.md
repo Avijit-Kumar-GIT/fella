@@ -26,7 +26,11 @@ refuses to. Referenced from [`WHY.md`](WHY.md); the refusals are in
   transcript.
 - **Anti-bloat in the base.** A new dependency needs a real justification.
   No settings modal. Minimal dependencies, small binary, fast startup. The
-  codebase stays understandable by one person.
+  codebase stays understandable by one person. "Lightweight" here is
+  actually four separable things (binary/dependency weight, runtime
+  performance, codebase simplicity, feature scope) — see
+  [`LIGHTWEIGHT.md`](LIGHTWEIGHT.md) for which parts of the engine are
+  allowed to spend weight on which axis, and which must not.
 - **A fixed, small tool set in the base**, customization opt-in and pushed to
   the edges (themes, skills, MCP connectors, augments a user installs
   themselves see [`EXTENSIBILITY.md`](EXTENSIBILITY.md)) rather than grown

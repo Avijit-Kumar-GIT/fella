@@ -7,6 +7,24 @@ this app repo (now **`fella`**; `fella-ai` is a private pre-v0.1 archive),
 `fella-marketplace` to mean the browse-site half of the **`fella-web`** repo,
 and any `CODE_OF_CONDUCT.md` mention as folded into `CONTRIBUTING.md` (§Conduct).
 
+- **2026-09-14** **"Lightweight" named as four separable axes (binary/dependency
+  weight, runtime performance, codebase simplicity, feature scope), each with its
+  own real evidence, in `docs/LIGHTWEIGHT.md`.** Prompted by the "enterprise-grade"
+  identity work raising a real question: does that push require DuckDB as the
+  default data engine? Answer: no. The retrieval-at-scale gap (fella#125) it would
+  address has SQLite-compatible candidate fixes already on the roadmap
+  (streaming/lazy ingestion, parallelism); DuckDB-as-default would reverse a
+  decision made from an actual `cargo bloat` measurement (2026-08-27: 54 MB vs
+  11 MB stripped, DuckDB alone >50% of `.text`), not one made from a guess, and
+  stays a last resort, not a first move. Separately established from
+  `docs/PERFORMANCE.md`'s existing numbers: fella's own compute is never the
+  runtime bottleneck a user feels (`run_sql` ~10-50ms) — time-to-answer is
+  dominated by model round-trip count, which is why the "one chart per answer"
+  and "batch independent lookups into one turn" rules matter more for feel than
+  anything in the engine itself. Feature-scope minimalism ("vertical, not
+  horizontal," 2026-09-08) is explicitly not reopened by this doc, or by anything
+  in the "enterprise-grade" framing that prompted it — that axis was locked
+  before this and stays locked.
 - **2026-09-13** **Named the roadmap's identity: enterprise-grade analytics
   depth, not enterprise-grade reach.** Positioning has been locked as
   "personal analytics for non-developers, read-only" since 2026-08-27
