@@ -4,9 +4,9 @@ A wish-list, not a commitment. Everything here is scoped to **not grow the base*
 each item reuses a dependency Fella already ships, or is frontend-only. Ideas that
 would need a positioning decision are in the last section, kept separate on purpose.
 
-Fella's locked shape still applies to all of it: personal analytics for
-non-developers, read-only, local-first, every answer a deterministic computation
-that shows its working. See [`DECISIONS.md`](DECISIONS.md) and
+Fella's locked shape still applies to all of it: enterprise-grade personal
+analytics for non-developers, read-only, local-first, every answer a
+deterministic computation that shows its working. See [`DECISIONS.md`](DECISIONS.md) and
 [`EXTENSIBILITY.md`](EXTENSIBILITY.md).
 
 The "Harness quality, measured" section below, plus the four fella-web

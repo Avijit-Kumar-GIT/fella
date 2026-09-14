@@ -5,7 +5,7 @@ commit as any change that alters a design decision here.
 
 ## What Fella is
 
-A local-first desktop app for **personal analytics** a regular person points it at
+A local-first desktop app for **enterprise-grade personal analytics** a regular person points it at
 their own folder of files (statements, health exports, notes, logs) and asks questions
 about their own life in plain language. Not a tool for analysts; the audience is people
 who don't write SQL or Python. Answers are grounded in **deterministic computation**

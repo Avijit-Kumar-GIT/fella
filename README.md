@@ -20,7 +20,7 @@ actually do for you if the answer to "can it act" stays permanently no? So
 far: further than it has any right to be. (The full argument, and the actual
 tradeoffs it costs, is in [`docs/WHY.md`](docs/WHY.md).)
 
-Fella is a small local-first desktop app for personal analytics. Point it at a folder
+Fella is a small local-first desktop app for enterprise-grade personal analytics. Point it at a folder
 of your own stuff bank statements, health exports, workout logs, notes, receipts
 and ask questions in plain language:
 
@@ -50,7 +50,7 @@ local-first version isn't the compromise. It's the one that gets to keep
 **Reads your files, computes real answers, never writes anything back.** Small,
 fast, and resistant to feature bloat *in the base version*, which ships as one
 binary with nothing bundled. Local-first. Minimal dependencies. It's for a regular
-person doing personal analytics not analysts, not developers so it's plain-language
+person doing enterprise-grade personal analytics not analysts, not developers so it's plain-language
 throughout and copes with a messy real-world folder. It is deliberately *not* a general
 task agent: no file-management, no chores, and the base has a fixed, small tool set.
 Customisation is opt-in and stays out of the base: vetted themes, skills, MCP

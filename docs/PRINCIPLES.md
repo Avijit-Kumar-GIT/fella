@@ -5,7 +5,7 @@ refuses to. Referenced from [`WHY.md`](WHY.md); the refusals are in
 [`NON-GOALS.md`](NON-GOALS.md); the dated history of how each got decided is
 [`DECISIONS.md`](DECISIONS.md).*
 
-- **Personal analytics, for non-developers.** A regular person points Fella at
+- **Enterprise-grade personal analytics, for non-developers.** A regular person points Fella at
   their own folder of files (statements, health exports, notes, logs) and asks
   questions about their own life in plain language. Not a tool for analysts —
   the audience doesn't write SQL or Python, so the app doesn't ask them to.
