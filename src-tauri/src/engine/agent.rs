@@ -709,7 +709,9 @@ a sql() helper."
 have; it renders itself, so don't describe it in prose. Use it for a breakdown across \
 categories or a trend over time skip it for a single figure, a yes/no answer, or values \
 that barely differ (it will refuse near-flat data a sentence says more than a flat chart \
-would)."
+would). One chart per answer: put every category or series you want compared into that \
+one call (multiple labels, up to two series) instead of calling it again for a second \
+chart."
                 .into(),
         );
     }
@@ -915,7 +917,9 @@ a sql() helper.\n\
 already have; it renders itself, so don't describe it in prose. Use it for a \
 breakdown across categories or a trend over time skip it for a single figure, \
 a yes/no answer, or values that barely differ (it will refuse near-flat data \
-a sentence says more than a flat chart would).\n\
+a sentence says more than a flat chart would). One chart per answer: put \
+every category or series you want compared into that one call (multiple \
+labels, up to two series) instead of calling it again for a second chart.\n\
 - Documents (notes, PDFs) are already listed below with their names and first \
 line, so don't call list_files for them. For a question about their content, \
 call read_file directly (pass `names: [...]` to read several at once); they are \
