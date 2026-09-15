@@ -1,7 +1,7 @@
 # Contributing to Fella
 
-Fella is a small, local-first desktop app for personal analytics by
-non-developers. Before proposing a change, read `README.md`,
+Fella is a small, local-first desktop app for enterprise-grade personal analytics
+by non-developers. Before proposing a change, read `README.md`,
 `docs/ARCHITECTURE.md`, and `docs/EXTENSIBILITY.md` so a change fits the
 project's shape. `docs/DECISIONS.md` is the log of why things are the way they
 are.
@@ -29,8 +29,9 @@ config, an augment manifest) is lane 2.
 ## What the app will and won't take
 
 Fella's positioning is locked ([`docs/PRINCIPLES.md`](docs/PRINCIPLES.md),
-[`docs/NON-GOALS.md`](docs/NON-GOALS.md), `docs/DECISIONS.md`): personal
-analytics for non-developers, read-only, local-first, anti-bloat in the base.
+[`docs/NON-GOALS.md`](docs/NON-GOALS.md), `docs/DECISIONS.md`): enterprise-grade
+personal analytics for non-developers, read-only, local-first, anti-bloat in
+the base.
 Changes are reviewed against those commitments and refusals in full; the ones
 that come up most in review:
 

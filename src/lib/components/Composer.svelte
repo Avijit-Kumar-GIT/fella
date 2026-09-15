@@ -142,6 +142,15 @@
 		value = '';
 		menuSel = -1;
 		queueMicrotask(grow);
+		// A real question with no folder open otherwise goes to the model with
+		// no tools at all, and a small model fills the gap by guessing or
+		// referencing the conversation as if a folder were still open, instead
+		// of saying so. If we know the last folder, reopen it first rather
+		// than making the user type /open themselves; a slash command still
+		// goes straight through (e.g. /open <a different folder>).
+		if (!session.catalog.workspace && !text.startsWith('/') && session.lastFolder) {
+			await resumeLastFolder();
+		}
 		await dispatch(text);
 		onafterrun?.();
 	}

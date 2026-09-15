@@ -2,10 +2,9 @@
 //! default, DuckDB behind a feature), the tool registry, and the agent loop.
 
 pub mod agent;
+pub mod analytics;
 pub mod augment;
 pub mod catalog;
-pub mod chart;
-pub mod data;
 mod env;
 pub mod error;
 pub mod evidence;
@@ -17,7 +16,6 @@ pub mod llm;
 pub mod mcp;
 pub mod memory;
 pub mod provider;
-pub mod pyexec;
 pub mod secrets;
 pub mod sqlite;
 pub mod state;
@@ -27,7 +25,6 @@ pub mod state;
 pub mod testkit;
 pub mod tools;
 pub mod update;
-pub mod verify;
 
 pub use catalog::{Catalog, SourceInfo};
 pub use error::{EngineError, EngineResult};

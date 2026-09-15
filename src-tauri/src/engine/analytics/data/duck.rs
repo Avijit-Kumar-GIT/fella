@@ -6,10 +6,10 @@ use duckdb::types::{TimeUnit, Value};
 use duckdb::Connection;
 use serde_json::Value as Json;
 
-use crate::engine::catalog::{ColumnInfo, SourceKind};
-use crate::engine::data::{
+use crate::engine::analytics::data::{
     quote_ident, quote_str, Cell, ColType, DataEngine, PythonBridge, QueryOutcome, SourceLoad,
 };
+use crate::engine::catalog::{ColumnInfo, SourceKind};
 use crate::engine::error::{EngineError, EngineResult};
 
 pub struct DuckEngine {

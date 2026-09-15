@@ -10,7 +10,7 @@ Read `docs/EXTENSIBILITY.md` first. If your idea is a theme, a skill
 and belongs in the `fella-extensions` repo, not here.
 
 **Who does this help?**
-The audience is non-developers doing personal analytics on their own files.
+The audience is non-developers doing enterprise-grade personal analytics on their own files.
 
 **What is the change?**
 

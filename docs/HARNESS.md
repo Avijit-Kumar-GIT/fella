@@ -128,6 +128,42 @@ The running list of open design questions from shaping this work is in
   now stores facts only (preferences, vocabulary, table notes); `## Recipes`
   in an existing file is silently dropped on next load.
 
+- **2026-09-14 · `depth_rule` generalized past seasonality + `aside_rule`
+  shipped** (`agent.rs`, `docs/GOALS.md`'s "depth, not reach" order).
+  *Add-scaffolding, so it had to buy correctness against a new tier built
+  first:* `bench/analysis-depth/` (6 cases; decompose a change as broad vs.
+  concentrated, meaningful-vs-normal comparison, correlation with enough
+  points, correlation with too few) — 5/6 on `gemma4:31b`, the one miss
+  model-call variance, not a rule gap. `aside_rule` (one brief aside on a
+  plain lookup, only when it's actually notable): first two zero-extra-query
+  wordings both measured **0/3** real — the one example worth surfacing (a
+  category being most of a larger total) is mathematically unreachable from
+  a single scalar query, not a phrasing problem, confirmed by two
+  differently-worded attempts landing on identical single-query behaviour.
+  Fixed by allowing exactly one bounded follow-up query when the question
+  has an obvious larger total to compare against; then **2/3**, aside
+  correctly grounded in the real number. Held at 6/6 on `analysis-depth` and
+  18/18 on the base `accuracy` battery with zero added cost on questions
+  with nothing to compare against (`agg_rent`, a whole-file total,
+  correctly skipped the follow-up).
+- **2026-09-14 · `check_row_value_labels`** (`analytics/verify.rs`).
+  *Remove-ambiguity.* Found live, not theorized: `fqah-goal-ontrack` against
+  `gemma4:31b` — a query packing five aggregates into one row, then the same
+  real value labeled a different goal run to run (202.78 called "Sleep"
+  once, "Dining out" once, "Running" once; only `max_dining` is right).
+  `check_numbers` didn't catch it — it pools every cell from every row into
+  one flat "is this number anywhere" set, no column identity. New check:
+  narrow on purpose (single-row 2+ column result; a value matching exactly
+  one column; flagged only when the line naming it carries a *different*
+  column's own alias words and not its true column's). Confirmed firing on
+  real model output, not just the synthetic unit tests: re-running the same
+  case live caught `"0" is labeled like leisure_trips but actually came
+  from books_finished` twice in 5 iterations, silent on the other three.
+  Related to the still-open 2026-09-12 case-mismatch note below — some of
+  `fqah-goal-ontrack`'s live failures are `purpose = 'Leisure'` vs. stored
+  `leisure` silently returning 0 rows, a different bug this check doesn't
+  fix, only catches a downstream symptom of.
+
 ### Measured, no change
 
 - **2026-09-07 · Prompt minimalism.** `prompt-ablation` on gemma4:31b: every

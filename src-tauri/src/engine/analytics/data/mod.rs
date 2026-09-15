@@ -26,7 +26,7 @@ pub const QUERY_TIMEOUT_SECS: u64 = 15;
 /// default a power-user escape hatch, and how the tests exercise the path
 /// without waiting 15 s.
 pub fn query_timeout_secs() -> u64 {
-    super::env::positive("FELLA_QUERY_TIMEOUT_SECS", QUERY_TIMEOUT_SECS)
+    crate::engine::env::positive("FELLA_QUERY_TIMEOUT_SECS", QUERY_TIMEOUT_SECS)
 }
 
 /// Most rows we'll pull into memory from one delimited file at ingest. Generous
@@ -37,7 +37,7 @@ pub fn query_timeout_secs() -> u64 {
 pub const INGEST_ROW_CAP: usize = 2_000_000;
 
 pub fn ingest_row_cap() -> usize {
-    super::env::positive("FELLA_INGEST_ROW_CAP", INGEST_ROW_CAP)
+    crate::engine::env::positive("FELLA_INGEST_ROW_CAP", INGEST_ROW_CAP)
 }
 
 /// A neutral cell value used for bulk inserts and query results.
