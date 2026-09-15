@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use crate::engine::data::PythonBridge;
+use crate::engine::analytics::data::PythonBridge;
 use crate::engine::error::{EngineError, EngineResult};
 
 const TIMEOUT: Duration = Duration::from_secs(20);
@@ -228,8 +228,42 @@ except ModuleNotFoundError as _e:
         }
     };
 
-    format!("import sys as _sys\n{setup}\n# ---- user code ----\n{user_code}\n")
+    format!("import sys as _sys\n{setup}\n{STATS_HELPERS}\n# ---- user code ----\n{user_code}\n")
 }
+
+/// Pure-stdlib correlation/regression, always available regardless of whether
+/// scipy or numpy happen to be installed -- `run_python`'s tool description
+/// promises these by name, and the app can't require scipy/numpy on a
+/// non-technical user's machine (`DECISIONS.md`, 2026-08-27: pandas alone was
+/// already rejected as a hard dependency for exactly this reason). `median`/
+/// `stdev` need no helper, they're already in stdlib `statistics`.
+const STATS_HELPERS: &str = r#"
+def pearsonr(x, y):
+    "Pearson correlation coefficient between two equal-length numeric sequences."
+    n = len(x)
+    if n != len(y) or n < 2:
+        raise ValueError("pearsonr needs two equal-length sequences of at least 2 values")
+    mx = sum(x) / n
+    my = sum(y) / n
+    cov = sum((a - mx) * (b - my) for a, b in zip(x, y))
+    vx = sum((a - mx) ** 2 for a in x)
+    vy = sum((b - my) ** 2 for b in y)
+    denom = (vx * vy) ** 0.5
+    return cov / denom if denom else 0.0
+
+def linregress(x, y):
+    "Simple linear regression. Returns (slope, intercept, r)."
+    n = len(x)
+    if n != len(y) or n < 2:
+        raise ValueError("linregress needs two equal-length sequences of at least 2 values")
+    mx = sum(x) / n
+    my = sum(y) / n
+    sxy = sum((a - mx) * (b - my) for a, b in zip(x, y))
+    sxx = sum((a - mx) ** 2 for a in x)
+    slope = sxy / sxx if sxx else 0.0
+    intercept = my - slope * mx
+    return slope, intercept, pearsonr(x, y)
+"#;
 
 #[cfg(unix)]
 fn apply_rlimits(cmd: &mut Command) {

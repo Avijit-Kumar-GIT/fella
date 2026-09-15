@@ -35,7 +35,7 @@
     "copyright": "Copyright © 2026 Avijit Kumar",
     "licenseFile": "../LICENSE",
     "shortDescription": "Ask questions about your own files.",
-    "longDescription": "A small local-first desktop app for personal analytics. Point it at a folder of your own files and ask questions in plain language. Every answer is deterministic computation and shows its working.",
+    "longDescription": "A small local-first desktop app for enterprise-grade personal analytics. Point it at a folder of your own files and ask questions in plain language. Every answer is deterministic computation and shows its working.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

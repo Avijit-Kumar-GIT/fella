@@ -1,0 +1,52 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "fella dev docs",
+  "description": "How fella is built: the harness/engine/model triad, for contributors.",
+  "colors": {
+    "primary": "#3fc7bc",
+    "light": "#74d8cf",
+    "dark": "#3fc7bc"
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Overview",
+        "icon": "house",
+        "pages": ["index"]
+      },
+      {
+        "tab": "Developer Platform",
+        "icon": "code",
+        "pages": [
+          "getting-started",
+          {
+            "group": "Concepts",
+            "pages": [
+              "concepts/triad",
+              "concepts/harness",
+              "concepts/engine",
+              "concepts/verification",
+              "concepts/tools",
+              "concepts/model-layer"
+            ]
+          },
+          "developer-platform/using-fella",
+          "other-resources/benchmarks",
+          "other-resources/evaluation",
+          "other-resources/contributing"
+        ]
+      },
+      {
+        "tab": "Extensions and MCP",
+        "icon": "puzzle-piece",
+        "pages": ["extensions-and-mcp"]
+      }
+    ]
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/Avijit-Kumar-GIT/fella"
+    }
+  }
+}

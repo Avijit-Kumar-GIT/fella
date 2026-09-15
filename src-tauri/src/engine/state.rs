@@ -9,9 +9,10 @@ use std::time::Instant;
 use serde::Serialize;
 
 use crate::engine::agent;
+use crate::engine::analytics::data::{self, DataEngine, PythonBridge, DEFAULT_ROW_CAP};
+use crate::engine::analytics::pyexec;
 use crate::engine::augment;
 use crate::engine::catalog::{self, Catalog, SourceInfo, SourceKind};
-use crate::engine::data::{self, DataEngine, PythonBridge, DEFAULT_ROW_CAP};
 use crate::engine::error::{EngineError, EngineResult};
 use crate::engine::evidence::{Answer, AskEvent};
 use crate::engine::extensions::{self, InstalledPack};
@@ -19,7 +20,6 @@ use crate::engine::ingest::docs;
 use crate::engine::llm::{LlmClient, ProviderHealth};
 use crate::engine::memory::{self, FolderMemory};
 use crate::engine::provider::{self, AuthKind, PROVIDERS};
-use crate::engine::pyexec;
 use crate::engine::secrets::Secrets;
 use crate::engine::sqlite::{self, Settings};
 use crate::engine::tools::Registry;
@@ -442,6 +442,13 @@ impl EngineState {
         }
     }
 
+    // `AnalyticsSource` (see `analytics::AnalyticsSource`) is implemented
+    // for this type near the bottom of the file, as a thin delegation to
+    // this method and `run_sql` below -- the trait exists so
+    // `analytics::verify` (and anything else in `analytics/`) can be handed
+    // a narrow capability instead of the whole `EngineState`, not because
+    // the logic itself needs to live differently.
+
     /// Compact one-line-per-table schema: `view("col" TYPE, ...)`. Used to echo
     /// the real schema back to the model after a SQL error.
     pub(crate) fn schema_oneline(&self) -> String {
@@ -673,7 +680,7 @@ impl EngineState {
                 "q": question.chars().take(300).collect::<String>(),
                 "headline": answer.text.lines().find(|l| !l.trim().is_empty()).unwrap_or("").chars().take(200).collect::<String>(),
                 "queries": sqls.iter().take(3).collect::<Vec<_>>(),
-                "verified": crate::engine::verify::reran_clean(&answer.verification),
+                "verified": crate::engine::analytics::verify::reran_clean(&answer.verification),
                 "corrected_prior": corrected,
             }),
         );
@@ -1936,6 +1943,19 @@ fn reconcile_provider(conn: &rusqlite::Connection, secrets: &Secrets) {
     patch.insert("embed_model".into(), d.default_embed_model.into());
     if sqlite::save_settings(conn, &patch).is_ok() {
         log::info!("no usable credential for provider {stored:?}; reset to {}", d.id);
+    }
+}
+
+// `AnalyticsSource` is a thin delegation to the methods just above -- the
+// trait exists so `analytics::verify` (and anything else in `analytics/`)
+// can be handed a narrow capability instead of the whole `EngineState`, not
+// because the logic itself needs to live differently.
+impl crate::engine::analytics::AnalyticsSource for EngineState {
+    fn catalog(&self) -> Catalog {
+        EngineState::catalog(self)
+    }
+    fn run_sql(&self, sql: &str) -> EngineResult<QueryResult> {
+        EngineState::run_sql(self, sql)
     }
 }
 

@@ -9,11 +9,11 @@ use rusqlite::types::ValueRef;
 use rusqlite::{Connection, OpenFlags};
 use serde_json::Value as Json;
 
-use crate::engine::catalog::{ColumnInfo, SourceKind};
-use crate::engine::data::{
+use crate::engine::analytics::data::{
     parse_named_month_date, parse_numeric, quote_ident, Cell, ColType, DataEngine, PythonBridge,
     QueryOutcome, SourceLoad,
 };
+use crate::engine::catalog::{ColumnInfo, SourceKind};
 use crate::engine::error::{EngineError, EngineResult};
 
 pub struct SqliteEngine {
@@ -230,7 +230,7 @@ impl DataEngine for SqliteEngine {
             let done = done.clone();
             let timed_out = timed_out.clone();
             std::thread::spawn(move || {
-                let secs = crate::engine::data::query_timeout_secs();
+                let secs = crate::engine::analytics::data::query_timeout_secs();
                 let deadline =
                     std::time::Instant::now() + std::time::Duration::from_secs(secs);
                 while std::time::Instant::now() < deadline {
@@ -278,7 +278,7 @@ impl DataEngine for SqliteEngine {
         if timed_out.load(Ordering::Relaxed) {
             return Err(EngineError::msg(format!(
                 "query stopped after {} s try narrowing it (add a WHERE or LIMIT)",
-                crate::engine::data::query_timeout_secs()
+                crate::engine::analytics::data::query_timeout_secs()
             )));
         }
         result
@@ -351,7 +351,7 @@ fn read_delimited(path: &str, default_delim: u8) -> EngineResult<Parsed> {
         .from_path(path)
         .map_err(|e| EngineError::msg(format!("read {path}: {e}")))?;
 
-    let cap = crate::engine::data::ingest_row_cap();
+    let cap = crate::engine::analytics::data::ingest_row_cap();
     let mut dropped = 0usize;
     let mut truncated = false;
     let mut records: Vec<csv::StringRecord> = Vec::new();
@@ -484,7 +484,7 @@ fn find_header(records: &[csv::StringRecord], width: usize) -> (Vec<String>, usi
 /// than a data row: carries a total-ish label and is mostly empty.
 fn looks_like_total_row(row: &[&str], width: usize) -> bool {
     let filled = row.iter().filter(|c| !c.trim().is_empty()).count();
-    let has_label = row.iter().any(|c| crate::engine::data::is_total_label(c));
+    let has_label = row.iter().any(|c| crate::engine::analytics::data::is_total_label(c));
     has_label && filled * 3 <= width * 2 + 2
 }
 
@@ -567,7 +567,7 @@ fn dedupe_headers(raw: &[String]) -> Vec<String> {
 /// can still be read as a written number (`$1,200`, `1,150`, `12%`), it becomes
 /// `Float` with a note so the caller can surface the coercion.
 fn sniff_strings<'a>(cells: impl Iterator<Item = &'a str>) -> (ColType, Option<String>) {
-    use crate::engine::data::{is_blankish, parse_numeric};
+    use crate::engine::analytics::data::{is_blankish, parse_numeric};
 
     let (mut any, mut int, mut float, mut boolean) = (false, true, true, true);
     let (mut loose_ok, mut loose_used) = (true, false);
@@ -661,7 +661,7 @@ fn sniff_strings<'a>(cells: impl Iterator<Item = &'a str>) -> (ColType, Option<S
 /// `rent` both present), return a note. Bounded: gives up once a column has too
 /// many distinct values to be a label (free text, ids), and stops at 5000 rows.
 fn case_collision<'a>(cells: impl Iterator<Item = &'a str>) -> Option<String> {
-    use crate::engine::data::is_blankish;
+    use crate::engine::analytics::data::is_blankish;
     use std::collections::BTreeSet;
 
     let mut raw: BTreeSet<String> = BTreeSet::new();
@@ -699,7 +699,7 @@ fn case_collision<'a>(cells: impl Iterator<Item = &'a str>) -> Option<String> {
 }
 
 fn sniff_json<'a>(vals: impl Iterator<Item = &'a Json>) -> (ColType, Option<String>) {
-    use crate::engine::data::{is_blankish, parse_numeric};
+    use crate::engine::analytics::data::{is_blankish, parse_numeric};
 
     let (mut any, mut int, mut float, mut boolean) = (false, true, true, true);
     let (mut saw_str, mut all_str_numeric) = (false, true);
@@ -794,14 +794,14 @@ fn string_cell(s: &str, ty: ColType) -> Cell {
                 Json::from(s.to_string())
             }
         }
-        _ if crate::engine::data::is_blankish(s) => Json::Null,
+        _ if crate::engine::analytics::data::is_blankish(s) => Json::Null,
         ColType::Int => s.parse::<i64>().map(Json::from).unwrap_or(Json::Null),
         // A `Float` column may have been chosen by loose coercion, so fall back
         // to `parse_numeric` for cells the strict parse rejects ("$1,200.00").
         ColType::Float => s
             .parse::<f64>()
             .ok()
-            .or_else(|| crate::engine::data::parse_numeric(s))
+            .or_else(|| crate::engine::analytics::data::parse_numeric(s))
             .and_then(serde_json::Number::from_f64)
             .map(Json::Number)
             .unwrap_or(Json::Null),
@@ -815,7 +815,7 @@ fn string_cell(s: &str, ty: ColType) -> Cell {
 }
 
 fn json_cell(v: &Json, ty: ColType) -> Cell {
-    use crate::engine::data::{is_blankish, parse_numeric};
+    use crate::engine::analytics::data::{is_blankish, parse_numeric};
     match (v, ty) {
         (Json::Null, _) => Json::Null,
         // Text column: keep a "none" / "-" placeholder verbatim, NULL only a

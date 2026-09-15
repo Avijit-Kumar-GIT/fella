@@ -5,7 +5,7 @@ commit as any change that alters a design decision here.
 
 ## What Fella is
 
-A local-first desktop app for **personal analytics** a regular person points it at
+A local-first desktop app for **enterprise-grade personal analytics** a regular person points it at
 their own folder of files (statements, health exports, notes, logs) and asks questions
 about their own life in plain language. Not a tool for analysts; the audience is people
 who don't write SQL or Python. Answers are grounded in **deterministic computation**
@@ -79,10 +79,26 @@ src-tauri/src/
                                            data_dir, cancel: AtomicBool }
     catalog.rs               walk workspace (depth ≤ 3), classify, slugify names, dedupe;
                              honour .fellaignore; skip a root fella.md
-    data/
-      mod.rs                 DataEngine trait + shared read-only guard, quote_ident
-      sqlite.rs              default engine: type sniff → CREATE TABLE + bulk INSERT
-      duck.rs                #[cfg(feature="duckdb")] engine: read_*_auto views
+    analytics/                the engine: deterministic compute + verification, no LLM
+                             calls, no Tauri/IPC, no conversation state. The one seam
+                             back into the rest of the app is `AnalyticsSource`
+                             (`catalog()` + `run_sql()`); `EngineState` implements it.
+      mod.rs                 AnalyticsSource trait + module doc (the four-sentence
+                             contract this module is held to)
+      data/
+        mod.rs                 DataEngine trait + shared read-only guard, quote_ident
+        sqlite.rs              default engine: type sniff → CREATE TABLE + bulk INSERT
+        duck.rs                #[cfg(feature="duckdb")] engine: read_*_auto views
+      pyexec.rs               run_python's subprocess sandbox; stdlib pearsonr/linregress
+                             preamble (no scipy/numpy dependency)
+      chart.rs                ChartData/Series/ChartKind + validate() (flat/degenerate
+                             data refused before it reaches the UI)
+      verify.rs               ten deterministic post-answer checks against `&dyn
+                             AnalyticsSource` (re-run cited SQL, catalog/column
+                             sanity, text-aggregate and case-filter traps, a NULL
+                             date GROUP BY, a value attached to the wrong column's
+                             name in a multi-aggregate row) + one cost-gated
+                             second-opinion re-ask
     ingest/
       docs.rs                pdf-extract / plain text → extract() (no chunking)
       excel.rs               calamine → typed rows → DataEngine::add_rows
@@ -93,19 +109,28 @@ src-tauri/src/
                              extensions (installed packs)
     extensions.rs            packs: theme / skill / mcp manifest, install, enable
     mcp.rs                   #[cfg(feature="mcp")] rmcp client + our HTTP backend
-    agent.rs                 reasoning loop + deterministic verification pass
+    agent.rs                 the harness: reasoning loop + system prompt
+                             (`PromptProfile`); the only place that calls the model.
+                             Owns no compute of its own -- calls into `analytics::*`
     evidence.rs              EvidenceItem / Answer / AskEvent types
-    tools.rs                 Tool trait, Registry, JSON-Schema export; the 6 built-ins
-    verify.rs                re-run cited SQL, check every figure came from a tool
+    tools.rs                 Tool trait, Registry, JSON-Schema export; the 7 built-ins
     memory.rs                per-folder learned notes (memory.md); FELLA_MEMORY
 ```
 
+**Harness vs. engine, explicitly:** `agent.rs` is the harness — it owns the
+reasoning loop, the system prompt, and the only LLM call site, and has no
+compute of its own. `engine/analytics/` is the engine — deterministic SQL/
+stats/chart/verification logic with no knowledge that a model or a loop
+exists. The engine supplies the harness, never the reverse; `AnalyticsSource`
+is the one seam between them. See `docs/GOALS.md` and `docs/LIGHTWEIGHT.md`
+for the philosophy and scope behind that split.
+
 ## Data layer
 
-`engine/data/` a `DataEngine` trait with a **SQLite** impl (default) and a
+`engine/analytics/data/` a `DataEngine` trait with a **SQLite** impl (default) and a
 **DuckDB** impl (`#[cfg(feature = "duckdb")]`). The trait is the only seam;
-`verify.rs`, `tools.rs`, `catalog.rs`, `llm.rs` are backend-agnostic. Shared free
-functions live in `data/mod.rs`: the read-only guard (`ensure_read_only`),
+`analytics::verify`, `tools.rs`, `catalog.rs`, `llm.rs` are backend-agnostic. Shared
+free functions live in `data/mod.rs`: the read-only guard (`ensure_read_only`),
 `quote_ident`.
 
 **Catalog scan** (`catalog.rs`): walk the chosen folder, depth ≤ 3, skip dotfiles,
@@ -175,24 +200,39 @@ run(question):
 finish(text): verification = verify(text, evidence); emit AnswerDone
 ```
 
-**System prompt** (`agent.rs`): never state a figure not returned by a tool;
-prefer `run_sql`; look before you leap; for documents use
+**System prompt** (`agent.rs`, sections gated by `PromptProfile` — droppable
+via `FELLA_PROMPT_DROP` for eval ablation): never state a figure not returned
+by a tool; prefer `run_sql`; look before you leap; for documents use
 `grep_files` / `read_file`; if the data cannot answer, say so; one optional
 `Background:` line of general knowledge is allowed (no figures); lead with the
-headline and pick whatever shape fits. A "Your context" block from `fella.md` +
-enabled `skill` packs is prepended; a line about `connector__tool` names is
+headline and pick whatever shape fits. **`depth_rule`**: for a change/trend/
+correlation/comparison question, check the data's shape before answering —
+decompose a change, verify a correlation actually holds, state how many
+points it's based on and hedge under ~8. **`aside_rule`**: `depth_rule`'s
+complement, for the plain single-figure lookup it explicitly skips — one
+bounded follow-up query (not a blanket cost) when the question is a segment
+of a larger total, and one added short sentence only if that comparison
+turns up something genuinely notable. A "Your context" block from `fella.md`
++ enabled `skill` packs is prepended; a line about `connector__tool` names is
 added when an `mcp` pack is connected.
 
-**Verification pass** (deterministic; one bounded re-ask on a hard fail —
-`FELLA_VERIFY_REASK`): re-execute any SQL cited in the answer and confirm the
-headline value is unchanged; confirm every table named in cited SQL exists in the
-catalog; flag numerals in the answer that appear in no tool result; flag a `SUM`/`AVG`
-over a text column, and an exact-case filter on a column whose values differ only in
-capitalisation. Rendered as a ✓/⚠ checklist in the evidence block.
+**Verification pass** (`analytics::verify`, deterministic; one bounded
+re-ask on a hard fail — `FELLA_VERIFY_REASK`): re-execute any SQL cited in
+the answer and confirm the headline value is unchanged; confirm every table
+named in cited SQL exists in the catalog; flag numerals in the answer that
+appear in no tool result; flag a `SUM`/`AVG` over a text column, and an
+exact-case filter on a column whose values differ only in capitalisation;
+flag wording that implies an aggregate no cited query used, or a column
+named in the question that no cited query touches; flag a question naming a
+shared join column answered from one table alone; flag a date/time
+`GROUP BY` that collapsed to a NULL key; flag a value in the answer sitting
+next to a different column's name than the one it actually came from (a
+query that packs several aggregates into one row). Rendered as a ✓/⚠
+checklist in the evidence block.
 
 ## Tools
 
-Six built-ins (`tools.rs`), plus any namespaced `connector__tool` from an
+Seven built-ins (`tools.rs`), plus any namespaced `connector__tool` from an
 enabled `mcp` pack (`mcp.rs`, held in a separate `Registry.mcp` list).
 
 | Tool | Args | Returns / guardrails |
@@ -202,7 +242,8 @@ enabled `mcp` pack (`mcp.rs`, held in a separate `Registry.mcp` list).
 | `run_sql` | `sql` | columns + rows (capped), row_count, ms. Read-only guard: single SELECT/WITH statement; rejects DDL/DML/`ATTACH`/`COPY`/`INSTALL`, `read_text`/`read_blob`/`glob`; a watchdog interrupts a runaway query (`FELLA_QUERY_TIMEOUT_SECS`, 15 s) |
 | `grep_files` | `pattern`, `max_hits=30` | matching lines (file + line) from every catalogued document, case-insensitive regex. No index |
 | `read_file` | `name` | full extracted text of one document, capped ~12k chars |
-| `run_python` | `code` | stdout / stderr / created files. `python3 -I` in a fresh temp cwd, env stripped, no network, wall-clock timeout, `RLIMIT_AS`/`RLIMIT_CPU` (best-effort not a hostile-code sandbox; the user analyses their own data). Preamble exposes `sql(q)` → a DataFrame (SQLite backend uses stdlib `sqlite3`, no `pip`) |
+| `run_python` | `code` | stdout / stderr / created files. `python3 -I` in a fresh temp cwd, env stripped, no network, wall-clock timeout, `RLIMIT_AS`/`RLIMIT_CPU` (best-effort not a hostile-code sandbox; the user analyses their own data). Preamble exposes `sql(q)` → a DataFrame (SQLite backend uses stdlib `sqlite3`, no `pip`) and stdlib `pearsonr(x, y)` / `linregress(x, y)` (no scipy/numpy) |
+| `make_chart` | `kind`, `labels`, `series` | a validated bar/line chart (`analytics::chart`) — refuses flat/degenerate data server-side rather than rendering a useless chart |
 
 Every tool call takes an optional plain-language `note` (shown in the evidence
 panel). Every call and result is captured as evidence whether or not the model
@@ -267,5 +308,9 @@ palette; `↑` recalls input; `Esc` stops a run or collapses evidence.
 
 MVP (0–9) delivered. Since then: SQLite default data engine (`DataEngine`
 trait), Vercel AI Gateway, `run_sql` timeout + mid-run stop, markdown answers,
-and the **packs** system (`theme` / `skill` / `mcp`, see `EXTENSIBILITY.md`).
-Notable choices are logged in `docs/DECISIONS.md`.
+the **packs** system (`theme` / `skill` / `mcp`, see `EXTENSIBILITY.md`), and
+the **analytics module** (`engine/analytics/` — SQL, stats, charts, and
+verification pulled behind one `AnalyticsSource` seam, `depth_rule` /
+`aside_rule`, and the value-attribution verification check). Notable choices
+are logged in `docs/DECISIONS.md`; the harness's own dated engineering log is
+`docs/HARNESS.md`.
