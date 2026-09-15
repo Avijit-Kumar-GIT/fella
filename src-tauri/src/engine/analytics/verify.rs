@@ -9,11 +9,14 @@
 //!   7. a column named in the question is never mentioned in any cited query
 //!   8. a question naming a shared join column was answered from one table
 //!   9. a date/time GROUP BY produced a NULL key instead of a real bucket
+//!  10. a query that packed several aggregates into one row has a value in
+//!      the answer sitting next to a different column's name than the one
+//!      it actually came from
 //!
 //! Plus one cost-gated check that *does* spend an extra LLM round-trip, used
 //! sparingly (agent.rs only calls it once a cheap check above already left a
 //! warning standing) and isn't part of `run()`'s list above:
-//!   10. a stricter, independent second opinion agrees with the first answer
+//!   11. a stricter, independent second opinion agrees with the first answer
 
 use std::collections::HashSet;
 
@@ -39,6 +42,7 @@ pub fn run(
     check_dropped_column(engine, question, evidence, &mut checks);
     check_multi_table_join(engine, question, evidence, &mut checks);
     check_null_group_key(evidence, &mut checks);
+    check_row_value_labels(answer, evidence, &mut checks);
 
     checks
 }
@@ -70,6 +74,7 @@ pub fn hard_fail(checks: &[VerificationCheck]) -> Option<String> {
             "not found in any result",
             "disagrees with this one",
             "returned no value for at least one row",
+            "actually came from",
         ],
     )
 }
@@ -878,6 +883,89 @@ month/week/year check the raw column's values"
     }
 }
 
+// --- 10. a value in a multi-aggregate row mislabeled with another column's name
+
+/// Split a SQL column alias into lowercase words on non-alphanumeric
+/// boundaries (`avg_sleep` -> ["avg", "sleep"]). Single-character
+/// fragments are dropped -- too easy to coincidentally match.
+fn alias_words(alias: &str) -> Vec<String> {
+    alias
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.len() > 1)
+        .map(|w| w.to_lowercase())
+        .collect()
+}
+
+/// A query that packs several unrelated aggregates into one row (`SELECT
+/// (SELECT ...) AS a, (SELECT ...) AS b, ...`) is the one shape where the
+/// model has to correctly remember which value belongs to which column
+/// after the fact, with no per-row label to anchor it -- the real,
+/// live-observed failure: the same value ("202.78") labeled "Sleep" in one
+/// run, "Dining out" in another, "Running" in a third; only one of them is
+/// actually `max_dining`. `check_numbers` doesn't catch this: it pools
+/// every cell from every row into one flat set and only checks whether a
+/// stated number is *somewhere* in it, with no column identity at all.
+///
+/// Deliberately narrow, precision over recall: only a single-row, 2+
+/// column result (a normal multi-row breakdown already carries its own
+/// label per row, a different shape); only a value that matches exactly
+/// one column (an ambiguous or unsupported value is left to
+/// `check_numbers`); only flagged when the line naming it contains some
+/// *other* column's own words and not its true column's -- a line that
+/// names no column at all is left alone.
+fn check_row_value_labels(answer: &str, evidence: &[EvidenceItem], out: &mut Vec<VerificationCheck>) {
+    for e in evidence {
+        if e.tool != "run_sql" || e.error.is_some() {
+            continue;
+        }
+        let (Some(columns), Some(rows)) = (&e.columns, &e.rows) else { continue };
+        if columns.len() < 2 || rows.len() != 1 {
+            continue;
+        }
+        let col_vals: Vec<(&str, f64)> = columns
+            .iter()
+            .zip(rows[0].iter())
+            .filter_map(|(c, v)| num_of(v).map(|n| (c.as_str(), n)))
+            .collect();
+        if col_vals.len() < 2 {
+            continue;
+        }
+
+        for line in answer.lines() {
+            for (raw, val) in number_tokens(line) {
+                let matches: Vec<&str> =
+                    col_vals.iter().filter(|(_, v)| close(*v, val)).map(|(c, _)| *c).collect();
+                if matches.len() != 1 {
+                    continue; // unsupported or ambiguous -- not this check's business
+                }
+                let true_col = matches[0];
+                let without_value = line.replacen(&raw, "", 1).to_lowercase();
+                if alias_words(true_col).iter().any(|w| without_value.contains(w.as_str())) {
+                    continue; // correctly labeled, or at least not contradicted
+                }
+                let swap = col_vals.iter().find(|(c, v)| {
+                    *c != true_col
+                        && !close(*v, val)
+                        && alias_words(c).iter().any(|w| without_value.contains(w.as_str()))
+                });
+                if let Some((other_col, _)) = swap {
+                    out.push(warn(
+                        format!(
+                            "\"{raw}\" is labeled like {other_col} but actually came from {true_col}"
+                        ),
+                        Some(
+                            "this query returned several figures in one row check which one \
+this line is actually quoting"
+                                .into(),
+                        ),
+                    ));
+                    return;
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1365,5 +1453,83 @@ mod tests {
         let mut out = Vec::new();
         check_null_group_key(&ev, &mut out);
         assert!(out.is_empty(), "{out:?}");
+    }
+
+    /// The real shape from a live `fqah-goal-ontrack` run: five unrelated
+    /// aggregates packed into one row by a subquery-per-column `SELECT`.
+    fn goal_ontrack_ev() -> Vec<EvidenceItem> {
+        vec![run_sql_ev(
+            "SELECT (SELECT count(*) FROM books WHERE finished = 'Yes') AS books_count, \
+             (SELECT sum(distance_km) FROM workouts WHERE activity = 'Running') AS run_km, \
+             (SELECT count(*) FROM trips WHERE purpose = 'leisure') AS leisure_trips, \
+             (SELECT avg(hours) FROM sleep) AS avg_sleep, \
+             (SELECT max(amount) FROM spend WHERE category = 'dining') AS max_dining",
+            &["books_count", "run_km", "leisure_trips", "avg_sleep", "max_dining"],
+            vec![vec![
+                Json::from(0),
+                Json::from(4.0),
+                Json::from(2),
+                Json::from(6.76),
+                Json::from(202.78),
+            ]],
+        )]
+    }
+
+    #[test]
+    fn check_row_value_labels_leaves_correctly_labeled_prose_alone() {
+        let ev = goal_ontrack_ev();
+        let answer = "- Reading: 0 books finished\n\
+             - Running: 4 km\n\
+             - Travel: 2 leisure trips\n\
+             - Sleep: 6.76 hours average\n\
+             - Dining out: $202.78 max in a month";
+        let mut out = Vec::new();
+        check_row_value_labels(answer, &ev, &mut out);
+        assert!(out.is_empty(), "every value sits next to its own column's words: {out:?}");
+    }
+
+    #[test]
+    fn check_row_value_labels_flags_the_real_observed_swap() {
+        let ev = goal_ontrack_ev();
+        // The exact live failure: 202.78 (max_dining) called "Sleep".
+        let answer = "You are currently on track to meet your Sleep goal, with an average of \
+202.78 hours (which is significantly above the 7.5 hours per night target).";
+        let mut out = Vec::new();
+        check_row_value_labels(answer, &ev, &mut out);
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert!(!out[0].ok);
+        assert!(out[0].label.contains("max_dining"), "{}", out[0].label);
+        assert!(hard_fail(&out).is_some(), "a label swap is a wrong answer, not just a caution");
+    }
+
+    #[test]
+    fn check_row_value_labels_ignores_a_normal_multi_row_breakdown() {
+        // Each row already carries its own label column -- not the risky
+        // shape this check targets, even though it also has 2+ columns.
+        let ev = vec![run_sql_ev(
+            "SELECT category, SUM(amount) AS total FROM spend GROUP BY category",
+            &["category", "total"],
+            vec![
+                vec![Json::from("rent"), Json::from(15013.23)],
+                vec![Json::from("dining"), Json::from(2233.69)],
+            ],
+        )];
+        let answer = "Rent was 15013.23 and dining was 2233.69.";
+        let mut out = Vec::new();
+        check_row_value_labels(answer, &ev, &mut out);
+        assert!(out.is_empty(), "multi-row results are out of scope: {out:?}");
+    }
+
+    #[test]
+    fn check_row_value_labels_skips_a_value_shared_by_two_columns() {
+        let ev = vec![run_sql_ev(
+            "SELECT (SELECT count(*) FROM a) AS a_count, (SELECT count(*) FROM b) AS b_count",
+            &["a_count", "b_count"],
+            vec![vec![Json::from(5), Json::from(5)]],
+        )];
+        let answer = "Both a and b came to 5.";
+        let mut out = Vec::new();
+        check_row_value_labels(answer, &ev, &mut out);
+        assert!(out.is_empty(), "an ambiguous value is left alone, not guessed at: {out:?}");
     }
 }
