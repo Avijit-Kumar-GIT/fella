@@ -25,7 +25,7 @@
     "eyebrows": "breadcrumbs"
   },
   "contextual": {
-    "options": ["copy", "view", "chatgpt", "claude"]
+    "options": ["copy", "view", "assistant", "chatgpt", "claude"]
   },
   "logo": "/logo.svg",
   "favicon": "/favicon.svg",
@@ -56,28 +56,43 @@
       {
         "tab": "Developer Platform",
         "icon": "code",
-        "pages": [
-          "getting-started",
+        "anchors": [
           {
-            "group": "Concepts",
-            "icon": "layers",
+            "anchor": "Guide",
+            "icon": "compass",
             "pages": [
-              "concepts/architecture",
-              "concepts/harness",
-              "concepts/engine",
-              "concepts/verification",
-              "concepts/tools",
-              "concepts/model-layer"
+              "getting-started",
+              {
+                "group": "Concepts",
+                "icon": "layers",
+                "pages": [
+                  "concepts/architecture",
+                  "concepts/harness",
+                  "concepts/engine",
+                  "concepts/verification",
+                  "concepts/model-layer"
+                ]
+              }
             ]
           },
-          "developer-platform/using-fella",
           {
-            "group": "Other resources",
-            "icon": "book-open",
+            "anchor": "Reference",
+            "icon": "terminal",
             "pages": [
-              "other-resources/benchmarks",
-              "other-resources/evaluation",
-              "other-resources/contributing"
+              {
+                "group": "Tools & commands",
+                "icon": "wrench",
+                "pages": ["concepts/tools", "developer-platform/using-fella"]
+              },
+              {
+                "group": "Other resources",
+                "icon": "book-open",
+                "pages": [
+                  "other-resources/benchmarks",
+                  "other-resources/evaluation",
+                  "other-resources/contributing"
+                ]
+              }
             ]
           }
         ]
