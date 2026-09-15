@@ -5,7 +5,7 @@ refuses to. Referenced from [`WHY.md`](WHY.md); the refusals are in
 [`NON-GOALS.md`](NON-GOALS.md); the dated history of how each got decided is
 [`DECISIONS.md`](DECISIONS.md).*
 
-- **Personal analytics, for non-developers.** A regular person points Fella at
+- **Enterprise-grade personal analytics, for non-developers.** A regular person points Fella at
   their own folder of files (statements, health exports, notes, logs) and asks
   questions about their own life in plain language. Not a tool for analysts —
   the audience doesn't write SQL or Python, so the app doesn't ask them to.
@@ -26,7 +26,11 @@ refuses to. Referenced from [`WHY.md`](WHY.md); the refusals are in
   transcript.
 - **Anti-bloat in the base.** A new dependency needs a real justification.
   No settings modal. Minimal dependencies, small binary, fast startup. The
-  codebase stays understandable by one person.
+  codebase stays understandable by one person. "Lightweight" here is
+  actually four separable things (binary/dependency weight, runtime
+  performance, codebase simplicity, feature scope) — see
+  [`LIGHTWEIGHT.md`](LIGHTWEIGHT.md) for which parts of the engine are
+  allowed to spend weight on which axis, and which must not.
 - **A fixed, small tool set in the base**, customization opt-in and pushed to
   the edges (themes, skills, MCP connectors, augments a user installs
   themselves see [`EXTENSIBILITY.md`](EXTENSIBILITY.md)) rather than grown

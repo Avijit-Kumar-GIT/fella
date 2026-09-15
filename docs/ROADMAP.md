@@ -4,10 +4,21 @@ A wish-list, not a commitment. Everything here is scoped to **not grow the base*
 each item reuses a dependency Fella already ships, or is frontend-only. Ideas that
 would need a positioning decision are in the last section, kept separate on purpose.
 
-Fella's locked shape still applies to all of it: personal analytics for
-non-developers, read-only, local-first, every answer a deterministic computation
-that shows its working. See [`DECISIONS.md`](DECISIONS.md) and
+Fella's locked shape still applies to all of it: enterprise-grade personal
+analytics for non-developers, read-only, local-first, every answer a
+deterministic computation that shows its working. See [`DECISIONS.md`](DECISIONS.md) and
 [`EXTENSIBILITY.md`](EXTENSIBILITY.md).
+
+The "Harness quality, measured" section below, plus the four fella-web
+`/next` initiatives it feeds (fella#121-128), is the concrete path toward
+one named identity: enterprise-grade analytics depth on a folder that
+never had a data team, not a bigger or more autonomous agent. See
+[`DECISIONS.md`](DECISIONS.md), 2026-09-13.
+
+**This whole file is a wish-list; [`GOALS.md`](GOALS.md) is the short,
+scoped answer to "what actually ships first."** Anything here that
+contradicts `GOALS.md`'s v1 line (hypothesis testing, significance
+testing, anything in that shape) is explicitly cut, not deferred.
 
 ## Answer trust, the "shows its working" promise
 

@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use serde_json::json;
 
 use crate::engine::evidence::{EvidenceItem, VerificationCheck};
-use crate::engine::verify;
+use crate::engine::analytics::verify;
 
 /// Keep the log from growing unbounded on a long-lived install, same cap
 /// style as `memory::record_episode`'s `.episodes.jsonl`.

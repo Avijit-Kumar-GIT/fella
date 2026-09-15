@@ -5,6 +5,21 @@
 
 	let { spec }: { spec: ChartSpec } = $props();
 
+	// A categorical palette built from colors the theme already defines
+	// (brand/link/ok/warn/err) rather than inventing new hues -- every one of
+	// these already has a light and a dark variant in app.css, so a chart
+	// never needs its own theme-awareness. Used per-category on a single
+	// series (where color is the only thing distinguishing one bar from the
+	// next) and per-series on a multi-series chart; color is always paired
+	// with the row/legend label right next to it, never carrying meaning on
+	// its own, so this stays inside the house "no color alone" rule even as
+	// a deliberate exception to "monochrome first" -- a chart is a different
+	// kind of surface than prose or chrome.
+	const CAT_COLORS = ['--brand', '--link', '--ok', '--warn', '--err'];
+	function catColor(i: number): string {
+		return `var(${CAT_COLORS[i % CAT_COLORS.length]})`;
+	}
+
 	function formatValue(v: number, unit?: string): string {
 		const abs = Math.abs(v);
 		const body = Number.isInteger(abs)
@@ -68,7 +83,8 @@
 		{#if spec.series.length > 1}
 			<div class="chart-legend">
 				{#each spec.series as s, si (s.name)}
-					<span class="legend-item"><i class="swatch" class:b={si === 1}></i>{s.name}</span>
+					<span class="legend-item"><i class="swatch" style="background:{catColor(si)}"
+						></i>{s.name}</span>
 				{/each}
 			</div>
 		{/if}
@@ -79,12 +95,12 @@
 					<div class="row-tracks">
 						{#each spec.series as s, si (s.name)}
 							{@const m = barMetrics(s.values[i])}
+							{@const color = catColor(spec.series.length > 1 ? si : i)}
 							<div class="track-line">
 								<div class="track">
 									<div
 										class="fill"
-										class:b={si === 1}
-										style="left:{m.left}%;width:{m.width}%"
+										style="left:{m.left}%;width:{m.width}%;background:{color}"
 									></div>
 								</div>
 								<span class="value">{formatValue(s.values[i], spec.unit)}</span>
@@ -101,7 +117,8 @@
 		{#if spec.series.length > 1}
 			<div class="chart-legend">
 				{#each spec.series as s, si (s.name)}
-					<span class="legend-item"><i class="swatch" class:b={si === 1}></i>{s.name}</span>
+					<span class="legend-item"><i class="swatch" style="background:{catColor(si)}"
+						></i>{s.name}</span>
 				{/each}
 			</div>
 		{/if}
@@ -114,9 +131,20 @@
 				class="axis"
 			/>
 			{#each spec.series as s, si (s.name)}
-				<path d={lineGen(s.values) ?? ''} class="line" class:b={si === 1} />
+				<path
+					d={lineGen(s.values) ?? ''}
+					class="line"
+					class:dashed={si > 0}
+					style="stroke:{catColor(si)}"
+				/>
 				{#each s.values as v, i (i)}
-					<circle cx={x(spec.labels[i]) ?? 0} cy={y(v)} r="2.4" class="dot" class:b={si === 1} />
+					<circle
+						cx={x(spec.labels[i]) ?? 0}
+						cy={y(v)}
+						r="2.4"
+						class="dot"
+						style="fill:{catColor(si)}"
+					/>
 				{/each}
 			{/each}
 			{#each spec.labels as label, i (label + i)}
@@ -157,11 +185,7 @@
 		width: 7px;
 		height: 7px;
 		border-radius: 2px;
-		background: var(--border-strong);
 		flex: none;
-	}
-	.swatch.b {
-		background: var(--text-dim);
 	}
 
 	/* --- bar chart: plain HTML/CSS, real layout -- no SVG, no estimated
@@ -207,12 +231,8 @@
 		position: absolute;
 		top: 0;
 		bottom: 0;
-		background: var(--border-strong);
 		border-radius: var(--radius-sm);
 		transition: width var(--dur) var(--ease), left var(--dur) var(--ease);
-	}
-	.fill.b {
-		background: var(--text-dim);
 	}
 	.value {
 		color: var(--text);
@@ -233,18 +253,12 @@
 	}
 	.line {
 		fill: none;
-		stroke: var(--text);
 		stroke-width: 1.6;
 	}
-	.line.b {
-		stroke: var(--text-dim);
+	/* a second, non-color cue for the second series -- distinguishable even
+	   for a colorblind reader or in a black/white screenshot. */
+	.line.dashed {
 		stroke-dasharray: 4 3;
-	}
-	.dot {
-		fill: var(--text);
-	}
-	.dot.b {
-		fill: var(--text-dim);
 	}
 	.axis-label {
 		fill: var(--text-dim);

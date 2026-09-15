@@ -5,12 +5,13 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+use crate::engine::analytics::verify;
 use crate::engine::error::{EngineError, EngineResult};
 use crate::engine::evidence::{Answer, AskEvent, EvidenceItem, Usage, VerificationCheck};
 use crate::engine::llm::{ChatMessage, LlmClient, ToolCall};
 use crate::engine::state::EngineState;
 use crate::engine::tools::Registry;
-use crate::engine::{friction, verify, Catalog};
+use crate::engine::{friction, Catalog};
 
 /// Hard cap on tool-calling iterations per question, before the loop forces
 /// a final answer. `FELLA_MAX_STEPS` overrides it a slower or less
@@ -546,6 +547,8 @@ pub struct PromptProfile {
     pub stop_early_rule: bool,
     pub dialect_rule: bool,
     pub python_rule: bool,
+    pub depth_rule: bool,
+    pub aside_rule: bool,
     pub chart_rule: bool,
     pub docs_rule: bool,
     pub refuse_rule: bool,
@@ -578,6 +581,8 @@ impl PromptProfile {
                 "stop_early_rule" => p.stop_early_rule = false,
                 "dialect_rule" => p.dialect_rule = false,
                 "python_rule" => p.python_rule = false,
+                "depth_rule" => p.depth_rule = false,
+                "aside_rule" => p.aside_rule = false,
                 "chart_rule" => p.chart_rule = false,
                 "docs_rule" => p.docs_rule = false,
                 "refuse_rule" => p.refuse_rule = false,
@@ -605,6 +610,8 @@ impl PromptProfile {
             stop_early_rule: true,
             dialect_rule: true,
             python_rule: true,
+            depth_rule: true,
+            aside_rule: true,
             chart_rule: true,
             docs_rule: true,
             refuse_rule: true,
@@ -696,10 +703,39 @@ you have at most {steps} tool-calling steps, so don't wander past the question."
 strftime()/date() (e.g. strftime('%Y-%m', d))."
         ));
     }
+    if profile.depth_rule {
+        rules.push(
+            "For a change, trend, correlation, or comparison question, check the shape of \
+the data before answering, not just the headline number: is a change broad-based or a few \
+outliers, does a relationship actually hold or did two things just happen to move \
+together, is one thing meaningfully different or within normal range. Grouping by a \
+second dimension, isolating the largest movers and recomputing without them, or checking \
+a correlation can all show something the raw total wouldn't skip this for a question \
+that only asks for one figure. Lead with the finding in plain language (e.g. \"mostly \
+seasonal, not outliers\"), then the numbers behind it, not a bare figure first. For any \
+correlation or regression, always state how many points it's based on and say plainly \
+when that's too few to trust (under about 8) rather than stating the coefficient as if \
+it settles it."
+                .into(),
+        );
+    }
+    if profile.aside_rule {
+        rules.push(
+            "After answering a plain lookup on one category or segment of a larger \
+total, always run one more small query summing across every category or segment \
+in that same total before you reply this costs one extra call and tells you \
+whether the figure you just found is most of the total, exactly zero, or a \
+clear outlier. If it is, add one short sentence saying so; if not, answer as \
+normal and add nothing. Skip this second query entirely when the question has \
+no obvious larger total to compare against."
+                .into(),
+        );
+    }
     if profile.python_rule {
         rules.push(
-            "run_python for stats SQL can't do (median, correlation, regression); it has \
-a sql() helper."
+            "run_python for stats SQL can't do: median/stdev (stdlib `statistics`), or \
+correlation/regression via the always-available `pearsonr(x, y)` / `linregress(x, y)` \
+helpers (pure stdlib, work with no scipy installed). It also has a sql() helper."
                 .into(),
         );
     }
@@ -709,16 +745,19 @@ a sql() helper."
 have; it renders itself, so don't describe it in prose. Use it for a breakdown across \
 categories or a trend over time skip it for a single figure, a yes/no answer, or values \
 that barely differ (it will refuse near-flat data a sentence says more than a flat chart \
-would)."
+would). One chart per answer: put every category or series you want compared into that \
+one call (multiple labels, up to two series) instead of calling it again for a second \
+chart."
                 .into(),
         );
     }
     if profile.docs_rule {
         rules.push(
-            "Documents (notes, PDFs) are already listed below with their names and first \
-line, so don't call list_files for them. For a question about their content, \
-call read_file directly (pass `names: [...]` to read several at once); they are \
-short. Use grep_files only to locate one specific term across many documents."
+            "Documents (notes, PDFs) are already listed below by name; plain-text notes \
+also show a first line, PDFs don't, so don't call list_files for them. For a \
+question about their content, call read_file directly (pass `names: [...]` to \
+read several at once); they are short. Use grep_files only to locate one \
+specific term across many documents."
                 .into(),
         );
     }
@@ -790,7 +829,13 @@ apply. It is background, not data: never take a figure from it.\n",
     match &catalog.workspace {
         Some(ws) => p.push_str(&format!("Workspace: {ws}\n")),
         None => {
-            p.push_str("No workspace is open yet; tell the user to run /open <folder>.\n");
+            p.push_str(
+                "No workspace is open yet. If the user asks anything about data, files, or \
+a folder (a chart, a total, \"the ledger\", anything that sounds like it needs files), say \
+plainly: \"No folder is open yet, run /open <folder> or drop one on the window.\" Don't ask \
+what they'd like to see, guess at data, or reference a prior conversation as if a folder \
+were open only a plain greeting or a question about Fella itself gets a normal reply.\n",
+            );
             return p;
         }
     }
@@ -909,17 +954,41 @@ need from it, and reconcile it with the query result.\n\
 you have at most {} tool-calling steps, so don't wander past the question.\n\
 - SQLite SQL, one SELECT / WITH per call. Dates are ISO-8601 text, so use \
 strftime()/date() (e.g. strftime('%Y-%m', d)).\n\
-- run_python for stats SQL can't do (median, correlation, regression); it has \
-a sql() helper.\n\
+- For a change, trend, correlation, or comparison question, check the shape \
+of the data before answering, not just the headline number: is a change \
+broad-based or a few outliers, does a relationship actually hold or did two \
+things just happen to move together, is one thing meaningfully different or \
+within normal range. Grouping by a second dimension, isolating the largest \
+movers and recomputing without them, or checking a correlation can all show \
+something the raw total wouldn't skip this for a question that only asks \
+for one figure. Lead with the finding in plain language (e.g. \"mostly \
+seasonal, not outliers\"), then the numbers behind it, not a bare figure \
+first. For any correlation or regression, always state how many points \
+it's based on and say plainly when that's too few to trust (under about 8) \
+rather than stating the coefficient as if it settles it.\n\
+- After answering a plain lookup on one category or segment of a larger \
+total, always run one more small query summing across every category or \
+segment in that same total before you reply this costs one extra call and \
+tells you whether the figure you just found is most of the total, exactly \
+zero, or a clear outlier. If it is, add one short sentence saying so; if \
+not, answer as normal and add nothing. Skip this second query entirely \
+when the question has no obvious larger total to compare against.\n\
+- run_python for stats SQL can't do: median/stdev (stdlib `statistics`), or \
+correlation/regression via the always-available `pearsonr(x, y)` / \
+`linregress(x, y)` helpers (pure stdlib, work with no scipy installed). It \
+also has a sql() helper.\n\
 - make_chart draws a bar or line chart from labels + numeric series you \
 already have; it renders itself, so don't describe it in prose. Use it for a \
 breakdown across categories or a trend over time skip it for a single figure, \
 a yes/no answer, or values that barely differ (it will refuse near-flat data \
-a sentence says more than a flat chart would).\n\
-- Documents (notes, PDFs) are already listed below with their names and first \
-line, so don't call list_files for them. For a question about their content, \
-call read_file directly (pass `names: [...]` to read several at once); they are \
-short. Use grep_files only to locate one specific term across many documents.\n\
+a sentence says more than a flat chart would). One chart per answer: put \
+every category or series you want compared into that one call (multiple \
+labels, up to two series) instead of calling it again for a second chart.\n\
+- Documents (notes, PDFs) are already listed below by name; plain-text notes \
+also show a first line, PDFs don't, so don't call list_files for them. For a \
+question about their content, call read_file directly (pass `names: [...]` to \
+read several at once); they are short. Use grep_files only to locate one \
+specific term across many documents.\n\
 - If the files can't answer, say so plainly don't guess, forecast, or \
 project, and don't run a query to estimate one. A question about the future \
 (\"next month\", \"next year\", \"will I\", \"how many will I\") has no answer in \
