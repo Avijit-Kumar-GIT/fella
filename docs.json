@@ -1,12 +1,50 @@
 {
   "$schema": "https://mintlify.com/docs.json",
   "theme": "mint",
-  "name": "fella dev docs",
-  "description": "How fella is built: the harness/engine/model triad, for contributors.",
+  "name": "fella | Developer Documentation",
+  "description": "How fella is built: the harness, the engine, and the model, for contributors.",
   "colors": {
     "primary": "#3fc7bc",
     "light": "#74d8cf",
     "dark": "#3fc7bc"
+  },
+  "fonts": {
+    "heading": {
+      "family": "Geist",
+      "format": "woff2"
+    },
+    "body": {
+      "family": "Geist",
+      "format": "woff2"
+    }
+  },
+  "icons": {
+    "library": "lucide"
+  },
+  "styling": {
+    "eyebrows": "breadcrumbs"
+  },
+  "contextual": {
+    "options": ["copy", "view", "chatgpt", "claude"]
+  },
+  "logo": "/logo.svg",
+  "favicon": "/favicon.svg",
+  "navbar": {
+    "links": [
+      {
+        "label": "Changelog",
+        "href": "https://github.com/Avijit-Kumar-GIT/fella/blob/main/CHANGELOG.md"
+      },
+      {
+        "label": "Support",
+        "href": "https://github.com/Avijit-Kumar-GIT/fella/issues"
+      }
+    ],
+    "primary": {
+      "type": "button",
+      "label": "Get fella",
+      "href": "https://fella.app"
+    }
   },
   "navigation": {
     "tabs": [
@@ -22,8 +60,9 @@
           "getting-started",
           {
             "group": "Concepts",
+            "icon": "layers",
             "pages": [
-              "concepts/triad",
+              "concepts/architecture",
               "concepts/harness",
               "concepts/engine",
               "concepts/verification",
@@ -32,14 +71,20 @@
             ]
           },
           "developer-platform/using-fella",
-          "other-resources/benchmarks",
-          "other-resources/evaluation",
-          "other-resources/contributing"
+          {
+            "group": "Other resources",
+            "icon": "book-open",
+            "pages": [
+              "other-resources/benchmarks",
+              "other-resources/evaluation",
+              "other-resources/contributing"
+            ]
+          }
         ]
       },
       {
         "tab": "Extensions and MCP",
-        "icon": "puzzle-piece",
+        "icon": "puzzle",
         "pages": ["extensions-and-mcp"]
       }
     ]
