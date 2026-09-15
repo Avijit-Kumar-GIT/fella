@@ -126,6 +126,7 @@ struct EvalCase {
 struct RunResult {
     text: String,
     evidence: Vec<EvidenceItem>,
+    verification: Vec<fella_lib::engine::evidence::VerificationCheck>,
     hard_fail: bool,
     prompt_tok: u32,
     completion_tok: u32,
@@ -178,6 +179,7 @@ async fn run_case(engine: &EngineState, conv: &str, question: &str, model: Optio
                 hard_fail: verify::hard_fail(&a.verification).is_some(),
                 text: a.text,
                 evidence: a.evidence,
+                verification: a.verification,
                 prompt_tok: p,
                 completion_tok: c,
                 total,
@@ -189,6 +191,7 @@ async fn run_case(engine: &EngineState, conv: &str, question: &str, model: Optio
         Err(e) => RunResult {
             text: String::new(),
             evidence: Vec::new(),
+            verification: Vec::new(),
             hard_fail: false,
             prompt_tok: 0,
             completion_tok: 0,
@@ -879,7 +882,7 @@ async fn run_bare(engine: &EngineState, dir: &Path, question: &str, files: &[Str
         Ok(b) => b,
         Err(e) => {
             return RunResult {
-                text: String::new(), evidence: Vec::new(), hard_fail: false,
+                text: String::new(), evidence: Vec::new(), verification: Vec::new(), hard_fail: false,
                 prompt_tok: 0, completion_tok: 0, total: t0.elapsed(),
                 first_token: None, steps: 0, err: Some(format!("bare: {e}")),
             }
@@ -902,13 +905,13 @@ number or short phrase, no explanation. If the files can't answer it, say so pla
                 // chars/4 estimate when the provider gave nothing
                 .unwrap_or(((sys.len() + user.len()) as u32 / 4, text.len() as u32 / 4));
             RunResult {
-                text, evidence: Vec::new(), hard_fail: false,
+                text, evidence: Vec::new(), verification: Vec::new(), hard_fail: false,
                 prompt_tok: p, completion_tok: c, total,
                 first_token: None, steps: 0, err: None,
             }
         }
         Err(e) => RunResult {
-            text: String::new(), evidence: Vec::new(), hard_fail: false,
+            text: String::new(), evidence: Vec::new(), verification: Vec::new(), hard_fail: false,
             prompt_tok: 0, completion_tok: 0, total, first_token: None,
             steps: 0, err: Some(format!("bare: {e}")),
         },
@@ -957,6 +960,7 @@ async fn run_openai_ci(h: &CiHarness, dir: &Path, question: &str, files: &[Strin
     let empty = |err: Option<String>, total: Duration| RunResult {
         text: String::new(),
         evidence: Vec::new(),
+        verification: Vec::new(),
         hard_fail: false,
         prompt_tok: 0,
         completion_tok: 0,
@@ -1005,6 +1009,7 @@ short phrase — no explanation, no restating the question. If the files cannot 
     RunResult {
         text: ci_text(&v),
         evidence: Vec::new(),
+        verification: Vec::new(),
         hard_fail: false,
         prompt_tok: v["usage"]["input_tokens"].as_u64().unwrap_or(0) as u32,
         completion_tok: v["usage"]["output_tokens"].as_u64().unwrap_or(0) as u32,
@@ -1081,6 +1086,13 @@ async fn score_case(
                     );
                 }
             }
+            for v in r.verification.iter().filter(|v| !v.ok) {
+                eprintln!(
+                    "     ! verify: {}{}",
+                    v.label,
+                    v.detail.as_deref().map(|d| format!("  ({d})")).unwrap_or_default()
+                );
+            }
         }
         cd += closeness_det(&r, case);
         if let (Some(jm), true) = (judge, r.err.is_none()) {
@@ -1143,6 +1155,12 @@ fn mean_closeness(scores: &[CaseScore]) -> f32 {
 fn total_waste(scores: &[CaseScore]) -> usize {
     scores.iter().map(|s| s.waste.total()).sum()
 }
+fn mean_steps(scores: &[CaseScore]) -> f64 {
+    if scores.is_empty() {
+        return 0.0;
+    }
+    scores.iter().map(|s| s.steps as f64).sum::<f64>() / scores.len() as f64
+}
 fn tokens_per_correct(scores: &[CaseScore]) -> f64 {
     let tot: f64 = scores.iter().map(|s| (s.prompt_tok + s.completion_tok) as f64).sum();
     let ok = scores.iter().filter(|s| s.correct).count().max(1);
@@ -1175,18 +1193,18 @@ async fn run_battery(
 async fn cmd_accuracy(engine: &EngineState, cases: &[EvalCase], models: &[String], judge: Option<&str>, iters: usize) -> Vec<CaseScore> {
     println!("\n# Accuracy   ({iters} iter(s)/case)\n");
     legend();
-    println!("| model | case | correct | rate | close(det) | close(judge) | waste (calls) | in tok | out tok | wall s |");
-    println!("|---|---|:-:|--:|--:|--:|--:|--:|--:|--:|");
+    println!("| model | case | correct | rate | close(det) | close(judge) | waste (calls) | steps | in tok | out tok | wall s |");
+    println!("|---|---|:-:|--:|--:|--:|--:|--:|--:|--:|--:|");
     let mut all = Vec::new();
     for m in models {
         if !set_model(engine, m) {
-            println!("| {m} | | | | | | | | | save failed |");
+            println!("| {m} | | | | | | | | | | save failed |");
             continue;
         }
         let scores = run_battery(engine, cases, m, "full", judge, "acc", iters).await;
         for s in &scores {
             println!(
-                "| {} | {} | {} | {:.0}% | {:.2} | {} | {} `{}` | {} | {} | {:.1} |",
+                "| {} | {} | {} | {:.0}% | {:.2} | {} | {} `{}` | {} | {} | {} | {:.1} |",
                 s.model,
                 s.id,
                 if s.err.is_some() { "ERR".into() } else { yn(s.correct) },
@@ -1195,6 +1213,7 @@ async fn cmd_accuracy(engine: &EngineState, cases: &[EvalCase], models: &[String
                 s.closeness_judge.map(|c| format!("{c:.2}")).unwrap_or_else(|| "-".into()),
                 s.waste.total(),
                 s.waste.breakdown(),
+                s.steps,
                 s.prompt_tok,
                 s.completion_tok,
                 s.total_s,
@@ -1202,9 +1221,10 @@ async fn cmd_accuracy(engine: &EngineState, cases: &[EvalCase], models: &[String
         }
         let (ok, n) = acc(&scores);
         println!(
-            "| **{m}** | **summary** | **{ok}/{n} correct** | | **{:.2}** | | **{} calls** | | | **{:.0} tok/correct-ans** |",
+            "| **{m}** | **summary** | **{ok}/{n} correct** | | **{:.2}** | | **{} calls** | **{:.1}** | | | **{:.0} tok/correct-ans** |",
             mean_closeness(&scores),
             total_waste(&scores),
+            mean_steps(&scores),
             tokens_per_correct(&scores),
         );
         all.extend(scores);
@@ -1522,8 +1542,8 @@ async fn cmd_bench(
         cases.len()
     );
     legend();
-    println!("| model | case | correct | rate | close(det) | waste | in tok | out tok | $/100 | wall s |");
-    println!("|---|---|:-:|--:|--:|--:|--:|--:|--:|--:|");
+    println!("| model | case | correct | rate | close(det) | waste | steps | in tok | out tok | $/100 | wall s |");
+    println!("|---|---|:-:|--:|--:|--:|--:|--:|--:|--:|--:|");
 
     let staging = std::env::temp_dir().join("fella-bench-ext");
     // A hosted endpoint (ollama-cloud especially) degrades under 15+ cases
@@ -1542,7 +1562,7 @@ async fn cmd_bench(
             model: m.rsplit('/').next().unwrap_or(m).to_string(),
         });
         if ci_for_model.is_none() && !set_model(engine, m) {
-            println!("| {m} | | | | | | | | | save failed |");
+            println!("| {m} | | | | | | | | | | save failed |");
             continue;
         }
         let mut scores: Vec<CaseScore> = Vec::new();
@@ -1557,7 +1577,7 @@ async fn cmd_bench(
                 let ws = staging.join(safe_dirname(case.id));
                 let _ = std::fs::remove_dir_all(&ws);
                 if std::fs::create_dir_all(&ws).is_err() {
-                    println!("| {m} | {} | ERR | | | | | | | mkdir failed |", case.id);
+                    println!("| {m} | {} | ERR | | | | | | | | mkdir failed |", case.id);
                     continue;
                 }
                 let mut staged = true;
@@ -1565,7 +1585,7 @@ async fn cmd_bench(
                     let src = dir.join(f);
                     let name = Path::new(f).file_name().unwrap_or(std::ffi::OsStr::new(f));
                     if std::fs::copy(&src, ws.join(name)).is_err() {
-                        println!("| {m} | {} | ERR | | | | | | | missing {} |", case.id, f);
+                        println!("| {m} | {} | ERR | | | | | | | | missing {} |", case.id, f);
                         staged = false;
                         break;
                     }
@@ -1574,7 +1594,7 @@ async fn cmd_bench(
                     continue;
                 }
                 if engine.open_workspace(&ws).is_err() {
-                    println!("| {m} | {} | ERR | | | | | | | open_workspace failed |", case.id);
+                    println!("| {m} | {} | ERR | | | | | | | | open_workspace failed |", case.id);
                     continue;
                 }
                 Runner::Fella
@@ -1584,7 +1604,7 @@ async fn cmd_bench(
                     .await;
             let price = price_per_100(m, s.prompt_tok as f64, s.completion_tok as f64);
             println!(
-                "| {} | {} | {} | {:.0}% | {:.2} | {} `{}` | {} | {} | {} | {:.1} |",
+                "| {} | {} | {} | {:.0}% | {:.2} | {} `{}` | {} | {} | {} | {} | {:.1} |",
                 s.model,
                 s.id,
                 if s.err.is_some() { "ERR".into() } else { yn(s.correct) },
@@ -1592,6 +1612,7 @@ async fn cmd_bench(
                 s.closeness_det,
                 s.waste.total(),
                 s.waste.breakdown(),
+                s.steps,
                 s.prompt_tok,
                 s.completion_tok,
                 price.map(|c| format!("${c:.2}")).unwrap_or_else(|| "n/a".into()),
@@ -1609,9 +1630,10 @@ async fn cmd_bench(
         let pout: f64 = scores.iter().map(|s| s.completion_tok as f64).sum();
         let avg_price = price_per_100(m, pin / n.max(1) as f64, pout / n.max(1) as f64);
         println!(
-            "| **{m}** | **summary** | **{ok}/{n} correct** | | **{:.2}** | **{} waste** | | | **{}** | **{:.0} tok/correct** |",
+            "| **{m}** | **summary** | **{ok}/{n} correct** | | **{:.2}** | **{} waste** | **{:.1}** | | | **{}** | **{:.0} tok/correct** |",
             mean_closeness(&scores),
             total_waste(&scores),
+            mean_steps(&scores),
             avg_price.map(|c| format!("${c:.2}/100 avg")).unwrap_or_else(|| "n/a".into()),
             tokens_per_correct(&scores),
         );
@@ -2370,6 +2392,7 @@ mod tests {
         RunResult {
             text: text.into(),
             evidence: ev,
+            verification: Vec::new(),
             hard_fail: false,
             prompt_tok: 0,
             completion_tok: 0,

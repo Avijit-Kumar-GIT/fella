@@ -31,11 +31,14 @@ gets held to before it counts as documented:
 - Basic stats only: median, stdev, correlation, linear regression — stdlib, zero new deps
 - Charts: bar/line, colored, validated against flat/degenerate data
 - `depth_rule`: decompose a change/trend/correlation question before answering
-- One brief, notable aside on a plain lookup, when the data actually
-  supports it — ships only behind an eval case that proves it helps, not
-  on faith
+- `aside_rule`: one brief, notable aside on a plain lookup (a category
+  that's most of its total, exactly zero, a clear outlier), only when a
+  bounded one-query check actually supports it — proven by `bench/
+  aside-rule/`'s A/B (0/3 → 2/3 correct with the rule on, both directions
+  read from real transcripts, not assumed)
 - An eval tier that actually tests decomposition/correlation questions —
-  doesn't exist yet; the current biggest hole
+  `bench/analysis-depth/`, 6 cases (broad-vs-concentrated, meaningful-vs-
+  normal, correlation with enough points, correlation with too few)
 
 **Out. Not later, out:**
 - Hypothesis testing, significance, p-values
@@ -71,8 +74,8 @@ different problem than the local engine. That split stays.
 ## Order
 
 1. Cut the hypothesis-testing wishlist items — done, this pass.
-2. Write the eval tier for decomposition/correlation questions, before the aside rule, not after.
-3. Build the aside rule against that eval tier.
+2. Write the eval tier for decomposition/correlation questions, before the aside rule, not after — done, this pass (`bench/analysis-depth/`); scored 5/6 against `gemma4:31b`, the one miss was model-call variance, not a rule gap.
+3. Build the aside rule against that eval tier — done, this pass (`aside_rule`, `bench/aside-rule/`); first two zero-cost wordings measured 0/3 (real A/B, not assumed), fixed by allowing one bounded comparison query, then 2/3 with the aside correctly grounded; held at 6/6 on `analysis-depth` and 18/18 on the base battery with zero added waste on questions with nothing to compare against.
 4. Ship v1.
 5. Scope MCP-server mode as its own initiative.
 

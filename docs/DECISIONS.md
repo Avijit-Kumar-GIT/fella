@@ -7,6 +7,55 @@ this app repo (now **`fella`**; `fella-ai` is a private pre-v0.1 archive),
 `fella-marketplace` to mean the browse-site half of the **`fella-web`** repo,
 and any `CODE_OF_CONDUCT.md` mention as folded into `CONTRIBUTING.md` (§Conduct).
 
+- **2026-09-14** **New deterministic check, `check_row_value_labels`: catches
+  a real number attached to the wrong column's name.** Found live, not
+  theorized: testing `fqah-goal-ontrack` (a question needing both a document,
+  `goals.md`, and a query packing five unrelated aggregates into one row)
+  against `gemma4:31b`, the same value came back labeled differently run to
+  run -- 202.78 called "Sleep" once, "Dining out" once, "Running" once; only
+  `max_dining` is actually right. `check_numbers` (existing) didn't catch it:
+  it pools every cell from every evidence row into one flat "is this number
+  anywhere" set, with no column identity, so a real value under the wrong
+  label still passes. New check is narrow on purpose (precision over
+  recall): only a single-row, 2+ column result; only a value matching
+  exactly one column; only flagged when the line naming it carries some
+  *other* column's own alias words and not its true column's. Added to
+  `hard_fail`'s list (so eval scoring counts it as wrong) but deliberately
+  **not** to `rerun_regression`'s corrective-re-ask list -- that list's own
+  existing comment already argues a tool-free re-ask on a fuzzy
+  number-shape mismatch tends to make the model parrot a raw value back
+  rather than actually re-reason, and that risk is if anything sharper for
+  a mislabeled figure than for a merely-unsupported one. Ships as a
+  surfaced warning only; re-ask wiring is a future step gated on its own
+  evidence, not assumed now. Confirmed firing on real (not just synthetic)
+  model output: re-running the same case 5 iterations after shipping,
+  the check caught a live swap twice --
+  `"0" is labeled like leisure_trips but actually came from books_finished`
+  -- and stayed silent on the other three iterations where no clean swap
+  pattern existed, matching the narrow-scope design, not a blanket flag.
+  Engine-only change: no `agent.rs`/`PromptProfile` touch, since
+  `verify.rs`'s checks run unconditionally in `run()` regardless of prompt
+  rules -- the cleanest fit yet for keeping the engine supplying the
+  harness rather than the reverse.
+- **2026-09-14** **`aside_rule` shipped: one bounded comparison query allowed
+  on a plain category/segment lookup, not zero-cost as first designed.**
+  GOALS.md's bar was explicit -- ships only behind an eval case that proves it
+  helps, not on faith -- so it was built against a new tier (`bench/
+  aside-rule/`, 2 cases) and measured against `gemma4:31b`, not assumed. Two
+  different zero-extra-query wordings both scored 0/3: the example this rule
+  needs most (a category being most of a larger total) is mathematically
+  unreachable from the single scalar query a plain lookup runs -- "don't
+  spend an extra call" and "notice the total is dominated by one category"
+  are in direct conflict, not just a wording problem, confirmed by two
+  differently-worded zero-cost attempts landing on identical single-query
+  behaviour. Fix: allow exactly one follow-up query (a same-table sum) when
+  the question has an obvious larger total to compare against; skip it
+  otherwise. Result: 2/3 with the aside correctly grounded in the real
+  total; the flat case (a middling category) stayed silent 3/3 both with the
+  rule on and off; held at 6/6 on `bench/analysis-depth/` and 18/18 on the
+  base `accuracy` battery, including `agg_rent` (a whole-file total with no
+  sibling category to compare against) correctly skipping the follow-up
+  entirely -- the cost is real but targeted, not paid on every plain lookup.
 - **2026-09-14** **"Lightweight" named as four separable axes (binary/dependency
   weight, runtime performance, codebase simplicity, feature scope), each with its
   own real evidence, in `docs/LIGHTWEIGHT.md`.** Prompted by the "enterprise-grade"

@@ -548,6 +548,7 @@ pub struct PromptProfile {
     pub dialect_rule: bool,
     pub python_rule: bool,
     pub depth_rule: bool,
+    pub aside_rule: bool,
     pub chart_rule: bool,
     pub docs_rule: bool,
     pub refuse_rule: bool,
@@ -581,6 +582,7 @@ impl PromptProfile {
                 "dialect_rule" => p.dialect_rule = false,
                 "python_rule" => p.python_rule = false,
                 "depth_rule" => p.depth_rule = false,
+                "aside_rule" => p.aside_rule = false,
                 "chart_rule" => p.chart_rule = false,
                 "docs_rule" => p.docs_rule = false,
                 "refuse_rule" => p.refuse_rule = false,
@@ -609,6 +611,7 @@ impl PromptProfile {
             dialect_rule: true,
             python_rule: true,
             depth_rule: true,
+            aside_rule: true,
             chart_rule: true,
             docs_rule: true,
             refuse_rule: true,
@@ -713,6 +716,18 @@ seasonal, not outliers\"), then the numbers behind it, not a bare figure first. 
 correlation or regression, always state how many points it's based on and say plainly \
 when that's too few to trust (under about 8) rather than stating the coefficient as if \
 it settles it."
+                .into(),
+        );
+    }
+    if profile.aside_rule {
+        rules.push(
+            "After answering a plain lookup on one category or segment of a larger \
+total, always run one more small query summing across every category or segment \
+in that same total before you reply this costs one extra call and tells you \
+whether the figure you just found is most of the total, exactly zero, or a \
+clear outlier. If it is, add one short sentence saying so; if not, answer as \
+normal and add nothing. Skip this second query entirely when the question has \
+no obvious larger total to compare against."
                 .into(),
         );
     }
@@ -951,6 +966,13 @@ seasonal, not outliers\"), then the numbers behind it, not a bare figure \
 first. For any correlation or regression, always state how many points \
 it's based on and say plainly when that's too few to trust (under about 8) \
 rather than stating the coefficient as if it settles it.\n\
+- After answering a plain lookup on one category or segment of a larger \
+total, always run one more small query summing across every category or \
+segment in that same total before you reply this costs one extra call and \
+tells you whether the figure you just found is most of the total, exactly \
+zero, or a clear outlier. If it is, add one short sentence saying so; if \
+not, answer as normal and add nothing. Skip this second query entirely \
+when the question has no obvious larger total to compare against.\n\
 - run_python for stats SQL can't do: median/stdev (stdlib `statistics`), or \
 correlation/regression via the always-available `pearsonr(x, y)` / \
 `linregress(x, y)` helpers (pure stdlib, work with no scipy installed). It \
