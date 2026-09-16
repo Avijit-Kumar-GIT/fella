@@ -279,7 +279,8 @@
 		</button>
 	</nav>
 	<div class="history-label">
-		<span>Recent conversations</span>
+		<span>Recent</span>
+		{#if list.length}<span class="history-count">{list.length}</span>{/if}
 	</div>
 	<div class="list">
 		{#each groups as group (group.label)}
@@ -299,13 +300,17 @@
 							aria-label="Rename conversation"
 						/>
 					{:else}
-						<button class="rowbtn item" type="button" onclick={() => open(c)} title={title(c)}>
-							<span class="row-top">
-								<span class="preview">{title(c)}</span>
-							</span>
-							<span class="meta">
+						<button
+							class="rowbtn item"
+							type="button"
+							onclick={() => open(c)}
+							title={title(c)}
+							aria-label={`Open conversation: ${title(c)}`}
+						>
+							<span class="preview">{title(c)}</span>
+							<span class="row-end">
 								{#if conversationWorkspace(c) !== folderName}
-									<span class="location">{conversationWorkspace(c)}</span>
+									<span class="location" title={conversationWorkspace(c)}>{conversationWorkspace(c)}</span>
 								{/if}
 								<span class="age">{relativeAge(c.saved_at_ms)}</span>
 							</span>
@@ -487,24 +492,36 @@
 		border-bottom: 1px solid var(--border);
 	}
 	.nav-row {
+		position: relative;
 		width: 100%;
 		display: flex;
 		align-items: center;
 		gap: var(--space-2);
 		padding: var(--space-2) var(--space-2);
-		border-radius: var(--radius-chip);
+		border-radius: var(--radius-sm);
 		color: var(--text-dim);
 		font-size: var(--fs-sm);
 		text-align: left;
 		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 	}
-	.nav-row:hover:not(:disabled),
-	.nav-row.active {
+	.nav-row:hover:not(:disabled) {
 		background: var(--bg-inset);
 		color: var(--text);
 	}
 	.nav-row.active {
+		background: transparent;
+		color: var(--text);
 		font-weight: 560;
+	}
+	.nav-row.active::before {
+		content: '';
+		position: absolute;
+		left: 1px;
+		top: 7px;
+		bottom: 7px;
+		width: 2px;
+		border-radius: 2px;
+		background: var(--brand);
 	}
 	.nav-row:disabled {
 		color: var(--border-strong);
@@ -519,7 +536,15 @@
 	.history-label {
 		display: flex;
 		align-items: center;
-		padding-top: var(--space-2);
+		justify-content: space-between;
+		padding-top: var(--space-3);
+	}
+	.history-count {
+		font-family: var(--mono);
+		font-size: 10px;
+		font-weight: 500;
+		letter-spacing: 0;
+		text-transform: none;
 	}
 	.list {
 		flex: 1;
@@ -539,16 +564,33 @@
 	}
 	.item {
 		display: flex;
-		flex-direction: column;
-		align-items: stretch;
-		gap: 2px;
-		width: 100%;
-	}
-	.row-top {
-		display: flex;
 		align-items: center;
 		gap: var(--space-2);
-		padding-right: 40px;
+		width: 100%;
+		min-height: 30px;
+		padding-top: 6px;
+		padding-bottom: 6px;
+		border-radius: var(--radius-sm);
+	}
+	.item:hover,
+	.item:focus-visible {
+		background: var(--bg-inset);
+	}
+	.item-wrap:focus-within .row-actions,
+	.item-wrap:hover .row-actions {
+		display: flex;
+	}
+	.item-wrap:hover .row-end,
+	.item-wrap:focus-within .row-end {
+		opacity: 0;
+	}
+	.row-end {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		flex: none;
+		max-width: 42%;
+		transition: opacity var(--dur-fast) var(--ease);
 	}
 	.preview {
 		flex: 1;
@@ -572,14 +614,11 @@
 	}
 	.row-actions {
 		position: absolute;
-		top: var(--space-2);
-		right: var(--space-2);
+		top: 5px;
+		right: 6px;
 		display: none;
 		align-items: center;
 		gap: 2px;
-	}
-	.item-wrap:hover .row-actions {
-		display: flex;
 	}
 	.ren,
 	.del {
@@ -598,17 +637,18 @@
 		color: var(--text);
 		background: var(--bg-inset);
 	}
-	.meta {
-		display: flex;
-		align-items: center;
-		gap: var(--space-2);
-		color: var(--text-faint);
-		font-size: var(--fs-xs);
-	}
 	.location {
 		min-width: 0;
 		overflow: hidden;
 		text-overflow: ellipsis;
+		white-space: nowrap;
+		color: var(--text-faint);
+		font-size: 10px;
+	}
+	.age {
+		color: var(--text-faint);
+		font-family: var(--mono);
+		font-size: 10px;
 		white-space: nowrap;
 	}
 	.empty {
