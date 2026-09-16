@@ -1,0 +1,22 @@
+# Internal repository material is linked from the public docs where useful, but
+# is not part of the Mintlify page source.
+docs/
+bench/
+
+# Generated build output.
+src-tauri/target/
+src-tauri/
+src/
+.svelte-kit/
+tsconfig.json
+
+# Repository policy files, not product documentation pages.
+SECURITY.md
+CODE_OF_CONDUCT.md
+
+# Binary fixtures and application icons are not documentation sources.
+**/*.png
+**/*.ico
+**/*.icns
+**/*.pdf
+**/*.xlsx

@@ -9,6 +9,10 @@ analytics for non-developers, read-only, local-first, every answer a
 deterministic computation that shows its working. See [`DECISIONS.md`](DECISIONS.md) and
 [`EXTENSIBILITY.md`](EXTENSIBILITY.md).
 
+**Next-release build brief:** [`ANALYTICS-RELEASE.md`](ANALYTICS-RELEASE.md) is
+the prioritized plan for making the existing engine feel like a natural-
+language analytics platform without broadening Fella's scope.
+
 The "Harness quality, measured" section below, plus the four fella-web
 `/next` initiatives it feeds (fella#121-128), is the concrete path toward
 one named identity: enterprise-grade analytics depth on a folder that

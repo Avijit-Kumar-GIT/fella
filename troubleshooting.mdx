@@ -1,0 +1,110 @@
+---
+title: "Troubleshooting"
+description: "Diagnose installation, workspace, model, query, Python, and connector problems."
+icon: "wrench"
+---
+
+# Diagnose the failing layer
+
+Start with the smallest direct check. A source problem, provider problem, and interpretation problem need different fixes.
+
+| Symptom | First check | Likely action |
+| --- | --- | --- |
+| A file is missing | `/files` | Check format, hidden path, scan depth, permissions, and `.fellaignore` |
+| A total looks wrong | `/schema <table>` | Check type inference, units, casing, nulls, and totals rows |
+| The model cannot answer | `/auth`, then `/model` | Start Ollama, sign in again, or choose a tool-capable model |
+| A query times out | Inspect working or use `/sql` | Add a date filter, narrower columns, grouping, or `LIMIT` |
+| Python fails | Inspect stderr in working | Install Python 3 or use stdlib-only code |
+| A PDF has no useful text | Open the PDF outside Fella | OCR it and reopen or `/reindex` the folder |
+| A connector is absent | `/packs`, then `/connect` | Enable the pack, reconnect, and inspect withheld tools |
+| Changes do not appear | `/reindex`, then `/files` | Refresh the catalog after external edits |
+
+## A file does not load
+
+1. Run `/files` and read the skipped-source reason.
+2. Confirm the extension is supported. Word documents, images, email files, HTML, XML, and OpenDocument files are not current inputs.
+3. Confirm the path is not hidden and is within eight levels of the opened folder.
+4. Check that `.fellaignore` does not match its name or workspace-relative prefix. Patterns are not globs.
+5. Confirm Fella can read the file and that another program is not locking it.
+6. For `.parquet` or `.pq`, use a custom DuckDB build or convert the file to CSV/JSON. Release builds do not include Parquet.
+
+`fella.md` at the workspace root is intentionally omitted from `/files`; it is prompt context.
+
+## The table loaded incorrectly
+
+Run:
+
+```text filename="fella commands"
+/schema table_name
+```
+
+Inspect column types and notes. CSV/TSV ingestion can infer headers, skip preambles, coerce common written amounts, normalize named-month dates, and leave out a recognizable trailing total row. These heuristics can be wrong for unusual exports. Clean the source, convert it to a simpler format, or state the exact column and conversion needed.
+
+Delimited files stop loading after 2,000,000 rows by default and report truncation. Query results shown to callers are capped at 1,000 rows; use aggregates rather than expecting a full export.
+
+## Fella cannot reach the model
+
+For local Ollama:
+
+```bash filename="terminal"
+ollama list
+ollama serve
+```
+
+Then use `/model` and choose an installed model. For hosted providers, use `/auth` to inspect login state, `/login <provider>` to replace the key, and `/model` to refresh current model IDs. Provider catalogs and IDs can change independently of Fella.
+
+HTTP `429` and transient server failures may be retried, but quota, billing, privacy settings, unsupported tool calling, or an unstable endpoint still require provider-side action.
+
+## An answer is plausible but wrong
+
+Open the working fold and check, in order:
+
+1. Correct files and tables.
+2. Correct date range, units, category spelling, and status filters.
+3. Correct join keys and join type.
+4. Correct aggregation and denominator.
+5. Rows that actually support the prose.
+6. Verification warnings.
+
+A query can run successfully and return a grounded number while answering the wrong interpretation. Restate the rule explicitly, ask Fella to show intermediate totals, or run direct `/sql`. A green check is not a semantic correctness guarantee.
+
+## There is no working fold
+
+Fella can answer general or conversational questions without a tool call. No call means no workspace evidence. Ask a source-bound question such as "Using `transactions.csv`, calculate..." or request the relevant file/table explicitly.
+
+## Python fails or feels unsafe
+
+`run_python` requires a discoverable `python3` or `python`. It supplies stdlib helpers for median, standard deviation, Pearson correlation, and simple linear regression; pandas is optional on the SQLite path.
+
+Python runs without a confirmation prompt. It uses isolated mode, a temporary working directory, a cleared environment, capped output, a 20-second timeout, and Unix resource limits, but it is not a security sandbox: it can read outside the workspace and use the network. If that boundary is unacceptable, stop the run and ask for a SQL-only answer.
+
+## A PDF cannot be searched
+
+Fella extracts an existing text layer and does not perform OCR. If selecting text in a PDF viewer does not produce meaningful text, OCR or convert the document first. Password-protected, malformed, or image-only PDFs may be skipped or produce poor extraction.
+
+## An MCP connector does not behave as expected
+
+Run `/packs` to confirm the pack is installed and enabled, then `/connect` to inspect connection state. Fella supports Streamable HTTP, not stdio. Tools marked non-read-only or destructive are withheld; unannotated tools are offered with undeclared effects.
+
+Hash verification only proves downloaded pack bytes match the catalog. It does not diagnose or guarantee the remote service. Check its URL, token scope, availability, terms, and MCP annotations.
+
+## The Linux window renders incorrectly
+
+On WSLg, if the window opens but layout or compositing is broken, try:
+
+```bash filename="terminal"
+WEBKIT_DISABLE_DMABUF_RENDERER=1 pnpm tauri dev
+```
+
+This development workaround does not fix every Linux display failure. Linux requires WebKitGTK 4.1 and the Tauri system libraries listed in the [developer setup](https://github.com/Avijit-Kumar-GIT/fella/blob/main/docs/DEV_SETUP.md).
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Check known limits" icon="triangle-alert" href="/limitations">
+    Confirm whether the behavior is outside Fella's current scope.
+  </Card>
+  <Card title="Report a reproducible bug" icon="bug" href="https://github.com/Avijit-Kumar-GIT/fella/issues/new/choose">
+    Include the OS, steps, expected result, actual result, and safe sample data.
+  </Card>
+</CardGroup>

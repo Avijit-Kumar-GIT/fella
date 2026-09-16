@@ -1,0 +1,76 @@
+---
+title: "Tabs, history, and focus"
+description: "Keep conversations separate, reopen past work, and use the compact focus view."
+icon: "panels-top-left"
+---
+
+Each conversation tab keeps its own transcript, in-flight run, input recall, and model selection. All tabs share one open workspace, active provider, and provider credentials.
+
+## Tabs
+
+Each tab has its own conversation transcript. The workspace and provider are shared, while each tab can select its own model.
+
+```text filename="keyboard and commands"
+/tab       # open a new conversation
+Ctrl+T     # open a new conversation
+Ctrl+W     # close the current tab
+Ctrl+1     # ... Ctrl+9 switch tabs
+```
+
+Use `Ctrl` on every platform, including macOS.
+
+## History
+
+Fella starts a fresh conversation when it launches. A conversation is archived locally as soon as an exchange settles, then updated after later turns and renames.
+
+The history sidebar is open by default. Use it to:
+
+- Search conversation titles, previews, and workspace paths.
+- Reopen a conversation in a tab.
+- Rename or delete a conversation.
+- Start a new conversation.
+
+Press `Ctrl+B` or use the title-bar button to toggle the sidebar. Its open or closed state persists across launches.
+
+Slash commands provide the same basic listing and reopen workflow:
+
+```text filename="fella commands"
+/history       # list saved conversations
+/history 2     # reopen the second entry
+/clear         # archive this conversation and start again
+```
+
+Conversation archives retain the workspace path, messages and embedded evidence, and an optional custom title. Reopening one remounts its saved folder when the path still exists. Deleting an archived conversation also closes its live tab if it is open.
+
+## Focus mode
+
+`/focus` or `Ctrl+Shift+F` hides the title bar and sidebar for a plain view. `Esc` still stops an active run first; otherwise it collapses open evidence folds.
+
+## Retry and correction
+
+Use `/retry` after a transient provider failure or after switching models. It repeats the latest non-command question in the current conversation. While a run is live, submitting a plain-text correction cancels the current run and re-asks with the correction appended.
+
+## Update manually
+
+```text filename="fella command"
+/update
+```
+
+Fella checks for a newer release only when you ask. It verifies the downloaded installer against the release checksum before applying it and never performs a background update check.
+
+## Related in the docs
+
+| If you need... | Go to |
+| --- | --- |
+| Learn every command and shortcut | [Commands and shortcuts](/developer-platform/using-fella/commands) |
+| Use a different model per tab | [Models and providers](/developer-platform/using-fella/models) |
+| Inspect a stopped run | [Read the evidence](/developer-platform/using-fella/evidence) |
+
+<CardGroup cols={2}>
+  <Card title="Commands and shortcuts" icon="command" href="/developer-platform/using-fella/commands">
+    Keep the full slash-command and keyboard reference nearby.
+  </Card>
+  <Card title="Read the evidence" icon="search-check" href="/developer-platform/using-fella/evidence">
+    Review partial work after a run stops or a provider fails.
+  </Card>
+</CardGroup>

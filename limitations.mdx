@@ -1,0 +1,92 @@
+---
+title: "Limitations"
+description: "Current boundaries for correctness, formats, scale, security, platforms, and extensions."
+icon: "triangle-alert"
+---
+
+# Know what Fella does not promise
+
+Fella is an early, pre-1.0 personal analytics app. Its narrow scope makes the normal path inspectable, but it does not remove model, data, or operating-system risk.
+
+## Correctness and evidence
+
+| Limit | Practical consequence |
+| --- | --- |
+| Not every response uses a tool | General answers can have no working fold or workspace evidence |
+| Verification is deterministic, not omniscient | It catches replay, grounding, and known query-shape problems, not every wrong interpretation |
+| Grounded can still be wrong | A valid query may use the wrong filter, join, unit, date boundary, or denominator |
+| Refusal is model-dependent | A model may forecast or infer when files do not support the answer |
+| Evidence is sampled/capped | Inspect the query and row counts, not only visible sample rows |
+
+For consequential decisions, validate the source and query independently. Fella is not a substitute for professional financial, medical, legal, or safety advice.
+
+## Data and formats
+
+- Shipped builds support delimited/JSON tables, Excel workbooks, and text-layer documents listed in [Getting started](/getting-started#what-the-shipped-app-can-use).
+- There is no OCR. Image-only PDFs and standalone images are not readable data.
+- Word, OpenDocument, email, HTML, XML, archive, media, and database files are not supported inputs.
+- JSON must be table-shaped enough to ingest; arbitrary deeply nested documents may not become useful columns.
+- Excel formulas are not recalculated by Fella; workbook parsing depends on stored values the parser can read.
+- Parquet requires the optional DuckDB backend. DuckDB is not part of published installers or CI and has known ingestion-parity gaps relative to SQLite.
+
+## Scale and output
+
+| Guardrail | Default |
+| --- | ---: |
+| Workspace scan depth | 8 levels |
+| Delimited-file ingest cap | 2,000,000 rows per file |
+| SQL result cap | 1,000 rows |
+| SQL timeout | 15 seconds |
+| Python wall timeout | 20 seconds |
+| Chart size | 12 categories, 2 series |
+
+Fella targets MB-scale personal folders and everyday lookups, aggregates, comparisons, and small joins. It is not a warehouse, distributed query engine, notebook, ETL system, or multi-user server.
+
+## Security boundaries
+
+### Base file and SQL tools
+
+The model has no built-in write, move, copy, or delete tool. Document reads resolve through the workspace catalog, and SQLite queries use a read-only connection plus a single-statement guard.
+
+### Python
+
+Python is the important qualification. The model can select `run_python`, which executes generated Python without a per-call permission prompt. Fella uses `python -I`, a fresh temporary working directory, a cleared environment, capped output, a timeout, and Unix CPU/memory/file-size limits. This is best-effort isolation, not a sandbox: code can read outside the workspace and access the network. Files written to the temporary working directory are removed afterward, but do not treat Python as an OS-level read-only boundary.
+
+### Augments
+
+An enabled augment can save a workspace-relative `.md`, `.txt`, `.csv`, or `.tsv` file when the user edits its view. This is a human-driven write path, not an agent tool.
+
+### MCP
+
+An enabled connector talks to its configured external service. Fella withholds tools that declare themselves non-read-only or destructive, but server annotations are not independently verified. Unannotated tools can still be offered with an effects warning. Use least-privilege credentials and trust the server separately.
+
+## Privacy and network activity
+
+- Local Ollama keeps normal model requests local; hosted providers receive prompts and tool results.
+- `/packs install` fetches the extension catalog and hash-pinned files.
+- `/update` contacts GitHub and downloads an installer only when the user invokes it.
+- MCP and Python can introduce additional network activity as described above.
+- Fella does not proxy hosted model requests through a Fella service, but cannot control a provider's logging, retention, or training policy.
+
+## Releases and platforms
+
+Published builds are currently unsigned, so macOS and Windows can show unknown-developer warnings. Integrity depends on HTTPS and `SHA256SUMS`, not code signing or notarization. macOS requires 10.15+, Windows requires 10+, and Linux requires WebKitGTK 4.1. Release automation builds macOS universal plus Windows and Linux artifacts on GitHub-hosted runners, but every apply/update path has not been manually exercised on every OS.
+
+## Extensions and compatibility
+
+Packs contain data, not application code. Themes and skills cannot add tools. Augments can only name `buffer` or `grid` capabilities already compiled into Fella. MCP packs support remote Streamable HTTP, not local stdio. Marketplace review and SHA-256 verification establish review provenance and byte integrity; neither guarantees a third-party service.
+
+## Benchmarks
+
+Published scores are dated measurements on fixed synthetic batteries, providers, models, prompts, and grading code. They do not predict correctness for your folder. The 2026-09-10 64-case comparison and 2026-09-12 16-case hard run should be rerun after material harness, fixture, model, or endpoint changes.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Work within the limits" icon="list-checks" href="/examples">
+    Use bounded recipes and inspect the resulting queries.
+  </Card>
+  <Card title="See evaluation methods" icon="test-tube" href="/other-resources/evaluation">
+    Learn what deterministic tests and live model evaluations each establish.
+  </Card>
+</CardGroup>

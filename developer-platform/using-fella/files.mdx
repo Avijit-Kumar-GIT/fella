@@ -1,0 +1,71 @@
+---
+title: "Files and documents"
+description: "Supported formats, table naming, document search, and rescanning."
+icon: "files"
+---
+
+Tables become queryable sources. Documents remain searchable text read directly from the selected workspace; Fella does not create an embedding index.
+
+## Supported formats
+
+| Kind | Extensions | Shipped behavior |
+| --- | --- | --- |
+| Delimited tables | `.csv`, `.tsv`, `.tab` | Loaded into SQLite; comma, semicolon, tab, or pipe delimiters can be detected from the first line |
+| JSON tables | `.json`, `.ndjson`, `.jsonl` | A JSON object, an array of objects, or object-per-line records becomes a table |
+| Spreadsheets | `.xlsx`, `.xlsm`, `.xlsb`, `.xls` | Each non-empty readable sheet becomes a table |
+| Documents | `.pdf`, `.txt`, `.text`, `.md`, `.markdown`, `.log` | PDF text is extracted; text files are read directly |
+| Optional table | `.parquet`, `.pq` | Recognized, but usable only in a build compiled with the `duckdb` feature |
+
+PDF extraction handles text-layer PDFs. Scanned or photographed documents need OCR before Fella can read them.
+
+## Messy values
+
+The ingestors infer integer, float, boolean, date, and text shapes. They can parse written amounts such as `$1,200.50`, treat blank-like values as missing in numeric columns, normalize unambiguous named-month dates, skip preamble rows, and drop a trailing total row. Caveats are supplied to the agent through table inspection and can appear in evidence.
+
+## Tables and names
+
+Use `/files` to see which table a file became. Use `/schema <name>` for its row count, column names, types, and null percentages. During an agent run, `inspect_table` can additionally return distinct counts, min/max values, ingest notes, and sample rows.
+
+```text filename="table names"
+Bank Statement 2024.csv -> bank_statement_2024
+123 transactions.json   -> t_123_transactions
+report.csv + report.json -> report and report_2
+```
+
+## Documents are direct reads
+
+`grep_files` searches catalogued document text with a case-insensitive regular expression and returns file/line matches. `read_file` accepts one or several document names. Each document is capped at 12,000 characters and a multi-document call is capped at 16,000 characters.
+
+<Warning>
+  PDF support reads selectable text only. Image-only scans return a no-text warning; Fella does not perform OCR.
+</Warning>
+
+## Rescan after changes
+
+```text filename="fella command"
+/reindex
+/files
+```
+
+`/reindex` refreshes the catalog. `/files` shows loaded sources and noticed files that could not be used. A root `.fellaignore` can exclude names and workspace-relative path prefixes.
+
+<Note>
+  `fella.md` at the workspace root is context, not a document source. Fella skips it during the data scan and injects it separately into the model prompt.
+</Note>
+
+## Related in the docs
+
+| If you need... | Go to |
+| --- | --- |
+| Open or exclude a workspace path | [Open a folder](/developer-platform/using-fella/open-folder) |
+| Teach Fella file conventions | [Context and memory](/developer-platform/using-fella/context-and-memory) |
+| Run a direct query | [Commands and shortcuts](/developer-platform/using-fella/commands) |
+
+<CardGroup cols={2}>
+  <Card title="Open a folder" icon="folder-open" href="/developer-platform/using-fella/open-folder">
+    Set the workspace boundary and understand scanning.
+  </Card>
+  <Card title="Ask questions" icon="message-circle-question" href="/developer-platform/using-fella/asking-questions">
+    Match a question to tables, documents, or analysis tools.
+  </Card>
+</CardGroup>

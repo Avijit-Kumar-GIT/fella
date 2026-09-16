@@ -1,0 +1,92 @@
+---
+title: "Evaluation and testing"
+description: "Choose the test layer that matches the claim you are changing."
+icon: "test-tube"
+---
+
+# Test the claim at the right layer
+
+Deterministic tests establish engine behavior. Live evaluation samples whether a stochastic model can use that behavior correctly. Neither substitutes for inspecting a real answer.
+
+## Capability matrix
+
+| Layer | Establishes | Does not establish |
+| --- | --- | --- |
+| Rust unit/integration tests | Catalog, ingest, SQL guards/timeouts, Python plumbing, verification, auth, packs, MCP, cancellation, and recovery behave as encoded | That a model chooses the right tool or interpretation |
+| Frontend checks/build | Svelte types and production compilation succeed | Browser interaction correctness on every OS |
+| CI | The default SQLite feature set passes on Linux with current toolchains | DuckDB support or live provider behavior |
+| Live agent evaluation | Repeated model outcomes on fixed folders and gold answers | General correctness for arbitrary user folders |
+| Manual desktop smoke test | Real window, installer, provider, and interaction path work on a tested OS | Cross-platform completeness |
+
+## Run the local gates
+
+```bash filename="Rust checks from src-tauri"
+cargo test --locked
+cargo clippy --all-targets --locked -- -D warnings
+```
+
+```bash filename="frontend checks from repository root"
+pnpm run check
+pnpm run build
+```
+
+Repository CI runs the frontend checks, Clippy, and Rust tests on Ubuntu 22.04 using Node 24 and stable Rust. It uses the default SQLite backend with the default PDF, XLSX, and MCP features.
+
+<Warning>
+  DuckDB is not a CI path. CI explicitly avoids `--features duckdb` because the bundled build exhausts available resources, and the DuckDB backend has unverified ingestion-parity gaps. Do not describe it as CI-tested.
+</Warning>
+
+## Add the smallest useful regression
+
+| Change | Preferred test |
+| --- | --- |
+| Parser or type inference | Local fixture plus Rust ingest test |
+| SQL safety, timeout, or result shape | Rust engine/integration test |
+| Verification heuristic | Focused positive and negative unit cases |
+| Agent-loop retry/cancellation/tool use | Mock-model integration test |
+| Prompt or policy behavior | Reproducible live eval case across several models |
+| UI rendering/interaction | Svelte check/build plus a targeted manual smoke test |
+| Pack install or MCP policy | Rust integration test with a local fixture/server |
+
+When a model failure reveals a deterministic defect, add the deterministic test first. When behavior depends on interpretation, preserve the folder, prompt, generated gold, and grading rule as an eval case.
+
+## Run live evaluation
+
+Live evaluation needs a provider and a copied app-data directory. It grades final-answer closeness, tool shape, calls, token use, refusal behavior, and whether verification surfaced a problem.
+
+```bash filename="terminal"
+cd src-tauri
+AGENT_EVAL_DATA_DIR=/tmp/fella-eval \
+  cargo run --release --features eval --example agent_eval -- bench \
+  --dir ../bench/folder-qa \
+  --harness fella \
+  --iters 3 \
+  --models "ollama-cloud/gemma4:31b" \
+  --json ../bench/folder-qa/out/fella.json
+```
+
+Provider output is stochastic. Use multiple iterations, report both majority accuracy and all-iteration consistency, and inspect minority failures that the rollup hides. Compare the same model under the same endpoint and battery before attributing a change to the harness.
+
+## Reproducibility checklist
+
+1. Record commit, date, provider, endpoint, exact model ID, harness, and parameters.
+2. Keep fixture data, generator, and grader in the same change.
+3. Use a copied data directory and isolate concurrent runs.
+4. Compare accuracy, consistency, token use, wasted calls, refusal behavior, and errors.
+5. Inspect tool evidence and wrong-answer categories, not only aggregate scores.
+6. Update maintained architecture or decision records when the underlying claim changes.
+
+## What remains manual
+
+The repository has no general frontend interaction test harness. Release automation builds unsigned installers for macOS, Windows, and Linux on `v*` tags, but building an artifact is not the same as exercising install, launch, provider login, answer flow, stop, packs, update, and relaunch on that OS.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Run the paired benchmark" icon="flask-conical" href="/other-resources/benchmarks">
+    Compare the same model with and without the Fella harness.
+  </Card>
+  <Card title="Prepare a contribution" icon="git-pull-request" href="/other-resources/contributing">
+    Choose the correct repository and run the required gates.
+  </Card>
+</CardGroup>

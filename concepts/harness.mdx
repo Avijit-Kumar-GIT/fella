@@ -1,0 +1,123 @@
+---
+title: "The harness"
+description: "How Fella controls model context, tool calls, evidence, verification, and stopping."
+icon: "workflow"
+---
+
+> The harness turns model responses into a bounded, inspectable loop.
+
+## Definition
+
+The harness is the control layer around the model. It decides what context and tool schemas to send, executes requested tools through the registry, returns results to the model, and records the work shown with the answer.
+
+It is a linear loop, not a planner graph, critic swarm, or sub-agent hierarchy.
+
+## Architecture
+
+For each question, the harness builds a system prompt from the workspace catalog and schema, optional root `fella.md`, recent conversation context, and learned folder notes. The user question follows as a separate message.
+
+If neither a workspace nor connected MCP tools are available, the model receives no tool schemas. If a connector is active, its namespaced tools join the schemas offered for that run without becoming built-in tools.
+
+## Flow
+
+<Steps>
+  <Step title="Ask the model">
+    Fella streams the response. The model can return text, tool calls, or both.
+  </Step>
+  <Step title="Execute calls">
+    Exact duplicate built-in calls reuse their result within the run. Other calls from the same response execute concurrently and are returned in call order.
+  </Step>
+  <Step title="Record evidence">
+    Each call produces an evidence item with its arguments, summary, timing, result data, and error where applicable.
+  </Step>
+  <Step title="Repeat or finish">
+    Tool results enter the next model turn. A response with no tool calls moves to verification and completion.
+  </Step>
+</Steps>
+
+The control flow is intentionally linear. This abbreviated excerpt shows the important ordering without the error-handling branches:
+
+```rust
+for step in 0..max_steps() {
+    let response = llm.chat(&messages, &schemas, &notify, &on_delta).await?;
+
+    if response.tool_calls.is_empty() {
+        let checks = verify::run(engine, question, &response.content, &evidence);
+        return Ok(finish_with(
+            engine, response.content, evidence, usage, checks, emit,
+        ));
+    }
+
+    messages.push(ChatMessage::Assistant {
+        content: response.content.clone(),
+        tool_calls: response.tool_calls.clone(),
+    });
+
+    // The production code handles exact duplicates separately, then joins
+    // non-duplicate calls and stitches them back into call order.
+    let outcomes = join_all(
+        response
+            .tool_calls
+            .iter()
+            .map(|call| run_tool_call(engine, registry, call)),
+    )
+    .await;
+
+    for (call, (item, llm_text)) in response.tool_calls.iter().zip(outcomes) {
+        emit(AskEvent::ToolEnd { item: Box::new(item.clone()) });
+        evidence.push(item);
+        messages.push(ChatMessage::Tool {
+            call_id: call.id.clone(),
+            name: call.name.clone(),
+            content: llm_text,
+        });
+    }
+
+    trim_history(&mut messages);
+}
+```
+
+This is a documentation excerpt, not a drop-in function: the production loop also races model calls against cancellation, handles partial model failures, memoizes exact duplicate built-in calls, emits UI events, and performs the final no-tool turn after the step cap. The implementation is in [`agent::run`](https://github.com/Avijit-Kumar-GIT/fella/blob/main/src-tauri/src/engine/agent.rs).
+
+`EngineState::ask_once` and `ask_once_usage` are separate evaluation helpers.
+They make one tool-free model call for judge/baseline measurements and are not
+used by the interactive product path; they do not create evidence or run
+verification.
+
+## Behavior
+
+The prompt tells the model to prefer SQL for tables, search or read documents directly, reserve Python for analysis SQL cannot express, avoid unsupported figures, and stop once it has enough evidence. These are behavior instructions, not enforcement boundaries.
+
+Deterministic verification always runs when the harness finishes an answer. A changed or failed SQL rerun can trigger one tool-free corrective turn. If checks still contain a warning, a separate default-on self-consistency path can request one stricter tool-free second opinion; `FELLA_SELF_CHECK=0` disables it.
+
+### Guidance versus enforcement
+
+| Layer | Example | Enforced by |
+| --- | --- | --- |
+| Prompt guidance | Prefer `run_sql`, stop early, refuse unsupported forecasts, use a chart only for useful structured data | `PromptProfile` text in `agent.rs`; a model can still misunderstand it |
+| Tool boundary | The model can call only schemas in the registry; built-in SQL and document tools resolve through the engine | `Registry`, tool implementations, and catalog lookup |
+| SQL boundary | One guarded, read-only statement with blocked mutation/file-reading operations | `analytics::data::ensure_read_only` plus the backend connection |
+| Python boundary | A temp directory, cleared environment, timeout, output cap, and Unix resource limits | `analytics::pyexec`; not a sandbox, because filesystem/network access remain possible |
+| Answer checks | Reruns, number grounding, query-shape heuristics, and label checks | `analytics::verify`; warnings are not semantic proof |
+
+## Limits
+
+- The default hard cap is 20 tool-calling iterations (`FELLA_MAX_STEPS`). At the cap, the harness requests one final answer with tools disabled.
+- Soft stop pressure begins after the normal three-round-trip budget (`FELLA_SOFT_STOP`).
+- Older tool results are elided as history grows and can be queried again.
+- Stop cancels the active model request, keeps collected evidence, and returns `Stopped.`
+- Prompt rules cannot make arbitrary Python safe. The `run_python` process has best-effort limits but can access the filesystem and network.
+- Verification can identify evidence and query-shape problems, not resolve every ambiguous interpretation.
+
+The major loop changes were introduced incrementally: [PR #39](https://github.com/Avijit-Kumar-GIT/fella/pull/39) added the scored evaluation harness, [PR #95](https://github.com/Avijit-Kumar-GIT/fella/pull/95) added escalating stop pressure, [PR #97](https://github.com/Avijit-Kumar-GIT/fella/pull/97) added the cost-gated second opinion, and [PR #134](https://github.com/Avijit-Kumar-GIT/fella/pull/134) added the current depth/aside prompt behavior. The current code, not any one historical PR description, is authoritative.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Built-in tools" icon="wrench" href="/concepts/tools">
+    See what the harness can execute and which boundaries each tool enforces.
+  </Card>
+  <Card title="Verification" icon="badge-check" href="/concepts/verification">
+    Separate deterministic checks from model-based second opinions.
+  </Card>
+</CardGroup>

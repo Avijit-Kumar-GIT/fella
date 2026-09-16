@@ -1,0 +1,115 @@
+---
+title: "Built-in tools"
+description: "The seven built-in tools, their purposes, and their actual guardrails."
+icon: "wrench"
+---
+
+> Built-in tools are application code; MCP tools are optional runtime integrations.
+
+## Definition
+
+Fella's standard registry contains seven built-in tools. Adding one requires an application code change. Each has a JSON schema and produces an evidence record.
+
+MCP connector tools are not built-ins. When a connector is enabled and connected, Fella discovers its remote tools, gives them names such as `connector__search`, and registers them separately for the current runtime.
+
+The extension point is a Rust trait, not a dynamic plugin ABI:
+
+```rust
+#[async_trait]
+pub trait Tool: Send + Sync {
+    fn name(&self) -> &'static str;
+    fn description(&self) -> &'static str;
+    fn parameters(&self) -> serde_json::Value;
+    async fn run(
+        &self,
+        engine: &EngineState,
+        args: &serde_json::Value,
+    ) -> EngineResult<ToolOutput>;
+}
+```
+
+`ToolOutput` keeps the model-facing text separate from the data shown in the evidence panel:
+
+```rust
+pub struct ToolOutput {
+    pub summary: String,
+    pub llm_text: String,
+    pub sql: Option<String>,
+    pub columns: Option<Vec<String>>,
+    pub rows: Option<Vec<Vec<serde_json::Value>>>,
+    pub row_count: Option<usize>,
+    pub output: Option<String>,
+    pub chart: Option<ChartData>,
+}
+```
+
+The standard registry is explicit:
+
+```rust
+tools: vec![
+    Box::new(ListFiles),
+    Box::new(InspectTable),
+    Box::new(RunSql),
+    Box::new(GrepFiles),
+    Box::new(ReadFile),
+    Box::new(RunPython),
+    Box::new(MakeChart),
+],
+```
+
+`inspect_table` is the current combined interface; older commits had separate `describe_schema` and `sample_rows` concepts. [PR #52](https://github.com/Avijit-Kumar-GIT/fella/pull/52) merged that surface so schema statistics and sample rows travel through one tool.
+
+## Architecture
+
+| Built-in | Purpose | Enforced behavior |
+| --- | --- | --- |
+| `list_files` | List recognized workspace files and tables | Reads the workspace catalog |
+| `inspect_table` | Return schema statistics and sample rows | Resolves a known table; requested sample is capped |
+| `run_sql` | Filter, join, group, and aggregate tables | Guarded SQL through the active local data engine; results and runtime are capped |
+| `grep_files` | Search document text | Case-insensitive regex over cataloged documents; 30 hits by default and 100 maximum |
+| `read_file` | Read cataloged document bodies | Resolves one or more catalogued names; 12,000 characters per document and 16,000 characters combined |
+| `run_python` | Run analysis that is awkward in SQL | Temporary working directory, stripped environment, timeout, capped output, and Unix resource limits |
+| `make_chart` | Build a bar or line chart from a query | Runs a guarded read-only query, derives the first column as labels and the next one or two columns as numeric series, then validates the result before client rendering |
+
+The built-ins are offered when a workspace is open. Connected MCP tools can be offered without a workspace because their data lives at the remote service.
+
+Every successful call is translated into a `ToolOutput` and then an `EvidenceItem` with a stable ordered ID for that answer. SQL-backed evidence also maps referenced tables to catalogued files or workbook sheets and retains source-level ingest notes when present. The output has a human-facing summary, compact model text, and optional SQL, columns, rows, text output, or structured chart data. `make_chart` derives its chart values from its own read-only query, so the chart evidence retains the SQL, result rows, and source mapping; it never accepts or emits SVG/HTML. `ChartData` is rendered by the Svelte client. Failed calls are also recorded with an error, summary, and elapsed time rather than disappearing from the run.
+
+## Flow
+
+For tables, the expected path is inspection when needed followed by `run_sql`. For documents, the model uses `grep_files` to locate text and `read_file` for context; `read_file` accepts either `name` or a `names` array and labels combined documents. `make_chart` receives a query, executes it through the guarded data path, and derives the chart values itself. The first query column becomes labels; the next one or two become series.
+
+`run_python` provides `sql(query)`: on the default SQLite backend it returns a pandas DataFrame when pandas is installed, otherwise a list of dictionaries. The built-in `pearsonr` and `linregress` helpers use only the standard library; median and standard deviation are available through Python's `statistics` module.
+
+## Behavior
+
+SQL is preferred because the query and rows are straightforward to display and rerun. `run_sql` accepts a single guarded read-only query, and the SQLite query connection is opened read-only. Direct file-reading SQL functions are blocked.
+
+MCP handling is annotation-aware. Fella withholds tools declared non-read-only or destructive. A tool without `readOnlyHint: true` can still be offered, but its effects are marked undeclared. MCP execution happens on the configured server and its result appears in the evidence panel.
+
+## Limits
+
+- `run_python` requires a system `python3` or `python`; Python is not bundled.
+- Python isolation is best effort, not a security boundary. The subprocess is not prevented from reading or writing files outside the workspace and is not prevented from using the network. Treat generated snippets as code you chose to run.
+- Python's CPU, memory, and file-size resource limits are Unix-only; the wall-clock timeout and output caps are cross-platform.
+- MCP annotations are claims from the remote server. Tools with undeclared effects require trust in that connector.
+- Tool outputs are capped, so evidence can contain a sample rather than every returned row or character.
+
+Direct `/sql` is deliberately outside this registry path: it calls the engine directly, prints a system result, and does not create an assistant evidence fold or invoke post-answer verification.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="The harness" icon="workflow" href="/concepts/harness">
+    Follow tool selection, execution, caching, and stopping.
+  </Card>
+  <Card title="Extensions and MCP" icon="puzzle" href="/extensions-and-mcp">
+    Configure remote connectors and review their trust boundary.
+  </Card>
+  <Card title="Verification" icon="badge-check" href="/concepts/verification">
+    See which results can be checked after the answer.
+  </Card>
+  <Card title="The engine" icon="database" href="/concepts/engine">
+    Understand the local SQL and document paths behind the tools.
+  </Card>
+</CardGroup>

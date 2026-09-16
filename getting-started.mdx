@@ -1,0 +1,122 @@
+---
+title: "Getting started"
+description: "Install Fella, connect a model, open a folder, and inspect a tool-backed answer."
+icon: "play"
+---
+
+# Get an inspectable answer
+
+By the end of this guide, Fella will have scanned a folder, answered a question from its contents, and shown you the computation behind the result.
+
+<Steps>
+  <Step title="Install the desktop app">
+    Download the current unsigned build from [GitHub Releases](https://github.com/Avijit-Kumar-GIT/fella/releases/latest). Releases provide a universal macOS `.dmg`, Windows installers, and x86_64 Linux `.AppImage` and `.deb` artifacts.
+
+    ```bash filename="macOS or Linux"
+    curl -fsSL https://lilfella.app/install.sh | sh
+    ```
+
+    ```powershell filename="Windows PowerShell"
+    irm https://lilfella.app/install.ps1 | iex
+    ```
+
+    Current builds are unsigned. Review a script before piping it to a shell, or download an installer and compare it with the release's `SHA256SUMS`.
+  </Step>
+
+  <Step title="Connect a tool-capable model">
+    Local Ollama is the default and requires no API key. If Ollama is not
+    running on this computer, use a hosted provider instead.
+
+    ```bash filename="terminal"
+    /login ollama-cloud key [api-key]
+    /model gemma4:31b
+    ```
+
+    Fella connects to `http://localhost:11434` by default. To use a hosted
+    provider, run `/login`, choose OpenAI, Vercel AI Gateway, xAI, Ollama Cloud,
+    OpenRouter, or a custom OpenAI-compatible endpoint, then use `/model` to
+    inspect the provider's current model list.
+
+    ```text filename="fella commands"
+    /login
+    /model
+    ```
+
+    Hosted providers receive prompts and tool results. Keys are stored in local `auth.json` with `0600` permissions where supported, not in the settings database, browser storage, or transcript.
+  </Step>
+
+  <Step title="Open a focused folder">
+    Choose **Open folder**, drag a folder into the window, or enter:
+
+    ```text filename="fella command"
+    /open /path/to/your/files
+    ```
+    or to open the file explorer:
+    ```text filename="fella command"
+    /open
+    ```
+
+    Start with a small folder containing only relevant files. Fella scans up to eight levels deep, skips hidden paths, does not follow links, and applies root `.fellaignore` name or path-prefix rules. A root `fella.md` supplies context and is not treated as evidence data.
+  </Step>
+
+  <Step title="Confirm what loaded">
+    Run `/files`.
+
+    ```text filename="fella commands"
+    /files
+    ```
+
+    Check skipped files, inferred types, units, date shapes, nulls, and ingest notes before trusting an aggregate. This catches the most common source problems earlier than a natural-language question does.
+  </Step>
+
+  <Step title="Ask and inspect">
+    Ask for a bounded outcome that names the measure and time range.
+
+    ```text filename="first question"
+    Using transactions.csv, compare total grocery spending in January and February 2025. Show both totals and the difference.
+    ```
+
+    Open the **working** fold under the response. Confirm the right source was selected, the query filters match your wording, units are correct, returned rows support the answer, and no verification warning needs attention.
+  </Step>
+</Steps>
+
+## What the shipped app can use
+
+| Capability | Current support | Qualification |
+| --- | --- | --- |
+| Desktop platforms | macOS 10.15+, Windows x64, Linux x86_64 with WebKitGTK 4.1 | Published macOS build is universal; Windows and Linux release jobs target x64 runners |
+| Delimited tables | `.csv`, `.tsv`, `.tab` | Loaded into SQLite; up to 2,000,000 rows per delimited file by default |
+| JSON tables | `.json`, `.ndjson`, `.jsonl` | Expected to contain tabular records |
+| Spreadsheets | `.xlsx`, `.xlsm`, `.xlsb`, `.xls` | Each usable sheet becomes a table |
+| Documents | `.pdf`, `.txt`, `.text`, `.md`, `.markdown`, `.log` | PDFs need an extractable text layer; there is no OCR |
+| Parquet | `.parquet`, `.pq` | Requires a custom `--features duckdb` build; not in release builds or CI |
+| Built-in tools | File listing, table inspection, read-only SQL, text search/read, Python, charts | The model chooses tools; general answers can use none |
+| Charts | Bar and line | Maximum 12 categories and 2 series |
+
+SQL result materialization is capped at 1,000 rows by default and a query is interrupted after 15 seconds. These are guardrails, not target dataset sizes.
+
+## A good first-question pattern
+
+```text
+Using [source], calculate [measure] for [scope].
+Compare/group it by [dimension]. Show [specific outputs].
+```
+
+However, the goal of fella is to eventually support looser question patterns such as
+
+```
+Did my spending go up or down from 2023 to 2024? How much and what caused it?
+```
+
+Specific wording reduces interpretation errors. If the answer matters, inspect the query rather than relying only on a green verification label.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Use task recipes" icon="list-checks" href="/examples">
+    Adapt tested prompt shapes to your own files.
+  </Card>
+  <Card title="Read the limits" icon="triangle-alert" href="/limitations">
+    Understand verification, Python, formats, and scale before relying on a result.
+  </Card>
+</CardGroup>

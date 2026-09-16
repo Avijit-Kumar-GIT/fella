@@ -1,0 +1,82 @@
+---
+title: "Using Fella"
+sidebarTitle: "Overview"
+description: "The complete path from a folder on disk to an auditable answer."
+icon: "compass"
+---
+
+Fella is a local-first desktop app for asking plain-language questions about files in a folder. It keeps model-written prose separate from the tool results and checks that support it.
+
+## Before you start
+
+- Open a folder containing a [supported table or document format](/developer-platform/using-fella/files).
+- Run local Ollama, or [connect a hosted provider](/developer-platform/using-fella/models).
+
+After this workflow, you can inspect the sources, computations, and verification findings behind an answer.
+
+## The four-part workflow
+
+<Steps>
+  <Step title="Open a workspace">
+    Choose a folder, drag it into the app, or use `/open`. Fella catalogs supported files and prepares tables and documents for read-only tools.
+  </Step>
+  <Step title="Ask a question">
+    Ask about tables, documents, trends, comparisons, joins, or correlations. SQL is the default computation path; Python is the escape hatch.
+  </Step>
+  <Step title="Inspect the evidence">
+    Open **Evidence** to see tool steps, queries or arguments, results, timings, and verification findings. Charts render below the answer.
+  </Step>
+  <Step title="Refine the workspace">
+    Ask a follow-up, add `fella.md` context, correct vocabulary, switch models, or open another conversation.
+  </Step>
+</Steps>
+
+## Choose a guide
+
+<CardGroup cols={2}>
+  <Card title="Open a folder" icon="folder-open" href="/developer-platform/using-fella/open-folder">
+    Workspace boundaries, scanning, `.fellaignore`, and the catalog.
+  </Card>
+  <Card title="Ask questions" icon="message-circle" href="/developer-platform/using-fella/asking-questions">
+    How to phrase questions and how Fella chooses SQL, documents, Python, and charts.
+  </Card>
+  <Card title="Read the evidence" icon="search-check" href="/developer-platform/using-fella/evidence">
+    Follow every computation and understand the verification checklist.
+  </Card>
+  <Card title="Understand files" icon="files" href="/developer-platform/using-fella/files">
+    Supported formats, table names, documents, and rescanning.
+  </Card>
+  <Card title="Add context and memory" icon="brain" href="/developer-platform/using-fella/context-and-memory">
+    Teach Fella your vocabulary without turning context into fake evidence.
+  </Card>
+  <Card title="Choose a model" icon="cpu" href="/developer-platform/using-fella/models">
+    Local Ollama, hosted providers, custom endpoints, and credential storage.
+  </Card>
+  <Card title="Manage sessions" icon="panels-top-left" href="/developer-platform/using-fella/sessions">
+    Tabs, the history sidebar, focus mode, retrying, and updates.
+  </Card>
+  <Card title="Commands and shortcuts" icon="book-open" href="/developer-platform/using-fella/commands">
+    The command palette, slash commands, and keyboard reference.
+  </Card>
+</CardGroup>
+
+## Product boundary
+
+The base agent has no tool that writes, moves, or deletes workspace files. The model chooses read-only tools; the data engine runs their computations and records evidence. Verification checks the completed answer, but it does not prove that a valid query interpreted an ambiguous question correctly.
+
+<Warning>
+  Python is restricted but not sandboxed. Hosted providers receive prompts and tool results, and enabled MCP connectors communicate with their configured services. Review [privacy and security](/developer-platform/using-fella/privacy) before using sensitive data.
+</Warning>
+
+<Note>
+  Fella answers questions about a workspace. It is not a general task agent, file manager, coding assistant, or cloud service.
+</Note>
+
+<CardGroup cols={2}>
+  <Card title="The harness, engine, and model" icon="layers" href="/concepts/triad">
+    The ownership boundaries behind the user workflow.
+  </Card>
+  <Card title="Extensions and MCP" icon="puzzle" href="/extensions-and-mcp">
+    Optional themes, skills, connectors, and augments.
+  </Card>
+</CardGroup>

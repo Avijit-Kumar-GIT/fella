@@ -1,12 +1,40 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "fella dev docs",
-  "description": "How fella is built: the harness/engine/model triad, for contributors.",
+  "theme": "aspen",
+  "name": "fella",
+  "description": "Documentation for Fella, a local-first desktop app for asking auditable questions about your own files.",
   "colors": {
     "primary": "#3fc7bc",
     "light": "#74d8cf",
     "dark": "#3fc7bc"
+  },
+  "favicon": "/favicon.svg",
+  "logo": {
+    "light": "/logo.svg",
+    "dark": "/logo.svg"
+  },
+  "icons": {
+    "library": "lucide"
+  },
+  "contextual": {
+    "options": ["copy", "view", "assistant"]
+  },
+  "navbar": {
+    "links": [
+      {
+        "label": "GitHub",
+        "href": "https://github.com/Avijit-Kumar-GIT/fella"
+      },
+      {
+        "label": "Releases",
+        "href": "https://github.com/Avijit-Kumar-GIT/fella/releases"
+      }
+    ],
+    "primary": {
+      "type": "button",
+      "label": "Download Fella",
+      "href": "https://github.com/Avijit-Kumar-GIT/fella/releases/latest"
+    }
   },
   "navigation": {
     "tabs": [
@@ -16,31 +44,109 @@
         "pages": ["index"]
       },
       {
-        "tab": "Developer Platform",
-        "icon": "code",
-        "pages": [
-          "getting-started",
+        "tab": "Getting started",
+        "icon": "play",
+        "groups": [
           {
-            "group": "Concepts",
+            "group": "Getting started",
+            "pages": ["getting-started"]
+          },
+          {
+            "group": "Recipes",
+            "pages": ["examples"]
+          },
+          {
+            "group": "Troubleshooting and limits",
+            "pages": ["troubleshooting", "limitations"]
+          }
+        ]
+      },
+      {
+        "tab": "Use Fella",
+        "icon": "compass",
+        "groups": [
+          {
+            "group": "Using Fella",
+            "pages": ["developer-platform/using-fella"]
+          },
+          {
+            "group": "Workspace",
+            "icon": "folder-open",
+            "pages": [
+              "developer-platform/using-fella/open-folder",
+              "developer-platform/using-fella/files",
+              "developer-platform/using-fella/context-and-memory"
+            ]
+          },
+          {
+            "group": "Ask and inspect",
+            "icon": "search-check",
+            "pages": [
+              "developer-platform/using-fella/asking-questions",
+              "developer-platform/using-fella/evidence"
+            ]
+          },
+          {
+            "group": "Models and sessions",
+            "icon": "cpu",
+            "pages": [
+              "developer-platform/using-fella/models",
+              "developer-platform/using-fella/sessions"
+            ]
+          },
+          {
+            "group": "Extensions",
+            "icon": "puzzle",
+            "pages": ["extensions-and-mcp"]
+          }
+        ]
+      },
+      {
+        "tab": "Concepts",
+        "icon": "layers",
+        "groups": [
+          {
+            "group": "How Fella works",
             "pages": [
               "concepts/triad",
               "concepts/harness",
               "concepts/engine",
-              "concepts/verification",
               "concepts/tools",
               "concepts/model-layer"
             ]
           },
-          "developer-platform/using-fella",
-          "other-resources/benchmarks",
-          "other-resources/evaluation",
-          "other-resources/contributing"
+          {
+            "group": "Trust and correctness",
+            "icon": "badge-check",
+            "pages": [
+              "concepts/verification",
+              "developer-platform/using-fella/privacy"
+            ]
+          }
         ]
       },
       {
-        "tab": "Extensions and MCP",
-        "icon": "puzzle-piece",
-        "pages": ["extensions-and-mcp"]
+        "tab": "Resources",
+        "icon": "book-open",
+        "groups": [
+          {
+            "group": "Reference",
+            "pages": ["developer-platform/using-fella/commands"]
+          },
+          {
+            "group": "Testing and evaluation",
+            "icon": "test-tube",
+            "pages": [
+              "other-resources/benchmarks",
+              "other-resources/evaluation"
+            ]
+          },
+          {
+            "group": "Project",
+            "icon": "git-pull-request",
+            "pages": ["other-resources/contributing"]
+          }
+        ]
       }
     ]
   },
@@ -48,5 +154,8 @@
     "socials": {
       "github": "https://github.com/Avijit-Kumar-GIT/fella"
     }
+  },
+  "styling": {
+    "eyebrows": "breadcrumbs"
   }
 }

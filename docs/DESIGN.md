@@ -30,6 +30,19 @@ blocks. There is no component library and no CSS framework; keep it that way.
   Fella would (`docs/*`, the `discoverability` rule in `CLAUDE.md`). No
   `auth.json`, `base_url`, "mcp pack" in anything on screen.
 
+## Entry UI boundary
+
+The entry experience stays minimal and clean: one primary folder action, one
+natural-language question surface, and only the small amount of readiness
+status needed to continue. Do not lead with a dashboard, catalog dump, raw SQL,
+settings screen, or provider mechanics.
+
+Deeper information is progressive disclosure, hidden by default and opened
+deliberately when the user wants it. The data catalog, ingestion notes, source
+mapping, samples, calculation details, raw SQL, and verification work belong in
+secondary views or disclosures. The release-level plan is in
+[`ANALYTICS-RELEASE.md`](ANALYTICS-RELEASE.md).
+
 ## Tokens (`src/app.css` `:root`)
 
 **Pack-overridable** a theme pack may replace these; keep the set in sync with

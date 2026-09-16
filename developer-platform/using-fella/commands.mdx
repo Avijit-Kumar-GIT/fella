@@ -1,0 +1,73 @@
+---
+title: "Commands and shortcuts"
+description: "Complete reference for Fella's slash commands and keyboard controls."
+icon: "command"
+---
+
+Commands are optional. Use buttons for common actions, type `/` for completions, or press `Ctrl+K` to search the built-in command palette.
+
+## Commands
+
+| Command | Action |
+| --- | --- |
+| `/open [path]` | Choose or open a workspace |
+| `/files` | List catalogued files and skipped files |
+| `/schema <name>` | Show a table's row count, column names, types, and null percentages |
+| `/sql <query>` | Run one read-only `SELECT` or `WITH` query directly and print its result |
+| `/reindex` | Scan the workspace again |
+| `/login [provider]` | List providers or connect one; use `/login <provider> key` to replace a saved key |
+| `/logout [provider] [forget]` | Stop using a provider; `forget` also deletes its saved key |
+| `/auth` | Show provider connection status |
+| `/model [name]` | Show available models or select a model for the current tab |
+| `/model <field> <value>` | Set `provider`, `base_url`, `model`, `embed_model`, or `key` |
+| `/memory [forget]` | View or clear learned folder notes |
+| `/context` | Edit `fella.md` |
+| `/packs [browse\|install\|add\|enable\|disable\|remove]` | List or manage packs |
+| `/connect [id] [off\|forget]` | List, connect, disconnect, or forget an MCP connector |
+| `/tab` | Open another conversation |
+| `/history [n]` | List archived conversations or reopen item `n` in a new tab |
+| `/clear` | Archive and restart the current conversation |
+| `/focus` | Toggle the plain view |
+| `/retry` | Ask the last question again |
+| `/update` | Check for and install a newer release |
+| `/help` | Print the command list |
+
+## Keyboard shortcuts
+
+| Key | Action |
+| --- | --- |
+| `Enter` | Send |
+| `Shift+Enter` | Insert a newline |
+| `Up` | Recall the last input |
+| `Ctrl+K` | Open the command palette |
+| `Ctrl+B` | Toggle the history sidebar |
+| `Ctrl+T` / `Ctrl+W` | New tab / close tab |
+| `Ctrl+1` through `Ctrl+9` | Switch tabs |
+| `Ctrl+L` | Clear the screen |
+| `Ctrl+Shift+F` | Toggle focus mode |
+| `Esc` | Stop a run, otherwise collapse evidence |
+
+<Warning>
+  Use `Ctrl`, including on macOS. Fella's handlers do not map these shortcuts to `Cmd`.
+</Warning>
+
+<Note>
+  `/sql` bypasses the model and prints a plain system result. Unlike an agent answer, it does not create an evidence fold or run post-answer verification.
+</Note>
+
+## Related in the docs
+
+| If you need... | Go to |
+| --- | --- |
+| Open, scan, or rescan a workspace | [Open a folder](/developer-platform/using-fella/open-folder) |
+| Keep conversations separate | [Tabs, history, and focus](/developer-platform/using-fella/sessions) |
+| Change the active model | [Models and providers](/developer-platform/using-fella/models) |
+
+<CardGroup cols={2}>
+  <Card title="Tabs, history, and focus" icon="panels-top-left" href="/developer-platform/using-fella/sessions">
+    Manage conversations without leaving the app.
+  </Card>
+  <Card title="Models and providers" icon="cpu" href="/developer-platform/using-fella/models">
+    Connect a local, hosted, or custom model.
+  </Card>
+</CardGroup>

@@ -155,7 +155,7 @@ own model. Slash commands below are a power-user shortcut; you never need them.
 | `/open` | Choose a folder (or use the button / drag one in). `/open <path>` skips the picker |
 | `/files` | List detected files and tables |
 | `/schema <name>` | Show a table's columns, types and null rates |
-| `/sql <query>` | Run SQL directly, bypassing the model (still recorded as evidence) |
+| `/sql <query>` | Run SQL directly, bypassing the model (plain result; no evidence fold or post-answer verification) |
 | `/login` `/logout` `/auth` | Sign in to a hosted provider (Vercel AI Gateway, OpenAI, xAI, Ollama Cloud, OpenRouter, or a custom OpenAI-compatible endpoint); list what's signed in |
 | `/model` | Show or change the LLM provider, base URL and model. Per-tab: each tab can run a different model, but all tabs share one login |
 | `/reindex` | Check the folder again for new or changed files |

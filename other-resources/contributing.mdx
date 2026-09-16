@@ -1,0 +1,113 @@
+---
+title: "Contributing"
+description: "Choose the app or pack lane, make a focused change, and verify the claims it affects."
+icon: "git-pull-request"
+---
+
+# Contribute without widening the base by accident
+
+Fella accepts app changes in this repository and pack changes in the separate extension repository. The split is determined by whether the compiled application must change.
+
+## Choose a contribution lane
+
+| Change | Repository | Review expectation |
+| --- | --- | --- |
+| Bug fix, UI, engine, verification, provider, parser, or built-in tool | [`fella`](https://github.com/Avijit-Kumar-GIT/fella) | App tests, design boundaries, and binary impact |
+| New augment capability | `fella` | It ships in every binary even if no pack enables it |
+| Theme, skill, MCP config, or manifest using an existing augment capability | [`fella-extensions`](https://github.com/Avijit-Kumar-GIT/fella-extensions) | Pack schema, content, provenance, and kind-specific rules |
+| New file format | `fella` | Parser and fixture tests; never a pack |
+
+A pack contains data only. If an idea needs executable behavior, a dependency, a new tool, or a new capability name, open an app issue before implementing it.
+
+## Prepare the development environment
+
+- Rust 1.88 or newer.
+- Node 22 or newer. CI currently uses Node 24.
+- pnpm 11.
+- Tauri system dependencies; Linux requires GTK 3 and WebKitGTK 4.1 development packages.
+- A model provider only for live app/evaluation work; deterministic tests do not need one.
+
+The [developer setup guide](https://github.com/Avijit-Kumar-GIT/fella/blob/main/docs/DEV_SETUP.md) lists platform packages and provider setup.
+
+```bash filename="terminal"
+git clone https://github.com/Avijit-Kumar-GIT/fella
+cd fella
+pnpm install
+pnpm tauri dev
+```
+
+## Make a focused app change
+
+<Steps>
+  <Step title="Read the maintained boundary">
+    Start with the [architecture](https://github.com/Avijit-Kumar-GIT/fella/blob/main/docs/ARCHITECTURE.md), [design rules](https://github.com/Avijit-Kumar-GIT/fella/blob/main/docs/DESIGN.md), [non-goals](https://github.com/Avijit-Kumar-GIT/fella/blob/main/docs/NON-GOALS.md), and [extension contract](https://github.com/Avijit-Kumar-GIT/fella/blob/main/docs/EXTENSIBILITY.md).
+  </Step>
+  <Step title="Choose the smallest implementation">
+    Preserve the fixed base tool set and normal read-only analytics path. Prefer a focused parser, check, or interaction improvement over a parallel feature surface.
+  </Step>
+  <Step title="Add the matching test">
+    Use a deterministic fixture for engine behavior and a reproducible eval case only when the claim depends on model interpretation. Do not treat one live provider response as a regression test.
+  </Step>
+  <Step title="Run all four gates">
+    Run the commands below with the default SQLite features.
+  </Step>
+  <Step title="Document changed claims">
+    Update maintained architecture when structure changes and add a dated decision entry when a design decision changes. Keep benchmark fixture, generator, and grader changes together.
+  </Step>
+</Steps>
+
+## Required local gates
+
+```bash filename="from src-tauri"
+cargo test --locked
+cargo clippy --all-targets --locked -- -D warnings
+```
+
+```bash filename="from repository root"
+pnpm run check
+pnpm run build
+```
+
+Do not add `--features duckdb` to the normal gate. DuckDB is neither built nor tested by CI; it is an opt-in backend with known parity gaps and a resource-heavy bundled build.
+
+## Security review prompts
+
+Before opening a PR, ask:
+
+- Does this expose a new filesystem or network path?
+- Can model-controlled input reach a shell, Python, URL, SQL, or renderer?
+- Does it change which prompt or tool result a hosted provider sees?
+- Does it store a credential in `auth.json` rather than settings, browser storage, or transcripts?
+- Does a read-only claim need qualification for Python, MCP, or an augment view?
+- Does a verification change detect semantic errors, or only grounding/replay patterns?
+
+State the actual boundary in docs and tests rather than broadening a guarantee.
+
+## Submit a pack
+
+Use the extension repository's templates and kind-specific rules. Test a local directory without publishing it:
+
+```text filename="fella command"
+/packs add /path/to/fella-extensions/packs/my-pack
+```
+
+Side-loaded packs are marked **unverified** because they lack marketplace review provenance. Catalog installation additionally checks each downloaded file against its listed SHA-256 hash. Hash verification and maintainer review are separate, and neither guarantees a remote MCP service.
+
+## Open the pull request
+
+1. Branch from `main` and keep one logical change per PR.
+2. Use the repository's Conventional Commit style, such as `fix(agent): ...` or `docs: ...`.
+3. Explain the user outcome, contribution lane, design boundary, and verification performed.
+4. Include tests and maintained documentation updates in the same PR.
+5. Follow [`CONTRIBUTING.md`](https://github.com/Avijit-Kumar-GIT/fella/blob/main/CONTRIBUTING.md) and the PR template.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Choose a test layer" icon="test-tube" href="/other-resources/evaluation">
+    Match deterministic tests and live evaluation to the claim.
+  </Card>
+  <Card title="Write a pack" icon="package-plus" href="https://github.com/Avijit-Kumar-GIT/fella-extensions">
+    Follow the separate pack schema and review workflow.
+  </Card>
+</CardGroup>

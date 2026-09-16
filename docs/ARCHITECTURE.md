@@ -77,7 +77,7 @@ src-tauri/src/
                                            sqlite: Mutex<Connection>, inner: Mutex<Inner>,
                                            http: reqwest::Client, secrets: Secrets,
                                            data_dir, cancel: AtomicBool }
-    catalog.rs               walk workspace (depth ≤ 3), classify, slugify names, dedupe;
+    catalog.rs               walk workspace (depth ≤ 8), classify, slugify names, dedupe;
                              honour .fellaignore; skip a root fella.md
     analytics/                the engine: deterministic compute + verification, no LLM
                              calls, no Tauri/IPC, no conversation state. The one seam
@@ -89,7 +89,7 @@ src-tauri/src/
         mod.rs                 DataEngine trait + shared read-only guard, quote_ident
         sqlite.rs              default engine: type sniff → CREATE TABLE + bulk INSERT
         duck.rs                #[cfg(feature="duckdb")] engine: read_*_auto views
-      pyexec.rs               run_python's subprocess sandbox; stdlib pearsonr/linregress
+      pyexec.rs               run_python's best-effort subprocess guardrails; stdlib pearsonr/linregress
                              preamble (no scipy/numpy dependency)
       chart.rs                ChartData/Series/ChartKind + validate() (flat/degenerate
                              data refused before it reaches the UI)
@@ -109,17 +109,17 @@ src-tauri/src/
                              extensions (installed packs)
     extensions.rs            packs: theme / skill / mcp manifest, install, enable
     mcp.rs                   #[cfg(feature="mcp")] rmcp client + our HTTP backend
-    agent.rs                 the harness: reasoning loop + system prompt
-                             (`PromptProfile`); the only place that calls the model.
-                             Owns no compute of its own -- calls into `analytics::*`
+     agent.rs                 the interactive harness: reasoning loop + system prompt
+                              (`PromptProfile`); owns no compute of its own and calls
+                              into `analytics::*`
     evidence.rs              EvidenceItem / Answer / AskEvent types
     tools.rs                 Tool trait, Registry, JSON-Schema export; the 7 built-ins
     memory.rs                per-folder learned notes (memory.md); FELLA_MEMORY
 ```
 
-**Harness vs. engine, explicitly:** `agent.rs` is the harness — it owns the
-reasoning loop, the system prompt, and the only LLM call site, and has no
-compute of its own. `engine/analytics/` is the engine — deterministic SQL/
+**Harness vs. engine, explicitly:** `agent.rs` is the interactive harness — it
+owns the reasoning loop, the system prompt, and the model turns for a product
+answer, and has no compute of its own. `engine/analytics/` is the engine — deterministic SQL/
 stats/chart/verification logic with no knowledge that a model or a loop
 exists. The engine supplies the harness, never the reverse; `AnalyticsSource`
 is the one seam between them. See `docs/GOALS.md` and `docs/LIGHTWEIGHT.md`
@@ -133,7 +133,7 @@ for the philosophy and scope behind that split.
 free functions live in `data/mod.rs`: the read-only guard (`ensure_read_only`),
 `quote_ident`.
 
-**Catalog scan** (`catalog.rs`): walk the chosen folder, depth ≤ 3, skip dotfiles,
+**Catalog scan** (`catalog.rs`): walk the chosen folder, depth ≤ 8, skip dotfiles,
 honour an optional `.fellaignore`, and skip a root `fella.md` (that is user
 context, not data see `EXTENSIBILITY.md`). Classify by extension. Each tabular
 file becomes a table named after the slugified stem (collisions get a numeric
@@ -167,10 +167,11 @@ needs `pip install duckdb`.
 `LlmClient` (`llm.rs`) one struct, branching on the provider's `wire`:
 
 - **Ollama wire** → `POST {base}/api/chat` with `tools`, `stream: true`
-  (tokens forwarded over a Tauri `Channel`). Default `base =
+  (the harness forwards deltas over a Tauri `Channel`). Default `base =
   http://localhost:11434`, no key.
-- **OpenAI wire** → `POST {base}/chat/completions`, buffered (their streaming
-  fragments tool calls); the assembled reply is handed to the same delta hook.
+- **OpenAI wire** → `POST {base}/chat/completions`, streamed as SSE. The client
+  reassembles content and split tool-call fragments, then hands the normalized
+  reply to the same harness path.
 
 Providers are one row each in `provider.rs` `PROVIDERS` (`id`, `display`, `auth`,
 `base_url`, `wire`, …); adding an OpenAI-compatible endpoint needs no other Rust
@@ -189,7 +190,7 @@ run(question):
   loop up to max_steps() (MAX_STEPS = 20, FELLA_MAX_STEPS overrides):
     resp = llm.chat(msgs, tool_schemas)            # raced against a cancel flag
     if not resp.tool_calls:
-      return finish(resp.text)                     # verify + AnswerDone
+     return finish(resp.content)                  # verify + AnswerDone
     for call:
       out = registry.run(call.name, args)          # built-in, then MCP; the only data access
       evidence.push({ tool, args, note, sql?, rows, result_summary, output, ms, error })
@@ -199,6 +200,11 @@ run(question):
 
 finish(text): verification = verify(text, evidence); emit AnswerDone
 ```
+
+The evaluation-only `EngineState::ask_once` and `ask_once_usage` helpers call
+the same `LlmClient` directly for judge/baseline measurements. They have no
+tools, workspace context, evidence fold, or product UI path; they are not an
+alternative interactive harness.
 
 **System prompt** (`agent.rs`, sections gated by `PromptProfile` — droppable
 via `FELLA_PROMPT_DROP` for eval ablation): never state a figure not returned
@@ -217,7 +223,7 @@ turns up something genuinely notable. A "Your context" block from `fella.md`
 added when an `mcp` pack is connected.
 
 **Verification pass** (`analytics::verify`, deterministic; one bounded
-re-ask on a hard fail — `FELLA_VERIFY_REASK`): re-execute any SQL cited in
+corrective re-ask only when a cited SQL rerun changes or fails — `FELLA_VERIFY_REASK`): re-execute any SQL cited in
 the answer and confirm the headline value is unchanged; confirm every table
 named in cited SQL exists in the catalog; flag numerals in the answer that
 appear in no tool result; flag a `SUM`/`AVG` over a text column, and an
@@ -240,9 +246,9 @@ enabled `mcp` pack (`mcp.rs`, held in a separate `Registry.mcp` list).
 | `list_files` | | workspace files: kind, row count / size, which table each maps to |
 | `inspect_table` | `name`, `rows=5` | per column: type, null %, distinct, min/max; plus the first `rows` rows (0-50). Merged `describe_schema` + `sample_rows` (2026-09-08) |
 | `run_sql` | `sql` | columns + rows (capped), row_count, ms. Read-only guard: single SELECT/WITH statement; rejects DDL/DML/`ATTACH`/`COPY`/`INSTALL`, `read_text`/`read_blob`/`glob`; a watchdog interrupts a runaway query (`FELLA_QUERY_TIMEOUT_SECS`, 15 s) |
-| `grep_files` | `pattern`, `max_hits=30` | matching lines (file + line) from every catalogued document, case-insensitive regex. No index |
-| `read_file` | `name` | full extracted text of one document, capped ~12k chars |
-| `run_python` | `code` | stdout / stderr / created files. `python3 -I` in a fresh temp cwd, env stripped, no network, wall-clock timeout, `RLIMIT_AS`/`RLIMIT_CPU` (best-effort not a hostile-code sandbox; the user analyses their own data). Preamble exposes `sql(q)` → a DataFrame (SQLite backend uses stdlib `sqlite3`, no `pip`) and stdlib `pearsonr(x, y)` / `linregress(x, y)` (no scipy/numpy) |
+| `grep_files` | `pattern`, `max_hits=30` (max 100) | matching lines (file + line) from every catalogued document, case-insensitive regex. No index |
+| `read_file` | `name` or `names` | extracted text by catalogued name, capped 12k chars per document and 16k combined for a multi-file call |
+| `run_python` | `code` | stdout / stderr. `python3 -I` in a fresh temp cwd, env stripped, 20 s wall-clock timeout, `RLIMIT_AS`/`RLIMIT_CPU`/`RLIMIT_FSIZE` on Unix (best-effort guard rail, not a hostile-code sandbox; filesystem reads outside the workspace and network access remain possible; temporary files are removed afterward). Preamble exposes `sql(q)` → a DataFrame (SQLite backend uses stdlib `sqlite3`, no `pip`) and stdlib `pearsonr(x, y)` / `linregress(x, y)` (no scipy/numpy) |
 | `make_chart` | `kind`, `labels`, `series` | a validated bar/line chart (`analytics::chart`) — refuses flat/degenerate data server-side rather than rendering a useless chart |
 
 Every tool call takes an optional plain-language `note` (shown in the evidence

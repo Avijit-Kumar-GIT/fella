@@ -1,0 +1,100 @@
+---
+title: "Benchmarks"
+description: "Reproduce and interpret Fella's dated harness-comparison measurements."
+icon: "flask-conical"
+---
+
+# Measure the harness, not a promise
+
+Fella compares the same model under two conditions: `bare`, where fixture files are placed in the prompt without tools, and `fella`, where the model drives Fella's deterministic tool loop. The paired difference asks whether the harness helped that model on that battery.
+
+## What is measured
+
+| Metric | Meaning | Interpretation limit |
+| --- | --- | --- |
+| Accuracy | Cases correct by majority across iterations | Depends on the fixture and grader |
+| Consistency | Cases correct on every iteration | Does not measure correctness outside the battery |
+| Delta accuracy | `fella` accuracy minus `bare` accuracy | Percentage points, not percent growth |
+| Delta 95% CI | Paired bootstrap interval over cases | An interval crossing zero is inconclusive |
+| Tokens per correct | Input plus output tokens for correct cases | Provider accounting can differ |
+| Wasted calls | Tool calls that did not contribute | Heuristic classification |
+| Round trips | Model-call proxy for latency | Not wall-clock performance |
+| Self-catch rate | Wrong answers flagged by verification | Only tests failures represented in the run |
+| Policy adherence | Whether unsupported forecasts are declined | Remains model-dependent |
+
+## Current batteries
+
+| Battery | Current shape | Coverage |
+| --- | --- | --- |
+| `bench/folder-qa/` | 66 cases today; published lift result used its earlier 64-case version | Everyday lookup, aggregate, text search, small joins, distractors, and refusal cases across personal-data domains |
+| `bench/folder-qa-hard/` | 16 cases | Rank-2 queries, conversion, compound filters, non-standard dates, five-file synthesis, and chart grading |
+
+The easy battery covers CSV, TSV, JSON, NDJSON/JSONL, Markdown, XLSX, PDF, and plain text. Gold values are generated from fixtures rather than manually copied into the grader. The hard battery reuses tabular/text fixtures and does not add XLSX or PDF cases.
+
+## Run the paired comparison
+
+Use a copy of the Fella app-data directory containing the settings and provider credentials needed by the evaluation. Do not point evaluation at live app state.
+
+```bash filename="terminal"
+cd src-tauri
+
+AGENT_EVAL_DATA_DIR=/tmp/fella-eval \
+  cargo run --release --features eval --example agent_eval -- bench \
+  --dir ../bench/folder-qa \
+  --harness fella \
+  --iters 3 \
+  --models "ollama-cloud/gemma4:31b" \
+  --json ../bench/folder-qa/out/fella.json
+```
+
+Repeat with `--harness bare`, using the same cases, model, and iteration count. Then aggregate the pair from the repository root:
+
+```bash filename="terminal"
+python3 bench/aggregate.py --lift \
+  --bare bench/folder-qa/out/bare.json \
+  --fella bench/folder-qa/out/fella.json
+```
+
+<Warning>
+  Do not run concurrent evaluations against the same `AGENT_EVAL_DATA_DIR`. They share provider/model state. Give each process its own copied data directory and `TMPDIR`.
+</Warning>
+
+## Dated reference results
+
+### 64-case lift run, 2026-09-10
+
+The run measured both conditions successfully for 10 models. One additional model's tool-calling endpoint failed too often to produce a Fella result and was excluded from the paired rollup.
+
+| Condition | Aggregate accuracy |
+| --- | ---: |
+| Bare model | 68% |
+| Fella harness | 96% |
+| Mean paired lift | +27.5 percentage points |
+
+Nine of the ten measured per-model confidence intervals excluded zero. `muse-glimmer-30b` measured +6 points with a `[-9, +22]` interval, so that model's observed lift was inconclusive. Across 640 Fella answers, 28 were wrong and verification hard-failed none of them; most were valid, grounded computations that answered the wrong interpretation. This is direct evidence that verification is not a correctness oracle.
+
+### 16-case hard run, 2026-09-12
+
+`ollama-cloud/gemma4:31b` and `openrouter/openai/gpt-5.6-luna` each scored 16/16 by majority across three iterations after grader defects found in earlier passes were fixed. One gemma iteration still exposed a real case-sensitive-filter failure that majority voting hid. The result showed that this battery did not create headroom for those two models, not that harder personal analytics is solved.
+
+## Read results correctly
+
+1. Record the date, commit, provider, endpoint, model ID, battery revision, harness condition, and iteration count.
+2. Treat one case in a 64-case battery as about 1.6 percentage points.
+3. Separate model/endpoint failures from graded wrong answers.
+4. Inspect per-case evidence; a headline score can hide repeated minority failures.
+5. Regenerate gold data after fixture changes and commit fixture, generator, and grading changes together.
+6. Do not compare a new 66-case run directly with the published 64-case result without accounting for the added cases.
+
+These results are dated measurements, not guarantees for another model, endpoint, folder, prompt, or Fella revision. See the maintained [harness comparison](https://github.com/Avijit-Kumar-GIT/fella/blob/main/docs/HARNESS-COMPARISON.md) for the full model table, failure analysis, and current commands.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Understand test layers" icon="test-tube" href="/other-resources/evaluation">
+    Separate deterministic regression tests from stochastic live evaluation.
+  </Card>
+  <Card title="Review answer limits" icon="triangle-alert" href="/limitations#correctness-and-evidence">
+    See why grounded, replayable output can still be wrong.
+  </Card>
+</CardGroup>
