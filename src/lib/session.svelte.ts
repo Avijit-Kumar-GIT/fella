@@ -11,6 +11,8 @@
 import { ipc, isTauri } from './ipc';
 import type {
 	AugmentConfig,
+	AnalysisArtifact,
+	Answer,
 	Catalog,
 	InstalledPack,
 	Message,
@@ -29,6 +31,7 @@ const PREFIX = 'fella:conversation:'; // one key per tab: fella:conversation:<id
 const LEGACY_KEY = 'fella:conversation'; // the single pre-tabs blob
 const INDEX_KEY = 'fella:tabs'; // JSON array of open tab ids
 const SIDEBAR_KEY = 'fella:sidebar-collapsed';
+const ANALYSES_KEY = 'fella:analyses';
 
 function readSidebarCollapsed(): boolean {
 	try {
@@ -36,6 +39,18 @@ function readSidebarCollapsed(): boolean {
 		return v === null ? false : v === '1';
 	} catch {
 		return false;
+	}
+}
+
+function readAnalyses(): AnalysisArtifact[] {
+	if (typeof localStorage === 'undefined') return [];
+	try {
+		const raw = localStorage.getItem(ANALYSES_KEY);
+		if (!raw) return [];
+		const parsed: unknown = JSON.parse(raw);
+		return Array.isArray(parsed) ? (parsed as AnalysisArtifact[]) : [];
+	} catch {
+		return [];
 	}
 }
 
@@ -148,9 +163,16 @@ export class AugmentTab {
 }
 
 export type Tab = Conversation | AugmentTab;
+export type WorkspaceView = 'home' | 'ask' | 'sources' | 'analyses' | 'context';
 
 class Session {
 	catalog = $state<Catalog>({ workspace: null, sources: [] });
+	/** The lightweight workspace surface currently shown beside the tab state. */
+	workspaceView = $state<WorkspaceView>('ask');
+	/** Personal saved analyses. These stay local until a durable artifact store
+	 *  exists; the answer itself remains the source of truth for its details. */
+	analyses = $state<AnalysisArtifact[]>(readAnalyses());
+	selectedAnalysisId = $state<string | null>(null);
 	/** Folder from the last session, if it still exists shown on the welcome
 	 *  screen as a one-click "reopen". Fella no longer opens it automatically. */
 	lastFolder = $state<string | null>(null);
@@ -191,6 +213,65 @@ class Session {
 		} catch {
 			/* ignore */
 		}
+	}
+
+	setWorkspaceView(view: WorkspaceView): void {
+		this.workspaceView = view;
+		// An augment is an editor surface, but Ask should always return to a
+		// conversation rather than leaving the user on a hidden file tab.
+		if (view === 'ask' && this.activeTab.kind === 'augment') {
+			const chat = this.tabs.findIndex((t) => t.kind === 'chat');
+			if (chat >= 0) this.active = chat;
+		}
+	}
+
+	/** Focus a tab and show the surface that belongs to it. Chat and ordinary
+	 *  augment tabs live in Ask; the context augment has its own workspace pane. */
+	activateTab(index: number): void {
+		const tab = this.tabs[index];
+		if (!tab) return;
+		this.active = index;
+		this.workspaceView = tab.kind === 'augment' && tab.command === 'context' ? 'context' : 'ask';
+	}
+
+	selectAnalysis(id: string | null): void {
+		this.selectedAnalysisId = id;
+	}
+
+	isAnalysisSaved(messageId: string): boolean {
+		return this.analyses.some((analysis) => analysis.message_id === messageId);
+	}
+
+	saveAnalysis(messageId: string, question: string, answer: Answer): AnalysisArtifact {
+		const existing = this.analyses.find((analysis) => analysis.message_id === messageId);
+		const cleanQuestion = question.replace(/\s+/g, ' ').trim();
+		const title = cleanQuestion
+			? cleanQuestion.length > 72
+				? cleanQuestion.slice(0, 69) + '…'
+				: cleanQuestion
+			: 'Saved analysis';
+		// Answers are reactive objects while the transcript is alive. Take a
+		// serializable snapshot so later streaming updates cannot mutate an
+		// artifact that the user already saved.
+		const answerSnapshot = JSON.parse(JSON.stringify(answer)) as Answer;
+		const artifact: AnalysisArtifact = {
+			id: existing?.id ?? uid(),
+			message_id: messageId,
+			title,
+			question: cleanQuestion || 'Saved analysis',
+			answer: answerSnapshot,
+			created_at_ms: existing?.created_at_ms ?? Date.now()
+		};
+		this.analyses = [artifact, ...this.analyses.filter((item) => item.message_id !== messageId)];
+		this.selectedAnalysisId = artifact.id;
+		this.#writeAnalyses();
+		return artifact;
+	}
+
+	deleteAnalysis(id: string): void {
+		this.analyses = this.analyses.filter((analysis) => analysis.id !== id);
+		if (this.selectedAnalysisId === id) this.selectedAnalysisId = this.analyses[0]?.id ?? null;
+		this.#writeAnalyses();
 	}
 
 	get activeTab(): Tab {
@@ -278,7 +359,7 @@ class Session {
 		const c = new Conversation();
 		c.model = inherit;
 		this.tabs.push(c);
-		this.active = this.tabs.length - 1;
+		this.activateTab(this.tabs.length - 1);
 		this.#writeIndex();
 	}
 
@@ -303,7 +384,7 @@ class Session {
 		// A reloaded transcript never has a run in flight.
 		c.messages = messages.map((m) => (m.pending ? { ...m, pending: false } : m));
 		this.tabs.push(c);
-		this.active = this.tabs.length - 1;
+		this.activateTab(this.tabs.length - 1);
 		this.#writeIndex();
 	}
 
@@ -329,12 +410,12 @@ class Session {
 	async openAugment(cfg: AugmentConfig): Promise<void> {
 		const existing = this.tabs.findIndex((t) => t.kind === 'augment' && t.file === cfg.file);
 		if (existing >= 0) {
-			this.active = existing;
+			this.activateTab(existing);
 			return;
 		}
 		const tab = new AugmentTab(cfg);
 		this.tabs.push(tab);
-		this.active = this.tabs.length - 1;
+		this.activateTab(this.tabs.length - 1);
 		this.#writeIndex();
 		if (!isTauri()) return;
 		try {
@@ -349,6 +430,7 @@ class Session {
 	async closeTab(i: number): Promise<void> {
 		const tab = this.tabs[i];
 		if (!tab) return;
+		const closingContext = tab.kind === 'augment' && tab.command === 'context';
 		if (tab.kind === 'chat') {
 			await this.#archive(tab);
 			tab.dropSnapshot();
@@ -363,6 +445,7 @@ class Session {
 		}
 		this.tabs.splice(i, 1);
 		if (this.tabs.length === 0) this.tabs.push(new Conversation());
+		if (closingContext && this.workspaceView === 'context') this.workspaceView = 'ask';
 		// Keep the focus on the same tab where possible: shift left if we closed
 		// one before it, then clamp.
 		if (this.active > i) this.active -= 1;
@@ -473,6 +556,14 @@ class Session {
 			localStorage.setItem(INDEX_KEY, JSON.stringify(this.tabs.map((t) => t.id)));
 		} catch {
 			/* ignore */
+		}
+	}
+
+	#writeAnalyses(): void {
+		try {
+			localStorage.setItem(ANALYSES_KEY, JSON.stringify(this.analyses));
+		} catch {
+			/* a full or unavailable local store should not interrupt a conversation */
 		}
 	}
 

@@ -18,10 +18,10 @@
 		if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
 			e.preventDefault();
 			const n = session.tabs.length;
-			session.active = (i + (e.key === 'ArrowRight' ? 1 : n - 1)) % n;
+			session.activateTab((i + (e.key === 'ArrowRight' ? 1 : n - 1)) % n);
 		} else if (e.key === 'Enter' || e.key === ' ') {
 			e.preventDefault();
-			session.active = i;
+			session.activateTab(i);
 		}
 	}
 </script>
@@ -34,7 +34,7 @@
 			role="tab"
 			aria-selected={i === session.active}
 			tabindex={i === session.active ? 0 : -1}
-			onclick={() => (session.active = i)}
+			onclick={() => session.activateTab(i)}
 			onkeydown={(e) => onKey(e, i)}
 			data-tauri-drag-region="false"
 		>

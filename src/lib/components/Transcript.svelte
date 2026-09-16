@@ -3,6 +3,7 @@
 	import { session } from '$lib/session.svelte';
 	import { isTauri, openExternal } from '$lib/ipc';
 	import { fadeQuick } from '$lib/motion';
+	import type { Message as MessageData } from '$lib/types';
 	import Icon from './Icon.svelte';
 	import Message from './Message.svelte';
 
@@ -76,6 +77,18 @@
 
 	function toggle(id: string) {
 		expanded = { ...expanded, [id]: !expanded[id] };
+	}
+
+	function questionFor(index: number): string {
+		for (let i = index - 1; i >= 0; i--) {
+			if (session.messages[i]?.role === 'user') return session.messages[i].text;
+		}
+		return '';
+	}
+
+	function saveAnswer(message: MessageData, index: number): void {
+		if (!message.answer) return;
+		session.saveAnalysis(message.id, questionFor(index), message.answer);
 	}
 
 	let stick = true;
@@ -313,8 +326,14 @@
 		{#key session.active}
 			<div class="stream" in:fadeQuick>
 				<svelte:boundary>
-					{#each session.messages as m (m.id)}
-						<Message message={m} expanded={!!expanded[m.id]} ontoggle={() => toggle(m.id)} />
+					{#each session.messages as m, i (m.id)}
+						<Message
+							message={m}
+							expanded={!!expanded[m.id]}
+							ontoggle={() => toggle(m.id)}
+							onsave={m.answer && !m.pending ? () => saveAnswer(m, i) : undefined}
+							saved={m.role === 'assistant' ? session.isAnalysisSaved(m.id) : false}
+						/>
 					{/each}
 					{#snippet failed(error)}
 						<pre class="boundary-err">The transcript hit a render error:

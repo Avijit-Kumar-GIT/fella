@@ -69,6 +69,18 @@ export interface Answer {
 	usage?: { prompt_tokens: number; completion_tokens: number };
 }
 
+/** A personal workspace artifact saved from one completed answer. Kept in the
+ *  local UI store for now; the answer already carries its workspace snapshot,
+ *  evidence, query, and chart data. */
+export interface AnalysisArtifact {
+	id: string;
+	message_id: string;
+	title: string;
+	question: string;
+	answer: Answer;
+	created_at_ms: number;
+}
+
 export interface Message {
 	id: string;
 	role: Role;

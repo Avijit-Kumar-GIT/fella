@@ -1,9 +1,12 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import CommandPalette from '$lib/components/CommandPalette.svelte';
+	import AnalysesView from '$lib/components/AnalysesView.svelte';
 	import Composer from '$lib/components/Composer.svelte';
+	import HomeView from '$lib/components/HomeView.svelte';
 	import Icon from '$lib/components/Icon.svelte';
 	import Sidebar from '$lib/components/Sidebar.svelte';
+	import SourcesView from '$lib/components/SourcesView.svelte';
 	import Titlebar from '$lib/components/Titlebar.svelte';
 	import Transcript from '$lib/components/Transcript.svelte';
 	import AugmentView from '$lib/components/AugmentView.svelte';
@@ -19,6 +22,7 @@
 	let dragging = $state(false);
 
 	let activeTab = $derived(session.activeTab);
+	let activeView = $derived(session.workspaceView);
 
 	async function refreshHealth() {
 		if (!isTauri()) return;
@@ -106,6 +110,7 @@
 			session.toggleSidebar();
 		} else if (e.ctrlKey && (e.key === 't' || e.key === 'T')) {
 			e.preventDefault();
+			session.setWorkspaceView('ask');
 			session.newTab();
 			composer?.focus();
 		} else if (e.ctrlKey && (e.key === 'w' || e.key === 'W')) {
@@ -116,7 +121,7 @@
 			const i = Number(e.key) - 1;
 			if (i < session.tabs.length) {
 				e.preventDefault();
-				session.active = i;
+				session.activateTab(i);
 				composer?.focus();
 			}
 		} else if (e.ctrlKey && e.shiftKey && (e.key === 'f' || e.key === 'F')) {
@@ -163,9 +168,18 @@
 			'/focus',
 			'/context'
 		];
-		composer?.setText(noArg.includes(cmd) ? cmd : cmd + ' ');
-		composer?.focus();
+		session.setWorkspaceView('ask');
+		const text = noArg.includes(cmd) ? cmd : cmd + ' ';
+		queueMicrotask(() => {
+			composer?.setText(text);
+			composer?.focus();
+		});
 	}
+
+	$effect(() => {
+		activeView;
+		if (activeView === 'ask') queueMicrotask(() => composer?.focus());
+	});
 
 	// A screen reader gets nothing during a run otherwise (the answer streams
 	// into a div it isn't watching). Announce what Fella is doing, and that the
@@ -186,7 +200,13 @@
 	<div class="app" class:focus={session.focus}>
 		<Titlebar onpalette={() => (paletteOpen = true)} />
 		<main>
-			{#if activeTab.kind === 'augment'}
+			{#if activeView === 'home'}
+				<HomeView />
+			{:else if activeView === 'sources'}
+				<SourcesView />
+			{:else if activeView === 'analyses'}
+				<AnalysesView />
+			{:else if activeTab.kind === 'augment'}
 				{#key activeTab.id}
 					<AugmentView tab={activeTab} />
 				{/key}
@@ -195,7 +215,7 @@
 			{/if}
 		</main>
 		<div class="dock">
-			{#if activeTab.kind !== 'augment'}
+			{#if activeView === 'ask' && activeTab.kind !== 'augment'}
 				<Composer bind:this={composer} onafterrun={refreshHealth} />
 			{/if}
 		</div>

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { ipc, isTauri } from '$lib/ipc';
-	import { baseName, errMsg, openFolder, relativeAge } from '$lib/commands';
+	import { baseName, errMsg, openContext, openFolder, relativeAge } from '$lib/commands';
 	import { session } from '$lib/session.svelte';
 	import type { ConversationSummary, Message } from '$lib/types';
 	import Icon from './Icon.svelte';
@@ -10,6 +10,18 @@
 	let query = $state('');
 	let searchOpen = $state(false);
 	let searchInput = $state<HTMLInputElement | null>(null);
+	let folderName = $derived(
+		session.catalog.workspace?.replace(/[/\\]+$/, '').replace(/^.*[/\\]/, '') ?? ''
+	);
+	let fileCount = $derived(session.catalog.sources.length);
+	let analysisCount = $derived(
+		session.analyses.filter(
+			(analysis) =>
+				!session.catalog.workspace ||
+				!analysis.answer.workspace?.path ||
+				analysis.answer.workspace.path === session.catalog.workspace
+		).length
+	);
 
 	function toggleSearch() {
 		searchOpen = !searchOpen;
@@ -32,13 +44,15 @@
 		void refresh();
 	});
 
-	/** A custom name, if renamed; otherwise "folder — first message" -- the
-	 *  folder is what actually distinguishes two similarly-phrased
-	 *  conversations. */
+	/** Keep the question as the primary history label. Workspace identity lives
+	 *  in the workspace card and only appears in a row when it disambiguates a
+	 *  conversation from the currently open folder. */
 	function title(c: ConversationSummary): string {
-		if (c.title) return c.title;
-		const folder = c.workspace ? baseName(c.workspace) : 'No project';
-		return `${folder} — ${c.preview}`;
+		return c.title ?? c.preview;
+	}
+
+	function conversationWorkspace(c: ConversationSummary): string {
+		return c.workspace ? baseName(c.workspace) : 'No workspace';
 	}
 
 	let renamingId = $state<string | null>(null);
@@ -104,6 +118,7 @@
 
 	async function open(c: ConversationSummary) {
 		try {
+			session.setWorkspaceView('ask');
 			const raw = await ipc.conversationLoad(c.id);
 			const saved: { workspace?: string | null; messages?: unknown; title?: string | null } =
 				JSON.parse(raw);
@@ -145,7 +160,10 @@
 				type="button"
 				aria-label="New conversation"
 				title="New conversation"
-				onclick={() => session.newTab()}
+				onclick={() => {
+					session.setWorkspaceView('ask');
+					session.newTab();
+				}}
 			>
 				<Icon name="plus" size={15} />
 			</button>
@@ -173,6 +191,96 @@
 			/>
 		</div>
 	{/if}
+	<div class="workspace-block">
+		<div class="section-label">Workspace</div>
+		{#if session.catalog.workspace}
+			<div class="workspace-card" title={session.catalog.workspace}>
+				<span class="workspace-mark"><Icon name="folder" size={15} /></span>
+				<span class="workspace-copy">
+					<strong>{folderName}</strong>
+					<span>{fileCount} file{fileCount === 1 ? '' : 's'} ready</span>
+				</span>
+				<button
+					class="change-folder"
+					type="button"
+					aria-label="Change workspace folder"
+					title="Change folder"
+					onclick={() => void openFolder()}
+				>
+					<Icon name="chevron-right" size={13} />
+				</button>
+			</div>
+		{:else}
+			<button class="workspace-empty" type="button" onclick={() => void openFolder()}>
+				<span class="workspace-mark"><Icon name="folder" size={15} /></span>
+				<span class="workspace-copy">
+					<strong>Choose a folder</strong>
+					<span>Start a local workspace</span>
+				</span>
+				<Icon name="chevron-right" size={13} />
+			</button>
+		{/if}
+	</div>
+	<nav class="workspace-nav" aria-label="Workspace">
+		<button
+			class="nav-row"
+			class:active={session.workspaceView === 'home'}
+			type="button"
+			aria-current={session.workspaceView === 'home' ? 'page' : undefined}
+			onclick={() => session.setWorkspaceView('home')}
+		>
+			<Icon name="home" size={14} />
+			<span>Overview</span>
+		</button>
+		<button
+			class="nav-row"
+			class:active={session.workspaceView === 'ask'}
+			type="button"
+			aria-current={session.workspaceView === 'ask' ? 'page' : undefined}
+			onclick={() => session.setWorkspaceView('ask')}
+		>
+			<Icon name="compose" size={14} />
+			<span>Ask</span>
+		</button>
+		<button
+			class="nav-row"
+			class:active={session.workspaceView === 'sources'}
+			type="button"
+			disabled={!session.catalog.workspace}
+			aria-current={session.workspaceView === 'sources' ? 'page' : undefined}
+			onclick={() => session.setWorkspaceView('sources')}
+		>
+			<Icon name="table" size={14} />
+			<span>Sources</span>
+			{#if fileCount}<small>{fileCount}</small>{/if}
+		</button>
+		<button
+			class="nav-row"
+			class:active={session.workspaceView === 'analyses'}
+			type="button"
+			disabled={!session.catalog.workspace && analysisCount === 0}
+			aria-current={session.workspaceView === 'analyses' ? 'page' : undefined}
+			onclick={() => session.setWorkspaceView('analyses')}
+		>
+			<Icon name="bookmark" size={14} />
+			<span>Analyses</span>
+			{#if analysisCount}<small>{analysisCount}</small>{/if}
+		</button>
+		<button
+			class="nav-row"
+			class:active={session.workspaceView === 'context'}
+			type="button"
+			disabled={!session.catalog.workspace}
+			aria-current={session.workspaceView === 'context' ? 'page' : undefined}
+			onclick={() => void openContext()}
+		>
+			<Icon name="file" size={14} />
+			<span>Context</span>
+		</button>
+	</nav>
+	<div class="history-label">
+		<span>Recent conversations</span>
+	</div>
 	<div class="list">
 		{#each groups as group (group.label)}
 			<div class="group-label">{group.label}</div>
@@ -196,6 +304,9 @@
 								<span class="preview">{title(c)}</span>
 							</span>
 							<span class="meta">
+								{#if conversationWorkspace(c) !== folderName}
+									<span class="location">{conversationWorkspace(c)}</span>
+								{/if}
 								<span class="age">{relativeAge(c.saved_at_ms)}</span>
 							</span>
 						</button>
@@ -294,6 +405,122 @@
 	.search input::placeholder {
 		color: var(--text-faint);
 	}
+	.workspace-block {
+		padding: var(--space-2) var(--space-1) 0;
+	}
+	.section-label,
+	.history-label {
+		padding: 0 var(--space-2) var(--space-1);
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+		font-weight: 650;
+		letter-spacing: 0.06em;
+		text-transform: uppercase;
+	}
+	.workspace-card,
+	.workspace-empty {
+		width: 100%;
+		display: flex;
+		align-items: center;
+		gap: var(--space-2);
+		padding: var(--space-2);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
+		background: var(--bg-raised);
+		text-align: left;
+	}
+	.workspace-empty {
+		color: var(--text-dim);
+		cursor: pointer;
+		transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+	}
+	.workspace-empty:hover {
+		border-color: var(--border-strong);
+		background: var(--bg-inset);
+	}
+	.workspace-mark {
+		display: grid;
+		place-items: center;
+		width: 28px;
+		height: 28px;
+		flex: none;
+		border-radius: var(--radius-sm);
+		background: color-mix(in srgb, var(--brand) 10%, transparent);
+		color: var(--brand);
+	}
+	.workspace-copy {
+		min-width: 0;
+		flex: 1;
+		display: flex;
+		flex-direction: column;
+		gap: 1px;
+	}
+	.workspace-copy strong {
+		overflow: hidden;
+		color: var(--text);
+		font-size: var(--fs-sm);
+		font-weight: 580;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.workspace-copy span {
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+	}
+	.change-folder {
+		display: grid;
+		place-items: center;
+		width: 22px;
+		height: 22px;
+		flex: none;
+		border-radius: var(--radius-chip);
+		color: var(--text-faint);
+	}
+	.change-folder:hover {
+		background: var(--bg-inset);
+		color: var(--text);
+	}
+	.workspace-nav {
+		display: grid;
+		gap: 2px;
+		padding: var(--space-2) var(--space-1) var(--space-3);
+		border-bottom: 1px solid var(--border);
+	}
+	.nav-row {
+		width: 100%;
+		display: flex;
+		align-items: center;
+		gap: var(--space-2);
+		padding: var(--space-2) var(--space-2);
+		border-radius: var(--radius-chip);
+		color: var(--text-dim);
+		font-size: var(--fs-sm);
+		text-align: left;
+		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+	}
+	.nav-row:hover:not(:disabled),
+	.nav-row.active {
+		background: var(--bg-inset);
+		color: var(--text);
+	}
+	.nav-row.active {
+		font-weight: 560;
+	}
+	.nav-row:disabled {
+		color: var(--border-strong);
+		cursor: default;
+	}
+	.nav-row small {
+		margin-left: auto;
+		color: var(--text-faint);
+		font-family: var(--mono);
+		font-size: 10px;
+	}
+	.history-label {
+		display: flex;
+		align-items: center;
+		padding-top: var(--space-2);
+	}
 	.list {
 		flex: 1;
 		min-height: 0;
@@ -374,8 +601,15 @@
 	.meta {
 		display: flex;
 		align-items: center;
+		gap: var(--space-2);
 		color: var(--text-faint);
 		font-size: var(--fs-xs);
+	}
+	.location {
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 	.empty {
 		padding: var(--space-2);

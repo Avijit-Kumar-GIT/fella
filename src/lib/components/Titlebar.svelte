@@ -9,6 +9,9 @@
 	let { onpalette }: { onpalette: () => void } = $props();
 
 	let multiTab = $derived(session.tabs.length > 1);
+	let folder = $derived(
+		session.catalog.workspace?.replace(/[/\\]+$/, '').replace(/^.*[/\\]/, '') ?? ''
+	);
 
 	// --- the active conversation's own title: a custom name if renamed,
 	// otherwise folder + its first message, not just the raw message -- the
@@ -22,6 +25,14 @@
 		const t = first.text.trim();
 		const clipped = t.length > 60 ? t.slice(0, 60) + '…' : t;
 		return folder ? `${folder} — ${clipped}` : clipped;
+	});
+	let displayTitle = $derived.by(() => {
+		const prefix = folder || 'Workspace';
+		if (session.workspaceView === 'home') return `${prefix} — Overview`;
+		if (session.workspaceView === 'sources') return `${prefix} — Sources`;
+		if (session.workspaceView === 'analyses') return `${prefix} — Analyses`;
+		if (session.workspaceView === 'context') return `${prefix} — Context`;
+		return conversationTitle;
 	});
 
 	// --- info popover: message count, model, last answer's verification --
@@ -66,9 +77,6 @@
 	const isWindows =
 		typeof navigator !== 'undefined' && /Win/i.test(navigator.platform || navigator.userAgent);
 
-	let folder = $derived(
-		session.catalog.workspace?.replace(/[/\\]+$/, '').replace(/^.*[/\\]/, '') ?? ''
-	);
 </script>
 
 <svelte:window onclick={onWindowClick} />
@@ -101,7 +109,7 @@
 		{:else}
 			<span class="id" data-tauri-drag-region>
 				{#if folder}
-					<span class="folder" title={conversationTitle}>{conversationTitle}</span>
+					<span class="folder" title={displayTitle}>{displayTitle}</span>
 				{:else}
 					<span class="wordmark">Fella</span>
 				{/if}

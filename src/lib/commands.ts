@@ -194,6 +194,7 @@ export function completionsFor(input: string): string[] {
 /** Open a folder as the workspace. With no path, shows the native picker. */
 export async function openFolder(path?: string): Promise<void> {
 	if (!isTauri()) {
+		session.setWorkspaceView('ask');
 		session.addSystem('Fella needs the desktop app to do that.');
 		return;
 	}
@@ -248,6 +249,23 @@ export async function loadStartupCatalog(): Promise<void> {
  *  button, and Enter on an empty composer with no folder open). */
 export async function resumeLastFolder(): Promise<void> {
 	if (session.lastFolder) await openFolder(session.lastFolder);
+}
+
+/** Open the workspace's fella.md editor from a navigation surface. Unlike the
+ *  slash-command path this does not add a command message to the transcript. */
+export async function openContext(): Promise<void> {
+	if (!requireEngine()) return;
+	if (!session.catalog.workspace) {
+		session.setWorkspaceView('ask');
+		session.addSystem('Open a folder first with /open — fella.md saves into it.');
+		return;
+	}
+	await session.openAugment({
+		capability: 'buffer',
+		command: 'context',
+		file: 'fella.md',
+		syntax: 'markdown'
+	});
 }
 
 /** Ask the engine to stop one tab's in-progress run (the active tab by
@@ -855,17 +873,7 @@ async function runCommand(text: string): Promise<void> {
 			// filename is load-bearing (the engine reads that exact name as
 			// system-prompt context, see catalog.rs/state.rs), so unlike
 			// /note it can't be renamed via an argument.
-			if (!requireEngine()) return;
-			if (!session.catalog.workspace) {
-				session.addSystem('Open a folder first with /open — fella.md saves into it.');
-				return;
-			}
-			await session.openAugment({
-				capability: 'buffer',
-				command: 'context',
-				file: 'fella.md',
-				syntax: 'markdown'
-			});
+			await openContext();
 			return;
 		}
 

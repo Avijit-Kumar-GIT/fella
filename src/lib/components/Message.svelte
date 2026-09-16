@@ -7,10 +7,12 @@
 	import { enterUp } from '$lib/motion';
 	import { answerStatus } from '$lib/verify';
 
-	let { message, expanded = false, ontoggle }: {
+	let { message, expanded = false, ontoggle, onsave, saved = false }: {
 		message: Message;
 		expanded?: boolean;
 		ontoggle?: () => void;
+		onsave?: () => void;
+		saved?: boolean;
 	} = $props();
 
 	// The model marks a one-line general-knowledge aside with "Background:" on
@@ -75,6 +77,14 @@
 	{/if}
 	{#if message.answer}
 		<EvidenceBlock answer={message.answer} {expanded} {ontoggle} />
+		{#if onsave && !message.pending}
+			<div class="answer-actions">
+				<button class:saved type="button" disabled={saved} onclick={onsave}>
+					<Icon name={saved ? 'check' : 'bookmark'} size={12} />
+					{saved ? 'Saved to Analyses' : 'Save to Analyses'}
+				</button>
+			</div>
+		{/if}
 	{/if}
 </div>
 
@@ -143,6 +153,28 @@
 	}
 	.unconfirmed :global(svg) {
 		align-self: center;
+	}
+	.answer-actions {
+		display: flex;
+		margin-top: var(--space-2);
+	}
+	.answer-actions button {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		padding: 4px 7px;
+		border-radius: var(--radius-chip);
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+	}
+	.answer-actions button:hover:not(:disabled) {
+		background: var(--bg-inset);
+		color: var(--text);
+	}
+	.answer-actions button.saved {
+		color: var(--ok);
+		cursor: default;
 	}
 
 	/* The assistant's answer is rendered from markdown (see markdown.ts). Code,
