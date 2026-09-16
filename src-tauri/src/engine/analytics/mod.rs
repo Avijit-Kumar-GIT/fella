@@ -14,6 +14,7 @@
 pub mod chart;
 pub mod data;
 pub mod pyexec;
+pub mod provenance;
 pub mod verify;
 
 use crate::engine::catalog::Catalog;

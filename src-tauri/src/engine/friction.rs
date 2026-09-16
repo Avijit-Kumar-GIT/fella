@@ -62,7 +62,9 @@ mod tests {
 
     fn ev(error: Option<&str>) -> EvidenceItem {
         EvidenceItem {
+            id: "evidence-test".into(),
             tool: "run_sql".into(),
+            sources: Vec::new(),
             args: serde_json::json!({}),
             note: None,
             sql: None,

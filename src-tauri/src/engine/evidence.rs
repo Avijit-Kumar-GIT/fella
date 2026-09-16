@@ -6,7 +6,13 @@ use serde_json::Value as Json;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct EvidenceItem {
+    /// Stable within one answer and ordered by the tool-call result presented
+    /// to the user. This is also the UI key for evidence and chart items.
+    pub id: String,
     pub tool: String,
+    /// Catalogued files/sheets behind a SQL-backed result.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<EvidenceSource>,
     pub args: Json,
     /// One plain sentence the model wrote describing what this step does, for a
     /// non-technical reader (e.g. "Add up spending by month"). Absent if the
@@ -34,6 +40,29 @@ pub struct EvidenceItem {
     pub ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct EvidenceSource {
+    pub table: String,
+    pub source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct WorkspaceSnapshot {
+    pub path: String,
+    pub revision: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VerificationStatus {
+    Verified,
+    NeedsReview,
+    InsufficientData,
+    Failed,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -72,6 +101,9 @@ pub struct Answer {
     pub text: String,
     pub evidence: Vec<EvidenceItem>,
     pub verification: Vec<VerificationCheck>,
+    pub status: VerificationStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<WorkspaceSnapshot>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usage: Option<Usage>,
 }
@@ -91,6 +123,14 @@ mod tests {
         assert_eq!(Usage::merge(None, Some(b)), Some(b));
         assert_eq!(Usage::merge(Some(a), None), Some(a));
         assert_eq!(Usage::merge(None, None), None);
+    }
+
+    #[test]
+    fn verification_status_serializes_as_a_stable_code() {
+        assert_eq!(
+            serde_json::to_value(VerificationStatus::NeedsReview).unwrap(),
+            serde_json::json!("needs_review")
+        );
     }
 }
 

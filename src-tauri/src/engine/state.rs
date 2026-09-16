@@ -2,14 +2,14 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use serde::Serialize;
 
 use crate::engine::agent;
-use crate::engine::analytics::data::{self, DataEngine, PythonBridge, DEFAULT_ROW_CAP};
+use crate::engine::analytics::data::{self, DataEngine, DEFAULT_ROW_CAP};
 use crate::engine::analytics::pyexec;
 use crate::engine::augment;
 use crate::engine::catalog::{self, Catalog, SourceInfo, SourceKind};
@@ -26,7 +26,7 @@ use crate::engine::tools::Registry;
 use crate::engine::update;
 
 pub struct EngineState {
-    data: Mutex<Box<dyn DataEngine>>,
+    workspace: Mutex<WorkspaceState>,
     sqlite: Mutex<rusqlite::Connection>,
     inner: Mutex<Inner>,
     http: reqwest::Client,
@@ -85,11 +85,6 @@ pub struct ProviderInfo {
 
 #[derive(Default)]
 struct Inner {
-    workspace: Option<PathBuf>,
-    sources: Vec<SourceInfo>,
-    /// Contents of `fella.md` at the workspace root, if present. User-written
-    /// context fed to the system prompt alongside enabled skill packs.
-    user_md: Option<String>,
     /// Distilled context from earlier questions, one entry per conversation
     /// (tab). Bounded by `SESSION_CAP`, LRU by `last_used`. Cleared on workspace
     /// (re)open; an entry is dropped when its tab is closed
@@ -98,6 +93,20 @@ struct Inner {
     /// Monotonic counter stamped onto `SessionMemory::last_used` so the least
     /// recently asked conversation can be evicted when `sessions` is full.
     session_tick: u64,
+}
+
+struct WorkspaceState {
+    data: Box<dyn DataEngine>,
+    /// Temporary directory for this backend's scratch database. DuckDB uses
+    /// memory here, but keeping the directory in the state gives SQLite a
+    /// private file that can be built without touching the active engine.
+    scratch: Option<WorkspaceScratch>,
+    workspace: Option<PathBuf>,
+    revision: Option<String>,
+    sources: Vec<SourceInfo>,
+    /// Contents of `fella.md` at the workspace root, if present. User-written
+    /// context fed to the system prompt alongside enabled skill packs.
+    user_md: Option<String>,
     /// Rendered `schema_block()` for the current sources - it re-samples every
     /// table, so we build it once per workspace and clear it on (re)open or
     /// when `describe_source` refreshes a table's stats.
@@ -117,8 +126,108 @@ struct Inner {
     memory_path: Option<PathBuf>,
 }
 
+impl WorkspaceState {
+    fn new(data: Box<dyn DataEngine>, scratch: Option<WorkspaceScratch>) -> Self {
+        Self {
+            data,
+            scratch,
+            workspace: None,
+            revision: None,
+            sources: Vec::new(),
+            user_md: None,
+            schema_cache: None,
+            inspected_tables: HashSet::new(),
+            skipped: Vec::new(),
+            memory_path: None,
+        }
+    }
+}
+
+struct WorkspaceScratch {
+    path: PathBuf,
+    users: Arc<AtomicUsize>,
+}
+
+impl WorkspaceScratch {
+    fn new(path: PathBuf) -> Self {
+        Self {
+            path,
+            users: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    fn lease(&self) -> ScratchLease {
+        self.users.fetch_add(1, Ordering::AcqRel);
+        ScratchLease {
+            path: self.path.clone(),
+            users: Arc::clone(&self.users),
+        }
+    }
+
+    fn cleanup(&self) {
+        if self.users.load(Ordering::Acquire) == 0 {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+}
+
+impl Drop for WorkspaceScratch {
+    fn drop(&mut self) {
+        self.cleanup();
+    }
+}
+
+struct ScratchLease {
+    path: PathBuf,
+    users: Arc<AtomicUsize>,
+}
+
+impl Drop for ScratchLease {
+    fn drop(&mut self) {
+        if self.users.fetch_sub(1, Ordering::AcqRel) == 1 {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+}
+
+#[cfg(test)]
+static TEST_OPEN_WORKSPACE_TARGET: AtomicUsize = AtomicUsize::new(0);
+#[cfg(test)]
+static TEST_OPEN_WORKSPACE_PAUSE: AtomicBool = AtomicBool::new(false);
+#[cfg(test)]
+static TEST_OPEN_WORKSPACE_READY: AtomicBool = AtomicBool::new(false);
+#[cfg(test)]
+static TEST_OPEN_WORKSPACE_RESUME: AtomicBool = AtomicBool::new(false);
+
+#[cfg(test)]
+fn pause_open_workspace_for_test(state: &EngineState) {
+    let target = state as *const EngineState as usize;
+    if TEST_OPEN_WORKSPACE_TARGET.load(Ordering::SeqCst) != target
+        || !TEST_OPEN_WORKSPACE_PAUSE.swap(false, Ordering::SeqCst)
+    {
+        return;
+    }
+    TEST_OPEN_WORKSPACE_READY.store(true, Ordering::SeqCst);
+    while !TEST_OPEN_WORKSPACE_RESUME.load(Ordering::SeqCst) {
+        std::thread::yield_now();
+    }
+}
+
 /// Most conversations we keep distilled memory for at once.
 const SESSION_CAP: usize = 24;
+
+fn workspace_scratch_dir(data_dir: &Path) -> EngineResult<PathBuf> {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    loop {
+        let suffix = NEXT.fetch_add(1, Ordering::Relaxed);
+        let path = data_dir.join(format!(".analysis-{}-{suffix}", std::process::id()));
+        match std::fs::create_dir(&path) {
+            Ok(()) => return Ok(path),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(EngineError::io(format!("create {}", path.display()), e)),
+        }
+    }
+}
 
 /// A few earlier turns of one conversation, distilled so a follow-up question
 /// doesn't have to rediscover the schema. In-memory only.
@@ -187,7 +296,7 @@ impl EngineState {
             // recoverable, so surface it.
             .expect("build HTTP client");
         Ok(Self {
-            data: Mutex::new(data),
+            workspace: Mutex::new(WorkspaceState::new(data, None)),
             sqlite: Mutex::new(sqlite),
             inner: Mutex::new(Inner::default()),
             http,
@@ -434,11 +543,26 @@ impl EngineState {
     }
 
     pub fn catalog(&self) -> Catalog {
-        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
         Catalog {
-            workspace: inner.workspace.as_ref().map(|p| p.display().to_string()),
-            sources: inner.sources.clone(),
-            skipped: inner.skipped.clone(),
+            workspace: workspace
+                .workspace
+                .as_ref()
+                .map(|p| p.display().to_string()),
+            revision: workspace.revision.clone(),
+            sources: workspace.sources.clone(),
+            skipped: workspace.skipped.clone(),
+        }
+    }
+
+    fn answer_workspace_is_current(&self, answer: &Answer) -> bool {
+        let workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
+        match &answer.workspace {
+            Some(snapshot) => {
+                workspace.workspace.as_deref() == Some(Path::new(&snapshot.path))
+                    && workspace.revision.as_deref() == Some(snapshot.revision.as_str())
+            }
+            None => workspace.workspace.is_none() && workspace.revision.is_none(),
         }
     }
 
@@ -452,9 +576,9 @@ impl EngineState {
     /// Compact one-line-per-table schema: `view("col" TYPE, ...)`. Used to echo
     /// the real schema back to the model after a SQL error.
     pub(crate) fn schema_oneline(&self) -> String {
-        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
         let mut out = String::new();
-        for s in inner.sources.iter().filter(|s| s.view.is_some()) {
+        for s in workspace.sources.iter().filter(|s| s.view.is_some()) {
             let cols = s
                 .columns
                 .as_ref()
@@ -475,14 +599,12 @@ impl EngineState {
     /// sample rows for a small workspace; a large/messy folder falls back to
     /// names + shape only (keeps the prompt small).
     pub(crate) fn schema_block(&self) -> String {
-        // Clone out first: `self.sample` re-locks `inner`.
-        let (sources, inspected) = {
-            let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(cached) = &inner.schema_cache {
-                return cached.clone();
-            }
-            (inner.sources.clone(), inner.inspected_tables.clone())
-        };
+        let mut workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(cached) = &workspace.schema_cache {
+            return cached.clone();
+        }
+        let sources = workspace.sources.clone();
+        let inspected = workspace.inspected_tables.clone();
         let tables: Vec<&SourceInfo> = sources.iter().filter(|s| s.view.is_some()).collect();
         let total_cols: usize = tables
             .iter()
@@ -518,7 +640,11 @@ impl EngineState {
                     }
                 }
                 if small || inspected.contains(&view.to_lowercase()) {
-                    if let Ok(sample) = self.sample(view, 3) {
+                    if let Ok(sample) = query_workspace(
+                        &*workspace.data,
+                        &format!("SELECT * FROM {} LIMIT 3", data::quote_ident(view)),
+                        3,
+                    ) {
                         for line in mini_table(&sample) {
                             p.push_str(&format!("    {line}\n"));
                         }
@@ -557,7 +683,7 @@ impl EngineState {
                 }
             }
         }
-        self.inner.lock().unwrap_or_else(|e| e.into_inner()).schema_cache = Some(p.clone());
+        workspace.schema_cache = Some(p.clone());
         p
     }
 
@@ -583,7 +709,13 @@ impl EngineState {
     /// followed by the Markdown of every enabled `skill` pack.
     pub fn user_context(&self) -> Vec<String> {
         let mut out = Vec::new();
-        if let Some(md) = self.inner.lock().unwrap_or_else(|e| e.into_inner()).user_md.clone() {
+        if let Some(md) = self
+            .workspace
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .user_md
+            .clone()
+        {
             out.push(md);
         }
         out.extend(extensions::enabled_skill_texts(
@@ -596,7 +728,11 @@ impl EngineState {
     // --- per-folder memory ---------------------------------------------------
 
     fn memory_path(&self) -> Option<PathBuf> {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner()).memory_path.clone()
+        self.workspace
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .memory_path
+            .clone()
     }
 
     /// `(file path, contents)` of the current folder's `memory.md` for the
@@ -640,7 +776,7 @@ impl EngineState {
     }
 
     fn known_views(&self) -> Vec<String> {
-        self.inner
+        self.workspace
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .sources
@@ -664,7 +800,7 @@ impl EngineState {
         let sqls: Vec<&str> = answer
             .evidence
             .iter()
-            .filter(|e| e.tool == "run_sql" && e.error.is_none())
+            .filter(|e| matches!(e.tool.as_str(), "run_sql" | "make_chart") && e.error.is_none())
             .filter_map(|e| e.sql.as_deref())
             .collect();
         let corrected = prior_q.is_some() && memory::is_correction(question);
@@ -680,7 +816,10 @@ impl EngineState {
                 "q": question.chars().take(300).collect::<String>(),
                 "headline": answer.text.lines().find(|l| !l.trim().is_empty()).unwrap_or("").chars().take(200).collect::<String>(),
                 "queries": sqls.iter().take(3).collect::<Vec<_>>(),
-                "verified": crate::engine::analytics::verify::reran_clean(&answer.verification),
+                "verified": matches!(
+                    answer.status,
+                    crate::engine::evidence::VerificationStatus::Verified
+                ),
                 "corrected_prior": corrected,
             }),
         );
@@ -783,7 +922,7 @@ exactly, character for character, from the list below.";
     /// sees the file like any other in the folder.
     pub fn augment_save(&self, capability: &str, file: &str, contents: &str) -> EngineResult<()> {
         let ws = self
-            .inner
+            .workspace
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .workspace
@@ -802,7 +941,7 @@ exactly, character for character, from the list below.";
     /// Read an augment file back for the editor. `None` if it doesn't exist yet.
     pub fn augment_load(&self, file: &str) -> EngineResult<Option<String>> {
         let ws = self
-            .inner
+            .workspace
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .workspace
@@ -968,21 +1107,18 @@ exactly, character for character, from the list below.";
         }
         let (scanned, mut skipped) = catalog::scan(path)?;
 
-        // Lock order is always inner -> data, and never both at once.
-        let old_views: Vec<String> = {
-            let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-            inner.sources.iter().filter_map(|s| s.view.clone()).collect()
+        // Build in an isolated backend. The active workspace remains fully
+        // queryable until the new catalog and data engine are published below.
+        let scratch_dir = workspace_scratch_dir(&self.data_dir)?;
+        let mut data = match data::open_engine(&scratch_dir) {
+            Ok(data) => data,
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(&scratch_dir);
+                return Err(e);
+            }
         };
 
         let mut sources = Vec::with_capacity(scanned.len());
-        {
-            // Clear the previous workspace's views in one short critical section.
-            let mut data = self.data.lock().unwrap_or_else(|e| e.into_inner());
-            for v in &old_views {
-                data.drop_source(v);
-            }
-        }
-
         {
             let mut used: HashSet<String> = HashSet::new();
             // Each text-doc synopsis is a file open + short read; cap how many we
@@ -1021,16 +1157,7 @@ exactly, character for character, from the list below.";
                 match f.kind {
                     #[cfg(feature = "xlsx")]
                     catalog::SourceKind::Xlsx => {
-                        // Lock the data engine only for this one file's ingest,
-                        // so a question asked mid-(re)scan isn't blocked for the
-                        // whole folder just for one big file.
-                        let mut data = self.data.lock().unwrap_or_else(|e| e.into_inner());
-                        match crate::engine::ingest::excel::ingest_workbook(
-                            &mut **data,
-                            &path_str,
-                            stem,
-                            &mut used,
-                        ) {
+                        match crate::engine::ingest::excel::ingest_workbook(&mut *data, &path_str, stem, &mut used) {
                             Ok((sheets, _)) if !sheets.is_empty() => {
                                 for sh in sheets {
                                     sources.push(SourceInfo {
@@ -1073,7 +1200,6 @@ exactly, character for character, from the list below.";
                     }
                     k if k.is_tabular() && k != SourceKind::Xlsx => {
                         let view = catalog::unique_view_name(stem, &mut used);
-                        let mut data = self.data.lock().unwrap_or_else(|e| e.into_inner());
                         match data.add_source(&view, f.kind, &path_str) {
                             Ok(load) => {
                                 info.row_count = Some(load.row_count);
@@ -1097,8 +1223,6 @@ exactly, character for character, from the list below.";
             }
         }
 
-        self.persist_sources(path, &sources);
-
         // `fella.md` at the root is optional user context, not a data file.
         let user_md = std::fs::read_to_string(path.join("fella.md"))
             .ok()
@@ -1107,20 +1231,37 @@ exactly, character for character, from the list below.";
 
         skipped.sort_by(|a, b| a.name.cmp(&b.name));
         skipped.dedup_by(|a, b| a.name == b.name);
+        let revision = Some(catalog::workspace_revision(path, &sources, &skipped));
         let mem_path = memory::path_for(&self.data_dir, path);
+
+        #[cfg(test)]
+        pause_open_workspace_for_test(self);
+
+        let old_scratch = {
+            let mut workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
+            let old_scratch = workspace
+                .scratch
+                .replace(WorkspaceScratch::new(scratch_dir));
+            workspace.data = data;
+            workspace.workspace = Some(path.to_path_buf());
+            workspace.revision = revision;
+            workspace.sources = sources;
+            workspace.skipped = skipped;
+            workspace.user_md = user_md;
+            workspace.memory_path = Some(mem_path);
+            workspace.schema_cache = None;
+            workspace.inspected_tables.clear();
+            self.persist_sources(path, &workspace.sources);
+            old_scratch
+        };
+
+        // The sources changed, so every conversation's distilled memory
+        // (schema hints, prior queries) is now stale.
         {
             let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-            inner.workspace = Some(path.to_path_buf());
-            inner.sources = sources;
-            inner.skipped = skipped;
-            inner.user_md = user_md;
-            inner.memory_path = Some(mem_path);
-            // The sources changed, so every conversation's distilled memory
-            // (schema hints, prior queries) is now stale.
             inner.sessions.clear();
-            inner.schema_cache = None;
-            inner.inspected_tables.clear();
         }
+        drop(old_scratch);
         // The user is about to ask something: warm the model now so the first
         // question doesn't wait on a cold load.
         self.warm_model();
@@ -1143,7 +1284,13 @@ exactly, character for character, from the list below.";
     /// history, the folder is gone, or it won't open no error is surfaced.
     /// A no-op if a workspace is already open.
     pub fn reopen_last_workspace(&self) -> Option<Catalog> {
-        if self.inner.lock().unwrap_or_else(|e| e.into_inner()).workspace.is_some() {
+        if self
+            .workspace
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .workspace
+            .is_some()
+        {
             return None;
         }
         let path = {
@@ -1166,8 +1313,8 @@ exactly, character for character, from the list below.";
     /// Re-open the current workspace (used by `/reindex`).
     pub fn reindex(&self) -> EngineResult<Catalog> {
         let ws = {
-            let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-            inner.workspace.clone()
+            let workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
+            workspace.workspace.clone()
         };
         match ws {
             Some(path) => self.open_workspace(&path),
@@ -1177,105 +1324,108 @@ exactly, character for character, from the list below.";
 
     /// Full per-column stats for one source.
     pub fn describe_source(&self, name: &str) -> EngineResult<SourceInfo> {
-        let mut info = {
-            let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-            inner
-                .sources
-                .iter()
-                .find(|s| s.name == name || s.view.as_deref() == Some(name))
-                .cloned()
-                .ok_or_else(|| EngineError::UnknownSource(name.to_string()))?
-        };
+        let mut workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
+        let mut info = workspace
+            .sources
+            .iter()
+            .find(|s| s.name == name || s.view.as_deref() == Some(name))
+            .cloned()
+            .ok_or_else(|| EngineError::UnknownSource(name.to_string()))?;
         let view = info
             .view
             .clone()
             .ok_or_else(|| EngineError::msg(format!("{name} is not a tabular source")))?;
 
-        let columns = {
-            let data = self.data.lock().unwrap_or_else(|e| e.into_inner());
-            let mut cols = data.describe(&view)?;
-            if info.row_count.is_none() {
-                info.row_count = data
-                    .query(&format!("SELECT count(*) FROM {}", data::quote_ident(&view)), 1)
-                    .ok()
-                    .and_then(|o| o.rows.first().and_then(|r| r.first()).and_then(|v| v.as_i64()));
-            }
-            // Carry any ingest-time note (coercion, mixed column) onto the
-            // freshly-computed stats, keyed by column name.
-            if let Some(prior) = &info.columns {
-                for c in &mut cols {
-                    if c.note.is_none() {
-                        c.note = prior.iter().find(|p| p.name == c.name).and_then(|p| p.note.clone());
-                    }
+        let mut columns = workspace.data.describe(&view)?;
+        if info.row_count.is_none() {
+            info.row_count = workspace
+                .data
+                .query(
+                    &format!("SELECT count(*) FROM {}", data::quote_ident(&view)),
+                    1,
+                )
+                .ok()
+                .and_then(|o| {
+                    o.rows
+                        .first()
+                        .and_then(|r| r.first())
+                        .and_then(|v| v.as_i64())
+                });
+        }
+        // Carry any ingest-time note (coercion, mixed column) onto the
+        // freshly-computed stats, keyed by column name.
+        if let Some(prior) = &info.columns {
+            for c in &mut columns {
+                if c.note.is_none() {
+                    c.note = prior
+                        .iter()
+                        .find(|p| p.name == c.name)
+                        .and_then(|p| p.note.clone());
                 }
             }
-            cols
-        };
+        }
         info.columns = Some(columns.clone());
 
         // Cache the enriched schema back so a later turn's describe / the
         // system-prompt digest is instant and carries the stats.
+        if let Some(s) = workspace
+            .sources
+            .iter_mut()
+            .find(|s| s.name == name || s.view.as_deref() == Some(name))
         {
-            let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(s) = inner
-                .sources
-                .iter_mut()
-                .find(|s| s.name == name || s.view.as_deref() == Some(name))
-            {
-                s.columns = Some(columns);
-                if s.row_count.is_none() {
-                    s.row_count = info.row_count;
-                }
+            s.columns = Some(columns);
+            if s.row_count.is_none() {
+                s.row_count = info.row_count;
             }
-            inner.inspected_tables.insert(view.to_lowercase());
-            inner.schema_cache = None;
         }
+        workspace.inspected_tables.insert(view.to_lowercase());
+        workspace.schema_cache = None;
         Ok(info)
     }
 
     /// Run a read-only SQL statement (used by `/sql` and the agent).
     pub fn run_sql(&self, sql: &str) -> EngineResult<QueryResult> {
-        data::ensure_read_only(sql)?;
-        let data = self.data.lock().unwrap_or_else(|e| e.into_inner());
-        let t = Instant::now();
-        let out = data.query(sql, DEFAULT_ROW_CAP)?;
-        Ok(QueryResult {
-            columns: out.columns,
-            rows: out.rows,
-            row_count: out.row_count,
-            ms: t.elapsed().as_millis() as u64,
-            truncated: out.truncated,
-        })
+        let workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
+        query_workspace(&*workspace.data, sql, DEFAULT_ROW_CAP)
     }
 
     /// First `n` rows of a source (used by the `inspect_table` tool).
     pub fn sample(&self, name: &str, n: usize) -> EngineResult<QueryResult> {
-        let view = self.view_for(name)?;
-        self.run_sql(&format!(
-            "SELECT * FROM {} LIMIT {}",
-            data::quote_ident(&view),
-            n.clamp(1, 200)
-        ))
+        let workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
+        let view = workspace
+            .sources
+            .iter()
+            .find(|s| s.name == name || s.view.as_deref() == Some(name))
+            .and_then(|s| s.view.clone())
+            .ok_or_else(|| EngineError::UnknownSource(name.to_string()))?;
+        query_workspace(
+            &*workspace.data,
+            &format!(
+                "SELECT * FROM {} LIMIT {}",
+                data::quote_ident(&view),
+                n.clamp(1, 200)
+            ),
+            n.clamp(1, 200),
+        )
     }
 
     /// Run a Python snippet against the workspace data (blocking work is moved
     /// off the async executor).
     pub async fn run_python(&self, code: &str) -> EngineResult<pyexec::PyResult> {
-        let bridge: PythonBridge = self.data.lock().unwrap_or_else(|e| e.into_inner()).python_bridge();
+        let (bridge, scratch_lease) = {
+            let workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
+            (
+                workspace.data.python_bridge(),
+                workspace.scratch.as_ref().map(WorkspaceScratch::lease),
+            )
+        };
         let code = code.to_string();
-        tokio::task::spawn_blocking(move || pyexec::run(&code, bridge))
-            .await
-            .map_err(|e| EngineError::msg(format!("python task panicked: {e}")))?
-    }
-
-    fn view_for(&self, name: &str) -> EngineResult<String> {
-        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        inner
-            .sources
-            .iter()
-            .find(|s| s.name == name || s.view.as_deref() == Some(name))
-            .and_then(|s| s.view.clone())
-            .ok_or_else(|| EngineError::UnknownSource(name.to_string()))
+        tokio::task::spawn_blocking(move || {
+            let _scratch_lease = scratch_lease;
+            pyexec::run(&code, bridge)
+        })
+        .await
+        .map_err(|e| EngineError::msg(format!("python task panicked: {e}")))?
     }
 
     /// Run the agent loop for one question, streaming progress through `emit`.
@@ -1359,7 +1509,7 @@ exactly, character for character, from the list below.";
         // a vocabulary note; an ordinary question teaches nothing). Needs the
         // previous question in this conversation for the correction check, so
         // read it before the distil step below pushes this one.
-        if !cancel.load(Ordering::Relaxed) {
+        if !cancel.load(Ordering::Relaxed) && self.answer_workspace_is_current(&answer) {
             let prior_q = {
                 let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
                 inner
@@ -1387,7 +1537,7 @@ exactly, character for character, from the list below.";
             let queries: Vec<String> = answer
                 .evidence
                 .iter()
-                .filter(|e| e.tool == "run_sql" && e.error.is_none())
+                .filter(|e| matches!(e.tool.as_str(), "run_sql" | "make_chart") && e.error.is_none())
                 .filter_map(|e| e.sql.clone())
                 .map(|s| s.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(160).collect())
                 .take(3)
@@ -1397,16 +1547,26 @@ exactly, character for character, from the list below.";
                     || headline == "Stopped."
                     || headline.starts_with("I ran out of analysis steps"));
             if !uninformative {
-                let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-                let entry = inner.sessions.entry(conversation_id.to_string()).or_default();
-                entry.turns.push(TurnDigest {
-                    question: question.chars().take(200).collect(),
-                    headline,
-                    queries,
-                });
-                let n = entry.turns.len();
-                if n > 3 {
-                    entry.turns.drain(0..n - 3);
+                let workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
+                let current = match &answer.workspace {
+                    Some(snapshot) => {
+                        workspace.workspace.as_deref() == Some(Path::new(&snapshot.path))
+                            && workspace.revision.as_deref() == Some(snapshot.revision.as_str())
+                    }
+                    None => workspace.workspace.is_none() && workspace.revision.is_none(),
+                };
+                if current {
+                    let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+                    let entry = inner.sessions.entry(conversation_id.to_string()).or_default();
+                    entry.turns.push(TurnDigest {
+                        question: question.chars().take(200).collect(),
+                        headline,
+                        queries,
+                    });
+                    let n = entry.turns.len();
+                    if n > 3 {
+                        entry.turns.drain(0..n - 3);
+                    }
                 }
             }
         }
@@ -1587,8 +1747,9 @@ exactly, character for character, from the list below.";
     /// Catalogued documents (text/PDF, not tables SQL already covers those),
     /// as (name, path, kind), for the `grep_files`/`read_file` tools.
     fn documents(&self) -> Vec<(String, String, SourceKind)> {
-        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        inner
+        self.workspace
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
             .sources
             .iter()
             .filter(|s| s.view.is_none())
@@ -1812,6 +1973,19 @@ pub(crate) fn cap_chars(s: &str, cap: usize) -> String {
 
 /// Render a small `QueryResult` as compact `col=val` sample lines for the
 /// system-prompt schema digest.
+fn query_workspace(data: &dyn DataEngine, sql: &str, max_rows: usize) -> EngineResult<QueryResult> {
+    data::ensure_read_only(sql)?;
+    let started = Instant::now();
+    let out = data.query(sql, max_rows)?;
+    Ok(QueryResult {
+        columns: out.columns,
+        rows: out.rows,
+        row_count: out.row_count,
+        ms: started.elapsed().as_millis() as u64,
+        truncated: out.truncated,
+    })
+}
+
 fn mini_table(q: &QueryResult) -> Vec<String> {
     q.rows
         .iter()
@@ -2118,5 +2292,77 @@ mod jit_schema_tests {
         let block = engine.schema_block();
         assert!(block.contains("town0"));
         assert!(block.contains("town1"));
+    }
+}
+
+#[cfg(test)]
+mod workspace_swap_tests {
+    use std::sync::Arc;
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+    use super::*;
+
+    fn scratch(tag: &str) -> PathBuf {
+        let n = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("fella-atomic-{tag}-{n}"));
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    #[test]
+    fn replacement_never_exposes_catalog_without_its_data() {
+        let old_workspace = scratch("old-workspace");
+        let new_workspace = scratch("new-workspace");
+        let data_dir = scratch("data");
+        std::fs::write(old_workspace.join("sales.csv"), "value\n1\n").unwrap();
+        std::fs::write(new_workspace.join("sales.csv"), "value\n2\n").unwrap();
+
+        let engine = Arc::new(EngineState::new(&data_dir).unwrap());
+        engine.open_workspace(&old_workspace).unwrap();
+
+        TEST_OPEN_WORKSPACE_TARGET.store(Arc::as_ptr(&engine) as usize, Ordering::SeqCst);
+        TEST_OPEN_WORKSPACE_READY.store(false, Ordering::SeqCst);
+        TEST_OPEN_WORKSPACE_RESUME.store(false, Ordering::SeqCst);
+        TEST_OPEN_WORKSPACE_PAUSE.store(true, Ordering::SeqCst);
+
+        let opening = {
+            let engine = Arc::clone(&engine);
+            let new_workspace = new_workspace.clone();
+            std::thread::spawn(move || engine.open_workspace(&new_workspace))
+        };
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !TEST_OPEN_WORKSPACE_READY.load(Ordering::SeqCst) && Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        let paused = TEST_OPEN_WORKSPACE_READY.load(Ordering::SeqCst);
+        let observed_catalog = engine.catalog();
+        let observed_query = engine.run_sql("SELECT value FROM sales");
+        TEST_OPEN_WORKSPACE_RESUME.store(true, Ordering::SeqCst);
+        TEST_OPEN_WORKSPACE_TARGET.store(0, Ordering::SeqCst);
+        let opened = opening.join().unwrap().unwrap();
+
+        assert!(paused, "workspace replacement did not reach its test pause");
+        assert_eq!(
+            observed_catalog.workspace.as_deref(),
+            Some(old_workspace.to_str().unwrap())
+        );
+        let query = observed_query.expect("the old catalog must still have its old table");
+        assert_eq!(query.rows[0][0], serde_json::json!(1));
+        assert_eq!(
+            opened.workspace.as_deref(),
+            Some(new_workspace.to_str().unwrap())
+        );
+        assert_eq!(
+            engine.run_sql("SELECT value FROM sales").unwrap().rows[0][0],
+            serde_json::json!(2)
+        );
+
+        let _ = std::fs::remove_dir_all(old_workspace);
+        let _ = std::fs::remove_dir_all(new_workspace);
+        let _ = std::fs::remove_dir_all(data_dir);
     }
 }

@@ -1,11 +1,10 @@
-//! Chart data: validates labels + one or more numeric series the model
-//! already has (e.g. from a prior `run_sql`) and passes them through as
-//! structured data -- rendering happens entirely client-side
+//! Chart data: converts a bounded query result into validated structured chart
+//! data. Rendering happens entirely client-side
 //! (`src/lib/components/Chart.svelte`, `d3-scale`/`d3-shape` for the
 //! line-chart math), so real DOM/CSS owns layout and theming instead of
 //! Rust estimating character widths into a hand-built SVG string. This
-//! module only ever emits data (labels, numbers, short strings); it does
-//! not generate markup, so there's no sanitizer boundary on the way out.
+//! module only ever emits data (labels, numbers, short strings); it does not
+//! generate markup, so there's no sanitizer boundary on the way out.
 //!
 //! The `make_chart` tool that wraps this for the agent loop lives in
 //! `tools.rs`, not here -- it's app-calling glue (`Tool`/`ToolOutput`),
@@ -13,6 +12,7 @@
 //! function, independent of the rest of the app.
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value as Json;
 
 /// A folder's worth of tables rarely needs more than this many categories in
 /// one chart before it stops being readable; past this, tell the model to
@@ -45,6 +45,105 @@ pub struct ChartData {
     pub series: Vec<Series>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unit: Option<String>,
+}
+
+/// Build chart data from a query result whose first column is the label and
+/// remaining columns are numeric series. Keeping this conversion here makes
+/// the shape rule testable without `EngineState`; the tool layer only runs the
+/// read-only query and supplies its result.
+pub fn from_query(
+    kind: ChartKind,
+    title: Option<String>,
+    unit: Option<String>,
+    columns: &[String],
+    rows: &[Vec<Json>],
+) -> Result<ChartData, String> {
+    if columns.len() < 2 {
+        return Err("a chart query needs one label column and at least one numeric column".into());
+    }
+    let series_count = columns.len() - 1;
+    if series_count > MAX_SERIES {
+        return Err(format!(
+            "a chart query returned {series_count} numeric columns (max {MAX_SERIES})"
+        ));
+    }
+    if rows.is_empty() {
+        return Err("the chart query returned no rows -- nothing to chart".into());
+    }
+    if rows.len() > MAX_CATEGORIES {
+        return Err(format!(
+            "the chart query returned {} rows (max {MAX_CATEGORIES}) -- aggregate first",
+            rows.len()
+        ));
+    }
+
+    let mut labels = Vec::with_capacity(rows.len());
+    let mut values = vec![Vec::with_capacity(rows.len()); series_count];
+    for (row_index, row) in rows.iter().enumerate() {
+        if row.len() != columns.len() {
+            return Err(format!(
+                "chart query row {} has {} values but the result has {} columns",
+                row_index + 1,
+                row.len(),
+                columns.len()
+            ));
+        }
+        labels.push(label_value(&row[0], row_index)?);
+        for (series_index, value) in row[1..].iter().enumerate() {
+            values[series_index].push(number_value(value, &columns[series_index + 1], row_index)?);
+        }
+    }
+
+    let series = columns[1..]
+        .iter()
+        .enumerate()
+        .map(|(i, name)| Series {
+            name: name.clone(),
+            values: values[i].clone(),
+        })
+        .collect();
+    let data = ChartData {
+        kind,
+        title,
+        labels,
+        series,
+        unit,
+    };
+    validate(&data)?;
+    Ok(data)
+}
+
+fn label_value(value: &Json, row: usize) -> Result<String, String> {
+    let label = match value {
+        Json::String(s) => s.clone(),
+        Json::Number(n) => n.to_string(),
+        Json::Bool(b) => b.to_string(),
+        Json::Null => return Err(format!("chart query row {} has an empty label", row + 1)),
+        Json::Array(_) | Json::Object(_) => {
+            return Err(format!("chart query row {} has a non-scalar label", row + 1))
+        }
+    };
+    if label.trim().is_empty() {
+        return Err(format!("chart query row {} has an empty label", row + 1));
+    }
+    Ok(label)
+}
+
+fn number_value(value: &Json, column: &str, row: usize) -> Result<f64, String> {
+    let number = match value {
+        Json::Number(n) => n.as_f64(),
+        // DuckDB can serialize decimal values as strings. Accept only strings
+        // that are unambiguously numeric; arbitrary text must fail loudly.
+        Json::String(s) => s.trim().parse::<f64>().ok(),
+        Json::Null | Json::Bool(_) | Json::Array(_) | Json::Object(_) => None,
+    };
+    match number.filter(|n| n.is_finite()) {
+        Some(n) => Ok(n),
+        None => Err(format!(
+            "chart query row {} column \"{column}\" is not a finite number",
+            row + 1
+        )),
+    }
 }
 
 /// Rejects shapes that can't be charted meaningfully. Doesn't reject
@@ -131,6 +230,38 @@ mod tests {
                 .collect(),
             unit: None,
         }
+    }
+
+    #[test]
+    fn from_query_uses_the_first_column_as_labels_and_the_rest_as_series() {
+        let data = from_query(
+            ChartKind::Bar,
+            Some("Spending".into()),
+            Some("$".into()),
+            &["category".into(), "amount".into()],
+            &[
+                vec![Json::from("Rent"), Json::from(1250.0)],
+                vec![Json::from("Groceries"), Json::from(412.5)],
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(data.labels, vec!["Rent", "Groceries"]);
+        assert_eq!(data.series[0].name, "amount");
+        assert_eq!(data.series[0].values, vec![1250.0, 412.5]);
+    }
+
+    #[test]
+    fn from_query_rejects_a_non_numeric_series_value() {
+        let result = from_query(
+            ChartKind::Bar,
+            None,
+            None,
+            &["category".into(), "amount".into()],
+            &[vec![Json::from("Rent"), Json::from("unknown")]],
+        );
+
+        assert!(result.unwrap_err().contains("amount"));
     }
 
     #[test]

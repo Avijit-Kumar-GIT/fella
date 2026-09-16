@@ -71,11 +71,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use fella_lib::engine::analytics::chart::Series as ChartSeries;
-use fella_lib::engine::evidence::EvidenceItem;
+use fella_lib::engine::evidence::{EvidenceItem, VerificationStatus};
 use fella_lib::engine::testkit::{
     self, Goldens, Messiness, TableGold, WorkspaceSpec,
 };
-use fella_lib::engine::analytics::verify;
 use fella_lib::engine::{memory, AskEvent, EngineState};
 
 // --- what a correct answer looks like -------------------------------------
@@ -176,7 +175,7 @@ async fn run_case(engine: &EngineState, conv: &str, question: &str, model: Optio
                 .map(|u| (u.prompt_tokens, u.completion_tokens))
                 .unwrap_or((0, 0));
             RunResult {
-                hard_fail: verify::hard_fail(&a.verification).is_some(),
+                hard_fail: matches!(a.status, VerificationStatus::Failed),
                 text: a.text,
                 evidence: a.evidence,
                 verification: a.verification,
@@ -2404,7 +2403,9 @@ mod tests {
     }
     fn ev(tool: &str, summary: &str, err: Option<&str>) -> EvidenceItem {
         EvidenceItem {
+            id: "evidence-eval".into(),
             tool: tool.into(),
+            sources: Vec::new(),
             // distinct args so two calls aren't seen as an exact repeat
             args: serde_json::json!({ "q": summary }),
             note: None,

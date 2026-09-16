@@ -116,11 +116,85 @@ pub struct SourceInfo {
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct Catalog {
     pub workspace: Option<String>,
+    /// Deterministic identity of the currently loaded workspace snapshot.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision: Option<String>,
     pub sources: Vec<SourceInfo>,
     /// Files the scan noticed but couldn't use, with a plain reason. Shown to
     /// the user so an incomplete dataset isn't analysed silently.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub skipped: Vec<SkippedFile>,
+}
+
+/// Derive a stable identity for the catalog that was actually loaded. This is
+/// a freshness marker, not a cryptographic integrity hash: it changes when the
+/// workspace path, source metadata, schema, ingest notes, or skipped files do.
+pub fn workspace_revision(root: &Path, sources: &[SourceInfo], skipped: &[SkippedFile]) -> String {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    let mut feed = |value: &str| {
+        for byte in value.as_bytes() {
+            hash ^= *byte as u64;
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        hash ^= 0xff;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    };
+
+    let canonical = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    feed(&canonical.to_string_lossy());
+
+    let mut source_rows: Vec<String> = sources
+        .iter()
+        .map(|source| {
+            let columns = source
+                .columns
+                .as_ref()
+                .map(|columns| {
+                    columns
+                        .iter()
+                        .map(|column| {
+                            format!(
+                                "{}\u{1f}{}\u{1f}{}",
+                                column.name,
+                                column.type_,
+                                column.note.as_deref().unwrap_or("")
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\u{1e}")
+                })
+                .unwrap_or_default();
+            format!(
+                "{}\u{1f}{}\u{1f}{:?}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
+                source.name,
+                source.path,
+                source.kind,
+                source.view.as_deref().unwrap_or(""),
+                source.size_bytes,
+                source.mtime,
+                source.note.as_deref().unwrap_or(""),
+                columns
+            )
+        })
+        .collect();
+    source_rows.sort();
+    for row in source_rows {
+        feed(&row);
+    }
+
+    let mut skipped_rows: Vec<String> = skipped
+        .iter()
+        .map(|file| format!("{}\u{1f}{}", file.name, file.reason))
+        .collect();
+    skipped_rows.sort();
+    for row in skipped_rows {
+        feed(&row);
+    }
+
+    if let Ok(metadata) = std::fs::metadata(root.join("fella.md")) {
+        feed(&format!("fella.md\u{1f}{}\u{1f}{:?}", metadata.len(), metadata.modified()));
+    }
+    format!("r{hash:016x}")
 }
 
 /// A file that was found but not loaded (unsupported type, unreadable, or a
@@ -351,5 +425,31 @@ mod tests {
         assert_eq!(SourceKind::from_ext("db"), None);
         assert!(SourceKind::Parquet.is_tabular());
         assert!(!SourceKind::Pdf.is_tabular());
+    }
+
+    #[test]
+    fn workspace_revision_changes_when_loaded_source_changes() {
+        let source = SourceInfo {
+            name: "sales.csv".into(),
+            path: "/tmp/sales.csv".into(),
+            kind: SourceKind::Csv,
+            view: Some("sales".into()),
+            row_count: Some(2),
+            columns: Some(vec![ColumnInfo::bare("amount", "REAL")]),
+            size_bytes: 20,
+            mtime: 1,
+            synopsis: None,
+            note: None,
+        };
+        let first = workspace_revision(
+            Path::new("/tmp/workspace"),
+            std::slice::from_ref(&source),
+            &[],
+        );
+        let mut changed = source;
+        changed.size_bytes += 1;
+        let second = workspace_revision(Path::new("/tmp/workspace"), &[changed], &[]);
+        assert_ne!(first, second);
+        assert!(first.starts_with('r'));
     }
 }

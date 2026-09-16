@@ -23,7 +23,11 @@ use std::collections::HashSet;
 use serde_json::Value as Json;
 
 use crate::engine::analytics::AnalyticsSource;
-use crate::engine::evidence::{EvidenceItem, VerificationCheck};
+use crate::engine::evidence::{EvidenceItem, VerificationCheck, VerificationStatus};
+
+fn is_sql_evidence(evidence: &EvidenceItem) -> bool {
+    matches!(evidence.tool.as_str(), "run_sql" | "make_chart")
+}
 
 pub fn run(
     engine: &dyn AnalyticsSource,
@@ -88,6 +92,25 @@ pub fn reran_clean(checks: &[VerificationCheck]) -> bool {
         && checks
             .iter()
             .any(|c| c.ok && c.label.contains("re-checked the queries behind this answer"))
+}
+
+/// Classify the complete answer result once. The serialized code is the
+/// contract consumed by the UI, memory recorder, and evaluation harness.
+pub fn status(checks: &[VerificationCheck], evidence: &[EvidenceItem]) -> VerificationStatus {
+    if evidence.is_empty() || !evidence.iter().any(|item| item.error.is_none()) {
+        return VerificationStatus::InsufficientData;
+    }
+    if hard_fail(checks).is_some() {
+        return VerificationStatus::Failed;
+    }
+    if checks.iter().any(|check| !check.ok) {
+        return VerificationStatus::NeedsReview;
+    }
+    if reran_clean(checks) {
+        VerificationStatus::Verified
+    } else {
+        VerificationStatus::NeedsReview
+    }
 }
 
 /// The narrower subset the agent loop's corrective re-ask acts on: a cited query
@@ -219,7 +242,7 @@ fn check_case_filter(engine: &dyn AnalyticsSource, evidence: &[EvidenceItem], ou
         return;
     }
     let lowered: Vec<String> = cols.iter().map(|(l, _)| l.clone()).collect();
-    for e in evidence.iter().filter(|e| e.tool == "run_sql" && e.error.is_none()) {
+    for e in evidence.iter().filter(|e| is_sql_evidence(e) && e.error.is_none()) {
         let Some(sql) = &e.sql else { continue };
         if let Some(hit) = case_sensitive_label_filter(sql, &lowered) {
             let name = cols.iter().find(|(l, _)| l == hit).map_or(hit, |(_, n)| n.as_str());
@@ -243,7 +266,7 @@ fn check_text_agg(engine: &dyn AnalyticsSource, evidence: &[EvidenceItem], out: 
         return;
     }
     let lowered: Vec<String> = cols.iter().map(|(l, _)| l.clone()).collect();
-    for e in evidence.iter().filter(|e| e.tool == "run_sql" && e.error.is_none()) {
+    for e in evidence.iter().filter(|e| is_sql_evidence(e) && e.error.is_none()) {
         let Some(sql) = &e.sql else { continue };
         if let Some(hit) = aggregates_text_column(sql, &lowered) {
             let name = cols.iter().find(|(l, _)| l == hit).map_or(hit, |(_, n)| n.as_str());
@@ -299,7 +322,7 @@ fn missing_aggregate_verbs<'a>(question: &str, sql_texts: &[String]) -> Vec<&'a 
 fn check_aggregate_verb(question: &str, evidence: &[EvidenceItem], out: &mut Vec<VerificationCheck>) {
     let sql: Vec<String> = evidence
         .iter()
-        .filter(|e| e.tool == "run_sql" && e.error.is_none())
+        .filter(|e| is_sql_evidence(e) && e.error.is_none())
         .filter_map(|e| e.sql.as_deref())
         .map(str::to_uppercase)
         .collect();
@@ -326,7 +349,7 @@ fn check_tables(engine: &dyn AnalyticsSource, evidence: &[EvidenceItem], out: &m
         .collect();
 
     let mut bad = HashSet::new();
-    for e in evidence.iter().filter(|e| e.tool == "run_sql") {
+    for e in evidence.iter().filter(|e| is_sql_evidence(e)) {
         let Some(sql) = &e.sql else { continue };
         for t in referenced_relations(sql) {
             if !known.contains(&t) && !t.contains('(') {
@@ -429,7 +452,7 @@ fn check_dropped_column(
 ) {
     let sql: Vec<String> = evidence
         .iter()
-        .filter(|e| e.tool == "run_sql" && e.error.is_none())
+        .filter(|e| is_sql_evidence(e) && e.error.is_none())
         .filter_map(|e| e.sql.as_deref())
         .map(str::to_string)
         .collect();
@@ -511,7 +534,7 @@ fn check_multi_table_join(
 ) {
     let sql: Vec<String> = evidence
         .iter()
-        .filter(|e| e.tool == "run_sql" && e.error.is_none())
+        .filter(|e| is_sql_evidence(e) && e.error.is_none())
         .filter_map(|e| e.sql.as_deref())
         .map(str::to_string)
         .collect();
@@ -544,7 +567,7 @@ fn rerun_queries(engine: &dyn AnalyticsSource, evidence: &[EvidenceItem], out: &
     let mut matched = 0usize;
     let mut skipped_cost = 0usize;
     let mut seen: HashSet<&str> = HashSet::new();
-    for e in evidence.iter().filter(|e| e.tool == "run_sql" && e.error.is_none()) {
+    for e in evidence.iter().filter(|e| is_sql_evidence(e) && e.error.is_none()) {
         let Some(sql) = &e.sql else { continue };
         // One re-run per distinct query - the model often cites the same SQL twice.
         if !seen.insert(sql.as_str()) {
@@ -610,7 +633,7 @@ fn check_numbers(answer: &str, evidence: &[EvidenceItem], out: &mut Vec<Verifica
             // An aggregate over no matching rows comes back as one all-NULL row
             // (or zero rows). That result backs the answer "0" / "none" - so
             // the model reporting 0 here isn't an ungrounded figure.
-            let empty_aggregate = e.tool == "run_sql"
+            let empty_aggregate = is_sql_evidence(e)
                 && e.error.is_none()
                 && (rows.is_empty() || (rows.len() == 1 && rows[0].iter().all(Json::is_null)));
             if empty_aggregate {
@@ -859,7 +882,7 @@ fn has_null_group_key(rows: &[Vec<Json>]) -> bool {
 /// real, non-null key in its one row and is left alone).
 fn check_null_group_key(evidence: &[EvidenceItem], out: &mut Vec<VerificationCheck>) {
     for e in evidence {
-        if e.tool != "run_sql" || e.error.is_some() {
+        if !is_sql_evidence(e) || e.error.is_some() {
             continue;
         }
         let Some(sql) = &e.sql else { continue };
@@ -915,7 +938,7 @@ fn alias_words(alias: &str) -> Vec<String> {
 /// names no column at all is left alone.
 fn check_row_value_labels(answer: &str, evidence: &[EvidenceItem], out: &mut Vec<VerificationCheck>) {
     for e in evidence {
-        if e.tool != "run_sql" || e.error.is_some() {
+        if !is_sql_evidence(e) || e.error.is_some() {
             continue;
         }
         let (Some(columns), Some(rows)) = (&e.columns, &e.rows) else { continue };
@@ -1078,6 +1101,20 @@ mod tests {
         );
         both.sort_unstable();
         assert_eq!(both, vec!["AVG", "SUM"]);
+    }
+
+    #[test]
+    fn chart_queries_use_the_same_sql_checks() {
+        let mut evidence = vec![run_sql_ev(
+            "SELECT 'all' AS bucket, COUNT(*) AS count FROM books",
+            &["bucket", "count"],
+            vec![vec![Json::from("all"), Json::from(4)]],
+        )];
+        evidence[0].tool = "make_chart".into();
+
+        let mut out = Vec::new();
+        check_aggregate_verb("how many books are there?", &evidence, &mut out);
+        assert!(out.is_empty(), "chart SQL should count as a cited aggregate: {out:?}");
     }
 
     #[test]
@@ -1255,6 +1292,36 @@ mod tests {
     }
 
     #[test]
+    fn status_uses_one_typed_answer_classification() {
+        let evidence = vec![run_sql_ev(
+            "SELECT 1 AS total",
+            &["total"],
+            vec![vec![Json::from(1)]],
+        )];
+        let clean = vec![
+            ok("re-checked the queries behind this answer  same results"),
+            ok("every number in the answer came from the data above"),
+        ];
+        assert_eq!(status(&clean, &evidence), VerificationStatus::Verified);
+        assert_eq!(
+            status(&[warn("a total here is computed over a text column", None)], &evidence),
+            VerificationStatus::NeedsReview
+        );
+        assert_eq!(
+            status(
+                &[warn("the answer mentions 999 not found in any result", None)],
+                &evidence
+            ),
+            VerificationStatus::Failed
+        );
+        assert_eq!(status(&[], &[]), VerificationStatus::InsufficientData);
+
+        let mut failed_tool = evidence[0].clone();
+        failed_tool.error = Some("query failed".into());
+        assert_eq!(status(&[], &[failed_tool]), VerificationStatus::InsufficientData);
+    }
+
+    #[test]
     fn spots_a_disagreeing_second_opinion() {
         // Same figure, different wording -> no disagreement.
         assert!(self_consistency_check("You spent $450 total.", "Total spending: 450").is_none());
@@ -1274,7 +1341,9 @@ mod tests {
     #[test]
     fn background_line_numbers_are_not_flagged() {
         let ev = vec![EvidenceItem {
+            id: "evidence-test".into(),
             tool: "run_sql".into(),
+            sources: Vec::new(),
             args: Json::Object(Default::default()),
             note: None,
             sql: None,
@@ -1300,7 +1369,9 @@ mod tests {
     #[test]
     fn an_empty_aggregate_backs_the_answer_zero() {
         let ev = vec![EvidenceItem {
+            id: "evidence-test".into(),
             tool: "run_sql".into(),
+            sources: Vec::new(),
             args: Json::Object(Default::default()),
             note: None,
             sql: Some("SELECT SUM(amount) FROM t WHERE category = 'healthcare'".into()),
@@ -1336,7 +1407,9 @@ mod tests {
         // their detail text, stored in `output` -- a summary answer quoting
         // one of those counts is backed, not a stray figure.
         let ev = vec![EvidenceItem {
+            id: "evidence-test".into(),
             tool: "list_files".into(),
+            sources: Vec::new(),
             args: Json::Object(Default::default()),
             note: None,
             sql: None,
@@ -1359,7 +1432,9 @@ mod tests {
 
     fn run_sql_ev(sql: &str, columns: &[&str], rows: Vec<Vec<Json>>) -> EvidenceItem {
         EvidenceItem {
+            id: "evidence-test".into(),
             tool: "run_sql".into(),
+            sources: Vec::new(),
             args: Json::Object(Default::default()),
             note: None,
             sql: Some(sql.to_string()),

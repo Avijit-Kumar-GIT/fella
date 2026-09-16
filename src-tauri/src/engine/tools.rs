@@ -5,7 +5,7 @@
 use async_trait::async_trait;
 use serde_json::{json, Value as Json};
 
-use crate::engine::analytics::chart::{self, ChartData, ChartKind, Series};
+use crate::engine::analytics::chart::{self, ChartData, ChartKind};
 use crate::engine::analytics::verify::truncate as truncate_chars;
 use crate::engine::error::{EngineError, EngineResult};
 use crate::engine::llm::ToolSchema;
@@ -677,14 +677,16 @@ it only to compute over the workspace data, not to fetch anything."
 // `ToolOutput`, same as every other tool here.
 
 #[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ChartArgs {
     kind: ChartKind,
     #[serde(default)]
     title: Option<String>,
-    labels: Vec<String>,
-    series: Vec<Series>,
+    sql: String,
     #[serde(default)]
     unit: Option<String>,
+    #[serde(default, rename = "note")]
+    _note: Option<String>,
 }
 
 pub struct MakeChart;
@@ -695,8 +697,9 @@ impl Tool for MakeChart {
         "make_chart"
     }
     fn description(&self) -> &'static str {
-        "Draw a bar or line chart from labels + one or more numeric series you already have \
-(e.g. from a prior run_sql). It renders itself in the answer; don't describe it in prose."
+        "Draw a bar or line chart from a read-only SQL query. The first query column \
+        must be the label or date and the remaining one or two columns must be numeric. \
+        It renders itself in the answer; don't describe it in prose."
     }
     fn parameters(&self) -> Json {
         json!({
@@ -704,40 +707,33 @@ impl Tool for MakeChart {
             "properties": {
                 "kind": { "type": "string", "enum": ["bar", "line"] },
                 "title": { "type": "string", "description": "short chart title, e.g. \"Spending by category\"" },
-                "labels": {
-                    "type": "array", "items": { "type": "string" },
-                    "description": "x-axis / category labels, in order"
-                },
-                "series": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "name": { "type": "string" },
-                            "values": { "type": "array", "items": { "type": "number" } }
-                        },
-                        "required": ["name", "values"],
-                        "additionalProperties": false
-                    },
-                    "description": "one or more named numeric series, each with one value per label"
+                "sql": {
+                    "type": "string",
+                    "description": "single read-only SELECT/WITH query; first column is the label/date and the next one or two columns are numeric"
                 },
                 "unit": { "type": "string", "description": "optional short suffix/prefix for values, e.g. \"$\" or \"%\"" }
             },
-            "required": ["kind", "labels", "series"],
+            "required": ["kind", "sql"],
             "additionalProperties": false
         })
     }
-    async fn run(&self, _engine: &EngineState, args: &Json) -> EngineResult<ToolOutput> {
+    async fn run(&self, engine: &EngineState, args: &Json) -> EngineResult<ToolOutput> {
         let parsed: ChartArgs = serde_json::from_value(args.clone())
             .map_err(|e| EngineError::msg(format!("invalid make_chart arguments: {e}")))?;
-        let data = ChartData {
-            kind: parsed.kind,
-            title: parsed.title,
-            labels: parsed.labels,
-            series: parsed.series,
-            unit: parsed.unit,
-        };
-        chart::validate(&data).map_err(EngineError::msg)?;
+        let sql = parsed.sql.trim();
+        if sql.is_empty() {
+            return Err(EngineError::msg("make_chart needs a non-empty SQL query"));
+        }
+        let q = engine.run_sql(sql)?;
+        if q.truncated || q.row_count > chart::MAX_CATEGORIES {
+            return Err(EngineError::msg(format!(
+                "the chart query returned {} rows (max {}); aggregate or limit it first",
+                q.row_count,
+                chart::MAX_CATEGORIES
+            )));
+        }
+        let data = chart::from_query(parsed.kind, parsed.title, parsed.unit, &q.columns, &q.rows)
+            .map_err(EngineError::msg)?;
 
         let n_series = data.series.len();
         let n_labels = data.labels.len();
@@ -750,13 +746,15 @@ impl Tool for MakeChart {
                 "{kind_word} chart, {n_labels} categor{}, {n_series} series",
                 if n_labels == 1 { "y" } else { "ies" }
             ),
-            llm_text: "Chart drawn — it renders below this message; don't restate the numbers \
-in prose."
-                .to_string(),
-            sql: None,
-            columns: None,
-            rows: None,
-            row_count: None,
+            llm_text: format!(
+                "Chart drawn from the query result below; it renders below this message. \
+                 Don't restate every value in prose.\n\n{}",
+                table_text(&q, chart::MAX_CATEGORIES)
+            ),
+            sql: Some(sql.to_string()),
+            columns: Some(q.columns),
+            rows: Some(q.rows),
+            row_count: Some(q.row_count),
             output: None,
             chart: Some(data),
         })

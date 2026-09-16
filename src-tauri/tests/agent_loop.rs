@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use fella_lib::engine::evidence::VerificationStatus;
 use fella_lib::engine::{AskEvent, EngineState};
 
 fn scratch(tag: &str) -> PathBuf {
@@ -110,7 +111,15 @@ async fn agent_calls_a_tool_then_answers() {
 
     assert!(answer.text.contains("450"), "answer was: {}", answer.text);
     assert_eq!(answer.evidence.len(), 1);
+    assert_eq!(answer.status, VerificationStatus::Verified);
+    let workspace = answer.workspace.as_ref().expect("answer has a workspace snapshot");
+    assert!(workspace.path.contains("fella-agent-ws-"));
+    assert!(workspace.revision.starts_with('r'));
     let ev = &answer.evidence[0];
+    assert_eq!(ev.id, "evidence-1");
+    assert_eq!(ev.sources.len(), 1);
+    assert_eq!(ev.sources[0].table, "sales");
+    assert_eq!(ev.sources[0].source, "sales.csv");
     assert_eq!(ev.tool, "run_sql");
     assert_eq!(ev.row_count, Some(1));
     assert!(ev.sql.as_deref().unwrap().contains("sum(amount)"));
@@ -403,6 +412,14 @@ async fn a_turns_tool_calls_run_concurrently() {
     server.join().unwrap();
 
     assert_eq!(answer.evidence.len(), 2);
+    assert_eq!(
+        answer
+            .evidence
+            .iter()
+            .map(|e| e.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["evidence-1", "evidence-2"]
+    );
     assert!(answer.evidence[0].output.as_deref().unwrap_or("").contains("one"));
     assert!(answer.evidence[1].output.as_deref().unwrap_or("").contains("two"));
 
