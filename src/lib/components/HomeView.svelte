@@ -94,7 +94,9 @@
 				<div class="section-head"><h2 id="source-summary-title">What Fella found</h2><button type="button" onclick={() => session.setWorkspaceView('sources')}>See all</button></div>
 				<div class="source-chips">
 					{#each sources.slice(0, 8) as source (source.path)}
-						<span class="source-chip"><Icon name={source.view ? 'table' : 'file'} size={13} /><span>{source.name}</span><small>{kindLabel(source)}</small></span>
+						<button class="source-chip" type="button" title="Inspect source" onclick={() => session.openInspector({ kind: 'source', path: source.path })}>
+							<Icon name={source.view ? 'table' : 'file'} size={13} /><span>{source.name}</span><small>{kindLabel(source)}</small>
+						</button>
 					{:else}
 						<p class="quiet">No readable files yet. Open Sources to see what was skipped.</p>
 					{/each}
@@ -311,6 +313,7 @@
 		gap: var(--space-2);
 	}
 	.source-chip {
+		font: inherit;
 		max-width: 100%;
 		display: inline-flex;
 		align-items: center;
@@ -321,6 +324,11 @@
 		background: var(--bg-raised);
 		color: var(--text-dim);
 		font-size: var(--fs-xs);
+	}
+	.source-chip:hover {
+		border-color: var(--border-strong);
+		background: var(--bg-inset);
+		color: var(--text);
 	}
 	.source-chip > span {
 		overflow: hidden;

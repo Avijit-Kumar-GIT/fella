@@ -12,12 +12,17 @@ import { ipc, isTauri } from './ipc';
 import type {
 	AugmentConfig,
 	AnalysisArtifact,
+	AskMode,
 	Answer,
 	Catalog,
+	ContextReference,
+	EvidenceItem,
+	InspectorSelection,
 	InstalledPack,
 	Message,
 	OllamaHealth,
 	ProviderInfo,
+	RunStep,
 	Settings
 } from './types';
 
@@ -25,6 +30,19 @@ export type { AugmentConfig };
 
 function uid(): string {
 	return Math.random().toString(36).slice(2, 10);
+}
+
+function humanToolName(tool: string): string {
+	const labels: Record<string, string> = {
+		list_files: 'Looking through the workspace',
+		inspect_file: 'Inspecting a source',
+		read_file: 'Reading a source',
+		search_files: 'Searching the workspace',
+		query: 'Calculating from the data',
+		make_chart: 'Preparing a chart',
+		memory: 'Checking workspace notes'
+	};
+	return labels[tool] ?? tool.replace(/[_-]+/g, ' ').replace(/^./, (c) => c.toUpperCase());
 }
 
 const PREFIX = 'fella:conversation:'; // one key per tab: fella:conversation:<id>
@@ -76,6 +94,15 @@ export class Conversation {
 	/** A user-given name. null = derive one from the folder + first message,
 	 *  the same as an un-renamed conversation always has. */
 	title = $state<string | null>(null);
+	/** The current question's intent. Inspect selects the stricter read-only
+	 *  tool registry and makes the source-first workflow explicit to the model. */
+	mode = $state<AskMode>('ask');
+	/** Context chosen from the workspace or saved analyses for this tab. */
+	contextRefs = $state<ContextReference[]>([]);
+	/** The compact, local run trace shown beneath the transcript. */
+	runSteps = $state<RunStep[]>([]);
+	runStartedAt = $state<number | null>(null);
+	runDurationMs = $state<number | null>(null);
 
 	/** `id` defaults to a fresh one (a genuinely new conversation). Reopening
 	 *  an archived conversation passes its real id back in, so re-archiving
@@ -100,6 +127,81 @@ export class Conversation {
 	addSystem(text: string): Message {
 		this.messages.push({ id: uid(), role: 'system', text, ts: Date.now() });
 		return this.messages[this.messages.length - 1];
+	}
+
+	setMode(mode: AskMode): void {
+		this.mode = mode;
+	}
+
+	addContext(ref: ContextReference): void {
+		if (this.contextRefs.some((item) => item.kind === ref.kind && item.key === ref.key)) return;
+		this.contextRefs = [...this.contextRefs, ref];
+	}
+
+	removeContext(kind: ContextReference['kind'], key: string): void {
+		this.contextRefs = this.contextRefs.filter((item) => item.kind !== kind || item.key !== key);
+	}
+
+	clearContext(): void {
+		this.contextRefs = [];
+	}
+
+	startRun(): void {
+		const now = Date.now();
+		this.runStartedAt = now;
+		this.runDurationMs = null;
+		this.runSteps = [
+			{
+				id: uid(),
+				label: 'Planning the question',
+				state: 'running',
+				started_at_ms: now
+			}
+		];
+	}
+
+	beginRunStep(tool: string, note?: string): void {
+		const now = Date.now();
+		const steps = this.runSteps.map((step) =>
+			step.state === 'running' && !step.tool
+				? { ...step, state: 'complete' as const, finished_at_ms: now }
+				: step
+		);
+		this.runSteps = [
+			...steps,
+			{
+				id: uid(),
+				label: note || humanToolName(tool),
+				state: 'running',
+				started_at_ms: now,
+				tool,
+				note
+			}
+		];
+	}
+
+	completeRunStep(item: EvidenceItem): void {
+		const now = Date.now();
+		const index = this.runSteps.findLastIndex(
+			(step) => step.state === 'running' && (!step.tool || step.tool === item.tool)
+		);
+		if (index < 0) return;
+		this.runSteps = this.runSteps.map((step, i) =>
+			i === index
+				? { ...step, state: item.error ? ('error' as const) : ('complete' as const), finished_at_ms: now, evidence: item }
+				: step
+		);
+	}
+
+	finishRun(error = false): void {
+		const now = Date.now();
+		this.runSteps = this.runSteps.map((step) =>
+			step.state === 'running'
+				? { ...step, state: error ? ('error' as const) : ('complete' as const), finished_at_ms: now }
+				: step
+		);
+		if (this.runStartedAt !== null) this.runDurationMs = Math.max(0, now - this.runStartedAt);
+		this.runStartedAt = null;
 	}
 
 	/** Coalesce writes while a run streams; flush immediately once it settles. */
@@ -205,6 +307,9 @@ class Session {
 	/** Bumped whenever a conversation is archived, so the sidebar's list
 	 *  knows to refetch without polling. */
 	historyVersion = $state<number>(0);
+	/** Right-hand contextual inspector, shared by Ask, Sources, and Analyses. */
+	inspectorOpen = $state<boolean>(false);
+	inspectorSelection = $state<InspectorSelection>(null);
 
 	toggleSidebar(): void {
 		this.sidebarCollapsed = !this.sidebarCollapsed;
@@ -243,6 +348,44 @@ class Session {
 
 	selectAnalysis(id: string | null): void {
 		this.selectedAnalysisId = id;
+	}
+
+	setAskMode(mode: AskMode): void {
+		this.ensureChat().setMode(mode);
+	}
+
+	addContextReference(ref: ContextReference): void {
+		this.ensureChat().addContext(ref);
+	}
+
+	removeContextReference(kind: ContextReference['kind'], key: string): void {
+		this.activeChat?.removeContext(kind, key);
+	}
+
+	clearContextReferences(): void {
+		this.activeChat?.clearContext();
+	}
+
+	openInspector(selection: InspectorSelection): void {
+		this.inspectorSelection = selection;
+		this.inspectorOpen = selection !== null;
+	}
+
+	closeInspector(): void {
+		this.inspectorOpen = false;
+		this.inspectorSelection = null;
+	}
+
+	/** Start a fresh Ask tab with a saved analysis attached as context. */
+	startFromAnalysis(analysis: AnalysisArtifact): void {
+		this.newTab();
+		this.addContextReference({
+			kind: 'analysis',
+			key: analysis.id,
+			label: analysis.title,
+			detail: analysis.question
+		});
+		this.workspaceView = 'ask';
 	}
 
 	isAnalysisSaved(messageId: string): boolean {

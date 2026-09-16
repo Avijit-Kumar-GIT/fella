@@ -58,6 +58,11 @@
 		void dispatch(selected.question);
 	}
 
+	function forkFollowUp(): void {
+		if (!selected) return;
+		session.startFromAnalysis(selected);
+	}
+
 	function removeSelected(): void {
 		if (!selected) return;
 		session.deleteAnalysis(selected.id);
@@ -138,6 +143,9 @@
 							<p class="question">“{selected.question}”</p>
 						</div>
 						<div class="detail-actions">
+							<button class="pill primary" type="button" onclick={forkFollowUp}>
+								<Icon name="plus" size={13} /> Fork follow-up
+							</button>
 							<button class="pill ghost" type="button" onclick={askAgain}>
 								<Icon name="compose" size={13} /> Ask again
 							</button>

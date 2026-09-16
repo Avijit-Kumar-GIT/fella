@@ -6,6 +6,7 @@
 
 import type {
 	Answer,
+	AskMode,
 	AskEvent,
 	Catalog,
 	ConversationSummary,
@@ -157,7 +158,8 @@ export const ipc = {
 		conversationId: string,
 		question: string,
 		onEvent: (e: AskEvent) => void,
-		model?: string
+		model?: string,
+		mode?: AskMode
 	): Promise<Answer> {
 		const { Channel } = await import('@tauri-apps/api/core');
 		const channel = new Channel<AskEvent>();
@@ -166,6 +168,7 @@ export const ipc = {
 			conversationId,
 			question,
 			model: model || null,
+			mode: mode || null,
 			channel
 		});
 	}

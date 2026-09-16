@@ -6,6 +6,7 @@
 	import type { Message as MessageData } from '$lib/types';
 	import Icon from './Icon.svelte';
 	import Message from './Message.svelte';
+	import RunTimeline from './RunTimeline.svelte';
 
 	// The empty screen adapts to what's already set up, so a non-technical user
 	// always sees the one next step rather than a bare "not connected".
@@ -108,6 +109,7 @@
 	$effect(() => {
 		session.messages.length;
 		session.messages.at(-1)?.text;
+		session.activeChat?.runSteps.length;
 		if (stick && scroller) {
 			queueMicrotask(() => scroller.scrollTo({ top: scroller.scrollHeight }));
 		}
@@ -130,6 +132,7 @@
 	aria-label="conversation"
 	aria-live="off"
 >
+	<RunTimeline />
 	{#if session.messages.length === 0}
 		<div class="onboard" class:center={!hasFolder && !showSetup}>
 			<div class="wordmark" aria-label="Fella">Fella</div>

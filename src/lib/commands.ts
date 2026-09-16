@@ -3,10 +3,21 @@
 import { ipc, isTauri, openExternal, pickFolder } from './ipc';
 import { prefs } from './prefs.svelte';
 import { Conversation, session } from './session.svelte';
-import type { AskEvent, InstalledPack, Message, OllamaHealth, ProviderInfo } from './types';
+import type {
+	AskEvent,
+	ContextReference,
+	InstalledPack,
+	Message,
+	OllamaHealth,
+	ProviderInfo
+} from './types';
 
 const HELP = `Ask a question in plain language and Fella answers from your files,
 showing the exact steps it took. You never need these commands, but here they are:
+
+  Ask / Inspect     choose the normal answer flow or a stricter source-first,
+                   read-only inspection flow from the composer
+  + Context / @     attach a source, field, or saved analysis to your next question
 
   /open <path>     choose the folder Fella looks at
   /files           see what Fella found in your folder
@@ -292,7 +303,7 @@ export async function steerRun(conv: Conversation, extra: string): Promise<void>
 	// Let the cancelled run unwind (its `ask` resolves "Stopped." and clears busy).
 	for (let i = 0; i < 60 && conv.busy; i++) await new Promise((r) => setTimeout(r, 50));
 	conv.addUser(extra);
-	await ask(`${prior.text}\n\nAlso: ${extra}`, conv);
+	await ask(buildQuestion(`${prior.text}\n\nAlso: ${extra}`, conv), conv);
 }
 
 /** Entry point: called with the raw composer text. */
@@ -341,7 +352,41 @@ export async function dispatch(raw: string): Promise<void> {
 
 	const conv = session.ensureChat();
 	conv.addUser(text);
-	await ask(text, conv);
+	await ask(buildQuestion(text, conv), conv);
+}
+
+/** Turn the small UI context selection into explicit model guidance. The
+ * catalog and engine still decide what can be read; this only makes the
+ * user's chosen starting points visible in the prompt. */
+function buildQuestion(question: string, conv: Conversation): string {
+	const instructions =
+		conv.mode === 'inspect'
+			? 'Start by inspecting the relevant workspace sources and schema. Briefly explain what you used and any caveats before giving the answer.'
+			: '';
+	const refs = conv.contextRefs;
+	if (!instructions && refs.length === 0) return question;
+	const context = refs.length
+		? `Use these references as the starting point for this question. Treat saved results as hypotheses and verify them against the current workspace:\n${refs
+				.map((ref) => `- ${contextReferenceText(ref)}`)
+				.join('\n')}`
+		: '';
+	return [instructions, context, question].filter(Boolean).join('\n\n');
+}
+
+function contextReferenceText(ref: ContextReference): string {
+	if (ref.kind === 'source') return `${ref.label}${ref.detail ? ` (${ref.detail})` : ''}`;
+	if (ref.kind === 'analysis') {
+		const analysis = session.analyses.find((item) => item.id === ref.key);
+		if (!analysis) return `saved analysis “${ref.label}”${ref.detail ? ` — original question: ${ref.detail}` : ''}`;
+		const answer = analysis.answer.text.replace(/\s+/g, ' ').trim().slice(0, 1200);
+		const evidence = analysis.answer.evidence
+			.map((item) => item.result_summary)
+			.filter(Boolean)
+			.slice(0, 4)
+			.join('; ');
+		return `saved analysis “${analysis.title}” — original question: ${analysis.question}\n  prior result: ${answer}${evidence ? `\n  evidence: ${evidence}` : ''}`;
+	}
+	return `${ref.label}${ref.detail ? ` (${ref.detail})` : ''}`;
 }
 
 /** Fetch the provider list and cache it on the session so the composer hint
@@ -471,7 +516,8 @@ async function runCommand(text: string): Promise<void> {
 				session.addSystem('Nothing to retry yet. Ask a question first.');
 				return;
 			}
-			await ask(q, session.ensureChat());
+			const retryChat = session.ensureChat();
+			await ask(buildQuestion(q, retryChat), retryChat);
 			return;
 		}
 
@@ -1078,6 +1124,7 @@ async function ask(question: string, conv: Conversation): Promise<void> {
 	if (!requireEngine()) return;
 
 	const msg = conv.addAssistant('');
+	conv.startRun();
 	conv.busy = true;
 	conv.activity = 'thinking…';
 
@@ -1096,6 +1143,7 @@ async function ask(question: string, conv: Conversation): Promise<void> {
 	// flash in the status bar. Keep them so that if the run ends badly the user
 	// has the warning that explains why.
 	const notices: string[] = [];
+	let failed = false;
 
 	const onEvent = (e: AskEvent) => {
 		switch (e.kind) {
@@ -1110,10 +1158,12 @@ async function ask(question: string, conv: Conversation): Promise<void> {
 				if (!msg.plan && msg.text.trim()) msg.plan = msg.text.trim();
 				msg.text = '';
 				const note = typeof e.args?.note === 'string' ? e.args.note.trim() : '';
+				conv.beginRunStep(e.tool, note || undefined);
 				conv.activity = note ? `${note}…` : 'working…';
 				break;
 			}
 			case 'tool_end':
+				conv.completeRunStep(e.item);
 				// Back to the model for the next step keep a heartbeat showing.
 				conv.activity = 'thinking…';
 				break;
@@ -1131,10 +1181,11 @@ async function ask(question: string, conv: Conversation): Promise<void> {
 	};
 
 	try {
-		const answer = await ipc.ask(conv.id, question, onEvent, conv.model || undefined);
+		const answer = await ipc.ask(conv.id, question, onEvent, conv.model || undefined, conv.mode);
 		msg.answer = answer;
 		msg.text = answer.text;
 	} catch (e) {
+		failed = true;
 		const kind = errKind(e);
 		// If the model already streamed part of an answer, keep it rather than
 		// replacing what the user watched appear with a bare "error:".
@@ -1156,6 +1207,7 @@ async function ask(question: string, conv: Conversation): Promise<void> {
 		msg.plan = undefined;
 		conv.busy = false;
 		conv.activity = '';
+		conv.finishRun(failed);
 	}
 }
 

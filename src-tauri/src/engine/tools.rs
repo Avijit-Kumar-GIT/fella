@@ -60,16 +60,33 @@ pub struct Registry {
 
 impl Registry {
     pub fn standard() -> Self {
+        Self::build(true)
+    }
+
+    /// Read-only inspection tools for the non-developer path. Python is kept
+    /// out of this registry because it is a subprocess with a broader OS
+    /// surface than the deterministic workspace tools. MCP is attached by the
+    /// caller only for ordinary Ask runs.
+    pub fn inspect() -> Self {
+        Self::build(false)
+    }
+
+    fn build(include_python: bool) -> Self {
+        let mut tools: Vec<Box<dyn Tool>> = vec![
+            Box::new(ListFiles),
+            Box::new(InspectTable),
+            Box::new(RunSql),
+            Box::new(GrepFiles),
+            Box::new(ReadFile),
+            Box::new(MakeChart),
+        ];
+        if include_python {
+            // Keep the more capable subprocess tool available to the existing
+            // Ask mode until the dedicated OS sandbox work lands.
+            tools.insert(5, Box::new(RunPython));
+        }
         Self {
-            tools: vec![
-                Box::new(ListFiles),
-                Box::new(InspectTable),
-                Box::new(RunSql),
-                Box::new(GrepFiles),
-                Box::new(ReadFile),
-                Box::new(RunPython),
-                Box::new(MakeChart),
-            ],
+            tools,
             #[cfg(feature = "mcp")]
             mcp: Vec::new(),
         }
@@ -792,5 +809,23 @@ mod tests {
         // A normal result is untouched.
         let r = table_text(&qr(&["x"], vec![vec![Json::from(5)]]), 30);
         assert!(!r.contains("nothing matched"), "{r}");
+    }
+
+    #[test]
+    fn inspect_registry_excludes_python() {
+        let inspect_names: Vec<String> = Registry::inspect()
+            .schemas()
+            .into_iter()
+            .map(|schema| schema.name)
+            .collect();
+        assert!(!inspect_names.iter().any(|name| name == "run_python"));
+        assert!(inspect_names.iter().any(|name| name == "run_sql"));
+
+        let standard_names: Vec<String> = Registry::standard()
+            .schemas()
+            .into_iter()
+            .map(|schema| schema.name)
+            .collect();
+        assert!(standard_names.iter().any(|name| name == "run_python"));
     }
 }

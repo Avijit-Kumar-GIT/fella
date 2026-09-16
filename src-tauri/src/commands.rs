@@ -277,11 +277,13 @@ pub async fn ask(
     conversation_id: String,
     question: String,
     model: Option<String>,
+    mode: Option<String>,
     channel: Channel<AskEvent>,
     engine: State<'_, EngineState>,
 ) -> Result<Answer, EngineError> {
+    let inspect = mode.as_deref() == Some("inspect");
     engine
-        .ask(&conversation_id, &question, model.as_deref(), move |ev| {
+        .ask_with_mode(&conversation_id, &question, model.as_deref(), inspect, move |ev| {
             let _ = channel.send(ev);
         })
         .await

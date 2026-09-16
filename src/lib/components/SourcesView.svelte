@@ -36,6 +36,21 @@
 		selectedPath = source.path;
 	}
 
+	function useSelected(): void {
+		if (!selected) return;
+		session.addContextReference({
+			kind: 'source',
+			key: selected.path,
+			label: selected.name,
+			detail: relativePath(selected.path)
+		});
+		session.setWorkspaceView('ask');
+	}
+
+	function inspectSelected(): void {
+		if (selected) session.openInspector({ kind: 'source', path: selected.path });
+	}
+
 	function relativePath(path: string): string {
 		if (!workspace) return path;
 		const root = workspace.replace(/[/\\]+$/, '');
@@ -146,6 +161,10 @@
 						</div>
 					</div>
 					<p class="path">{relativePath(selected.path)}</p>
+					<div class="detail-actions">
+						<button class="pill primary" type="button" onclick={useSelected}><Icon name="plus" size={13} /> Use in Ask</button>
+						<button class="pill ghost" type="button" onclick={inspectSelected}><Icon name="info" size={13} /> Inspect</button>
+					</div>
 
 					<div class="facts">
 						<div><span>Size</span><strong>{formatBytes(selected.size_bytes)}</strong></div>
@@ -408,6 +427,19 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+	}
+	.detail-actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: var(--space-2);
+		margin: 0 0 var(--space-4);
+	}
+	.detail-actions .pill {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		padding: 6px 10px;
+		font-size: var(--fs-xs);
 	}
 	.facts {
 		display: grid;

@@ -81,6 +81,39 @@ export interface AnalysisArtifact {
 	created_at_ms: number;
 }
 
+/** The two user-facing ways to work with a mounted workspace. Ask is the
+ * default conversational surface; Inspect is the stricter source-first path
+ * with a read-only tool registry. */
+export type AskMode = 'ask' | 'inspect';
+
+/** A small, local reference attached to the next conversation turn. It is a
+ * UI affordance for choosing context; the engine still decides which files to
+ * read and the backend remains the source of truth for access. */
+export type ContextReference =
+	| { kind: 'source'; key: string; label: string; detail?: string }
+	| { kind: 'analysis'; key: string; label: string; detail?: string }
+	| { kind: 'column'; key: string; label: string; detail?: string };
+
+/** One observable step in a local question run. Kept in the conversation so
+ * switching tabs never loses the small amount of run history shown in the UI. */
+export interface RunStep {
+	id: string;
+	label: string;
+	state: 'running' | 'complete' | 'error';
+	started_at_ms: number;
+	finished_at_ms?: number;
+	tool?: string;
+	note?: string;
+	evidence?: EvidenceItem;
+}
+
+/** Selection rendered by the right-hand inspector drawer. */
+export type InspectorSelection =
+	| { kind: 'source'; path: string }
+	| { kind: 'analysis'; id: string }
+	| { kind: 'answer'; messageId: string; stepIndex?: number }
+	| null;
+
 export interface Message {
 	id: string;
 	role: Role;

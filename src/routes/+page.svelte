@@ -3,6 +3,7 @@
 	import CommandPalette from '$lib/components/CommandPalette.svelte';
 	import AnalysesView from '$lib/components/AnalysesView.svelte';
 	import Composer from '$lib/components/Composer.svelte';
+	import ContextInspector from '$lib/components/ContextInspector.svelte';
 	import HomeView from '$lib/components/HomeView.svelte';
 	import Icon from '$lib/components/Icon.svelte';
 	import Sidebar from '$lib/components/Sidebar.svelte';
@@ -128,7 +129,9 @@
 			e.preventDefault();
 			session.focus = !session.focus;
 		} else if (e.key === 'Escape' && !paletteOpen) {
-			if (session.pendingKey || session.pendingConnect) {
+			if (session.inspectorOpen) {
+				session.closeInspector();
+			} else if (session.pendingKey || session.pendingConnect) {
 				session.pendingKey = null;
 				session.pendingConnect = null;
 				session.addSystem('Cancelled.');
@@ -210,21 +213,26 @@
 	<div class="app" class:focus={session.focus}>
 		<Titlebar onpalette={() => (paletteOpen = true)} />
 		<main>
-			{#if !session.catalog.workspace && (activeView === 'home' || activeView === 'sources' || activeView === 'context')}
-				<Transcript bind:this={transcript} />
-			{:else if activeView === 'home'}
-				<HomeView />
-			{:else if activeView === 'sources'}
-				<SourcesView />
-			{:else if activeView === 'analyses'}
-				<AnalysesView />
-			{:else if activeTab.kind === 'augment'}
-				{#key activeTab.id}
-					<AugmentView tab={activeTab} />
-				{/key}
-			{:else}
-				<Transcript bind:this={transcript} />
-			{/if}
+			<div class="main-row">
+				{#if !session.catalog.workspace && (activeView === 'home' || activeView === 'sources' || activeView === 'context')}
+					<Transcript bind:this={transcript} />
+				{:else if activeView === 'home'}
+					<HomeView />
+				{:else if activeView === 'sources'}
+					<SourcesView />
+				{:else if activeView === 'analyses'}
+					<AnalysesView />
+				{:else if activeTab.kind === 'augment'}
+					{#key activeTab.id}
+						<AugmentView tab={activeTab} />
+					{/key}
+				{:else}
+					<Transcript bind:this={transcript} />
+				{/if}
+				{#if session.inspectorOpen}
+					<ContextInspector />
+				{/if}
+			</div>
 		</main>
 		<div class="dock">
 			{#if activeView === 'ask' && activeTab.kind !== 'augment'}
@@ -275,6 +283,13 @@
 		/* Same fill as the titlebar/sidebar/panel so the whole shell reads as
 		   one open canvas, not stacked boxes -- no seam, no colour change. */
 		background: var(--bg);
+	}
+	.main-row {
+		position: relative;
+		flex: 1;
+		min-width: 0;
+		min-height: 0;
+		display: flex;
 	}
 	/* Status line + composer read as one calm footer zone, continuous with the
 	   transcript surface above it no rule, no colour change. */

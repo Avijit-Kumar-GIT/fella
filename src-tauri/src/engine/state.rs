@@ -1444,6 +1444,22 @@ exactly, character for character, from the list below.";
         model: Option<&str>,
         emit: impl Fn(AskEvent) + Send + Sync,
     ) -> EngineResult<Answer> {
+        self
+            .ask_with_mode(conversation_id, question, model, false, emit)
+            .await
+    }
+
+    /// Run the agent loop with the user's interaction mode. Inspect keeps the
+    /// same evidence and verification path but exposes only deterministic
+    /// workspace tools; it also avoids attaching external MCP tools.
+    pub async fn ask_with_mode(
+        &self,
+        conversation_id: &str,
+        question: &str,
+        model: Option<&str>,
+        inspect: bool,
+        emit: impl Fn(AskEvent) + Send + Sync,
+    ) -> EngineResult<Answer> {
         let effective_model = model
             .map(str::trim)
             .filter(|m| !m.is_empty())
@@ -1488,9 +1504,15 @@ exactly, character for character, from the list below.";
 
         let llm = self.llm_with_model(&effective_model);
         #[allow(unused_mut)]
-        let mut registry = Registry::standard();
+        let mut registry = if inspect {
+            Registry::inspect()
+        } else {
+            Registry::standard()
+        };
         #[cfg(feature = "mcp")]
-        self.attach_mcp_tools(&mut registry, &emit).await;
+        if !inspect {
+            self.attach_mcp_tools(&mut registry, &emit).await;
+        }
         let answer =
             agent::run(self, &llm, &registry, conversation_id, question, &cancel, &emit).await;
         // (`&cancel` derefs `Arc<AtomicBool>` -> `&AtomicBool` for `run`.)
