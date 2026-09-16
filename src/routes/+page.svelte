@@ -181,6 +181,16 @@
 		if (activeView === 'ask') queueMicrotask(() => composer?.focus());
 	});
 
+	// Keep the no-folder Ask onboarding as the canonical fallback if the
+	// workspace disappears while a catalog-dependent pane is open.
+	$effect(() => {
+		const view = session.workspaceView;
+		const mounted = session.catalog.workspace;
+		if (!mounted && (view === 'sources' || view === 'context')) {
+			session.setWorkspaceView('ask');
+		}
+	});
+
 	// A screen reader gets nothing during a run otherwise (the answer streams
 	// into a div it isn't watching). Announce what Fella is doing, and that the
 	// answer has landed.

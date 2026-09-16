@@ -216,6 +216,13 @@ class Session {
 	}
 
 	setWorkspaceView(view: WorkspaceView): void {
+		// Sources and Context describe a mounted workspace. If the catalog is
+		// empty, keep the user on the useful no-folder onboarding surface instead
+		// of showing a dead-end pane.
+		if (!this.catalog.workspace && (view === 'sources' || view === 'context')) {
+			this.workspaceView = 'ask';
+			return;
+		}
 		this.workspaceView = view;
 		// An augment is an editor surface, but Ask should always return to a
 		// conversation rather than leaving the user on a hidden file tab.
