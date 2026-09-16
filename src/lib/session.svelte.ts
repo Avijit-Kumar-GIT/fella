@@ -216,10 +216,10 @@ class Session {
 	}
 
 	setWorkspaceView(view: WorkspaceView): void {
-		// Sources and Context describe a mounted workspace. If the catalog is
-		// empty, keep the user on the useful no-folder onboarding surface instead
-		// of showing a dead-end pane.
-		if (!this.catalog.workspace && (view === 'sources' || view === 'context')) {
+		// Overview, Sources, and Context describe a mounted workspace. If the
+		// catalog is empty, keep the user on the single useful no-folder
+		// onboarding surface instead of showing competing empty states.
+		if (!this.catalog.workspace && (view === 'home' || view === 'sources' || view === 'context')) {
 			this.workspaceView = 'ask';
 			return;
 		}

@@ -226,6 +226,7 @@
 			class="nav-row"
 			class:active={session.workspaceView === 'home'}
 			type="button"
+			disabled={!session.catalog.workspace}
 			aria-current={session.workspaceView === 'home' ? 'page' : undefined}
 			onclick={() => session.setWorkspaceView('home')}
 		>

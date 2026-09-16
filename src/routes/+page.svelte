@@ -186,7 +186,7 @@
 	$effect(() => {
 		const view = session.workspaceView;
 		const mounted = session.catalog.workspace;
-		if (!mounted && (view === 'sources' || view === 'context')) {
+		if (!mounted && (view === 'home' || view === 'sources' || view === 'context')) {
 			session.setWorkspaceView('ask');
 		}
 	});
@@ -210,7 +210,9 @@
 	<div class="app" class:focus={session.focus}>
 		<Titlebar onpalette={() => (paletteOpen = true)} />
 		<main>
-			{#if activeView === 'home'}
+			{#if !session.catalog.workspace && (activeView === 'home' || activeView === 'sources' || activeView === 'context')}
+				<Transcript bind:this={transcript} />
+			{:else if activeView === 'home'}
 				<HomeView />
 			{:else if activeView === 'sources'}
 				<SourcesView />

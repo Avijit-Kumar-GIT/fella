@@ -47,94 +47,83 @@
 </script>
 
 <section class="home-page" aria-labelledby="home-title">
-	{#if !workspace}
-		<div class="home-empty">
-			<p class="eyebrow">Personal analytics</p>
-			<h1 id="home-title">A clear place to think with your files.</h1>
-			<p>Open a folder and ask questions about the data, documents, and notes already on your computer.</p>
-			<button class="pill primary" type="button" onclick={() => void openFolder()}>
-				<Icon name="folder" size={14} /> Choose a folder
-			</button>
+	<header class="home-head">
+		<div>
+			<p class="eyebrow">Workspace overview</p>
+			<h1 id="home-title">{folderName}</h1>
+			<p class="lede">A private view of the files you chose to explore.</p>
 		</div>
-	{:else}
-		<header class="home-head">
-			<div>
-				<p class="eyebrow">Workspace overview</p>
-				<h1 id="home-title">{folderName}</h1>
-				<p class="lede">A private view of the files you chose to explore.</p>
-			</div>
-			<button class="pill ghost" type="button" onclick={() => void openFolder()}>
-				<Icon name="folder" size={14} /> Change folder
-			</button>
-		</header>
+		<button class="pill ghost" type="button" onclick={() => void openFolder()}>
+			<Icon name="folder" size={14} /> Change folder
+		</button>
+	</header>
 
-		<div class="stats" aria-label="Workspace summary">
-			<div class="stat"><strong>{formatCount(sources.length)}</strong><span>readable files</span></div>
-			<div class="stat"><strong>{formatCount(rowCount)}</strong><span>known rows</span></div>
-			<div class="stat"><strong>{formatCount(analyses.length)}</strong><span>saved analyses</span></div>
-			{#if skipped.length}<div class="stat warn"><strong>{formatCount(skipped.length)}</strong><span>files to review</span></div>{/if}
+	<div class="stats" aria-label="Workspace summary">
+		<div class="stat"><strong>{formatCount(sources.length)}</strong><span>readable files</span></div>
+		<div class="stat"><strong>{formatCount(rowCount)}</strong><span>known rows</span></div>
+		<div class="stat"><strong>{formatCount(analyses.length)}</strong><span>saved analyses</span></div>
+		{#if skipped.length}<div class="stat warn"><strong>{formatCount(skipped.length)}</strong><span>files to review</span></div>{/if}
+	</div>
+
+	<div class="home-grid">
+		<div class="main-column">
+			<section class="ask-card" aria-labelledby="ask-title">
+				<div class="ask-mark"><Icon name="compose" size={18} /></div>
+				<div>
+					<p class="eyebrow">Start with a question</p>
+					<h2 id="ask-title">What would you like to understand?</h2>
+					<p>Fella will show the files, calculations, and checks behind its answer.</p>
+				</div>
+				<button class="ask-button" type="button" onclick={() => session.setWorkspaceView('ask')}>
+					<span>Ask a question</span><Icon name="chevron-right" size={14} />
+				</button>
+			</section>
+
+			<section class="suggestions" aria-labelledby="suggestions-title">
+				<div class="section-head"><h2 id="suggestions-title">Good places to begin</h2><span>From this workspace</span></div>
+				<div class="suggestion-list">
+					{#each SUGGESTIONS as suggestion (suggestion)}
+						<button type="button" onclick={() => ask(suggestion)}>
+							<span>{suggestion}</span><Icon name="arrow-up-right" size={13} />
+						</button>
+					{/each}
+				</div>
+			</section>
+
+			<section class="source-summary" aria-labelledby="source-summary-title">
+				<div class="section-head"><h2 id="source-summary-title">What Fella found</h2><button type="button" onclick={() => session.setWorkspaceView('sources')}>See all</button></div>
+				<div class="source-chips">
+					{#each sources.slice(0, 8) as source (source.path)}
+						<span class="source-chip"><Icon name={source.view ? 'table' : 'file'} size={13} /><span>{source.name}</span><small>{kindLabel(source)}</small></span>
+					{:else}
+						<p class="quiet">No readable files yet. Open Sources to see what was skipped.</p>
+					{/each}
+				</div>
+			</section>
 		</div>
 
-		<div class="home-grid">
-			<div class="main-column">
-				<section class="ask-card" aria-labelledby="ask-title">
-					<div class="ask-mark"><Icon name="compose" size={18} /></div>
-					<div>
-						<p class="eyebrow">Start with a question</p>
-						<h2 id="ask-title">What would you like to understand?</h2>
-						<p>Fella will show the files, calculations, and checks behind its answer.</p>
-					</div>
-					<button class="ask-button" type="button" onclick={() => session.setWorkspaceView('ask')}>
-						<span>Ask a question</span><Icon name="chevron-right" size={14} />
-					</button>
-				</section>
+		<aside class="home-side">
+			<section class="recent" aria-labelledby="recent-title">
+				<div class="section-head"><h2 id="recent-title">Recent analyses</h2><button type="button" onclick={() => session.setWorkspaceView('analyses')}>View all</button></div>
+				<div class="analysis-list">
+					{#each analyses.slice(0, 4) as analysis (analysis.id)}
+						<button class="analysis-row" type="button" onclick={() => openAnalysis(analysis)}>
+							<span class="analysis-icon"><Icon name="bookmark" size={13} /></span>
+							<span><strong>{analysis.title}</strong><small>{formatDate(analysis.created_at_ms)}</small></span>
+						</button>
+					{:else}
+						<div class="quiet-block"><Icon name="bookmark" size={15} /><span>Save a useful answer and it will live here.</span></div>
+					{/each}
+				</div>
+			</section>
 
-				<section class="suggestions" aria-labelledby="suggestions-title">
-					<div class="section-head"><h2 id="suggestions-title">Good places to begin</h2><span>From this workspace</span></div>
-					<div class="suggestion-list">
-						{#each SUGGESTIONS as suggestion (suggestion)}
-							<button type="button" onclick={() => ask(suggestion)}>
-								<span>{suggestion}</span><Icon name="arrow-up-right" size={13} />
-							</button>
-						{/each}
-					</div>
-				</section>
-
-				<section class="source-summary" aria-labelledby="source-summary-title">
-					<div class="section-head"><h2 id="source-summary-title">What Fella found</h2><button type="button" onclick={() => session.setWorkspaceView('sources')}>See all</button></div>
-					<div class="source-chips">
-						{#each sources.slice(0, 8) as source (source.path)}
-							<span class="source-chip"><Icon name={source.view ? 'table' : 'file'} size={13} /><span>{source.name}</span><small>{kindLabel(source)}</small></span>
-						{:else}
-							<p class="quiet">No readable files yet. Open Sources to see what was skipped.</p>
-						{/each}
-					</div>
-				</section>
-			</div>
-
-			<aside class="home-side">
-				<section class="recent" aria-labelledby="recent-title">
-					<div class="section-head"><h2 id="recent-title">Recent analyses</h2><button type="button" onclick={() => session.setWorkspaceView('analyses')}>View all</button></div>
-					<div class="analysis-list">
-						{#each analyses.slice(0, 4) as analysis (analysis.id)}
-							<button class="analysis-row" type="button" onclick={() => openAnalysis(analysis)}>
-								<span class="analysis-icon"><Icon name="bookmark" size={13} /></span>
-								<span><strong>{analysis.title}</strong><small>{formatDate(analysis.created_at_ms)}</small></span>
-							</button>
-						{:else}
-							<div class="quiet-block"><Icon name="bookmark" size={15} /><span>Save a useful answer and it will live here.</span></div>
-						{/each}
-					</div>
-				</section>
-
-				<section class="context-note">
-					<div class="section-head"><h2>Make it yours</h2></div>
-					<p>Tell Fella what your columns, dates, and categories mean in <code>fella.md</code>.</p>
-					<button class="text-button" type="button" onclick={() => void openContext()}>Open workspace context <Icon name="arrow-up-right" size={13} /></button>
-				</section>
-			</aside>
-		</div>
-	{/if}
+			<section class="context-note">
+				<div class="section-head"><h2>Make it yours</h2></div>
+				<p>Tell Fella what your columns, dates, and categories mean in <code>fella.md</code>.</p>
+				<button class="text-button" type="button" onclick={() => void openContext()}>Open workspace context <Icon name="arrow-up-right" size={13} /></button>
+			</section>
+		</aside>
+	</div>
 </section>
 
 <style>
@@ -145,28 +134,6 @@
 		margin: 0 auto;
 		padding: var(--space-6) var(--pad) var(--space-6);
 		overflow: auto;
-	}
-	.home-empty {
-		max-width: 48ch;
-		min-height: 70vh;
-		margin: 0 auto;
-		display: flex;
-		flex-direction: column;
-		justify-content: center;
-		align-items: flex-start;
-	}
-	.home-empty h1 {
-		max-width: 15ch;
-		margin: 0;
-		font-size: clamp(30px, 5vw, 48px);
-		line-height: 1.04;
-		letter-spacing: -0.055em;
-		font-weight: 620;
-	}
-	.home-empty p:not(.eyebrow) {
-		margin: var(--space-4) 0 var(--space-5);
-		color: var(--text-dim);
-		font-size: var(--fs-lg);
 	}
 	.home-head {
 		display: flex;
