@@ -1,6 +1,7 @@
 <script lang="ts">
-	import type { Answer, EvidenceItem } from '$lib/types';
+	import type { Answer, EvidenceItem, VerificationStatus } from '$lib/types';
 	import Icon from './Icon.svelte';
+	import { answerStatus } from '$lib/verify';
 
 	let {
 		answer,
@@ -14,7 +15,14 @@
 	let stepCount = $derived(answer.evidence.length);
 	let ms = $derived(answer.evidence.reduce((n, e) => n + e.ms, 0));
 	let warns = $derived(answer.verification.filter((v) => !v.ok).length);
+	let status = $derived(answerStatus(answer));
 	let hasBackground = $derived(/^\s*Background:/m.test(answer.text));
+	const STATUS_LABEL: Record<VerificationStatus, string> = {
+		verified: 'verified',
+		needs_review: 'needs review',
+		insufficient_data: 'insufficient data',
+		failed: 'failed'
+	};
 
 	// Which steps have their raw detail (SQL, table, output) revealed.
 	let openDetail = $state<Record<number, boolean>>({});
@@ -48,6 +56,9 @@
 		const { note: _note, ...rest } = args;
 		return rest;
 	}
+	function sourceLabel(e: EvidenceItem): string {
+		return (e.sources ?? []).map((s) => `${s.source} (${s.table})`).join(', ');
+	}
 </script>
 
 <div class="evidence">
@@ -65,22 +76,28 @@
 		{:else}
 			Evidence · {stepCount} step{stepCount === 1 ? '' : 's'} · {(ms / 1000).toFixed(1)}s
 			{#if hasBackground}<span class="bg">· background</span>{/if}
+			{#if answer.workspace}<span class="snapshot">· folder snapshot checked</span>{/if}
 		{/if}
+		<span class="status {status}">· {STATUS_LABEL[status]}</span>
 		{#if warns > 0}<span class="warn">· {warns} to check</span>{/if}
 	</button>
 
 	{#if expanded}
 		<div class="body" id={bodyId}>
 			<ol class="steps">
-				{#each answer.evidence as e, i (i)}
+				{#each answer.evidence as e, i (e.id ?? `evidence-${i}`)}
 					{@const shownArgs = argsWithoutNote(e.args)}
 					{@const hasDetail =
 						!!e.sql ||
+						!!e.sources?.length ||
 						Object.keys(shownArgs).length > 0 ||
 						!!e.output ||
 						!!(e.columns && e.rows)}
 					<li class="step" class:failed={!!e.error}>
 						<span class="line">{stepLabel(e)}</span>
+						{#if e.sources?.length}
+							<div class="source-line">from {sourceLabel(e)}</div>
+						{/if}
 
 						{#if e.error}
 							<div class="steperr">didn't work: {e.error}</div>
@@ -186,6 +203,21 @@
 	.bg {
 		color: var(--text-faint);
 	}
+	.snapshot {
+		color: var(--text-faint);
+	}
+	.status.verified {
+		color: var(--ok);
+	}
+	.status.needs_review {
+		color: var(--warn);
+	}
+	.status.insufficient_data {
+		color: var(--text-faint);
+	}
+	.status.failed {
+		color: var(--err);
+	}
 	.body {
 		margin: 6px 0 2px;
 		padding-left: 10px;
@@ -209,6 +241,11 @@
 	}
 	.line {
 		color: var(--text);
+	}
+	.source-line {
+		margin-top: 2px;
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
 	}
 	.step.failed .line {
 		color: var(--warn);

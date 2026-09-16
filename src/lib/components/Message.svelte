@@ -5,7 +5,7 @@
 	import Icon from './Icon.svelte';
 	import { renderMarkdown } from '$lib/markdown';
 	import { enterUp } from '$lib/motion';
-	import { hardFail } from '$lib/verify';
+	import { answerStatus } from '$lib/verify';
 
 	let { message, expanded = false, ontoggle }: {
 		message: Message;
@@ -34,7 +34,7 @@
 	// exists to close, surfaced at the point the user actually reads it.
 	let unconfirmed = $derived(
 		message.role === 'assistant' && message.answer
-			? hardFail(message.answer.verification)
+			? answerStatus(message.answer) === 'failed'
 			: undefined
 	);
 
@@ -67,7 +67,7 @@
 		<div class="text rich" class:pending={message.pending}>{@html bodyHtml}{#if message.pending}<span
 					class="thinking" aria-hidden="true"></span
 				>{/if}</div>
-		{#each chartItems as e, i (i)}
+		{#each chartItems as e, i (e.id ?? `chart-${i}`)}
 			{#if e.chart}<Chart spec={e.chart} />{/if}
 		{/each}
 	{:else}

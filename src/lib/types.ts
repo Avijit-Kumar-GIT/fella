@@ -19,7 +19,10 @@ export interface ChartSpec {
 }
 
 export interface EvidenceItem {
+	/** Stable within one answer; older archived answers may not have one. */
+	id?: string;
 	tool: string;
+	sources?: EvidenceSource[];
 	args: Record<string, unknown>;
 	/** One plain sentence the model wrote describing what this step does, for a
 	 *  non-technical reader (e.g. "Add up spending by month"). */
@@ -41,16 +44,27 @@ export interface EvidenceItem {
 	error?: string;
 }
 
+export interface EvidenceSource {
+	table: string;
+	source: string;
+	note?: string;
+}
+
 export interface VerificationCheck {
 	label: string;
 	ok: boolean;
 	detail?: string;
 }
 
+export type VerificationStatus = 'verified' | 'needs_review' | 'insufficient_data' | 'failed';
+
 export interface Answer {
 	text: string;
 	evidence: EvidenceItem[];
 	verification: VerificationCheck[];
+	/** Optional for archived answers written before typed verification status. */
+	status?: VerificationStatus;
+	workspace?: { path: string; revision: string };
 	/** Token counts for the whole run, when the provider reported them. */
 	usage?: { prompt_tokens: number; completion_tokens: number };
 }
@@ -114,6 +128,7 @@ export interface SkippedFile {
 
 export interface Catalog {
 	workspace: string | null;
+	revision?: string;
 	sources: SourceInfo[];
 	/** Files found but not loaded (unsupported type, unreadable, parse failure).
 	 *  Absent when nothing was skipped. */

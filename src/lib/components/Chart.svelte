@@ -122,7 +122,12 @@
 				{/each}
 			</div>
 		{/if}
-		<svg viewBox="0 0 {width} {height}" preserveAspectRatio="none">
+		<svg
+			viewBox="0 0 {width} {height}"
+			preserveAspectRatio="none"
+			role="img"
+			aria-label={spec.title ?? 'Chart'}
+		>
 			<line
 				x1={pad.left}
 				x2={width - pad.right}
@@ -157,6 +162,31 @@
 		</svg>
 	</div>
 {/if}
+
+<details class="values">
+	<summary>Show exact values</summary>
+	<div class="value-table-wrap">
+		<table class="value-table">
+			<caption class="sr-only">{spec.title ?? 'Chart values'}</caption>
+			<thead>
+				<tr>
+					<th scope="col">{spec.kind === 'line' ? 'Label' : 'Category'}</th>
+					{#each spec.series as s (s.name)}<th scope="col">{s.name}</th>{/each}
+				</tr>
+			</thead>
+			<tbody>
+				{#each spec.labels as label, i (label + i)}
+					<tr>
+						<th scope="row">{label}</th>
+						{#each spec.series as s (s.name)}
+							<td>{formatValue(s.values[i], spec.unit)}</td>
+						{/each}
+					</tr>
+				{/each}
+			</tbody>
+		</table>
+	</div>
+</details>
 
 <style>
 	.chart {
@@ -238,6 +268,42 @@
 		color: var(--text);
 		font-variant-numeric: tabular-nums;
 		white-space: nowrap;
+	}
+	.values {
+		margin-top: var(--space-2);
+		font-size: var(--fs-xs);
+	}
+	.values summary {
+		color: var(--text-faint);
+		cursor: pointer;
+		width: fit-content;
+	}
+	.values summary:hover {
+		color: var(--text-dim);
+	}
+	.value-table-wrap {
+		margin-top: var(--space-2);
+		overflow-x: auto;
+	}
+	.value-table {
+		border-collapse: collapse;
+		min-width: 100%;
+		font-variant-numeric: tabular-nums;
+		white-space: nowrap;
+	}
+	.value-table th,
+	.value-table td {
+		padding: 4px 8px;
+		border-bottom: 1px solid var(--border);
+		text-align: right;
+	}
+	.value-table th:first-child,
+	.value-table td:first-child {
+		text-align: left;
+	}
+	.value-table thead th {
+		color: var(--text-dim);
+		font-weight: 500;
 	}
 
 	/* --- line chart: SVG hand-written here (trusted Svelte markup, not

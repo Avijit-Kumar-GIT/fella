@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { session } from '$lib/session.svelte';
 	import { isTauri, win } from '$lib/ipc';
-	import { hardFail } from '$lib/verify';
+	import { answerStatus, hardFail } from '$lib/verify';
 	import Icon from './Icon.svelte';
 	import Logo from './Logo.svelte';
 	import TabBar from './TabBar.svelte';
@@ -46,10 +46,15 @@
 	});
 	let verifySummary = $derived.by(() => {
 		if (!lastAnswer) return null;
-		const fail = hardFail(lastAnswer.verification);
-		if (fail) return `unconfirmed — ${fail}`;
+		const status = answerStatus(lastAnswer);
+		if (status === 'failed') {
+			const fail = hardFail(lastAnswer.verification);
+			return fail ? `failed — ${fail}` : 'failed';
+		}
+		if (status === 'insufficient_data') return 'insufficient data';
 		const n = lastAnswer.verification.length;
-		return n ? `${n} check${n === 1 ? '' : 's'} passed` : null;
+		if (status === 'verified') return `verified · ${n} check${n === 1 ? '' : 's'}`;
+		return `needs review · ${n} check${n === 1 ? '' : 's'}`;
 	});
 
 	// macOS keeps its native traffic lights (titleBarStyle: Overlay), so leave a
