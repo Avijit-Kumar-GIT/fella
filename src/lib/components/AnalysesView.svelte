@@ -360,6 +360,7 @@
 		display: inline-flex;
 		align-items: center;
 		gap: 5px;
+		white-space: nowrap;
 	}
 	.answer-surface {
 		max-width: 76ch;

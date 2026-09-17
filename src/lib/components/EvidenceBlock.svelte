@@ -181,6 +181,7 @@
 		display: inline-flex;
 		align-items: center;
 		gap: var(--space-1);
+		white-space: nowrap;
 		letter-spacing: 0.01em;
 		font-size: var(--fs-xs);
 	}

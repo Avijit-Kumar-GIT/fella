@@ -516,6 +516,7 @@
 		color: var(--text-dim);
 		font-size: var(--fs-sm);
 		text-align: left;
+		white-space: nowrap;
 		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 	}
 	.nav-row:hover:not(:disabled) {

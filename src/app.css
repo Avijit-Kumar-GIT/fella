@@ -218,6 +218,11 @@ kbd {
 
 /* A bordered, low-emphasis action button (onboarding CTAs, provider chips). */
 .pill {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: var(--space-2);
+	white-space: nowrap;
 	color: var(--text);
 	background: var(--bg-raised);
 	border: 1px solid var(--border-strong);

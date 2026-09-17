@@ -57,7 +57,8 @@
 
 <style>
 	.icon {
-		display: block;
+		display: inline-block;
 		flex: none;
+		vertical-align: middle;
 	}
 </style>

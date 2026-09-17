@@ -409,6 +409,7 @@
 		color: var(--link);
 		font-size: var(--fs-xs);
 		text-align: left;
+		white-space: nowrap;
 	}
 	.text-action:hover {
 		text-decoration: underline;

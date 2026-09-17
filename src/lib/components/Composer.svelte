@@ -644,6 +644,7 @@
 		border-radius: var(--radius-chip);
 		color: var(--text-faint);
 		font-size: 10.5px;
+		white-space: nowrap;
 	}
 	.context-add:hover,
 	.context-add[aria-expanded='true'] {
@@ -663,6 +664,7 @@
 		color: var(--text-dim);
 		font-size: var(--fs-xs);
 		font-weight: 560;
+		white-space: nowrap;
 	}
 	.mode-trigger:hover,
 	.mode-trigger[aria-expanded='true'] {
@@ -903,6 +905,7 @@
 		gap: 6px;
 		color: var(--text-faint);
 		font-size: var(--fs-xs);
+		white-space: nowrap;
 		padding: 3px 6px;
 		border-radius: var(--radius-chip);
 		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
