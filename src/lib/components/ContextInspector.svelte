@@ -272,7 +272,7 @@
 		height: 42px;
 		margin-bottom: var(--space-3);
 		border-radius: 12px;
-		background: color-mix(in srgb, var(--brand) 11%, transparent);
+		background: var(--bg-inset);
 		color: var(--brand);
 	}
 	.type-label {
@@ -328,7 +328,7 @@
 		margin-bottom: var(--space-4);
 		padding: var(--space-2) var(--space-3);
 		border-left: 2px solid var(--warn);
-		background: color-mix(in srgb, var(--warn) 7%, transparent);
+		background: var(--bg-inset);
 		color: var(--text-dim);
 		font-size: var(--fs-sm);
 	}
@@ -426,7 +426,6 @@
 		height: 7px;
 		border-radius: 50%;
 		background: var(--ok);
-		box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 15%, transparent);
 	}
 	.evidence-card {
 		padding: var(--space-3);

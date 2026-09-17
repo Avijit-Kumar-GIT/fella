@@ -232,7 +232,8 @@ kbd {
 	transition:
 		background var(--dur-fast) var(--ease),
 		border-color var(--dur-fast) var(--ease),
-		box-shadow var(--dur-fast) var(--ease);
+		box-shadow var(--dur-fast) var(--ease),
+		filter var(--dur-fast) var(--ease);
 }
 .pill:hover {
 	background: var(--bg-inset);
@@ -254,7 +255,8 @@ kbd {
 	border-color: var(--brand);
 }
 .pill.primary:hover {
-	background: color-mix(in srgb, var(--brand) 88%, var(--bg));
+	background: var(--brand);
+	filter: brightness(0.92);
 }
 
 /* A full-width row inside a drop-up / palette list. Selection is marked by the

@@ -292,7 +292,7 @@
 		margin-bottom: var(--space-4);
 		padding: var(--space-2) var(--space-3);
 		border-left: 2px solid var(--err);
-		background: color-mix(in srgb, var(--err) 7%, transparent);
+		background: var(--bg-inset);
 		color: var(--err);
 		font-size: var(--fs-sm);
 	}
@@ -312,7 +312,7 @@
 		height: 42px;
 		margin-bottom: var(--space-3);
 		border-radius: 50%;
-		background: color-mix(in srgb, var(--brand) 10%, transparent);
+		background: var(--bg-inset);
 		color: var(--brand);
 	}
 	.empty-state h2 {
@@ -364,7 +364,7 @@
 		width: 32px;
 		height: 32px;
 		border-radius: var(--radius-sm);
-		background: color-mix(in srgb, var(--brand) 10%, transparent);
+		background: var(--bg-inset);
 		color: var(--brand);
 	}
 	.pack-row.off .pack-mark {
@@ -393,7 +393,7 @@
 		font-size: 10px;
 	}
 	.trust.verified {
-		border-color: color-mix(in srgb, var(--ok) 30%, var(--border));
+		border-color: var(--ok);
 		color: var(--ok);
 	}
 	.pack-copy p {
@@ -447,8 +447,15 @@
 		color: var(--text);
 	}
 	.state-action.on {
-		border-color: color-mix(in srgb, var(--brand) 30%, var(--border));
-		color: var(--brand);
+		background: var(--brand);
+		border-color: var(--brand);
+		color: #fff;
+	}
+	.state-action.on:hover:not(:disabled) {
+		background: var(--brand);
+		border-color: var(--brand);
+		color: #fff;
+		filter: brightness(0.92);
 	}
 	.icon-action {
 		display: grid;

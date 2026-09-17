@@ -405,7 +405,7 @@
 		min-width: 0;
 		padding: var(--space-5);
 		border-left: 1px solid var(--border);
-		background: color-mix(in srgb, var(--bg-raised) 72%, var(--bg-inset));
+		background: var(--bg-raised);
 		overflow: auto;
 	}
 	.detail-head {
@@ -417,7 +417,7 @@
 		width: 30px;
 		height: 30px;
 		border-radius: var(--radius-sm);
-		background: color-mix(in srgb, var(--brand) 10%, transparent);
+		background: var(--bg-inset);
 	}
 	.detail-head h2 {
 		max-width: 24ch;
@@ -475,7 +475,7 @@
 		margin-bottom: var(--space-4);
 		padding: var(--space-2) var(--space-3);
 		border-left: 2px solid var(--warn);
-		background: color-mix(in srgb, var(--warn) 7%, transparent);
+		background: var(--bg-inset);
 		color: var(--text-dim);
 		font-size: var(--fs-sm);
 	}
@@ -572,7 +572,7 @@
 		height: 42px;
 		margin: 0 auto var(--space-3);
 		border-radius: 50%;
-		background: color-mix(in srgb, var(--brand) 10%, transparent);
+		background: var(--bg-inset);
 	}
 	.empty-state h2 {
 		font-size: var(--fs-xl);

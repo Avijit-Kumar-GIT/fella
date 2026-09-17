@@ -143,16 +143,13 @@
 		flex: none;
 		border-radius: 50%;
 		background: var(--ok);
-		box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 15%, transparent);
 	}
 	.run-dot.pulse {
 		background: var(--brand);
-		box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 16%, transparent);
 		animation: run-pulse 1.4s ease-in-out infinite;
 	}
 	.run-dot.error {
 		background: var(--err);
-		box-shadow: 0 0 0 3px color-mix(in srgb, var(--err) 15%, transparent);
 	}
 	.timeline-tools {
 		gap: var(--space-2);

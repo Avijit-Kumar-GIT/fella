@@ -106,13 +106,11 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 	}
-	/* Same halo treatment as Composer's connection-status chip dot. */
 	.unsaved {
 		width: 6px;
 		height: 6px;
 		border-radius: 50%;
 		background: var(--warn);
-		box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 20%, transparent);
 		flex: none;
 	}
 	.close,

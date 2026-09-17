@@ -265,7 +265,7 @@
 		left: 0;
 		right: 0;
 		height: 2px;
-		background: linear-gradient(90deg, transparent, var(--brand) 50%, transparent);
+		background: var(--brand);
 		pointer-events: none;
 	}
 	.app {

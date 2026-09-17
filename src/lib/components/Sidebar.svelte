@@ -464,7 +464,7 @@
 		height: 28px;
 		flex: none;
 		border-radius: var(--radius-sm);
-		background: color-mix(in srgb, var(--brand) 10%, transparent);
+		background: var(--bg-inset);
 		color: var(--brand);
 	}
 	.workspace-copy {

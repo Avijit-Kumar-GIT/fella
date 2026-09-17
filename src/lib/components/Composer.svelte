@@ -13,6 +13,7 @@
 	import { enterUp } from '$lib/motion';
 	import type { AnalysisArtifact, ContextReference, SourceInfo } from '$lib/types';
 	import Icon from './Icon.svelte';
+	import ProviderIcon from './ProviderIcon.svelte';
 
 	let { onafterrun }: { onafterrun?: () => void } = $props();
 
@@ -47,19 +48,10 @@
 	);
 	let hasFolder = $derived(!!session.catalog.workspace);
 	let fileCount = $derived(session.catalog.sources.length);
-	// provider/model, only once the provider has actually answered. Shows the
-	// active tab's model (each tab can pick its own).
-	let modelLabel = $derived(up === true && session.model ? `${providerName}/${session.model}` : '');
-	// Keep the visible status useful to someone who never needs to know the
-	// provider's command names. The exact provider/model remains in the tooltip
-	// and the session info button.
-	let connectionLabel = $derived.by(() => {
-		if (up === null) return 'Checking connection…';
-		if (rejected) return 'Connection needs attention';
-		if (up === false) return providerId === 'ollama' ? 'Local model offline' : `${providerName} offline`;
-		if (!session.model) return 'Choose a model';
-		return providerId === 'ollama' ? 'Answers stay on this computer' : `${providerName} connected`;
-	});
+	// Show the effective model rather than a generic connection state. A tab can
+	// choose its own model, so this is the model the next answer will use; when
+	// no tab override exists it is the saved provider default.
+	let modelLabel = $derived(session.model || session.settings?.model || '');
 	let activityNote = $derived.by(() => {
 		if (session.activity) return session.activity;
 		if (session.busy) return 'working…';
@@ -504,14 +496,10 @@
 			{/if}
 			{#if !session.focus}
 				<div class="chips">
-					<span class="chip" title={modelLabel || providerName}>
-						{#if up === true}
-							<Icon name="asterisk" size={11} />
-					{:else}
-						<span class="dot" class:down={up === false} aria-hidden="true"></span>
-					{/if}
-					{connectionLabel}
-				</span>
+					<span class="chip model-chip" title={modelLabel ? `${providerName} · ${modelLabel}` : providerName}>
+						<ProviderIcon providerId={providerId} size={13} />
+						{modelLabel || 'No model selected'}
+					</span>
 				{#if activityNote}
 					<span class="chip">
 						{#if session.busy}<span class="thinking" aria-hidden="true"></span>{/if}
@@ -579,17 +567,8 @@
 		font-size: var(--fs-sm);
 		white-space: nowrap;
 	}
-	.chip .dot {
-		width: 6px;
-		height: 6px;
-		border-radius: 50%;
-		background: var(--text-faint);
-		flex: none;
-		box-shadow: 0 0 0 3px color-mix(in srgb, var(--text-faint) 18%, transparent);
-	}
-	.chip .dot.down {
-		background: var(--err);
-		box-shadow: 0 0 0 3px color-mix(in srgb, var(--err) 20%, transparent);
+	.model-chip :global(.provider-icon) {
+		color: var(--brand);
 	}
 	.context-row {
 		display: flex;
@@ -609,9 +588,9 @@
 		gap: 5px;
 		max-width: 210px;
 		padding: 3px 4px 3px 7px;
-		border: 1px solid color-mix(in srgb, var(--brand) 24%, var(--border));
+		border: 1px solid var(--border-strong);
 		border-radius: var(--radius-chip);
-		background: color-mix(in srgb, var(--brand) 6%, var(--bg-raised));
+		background: var(--bg-inset);
 		color: var(--text-dim);
 		font-size: 10.5px;
 		white-space: nowrap;
@@ -632,7 +611,7 @@
 		color: var(--text-faint);
 	}
 	.ref-pill button:hover {
-		background: color-mix(in srgb, var(--brand) 14%, transparent);
+		background: var(--bg-inset);
 		color: var(--text);
 	}
 	.context-add {
@@ -680,11 +659,9 @@
 		height: 6px;
 		border-radius: 50%;
 		background: var(--link);
-		box-shadow: 0 0 0 3px color-mix(in srgb, var(--link) 14%, transparent);
 	}
 	.mode-mark.inspect {
 		background: var(--brand);
-		box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 14%, transparent);
 	}
 	.mode-menu {
 		position: absolute;
@@ -824,7 +801,7 @@
 		height: 24px;
 		flex: none;
 		border-radius: var(--radius-chip);
-		background: color-mix(in srgb, var(--brand) 9%, transparent);
+		background: var(--bg-inset);
 		color: var(--brand);
 	}
 	.context-copy {
@@ -964,7 +941,7 @@
 		color: var(--err);
 	}
 	.act.stop:hover {
-		background: color-mix(in srgb, var(--err) 12%, transparent);
+		background: var(--bg-inset);
 	}
 
 	/* completion menu drops up, since the composer sits at the bottom */

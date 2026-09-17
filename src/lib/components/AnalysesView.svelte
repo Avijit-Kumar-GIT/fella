@@ -281,7 +281,7 @@
 		width: 28px;
 		height: 28px;
 		border-radius: var(--radius-sm);
-		background: color-mix(in srgb, var(--brand) 10%, transparent);
+		background: var(--bg-inset);
 		color: var(--brand);
 	}
 	.analysis-copy {
@@ -382,7 +382,7 @@
 		height: 42px;
 		margin-bottom: var(--space-3);
 		border-radius: 50%;
-		background: color-mix(in srgb, var(--brand) 10%, transparent);
+		background: var(--bg-inset);
 		color: var(--brand);
 	}
 	.empty-state h2 {
