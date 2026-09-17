@@ -1804,6 +1804,16 @@ exactly, character for character, from the list below.";
         self.llm().health().await
     }
 
+    /// Compatibility response for older frontends. The removed local provider
+    /// is no longer supported, so this deliberately does not probe a local port.
+    pub async fn probe_ollama(&self) -> ProviderHealth {
+        ProviderHealth {
+            reachable: false,
+            rejected: false,
+            models: Vec::new(),
+        }
+    }
+
     /// One model call with no tools and no workspace context just a system
     /// and a user message. Returns the reply text. Used by the eval harness's
     /// `--judge` scorer; not on any product path.

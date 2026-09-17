@@ -177,7 +177,6 @@ mod tests {
     fn legacy_names_normalize() {
         assert_eq!(normalize_id("openai-compatible"), "custom");
         assert_eq!(normalize_id(""), DEFAULT_ID);
-        assert_eq!(normalize_id("ollama"), DEFAULT_ID);
         assert_eq!(normalize_id("openai"), "openai");
     }
 

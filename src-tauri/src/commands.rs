@@ -299,8 +299,15 @@ pub async fn ask(
 }
 
 #[tauri::command]
-pub async fn provider_health(engine: State<'_, EngineState>) -> Result<ProviderHealth, EngineError> {
+pub async fn ollama_health(engine: State<'_, EngineState>) -> Result<ProviderHealth, EngineError> {
     Ok(engine.provider_health().await)
+}
+
+/// Compatibility response for older frontends. The removed local provider is
+/// no longer supported, so this never makes a network request.
+#[tauri::command]
+pub async fn probe_ollama(engine: State<'_, EngineState>) -> Result<ProviderHealth, EngineError> {
+    Ok(engine.probe_ollama().await)
 }
 
 // --- conversation archive ----------------------------------------------------

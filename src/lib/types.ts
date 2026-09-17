@@ -181,7 +181,7 @@ export interface Catalog {
 }
 
 export interface Settings {
-	/** A provider id from the registry (`openai`, `vercel`, `xai`, `ollama-cloud`, `custom`, …). */
+	/** A provider id from the registry (`ollama`, `openai`, `vercel`, `xai`, `custom`, …). */
 	provider: string;
 	base_url: string;
 	model: string;
@@ -194,20 +194,20 @@ export interface Settings {
 export interface ProviderInfo {
 	id: string;
 	display: string;
-	/** Every model provider uses a BYOK API key. */
-	auth: 'key';
+	/** `"none"` or `"key"`. */
+	auth: 'none' | 'key';
 	base_url: string;
 	/** Page to get an API key from; empty when N/A. */
 	get_key_url: string;
 	/** Provider exposes an embeddings endpoint (needed for doc search). */
 	embeddings: boolean;
-	/** A credential is present. */
+	/** A credential is present, or none is needed. */
 	authed: boolean;
 	/** The currently-selected provider. */
 	current: boolean;
 }
 
-export interface ProviderHealth {
+export interface OllamaHealth {
 	reachable: boolean;
 	/** Endpoint answered with 401/403: it's up, but the key is wrong or
 	 *  unauthorized. Always false when `reachable`. */
