@@ -4,8 +4,8 @@
 	import AnalysesView from '$lib/components/AnalysesView.svelte';
 	import Composer from '$lib/components/Composer.svelte';
 	import ContextInspector from '$lib/components/ContextInspector.svelte';
-	import HomeView from '$lib/components/HomeView.svelte';
 	import Icon from '$lib/components/Icon.svelte';
+	import PacksView from '$lib/components/PacksView.svelte';
 	import Sidebar from '$lib/components/Sidebar.svelte';
 	import SourcesView from '$lib/components/SourcesView.svelte';
 	import Titlebar from '$lib/components/Titlebar.svelte';
@@ -189,7 +189,7 @@
 	$effect(() => {
 		const view = session.workspaceView;
 		const mounted = session.catalog.workspace;
-		if (!mounted && (view === 'home' || view === 'sources' || view === 'context')) {
+		if (!mounted && (view === 'sources' || view === 'context')) {
 			session.setWorkspaceView('ask');
 		}
 	});
@@ -206,18 +206,18 @@
 
 <svelte:window onkeydown={onKey} />
 
-<div class="shell">
-	{#if !session.focus && !session.sidebarCollapsed}
-		<Sidebar />
-	{/if}
+	<div class="shell">
+		{#if !session.focus && !session.sidebarCollapsed}
+			<Sidebar onsearch={() => (paletteOpen = true)} />
+		{/if}
 	<div class="app" class:focus={session.focus}>
 		<Titlebar onpalette={() => (paletteOpen = true)} />
 		<main>
 			<div class="main-row">
-				{#if !session.catalog.workspace && (activeView === 'home' || activeView === 'sources' || activeView === 'context')}
+				{#if !session.catalog.workspace && (activeView === 'sources' || activeView === 'context')}
 					<Transcript bind:this={transcript} />
-				{:else if activeView === 'home'}
-					<HomeView />
+				{:else if activeView === 'packs'}
+					<PacksView />
 				{:else if activeView === 'sources'}
 					<SourcesView />
 				{:else if activeView === 'analyses'}

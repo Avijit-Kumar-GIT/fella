@@ -6,6 +6,8 @@
 	import Icon from './Icon.svelte';
 	import Logo from './Logo.svelte';
 
+	let { onsearch }: { onsearch?: () => void } = $props();
+
 	let list = $state<ConversationSummary[]>([]);
 	let query = $state('');
 	let searchOpen = $state(false);
@@ -170,8 +172,8 @@
 			<button
 				class="icon-btn"
 				type="button"
-				aria-label="Search history"
-				title="Search"
+				aria-label="Filter conversations"
+				title="Filter conversations"
 				aria-pressed={searchOpen}
 				onclick={toggleSearch}
 			>
@@ -224,17 +226,6 @@
 	<nav class="workspace-nav" aria-label="Workspace">
 		<button
 			class="nav-row"
-			class:active={session.workspaceView === 'home'}
-			type="button"
-			disabled={!session.catalog.workspace}
-			aria-current={session.workspaceView === 'home' ? 'page' : undefined}
-			onclick={() => session.setWorkspaceView('home')}
-		>
-			<Icon name="home" size={14} />
-			<span>Overview</span>
-		</button>
-		<button
-			class="nav-row"
 			class:active={session.workspaceView === 'ask'}
 			type="button"
 			aria-current={session.workspaceView === 'ask' ? 'page' : undefined}
@@ -242,6 +233,29 @@
 		>
 			<Icon name="compose" size={14} />
 			<span>Ask</span>
+		</button>
+		<button
+			class="nav-row"
+			type="button"
+			title="Search (Ctrl+K)"
+			aria-keyshortcuts="Control+K"
+			aria-haspopup="dialog"
+			onclick={() => onsearch?.()}
+		>
+			<Icon name="search" size={14} />
+			<span>Search</span>
+			<kbd>Ctrl+K</kbd>
+		</button>
+		<button
+			class="nav-row"
+			class:active={session.workspaceView === 'packs'}
+			type="button"
+			aria-current={session.workspaceView === 'packs' ? 'page' : undefined}
+			onclick={() => session.setWorkspaceView('packs')}
+		>
+			<Icon name="asterisk" size={14} />
+			<span>Packs</span>
+			{#if session.packs.length}<small>{session.packs.length}</small>{/if}
 		</button>
 		<button
 			class="nav-row"
@@ -528,6 +542,12 @@
 		cursor: default;
 	}
 	.nav-row small {
+		margin-left: auto;
+		color: var(--text-faint);
+		font-family: var(--mono);
+		font-size: 10px;
+	}
+	.nav-row kbd {
 		margin-left: auto;
 		color: var(--text-faint);
 		font-family: var(--mono);

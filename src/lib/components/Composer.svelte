@@ -553,7 +553,10 @@
 <style>
 	.wrap {
 		position: relative;
-		flex: none;
+		flex: 0 1 var(--content-max);
+		width: 100%;
+		max-width: var(--content-max);
+		margin-inline: auto;
 		padding: var(--space-1) var(--pad) var(--space-2);
 	}
 	/* Live session state, moved here from the retired StatusBar so it reads

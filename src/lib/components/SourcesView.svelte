@@ -224,7 +224,8 @@
 	.sources-page {
 		flex: 1;
 		min-height: 0;
-		width: min(1040px, 100%);
+		width: 100%;
+		max-width: var(--content-max);
 		margin: 0 auto;
 		padding: var(--space-6) var(--pad) var(--space-6);
 		overflow: auto;

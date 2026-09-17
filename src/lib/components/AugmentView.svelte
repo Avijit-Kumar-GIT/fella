@@ -255,6 +255,9 @@ Still: never guess a figure you can't compute.`;
 	.augment {
 		flex: 1;
 		min-height: 0;
+		width: 100%;
+		max-width: var(--content-max);
+		margin-inline: auto;
 		display: flex;
 		flex-direction: column;
 		padding: var(--space-5) var(--pad) 0;

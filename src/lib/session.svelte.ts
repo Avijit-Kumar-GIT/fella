@@ -265,7 +265,7 @@ export class AugmentTab {
 }
 
 export type Tab = Conversation | AugmentTab;
-export type WorkspaceView = 'home' | 'ask' | 'sources' | 'analyses' | 'context';
+export type WorkspaceView = 'ask' | 'packs' | 'sources' | 'analyses' | 'context';
 
 class Session {
 	catalog = $state<Catalog>({ workspace: null, sources: [] });
@@ -321,10 +321,10 @@ class Session {
 	}
 
 	setWorkspaceView(view: WorkspaceView): void {
-		// Overview, Sources, and Context describe a mounted workspace. If the
+		// Sources and Context describe a mounted workspace. If the
 		// catalog is empty, keep the user on the single useful no-folder
 		// onboarding surface instead of showing competing empty states.
-		if (!this.catalog.workspace && (view === 'home' || view === 'sources' || view === 'context')) {
+		if (!this.catalog.workspace && (view === 'sources' || view === 'context')) {
 			this.workspaceView = 'ask';
 			return;
 		}

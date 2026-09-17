@@ -88,7 +88,7 @@
 			bind:this={dialog}
 			role="dialog"
 			aria-modal="true"
-			aria-label="Commands"
+			aria-label="Search Fella"
 			tabindex="-1"
 			onkeydown={trap}
 			transition:pop
@@ -99,9 +99,9 @@
 					bind:this={input}
 					bind:value={query}
 					onkeydown={key}
-					placeholder="Search commands…"
+					placeholder="Search commands and actions…"
 					spellcheck="false"
-					aria-label="Search commands"
+					aria-label="Search commands and actions"
 				/>
 			</div>
 			<ul>
