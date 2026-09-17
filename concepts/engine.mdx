@@ -32,7 +32,7 @@ The engine is not a database service or a general-purpose code runner. It is the
 | [`analytics/data/duck.rs`](https://github.com/Avijit-Kumar-GIT/fella/blob/main/src-tauri/src/engine/analytics/data/duck.rs) | Optional DuckDB backend with file-reader views for larger/Parquet workloads | Run in the default release build |
 | [`ingest/excel.rs`](https://github.com/Avijit-Kumar-GIT/fella/blob/main/src-tauri/src/engine/ingest/excel.rs) | Read each usable spreadsheet sheet and send typed rows to `DataEngine::add_rows` | Treat a workbook as one opaque file |
 | [`ingest/docs.rs`](https://github.com/Avijit-Kumar-GIT/fella/blob/main/src-tauri/src/engine/ingest/docs.rs) | Extract PDF text and stream text-file lines to document tools | Build an embedding index |
-| [`analytics/pyexec.rs`](https://github.com/Avijit-Kumar-GIT/fella/blob/main/src-tauri/src/engine/analytics/pyexec.rs) | Run bounded Python for statistics SQL does not express conveniently | Make Python a security sandbox |
+| [`analytics/pyexec.rs`](https://github.com/Avijit-Kumar-GIT/fella/blob/main/src-tauri/src/engine/analytics/pyexec.rs) | Run bounded Python for statistics SQL does not express conveniently | Keep the embedded guest small and its host ABI narrow |
 | [`analytics/chart.rs`](https://github.com/Avijit-Kumar-GIT/fella/blob/main/src-tauri/src/engine/analytics/chart.rs) | Convert bounded query results into validated chart data before the client renders it | Generate SVG or HTML |
 | [`analytics/verify.rs`](https://github.com/Avijit-Kumar-GIT/fella/blob/main/src-tauri/src/engine/analytics/verify.rs) | Compare an answer with its recorded work using deterministic checks | Grade meaning with another model |
 
@@ -146,9 +146,9 @@ Documents stay outside the SQL tables. `ingest/docs.rs` reads text files line by
 
 ### Python analysis
 
-`PythonBridge` connects generated Python to the active backend. SQLite supplies a read-only `analysis.db` path; its injected `sql(query)` helper returns a pandas `DataFrame` when pandas is installed and otherwise a list of dictionaries. The DuckDB bridge supplies reader expressions and requires the Python `duckdb` package. `pearsonr()` and `linregress()` are injected pure-stdlib helpers; `statistics.median()` and `statistics.stdev()` need no third-party package.
+`PythonBridge` connects generated Python to the active backend without passing a path into Python. The host opens SQLite or DuckDB itself, checks the query, and returns a bounded JSON result that the guest turns into a list of dictionaries. `median()`, `stdev()`, `pearsonr()`, and `linregress()` are injected helpers; no third-party package is present.
 
-`pyexec::run()` invokes the machine's `python3` or `python` with `-I`, a temporary working directory, a cleared environment, and captured stdout/stderr. Output is capped at 64 KiB and the wall-clock timeout is 20 seconds. Unix adds a 15-second CPU limit, a 1 GiB address-space limit, and a 64 MiB file-size limit. These are resource guardrails, not a security sandbox: generated code can still read outside the workspace and access the network.
+`pyexec::run()` loads the checked-in `wasm32-unknown-unknown` RustPython guest into a fresh Wasmi store. The guest has no filesystem, network, environment, clock, or subprocess import. Wasmi caps fuel, linear memory, value-stack height, source, output, SQL rows, and SQL response size; the host data engine also keeps its query watchdog.
 
 ### Charts
 
@@ -171,7 +171,7 @@ source metadata, schema, ingest notes, skipped files, or root context changes.
 - SQLite is the default and shipped analytics backend. Parquet is unavailable in that build; DuckDB support is feature-gated, not an automatically selected runtime mode.
 - Scans, ingestion, queries, document reads, and displayed rows are bounded. Large inputs may be truncated with a note.
 - Type inference and normalization are best effort. Ingest notes and verifier warnings should be inspected for messy data.
-- `run_python` is not a security sandbox. Its temporary directory, stripped environment, timeout, and Unix resource limits do not block filesystem reads or writes and do not block network access.
+- `run_python` runs in the embedded WASM guest. It has no filesystem, network, environment, clock, or subprocess capability; Wasmi and the host data engine apply resource and query limits.
 - The app also uses a separate SQLite database for settings, cached source metadata, packs, and conversation metadata. Model and MCP credentials are stored in `auth.json`, not that database.
 
 ## Execution limits
@@ -186,7 +186,7 @@ source metadata, schema, ingest notes, skipped files, or root context changes.
 | Document search | 30 hits by default, 100 maximum | Keep regex scans and evidence manageable |
 | Document read | 12,000 characters per document; 16,000 combined in a multi-file tool call | Keep extracted text out of an oversized model context |
 | Table sample | 0-50 rows for `inspect_table` | Make schema inspection useful without dumping a table |
-| Python execution | 20 seconds and 64 KiB output; Unix CPU/memory/file-size limits | Bound an analysis escape hatch without claiming sandboxing |
+| Python execution | 1 billion Wasmi fuel, 256 MiB memory, 2 MiB stack, and 64 KiB output; SQL rows/response are capped | Keep generated analytics bounded without requiring Python or an OS-specific sandbox |
 | Chart data | 12 categories and 2 series | Keep the rendered result readable |
 
 The history behind this module matters: [commit `08d0b6e`](https://github.com/Avijit-Kumar-GIT/fella/commit/08d0b6e) made the analytics boundary explicit, while [PR #102](https://github.com/Avijit-Kumar-GIT/fella/pull/102) added structured chart data and [commit `9072c8d`](https://github.com/Avijit-Kumar-GIT/fella/commit/9072c8d) moved chart rendering to the client so the backend emits data rather than SVG markup.

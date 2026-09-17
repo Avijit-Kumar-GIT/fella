@@ -5,7 +5,7 @@ description = "Ask questions about your own files"
 authors = ["Avijit Kumar and contributors"]
 license = "MIT"
 edition = "2021"
-rust-version = "1.88"   # the `mcp` feature pulls `rmcp`, which needs 1.88
+rust-version = "1.93"   # RustPython 0.5 (the embedded Python guest) needs 1.93
 
 [lib]
 name = "fella_lib"
@@ -60,6 +60,8 @@ ring = "0.17"
 async-trait = "0.1.92"
 nix = { version = "0.31.3", features = ["resource"] }
 tokio = { version = "1.53.1", features = ["rt", "time", "macros"] }
+getrandom = "0.3.4"
+wasmi = { version = "2.0.0", default-features = false, features = ["std", "validate", "auto-dispatch", "extra-checks"] }
 
 # optional
 duckdb = { version = "1.4.0", features = ["bundled"], optional = true }

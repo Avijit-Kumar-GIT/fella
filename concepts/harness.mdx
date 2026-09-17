@@ -97,7 +97,7 @@ Deterministic verification always runs when the harness finishes an answer. A ch
 | Prompt guidance | Prefer `run_sql`, stop early, refuse unsupported forecasts, use a chart only for useful structured data | `PromptProfile` text in `agent.rs`; a model can still misunderstand it |
 | Tool boundary | The model can call only schemas in the registry; built-in SQL and document tools resolve through the engine | `Registry`, tool implementations, and catalog lookup |
 | SQL boundary | One guarded, read-only statement with blocked mutation/file-reading operations | `analytics::data::ensure_read_only` plus the backend connection |
-| Python boundary | A temp directory, cleared environment, timeout, output cap, and Unix resource limits | `analytics::pyexec`; not a sandbox, because filesystem/network access remain possible |
+| Python boundary | Embedded `wasm32-unknown-unknown` RustPython guest; no OS imports; fuel, memory, stack, source, output, SQL-row, and SQL-response caps | `analytics::pyexec` + `python-sandbox`; stronger capability isolation with Wasmi/RustPython in the trusted base |
 | Answer checks | Reruns, number grounding, query-shape heuristics, and label checks | `analytics::verify`; warnings are not semantic proof |
 
 ## Limits
@@ -106,7 +106,7 @@ Deterministic verification always runs when the harness finishes an answer. A ch
 - Soft stop pressure begins after the normal three-round-trip budget (`FELLA_SOFT_STOP`).
 - Older tool results are elided as history grows and can be queried again.
 - Stop cancels the active model request, keeps collected evidence, and returns `Stopped.`
-- Prompt rules cannot make arbitrary Python safe. The `run_python` process has best-effort limits but can access the filesystem and network.
+- Prompt rules still do not define the Python capability boundary. The embedded WASM guest has no OS imports; Wasmi limits the guest and the host exposes only output, entropy for interpreter startup, and bounded read-only SQL.
 - Verification can identify evidence and query-shape problems, not resolve every ambiguous interpretation.
 
 The major loop changes were introduced incrementally: [PR #39](https://github.com/Avijit-Kumar-GIT/fella/pull/39) added the scored evaluation harness, [PR #95](https://github.com/Avijit-Kumar-GIT/fella/pull/95) added escalating stop pressure, [PR #97](https://github.com/Avijit-Kumar-GIT/fella/pull/97) added the cost-gated second opinion, and [PR #134](https://github.com/Avijit-Kumar-GIT/fella/pull/134) added the current depth/aside prompt behavior. The current code, not any one historical PR description, is authoritative.

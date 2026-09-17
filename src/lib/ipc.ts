@@ -2,7 +2,7 @@
 //
 // Every call degrades gracefully when the app is opened in a plain browser
 // (e.g. `pnpm dev` without Tauri, or `pnpm build` prerender): `isTauri()` is
-// false and the callers fall back to local-only behaviour.
+// false and the callers fall back to browser-only behaviour.
 
 import type {
 	Answer,
@@ -11,7 +11,7 @@ import type {
 	Catalog,
 	ConversationSummary,
 	InstalledPack,
-	OllamaHealth,
+	ProviderHealth,
 	ProviderInfo,
 	QueryResult,
 	Settings,
@@ -90,9 +90,7 @@ export const ipc = {
 	logout: (provider: string, forget = false) =>
 		invoke<Settings>('logout', { provider, forget }),
 
-	ollamaHealth: () => invoke<OllamaHealth>('ollama_health'),
-	/** Is a local Ollama running, regardless of the configured provider? */
-	probeOllama: () => invoke<OllamaHealth>('probe_ollama'),
+	providerHealth: () => invoke<ProviderHealth>('provider_health'),
 	cancel: (conversationId: string) => invoke<void>('cancel', { conversationId }),
 	forgetConversation: (conversationId: string) =>
 		invoke<void>('forget_conversation', { conversationId }),

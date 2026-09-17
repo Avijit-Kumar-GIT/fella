@@ -1,0 +1,22 @@
+[package]
+name = "fella-python-sandbox"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.93"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+rustpython = { version = "0.5.0", default-features = false }
+rustpython-vm = { version = "0.5.0", default-features = false, features = ["compiler", "gc"] }
+serde_json = { version = "1", default-features = false, features = ["alloc"] }
+getrandom = { version = "0.3.4", default-features = false }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

@@ -1,7 +1,7 @@
 //! Model-agnostic chat client. One struct, branching on the configured
-//! provider Ollama by default, any OpenAI-compatible endpoint as an
-//! override. The Ollama path streams tokens as they arrive; OpenAI-compatible
-//! endpoints deliver the reply in one delta.
+//! provider-specific wire formats. Hosted Ollama-compatible providers stream
+//! tokens as they arrive; OpenAI-compatible endpoints deliver the reply in one
+//! delta.
 
 use futures_util::StreamExt;
 use serde::Serialize;
@@ -31,12 +31,13 @@ fn retry_budget() -> u32 {
         .unwrap_or(3)
 }
 
-/// How long Ollama should keep the model resident in memory after a call. The
-/// default (5 min) drops it between questions, so the next question eats a
-/// 10-20 s reload; `"30m"` keeps a conversation warm. `FELLA_OLLAMA_KEEP_ALIVE`
-/// overrides (any Ollama duration string, e.g. `"-1"` for "never unload").
-fn ollama_keep_alive() -> String {
-    std::env::var("FELLA_OLLAMA_KEEP_ALIVE")
+/// How long an Ollama-wire provider should keep the model resident in memory
+/// after a call. The default (5 min) drops it between questions, so the next
+/// question eats a 10-20 s reload; `"30m"` keeps a conversation warm.
+/// `FELLA_MODEL_KEEP_ALIVE` overrides (any Ollama duration string, e.g. `"-1"`
+/// for "never unload").
+fn model_keep_alive() -> String {
+    std::env::var("FELLA_MODEL_KEEP_ALIVE")
         .ok()
         .filter(|v| !v.trim().is_empty())
         .unwrap_or_else(|| "30m".to_string())
@@ -47,9 +48,9 @@ fn ollama_keep_alive() -> String {
 /// tail (the schema, or the question) is silently truncated and the model looks
 /// dumb. 8192 fits a typical prompt with room for a few tool-result rounds;
 /// `fit_num_ctx` grows past this when the actual payload needs it.
-/// `FELLA_OLLAMA_NUM_CTX` raises (or lowers, min 512) the floor.
-fn ollama_num_ctx() -> u32 {
-    std::env::var("FELLA_OLLAMA_NUM_CTX")
+/// `FELLA_MODEL_NUM_CTX` raises (or lowers, min 512) the floor.
+fn model_num_ctx() -> u32 {
+    std::env::var("FELLA_MODEL_NUM_CTX")
         .ok()
         .and_then(|v| v.parse().ok())
         .filter(|&n: &u32| n >= 512)
@@ -60,7 +61,7 @@ fn ollama_num_ctx() -> u32 {
 /// oversized prompt (many tables, a long `fella.md`, deep history) which would
 /// otherwise be silently truncated. `chars/4` is a crude token estimate; the
 /// 5/4 headroom and 2048 rounding absorb its error. Clamped at 32k the point
-/// past which the first-token stall on a local model isn't worth it; the caller
+/// past which first-token latency isn't worth the extra context; the caller
 /// logs a warning when the estimate still crowds that ceiling.
 /// ponytail: chars/4, swap for a real tokenizer only if the clamp/warn misfires.
 fn fit_num_ctx(messages_json: &Json, tools_json: Option<&Json>) -> u32 {
@@ -68,7 +69,7 @@ fn fit_num_ctx(messages_json: &Json, tools_json: Option<&Json>) -> u32 {
     let approx_tok = ((len(messages_json) + tools_json.map(len).unwrap_or(0)) / 4) as u32;
     ((approx_tok * 5 / 4) + max_output_tokens())
         .next_multiple_of(2048)
-        .clamp(ollama_num_ctx(), 32768)
+        .clamp(model_num_ctx(), 32768)
 }
 
 /// Cap on tokens the model may generate in one turn (`num_predict` on Ollama,
@@ -85,11 +86,11 @@ fn max_output_tokens() -> u32 {
 
 /// Whether to let a reasoning model (gpt-oss, deepseek-r1, qwen3, …) emit its
 /// chain-of-thought. Fella never shows it, and generating it adds seconds to
-/// every turn's first token, so the loop asks for it off. `FELLA_OLLAMA_THINK=1`
+/// every turn's first token, so the loop asks for it off. `FELLA_MODEL_THINK=1`
 /// re-enables it. Ignored by models that don't think.
-fn ollama_think() -> bool {
+fn model_think() -> bool {
     matches!(
-        std::env::var("FELLA_OLLAMA_THINK").ok().as_deref(),
+        std::env::var("FELLA_MODEL_THINK").ok().as_deref(),
         Some("1") | Some("true") | Some("yes")
     )
 }
@@ -334,10 +335,10 @@ impl LlmClient {
 
     /// Ask Ollama to load the model into memory now and hold it (`keep_alive`),
     /// so the first real question doesn't pay the 10-20 s cold-load stall.
-    /// Fire-and-forget: unreachable server, a hosted provider, or a model that
-    /// isn't pulled yet are all swallowed.
+    /// Fire-and-forget: an unreachable provider or unavailable model is
+    /// swallowed because warming is only a latency optimization.
     pub async fn warm(&self) {
-        if self.is_openai() {
+        if self.is_openai() || self.api_key.is_none() {
             return;
         }
         let url = format!("{}/api/chat", self.base_url);
@@ -345,7 +346,7 @@ impl LlmClient {
             "model": self.model,
             "messages": [],
             "stream": false,
-            "keep_alive": ollama_keep_alive(),
+            "keep_alive": model_keep_alive(),
         });
         let mut req = self.http.post(&url).timeout(Duration::from_secs(20)).json(&body);
         if let Some(k) = &self.api_key {
@@ -405,10 +406,10 @@ impl LlmClient {
         let messages_json = Json::Array(messages.iter().map(ollama_message).collect());
         let tools_json = (!tools.is_empty())
             .then(|| Json::Array(tools.iter().map(tool_schema_json).collect()));
-        // `FELLA_OLLAMA_NUM_CTX_FIXED` pins num_ctx to the floor (no growth) so
+        // `FELLA_MODEL_NUM_CTX_FIXED` pins num_ctx to the floor (no growth) so
         // the eval harness can measure fixed-vs-adaptive on a big workspace.
-        let num_ctx = if std::env::var_os("FELLA_OLLAMA_NUM_CTX_FIXED").is_some() {
-            ollama_num_ctx()
+        let num_ctx = if std::env::var_os("FELLA_MODEL_NUM_CTX_FIXED").is_some() {
+            model_num_ctx()
         } else {
             fit_num_ctx(&messages_json, tools_json.as_ref())
         };
@@ -422,8 +423,8 @@ impl LlmClient {
             "model": self.model,
             "messages": messages_json,
             "stream": true,
-            "keep_alive": ollama_keep_alive(),
-            "think": ollama_think(),
+            "keep_alive": model_keep_alive(),
+            "think": model_think(),
             "options": {
                 "temperature": 0.2,
                 "num_ctx": num_ctx,
@@ -634,16 +635,16 @@ impl LlmClient {
                 "the model service kept failing ({status}) after {attempt} attempt(s) it's \
                  having trouble. Try again shortly. ({snippet})"
             )),
-            // Ollama returns 404 "model '...' not found" when the id isn't
-            // pulled (default `llama3.1` vs a pulled `llama3.1:8b`). Say what
-            // to do instead of echoing the raw 404.
-            _ if crate::engine::provider::normalize_id(&self.provider) == "ollama"
+            // Hosted Ollama-wire providers return 404 when a model id is not
+            // available to the account. Give the user a useful next step
+            // instead of echoing the raw response.
+            _ if crate::engine::provider::wire_of(&self.provider)
+                == crate::engine::provider::Wire::Ollama
                 && snippet.contains("not found") =>
             {
                 EngineError::msg(format!(
-                    "The model \"{}\" isn't downloaded in Ollama. Run `ollama pull {}` in a \
-                     terminal, or pick one you already have with /model.",
-                    self.model, self.model
+                    "The model \"{}\" isn't available from {}. Pick another with /model.",
+                    self.model, provider
                 ))
             }
             _ => EngineError::msg(format!(

@@ -4,7 +4,8 @@ description: "Understand the read-only boundary, network behavior, credentials, 
 icon: "shield-check"
 ---
 
-The base agent has no workspace write tools, but local execution and network behavior have important limits.
+The base agent has no workspace write tools, but local execution and provider
+network behavior have important limits.
 
 ## Read-only by construction
 
@@ -16,24 +17,34 @@ The exception is explicit and human-driven: an optional augment view can save a 
 
 | Destination | When Fella connects | Data involved |
 | --- | --- | --- |
-| Selected model provider | Periodic health/model-list probes and model turns; Ollama-wire providers can also receive a warm-up request | Credentials where required, prompts, tool schemas, conversation digest, context, and tool results |
-| Local Ollama at `localhost:11434` | Availability probes even when another provider is selected | A local model-list request; no workspace data |
+| Selected model provider | Health/model-list probes and model turns after you connect it; Ollama-wire providers can also receive a warm-up request | Your API key, prompts, tool schemas, conversation digest, context, and tool results |
 | Pack catalogue and files | Only for `/packs install`; `/packs browse` opens the packs repository in the browser | Requested pack ID and downloads |
 | GitHub releases | Only for `/update` | Version check and installer download |
 | MCP service | When its connector is enabled and a question initializes or calls it | Connector credentials, initialization data, and tool arguments |
 
-Local Ollama traffic stays on the machine. A hosted provider can receive multiple requests for one question because the agent loop is multi-turn, retries transient failures, and may perform a corrective or second-opinion turn. Fella does not proxy these requests through a Fella service.
+The selected provider can receive multiple requests for one question because the
+agent loop is multi-turn, retries transient failures, and may perform a
+corrective or second-opinion turn. Fella does not proxy these requests through
+a Fella service.
 
 ## Credentials
 
 API keys and connector tokens are stored in `auth.json` with restrictive permissions. They are not stored in the settings database, browser `localStorage`, or conversation archives. Secret-bearing command lines are redacted from the transcript.
 
-## Python is a guard rail, not a sandbox
+## Python runs inside a local capability boundary
 
-`run_python` executes model-generated Python 3 on your machine. It uses `python -I`, a fresh temporary working directory, a cleared environment with a limited replacement, a 20-second wall timeout, and 64 KiB caps for stdout and stderr. Unix builds also request 15 seconds of CPU, 1 GiB of address space, and a 64 MiB file-size limit.
+`run_python` executes model-generated Python 3 inside an embedded
+`wasm32-unknown-unknown` RustPython guest under Wasmi. It has no filesystem,
+network, environment, clock, or subprocess access. The host provides captured
+stdout/stderr, OS entropy for interpreter startup, and a bounded read-only
+`sql(query)` bridge. It applies fuel, memory, stack, source, output, row, and
+response limits.
 
 <Warning>
-  Python is not sandboxed. It can read files outside the workspace and access the network, and operating-system resource limits are best effort. Treat every generated snippet as code you chose to run.
+  This is a stronger boundary for generated analytics, but it remains defense
+  in depth: Wasmi, RustPython, and the checked-in guest artifact are trusted
+  computing-base components. The guest does not include pandas, NumPy, SciPy,
+  or a package installer.
 </Warning>
 
 ## Hosted-provider decision

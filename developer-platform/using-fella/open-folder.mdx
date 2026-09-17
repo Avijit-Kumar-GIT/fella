@@ -63,7 +63,7 @@ Blank lines and lines starting with `#` are ignored. Other entries match an exac
 Fella starts without mounting the last workspace. The welcome screen can offer a one-click reopen; pressing `Enter` with an empty composer can also reopen it. Reopening a conversation from history mounts its saved workspace when that folder still exists.
 
 <Warning>
-  The built-in workspace tools stay within the catalogued folder, but `run_python` is not a filesystem sandbox and can read outside it. See [privacy and security](/developer-platform/using-fella/privacy).
+  The built-in workspace tools stay within the catalogued folder, and `run_python` runs in an embedded guest without filesystem access. See [privacy and security](/developer-platform/using-fella/privacy).
 </Warning>
 
 <CardGroup cols={2}>

@@ -28,18 +28,10 @@
 	async function refreshHealth() {
 		if (!isTauri()) return;
 		try {
-			session.health = await ipc.ollamaHealth();
+			session.health = await ipc.providerHealth();
 			await reconcileModel();
 		} catch {
 			/* keep the last value; the next tick retries */
-		}
-		// Also look for a local Ollama regardless of the current provider, so
-		// "you just installed it" gets noticed. Skip when we're already on a
-		// reachable Ollama that check would be redundant.
-		if (!(session.settings?.provider === 'ollama' && session.health?.reachable)) {
-			void ipc.probeOllama().then((h) => { session.ollamaLocal = h; }).catch(() => {});
-		} else {
-			session.ollamaLocal = session.health;
 		}
 	}
 
@@ -59,8 +51,8 @@
 		void ipc.augmentCapabilities().then((c) => { session.augmentCapabilities = c; }).catch(() => {});
 		void prefs.load();
 
-		// Poll quickly while disconnected so a freshly-started Ollama or a
-		// just-fixed key is picked up within seconds; back off once healthy.
+		// Poll quickly while disconnected so a just-fixed key is picked up within
+		// seconds; back off once healthy.
 		let timer: ReturnType<typeof setTimeout>;
 		const tick = () => {
 			void refreshHealth().finally(() => {

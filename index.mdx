@@ -41,7 +41,7 @@ Fella is a local-first desktop app for personal analytics. Open a folder of stat
 Fella can answer a general question without calling a tool. Those answers have no workspace evidence. When tools run, the working fold records the selected files, arguments, SQL or Python, result samples, timings, errors, and post-answer checks.
 
 <Note>
-  The base agent has no file write, move, or delete tool. Optional augment views let the user save a named note or table, and enabled MCP connectors communicate with an external service. Python is an analysis escape hatch, not a security sandbox; review the [limits](/limitations#security-boundaries) before using sensitive data.
+  The base agent has no file write, move, or delete tool. Optional augment views let the user save a named note or table, and enabled MCP connectors communicate with an external service. Python runs inside an embedded WASM capability boundary; review the [limits](/limitations#security-boundaries) before using sensitive data.
 </Note>
 
 ## What you can do
@@ -61,7 +61,7 @@ Compare monthly dining spend in the first and second half of 2025. Show the tota
 
 ## Local-first, with explicit egress
 
-With local Ollama, normal question traffic stays on your machine. With a hosted model, that provider receives the prompt and tool results needed for the question. Installing a catalog pack fetches its hash-pinned files; `/update` contacts GitHub only when invoked; an enabled MCP connector talks to its configured service; generated Python can access the network.
+The provider you connect receives the prompt and tool results needed for the question. Installing a catalog pack fetches its hash-pinned files; `/update` contacts GitHub only when invoked; an enabled MCP connector talks to its configured service. Generated Python stays inside its embedded local guest and has no network capability.
 
 ## Next steps
 

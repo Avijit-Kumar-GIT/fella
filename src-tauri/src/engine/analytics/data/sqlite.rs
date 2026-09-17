@@ -67,9 +67,7 @@ fn register_parse_num(conn: &Connection) -> EngineResult<()> {
                 ValueRef::Null => None,
                 ValueRef::Integer(i) => Some(i as f64),
                 ValueRef::Real(r) => Some(r),
-                ValueRef::Text(t) => {
-                    std::str::from_utf8(t).ok().and_then(parse_numeric)
-                }
+                ValueRef::Text(t) => std::str::from_utf8(t).ok().and_then(parse_numeric),
                 ValueRef::Blob(_) => None,
             };
             Ok(parsed)
@@ -80,19 +78,24 @@ fn register_parse_num(conn: &Connection) -> EngineResult<()> {
 
 impl DataEngine for SqliteEngine {
     fn add_source(&mut self, name: &str, kind: SourceKind, path: &str) -> EngineResult<SourceLoad> {
-        let parsed = match kind {
-            SourceKind::Csv => read_delimited(path, b',')?,
-            SourceKind::Tsv => read_delimited(path, b'\t')?,
-            SourceKind::Json => read_json(path, false)?,
-            SourceKind::Ndjson => read_json(path, true)?,
-            SourceKind::Parquet => {
-                return Err(EngineError::msg(
+        let parsed =
+            match kind {
+                SourceKind::Csv => read_delimited(path, b',')?,
+                SourceKind::Tsv => read_delimited(path, b'\t')?,
+                SourceKind::Json => read_json(path, false)?,
+                SourceKind::Ndjson => read_json(path, true)?,
+                SourceKind::Parquet => return Err(EngineError::msg(
                     "Parquet needs the DuckDB build rebuild with `cargo build --features duckdb`",
-                ))
-            }
-            _ => return Err(EngineError::msg("not a path-readable tabular source")),
-        };
-        let Parsed { headers, types, notes, rows, note } = parsed;
+                )),
+                _ => return Err(EngineError::msg("not a path-readable tabular source")),
+            };
+        let Parsed {
+            headers,
+            types,
+            notes,
+            rows,
+            note,
+        } = parsed;
         let cols: Vec<(String, ColType)> = headers.into_iter().zip(types).collect();
         let n = self.add_rows(name, &cols, &rows)?;
         Ok(SourceLoad {
@@ -138,8 +141,7 @@ impl DataEngine for SqliteEngine {
         let placeholders = vec!["?"; columns.len()].join(", ");
         let tx = self.conn.transaction()?;
         {
-            let mut stmt =
-                tx.prepare(&format!("INSERT INTO {ident} VALUES ({placeholders})"))?;
+            let mut stmt = tx.prepare(&format!("INSERT INTO {ident} VALUES ({placeholders})"))?;
             for row in rows {
                 let vals: Vec<rusqlite::types::Value> = (0..columns.len())
                     .map(|i| cell_to_sqlite(row.get(i).unwrap_or(&Json::Null), columns[i].1))
@@ -158,7 +160,9 @@ impl DataEngine for SqliteEngine {
         // the DROP TABLE that follows it leaving the old table in place
         // for the next ingest's own DROP VIEW IF EXISTS to fail on for real.
         let ident = quote_ident(name);
-        let _ = self.conn.execute_batch(&format!("DROP TABLE IF EXISTS {ident};"));
+        let _ = self
+            .conn
+            .execute_batch(&format!("DROP TABLE IF EXISTS {ident};"));
     }
 
     fn describe(&self, name: &str) -> EngineResult<Vec<ColumnInfo>> {
@@ -166,9 +170,8 @@ impl DataEngine for SqliteEngine {
         let mut cols: Vec<(String, String)> = Vec::new();
         {
             let mut stmt = ro.prepare(&format!("PRAGMA table_info({})", quote_ident(name)))?;
-            let rows = stmt.query_map([], |r| {
-                Ok((r.get::<_, String>(1)?, r.get::<_, String>(2)?))
-            })?;
+            let rows =
+                stmt.query_map([], |r| Ok((r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?;
             for r in rows {
                 cols.push(r?);
             }
@@ -178,9 +181,11 @@ impl DataEngine for SqliteEngine {
         }
 
         let total: i64 = ro
-            .query_row(&format!("SELECT count(*) FROM {}", quote_ident(name)), [], |r| {
-                r.get(0)
-            })
+            .query_row(
+                &format!("SELECT count(*) FROM {}", quote_ident(name)),
+                [],
+                |r| r.get(0),
+            )
             .unwrap_or(0);
 
         let mut out = Vec::new();
@@ -216,77 +221,100 @@ impl DataEngine for SqliteEngine {
     }
 
     fn query(&self, sql: &str, max_rows: usize) -> EngineResult<QueryOutcome> {
-        use std::sync::atomic::{AtomicBool, Ordering};
-        use std::sync::Arc;
-
         let ro = self.ro()?;
-
-        // Watchdog: interrupt the statement after QUERY_TIMEOUT_SECS. The handle
-        // is Send + Sync; `interrupt()` makes an in-flight step return SQLITE_INTERRUPT.
-        let handle = ro.get_interrupt_handle();
-        let done = Arc::new(AtomicBool::new(false));
-        let timed_out = Arc::new(AtomicBool::new(false));
-        let watchdog = {
-            let done = done.clone();
-            let timed_out = timed_out.clone();
-            std::thread::spawn(move || {
-                let secs = crate::engine::analytics::data::query_timeout_secs();
-                let deadline =
-                    std::time::Instant::now() + std::time::Duration::from_secs(secs);
-                while std::time::Instant::now() < deadline {
-                    if done.load(Ordering::Relaxed) {
-                        return;
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(50));
-                }
-                if !done.load(Ordering::Relaxed) {
-                    timed_out.store(true, Ordering::Relaxed);
-                    handle.interrupt();
-                }
-            })
-        };
-
-        let result = (|| -> EngineResult<QueryOutcome> {
-            let mut stmt = ro.prepare(sql)?;
-            let columns: Vec<String> =
-                stmt.column_names().iter().map(|s| s.to_string()).collect();
-            let ncol = columns.len();
-
-            let mut rows_out: Vec<Vec<Json>> = Vec::new();
-            let mut total = 0usize;
-            let mut truncated = false;
-
-            let mut rows = stmt.query([])?;
-            while let Some(row) = rows.next()? {
-                total += 1;
-                if rows_out.len() >= max_rows {
-                    truncated = true;
-                    continue;
-                }
-                let mut cells = Vec::with_capacity(ncol);
-                for i in 0..ncol {
-                    cells.push(valueref_to_json(row.get_ref(i)?));
-                }
-                rows_out.push(cells);
-            }
-            Ok(QueryOutcome { columns, rows: rows_out, row_count: total, truncated })
-        })();
-
-        done.store(true, Ordering::Relaxed);
-        let _ = watchdog.join();
-
-        if timed_out.load(Ordering::Relaxed) {
-            return Err(EngineError::msg(format!(
-                "query stopped after {} s try narrowing it (add a WHERE or LIMIT)",
-                crate::engine::analytics::data::query_timeout_secs()
-            )));
-        }
-        result
+        query_connection(ro, sql, max_rows)
     }
 
     fn python_bridge(&self) -> PythonBridge {
         PythonBridge::SqliteFile(self.path.clone())
     }
+}
+
+/// Query the workspace file from a separate read-only connection. The
+/// embedded Python guest uses this instead of receiving the SQLite path, so
+/// generated code never gets a filesystem capability of its own.
+pub(crate) fn query_read_only(
+    path: &Path,
+    sql: &str,
+    max_rows: usize,
+) -> EngineResult<QueryOutcome> {
+    let conn = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
+    )
+    .map_err(|e| EngineError::msg(format!("open read-only: {e}")))?;
+    register_parse_num(&conn)?;
+    query_connection(conn, sql, max_rows)
+}
+
+fn query_connection(ro: Connection, sql: &str, max_rows: usize) -> EngineResult<QueryOutcome> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    // Watchdog: interrupt the statement after QUERY_TIMEOUT_SECS. The handle
+    // is Send + Sync; `interrupt()` makes an in-flight step return SQLITE_INTERRUPT.
+    let handle = ro.get_interrupt_handle();
+    let done = Arc::new(AtomicBool::new(false));
+    let timed_out = Arc::new(AtomicBool::new(false));
+    let watchdog = {
+        let done = done.clone();
+        let timed_out = timed_out.clone();
+        std::thread::spawn(move || {
+            let secs = crate::engine::analytics::data::query_timeout_secs();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+            while std::time::Instant::now() < deadline {
+                if done.load(Ordering::Relaxed) {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            if !done.load(Ordering::Relaxed) {
+                timed_out.store(true, Ordering::Relaxed);
+                handle.interrupt();
+            }
+        })
+    };
+
+    let result = (|| -> EngineResult<QueryOutcome> {
+        let mut stmt = ro.prepare(sql)?;
+        let columns: Vec<String> = stmt.column_names().iter().map(|s| s.to_string()).collect();
+        let ncol = columns.len();
+
+        let mut rows_out: Vec<Vec<Json>> = Vec::new();
+        let mut total = 0usize;
+        let mut truncated = false;
+
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            total += 1;
+            if rows_out.len() >= max_rows {
+                truncated = true;
+                continue;
+            }
+            let mut cells = Vec::with_capacity(ncol);
+            for i in 0..ncol {
+                cells.push(valueref_to_json(row.get_ref(i)?));
+            }
+            rows_out.push(cells);
+        }
+        Ok(QueryOutcome {
+            columns,
+            rows: rows_out,
+            row_count: total,
+            truncated,
+        })
+    })();
+
+    done.store(true, Ordering::Relaxed);
+    let _ = watchdog.join();
+
+    if timed_out.load(Ordering::Relaxed) {
+        return Err(EngineError::msg(format!(
+            "query stopped after {} s try narrowing it (add a WHERE or LIMIT)",
+            crate::engine::analytics::data::query_timeout_secs()
+        )));
+    }
+    result
 }
 
 // --- file readers ---------------------------------------------------------
@@ -306,7 +334,9 @@ struct Parsed {
 /// counting only outside double quotes. Falls back to `default_delim`.
 fn sniff_delimiter(path: &str, default_delim: u8) -> u8 {
     use std::io::BufRead;
-    let Ok(file) = std::fs::File::open(path) else { return default_delim };
+    let Ok(file) = std::fs::File::open(path) else {
+        return default_delim;
+    };
     let mut first = String::new();
     if std::io::BufReader::new(file).read_line(&mut first).is_err() {
         return default_delim;
@@ -338,7 +368,11 @@ fn read_delimited(path: &str, default_delim: u8) -> EngineResult<Parsed> {
     if delim != default_delim {
         note = Some(format!(
             "columns are separated by '{}', not ','",
-            if delim == b'\t' { "tab".to_string() } else { (delim as char).to_string() }
+            if delim == b'\t' {
+                "tab".to_string()
+            } else {
+                (delim as char).to_string()
+            }
         ));
     }
 
@@ -368,11 +402,16 @@ fn read_delimited(path: &str, default_delim: u8) -> EngineResult<Parsed> {
     if dropped > 0 {
         note = merge_note(
             note,
-            format!("{dropped} row(s) had characters Fella couldn't read (not UTF-8) and were skipped"),
+            format!(
+                "{dropped} row(s) had characters Fella couldn't read (not UTF-8) and were skipped"
+            ),
         );
     }
     if truncated {
-        note = merge_note(note, format!("only the first {cap} rows were loaded (the file is larger)"));
+        note = merge_note(
+            note,
+            format!("only the first {cap} rows were loaded (the file is larger)"),
+        );
     }
 
     // Strip a leading BOM from the very first cell (Excel "CSV UTF-8").
@@ -385,7 +424,13 @@ fn read_delimited(path: &str, default_delim: u8) -> EngineResult<Parsed> {
     }
 
     if records.is_empty() {
-        return Ok(Parsed { headers: vec![], types: vec![], notes: vec![], rows: vec![], note });
+        return Ok(Parsed {
+            headers: vec![],
+            types: vec![],
+            notes: vec![],
+            rows: vec![],
+            note,
+        });
     }
 
     let width = records.iter().map(|r| r.len()).max().unwrap_or(0);
@@ -393,9 +438,15 @@ fn read_delimited(path: &str, default_delim: u8) -> EngineResult<Parsed> {
     // Header detection: skip any preamble, then take the first header-shaped row.
     let (headers, data_start) = find_header(&records, width);
     if data_start > 1 {
-        note = merge_note(note, format!("{} row(s) above the header were skipped", data_start - 1));
+        note = merge_note(
+            note,
+            format!("{} row(s) above the header were skipped", data_start - 1),
+        );
     } else if data_start == 0 {
-        note = merge_note(note, "no header row was found; columns are named col1, col2, …".to_string());
+        note = merge_note(
+            note,
+            "no header row was found; columns are named col1, col2, …".to_string(),
+        );
     }
 
     let mut data: Vec<&csv::StringRecord> = records[data_start..].iter().collect();
@@ -406,7 +457,10 @@ fn read_delimited(path: &str, default_delim: u8) -> EngineResult<Parsed> {
         let cells: Vec<&str> = last.iter().collect();
         if looks_like_total_row(&cells, width) {
             data.pop();
-            note = merge_note(note, "a trailing total row was left out of the table".to_string());
+            note = merge_note(
+                note,
+                "a trailing total row was left out of the table".to_string(),
+            );
         }
     }
 
@@ -427,10 +481,20 @@ fn read_delimited(path: &str, default_delim: u8) -> EngineResult<Parsed> {
 
     let rows: Vec<Vec<Cell>> = data
         .iter()
-        .map(|r| (0..width).map(|i| string_cell(r.get(i).unwrap_or(""), types[i])).collect())
+        .map(|r| {
+            (0..width)
+                .map(|i| string_cell(r.get(i).unwrap_or(""), types[i]))
+                .collect()
+        })
         .collect();
 
-    Ok(Parsed { headers, types, notes, rows, note })
+    Ok(Parsed {
+        headers,
+        types,
+        notes,
+        rows,
+        note,
+    })
 }
 
 /// Append `add` to an optional running note, semicolon-separated.
@@ -473,7 +537,12 @@ fn find_header(records: &[csv::StringRecord], width: usize) -> (Vec<String>, usi
             continue;
         }
         let raw: Vec<String> = (0..width)
-            .map(|j| cells.get(j).map(|s| s.trim().to_string()).unwrap_or_default())
+            .map(|j| {
+                cells
+                    .get(j)
+                    .map(|s| s.trim().to_string())
+                    .unwrap_or_default()
+            })
             .collect();
         return (dedupe_headers(&raw), i + 1);
     }
@@ -484,12 +553,15 @@ fn find_header(records: &[csv::StringRecord], width: usize) -> (Vec<String>, usi
 /// than a data row: carries a total-ish label and is mostly empty.
 fn looks_like_total_row(row: &[&str], width: usize) -> bool {
     let filled = row.iter().filter(|c| !c.trim().is_empty()).count();
-    let has_label = row.iter().any(|c| crate::engine::analytics::data::is_total_label(c));
+    let has_label = row
+        .iter()
+        .any(|c| crate::engine::analytics::data::is_total_label(c));
     has_label && filled * 3 <= width * 2 + 2
 }
 
 fn read_json(path: &str, ndjson: bool) -> EngineResult<Parsed> {
-    let text = std::fs::read_to_string(path).map_err(|e| EngineError::io(format!("read {path}"), e))?;
+    let text =
+        std::fs::read_to_string(path).map_err(|e| EngineError::io(format!("read {path}"), e))?;
 
     let objs: Vec<serde_json::Map<String, Json>> = if ndjson {
         text.lines()
@@ -501,9 +573,16 @@ fn read_json(path: &str, ndjson: bool) -> EngineResult<Parsed> {
         match serde_json::from_str::<Json>(&text)
             .map_err(|e| EngineError::msg(format!("{path}: {e}")))?
         {
-            Json::Array(a) => a.into_iter().filter_map(|v| v.as_object().cloned()).collect(),
+            Json::Array(a) => a
+                .into_iter()
+                .filter_map(|v| v.as_object().cloned())
+                .collect(),
             Json::Object(o) => vec![o],
-            _ => return Err(EngineError::msg(format!("{path}: expected a JSON array of objects"))),
+            _ => {
+                return Err(EngineError::msg(format!(
+                    "{path}: expected a JSON array of objects"
+                )))
+            }
         }
     };
     if objs.is_empty() {
@@ -540,7 +619,13 @@ fn read_json(path: &str, ndjson: bool) -> EngineResult<Parsed> {
         })
         .collect();
 
-    Ok(Parsed { headers, types, notes, rows, note: None })
+    Ok(Parsed {
+        headers,
+        types,
+        notes,
+        rows,
+        note: None,
+    })
 }
 
 fn dedupe_headers(raw: &[String]) -> Vec<String> {
@@ -548,7 +633,11 @@ fn dedupe_headers(raw: &[String]) -> Vec<String> {
     raw.iter()
         .enumerate()
         .map(|(i, h)| {
-            let base = if h.is_empty() { format!("col{}", i + 1) } else { h.clone() };
+            let base = if h.is_empty() {
+                format!("col{}", i + 1)
+            } else {
+                h.clone()
+            };
             let mut name = base.clone();
             let mut n = 2;
             while !seen.insert(name.clone()) {
@@ -626,7 +715,10 @@ fn sniff_strings<'a>(cells: impl Iterator<Item = &'a str>) -> (ColType, Option<S
     if loose_ok && loose_used {
         return (
             ColType::Float,
-            Some("amounts were stored as text (currency, commas, percent) and read as numbers".into()),
+            Some(
+                "amounts were stored as text (currency, commas, percent) and read as numbers"
+                    .into(),
+            ),
         );
     }
     // Only when every non-blank cell parses -- a wrong guess on an ambiguous
@@ -688,7 +780,9 @@ fn case_collision<'a>(cells: impl Iterator<Item = &'a str>) -> Option<String> {
         folded.insert(lc);
     }
     if raw.len() > folded.len() {
-        let eg = example.map(|(a, b)| format!(" (e.g. {a} / {b})")).unwrap_or_default();
+        let eg = example
+            .map(|(a, b)| format!(" (e.g. {a} / {b})"))
+            .unwrap_or_default();
         Some(format!(
             "values differ only in capitalisation{eg}; when filtering by a value, fold case \
              (lower(col) = lower('value'), or col = 'value' COLLATE NOCASE)"
@@ -810,7 +904,9 @@ fn string_cell(s: &str, ty: ColType) -> Cell {
             "false" => Json::from(0),
             _ => Json::Null,
         },
-        ColType::Date => parse_named_month_date(s).map(Json::from).unwrap_or(Json::Null),
+        ColType::Date => parse_named_month_date(s)
+            .map(Json::from)
+            .unwrap_or(Json::Null),
     }
 }
 
@@ -835,12 +931,12 @@ fn json_cell(v: &Json, ty: ColType) -> Cell {
             .and_then(serde_json::Number::from_f64)
             .map(Json::Number)
             .unwrap_or(Json::Null),
-        (Json::String(s), ColType::Int) => {
-            parse_numeric(s).map(|f| Json::from(f as i64)).unwrap_or(Json::Null)
-        }
-        (Json::String(s), ColType::Date) => {
-            parse_named_month_date(s).map(Json::from).unwrap_or(Json::Null)
-        }
+        (Json::String(s), ColType::Int) => parse_numeric(s)
+            .map(|f| Json::from(f as i64))
+            .unwrap_or(Json::Null),
+        (Json::String(s), ColType::Date) => parse_named_month_date(s)
+            .map(Json::from)
+            .unwrap_or(Json::Null),
         (Json::String(s), _) => Json::from(s.clone()),
         (other, ColType::Text) => Json::from(other.to_string()),
         _ => Json::Null,
@@ -869,7 +965,9 @@ fn valueref_to_json(v: rusqlite::types::ValueRef<'_>) -> Json {
     match v {
         R::Null => Json::Null,
         R::Integer(i) => Json::from(i),
-        R::Real(f) => serde_json::Number::from_f64(f).map(Json::Number).unwrap_or(Json::Null),
+        R::Real(f) => serde_json::Number::from_f64(f)
+            .map(Json::Number)
+            .unwrap_or(Json::Null),
         R::Text(t) => Json::from(String::from_utf8_lossy(t).into_owned()),
         R::Blob(b) => Json::from(format!("<{} bytes>", b.len())),
     }
@@ -881,9 +979,18 @@ mod tests {
 
     #[test]
     fn sniffs_types() {
-        assert_eq!(sniff_strings(["1", "2", "", "3"].into_iter()).0, ColType::Int);
-        assert_eq!(sniff_strings(["1", "2.5", "3"].into_iter()).0, ColType::Float);
-        assert_eq!(sniff_strings(["true", "false"].into_iter()).0, ColType::Bool);
+        assert_eq!(
+            sniff_strings(["1", "2", "", "3"].into_iter()).0,
+            ColType::Int
+        );
+        assert_eq!(
+            sniff_strings(["1", "2.5", "3"].into_iter()).0,
+            ColType::Float
+        );
+        assert_eq!(
+            sniff_strings(["true", "false"].into_iter()).0,
+            ColType::Bool
+        );
         assert_eq!(sniff_strings(["a", "1", "b"].into_iter()).0, ColType::Text);
         assert_eq!(sniff_strings(["", ""].into_iter()).0, ColType::Text);
     }
@@ -907,26 +1014,50 @@ mod tests {
             sniff_strings(["$1,200.00", "$1,300.00", "$1,300.00 (paid)", "500", "600"].into_iter());
         assert_eq!(ty, ColType::Text);
         let note = note.expect("a mixed column should be noted");
-        assert!(note.contains("parse_num"), "note should mention parse_num: {note:?}");
-        assert!(!note.contains("CAST it for a total"), "note should not tell the model to CAST: {note:?}");
+        assert!(
+            note.contains("parse_num"),
+            "note should mention parse_num: {note:?}"
+        );
+        assert!(
+            !note.contains("CAST it for a total"),
+            "note should not tell the model to CAST: {note:?}"
+        );
     }
 
     #[test]
     fn parses_named_month_dates() {
         // The reported bug: "Aug 1, 2026" made strftime() return NULL.
-        assert_eq!(parse_named_month_date("Aug 1, 2026").as_deref(), Some("2026-08-01"));
-        assert_eq!(parse_named_month_date("August 1, 2026").as_deref(), Some("2026-08-01"));
-        assert_eq!(parse_named_month_date("Aug 15 2026").as_deref(), Some("2026-08-15"));
+        assert_eq!(
+            parse_named_month_date("Aug 1, 2026").as_deref(),
+            Some("2026-08-01")
+        );
+        assert_eq!(
+            parse_named_month_date("August 1, 2026").as_deref(),
+            Some("2026-08-01")
+        );
+        assert_eq!(
+            parse_named_month_date("Aug 15 2026").as_deref(),
+            Some("2026-08-15")
+        );
         // day-first, with an ordinal suffix
-        assert_eq!(parse_named_month_date("1st Aug 2026").as_deref(), Some("2026-08-01"));
-        assert_eq!(parse_named_month_date("21st August 2026").as_deref(), Some("2026-08-21"));
+        assert_eq!(
+            parse_named_month_date("1st Aug 2026").as_deref(),
+            Some("2026-08-01")
+        );
+        assert_eq!(
+            parse_named_month_date("21st August 2026").as_deref(),
+            Some("2026-08-21")
+        );
         // case-insensitive
-        assert_eq!(parse_named_month_date("aug 1, 2026").as_deref(), Some("2026-08-01"));
+        assert_eq!(
+            parse_named_month_date("aug 1, 2026").as_deref(),
+            Some("2026-08-01")
+        );
         // not a date at all
         assert_eq!(parse_named_month_date("Groceries"), None);
         assert_eq!(parse_named_month_date("$1,200.00"), None);
         assert_eq!(parse_named_month_date("2026-08-01"), None); // already ISO, not this format
-        // out-of-range day/year rejected rather than silently wrapped
+                                                                // out-of-range day/year rejected rather than silently wrapped
         assert_eq!(parse_named_month_date("Aug 45, 2026"), None);
         assert_eq!(parse_named_month_date("Aug 1, 26"), None);
         // deliberately NOT attempted: ambiguous numeric formats
@@ -940,7 +1071,10 @@ mod tests {
         assert_eq!(ty, ColType::Date);
         let note = note.expect("a coerced date column should be noted");
         assert!(note.contains("ISO-8601"), "{note}");
-        assert_eq!(string_cell("Aug 1, 2026", ColType::Date), Json::from("2026-08-01"));
+        assert_eq!(
+            string_cell("Aug 1, 2026", ColType::Date),
+            Json::from("2026-08-01")
+        );
 
         // one genuinely unparseable value -> the whole column stays text,
         // rather than silently mixing ISO and non-ISO dates.
@@ -948,16 +1082,26 @@ mod tests {
         assert_eq!(ty, ColType::Text);
 
         // a plain text column is unaffected
-        assert_eq!(sniff_strings(["Groceries", "Rent", "Transport"].into_iter()).0, ColType::Text);
+        assert_eq!(
+            sniff_strings(["Groceries", "Rent", "Transport"].into_iter()).0,
+            ColType::Text
+        );
     }
 
     #[test]
     fn sniffs_named_month_dates_from_json() {
-        let vals = [Json::from("Aug 1, 2026"), Json::from("Sep 15, 2026"), Json::Null];
+        let vals = [
+            Json::from("Aug 1, 2026"),
+            Json::from("Sep 15, 2026"),
+            Json::Null,
+        ];
         let (ty, note) = sniff_json(vals.iter());
         assert_eq!(ty, ColType::Date);
         assert!(note.unwrap().contains("ISO-8601"));
-        assert_eq!(json_cell(&Json::from("Aug 1, 2026"), ColType::Date), Json::from("2026-08-01"));
+        assert_eq!(
+            json_cell(&Json::from("Aug 1, 2026"), ColType::Date),
+            Json::from("2026-08-01")
+        );
     }
 
     #[test]
@@ -965,7 +1109,10 @@ mod tests {
         let c = case_collision(["Rent", "rent", "food", "RENT", "food"].into_iter());
         let c = c.expect("Rent/rent/RENT collide under case-fold");
         assert!(c.contains("capitalisation"), "{c}");
-        assert!(c.contains("lower(") || c.contains("NOCASE"), "steers to case-fold: {c}");
+        assert!(
+            c.contains("lower(") || c.contains("NOCASE"),
+            "steers to case-fold: {c}"
+        );
 
         // consistent casing -> no note
         assert!(case_collision(["rent", "food", "transport", "rent"].into_iter()).is_none());
@@ -980,9 +1127,7 @@ mod tests {
     fn parse_num_sql_function_matches_parse_numeric() {
         let conn = Connection::open_in_memory().unwrap();
         register_parse_num(&conn).unwrap();
-        let get = |sql: &str| -> Option<f64> {
-            conn.query_row(sql, [], |r| r.get(0)).unwrap()
-        };
+        let get = |sql: &str| -> Option<f64> { conn.query_row(sql, [], |r| r.get(0)).unwrap() };
         assert_eq!(get("SELECT parse_num('$1,200.00')"), Some(1200.0));
         assert_eq!(get("SELECT parse_num('1,300.00 (paid)')"), None);
         assert_eq!(get("SELECT parse_num(42)"), Some(42.0));
@@ -998,11 +1143,17 @@ mod tests {
         let total: f64 = conn
             .query_row("SELECT SUM(parse_num(amount)) FROM t", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(total, 1700.0, "the unparseable row should be skipped, not truncated to 1.0");
+        assert_eq!(
+            total, 1700.0,
+            "the unparseable row should be skipped, not truncated to 1.0"
+        );
         let parsed_count: i64 = conn
             .query_row("SELECT COUNT(parse_num(amount)) FROM t", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(parsed_count, 2, "exactly the two clean rows should have parsed");
+        assert_eq!(
+            parsed_count, 2,
+            "exactly the two clean rows should have parsed"
+        );
     }
 
     #[test]

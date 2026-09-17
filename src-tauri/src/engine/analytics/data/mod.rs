@@ -11,9 +11,9 @@ use serde_json::Value as Json;
 use crate::engine::catalog::{ColumnInfo, SourceKind};
 use crate::engine::error::{EngineError, EngineResult};
 
-pub mod sqlite;
 #[cfg(feature = "duckdb")]
 pub mod duck;
+pub mod sqlite;
 
 /// Rows returned to callers are capped at this many by default.
 pub const DEFAULT_ROW_CAP: usize = 1000;
@@ -95,10 +95,10 @@ pub struct SourceLoad {
 
 /// How `run_python`'s `sql()` helper reaches the workspace data.
 pub enum PythonBridge {
-    /// Point the Python subprocess at a read-only SQLite file.
+    /// The host opens this SQLite file read-only on behalf of the guest.
     SqliteFile(std::path::PathBuf),
-    /// Hand the subprocess `(table, FROM-expression)` pairs to re-read files
-    /// through its own DuckDB (needs `pip install duckdb`).
+    /// The host recreates these `(table, FROM-expression)` views in its own
+    /// DuckDB connection; the guest never receives the paths or expressions.
     #[cfg(feature = "duckdb")]
     DuckReaders(Vec<(String, String)>),
 }
@@ -162,7 +162,15 @@ pub fn ensure_read_only(sql: &str) -> EngineResult<()> {
         .next()
         .unwrap_or_default();
     const ALLOWED_START: &[&str] = &[
-        "select", "with", "table", "from", "values", "describe", "summarize", "explain", "pragma",
+        "select",
+        "with",
+        "table",
+        "from",
+        "values",
+        "describe",
+        "summarize",
+        "explain",
+        "pragma",
     ];
     if !ALLOWED_START.contains(&first) {
         return Err(EngineError::Forbidden(format!(
@@ -182,18 +190,56 @@ pub fn ensure_read_only(sql: &str) -> EngineResult<()> {
     // to)` *function* inside a SELECT the standard way to strip currency
     // formatting (commas, `$`) before CAST/SUM.
     const BANNED: &[&str] = &[
-        "attach", "detach", "copy", "install", "load", "export", "import", "vacuum", "reindex",
-        "analyze", "call", "create", "drop", "alter", "insert", "update", "delete",
-        "truncate", "begin", "commit", "rollback", "savepoint", "read_text", "read_blob", "glob",
+        "attach",
+        "detach",
+        "copy",
+        "install",
+        "load",
+        "export",
+        "import",
+        "vacuum",
+        "reindex",
+        "analyze",
+        "call",
+        "create",
+        "drop",
+        "alter",
+        "insert",
+        "update",
+        "delete",
+        "truncate",
+        "begin",
+        "commit",
+        "rollback",
+        "savepoint",
+        "read_text",
+        "read_blob",
+        "glob",
         // DuckDB file/DB-reading table functions: the catalog builds the views
         // Fella needs; the model never calls these directly, and left open they
         // let a query read any path on disk (`read_csv_auto('/etc/passwd')`),
         // which would breach the workspace boundary the docs call the safety
         // story. Harmless no-ops on the SQLite backend.
-        "read_csv", "read_csv_auto", "read_parquet", "parquet_scan", "parquet_metadata",
-        "parquet_schema", "read_json", "read_json_auto", "read_json_objects", "read_ndjson",
-        "read_ndjson_auto", "read_ndjson_objects", "postgres_scan", "postgres_query",
-        "sqlite_scan", "sqlite_query", "mysql_scan", "mysql_query", "iceberg_scan", "delta_scan",
+        "read_csv",
+        "read_csv_auto",
+        "read_parquet",
+        "parquet_scan",
+        "parquet_metadata",
+        "parquet_schema",
+        "read_json",
+        "read_json_auto",
+        "read_json_objects",
+        "read_ndjson",
+        "read_ndjson_auto",
+        "read_ndjson_objects",
+        "postgres_scan",
+        "postgres_query",
+        "sqlite_scan",
+        "sqlite_query",
+        "mysql_scan",
+        "mysql_query",
+        "iceberg_scan",
+        "delta_scan",
     ];
     let banned_hit = body
         .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
@@ -243,7 +289,17 @@ pub fn strip_comments(sql: &str) -> String {
 pub fn is_blankish(s: &str) -> bool {
     matches!(
         s.trim().to_ascii_lowercase().as_str(),
-        "" | "n/a" | "na" | "#n/a" | "-" | "--" | "\u{2014}" | "." | "null" | "nil" | "none" | "tbd"
+        "" | "n/a"
+            | "na"
+            | "#n/a"
+            | "-"
+            | "--"
+            | "\u{2014}"
+            | "."
+            | "null"
+            | "nil"
+            | "none"
+            | "tbd"
     )
 }
 
@@ -315,7 +371,10 @@ pub fn parse_numeric(s: &str) -> Option<f64> {
     // grouping: any group after the first is exactly three digits. This
     // rejects "1 2 3" and "1,23,456" instead of silently reading them as 123 /
     // 123456.
-    let groups: Vec<&str> = int_part.split([',', ' ']).filter(|g| !g.is_empty()).collect();
+    let groups: Vec<&str> = int_part
+        .split([',', ' '])
+        .filter(|g| !g.is_empty())
+        .collect();
     if groups.is_empty() && frac_part.is_none_or(|f| f.is_empty()) {
         return None;
     }
@@ -354,25 +413,49 @@ pub fn parse_numeric(s: &str) -> Option<f64> {
 /// by both the CSV/JSON sniffer (`sqlite.rs`) and the Excel ingest.
 pub fn parse_named_month_date(s: &str) -> Option<String> {
     const MONTHS: &[(&str, u32)] = &[
-        ("jan", 1), ("january", 1),
-        ("feb", 2), ("february", 2),
-        ("mar", 3), ("march", 3),
-        ("apr", 4), ("april", 4),
+        ("jan", 1),
+        ("january", 1),
+        ("feb", 2),
+        ("february", 2),
+        ("mar", 3),
+        ("march", 3),
+        ("apr", 4),
+        ("april", 4),
         ("may", 5),
-        ("jun", 6), ("june", 6),
-        ("jul", 7), ("july", 7),
-        ("aug", 8), ("august", 8),
-        ("sep", 9), ("sept", 9), ("september", 9),
-        ("oct", 10), ("october", 10),
-        ("nov", 11), ("november", 11),
-        ("dec", 12), ("december", 12),
+        ("jun", 6),
+        ("june", 6),
+        ("jul", 7),
+        ("july", 7),
+        ("aug", 8),
+        ("august", 8),
+        ("sep", 9),
+        ("sept", 9),
+        ("september", 9),
+        ("oct", 10),
+        ("october", 10),
+        ("nov", 11),
+        ("november", 11),
+        ("dec", 12),
+        ("december", 12),
     ];
     let cleaned: String = s.chars().filter(|&c| c != ',').collect();
     let parts: Vec<&str> = cleaned.split_whitespace().collect();
-    let [a, b, year_str] = parts[..] else { return None };
-    let (month_str, day_str) = if a.chars().next()?.is_ascii_alphabetic() { (a, b) } else { (b, a) };
-    let month = MONTHS.iter().find(|(n, _)| n.eq_ignore_ascii_case(month_str)).map(|(_, m)| *m)?;
-    let day: u32 = day_str.trim_end_matches(|c: char| c.is_ascii_alphabetic()).parse().ok()?;
+    let [a, b, year_str] = parts[..] else {
+        return None;
+    };
+    let (month_str, day_str) = if a.chars().next()?.is_ascii_alphabetic() {
+        (a, b)
+    } else {
+        (b, a)
+    };
+    let month = MONTHS
+        .iter()
+        .find(|(n, _)| n.eq_ignore_ascii_case(month_str))
+        .map(|(_, m)| *m)?;
+    let day: u32 = day_str
+        .trim_end_matches(|c: char| c.is_ascii_alphabetic())
+        .parse()
+        .ok()?;
     let year: i32 = year_str.parse().ok()?;
     if !(1..=31).contains(&day) || !(1900..=2100).contains(&year) {
         return None;
@@ -387,8 +470,10 @@ pub fn parse_named_month_date(s: &str) -> Option<String> {
 pub fn is_total_label(s: &str) -> bool {
     let l = s.trim().to_ascii_lowercase();
     let l = l.trim_end_matches([':', '.']).trim();
-    matches!(l, "total" | "totals" | "sum" | "grand total" | "subtotal" | "sub total")
-        || l.starts_with("total ")
+    matches!(
+        l,
+        "total" | "totals" | "sum" | "grand total" | "subtotal" | "sub total"
+    ) || l.starts_with("total ")
         || l.starts_with("grand total ")
         || l.starts_with("subtotal ")
 }
@@ -480,10 +565,9 @@ mod tests {
         // REPLACE(str, from, to) is a read-only string function the standard
         // way to strip currency formatting (commas, `$`) before CAST/SUM and
         // must not be caught by the mutating-statement ban.
-        assert!(ensure_read_only(
-            "SELECT SUM(CAST(REPLACE(amount, ',', '') AS REAL)) FROM t"
-        )
-        .is_ok());
+        assert!(
+            ensure_read_only("SELECT SUM(CAST(REPLACE(amount, ',', '') AS REAL)) FROM t").is_ok()
+        );
         // The mutating `REPLACE INTO ...` statement is still rejected because
         // it fails the "must start with SELECT/WITH" check, not the token ban.
         assert!(ensure_read_only("REPLACE INTO t VALUES (1)").is_err());

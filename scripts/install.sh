@@ -153,5 +153,4 @@ EOF
 esac
 
 echo
-echo "Next: install Ollama (https://ollama.com) and 'ollama pull llama3.1' for a"
-echo "local model, or run Fella and type /login to use a hosted one."
+echo "Next: open Fella and type /login to connect a model provider with your API key."

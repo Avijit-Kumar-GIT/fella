@@ -72,12 +72,12 @@ pub struct ConversationSummary {
 pub struct ProviderInfo {
     pub id: String,
     pub display: String,
-    /// `"none"` or `"key"`.
+    /// `"key"` all model providers are BYOK.
     pub auth: String,
     pub base_url: String,
     pub get_key_url: String,
     pub embeddings: bool,
-    /// A credential is present, or the provider needs none.
+    /// A credential is present for this provider.
     pub authed: bool,
     /// This is the currently-selected provider.
     pub current: bool,
@@ -146,6 +146,7 @@ impl WorkspaceState {
 struct WorkspaceScratch {
     path: PathBuf,
     users: Arc<AtomicUsize>,
+    owner: Arc<AtomicBool>,
 }
 
 impl WorkspaceScratch {
@@ -153,6 +154,7 @@ impl WorkspaceScratch {
         Self {
             path,
             users: Arc::new(AtomicUsize::new(0)),
+            owner: Arc::new(AtomicBool::new(true)),
         }
     }
 
@@ -161,13 +163,13 @@ impl WorkspaceScratch {
         ScratchLease {
             path: self.path.clone(),
             users: Arc::clone(&self.users),
+            owner: Arc::clone(&self.owner),
         }
     }
 
     fn cleanup(&self) {
-        if self.users.load(Ordering::Acquire) == 0 {
-            let _ = std::fs::remove_dir_all(&self.path);
-        }
+        self.owner.store(false, Ordering::Release);
+        cleanup_scratch(&self.path, &self.users, &self.owner);
     }
 }
 
@@ -180,13 +182,70 @@ impl Drop for WorkspaceScratch {
 struct ScratchLease {
     path: PathBuf,
     users: Arc<AtomicUsize>,
+    owner: Arc<AtomicBool>,
 }
 
 impl Drop for ScratchLease {
     fn drop(&mut self) {
-        if self.users.fetch_sub(1, Ordering::AcqRel) == 1 {
-            let _ = std::fs::remove_dir_all(&self.path);
-        }
+        self.users.fetch_sub(1, Ordering::AcqRel);
+        cleanup_scratch(&self.path, &self.users, &self.owner);
+    }
+}
+
+fn cleanup_scratch(path: &Path, users: &AtomicUsize, owner: &AtomicBool) {
+    // The active workspace owns its scratch directory. A Python lease only
+    // keeps a replaced workspace alive long enough for its in-flight guest to
+    // finish; it must never delete the current directory while another tool
+    // is about to open a read-only connection to it.
+    if !owner.load(Ordering::Acquire) && users.load(Ordering::Acquire) == 0 {
+        let _ = std::fs::remove_dir_all(path);
+    }
+}
+
+#[cfg(test)]
+mod scratch_tests {
+    use super::*;
+
+    #[test]
+    fn active_workspace_keeps_scratch_after_last_python_lease() {
+        let path = std::env::temp_dir().join(format!("fella-scratch-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir(&path).unwrap();
+
+        let scratch = WorkspaceScratch::new(path.clone());
+        let lease = scratch.lease();
+        drop(lease);
+        assert!(
+            path.exists(),
+            "the active workspace still owns its scratch dir"
+        );
+
+        drop(scratch);
+        assert!(
+            !path.exists(),
+            "scratch is removed after the workspace owner drops"
+        );
+    }
+
+    #[test]
+    fn replaced_workspace_keeps_scratch_until_its_lease_drops() {
+        let path = std::env::temp_dir().join(format!("fella-scratch-old-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir(&path).unwrap();
+
+        let scratch = WorkspaceScratch::new(path.clone());
+        let lease = scratch.lease();
+        drop(scratch);
+        assert!(
+            path.exists(),
+            "an in-flight Python call still owns the scratch dir"
+        );
+
+        drop(lease);
+        assert!(
+            !path.exists(),
+            "replaced scratch is removed after the last lease drops"
+        );
     }
 }
 
@@ -351,7 +410,11 @@ impl EngineState {
             .filter(|c| c.is_ascii_alphanumeric())
             .take(32)
             .collect();
-        let slug = if slug.is_empty() { "unknown".to_string() } else { slug };
+        let slug = if slug.is_empty() {
+            "unknown".to_string()
+        } else {
+            slug
+        };
         let suffix = format!("_{slug}.json");
 
         let dir = self.data_dir.join("conversations");
@@ -414,7 +477,10 @@ impl EngineState {
             if trimmed.is_empty() {
                 obj.remove("title");
             } else {
-                obj.insert("title".into(), serde_json::Value::String(trimmed.to_string()));
+                obj.insert(
+                    "title".into(),
+                    serde_json::Value::String(trimmed.to_string()),
+                );
             }
         }
         let pretty = serde_json::to_string_pretty(&value).unwrap_or(text);
@@ -435,11 +501,7 @@ impl EngineState {
             .map(|entries| {
                 entries
                     .flatten()
-                    .filter(|e| {
-                        e.file_name()
-                            .to_string_lossy()
-                            .ends_with(".json")
-                    })
+                    .filter(|e| e.file_name().to_string_lossy().ends_with(".json"))
                     .count()
             })
             .unwrap_or(0);
@@ -624,7 +686,10 @@ impl EngineState {
             p.push_str("Tables (columns and types shown; use inspect_table for values):\n");
             for s in &tables {
                 let view = s.view.as_deref().unwrap_or("");
-                let rows = s.row_count.map(|n| n.to_string()).unwrap_or_else(|| "?".into());
+                let rows = s
+                    .row_count
+                    .map(|n| n.to_string())
+                    .unwrap_or_else(|| "?".into());
                 p.push_str(&format!("  {view}  ({rows} rows)\n"));
                 if let Some(note) = &s.note {
                     p.push_str(&format!("    note: {note}\n"));
@@ -658,7 +723,9 @@ impl EngineState {
                 p.push_str(&format!(
                     "  {}  {} rows, {ncols} columns\n",
                     s.view.as_deref().unwrap_or(""),
-                    s.row_count.map(|n| n.to_string()).unwrap_or_else(|| "?".into()),
+                    s.row_count
+                        .map(|n| n.to_string())
+                        .unwrap_or_else(|| "?".into()),
                 ));
             }
         }
@@ -758,7 +825,11 @@ impl EngineState {
     /// when `reason` fires (see `friction::trigger`). Never transmitted; never
     /// contains question/answer text, file paths, or data values. Best-effort
     /// a write failure here must never fail the actual answer.
-    pub(crate) fn record_friction_signal(&self, reason: &str, evidence: &[crate::engine::evidence::EvidenceItem]) {
+    pub(crate) fn record_friction_signal(
+        &self,
+        reason: &str,
+        evidence: &[crate::engine::evidence::EvidenceItem],
+    ) {
         crate::engine::friction::record(&self.data_dir, reason, evidence);
     }
 
@@ -795,7 +866,9 @@ impl EngineState {
         if !memory::writes_enabled() {
             return;
         }
-        let Some(path) = self.memory_path() else { return };
+        let Some(path) = self.memory_path() else {
+            return;
+        };
 
         let sqls: Vec<&str> = answer
             .evidence
@@ -847,12 +920,19 @@ impl EngineState {
     /// 2026-09-12). Uses whichever model is currently active no override so
     /// the memory file stays legible to any model that later reads it, and
     /// costs nothing when there's nothing yet to reconcile against.
-    async fn reconcile_vocab_key(&self, correction: &str, existing: &[(String, String)]) -> VocabAction {
+    async fn reconcile_vocab_key(
+        &self,
+        correction: &str,
+        existing: &[(String, String)],
+    ) -> VocabAction {
         if existing.is_empty() {
             return VocabAction::Add(default_topic_key(correction));
         }
-        let list =
-            existing.iter().map(|(k, v)| format!("- {k}: {v}")).collect::<Vec<_>>().join("\n");
+        let list = existing
+            .iter()
+            .map(|(k, v)| format!("- {k}: {v}"))
+            .collect::<Vec<_>>()
+            .join("\n");
         let sys = "You maintain a short list of facts Fella has learned from a user's corrections \
 about their own data. Given a new correction and the existing facts, decide: does it UPDATE one of \
 them (replace its text with this correction), is it genuinely a NEW fact (ADD), or does it just \
@@ -894,11 +974,7 @@ exactly, character for character, from the list below.";
         Ok(extensions::list(&self.data_dir, &conn))
     }
 
-    pub fn packs_set_enabled(
-        &self,
-        id: &str,
-        enabled: bool,
-    ) -> EngineResult<Vec<InstalledPack>> {
+    pub fn packs_set_enabled(&self, id: &str, enabled: bool) -> EngineResult<Vec<InstalledPack>> {
         let conn = self.sqlite.lock().unwrap_or_else(|e| e.into_inner());
         extensions::set_enabled(&conn, id, enabled)?;
         Ok(extensions::list(&self.data_dir, &conn))
@@ -961,14 +1037,16 @@ exactly, character for character, from the list below.";
 
     /// CSS token map of the active theme pack, for the frontend to apply.
     pub fn packs_theme(&self) -> Option<std::collections::BTreeMap<String, String>> {
-        extensions::active_theme_tokens(&self.data_dir, &self.sqlite.lock().unwrap_or_else(|e| e.into_inner()))
+        extensions::active_theme_tokens(
+            &self.data_dir,
+            &self.sqlite.lock().unwrap_or_else(|e| e.into_inner()),
+        )
     }
 
     pub fn settings(&self) -> Settings {
         let mut s = sqlite::load_settings(&self.sqlite.lock().unwrap_or_else(|e| e.into_inner()));
         let id = provider::normalize_id(&s.provider);
-        let needs_none = provider::get(id).map(|p| p.auth == AuthKind::None).unwrap_or(false);
-        s.has_credential = needs_none || self.secrets.has(id);
+        s.has_credential = self.secrets.has(id);
         s
     }
 
@@ -1001,8 +1079,12 @@ exactly, character for character, from the list below.";
             }
         }
 
-        sqlite::save_settings(&self.sqlite.lock().unwrap_or_else(|e| e.into_inner()), &patch)?;
-        // A model or provider change: pre-load the new local model.
+        sqlite::save_settings(
+            &self.sqlite.lock().unwrap_or_else(|e| e.into_inner()),
+            &patch,
+        )?;
+        // A model or provider change: warm a hosted Ollama-wire model when a
+        // credential is available.
         self.warm_model();
         Ok(self.settings())
     }
@@ -1020,7 +1102,7 @@ exactly, character for character, from the list below.";
                 base_url: p.base_url.to_string(),
                 get_key_url: p.get_key_url.to_string(),
                 embeddings: p.embeddings,
-                authed: p.auth == AuthKind::None || self.secrets.has(p.id),
+                authed: self.secrets.has(p.id),
                 current: p.id == current,
             })
             .collect()
@@ -1032,7 +1114,10 @@ exactly, character for character, from the list below.";
         let p = provider::get(provider_id)
             .ok_or_else(|| EngineError::msg(format!("unknown provider: {provider_id}")))?;
         if p.auth != AuthKind::ApiKey {
-            return Err(EngineError::msg(format!("{} does not use an API key", p.display)));
+            return Err(EngineError::msg(format!(
+                "{} does not use an API key",
+                p.display
+            )));
         }
         let key = key.trim();
         if key.is_empty() {
@@ -1132,7 +1217,11 @@ exactly, character for character, from the list below.";
                     .and_then(|n| n.to_str())
                     .unwrap_or("source")
                     .to_string();
-                let stem = f.path.file_stem().and_then(|s| s.to_str()).unwrap_or("source");
+                let stem = f
+                    .path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("source");
                 let path_str = f.path.display().to_string();
 
                 let synopsis = if f.kind == SourceKind::Text && synopsis_budget > 0 {
@@ -1157,7 +1246,9 @@ exactly, character for character, from the list below.";
                 match f.kind {
                     #[cfg(feature = "xlsx")]
                     catalog::SourceKind::Xlsx => {
-                        match crate::engine::ingest::excel::ingest_workbook(&mut *data, &path_str, stem, &mut used) {
+                        match crate::engine::ingest::excel::ingest_workbook(
+                            &mut *data, &path_str, stem, &mut used,
+                        ) {
                             Ok((sheets, _)) if !sheets.is_empty() => {
                                 for sh in sheets {
                                     sources.push(SourceInfo {
@@ -1444,8 +1535,7 @@ exactly, character for character, from the list below.";
         model: Option<&str>,
         emit: impl Fn(AskEvent) + Send + Sync,
     ) -> EngineResult<Answer> {
-        self
-            .ask_with_mode(conversation_id, question, model, false, emit)
+        self.ask_with_mode(conversation_id, question, model, false, emit)
             .await
     }
 
@@ -1460,11 +1550,17 @@ exactly, character for character, from the list below.";
         inspect: bool,
         emit: impl Fn(AskEvent) + Send + Sync,
     ) -> EngineResult<Answer> {
+        let settings = self.settings();
+        if !settings.has_credential {
+            return Err(EngineError::msg(
+                "Connect a model service with /login before asking a question.",
+            ));
+        }
         let effective_model = model
             .map(str::trim)
             .filter(|m| !m.is_empty())
             .map(str::to_string)
-            .unwrap_or_else(|| self.settings().model);
+            .unwrap_or(settings.model);
         if effective_model.trim().is_empty() {
             return Err(EngineError::msg(
                 "No model chosen yet. Run /model to see the options and pick one.",
@@ -1513,15 +1609,26 @@ exactly, character for character, from the list below.";
         if !inspect {
             self.attach_mcp_tools(&mut registry, &emit).await;
         }
-        let answer =
-            agent::run(self, &llm, &registry, conversation_id, question, &cancel, &emit).await;
+        let answer = agent::run(
+            self,
+            &llm,
+            &registry,
+            conversation_id,
+            question,
+            &cancel,
+            &emit,
+        )
+        .await;
         // (`&cancel` derefs `Arc<AtomicBool>` -> `&AtomicBool` for `run`.)
 
         // Drop this run's stop-flag (unless a newer run for the same id already
         // replaced it).
         {
             let mut flags = self.cancel.lock().unwrap_or_else(|e| e.into_inner());
-            if flags.get(conversation_id).is_some_and(|f| Arc::ptr_eq(f, &cancel)) {
+            if flags
+                .get(conversation_id)
+                .is_some_and(|f| Arc::ptr_eq(f, &cancel))
+            {
                 flags.remove(conversation_id);
             }
         }
@@ -1540,7 +1647,8 @@ exactly, character for character, from the list below.";
                     .and_then(|s| s.turns.last())
                     .map(|t| t.question.clone())
             };
-            self.record_turn_memory(prior_q.as_deref(), question, &answer).await;
+            self.record_turn_memory(prior_q.as_deref(), question, &answer)
+                .await;
         }
 
         // Distil this turn for the next question in the conversation - but not a
@@ -1559,9 +1667,18 @@ exactly, character for character, from the list below.";
             let queries: Vec<String> = answer
                 .evidence
                 .iter()
-                .filter(|e| matches!(e.tool.as_str(), "run_sql" | "make_chart") && e.error.is_none())
+                .filter(|e| {
+                    matches!(e.tool.as_str(), "run_sql" | "make_chart") && e.error.is_none()
+                })
                 .filter_map(|e| e.sql.clone())
-                .map(|s| s.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(160).collect())
+                .map(|s| {
+                    s.split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                        .chars()
+                        .take(160)
+                        .collect()
+                })
                 .take(3)
                 .collect();
             let uninformative = queries.is_empty()
@@ -1579,7 +1696,10 @@ exactly, character for character, from the list below.";
                 };
                 if current {
                     let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-                    let entry = inner.sessions.entry(conversation_id.to_string()).or_default();
+                    let entry = inner
+                        .sessions
+                        .entry(conversation_id.to_string())
+                        .or_default();
                     entry.turns.push(TurnDigest {
                         question: question.chars().take(200).collect(),
                         headline,
@@ -1673,6 +1793,14 @@ exactly, character for character, from the list below.";
 
     /// Is the configured model provider reachable?
     pub async fn provider_health(&self) -> ProviderHealth {
+        let settings = self.settings();
+        if !settings.has_credential || settings.base_url.trim().is_empty() {
+            return ProviderHealth {
+                reachable: false,
+                rejected: false,
+                models: Vec::new(),
+            };
+        }
         self.llm().health().await
     }
 
@@ -1718,23 +1846,6 @@ exactly, character for character, from the list below.";
         Ok((resp.content, resp.usage))
     }
 
-    /// Probe a local Ollama regardless of which provider is configured, so the
-    /// UI can offer "use Ollama" when someone installs it after signing in
-    /// somewhere else. Returns `reachable: false` when nothing is listening.
-    pub async fn probe_ollama(&self) -> ProviderHealth {
-        let Some(p) = provider::get("ollama") else {
-            return ProviderHealth { reachable: false, rejected: false, models: Vec::new() };
-        };
-        let s = Settings {
-            provider: p.id.to_string(),
-            base_url: p.base_url.to_string(),
-            model: String::new(),
-            embed_model: String::new(),
-            has_credential: true,
-        };
-        LlmClient::new(self.http.clone(), &s, None).health().await
-    }
-
     fn llm(&self) -> LlmClient {
         self.llm_with_model("")
     }
@@ -1752,12 +1863,16 @@ exactly, character for character, from the list below.";
         LlmClient::new(self.http.clone(), &settings, key)
     }
 
-    /// Fire-and-forget: ask a local Ollama to load the configured model now so
-    /// the next question doesn't stall on a cold load. No-op off a Tokio
-    /// runtime, for a hosted provider, or when `FELLA_SKIP_MODEL_WARMUP` is set
-    /// (tests point at a fixed-count mock server).
+    /// Fire-and-forget: ask a hosted Ollama-wire provider to load the
+    /// configured model now so the next question doesn't stall on a cold load.
+    /// No-op without a saved BYOK credential, off a Tokio runtime, for an
+    /// OpenAI-wire provider, or when `FELLA_SKIP_MODEL_WARMUP` is set (tests
+    /// point at a fixed-count mock server).
     fn warm_model(&self) {
         if std::env::var_os("FELLA_SKIP_MODEL_WARMUP").is_some() {
+            return;
+        }
+        if !self.settings().has_credential {
             return;
         }
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
@@ -1791,7 +1906,9 @@ exactly, character for character, from the list below.";
         for (name, path, kind) in self.documents() {
             if kind == SourceKind::Pdf {
                 // PDF text isn't streamable parse (cached) and scan in memory.
-                let Ok(text) = self.pdf_text(&path) else { continue };
+                let Ok(text) = self.pdf_text(&path) else {
+                    continue;
+                };
                 for (i, line) in text.lines().enumerate() {
                     if re.is_match(line) {
                         hits.push(GrepHit {
@@ -1867,7 +1984,12 @@ exactly, character for character, from the list below.";
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        if let Some((ts, text)) = self.doc_cache.lock().unwrap_or_else(|e| e.into_inner()).get(path) {
+        if let Some((ts, text)) = self
+            .doc_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(path)
+        {
             if *ts == mtime {
                 return Ok(text.clone());
             }
@@ -1958,7 +2080,12 @@ fn parse_vocab_action(reply: &str, existing: &[(String, String)]) -> Option<Voca
     if key.is_empty() {
         return None;
     }
-    let exact = |k: &str| existing.iter().find(|(ek, _)| ek.eq_ignore_ascii_case(k)).map(|(ek, _)| ek.clone());
+    let exact = |k: &str| {
+        existing
+            .iter()
+            .find(|(ek, _)| ek.eq_ignore_ascii_case(k))
+            .map(|(ek, _)| ek.clone())
+    };
     match verb.to_ascii_uppercase().as_str() {
         "UPDATE" => exact(key).map(VocabAction::Update),
         "NOOP" => exact(key).map(|_| VocabAction::Noop),
@@ -2037,11 +2164,30 @@ fn mini_table(q: &QueryResult) -> Vec<String> {
 /// stoplist drops names that are almost never cross-table keys.
 fn shared_column_hints(tables: &[&SourceInfo]) -> Vec<String> {
     const STOP: &[&str] = &[
-        "id", "name", "title", "description", "note", "notes", "memo", "comment",
-        "comments", "type", "status", "value", "amount", "total", "subtotal",
-        "count", "price", "cost", "qty", "quantity", "label",
+        "id",
+        "name",
+        "title",
+        "description",
+        "note",
+        "notes",
+        "memo",
+        "comment",
+        "comments",
+        "type",
+        "status",
+        "value",
+        "amount",
+        "total",
+        "subtotal",
+        "count",
+        "price",
+        "cost",
+        "qty",
+        "quantity",
+        "label",
     ];
-    let mut by_col: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
+    let mut by_col: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
     for t in tables {
         let view = t.view.as_deref().unwrap_or("");
         for c in t.columns.iter().flatten() {
@@ -2073,7 +2219,10 @@ fn open_or_recover(path: &Path) -> rusqlite::Connection {
     // sidecars) forward the first time we open at the new name.
     if !path.exists() {
         for suffix in ["", "-wal", "-shm"] {
-            let old = PathBuf::from(format!("{}{suffix}", path.with_file_name("woody.db").display()));
+            let old = PathBuf::from(format!(
+                "{}{suffix}",
+                path.with_file_name("woody.db").display()
+            ));
             let new = PathBuf::from(format!("{}{suffix}", path.display()));
             if old.exists() {
                 let _ = std::fs::rename(&old, &new);
@@ -2107,9 +2256,13 @@ fn migrate_legacy_key(conn: &rusqlite::Connection, secrets: &Secrets) {
     let stored = sqlite::load_settings(conn).provider;
     let id = provider::normalize_id(&stored);
     // A pre-registry key almost always belonged to the "openai-compatible"
-    // (now `custom`) path; if the provider still reads as the local default,
-    // park it there rather than on `ollama` (which needs no key).
-    let target: &str = if id == provider::DEFAULT_ID { "custom" } else { id };
+    // (now `custom`) path; if the provider still reads as the BYOK default,
+    // park it there rather than guessing a hosted provider.
+    let target: &str = if id == provider::DEFAULT_ID {
+        "custom"
+    } else {
+        id
+    };
     if secrets.set_api_key(target, &key).is_ok() {
         let _ = sqlite::clear_legacy_api_key(conn);
         log::info!("migrated a stored API key out of the settings table into auth.json");
@@ -2117,14 +2270,14 @@ fn migrate_legacy_key(conn: &rusqlite::Connection, secrets: &Secrets) {
 }
 
 /// On startup: if the stored provider needs an API key but none is saved (a
-/// past `/logout`, a deleted `auth.json`), fall back to the local default so
-/// the app doesn't come up pointed at a service it can't reach with a stale
+/// past `/logout`, a deleted `auth.json`), fall back to the BYOK default so
+/// the app doesn't come up pointed at a service it can't use with a stale
 /// model still showing in the status bar.
 fn reconcile_provider(conn: &rusqlite::Connection, secrets: &Secrets) {
     let stored = sqlite::load_settings(conn).provider;
     match provider::get(&stored) {
-        // Registered provider that needs no key, or has one saved nothing to do.
-        Some(p) if p.auth == AuthKind::None || secrets.has(p.id) => return,
+        // Registered provider with a saved key needs no reconciliation.
+        Some(p) if secrets.has(p.id) => return,
         // Registered but keyless: fall through and reset.
         Some(_) => {}
         // An id no build knows (a stray `/model provider x`, a removed registry
@@ -2138,7 +2291,10 @@ fn reconcile_provider(conn: &rusqlite::Connection, secrets: &Secrets) {
     patch.insert("model".into(), d.default_model.into());
     patch.insert("embed_model".into(), d.default_embed_model.into());
     if sqlite::save_settings(conn, &patch).is_ok() {
-        log::info!("no usable credential for provider {stored:?}; reset to {}", d.id);
+        log::info!(
+            "no usable credential for provider {stored:?}; reset to {}",
+            d.id
+        );
     }
 }
 
@@ -2181,7 +2337,10 @@ mod schema_hint_tests {
         let customers = tbl("customers", &["Customer_ID", "name", "region"]);
         let hints = shared_column_hints(&[&orders, &customers]);
         // matched case-insensitively; each side shown with its own casing
-        assert_eq!(hints, vec![r#"orders."customer_id" ↔ customers."Customer_ID""#]);
+        assert_eq!(
+            hints,
+            vec![r#"orders."customer_id" ↔ customers."Customer_ID""#]
+        );
     }
 
     #[test]
@@ -2199,7 +2358,10 @@ mod vocab_reconcile_tests {
 
     #[test]
     fn default_topic_key_skips_filler_words() {
-        assert_eq!(default_topic_key("no, actually rent should include housing"), "rent should include");
+        assert_eq!(
+            default_topic_key("no, actually rent should include housing"),
+            "rent should include"
+        );
         assert_eq!(default_topic_key("gym is under health"), "gym is under");
     }
 
@@ -2234,7 +2396,10 @@ mod vocab_reconcile_tests {
     #[test]
     fn parses_noop_against_an_exact_existing_key() {
         let existing = vec![("for rent totals".to_string(), "old text".to_string())];
-        assert_eq!(parse_vocab_action("NOOP for rent totals", &existing), Some(VocabAction::Noop));
+        assert_eq!(
+            parse_vocab_action("NOOP for rent totals", &existing),
+            Some(VocabAction::Noop)
+        );
     }
 
     #[test]
@@ -2249,7 +2414,10 @@ mod vocab_reconcile_tests {
     #[test]
     fn unparseable_replies_fall_back_to_none() {
         let existing = vec![("for rent totals".to_string(), "old text".to_string())];
-        assert_eq!(parse_vocab_action("I think this updates the rent note.", &existing), None);
+        assert_eq!(
+            parse_vocab_action("I think this updates the rent note.", &existing),
+            None
+        );
         assert_eq!(parse_vocab_action("", &existing), None);
     }
 }
@@ -2261,7 +2429,10 @@ mod jit_schema_tests {
     use super::*;
 
     fn scratch(tag: &str) -> std::path::PathBuf {
-        let n = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let n = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         let p = std::env::temp_dir().join(format!("fella-jit-{tag}-{n}"));
         std::fs::create_dir_all(&p).unwrap();
         p
@@ -2287,13 +2458,25 @@ mod jit_schema_tests {
         let before = engine.schema_block();
         assert!(before.contains("t0"), "table names still listed");
         assert!(before.contains("\"city\""), "columns still listed eagerly");
-        assert!(!before.contains("town0"), "no sample rows before any inspection");
-        assert!(!before.contains("town3"), "no sample rows before any inspection");
+        assert!(
+            !before.contains("town0"),
+            "no sample rows before any inspection"
+        );
+        assert!(
+            !before.contains("town3"),
+            "no sample rows before any inspection"
+        );
 
         engine.describe_source("t0").unwrap();
         let after = engine.schema_block();
-        assert!(after.contains("town0"), "t0's sample rows enter the digest once inspected");
-        assert!(!after.contains("town3"), "t3 wasn't inspected, still no samples for it");
+        assert!(
+            after.contains("town0"),
+            "t0's sample rows enter the digest once inspected"
+        );
+        assert!(
+            !after.contains("town3"),
+            "t3 wasn't inspected, still no samples for it"
+        );
     }
 
     #[test]

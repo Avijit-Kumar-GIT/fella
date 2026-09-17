@@ -1,10 +1,13 @@
 ---
 title: "Models and providers"
-description: "Use local Ollama, a hosted provider, or a custom OpenAI-compatible endpoint."
+description: "Connect a hosted provider or custom OpenAI-compatible endpoint with your own key."
 icon: "cpu"
 ---
 
-Fella supports local Ollama, six hosted or gateway choices, and custom OpenAI-compatible endpoints. Switching providers changes where prompts and tool results are sent, but not the local ingestion engine or verification code.
+Fella is BYOK-only. It supports hosted Ollama Cloud, OpenAI, gateway choices,
+and custom OpenAI-compatible endpoints. Switching providers changes where
+prompts and tool results are sent, but not the local ingestion engine or
+verification code.
 
 ## Ollama Cloud
 
@@ -14,8 +17,7 @@ Fella supports local Ollama, six hosted or gateway choices, and custom OpenAI-co
   <Step title="Create an Ollama Cloud key">
 
 Get a key from [Ollama Cloud](https://ollama.com/settings/keys), then enter it
-through the command below. Fella uses Ollama Cloud's hosted Ollama API; no
-local Ollama process is required.
+through the command below. Fella uses Ollama Cloud's hosted Ollama API.
 
 ```bash filename="terminal"
 /login ollama-cloud key [api-key]
@@ -38,7 +40,6 @@ local Ollama process is required.
 
 | Provider ID | Service | Default model |
 | --- | --- | --- |
-| `ollama` | Ollama on `localhost` | `llama3.1` |
 | `openai` | OpenAI | `gpt-5.6-luna` |
 | `vercel` | Vercel AI Gateway | `openai/gpt-5.6-luna` |
 | `xai` | xAI | `grok-4.3` |

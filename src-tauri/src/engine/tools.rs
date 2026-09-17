@@ -64,9 +64,9 @@ impl Registry {
     }
 
     /// Read-only inspection tools for the non-developer path. Python is kept
-    /// out of this registry because it is a subprocess with a broader OS
-    /// surface than the deterministic workspace tools. MCP is attached by the
-    /// caller only for ordinary Ask runs.
+    /// out of this registry because Inspect is deliberately limited to the
+    /// deterministic workspace tools. MCP is attached by the caller only for
+    /// ordinary Ask runs.
     pub fn inspect() -> Self {
         Self::build(false)
     }
@@ -81,8 +81,8 @@ impl Registry {
             Box::new(MakeChart),
         ];
         if include_python {
-            // Keep the more capable subprocess tool available to the existing
-            // Ask mode until the dedicated OS sandbox work lands.
+            // Python is available only in ordinary Ask mode; Inspect stays a
+            // deterministic read-only surface even though Python is sandboxed.
             tools.insert(5, Box::new(RunPython));
         }
         Self {
@@ -110,7 +110,10 @@ impl Registry {
     }
 
     fn get(&self, name: &str) -> Option<&dyn Tool> {
-        self.tools.iter().find(|t| t.name() == name).map(|b| b.as_ref())
+        self.tools
+            .iter()
+            .find(|t| t.name() == name)
+            .map(|b| b.as_ref())
     }
 
     /// Run the tool named `name`. `None` = no such tool.
@@ -174,7 +177,7 @@ fn with_note_param(mut params: Json) -> Json {
             json!({
                 "type": "string",
                 "description": "Optional. 4-8 plain words for the activity display, \
-e.g. \"Add up spending by month\"."
+            e.g. \"Add up spending by month\"."
             }),
         );
     }
@@ -228,8 +231,8 @@ fn table_text(q: &QueryResult, max_rows: usize) -> String {
     // renders as a blank cell; a smaller model reads that as "the query failed"
     // and starts probing whether the category/filter exists. Say plainly that
     // nothing matched so an empty SUM/COUNT is taken as the answer (0 / none).
-    let nothing_matched = q.row_count == 0
-        || (q.rows.len() == 1 && q.rows[0].iter().all(|c| c.is_null()));
+    let nothing_matched =
+        q.row_count == 0 || (q.rows.len() == 1 && q.rows[0].iter().all(|c| c.is_null()));
     if nothing_matched {
         out.push_str("nothing matched this query an empty SUM/COUNT is 0, an empty MIN/MAX/AVG is none; that is the answer\n");
     }
@@ -271,7 +274,9 @@ impl Tool for ListFiles {
                 Some(v) => lines.push(format!(
                     "table {v}  (from {}, {} rows)",
                     s.name,
-                    s.row_count.map(|n| n.to_string()).unwrap_or_else(|| "?".into())
+                    s.row_count
+                        .map(|n| n.to_string())
+                        .unwrap_or_else(|| "?".into())
                 )),
                 None => lines.push(format!(
                     "document {}  ({:?}, {} KB)",
@@ -333,14 +338,20 @@ many sample rows to return (default 5, max 50)."
     }
     async fn run(&self, engine: &EngineState, args: &Json) -> EngineResult<ToolOutput> {
         let name = str_arg(args, "name")?;
-        let n = args.get("rows").and_then(|v| v.as_u64()).unwrap_or(5).clamp(0, 50) as usize;
+        let n = args
+            .get("rows")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(5)
+            .clamp(0, 50) as usize;
 
         let info = engine.describe_source(name)?;
         let cols = info.columns.unwrap_or_default();
         let mut lines = vec![format!(
             "{} {} rows, {} columns",
             name,
-            info.row_count.map(|n| n.to_string()).unwrap_or_else(|| "?".into()),
+            info.row_count
+                .map(|n| n.to_string())
+                .unwrap_or_else(|| "?".into()),
             cols.len()
         )];
         if let Some(note) = &info.note {
@@ -354,14 +365,23 @@ many sample rows to return (default 5, max 50)."
                 c.null_fraction
                     .map(|f| format!("{:.0}%", f * 100.0))
                     .unwrap_or_else(|| "?".into()),
-                c.distinct.map(|d| d.to_string()).unwrap_or_else(|| "?".into()),
+                c.distinct
+                    .map(|d| d.to_string())
+                    .unwrap_or_else(|| "?".into()),
                 c.min.clone().unwrap_or_default(),
                 c.max.clone().unwrap_or_default(),
-                c.note.as_deref().map(|n| format!("  [{n}]")).unwrap_or_default(),
+                c.note
+                    .as_deref()
+                    .map(|n| format!("  [{n}]"))
+                    .unwrap_or_default(),
             ));
         }
 
-        let sample = if n > 0 { engine.sample(name, n).ok() } else { None };
+        let sample = if n > 0 {
+            engine.sample(name, n).ok()
+        } else {
+            None
+        };
         if let Some(s) = &sample {
             if !s.rows.is_empty() {
                 lines.push(String::new());
@@ -398,7 +418,7 @@ impl Tool for RunSql {
         "run_sql"
     }
     fn description(&self) -> &'static str {
-        "Run a read-only SQL query (SELECT / WITH only) and return the rows."
+        "Run a read-only SQL query (SELECT / WITH only) and return the rows. Text comparisons are case-sensitive; for category or status values whose case may vary, use lower(column) = lower(value)."
     }
     fn parameters(&self) -> Json {
         json!({
@@ -455,18 +475,33 @@ SUM(CAST(REPLACE(REPLACE(\"{name}\", '$', ''), ',', '') AS REAL))."
     ))
 }
 
-/// If `sql` filters a mixed-case label column by exact case, tell the model to
-/// fold case values like `Rent` and `rent` won't all match otherwise.
+/// If `sql` filters a likely label column by exact case, tell the model to fold
+/// case. This also catches a uniformly cased source when the model writes
+/// `Leisure` for stored `leisure`.
 fn case_filter_warning(engine: &EngineState, sql: &str) -> Option<String> {
-    let cols = crate::engine::analytics::verify::mixed_case_columns(engine);
+    let cols = crate::engine::analytics::verify::filterable_text_columns(engine);
     let lowered: Vec<String> = cols.iter().map(|(l, _)| l.clone()).collect();
     let hit = crate::engine::analytics::verify::case_sensitive_label_filter(sql, &lowered)?;
-    let name = cols.iter().find(|(l, _)| l == hit).map_or(hit, |(_, n)| n.as_str());
-    Some(format!(
-        "NOTE: \"{name}\" has values that differ only in capitalisation (e.g. Rent / rent). \
+    let name = cols
+        .iter()
+        .find(|(l, _)| l == hit)
+        .map_or(hit, |(_, n)| n.as_str());
+    let mixed_case = crate::engine::analytics::verify::mixed_case_columns(engine)
+        .iter()
+        .any(|(l, _)| l == hit);
+    let detail = if mixed_case {
+        format!(
+            "NOTE: \"{name}\" has values that differ only in capitalisation (e.g. Rent / rent). \
 This filter matches exact case fold it: lower(\"{name}\") = lower('value'), or \
 \"{name}\" = 'value' COLLATE NOCASE."
-    ))
+        )
+    } else {
+        format!(
+            "NOTE: text filters on \"{name}\" match exact case. If the source value's \
+spelling or case may differ, fold it: lower(\"{name}\") = lower('value')."
+        )
+    };
+    Some(detail)
 }
 
 // --- grep_files ------------------------------------------------------
@@ -525,7 +560,11 @@ different word.",
             rows: Some(
                 hits.iter()
                     .map(|h: &GrepHit| {
-                        vec![Json::from(h.source.clone()), Json::from(h.line), Json::from(h.text.clone())]
+                        vec![
+                            Json::from(h.source.clone()),
+                            Json::from(h.line),
+                            Json::from(h.text.clone()),
+                        ]
                     })
                     .collect(),
             ),
@@ -566,9 +605,11 @@ summarization question needs the documents' actual content."
     }
     async fn run(&self, engine: &EngineState, args: &Json) -> EngineResult<ToolOutput> {
         let names: Vec<String> = match args.get("names").and_then(|v| v.as_array()) {
-            Some(arr) if !arr.is_empty() => {
-                arr.iter().filter_map(|v| v.as_str()).map(str::to_string).collect()
-            }
+            Some(arr) if !arr.is_empty() => arr
+                .iter()
+                .filter_map(|v| v.as_str())
+                .map(str::to_string)
+                .collect(),
             _ => vec![str_arg(args, "name")?.to_string()],
         };
 
@@ -626,17 +667,18 @@ impl Tool for RunPython {
         "run_python"
     }
     fn description(&self) -> &'static str {
-        "Run a short Python 3 snippet for analysis that SQL can't express: median/stdev \
-(stdlib `statistics`), correlation (`pearsonr(x, y)`), or a simple linear regression \
-(`linregress(x, y)` -> slope, intercept, r) both always available, pure stdlib, no scipy \
-needed. A helper `sql(query)` returns a pandas DataFrame of the workspace tables (a plain \
-list of dicts if pandas isn't installed). Print results to stdout. About 20s and 1 GB; use \
-it only to compute over the workspace data, not to fetch anything."
+        "Run a short Python 3 snippet for analysis that SQL can't express: `median(values)`, \
+`stdev(values)`, correlation (`pearsonr(x, y)`), or a simple linear regression \
+(`linregress(x, y)` -> slope, intercept, r). These helpers are built in. `sql(query)` \
+returns a list of dictionaries from the workspace tables. The snippet runs in Fella's \
+local WASM + RustPython sandbox: it has no filesystem, network, environment, or subprocess \
+access, and can only print or request bounded read-only workspace SQL. Use it for computation \
+over the mounted data, not for fetching anything."
     }
     fn parameters(&self) -> Json {
         json!({
             "type": "object",
-            "properties": { "code": { "type": "string", "description": "Python 3 source" } },
+            "properties": { "code": { "type": "string", "description": "Python 3 source using the core language, Fella's built-in analytics helpers, and sql(query)" } },
             "required": ["code"],
             "additionalProperties": false
         })
@@ -661,14 +703,18 @@ it only to compute over the workspace data, not to fetch anything."
         }
 
         let summary = if r.timed_out {
-            format!("python timed out after {}ms", r.ms)
+            format!(
+                "python execution budget ended after {}ms · local sandbox",
+                r.ms
+            )
         } else {
             match r.exit_code {
-                Some(0) => format!("python finished in {}ms", r.ms),
-                Some(c) => format!("python exited with code {c} in {}ms", r.ms),
-                // No exit code = the process was killed by a signal, usually the
-                // memory or CPU rlimit.
-                None => format!("python was stopped after {}ms (it ran out of memory or time)", r.ms),
+                Some(0) => format!("python finished in {}ms · local sandbox", r.ms),
+                Some(c) => format!("python exited with code {c} in {}ms · local sandbox", r.ms),
+                None => format!(
+                    "python was stopped after {}ms inside the local sandbox",
+                    r.ms
+                ),
             }
         };
         let llm_text = format!("{summary}\n\n{}", truncate_chars(&combined, 6000));

@@ -74,7 +74,7 @@ pub struct VerificationCheck {
 }
 
 /// Token accounting for one `ask`, summed across every model turn. Populated
-/// only when the provider reports it (Ollama always; an OpenAI-compatible
+/// only when the provider reports it (Ollama-compatible providers always; an OpenAI-compatible
 /// endpoint when it honours `stream_options.include_usage`). `None` otherwise.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 pub struct Usage {

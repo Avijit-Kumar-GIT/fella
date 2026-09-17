@@ -5,7 +5,7 @@
 > [release](https://github.com/Avijit-Kumar-GIT/fella/releases) download.
 > This page is for **building it yourself**.
 
-Fella needs a Rust toolchain, Node + pnpm, an LLM provider (Ollama by default), and —
+Fella needs a Rust toolchain, Node + pnpm, a BYOK LLM provider, and —
 on Linux GTK/WebKit system libraries for Tauri.
 
 ## 1. System libraries (Linux / Debian-Ubuntu)
@@ -20,17 +20,17 @@ sudo apt-get update && sudo apt-get install -y \
 macOS: install Xcode Command Line Tools (`xcode-select --install`).
 Windows: install the Visual Studio C++ Build Tools and WebView2 (ships with Windows 11).
 
-## 2. Rust (stable, **1.88+**)
+## 2. Rust (stable, **1.93+**)
 
 ```sh
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
 . "$HOME/.cargo/env"
 ```
 
-MSRV is 1.88 (the default `mcp` feature pulls `rmcp`). The `rusqlite` (and
-`duckdb`) crates use the `bundled` feature, so SQLite / DuckDB compile from
-source on the first build slow once, fast thereafter. Needs the C/C++ compiler
-from step 1.
+MSRV is 1.93 because the embedded RustPython guest is built with RustPython
+0.5. The default `mcp` feature also pulls `rmcp`. The `rusqlite` (and `duckdb`)
+crates use the `bundled` feature, so SQLite / DuckDB compile from source on the
+first build slow once, fast thereafter. Needs the C/C++ compiler from step 1.
 
 ## 3. Node + pnpm
 
@@ -45,19 +45,9 @@ npm install -g pnpm
 
 ## 4. LLM provider
 
-Fella talks to **Ollama on `http://localhost:11434` by default** nothing to
-configure, nothing leaves the machine. To use a hosted model instead, sign in
-from inside the app with `/login` (see below).
-
-### Ollama (local, default)
-
-```sh
-# install from https://ollama.com, then:
-ollama pull llama3.1  # chat + tool calling
-ollama serve           # if not already running as a service
-```
-
-### Hosted providers
+Fella is BYOK-only. Connect a provider from inside the app with `/login` and
+paste your own API key. No model server runs as part of Fella, and no provider
+is contacted before a usable key is saved.
 
 In the app:
 
@@ -70,9 +60,6 @@ In the app:
 
 | id | auth | base URL | embeddings | notes |
 |----|------|----------|-----------|-------|
-| id | auth | base URL | embeddings | `default_model` on `/login` |
-|----|------|----------|-----------|-------|
-| `ollama` | none local | `http://localhost:11434` | yes | `llama3.1` (reconciled to a pulled model) |
 | `openai` | API key | `https://api.openai.com/v1` | yes | `gpt-5.6-luna` (cheapest current-gen) |
 | `vercel` | API key | `https://ai-gateway.vercel.sh/v1` | **yes** | `openai/gpt-5.6-luna` |
 | `xai` | API key | `https://api.x.ai/v1` | **no** | `grok-4.3` (cheapest current grok) |
@@ -112,7 +99,7 @@ the limits.
 openrouter` and paste it. Defaults to `openai/gpt-5.6-luna`; `/model` switches to
 anything in the catalogue. No embeddings endpoint.
 
-**Ollama Cloud:** the same wire as local Ollama, just hosted and behind a key.
+**Ollama Cloud:** Ollama's hosted wire behind a key.
 Get one from <https://ollama.com/settings/keys>, then `/login ollama-cloud`.
 Defaults to `gemma4:31b`; `/api/tags` with the key lists your account's cloud
 catalogue (browse `ollama.com/search?c=cloud`) to switch with `/model`.
@@ -128,7 +115,7 @@ capability info, just currently unused by any feature (see `docs/DECISIONS.md`,
 
 Each provider is **one row** in `PROVIDERS` in
 [`src-tauri/src/engine/provider.rs`](../src-tauri/src/engine/provider.rs): `id`,
-`display`, `auth` (`None` / `ApiKey`), `base_url`, `default_model`,
+`display`, `auth` (`ApiKey`), `base_url`, `default_model`,
 `default_embed_model`, `wire` (`Ollama` / `OpenAi`), `embeddings`, `get_key_url`.
 Add the row and it shows up in `/auth`, `/login`, and the registry-driven
 defaults no other code changes for an OpenAI-compatible endpoint.

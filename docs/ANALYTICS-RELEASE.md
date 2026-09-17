@@ -160,16 +160,18 @@ known live failures are uniform-case literals such as `Leisure` versus stored
 `leisure`, and genuinely different labels such as `HOUSING` and `mortgage`.
 
 Improve the existing inspection and query feedback rather than adding a new
-agent:
+agent. The first narrow slice is now in the working tree: likely label filters
+get case-folding guidance before the query result, and an end-to-end test covers
+`purpose = 'Leisure'` against stored lowercase `leisure`.
 
-- Show common values for low-cardinality text columns.
-- Detect zero-result text filters and report case-insensitive or near-match
-  candidates.
-- Extend filter warnings beyond columns with detected case collisions.
+- [ ] Show common values for low-cardinality text columns.
+- [ ] Detect zero-result text filters and report case-insensitive or near-match
+      candidates.
+- [x] Extend filter warnings beyond columns with detected case collisions.
 - Preserve ambiguity instead of silently rewriting user intent.
 - Make `fella.md` and learned vocabulary notes easy for the model to apply.
-- Add frozen evaluation cases for case, aliases, empty results, and ambiguous
-  categories.
+- [ ] Add frozen evaluation cases for case, aliases, empty results, and
+      ambiguous categories.
 
 The backend should help the model ask or infer the right question, not pretend
 that semantic aliases can always be resolved automatically.
@@ -310,7 +312,7 @@ The next release is ready when:
   number appears somewhere in the prose.
 - The frozen battery still has no regression across the supported model floor,
   a mid-tier model, and a frontier model.
-- Local Ollama performance is measured, not inferred from hosted-model timing.
+- Hosted BYOK performance is measured for the supported deployment path.
 - The full Rust suite, frontend checks, release build, and GUI smoke checklist
   are green.
 - A non-technical user can understand the headline, the important caveat, and

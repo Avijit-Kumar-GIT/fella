@@ -11,7 +11,7 @@
 //!   BENCH_ONLY=agg_tiny \        # optional: run only ids containing this
 //!   cargo run --release --example agent_bench
 //!
-//! Knobs (`FELLA_OLLAMA_NUM_CTX`, `FELLA_OLLAMA_KEEP_ALIVE`,
+//! Knobs (`FELLA_MODEL_NUM_CTX`, `FELLA_MODEL_KEEP_ALIVE`,
 //! `FELLA_MODEL_MAX_OUTPUT`, `FELLA_MAX_STEPS`, `FELLA_MODEL_TIMEOUT_SECS`) are
 //! read by the engine as usual, so a sweep is just re-running with them set.
 
@@ -303,8 +303,8 @@ async fn main() {
         s.provider, s.base_url, s.model, s.has_credential
     );
     for (k, def) in [
-        ("FELLA_OLLAMA_NUM_CTX", "8192"),
-        ("FELLA_OLLAMA_KEEP_ALIVE", "30m"),
+        ("FELLA_MODEL_NUM_CTX", "8192"),
+        ("FELLA_MODEL_KEEP_ALIVE", "30m"),
         ("FELLA_MODEL_MAX_OUTPUT", "1024"),
         ("FELLA_MAX_STEPS", "20"),
     ] {
@@ -348,9 +348,9 @@ async fn main() {
             .collect();
         println!("\n# Cross-model sweep\n");
         println!("num_ctx {} · keep_alive {} · think {} · {n} warm iters/question after 1 warm-up\n",
-            env("FELLA_OLLAMA_NUM_CTX", "8192"),
-            env("FELLA_OLLAMA_KEEP_ALIVE", "30m"),
-            env("FELLA_OLLAMA_THINK", "false"));
+            env("FELLA_MODEL_NUM_CTX", "8192"),
+            env("FELLA_MODEL_KEEP_ALIVE", "30m"),
+            env("FELLA_MODEL_THINK", "false"));
         println!("| model | total s (mean) | 1st tok s | model calls | steps>1 | verif ok | worst q |");
         println!("|---|--:|--:|--:|--:|:-:|---|");
         for m in models.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
@@ -419,8 +419,8 @@ async fn main() {
         "provider `{}` · model `{}` · num_ctx {} · keep_alive {} · {} iteration(s)/question\n",
         s.provider,
         s.model,
-        env("FELLA_OLLAMA_NUM_CTX", "8192"),
-        env("FELLA_OLLAMA_KEEP_ALIVE", "30m"),
+        env("FELLA_MODEL_NUM_CTX", "8192"),
+        env("FELLA_MODEL_KEEP_ALIVE", "30m"),
         iters
     );
     println!("| question | run | total s | 1st tok s | model calls | tool calls | model s | tool s | steps | cap | verif | note |");
@@ -535,7 +535,7 @@ async fn main() {
             Q { id: "sweep_multi", text: "in transactions.csv, which merchant did I spend the most at, and how much, and in which month was my single biggest purchase?" },
         ];
         for ctx in ["2048", "8192", "16384"] {
-            std::env::set_var("FELLA_OLLAMA_NUM_CTX", ctx);
+            std::env::set_var("FELLA_MODEL_NUM_CTX", ctx);
             for (k, q) in sweep_qs.iter().enumerate() {
                 let conv = format!("sweep-{ctx}-{k}");
                 let sm = run_one(&engine, &conv, q).await;
@@ -554,7 +554,7 @@ async fn main() {
                 std::io::stdout().flush().ok();
             }
         }
-        std::env::set_var("FELLA_OLLAMA_NUM_CTX", "8192");
+        std::env::set_var("FELLA_MODEL_NUM_CTX", "8192");
     }
 
     eprintln!("bench: done");

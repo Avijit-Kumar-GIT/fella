@@ -41,7 +41,11 @@ fn soft_stop_round_trips() -> usize {
 /// `max_steps` ceiling or hoping the static "stop early" prompt rule takes.
 /// `None` below the threshold. Pure and testable without a real run, same
 /// pattern as `trim_history`.
-fn stop_pressure_nudge(rounds_done: usize, soft_threshold: usize, evidence_count: usize) -> Option<String> {
+fn stop_pressure_nudge(
+    rounds_done: usize,
+    soft_threshold: usize,
+    evidence_count: usize,
+) -> Option<String> {
     if rounds_done < soft_threshold {
         return None;
     }
@@ -111,7 +115,7 @@ you did not get from a tool.\n",
     // With no folder open there is nothing to compute don't hand the model
     // tools it can only fail to call. This keeps a plain "hello" (or "what can
     // you do?") to a single fast turn instead of a many-step loop of
-    // NoWorkspace errors, which on a small local model can take minutes.
+    // NoWorkspace errors, which can take minutes on a slow provider.
     let schemas = if catalog.workspace.is_some() || registry.has_mcp() {
         registry.schemas()
     } else {
@@ -120,9 +124,17 @@ you did not get from a tool.\n",
     let mut evidence: Vec<EvidenceItem> = Vec::new();
 
     // Forward a retry/backoff line from the model client to the transcript.
-    let notify = |line: &str| emit(AskEvent::Notice { text: line.to_string() });
+    let notify = |line: &str| {
+        emit(AskEvent::Notice {
+            text: line.to_string(),
+        })
+    };
     // Forward each token as the model streams it.
-    let on_delta = |text: &str| emit(AskEvent::AssistantDelta { text: text.to_string() });
+    let on_delta = |text: &str| {
+        emit(AskEvent::AssistantDelta {
+            text: text.to_string(),
+        })
+    };
 
     // Exact `(tool, args)` pairs already run this question, mapped to the result
     // text we fed back. A small model re-issuing the same call is a common way
@@ -321,10 +333,13 @@ not run again. Its result is repeated below - use it, refine the call, or give y
         for (call, outcome) in resp.tool_calls.iter().zip(outcomes) {
             // Every slot is filled above (dup branch or the `pending`/`ran` zip);
             // treat a gap as a broken invariant that ends the run cleanly.
-            let (mut item, llm_text) = outcome
-                .ok_or_else(|| EngineError::msg("internal error: a tool call produced no outcome"))?;
+            let (mut item, llm_text) = outcome.ok_or_else(|| {
+                EngineError::msg("internal error: a tool call produced no outcome")
+            })?;
             item.id = evidence_id(evidence.len());
-            emit(AskEvent::ToolEnd { item: Box::new(item.clone()) });
+            emit(AskEvent::ToolEnd {
+                item: Box::new(item.clone()),
+            });
             // Remember a fresh, successful built-in result so a later exact
             // repeat is answered from the memo rather than re-run.
             if !call.name.contains("__")
@@ -343,7 +358,14 @@ not run again. Its result is repeated below - use it, refine the call, or give y
         }
 
         if cancel.load(Ordering::Relaxed) {
-            return Ok(stopped(engine, workspace.as_ref(), question, evidence, usage, emit));
+            return Ok(stopped(
+                engine,
+                workspace.as_ref(),
+                question,
+                evidence,
+                usage,
+                emit,
+            ));
         }
         trim_history(&mut messages);
         if let Some(nudge) = stop_pressure_nudge(step + 1, soft_stop, evidence.len()) {
@@ -404,7 +426,15 @@ fn stopped(
     usage: Option<Usage>,
     emit: &(dyn Fn(AskEvent) + Send + Sync),
 ) -> Answer {
-    finish(engine, workspace, question, "Stopped.".to_string(), evidence, usage, emit)
+    finish(
+        engine,
+        workspace,
+        question,
+        "Stopped.".to_string(),
+        evidence,
+        usage,
+        emit,
+    )
 }
 
 fn catalog_matches(engine: &EngineState, expected: &Catalog) -> bool {
@@ -733,7 +763,11 @@ fn system_prompt(
     recent: Option<&str>,
     learned: Option<&str>,
 ) -> String {
-    let dialect = if cfg!(feature = "duckdb") { "DuckDB" } else { "SQLite" };
+    let dialect = if cfg!(feature = "duckdb") {
+        "DuckDB"
+    } else {
+        "SQLite"
+    };
     let steps = max_steps();
     let mut p = String::new();
 
@@ -831,9 +865,10 @@ no obvious larger total to compare against."
     }
     if profile.python_rule {
         rules.push(
-            "run_python for stats SQL can't do: median/stdev (stdlib `statistics`), or \
+            "run_python for stats SQL can't do: `median(values)`, `stdev(values)`, or \
 correlation/regression via the always-available `pearsonr(x, y)` / `linregress(x, y)` \
-helpers (pure stdlib, work with no scipy installed). It also has a sql() helper."
+helpers. Its `sql(query)` helper returns a list of dictionaries. It runs in a local WASM + \
+RustPython sandbox with no filesystem, network, environment, or subprocess access."
                 .into(),
         );
     }
@@ -981,7 +1016,14 @@ mod tests {
         let recent = "Earlier in this conversation (reuse what still applies):\n- Q: \"total?\"  A: \"$4,850\"\n  used: SELECT SUM(\"Amount Paid\") FROM ledger\n";
         let full = PromptProfile::full();
         let learned = "Learned notes for this folder (reference, not rules):\nPreferences:\n- amounts are GBP\n";
-        let p = system_prompt(&full, &open_catalog(), &[], schema, Some(recent), Some(learned));
+        let p = system_prompt(
+            &full,
+            &open_catalog(),
+            &[],
+            schema,
+            Some(recent),
+            Some(learned),
+        );
         assert!(p.contains("\"Amount Paid\" REAL  [coerced]"));
         assert!(p.contains("Earlier in this conversation"));
         assert!(p.contains("SELECT SUM(\"Amount Paid\") FROM ledger"));
@@ -998,7 +1040,10 @@ mod tests {
 
     #[test]
     fn prompt_drop_env_clears_named_sections() {
-        std::env::set_var("FELLA_PROMPT_DROP", "persona, docs_rule ,session_block, folder_memory");
+        std::env::set_var(
+            "FELLA_PROMPT_DROP",
+            "persona, docs_rule ,session_block, folder_memory",
+        );
         let p = PromptProfile::from_env();
         std::env::remove_var("FELLA_PROMPT_DROP");
         assert!(!p.persona && !p.docs_rule && !p.session_block && !p.folder_memory);
@@ -1019,7 +1064,8 @@ mod tests {
     #[test]
     fn full_profile_matches_the_shipped_prompt() {
         let schema = "Tables:\n  ledger  (12 rows)\n";
-        let recent = "Earlier in this conversation (reuse what still applies):\n- Q: \"x\"  A: \"y\"\n";
+        let recent =
+            "Earlier in this conversation (reuse what still applies):\n- Q: \"x\"  A: \"y\"\n";
         let got = system_prompt(
             &PromptProfile::full(),
             &open_catalog(),
@@ -1078,10 +1124,11 @@ tells you whether the figure you just found is most of the total, exactly \
 zero, or a clear outlier. If it is, add one short sentence saying so; if \
 not, answer as normal and add nothing. Skip this second query entirely \
 when the question has no obvious larger total to compare against.\n\
-- run_python for stats SQL can't do: median/stdev (stdlib `statistics`), or \
+- run_python for stats SQL can't do: `median(values)`, `stdev(values)`, or \
 correlation/regression via the always-available `pearsonr(x, y)` / \
-`linregress(x, y)` helpers (pure stdlib, work with no scipy installed). It \
-also has a sql() helper.\n\
+`linregress(x, y)` helpers. Its `sql(query)` helper returns a list of \
+dictionaries. It runs in a local WASM + RustPython sandbox with no \
+filesystem, network, environment, or subprocess access.\n\
 - make_chart draws a bar or line chart from a read-only SQL query. The first \
  query column must be the label or date and the remaining one or two columns \
  must be numeric; it derives the values itself, so never pass labels or series \
@@ -1158,7 +1205,10 @@ Workspace: /tmp/ws\n{}\n{}",
 
     #[test]
     fn trim_history_blanks_old_tool_results_only() {
-        let mut msgs = vec![ChatMessage::System("sys".into()), ChatMessage::User("q".into())];
+        let mut msgs = vec![
+            ChatMessage::System("sys".into()),
+            ChatMessage::User("q".into()),
+        ];
         for i in 0..9 {
             msgs.push(ChatMessage::Assistant {
                 content: String::new(),

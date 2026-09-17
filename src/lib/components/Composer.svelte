@@ -41,7 +41,7 @@
 	// --- live-state chips (moved from the retired StatusBar) -------------
 	let up = $derived(session.health?.reachable ?? null);
 	let rejected = $derived(session.health?.rejected === true);
-	let providerId = $derived(session.settings?.provider ?? 'ollama');
+	let providerId = $derived(session.settings?.provider ?? 'ollama-cloud');
 	let providerName = $derived(
 		session.providers.find((p) => p.id === providerId)?.display ?? providerId
 	);
@@ -54,16 +54,17 @@
 	// provider's command names. The exact provider/model remains in the tooltip
 	// and the session info button.
 	let connectionLabel = $derived.by(() => {
+		if (!session.settings?.has_credential) return 'Connect a model service';
 		if (up === null) return 'Checking connection…';
 		if (rejected) return 'Connection needs attention';
-		if (up === false) return providerId === 'ollama' ? 'Local model offline' : `${providerName} offline`;
+		if (up === false) return `${providerName} offline`;
 		if (!session.model) return 'Choose a model';
-		return providerId === 'ollama' ? 'Answers stay on this computer' : `${providerName} connected`;
+		return `${providerName} connected`;
 	});
 	let activityNote = $derived.by(() => {
 		if (session.activity) return session.activity;
 		if (session.busy) return 'working…';
-		if ((up === false || rejected) && providerId !== 'ollama') return providerName;
+		if (up === false || rejected) return providerName;
 		if (session.focus) return 'focus mode · /focus to exit';
 		return null;
 	});
@@ -119,7 +120,7 @@
 	function describe(item: string): string {
 		if (item.startsWith('/')) return COMMAND_DESCRIPTIONS[item] ?? '';
 		const p = session.providers.find((x) => x.id === item);
-		if (p) return p.auth === 'none' ? 'runs on your machine' : 'sign in with an API key';
+		if (p) return 'sign in with an API key';
 		return '';
 	}
 

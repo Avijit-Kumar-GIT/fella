@@ -10,7 +10,7 @@ Fella is a local-first desktop app for asking plain-language questions about fil
 ## Before you start
 
 - Open a folder containing a [supported table or document format](/developer-platform/using-fella/files).
-- Run local Ollama, or [connect a hosted provider](/developer-platform/using-fella/models).
+- [Connect a model provider](/developer-platform/using-fella/models) with your own API key.
 
 After this workflow, you can inspect the sources, computations, and verification findings behind an answer.
 
@@ -50,7 +50,7 @@ After this workflow, you can inspect the sources, computations, and verification
     Teach Fella your vocabulary without turning context into fake evidence.
   </Card>
   <Card title="Choose a model" icon="cpu" href="/developer-platform/using-fella/models">
-    Local Ollama, hosted providers, custom endpoints, and credential storage.
+    Hosted providers, custom endpoints, and credential storage.
   </Card>
   <Card title="Manage sessions" icon="panels-top-left" href="/developer-platform/using-fella/sessions">
     Tabs, the history sidebar, focus mode, retrying, and updates.
@@ -65,7 +65,7 @@ After this workflow, you can inspect the sources, computations, and verification
 The base agent has no tool that writes, moves, or deletes workspace files. The model chooses read-only tools; the data engine runs their computations and records evidence. Verification checks the completed answer, but it does not prove that a valid query interpreted an ambiguous question correctly.
 
 <Warning>
-  Python is restricted but not sandboxed. Hosted providers receive prompts and tool results, and enabled MCP connectors communicate with their configured services. Review [privacy and security](/developer-platform/using-fella/privacy) before using sensitive data.
+  Python runs inside an embedded WASM capability boundary. Hosted providers receive prompts and tool results, and enabled MCP connectors communicate with their configured services. Review [privacy and security](/developer-platform/using-fella/privacy) before using sensitive data.
 </Warning>
 
 <Note>

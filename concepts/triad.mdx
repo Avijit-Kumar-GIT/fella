@@ -90,7 +90,7 @@ For the user-facing version of this flow, see [read the evidence](/developer-pla
 
 - The model can still choose the wrong query or misread an ambiguous question.
 - Deterministic verification checks evidence consistency and known query patterns; it does not prove the user's intended meaning.
-- The SQL and document paths are bounded and read-only. `run_python` is different: it is a best-effort isolated subprocess, not a security sandbox, and its filesystem and network access are not blocked.
+- The SQL and document paths are bounded and read-only. `run_python` uses the same host-side data boundary from an embedded WASM guest; it has no filesystem, network, environment, or subprocess capability and is bounded by Wasmi resource limits.
 - A hosted model provider sees the prompt and tool results sent to it. An enabled MCP connector communicates with its configured remote service.
 
 ## Next steps

@@ -89,9 +89,11 @@ pub fn hard_fail(checks: &[VerificationCheck]) -> Option<String> {
 /// caches no query, however cleanly it verified).
 pub fn reran_clean(checks: &[VerificationCheck]) -> bool {
     hard_fail(checks).is_none()
-        && checks
-            .iter()
-            .any(|c| c.ok && c.label.contains("re-checked the queries behind this answer"))
+        && checks.iter().any(|c| {
+            c.ok && c
+                .label
+                .contains("re-checked the queries behind this answer")
+        })
 }
 
 /// Classify the complete answer result once. The serialized code is the
@@ -136,7 +138,7 @@ pub(crate) fn text_columns(engine: &dyn AnalyticsSource) -> Vec<(String, String)
         .iter()
         .filter_map(|s| s.columns.as_ref())
         .flatten()
-        .filter(|c| c.type_.eq_ignore_ascii_case("text"))
+        .filter(|c| is_text_type(&c.type_))
         .map(|c| (c.name.to_lowercase(), c.name.clone()))
         .collect()
 }
@@ -161,13 +163,19 @@ pub(crate) fn aggregates_text_column<'a>(sql: &str, text_cols: &'a [String]) -> 
                 continue;
             }
             i += 1;
-            let Some(close) = lower[i..].find(')') else { break };
+            let Some(close) = lower[i..].find(')') else {
+                break;
+            };
             let inner = lower[i..i + close].trim();
-            let inner = inner.strip_prefix("distinct").map(str::trim_start).unwrap_or(inner);
+            let inner = inner
+                .strip_prefix("distinct")
+                .map(str::trim_start)
+                .unwrap_or(inner);
             let arg = match inner.split_once('.') {
                 Some((q, rest))
                     if !q.is_empty()
-                        && q.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '"') =>
+                        && q.chars()
+                            .all(|c| c.is_alphanumeric() || c == '_' || c == '"') =>
                 {
                     rest.trim()
                 }
@@ -184,7 +192,7 @@ pub(crate) fn aggregates_text_column<'a>(sql: &str, text_cols: &'a [String]) -> 
 
 // --- 5. case-sensitive filter on a mixed-case label column ----------------
 
-/// `(lowercased, original)` names of catalogued `TEXT` columns whose ingest note
+/// `(lowercased, original)` names of catalogued text columns whose ingest note
 /// says the values differ only in capitalisation (`case_collision`).
 pub(crate) fn mixed_case_columns(engine: &dyn AnalyticsSource) -> Vec<(String, String)> {
     engine
@@ -193,10 +201,92 @@ pub(crate) fn mixed_case_columns(engine: &dyn AnalyticsSource) -> Vec<(String, S
         .iter()
         .filter_map(|s| s.columns.as_ref())
         .flatten()
-        .filter(|c| c.type_.eq_ignore_ascii_case("text"))
-        .filter(|c| c.note.as_deref().is_some_and(|n| n.contains("capitalisation")))
+        .filter(|c| is_text_type(&c.type_))
+        .filter(|c| {
+            c.note
+                .as_deref()
+                .is_some_and(|n| n.contains("capitalisation"))
+        })
         .map(|c| (c.name.to_lowercase(), c.name.clone()))
         .collect()
+}
+
+/// `(lowercased, original)` names of text columns where an exact-value filter
+/// is likely to be a category/status/label lookup. This is intentionally a
+/// little broader than [`mixed_case_columns`]: a uniformly cased column can
+/// still lose every row when the model writes `Leisure` for stored `leisure`.
+/// The name and cardinality filters keep free-form text, ids, dates, and other
+/// high-cardinality columns from adding a warning to every ordinary query.
+pub(crate) fn filterable_text_columns(engine: &dyn AnalyticsSource) -> Vec<(String, String)> {
+    engine
+        .catalog()
+        .sources
+        .iter()
+        .filter_map(|s| s.columns.as_ref())
+        .flatten()
+        .filter(|c| is_filterable_text_column(c))
+        .map(|c| (c.name.to_lowercase(), c.name.clone()))
+        .collect()
+}
+
+fn is_text_type(type_: &str) -> bool {
+    let upper = type_.trim().to_ascii_uppercase();
+    matches!(
+        upper.as_str(),
+        "TEXT" | "VARCHAR" | "STRING" | "CHAR" | "BPCHAR"
+    ) || upper.starts_with("VARCHAR(")
+        || upper.starts_with("CHAR(")
+}
+
+fn is_filterable_text_column(column: &crate::engine::catalog::ColumnInfo) -> bool {
+    if !is_text_type(&column.type_) {
+        return false;
+    }
+    if column.distinct.is_some_and(|distinct| distinct > 100) {
+        return false;
+    }
+    if column
+        .note
+        .as_deref()
+        .is_some_and(|note| note.contains("ISO-8601"))
+    {
+        return false;
+    }
+
+    // These names usually identify free-form text, dates, paths, or opaque
+    // identifiers. A column with no stats is still eligible when its name
+    // looks like a useful label; stats only narrow the high-cardinality case.
+    const NON_LABEL_TOKENS: &[&str] = &[
+        "address",
+        "body",
+        "comment",
+        "content",
+        "created",
+        "date",
+        "description",
+        "details",
+        "email",
+        "hash",
+        "id",
+        "key",
+        "memo",
+        "note",
+        "notes",
+        "path",
+        "summary",
+        "text",
+        "time",
+        "timestamp",
+        "updated",
+        "uri",
+        "url",
+        "uuid",
+    ];
+    let normalized = column.name.to_ascii_lowercase();
+    !normalized
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .any(|token| NON_LABEL_TOKENS.contains(&token))
 }
 
 /// If `sql` filters one of `cols` (already lowercased) with an exact-case
@@ -205,7 +295,12 @@ pub(crate) fn mixed_case_columns(engine: &dyn AnalyticsSource) -> Vec<(String, S
 pub(crate) fn case_sensitive_label_filter<'a>(sql: &str, cols: &'a [String]) -> Option<&'a str> {
     let lower = sql.to_lowercase();
     for col in cols {
-        for pat in [format!(" {col}"), format!("\"{col}\""), format!(".{col}"), format!("({col}")] {
+        for pat in [
+            format!(" {col}"),
+            format!("\"{col}\""),
+            format!(".{col}"),
+            format!("({col}"),
+        ] {
             let mut from = 0;
             while let Some(rel) = lower[from..].find(&pat) {
                 let start = from + rel;
@@ -219,7 +314,10 @@ pub(crate) fn case_sensitive_label_filter<'a>(sql: &str, cols: &'a [String]) -> 
                 if before.ends_with("lower(") || before.ends_with("upper(") {
                     continue; // already case-folded
                 }
-                let after = lower[end..].trim_start().trim_start_matches('"').trim_start();
+                let after = lower[end..]
+                    .trim_start()
+                    .trim_start_matches('"')
+                    .trim_start();
                 let is_filter = after.starts_with("= '")
                     || after.starts_with("='")
                     || after.starts_with("in ('")
@@ -233,19 +331,29 @@ pub(crate) fn case_sensitive_label_filter<'a>(sql: &str, cols: &'a [String]) -> 
     None
 }
 
-/// Flag a cited query that filters a mixed-case label column by exact case one
-/// `Rent` vs `rent` row silently drops out. A soft warning; the schema note is
-/// where the model is meant to have folded case in the first place.
-fn check_case_filter(engine: &dyn AnalyticsSource, evidence: &[EvidenceItem], out: &mut Vec<VerificationCheck>) {
+/// Flag a cited query that filters a likely label column by exact case. A soft
+/// warning; this catches both mixed-case data and a model inventing `Leisure`
+/// for a uniformly lowercase `leisure` column.
+fn check_case_filter(
+    engine: &dyn AnalyticsSource,
+    evidence: &[EvidenceItem],
+    out: &mut Vec<VerificationCheck>,
+) {
     let cols = mixed_case_columns(engine);
     if cols.is_empty() {
         return;
     }
     let lowered: Vec<String> = cols.iter().map(|(l, _)| l.clone()).collect();
-    for e in evidence.iter().filter(|e| is_sql_evidence(e) && e.error.is_none()) {
+    for e in evidence
+        .iter()
+        .filter(|e| is_sql_evidence(e) && e.error.is_none())
+    {
         let Some(sql) = &e.sql else { continue };
         if let Some(hit) = case_sensitive_label_filter(sql, &lowered) {
-            let name = cols.iter().find(|(l, _)| l == hit).map_or(hit, |(_, n)| n.as_str());
+            let name = cols
+                .iter()
+                .find(|(l, _)| l == hit)
+                .map_or(hit, |(_, n)| n.as_str());
             out.push(warn(
                 format!("a filter on `{name}` matches exact case"),
                 Some(format!(
@@ -260,19 +368,31 @@ fn check_case_filter(engine: &dyn AnalyticsSource, evidence: &[EvidenceItem], ou
 
 /// Flag any cited query that sums/averages a column the catalog reports as
 /// `TEXT` SQLite counts non-numeric text as 0, so the figure may be wrong.
-fn check_text_agg(engine: &dyn AnalyticsSource, evidence: &[EvidenceItem], out: &mut Vec<VerificationCheck>) {
+fn check_text_agg(
+    engine: &dyn AnalyticsSource,
+    evidence: &[EvidenceItem],
+    out: &mut Vec<VerificationCheck>,
+) {
     let cols = text_columns(engine);
     if cols.is_empty() {
         return;
     }
     let lowered: Vec<String> = cols.iter().map(|(l, _)| l.clone()).collect();
-    for e in evidence.iter().filter(|e| is_sql_evidence(e) && e.error.is_none()) {
+    for e in evidence
+        .iter()
+        .filter(|e| is_sql_evidence(e) && e.error.is_none())
+    {
         let Some(sql) = &e.sql else { continue };
         if let Some(hit) = aggregates_text_column(sql, &lowered) {
-            let name = cols.iter().find(|(l, _)| l == hit).map_or(hit, |(_, n)| n.as_str());
+            let name = cols
+                .iter()
+                .find(|(l, _)| l == hit)
+                .map_or(hit, |(_, n)| n.as_str());
             out.push(warn(
                 format!("a total here is computed over the text column `{name}`"),
-                Some("non-numeric values count as 0 cast the column if the figure looks off".into()),
+                Some(
+                    "non-numeric values count as 0 cast the column if the figure looks off".into(),
+                ),
             ));
             return;
         }
@@ -280,10 +400,18 @@ fn check_text_agg(engine: &dyn AnalyticsSource, evidence: &[EvidenceItem], out: 
 }
 
 fn ok(label: impl Into<String>) -> VerificationCheck {
-    VerificationCheck { label: label.into(), ok: true, detail: None }
+    VerificationCheck {
+        label: label.into(),
+        ok: true,
+        detail: None,
+    }
 }
 fn warn(label: impl Into<String>, detail: Option<String>) -> VerificationCheck {
-    VerificationCheck { label: label.into(), ok: false, detail }
+    VerificationCheck {
+        label: label.into(),
+        ok: false,
+        detail,
+    }
 }
 
 // --- 6. question implies an aggregate no cited query used ------------------
@@ -319,7 +447,11 @@ fn missing_aggregate_verbs<'a>(question: &str, sql_texts: &[String]) -> Vec<&'a 
 /// wrong question" class — this catches only the crudest, lexical case of
 /// it; #77 is the deeper fix). Soft warning: the aggregate can legitimately
 /// be absent (e.g. the raw rows already answer it, or a subquery hides it).
-fn check_aggregate_verb(question: &str, evidence: &[EvidenceItem], out: &mut Vec<VerificationCheck>) {
+fn check_aggregate_verb(
+    question: &str,
+    evidence: &[EvidenceItem],
+    out: &mut Vec<VerificationCheck>,
+) {
     let sql: Vec<String> = evidence
         .iter()
         .filter(|e| is_sql_evidence(e) && e.error.is_none())
@@ -340,7 +472,11 @@ fn check_aggregate_verb(question: &str, evidence: &[EvidenceItem], out: &mut Vec
 
 // --- 1. table existence -------------------------------------------------
 
-fn check_tables(engine: &dyn AnalyticsSource, evidence: &[EvidenceItem], out: &mut Vec<VerificationCheck>) {
+fn check_tables(
+    engine: &dyn AnalyticsSource,
+    evidence: &[EvidenceItem],
+    out: &mut Vec<VerificationCheck>,
+) {
     let known: HashSet<String> = engine
         .catalog()
         .sources
@@ -369,7 +505,10 @@ fn check_tables(engine: &dyn AnalyticsSource, evidence: &[EvidenceItem], out: &m
 /// used to flag obviously-wrong table names and to check a multi-table join.
 pub(crate) fn referenced_relations(sql: &str) -> HashSet<String> {
     let lower = sql.to_lowercase();
-    let toks: Vec<&str> = lower.split(|c: char| c.is_whitespace()).filter(|s| !s.is_empty()).collect();
+    let toks: Vec<&str> = lower
+        .split(|c: char| c.is_whitespace())
+        .filter(|s| !s.is_empty())
+        .collect();
     let mut out = HashSet::new();
     for (i, t) in toks.iter().enumerate() {
         if (*t == "from" || *t == "join") && i + 1 < toks.len() {
@@ -391,8 +530,10 @@ fn contains_word(haystack: &str, needle: &str) -> bool {
         let start = from + rel;
         let end = start + needle.len();
         from = end;
-        let before_ok = start == 0 || !bytes[start - 1].is_ascii_alphanumeric() && bytes[start - 1] != b'_';
-        let after_ok = end == bytes.len() || !bytes[end].is_ascii_alphanumeric() && bytes[end] != b'_';
+        let before_ok =
+            start == 0 || !bytes[start - 1].is_ascii_alphanumeric() && bytes[start - 1] != b'_';
+        let after_ok =
+            end == bytes.len() || !bytes[end].is_ascii_alphanumeric() && bytes[end] != b'_';
         if before_ok && after_ok {
             return true;
         }
@@ -406,9 +547,28 @@ fn contains_word(haystack: &str, needle: &str) -> bool {
 /// shows up in the question — same list `shared_column_hints` (state.rs)
 /// already uses to drop unhelpful join-key suggestions.
 const GENERIC_COLUMN_NAMES: &[&str] = &[
-    "id", "name", "title", "description", "note", "notes", "memo", "comment", "comments", "type",
-    "status", "value", "amount", "total", "subtotal", "count", "price", "cost", "qty", "quantity",
-    "label", "date",
+    "id",
+    "name",
+    "title",
+    "description",
+    "note",
+    "notes",
+    "memo",
+    "comment",
+    "comments",
+    "type",
+    "status",
+    "value",
+    "amount",
+    "total",
+    "subtotal",
+    "count",
+    "price",
+    "cost",
+    "qty",
+    "quantity",
+    "label",
+    "date",
 ];
 
 /// Which of `table_columns` (real schema names, any case) are named in the
@@ -421,7 +581,11 @@ const GENERIC_COLUMN_NAMES: &[&str] = &[
 /// pattern as `missing_aggregate_verbs`. Doesn't check filter *values*
 /// (`tier = 'close'` vs `tier = 'active'`) only that the column was
 /// referenced at all; see #67 for the harder cases this still misses.
-fn dropped_columns<'a>(question: &str, sql_texts: &[String], table_columns: &'a [String]) -> Vec<&'a str> {
+fn dropped_columns<'a>(
+    question: &str,
+    sql_texts: &[String],
+    table_columns: &'a [String],
+) -> Vec<&'a str> {
     if sql_texts.is_empty() {
         return Vec::new();
     }
@@ -456,9 +620,13 @@ fn check_dropped_column(
         .filter_map(|e| e.sql.as_deref())
         .map(str::to_string)
         .collect();
-    let tables: HashSet<String> =
-        sql.iter().flat_map(|s| referenced_relations(&s.to_lowercase())).collect();
-    let [table] = tables.iter().collect::<Vec<_>>()[..] else { return };
+    let tables: HashSet<String> = sql
+        .iter()
+        .flat_map(|s| referenced_relations(&s.to_lowercase()))
+        .collect();
+    let [table] = tables.iter().collect::<Vec<_>>()[..] else {
+        return;
+    };
     let catalog = engine.catalog();
     let Some(cols) = catalog
         .sources
@@ -500,7 +668,11 @@ fn multi_table_columns(tables: &[(&str, Vec<String>)]) -> HashSet<String> {
             *counts.entry(low).or_insert(0) += 1;
         }
     }
-    counts.into_iter().filter(|&(_, n)| n >= 2).map(|(k, _)| k).collect()
+    counts
+        .into_iter()
+        .filter(|&(_, n)| n >= 2)
+        .map(|(k, _)| k)
+        .collect()
 }
 
 /// True when the question's wording names a column shared across ≥2
@@ -516,7 +688,9 @@ fn looks_like_a_missed_join(
         return false;
     }
     let q = question.to_lowercase();
-    multi_table_columns(all_tables).iter().any(|c| contains_word(&q, c))
+    multi_table_columns(all_tables)
+        .iter()
+        .any(|c| contains_word(&q, c))
 }
 
 /// Extends #58's prompt-side join hint with a check on the answer side: when
@@ -541,8 +715,10 @@ fn check_multi_table_join(
     if sql.is_empty() {
         return;
     }
-    let touched: HashSet<String> =
-        sql.iter().flat_map(|s| referenced_relations(&s.to_lowercase())).collect();
+    let touched: HashSet<String> = sql
+        .iter()
+        .flat_map(|s| referenced_relations(&s.to_lowercase()))
+        .collect();
     let catalog = engine.catalog();
     let all_tables: Vec<(&str, Vec<String>)> = catalog
         .sources
@@ -563,11 +739,18 @@ fn check_multi_table_join(
 
 // --- 2. re-run cited queries ------------------------------------------
 
-fn rerun_queries(engine: &dyn AnalyticsSource, evidence: &[EvidenceItem], out: &mut Vec<VerificationCheck>) {
+fn rerun_queries(
+    engine: &dyn AnalyticsSource,
+    evidence: &[EvidenceItem],
+    out: &mut Vec<VerificationCheck>,
+) {
     let mut matched = 0usize;
     let mut skipped_cost = 0usize;
     let mut seen: HashSet<&str> = HashSet::new();
-    for e in evidence.iter().filter(|e| is_sql_evidence(e) && e.error.is_none()) {
+    for e in evidence
+        .iter()
+        .filter(|e| is_sql_evidence(e) && e.error.is_none())
+    {
         let Some(sql) = &e.sql else { continue };
         // One re-run per distinct query - the model often cites the same SQL twice.
         if !seen.insert(sql.as_str()) {
@@ -584,7 +767,10 @@ fn rerun_queries(engine: &dyn AnalyticsSource, evidence: &[EvidenceItem], out: &
         match engine.run_sql(sql) {
             Ok(fresh) => {
                 let same = e.row_count == Some(fresh.row_count)
-                    && e.rows.as_ref().map(|r| rows_match(r, &fresh.rows)).unwrap_or(true);
+                    && e.rows
+                        .as_ref()
+                        .map(|r| rows_match(r, &fresh.rows))
+                        .unwrap_or(true);
                 if same {
                     matched += 1;
                 } else {
@@ -601,7 +787,9 @@ fn rerun_queries(engine: &dyn AnalyticsSource, evidence: &[EvidenceItem], out: &
         }
     }
     if matched > 0 {
-        out.push(ok("re-checked the queries behind this answer  same results"));
+        out.push(ok(
+            "re-checked the queries behind this answer  same results",
+        ));
     }
     if skipped_cost > 0 {
         out.push(ok(
@@ -779,10 +967,13 @@ fn rows_match(a: &[Vec<Json>], b: &[Vec<Json>]) -> bool {
     a.len() == b.len()
         && a.iter().zip(b).all(|(ra, rb)| {
             ra.len() == rb.len()
-                && ra.iter().zip(rb).all(|(ca, cb)| match (num_of(ca), num_of(cb)) {
-                    (Some(x), Some(y)) => close(x, y),
-                    _ => ca == cb,
-                })
+                && ra
+                    .iter()
+                    .zip(rb)
+                    .all(|(ca, cb)| match (num_of(ca), num_of(cb)) {
+                        (Some(x), Some(y)) => close(x, y),
+                        _ => ca == cb,
+                    })
         })
 }
 
@@ -814,7 +1005,10 @@ pub(crate) fn truncate(s: &str, n: usize) -> String {
 /// evidence of disagreement. Pure and testable without a real run.
 fn answers_disagree(a: &str, b: &str) -> bool {
     let nums = |t: &str| -> Vec<f64> {
-        number_tokens(t).map(|(_, v)| v).filter(|v| !is_probable_year(*v)).collect()
+        number_tokens(t)
+            .map(|(_, v)| v)
+            .filter(|v| !is_probable_year(*v))
+            .collect()
     };
     let (na, nb) = (nums(a), nums(b));
     if na.is_empty() || nb.is_empty() {
@@ -854,7 +1048,9 @@ pub fn self_consistency_check(first: &str, second: &str) -> Option<VerificationC
 /// of the pattern matters, not a full parse.
 fn groups_by_date_expr(sql: &str) -> bool {
     let lower = sql.to_lowercase();
-    let Some(gb) = lower.find("group by") else { return false };
+    let Some(gb) = lower.find("group by") else {
+        return false;
+    };
     let clause = &lower[gb..];
     clause.contains("strftime(") || clause.contains("date(") || clause.contains("datetime(")
 }
@@ -936,12 +1132,18 @@ fn alias_words(alias: &str) -> Vec<String> {
 /// `check_numbers`); only flagged when the line naming it contains some
 /// *other* column's own words and not its true column's -- a line that
 /// names no column at all is left alone.
-fn check_row_value_labels(answer: &str, evidence: &[EvidenceItem], out: &mut Vec<VerificationCheck>) {
+fn check_row_value_labels(
+    answer: &str,
+    evidence: &[EvidenceItem],
+    out: &mut Vec<VerificationCheck>,
+) {
     for e in evidence {
         if !is_sql_evidence(e) || e.error.is_some() {
             continue;
         }
-        let (Some(columns), Some(rows)) = (&e.columns, &e.rows) else { continue };
+        let (Some(columns), Some(rows)) = (&e.columns, &e.rows) else {
+            continue;
+        };
         if columns.len() < 2 || rows.len() != 1 {
             continue;
         }
@@ -956,20 +1158,28 @@ fn check_row_value_labels(answer: &str, evidence: &[EvidenceItem], out: &mut Vec
 
         for line in answer.lines() {
             for (raw, val) in number_tokens(line) {
-                let matches: Vec<&str> =
-                    col_vals.iter().filter(|(_, v)| close(*v, val)).map(|(c, _)| *c).collect();
+                let matches: Vec<&str> = col_vals
+                    .iter()
+                    .filter(|(_, v)| close(*v, val))
+                    .map(|(c, _)| *c)
+                    .collect();
                 if matches.len() != 1 {
                     continue; // unsupported or ambiguous -- not this check's business
                 }
                 let true_col = matches[0];
                 let without_value = line.replacen(&raw, "", 1).to_lowercase();
-                if alias_words(true_col).iter().any(|w| without_value.contains(w.as_str())) {
+                if alias_words(true_col)
+                    .iter()
+                    .any(|w| without_value.contains(w.as_str()))
+                {
                     continue; // correctly labeled, or at least not contradicted
                 }
                 let swap = col_vals.iter().find(|(c, v)| {
                     *c != true_col
                         && !close(*v, val)
-                        && alias_words(c).iter().any(|w| without_value.contains(w.as_str()))
+                        && alias_words(c)
+                            .iter()
+                            .any(|w| without_value.contains(w.as_str()))
                 });
                 if let Some((other_col, _)) = swap {
                     out.push(warn(
@@ -1003,10 +1213,16 @@ mod tests {
     fn rows_match_tolerates_float_jitter_only() {
         let a = vec![vec![Json::from(738022.3)]];
         let b = vec![vec![Json::from(738022.3 + 1e-6)]];
-        assert!(rows_match(&a, &b), "sub-cent float drift is the same result");
+        assert!(
+            rows_match(&a, &b),
+            "sub-cent float drift is the same result"
+        );
 
         let c = vec![vec![Json::from(752000.0)]];
-        assert!(!rows_match(&a, &c), "a result past close() tolerance still trips");
+        assert!(
+            !rows_match(&a, &c),
+            "a result past close() tolerance still trips"
+        );
 
         // non-numeric cells must still match exactly
         let m1 = vec![vec![Json::from("2024-03"), Json::from(10.0)]];
@@ -1027,7 +1243,10 @@ mod tests {
             aggregates_text_column("select total(\"amount paid\") from x", &cols),
             Some("amount paid")
         );
-        assert_eq!(aggregates_text_column("SELECT count(*) FROM ledger", &cols), None);
+        assert_eq!(
+            aggregates_text_column("SELECT count(*) FROM ledger", &cols),
+            None
+        );
         assert_eq!(
             aggregates_text_column(r#"SELECT SUM(rent_total) FROM ledger"#, &cols),
             None
@@ -1066,12 +1285,42 @@ mod tests {
     }
 
     #[test]
+    fn selects_label_columns_for_inline_case_guidance() {
+        use crate::engine::catalog::ColumnInfo;
+
+        assert!(is_filterable_text_column(&ColumnInfo::bare(
+            "purpose", "TEXT"
+        )));
+        assert!(is_filterable_text_column(&ColumnInfo::bare(
+            "status", "VARCHAR"
+        )));
+        assert!(!is_filterable_text_column(&ColumnInfo::bare(
+            "created_at",
+            "TEXT"
+        )));
+        assert!(!is_filterable_text_column(&ColumnInfo::bare(
+            "description",
+            "TEXT"
+        )));
+        assert!(!is_filterable_text_column(&ColumnInfo::bare(
+            "amount", "REAL"
+        )));
+
+        let mut many_values = ColumnInfo::bare("merchant", "TEXT");
+        many_values.distinct = Some(101);
+        assert!(!is_filterable_text_column(&many_values));
+    }
+
+    #[test]
     fn spots_missing_aggregate_verb() {
         let sql = |s: &str| vec![s.to_uppercase()];
 
         // wording implies COUNT, query doesn't have it -> flagged
         assert_eq!(
-            missing_aggregate_verbs("how many books have I finished?", &sql("SELECT * FROM books")),
+            missing_aggregate_verbs(
+                "how many books have I finished?",
+                &sql("SELECT * FROM books")
+            ),
             vec!["COUNT"]
         );
         // query does have it -> not flagged
@@ -1087,13 +1336,20 @@ mod tests {
         );
         // "average" implies AVG
         assert_eq!(
-            missing_aggregate_verbs("what's my average rating?", &sql("SELECT MAX(rating) FROM books")),
+            missing_aggregate_verbs(
+                "what's my average rating?",
+                &sql("SELECT MAX(rating) FROM books")
+            ),
             vec!["AVG"]
         );
         // no run_sql evidence at all -> nothing to flag (e.g. answered from schema/no-tool)
         assert!(missing_aggregate_verbs("how many books have I finished?", &[]).is_empty());
         // wording doesn't imply any of these verbs -> nothing flagged
-        assert!(missing_aggregate_verbs("which genre did I read most?", &sql("SELECT genre FROM books")).is_empty());
+        assert!(missing_aggregate_verbs(
+            "which genre did I read most?",
+            &sql("SELECT genre FROM books")
+        )
+        .is_empty());
         // a compound question can flag more than one verb
         let mut both = missing_aggregate_verbs(
             "what's the total and average rating?",
@@ -1114,12 +1370,19 @@ mod tests {
 
         let mut out = Vec::new();
         check_aggregate_verb("how many books are there?", &evidence, &mut out);
-        assert!(out.is_empty(), "chart SQL should count as a cited aggregate: {out:?}");
+        assert!(
+            out.is_empty(),
+            "chart SQL should count as a cited aggregate: {out:?}"
+        );
     }
 
     #[test]
     fn spots_a_dropped_column() {
-        let cols = vec!["finished".to_string(), "genre".to_string(), "title".to_string()];
+        let cols = vec![
+            "finished".to_string(),
+            "genre".to_string(),
+            "title".to_string(),
+        ];
 
         // question names "finished", cited query never mentions it -> flagged
         assert_eq!(
@@ -1170,8 +1433,14 @@ mod tests {
 
     #[test]
     fn spots_a_missed_join() {
-        let orders = ("orders", vec!["customer_id".to_string(), "amount".to_string()]);
-        let customers = ("customers", vec!["customer_id".to_string(), "city".to_string()]);
+        let orders = (
+            "orders",
+            vec!["customer_id".to_string(), "amount".to_string()],
+        );
+        let customers = (
+            "customers",
+            vec!["customer_id".to_string(), "city".to_string()],
+        );
         let tables = vec![orders.clone(), customers.clone()];
 
         // "customer_id" lives on both tables -> question naming it, answered
@@ -1211,9 +1480,18 @@ mod tests {
     fn generic_shared_columns_dont_count() {
         // "id"/"amount"/"date" are stoplisted even though every table has one;
         // a genuinely shared non-generic column ("vendor") is still caught.
-        let a = ("a", vec!["id".to_string(), "amount".to_string(), "vendor".to_string()]);
-        let b = ("b", vec!["id".to_string(), "date".to_string(), "vendor".to_string()]);
-        assert_eq!(multi_table_columns(&[a, b]), HashSet::from(["vendor".to_string()]));
+        let a = (
+            "a",
+            vec!["id".to_string(), "amount".to_string(), "vendor".to_string()],
+        );
+        let b = (
+            "b",
+            vec!["id".to_string(), "date".to_string(), "vendor".to_string()],
+        );
+        assert_eq!(
+            multi_table_columns(&[a, b]),
+            HashSet::from(["vendor".to_string()])
+        );
     }
 
     #[test]
@@ -1221,7 +1499,10 @@ mod tests {
         assert!(contains_word("how many books have i finished?", "finished"));
         assert!(!contains_word("unfinished business", "finished"));
         assert!(!contains_word("the finisher", "finish"));
-        assert!(contains_word("select * from t where finished = 'yes'", "finished"));
+        assert!(contains_word(
+            "select * from t where finished = 'yes'",
+            "finished"
+        ));
     }
 
     #[test]
@@ -1257,7 +1538,10 @@ mod tests {
     fn hard_fail_separates_wrong_from_merely_noteworthy() {
         // A soft warning only -> no hard fail.
         let soft = vec![
-            warn("a total here is computed over the text column `amount`", None),
+            warn(
+                "a total here is computed over the text column `amount`",
+                None,
+            ),
             ok("every number in the answer came from the data above"),
         ];
         assert_eq!(hard_fail(&soft), None);
@@ -1276,15 +1560,25 @@ mod tests {
         );
 
         // An unbacked figure is a hard fail; label used when there's no detail.
-        let stray = vec![warn("the answer mentions 999 not found in any result", None)];
+        let stray = vec![warn(
+            "the answer mentions 999 not found in any result",
+            None,
+        )];
         assert_eq!(
             hard_fail(&stray).as_deref(),
             Some("the answer mentions 999 not found in any result")
         );
 
         // ...but the corrective re-ask only acts on the re-run checks.
-        assert_eq!(rerun_regression(&stray), None, "unbacked figure is fold-only");
-        assert!(rerun_regression(&hard).is_some(), "a changed re-run does trigger it");
+        assert_eq!(
+            rerun_regression(&stray),
+            None,
+            "unbacked figure is fold-only"
+        );
+        assert!(
+            rerun_regression(&hard).is_some(),
+            "a changed re-run does trigger it"
+        );
 
         // A self-consistency disagreement is a hard fail too.
         let disagreed = vec![self_consistency_check("Total: $450", "Total: $600").unwrap()];
@@ -1304,12 +1598,18 @@ mod tests {
         ];
         assert_eq!(status(&clean, &evidence), VerificationStatus::Verified);
         assert_eq!(
-            status(&[warn("a total here is computed over a text column", None)], &evidence),
+            status(
+                &[warn("a total here is computed over a text column", None)],
+                &evidence
+            ),
             VerificationStatus::NeedsReview
         );
         assert_eq!(
             status(
-                &[warn("the answer mentions 999 not found in any result", None)],
+                &[warn(
+                    "the answer mentions 999 not found in any result",
+                    None
+                )],
                 &evidence
             ),
             VerificationStatus::Failed
@@ -1318,7 +1618,10 @@ mod tests {
 
         let mut failed_tool = evidence[0].clone();
         failed_tool.error = Some("query failed".into());
-        assert_eq!(status(&[], &[failed_tool]), VerificationStatus::InsufficientData);
+        assert_eq!(
+            status(&[], &[failed_tool]),
+            VerificationStatus::InsufficientData
+        );
     }
 
     #[test]
@@ -1362,7 +1665,11 @@ mod tests {
         check_numbers(answer, &ev, &mut out);
 
         let warns: Vec<_> = out.iter().filter(|c| !c.ok).collect();
-        assert_eq!(warns.len(), 1, "only the body's stray 999 should warn: {out:?}");
+        assert_eq!(
+            warns.len(),
+            1,
+            "only the body's stray 999 should warn: {out:?}"
+        );
         assert!(warns[0].label.contains("999"), "{}", warns[0].label);
     }
 
@@ -1397,8 +1704,15 @@ mod tests {
         // A general-knowledge / conversational answer, no tool ran. Its
         // numbers aren't a data claim, so there's nothing to check.
         let mut out = Vec::new();
-        check_numbers("A common rule of thumb is saving 20% of income.", &[], &mut out);
-        assert!(out.is_empty(), "no evidence means no check, not a warning: {out:?}");
+        check_numbers(
+            "A common rule of thumb is saving 20% of income.",
+            &[],
+            &mut out,
+        );
+        assert!(
+            out.is_empty(),
+            "no evidence means no check, not a warning: {out:?}"
+        );
     }
 
     #[test]
@@ -1417,13 +1731,19 @@ mod tests {
             columns: None,
             rows: None,
             row_count: None,
-            output: Some("table ledger  (from ledger.csv, 30 rows)\ndocument notes.md  (Notes, 1 KB)".into()),
+            output: Some(
+                "table ledger  (from ledger.csv, 30 rows)\ndocument notes.md  (Notes, 1 KB)".into(),
+            ),
             chart: None,
             ms: 1,
             error: None,
         }];
         let mut out = Vec::new();
-        check_numbers("This folder has a ledger table with 30 rows and one notes file.", &ev, &mut out);
+        check_numbers(
+            "This folder has a ledger table with 30 rows and one notes file.",
+            &ev,
+            &mut out,
+        );
         assert!(
             out.iter().all(|c| c.ok),
             "30 came from list_files' own listing, not a stray figure: {out:?}"
@@ -1455,12 +1775,19 @@ mod tests {
             "SELECT strftime('%Y-%m', Date) AS month, SUM(x) AS t FROM t \
              GROUP BY strftime('%Y-%m', Date) ORDER BY month"
         ));
-        assert!(groups_by_date_expr("SELECT date(d) AS day, count(*) FROM t GROUP BY date(d)"));
-        assert!(!groups_by_date_expr("SELECT category, SUM(x) FROM t GROUP BY category"));
+        assert!(groups_by_date_expr(
+            "SELECT date(d) AS day, count(*) FROM t GROUP BY date(d)"
+        ));
+        assert!(!groups_by_date_expr(
+            "SELECT category, SUM(x) FROM t GROUP BY category"
+        ));
         assert!(!groups_by_date_expr("SELECT SUM(x) FROM t")); // no GROUP BY at all
 
         assert!(has_null_group_key(&[vec![Json::Null, Json::from(15797)]]));
-        assert!(!has_null_group_key(&[vec![Json::from("2025-09"), Json::from(1316)]]));
+        assert!(!has_null_group_key(&[vec![
+            Json::from("2025-09"),
+            Json::from(1316)
+        ]]));
     }
 
     #[test]
@@ -1479,7 +1806,10 @@ mod tests {
         check_null_group_key(&ev, &mut out);
         assert_eq!(out.len(), 1, "{out:?}");
         assert!(!out[0].ok);
-        assert!(hard_fail(&out).is_some(), "should surface as a hard fail, not just a caution");
+        assert!(
+            hard_fail(&out).is_some(),
+            "should surface as a hard fail, not just a caution"
+        );
     }
 
     #[test]
@@ -1511,7 +1841,10 @@ mod tests {
         )];
         let mut out = Vec::new();
         check_null_group_key(&ev, &mut out);
-        assert!(out.is_empty(), "a real single-month result is not a bug: {out:?}");
+        assert!(
+            out.is_empty(),
+            "a real single-month result is not a bug: {out:?}"
+        );
     }
 
     #[test]
@@ -1539,7 +1872,13 @@ mod tests {
              (SELECT count(*) FROM trips WHERE purpose = 'leisure') AS leisure_trips, \
              (SELECT avg(hours) FROM sleep) AS avg_sleep, \
              (SELECT max(amount) FROM spend WHERE category = 'dining') AS max_dining",
-            &["books_count", "run_km", "leisure_trips", "avg_sleep", "max_dining"],
+            &[
+                "books_count",
+                "run_km",
+                "leisure_trips",
+                "avg_sleep",
+                "max_dining",
+            ],
             vec![vec![
                 Json::from(0),
                 Json::from(4.0),
@@ -1560,7 +1899,10 @@ mod tests {
              - Dining out: $202.78 max in a month";
         let mut out = Vec::new();
         check_row_value_labels(answer, &ev, &mut out);
-        assert!(out.is_empty(), "every value sits next to its own column's words: {out:?}");
+        assert!(
+            out.is_empty(),
+            "every value sits next to its own column's words: {out:?}"
+        );
     }
 
     #[test]
@@ -1574,7 +1916,10 @@ mod tests {
         assert_eq!(out.len(), 1, "{out:?}");
         assert!(!out[0].ok);
         assert!(out[0].label.contains("max_dining"), "{}", out[0].label);
-        assert!(hard_fail(&out).is_some(), "a label swap is a wrong answer, not just a caution");
+        assert!(
+            hard_fail(&out).is_some(),
+            "a label swap is a wrong answer, not just a caution"
+        );
     }
 
     #[test]
@@ -1592,7 +1937,10 @@ mod tests {
         let answer = "Rent was 15013.23 and dining was 2233.69.";
         let mut out = Vec::new();
         check_row_value_labels(answer, &ev, &mut out);
-        assert!(out.is_empty(), "multi-row results are out of scope: {out:?}");
+        assert!(
+            out.is_empty(),
+            "multi-row results are out of scope: {out:?}"
+        );
     }
 
     #[test]
@@ -1605,6 +1953,9 @@ mod tests {
         let answer = "Both a and b came to 5.";
         let mut out = Vec::new();
         check_row_value_labels(answer, &ev, &mut out);
-        assert!(out.is_empty(), "an ambiguous value is left alone, not guessed at: {out:?}");
+        assert!(
+            out.is_empty(),
+            "an ambiguous value is left alone, not guessed at: {out:?}"
+        );
     }
 }

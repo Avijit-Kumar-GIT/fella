@@ -12,7 +12,7 @@ Start with the smallest direct check. A source problem, provider problem, and in
 | --- | --- | --- |
 | A file is missing | `/files` | Check format, hidden path, scan depth, permissions, and `.fellaignore` |
 | A total looks wrong | `/schema <table>` | Check type inference, units, casing, nulls, and totals rows |
-| The model cannot answer | `/auth`, then `/model` | Start Ollama, sign in again, or choose a tool-capable model |
+| The model cannot answer | `/auth`, then `/model` | Sign in again or choose a tool-capable model |
 | A query times out | Inspect working or use `/sql` | Add a date filter, narrower columns, grouping, or `LIMIT` |
 | Python fails | Inspect stderr in working | Install Python 3 or use stdlib-only code |
 | A PDF has no useful text | Open the PDF outside Fella | OCR it and reopen or `/reindex` the folder |
@@ -44,14 +44,9 @@ Delimited files stop loading after 2,000,000 rows by default and report truncati
 
 ## Fella cannot reach the model
 
-For local Ollama:
-
-```bash filename="terminal"
-ollama list
-ollama serve
-```
-
-Then use `/model` and choose an installed model. For hosted providers, use `/auth` to inspect login state, `/login <provider>` to replace the key, and `/model` to refresh current model IDs. Provider catalogs and IDs can change independently of Fella.
+Use `/auth` to inspect login state, `/login <provider>` to replace the key,
+and `/model` to refresh current model IDs. Provider catalogs and IDs can change
+independently of Fella.
 
 HTTP `429` and transient server failures may be retried, but quota, billing, privacy settings, unsupported tool calling, or an unstable endpoint still require provider-side action.
 
@@ -74,9 +69,16 @@ Fella can answer general or conversational questions without a tool call. No cal
 
 ## Python fails or feels unsafe
 
-`run_python` requires a discoverable `python3` or `python`. It supplies stdlib helpers for median, standard deviation, Pearson correlation, and simple linear regression; pandas is optional on the SQLite path.
+`run_python` is built into Fella. It supplies `median`, `stdev`, Pearson
+correlation, and simple linear regression helpers, plus `sql(query)`, which
+returns a list of dictionaries from the mounted workspace. It does not need a
+Python installation or third-party packages.
 
-Python runs without a confirmation prompt. It uses isolated mode, a temporary working directory, a cleared environment, capped output, a 20-second timeout, and Unix resource limits, but it is not a security sandbox: it can read outside the workspace and use the network. If that boundary is unacceptable, stop the run and ask for a SQL-only answer.
+Python runs without a confirmation prompt inside an embedded RustPython/WASM
+guest. The guest has no filesystem, network, environment, or subprocess access;
+the host provides only captured output and bounded read-only SQL. Fuel, memory,
+stack, source, output, row, and response limits apply. If a calculation can be
+written clearly in SQL, prefer SQL because its evidence is easier to inspect.
 
 ## A PDF cannot be searched
 

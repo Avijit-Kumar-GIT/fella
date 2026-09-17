@@ -100,22 +100,23 @@ pub fn clear_legacy_api_key(conn: &Connection) -> EngineResult<()> {
 
 pub fn load_settings(conn: &Connection) -> Settings {
     use crate::engine::provider;
-    let stored = get(conn, "provider").unwrap_or_else(|| provider::DEFAULT_ID.into());
-    let p = provider::get(&stored);
+    let stored = get(conn, "provider").unwrap_or_default();
+    let provider_id = provider::normalize_id(&stored).to_string();
+    let p = provider::get(&provider_id);
     Settings {
         base_url: get(conn, "base_url")
             .or_else(|| p.map(|p| p.base_url.to_string()).filter(|s| !s.is_empty()))
-            .unwrap_or_else(|| "http://localhost:11434".into()),
-        model: get(conn, "model").unwrap_or_else(|| {
-            p.map(|p| p.default_model).unwrap_or("llama3.1").into()
-        }),
+            .unwrap_or_default(),
+        model: get(conn, "model")
+            .or_else(|| p.map(|p| p.default_model.to_string()).filter(|s| !s.is_empty()))
+            .unwrap_or_default(),
         embed_model: get(conn, "embed_model").unwrap_or_else(|| {
             p.map(|p| p.default_embed_model)
                 .filter(|s| !s.is_empty())
-                .unwrap_or("nomic-embed-text")
+                .unwrap_or("")
                 .into()
         }),
-        provider: stored,
+        provider: provider_id,
         has_credential: false,
     }
 }
@@ -232,7 +233,7 @@ mod tests {
         conn.execute_batch(SCHEMA).unwrap();
 
         let s = load_settings(&conn);
-        assert_eq!(s.provider, "ollama");
+        assert_eq!(s.provider, crate::engine::provider::DEFAULT_ID);
         assert!(!s.has_credential);
 
         let mut patch = serde_json::Map::new();

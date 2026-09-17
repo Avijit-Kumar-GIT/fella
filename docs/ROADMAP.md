@@ -117,18 +117,21 @@ optimisation that costs it isn't taken.
   block beside `fella.db`, per-folder, never leaving the machine — no new
   dependency. See [`HARNESS.md`](HARNESS.md#shipped) and
   [`FOLDER-MEMORY.md`](FOLDER-MEMORY.md).
-- **Case-mismatch on a uniformly-cased column** *(next, unfixed)* and
-  **semantic near-duplicate category labels** *(next, no candidate fix yet)*
-  two distinct gaps a new benchmark pass surfaced 2026-09-12, neither caught
-  by the shipped case-sensitivity flag (which only fires on a real collision
-  in the data, not a model-invented wrong-case literal against clean data).
-  gemma4:31b: 5/9 on the new messiness axis, the worst of ten axes measured.
-  See [`HARNESS.md`](HARNESS.md#next).
+- **Case-mismatch on a uniformly-cased column** *(partially addressed
+  2026-09-17)* and **semantic near-duplicate category labels** *(next, no
+  candidate fix yet)* remain two distinct gaps surfaced by the 2026-09-12
+  benchmark pass. The SQL tool now gives pre-query case-folding guidance for
+  likely label columns even when the data has only one case, with a registry
+  regression test. Zero-result detection, candidate-value discovery, and a
+  frozen model-battery result remain open; `lower()` also cannot resolve
+  aliases such as `HOUSING` and `mortgage`. gemma4:31b scored 5/9 on the new
+  messiness axis, the worst of ten axes measured. See
+  [`HARNESS.md`](HARNESS.md#next).
 - **Correction-trigger breadth** *(open question, unmeasured).*
   `memory::is_correction()` only recognises a fixed marker-word list; whether
   it needs to recognise more natural phrasings hasn't been tested, only
   assumed. See [`HARNESS.md`](HARNESS.md#next).
-- **Few-shot worked examples** in the system prompt for small local models
+- **Few-shot worked examples** in the system prompt for smaller models
   *deferred:* `prompt-ablation` on gemma4:31b (2026-09-07) shows no prompt slack
   to trade the shipped prompt already loses a case or a feature at every cut
   above the core rules + schema.

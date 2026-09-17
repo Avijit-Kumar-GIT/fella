@@ -58,10 +58,9 @@
 //! them still fails a chart case.
 //! Env:  EVAL_SHOW_ANSWERS=1  print every answer + its evidence to stderr
 //!
-//! A --models entry is a bare model on the configured provider (`gemma4:31b`)
-//! or `provider/model` to switch provider too (`xai/grok-4.3`,
-//! `openai/gpt-5.6-luna`, `ollama-cloud/gemma4:31b`) the data dir's
-//! auth.json must hold each provider's key. Only the first `/` is the
+//! A --models entry is `provider/model` (`xai/grok-4.3`,
+//! `openai/gpt-5.6-luna`, `ollama-cloud/gemma4:31b`) and the data dir's
+//! auth.json must hold that provider's key. Only the first `/` is the
 //! separator, so `gemma4:31b` keeps its colon.
 
 use std::collections::BTreeMap;
@@ -750,25 +749,44 @@ fn env(k: &str, d: &str) -> String {
     std::env::var(k).unwrap_or_else(|_| d.to_string())
 }
 
-/// Point the engine at a model. `"grok-4.3"` keeps the current provider;
-/// `"xai/grok-4.3"` (a known provider id, then `/`, then the model) also
-/// switches provider + base_url so one run can sweep across providers as long
-/// as the data dir's `auth.json` holds each provider's key. `gemma4:31b` keeps
-/// its colon; only the first `/` is the provider separator.
+/// Point the engine at a model. Evaluation always names the provider explicitly
+/// (`"xai/grok-4.3"`) so a run cannot silently fall back to a non-BYOK service.
+/// The data dir's `auth.json` must hold that provider's key. Only the first `/`
+/// is the provider separator, so `gemma4:31b` keeps its colon.
 fn set_model(engine: &EngineState, spec: &str) -> bool {
+    let Some((prov, model)) = spec.split_once('/') else {
+        eprintln!("eval: model {spec:?} must use provider/model and a BYOK key");
+        return false;
+    };
+    let Some(p) = fella_lib::engine::provider::get(prov) else {
+        eprintln!("eval: unknown provider in model {spec:?}");
+        return false;
+    };
+    if p.auth != fella_lib::engine::provider::AuthKind::ApiKey {
+        eprintln!("eval: provider {} is not a BYOK provider", p.id);
+        return false;
+    }
+    if model.trim().is_empty() {
+        eprintln!("eval: model name is empty in {spec:?}");
+        return false;
+    }
     let mut patch = serde_json::Map::new();
-    if let Some((prov, model)) = spec.split_once('/') {
-        if let Some(p) = fella_lib::engine::provider::get(prov) {
-            patch.insert("provider".into(), prov.into());
-            if !p.base_url.is_empty() {
-                patch.insert("base_url".into(), p.base_url.into());
-            }
-            patch.insert("model".into(), model.into());
-            return engine.save_settings(&patch).is_ok();
+    patch.insert("provider".into(), p.id.into());
+    if !p.base_url.is_empty() {
+        patch.insert("base_url".into(), p.base_url.into());
+    }
+    patch.insert("model".into(), model.into());
+    match engine.save_settings(&patch) {
+        Ok(s) if s.has_credential => true,
+        Ok(_) => {
+            eprintln!("eval: no credential saved for provider {}", p.id);
+            false
+        }
+        Err(e) => {
+            eprintln!("eval: could not select {spec:?}: {e}");
+            false
         }
     }
-    patch.insert("model".into(), spec.into());
-    engine.save_settings(&patch).is_ok()
 }
 
 /// $ per 100 answers for a model, from a small static price table
@@ -1297,12 +1315,12 @@ async fn cmd_folder_scale(engine: &EngineState, model: &str, ws: &Path, iters: u
         let cases = battery(&g, 6100.0);
         for (label, fixed) in [("adaptive", false), ("fixed 8192", true)] {
             if fixed {
-                std::env::set_var("FELLA_OLLAMA_NUM_CTX_FIXED", "1");
+                std::env::set_var("FELLA_MODEL_NUM_CTX_FIXED", "1");
             } else {
-                std::env::remove_var("FELLA_OLLAMA_NUM_CTX_FIXED");
+                std::env::remove_var("FELLA_MODEL_NUM_CTX_FIXED");
             }
             let scores = run_battery(engine, &cases, model, label, None, "scale", iters).await;
-            std::env::remove_var("FELLA_OLLAMA_NUM_CTX_FIXED");
+            std::env::remove_var("FELLA_MODEL_NUM_CTX_FIXED");
             let (ok, n) = acc(&scores);
             let ft: Vec<f64> = scores.iter().filter_map(|s| s.first_tok_s).collect();
             let ft_mean = if ft.is_empty() { 0.0 } else { ft.iter().sum::<f64>() / ft.len() as f64 };
@@ -2298,7 +2316,7 @@ async fn main() {
     let only = opt("--only");
     let bench_dir = opt("--dir");
     let harness = opt("--harness").unwrap_or_else(|| "fella".into());
-    let models: Vec<String> = opt("--models")
+    let requested_models: Vec<String> = opt("--models")
         .map(|s| s.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect())
         .unwrap_or_default();
 
@@ -2316,18 +2334,32 @@ async fn main() {
 
     let engine = EngineState::new(&data_dir).expect("engine init");
     let s = engine.settings();
-    let models = if models.is_empty() { vec![s.model.clone()] } else { models };
+    let models = if requested_models.is_empty() {
+        let Some(p) = fella_lib::engine::provider::get(&s.provider) else {
+            eprintln!("eval: no configured BYOK provider; pass --models provider/model");
+            std::process::exit(2);
+        };
+        if p.auth != fella_lib::engine::provider::AuthKind::ApiKey
+            || !s.has_credential
+            || s.model.trim().is_empty()
+        {
+            eprintln!("eval: no configured BYOK model; pass --models provider/model");
+            std::process::exit(2);
+        }
+        vec![format!("{}/{}", p.id, s.model)]
+    } else {
+        requested_models
+    };
+    if models.iter().any(|m| !m.contains('/')) {
+        eprintln!("eval: every model must be written as provider/model and use a BYOK provider");
+        std::process::exit(2);
+    }
     eprintln!(
         "eval: provider={} model(s)={:?} ws={}",
         s.provider,
         models,
         ws.display()
     );
-    let health = engine.provider_health().await;
-    if !health.reachable {
-        eprintln!("eval: provider not reachable, aborting");
-        std::process::exit(1);
-    }
 
     // Default workspace: one clean 6k-row table + rent fixture + notes.
     let g = testkit::synth_workspace(&ws, &WorkspaceSpec::small_clean());

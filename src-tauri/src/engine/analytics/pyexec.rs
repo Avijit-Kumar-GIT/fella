@@ -1,29 +1,68 @@
-//! `run_python`: execute a short Python snippet against the workspace data.
+//! `run_python`: execute generated Python inside Fella's embedded sandbox.
 //!
-//! This is a guard rail, not a security sandbox the user is running their own
-//! code against their own files on their own machine. We isolate best-effort:
-//! a fresh temp cwd, a stripped environment, wall-clock + CPU + memory limits
-//! on Unix, and captured/[capped] output. Not restricted: filesystem reads
-//! outside the workspace, and network access (an unprivileged net namespace
-//! needs a user namespace + uid mapping, which would break reading pip packages
-//! from a mode-700 home). Treat a snippet as code the user chose to run.
+//! The Python interpreter is compiled once as a `wasm32-unknown-unknown`
+//! module (`python-sandbox/`) and embedded in the desktop binary. Wasmi runs
+//! that module without WASI imports, so the guest has no filesystem, network,
+//! environment, clock, or subprocess capability. The host exposes only a
+//! bounded stdout/stderr sink and a bounded read-only `sql()` bridge.
+//!
+//! This gives the personal app one capability model on Linux, macOS, and
+//! Windows. The sandbox is still defense in depth: the Wasmi/RustPython
+//! versions and the checked-in guest artifact are part of the trusted base.
 
-use std::io::{Read, Write};
-use std::path::PathBuf;
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::sync::OnceLock;
+use std::time::Instant;
 
-use crate::engine::analytics::data::PythonBridge;
+use serde_json::json;
+use wasmi::{
+    Caller, Config, Engine, Extern, Linker, Memory, Module, Store, StoreLimits, StoreLimitsBuilder,
+};
+
+use crate::engine::analytics::data::{self, PythonBridge, QueryOutcome};
 use crate::engine::error::{EngineError, EngineResult};
 
-const TIMEOUT: Duration = Duration::from_secs(20);
+// RustPython's VM initialization plus compilation is instruction-heavy when
+// Wasmi fuel metering is enabled. This is a portable execution budget, not a
+// wall clock; the SQL backend has its own query watchdog.
+const FUEL: u64 = 1_000_000_000;
+const CODE_CAP: usize = 64 * 1024;
 const OUTPUT_CAP: usize = 64 * 1024;
-#[cfg(unix)]
-const MEM_LIMIT_BYTES: u64 = 1024 * 1024 * 1024; // 1 GiB address space
-#[cfg(unix)]
-const CPU_LIMIT_SECS: u64 = 15;
-#[cfg(unix)]
-const FSIZE_LIMIT_BYTES: u64 = 64 * 1024 * 1024;
+const SQL_QUERY_CAP: usize = 64 * 1024;
+const SQL_ROW_CAP: usize = 10_000;
+const SQL_RESPONSE_CAP: usize = 1024 * 1024;
+const MEMORY_CAP_BYTES: usize = 256 * 1024 * 1024;
+const STACK_CAP_BYTES: usize = 2 * 1024 * 1024;
+
+// `build-python-sandbox.sh` (and the Tauri build instructions) keep this
+// artifact in the source tree so a clean desktop build does not need Python,
+// WASI, or a platform-specific sandbox executable installed on the user's
+// machine.
+const PYTHON_WASM: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/resources/fella-python-sandbox.wasm"
+));
+
+fn sandbox_engine() -> &'static Engine {
+    static ENGINE: OnceLock<Engine> = OnceLock::new();
+    ENGINE.get_or_init(|| {
+        let mut config = Config::default();
+        config.consume_fuel(true);
+        config.set_max_stack_height(STACK_CAP_BYTES);
+        Engine::new(&config)
+    })
+}
+
+fn sandbox_module() -> EngineResult<Module> {
+    static MODULE: OnceLock<Result<Module, String>> = OnceLock::new();
+    match MODULE.get_or_init(|| {
+        Module::new(sandbox_engine(), PYTHON_WASM).map_err(|error| error.to_string())
+    }) {
+        Ok(module) => Ok(module.clone()),
+        Err(error) => Err(EngineError::msg(format!(
+            "load embedded Python sandbox: {error}"
+        ))),
+    }
+}
 
 pub struct PyResult {
     pub stdout: String,
@@ -33,211 +72,327 @@ pub struct PyResult {
     pub ms: u64,
 }
 
-/// `bridge` is how the generated `sql()` helper reaches the workspace data —
-/// a read-only SQLite file (default), or DuckDB file-reader expressions.
-/// Directories to search for `python3`/`python`, and the `PATH` the sandboxed
-/// child gets: common install locations (a no-op on platforms they don't
-/// apply to) plus the caller's own `PATH`, so a Homebrew / Nix / pyenv /
-/// python.org install not in the OS default path is still found. Built and
-/// read with `join_paths`/`split_paths` the platform list separator (`:` on
-/// Unix, `;` on Windows), never a hardcoded `:` a previous version used `:`
-/// unconditionally, so Python was never found on Windows even when installed
-/// (splitting `C:\Python312\...` on `:` doesn't yield a real directory).
-fn search_dirs() -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
-    #[cfg(unix)]
-    dirs.extend(["/usr/bin", "/bin", "/usr/local/bin", "/opt/homebrew/bin"].map(PathBuf::from));
-    if let Some(path) = std::env::var_os("PATH") {
-        dirs.extend(std::env::split_paths(&path));
+struct HostState {
+    bridge: PythonBridge,
+    stdout: CapturedOutput,
+    stderr: CapturedOutput,
+    limits: StoreLimits,
+}
+
+impl HostState {
+    fn new(bridge: PythonBridge) -> Self {
+        Self {
+            bridge,
+            stdout: CapturedOutput::default(),
+            stderr: CapturedOutput::default(),
+            limits: StoreLimitsBuilder::new()
+                .memory_size(MEMORY_CAP_BYTES)
+                // RustPython's frozen stdlib needs a few thousand table
+                // elements at instantiation; this still prevents unbounded
+                // table growth from user code.
+                .table_elements(10_000)
+                .instances(2)
+                .tables(4)
+                .memories(1)
+                .trap_on_grow_failure(true)
+                .build(),
+        }
     }
-    dirs
 }
 
-fn child_path() -> std::ffi::OsString {
-    std::env::join_paths(search_dirs()).unwrap_or_default()
+#[derive(Debug, Default)]
+struct CapturedOutput {
+    bytes: Vec<u8>,
+    truncated: bool,
 }
 
+impl CapturedOutput {
+    fn push(&mut self, bytes: &[u8]) {
+        let remaining = OUTPUT_CAP.saturating_sub(self.bytes.len());
+        let take = bytes.len().min(remaining);
+        self.bytes.extend_from_slice(&bytes[..take]);
+        if take < bytes.len() {
+            self.truncated = true;
+        }
+    }
+
+    fn mark_truncated(&mut self) {
+        self.truncated = true;
+    }
+
+    fn into_text(self) -> String {
+        let mut text = String::from_utf8_lossy(&self.bytes).into_owned();
+        if self.truncated {
+            text.push_str("\n…(output truncated)");
+        }
+        text
+    }
+}
+
+/// Run one snippet with a fresh Wasmi Store. A fresh store is what makes the
+/// guest's allocator and module state disposable between questions.
 pub fn run(code: &str, bridge: PythonBridge) -> EngineResult<PyResult> {
-    let Some(python) = resolve_python() else {
-        return Err(EngineError::msg(
-            "This question needs Python, which isn't installed on this computer.",
-        ));
-    };
-
-    let workdir = std::env::temp_dir().join(format!(
-        "fella-py-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    ));
-    std::fs::create_dir_all(&workdir)
-        .map_err(|e| EngineError::io("create python workdir", e))?;
-
-    let script = build_script(code, &bridge);
-
-    let mut cmd = Command::new(&python);
-    cmd.arg("-I") // isolated: ignore env vars, user site, no implicit cwd on path
-        .arg("-")
-        .current_dir(&workdir)
-        .env_clear()
-        .env("PATH", child_path())
-        .env("HOME", &workdir)
-        .env("PYTHONDONTWRITEBYTECODE", "1")
-        .env("MPLBACKEND", "Agg")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-
-    #[cfg(unix)]
-    apply_rlimits(&mut cmd);
+    let script = format!("{STATS_HELPERS}\n# ---- user code ----\n{code}\n");
+    if script.len() > CODE_CAP {
+        return Err(EngineError::msg(format!(
+            "Python code is too large for the local sandbox ({} KiB maximum)",
+            CODE_CAP / 1024
+        )));
+    }
 
     let started = Instant::now();
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| EngineError::io("spawn python3", e))?;
+    let engine = sandbox_engine();
+    let module = sandbox_module()?;
 
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(script.as_bytes())
-        .map_err(|e| EngineError::io("write python script", e))?;
+    let mut store = Store::new(engine, HostState::new(bridge));
+    store.limiter(|state| &mut state.limits);
+    store
+        .set_fuel(FUEL)
+        .map_err(|e| EngineError::msg(format!("configure Python sandbox fuel: {e}")))?;
 
-    let mut out_pipe = child.stdout.take().unwrap();
-    let mut err_pipe = child.stderr.take().unwrap();
-    let out_h = std::thread::spawn(move || read_capped(&mut out_pipe));
-    let err_h = std::thread::spawn(move || read_capped(&mut err_pipe));
-
-    let mut timed_out = false;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(s)) => break Some(s),
-            Ok(None) => {
-                if started.elapsed() > TIMEOUT {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    timed_out = true;
-                    break None;
+    let mut linker = Linker::new(engine);
+    linker
+        .func_wrap(
+            "fella",
+            "write",
+            |mut caller: Caller<'_, HostState>, ptr: i32, len: i32, stream: i32| {
+                let Some(memory) = caller.get_export("memory").and_then(Extern::into_memory) else {
+                    return;
+                };
+                if ptr < 0 || len < 0 {
+                    return;
                 }
-                std::thread::sleep(Duration::from_millis(40));
-            }
-            Err(_) => break None,
-        }
+                let original_len = len as usize;
+                let read_len = original_len.min(OUTPUT_CAP);
+                let Some((ptr, read_len)) = checked_range(ptr, read_len as i32, OUTPUT_CAP) else {
+                    return;
+                };
+                let mut bytes = vec![0; read_len];
+                if memory.read(&caller, ptr, &mut bytes).is_err() {
+                    return;
+                }
+                if stream == 0 {
+                    caller.data_mut().stdout.push(&bytes);
+                    if original_len > read_len {
+                        caller.data_mut().stdout.mark_truncated();
+                    }
+                } else {
+                    caller.data_mut().stderr.push(&bytes);
+                    if original_len > read_len {
+                        caller.data_mut().stderr.mark_truncated();
+                    }
+                }
+            },
+        )
+        .map_err(|e| EngineError::msg(format!("register Python output bridge: {e}")))?;
+    linker
+        .func_wrap(
+            "fella",
+            "random",
+            |mut caller: Caller<'_, HostState>, ptr: i32, len: i32| -> i32 {
+                let Some(memory) = caller.get_export("memory").and_then(Extern::into_memory) else {
+                    return -1;
+                };
+                let Some((ptr, len)) = checked_range(ptr, len, 64 * 1024) else {
+                    return -1;
+                };
+                let mut bytes = vec![0; len];
+                if getrandom::fill(&mut bytes).is_err() {
+                    return -1;
+                }
+                memory
+                    .write(&mut caller, ptr, &bytes)
+                    .map(|_| 0)
+                    .unwrap_or(-1)
+            },
+        )
+        .map_err(|e| EngineError::msg(format!("register Python entropy bridge: {e}")))?;
+    linker
+        .func_wrap(
+            "fella",
+            "sql",
+            |mut caller: Caller<'_, HostState>,
+             query_ptr: i32,
+             query_len: i32,
+             out_ptr: i32,
+             out_cap: i32|
+             -> i32 {
+                let Some(memory) = caller.get_export("memory").and_then(Extern::into_memory) else {
+                    return -1;
+                };
+                let Some((query_ptr, query_len)) =
+                    checked_range(query_ptr, query_len, SQL_QUERY_CAP)
+                else {
+                    return -1;
+                };
+                let Some((out_ptr, out_cap)) = checked_range(out_ptr, out_cap, SQL_RESPONSE_CAP)
+                else {
+                    return -1;
+                };
+
+                let mut query = vec![0; query_len];
+                if memory.read(&caller, query_ptr, &mut query).is_err() {
+                    return -1;
+                }
+                let query = match std::str::from_utf8(&query) {
+                    Ok(query) => query,
+                    Err(_) => {
+                        return write_json_error(
+                            &memory,
+                            &mut caller,
+                            out_ptr,
+                            out_cap,
+                            "sql() query is not valid UTF-8",
+                        )
+                    }
+                };
+
+                let response = match query_bridge(&caller.data().bridge, query) {
+                    Ok(result) => serde_json::to_vec(&result).unwrap_or_default(),
+                    Err(error) => serde_json::to_vec(&json!({ "error": error.to_string() }))
+                        .unwrap_or_default(),
+                };
+                if response.len() > out_cap {
+                    return write_json_error(
+                        &memory,
+                        &mut caller,
+                        out_ptr,
+                        out_cap,
+                        "sql() result is too large; add a narrower SELECT or LIMIT",
+                    );
+                }
+                if memory.write(&mut caller, out_ptr, &response).is_err() {
+                    return -1;
+                }
+                response.len() as i32
+            },
+        )
+        .map_err(|e| EngineError::msg(format!("register Python SQL bridge: {e}")))?;
+
+    let instance = linker
+        .instantiate_and_start(&mut store, &module)
+        .map_err(|e| EngineError::msg(format!("start embedded Python sandbox: {e}")))?;
+    let memory = instance
+        .get_export(&store, "memory")
+        .and_then(Extern::into_memory)
+        .ok_or_else(|| EngineError::msg("embedded Python sandbox has no exported memory"))?;
+    let alloc = instance
+        .get_typed_func::<i32, i32>(&store, "alloc")
+        .map_err(|e| EngineError::msg(format!("embedded Python sandbox has no allocator: {e}")))?;
+    let run_fn = instance
+        .get_typed_func::<(i32, i32), i32>(&store, "run")
+        .map_err(|e| EngineError::msg(format!("embedded Python sandbox has no runner: {e}")))?;
+
+    let code_ptr = alloc
+        .call(&mut store, script.len() as i32)
+        .map_err(|e| EngineError::msg(format!("allocate Python input: {e}")))?;
+    let Some((code_ptr, code_len)) = checked_range(code_ptr, script.len() as i32, CODE_CAP) else {
+        return Err(EngineError::msg(
+            "embedded Python sandbox returned an invalid input buffer",
+        ));
     };
+    memory
+        .write(&mut store, code_ptr, script.as_bytes())
+        .map_err(|e| EngineError::msg(format!("write Python input: {e}")))?;
 
-    let stdout = out_h.join().unwrap_or_default();
-    let stderr = err_h.join().unwrap_or_default();
-    let _ = std::fs::remove_dir_all(&workdir);
+    let wasm_result = run_fn.call(&mut store, (code_ptr as i32, code_len as i32));
+    let elapsed_ms = started.elapsed().as_millis() as u64;
+    let host = store.into_data();
+    let (stdout, stderr) = (host.stdout.into_text(), host.stderr.into_text());
 
-    Ok(PyResult {
-        stdout,
-        stderr,
-        exit_code: status.and_then(|s| s.code()),
-        timed_out,
-        ms: started.elapsed().as_millis() as u64,
-    })
-}
-
-/// First `python3` (or `python`) on `search_dirs()` that answers `--version`.
-/// Returned as an absolute path so `run()` spawns exactly what it checked.
-fn resolve_python() -> Option<PathBuf> {
-    let names: &[&str] = if cfg!(windows) {
-        &["python3.exe", "python.exe", "python3", "python"]
-    } else {
-        &["python3", "python"]
-    };
-    for dir in search_dirs() {
-        for name in names {
-            let cand = dir.join(name);
-            let ok = Command::new(&cand)
-                .arg("--version")
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .map(|s| s.success())
-                .unwrap_or(false);
-            if ok {
-                return Some(cand);
+    match wasm_result {
+        Ok(exit_code) => Ok(PyResult {
+            stdout,
+            stderr,
+            exit_code: Some(exit_code),
+            timed_out: false,
+            ms: elapsed_ms,
+        }),
+        Err(error) => {
+            let error_text = error.to_string();
+            let out_of_fuel = error_text.to_ascii_lowercase().contains("fuel");
+            let mut stderr = stderr;
+            if !stderr.is_empty() {
+                stderr.push('\n');
             }
+            stderr.push_str(if out_of_fuel {
+                "Python stopped by the local sandbox fuel limit"
+            } else {
+                "Python stopped inside the local sandbox"
+            });
+            if !out_of_fuel {
+                stderr.push_str(": ");
+                stderr.push_str(&error_text);
+            }
+            Ok(PyResult {
+                stdout,
+                stderr,
+                exit_code: None,
+                timed_out: out_of_fuel,
+                ms: elapsed_ms,
+            })
         }
     }
-    None
 }
 
-fn read_capped(r: &mut impl Read) -> String {
-    let mut buf = Vec::with_capacity(8192);
-    let _ = r.take(OUTPUT_CAP as u64).read_to_end(&mut buf);
-    let mut rest = Vec::new();
-    let _ = r.read_to_end(&mut rest); // drain so the child isn't stuck on a full pipe
-    let mut s = String::from_utf8_lossy(&buf).into_owned();
-    if !rest.is_empty() {
-        s.push_str("\n…(output truncated)");
+fn checked_range(ptr: i32, len: i32, cap: usize) -> Option<(usize, usize)> {
+    if ptr < 0 || len < 0 {
+        return None;
     }
-    s
+    let ptr = ptr as usize;
+    let len = len as usize;
+    (len <= cap).then_some((ptr, len))
 }
 
-fn py_str(s: &str) -> String {
-    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+fn write_json_error(
+    memory: &Memory,
+    caller: &mut Caller<'_, HostState>,
+    out_ptr: usize,
+    out_cap: usize,
+    message: &str,
+) -> i32 {
+    let response = serde_json::to_vec(&json!({ "error": message })).unwrap_or_default();
+    if response.len() > out_cap || memory.write(caller, out_ptr, &response).is_err() {
+        return -1;
+    }
+    response.len() as i32
 }
 
-fn build_script(user_code: &str, bridge: &PythonBridge) -> String {
-    // `sql(query)` returns a pandas DataFrame if pandas is installed, else a
-    // list of dicts. The SQLite path needs nothing beyond the Python stdlib.
-    let setup = match bridge {
-        PythonBridge::SqliteFile(path) => format!(
-            r#"import sqlite3 as _sqlite3
-_con = _sqlite3.connect("file:" + {p} + "?mode=ro", uri=True)
-_con.row_factory = _sqlite3.Row
-def sql(q):
-    "Run read-only SQL against the workspace tables."
-    _rows = [dict(_r) for _r in _con.execute(q).fetchall()]
-    try:
-        import pandas as _pd
-        return _pd.DataFrame(_rows)
-    except ModuleNotFoundError:
-        return _rows
-"#,
-            p = py_str(&path.to_string_lossy())
-        ),
+fn query_bridge(bridge: &PythonBridge, sql: &str) -> EngineResult<QueryOutcome> {
+    data::ensure_read_only(sql)?;
+    match bridge {
+        PythonBridge::SqliteFile(path) => data::sqlite::query_read_only(path, sql, SQL_ROW_CAP),
         #[cfg(feature = "duckdb")]
-        PythonBridge::DuckReaders(views) => {
-            let mut list = String::new();
-            for (name, reader) in views {
-                list.push_str(&format!("    ({}, {}),\n", py_str(name), py_str(reader)));
-            }
-            format!(
-                r#"_VIEWS = [
-{list}]
-try:
-    import duckdb as _duckdb
-    _con = _duckdb.connect()
-    for _n, _r in _VIEWS:
-        try:
-            _con.execute('CREATE VIEW "' + _n + '" AS SELECT * FROM ' + _r)
-        except Exception as _e:
-            print("fella: could not load table " + _n + ": " + str(_e), file=_sys.stderr)
-    def sql(q):
-        return _con.sql(q).df()
-except ModuleNotFoundError as _e:
-    print("fella: " + str(_e) + " -- sql() needs `pip install duckdb pandas`", file=_sys.stderr)
-    def sql(q):
-        raise RuntimeError("sql() needs the duckdb package")
-"#
-            )
+        PythonBridge::DuckReaders(readers) => {
+            data::duck::query_read_only(readers, sql, SQL_ROW_CAP)
         }
-    };
-
-    format!("import sys as _sys\n{setup}\n{STATS_HELPERS}\n# ---- user code ----\n{user_code}\n")
+    }
 }
 
-/// Pure-stdlib correlation/regression, always available regardless of whether
-/// scipy or numpy happen to be installed -- `run_python`'s tool description
-/// promises these by name, and the app can't require scipy/numpy on a
-/// non-technical user's machine (`DECISIONS.md`, 2026-08-27: pandas alone was
-/// already rejected as a hard dependency for exactly this reason). `median`/
-/// `stdev` need no helper, they're already in stdlib `statistics`.
-const STATS_HELPERS: &str = r#"
+/// Small pure-Python analytics helpers. Keeping them in the preamble means the
+/// guest can stay core-only: no standard-library package tree or third-party
+/// data-science dependency is needed for the calculations this tool promises.
+pub const STATS_HELPERS: &str = r#"
+def median(values):
+    "Median of a non-empty numeric sequence."
+    values = sorted(values)
+    n = len(values)
+    if n == 0:
+        raise ValueError("median needs at least one value")
+    middle = n // 2
+    if n % 2:
+        return values[middle]
+    return (values[middle - 1] + values[middle]) / 2
+
+def stdev(values):
+    "Sample standard deviation of a numeric sequence."
+    values = list(values)
+    n = len(values)
+    if n < 2:
+        raise ValueError("stdev needs at least two values")
+    mean = sum(values) / n
+    return (sum((value - mean) ** 2 for value in values) / (n - 1)) ** 0.5
+
 def pearsonr(x, y):
     "Pearson correlation coefficient between two equal-length numeric sequences."
     n = len(x)
@@ -264,18 +419,3 @@ def linregress(x, y):
     intercept = my - slope * mx
     return slope, intercept, pearsonr(x, y)
 "#;
-
-#[cfg(unix)]
-fn apply_rlimits(cmd: &mut Command) {
-    use std::os::unix::process::CommandExt;
-    // SAFETY: only async-signal-safe setrlimit calls run in the forked child.
-    unsafe {
-        cmd.pre_exec(|| {
-            use nix::sys::resource::{setrlimit, Resource};
-            let _ = setrlimit(Resource::RLIMIT_CPU, CPU_LIMIT_SECS, CPU_LIMIT_SECS);
-            let _ = setrlimit(Resource::RLIMIT_AS, MEM_LIMIT_BYTES, MEM_LIMIT_BYTES);
-            let _ = setrlimit(Resource::RLIMIT_FSIZE, FSIZE_LIMIT_BYTES, FSIZE_LIMIT_BYTES);
-            Ok(())
-        });
-    }
-}

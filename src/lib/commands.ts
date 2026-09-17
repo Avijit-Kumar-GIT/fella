@@ -8,7 +8,7 @@ import type {
 	ContextReference,
 	InstalledPack,
 	Message,
-	OllamaHealth,
+	ProviderHealth,
 	ProviderInfo
 } from './types';
 
@@ -156,11 +156,11 @@ export function completionsFor(input: string): string[] {
 	if (parts.length === 2) {
 		switch (cmd) {
 			case '/login':
-				return pick(providerIds((p) => p.auth !== 'none'));
+				return pick(providerIds(() => true));
 			case '/logout':
-				// Signed-in services, plus the one you're currently on if it's a
-				// hosted provider (so you can undo a half-configured switch).
-				return pick(providerIds((p) => p.auth !== 'none' && (p.authed || p.current)));
+				// Signed-in services, plus the current provider so you can undo a
+				// half-configured switch.
+				return pick(providerIds((p) => p.authed || p.current));
 			case '/model':
 				// A bare word is taken as a model name, so offer both the fields
 				// and the models the signed-in provider actually exposes.
@@ -187,12 +187,12 @@ export function completionsFor(input: string): string[] {
 	if (parts.length === 3 && cmd === '/login') {
 		// `/login <provider> …` the only meaningful trailing word is `key`.
 		const p = session.providers.find((x) => x.id === parts[1].toLowerCase());
-		return p && p.auth !== 'none' ? pick(['key']) : [];
+		return p ? pick(['key']) : [];
 	}
 	if (parts.length === 3 && cmd === '/logout') {
 		// `/logout <provider> forget` also deletes the saved key.
 		const p = session.providers.find((x) => x.id === parts[1].toLowerCase());
-		return p && p.auth !== 'none' ? pick(['forget']) : [];
+		return p ? pick(['forget']) : [];
 	}
 	if (parts.length === 3 && cmd === '/model') {
 		const field = parts[1].toLowerCase();
@@ -397,29 +397,27 @@ async function loadProviders(): Promise<ProviderInfo[]> {
 	return list;
 }
 
-/** Nudge the health indicator to re-probe after an auth change. Returns the
- *  probe result so the caller can react to a key the provider won't take. */
-async function refreshHealthSoon(): Promise<OllamaHealth | null> {
+/** Nudge the health indicator to check the configured provider after an auth
+ *  change. Returns the result so the caller can react to a rejected key. */
+async function refreshHealthSoon(): Promise<ProviderHealth | null> {
 	try {
-		session.health = await ipc.ollamaHealth();
+		session.health = await ipc.providerHealth();
 		await reconcileModel();
 		return session.health;
 	} catch {
-		/* ignore the status bar will re-probe on its own timer */
+		/* ignore the status bar will check again on its own timer */
 		return null;
 	}
 }
 
-/** When connected to Ollama, make sure the configured model is one that's
- *  actually pulled Fella's default `llama3.1` often isn't (people have
- *  `llama3.1:8b`). Silently switches to an available chat model; the status
- *  bar shows the result. Ollama only gateways expose hundreds of models and
- *  must be chosen deliberately. Never posts to the transcript, so it doesn't
- *  push the welcome screen away before the user has asked anything. */
+/** When a provider returns a model catalogue, correct a saved model that is no
+ *  longer available. An empty model remains a deliberate choice for gateways
+ *  with large catalogues. Never posts to the transcript, so it doesn't push
+ *  the welcome screen away before the user has asked anything. */
 export async function reconcileModel(): Promise<void> {
 	const s = session.settings;
 	const h = session.health;
-	if (!s || s.provider !== 'ollama' || !h?.reachable) return;
+	if (!s || !h?.reachable) return;
 
 	const models = h.models ?? [];
 	if (!models.length) return;
@@ -445,7 +443,7 @@ export async function reconcileModel(): Promise<void> {
 /** After a key is saved, say so if the provider wouldn't take it. The key stays
  *  saved either way a probe can fail for offline or transient reasons, and we
  *  don't want to block someone who knows their key is fine. */
-function warnIfKeyUnverified(display: string, health: OllamaHealth | null): void {
+function warnIfKeyUnverified(display: string, health: ProviderHealth | null): void {
 	if (!health || health.reachable) return;
 	session.addSystem(
 		health.rejected
@@ -454,7 +452,7 @@ function warnIfKeyUnverified(display: string, health: OllamaHealth | null): void
 	);
 }
 
-/** Confirm a completed sign-in and re-probe health. Call after `session.settings` is set. */
+/** Confirm a completed sign-in and check health. Call after `session.settings` is set. */
 async function announceSignedIn(display: string): Promise<void> {
 	const m = session.settings?.model;
 	session.addSystem(
@@ -661,13 +659,6 @@ async function runCommand(text: string): Promise<void> {
 				session.addSystem(`unknown provider: ${name}\n\n${renderProviders(list)}`);
 				return;
 			}
-			if (p.auth === 'none') {
-				session.addSystem(
-					`${p.display} runs on your computer and needs no sign-in. Start it, then pick it with /model.`
-				);
-				return;
-			}
-
 			const saidKey = words[1]?.toLowerCase() === 'key';
 			const inlineKey = saidKey ? words.slice(2).join(' ').trim() : '';
 			if (inlineKey) {
@@ -722,7 +713,7 @@ async function runCommand(text: string): Promise<void> {
 			const words = arg.split(/\s+/).filter(Boolean).map((w) => w.toLowerCase());
 			const forget = words.includes('forget');
 			const named = words.find((w) => w !== 'forget');
-			const signedIn = list.filter((p) => p.authed && p.auth !== 'none');
+			const signedIn = list.filter((p) => p.authed);
 			const active = list.find((p) => p.current);
 			const kept = (id: string) =>
 				forget ? '' : ` Its key is still saved  /login ${id} to use it again.`;
@@ -739,7 +730,7 @@ async function runCommand(text: string): Promise<void> {
 							session.settings = await ipc.logout(named, forget);
 							session.providers = await ipc.listProviders();
 							session.addSystem(
-								`Stopped using ${named}. Fella is back on the local default.` + kept(named)
+								`Stopped using ${named}. Fella is waiting for a model key.` + kept(named)
 							);
 							await refreshHealthSoon();
 						} catch (e) {
@@ -750,24 +741,19 @@ async function runCommand(text: string): Promise<void> {
 					session.addSystem(`unknown provider: ${named}\n\n${renderProviders(list)}`);
 					return;
 				}
-				if (target.auth === 'none') {
-					session.addSystem(`${target.display} runs on your computer, so there's no sign-in to undo.`);
-					return;
-				}
-			} else if (active && active.auth !== 'none') {
+			} else if (active) {
 				target = active; // bare /logout disconnects the service you're on
 			} else if (signedIn.length === 1) {
 				target = signedIn[0];
 			} else if (signedIn.length > 1) {
 				session.addSystem(
-					`You're signed in to ${signedIn.map((p) => p.display).join(', ')}.\n` +
+								`You're signed in to ${signedIn.map((p) => p.display).join(', ')}.\n` +
 						`Which one? Use /logout <name>.`
 				);
 				return;
 			} else {
-				const ollama = list.find((x) => x.id === 'ollama')?.display ?? 'Ollama';
 				session.addSystem(
-					`You're not connected to any model service. Fella is on ${ollama}, which needs no sign-in.`
+					`You're not connected to a model service. Use /login <name> to connect one.`
 				);
 				return;
 			}
@@ -776,8 +762,6 @@ async function runCommand(text: string): Promise<void> {
 				const hadKey = target.authed;
 				session.settings = await ipc.logout(target.id, forget);
 				session.providers = await ipc.listProviders();
-				const resetToOllama = session.settings?.provider === 'ollama' && target.id !== 'ollama';
-				const ollama = session.providers.find((x) => x.id === 'ollama')?.display ?? 'Ollama';
 				const head = !hadKey
 					? `${target.display} had no saved key.`
 					: forget
@@ -785,9 +769,9 @@ async function runCommand(text: string): Promise<void> {
 						: `Stopped using ${target.display}.${kept(target.id)}`;
 				session.addSystem(
 					head +
-						(resetToOllama
-							? ` Fella is back on ${ollama}; start it, or /login to another service.`
-							: '')
+					(session.settings?.has_credential
+						? ''
+						: ' Fella is waiting for a model key; use /login <name> to connect again.')
 				);
 				await refreshHealthSoon();
 			} catch (e) {
@@ -842,7 +826,7 @@ async function runCommand(text: string): Promise<void> {
 				}
 				const s = session.settings ?? (await ipc.getSettings());
 				session.settings = s;
-				// Re-probe so the model list reflects the provider you're signed in to.
+				// Refresh so the model list reflects the provider you're signed in to.
 				await refreshHealthSoon();
 				const prov = session.providers.find((p) => p.id === s.provider);
 				const tabModel = session.model;
@@ -856,11 +840,7 @@ async function runCommand(text: string): Promise<void> {
 						`model:           ${tabModel}   (this tab)\n` +
 						`connected:       ${s.has_credential ? 'yes' : 'no'}` +
 						renderModelChoices(session.health?.models ?? [], tabModel) +
-						perTab +
-						(s.provider === 'ollama'
-							? '\n\nOnly downloaded models show above. Browse more at ollama.com/library, ' +
-								'then run  ollama pull <name>  (or add Ollama Cloud with /login ollama-cloud).'
-							: '')
+						perTab
 				);
 			} catch (e) {
 				session.addSystem(`error: ${errMsg(e)}`);
@@ -1128,8 +1108,8 @@ async function ask(question: string, conv: Conversation): Promise<void> {
 	conv.busy = true;
 	conv.activity = 'thinking…';
 
-	// A local model's first reply can take 10-20s (cold model load). Show a
-	// running count so the wait doesn't read as a hang only ever rewrites
+	// A provider's first reply can take several seconds. Show a running count so
+	// the wait doesn't read as a hang only ever rewrites
 	// our own "thinking…" text, never a tool note or a retry notice.
 	const t0 = Date.now();
 	const tick = setInterval(() => {
@@ -1284,8 +1264,7 @@ function renderConnectors(list: InstalledPack[]): string {
 function renderProviders(list: ProviderInfo[]): string {
 	const rows = list.map((p) => {
 		const bullet = p.current ? '●' : ' ';
-		const status =
-			p.auth === 'none' ? 'on your computer' : p.authed ? 'connected' : 'not connected';
+		const status = p.authed ? 'connected' : 'not connected';
 		return `${bullet} ${p.id.padEnd(11)} ${p.display.padEnd(26)} ${status}${p.current ? '   (current)' : ''}`;
 	});
 	return [

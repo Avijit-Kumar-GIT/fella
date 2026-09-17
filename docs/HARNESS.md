@@ -10,15 +10,15 @@ tried.
 ## Stance
 
 Fella's harness is deliberately at the small end of every axis in the
-[literature](#reference). The choices, and why each one holds across a weak
-local model and a frontier one:
+[literature](#reference). The choices, and why each one holds across a smaller
+BYOK model and a frontier one:
 
 | Choice | Why it's model-agnostic |
 |---|---|
 | **One linear loop**, no planner/critic/sub-agents (`agent.rs`, ~one file) | Coordination overhead and context-sharing bugs scale with orchestration complexity, not model strength. A weak model derails in a multi-agent graph; a strong one doesn't need it. |
 | **Deterministic tools are the only data path**; the model never emits a figure | The correctness floor is the same whatever the model. A better model writes better SQL; it can't make the numbers less checked. |
 | **Deterministic verification, no LLM critic** (`verify.rs`) | A self-grading model is generous to its own output, and that bias is worse on weaker models. Re-running the cited SQL is exact for everyone. |
-| **Minimal prompt**, split into toggleable sections (`PromptProfile`) | Every added instruction is a token tax on the strong model and a distraction risk for both. Measured: the shipped prompt is already at the Pareto point for a 31B local model (see log). |
+| **Minimal prompt**, split into toggleable sections (`PromptProfile`) | Every added instruction is a token tax on the strong model and a distraction risk for both. Measured: the shipped prompt is already at the Pareto point for the 31B benchmark model (see log). |
 | **Schema-in-prompt instead of RAG** | The folder *is* the scope. A retrieval config to tune is a second system that fails independently of the model. |
 | **`num_ctx` is a growing floor, not a fixed size** (`fit_num_ctx`) | Small models have small default context; large folders need more. Growing only when the prompt demands it keeps a weak model from paging its whole context every turn. |
 
@@ -187,21 +187,15 @@ The running list of open design questions from shaping this work is in
 
 ### Next
 
-- **2026-09-12 · Case-mismatch on a uniformly-cased column, not caught by the
-  case-sensitivity flag.** The shipped flag (`mixed_case_columns`, above) only
-  fires when a column's *ingested data* actually has colliding case variants
-  (`Rent`/`rent`/`RENT` all present). It has nothing to check when a column is
-  internally consistent (`trips.purpose` is only ever lowercase `leisure`/
-  `work`) but the model invents a differently-cased literal anyway
-  (`= 'Leisure'`) — that's not a data collision, so no note, no warning, and
-  the query silently returns 0 rows. New eval axes built to stop naming files
-  in questions (real users don't; see `bench/out/dashboard.html`) caught this
-  live: `bench/folder-qa-hard`'s `fqah-goal-ontrack`, gemma4:31b, 2 of 3
-  iterations wrote exactly this query and concluded the wrong goal off the
-  back of it. Candidate fix, unexplored: extend `case_sensitive_label_filter`
-  to *every* bare `=`/`IN` text-column filter, not only ones gated on a
-  detected collision — `lower()`/`COLLATE NOCASE` as a default habit, not a
-  reactive flag.
+- **2026-09-17 · Uniform-case filter guidance, partially addressed.** The
+  original case flag (`mixed_case_columns`, above) only fires when ingested
+  data has colliding variants (`Rent`/`rent`/`RENT`). The SQL tool now adds a
+  pre-query note for exact `=`/`IN` filters on likely label columns even when
+  the source is internally consistent (`trips.purpose` contains only lowercase
+  `leisure`/`work`) and the model writes `= 'Leisure'`. The registry regression
+  test covers the resulting empty aggregate. This is a narrow guidance layer,
+  not zero-result or candidate-value detection, and it has not yet been
+  re-scored across the frozen model battery.
 - **2026-09-12 · Semantic near-duplicate category labels.** A different, harder
   problem from the one above — not a case mismatch but genuinely different
   words for the same thing (`HOUSING`, `mortgage` both meaning "rent"; see

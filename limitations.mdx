@@ -37,7 +37,7 @@ For consequential decisions, validate the source and query independently. Fella 
 | Delimited-file ingest cap | 2,000,000 rows per file |
 | SQL result cap | 1,000 rows |
 | SQL timeout | 15 seconds |
-| Python wall timeout | 20 seconds |
+| Python execution budget | 1 billion Wasmi fuel; host SQL keeps its 15-second watchdog |
 | Chart size | 12 categories, 2 series |
 
 Fella targets MB-scale personal folders and everyday lookups, aggregates, comparisons, and small joins. It is not a warehouse, distributed query engine, notebook, ETL system, or multi-user server.
@@ -50,7 +50,13 @@ The model has no built-in write, move, copy, or delete tool. Document reads reso
 
 ### Python
 
-Python is the important qualification. The model can select `run_python`, which executes generated Python without a per-call permission prompt. Fella uses `python -I`, a fresh temporary working directory, a cleared environment, capped output, a timeout, and Unix CPU/memory/file-size limits. This is best-effort isolation, not a sandbox: code can read outside the workspace and access the network. Files written to the temporary working directory are removed afterward, but do not treat Python as an OS-level read-only boundary.
+Python runs without a per-call permission prompt inside an embedded
+`wasm32-unknown-unknown` RustPython guest under Wasmi. It has no filesystem,
+network, environment, or subprocess capability. The host provides captured
+output and bounded read-only SQL, and applies fuel, memory, stack, source,
+output, row, and response limits. The guest contains the core language and
+Fella's small analytics helpers; it does not contain pandas, NumPy, SciPy, or a
+package installer.
 
 ### Augments
 
@@ -62,10 +68,10 @@ An enabled connector talks to its configured external service. Fella withholds t
 
 ## Privacy and network activity
 
-- Local Ollama keeps normal model requests local; hosted providers receive prompts and tool results.
+- Fella is BYOK-only: the provider you connect receives prompts and tool results for each question.
 - `/packs install` fetches the extension catalog and hash-pinned files.
 - `/update` contacts GitHub and downloads an installer only when the user invokes it.
-- MCP and Python can introduce additional network activity as described above.
+- MCP can introduce additional network activity as described above. The embedded Python guest has no network capability.
 - Fella does not proxy hosted model requests through a Fella service, but cannot control a provider's logging, retention, or training policy.
 
 ## Releases and platforms

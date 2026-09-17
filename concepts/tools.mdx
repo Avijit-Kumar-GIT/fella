@@ -79,7 +79,7 @@ Every successful call is translated into a `ToolOutput` and then an `EvidenceIte
 
 For tables, the expected path is inspection when needed followed by `run_sql`. For documents, the model uses `grep_files` to locate text and `read_file` for context; `read_file` accepts either `name` or a `names` array and labels combined documents. `make_chart` receives a query, executes it through the guarded data path, and derives the chart values itself. The first query column becomes labels; the next one or two become series.
 
-`run_python` provides `sql(query)`: on the default SQLite backend it returns a pandas DataFrame when pandas is installed, otherwise a list of dictionaries. The built-in `pearsonr` and `linregress` helpers use only the standard library; median and standard deviation are available through Python's `statistics` module.
+`run_python` provides `sql(query)`, which returns a bounded list of dictionaries from the host's read-only data engine. The built-in `median`, `stdev`, `pearsonr`, and `linregress` helpers cover the small calculations SQL handles poorly. The embedded guest has no pandas, NumPy, SciPy, package installer, or system Python dependency.
 
 ## Behavior
 
@@ -89,9 +89,8 @@ MCP handling is annotation-aware. Fella withholds tools declared non-read-only o
 
 ## Limits
 
-- `run_python` requires a system `python3` or `python`; Python is not bundled.
-- Python isolation is best effort, not a security boundary. The subprocess is not prevented from reading or writing files outside the workspace and is not prevented from using the network. Treat generated snippets as code you chose to run.
-- Python's CPU, memory, and file-size resource limits are Unix-only; the wall-clock timeout and output caps are cross-platform.
+- Python runs in a fresh embedded WASM guest with no filesystem, network, environment, or subprocess capability. Wasmi fuel, memory, stack, source, output, SQL-row, and SQL-response limits bound the calculation; Wasmi, RustPython, and the checked-in guest remain part of the trusted computing base.
+- The Python guest's fuel, memory, stack, source, output, SQL-row, and SQL-response limits are cross-platform; the host SQL watchdog applies to each SQL call.
 - MCP annotations are claims from the remote server. Tools with undeclared effects require trust in that connector.
 - Tool outputs are capped, so evidence can contain a sample rather than every returned row or character.
 

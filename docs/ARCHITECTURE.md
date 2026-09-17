@@ -38,16 +38,16 @@ each choice holds across weak and strong models.
 | Data engine | **SQLite** (`rusqlite`, `bundled` + `window`) behind the `DataEngine` trait | Already bundled (+0 crates); covers personal-analytics SQL. DuckDB was ~2/3 of the binary and ~all the build time (`docs/AUDIT.md` / `PERFORMANCE.md`). |
 | Data engine (opt-in) | DuckDB (`--features duckdb`) | Parquet, faster on large files, `SUMMARIZE`. Adds ~30 MB. |
 | App state | SQLite (`rusqlite`) | Settings, source cache, installed packs separate `fella.db` |
-| MCP client (`--features mcp`, default on) | `rmcp` (client + base Streamable-HTTP transport; our own `reqwest` backend) | Connect an `mcp` connector pack to a remote MCP server; ~10 small crates, MSRV 1.88 |
+| MCP client (`--features mcp`, default on) | `rmcp` (client + base Streamable-HTTP transport; our own `reqwest` backend) | Connect an `mcp` connector pack to a remote MCP server; ~10 small crates, MSRV 1.93 |
 | CSV/JSON import | `csv` crate + `serde_json`, own type sniffer (`data/sqlite.rs`) | DuckDB's `read_csv_auto` replacement; reuses the Excel type-inference idea |
-| HTTP | `reqwest` (rustls, `ring` provider, no HTTP/2) | Talk to Ollama / OpenAI-compatible APIs; `ring` avoids the aws-lc cmake/NASM build |
+| HTTP | `reqwest` (rustls, `ring` provider, no HTTP/2) | Talk to hosted Ollama-wire / OpenAI-compatible APIs; `ring` avoids the aws-lc cmake/NASM build |
 | Excel (`--features xlsx`, default on) | `calamine` → typed rows → `DataEngine::add_rows` | Pure Rust; ~8 crates |
 | PDF (`--features pdf`, default on) | `pdf-extract` | Pure Rust text extraction (scanned/OCR out of scope); ~28 crates |
 
 ### Cargo features
 
 ```
-default = ["pdf", "xlsx", "mcp"]   # the shipped build (MSRV 1.88, for rmcp)
+default = ["pdf", "xlsx", "mcp"]   # the shipped build (MSRV 1.93, for RustPython 0.5)
 --no-default-features              # CSV/JSON/SQL + agent only; no PDF/Excel/MCP
 --features duckdb                  # swap SQLite → DuckDB (CI-only; OOMs a laptop)
 ```
@@ -89,8 +89,8 @@ src-tauri/src/
         mod.rs                 DataEngine trait + shared read-only guard, quote_ident
         sqlite.rs              default engine: type sniff → CREATE TABLE + bulk INSERT
         duck.rs                #[cfg(feature="duckdb")] engine: read_*_auto views
-      pyexec.rs               run_python's best-effort subprocess guardrails; stdlib pearsonr/linregress
-                             preamble (no scipy/numpy dependency)
+      pyexec.rs               Wasmi host for the embedded RustPython/WASM guest; bounded output,
+                             fuel, memory, stack, SQL bridge, and pearsonr/linregress helpers
       chart.rs                ChartData/Series/ChartKind + validate() (flat/degenerate
                              data refused before it reaches the UI)
       verify.rs               ten deterministic post-answer checks against `&dyn
@@ -156,19 +156,20 @@ text, returns file + line) and `read_file` (full text of one file, capped
 ~12k chars). Works identically on every model provider. (This replaced an
 embed-and-cosine pipeline see `docs/DECISIONS.md`, 2026-08-29.)
 
-**`run_python`** reaches the data through `PythonBridge`: the SQLite backend hands the
-subprocess a read-only path to `analysis.db` and the `sql()` helper uses the Python
-**stdlib `sqlite3`** (returns a pandas DataFrame if pandas is installed, else a list
-of dicts) no `pip install` needed. The DuckDB backend hands `read_*` expressions and
-needs `pip install duckdb`.
+**`run_python`** reaches the data through `PythonBridge`: the host opens the
+workspace backend itself and exposes only a bounded read-only `sql()` bridge to
+the embedded RustPython/WASM guest. The guest returns a Python list of
+dictionaries and carries no workspace path, filesystem, network, environment,
+or subprocess capability. It has no package installer or pandas dependency;
+`median`, `stdev`, `pearsonr`, and `linregress` are injected as small helpers.
 
 ## AI layer
 
 `LlmClient` (`llm.rs`) one struct, branching on the provider's `wire`:
 
 - **Ollama wire** → `POST {base}/api/chat` with `tools`, `stream: true`
-  (the harness forwards deltas over a Tauri `Channel`). Default `base =
-  http://localhost:11434`, no key.
+  (the harness forwards deltas over a Tauri `Channel`). Ollama Cloud is the
+  shipped hosted provider for this wire and requires a key.
 - **OpenAI wire** → `POST {base}/chat/completions`, streamed as SSE. The client
   reassembles content and split tool-call fragments, then hands the normalized
   reply to the same harness path.
@@ -248,7 +249,7 @@ enabled `mcp` pack (`mcp.rs`, held in a separate `Registry.mcp` list).
 | `run_sql` | `sql` | columns + rows (capped), row_count, ms. Read-only guard: single SELECT/WITH statement; rejects DDL/DML/`ATTACH`/`COPY`/`INSTALL`, `read_text`/`read_blob`/`glob`; a watchdog interrupts a runaway query (`FELLA_QUERY_TIMEOUT_SECS`, 15 s) |
 | `grep_files` | `pattern`, `max_hits=30` (max 100) | matching lines (file + line) from every catalogued document, case-insensitive regex. No index |
 | `read_file` | `name` or `names` | extracted text by catalogued name, capped 12k chars per document and 16k combined for a multi-file call |
-| `run_python` | `code` | stdout / stderr. `python3 -I` in a fresh temp cwd, env stripped, 20 s wall-clock timeout, `RLIMIT_AS`/`RLIMIT_CPU`/`RLIMIT_FSIZE` on Unix (best-effort guard rail, not a hostile-code sandbox; filesystem reads outside the workspace and network access remain possible; temporary files are removed afterward). Preamble exposes `sql(q)` → a DataFrame (SQLite backend uses stdlib `sqlite3`, no `pip`) and stdlib `pearsonr(x, y)` / `linregress(x, y)` (no scipy/numpy) |
+| `run_python` | `code` | stdout / stderr from the embedded RustPython/WASM guest. No filesystem, network, environment, or subprocess capability; bounded source/output/fuel/memory/stack, plus `sql(q)` → a list of dictionaries from bounded read-only host SQL. Built-in `median`, `stdev`, `pearsonr(x, y)`, and `linregress(x, y)` need no packages |
 | `make_chart` | `kind`, `labels`, `series` | a validated bar/line chart (`analytics::chart`) — refuses flat/degenerate data server-side rather than rendering a useless chart |
 
 Every tool call takes an optional plain-language `note` (shown in the evidence
@@ -262,7 +263,7 @@ un-annotated one is offered but flagged.
 · `reindex()` · `get_settings()` / `set_settings()` · `list_providers()` /
 `set_api_key(provider, key)` / `logout(provider)` · `ask(conversation_id,
 question, channel)` streams `assistant_delta` / `tool_start` / `tool_end` /
-`notice` / `answer_done` · `cancel()` · `ollama_health()` / `probe_ollama()` ·
+`notice` / `answer_done` · `cancel()` · `provider_health()` ·
 `archive_conversation(id, body)` / `conversations_info()` · **packs**
 `packs_list` / `packs_add` / `packs_remove` / `packs_set_enabled` /
 `packs_install` / `packs_theme` · **connectors** `mcp_set_token` /
@@ -284,7 +285,7 @@ is unchanged by any pack. Full design: `docs/EXTENSIBILITY.md`.
 ## UI
 
 One window: an informative empty state, a scrolling **Transcript**, a bottom
-**Composer**, a one-line **StatusBar** (workspace · model · Ollama up/down dot ·
+**Composer**, a one-line **StatusBar** (workspace · model · provider status ·
 last answer time). Plain-language and sans-serif; monospace only where data
 lines up (tables, SQL). Light/dark via `prefers-color-scheme`, plus optional
 `theme` packs (CSS-token overrides on `<html>`, `prefs.svelte.ts`). No routes,
@@ -307,7 +308,7 @@ palette; `↑` recalls input; `Esc` stops a run or collapses evidence.
 - [x] **6** Documents: `extract()` + `grep_files` / `read_file` (originally an
   embed pipeline, replaced 2026-08-29).
 - [x] **7** Python tool.
-- [x] **8** OpenAI-compatible provider + `/model` command + Ollama health dot.
+- [x] **8** OpenAI-compatible provider + `/model` command + provider health dot.
   Config is command-driven; no settings modal.
 - [x] **9** Polish: keybindings, `Ctrl+K` palette, light/dark, transcript in
   `localStorage`; a fresh conversation on restart, old ones archived to files.

@@ -18,7 +18,6 @@ Fella currently ships these provider registry entries:
 
 | Provider | Authentication | Wire protocol |
 | --- | --- | --- |
-| Ollama local | None | Ollama |
 | OpenAI | API key | OpenAI-compatible |
 | Vercel AI Gateway | API key | OpenAI-compatible |
 | xAI (Grok) | API key | OpenAI-compatible |
@@ -26,7 +25,9 @@ Fella currently ships these provider registry entries:
 | OpenRouter | API key | OpenAI-compatible |
 | Custom endpoint | API key | OpenAI-compatible |
 
-Local Ollama at `http://localhost:11434` is the default. Ollama Cloud uses Ollama's API shape at a hosted endpoint; it is not an OpenAI-compatible provider. The custom option expects an OpenAI-compatible API root.
+Fella is BYOK-only and starts the connection flow on Ollama Cloud. Ollama Cloud
+uses Ollama's API shape at a hosted endpoint; it is not an OpenAI-compatible
+provider. The custom option expects an OpenAI-compatible API root.
 
 Some registry rows describe embedding endpoints, but Fella does not currently use embeddings for document retrieval.
 
@@ -60,7 +61,7 @@ API keys and MCP connector tokens are kept in `auth.json` under Fella's applicat
 
 Document search remains local and direct through `grep_files` and `read_file`, so it works even when the provider has no embeddings endpoint.
 
-The wire choice is independent of whether the service is local or hosted:
+The wire choice is independent of which hosted service you choose:
 
 ```rust
 let response = if self.is_openai() {
@@ -70,13 +71,16 @@ let response = if self.is_openai() {
 };
 ```
 
-That is why local Ollama and Ollama Cloud share the Ollama wire, while OpenAI, Vercel AI Gateway, xAI, OpenRouter, and custom endpoints use the OpenAI-compatible wire. The streamed response is normalized before it reaches `agent::run`; provider-specific framing does not leak into the tool loop.
+That is why Ollama Cloud uses the Ollama wire, while OpenAI, Vercel AI Gateway,
+xAI, OpenRouter, and custom endpoints use the OpenAI-compatible wire. The
+streamed response is normalized before it reaches `agent::run`; provider-specific
+framing does not leak into the tool loop.
 
 ## Limits
 
-- With local Ollama, chat requests stay on the configured local endpoint. With a hosted or custom provider, prompts and tool results sent for the conversation leave the machine and are subject to that provider's policies.
+- With a hosted or custom provider, prompts and tool results sent for the conversation leave the machine and are subject to that provider's policies.
 - Enabled MCP connectors make separate requests to their configured remote services. They are not model providers.
-- `run_python` is local execution but is not network-blocked; a generated snippet can make its own network requests. The model prompt tells it not to fetch, but that is not enforced isolation.
+- `run_python` is local execution inside the embedded WASM guest. The guest has no filesystem, network, environment, or subprocess capability; the prompt describes the boundary, while the host ABI enforces it.
 - Provider model catalogs and default model IDs can change. `/model` is the source of the active service's available models when listing is supported.
 - The model can make reasoning and tool-selection mistakes regardless of provider. Deterministic checks cover evidence consistency, not every semantic error.
 

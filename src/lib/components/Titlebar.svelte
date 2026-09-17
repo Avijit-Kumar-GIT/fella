@@ -44,7 +44,7 @@
 		}
 	}
 	let messageCount = $derived(session.activeChat?.messages.length ?? 0);
-	let providerId = $derived(session.settings?.provider ?? 'ollama');
+	let providerId = $derived(session.settings?.provider ?? 'ollama-cloud');
 	let providerName = $derived(
 		session.providers.find((p) => p.id === providerId)?.display ?? providerId
 	);

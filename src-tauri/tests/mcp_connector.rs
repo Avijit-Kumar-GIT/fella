@@ -121,8 +121,8 @@ fn stub_mcp() -> String {
     format!("http://{addr}/mcp")
 }
 
-/// A fake `/api/chat`: `responses[i]` for the i-th call.
-fn fake_ollama(responses: Vec<serde_json::Value>) -> (String, std::thread::JoinHandle<()>) {
+/// A fake `/chat/completions` endpoint: `responses[i]` for the i-th call.
+fn fake_openai(responses: Vec<serde_json::Value>) -> (String, std::thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     let calls = Arc::new(AtomicUsize::new(0));
@@ -158,6 +158,10 @@ fn fake_ollama(responses: Vec<serde_json::Value>) -> (String, std::thread::JoinH
     (format!("http://{addr}"), handle)
 }
 
+fn openai_response(message: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({ "choices": [{ "message": message }] })
+}
+
 #[test]
 fn rejects_a_non_http_connector() {
     let src = scratch("mcp-bad");
@@ -191,28 +195,29 @@ async fn connector_tool_runs_through_the_agent_and_non_read_only_is_withheld() {
         ),
     );
 
-    let (ollama, server) = fake_ollama(vec![
-        serde_json::json!({
-            "message": {
+    let (url, server) = fake_openai(vec![
+        openai_response(serde_json::json!({
                 "role": "assistant", "content": "",
                 "tool_calls": [
-                    { "function": { "name": "stub__echo", "arguments": { "msg": "hi" } } }
+                    { "id": "call_1", "type": "function", "function": {
+                        "name": "stub__echo", "arguments": "{\"msg\":\"hi\"}"
+                    } }
                 ]
-            }
-        }),
-        serde_json::json!({
-            "message": { "role": "assistant", "content": "The connector said: echoed: hi" }
-        }),
+        })),
+        openai_response(serde_json::json!({
+            "role": "assistant", "content": "The connector said: echoed: hi"
+        })),
     ]);
 
     let engine = EngineState::new(&data).unwrap();
     engine
         .save_settings(
-            serde_json::json!({ "provider": "ollama", "base_url": ollama, "model": "test" })
+            serde_json::json!({ "provider": "custom", "base_url": url, "model": "test" })
                 .as_object()
                 .unwrap(),
         )
         .unwrap();
+    engine.set_api_key("custom", "sk-test").unwrap();
     engine.packs_add(&src.join("stub")).unwrap();
     engine.mcp_set_token("stub", "secret-token").unwrap();
     engine.packs_set_enabled("stub", true).unwrap();

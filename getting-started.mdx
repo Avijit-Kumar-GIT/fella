@@ -24,18 +24,17 @@ By the end of this guide, Fella will have scanned a folder, answered a question 
   </Step>
 
   <Step title="Connect a tool-capable model">
-    Local Ollama is the default and requires no API key. If Ollama is not
-    running on this computer, use a hosted provider instead.
+    Fella is BYOK-only. Connect a hosted provider with your own API key before
+    asking a question.
 
     ```bash filename="terminal"
     /login ollama-cloud key [api-key]
     /model gemma4:31b
     ```
 
-    Fella connects to `http://localhost:11434` by default. To use a hosted
-    provider, run `/login`, choose OpenAI, Vercel AI Gateway, xAI, Ollama Cloud,
-    OpenRouter, or a custom OpenAI-compatible endpoint, then use `/model` to
-    inspect the provider's current model list.
+    Run `/login`, choose OpenAI, Vercel AI Gateway, xAI, Ollama Cloud, OpenRouter,
+    or a custom OpenAI-compatible endpoint, then use `/model` to inspect the
+    provider's current model list.
 
     ```text filename="fella commands"
     /login

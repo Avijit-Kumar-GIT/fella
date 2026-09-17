@@ -10,7 +10,7 @@
 
 	// The empty screen adapts to what's already set up, so a non-technical user
 	// always sees the one next step rather than a bare "not connected".
-	let providerId = $derived(session.settings?.provider ?? 'ollama');
+	let providerId = $derived(session.settings?.provider ?? 'ollama-cloud');
 	let provider = $derived(session.providers.find((p) => p.id === providerId));
 	let providerName = $derived(provider?.display ?? providerId);
 	let getKeyUrl = $derived(provider?.get_key_url ?? '');
@@ -27,28 +27,17 @@
 	let rejected = $derived(session.health?.rejected === true);
 	let currentModel = $derived(session.settings?.model ?? '');
 	let healthModels = $derived(session.health?.models ?? []);
-
-	// A local Ollama, probed regardless of which provider is selected.
-	let ollamaUp = $derived(session.ollamaLocal?.reachable === true);
-	let ollamaModelCount = $derived(session.ollamaLocal?.models?.length ?? 0);
-
-	// On Ollama, reachable, but nothing but embedding models are pulled.
-	let ollamaNoChat = $derived(
-		providerId === 'ollama' &&
-			up &&
-			healthModels.length > 0 &&
-			!healthModels.some((m) => !/embed/i.test(m))
-	);
+	let hasCredential = $derived(session.settings?.has_credential === true);
 	// Connected to a hosted service but no model chosen yet (gateways ship with
 	// no default; we don't auto-pick from hundreds).
-	let needModelPick = $derived(up && providerId !== 'ollama' && !currentModel);
+	let needModelPick = $derived(hasCredential && up && !currentModel);
 
 	// Show the connect panel whenever the user can't actually ask a question.
-	let showSetup = $derived(healthChecked && (rejected || !up || ollamaNoChat || needModelPick));
-	let showExamples = $derived(up && !!currentModel && !ollamaNoChat && !needModelPick);
+	let showSetup = $derived(healthChecked && (!hasCredential || rejected || !up || needModelPick));
+	let showExamples = $derived(hasCredential && up && !!currentModel && !needModelPick);
 
 	let services = $derived(
-		session.providers.filter((p) => p.auth !== 'none' && p.id !== 'custom')
+		session.providers.filter((p) => p.id !== 'custom')
 	);
 
 	/** Open the provider's key page (if any) and start the paste flow. */
@@ -191,7 +180,29 @@
 
 			{#if showSetup}
 				<div class="setup">
-					{#if rejected}
+					{#if !hasCredential}
+						<p>
+							Connect <strong>{providerName}</strong> with an API key before asking about your files.
+						</p>
+						<div class="svc">
+							<button class="pill primary" onclick={() => void dispatch(`/login ${providerId}`)}>
+								Connect {providerName}
+							</button>
+							{#if getKeyUrl}
+								<button class="pill ghost" onclick={() => void openExternal(getKeyUrl)}>
+									Get an API key <Icon name="arrow-up-right" size={13} />
+								</button>
+							{/if}
+						</div>
+						{#if services.length}
+							<p class="alt">Or choose another model service:</p>
+							<div class="svc">
+								{#each services as p (p.id)}
+									<button class="pill" onclick={() => connectService(p.id, p.get_key_url)}>{p.display}</button>
+								{/each}
+							</div>
+						{/if}
+					{:else if rejected}
 						<!-- Hosted key was refused (HTTP 401/403). -->
 						<p>Your <strong>{providerName}</strong> key was refused.</p>
 						<div class="svc">
@@ -214,54 +225,7 @@
 						{:else}
 							<p class="alt">Run <code>/model</code> to see what's available and pick one.</p>
 						{/if}
-					{:else if ollamaNoChat}
-						<!-- Ollama up but only embedding models pulled. -->
-						<p>
-							<strong>Ollama</strong> is running, but no chat model is downloaded yet.
-							In a terminal: <code>ollama pull llama3.1</code>
-						</p>
-					{:else if providerId === 'ollama'}
-						<!-- Default path: Ollama selected but not reachable. -->
-						<p>
-							Fella isn't connected to a model. It sends your questions to
-							<strong>Ollama</strong>, a free app that runs on your own computer.
-						</p>
-						<ol class="steps">
-							<li>
-								Install it from
-								<button class="link" onclick={() => void openExternal('https://ollama.com/download')}>ollama.com</button>
-								(skip if you already have it).
-							</li>
-							<li>
-								Open Ollama so it's running. It sits in your menu bar or tray; on
-								Linux you may need <code>ollama serve</code> in a terminal.
-							</li>
-							<li>Download a model: <code>ollama pull llama3.1</code></li>
-						</ol>
-						<p class="alt">Fella keeps checking, so there's no need to restart it.</p>
-						{#if services.length}
-							<p class="alt">Or connect an online service instead (you paste in a key):</p>
-							<div class="svc">
-								{#each services as p (p.id)}
-									<button class="pill" onclick={() => connectService(p.id, p.get_key_url)}>{p.display}</button>
-								{/each}
-							</div>
-						{/if}
-					{:else if ollamaUp}
-						<!-- On a hosted provider that's down, but a local Ollama is running. -->
-						<p>
-							<strong>Ollama</strong> is running on this computer
-							{#if ollamaModelCount}({ollamaModelCount} model{ollamaModelCount === 1 ? '' : 's'}){/if}.
-						</p>
-						<div class="svc">
-							<button class="pill" onclick={() => void dispatch('/model provider ollama')}>Use Ollama</button>
-						</div>
-						<p class="alt">
-							Or fix <strong>{providerName}</strong>:
-							<button class="link" onclick={() => void dispatch(`/login ${providerId}`)}>enter a key</button>.
-						</p>
 					{:else}
-						<!-- Hosted provider unreachable, no local Ollama. -->
 						<p>Can't reach <strong>{providerName}</strong>. Check your internet connection.</p>
 						{#if services.length}
 							<p class="alt">Or connect a different service:</p>
@@ -288,7 +252,12 @@
 			     model stops working mid-session, keep a compact version in view so
 			     the user isn't left with just a red dot and bare error lines. -->
 			<div class="setup compact stream">
-				{#if rejected}
+				{#if !hasCredential}
+					<p>
+						Connect <strong>{providerName}</strong> with an API key.
+						<button class="link" onclick={() => void dispatch(`/login ${providerId}`)}>Connect now</button>
+					</p>
+				{:else if rejected}
 					<p>
 						Your <strong>{providerName}</strong> key was refused.
 						<button class="link" onclick={() => void dispatch(`/login ${providerId}`)}>
@@ -299,27 +268,6 @@
 					<p>
 						Connected to <strong>{providerName}</strong>, but no model is chosen.
 						<button class="link" onclick={() => void dispatch('/model')}>Pick a model</button>
-					</p>
-				{:else if ollamaNoChat}
-					<p>
-						<strong>Ollama</strong> is running, but no chat model is downloaded.
-						Run <code>ollama pull llama3.1</code>.
-					</p>
-				{:else if providerId === 'ollama'}
-					<p>
-						Fella can't reach <strong>Ollama</strong>. Open the Ollama app, or run
-						<code>ollama serve</code>. Fella keeps checking.
-					</p>
-				{:else if ollamaUp}
-					<p>
-						Can't reach <strong>{providerName}</strong>.
-						<button class="link" onclick={() => void dispatch('/model provider ollama')}>
-							Use local Ollama
-						</button>
-						, or
-						<button class="link" onclick={() => void dispatch(`/login ${providerId}`)}>
-							enter a key
-						</button>.
 					</p>
 				{:else}
 					<p>Can't reach <strong>{providerName}</strong>. Check your internet connection.</p>
@@ -489,13 +437,6 @@
 	}
 	.setup .alt {
 		color: var(--text-faint);
-	}
-	.setup .steps {
-		margin: 0 0 10px;
-		padding-left: 1.4em;
-	}
-	.setup .steps li {
-		margin-bottom: 6px;
 	}
 	.setup code {
 		font-family: var(--mono);

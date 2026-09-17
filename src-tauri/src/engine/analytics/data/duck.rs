@@ -14,7 +14,8 @@ use crate::engine::error::{EngineError, EngineResult};
 
 pub struct DuckEngine {
     conn: Connection,
-    /// (table, FROM-expression) for `python_bridge`. Only path-backed sources.
+    /// (table, FROM-expression) for the host-side Python SQL bridge. Only
+    /// path-backed sources are represented here; the guest never sees them.
     readers: Vec<(String, String)>,
 }
 
@@ -24,7 +25,10 @@ impl DuckEngine {
         let _ = conn.execute_batch(
             "SET threads TO 4; SET memory_limit = '2GB'; SET enable_progress_bar = false;",
         );
-        Ok(Self { conn, readers: Vec::new() })
+        Ok(Self {
+            conn,
+            readers: Vec::new(),
+        })
     }
 }
 
@@ -76,9 +80,9 @@ impl DataEngine for DuckEngine {
 
     fn drop_source(&mut self, name: &str) {
         let ident = quote_ident(name);
-        let _ = self
-            .conn
-            .execute_batch(&format!("DROP VIEW IF EXISTS {ident}; DROP TABLE IF EXISTS {ident};"));
+        let _ = self.conn.execute_batch(&format!(
+            "DROP VIEW IF EXISTS {ident}; DROP TABLE IF EXISTS {ident};"
+        ));
         self.readers.retain(|(n, _)| n != name);
     }
 
@@ -93,6 +97,24 @@ impl DataEngine for DuckEngine {
     fn python_bridge(&self) -> PythonBridge {
         PythonBridge::DuckReaders(self.readers.clone())
     }
+}
+
+/// Rebuild the read-only path-backed views in a short-lived host connection.
+/// The Python guest never receives these paths; it can only ask the host to
+/// execute a query against the already registered readers.
+pub(crate) fn query_read_only(
+    readers: &[(String, String)],
+    sql: &str,
+    max_rows: usize,
+) -> EngineResult<QueryOutcome> {
+    let conn = Connection::open_in_memory()?;
+    for (name, reader) in readers {
+        conn.execute_batch(&format!(
+            "CREATE VIEW {} AS SELECT * FROM {reader};",
+            quote_ident(name)
+        ))?;
+    }
+    query(&conn, sql, max_rows)
 }
 
 // --- reader expressions (also used to build the Python bridge) -------------
@@ -112,9 +134,11 @@ pub fn reader_expr(kind: SourceKind, path: &str) -> Option<String> {
 // --- connection helpers (unchanged from the original engine/duck.rs) ------
 
 fn row_count(conn: &Connection, view: &str) -> EngineResult<i64> {
-    Ok(conn.query_row(&format!("SELECT count(*) FROM {}", quote_ident(view)), [], |r| {
-        r.get::<_, i64>(0)
-    })?)
+    Ok(conn.query_row(
+        &format!("SELECT count(*) FROM {}", quote_ident(view)),
+        [],
+        |r| r.get::<_, i64>(0),
+    )?)
 }
 
 // KNOWN GAP (parity with the SQLite backend): the SQLite path reads delimited
@@ -127,7 +151,11 @@ fn row_count(conn: &Connection, view: &str) -> EngineResult<i64> {
 // worth shipping blind. Until then the `run_sql` TEXT-aggregation warning
 // (engine/tools.rs) and `inspect_table` still steer the model to CAST.
 fn columns(conn: &Connection, view: &str) -> EngineResult<Vec<ColumnInfo>> {
-    let out = query(conn, &format!("DESCRIBE SELECT * FROM {}", quote_ident(view)), 10_000)?;
+    let out = query(
+        conn,
+        &format!("DESCRIBE SELECT * FROM {}", quote_ident(view)),
+        10_000,
+    )?;
     let ix = col_index(&out.columns);
     Ok(out
         .rows
@@ -146,7 +174,11 @@ fn columns(conn: &Connection, view: &str) -> EngineResult<Vec<ColumnInfo>> {
 }
 
 fn describe(conn: &Connection, view: &str) -> EngineResult<Vec<ColumnInfo>> {
-    let out = query(conn, &format!("SUMMARIZE SELECT * FROM {}", quote_ident(view)), 100_000)?;
+    let out = query(
+        conn,
+        &format!("SUMMARIZE SELECT * FROM {}", quote_ident(view)),
+        100_000,
+    )?;
     let ix = col_index(&out.columns);
     let mut cols = Vec::new();
     for row in &out.rows {
@@ -189,11 +221,20 @@ fn query(conn: &Connection, sql: &str, max_rows: usize) -> EngineResult<QueryOut
         }
         rows_out.push(cells);
     }
-    Ok(QueryOutcome { columns, rows: rows_out, row_count: total, truncated })
+    Ok(QueryOutcome {
+        columns,
+        rows: rows_out,
+        row_count: total,
+        truncated,
+    })
 }
 
 fn col_index(columns: &[String]) -> std::collections::HashMap<String, usize> {
-    columns.iter().enumerate().map(|(i, c)| (c.to_lowercase(), i)).collect()
+    columns
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (c.to_lowercase(), i))
+        .collect()
 }
 
 fn str_at(row: &[Json], idx: Option<&usize>) -> Option<String> {
@@ -205,7 +246,9 @@ fn str_at(row: &[Json], idx: Option<&usize>) -> Option<String> {
 }
 
 fn json_f64(f: f64) -> Json {
-    serde_json::Number::from_f64(f).map(Json::Number).unwrap_or(Json::Null)
+    serde_json::Number::from_f64(f)
+        .map(Json::Number)
+        .unwrap_or(Json::Null)
 }
 
 fn cell_to_duck(v: &Json, ty: ColType) -> Value {

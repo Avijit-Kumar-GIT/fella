@@ -15,37 +15,23 @@ fn scratch(tag: &str) -> PathBuf {
     p
 }
 
-#[tokio::test]
-async fn probe_ollama_targets_the_local_endpoint_and_never_reports_rejected() {
-    let data = scratch("probe-ollama");
-    let engine = EngineState::new(&data).unwrap();
-
-    // Point the engine at a hosted provider it can't reach the unconditional
-    // Ollama probe must still target localhost, not that provider.
-    engine.set_api_key("openai", "sk-not-real").unwrap();
-
-    let h = engine.probe_ollama().await;
-    // Ollama needs no key, so a probe can be reachable-or-not but never a
-    // 401/403 "rejected". (Reachability itself is environment-dependent.)
-    assert!(!h.rejected, "local Ollama probe should never be a rejected key");
-
-    let _ = fs::remove_dir_all(&data);
-}
-
 #[test]
 fn set_key_switches_provider_and_persists_outside_the_db() {
     let data = scratch("auth-set");
     let engine = EngineState::new(&data).unwrap();
 
     // nothing configured yet
-    assert_eq!(engine.settings().provider, "ollama");
+    assert_eq!(
+        engine.settings().provider,
+        fella_lib::engine::provider::DEFAULT_ID
+    );
     assert!(engine.list_providers().iter().any(|p| p.id == "vercel" && !p.authed));
 
     let s = engine.set_api_key("vercel", "  vk-123  ").unwrap();
     assert_eq!(s.provider, "vercel");
     assert_eq!(s.base_url, "https://ai-gateway.vercel.sh/v1");
     assert!(s.has_credential);
-    // switching moves to the target provider's default, not ollama's
+    // switching moves to the target provider's defaults
     assert_eq!(
         s.model,
         fella_lib::engine::provider::get("vercel").unwrap().default_model
@@ -89,7 +75,7 @@ fn logout_keeps_the_key_unless_forget_and_touches_only_that_provider() {
 }
 
 #[test]
-fn a_keyed_provider_with_no_saved_key_reverts_to_local_on_startup() {
+fn a_keyed_provider_with_no_saved_key_reverts_to_the_default_provider() {
     let data = scratch("auth-reconcile");
 
     // First run: sign in to OpenAI, then delete the key file by hand
@@ -101,18 +87,22 @@ fn a_keyed_provider_with_no_saved_key_reverts_to_local_on_startup() {
     }
     fs::remove_file(data.join("auth.json")).unwrap();
 
-    // Next run reconciles: keyed provider + no key -> back to the local default.
+    // Next run reconciles: keyed provider + no key -> back to the default.
     let engine = EngineState::new(&data).unwrap();
     let s = engine.settings();
-    assert_eq!(s.provider, "ollama");
-    assert_eq!(s.base_url, "http://localhost:11434");
-    assert_eq!(s.model, "llama3.1");
+    let default = fella_lib::engine::provider::get(
+        fella_lib::engine::provider::DEFAULT_ID,
+    )
+    .unwrap();
+    assert_eq!(s.provider, default.id);
+    assert_eq!(s.base_url, default.base_url);
+    assert_eq!(s.model, default.default_model);
 
     let _ = fs::remove_dir_all(&data);
 }
 
 #[test]
-fn an_unknown_stored_provider_reverts_to_local_on_startup() {
+fn an_unknown_stored_provider_reverts_to_the_default_provider() {
     let data = scratch("auth-reconcile-unknown");
 
     // A stray `/model provider <x>` from an older build leaves an id no
@@ -124,10 +114,14 @@ fn an_unknown_stored_provider_reverts_to_local_on_startup() {
         assert_eq!(s.provider, "some-old-gateway");
     }
 
-    // Next run can't use it and reverts to the local default.
+    // Next run can't use it and reverts to the default provider.
     let engine = EngineState::new(&data).unwrap();
-    assert_eq!(engine.settings().provider, "ollama");
-    assert_eq!(engine.settings().model, "llama3.1");
+    let default = fella_lib::engine::provider::get(
+        fella_lib::engine::provider::DEFAULT_ID,
+    )
+    .unwrap();
+    assert_eq!(engine.settings().provider, default.id);
+    assert_eq!(engine.settings().model, default.default_model);
 
     let _ = fs::remove_dir_all(&data);
 }
@@ -136,7 +130,10 @@ fn an_unknown_stored_provider_reverts_to_local_on_startup() {
 fn switching_provider_through_settings_moves_the_address_and_model() {
     let data = scratch("auth-switch-provider");
     let engine = EngineState::new(&data).unwrap();
-    assert_eq!(engine.settings().provider, "ollama");
+    assert_eq!(
+        engine.settings().provider,
+        fella_lib::engine::provider::DEFAULT_ID
+    );
 
     // `/model provider openai` sends just { "provider": "openai" }.
     let patch = serde_json::json!({ "provider": "openai" });
@@ -178,7 +175,7 @@ fn switching_to_a_provider_with_a_saved_key_needs_no_re_entry() {
 }
 
 #[test]
-fn logout_of_the_active_provider_resets_to_the_local_default() {
+fn logout_of_the_active_provider_resets_to_the_default_provider() {
     let data = scratch("auth-logout-active");
     let engine = EngineState::new(&data).unwrap();
 
@@ -187,11 +184,15 @@ fn logout_of_the_active_provider_resets_to_the_local_default() {
     assert_eq!(before.provider, "openai");
     assert_eq!(before.base_url, "https://api.openai.com/v1");
 
-    // Plain logout of the active provider: back on the local default...
+    // Plain logout of the active provider: back on the default provider...
     let s = engine.logout("openai", false).unwrap();
-    assert_eq!(s.provider, "ollama");
-    assert_eq!(s.base_url, "http://localhost:11434");
-    assert_eq!(s.model, "llama3.1");
+    let default = fella_lib::engine::provider::get(
+        fella_lib::engine::provider::DEFAULT_ID,
+    )
+    .unwrap();
+    assert_eq!(s.provider, default.id);
+    assert_eq!(s.base_url, default.base_url);
+    assert_eq!(s.model, default.default_model);
     // ...but the key is kept, so /login openai reconnects with no re-paste.
     assert!(engine.list_providers().iter().any(|p| p.id == "openai" && p.authed));
 
@@ -203,13 +204,34 @@ fn logout_of_the_active_provider_resets_to_the_local_default() {
 }
 
 #[test]
-fn rejects_unknown_provider_and_keyless_provider() {
+fn rejects_unknown_provider_and_empty_key() {
     let data = scratch("auth-reject");
     let engine = EngineState::new(&data).unwrap();
 
     assert!(engine.set_api_key("nope", "x").is_err());
-    assert!(engine.set_api_key("ollama", "x").is_err()); // local, needs no key
     assert!(engine.set_api_key("openai", "   ").is_err()); // empty
+
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[tokio::test]
+async fn a_missing_key_cannot_start_a_run_or_probe_a_provider() {
+    let data = scratch("auth-require-key");
+    let engine = EngineState::new(&data).unwrap();
+
+    // Health is a local state check until the user has supplied a key; this
+    // test must stay independent of every model service, local or hosted.
+    let health = engine.provider_health().await;
+    assert!(!health.reachable);
+    assert!(!health.rejected);
+    assert!(health.models.is_empty());
+
+    let err = engine
+        .ask("no-key", "does this need a model?", None, |_| {})
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind(), "auth");
+    assert!(err.to_string().contains("/login"));
 
     let _ = fs::remove_dir_all(&data);
 }
@@ -241,7 +263,7 @@ fn migrates_a_legacy_plaintext_key_out_of_the_settings_table() {
 
     // provider mapped onto the registry; credential now recognized
     let s = engine.settings();
-    assert_eq!(s.provider, "openai-compatible"); // stored value is preserved
+    assert_eq!(s.provider, "custom"); // legacy id is normalized to the registry id
     assert!(s.has_credential);
 
     // key moved to auth.json, removed from the db

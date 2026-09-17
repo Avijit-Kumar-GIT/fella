@@ -4,8 +4,9 @@ A pre-release self-review of the shipped desktop app. Scope: the base app and
 its default (`pdf`, `xlsx`, `mcp`) build. Companion to `SECURITY.md` (the
 guarantees) and `docs/AUDIT.md` (the 2026-08-27 philosophy assessment).
 
-Reviewed against commit at branch cut. Re-confirm the checklist items marked
-"gate" in the pre-flight (`docs/RELEASE.md` §1) before tagging.
+Reviewed against the v0.1 branch cut. The embedded-Python boundary also has a
+focused recheck dated 2026-09-17; re-confirm the current release gate in
+[`docs/RELEASE.md`](RELEASE.md) before tagging.
 
 ## The four guarantees hold
 
@@ -20,14 +21,15 @@ Reviewed against commit at branch cut. Re-confirm the checklist items marked
 
 | Destination | When | Where |
 |---|---|---|
-| The configured model provider (`localhost:11434` Ollama by default; or OpenAI / Vercel AI Gateway / xAI / Ollama Cloud / OpenRouter / a custom base URL) | every question, plus a health probe and a warm-up | `engine/llm.rs`, `engine/provider.rs` |
+| The configured hosted model provider (OpenAI / Vercel AI Gateway / xAI / Ollama Cloud / OpenRouter / a custom base URL) | every question after a BYOK key is saved, plus a health probe and an Ollama-wire warm-up | `engine/llm.rs`, `engine/provider.rs` |
 | `raw.githubusercontent.com/…/fella-extensions/main/catalog.json` and each pack file it lists | only on `/packs install <id>` | `engine/extensions.rs` (`FELLA_CATALOG_URL` overrides). Every file SHA-256-checked against the catalog before it touches disk. |
 | A user-configured MCP server URL | only when an enabled `mcp` connector pack's tool is called | `engine/mcp.rs` |
 | `api.github.com/repos/Avijit-Kumar-GIT/fella/releases/latest`, the chosen installer's `browser_download_url`, and `SHA256SUMS` | only on `/update` | `engine/update.rs` (`FELLA_RELEASE_API_URL` overrides). The installer is checksum-verified before it's handed off; a mismatch aborts with nothing installed, matching `scripts/install.sh`/`install.ps1`'s own check. |
 
-`run_python` may itself open sockets or read outside the workspace Fella issues
-no request on its behalf, and this is a documented limitation, not a regression
-(see below).
+`run_python` is part of the local execution boundary: its embedded
+`wasm32-unknown-unknown` guest receives no filesystem, socket, environment, or
+process import. Its only host calls are captured output, OS entropy for
+interpreter startup, and bounded read-only SQL.
 
 ## Hardening done for v0.1
 
@@ -53,17 +55,25 @@ no request on its behalf, and this is a documented limitation, not a regression
   enabled (cargo / npm / actions). CI actions SHA-pinned.
 - **Release integrity**: `release.yml` attaches `SHA256SUMS`; `install.sh` /
   `install.ps1` verify the download against it (fatal on mismatch).
+- **Embedded Python hostile baseline (2026-09-17)**: `tests/python_tool.rs`
+  passes seven checks covering output capture, the read-only SQL bridge, a
+  blocked host-file read, fuel exhaustion, and the bounded-output marker. The
+  tests confirm the current capability contract; they do not replace the
+  future OS-worker acceptance suite described in `docs/PYTHON-SANDBOX.md`.
 
 ## Known limitations for the release notes and first-run copy
 
 1. **Unsigned builds.** No Apple notarization / Windows Authenticode for v0.1.
    Integrity rests on HTTPS + the `SHA256SUMS` file. Users get the OS "unknown
    developer" prompt.
-2. **`run_python` is not a sandbox.** It runs `python3 -I` with cleared env, a
-   fresh temp cwd, a 20 s wall timeout, and (on Unix) CPU/AS/FSIZE rlimits but
-   it can still read files outside the workspace and open the network. It exists
-   so the model can compute statistics SQL can't express. Accepted per
-   `docs/AUDIT.md`; must be stated plainly where a user would see it.
+2. **The embedded Python boundary remains defense in depth.** `run_python`
+   executes a checked-in `wasm32-unknown-unknown` RustPython core under Wasmi.
+   There are no WASI imports and no filesystem, network, environment, or
+   subprocess capability. The host exposes only captured output, OS entropy,
+   and bounded read-only SQL, with fuel, memory, stack, source, output, row,
+   and response limits. A vulnerability in Wasmi, RustPython, or the guest
+   artifact is outside those limits, so this is a stronger capability boundary,
+   not a claim that hostile code is impossible.
 3. **`mcp` connectors reach the network by design.** Off by default; installing
    and enabling one is the user's explicit choice; the token is theirs. Fella
    vouches only for the review of catalog-listed packs; side-loaded packs are
