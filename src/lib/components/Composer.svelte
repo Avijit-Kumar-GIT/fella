@@ -567,9 +567,6 @@
 		font-size: var(--fs-sm);
 		white-space: nowrap;
 	}
-	.model-chip :global(.provider-icon) {
-		color: var(--brand);
-	}
 	.context-row {
 		display: flex;
 		align-items: center;
