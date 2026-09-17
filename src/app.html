@@ -1,23 +1,38 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-appearance="system" data-color-mode="light">
 	<head>
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<title>Fella</title>
+		<script>
+			// Resolve the saved appearance before the first stylesheet is painted.
+			// The app later keeps this in sync when the system preference changes.
+			try {
+				const saved = localStorage.getItem('fella:appearance');
+				const appearance = saved === 'light' || saved === 'dark' || saved === 'system' ? saved : 'system';
+				const dark = appearance === 'dark' ||
+					(appearance === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+				document.documentElement.dataset.appearance = appearance;
+				document.documentElement.dataset.colorMode = dark ? 'dark' : 'light';
+			} catch {
+				/* Keep the system defaults when storage or matchMedia is unavailable. */
+			}
+		</script>
 		<!-- Paint the themed window background on the first frame, before the app
-		     stylesheet loads, so there's no white flash on a dark system. The two
-		     values mirror --bg in src/app.css. -->
+		     stylesheet loads, so there's no flash when an explicit mode is saved.
+		     The two values mirror --bg in src/app.css. -->
 		<style>
 			:root {
-				color-scheme: light dark;
+				color-scheme: light;
+			}
+			:root[data-color-mode='dark'] {
+				color-scheme: dark;
 			}
 			html {
 				background: #fcfcfb;
 			}
-			@media (prefers-color-scheme: dark) {
-				html {
-					background: #0e0e10;
-				}
+			html[data-color-mode='dark'] {
+				background: #0e0e10;
 			}
 		</style>
 		<!-- Start the UI fonts downloading alongside the JS bundle instead of

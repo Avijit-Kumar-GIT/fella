@@ -153,8 +153,9 @@
 		session.persist();
 	});
 
-	// Apply the active theme pack's CSS tokens to <html>.
+	// Apply the selected appearance and active theme pack's CSS tokens to <html>.
 	$effect(() => {
+		prefs.appearance;
 		prefs.themeTokens;
 		prefs.apply();
 	});
