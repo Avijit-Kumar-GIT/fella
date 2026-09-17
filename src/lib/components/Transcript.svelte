@@ -51,9 +51,8 @@
 		session.providers.filter((p) => p.auth !== 'none' && p.id !== 'custom')
 	);
 
-	/** Open the provider's key page (if any) and start the paste flow. */
-	function connectService(id: string, keyUrl: string) {
-		if (keyUrl) void openExternal(keyUrl);
+	/** Start the in-app key entry flow without navigating away from Fella. */
+	function connectService(id: string) {
 		void dispatch(`/login ${id}`);
 	}
 
@@ -243,7 +242,7 @@
 							<p class="alt">Or connect an online service instead (you paste in a key):</p>
 							<div class="svc">
 								{#each services as p (p.id)}
-									<button class="pill" onclick={() => connectService(p.id, p.get_key_url)}>{p.display}</button>
+									<button class="pill" onclick={() => connectService(p.id)}>{p.display}</button>
 								{/each}
 							</div>
 						{/if}
@@ -267,7 +266,7 @@
 							<p class="alt">Or connect a different service:</p>
 							<div class="svc">
 								{#each services as p (p.id)}
-									<button class="pill" onclick={() => connectService(p.id, p.get_key_url)}>{p.display}</button>
+									<button class="pill" onclick={() => connectService(p.id)}>{p.display}</button>
 								{/each}
 							</div>
 						{/if}
