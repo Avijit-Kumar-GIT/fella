@@ -3,6 +3,7 @@
 	import { session } from '$lib/session.svelte';
 	import type { AnalysisArtifact, EvidenceItem, SourceInfo } from '$lib/types';
 	import Icon from './Icon.svelte';
+	import SourcePreview from './SourcePreview.svelte';
 
 	let selection = $derived(session.inspectorSelection);
 	let workspace = $derived(session.catalog.workspace);
@@ -144,6 +145,7 @@
 			</div>
 			{#if source.synopsis}<p class="description">{source.synopsis}</p>{/if}
 			{#if source.note}<div class="note"><span>Ingest note</span>{source.note}</div>{/if}
+			<SourcePreview source={source} />
 			{#if source.columns?.length}
 				<div class="section">
 					<div class="section-title"><span>Fields</span><span>{source.columns.length}</span></div>

@@ -35,7 +35,7 @@
 				? `Paste the ${session.pendingConnect.id} key…`
 				: folderName
 					? `Ask about ${folderName}…`
-					: 'Open a folder to ask, or type /help'
+					: 'Choose a folder to ask about…'
 	);
 
 	// --- live-state chips (moved from the retired StatusBar) -------------
@@ -50,14 +50,15 @@
 	// provider/model, only once the provider has actually answered. Shows the
 	// active tab's model (each tab can pick its own).
 	let modelLabel = $derived(up === true && session.model ? `${providerName}/${session.model}` : '');
-	// The health chip's text when there's nothing to show yet, or something
-	// needs doing. Points at the fix.
-	let healthState = $derived.by(() => {
-		if (up === null) return 'connecting…';
-		if (rejected) return 'key refused — /login';
-		if (up === false) return 'offline';
-		if (up === true && !session.model) return 'pick a model — /model';
-		return '';
+	// Keep the visible status useful to someone who never needs to know the
+	// provider's command names. The exact provider/model remains in the tooltip
+	// and the session info button.
+	let connectionLabel = $derived.by(() => {
+		if (up === null) return 'Checking connection…';
+		if (rejected) return 'Connection needs attention';
+		if (up === false) return providerId === 'ollama' ? 'Local model offline' : `${providerName} offline`;
+		if (!session.model) return 'Choose a model';
+		return providerId === 'ollama' ? 'Answers stay on this computer' : `${providerName} connected`;
 	});
 	let activityNote = $derived.by(() => {
 		if (session.activity) return session.activity;
@@ -410,7 +411,7 @@
 			{#if !contextSources.length && !contextColumns.length && !contextAnalyses.length}
 				<p class="context-empty">No matching sources or saved analyses.</p>
 			{/if}
-			<p class="context-hint">Tip: type <kbd>@</kbd> in the question to open this picker.</p>
+			<p class="context-hint">Add a source or saved answer to guide your next question.</p>
 		</div>
 	{/if}
 	{#if menuOpen && !contextOpen && !modeOpen}
@@ -459,7 +460,7 @@
 					</span>
 				{/each}
 				<button class="context-add" type="button" aria-expanded={contextOpen} onclick={() => { contextOpen = !contextOpen; modeOpen = false; }}>
-					<Icon name="plus" size={12} /> Context{#if contextRefs.length} · {contextRefs.length}{/if}
+					<Icon name="plus" size={12} /> Add context{#if contextRefs.length} · {contextRefs.length}{/if}
 				</button>
 			</div>
 		{/if}
@@ -486,7 +487,7 @@
 				<div class="mode-wrap">
 					<button class="mode-trigger" type="button" aria-expanded={modeOpen} onclick={() => { modeOpen = !modeOpen; contextOpen = false; }}>
 						<span class="mode-mark" class:inspect={mode === 'inspect'}></span>
-						{mode === 'inspect' ? 'Inspect' : 'Ask'}
+						{mode === 'inspect' ? 'Check data' : 'Ask'}
 						<Icon name="chevron-right" size={11} />
 					</button>
 					{#if modeOpen}
@@ -495,7 +496,7 @@
 								<span class="mode-mark"></span><span><strong>Ask</strong><small>Answer from the workspace.</small></span>
 							</button>
 							<button class:chosen={mode === 'inspect'} type="button" onclick={() => chooseMode('inspect')}>
-								<span class="mode-mark inspect"></span><span><strong>Inspect</strong><small>Read-only sources and checks.</small></span>
+								<span class="mode-mark inspect"></span><span><strong>Check data</strong><small>Start with the files and show the checks.</small></span>
 							</button>
 						</div>
 					{/if}
@@ -503,20 +504,20 @@
 			{/if}
 			{#if !session.focus}
 				<div class="chips">
-					<span class="chip">
+					<span class="chip" title={modelLabel || providerName}>
 						{#if up === true}
 							<Icon name="asterisk" size={11} />
-						{:else}
-							<span class="dot" class:down={up === false} aria-hidden="true"></span>
-						{/if}
-						{modelLabel || healthState}
-					</span>
-					{#if activityNote}
-						<span class="chip">
-							{#if session.busy}<span class="thinking" aria-hidden="true"></span>{/if}
-							{activityNote}
-						</span>
+					{:else}
+						<span class="dot" class:down={up === false} aria-hidden="true"></span>
 					{/if}
+					{connectionLabel}
+				</span>
+				{#if activityNote}
+					<span class="chip">
+						{#if session.busy}<span class="thinking" aria-hidden="true"></span>{/if}
+						{activityNote}
+					</span>
+				{/if}
 				</div>
 			{/if}
 			{#if answering && value.trim() && !pendingInput && !value.startsWith('/')}
@@ -543,7 +544,7 @@
 		<div class="below">
 			<button class="below-btn" type="button" onclick={() => void openFolder()}>
 				<Icon name="folder" size={12} />
-				{hasFolder ? `${folderName} · ${fileCount} file${fileCount === 1 ? '' : 's'}` : 'choose a folder'}
+				{hasFolder ? `${folderName} · ${fileCount} file${fileCount === 1 ? '' : 's'}` : 'Choose a folder'}
 			</button>
 		</div>
 	{/if}
@@ -863,11 +864,6 @@
 	.context-hint {
 		padding-top: var(--space-2);
 		border-top: 1px solid var(--border);
-	}
-	.context-hint kbd {
-		padding: 1px 4px;
-		border: 1px solid var(--border-strong);
-		border-radius: 3px;
 	}
 	/* Outlined but unfilled it sits on the footer surface, no card colour.
 	   Softly rounded; stays sane when the textarea grows tall. */

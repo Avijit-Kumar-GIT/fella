@@ -80,6 +80,7 @@ export const ipc = {
 	getCatalog: () => invoke<Catalog>('get_catalog'),
 	lastWorkspacePath: () => invoke<string | null>('last_workspace_path'),
 	describe: (name: string) => invoke<SourceInfo>('describe', { name }),
+	sampleSource: (name: string, rows = 5) => invoke<QueryResult>('sample_source', { name, rows }),
 	runSqlDirect: (sql: string) => invoke<QueryResult>('run_sql_direct', { sql }),
 	getSettings: () => invoke<Settings>('get_settings'),
 	setSettings: (settings: Partial<Settings>) => invoke<Settings>('set_settings', { settings }),

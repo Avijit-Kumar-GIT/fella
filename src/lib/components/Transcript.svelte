@@ -334,6 +334,9 @@
 							message={m}
 							expanded={!!expanded[m.id]}
 							ontoggle={() => toggle(m.id)}
+							question={questionFor(i)}
+							showFollowups={i === session.messages.length - 1 && !m.pending}
+							onfollowup={(next) => void dispatch(next)}
 							onsave={m.answer && !m.pending ? () => saveAnswer(m, i) : undefined}
 							saved={m.role === 'assistant' ? session.isAnalysisSaved(m.id) : false}
 						/>

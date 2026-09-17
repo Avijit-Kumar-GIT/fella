@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { Message } from '$lib/types';
+	import type { Answer, Message } from '$lib/types';
 	import EvidenceBlock from './EvidenceBlock.svelte';
 	import Chart from './Chart.svelte';
 	import Icon from './Icon.svelte';
@@ -7,12 +7,24 @@
 	import { enterUp } from '$lib/motion';
 	import { answerStatus } from '$lib/verify';
 
-	let { message, expanded = false, ontoggle, onsave, saved = false }: {
+	let {
+		message,
+		expanded = false,
+		ontoggle,
+		onsave,
+		saved = false,
+		question = '',
+		showFollowups = false,
+		onfollowup
+	}: {
 		message: Message;
 		expanded?: boolean;
 		ontoggle?: () => void;
 		onsave?: () => void;
 		saved?: boolean;
+		question?: string;
+		showFollowups?: boolean;
+		onfollowup?: (question: string) => void;
 	} = $props();
 
 	// The model marks a one-line general-knowledge aside with "Background:" on
@@ -46,6 +58,69 @@
 	let chartItems = $derived(
 		(message.answer?.evidence ?? []).filter((e) => e.tool === 'make_chart' && e.chart)
 	);
+
+	// Keep the useful trust signal close to the finding. This deliberately uses
+	// only evidence already returned by the engine; it never invents a row count
+	// or claims that a selected source was a hard filter when it was only a
+	// starting point for the model.
+	let answerSources = $derived.by(() => {
+		const names = new Set<string>();
+		for (const item of message.answer?.evidence ?? []) {
+			for (const source of item.sources ?? []) {
+				if (source.source.trim()) names.add(source.source.trim());
+			}
+		}
+		return [...names];
+	});
+	let scopeLabel = $derived.by(() => {
+		if (answerSources.length === 1) return `Based on ${answerSources[0]}`;
+		if (answerSources.length > 1) return `Based on ${answerSources.length} sources`;
+		return message.answer?.workspace ? 'Based on this workspace' : 'Based on the available evidence';
+	});
+	let scopeDetail = $derived(
+		answerSources.length ? answerSources.join(', ') : 'The current workspace snapshot'
+	);
+	let status = $derived(message.answer ? answerStatus(message.answer) : null);
+	let statusLabel = $derived.by(() => {
+		switch (status) {
+			case 'verified':
+				return 'Checked against your data';
+			case 'needs_review':
+				return 'Needs a closer look';
+			case 'insufficient_data':
+				return 'Not enough data';
+			case 'failed':
+				return 'Could not fully check';
+			default:
+				return '';
+		}
+	});
+
+	function followupQuestions(text: string, answer: Answer): string[] {
+		const q = text.toLowerCase();
+		const suggestions: string[] = [];
+		const add = (value: string) => {
+			if (!suggestions.includes(value)) suggestions.push(value);
+		};
+		if (/\b(change|trend|over time|year|month|week|daily|monthly)\b/.test(q)) {
+			add('What explains the biggest change?');
+			add('Break this down by category');
+		} else if (/\b(total|how much|how many|average|mean|count|sum)\b/.test(q)) {
+			add('Show this over time');
+			add('Break this down by category');
+		} else {
+			add('What else stands out?');
+			add('Show this over time');
+		}
+		if (!answer.evidence.some((item) => item.tool === 'make_chart' && item.chart)) {
+			add('Show this as a chart');
+		}
+		return suggestions.slice(0, 3);
+	}
+
+	let followups = $derived(
+		message.answer && question ? followupQuestions(question, message.answer) : []
+	);
 </script>
 
 <div class="msg {message.role}" transition:enterUp>
@@ -69,6 +144,14 @@
 		<div class="text rich" class:pending={message.pending}>{@html bodyHtml}{#if message.pending}<span
 					class="thinking" aria-hidden="true"></span
 				>{/if}</div>
+		{#if message.answer && !message.pending}
+			<div class="answer-meta" aria-label="Answer context">
+				{#if statusLabel}
+					<span class="answer-status {status}"><span class="status-dot" aria-hidden="true"></span>{statusLabel}</span>
+				{/if}
+				<span class="answer-scope" title={scopeDetail}>{scopeLabel}</span>
+			</div>
+		{/if}
 		{#each chartItems as e, i (e.id ?? `chart-${i}`)}
 			{#if e.chart}<Chart spec={e.chart} />{/if}
 		{/each}
@@ -83,6 +166,14 @@
 					<Icon name={saved ? 'check' : 'bookmark'} size={12} />
 					{saved ? 'Saved to Analyses' : 'Save to Analyses'}
 				</button>
+			</div>
+		{/if}
+		{#if showFollowups && onfollowup && followups.length}
+			<div class="followups" aria-label="Suggested follow-up questions">
+				<span class="followup-label">Continue with</span>
+				{#each followups as next (next)}
+					<button type="button" onclick={() => onfollowup?.(next)}>{next}<Icon name="arrow-up-right" size={11} /></button>
+				{/each}
 			</div>
 		{/if}
 	{/if}
@@ -175,6 +266,81 @@
 	.answer-actions button.saved {
 		color: var(--ok);
 		cursor: default;
+	}
+	.answer-meta {
+		display: flex;
+		align-items: center;
+		flex-wrap: wrap;
+		gap: 6px 12px;
+		margin-top: var(--space-3);
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+	}
+	.answer-status,
+	.answer-scope {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+	}
+	.answer-status {
+		color: var(--text-dim);
+	}
+	.answer-status.needs_review,
+	.answer-status.failed {
+		color: var(--warn);
+	}
+	.answer-status.insufficient_data {
+		color: var(--text-faint);
+	}
+	.answer-status .status-dot {
+		width: 5px;
+		height: 5px;
+		border-radius: 50%;
+		background: var(--ok);
+	}
+	.answer-status.needs_review .status-dot,
+	.answer-status.failed .status-dot {
+		background: var(--warn);
+	}
+	.answer-status.insufficient_data .status-dot {
+		background: var(--text-faint);
+	}
+	.answer-scope {
+		min-width: 0;
+		max-width: 100%;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.followups {
+		display: flex;
+		align-items: center;
+		flex-wrap: wrap;
+		gap: 6px;
+		margin-top: var(--space-3);
+	}
+	.followup-label {
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+		margin-right: 2px;
+	}
+	.followups button {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		padding: 5px 8px;
+		border: 1px solid var(--border);
+		border-radius: var(--radius-chip);
+		color: var(--text-dim);
+		background: var(--bg-raised);
+		font-size: var(--fs-xs);
+		text-align: left;
+		transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+	}
+	.followups button:hover {
+		border-color: var(--border-strong);
+		background: var(--bg-inset);
+		color: var(--text);
 	}
 
 	/* The assistant's answer is rendered from markdown (see markdown.ts). Code,

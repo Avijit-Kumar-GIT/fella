@@ -66,6 +66,7 @@ pub fn run() {
             commands::get_catalog,
             commands::last_workspace_path,
             commands::describe,
+            commands::sample_source,
             commands::run_sql_direct,
             commands::reindex,
             commands::memory_file,

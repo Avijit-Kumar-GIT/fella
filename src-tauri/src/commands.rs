@@ -92,6 +92,15 @@ pub fn describe(name: String, engine: State<'_, EngineState>) -> EngineResult<So
 }
 
 #[tauri::command]
+pub fn sample_source(
+    name: String,
+    rows: Option<usize>,
+    engine: State<'_, EngineState>,
+) -> EngineResult<QueryResult> {
+    engine.sample(&name, rows.unwrap_or(5).clamp(1, 50))
+}
+
+#[tauri::command]
 pub fn run_sql_direct(sql: String, engine: State<'_, EngineState>) -> EngineResult<QueryResult> {
     engine.run_sql(&sql)
 }

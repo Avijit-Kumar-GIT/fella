@@ -3,6 +3,7 @@
 	import { session } from '$lib/session.svelte';
 	import type { SourceInfo } from '$lib/types';
 	import Icon from './Icon.svelte';
+	import SourcePreview from './SourcePreview.svelte';
 
 	let query = $state('');
 	let selectedPath = $state<string | null>(null);
@@ -179,6 +180,8 @@
 					{#if selected.note}
 						<div class="note"><span>Note</span>{selected.note}</div>
 					{/if}
+
+					<SourcePreview source={selected} />
 
 					{#if selected.columns?.length}
 						<div class="columns">
