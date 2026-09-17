@@ -771,8 +771,7 @@
 		color: var(--text-faint);
 		font-size: 10px;
 		font-weight: 650;
-		letter-spacing: 0.07em;
-		text-transform: uppercase;
+		letter-spacing: 0.01em;
 	}
 	.context-list {
 		max-height: 220px;

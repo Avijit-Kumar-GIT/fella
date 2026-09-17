@@ -42,7 +42,8 @@
 	}
 
 	function kindLabel(source: SourceInfo): string {
-		return source.kind === 'ndjson' ? 'NDJSON' : source.kind.toUpperCase();
+		const kind = source.kind.toLowerCase();
+		return kind.charAt(0).toUpperCase() + kind.slice(1);
 	}
 </script>
 
@@ -149,8 +150,7 @@
 		color: var(--text-faint);
 		font-size: var(--fs-xs);
 		font-weight: 650;
-		letter-spacing: 0.08em;
-		text-transform: uppercase;
+		letter-spacing: 0.01em;
 	}
 	h1,
 	h2 {

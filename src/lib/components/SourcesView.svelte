@@ -78,7 +78,8 @@
 	}
 
 	function kindLabel(kind: SourceInfo['kind']): string {
-		return kind === 'ndjson' ? 'NDJSON' : kind.toUpperCase();
+		const label = kind.toLowerCase();
+		return label.charAt(0).toUpperCase() + label.slice(1);
 	}
 </script>
 
@@ -237,8 +238,7 @@
 		color: var(--text-faint);
 		font-size: var(--fs-xs);
 		font-weight: 650;
-		letter-spacing: 0.08em;
-		text-transform: uppercase;
+		letter-spacing: 0.01em;
 	}
 	h1,
 	h2 {
@@ -481,8 +481,7 @@
 		color: var(--warn);
 		font-size: var(--fs-xs);
 		font-weight: 650;
-		text-transform: uppercase;
-		letter-spacing: 0.06em;
+		letter-spacing: 0.01em;
 	}
 	.columns {
 		border-top: 1px solid var(--border);
@@ -494,8 +493,7 @@
 		color: var(--text-dim);
 		font-size: var(--fs-xs);
 		font-weight: 650;
-		text-transform: uppercase;
-		letter-spacing: 0.06em;
+		letter-spacing: 0.01em;
 	}
 	.subhead span:last-child {
 		color: var(--text-faint);

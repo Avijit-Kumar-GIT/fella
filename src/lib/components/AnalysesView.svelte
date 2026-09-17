@@ -195,8 +195,7 @@
 		color: var(--text-faint);
 		font-size: var(--fs-xs);
 		font-weight: 650;
-		letter-spacing: 0.08em;
-		text-transform: uppercase;
+		letter-spacing: 0.01em;
 	}
 	h1,
 	h2 {

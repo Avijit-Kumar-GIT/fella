@@ -420,8 +420,7 @@
 		color: var(--text-faint);
 		font-size: var(--fs-xs);
 		font-weight: 650;
-		letter-spacing: 0.06em;
-		text-transform: uppercase;
+		letter-spacing: 0.01em;
 	}
 	.workspace-card,
 	.workspace-empty {
@@ -557,8 +556,7 @@
 		color: var(--text-faint);
 		font-size: var(--fs-xs);
 		font-weight: 600;
-		text-transform: uppercase;
-		letter-spacing: 0.04em;
+		letter-spacing: 0.01em;
 	}
 	.item-wrap {
 		position: relative;

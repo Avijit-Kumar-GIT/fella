@@ -181,8 +181,7 @@
 		display: inline-flex;
 		align-items: center;
 		gap: var(--space-1);
-		text-transform: uppercase;
-		letter-spacing: 0.06em;
+		letter-spacing: 0.01em;
 		font-size: var(--fs-xs);
 	}
 	.summary:hover {
