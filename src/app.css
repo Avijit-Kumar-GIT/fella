@@ -1,6 +1,6 @@
 /* Fella one hand-written stylesheet. Calm and uncluttered, with room to
-   breathe a lightweight macOS register. Sans for the conversation; monospace
-   only where data lines up (tables, SQL, output, identifiers).
+   breathe a lightweight macOS register. Geist Mono is currently being tried
+   across the primary UI; data still uses the dedicated mono token.
 
    Tokens are intentionally local to the application. All colors, plus --radius
    and --pad, live here; the type scale, fonts, spacing scale, shadows, radii,
@@ -66,8 +66,8 @@
 	--pad: 28px;
 
 	/* --- fixed --------------------------------------------------------- */
-	--sans: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
-		'Helvetica Neue', Arial, 'Noto Sans', sans-serif;
+	--sans: 'Geist Mono', 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+		Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif;
 	--mono: 'Geist Mono', ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo,
 		Consolas, 'DejaVu Sans Mono', monospace;
 	/* type scale: two small steps for chrome/dense data, two up for headings */
