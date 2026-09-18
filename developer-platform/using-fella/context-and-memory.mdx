@@ -43,7 +43,9 @@ Automatic learning is deliberately narrow: an ordinary question teaches memory n
 
 ## Context is not permission
 
-`fella.md`, skills, and memory can influence how the model interprets a question, but they cannot grant it a new tool or a write capability. The read-only boundary comes from the registry and engine.
+`fella.md` and memory can influence how the model interprets a question, but
+they cannot grant it a new tool or a write capability. The read-only boundary
+comes from the registry and engine.
 
 ## When to use which
 
@@ -51,12 +53,12 @@ Automatic learning is deliberately narrow: an ordinary question teaches memory n
 | --- | --- |
 | Stable file conventions | `fella.md` |
 | An explicit vocabulary correction that should carry across conversations | Folder memory |
-| Provider-specific or domain-wide guidance | A `skill` pack |
-| New external data | An `mcp` connector pack |
+| Provider-specific or domain-wide guidance | `fella.md` plus the normal question |
+| New external data | Mount the files in the workspace |
 
 <CardGroup cols={2}>
-  <Card title="Packs and connectors" icon="puzzle" href="/extensions-and-mcp">
-    Extend the app without changing the base agent.
+  <Card title="Experimental MCP" icon="puzzle" href="/extensions-and-mcp">
+    Read the inert extension boundary for future forks.
   </Card>
   <Card title="The model prompt" icon="scroll-text" href="/concepts/harness">
     See where context enters the reasoning loop.

@@ -26,17 +26,6 @@ CREATE TABLE IF NOT EXISTS recent_workspaces (
     path      TEXT PRIMARY KEY,
     opened_at INTEGER NOT NULL
 );
-CREATE TABLE IF NOT EXISTS extensions (
-    id           TEXT PRIMARY KEY,
-    kind         TEXT NOT NULL,
-    name         TEXT NOT NULL,
-    version      TEXT NOT NULL,
-    description  TEXT NOT NULL,
-    source       TEXT NOT NULL,
-    sha256       TEXT,
-    enabled      INTEGER NOT NULL DEFAULT 0,
-    installed_at INTEGER NOT NULL
-);
 ";
 
 pub fn open(path: &Path) -> EngineResult<Connection> {
@@ -136,94 +125,6 @@ pub fn save_settings(
         }
     }
     Ok(load_settings(conn))
-}
-
-// --- installed extensions (packs) -----------------------------------------
-
-/// One row of the `extensions` table. `source` is `"local"` (side-loaded) or
-/// `"marketplace"`; `sha256` is set only for marketplace installs.
-#[derive(Debug, Clone)]
-pub struct ExtRow {
-    pub id: String,
-    pub kind: String,
-    pub name: String,
-    pub version: String,
-    pub description: String,
-    pub source: String,
-    pub sha256: Option<String>,
-    pub enabled: bool,
-    pub installed_at: i64,
-}
-
-pub fn list_extensions(conn: &Connection) -> Vec<ExtRow> {
-    let mut stmt = match conn.prepare(
-        "SELECT id, kind, name, version, description, source, sha256, enabled, installed_at
-         FROM extensions ORDER BY kind, name",
-    ) {
-        Ok(s) => s,
-        Err(_) => return Vec::new(),
-    };
-    let rows = stmt.query_map([], |r| {
-        Ok(ExtRow {
-            id: r.get(0)?,
-            kind: r.get(1)?,
-            name: r.get(2)?,
-            version: r.get(3)?,
-            description: r.get(4)?,
-            source: r.get(5)?,
-            sha256: r.get(6)?,
-            enabled: r.get::<_, i64>(7)? != 0,
-            installed_at: r.get(8)?,
-        })
-    });
-    match rows {
-        Ok(it) => it.filter_map(Result::ok).collect(),
-        Err(_) => Vec::new(),
-    }
-}
-
-pub fn upsert_extension(conn: &Connection, row: &ExtRow) -> EngineResult<()> {
-    conn.execute(
-        "INSERT INTO extensions
-           (id, kind, name, version, description, source, sha256, enabled, installed_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
-         ON CONFLICT(id) DO UPDATE SET
-           kind = excluded.kind, name = excluded.name, version = excluded.version,
-           description = excluded.description, source = excluded.source,
-           sha256 = excluded.sha256, installed_at = excluded.installed_at",
-        rusqlite::params![
-            row.id,
-            row.kind,
-            row.name,
-            row.version,
-            row.description,
-            row.source,
-            row.sha256,
-            row.enabled as i64,
-            row.installed_at,
-        ],
-    )?;
-    Ok(())
-}
-
-pub fn delete_extension(conn: &Connection, id: &str) -> EngineResult<()> {
-    conn.execute("DELETE FROM extensions WHERE id = ?1", [id])?;
-    Ok(())
-}
-
-pub fn set_extension_enabled(conn: &Connection, id: &str, enabled: bool) -> EngineResult<()> {
-    conn.execute(
-        "UPDATE extensions SET enabled = ?2 WHERE id = ?1",
-        rusqlite::params![id, enabled as i64],
-    )?;
-    Ok(())
-}
-
-/// Turn off every `theme` row used before enabling one so a single theme is
-/// active at a time.
-pub fn disable_all_themes(conn: &Connection) -> EngineResult<()> {
-    conn.execute("UPDATE extensions SET enabled = 0 WHERE kind = 'theme'", [])?;
-    Ok(())
 }
 
 #[cfg(test)]

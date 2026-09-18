@@ -72,11 +72,6 @@ pub trait Tool: Send + Sync {
 
 pub struct Registry {
     tools: Vec<Box<dyn Tool>>,
-    /// Tools contributed at runtime by enabled `mcp` connector packs. Kept
-    /// separate because their names/schemas are owned `String`s, not the
-    /// `&'static str` the `Tool` trait wants.
-    #[cfg(feature = "mcp")]
-    mcp: Vec<crate::engine::mcp::McpTool>,
 }
 
 impl Registry {
@@ -86,8 +81,7 @@ impl Registry {
 
     /// Read-only inspection tools for the non-developer path. Python is kept
     /// out of this registry because Inspect is deliberately limited to the
-    /// deterministic workspace tools. MCP is attached by the caller only for
-    /// ordinary Ask runs.
+    /// deterministic workspace tools.
     pub fn inspect() -> Self {
         Self::build(false)
     }
@@ -106,28 +100,7 @@ impl Registry {
             // deterministic read-only surface even though Python is sandboxed.
             tools.insert(5, Box::new(RunPython));
         }
-        Self {
-            tools,
-            #[cfg(feature = "mcp")]
-            mcp: Vec::new(),
-        }
-    }
-
-    #[cfg(feature = "mcp")]
-    pub fn set_mcp(&mut self, tools: Vec<crate::engine::mcp::McpTool>) {
-        self.mcp = tools;
-    }
-
-    /// Whether any runtime (MCP) tools are present.
-    pub fn has_mcp(&self) -> bool {
-        #[cfg(feature = "mcp")]
-        {
-            !self.mcp.is_empty()
-        }
-        #[cfg(not(feature = "mcp"))]
-        {
-            false
-        }
+        Self { tools }
     }
 
     fn get(&self, name: &str) -> Option<&dyn Tool> {
@@ -148,8 +121,8 @@ impl Registry {
             .await
     }
 
-    /// Run a tool while allowing long-running built-ins and remote connector
-    /// calls to observe the question's stop flag.
+    /// Run a built-in tool while allowing long-running calls to observe the
+    /// question's stop flag.
     pub async fn run_with_cancel(
         &self,
         engine: &EngineState,
@@ -160,45 +133,19 @@ impl Registry {
         if let Some(tool) = self.get(name) {
             return Some(tool.run_with_cancel(engine, args, cancel).await);
         }
-        #[cfg(feature = "mcp")]
-        if let Some(t) = self.mcp.iter().find(|t| t.namespaced == name) {
-            return Some(crate::engine::mcp::run_mcp_tool(t, args, Some(cancel)).await);
-        }
         None
     }
 
     pub fn schemas(&self) -> Vec<ToolSchema> {
-        #[cfg_attr(not(feature = "mcp"), allow(unused_mut))]
-        let mut out: Vec<ToolSchema> = self
-            .tools
+        self.tools
             .iter()
             .map(|t| ToolSchema {
                 name: t.name().to_string(),
                 description: t.description().to_string(),
                 parameters: with_note_param(t.parameters()),
             })
-            .collect();
-        #[cfg(feature = "mcp")]
-        out.extend(self.mcp.iter().map(|t| ToolSchema {
-            name: t.namespaced.clone(),
-            description: t.description.clone(),
-            parameters: with_note_param(object_schema(t.input_schema.clone())),
-        }));
-        out
+            .collect()
     }
-}
-
-/// Ensure a schema is an object with a `properties` map so `with_note_param`
-/// can attach `note` (some MCP servers send a bare `{"type":"object"}`).
-#[cfg(feature = "mcp")]
-fn object_schema(mut s: Json) -> Json {
-    if !s.is_object() {
-        s = json!({ "type": "object" });
-    }
-    let obj = s.as_object_mut().unwrap();
-    obj.entry("type").or_insert_with(|| json!("object"));
-    obj.entry("properties").or_insert_with(|| json!({}));
-    s
 }
 
 /// Add a shared optional `note` string to a tool's parameter schema. The model

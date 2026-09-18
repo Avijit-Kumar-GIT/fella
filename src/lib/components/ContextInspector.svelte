@@ -1,7 +1,6 @@
 <script lang="ts">
-	import { dispatch } from '$lib/commands';
 	import { session } from '$lib/session.svelte';
-	import type { AnalysisArtifact, EvidenceItem, SourceInfo } from '$lib/types';
+	import type { EvidenceItem, SourceInfo } from '$lib/types';
 	import Icon from './Icon.svelte';
 	import SourcePreview from './SourcePreview.svelte';
 
@@ -10,10 +9,6 @@
 	let source = $derived.by((): SourceInfo | null => {
 		if (selection?.kind !== 'source') return null;
 		return session.catalog.sources.find((item) => item.path === selection.path) ?? null;
-	});
-	let analysis = $derived.by((): AnalysisArtifact | null => {
-		if (selection?.kind !== 'analysis') return null;
-		return session.analyses.find((item) => item.id === selection.id) ?? null;
 	});
 	let answerMessage = $derived.by(() => {
 		if (selection?.kind !== 'answer') return null;
@@ -59,10 +54,6 @@
 		return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${unit}`;
 	}
 
-	function formatDate(ms: number): string {
-		return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric' }).format(ms);
-	}
-
 	function useSource(): void {
 		if (!source) return;
 		session.addContextReference({
@@ -75,41 +66,9 @@
 		session.closeInspector();
 	}
 
-	function useAnalysis(): void {
-		if (!analysis) return;
-		session.addContextReference({
-			kind: 'analysis',
-			key: analysis.id,
-			label: analysis.title,
-			detail: analysis.question
-		});
-		session.setWorkspaceView('ask');
-		session.closeInspector();
-	}
-
-	function forkAnalysis(): void {
-		if (!analysis) return;
-		session.startFromAnalysis(analysis);
-		session.closeInspector();
-	}
-
-	function askAgain(): void {
-		if (!analysis) return;
-		session.setWorkspaceView('ask');
-		session.closeInspector();
-		void dispatch(analysis.question);
-	}
-
 	function openSourcePage(): void {
 		session.closeInspector();
-		session.setWorkspaceView('sources');
-	}
-
-	function openAnalysisPage(): void {
-		if (!analysis) return;
-		session.selectAnalysis(analysis.id);
-		session.closeInspector();
-		session.setWorkspaceView('analyses');
+		session.setWorkspacePane('sources');
 	}
 
 	function answerStatus(): string {
@@ -126,7 +85,7 @@
 	<header class="inspector-head">
 		<div>
 			<p class="eyebrow">Inspector</p>
-			<h2>{source?.name ?? analysis?.title ?? (evidence ? 'Run step' : 'Answer details')}</h2>
+			<h2>{source?.name ?? (evidence ? 'Run step' : 'Answer details')}</h2>
 		</div>
 		<button class="close" type="button" aria-label="Close inspector" title="Close inspector" onclick={() => session.closeInspector()}>
 			<Icon name="x" size={15} />
@@ -159,24 +118,6 @@
 				<button class="pill primary" type="button" onclick={useSource}><Icon name="plus" size={13} /> Use in Ask</button>
 				<button class="pill ghost" type="button" onclick={openSourcePage}>Open Sources</button>
 			</div>
-		{:else if analysis}
-			<div class="object-mark"><Icon name="bookmark" size={18} /></div>
-			<p class="type-label">Saved analysis · {formatDate(analysis.created_at_ms)}</p>
-			<p class="question">“{analysis.question}”</p>
-			<div class="facts two">
-				<div><span>Evidence</span><strong>{analysis.answer.evidence.length} steps</strong></div>
-				<div><span>Checks</span><strong>{analysis.answer.verification.filter((check) => check.ok).length}/{analysis.answer.verification.length || 0}</strong></div>
-			</div>
-			{#if analysis.answer.workspace?.path}
-				<p class="path" title={analysis.answer.workspace.path}><Icon name="folder" size={12} /> {baseName(analysis.answer.workspace.path)}</p>
-			{/if}
-			<p class="description">Use this saved result as a starting point for a follow-up question, or rerun the original question against the current workspace.</p>
-			<div class="actions">
-				<button class="pill primary" type="button" onclick={forkAnalysis}><Icon name="plus" size={13} /> Fork follow-up</button>
-				<button class="pill ghost" type="button" onclick={useAnalysis}><Icon name="bookmark" size={13} /> Use in Ask</button>
-				<button class="pill ghost" type="button" onclick={askAgain}><Icon name="compose" size={13} /> Ask again</button>
-				<button class="text-action" type="button" onclick={openAnalysisPage}>Open saved analysis <Icon name="arrow-up-right" size={12} /></button>
-			</div>
 		{:else if answerMessage?.answer}
 			<div class="answer-state"><span class="status-dot"></span><strong>{answerStatus()}</strong></div>
 			{#if answerMessage.answer.workspace?.path}
@@ -206,7 +147,7 @@
 			<div class="empty-inspector">
 				<div class="object-mark"><Icon name="info" size={18} /></div>
 				<strong>Nothing selected yet</strong>
-				<p>Choose a source, saved analysis, or run step to see its shape and provenance here.</p>
+					<p>Choose a source or run step to see its shape and provenance here.</p>
 			</div>
 		{/if}
 	</div>
@@ -296,9 +237,6 @@
 		gap: var(--space-2);
 		margin-bottom: var(--space-4);
 	}
-	.facts.two {
-		grid-template-columns: repeat(2, 1fr);
-	}
 	.facts div {
 		display: flex;
 		flex-direction: column;
@@ -314,15 +252,10 @@
 		font-size: var(--fs-sm);
 		font-weight: 580;
 	}
-	.description,
-	.question {
+	.description {
 		margin: 0 0 var(--space-4);
 		color: var(--text-dim);
 		font-size: var(--fs-sm);
-	}
-	.question {
-		color: var(--text);
-		line-height: 1.45;
 	}
 	.note {
 		margin-bottom: var(--space-4);
@@ -399,20 +332,6 @@
 	.actions .pill {
 		font-size: var(--fs-xs);
 		padding: 6px 10px;
-	}
-	.text-action {
-		display: inline-flex;
-		align-items: center;
-		gap: 5px;
-		width: 100%;
-		margin-top: var(--space-1);
-		color: var(--link);
-		font-size: var(--fs-xs);
-		text-align: left;
-		white-space: nowrap;
-	}
-	.text-action:hover {
-		text-decoration: underline;
 	}
 	.answer-state {
 		display: flex;

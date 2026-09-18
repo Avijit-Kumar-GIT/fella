@@ -12,7 +12,7 @@ Deterministic tests establish engine behavior. Live evaluation samples whether a
 
 | Layer | Establishes | Does not establish |
 | --- | --- | --- |
-| Rust unit/integration tests | Catalog, ingest, SQL guards/timeouts, Python plumbing, verification, auth, packs, MCP, cancellation, and recovery behave as encoded | That a model chooses the right tool or interpretation |
+| Rust unit/integration tests | Catalog, ingest, SQL guards/timeouts, Python plumbing, verification, auth, cancellation, and recovery behave as encoded | That a model chooses the right tool or interpretation |
 | Frontend checks/build | Svelte types and production compilation succeed | Browser interaction correctness on every OS |
 | CI | The default SQLite feature set passes on Linux with current toolchains | DuckDB support or live provider behavior |
 | Live agent evaluation | Repeated model outcomes on fixed folders and gold answers | General correctness for arbitrary user folders |
@@ -30,7 +30,7 @@ pnpm run check
 pnpm run build
 ```
 
-Repository CI runs the frontend checks, Clippy, and Rust tests on Ubuntu 22.04 using Node 24 and stable Rust. It uses the default SQLite backend with the default PDF, XLSX, and MCP features.
+Repository CI runs the frontend checks, Clippy, and Rust tests on Ubuntu 22.04 using Node 24 and stable Rust. It uses the default SQLite backend with the default PDF and XLSX features.
 
 <Warning>
   DuckDB is not a CI path. CI explicitly avoids `--features duckdb` because the bundled build exhausts available resources, and the DuckDB backend has unverified ingestion-parity gaps. Do not describe it as CI-tested.
@@ -46,7 +46,7 @@ Repository CI runs the frontend checks, Clippy, and Rust tests on Ubuntu 22.04 u
 | Agent-loop retry/cancellation/tool use | Mock-model integration test |
 | Prompt or policy behavior | Reproducible live eval case across several models |
 | UI rendering/interaction | Svelte check/build plus a targeted manual smoke test |
-| Pack install or MCP policy | Rust integration test with a local fixture/server |
+| Extension boundary or inert `/mcp` behavior | Documentation check plus a focused command/UI test when the surface changes |
 
 When a model failure reveals a deterministic defect, add the deterministic test first. When behavior depends on interpretation, preserve the folder, prompt, generated gold, and grading rule as an eval case.
 
@@ -78,7 +78,7 @@ Provider output is stochastic. Use multiple iterations, report both majority acc
 
 ## What remains manual
 
-The repository has no general frontend interaction test harness. Release automation builds unsigned installers for macOS, Windows, and Linux on `v*` tags, but building an artifact is not the same as exercising install, launch, provider login, answer flow, stop, packs, update, and relaunch on that OS.
+The repository has no general frontend interaction test harness. Release automation builds unsigned installers for macOS, Windows, and Linux on `v*` tags, but building an artifact is not the same as exercising install, launch, provider login, answer flow, stop, update, and relaunch on that OS.
 
 ## Next steps
 

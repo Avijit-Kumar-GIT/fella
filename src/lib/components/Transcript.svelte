@@ -3,7 +3,6 @@
 	import { session } from '$lib/session.svelte';
 	import { isTauri, openExternal } from '$lib/ipc';
 	import { fadeQuick } from '$lib/motion';
-	import type { Message as MessageData } from '$lib/types';
 	import Icon from './Icon.svelte';
 	import Message from './Message.svelte';
 	import RunTimeline from './RunTimeline.svelte';
@@ -71,11 +70,6 @@
 			if (session.messages[i]?.role === 'user') return session.messages[i].text;
 		}
 		return '';
-	}
-
-	function saveAnswer(message: MessageData, index: number): void {
-		if (!message.answer) return;
-		session.saveAnalysis(message.id, questionFor(index), message.answer);
 	}
 
 	let stick = true;
@@ -225,8 +219,7 @@
 
 			{#if hasFolder && showExamples}
 				<p class="personalize">
-					Make it yours: <code>/context</code> to tell Fella how your files are organised,
-					or <code>/packs browse</code> for themes and skills.
+					Make it yours: <code>/context</code> to tell Fella how your files are organised.
 				</p>
 			{/if}
 		</div>
@@ -273,8 +266,6 @@
 							question={questionFor(i)}
 							showFollowups={i === session.messages.length - 1 && !m.pending}
 							onfollowup={(next) => void dispatch(next)}
-							onsave={m.answer && !m.pending ? () => saveAnswer(m, i) : undefined}
-							saved={m.role === 'assistant' ? session.isAnalysisSaved(m.id) : false}
 						/>
 					{/each}
 					{#snippet failed(error)}

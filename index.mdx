@@ -24,8 +24,8 @@ Fella is a local-first desktop app for personal analytics. Open a folder of stat
   <Card title="Know the limits" icon="triangle-alert" href="/limitations">
     Understand verification, security, format, and scale boundaries.
   </Card>
-  <Card title="Add an extension" icon="puzzle" href="/extensions-and-mcp">
-    Opt into inert packs, first-party views, or a remote MCP source.
+  <Card title="Understand the boundary" icon="shield-check" href="/extensions-and-mcp">
+    See why the personal release keeps tools fixed and MCP experimental.
   </Card>
 </CardGroup>
 
@@ -41,7 +41,10 @@ Fella is a local-first desktop app for personal analytics. Open a folder of stat
 Fella can answer a general question without calling a tool. Those answers have no workspace evidence. When tools run, the working fold records the selected files, arguments, SQL or Python, result samples, timings, errors, and post-answer checks.
 
 <Note>
-  The base agent has no file write, move, or delete tool. Optional augment views let the user save a named note or table, and enabled MCP connectors communicate with an external service. Python runs inside an embedded WASM capability boundary; review the [limits](/limitations#security-boundaries) before using sensitive data.
+  The agent has no file write, move, or delete tool. The user can edit the
+  `fella.md` context file, while generated Python runs inside an embedded WASM
+  capability boundary. Review the [limits](/limitations#security-boundaries)
+  before using sensitive data.
 </Note>
 
 ## What you can do
@@ -51,7 +54,7 @@ Fella can answer a general question without calling a tool. Those answers have n
 | Compare periods or categories | Ask a plain-language question; Fella queries one or more tables |
 | Find a fact in notes or a text-layer PDF | Fella searches and reads document text directly |
 | Reconcile several exports | Name the files and join key when you know them |
-| Produce a small bar or line chart | Ask for a chart with no more than 12 categories and 2 series |
+| Produce a bar or line chart | Ask for a chart; category charts are bounded, while time-series charts can cover longer periods |
 | Inspect data directly | Use `/files`, `/schema <table>`, or `/sql <query>` |
 
 ```text filename="first question"
@@ -61,7 +64,7 @@ Compare monthly dining spend in the first and second half of 2025. Show the tota
 
 ## Local-first, with explicit egress
 
-The provider you connect receives the prompt and tool results needed for the question. Installing a catalog pack fetches its hash-pinned files; `/update` contacts GitHub only when invoked; an enabled MCP connector talks to its configured service. Generated Python stays inside its embedded local guest and has no network capability.
+The provider you connect receives the prompt and tool results needed for the question. `/update` contacts GitHub only when invoked. `/mcp` is inert in the personal release, and generated Python stays inside its embedded local guest with no network capability.
 
 ## Next steps
 

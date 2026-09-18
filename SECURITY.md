@@ -19,36 +19,26 @@ rather than including a working exploit.
 
 - **Read-only agent.** Fella's agent reads the folder you point it at; it never
   writes, moves, or deletes anything there, and the model never emits a file.
-  There is no write tool to disable none was built. (An opt-in `augment`
-  pack adds a tab where *you* save a note or table you typed into one named
-  file; see below.)
+  The user may explicitly edit the root `fella.md` context file from the
+  Workspace surface; that editor is separate from the agent and is the only
+  workspace write in the personal release.
 - **BYOK model access.** The only model network call the base app makes on its
   own is the request to the provider you chose with your own API key.
-  `/packs install` and `/update` reach GitHub, but only when you type one of
-  those commands never automatically, never on startup.
-- **Credentials** (API keys, and tokens for `mcp` connector packs) live in
-  `auth.json` (mode `0600`) in the OS app-data directory never in the
-  settings database, `localStorage`, or the transcript, and never echoed.
+  `/update` reaches GitHub only when you type the command, never automatically
+  and never on startup. `/mcp` is an inert experimental command.
+- **Credentials** (provider API keys) live in `auth.json` (mode `0600`) in the
+  OS app-data directory, never in the settings database, `localStorage`, or the
+  transcript, and are never echoed.
 - **Deterministic answers.** Figures in an answer come from a tool result (SQL
   or Python), checked by a verification pass never from the model directly.
 
-## Extensions change this, by your choice
+## Experimental extension boundary
 
-Installing a pack is opt-in:
-
-- A **theme** or **skill** pack is inert data (CSS tokens / Markdown) it
-  cannot execute code or make network calls.
-- An **`mcp` connector** pack connects to a remote MCP server you configure.
-  That server runs elsewhere with your credentials and may reach the network
-  installing one is your informed decision.
-- An **`augment`** pack turns on a built-in capability (a notes tab, a small
-  table) and binds it to a slash command. It ships no code. The tab saves a
-  file **into your open folder when you type in it** the first time a pack
-  can make Fella write there. Only your keystroke writes, only the one file the
-  manifest names, and the agent's tools are unchanged (still no write tool).
-
-Fella vouches only for the code review of packs listed in the vetted catalog;
-anything you side-load is marked **unverified**.
+The personal release has no pack manager, augment runtime, or MCP connector.
+`/mcp` is retained as an inert signpost and creates no connector or network
+activity. The root `fella.md` file is the supported user-authored context
+surface. Extension designs are archived for future custom forks; see
+[`docs/EXTENSIBILITY.md`](docs/EXTENSIBILITY.md).
 
 `run_python` executes code the model writes inside the checked-in
 `wasm32-unknown-unknown` RustPython guest through Wasmi. The guest receives no

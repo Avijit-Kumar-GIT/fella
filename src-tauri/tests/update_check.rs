@@ -1,6 +1,6 @@
 //! `/update`'s version-check step against a fake GitHub releases API. Its
 //! own test binary because it sets the process-global
-//! `FELLA_RELEASE_API_URL` (same reasoning as packs_marketplace.rs); both
+//! `FELLA_RELEASE_API_URL` (the network fixture is opt-in); both
 //! scenarios below share one test function rather than two, so two
 //! concurrently-run tests can't race on that same env var.
 

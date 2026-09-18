@@ -3,17 +3,13 @@
 
 pub mod agent;
 pub mod analytics;
-pub mod augment;
 pub mod catalog;
 mod env;
 pub mod error;
 pub mod evidence;
-pub mod extensions;
 mod friction;
 pub mod ingest;
 pub mod llm;
-#[cfg(feature = "mcp")]
-pub mod mcp;
 pub mod memory;
 pub mod provider;
 pub mod secrets;
@@ -29,7 +25,6 @@ pub mod update;
 pub use catalog::{Catalog, SourceInfo};
 pub use error::{EngineError, EngineResult};
 pub use evidence::{Answer, AskEvent};
-pub use extensions::InstalledPack;
 pub use llm::ProviderHealth;
 pub use provider::{AuthKind, Provider, PROVIDERS};
 pub use sqlite::Settings;

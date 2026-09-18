@@ -65,7 +65,9 @@ After this workflow, you can inspect the sources, computations, and verification
 The base agent has no tool that writes, moves, or deletes workspace files. The model chooses read-only tools; the data engine runs their computations and records evidence. Verification checks the completed answer, but it does not prove that a valid query interpreted an ambiguous question correctly.
 
 <Warning>
-  Python runs inside an embedded WASM capability boundary. Hosted providers receive prompts and tool results, and enabled MCP connectors communicate with their configured services. Review [privacy and security](/developer-platform/using-fella/privacy) before using sensitive data.
+  Python runs inside an embedded WASM capability boundary. Hosted providers
+  receive prompts and tool results for the question. Review [privacy and
+  security](/developer-platform/using-fella/privacy) before using sensitive data.
 </Warning>
 
 <Note>
@@ -76,7 +78,7 @@ The base agent has no tool that writes, moves, or deletes workspace files. The m
   <Card title="The harness, engine, and model" icon="layers" href="/concepts/triad">
     The ownership boundaries behind the user workflow.
   </Card>
-  <Card title="Extensions and MCP" icon="puzzle" href="/extensions-and-mcp">
-    Optional themes, skills, connectors, and augments.
+  <Card title="Privacy and security" icon="shield-check" href="/developer-platform/using-fella/privacy">
+    Provider egress, credentials, and the Python boundary.
   </Card>
 </CardGroup>

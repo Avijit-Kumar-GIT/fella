@@ -11,8 +11,6 @@
 		message,
 		expanded = false,
 		ontoggle,
-		onsave,
-		saved = false,
 		question = '',
 		showFollowups = false,
 		onfollowup
@@ -20,8 +18,6 @@
 		message: Message;
 		expanded?: boolean;
 		ontoggle?: () => void;
-		onsave?: () => void;
-		saved?: boolean;
 		question?: string;
 		showFollowups?: boolean;
 		onfollowup?: (question: string) => void;
@@ -190,14 +186,6 @@
 	{/if}
 	{#if message.answer}
 		<EvidenceBlock answer={message.answer} {expanded} {ontoggle} />
-		{#if onsave && !message.pending}
-			<div class="answer-actions">
-				<button class:saved type="button" disabled={saved} onclick={onsave}>
-					<Icon name={saved ? 'check' : 'bookmark'} size={12} />
-					{saved ? 'Saved to Analyses' : 'Save to Analyses'}
-				</button>
-			</div>
-		{/if}
 		{#if showFollowups && onfollowup && followups.length}
 			<div class="followups" aria-label="Suggested follow-up questions">
 				<span class="followup-label">Continue with</span>
@@ -275,10 +263,6 @@
 	.unconfirmed :global(svg) {
 		align-self: center;
 	}
-	.answer-actions {
-		display: flex;
-		margin-top: var(--space-2);
-	}
 	.answer-visuals {
 		margin-top: var(--space-3);
 	}
@@ -287,24 +271,6 @@
 	}
 	.answer-supporting {
 		margin-top: var(--space-3);
-	}
-	.answer-actions button {
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
-		padding: 4px 7px;
-		border-radius: var(--radius-chip);
-		color: var(--text-faint);
-		font-size: var(--fs-xs);
-		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
-	}
-	.answer-actions button:hover:not(:disabled) {
-		background: var(--bg-inset);
-		color: var(--text);
-	}
-	.answer-actions button.saved {
-		color: var(--ok);
-		cursor: default;
 	}
 	.answer-meta {
 		display: flex;

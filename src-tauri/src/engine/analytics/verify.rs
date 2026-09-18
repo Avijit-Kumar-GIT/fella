@@ -1182,7 +1182,7 @@ fn alias_words(alias: &str) -> Vec<String> {
         .collect()
 }
 
-/// A query that packs several unrelated aggregates into one row (`SELECT
+/// A query that combines several unrelated aggregates into one row (`SELECT
 /// (SELECT ...) AS a, (SELECT ...) AS b, ...`) is the one shape where the
 /// model has to correctly remember which value belongs to which column
 /// after the fact, with no per-row label to anchor it -- the real,

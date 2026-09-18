@@ -1,8 +1,15 @@
 # Fella Extensibility
 
 How Fella stays minimal at install while letting people who want more add it
-themselves. Read `docs/DECISIONS.md` (2026-08-29 entries) for the decisions
-that set this; this file is the maintained reference.
+themselves. This file is an **archived design reference**. The current lean
+personal release does not compile or expose the pack, augment, or MCP runtime
+described below. Read [`LEAN-PERSONAL-RELEASE.md`](LEAN-PERSONAL-RELEASE.md)
+for the shipped boundary and the criteria for reopening it.
+
+The only active user-authored extension point is `fella.md`, the context file
+in a mounted workspace. It is edited by the user and read by the agent; the
+agent has no workspace write tool. `/mcp` remains an inert experimental
+signpost with no official connectors.
 
 ## The principle
 

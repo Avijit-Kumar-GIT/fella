@@ -18,7 +18,7 @@ row-cap implementation. Capacity boundaries are covered separately by determinis
 tests in `src-tauri/tests/chart_tool.rs`.
 
 The hosted run is opt in and BYOK only. It defaults to the hosted Ollama provider
-and Gemma 4 31B; it never starts or calls a local Ollama server.
+and Gemma 4 31B; it never starts or calls a model server on the machine.
 
 From the repository root, copy a Fella data directory containing `fella.db` and
 the provider credential to a scratch location, then run:

@@ -45,9 +45,6 @@
 	function stepLabel(e: EvidenceItem): string {
 		if (e.note?.trim()) return e.note.trim();
 		if (FALLBACK[e.tool]) return FALLBACK[e.tool];
-		// An mcp connector tool is named `<connector>__<tool>`.
-		const i = e.tool.indexOf('__');
-		if (i > 0) return `Used the ${e.tool.slice(0, i)} connector`;
 		return e.tool;
 	}
 

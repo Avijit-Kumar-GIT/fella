@@ -1,12 +1,10 @@
 // Slash-command parsing and input dispatch for the REPL.
 
-import { ipc, isTauri, openExternal, pickFolder } from './ipc';
-import { prefs } from './prefs.svelte';
+import { ipc, isTauri, pickFolder } from './ipc';
 import { Conversation, session } from './session.svelte';
 import type {
 	AskEvent,
 	ContextReference,
-	InstalledPack,
 	Message,
 	ProviderHealth,
 	ProviderInfo
@@ -17,7 +15,7 @@ showing the exact steps it took. You never need these commands, but here they ar
 
   Ask / Inspect     choose the normal answer flow or a stricter source-first,
                    read-only inspection flow from the composer
-  + Context / @     attach a source, field, or saved analysis to your next question
+  + Context / @     attach a source or field to your next question
 
   /open <path>     choose the folder Fella looks at
   /files           see what Fella found in your folder
@@ -33,8 +31,7 @@ showing the exact steps it took. You never need these commands, but here they ar
   /memory          see what Fella has learned about this folder (/memory forget to clear)
   /context         open fella.md, where you tell Fella about your files
   /update          check for a newer version of Fella and install it
-  /packs           themes and skills you've added (/packs browse to find more)
-  /connect         connect a data source you've added
+  /mcp             experimental and inert; no connectors are enabled
   /tab             open another conversation in a new tab
   /focus           hide the tabs and header for a plain view (again to undo)
   /clear           start this conversation over (the old one is saved)
@@ -59,8 +56,7 @@ export const SLASH_COMMANDS = [
 	'/memory',
 	'/context',
 	'/update',
-	'/packs',
-	'/connect',
+	'/mcp',
 	'/tab',
 	'/focus',
 	'/clear',
@@ -69,41 +65,7 @@ export const SLASH_COMMANDS = [
 	'/help'
 ] as const;
 
-/** Resolve `/<command> [name]` to the file an augment view should open: the
- *  pack's default file when no name is given, else `name` with the pack's
- *  default extension appended if `name` has none of its own (so `/note` still
- *  opens `notes.md`, `/note shopping` opens `shopping.md`, and `/note x.txt`
- *  is honoured as-is). Any path safety (no `..`, no absolute path, extension
- *  allowlist) is still enforced backend-side, same as the pack's own file. */
-function resolveAugmentFile(defaultFile: string, arg: string): string {
-	const name = arg.trim();
-	if (!name) return defaultFile;
-	if (/\.[^./\\]+$/.test(name)) return name;
-	const dot = defaultFile.lastIndexOf('.');
-	return name + (dot >= 0 ? defaultFile.slice(dot) : '');
-}
-
-/** `/`-prefixed commands contributed by enabled augment packs whose capability
- *  this build actually ships (`session.augmentCapabilities`, from the engine
- *  the UI keeps no list of its own). */
-function augmentCommands(): { cmd: string; pack: InstalledPack }[] {
-	return session.packs
-		.filter(
-			(p) =>
-				p.enabled &&
-				p.kind === 'augment' &&
-				p.augment &&
-				session.augmentCapabilities.includes(p.augment.capability)
-		)
-		.map((p) => ({ cmd: '/' + (p.augment as NonNullable<InstalledPack['augment']>).command, pack: p }));
-}
-
 const MODEL_FIELDS = ['provider', 'base_url', 'model', 'embed_model'];
-
-/** Where `/packs browse` sends you to find packs and their ids. Points at the
- *  `fella-extensions` repo until the marketplace site (`packs.fella.dev`) is
- *  deployed from `fella-web`. */
-const MARKETPLACE_URL = 'https://github.com/Avijit-Kumar-GIT/fella-extensions';
 
 /** One-line summary per command, for the composer menu and the ⌘K palette. */
 export const COMMAND_DESCRIPTIONS: Record<string, string> = {
@@ -119,8 +81,7 @@ export const COMMAND_DESCRIPTIONS: Record<string, string> = {
 	'/memory': 'see what Fella has learned about this folder',
 	'/context': 'open fella.md, where you tell Fella about your files',
 	'/update': 'check for a newer version of Fella and install it',
-	'/packs': "themes and skills you've added",
-	'/connect': "connect a data source you've added",
+	'/mcp': 'experimental and inert; no connectors are enabled',
 	'/tab': 'open another conversation in a new tab',
 	'/focus': 'hide the tabs and header for a plain view',
 	'/clear': 'start this conversation over (the old one is saved)',
@@ -143,7 +104,7 @@ export function completionsFor(input: string): string[] {
 
 	// Still on the command word itself.
 	if (parts.length === 1) {
-		const all = [...SLASH_COMMANDS, ...augmentCommands().map((a) => a.cmd)];
+		const all = [...SLASH_COMMANDS];
 		const m = all.filter((c) => c.startsWith(cmd));
 		return m.length === 1 && m[0] === cmd ? [] : [...new Set(m)];
 	}
@@ -169,20 +130,7 @@ export function completionsFor(input: string): string[] {
 				return pick(tables());
 			case '/memory':
 				return pick(['forget']);
-			case '/packs':
-				return pick(['browse', 'install', 'add', 'enable', 'disable', 'remove']);
-			case '/connect':
-				return pick(session.packs.filter((p) => p.kind === 'mcp').map((p) => p.id));
 		}
-	}
-	if (parts.length === 3 && cmd === '/packs') {
-		const sub = parts[1].toLowerCase();
-		if (sub === 'enable') return pick(session.packs.filter((p) => !p.enabled).map((p) => p.id));
-		if (sub === 'disable') return pick(session.packs.filter((p) => p.enabled).map((p) => p.id));
-		if (sub === 'remove') return pick(session.packs.map((p) => p.id));
-	}
-	if (parts.length === 3 && cmd === '/connect') {
-		return pick(['off', 'forget']);
 	}
 	if (parts.length === 3 && cmd === '/login') {
 		// `/login <provider> …` the only meaningful trailing word is `key`.
@@ -271,12 +219,7 @@ export async function openContext(): Promise<void> {
 		session.addSystem('Open a folder first with /open — fella.md saves into it.');
 		return;
 	}
-	await session.openAugment({
-		capability: 'buffer',
-		command: 'context',
-		file: 'fella.md',
-		syntax: 'markdown'
-	});
+	session.setWorkspacePane('context');
 }
 
 /** Ask the engine to stop one tab's in-progress run (the active tab by
@@ -329,21 +272,6 @@ export async function dispatch(raw: string): Promise<void> {
 		}
 	}
 
-	// Capturing an MCP connector token for `/connect <id>`.
-	if (session.pendingConnect) {
-		const { id } = session.pendingConnect;
-		session.pendingConnect = null;
-		if (!text.startsWith('/')) {
-			try {
-				await ipc.mcpSetToken(id, text);
-				session.packs = await ipc.packsSetEnabled(id, true);
-				session.addSystem(`Connected ${id}.`);
-			} catch (e) {
-				session.addSystem(`Couldn't save that key: ${errMsg(e)}`);
-			}
-			return;
-		}
-	}
 
 	if (text.startsWith('/')) {
 		await runCommand(text);
@@ -374,18 +302,6 @@ function buildQuestion(question: string, conv: Conversation): string {
 }
 
 function contextReferenceText(ref: ContextReference): string {
-	if (ref.kind === 'source') return `${ref.label}${ref.detail ? ` (${ref.detail})` : ''}`;
-	if (ref.kind === 'analysis') {
-		const analysis = session.analyses.find((item) => item.id === ref.key);
-		if (!analysis) return `saved analysis “${ref.label}”${ref.detail ? ` — original question: ${ref.detail}` : ''}`;
-		const answer = analysis.answer.text.replace(/\s+/g, ' ').trim().slice(0, 1200);
-		const evidence = analysis.answer.evidence
-			.map((item) => item.result_summary)
-			.filter(Boolean)
-			.slice(0, 4)
-			.join('; ');
-		return `saved analysis “${analysis.title}” — original question: ${analysis.question}\n  prior result: ${answer}${evidence ? `\n  evidence: ${evidence}` : ''}`;
-	}
 	return `${ref.label}${ref.detail ? ` (${ref.detail})` : ''}`;
 }
 
@@ -438,8 +354,7 @@ async function announceSignedIn(display: string): Promise<void> {
 export function carriesSecret(text: string): boolean {
 	const t = text.trim();
 	if (/^\/(login\s+\S+\s+key|model\s+key)\s+\S/i.test(t)) return true;
-	// `/connect <id> <token>` but not `/connect <id> off|forget`
-	return /^\/connect\s+\S+\s+(?!off\s*$|forget\s*$)\S/i.test(t);
+	return false;
 }
 
 /** The same line with the secret blanked, for the transcript. */
@@ -447,7 +362,6 @@ function redactSecret(text: string): string {
 	return text
 		.replace(/^(\/login\s+\S+\s+key)\s+.+/i, '$1 ••••••')
 		.replace(/^(\/model\s+key)\s+.+/i, '$1 ••••••')
-		.replace(/^(\/connect\s+\S+)\s+(?!off$|forget$).+/i, '$1 ••••••');
 }
 
 async function runCommand(text: string): Promise<void> {
@@ -857,10 +771,7 @@ async function runCommand(text: string): Promise<void> {
 		}
 
 		case '/context': {
-			// Not routed through the generic augment-command path: fella.md's
-			// filename is load-bearing (the engine reads that exact name as
-			// system-prompt context, see catalog.rs/state.rs), so unlike
-			// /note it can't be renamed via an argument.
+			// fella.md is the one explicit workspace context file the engine reads.
 			await openContext();
 			return;
 		}
@@ -890,175 +801,19 @@ async function runCommand(text: string): Promise<void> {
 			}
 			return;
 
-		case '/packs': {
-			if (!requireEngine()) return;
-			const words = arg.split(/\s+/).filter(Boolean);
-			const sub = words[0]?.toLowerCase();
-			try {
-				if (!sub) {
-					session.packs = await ipc.packsList();
-					session.addSystem(renderPacks(session.packs));
-					return;
-				}
-				if (sub === 'browse') {
-					session.addSystem(
-						"The browse site isn't live yet — opening the packs repo, " +
-							`where the packs and their ids are listed:\n${MARKETPLACE_URL}`
-					);
-					void openExternal(MARKETPLACE_URL);
-					return;
-				}
-				if (sub === 'add') {
-					const path = words.slice(1).join(' ').trim();
-					if (!path) {
-						session.addSystem(
-							'Point /packs add at a folder on this computer that holds a pack, ' +
-								'for example: /packs add ~/Downloads/ocean-theme'
-						);
-						return;
-					}
-					session.packs = await ipc.packsAdd(path);
-					await prefs.load();
-					session.addSystem(
-						`Added from a local folder, so it's marked unverified (nobody reviewed it but you).\n${renderPacks(session.packs)}`
-					);
-					warnAugmentCollisions();
-					return;
-				}
-				if (sub === 'install') {
-					const id = words[1];
-					if (!id) {
-						session.addSystem(
-							'Which pack? Run /packs browse to see what’s available, ' +
-								'then /packs install <id> with an id from that list.'
-						);
-						return;
-					}
-					session.addSystem(`Installing ${id}…`);
-					try {
-						session.packs = await ipc.packsInstall(id);
-					} catch (e) {
-						// The hosted catalog isn't fully live yet — a missing or
-						// unreachable catalog shouldn't read as a raw HTTP error.
-						// Real failures (checksum mismatch, unknown id, disk) fall
-						// through to the outer catch unchanged.
-						if (/could not reach|catalog is not valid|: HTTP [45]\d\d/i.test(errMsg(e))) {
-							session.addSystem(
-								"Couldn't reach the pack catalog (the marketplace isn't fully live yet). " +
-									'You can still add a pack from a local folder: /packs add <path>.'
-							);
-							return;
-						}
-						throw e;
-					}
-					await prefs.load();
-					session.addSystem(`Installed ${id}. Enable it with /packs enable ${id}.\n${renderPacks(session.packs)}`);
-					warnAugmentCollisions();
-					return;
-				}
-				if (sub === 'enable' || sub === 'disable' || sub === 'remove') {
-					const id = words[1];
-					if (!id) {
-						const pool =
-							sub === 'enable'
-								? session.packs.filter((p) => !p.enabled)
-								: sub === 'disable'
-									? session.packs.filter((p) => p.enabled)
-									: session.packs;
-						session.addSystem(
-							pool.length
-								? `Which one? /packs ${sub} <id>, where <id> is one of:\n  ${pool
-										.map((p) => p.id)
-										.join('\n  ')}`
-								: `Nothing to ${sub}. Run /packs to see what you have.`
-						);
-						return;
-					}
-					session.packs =
-						sub === 'remove'
-							? await ipc.packsRemove(id)
-							: await ipc.packsSetEnabled(id, sub === 'enable');
-					await prefs.load();
-					session.addSystem(renderPacks(session.packs));
-					return;
-				}
-				session.addSystem(
-					`unknown: /packs ${sub}\n\n` +
-						'/packs · /packs browse · /packs install <id> · /packs add <path> · /packs enable <id> · /packs disable <id> · /packs remove <id>'
-				);
-			} catch (e) {
-				session.addSystem(`error: ${errMsg(e)}`);
-			}
+		case '/mcp':
+			session.addSystem(
+				'MCP is experimental and closed in this release.\n' +
+					'No official connectors are enabled.\n' +
+					'Custom implementations require a fork or experimental build.'
+			);
 			return;
-		}
 
-		case '/connect': {
-			if (!requireEngine()) return;
-			const words = arg.split(/\s+/).filter(Boolean);
-			const id = words[0];
-			const sub = words[1]?.toLowerCase();
-			try {
-				const connectors = session.packs.filter((p) => p.kind === 'mcp');
-				if (!id) {
-					session.addSystem(renderConnectors(connectors));
-					return;
-				}
-				const c = connectors.find((p) => p.id === id);
-				if (!c) {
-					session.addSystem(`No data connection called "${id}".\n\n${renderConnectors(connectors)}`);
-					return;
-				}
-				if (sub === 'off') {
-					session.packs = await ipc.packsSetEnabled(id, false);
-					session.addSystem(`Disconnected ${id}.`);
-					return;
-				}
-				if (sub === 'forget') {
-					await ipc.mcpClearToken(id);
-					session.packs = await ipc.packsSetEnabled(id, false);
-					session.addSystem(`Forgot the ${id} key and disconnected it.`);
-					return;
-				}
-				if (words.length >= 2) {
-					await ipc.mcpSetToken(id, words.slice(1).join(' '));
-					session.packs = await ipc.packsSetEnabled(id, true);
-					session.addSystem(`Connected ${id}.`);
-					return;
-				}
-				if (!c.needs_token) {
-					session.packs = await ipc.packsSetEnabled(id, true);
-					session.addSystem(c.enabled ? `${id} is already connected.` : `Connected ${id}.`);
-					return;
-				}
-				session.pendingConnect = { id };
-				session.addSystem(
-					`Paste the ${id} key and press Enter. It's stored on this computer, ` +
-						'never shown or logged. Esc to cancel.'
-				);
-			} catch (e) {
-				session.addSystem(`error: ${errMsg(e)}`);
-			}
-			return;
-		}
-
-		default: {
-			// A slash command contributed by an enabled augment pack? An argument
-			// names a different file than the pack's default, so one `buffer`/
-			// `grid` augment can hold many independently-named notes/tables.
-			const aug = augmentCommands().find((a) => a.cmd === cmd)?.pack.augment;
-			if (aug) {
-				if (!requireEngine()) return;
-				if (!session.catalog.workspace) {
-					session.addSystem('Open a folder first with /open — the file saves into it.');
-					return;
-				}
-				await session.openAugment({ ...aug, file: resolveAugmentFile(aug.file, arg) });
-				return;
-			}
+		default:
 			session.addSystem(`unknown command: ${cmd}\n\n${HELP}`);
+			return;
 		}
 	}
-}
 
 /** Run one question in `conv` (its own tab). Bound to the tab, not "the active
  *  tab", so it keeps streaming there after the user switches away. */
@@ -1081,7 +836,7 @@ async function ask(question: string, conv: Conversation): Promise<void> {
 		}
 	}, 1000);
 
-	// Transient engine notices (retry/backoff, connector problems) normally only
+	// Transient engine notices (retry/backoff, provider problems) normally only
 	// flash in the status bar. Keep them so that if the run ends badly the user
 	// has the warning that explains why.
 	const notices: string[] = [];
@@ -1168,59 +923,6 @@ function parseModelArg(arg: string): SettingsPatch | null {
 	// Anything else is a model id. Send it as-is the provider rejects a bad
 	// one with a real error, which beats silently keeping the old model.
 	return { model: arg };
-}
-
-/** Warn when an installed augment's command is shadowed by a built-in it
- *  stays installed but can't be opened by that name. */
-function warnAugmentCollisions(): void {
-	const builtins = new Set<string>(SLASH_COMMANDS);
-	const clashes = session.packs
-		.filter((p) => p.kind === 'augment' && p.augment && builtins.has('/' + p.augment.command))
-		.map((p) => `/${p.augment?.command} (${p.id})`);
-	if (clashes.length) {
-		session.addSystem(
-			`Note: ${clashes.join(', ')} — that name is a built-in command, so the augment can't be ` +
-				`opened by it. It stays installed.`
-		);
-	}
-}
-
-function renderPacks(list: InstalledPack[]): string {
-	if (list.length === 0) {
-		return 'No packs installed.\n\n/packs browse  to find some · /packs install <id>  ·  /packs add <path>';
-	}
-	const rows = list.map((p) => {
-		const mark = p.enabled ? '●' : '○';
-		const unver = p.verified ? '' : '  (unverified)';
-		const extra =
-			p.kind === 'augment' && p.augment
-				? `  →  /${p.augment.command} [name]  (default: ${p.augment.file})`
-				: '';
-		return `${mark} ${p.id.padEnd(20)} ${p.kind.padEnd(7)} ${(p.enabled ? 'on' : 'off').padEnd(3)}  ${p.name}${unver}${extra}`;
-	});
-	const out = ['  id                   kind    state', ...rows, ''];
-	if (list.some((p) => !p.verified)) {
-		out.push('(unverified) = added from a local folder, not the reviewed marketplace');
-	}
-	out.push('/packs enable <id> · /packs disable <id> · /packs remove <id> · /packs browse');
-	return out.join('\n');
-}
-
-function renderConnectors(list: InstalledPack[]): string {
-	if (list.length === 0) {
-		return 'No data connections yet.\n\nAdd one with /packs browse, then /connect it.';
-	}
-	const rows = list.map((c) => {
-		const status = c.needs_token ? 'needs a key' : c.enabled ? 'connected' : 'off';
-		const mark = c.enabled && !c.needs_token ? '●' : '○';
-		return `${mark} ${c.id.padEnd(20)} ${status}`;
-	});
-	return [
-		'  data connection',
-		...rows,
-		'',
-		'/connect <id> to connect (paste a key) · /connect <id> off · /connect <id> forget'
-	].join('\n');
 }
 
 function renderProviders(list: ProviderInfo[]): string {

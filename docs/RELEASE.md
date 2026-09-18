@@ -9,6 +9,11 @@ The next version should remain the personal analytics release. It can improve
 correctness, sandbox behavior, and packaging without expanding the product into
 a general agent, hosted marketplace, or enterprise control plane.
 
+The implemented product boundary for the next lean personal release is documented
+in [`LEAN-PERSONAL-RELEASE.md`](LEAN-PERSONAL-RELEASE.md). It supersedes the
+historical extension and pack plans below for the next release scope; the
+historical entries remain for context.
+
 The release candidate is ready only when these items are complete:
 
 - [x] Run the current Rust and frontend gates after the latest code changes:
@@ -28,7 +33,7 @@ The release candidate is ready only when these items are complete:
       Windows and macOS when those hosts are available.
 - [ ] Build `pnpm tauri build` on each reachable desktop target, record
       installer sizes, and launch at least one packaged build through the
-      folder-open, question, evidence, stop, login, model, packs, tabs, and
+      folder-open, question, evidence, stop, login, model, workspace, tabs, and
       focus flows.
 - [x] Capture a hosted BYOK baseline in `docs/PERFORMANCE-LOG.md`; local model
       server measurements are outside the product's supported deployment.

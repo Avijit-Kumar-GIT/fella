@@ -2,12 +2,9 @@
    breathe a lightweight macOS register. Sans for the conversation; monospace
    only where data lines up (tables, SQL, output, identifiers).
 
-   Tokens come in two groups:
-   - PACK-OVERRIDABLE: a theme pack may replace these (see THEME_TOKEN_KEYS in
-     src/lib/prefs.svelte.ts and src-tauri/src/engine/extensions.rs keep both in
-     sync). All colors, plus --radius and --pad.
-   - FIXED: the type scale, fonts, spacing scale, shadows, radii, motion. Not
-     overridable; changing them would break layout a pack can't reason about.
+   Tokens are intentionally local to the application. All colors, plus --radius
+   and --pad, live here; the type scale, fonts, spacing scale, shadows, radii,
+   and motion are fixed so the layout remains predictable.
 
    Rules of the house:
    - Monochrome first, with one accent. Color (--ok / --warn / --err / --link)
@@ -42,7 +39,7 @@
 }
 
 :root {
-	/* --- pack-overridable ------------------------------------------------ */
+	/* --- application tokens --------------------------------------------- */
 	/* Warm neutrals with real depth: --bg is the window tint, --bg-raised the
 	   writing surface (they differ now), --bg-inset the recessed fill. */
 	--bg: #fcfcfb;

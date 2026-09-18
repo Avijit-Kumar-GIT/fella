@@ -72,18 +72,6 @@ export interface Answer {
 	usage?: { prompt_tokens: number; completion_tokens: number };
 }
 
-/** A personal workspace artifact saved from one completed answer. Kept in the
- *  local UI store for now; the answer already carries its workspace snapshot,
- *  evidence, query, and chart data. */
-export interface AnalysisArtifact {
-	id: string;
-	message_id: string;
-	title: string;
-	question: string;
-	answer: Answer;
-	created_at_ms: number;
-}
-
 /** The two user-facing ways to work with a mounted workspace. Ask is the
  * default conversational surface; Inspect is the stricter source-first path
  * with a read-only tool registry. */
@@ -94,7 +82,6 @@ export type AskMode = 'ask' | 'inspect';
  * read and the backend remains the source of truth for access. */
 export type ContextReference =
 	| { kind: 'source'; key: string; label: string; detail?: string }
-	| { kind: 'analysis'; key: string; label: string; detail?: string }
 	| { kind: 'column'; key: string; label: string; detail?: string };
 
 /** One observable step in a local question run. Kept in the conversation so
@@ -113,7 +100,6 @@ export interface RunStep {
 /** Selection rendered by the right-hand inspector drawer. */
 export type InspectorSelection =
 	| { kind: 'source'; path: string }
-	| { kind: 'analysis'; id: string }
 	| { kind: 'answer'; messageId: string; stepIndex?: number }
 	| null;
 
@@ -249,37 +235,6 @@ export interface ConversationSummary {
 	message_count: number;
 	/** A user-given name, if this conversation was renamed. */
 	title: string | null;
-}
-
-/** A pack: a theme, a skill, an mcp connector, or an augment. See
- *  docs/EXTENSIBILITY.md. A kind this build doesn't know arrives as a string. */
-export type PackKind = 'theme' | 'skill' | 'mcp' | 'augment' | (string & {});
-
-/** An `augment` pack's `augment.json`, parsed by the engine. */
-export interface AugmentConfig {
-	capability: string;
-	command: string;
-	file: string;
-	syntax: string;
-}
-
-/** One installed pack, as returned by the `packs_*` commands. */
-export interface InstalledPack {
-	id: string;
-	kind: PackKind;
-	name: string;
-	version: string;
-	description: string;
-	/** `"local"` (side-loaded) or `"marketplace"`. */
-	source: string;
-	/** Installed from the reviewed marketplace. */
-	verified: boolean;
-	enabled: boolean;
-	/** `mcp` packs: enabled but still missing the token `/connect` needs. */
-	needs_token?: boolean;
-	/** `augment` packs: the parsed config, or absent for other kinds / an
-	 *  unparseable payload. */
-	augment?: AugmentConfig;
 }
 
 /** Streaming events emitted by the `ask` command over a Tauri Channel. */

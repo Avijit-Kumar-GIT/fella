@@ -1,23 +1,25 @@
 ---
 title: "Contributing"
-description: "Choose the app or pack lane, make a focused change, and verify the claims it affects."
+description: "Make a focused app change and verify the claims it affects."
 icon: "git-pull-request"
 ---
 
 # Contribute without widening the base by accident
 
-Fella accepts app changes in this repository and pack changes in the separate extension repository. The split is determined by whether the compiled application must change.
+Fella accepts app changes in this repository. The current personal release has
+one maintained contribution surface: the application and its fixed local
+analytics path. The former extension design is archived for future forks.
 
 ## Choose a contribution lane
 
-| Change | Repository | Review expectation |
+| Change | Review expectation |
 | --- | --- | --- |
-| Bug fix, UI, engine, verification, provider, parser, or built-in tool | [`fella`](https://github.com/Avijit-Kumar-GIT/fella) | App tests, design boundaries, and binary impact |
-| New augment capability | `fella` | It ships in every binary even if no pack enables it |
-| Theme, skill, MCP config, or manifest using an existing augment capability | [`fella-extensions`](https://github.com/Avijit-Kumar-GIT/fella-extensions) | Pack schema, content, provenance, and kind-specific rules |
-| New file format | `fella` | Parser and fixture tests; never a pack |
+| Bug fix, UI, engine, verification, provider, parser, or built-in tool | App tests, design boundaries, and binary impact |
+| New file format | Parser and fixture tests |
+| Sandbox or resource-limit change | Boundary-focused tests and a security review |
 
-A pack contains data only. If an idea needs executable behavior, a dependency, a new tool, or a new capability name, open an app issue before implementing it.
+If an idea needs a new tool, network path, filesystem capability, or generated
+workspace artifact, open an issue first so the product boundary can be reviewed.
 
 ## Prepare the development environment
 
@@ -85,20 +87,18 @@ Before opening a PR, ask:
 - Can model-controlled input reach a shell, Python, URL, SQL, or renderer?
 - Does it change which prompt or tool result a hosted provider sees?
 - Does it store a credential in `auth.json` rather than settings, browser storage, or transcripts?
-- Does a read-only claim need qualification for Python, MCP, or an augment view?
+- Does a read-only claim need qualification for Python or user-authored context?
 - Does a verification change detect semantic errors, or only grounding/replay patterns?
 
 State the actual boundary in docs and tests rather than broadening a guarantee.
 
-## Submit a pack
+## Experimental boundary
 
-Use the extension repository's templates and kind-specific rules. Test a local directory without publishing it:
-
-```text filename="fella command"
-/packs add /path/to/fella-extensions/packs/my-pack
-```
-
-Side-loaded packs are marked **unverified** because they lack marketplace review provenance. Catalog installation additionally checks each downloaded file against its listed SHA-256 hash. Hash verification and maintainer review are separate, and neither guarantees a remote MCP service.
+The `/mcp` command is retained as an inert signpost. It does not connect to a
+service or add tools in the personal release. The active user-authored context
+surface is the root `fella.md` file. Pack, augment, and connector designs are
+archived in [`docs/EXTENSIBILITY.md`](https://github.com/Avijit-Kumar-GIT/fella/blob/main/docs/EXTENSIBILITY.md)
+for future custom forks.
 
 ## Open the pull request
 
@@ -114,7 +114,7 @@ Side-loaded packs are marked **unverified** because they lack marketplace review
   <Card title="Choose a test layer" icon="test-tube" href="/other-resources/evaluation">
     Match deterministic tests and live evaluation to the claim.
   </Card>
-  <Card title="Write a pack" icon="package-plus" href="https://github.com/Avijit-Kumar-GIT/fella-extensions">
-    Follow the separate pack schema and review workflow.
+  <Card title="Read the release boundary" icon="book-open" href="https://github.com/Avijit-Kumar-GIT/fella/blob/main/docs/LEAN-PERSONAL-RELEASE.md">
+    See which capabilities are active in the personal release.
   </Card>
 </CardGroup>

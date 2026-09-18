@@ -11,11 +11,9 @@ use serde::Serialize;
 use crate::engine::agent;
 use crate::engine::analytics::data::{self, DataEngine, DEFAULT_ROW_CAP};
 use crate::engine::analytics::pyexec;
-use crate::engine::augment;
 use crate::engine::catalog::{self, Catalog, SourceInfo, SourceKind};
 use crate::engine::error::{EngineError, EngineResult};
 use crate::engine::evidence::{Answer, AskEvent};
-use crate::engine::extensions::{self, InstalledPack};
 use crate::engine::ingest::docs;
 use crate::engine::llm::{LlmClient, ProviderHealth};
 use crate::engine::memory::{self, FolderMemory};
@@ -106,7 +104,7 @@ struct WorkspaceState {
     indexed_at_ms: Option<i64>,
     sources: Vec<SourceInfo>,
     /// Contents of `fella.md` at the workspace root, if present. User-written
-    /// context fed to the system prompt alongside enabled skill packs.
+    /// context fed to the system prompt.
     user_md: Option<String>,
     /// Rendered `schema_block()` for the current sources - it re-samples every
     /// table, so we build it once per workspace and clear it on (re)open or
@@ -791,8 +789,7 @@ impl EngineState {
         Some(p)
     }
 
-    /// User-written context for the system prompt: the workspace `fella.md`
-    /// followed by the Markdown of every enabled `skill` pack.
+    /// User-written context for the system prompt: the workspace `fella.md`.
     pub fn user_context(&self) -> Vec<String> {
         let mut out = Vec::new();
         if let Some(md) = self
@@ -804,10 +801,6 @@ impl EngineState {
         {
             out.push(md);
         }
-        out.extend(extensions::enabled_skill_texts(
-            &self.data_dir,
-            &self.sqlite.lock().unwrap_or_else(|e| e.into_inner()),
-        ));
         out
     }
 
@@ -966,83 +959,58 @@ exactly, character for character, from the list below.";
         }
     }
 
-    // --- packs (installed extensions) ------------------------------------
+    /// Return the current workspace context file and its contents.
+    /// The file is user-authored context, not an agent write surface.
+    pub fn context_file(&self) -> Option<(String, Option<String>)> {
+        let ws = self
+            .workspace
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .workspace
+            .clone()?;
+        let path = ws.join("fella.md");
+        Some((
+            path.display().to_string(),
+            std::fs::read_to_string(path).ok(),
+        ))
+    }
 
-    pub fn packs_list(&self) -> Vec<InstalledPack> {
-        let mut list = extensions::list(
-            &self.data_dir,
-            &self.sqlite.lock().unwrap_or_else(|e| e.into_inner()),
-        );
-        for p in &mut list {
-            if p.kind == "mcp" && !self.mcp_has_token(&p.id) {
-                p.needs_token = true;
+    /// Save the explicit user context file at the root of the open workspace.
+    /// This is the one supported workspace write outside the agent tool path.
+    pub fn save_context(&self, contents: &str) -> EngineResult<()> {
+        let ws = self
+            .workspace
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .workspace
+            .clone()
+            .ok_or(EngineError::NoWorkspace)?;
+        let path = ws.join("fella.md");
+        let tmp = ws.join(".fella.md.fella-tmp");
+        std::fs::write(&tmp, contents)
+            .map_err(|e| EngineError::io(format!("write {}", tmp.display()), e))?;
+        if let Err(e) = Self::replace_file(&tmp, &path) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(EngineError::io(format!("replace {}", path.display()), e));
+        }
+        let normalized = contents.trim().to_string();
+        let mut workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
+        workspace.user_md = (!normalized.is_empty()).then_some(normalized);
+        Ok(())
+    }
+
+    /// Replace a file after writing a sibling temporary file. Unix rename is an
+    /// atomic replacement; Windows refuses to rename over an existing file, so the
+    /// small fallback removes the old context file before moving the completed
+    /// temporary file into place.
+    fn replace_file(tmp: &Path, destination: &Path) -> std::io::Result<()> {
+        #[cfg(windows)]
+        {
+            if destination.exists() {
+                std::fs::remove_file(destination)?;
             }
         }
-        list
-    }
-
-    pub fn packs_add(&self, src: &Path) -> EngineResult<Vec<InstalledPack>> {
-        let conn = self.sqlite.lock().unwrap_or_else(|e| e.into_inner());
-        extensions::install_local(&self.data_dir, &conn, src)?;
-        Ok(extensions::list(&self.data_dir, &conn))
-    }
-
-    pub fn packs_remove(&self, id: &str) -> EngineResult<Vec<InstalledPack>> {
-        let conn = self.sqlite.lock().unwrap_or_else(|e| e.into_inner());
-        extensions::remove(&self.data_dir, &conn, id)?;
-        Ok(extensions::list(&self.data_dir, &conn))
-    }
-
-    pub fn packs_set_enabled(&self, id: &str, enabled: bool) -> EngineResult<Vec<InstalledPack>> {
-        let conn = self.sqlite.lock().unwrap_or_else(|e| e.into_inner());
-        extensions::set_enabled(&conn, id, enabled)?;
-        Ok(extensions::list(&self.data_dir, &conn))
-    }
-
-    /// Install a pack from the marketplace by id (files are SHA-256 checked
-    /// against the catalog). Network happens before the DB lock is taken.
-    pub async fn packs_install(&self, id: &str) -> EngineResult<Vec<InstalledPack>> {
-        let downloaded =
-            extensions::download_pack(&self.http, &extensions::catalog_url(), id).await?;
-        let conn = self.sqlite.lock().unwrap_or_else(|e| e.into_inner());
-        extensions::install_downloaded(&self.data_dir, &conn, &downloaded)?;
-        Ok(extensions::list(&self.data_dir, &conn))
-    }
-
-    // --- augments (user-authored files in the open folder) --------------
-
-    /// Write a user-authored augment file into the open folder. Called by the UI
-    /// when a person types in a `buffer` / `grid` view never by the agent.
-    /// Write only; the UI calls `reindex()` (on tab close / idle) so Fella then
-    /// sees the file like any other in the folder.
-    pub fn augment_save(&self, capability: &str, file: &str, contents: &str) -> EngineResult<()> {
-        let ws = self
-            .workspace
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .workspace
-            .clone()
-            .ok_or(EngineError::NoWorkspace)?;
-        match capability {
-            // The grid is serialised to CSV text by the UI, so both persist the
-            // same way; `capability` is only the compatibility checkpoint.
-            "buffer" | "grid" => augment::write_buffer(&ws, file, contents).map(|_| ()),
-            other => Err(EngineError::msg(format!(
-                "this build doesn't support the '{other}' augment update Fella"
-            ))),
-        }
-    }
-
-    /// Read an augment file back for the editor. `None` if it doesn't exist yet.
-    pub fn augment_load(&self, file: &str) -> EngineResult<Option<String>> {
-        let ws = self
-            .workspace
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .workspace
-            .clone()
-            .ok_or(EngineError::NoWorkspace)?;
-        augment::read_buffer(&ws, file)
+        std::fs::rename(tmp, destination)
     }
 
     /// Check the latest GitHub release and, if it's newer, download +
@@ -1052,14 +1020,6 @@ exactly, character for character, from the list below.";
     /// before the handoff.
     pub async fn update(&self, app: tauri::AppHandle) -> EngineResult<update::UpdateStatus> {
         update::apply(&self.http, app).await
-    }
-
-    /// CSS token map of the active theme pack, for the frontend to apply.
-    pub fn packs_theme(&self) -> Option<std::collections::BTreeMap<String, String>> {
-        extensions::active_theme_tokens(
-            &self.data_dir,
-            &self.sqlite.lock().unwrap_or_else(|e| e.into_inner()),
-        )
     }
 
     pub fn settings(&self) -> Settings {
@@ -1598,7 +1558,7 @@ exactly, character for character, from the list below.";
 
     /// Run the agent loop with the user's interaction mode. Inspect keeps the
     /// same evidence and verification path but exposes only deterministic
-    /// workspace tools; it also avoids attaching external MCP tools.
+    /// workspace tools.
     pub async fn ask_with_mode(
         &self,
         conversation_id: &str,
@@ -1662,10 +1622,6 @@ exactly, character for character, from the list below.";
         } else {
             Registry::standard()
         };
-        #[cfg(feature = "mcp")]
-        if !inspect {
-            self.attach_mcp_tools(&mut registry, &emit).await;
-        }
         let answer = agent::run(
             self,
             &llm,
@@ -1768,82 +1724,6 @@ exactly, character for character, from the list below.";
             }
         }
         Ok(answer)
-    }
-
-    /// Connect every enabled `mcp` connector and register its tools. Failures
-    /// and withheld (non-read-only) tools are reported as notices, never fatal.
-    #[cfg(feature = "mcp")]
-    async fn attach_mcp_tools(
-        &self,
-        registry: &mut Registry,
-        emit: &(impl Fn(AskEvent) + Send + Sync),
-    ) {
-        let connectors = {
-            let conn = self.sqlite.lock().unwrap_or_else(|e| e.into_inner());
-            extensions::enabled_mcp_connectors(&self.data_dir, &conn)
-        };
-        let mut tools = Vec::new();
-        for (id, cfg) in connectors {
-            let token = cfg
-                .auth
-                .secret_name()
-                .and_then(|v| self.secrets.api_key(&format!("mcp:{id}:{v}")));
-            if cfg.auth.secret_name().is_some() && token.is_none() {
-                emit(AskEvent::Notice {
-                    text: format!("connector '{id}' has no token yet run /connect {id}"),
-                });
-                continue;
-            }
-            match crate::engine::mcp::connect(&self.http, &id, &cfg, token.as_deref()).await {
-                Ok((mut offered, withheld)) => {
-                    if !withheld.is_empty() {
-                        emit(AskEvent::Notice {
-                            text: format!(
-                                "connector '{id}': skipped {} tool(s) that can modify the service ({})",
-                                withheld.len(),
-                                withheld.join(", ")
-                            ),
-                        });
-                    }
-                    tools.append(&mut offered);
-                }
-                Err(e) => emit(AskEvent::Notice {
-                    text: format!("couldn't use connector '{id}': {e}"),
-                }),
-            }
-        }
-        registry.set_mcp(tools);
-    }
-
-    /// Store the token for an `mcp` connector pack (its `connector.json` names
-    /// which credential it reads).
-    pub fn mcp_set_token(&self, id: &str, token: &str) -> EngineResult<()> {
-        let cfg = extensions::connector_config(&self.data_dir, id)?;
-        let var = cfg
-            .auth
-            .secret_name()
-            .ok_or_else(|| EngineError::msg(format!("connector '{id}' needs no token")))?;
-        self.secrets.set_api_key(&format!("mcp:{id}:{var}"), token)
-    }
-
-    /// Forget an `mcp` connector's token.
-    pub fn mcp_clear_token(&self, id: &str) -> EngineResult<bool> {
-        let cfg = extensions::connector_config(&self.data_dir, id)?;
-        match cfg.auth.secret_name() {
-            Some(var) => self.secrets.clear(&format!("mcp:{id}:{var}")),
-            None => Ok(false),
-        }
-    }
-
-    /// Whether an `mcp` connector pack has its token stored (or needs none).
-    pub fn mcp_has_token(&self, id: &str) -> bool {
-        match extensions::connector_config(&self.data_dir, id) {
-            Ok(cfg) => match cfg.auth.secret_name() {
-                Some(var) => self.secrets.has(&format!("mcp:{id}:{var}")),
-                None => true,
-            },
-            Err(_) => false,
-        }
     }
 
     /// Is the configured model provider reachable?
@@ -2294,9 +2174,9 @@ fn shared_column_hints(tables: &[&SourceInfo]) -> Vec<String> {
 
 /// Open `fella.db`, or, if it's corrupt (a truncated write, a bad disk),
 /// move it aside as `fella.db.corrupt-<unix>` and start fresh. Losing it costs
-/// the user their settings and pack list, not their API keys (`auth.json` is
-/// separate) or their archived conversations. Better than a non-starting app
-/// with a stderr-only message.
+/// the user their settings and workspace/session metadata, not their API keys
+/// (`auth.json` is separate) or their archived conversations. Better than a
+/// non-starting app with a stderr-only message.
 fn open_or_recover(path: &Path) -> rusqlite::Connection {
     // The app was "Woody" until the rename: carry a `woody.db` (and its WAL
     // sidecars) forward the first time we open at the new name.

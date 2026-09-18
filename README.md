@@ -53,10 +53,11 @@ binary with nothing bundled. Local-first. Minimal dependencies. It's for a regul
 person doing enterprise-grade personal analytics not analysts, not developers so it's plain-language
 throughout and copes with a messy real-world folder. It is deliberately *not* a general
 task agent: no file-management, no chores, and the base has a fixed, small tool set.
-Customisation is opt-in and stays out of the base: vetted themes, skills, MCP
-connectors, and augments (a notes tab, a small table) a user can install
-themselves (see [`docs/EXTENSIBILITY.md`](docs/EXTENSIBILITY.md)). The whole thing stays understandable
-by one person. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for how it's built,
+The shipped release keeps customization deliberately small: the user-authored
+`fella.md` context file, provider/model settings, and appearance are the active
+extension points. MCP is documented as an inert experimental command; packs and
+augments are archived design work rather than runtime features. The whole thing
+stays understandable by one person. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for how it's built,
 [`docs/WHY.md`](docs/WHY.md) for the reasoning, [`docs/PRINCIPLES.md`](docs/PRINCIPLES.md)
 for the commitments, and [`docs/NON-GOALS.md`](docs/NON-GOALS.md) for what it deliberately
 doesn't do.
@@ -156,11 +157,9 @@ own model. Slash commands below are a power-user shortcut; you never need them.
 | `/model` | Show or change the LLM provider, base URL and model. Per-tab: each tab can run a different model, but all tabs share one login |
 | `/reindex` | Check the folder again for new or changed files |
 | `/memory` | See what Fella has learned about this folder on its own (`/memory forget` clears it) |
-| `/context` | Open `fella.md` in an editor tab: tell Fella how your files are organised and what your terms mean, in your own words. Saves as you type, read at the start of every question |
+| `/context` | Open `fella.md` in the Workspace editor: tell Fella how your files are organised and what your terms mean, in your own words |
 | `/update` | Check for a newer release and install it (checksum-verified, same as the install scripts); Fella closes and you reopen it once the installer finishes |
-| `/packs` | Packs you've added themes, skills, mcp connectors, augments. `/packs add <path>` for a local one, `/packs install <id>` from the seed catalog ([`docs/EXTENSIBILITY.md`](docs/EXTENSIBILITY.md)) |
-| `/connect` | Connect a data source you installed as an `mcp` pack (paste its token) |
-| _(augment)_ | An installed `augment` pack adds its own command e.g. `/note` opens a notes tab, `/table` a small editable table, each saved into the open folder. Add a name to use a different file: `/note shopping` → `shopping.md`, default is `/note` alone → `notes.md` |
+| `/mcp` | Experimental and inert. No official connectors are enabled; custom implementations require a fork or experimental build |
 | `/tab` | Open another conversation in a new tab |
 | `/focus` | Hide the tabs and header for a plain view (again to undo) |
 | `/clear` | Start a new conversation (the old one is saved) |
@@ -190,24 +189,19 @@ worked) instead of starting over each time.
 
 ### Personalizing
 
-Fella works with nothing set up. If you want more: `/context` opens `fella.md` right
-in the app, an editor tab where you tell Fella how your files are organised and what
-your terms mean, in your own words (dropping the file in by hand works too, if you'd
-rather). Or add a pack: a
-`theme` (colours), a `skill` (vocabulary/rules for the model), an `mcp` connector
-(a remote data source), or an `augment` (a notes tab or a small table, saved into
-the folder), from a local folder with `/packs add <path>`. A small seed
-catalog is installable by id (`/packs install <id>`); a browsable gallery of packs
-comes later. All optional. See [`docs/EXTENSIBILITY.md`](docs/EXTENSIBILITY.md).
+Fella works with nothing set up. If you want to add local guidance, `/context`
+opens `fella.md` in the Workspace editor so you can describe how your files are
+organised and what your terms mean. The file can also be created by hand. `/mcp`
+is present as an inert experimental signpost; it does not connect to anything in
+the personal release.
 
 ## Contributing
 
-Fella is open source and takes contributions two ways: to the **app** (features,
-fixes, new file formats, engine or UI work, new augment capabilities) here, and
-to **packs** (themes, skills, MCP connectors, augments) in the `fella-extensions`
-repo. Start with
-[`CONTRIBUTING.md`](CONTRIBUTING.md); the pack model is in
-[`docs/EXTENSIBILITY.md`](docs/EXTENSIBILITY.md).
+Fella is open source and takes contributions to the **app**: features, fixes,
+new file formats, engine, UI, sandbox, and verification work. Extension and MCP
+designs remain archived for future forks. Start with
+[`CONTRIBUTING.md`](CONTRIBUTING.md); the current release boundary is in
+[`docs/LEAN-PERSONAL-RELEASE.md`](docs/LEAN-PERSONAL-RELEASE.md).
 
 ## Status
 

@@ -3,6 +3,11 @@
 This document is the maintained reference for how Fella is built. Update it in the same
 commit as any change that alters a design decision here.
 
+> **Current lean personal release:** the compiled product has fixed local tools,
+> a Workspace surface for sources and `fella.md`, Ask, History, Search, and
+> Settings. The extension, pack, MCP client, augment, and standalone analysis
+> sections below are historical design notes unless explicitly marked current.
+
 ## What Fella is
 
 A local-first desktop app for **enterprise-grade personal analytics** a regular person points it at
@@ -14,9 +19,9 @@ carries the steps, queries and rows behind it.
 
 **Read-only agent.** The agent reads the folder; it never writes, moves or deletes
 anything, and it produces answers, not files. The read-only boundary is the safety
-story, and it is structural there is no write tool to disable. An opt-in
-`augment` pack (`EXTENSIBILITY.md`) adds a tab where *you* save a note or table you
-typed; that is a user keystroke writing one named file, never the model.
+story, and it is structural: there is no write tool to disable. The user may
+edit the explicit `fella.md` context file from the Workspace surface; that is a
+user action and never an agent write.
 
 The full set of positive commitments this implies is
 [`PRINCIPLES.md`](PRINCIPLES.md); what Fella deliberately doesn't do is
@@ -24,7 +29,7 @@ The full set of positive commitments this implies is
 the reasoning behind them.
 
 The microharness principles in `AUDIT.md` (thin UI, local-first, token efficiency,
-smallest useful tool set, interchangeable models, extensions at the edges, testable
+smallest useful tool set, interchangeable models, reviewed boundaries, testable
 headless, anti-bloat) are the standing design constraints. `HARNESS.md` is the
 engineering log for the reasoning loop what's been measured and changed, and why
 each choice holds across weak and strong models.
@@ -37,8 +42,7 @@ each choice holds across weak and strong models.
 | UI | SvelteKit + Svelte 5 + TS, `adapter-static`, SSR off | Static SPA, no server; compiles small |
 | Data engine | **SQLite** (`rusqlite`, `bundled` + `window`) behind the `DataEngine` trait | Already bundled (+0 crates); covers personal-analytics SQL. DuckDB was ~2/3 of the binary and ~all the build time (`docs/AUDIT.md` / `PERFORMANCE.md`). |
 | Data engine (opt-in) | DuckDB (`--features duckdb`) | Parquet, faster on large files, `SUMMARIZE`. Adds ~30 MB. |
-| App state | SQLite (`rusqlite`) | Settings, source cache, installed packs separate `fella.db` |
-| MCP client (`--features mcp`, default on) | `rmcp` (client + base Streamable-HTTP transport; our own `reqwest` backend) | Connect an `mcp` connector pack to a remote MCP server; ~10 small crates, MSRV 1.93 |
+| App state | SQLite (`rusqlite`) | Settings, source cache, recent workspaces, and conversation metadata |
 | CSV/JSON import | `csv` crate + `serde_json`, own type sniffer (`data/sqlite.rs`) | DuckDB's `read_csv_auto` replacement; reuses the Excel type-inference idea |
 | HTTP | `reqwest` (rustls, `ring` provider, no HTTP/2) | Talk to hosted Ollama-wire / OpenAI-compatible APIs; `ring` avoids the aws-lc cmake/NASM build |
 | Excel (`--features xlsx`, default on) | `calamine` → typed rows → `DataEngine::add_rows` | Pure Rust; ~8 crates |
@@ -47,13 +51,10 @@ each choice holds across weak and strong models.
 ### Cargo features
 
 ```
-default = ["pdf", "xlsx", "mcp"]   # the shipped build (MSRV 1.93, for RustPython 0.5)
---no-default-features              # CSV/JSON/SQL + agent only; no PDF/Excel/MCP
+default = ["pdf", "xlsx"]         # the shipped build (MSRV 1.93, for RustPython 0.5)
+--no-default-features              # CSV/JSON/SQL + agent only; no PDF/Excel
 --features duckdb                  # swap SQLite → DuckDB (CI-only; OOMs a laptop)
 ```
-
-`mcp` pulls `rmcp` for connector packs; dropping it still installs/lists `mcp`
-packs but connecting reports "no connector support".
 
 Frontend config note: this SvelteKit version carries adapter config in
 `vite.config.ts` (via the `sveltekit()` plugin options), not a separate
@@ -68,7 +69,7 @@ src/                         SvelteKit frontend presentation only
   routes/+page.svelte        the single REPL view
   lib/ipc.ts                 typed wrappers over invoke() + Channel events
   lib/components/            Transcript, Message, EvidenceBlock, Composer, Sidebar,
-                             Titlebar, Sources, Packs, Analyses
+                             Titlebar, Workspace, Sources, Context, Settings
 
 src-tauri/src/
   lib.rs                     tauri::Builder, managed state, command registration
@@ -109,12 +110,9 @@ src-tauri/src/
       excel.rs               calamine → typed rows → DataEngine::add_rows
     llm.rs                   LlmClient (one struct; branches on the provider `wire`)
     provider.rs              PROVIDERS registry (one row per provider)
-    secrets.rs               Secrets → auth.json (0600); API keys + connector tokens
-    sqlite.rs                fella.db: settings, sources cache, recent_workspaces,
-                             extensions (installed packs)
-    extensions.rs            packs: theme / skill / mcp manifest, install, enable
-    mcp.rs                   #[cfg(feature="mcp")] rmcp client + our HTTP backend
-     agent.rs                 the interactive harness: reasoning loop + system prompt
+    secrets.rs               Secrets → auth.json (0600); provider API keys
+    sqlite.rs                fella.db: settings, sources cache, recent_workspaces
+    agent.rs                 the interactive harness: reasoning loop + system prompt
                               (`PromptProfile`); owns no compute of its own and calls
                               into `analytics::*`
     evidence.rs              EvidenceItem / Answer / AskEvent types
@@ -194,8 +192,8 @@ these allocation and teardown paths repeatedly in an optimized build.
 Providers are one row each in `provider.rs` `PROVIDERS` (`id`, `display`, `auth`,
 `base_url`, `wire`, …); adding an OpenAI-compatible endpoint needs no other Rust
 change. Provider, base URL, key and model live in SQLite settings, edited via
-`/model`; keys and connector tokens live in `auth.json` (`Secrets`), never the
-DB. Transient model failures retry with backoff; a partial answer is kept. If
+`/model`; provider keys live in `auth.json` (`Secrets`), never the DB. Transient
+model failures retry with backoff; a partial answer is kept. If
 the provider is unreachable, `ask` returns a clear message and the status bar
 shows a red dot.
 
@@ -204,14 +202,14 @@ shows a red dot.
 ```
 run(question):
   msgs = [system_prompt(catalog, user_context), user: question];  evidence = []
-  # no workspace and no connector → no tools offered (a plain "hello" stays one turn)
+  # no workspace → no tools offered (a plain "hello" stays one turn)
   loop up to max_steps() (MAX_STEPS = 20, FELLA_MAX_STEPS overrides):
     resp = llm.chat(msgs, tool_schemas)            # raced against a cancel flag
     if not resp.tool_calls:
      return finish(resp.content)                  # verify + AnswerDone
     for call:
       out = registry.run_with_cancel(call.name, args, cancel)
-                                                   # built-in, then MCP; only data access
+                                                   # fixed built-in; only data access
       evidence.push({ tool, args, note, sql?, rows, result_summary, output, ms, error })
       msgs.push(assistant tool_call); msgs.push(tool result)
   # out of steps: one last turn with no tools, telling the model why, for a hedged answer
@@ -237,9 +235,8 @@ points it's based on and hedge under ~8. **`aside_rule`**: `depth_rule`'s
 complement, for the plain single-figure lookup it explicitly skips — one
 bounded follow-up query (not a blanket cost) when the question is a segment
 of a larger total, and one added short sentence only if that comparison
-turns up something genuinely notable. A "Your context" block from `fella.md`
-+ enabled `skill` packs is prepended; a line about `connector__tool` names is
-added when an `mcp` pack is connected.
+turns up something genuinely notable. A "Your context" block from the
+workspace's `fella.md` is prepended.
 
 **Verification pass** (`analytics::verify`, deterministic; one bounded
 corrective re-ask only when a cited SQL rerun changes or fails — `FELLA_VERIFY_REASK`): re-execute any SQL cited in
@@ -257,8 +254,8 @@ checklist in the evidence block.
 
 ## Tools
 
-Seven built-ins (`tools.rs`), plus any namespaced `connector__tool` from an
-enabled `mcp` pack (`mcp.rs`, held in a separate `Registry.mcp` list).
+Seven fixed built-ins (`tools.rs`). There is no dynamic tool registry in the
+lean release.
 
 | Tool | Args | Returns / guardrails |
 |------|------|----------------------|
@@ -272,8 +269,8 @@ enabled `mcp` pack (`mcp.rs`, held in a separate `Registry.mcp` list).
 
 Every tool call takes an optional plain-language `note` (shown in the evidence
 panel). Every call and result is captured as evidence whether or not the model
-cites it. An `mcp` tool the server marks non-read-only is withheld; an
-un-annotated one is offered but flagged.
+cites it. Experimental builds must preserve this evidence boundary if they add
+an external tool.
 
 ## IPC surface (`commands.rs` thin adapters; registered in `lib.rs`)
 
@@ -283,34 +280,26 @@ un-annotated one is offered but flagged.
 question, channel)` streams `assistant_delta` / `tool_start` / `tool_end` /
 `notice` / `answer_done` · `cancel()` · `provider_health()` ·
 `set_window_appearance(dark)` ·
-`archive_conversation(id, body)` / `conversations_info()` · **packs**
-`packs_list` / `packs_add` / `packs_remove` / `packs_set_enabled` /
-`packs_install` / `packs_theme` · **connectors** `mcp_set_token` /
-`mcp_clear_token`.
+`context_file()` / `save_context(contents)` ·
+`archive_conversation(id, body)` / `conversations_info()`.
 
-## Packs (extensions)
+## Extension boundary (historical)
 
-`engine/extensions.rs` + `engine/mcp.rs` + `engine/augment.rs`. A pack is one of
-four kinds `theme` (CSS-token JSON), `skill` (Markdown into the system
-prompt), `mcp` (a `connector.json` for a remote MCP server), or `augment` (an
-`augment.json` that switches on a first-party capability `buffer`/`grid` and
-binds it to a slash command; the tab saves a user-typed file into the open
-folder). Installed under `<app-data>/extensions/<id>/`; tracked in the
-`extensions` table. Browsed on an external website, installed by id
-(`/packs install`), hash-checked. Connectors use `rmcp` behind the `mcp`
-feature, connected lazily per `ask`, token in `auth.json`. The agent's tool set
-is unchanged by any pack. A pack's kind-specific disclosure is shown before
-enabling it; appearance mode stays outside the pack system. Full design:
-`docs/EXTENSIBILITY.md`.
+The pack, augment, and MCP designs remain in the experimental branch and in
+the archived [`EXTENSIBILITY.md`](EXTENSIBILITY.md) reference. They are not
+compiled, registered, or exposed by the lean personal release. `/mcp` is an
+inert command whose only purpose is to mark this future seam. See
+[`LEAN-PERSONAL-RELEASE.md`](LEAN-PERSONAL-RELEASE.md).
 
 ## UI
 
 One window with a focused shell: **Ask** is the default conversation, **Search**
-is the Ctrl/Command+K palette, and **Packs**, **Sources**, **Analyses**, and
-**Context** are organized workspace panes. The bottom **Composer** carries the
+is the Ctrl/Command+K palette, **Workspace** contains **Sources** and
+user-authored **Context**, and **Settings** contains provider, model, appearance,
+and folder controls. Recent conversations form the History surface. The bottom **Composer** carries the
 active model name and brand icon. Plain-language and sans-serif; monospace only
 where data lines up (tables, SQL). System/Light/Dark appearance is a local
-preference, while optional theme packs provide approved visual tokens.
+preference.
 Assistant prose renders as markdown (`marked`, raw HTML stripped), while charts
 cross the boundary as typed visualization data and render through the native
 Svelte chart component; user/system lines stay plain text. A chart answer leads
@@ -339,9 +328,10 @@ the chart card. The evidence block is collapsed by default. `↑` recalls input;
 
 MVP (0–9) delivered. Since then: SQLite default data engine (`DataEngine`
 trait), Vercel AI Gateway, `run_sql` timeout + mid-run stop, markdown answers,
-the **packs** system (`theme` / `skill` / `mcp`, see `EXTENSIBILITY.md`), and
 the **analytics module** (`engine/analytics/` — SQL, stats, charts, and
 verification pulled behind one `AnalyticsSource` seam, `depth_rule` /
-`aside_rule`, and the value-attribution verification check). Notable choices
+`aside_rule`, and the value-attribution verification check). The lean personal
+release removes the extension surfaces and keeps `fella.md` as the one explicit
+user-authored context file. Notable choices
 are logged in `docs/DECISIONS.md`; the harness's own dated engineering log is
 `docs/HARNESS.md`.

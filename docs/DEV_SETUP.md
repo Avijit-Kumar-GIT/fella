@@ -28,9 +28,10 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profil
 ```
 
 MSRV is 1.93 because the embedded RustPython guest is built with RustPython
-0.5. The default `mcp` feature also pulls `rmcp`. The `rusqlite` (and `duckdb`)
-crates use the `bundled` feature, so SQLite / DuckDB compile from source on the
-first build slow once, fast thereafter. Needs the C/C++ compiler from step 1.
+0.5. The default build uses the `pdf` and `xlsx` features. The `rusqlite` (and
+`duckdb`) crates use the `bundled` feature, so SQLite / DuckDB compile from
+source on the first build slow once, fast thereafter. Needs the C/C++ compiler
+from step 1.
 
 ## 3. Node + pnpm
 
@@ -146,47 +147,18 @@ window that opens but paints wrong, not for that.
 
 Verify gates before a PR (see `CONTRIBUTING.md`), all from a clean tree:
 `cargo test --locked` and `cargo clippy --all-targets --locked -- -D warnings`
-from `src-tauri/` (SQLite default features, which include `mcp`),
+from `src-tauri/` (the default SQLite build with `pdf` and `xlsx`),
 `pnpm run check` (0/0), `pnpm run build`. Never `--features duckdb` locally it
 is CI-only.
 
-## Packs
+## Experimental extension boundary
 
-Themes, skills, MCP connectors, and augments are **packs**, developed and
-submitted in the `fella-extensions` repo, not here. Build one as a directory
-with a `fella-pack.json`. See [`EXTENSIBILITY.md`](EXTENSIBILITY.md) for the
-per-kind rules and `fella-extensions/docs/WRITING-A-PACK.md` for the walkthrough.
-
-Two ways to test a pack against a dev build, **neither needs a GitHub push**:
-
-- **`/packs add <path>`** a local pack directory (even an uncommitted one in a
-  sibling `fella-extensions` checkout). No network. Fastest loop for iterating
-  on a pack's content; it installs **unverified**, same as any side-loaded
-  pack. This is enough for a `skill`/`theme`/`augment` pack's actual behaviour
-  the manifest, payload, and (for an augment) the command/file wiring are all
-  exercised exactly as they would be from the catalog.
-- **A local catalog, to exercise `/packs install <id>`** the by-id path real
-  users hit, including the SHA-256 check against `catalog.json`. Mirrors how
-  `src-tauri/tests/packs_marketplace.rs` tests it, but manually against a real
-  running app:
-  ```sh
-  cd fella-extensions
-  node scripts/build-catalog.mjs --base http://127.0.0.1:8787
-  python3 -m http.server 8787          # serves catalog.json + packs/ as-is
-
-  # in another shell, same machine:
-  cd fella-oss
-  FELLA_CATALOG_URL=http://127.0.0.1:8787/catalog.json pnpm tauri dev
-  ```
-  Then in the app: `/packs install notes` (or any id in your local
-  `catalog.json`). `FELLA_CATALOG_URL` overrides the default
-  `raw.githubusercontent.com/…/fella-extensions/main/catalog.json`
-  (`engine/extensions.rs`); everything downstream install, hash-check,
-  write to `<app-data>/extensions/<id>/` runs unmodified. Re-run
-  `build-catalog.mjs` after any edit to a pack under `packs/` before
-  reinstalling. Same seam `/update` uses for testing an installer apply
-  without cutting a real release: an env var pointing at a local
-  `python -m http.server`, see `FELLA_RELEASE_API_URL` in `engine/update.rs`.
+The lean personal release has no pack runtime, MCP connector, or augment
+implementation. Use the root `fella.md` file for explicit folder guidance.
+The `/mcp` command is retained as an inert signpost for future experiments; it
+does not connect to services or add tools. The former pack design is archived
+in [`EXTENSIBILITY.md`](EXTENSIBILITY.md) for custom forks and future design
+work.
 
 ## Non-interactive shells
 

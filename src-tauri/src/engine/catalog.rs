@@ -299,7 +299,7 @@ pub fn scan(root: &Path) -> EngineResult<(Vec<ScannedFile>, Vec<SkippedFile>)> {
         if ignore.matches(root, path) {
             continue;
         }
-        // `fella.md` at the workspace root is user context (see the extensions
+        // `fella.md` at the workspace root is user context (see the workspace
         // system), not a data file skip it the way `.fellaignore` is skipped.
         if path.parent() == Some(root) && path.file_name() == Some(std::ffi::OsStr::new("fella.md"))
         {

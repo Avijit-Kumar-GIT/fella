@@ -1,7 +1,13 @@
-# Security review v0.1
+# Historical security review v0.1
 
-A pre-release self-review of the shipped desktop app. Scope: the base app and
-its default (`pdf`, `xlsx`, `mcp`) build. Companion to `SECURITY.md` (the
+> This review predates the lean personal release. It is retained as a security
+> history for the earlier extension branch; its MCP, Packs, and default-build
+> network rows are not current. Use [`SECURITY.md`](../SECURITY.md),
+> [`docs/LEAN-PERSONAL-RELEASE.md`](LEAN-PERSONAL-RELEASE.md), and the current
+> source tree for the active release boundary.
+
+A pre-release self-review of the earlier desktop app. Scope: the base app and
+its former default (`pdf`, `xlsx`, `mcp`) build. Companion to `SECURITY.md` (the
 guarantees) and `docs/AUDIT.md` (the 2026-08-27 philosophy assessment).
 
 Reviewed against the v0.1 branch cut. The embedded-Python boundary also has a

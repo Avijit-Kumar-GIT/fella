@@ -1,5 +1,4 @@
-// Per-install UI preferences. Appearance is a local UI choice; theme packs
-// remain durable engine state and can still provide their own CSS tokens.
+// Per-install UI preferences. Appearance is a local UI choice.
 
 import { ipc, isTauri } from './ipc';
 
@@ -25,27 +24,6 @@ function readSystemDark(): boolean {
 	);
 }
 
-/** The CSS custom properties a theme pack may set (matches THEME_TOKEN_KEYS in
- *  src-tauri/src/engine/extensions.rs). Anything else is ignored. */
-const THEME_TOKEN_KEYS = new Set([
-	'--bg',
-	'--bg-raised',
-	'--bg-inset',
-	'--border',
-	'--border-strong',
-	'--text',
-	'--text-dim',
-	'--text-faint',
-	'--accent',
-	'--brand',
-	'--link',
-	'--ok',
-	'--warn',
-	'--err',
-	'--radius',
-	'--pad'
-]);
-
 class Prefs {
 	/** The selected appearance. System follows the OS preference. */
 	appearance = $state<Appearance>(readAppearance());
@@ -53,8 +31,6 @@ class Prefs {
 	systemDark = $state(readSystemDark());
 	isDark = $state(false);
 
-	/** Tokens of the active theme pack, or null for the built-in look. */
-	themeTokens = $state<Record<string, string> | null>(null);
 
 	constructor() {
 		this.syncColorMode();
@@ -85,17 +61,7 @@ class Prefs {
 		this.apply();
 	}
 
-	/** Pull the active theme from the engine. Safe to call outside Tauri. */
-	async load(): Promise<void> {
-		if (!isTauri()) return;
-		try {
-			this.themeTokens = await ipc.packsTheme();
-		} catch {
-			this.themeTokens = null;
-		}
-	}
-
-	/** Apply appearance and `themeTokens` to <html>. */
+	/** Apply the selected appearance to the document and native window. */
 	apply(): void {
 		if (typeof document === 'undefined') return;
 		const root = document.documentElement;
@@ -103,14 +69,6 @@ class Prefs {
 		root.dataset.colorMode = this.isDark ? 'dark' : 'light';
 		root.style.colorScheme = this.isDark ? 'dark' : 'light';
 		if (isTauri()) void ipc.setWindowAppearance(this.isDark).catch(() => {});
-		for (const k of THEME_TOKEN_KEYS) root.style.removeProperty(k);
-		const t = this.themeTokens;
-		if (!t) return;
-		for (const [k, v] of Object.entries(t)) {
-			if (THEME_TOKEN_KEYS.has(k) && typeof v === 'string') {
-				root.style.setProperty(k, v);
-			}
-		}
 	}
 }
 

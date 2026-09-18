@@ -1,6 +1,6 @@
 ---
 title: "Limitations"
-description: "Current boundaries for correctness, formats, scale, security, platforms, and extensions."
+description: "Current boundaries for correctness, formats, scale, security, and platforms."
 icon: "triangle-alert"
 ---
 
@@ -38,7 +38,7 @@ For consequential decisions, validate the source and query independently. Fella 
 | SQL result cap | 1,000 rows |
 | SQL timeout | 15 seconds |
 | Python execution budget | 1 billion Wasmi fuel; host SQL keeps its 15-second watchdog |
-| Chart size | 12 categories, 2 series |
+| Chart size | Category charts are bounded; time-series charts can cover longer periods, with output and rendering caps |
 
 Fella targets MB-scale personal folders and everyday lookups, aggregates, comparisons, and small joins. It is not a warehouse, distributed query engine, notebook, ETL system, or multi-user server.
 
@@ -58,29 +58,35 @@ output, row, and response limits. The guest contains the core language and
 Fella's small analytics helpers; it does not contain pandas, NumPy, SciPy, or a
 package installer.
 
-### Augments
+### Context
 
-An enabled augment can save a workspace-relative `.md`, `.txt`, `.csv`, or `.tsv` file when the user edits its view. This is a human-driven write path, not an agent tool.
+The user may edit `fella.md` in the Workspace surface. This is a human-driven
+write path, not an agent tool. The agent can read the file as context, but it
+cannot create or modify it.
 
-### MCP
+### Experimental MCP
 
-An enabled connector talks to its configured external service. Fella withholds tools that declare themselves non-read-only or destructive, but server annotations are not independently verified. Unannotated tools can still be offered with an effects warning. Use least-privilege credentials and trust the server separately.
+`/mcp` is inert in the personal release. The default build has no MCP client,
+connector authentication, dynamic tools, or outbound connector path. A fork
+that adds a connector must review its permissions and network behavior
+separately.
 
 ## Privacy and network activity
 
 - Fella is BYOK-only: the provider you connect receives prompts and tool results for each question.
-- `/packs install` fetches the extension catalog and hash-pinned files.
 - `/update` contacts GitHub and downloads an installer only when the user invokes it.
-- MCP can introduce additional network activity as described above. The embedded Python guest has no network capability.
+- `/mcp` introduces no network activity. The embedded Python guest has no network capability.
 - Fella does not proxy hosted model requests through a Fella service, but cannot control a provider's logging, retention, or training policy.
 
 ## Releases and platforms
 
 Published builds are currently unsigned, so macOS and Windows can show unknown-developer warnings. Integrity depends on HTTPS and `SHA256SUMS`, not code signing or notarization. macOS requires 10.15+, Windows requires 10+, and Linux requires WebKitGTK 4.1. Release automation builds macOS universal plus Windows and Linux artifacts on GitHub-hosted runners, but every apply/update path has not been manually exercised on every OS.
 
-## Extensions and compatibility
+## Experimental compatibility boundary
 
-Packs contain data, not application code. Themes and skills cannot add tools. Augments can only name `buffer` or `grid` capabilities already compiled into Fella. MCP packs support remote Streamable HTTP, not local stdio. Marketplace review and SHA-256 verification establish review provenance and byte integrity; neither guarantees a third-party service.
+The pack and connector designs are archived in the repository for future forks.
+They are not part of the default runtime. See [Experimental MCP](/extensions-and-mcp)
+for the exact inert command and reopening criteria.
 
 ## Benchmarks
 

@@ -45,9 +45,8 @@ secondary views or disclosures. The release-level plan is in
 
 ## Tokens (`src/app.css` `:root`)
 
-**Pack-overridable** a theme pack may replace these; keep the set in sync with
-`THEME_TOKEN_KEYS` in `src/lib/prefs.svelte.ts` **and**
-`src-tauri/src/engine/extensions.rs`:
+These application tokens are maintained in the frontend. The personal release
+has no theme-pack override path:
 
 | | light | dark |
 |---|---|---|

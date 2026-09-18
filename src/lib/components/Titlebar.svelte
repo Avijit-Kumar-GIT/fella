@@ -44,10 +44,8 @@
 	});
 	let displayTitle = $derived.by(() => {
 		const prefix = folder || 'Workspace';
-		if (session.workspaceView === 'packs') return `${prefix} — Packs`;
-		if (session.workspaceView === 'sources') return `${prefix} — Sources`;
-		if (session.workspaceView === 'analyses') return `${prefix} — Analyses`;
-		if (session.workspaceView === 'context') return `${prefix} — Context`;
+		if (session.workspaceView === 'workspace') return `${prefix} — Workspace`;
+		if (session.workspaceView === 'settings') return `${prefix} — Settings`;
 		return conversationTitle;
 	});
 

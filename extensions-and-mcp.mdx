@@ -1,118 +1,53 @@
 ---
-title: "Extensions and MCP"
-description: "Add inert packs, first-party views, or remote MCP sources without changing the base agent."
+title: "Experimental MCP"
+description: "The extension boundary in Fella's lean personal release."
 icon: "puzzle"
 ---
 
-# Extend Fella deliberately
+# The extension door is closed for this release
 
-Fella works without packs. A pack is opt-in data that configures a narrow extension point; it does not carry executable app code or add an arbitrary plugin runtime.
+Fella's personal release is intentionally small. It mounts a folder, uses a
+fixed set of read-only tools, and returns answers with evidence and
+verification. There is no pack manager, plugin runtime, or official connector
+system in the shipped application.
 
-## Choose the right pack
+## MCP is experimental and inert
 
-| Kind | Payload | Outcome | Important boundary |
-| --- | --- | --- | --- |
-| `theme` | `theme.json` | Change supported CSS tokens | Inert data; one theme active at a time |
-| `skill` | `skill.md` | Add domain vocabulary, conventions, or caveats | Prompt context, not evidence; cannot add tools |
-| `augment` | `augment.json` | Enable a shipped `buffer` or `grid` view | The user can save one allowed workspace-relative file; the agent cannot |
-| `mcp` | `connector.json` | Offer tools from a remote Streamable HTTP MCP server | External network and trust boundary; no stdio transport |
+The `/mcp` command is a signpost for future work. Its only supported response
+is:
 
-Every pack directory contains `fella-pack.json` and exactly one kind-specific payload. New file parsers, built-in tools, and augment capabilities require an app change, not a pack.
-
-## Install and manage a pack
-
-```text filename="fella commands"
-/packs
-/packs browse
-/packs install <id>
-/packs add /path/to/local-pack
-/packs enable <id>
-/packs disable <id>
-/packs remove <id>
+```text
+MCP is experimental and closed in this release.
+No official connectors are enabled.
+Custom implementations require a fork or experimental build.
 ```
 
-The public extension repository currently provides the schema and catalog machinery, but availability of listed packs can change. `/packs add` works with a local directory without a marketplace listing.
+The default build does not include an MCP client, connector authentication,
+dynamic tool discovery, outbound connector connections, or an MCP marketplace.
+The built-in agent registry contains only Fella's fixed local tools.
 
-### Verification is not review
+## What remains extensible
 
-| Label or check | What it means | What it does not mean |
-| --- | --- | --- |
-| Catalog content hash | Downloaded bytes match the catalog's SHA-256 entry | The content or remote service is safe |
-| Marketplace review | Maintainers inspected the submitted pack content | Ongoing endorsement or monitoring of a third-party service |
-| Local **unverified** pack | The pack was side-loaded and has no marketplace review provenance | That Fella found malware; it describes provenance, not a scan result |
+The product boundary is documented so a future implementation has a clear seam:
 
-Nothing auto-updates. Review the manifest and payload before installation, and review remote permissions and terms before connection.
+- `fella.md` is a user-authored context file in the mounted folder.
+- The agent remains read-only and cannot create workspace files.
+- A fork or experimental build may add a reviewed connector implementation.
+- Any future connector must declare its data access, network destinations,
+  write behavior, limits, enablement flow, and evidence behavior.
 
-## Recipe: add vocabulary without adding facts
+Custom builds are the user's responsibility. A connector should not become an
+official Fella feature merely because it speaks the MCP protocol; it must also
+fit the local-first, bounded, auditable request path.
 
-Use a `skill` pack or root `fella.md` to explain names, units, and conventions:
+## Removed from the personal release
 
-```markdown filename="fella.md"
-`merchant_group` is our normalized merchant category.
-Amounts in transactions.csv are in USD and refunds are negative.
-Use calendar months unless the question says otherwise.
-```
+The following surfaces are intentionally absent from the default build:
 
-This text influences interpretation. A number written there is not valid workspace evidence; ask Fella to calculate it from a data source.
+- Packs and the `fella-extensions` marketplace relationship.
+- `/packs` and `/connect`.
+- Augment tabs, `/note`, and `/table`.
+- Dynamic tools supplied by a user-installed extension.
 
-## Recipe: enable a user-edited view
-
-Current augment capabilities are:
-
-| Capability | Allowed files | Behavior |
-| --- | --- | --- |
-| `buffer` | `.md`, `.txt` | Plain-text or Markdown editor |
-| `grid` | `.csv`, `.tsv` | Small editable table; current serialization is comma-separated even for a `.tsv` filename |
-
-An augment's command opens its configured file. An optional argument chooses another file with the same allowed extension, such as `/note shopping`. Saving happens because the user edits the view; the model receives no write operation. Closing the tab triggers a reindex so the saved file can become data.
-
-## Recipe: connect a remote MCP source
-
-Fella supports remote Streamable HTTP connectors with no authentication, bearer authentication, or a named header. Local stdio MCP servers are not supported by the pack format.
-
-```json filename="connector.json"
-{
-  "transport": "http",
-  "url": "https://mcp.example.com/mcp",
-  "auth": {
-    "type": "bearer",
-    "secret": "EXAMPLE_TOKEN"
-  },
-  "setup": "Where to obtain the token and what access it grants."
-}
-```
-
-```text filename="fella commands"
-/packs install <connector-id>
-/connect <connector-id>
-/connect <connector-id> off
-/connect <connector-id> forget
-```
-
-Connector tokens use the local secret store. Offered tools are namespaced `<connector-id>__<tool>` and calls appear in the working fold.
-
-## MCP tool policy
-
-| Server annotation | Fella behavior |
-| --- | --- |
-| `readOnlyHint: true` | Offers the tool normally |
-| No read-only declaration | Offers the tool and marks its effects undeclared |
-| `readOnlyHint: false` | Withholds the tool |
-| `destructiveHint: true` | Withholds the tool |
-
-Annotations are claims supplied by the MCP server, not an independent capability proof. An enabled connector communicates with an external service and is outside the base app's local-only boundary. Use a least-privilege token and verify the server independently.
-
-## Pack compatibility
-
-The stable surface is intentionally narrow: manifest schema 1, its required fields, augment capability names and keys, and the `.md`, `.txt`, `.csv`, and `.tsv` augment file allowlist. Internal app behavior is not a plugin API.
-
-## Next steps
-
-<CardGroup cols={2}>
-  <Card title="Write a pack" icon="package-plus" href="https://github.com/Avijit-Kumar-GIT/fella-extensions">
-    Use the extension repository's schemas and contribution rules.
-  </Card>
-  <Card title="Review security limits" icon="shield-alert" href="/limitations#security-boundaries">
-    Compare base tools, Python, augments, and MCP before enabling them.
-  </Card>
-</CardGroup>
+For the current product boundary and the criteria for reopening extensibility,
+see [`LEAN-PERSONAL-RELEASE.md`](/docs/LEAN-PERSONAL-RELEASE).

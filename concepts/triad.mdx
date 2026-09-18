@@ -59,7 +59,8 @@ The model receives text context, tool schemas, and returned tool results. It doe
 
 The engine does not call an LLM and is exposed to analytics code through a narrow `AnalyticsSource` trait. The Svelte frontend is a client of the Rust/Tauri backend: it sends commands, streams events, and renders answers, evidence, tabs, and controls.
 
-The standard registry contains seven built-in tools. Connected MCP tools are discovered at runtime, namespaced, and stored separately from that built-in list.
+The standard registry contains seven fixed built-in tools. There is no runtime
+connector or plugin expansion path in the personal release.
 
 ## The narrow engine seam
 
@@ -91,7 +92,8 @@ For the user-facing version of this flow, see [read the evidence](/developer-pla
 - The model can still choose the wrong query or misread an ambiguous question.
 - Deterministic verification checks evidence consistency and known query patterns; it does not prove the user's intended meaning.
 - The SQL and document paths are bounded and read-only. `run_python` uses the same host-side data boundary from an embedded WASM guest; it has no filesystem, network, environment, or subprocess capability and is bounded by Wasmi resource limits.
-- A hosted model provider sees the prompt and tool results sent to it. An enabled MCP connector communicates with its configured remote service.
+- A hosted model provider sees the prompt and tool results sent to it. The
+  inert `/mcp` command makes no separate network request.
 
 ## Next steps
 
@@ -103,7 +105,7 @@ For the user-facing version of this flow, see [read the evidence](/developer-pla
     See how files become local tables, documents, and evidence.
   </Card>
   <Card title="Inspect the tools" icon="wrench" href="/concepts/tools">
-    Compare the seven built-ins with optional MCP tools.
+    Review the seven fixed built-ins and their execution boundaries.
   </Card>
   <Card title="Choose a model" icon="cpu" href="/concepts/model-layer">
     Review provider protocols, credentials, and network boundaries.

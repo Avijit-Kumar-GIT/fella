@@ -39,10 +39,9 @@ be treated as equivalent to this guest.
 | Delimited input | 2 million rows and 256 MiB retained input | SQLite ingestion |
 | Document cache | 32 MiB | bounded LRU-style cache in the engine |
 | Conversation memory | 24 active sessions | LRU eviction |
-| MCP response | 30-second call timeout, 32,000 characters | connector client |
-
 The limits bound accidental memory spikes and runaway analysis. They do not
-make a vulnerable Wasmi, RustPython, SQLite, or MCP dependency harmless.
+The limits bound accidental memory spikes and runaway analysis. They do not
+make a vulnerable Wasmi, RustPython, or SQLite dependency harmless.
 
 ## Allocation and teardown review
 
@@ -62,7 +61,7 @@ joined before the read-only connection is released. Workspace replacement clears
 the PDF cache and retains only scratch leases held by in-flight operations.
 
 The host-side review also covers saturation of evidence usage counters,
-bounded catalog samples, clipped MCP results, and the absence of unbounded
+bounded catalog samples, clipped tool results, and the absence of unbounded
 frontend polling or conversation session growth.
 
 ## Repeatable checks

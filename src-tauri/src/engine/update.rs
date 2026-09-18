@@ -19,9 +19,16 @@
 use serde::{Deserialize, Serialize};
 
 use crate::engine::error::{EngineError, EngineResult};
-use crate::engine::extensions::sha256_hex;
 
 const REPO: &str = "Avijit-Kumar-GIT/fella";
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    ring::digest::digest(&ring::digest::SHA256, bytes)
+        .as_ref()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
 
 fn latest_release_url() -> String {
     std::env::var("FELLA_RELEASE_API_URL")

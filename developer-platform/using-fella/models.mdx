@@ -91,7 +91,7 @@ Provider credentials and the active provider are shared by the app. Each convers
 
 ## Credential storage
 
-API keys and connector tokens live in `auth.json` in Fella's application data directory with mode `0600` where supported. They are not stored in the SQLite settings database, browser storage, or archived transcripts.
+Provider API keys live in `auth.json` in Fella's application data directory with mode `0600` where supported. They are not stored in the SQLite settings database, browser storage, or archived transcripts. The inert `/mcp` command stores no connector tokens.
 
 ## Embeddings are not required
 

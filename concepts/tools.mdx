@@ -4,13 +4,14 @@ description: "The seven built-in tools, their purposes, and their actual guardra
 icon: "wrench"
 ---
 
-> Built-in tools are application code; MCP tools are optional runtime integrations.
+> Built-in tools are application code. The lean release has no dynamic runtime integrations.
 
 ## Definition
 
 Fella's standard registry contains seven built-in tools. Adding one requires an application code change. Each has a JSON schema and produces an evidence record.
 
-MCP connector tools are not built-ins. When a connector is enabled and connected, Fella discovers its remote tools, gives them names such as `connector__search`, and registers them separately for the current runtime.
+The experimental MCP boundary is documented separately, but `/mcp` is inert in
+the shipped application. No remote tools can enter the default registry.
 
 The extension point is a Rust trait, not a dynamic plugin ABI:
 
@@ -68,10 +69,11 @@ tools: vec![
 | `run_sql` | Filter, join, group, and aggregate tables | Guarded SQL through the active local data engine; results and runtime are capped |
 | `grep_files` | Search document text | Case-insensitive regex over cataloged documents; 30 hits by default and 100 maximum |
 | `read_file` | Read cataloged document bodies | Resolves one or more catalogued names; 12,000 characters per document and 16,000 characters combined |
-| `run_python` | Run analysis that is awkward in SQL | Temporary working directory, stripped environment, timeout, capped output, and Unix resource limits |
+| `run_python` | Run analysis that is awkward in SQL | Embedded WASM/RustPython guest with no filesystem, network, environment, or subprocess imports; fuel, memory, stack, source, output, SQL-row, and SQL-response limits |
 | `make_chart` | Build a bar or line chart from a query | Runs a guarded read-only query, derives the first column as labels and the next one or two columns as numeric series, then validates the result before client rendering |
 
-The built-ins are offered when a workspace is open. Connected MCP tools can be offered without a workspace because their data lives at the remote service.
+The built-ins are offered when a workspace is open. With no workspace, the model
+receives no data tools.
 
 Every successful call is translated into a `ToolOutput` and then an `EvidenceItem` with a stable ordered ID for that answer. SQL-backed evidence also maps referenced tables to catalogued files or workbook sheets and retains source-level ingest notes when present. The output has a human-facing summary, compact model text, and optional SQL, columns, rows, text output, or structured chart data. `make_chart` derives its chart values from its own read-only query, so the chart evidence retains the SQL, result rows, and source mapping; it never accepts or emits SVG/HTML. `ChartData` is rendered by the Svelte client. Failed calls are also recorded with an error, summary, and elapsed time rather than disappearing from the run.
 
@@ -85,13 +87,14 @@ For tables, the expected path is inspection when needed followed by `run_sql`. F
 
 SQL is preferred because the query and rows are straightforward to display and rerun. `run_sql` accepts a single guarded read-only query, and the SQLite query connection is opened read-only. Direct file-reading SQL functions are blocked.
 
-MCP handling is annotation-aware. Fella withholds tools declared non-read-only or destructive. A tool without `readOnlyHint: true` can still be offered, but its effects are marked undeclared. MCP execution happens on the configured server and its result appears in the evidence panel.
+There is no MCP execution path in the personal release. A future connector
+must preserve the fixed evidence and verification boundary before it can become
+an official feature.
 
 ## Limits
 
 - Python runs in a fresh embedded WASM guest with no filesystem, network, environment, or subprocess capability. Wasmi fuel, memory, stack, source, output, SQL-row, and SQL-response limits bound the calculation; Wasmi, RustPython, and the checked-in guest remain part of the trusted computing base.
 - The Python guest's fuel, memory, stack, source, output, SQL-row, and SQL-response limits are cross-platform; the host SQL watchdog applies to each SQL call.
-- MCP annotations are claims from the remote server. Tools with undeclared effects require trust in that connector.
 - Tool outputs are capped, so evidence can contain a sample rather than every returned row or character.
 
 Direct `/sql` is deliberately outside this registry path: it calls the engine directly, prints a system result, and does not create an assistant evidence fold or invoke post-answer verification.
@@ -102,8 +105,8 @@ Direct `/sql` is deliberately outside this registry path: it calls the engine di
   <Card title="The harness" icon="workflow" href="/concepts/harness">
     Follow tool selection, execution, caching, and stopping.
   </Card>
-  <Card title="Extensions and MCP" icon="puzzle" href="/extensions-and-mcp">
-    Configure remote connectors and review their trust boundary.
+  <Card title="Experimental MCP" icon="puzzle" href="/extensions-and-mcp">
+    Read the inert extension boundary for future forks.
   </Card>
   <Card title="Verification" icon="badge-check" href="/concepts/verification">
     See which results can be checked after the answer.

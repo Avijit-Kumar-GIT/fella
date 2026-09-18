@@ -11,7 +11,7 @@
 	} from '$lib/commands';
 	import { session } from '$lib/session.svelte';
 	import { enterUp } from '$lib/motion';
-	import type { AnalysisArtifact, ContextReference, SourceInfo } from '$lib/types';
+	import type { ContextReference, SourceInfo } from '$lib/types';
 	import Icon from './Icon.svelte';
 	import ProviderIcon from './ProviderIcon.svelte';
 
@@ -22,7 +22,6 @@
 	let contextInput = $state<HTMLInputElement>();
 	let wrapEl = $state<HTMLDivElement>();
 	// ↑-recall history lives on the active conversation, so each tab has its own.
-	// (The composer is hidden on an augment tab, so activeChat is the focused tab.)
 	let history = $derived(session.activeChat?.history ?? []);
 	let histIx = -1;
 
@@ -32,11 +31,9 @@
 	let placeholder = $derived(
 		session.pendingKey
 			? `Paste your ${session.pendingKey.display} API key…`
-			: session.pendingConnect
-				? `Paste the ${session.pendingConnect.id} key…`
-				: folderName
-					? `Ask about ${folderName}…`
-					: 'Choose a folder to ask about…'
+			: folderName
+				? `Ask about ${folderName}…`
+				: 'Choose a folder to ask about…'
 	);
 
 	// --- live-state chips (moved from the retired StatusBar) -------------
@@ -84,20 +81,11 @@
 			)
 			.slice(0, 8);
 	});
-	let contextAnalyses = $derived.by((): AnalysisArtifact[] => {
-		const workspace = session.catalog.workspace;
-		const q = contextQuery.trim().toLowerCase();
-		return session.analyses
-			.filter((analysis) => !workspace || !analysis.answer.workspace?.path || analysis.answer.workspace.path === workspace)
-			.filter((analysis) => !q || `${analysis.title} ${analysis.question}`.toLowerCase().includes(q))
-			.slice(0, 6);
-	});
-
 	$effect(() => {
 		if (contextOpen) queueMicrotask(() => contextInput?.focus());
 	});
 
-	let pendingInput = $derived(!!session.pendingKey || !!session.pendingConnect);
+	let pendingInput = $derived(!!session.pendingKey);
 	// `session.busy` alone isn't specific enough to mean "an answer is
 	// streaming, steering it makes sense" -- it's also true while a folder
 	// is still loading (openFolder reuses it for progress feedback), which
@@ -303,12 +291,6 @@
 		contextQuery = '';
 	}
 
-	function addAnalysis(analysis: AnalysisArtifact): void {
-		session.addContextReference({ kind: 'analysis', key: analysis.id, label: analysis.title, detail: analysis.question });
-		contextOpen = false;
-		contextQuery = '';
-	}
-
 	function addColumn(source: SourceInfo, name: string, type: string): void {
 		session.addContextReference({
 			kind: 'column',
@@ -323,11 +305,6 @@
 	function inspectSource(source: SourceInfo): void {
 		contextOpen = false;
 		session.openInspector({ kind: 'source', path: source.path });
-	}
-
-	function inspectAnalysis(analysis: AnalysisArtifact): void {
-		contextOpen = false;
-		session.openInspector({ kind: 'analysis', id: analysis.id });
 	}
 
 	function removeReference(ref: ContextReference): void {
@@ -354,7 +331,7 @@
 		<div class="context-menu" transition:enterUp>
 			<div class="context-search">
 				<Icon name="search" size={13} />
-				<input bind:this={contextInput} bind:value={contextQuery} placeholder="Find a source or saved analysis…" spellcheck="false" />
+				<input bind:this={contextInput} bind:value={contextQuery} placeholder="Find a source or field…" spellcheck="false" />
 				<button type="button" aria-label="Close context picker" onclick={() => (contextOpen = false)}><Icon name="x" size={13} /></button>
 			</div>
 			{#if contextSources.length}
@@ -384,26 +361,10 @@
 					{/each}
 				</div>
 			{/if}
-			{#if contextAnalyses.length}
-				<p class="context-heading">Saved analyses</p>
-				<div class="context-list">
-					{#each contextAnalyses as analysis (analysis.id)}
-						<div class="context-item">
-							<button class="context-main" type="button" onclick={() => addAnalysis(analysis)}>
-								<span class="context-icon"><Icon name="bookmark" size={13} /></span>
-								<span class="context-copy"><strong>{analysis.title}</strong><small>{analysis.question}</small></span>
-							</button>
-							<button class="context-inspect" type="button" aria-label={`Inspect ${analysis.title}`} title="Inspect saved analysis" onclick={() => inspectAnalysis(analysis)}>
-								<Icon name="info" size={13} />
-							</button>
-						</div>
-					{/each}
-				</div>
+			{#if !contextSources.length && !contextColumns.length}
+				<p class="context-empty">No matching sources or fields.</p>
 			{/if}
-			{#if !contextSources.length && !contextColumns.length && !contextAnalyses.length}
-				<p class="context-empty">No matching sources or saved analyses.</p>
-			{/if}
-			<p class="context-hint">Add a source or saved answer to guide your next question.</p>
+			<p class="context-hint">Add a source or field to guide your next question.</p>
 		</div>
 	{/if}
 	{#if menuOpen && !contextOpen && !modeOpen}
@@ -446,7 +407,7 @@
 			<div class="context-row">
 				{#each contextRefs as ref (ref.kind + ':' + ref.key)}
 					<span class="ref-pill" title={ref.detail ?? ref.label}>
-						<Icon name={ref.kind === 'source' ? 'file' : ref.kind === 'analysis' ? 'bookmark' : 'table'} size={11} />
+						<Icon name={ref.kind === 'source' ? 'file' : 'table'} size={11} />
 						<span>{ref.label}</span>
 						<button type="button" aria-label={`Remove ${ref.label} from context`} onclick={() => removeReference(ref)}><Icon name="x" size={11} /></button>
 					</span>

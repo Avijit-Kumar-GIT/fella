@@ -16,7 +16,9 @@ It is a linear loop, not a planner graph, critic swarm, or sub-agent hierarchy.
 
 For each question, the harness builds a system prompt from the workspace catalog and schema, optional root `fella.md`, recent conversation context, and learned folder notes. The user question follows as a separate message.
 
-If neither a workspace nor connected MCP tools are available, the model receives no tool schemas. If a connector is active, its namespaced tools join the schemas offered for that run without becoming built-in tools.
+If no workspace is available, the model receives no tool schemas. With a
+workspace, it receives only the fixed built-in registry for that run; the
+registry has no runtime connector or plugin expansion path.
 
 ## Flow
 

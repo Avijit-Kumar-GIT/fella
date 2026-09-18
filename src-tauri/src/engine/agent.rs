@@ -93,7 +93,7 @@ pub async fn run(
     let schema = engine.schema_block();
     let recent = engine.session_block(conversation_id);
     let learned = engine.folder_memory_block();
-    let mut sys = system_prompt(
+    let sys = system_prompt(
         &PromptProfile::from_env(),
         &catalog,
         &user_context,
@@ -101,14 +101,6 @@ pub async fn run(
         recent.as_deref(),
         learned.as_deref(),
     );
-    if registry.has_mcp() {
-        sys.push_str(
-            "\nSome tools are named `connector__tool` these reach an outside service \
-the user connected (e.g. their notes). Use one when the question is about that \
-service. Its result is a tool result like any other still never state a figure \
-you did not get from a tool.\n",
-        );
-    }
     let mut messages = vec![
         ChatMessage::System(sys),
         ChatMessage::User(question.to_string()),
@@ -117,7 +109,7 @@ you did not get from a tool.\n",
     // tools it can only fail to call. This keeps a plain "hello" (or "what can
     // you do?") to a single fast turn instead of a many-step loop of
     // NoWorkspace errors, which can take minutes on a slow provider.
-    let schemas = if catalog.workspace.is_some() || registry.has_mcp() {
+    let schemas = if catalog.workspace.is_some() {
         registry.schemas()
     } else {
         Vec::new()

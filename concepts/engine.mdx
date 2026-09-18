@@ -51,7 +51,7 @@ The shipped desktop build uses bundled SQLite as its data engine. Compiling with
 
 Documents are not embedded or vector-indexed. `grep_files` searches their text and `read_file` reads cataloged document content, independent of model-provider embedding support.
 
-The default Cargo features are `pdf`, `xlsx`, and `mcp`. `duckdb` is deliberately opt-in; the release data path is SQLite.
+The default Cargo features are `pdf` and `xlsx`. `duckdb` is deliberately opt-in; the release data path is SQLite.
 
 The analytics module depends on a deliberately small application capability:
 
@@ -172,7 +172,7 @@ source metadata, schema, ingest notes, skipped files, or root context changes.
 - Scans, ingestion, queries, document reads, and displayed rows are bounded. Large inputs may be truncated with a note.
 - Type inference and normalization are best effort. Ingest notes and verifier warnings should be inspected for messy data.
 - `run_python` runs in the embedded WASM guest. It has no filesystem, network, environment, clock, or subprocess capability; Wasmi and the host data engine apply resource and query limits.
-- The app also uses a separate SQLite database for settings, cached source metadata, packs, and conversation metadata. Model and MCP credentials are stored in `auth.json`, not that database.
+- The app also uses a separate SQLite database for settings, cached source metadata, and conversation metadata. Provider credentials are stored in `auth.json`, not that database.
 
 ## Execution limits
 

@@ -11,16 +11,16 @@ refuses to. Referenced from [`WHY.md`](WHY.md); the refusals are in
   the audience doesn't write SQL or Python, so the app doesn't ask them to.
 - **Read-only.** Fella reads the folder; it never writes, moves, or deletes
   anything in it, and it produces answers, not files. This is the single
-  safety guarantee and it's structural, not policy there is no write tool to
-  disable. (An opt-in `augment` pack adds a tab where *you* save a note or
-  table you typed that's a user keystroke writing one named file, never the
-  model. See [`EXTENSIBILITY.md`](EXTENSIBILITY.md).)
+  safety guarantee and it's structural: there is no write tool to disable.
+  The user may explicitly edit the root `fella.md` context file; the model
+  cannot write it.
 - **Deterministic, auditable answers.** Every number comes from a real
   computation SQL, or Python when SQL can't express it never from the model
   guessing. Every answer carries the exact steps, queries, and rows behind it,
   open for inspection.
-- **Local-first.** The base makes one network call: to the model the user
-  chose (a local one by default). Nothing else leaves the machine.
+- **Local-first.** The base makes one model network call to the provider the
+  user chose. Nothing else leaves the machine during ordinary analysis; `/mcp`
+  is inert and `/update` runs only when explicitly invoked.
 - **Credentials stay local and scoped.** An API key lives in `auth.json`
   (mode `0600`), never the settings database, `localStorage`, or the
   transcript.
@@ -31,10 +31,10 @@ refuses to. Referenced from [`WHY.md`](WHY.md); the refusals are in
   performance, codebase simplicity, feature scope) — see
   [`LIGHTWEIGHT.md`](LIGHTWEIGHT.md) for which parts of the engine are
   allowed to spend weight on which axis, and which must not.
-- **A fixed, small tool set in the base**, customization opt-in and pushed to
-  the edges (themes, skills, MCP connectors, augments a user installs
-  themselves see [`EXTENSIBILITY.md`](EXTENSIBILITY.md)) rather than grown
-  into the base every install ships regardless of who uses it.
+- **A fixed, small tool set.** The personal release keeps customization to
+  provider/model settings, appearance, and the user-authored `fella.md` file.
+  Pack, augment, and connector designs remain archived rather than becoming
+  default runtime surfaces.
 
 See also [`ARCHITECTURE.md`](ARCHITECTURE.md#what-fella-is) for how these
 translate into the actual build, and [`NON-GOALS.md`](NON-GOALS.md) for the

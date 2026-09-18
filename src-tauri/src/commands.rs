@@ -9,15 +9,14 @@ use tauri::{State, Window};
 
 use crate::engine::{
     Answer, AskEvent, Catalog, ConversationSummary, ConversationsInfo, EngineError, EngineResult,
-    EngineState, InstalledPack, ProviderHealth, ProviderInfo, QueryResult, Settings, SourceInfo,
-    UpdateStatus,
+    EngineState, ProviderHealth, ProviderInfo, QueryResult, Settings, SourceInfo, UpdateStatus,
 };
 use crate::AppState;
 
 /// Expand a leading `~` (or `~/…`, `~\…`) to the user's home directory. Typed
 /// paths come from the composer, a text field, not a shell, so nothing else
 /// expands this the way a terminal would. Used by every command that takes a
-/// user-typed filesystem path (`open_workspace`, `packs_add`).
+/// user-typed filesystem path (`open_workspace`).
 fn expand_tilde(path: &str) -> std::path::PathBuf {
     if let Some(rest) = path.strip_prefix('~') {
         if rest.is_empty() || rest.starts_with('/') || rest.starts_with('\\') {
@@ -168,50 +167,10 @@ pub fn logout(
     engine.logout(&provider, forget)
 }
 
-// --- packs (installed extensions) --------------------------------------
-
-#[tauri::command]
-pub fn packs_list(engine: State<'_, EngineState>) -> Vec<InstalledPack> {
-    engine.packs_list()
-}
-
-#[tauri::command]
-pub fn packs_add(
-    path: String,
-    engine: State<'_, EngineState>,
-) -> Result<Vec<InstalledPack>, EngineError> {
-    engine.packs_add(&expand_tilde(&path))
-}
-
-#[tauri::command]
-pub fn packs_remove(
-    id: String,
-    engine: State<'_, EngineState>,
-) -> Result<Vec<InstalledPack>, EngineError> {
-    engine.packs_remove(&id)
-}
-
-#[tauri::command]
-pub fn packs_set_enabled(
-    id: String,
-    enabled: bool,
-    engine: State<'_, EngineState>,
-) -> Result<Vec<InstalledPack>, EngineError> {
-    engine.packs_set_enabled(&id, enabled)
-}
-
-/// Install a pack from the marketplace by id.
-#[tauri::command]
-pub async fn packs_install(
-    id: String,
-    engine: State<'_, EngineState>,
-) -> Result<Vec<InstalledPack>, EngineError> {
-    engine.packs_install(&id).await
-}
+// --- update --------------------------------------------------------------
 
 /// Check for a newer release and, if one exists, download + verify +
-/// install it and exit. Only ever called by the user typing `/update` no
-/// background/startup check.
+/// install it and exit. Only ever called by the user typing `/update`.
 #[tauri::command]
 pub async fn update(
     app: tauri::AppHandle,
@@ -220,60 +179,18 @@ pub async fn update(
     engine.update(app).await
 }
 
-/// Store the token an `mcp` connector pack needs.
+// --- user context -------------------------------------------------------
+
+/// `[path, contents_or_null]` for the current workspace's `fella.md`.
 #[tauri::command]
-pub fn mcp_set_token(
-    id: String,
-    token: String,
-    engine: State<'_, EngineState>,
-) -> Result<(), EngineError> {
-    engine.mcp_set_token(&id, &token)
+pub fn context_file(engine: State<'_, EngineState>) -> Option<(String, Option<String>)> {
+    engine.context_file()
 }
 
-/// Forget an `mcp` connector pack's token.
+/// Save the explicitly user-authored `fella.md` context file.
 #[tauri::command]
-pub fn mcp_clear_token(id: String, engine: State<'_, EngineState>) -> Result<bool, EngineError> {
-    engine.mcp_clear_token(&id)
-}
-
-/// CSS token map of the active theme pack, or null. The UI applies it to
-/// `document.documentElement`.
-#[tauri::command]
-pub fn packs_theme(
-    engine: State<'_, EngineState>,
-) -> Option<std::collections::BTreeMap<String, String>> {
-    engine.packs_theme()
-}
-
-// --- augments (user-authored files in the open folder) -----------------
-
-/// Write a note/table the user typed in an `augment` view into the open folder.
-/// The UI is the only caller; the agent has no path here.
-#[tauri::command]
-pub fn augment_save(
-    capability: String,
-    file: String,
-    contents: String,
-    engine: State<'_, EngineState>,
-) -> Result<(), EngineError> {
-    engine.augment_save(&capability, &file, &contents)
-}
-
-/// Read an augment file back for its editor. Null if it doesn't exist yet.
-#[tauri::command]
-pub fn augment_load(
-    file: String,
-    engine: State<'_, EngineState>,
-) -> Result<Option<String>, EngineError> {
-    engine.augment_load(&file)
-}
-
-/// The augment capabilities this build ships. The UI reads this instead of
-/// carrying its own copy of the list, so a new capability is one Rust entry
-/// plus its view no per-pack code, ever.
-#[tauri::command]
-pub fn augment_capabilities() -> Vec<&'static str> {
-    crate::engine::augment::CAPABILITIES.to_vec()
+pub fn save_context(contents: String, engine: State<'_, EngineState>) -> Result<(), EngineError> {
+    engine.save_context(&contents)
 }
 
 // --- ask (the agent loop) -------------------------------------------------

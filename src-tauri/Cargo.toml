@@ -14,15 +14,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [features]
 # The shipped desktop app builds with these on; all are removable. The data
 # engine is SQLite; `--features duckdb` swaps in DuckDB (Parquet, big files).
-default = ["pdf", "xlsx", "mcp"]
+default = ["pdf", "xlsx"]
 pdf = ["dep:pdf-extract"]           # PDF text extraction (~28 crates)
 xlsx = ["dep:calamine"]             # Excel ingest (~8 crates)
-# MCP connector packs (`mcp` pack kind). `rmcp` client + the pluggable
-# Streamable-HTTP transport (we supply the reqwest 0.13 backend, so this does
-# NOT pull reqwest 0.12 / quinn). ~10 small crates, ~12s cold build. In the
-# shipped app; `--no-default-features` drops it and connector packs then say
-# "this build has no connector support".
-mcp = ["dep:rmcp", "dep:sse-stream", "dep:futures", "dep:bytes", "tokio/sync"]
 # Opt-in "power" build: swap the SQLite data engine for DuckDB adds Parquet,
 # faster queries on large files, ~30 MB, ~15 min cold build.
 duckdb = ["dep:duckdb"]
@@ -67,13 +61,6 @@ wasmi = { version = "2.0.0", default-features = false, features = ["std", "valid
 duckdb = { version = "1.4.0", features = ["bundled"], optional = true }
 calamine = { version = "0.36", optional = true }
 pdf-extract = { version = "0.12.0", optional = true }
-rmcp = { version = "3.1", default-features = false, features = [
-    "client",
-    "transport-streamable-http-client",
-], optional = true }
-sse-stream = { version = "0.2", optional = true }
-futures = { version = "0.3", optional = true }
-bytes = { version = "1", optional = true }
 
 # Windows-only: one Win32 call (ShowCursor) in `commands::unhide_cursor`.
 # Already in the tree transitively via tauri/wry at this exact version, so this

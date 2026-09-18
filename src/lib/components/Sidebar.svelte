@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { ipc, isTauri } from '$lib/ipc';
-	import { baseName, errMsg, openContext, openFolder, relativeAge } from '$lib/commands';
+	import { baseName, errMsg, openFolder, relativeAge } from '$lib/commands';
 	import { session } from '$lib/session.svelte';
 	import type { ConversationSummary, Message } from '$lib/types';
 	import Icon from './Icon.svelte';
@@ -16,14 +16,6 @@
 		session.catalog.workspace?.replace(/[/\\]+$/, '').replace(/^.*[/\\]/, '') ?? ''
 	);
 	let fileCount = $derived(session.catalog.sources.length);
-	let analysisCount = $derived(
-		session.analyses.filter(
-			(analysis) =>
-				!session.catalog.workspace ||
-				!analysis.answer.workspace?.path ||
-				analysis.answer.workspace.path === session.catalog.workspace
-		).length
-	);
 	const shortcutModifier =
 		typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform || navigator.userAgent)
 			? '⌘'
@@ -252,49 +244,25 @@
 		</button>
 		<button
 			class="nav-row"
-			class:active={session.workspaceView === 'packs'}
-			type="button"
-			aria-current={session.workspaceView === 'packs' ? 'page' : undefined}
-			onclick={() => session.setWorkspaceView('packs')}
-		>
-			<Icon name="asterisk" size={14} />
-			<span>Packs</span>
-			{#if session.packs.length}<small>{session.packs.length}</small>{/if}
-		</button>
-		<button
-			class="nav-row"
-			class:active={session.workspaceView === 'sources'}
+			class:active={session.workspaceView === 'workspace'}
 			type="button"
 			disabled={!session.catalog.workspace}
-			aria-current={session.workspaceView === 'sources' ? 'page' : undefined}
-			onclick={() => session.setWorkspaceView('sources')}
+			aria-current={session.workspaceView === 'workspace' ? 'page' : undefined}
+			onclick={() => session.setWorkspacePane('sources')}
 		>
 			<Icon name="table" size={14} />
-			<span>Sources</span>
+			<span>Workspace</span>
 			{#if fileCount}<small>{fileCount}</small>{/if}
 		</button>
 		<button
 			class="nav-row"
-			class:active={session.workspaceView === 'analyses'}
+			class:active={session.workspaceView === 'settings'}
 			type="button"
-			disabled={!session.catalog.workspace && analysisCount === 0}
-			aria-current={session.workspaceView === 'analyses' ? 'page' : undefined}
-			onclick={() => session.setWorkspaceView('analyses')}
+			aria-current={session.workspaceView === 'settings' ? 'page' : undefined}
+			onclick={() => session.setWorkspaceView('settings')}
 		>
-			<Icon name="bookmark" size={14} />
-			<span>Analyses</span>
-			{#if analysisCount}<small>{analysisCount}</small>{/if}
-		</button>
-		<button
-			class="nav-row"
-			class:active={session.workspaceView === 'context'}
-			type="button"
-			disabled={!session.catalog.workspace}
-			aria-current={session.workspaceView === 'context' ? 'page' : undefined}
-			onclick={() => void openContext()}
-		>
-			<Icon name="file" size={14} />
-			<span>Context</span>
+			<Icon name="settings" size={14} />
+			<span>Settings</span>
 		</button>
 	</nav>
 	<div class="history-label">

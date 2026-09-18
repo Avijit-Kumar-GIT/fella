@@ -1,16 +1,14 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import CommandPalette from '$lib/components/CommandPalette.svelte';
-	import AnalysesView from '$lib/components/AnalysesView.svelte';
 	import Composer from '$lib/components/Composer.svelte';
 	import ContextInspector from '$lib/components/ContextInspector.svelte';
 	import Icon from '$lib/components/Icon.svelte';
-	import PacksView from '$lib/components/PacksView.svelte';
 	import Sidebar from '$lib/components/Sidebar.svelte';
-	import SourcesView from '$lib/components/SourcesView.svelte';
+	import SettingsView from '$lib/components/SettingsView.svelte';
 	import Titlebar from '$lib/components/Titlebar.svelte';
 	import Transcript from '$lib/components/Transcript.svelte';
-	import AugmentView from '$lib/components/AugmentView.svelte';
+	import WorkspaceView from '$lib/components/WorkspaceView.svelte';
 	import { dispatch, loadStartupCatalog, stop } from '$lib/commands';
 	import { ipc, isTauri } from '$lib/ipc';
 	import { fadeQuick } from '$lib/motion';
@@ -22,7 +20,6 @@
 	let paletteOpen = $state(false);
 	let dragging = $state(false);
 
-	let activeTab = $derived(session.activeTab);
 	let activeView = $derived(session.workspaceView);
 
 	async function refreshHealth() {
@@ -46,9 +43,6 @@
 		void ipc.getSettings().then((s) => { session.settings = s; }).catch(() => {});
 		void loadStartupCatalog();
 		void ipc.listProviders().then((p) => { session.providers = p; }).catch(() => {});
-		void ipc.packsList().then((p) => { session.packs = p; }).catch(() => {});
-		void ipc.augmentCapabilities().then((c) => { session.augmentCapabilities = c; }).catch(() => {});
-		void prefs.load();
 
 		// Poll quickly while disconnected so a just-fixed key is picked up within
 		// seconds; back off once healthy.
@@ -124,17 +118,15 @@
 		} else if (e.key === 'Escape' && !paletteOpen) {
 			if (session.inspectorOpen) {
 				session.closeInspector();
-			} else if (session.pendingKey || session.pendingConnect) {
+			} else if (session.pendingKey) {
 				session.pendingKey = null;
-				session.pendingConnect = null;
 				session.addSystem('Cancelled.');
 			} else if (session.busy) void stop();
 			else transcript?.collapseAll();
 		}
 	}
 
-	// Persist every conversation tab's transcript as it changes. Augment tabs
-	// have no transcript and aren't persisted.
+	// Persist the conversation transcript as it changes.
 	$effect(() => {
 		session.tabs.length;
 		for (const t of session.tabs) {
@@ -146,10 +138,9 @@
 		session.persist();
 	});
 
-	// Apply the selected appearance and active theme pack's CSS tokens to <html>.
+	// Apply the selected appearance to <html>.
 	$effect(() => {
 		prefs.appearance;
-		prefs.themeTokens;
 		prefs.apply();
 	});
 
@@ -183,7 +174,7 @@
 	$effect(() => {
 		const view = session.workspaceView;
 		const mounted = session.catalog.workspace;
-		if (!mounted && (view === 'sources' || view === 'context')) {
+		if (!mounted && view === 'workspace') {
 			session.setWorkspaceView('ask');
 		}
 	});
@@ -208,18 +199,10 @@
 		<Titlebar onpalette={() => (paletteOpen = true)} />
 		<main>
 			<div class="main-row">
-				{#if !session.catalog.workspace && (activeView === 'sources' || activeView === 'context')}
-					<Transcript bind:this={transcript} />
-				{:else if activeView === 'packs'}
-					<PacksView />
-				{:else if activeView === 'sources'}
-					<SourcesView />
-				{:else if activeView === 'analyses'}
-					<AnalysesView />
-				{:else if activeTab.kind === 'augment'}
-					{#key activeTab.id}
-						<AugmentView tab={activeTab} />
-					{/key}
+				{#if activeView === 'workspace'}
+					<WorkspaceView />
+				{:else if activeView === 'settings'}
+					<SettingsView />
 				{:else}
 					<Transcript bind:this={transcript} />
 				{/if}
@@ -229,7 +212,7 @@
 			</div>
 		</main>
 		<div class="dock">
-			{#if activeView === 'ask' && activeTab.kind !== 'augment'}
+			{#if activeView === 'ask'}
 				<Composer bind:this={composer} onafterrun={refreshHealth} />
 			{/if}
 		</div>

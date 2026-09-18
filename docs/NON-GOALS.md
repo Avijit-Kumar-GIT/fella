@@ -7,22 +7,21 @@ decided is [`DECISIONS.md`](DECISIONS.md).*
 
 - **Not a task agent.** The agent has no write/move/delete tools and emits no
   artifacts; no permission dialogs see [`AUDIT.md`](AUDIT.md). Fella answers
-  questions; it doesn't do chores. (An opt-in `augment` pack adds a note/table
-  tab the *user* saves, see [`EXTENSIBILITY.md`](EXTENSIBILITY.md); the
-  agent's own tools are unchanged.)
+  questions; it doesn't do chores. The user may explicitly edit `fella.md`,
+  which is context for the agent rather than an agent-generated artifact.
 - **Not horizontal.** The zero-config base build stays small in feature count
   and spends its weight on intelligence and quality-of-life better answers,
   fewer interactions, faster and lighter not more commands. A capability
   earns its place by making the existing job better or shorter, not by adding
-  a parallel thing to do; breadth lives in extensions. (`DECISIONS.md`
+  a parallel thing to do; future breadth belongs in reviewed custom forks.
+  (`DECISIONS.md`
   2026-09-08.)
-- **A fixed, small tool set in the base.** Adding a built-in tool or a
-  file-format parser is a code change, not a plugin. Beyond the base, users
-  can install vetted themes, skills, MCP connectors, and augments themselves
-  see [`EXTENSIBILITY.md`](EXTENSIBILITY.md).
-- **MCP is opt-in, not bundled.** Fella ships an MCP client so a user can
-  connect an external source (Notion, a notes repo); no connector ships by
-  default and none is a core dependency. (Reversed 2026-08-29; was "No MCP".)
+- **A fixed, small tool set.** Adding a built-in tool or a file-format parser
+  is a code change. The personal release has no plugin, pack, or connector
+  runtime; the former extension design is archived for future forks.
+- **MCP is experimental and inert.** `/mcp` remains documented as a future
+  boundary, but the default build has no MCP client, connector credentials,
+  dynamic tools, or outbound connector path.
 - **No server / cloud / Docker / Redis.** One desktop process. SQLite for app
   state, in-process DuckDB (opt-in) for analysis.
 - **No generic agent framework.** One reasoning loop, purpose-built, ~one

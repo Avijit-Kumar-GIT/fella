@@ -20,7 +20,7 @@ The public stages have different guarantees:
 | SQL rerun correction | The rerun is deterministic | Yes, once | A cited query that changed or no longer runs |
 | Self-consistency second opinion | No | Yes, only after a warning | Existing results and a stricter tool-free prompt |
 | Chart SQL evidence | Yes | No | Chart queries use the same SQL checks and rerun policy as `run_sql` |
-| Python/MCP independent rerun | No | No | These results are not independently re-executed by the verifier |
+| Python independent rerun | No | No | Python results are not independently re-executed by the verifier |
 
 ## Architecture
 
@@ -83,7 +83,7 @@ Not every warning is a hard failure. Text aggregation, possible case sensitivity
 - Numeric grounding uses tolerant number matching. It is useful but cannot prove a derived percentage or narrative interpretation is correct in every form.
 - A successful rerun proves repeatability at that moment, not source completeness or truth.
 - Heuristic SQL checks can produce warnings on valid queries and miss semantic mistakes.
-- Python and MCP outputs can support number grounding, but the verifier does not independently rerun arbitrary Python or remote MCP calls.
+- Python output can support number grounding, but the verifier does not independently rerun arbitrary Python programs.
 - A model second opinion costs another provider request and remains model output, not deterministic validation.
 
 For high-stakes use, inspect the query, rows, and source data yourself.

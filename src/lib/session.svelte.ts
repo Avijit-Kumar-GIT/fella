@@ -10,15 +10,11 @@
 
 import { ipc, isTauri } from './ipc';
 import type {
-	AugmentConfig,
-	AnalysisArtifact,
 	AskMode,
-	Answer,
 	Catalog,
 	ContextReference,
 	EvidenceItem,
 	InspectorSelection,
-	InstalledPack,
 	Message,
 	ProviderHealth,
 	ProviderInfo,
@@ -26,7 +22,6 @@ import type {
 	Settings
 } from './types';
 
-export type { AugmentConfig };
 
 function uid(): string {
 	return Math.random().toString(36).slice(2, 10);
@@ -49,7 +44,6 @@ const PREFIX = 'fella:conversation:'; // one key per tab: fella:conversation:<id
 const LEGACY_KEY = 'fella:conversation'; // the single pre-tabs blob
 const INDEX_KEY = 'fella:tabs'; // JSON array of open tab ids
 const SIDEBAR_KEY = 'fella:sidebar-collapsed';
-const ANALYSES_KEY = 'fella:analyses';
 
 function readSidebarCollapsed(): boolean {
 	try {
@@ -60,17 +54,6 @@ function readSidebarCollapsed(): boolean {
 	}
 }
 
-function readAnalyses(): AnalysisArtifact[] {
-	if (typeof localStorage === 'undefined') return [];
-	try {
-		const raw = localStorage.getItem(ANALYSES_KEY);
-		if (!raw) return [];
-		const parsed: unknown = JSON.parse(raw);
-		return Array.isArray(parsed) ? (parsed as AnalysisArtifact[]) : [];
-	} catch {
-		return [];
-	}
-}
 
 /** One conversation tab: its transcript, its in-flight run, its input history. */
 export class Conversation {
@@ -83,9 +66,6 @@ export class Conversation {
 	/** Set by `/login <provider>`: the next composer line is taken as the API
 	 *  key for this provider not echoed to the transcript, not persisted. */
 	pendingKey = $state<{ provider: string; display: string } | null>(null);
-	/** Set by `/connect <id>`: the next composer line is the connector's key
-	 *  same masked-input treatment as `pendingKey`. */
-	pendingConnect = $state<{ id: string } | null>(null);
 	/** ↑-recall history for the composer while this tab is focused. */
 	history: string[] = [];
 	/** The model this tab answers with. Empty = use the saved default. All tabs
@@ -97,7 +77,7 @@ export class Conversation {
 	/** The current question's intent. Inspect selects the stricter read-only
 	 *  tool registry and makes the source-first workflow explicit to the model. */
 	mode = $state<AskMode>('ask');
-	/** Context chosen from the workspace or saved analyses for this tab. */
+	/** Sources and fields chosen from the workspace for this tab. */
 	contextRefs = $state<ContextReference[]>([]);
 	/** The compact, local run trace shown beneath the transcript. */
 	runSteps = $state<RunStep[]>([]);
@@ -234,47 +214,17 @@ export class Conversation {
 	}
 }
 
-/** A non-conversation tab: an augment view (a notes buffer, later a grid)
- *  editing one file in the open folder. Not persisted to localStorage the
- *  file on disk is the source of truth and it isn't restored on relaunch. */
-export class AugmentTab {
-	readonly kind = 'augment' as const;
-	readonly id = uid();
-	readonly capability: string;
-	readonly command: string;
-	readonly file: string;
-	readonly syntax: string;
-	/** Current editor contents. */
-	text = $state<string>('');
-	/** Last value confirmed written to disk. */
-	saved = $state<string>('');
-	savedAt = $state<number | null>(null);
-	saving = $state<boolean>(false);
-	loadError = $state<string | null>(null);
 
-	constructor(cfg: AugmentConfig) {
-		this.capability = cfg.capability;
-		this.command = cfg.command;
-		this.file = cfg.file;
-		this.syntax = cfg.syntax;
-	}
-
-	get dirty(): boolean {
-		return this.text !== this.saved;
-	}
-}
-
-export type Tab = Conversation | AugmentTab;
-export type WorkspaceView = 'ask' | 'packs' | 'sources' | 'analyses' | 'context';
+export type Tab = Conversation;
+export type WorkspaceView = 'ask' | 'workspace' | 'settings';
+export type WorkspacePane = 'sources' | 'context';
 
 class Session {
 	catalog = $state<Catalog>({ workspace: null, sources: [] });
 	/** The lightweight workspace surface currently shown beside the tab state. */
 	workspaceView = $state<WorkspaceView>('ask');
-	/** Personal saved analyses. These stay local until a durable artifact store
-	 *  exists; the answer itself remains the source of truth for its details. */
-	analyses = $state<AnalysisArtifact[]>(readAnalyses());
-	selectedAnalysisId = $state<string | null>(null);
+	/** The active pane inside Workspace. */
+	workspacePane = $state<WorkspacePane>('sources');
 	/** Folder from the last session, if it still exists shown on the welcome
 	 *  screen as a one-click "reopen". Fella no longer opens it automatically. */
 	lastFolder = $state<string | null>(null);
@@ -283,14 +233,7 @@ class Session {
 	/** Built-in providers from the engine, cached so the composer can hint
 	 *  valid `/login` / `/logout` names without an await. */
 	providers = $state<ProviderInfo[]>([]);
-	/** Installed packs, cached so `/packs` completion can offer ids without an
-	 *  await. */
-	packs = $state<InstalledPack[]>([]);
-	/** Augment capabilities this build ships (from the engine, not a hardcoded
-	 *  list) an augment pack is only reachable if its capability is here. */
-	augmentCapabilities = $state<string[]>([]);
-
-	/** The open tabs (conversations, and augment views), and the focused index. */
+	/** The open conversation tabs and the focused index. */
 	tabs = $state<Tab[]>([new Conversation()]);
 	active = $state<number>(0);
 	/** Focus mode: hide the tab strip and the folder header for a plain,
@@ -303,7 +246,7 @@ class Session {
 	/** Bumped whenever a conversation is archived, so the sidebar's list
 	 *  knows to refetch without polling. */
 	historyVersion = $state<number>(0);
-	/** Right-hand contextual inspector, shared by Ask, Sources, and Analyses. */
+	/** Right-hand contextual inspector, shared by Ask and Workspace. */
 	inspectorOpen = $state<boolean>(false);
 	inspectorSelection = $state<InspectorSelection>(null);
 
@@ -317,34 +260,29 @@ class Session {
 	}
 
 	setWorkspaceView(view: WorkspaceView): void {
-		// Sources and Context describe a mounted workspace. If the
-		// catalog is empty, keep the user on the single useful no-folder
-		// onboarding surface instead of showing competing empty states.
-		if (!this.catalog.workspace && (view === 'sources' || view === 'context')) {
+		if (view === 'workspace' && !this.catalog.workspace) {
 			this.workspaceView = 'ask';
 			return;
 		}
 		this.workspaceView = view;
-		// An augment is an editor surface, but Ask should always return to a
-		// conversation rather than leaving the user on a hidden file tab.
-		if (view === 'ask' && this.activeTab.kind === 'augment') {
-			const chat = this.tabs.findIndex((t) => t.kind === 'chat');
-			if (chat >= 0) this.active = chat;
+	}
+
+	setWorkspacePane(pane: WorkspacePane): void {
+		if (!this.catalog.workspace) {
+			this.workspaceView = 'ask';
+			return;
 		}
+		this.workspacePane = pane;
+		this.workspaceView = 'workspace';
 	}
 
-	/** Focus a tab and show the surface that belongs to it. Chat and ordinary
-	 *  augment tabs live in Ask; the context augment has its own workspace pane. */
+	/** Focus a conversation tab. */
 	activateTab(index: number): void {
-		const tab = this.tabs[index];
-		if (!tab) return;
+		if (!this.tabs[index]) return;
 		this.active = index;
-		this.workspaceView = tab.kind === 'augment' && tab.command === 'context' ? 'context' : 'ask';
+		this.workspaceView = 'ask';
 	}
 
-	selectAnalysis(id: string | null): void {
-		this.selectedAnalysisId = id;
-	}
 
 	setAskMode(mode: AskMode): void {
 		this.ensureChat().setMode(mode);
@@ -372,71 +310,19 @@ class Session {
 		this.inspectorSelection = null;
 	}
 
-	/** Start a fresh Ask tab with a saved analysis attached as context. */
-	startFromAnalysis(analysis: AnalysisArtifact): void {
-		this.newTab();
-		this.addContextReference({
-			kind: 'analysis',
-			key: analysis.id,
-			label: analysis.title,
-			detail: analysis.question
-		});
-		this.workspaceView = 'ask';
-	}
-
-	isAnalysisSaved(messageId: string): boolean {
-		return this.analyses.some((analysis) => analysis.message_id === messageId);
-	}
-
-	saveAnalysis(messageId: string, question: string, answer: Answer): AnalysisArtifact {
-		const existing = this.analyses.find((analysis) => analysis.message_id === messageId);
-		const cleanQuestion = question.replace(/\s+/g, ' ').trim();
-		const title = cleanQuestion
-			? cleanQuestion.length > 72
-				? cleanQuestion.slice(0, 69) + '…'
-				: cleanQuestion
-			: 'Saved analysis';
-		// Answers are reactive objects while the transcript is alive. Take a
-		// serializable snapshot so later streaming updates cannot mutate an
-		// artifact that the user already saved.
-		const answerSnapshot = JSON.parse(JSON.stringify(answer)) as Answer;
-		const artifact: AnalysisArtifact = {
-			id: existing?.id ?? uid(),
-			message_id: messageId,
-			title,
-			question: cleanQuestion || 'Saved analysis',
-			answer: answerSnapshot,
-			created_at_ms: existing?.created_at_ms ?? Date.now()
-		};
-		this.analyses = [artifact, ...this.analyses.filter((item) => item.message_id !== messageId)];
-		this.selectedAnalysisId = artifact.id;
-		this.#writeAnalyses();
-		return artifact;
-	}
-
-	deleteAnalysis(id: string): void {
-		this.analyses = this.analyses.filter((analysis) => analysis.id !== id);
-		if (this.selectedAnalysisId === id) this.selectedAnalysisId = this.analyses[0]?.id ?? null;
-		this.#writeAnalyses();
-	}
 
 	get activeTab(): Tab {
 		return this.tabs[this.active] ?? this.tabs[0];
 	}
 
-	/** The focused tab if it's a conversation, else the first conversation tab,
-	 *  else null. The `session.addSystem(...)` / `ask` paths route here so a
-	 *  slash command run while an augment tab is focused still lands somewhere
-	 *  sensible. */
-	get activeChat(): Conversation | null {
-		const t = this.activeTab;
-		if (t.kind === 'chat') return t;
-		return (this.tabs.find((x) => x.kind === 'chat') as Conversation | undefined) ?? null;
+	/** The focused conversation used by the command and ask paths. */
+	get activeChat(): Conversation {
+		return this.activeTab;
 	}
 
 	/** The active tab's model, or the saved default when it hasn't picked one. */
 	get model(): string {
-		const m = this.activeTab.kind === 'chat' ? this.activeTab.model : '';
+		const m = this.activeTab.model;
 		return m || this.settings?.model || '';
 	}
 
@@ -468,25 +354,9 @@ class Session {
 	set pendingKey(v: { provider: string; display: string } | null) {
 		if (this.activeChat) this.activeChat.pendingKey = v;
 	}
-	get pendingConnect(): { id: string } | null {
-		return this.activeChat?.pendingConnect ?? null;
-	}
-	set pendingConnect(v: { id: string } | null) {
-		if (this.activeChat) this.activeChat.pendingConnect = v;
-	}
-
-	/** The conversation to act on for a slash command: the focused tab if it's a
-	 *  conversation, otherwise the first conversation tab (focusing it), or a
-	 *  fresh one. Slash commands are dispatched from the Composer, which is
-	 *  hidden on an augment tab, so in practice this is just the active tab. */
+	/** The conversation to act on for a slash command. */
 	ensureChat(): Conversation {
-		const existing = this.activeChat;
-		if (existing) {
-			if (this.activeTab.kind !== 'chat') this.active = this.tabs.indexOf(existing);
-			return existing;
-		}
-		this.newTab();
-		return this.tabs[this.active] as Conversation;
+		return this.activeChat;
 	}
 
 	addUser(text: string): Message {
@@ -551,49 +421,15 @@ class Session {
 		this.historyVersion++;
 	}
 
-	/** Open (or focus) an augment view for `cfg`, loading the file's current
-	 *  contents from the open folder. */
-	async openAugment(cfg: AugmentConfig): Promise<void> {
-		const existing = this.tabs.findIndex((t) => t.kind === 'augment' && t.file === cfg.file);
-		if (existing >= 0) {
-			this.activateTab(existing);
-			return;
-		}
-		const tab = new AugmentTab(cfg);
-		this.tabs.push(tab);
-		this.activateTab(this.tabs.length - 1);
-		this.#writeIndex();
-		if (!isTauri()) return;
-		try {
-			const cur = await ipc.augmentLoad(cfg.file);
-			tab.text = cur ?? '';
-			tab.saved = tab.text;
-		} catch (e) {
-			tab.loadError = e instanceof Error ? e.message : String(e);
-		}
-	}
 
 	async closeTab(i: number): Promise<void> {
 		const tab = this.tabs[i];
 		if (!tab) return;
-		const closingContext = tab.kind === 'augment' && tab.command === 'context';
-		if (tab.kind === 'chat') {
-			await this.#archive(tab);
-			tab.dropSnapshot();
-			if (isTauri()) void ipc.forgetConversation(tab.id).catch(() => {});
-		} else if (tab.dirty && isTauri()) {
-			// Flush a final save so nothing typed is lost on close.
-			try {
-				await ipc.augmentSave(tab.capability, tab.file, tab.text);
-			} catch (e) {
-				console.warn('augment final save failed', e);
-			}
-		}
+		await this.#archive(tab);
+		tab.dropSnapshot();
+		if (isTauri()) void ipc.forgetConversation(tab.id).catch(() => {});
 		this.tabs.splice(i, 1);
 		if (this.tabs.length === 0) this.tabs.push(new Conversation());
-		if (closingContext && this.workspaceView === 'context') this.workspaceView = 'ask';
-		// Keep the focus on the same tab where possible: shift left if we closed
-		// one before it, then clamp.
 		if (this.active > i) this.active -= 1;
 		this.active = Math.min(this.active, this.tabs.length - 1);
 		this.#writeIndex();
@@ -620,20 +456,11 @@ class Session {
 		this.#writeIndex();
 	}
 
-	/** End the active tab: archive a conversation / flush an augment, then start
-	 *  the slot blank. */
+	/** End the active conversation and start the slot blank. */
 	async clear(): Promise<void> {
-		const tab = this.activeTab;
-		if (tab.kind === 'chat') {
-			await this.#archive(tab);
-			tab.dropSnapshot();
-		} else if (tab.dirty && isTauri()) {
-			try {
-				await ipc.augmentSave(tab.capability, tab.file, tab.text);
-			} catch {
-				/* ignore */
-			}
-		}
+		const tab = this.activeChat;
+		await this.#archive(tab);
+		tab.dropSnapshot();
 		this.tabs[this.active] = new Conversation();
 		this.#writeIndex();
 	}
@@ -678,7 +505,7 @@ class Session {
 	}
 
 	/** Persist every conversation tab's transcript (each debounces its own
-	 *  write). Augment tabs aren't persisted the file on disk is the truth.
+	 *  write).
 	 *
 	 *  Also archives a tab into history as soon as its first exchange
 	 *  settles, not just on close/clear -- otherwise a conversation you're
@@ -690,7 +517,6 @@ class Session {
 	persist(): void {
 		const ws = this.catalog.workspace ?? null;
 		for (const t of this.tabs) {
-			if (t.kind !== 'chat') continue;
 			t.persist(ws);
 			if (!t.busy && t.messages.length > 0) void this.#archive(t);
 		}
@@ -702,14 +528,6 @@ class Session {
 			localStorage.setItem(INDEX_KEY, JSON.stringify(this.tabs.map((t) => t.id)));
 		} catch {
 			/* ignore */
-		}
-	}
-
-	#writeAnalyses(): void {
-		try {
-			localStorage.setItem(ANALYSES_KEY, JSON.stringify(this.analyses));
-		} catch {
-			/* a full or unavailable local store should not interrupt a conversation */
 		}
 	}
 

@@ -3,10 +3,8 @@
 	import type { Tab } from '$lib/session.svelte';
 	import Icon from './Icon.svelte';
 
-	/** A chip-sized label: the augment's file, a custom name if renamed, or
-	 *  a conversation's first line. */
+	/** A chip-sized label: a custom name if renamed, or a conversation's first line. */
 	function label(tab: Tab): string {
-		if (tab.kind === 'augment') return tab.file;
 		if (tab.title) return tab.title;
 		const first = tab.messages.find((m) => m.role === 'user');
 		const t = first?.text.replace(/\s+/g, ' ').trim();
@@ -38,15 +36,13 @@
 			onkeydown={(e) => onKey(e, i)}
 			data-tauri-drag-region="false"
 		>
-			{#if tab.kind === 'chat' && tab.busy}
+			{#if tab.busy}
 				<span class="thinking" aria-hidden="true"></span>
-			{:else if tab.kind === 'augment' && tab.dirty}
-				<span class="unsaved" aria-hidden="true" title="unsaved changes"></span>
 			{/if}
 			<span class="label">{label(tab)}</span>
 			<button
 				class="close"
-				aria-label={tab.kind === 'augment' ? 'Close this tab' : 'Close this conversation'}
+				aria-label="Close this conversation"
 				tabindex="-1"
 				onclick={(e) => {
 					e.stopPropagation();
@@ -105,13 +101,6 @@
 	.label {
 		overflow: hidden;
 		text-overflow: ellipsis;
-	}
-	.unsaved {
-		width: 6px;
-		height: 6px;
-		border-radius: 50%;
-		background: var(--warn);
-		flex: none;
 	}
 	.close,
 	.add {

@@ -57,7 +57,7 @@ Each tab can select a model. Provider authentication is stored at the applicatio
 
 Ollama connections use `/api/chat`; OpenAI-compatible connections use `/chat/completions`. Both stream output into the same harness, which assembles tool calls, executes them through the registry, and returns results in later turns. Transient provider failures retry with backoff.
 
-API keys and MCP connector tokens are kept in `auth.json` under Fella's application data directory, with mode `0600` on platforms that support it. Secret-bearing configuration commands are redacted from conversation transcripts.
+Provider API keys are kept in `auth.json` under Fella's application data directory, with mode `0600` on platforms that support it. Secret-bearing configuration commands are redacted from conversation transcripts. The inert `/mcp` command stores no connector tokens and makes no network request.
 
 Document search remains local and direct through `grep_files` and `read_file`, so it works even when the provider has no embeddings endpoint.
 
@@ -79,7 +79,7 @@ framing does not leak into the tool loop.
 ## Limits
 
 - With a hosted or custom provider, prompts and tool results sent for the conversation leave the machine and are subject to that provider's policies.
-- Enabled MCP connectors make separate requests to their configured remote services. They are not model providers.
+- The inert `/mcp` command does not create a connector or make a separate network request.
 - `run_python` is local execution inside the embedded WASM guest. The guest has no filesystem, network, environment, or subprocess capability; the prompt describes the boundary, while the host ABI enforces it.
 - Provider model catalogs and default model IDs can change. `/model` is the source of the active service's available models when listing is supported.
 - The model can make reasoning and tool-selection mistakes regardless of provider. Deterministic checks cover evidence consistency, not every semantic error.
@@ -91,7 +91,7 @@ framing does not leak into the tool loop.
     See how provider output enters the tool loop.
   </Card>
   <Card title="Privacy and security" icon="shield-check" href="/developer-platform/using-fella/privacy">
-    Review provider, connector, credential, and local-execution boundaries.
+    Review provider, credential, and local-execution boundaries.
   </Card>
   <Card title="Using Fella" icon="folder-open" href="/developer-platform/using-fella">
     Configure a workspace and ask a first question.
