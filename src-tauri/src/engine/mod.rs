@@ -28,8 +28,8 @@ pub mod update;
 
 pub use catalog::{Catalog, SourceInfo};
 pub use error::{EngineError, EngineResult};
-pub use extensions::InstalledPack;
 pub use evidence::{Answer, AskEvent};
+pub use extensions::InstalledPack;
 pub use llm::ProviderHealth;
 pub use provider::{AuthKind, Provider, PROVIDERS};
 pub use sqlite::Settings;

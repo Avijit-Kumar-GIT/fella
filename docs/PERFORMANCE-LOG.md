@@ -461,10 +461,17 @@ turn's context): turn 1 (fresh) 2.7s, turn 2 (follow-up) 2.7s no measurable
 discount against a hosted cloud model network + inference time dominate over
 the small context-reuse savings visible against a local model.
 
-Run against **local** Ollama still not captured the numbers above are a
-hosted-cloud model over the network, not the "local, private (default)" path
-most users will actually run. Worth a second row here once measured on a real
-machine with local Ollama and a comparable model size.
+There is no local-model row by design: Fella's supported product path is
+hosted BYOK, and local Ollama is not part of the test or deployment surface.
+
+### Embedded Python/WASM memory probe
+
+Captured 2026-09-17 from the optimized `memory_probe` example: 256
+post-warm-up SQL-backed and pure-Python executions reached a 6.1 MiB peak
+guest Wasm store. Linux process RSS grew from 36.8 MiB to 46.6 MiB, or 9.9
+MiB, and stayed below the 128 MiB probe threshold. This is a repeated-use
+regression signal rather than a proof that every allocator or platform host is
+leak-free; Windows and macOS still need native RSS/profiler coverage.
 
 ### `agent_eval` the scored harness
 
@@ -665,7 +672,7 @@ shortcut, or a native folder dialog.
 
 | scenario | interactions |
 |---|:-:|
-| Ollama installed + a chat model pulled | **3** (open 2 + ask 1; login/model are 0) |
+| Hosted provider with a saved key and model | **3** (open 2 + ask 1) |
 | Hosted provider, names known | **5** (open 2 + `/login p key <KEY>` 1 + `/model name` 1 + ask 1) |
 | Hosted provider, first run, discovering | **~11–14** |
 

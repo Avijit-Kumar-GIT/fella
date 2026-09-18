@@ -123,7 +123,10 @@ mod tests {
             EngineError::msg("the model is busy retrying in 3s").kind(),
             "transient"
         );
-        assert_eq!(EngineError::msg("something odd happened").kind(), "internal");
+        assert_eq!(
+            EngineError::msg("something odd happened").kind(),
+            "internal"
+        );
     }
 
     #[test]

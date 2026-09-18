@@ -52,7 +52,9 @@ fn resolve_in_workspace(workspace: &Path, rel: &str) -> EngineResult<PathBuf> {
     let parent_canon = std::fs::canonicalize(parent)
         .map_err(|e| EngineError::io(format!("the folder for '{rel}' doesn't exist yet"), e))?;
     if !parent_canon.starts_with(&root) {
-        return Err(EngineError::msg("that path would write outside the open folder"));
+        return Err(EngineError::msg(
+            "that path would write outside the open folder",
+        ));
     }
 
     let name = target
@@ -119,9 +121,15 @@ mod tests {
         let ws = tmp_ws("roundtrip");
         let p = write_buffer(&ws, "notes.md", "hello").unwrap();
         assert!(p.starts_with(&ws));
-        assert_eq!(read_buffer(&ws, "notes.md").unwrap().as_deref(), Some("hello"));
+        assert_eq!(
+            read_buffer(&ws, "notes.md").unwrap().as_deref(),
+            Some("hello")
+        );
         write_buffer(&ws, "notes.md", "world").unwrap();
-        assert_eq!(read_buffer(&ws, "notes.md").unwrap().as_deref(), Some("world"));
+        assert_eq!(
+            read_buffer(&ws, "notes.md").unwrap().as_deref(),
+            Some("world")
+        );
         // no stray tmp file left behind
         let leftovers: Vec<_> = std::fs::read_dir(&ws)
             .unwrap()

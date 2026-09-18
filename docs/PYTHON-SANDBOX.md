@@ -24,8 +24,24 @@ and `linregress` to each snippet.
 Wasmi applies a fresh Store per run with a 256 MiB linear-memory limit, a 2 MiB
 value-stack limit, 1 billion instructions of fuel, 64 KiB of source and output,
 10,000 SQL rows, and a 1 MiB SQL response. SQLite also interrupts the host
-query after its normal query timeout. These are bounds on a generated
-calculation, not a claim that any runtime vulnerability is impossible.
+query after its normal query timeout. The host frees the guest input and SQL
+response buffers by dropping the fresh Store after each run.
+Resumable 20-million-fuel slices let a user Stop a pure-Python loop; the normal
+Python wall budget is 60 seconds. These are bounds on a generated calculation,
+not a claim that any runtime vulnerability is impossible.
+
+The repeatable release check is:
+
+```sh
+./scripts/check-memory.sh
+```
+
+It warms the runtime, runs SQL-backed and pure-Python snippets 32 times, reports
+the peak guest memory, and on Linux compares post-warm-up process RSS against a
+128 MiB growth budget. Set `FELLA_MEMORY_ITERATIONS` or
+`FELLA_MEMORY_MAX_GROWTH_MB` to tune the probe for a CI runner. Windows and
+macOS still exercise the guest metric; their host RSS needs a native profiler or
+an OS-specific follow-up.
 
 To rebuild the guest after changing its source:
 

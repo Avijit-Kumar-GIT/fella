@@ -2,7 +2,11 @@
 
 use std::fs;
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use fella_lib::engine::EngineState;
 
@@ -147,6 +151,42 @@ async fn python_loop_is_stopped_by_fuel() {
 
     assert!(r.timed_out, "expected the fuel limit, got: {:?}", r.stderr);
     assert!(r.exit_code.is_none());
+
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[tokio::test]
+async fn python_loop_can_be_stopped_by_the_user() {
+    let data = scratch("py-cancel");
+    let engine = Arc::new(EngineState::new(&data).unwrap());
+    let cancel = Arc::new(AtomicBool::new(false));
+    let running = Arc::clone(&engine);
+    let worker_cancel = Arc::clone(&cancel);
+
+    let task = tokio::spawn(async move {
+        running
+            .run_python_cancellable(
+                "while True:\n    total = 0\n    for i in range(100_000):\n        total += i * i",
+                worker_cancel,
+            )
+            .await
+            .unwrap()
+    });
+    // The heavier body keeps the release build alive long enough for this
+    // test to exercise user cancellation before the finite fuel budget ends.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    cancel.store(true, Ordering::Relaxed);
+
+    let result = tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .expect("the Python worker did not respond to cancellation")
+        .unwrap();
+    assert!(
+        result.cancelled,
+        "expected user cancellation: stderr={}",
+        result.stderr
+    );
+    assert!(!result.timed_out);
 
     let _ = fs::remove_dir_all(&data);
 }

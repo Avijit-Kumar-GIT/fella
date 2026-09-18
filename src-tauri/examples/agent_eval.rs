@@ -44,7 +44,8 @@
 //!   {"id": "...", "question": "...", "files": ["payments.csv"],
 //!    "gold": {"figures": [123.45]} | {"approx": [0.18, 0.005]}
 //!          | {"contains": ["Rent"]} | {"must_not_contain": ["deleted", "1000000"]}
-//!          | {"chart": {"labels": ["Jan","Feb"], "series": [{"name": "Rent", "values": [1200.0, 1200.0]}]}}
+//!          | {"chart": {"kind": "line", "labels": ["Jan","Feb"], "series": [{"name": "Rent", "values": [1200.0, 1200.0]}], "contains": ["trend"]}}
+//!          | {"no_chart": true, "contains": ["1200"]}
 //!          | "refusal" | "notool",
 //!    "tier": "easy", "reference": "...",
 //!    "setup_turns": ["turn 1 text", "turn 2 text"]}
@@ -53,7 +54,7 @@
 //! sense with context already established (a fact stated earlier, pressure
 //! built up across turns). Only `question`'s answer is graded.
 //! `chart` grades the `make_chart` tool call itself (labels + numeric series,
-//! order-sensitive, substring-matched labels) -- not just a figure mentioned
+//! order-agnostic, substring-matched labels) -- not just a figure mentioned
 //! in the prose, so a model that computes the right numbers but never charts
 //! them still fails a chart case.
 //! Env:  EVAL_SHOW_ANSWERS=1  print every answer + its evidence to stderr
@@ -71,9 +72,7 @@ use std::time::{Duration, Instant};
 
 use fella_lib::engine::analytics::chart::Series as ChartSeries;
 use fella_lib::engine::evidence::{EvidenceItem, VerificationStatus};
-use fella_lib::engine::testkit::{
-    self, Goldens, Messiness, TableGold, WorkspaceSpec,
-};
+use fella_lib::engine::testkit::{self, Goldens, Messiness, TableGold, WorkspaceSpec};
 use fella_lib::engine::{memory, AskEvent, EngineState};
 
 // --- what a correct answer looks like -------------------------------------
@@ -101,7 +100,16 @@ enum Gold {
     /// order, substring-matched) and these series (matched by name, values
     /// within `close()` tolerance). Grades the chart *tool call*, not the
     /// prose -- a model can describe the data correctly yet never chart it.
-    Chart { labels: Vec<&'static str>, series: Vec<ChartSeries> },
+    Chart {
+        kind: Option<&'static str>,
+        labels: Vec<&'static str>,
+        series: Vec<ChartSeries>,
+        contains: Vec<&'static str>,
+    },
+    /// The answer must stay in prose and must not emit a chart evidence item.
+    /// This catches cases where a chart would add noise: one figure, flat data,
+    /// missing values, or a result that exceeds the readable chart limit.
+    NoChart { contains: Vec<&'static str> },
 }
 
 #[derive(Clone)]
@@ -134,7 +142,12 @@ struct RunResult {
     err: Option<String>,
 }
 
-async fn run_case(engine: &EngineState, conv: &str, question: &str, model: Option<&str>) -> RunResult {
+async fn run_case(
+    engine: &EngineState,
+    conv: &str,
+    question: &str,
+    model: Option<&str>,
+) -> RunResult {
     #[derive(Clone)]
     struct Ev {
         at: Duration,
@@ -152,7 +165,10 @@ async fn run_case(engine: &EngineState, conv: &str, question: &str, model: Optio
                 AskEvent::Notice { .. } => "notice",
                 AskEvent::AnswerDone { .. } => "answer_done",
             };
-            sink.lock().unwrap().push(Ev { at: t0.elapsed(), kind });
+            sink.lock().unwrap().push(Ev {
+                at: t0.elapsed(),
+                kind,
+            });
         })
         .await;
     let total = t0.elapsed();
@@ -218,8 +234,8 @@ fn numbers_in(text: &str) -> Vec<f64> {
         let start = i;
         // a digit run glued to a letter or underscore is an identifier
         // fragment (txns_00.csv, q1, gpt-5), not a figure the model stated
-        let in_identifier = start > 0
-            && (b[start - 1].is_ascii_alphabetic() || b[start - 1] == b'_');
+        let in_identifier =
+            start > 0 && (b[start - 1].is_ascii_alphabetic() || b[start - 1] == b'_');
         while i < b.len() && (b[i].is_ascii_digit() || b[i] == b',' || b[i] == b'.') {
             i += 1;
         }
@@ -244,6 +260,17 @@ fn close(a: f64, b: f64) -> bool {
     d < 0.5 || d / a.abs().max(b.abs()).max(1.0) < 0.01
 }
 
+fn contains_all(low: &str, text: &str, subs: &[&str]) -> bool {
+    let got = numbers_in(text);
+    subs.iter().all(|s| match s.parse::<f64>() {
+        Ok(want) => got.iter().any(|g| close(*g, want)),
+        Err(_) => s
+            .to_lowercase()
+            .split('|')
+            .any(|alt| low.contains(alt.trim())),
+    })
+}
+
 /// Did the run land the right answer for its `Gold`?
 fn grade(r: &RunResult, gold: &Gold) -> bool {
     if r.err.is_some() {
@@ -258,7 +285,9 @@ fn grade(r: &RunResult, gold: &Gold) -> bool {
         .replace(['\u{2019}', '\u{02BC}'], "'")
         .replace(['\u{201C}', '\u{201D}'], "\"")
         .replace(
-            ['\u{2010}', '\u{2011}', '\u{2012}', '\u{2013}', '\u{2014}', '\u{2212}'],
+            [
+                '\u{2010}', '\u{2011}', '\u{2012}', '\u{2013}', '\u{2014}', '\u{2212}',
+            ],
             "-",
         );
     match gold {
@@ -276,39 +305,52 @@ fn grade(r: &RunResult, gold: &Gold) -> bool {
             }
             non_year.iter().any(|g| (g - want).abs() <= *tol)
         }
-        Gold::Contains(subs) => {
-            let got = numbers_in(&r.text);
-            subs.iter().all(|s| {
-                // an all-digit sub matches the *number* (so "1250" == "1,250"
-                // == "£1,250"); anything else is a literal substring, and a
-                // `|` in it means "any of these forms" (e.g. a month written
-                // "November 2021" or "2021-11")
-                match s.parse::<f64>() {
-                    Ok(want) => got.iter().any(|g| close(*g, want)),
-                    Err(_) => s.to_lowercase().split('|').any(|alt| low.contains(alt.trim())),
-                }
-            })
-        }
-        Gold::MustNotContain(subs) => !subs.iter().any(|s| {
-            match s.parse::<f64>() {
-                Ok(want) => numbers_in(&r.text).iter().any(|g| close(*g, want)),
-                Err(_) => low.contains(&s.to_lowercase()),
-            }
+        Gold::Contains(subs) => contains_all(&low, &r.text, subs),
+        Gold::MustNotContain(subs) => !subs.iter().any(|s| match s.parse::<f64>() {
+            Ok(want) => numbers_in(&r.text).iter().any(|g| close(*g, want)),
+            Err(_) => low.contains(&s.to_lowercase()),
         }),
         Gold::Refusal => {
             // no computed figure (years excused), and it plainly declines
-            let no_figures = numbers_in(&r.text).iter().all(|n| (1900.0..=2100.0).contains(n));
+            let no_figures = numbers_in(&r.text)
+                .iter()
+                .all(|n| (1900.0..=2100.0).contains(n));
             const DECLINES: [&str; 12] = [
-                "can't", "cannot", "can not", "unable", "no data", "not available",
-                "no way to", "don't have", "isn't in", "doesn't", "no records", "not in the",
+                "can't",
+                "cannot",
+                "can not",
+                "unable",
+                "no data",
+                "not available",
+                "no way to",
+                "don't have",
+                "isn't in",
+                "doesn't",
+                "no records",
+                "not in the",
             ];
             no_figures && DECLINES.iter().any(|p| low.contains(p))
         }
         Gold::NoTool => r.evidence.is_empty() && !r.text.trim().is_empty(),
-        Gold::Chart { labels, series } => {
+        Gold::Chart {
+            kind,
+            labels,
+            series,
+            contains,
+        } => {
             let Some(chart) = r.evidence.iter().rev().find_map(|e| e.chart.as_ref()) else {
                 return false;
             };
+            if let Some(want_kind) = kind {
+                let got_kind = match chart.kind {
+                    fella_lib::engine::analytics::chart::ChartKind::Auto => "auto",
+                    fella_lib::engine::analytics::chart::ChartKind::Bar => "bar",
+                    fella_lib::engine::analytics::chart::ChartKind::Line => "line",
+                };
+                if got_kind != want_kind.to_ascii_lowercase() {
+                    return false;
+                }
+            }
             if chart.labels.len() != labels.len() {
                 return false;
             }
@@ -324,12 +366,14 @@ fn grade(r: &RunResult, gold: &Gold) -> bool {
             // Order-agnostic: a model may chart the same categories/months in a
             // different sequence (by rank instead of chronological, say) and
             // still be right. Each gold label just needs to appear somewhere.
-            let Some(label_at): Option<Vec<usize>> =
-                labels.iter().map(|w| chart.labels.iter().position(|g| label_eq(g, w))).collect()
+            let Some(label_at): Option<Vec<usize>> = labels
+                .iter()
+                .map(|w| chart.labels.iter().position(|g| label_eq(g, w)))
+                .collect()
             else {
                 return false;
             };
-            series.iter().all(|want| {
+            let right_series = series.iter().all(|want| {
                 // A single-series chart's series name is the model's free-text
                 // choice ("Spending", "Total", ...) -- don't fail a correct
                 // chart over a label mismatch when there's nothing to confuse
@@ -337,13 +381,26 @@ fn grade(r: &RunResult, gold: &Gold) -> bool {
                 let got = if series.len() == 1 && chart.series.len() == 1 {
                     Some(&chart.series[0])
                 } else {
-                    chart.series.iter().find(|s| fuzzy_eq(&s.name, &want.name))
+                    chart.series.iter().find(|s| {
+                        want.name
+                            .split('|')
+                            .any(|alt| fuzzy_eq(&s.name, alt.trim()))
+                    })
                 };
                 got.is_some_and(|got| {
                     got.values.len() == chart.labels.len()
-                        && label_at.iter().zip(&want.values).all(|(&i, w)| close(got.values[i], *w))
+                        && label_at
+                            .iter()
+                            .zip(&want.values)
+                            .all(|(&i, w)| close(got.values[i], *w))
                 })
-            })
+            });
+            right_series && contains_all(&low, &r.text, contains)
+        }
+        Gold::NoChart { contains } => {
+            !r.evidence.iter().any(|e| e.chart.is_some())
+                && !r.text.trim().is_empty()
+                && contains_all(&low, &r.text, contains)
         }
     }
 }
@@ -356,27 +413,51 @@ fn gold_reference(gold: &Gold) -> String {
     match gold {
         Gold::Figures(want) => format!(
             "the answer must state these figures: {}",
-            want.iter().map(|f| format!("{f}")).collect::<Vec<_>>().join(", ")
+            want.iter()
+                .map(|f| format!("{f}"))
+                .collect::<Vec<_>>()
+                .join(", ")
         ),
         Gold::Approx(want, tol) => format!("the answer must give a figure within {tol} of {want}"),
         Gold::Contains(subs) => format!("the answer must mention: {}", subs.join(" / ")),
         Gold::MustNotContain(subs) => {
             format!("the answer must NOT contain any of: {}", subs.join(" / "))
         }
-        Gold::Refusal => "the answer must decline — no computed figure, it says it can't".to_string(),
+        Gold::Refusal => {
+            "the answer must decline — no computed figure, it says it can't".to_string()
+        }
         Gold::NoTool => "any correct, on-topic answer requiring no data lookup".to_string(),
-        Gold::Chart { labels, series } => format!(
-            "the answer must include a chart with labels [{}] and series {}",
+        Gold::Chart {
+            kind,
+            labels,
+            series,
+            contains,
+        } => format!(
+            "the answer must include a{} chart with labels [{}] and series {}{}",
+            kind.map(|k| format!(" {k}")).unwrap_or_default(),
             labels.join(", "),
             series
                 .iter()
                 .map(|s| format!(
                     "{}=[{}]",
                     s.name,
-                    s.values.iter().map(|v| format!("{v}")).collect::<Vec<_>>().join(", ")
+                    s.values
+                        .iter()
+                        .map(|v| format!("{v}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 ))
                 .collect::<Vec<_>>()
-                .join("; ")
+                .join("; "),
+            if contains.is_empty() {
+                String::new()
+            } else {
+                format!(" and mention {}", contains.join(" / "))
+            }
+        ),
+        Gold::NoChart { contains } => format!(
+            "the answer must not include a chart and must mention: {}",
+            contains.join(" / ")
         ),
     }
 }
@@ -386,8 +467,20 @@ fn gold_reference(gold: &Gold) -> String {
 /// correctly answers "you spent nothing" shouldn't score as if it missed 0.
 fn says_zero(low: &str) -> bool {
     [
-        "none", "nothing", "zero", "no ", "n/a", "not have any", "not listed", "isn't listed",
-        "not recorded", "not present", "no such", "not in the data", "no entry", "no rows",
+        "none",
+        "nothing",
+        "zero",
+        "no ",
+        "n/a",
+        "not have any",
+        "not listed",
+        "isn't listed",
+        "not recorded",
+        "not present",
+        "no such",
+        "not in the data",
+        "no entry",
+        "no rows",
     ]
     .iter()
     .any(|p| low.contains(p))
@@ -447,16 +540,27 @@ fn closeness_det(r: &RunResult, case: &EvalCase) -> f32 {
         (n.abs() < 1e-9 && empty_agg)
             || r.evidence.iter().any(|e| {
                 numbers_in(&e.result_summary).iter().any(|x| close(*x, n))
-                    || e.output.as_deref().map(|o| numbers_in(o).iter().any(|x| close(*x, n))).unwrap_or(false)
-                    || e.rows.as_ref().map(|rs| {
-                        rs.iter().flatten().filter_map(|c| c.as_f64()).any(|x| close(x, n))
-                    }).unwrap_or(false)
+                    || e.output
+                        .as_deref()
+                        .map(|o| numbers_in(o).iter().any(|x| close(*x, n)))
+                        .unwrap_or(false)
+                    || e.rows
+                        .as_ref()
+                        .map(|rs| {
+                            rs.iter()
+                                .flatten()
+                                .filter_map(|c| c.as_f64())
+                                .any(|x| close(x, n))
+                        })
+                        .unwrap_or(false)
             })
     };
     let ungrounded_rate = if got.is_empty() {
         0.0
     } else {
-        got.iter().filter(|n| !(1900.0..=2100.0).contains(*n) && !grounded(**n)).count() as f32
+        got.iter()
+            .filter(|n| !(1900.0..=2100.0).contains(*n) && !grounded(**n))
+            .count() as f32
             / got.len() as f32
     };
     // Grounding needs an evidence trail. A harness that cites figures but
@@ -732,8 +836,18 @@ fn leak(s: &str) -> &'static str {
 
 fn month_name(yyyy_mm: &str) -> String {
     const M: [&str; 12] = [
-        "January", "February", "March", "April", "May", "June", "July", "August", "September",
-        "October", "November", "December",
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
     ];
     yyyy_mm
         .get(5..7)
@@ -814,7 +928,10 @@ fn price_per_100(model: &str, prompt_tok: f64, completion_tok: f64) -> Option<f6
         ("gemma4:31b", 0.0, 0.0),
     ];
     let stem = model.rsplit('/').next().unwrap_or(model);
-    let (pin, pout) = P.iter().find(|(m, ..)| *m == stem).map(|(_, a, b)| (*a, *b))?;
+    let (pin, pout) = P
+        .iter()
+        .find(|(m, ..)| *m == stem)
+        .map(|(_, a, b)| (*a, *b))?;
     Some((prompt_tok * pin + completion_tok * pout) / 1e6 * 100.0)
 }
 
@@ -864,7 +981,11 @@ enum Runner<'a> {
     /// tools, no execution. The baseline that isolates the harness's lift.
     Bare { dir: &'a Path, files: &'a [String] },
     /// OpenAI Responses API + code_interpreter (a comparison harness).
-    OpenAiCi { h: &'a CiHarness, dir: &'a Path, files: &'a [String] },
+    OpenAiCi {
+        h: &'a CiHarness,
+        dir: &'a Path,
+        files: &'a [String],
+    },
 }
 
 /// Read a case's files into a fenced blob for a prompt-only runner. `Err` if a
@@ -899,9 +1020,16 @@ async fn run_bare(engine: &EngineState, dir: &Path, question: &str, files: &[Str
         Ok(b) => b,
         Err(e) => {
             return RunResult {
-                text: String::new(), evidence: Vec::new(), verification: Vec::new(), hard_fail: false,
-                prompt_tok: 0, completion_tok: 0, total: t0.elapsed(),
-                first_token: None, steps: 0, err: Some(format!("bare: {e}")),
+                text: String::new(),
+                evidence: Vec::new(),
+                verification: Vec::new(),
+                hard_fail: false,
+                prompt_tok: 0,
+                completion_tok: 0,
+                total: t0.elapsed(),
+                first_token: None,
+                steps: 0,
+                err: Some(format!("bare: {e}")),
             }
         }
     };
@@ -922,15 +1050,29 @@ number or short phrase, no explanation. If the files can't answer it, say so pla
                 // chars/4 estimate when the provider gave nothing
                 .unwrap_or(((sys.len() + user.len()) as u32 / 4, text.len() as u32 / 4));
             RunResult {
-                text, evidence: Vec::new(), verification: Vec::new(), hard_fail: false,
-                prompt_tok: p, completion_tok: c, total,
-                first_token: None, steps: 0, err: None,
+                text,
+                evidence: Vec::new(),
+                verification: Vec::new(),
+                hard_fail: false,
+                prompt_tok: p,
+                completion_tok: c,
+                total,
+                first_token: None,
+                steps: 0,
+                err: None,
             }
         }
         Err(e) => RunResult {
-            text: String::new(), evidence: Vec::new(), verification: Vec::new(), hard_fail: false,
-            prompt_tok: 0, completion_tok: 0, total, first_token: None,
-            steps: 0, err: Some(format!("bare: {e}")),
+            text: String::new(),
+            evidence: Vec::new(),
+            verification: Vec::new(),
+            hard_fail: false,
+            prompt_tok: 0,
+            completion_tok: 0,
+            total,
+            first_token: None,
+            steps: 0,
+            err: Some(format!("bare: {e}")),
         },
     }
 }
@@ -948,7 +1090,12 @@ fn ci_text(v: &serde_json::Value) -> String {
             if it.get("type").and_then(|t| t.as_str()) != Some("message") {
                 continue;
             }
-            for part in it.get("content").and_then(|c| c.as_array()).into_iter().flatten() {
+            for part in it
+                .get("content")
+                .and_then(|c| c.as_array())
+                .into_iter()
+                .flatten()
+            {
                 if let Some(t) = part.get("text").and_then(|t| t.as_str()) {
                     out.push_str(t);
                 }
@@ -996,8 +1143,8 @@ async fn run_openai_ci(h: &CiHarness, dir: &Path, question: &str, files: &[Strin
     let body = serde_json::json!({
         "model": h.model,
         "instructions": "You are a careful data analyst. The user's files are included in the message. \
-Use the code_interpreter tool to compute the answer from them. Reply with only the final number or \
-short phrase — no explanation, no restating the question. If the files cannot answer it, say so plainly.",
+    Use the code_interpreter tool to compute the answer from them. Reply with only the final number or \
+    short phrase — no explanation, no restating the question. If the files cannot answer it, say so plainly.",
         "input": format!("{blob}Question: {question}"),
         "tools": [{ "type": "code_interpreter", "container": { "type": "auto" } }],
     });
@@ -1017,7 +1164,13 @@ short phrase — no explanation, no restating the question. If the files cannot 
     if !resp.status().is_success() {
         let s = resp.status();
         let b = resp.text().await.unwrap_or_default();
-        return empty(Some(format!("ci {s}: {}", b.chars().take(200).collect::<String>())), total);
+        return empty(
+            Some(format!(
+                "ci {s}: {}",
+                b.chars().take(200).collect::<String>()
+            )),
+            total,
+        );
     }
     let v: serde_json::Value = match resp.json().await {
         Ok(v) => v,
@@ -1092,14 +1245,23 @@ async fn score_case(
                     "     · {} {}ms{}{}",
                     e.tool,
                     e.ms,
-                    e.sql.as_deref().map(|s| format!("  {s}")).unwrap_or_default(),
-                    e.error.as_deref().map(|s| format!("  ERR {s}")).unwrap_or_default(),
+                    e.sql
+                        .as_deref()
+                        .map(|s| format!("  {s}"))
+                        .unwrap_or_default(),
+                    e.error
+                        .as_deref()
+                        .map(|s| format!("  ERR {s}"))
+                        .unwrap_or_default(),
                 );
                 if let Some(c) = &e.chart {
                     eprintln!(
                         "       labels={:?} series={:?}",
                         c.labels,
-                        c.series.iter().map(|s| (&s.name, &s.values)).collect::<Vec<_>>()
+                        c.series
+                            .iter()
+                            .map(|s| (&s.name, &s.values))
+                            .collect::<Vec<_>>()
                     );
                 }
             }
@@ -1107,7 +1269,10 @@ async fn score_case(
                 eprintln!(
                     "     ! verify: {}{}",
                     v.label,
-                    v.detail.as_deref().map(|d| format!("  ({d})")).unwrap_or_default()
+                    v.detail
+                        .as_deref()
+                        .map(|d| format!("  ({d})"))
+                        .unwrap_or_default()
                 );
             }
         }
@@ -1167,7 +1332,11 @@ fn acc(scores: &[CaseScore]) -> (usize, usize) {
 }
 fn mean_closeness(scores: &[CaseScore]) -> f32 {
     let v: Vec<f32> = scores.iter().map(|s| s.closeness_det).collect();
-    if v.is_empty() { 0.0 } else { v.iter().sum::<f32>() / v.len() as f32 }
+    if v.is_empty() {
+        0.0
+    } else {
+        v.iter().sum::<f32>() / v.len() as f32
+    }
 }
 fn total_waste(scores: &[CaseScore]) -> usize {
     scores.iter().map(|s| s.waste.total()).sum()
@@ -1179,7 +1348,10 @@ fn mean_steps(scores: &[CaseScore]) -> f64 {
     scores.iter().map(|s| s.steps as f64).sum::<f64>() / scores.len() as f64
 }
 fn tokens_per_correct(scores: &[CaseScore]) -> f64 {
-    let tot: f64 = scores.iter().map(|s| (s.prompt_tok + s.completion_tok) as f64).sum();
+    let tot: f64 = scores
+        .iter()
+        .map(|s| (s.prompt_tok + s.completion_tok) as f64)
+        .sum();
     let ok = scores.iter().filter(|s| s.correct).count().max(1);
     tot / ok as f64
 }
@@ -1200,14 +1372,31 @@ async fn run_battery(
     for c in cases {
         let conv = format!("{tag}-{model}-{profile}-{}", c.id);
         out.push(
-            score_case(engine, c, model, profile, judge, &conv, iters, &Runner::Fella, &[]).await,
+            score_case(
+                engine,
+                c,
+                model,
+                profile,
+                judge,
+                &conv,
+                iters,
+                &Runner::Fella,
+                &[],
+            )
+            .await,
         );
         std::io::stdout().flush().ok();
     }
     out
 }
 
-async fn cmd_accuracy(engine: &EngineState, cases: &[EvalCase], models: &[String], judge: Option<&str>, iters: usize) -> Vec<CaseScore> {
+async fn cmd_accuracy(
+    engine: &EngineState,
+    cases: &[EvalCase],
+    models: &[String],
+    judge: Option<&str>,
+    iters: usize,
+) -> Vec<CaseScore> {
     println!("\n# Accuracy   ({iters} iter(s)/case)\n");
     legend();
     println!("| model | case | correct | rate | close(det) | close(judge) | waste (calls) | steps | in tok | out tok | wall s |");
@@ -1224,10 +1413,16 @@ async fn cmd_accuracy(engine: &EngineState, cases: &[EvalCase], models: &[String
                 "| {} | {} | {} | {:.0}% | {:.2} | {} | {} `{}` | {} | {} | {} | {:.1} |",
                 s.model,
                 s.id,
-                if s.err.is_some() { "ERR".into() } else { yn(s.correct) },
+                if s.err.is_some() {
+                    "ERR".into()
+                } else {
+                    yn(s.correct)
+                },
                 s.correct_rate * 100.0,
                 s.closeness_det,
-                s.closeness_judge.map(|c| format!("{c:.2}")).unwrap_or_else(|| "-".into()),
+                s.closeness_judge
+                    .map(|c| format!("{c:.2}"))
+                    .unwrap_or_else(|| "-".into()),
                 s.waste.total(),
                 s.waste.breakdown(),
                 s.steps,
@@ -1259,19 +1454,49 @@ fn legend() {
     );
 }
 
-async fn cmd_prompt_ablation(engine: &EngineState, cases: &[EvalCase], model: &str, judge: Option<&str>, iters: usize) -> Vec<CaseScore> {
+async fn cmd_prompt_ablation(
+    engine: &EngineState,
+    cases: &[EvalCase],
+    model: &str,
+    judge: Option<&str>,
+    iters: usize,
+) -> Vec<CaseScore> {
     // cumulative-drop ladder: each row drops one more section than the last.
     let ladder: &[(&str, &[&str])] = &[
         ("full", &[]),
         ("-note_rule", &["note_rule"]),
         ("-background_rule", &["note_rule", "background_rule"]),
         ("-docs_rule", &["note_rule", "background_rule", "docs_rule"]),
-        ("-parallel_rule", &["note_rule", "background_rule", "docs_rule", "parallel_rule"]),
-        ("-plan_rule", &["note_rule", "background_rule", "docs_rule", "parallel_rule", "plan_rule"]),
-        ("core+schema only", &[
-            "note_rule", "background_rule", "docs_rule", "parallel_rule", "plan_rule",
-            "python_rule", "dialect_rule", "stop_early_rule", "refuse_rule", "user_context", "session_block",
-        ]),
+        (
+            "-parallel_rule",
+            &["note_rule", "background_rule", "docs_rule", "parallel_rule"],
+        ),
+        (
+            "-plan_rule",
+            &[
+                "note_rule",
+                "background_rule",
+                "docs_rule",
+                "parallel_rule",
+                "plan_rule",
+            ],
+        ),
+        (
+            "core+schema only",
+            &[
+                "note_rule",
+                "background_rule",
+                "docs_rule",
+                "parallel_rule",
+                "plan_rule",
+                "python_rule",
+                "dialect_rule",
+                "stop_early_rule",
+                "refuse_rule",
+                "user_context",
+                "session_block",
+            ],
+        ),
         ("schema names-only", &["schema"]),
     ];
     set_model(engine, model);
@@ -1284,7 +1509,8 @@ async fn cmd_prompt_ablation(engine: &EngineState, cases: &[EvalCase], model: &s
         let scores = run_battery(engine, cases, model, name, judge, "ablate", iters).await;
         std::env::remove_var("FELLA_PROMPT_DROP");
         let (ok, n) = acc(&scores);
-        let mean_in = scores.iter().map(|s| s.prompt_tok as f64).sum::<f64>() / scores.len().max(1) as f64;
+        let mean_in =
+            scores.iter().map(|s| s.prompt_tok as f64).sum::<f64>() / scores.len().max(1) as f64;
         println!(
             "| {name} | {ok}/{n} | {:.2} | {} | {mean_in:.0} |",
             mean_closeness(&scores),
@@ -1296,7 +1522,12 @@ async fn cmd_prompt_ablation(engine: &EngineState, cases: &[EvalCase], model: &s
     all
 }
 
-async fn cmd_folder_scale(engine: &EngineState, model: &str, ws: &Path, iters: usize) -> Vec<CaseScore> {
+async fn cmd_folder_scale(
+    engine: &EngineState,
+    model: &str,
+    ws: &Path,
+    iters: usize,
+) -> Vec<CaseScore> {
     set_model(engine, model);
     println!("\n# Folder scale  ·  model `{model}`\n");
     println!("| tables | rows/table | num_ctx | acc | first tok s | hit cap | waste |");
@@ -1305,7 +1536,12 @@ async fn cmd_folder_scale(engine: &EngineState, model: &str, ws: &Path, iters: u
     let sizes: &[(usize, usize)] = &[(1, 2_000), (5, 2_000), (13, 1_000), (40, 500), (120, 200)];
     for &(n_tables, rows) in sizes {
         let dir = ws.join(format!("scale_{n_tables}x{rows}"));
-        let spec = WorkspaceSpec { n_tables, rows_per_table: rows, messiness: Messiness::Clean, seed: 7 };
+        let spec = WorkspaceSpec {
+            n_tables,
+            rows_per_table: rows,
+            messiness: Messiness::Clean,
+            seed: 7,
+        };
         let g = testkit::synth_workspace(&dir, &spec);
         let _ = testkit::write_rent_fixture(&dir);
         if engine.open_workspace(&dir).is_err() {
@@ -1323,8 +1559,15 @@ async fn cmd_folder_scale(engine: &EngineState, model: &str, ws: &Path, iters: u
             std::env::remove_var("FELLA_MODEL_NUM_CTX_FIXED");
             let (ok, n) = acc(&scores);
             let ft: Vec<f64> = scores.iter().filter_map(|s| s.first_tok_s).collect();
-            let ft_mean = if ft.is_empty() { 0.0 } else { ft.iter().sum::<f64>() / ft.len() as f64 };
-            let cap = scores.iter().filter(|s| s.err.as_deref().is_some_and(|e| e.contains("step"))).count();
+            let ft_mean = if ft.is_empty() {
+                0.0
+            } else {
+                ft.iter().sum::<f64>() / ft.len() as f64
+            };
+            let cap = scores
+                .iter()
+                .filter(|s| s.err.as_deref().is_some_and(|e| e.contains("step")))
+                .count();
             println!(
                 "| {n_tables} | {rows} | {label} | {ok}/{n} | {ft_mean:.1} | {cap} | {} |",
                 total_waste(&scores),
@@ -1335,7 +1578,13 @@ async fn cmd_folder_scale(engine: &EngineState, model: &str, ws: &Path, iters: u
     all
 }
 
-async fn cmd_model_ladder(engine: &EngineState, cases: &[EvalCase], models: &[String], judge: Option<&str>, iters: usize) -> Vec<CaseScore> {
+async fn cmd_model_ladder(
+    engine: &EngineState,
+    cases: &[EvalCase],
+    models: &[String],
+    judge: Option<&str>,
+    iters: usize,
+) -> Vec<CaseScore> {
     println!("\n# Model ladder   ({iters} iter(s)/case)\n");
     legend();
     let n_cases = cases.len();
@@ -1358,7 +1607,9 @@ async fn cmd_model_ladder(engine: &EngineState, cases: &[EvalCase], models: &[St
         let pin: f64 = scores.iter().map(|s| s.prompt_tok as f64).sum::<f64>();
         let pout: f64 = scores.iter().map(|s| s.completion_tok as f64).sum::<f64>();
         let price = price_per_100(m, pin, pout);
-        let cost = price.map(|c| format!("${c:.2}")).unwrap_or_else(|| "n/a".into());
+        let cost = price
+            .map(|c| format!("${c:.2}"))
+            .unwrap_or_else(|| "n/a".into());
         let waste_per_case = total_waste(&scores) as f64 / scores.len().max(1) as f64;
         println!(
             "| {m} | {ok}/{n} | {:.2} | {:.2} | {:.0} | {cost} | {mean_s:.1} |",
@@ -1426,20 +1677,41 @@ struct BenchSpec {
 
 #[derive(serde::Deserialize)]
 struct BenchChartGold {
+    #[serde(default)]
+    kind: Option<String>,
     labels: Vec<String>,
     series: Vec<ChartSeries>,
+    #[serde(default)]
+    contains: Vec<String>,
 }
 
 #[derive(serde::Deserialize)]
 #[serde(untagged)]
 enum BenchGold {
-    Figures { figures: Vec<f64> },
+    /// `{"no_chart": true, "contains": ["same"]}` — prose is required,
+    /// while a chart evidence item is a failure.
+    NoChart {
+        no_chart: bool,
+        #[serde(default)]
+        contains: Vec<String>,
+    },
+    Figures {
+        figures: Vec<f64>,
+    },
     /// `[value, absolute tolerance]`
-    Approx { approx: [f64; 2] },
-    Contains { contains: Vec<String> },
-    MustNotContain { must_not_contain: Vec<String> },
+    Approx {
+        approx: [f64; 2],
+    },
+    Contains {
+        contains: Vec<String>,
+    },
+    MustNotContain {
+        must_not_contain: Vec<String>,
+    },
     /// `{"labels": [...], "series": [{"name": "...", "values": [...]}]}`
-    Chart { chart: BenchChartGold },
+    Chart {
+        chart: BenchChartGold,
+    },
     /// `"refusal"` | `"notool"`
     Tag(String),
 }
@@ -1456,9 +1728,19 @@ impl BenchGold {
                 Gold::MustNotContain(must_not_contain.iter().map(|s| leak(s)).collect())
             }
             BenchGold::Chart { chart } => Gold::Chart {
+                kind: chart.kind.as_deref().map(leak),
                 labels: chart.labels.iter().map(|s| leak(s)).collect(),
                 series: chart.series,
+                contains: chart.contains.iter().map(|s| leak(s)).collect(),
             },
+            BenchGold::NoChart { no_chart, contains } => {
+                if !no_chart {
+                    return Err("no_chart must be true".into());
+                }
+                Gold::NoChart {
+                    contains: contains.iter().map(|s| leak(s)).collect(),
+                }
+            }
             BenchGold::Tag(t) => match t.to_ascii_lowercase().as_str() {
                 "refusal" => Gold::Refusal,
                 "notool" | "no_tool" => Gold::NoTool,
@@ -1511,7 +1793,13 @@ fn load_bench_dir(dir: &Path) -> Vec<(Vec<String>, Vec<String>, EvalCase)> {
 
 fn safe_dirname(s: &str) -> String {
     s.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
@@ -1611,20 +1899,36 @@ async fn cmd_bench(
                     continue;
                 }
                 if engine.open_workspace(&ws).is_err() {
-                    println!("| {m} | {} | ERR | | | | | | | | open_workspace failed |", case.id);
+                    println!(
+                        "| {m} | {} | ERR | | | | | | | | open_workspace failed |",
+                        case.id
+                    );
                     continue;
                 }
                 Runner::Fella
             };
-            let s =
-                score_case(engine, case, m, "bench", judge, &conv, iters, &runner, setup_turns)
-                    .await;
+            let s = score_case(
+                engine,
+                case,
+                m,
+                "bench",
+                judge,
+                &conv,
+                iters,
+                &runner,
+                setup_turns,
+            )
+            .await;
             let price = price_per_100(m, s.prompt_tok as f64, s.completion_tok as f64);
             println!(
                 "| {} | {} | {} | {:.0}% | {:.2} | {} `{}` | {} | {} | {} | {} | {:.1} |",
                 s.model,
                 s.id,
-                if s.err.is_some() { "ERR".into() } else { yn(s.correct) },
+                if s.err.is_some() {
+                    "ERR".into()
+                } else {
+                    yn(s.correct)
+                },
                 s.correct_rate * 100.0,
                 s.closeness_det,
                 s.waste.total(),
@@ -1632,7 +1936,9 @@ async fn cmd_bench(
                 s.steps,
                 s.prompt_tok,
                 s.completion_tok,
-                price.map(|c| format!("${c:.2}")).unwrap_or_else(|| "n/a".into()),
+                price
+                    .map(|c| format!("${c:.2}"))
+                    .unwrap_or_else(|| "n/a".into()),
                 s.total_s,
             );
             std::io::stdout().flush().ok();
@@ -1664,7 +1970,12 @@ async fn cmd_bench(
     all
 }
 
-async fn cmd_robustness(engine: &EngineState, model: &str, ws: &Path, iters: usize) -> Vec<CaseScore> {
+async fn cmd_robustness(
+    engine: &EngineState,
+    model: &str,
+    ws: &Path,
+    iters: usize,
+) -> Vec<CaseScore> {
     set_model(engine, model);
     println!("\n# Robustness (data traps)  ·  model `{model}`\n");
     println!("| trap | acc | close(det) | verify caught misses |");
@@ -1676,7 +1987,12 @@ async fn cmd_robustness(engine: &EngineState, model: &str, ws: &Path, iters: usi
         ("+ mixed dates", Messiness::MixedDates),
     ] {
         let dir = ws.join(format!("trap_{}", label.replace([' ', '+'], "_")));
-        let spec = WorkspaceSpec { n_tables: 1, rows_per_table: 2_000, messiness: mess, seed: 11 };
+        let spec = WorkspaceSpec {
+            n_tables: 1,
+            rows_per_table: 2_000,
+            messiness: mess,
+            seed: 11,
+        };
         let g = testkit::synth_workspace(&dir, &spec);
         let _ = testkit::write_rent_fixture(&dir);
         engine.open_workspace(&dir).ok();
@@ -1697,12 +2013,25 @@ async fn cmd_robustness(engine: &EngineState, model: &str, ws: &Path, iters: usi
     all
 }
 
-async fn cmd_session_memory(engine: &EngineState, model: &str, g: &Goldens, iters: usize) -> Vec<CaseScore> {
+async fn cmd_session_memory(
+    engine: &EngineState,
+    model: &str,
+    g: &Goldens,
+    iters: usize,
+) -> Vec<CaseScore> {
     set_model(engine, model);
     let tg = &g.tables["txns_00"];
     let by_cat = tg.by_category.clone();
-    let (c1, a1) = by_cat.iter().next().map(|(k, v)| (k.clone(), *v)).unwrap_or_default();
-    let (c2, a2) = by_cat.iter().nth(1).map(|(k, v)| (k.clone(), *v)).unwrap_or_default();
+    let (c1, a1) = by_cat
+        .iter()
+        .next()
+        .map(|(k, v)| (k.clone(), *v))
+        .unwrap_or_default();
+    let (c2, a2) = by_cat
+        .iter()
+        .nth(1)
+        .map(|(k, v)| (k.clone(), *v))
+        .unwrap_or_default();
     let q1 = format!("in txns_00.csv, what did I spend on {c1} in total?");
     let q2 = format!("and what about {c2}?");
     let iters = iters.max(1);
@@ -1771,11 +2100,19 @@ async fn cmd_session_memory(engine: &EngineState, model: &str, g: &Goldens, iter
 }
 
 fn yn(b: bool) -> String {
-    if b { "✓".into() } else { "✗".into() }
+    if b {
+        "✓".into()
+    } else {
+        "✗".into()
+    }
 }
 
 fn first_line(s: &str) -> String {
-    s.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("").to_string()
+    s.lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("")
+        .to_string()
 }
 
 /// A deliberately messy one-file folder: cryptic column names, amounts as text,
@@ -1835,7 +2172,13 @@ async fn cmd_memory(
     // Session 1: look at the categories, then correct Fella's model of "rent".
     let prime = "xs-prime";
     engine.forget_conversation(prime);
-    let p1 = run_case(engine, prime, "what spending categories are in spend.csv?", None).await;
+    let p1 = run_case(
+        engine,
+        prime,
+        "what spending categories are in spend.csv?",
+        None,
+    )
+    .await;
     let p2 = run_case(
         engine,
         prime,
@@ -1970,7 +2313,11 @@ async fn cmd_memory_axes(
     let mut out = Vec::new();
     let mut record = |id: &str, oks: usize| {
         let correct = oks * 2 > iters;
-        println!("| {id} | {} | {:.0}% |", yn(correct), oks as f32 / iters as f32 * 100.0);
+        println!(
+            "| {id} | {} | {:.0}% |",
+            yn(correct),
+            oks as f32 / iters as f32 * 100.0
+        );
         out.push(CaseScore {
             id: id.to_string(),
             model: model.into(),
@@ -2003,8 +2350,13 @@ async fn cmd_memory_axes(
             if engine.open_workspace(&ws).is_err() {
                 continue;
             }
-            run_case(engine, &format!("mx-oneoff-{it}"), "What's my biggest expense category?", None)
-                .await;
+            run_case(
+                engine,
+                &format!("mx-oneoff-{it}"),
+                "What's my biggest expense category?",
+                None,
+            )
+            .await;
             if vocab_snapshot(data_dir, &ws).is_empty() {
                 oks += 1;
             }
@@ -2029,7 +2381,13 @@ async fn cmd_memory_axes(
             // conversation* to correct (state.rs's `record_turn_memory`) --
             // each session is an ordinary question, then the correction.
             let sess_a = format!("mx-sup-a-{it}");
-            run_case(engine, &sess_a, "How many transactions are marked 'cancelled'?", None).await;
+            run_case(
+                engine,
+                &sess_a,
+                "How many transactions are marked 'cancelled'?",
+                None,
+            )
+            .await;
             run_case(
                 engine,
                 &sess_a,
@@ -2038,8 +2396,13 @@ async fn cmd_memory_axes(
             )
             .await;
             let sess_b = format!("mx-sup-b-{it}");
-            run_case(engine, &sess_b, "How many transactions are marked 'cancelled' or 'refunded'?", None)
-                .await;
+            run_case(
+                engine,
+                &sess_b,
+                "How many transactions are marked 'cancelled' or 'refunded'?",
+                None,
+            )
+            .await;
             run_case(
                 engine,
                 &sess_b,
@@ -2049,14 +2412,17 @@ async fn cmd_memory_axes(
             )
             .await;
             let vocab = vocab_snapshot(data_dir, &ws);
-            let matching: Vec<&(String, String)> =
-                vocab.iter().filter(|(k, t)| {
+            let matching: Vec<&(String, String)> = vocab
+                .iter()
+                .filter(|(k, t)| {
                     let l = format!("{k} {t}").to_lowercase();
                     l.contains("cancel") || l.contains("refund")
-                }).collect();
+                })
+                .collect();
             let one_entry = matching.len() == 1;
-            let reflects_latest =
-                matching.first().is_some_and(|(_, t)| t.to_lowercase().contains("50"));
+            let reflects_latest = matching
+                .first()
+                .is_some_and(|(_, t)| t.to_lowercase().contains("50"));
             if one_entry && reflects_latest {
                 oks += 1;
             }
@@ -2088,8 +2454,13 @@ async fn cmd_memory_axes(
             .await;
             let sess_b = format!("mx-iso-b-{it}");
             run_case(engine, &sess_b, "What categories are in spend.csv?", None).await;
-            run_case(engine, &sess_b, "How many transactions are in spend.csv in total?", None)
-                .await;
+            run_case(
+                engine,
+                &sess_b,
+                "How many transactions are in spend.csv in total?",
+                None,
+            )
+            .await;
             let vocab = vocab_snapshot(data_dir, &ws);
             let rent_entry = vocab.iter().any(|(k, t)| {
                 let l = format!("{k} {t}").to_lowercase();
@@ -2183,7 +2554,11 @@ async fn cmd_memory_sandbox(engine: &EngineState, model: &str, data_dir: &Path) 
         let text = std::fs::read_to_string(&mem).unwrap_or_default();
         println!(
             "\n--- memory.md after {label} ---\n{}",
-            if text.is_empty() { "(absent -- nothing learned yet)".to_string() } else { text }
+            if text.is_empty() {
+                "(absent -- nothing learned yet)".to_string()
+            } else {
+                text
+            }
         );
     };
 
@@ -2191,8 +2566,17 @@ async fn cmd_memory_sandbox(engine: &EngineState, model: &str, data_dir: &Path) 
 
     let s1 = "sbx-session-1";
     engine.forget_conversation(s1);
-    let r = run_case(engine, s1, "How much did I spend on rent in spend.csv?", None).await;
-    println!("[session 1] Q: how much did I spend on rent?\n  A: {}", first_line(&r.text));
+    let r = run_case(
+        engine,
+        s1,
+        "How much did I spend on rent in spend.csv?",
+        None,
+    )
+    .await;
+    println!(
+        "[session 1] Q: how much did I spend on rent?\n  A: {}",
+        first_line(&r.text)
+    );
     dump("session 1, turn 1 (ordinary question)");
 
     let r = run_case(
@@ -2206,13 +2590,25 @@ async fn cmd_memory_sandbox(engine: &EngineState, model: &str, data_dir: &Path) 
     dump("session 1, turn 2 (a correction)");
 
     let r = run_case(engine, s1, "how much did I spend on transport?", None).await;
-    println!("\n[session 1] Q: transport spend\n  A: {}", first_line(&r.text));
+    println!(
+        "\n[session 1] Q: transport spend\n  A: {}",
+        first_line(&r.text)
+    );
     dump("session 1, turn 3 (ordinary again -- should be unchanged)");
 
     let s2 = "sbx-session-2";
     engine.forget_conversation(s2);
-    let r = run_case(engine, s2, "what's my total rent spending in spend.csv?", None).await;
-    println!("\n[session 2, COLD] Q: total rent\n  A: {}", first_line(&r.text));
+    let r = run_case(
+        engine,
+        s2,
+        "what's my total rent spending in spend.csv?",
+        None,
+    )
+    .await;
+    println!(
+        "\n[session 2, COLD] Q: total rent\n  A: {}",
+        first_line(&r.text)
+    );
 
     let r = run_case(
         engine,
@@ -2221,13 +2617,25 @@ async fn cmd_memory_sandbox(engine: &EngineState, model: &str, data_dir: &Path) 
         None,
     )
     .await;
-    println!("\n[session 2] correction 2 (overlapping topic, different wording) -> {}", first_line(&r.text));
+    println!(
+        "\n[session 2] correction 2 (overlapping topic, different wording) -> {}",
+        first_line(&r.text)
+    );
     dump("session 2 (after a second, overlapping correction)");
 
     let s3 = "sbx-session-3";
     engine.forget_conversation(s3);
-    let r = run_case(engine, s3, "what's my total rent spending in spend.csv?", None).await;
-    println!("\n[session 3, COLD] Q: total rent\n  A: {}", first_line(&r.text));
+    let r = run_case(
+        engine,
+        s3,
+        "what's my total rent spending in spend.csv?",
+        None,
+    )
+    .await;
+    println!(
+        "\n[session 3, COLD] Q: total rent\n  A: {}",
+        first_line(&r.text)
+    );
 
     println!(
         "\n(raw episode log, not read back by the model): {}",
@@ -2277,7 +2685,8 @@ fn compare(old_path: &str, new_scores: &[CaseScore]) {
             ),
             (
                 r["correct"].as_bool().unwrap_or(false),
-                r["prompt_tok"].as_f64().unwrap_or(0.0) + r["completion_tok"].as_f64().unwrap_or(0.0),
+                r["prompt_tok"].as_f64().unwrap_or(0.0)
+                    + r["completion_tok"].as_f64().unwrap_or(0.0),
             ),
         );
     }
@@ -2307,29 +2716,46 @@ async fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let cmd = args.first().cloned().unwrap_or_default();
     let opt = |name: &str| {
-        args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned()
+        args.iter()
+            .position(|a| a == name)
+            .and_then(|i| args.get(i + 1))
+            .cloned()
     };
     let judge = opt("--judge");
-    let iters: usize = opt("--iters").and_then(|s| s.parse().ok()).unwrap_or(1).max(1);
+    let iters: usize = opt("--iters")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1)
+        .max(1);
     let json_out = opt("--json");
     let compare_to = opt("--compare");
     let only = opt("--only");
     let bench_dir = opt("--dir");
     let harness = opt("--harness").unwrap_or_else(|| "fella".into());
     let requested_models: Vec<String> = opt("--models")
-        .map(|s| s.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect())
+        .map(|s| {
+            s.split(',')
+                .map(|x| x.trim().to_string())
+                .filter(|x| !x.is_empty())
+                .collect()
+        })
         .unwrap_or_default();
 
-    let data_dir = match std::env::var("AGENT_EVAL_DATA_DIR").or_else(|_| std::env::var("BENCH_DATA_DIR")) {
-        Ok(d) => PathBuf::from(d),
-        Err(_) => {
-            eprintln!("set AGENT_EVAL_DATA_DIR to a dir holding a copy of your fella.db + auth.json");
-            std::process::exit(2);
-        }
-    };
+    let data_dir =
+        match std::env::var("AGENT_EVAL_DATA_DIR").or_else(|_| std::env::var("BENCH_DATA_DIR")) {
+            Ok(d) => PathBuf::from(d),
+            Err(_) => {
+                eprintln!(
+                    "set AGENT_EVAL_DATA_DIR to a dir holding a copy of your fella.db + auth.json"
+                );
+                std::process::exit(2);
+            }
+        };
     let ws = PathBuf::from(env(
         "AGENT_EVAL_WS",
-        std::env::temp_dir().join("fella-eval-ws").to_str().unwrap_or("/tmp/fella-eval-ws"),
+        std::env::temp_dir()
+            .join("fella-eval-ws")
+            .to_str()
+            .unwrap_or("/tmp/fella-eval-ws"),
     ));
 
     let engine = EngineState::new(&data_dir).expect("engine init");
@@ -2378,9 +2804,7 @@ async fn main() {
         "model-ladder" => cmd_model_ladder(&engine, &cases, &models, judge, iters).await,
         "robustness" => cmd_robustness(&engine, &models[0], &ws, iters).await,
         "session-memory" => cmd_session_memory(&engine, &models[0], &g, iters).await,
-        "memory" => {
-            cmd_memory(&engine, &models[0], &data_dir, iters).await
-        }
+        "memory" => cmd_memory(&engine, &models[0], &data_dir, iters).await,
         "memory-axes" => cmd_memory_axes(&engine, &models[0], &data_dir, iters).await,
         "memory-sandbox" => {
             cmd_memory_sandbox(&engine, &models[0], &data_dir).await;
@@ -2388,10 +2812,23 @@ async fn main() {
         }
         "bench" => {
             let Some(d) = &bench_dir else {
-                eprintln!("bench: pass --dir <path-to-benchmark-dir> (holds cases.jsonl + data files)");
+                eprintln!(
+                    "bench: pass --dir <path-to-benchmark-dir> (holds cases.jsonl + data files)"
+                );
                 std::process::exit(2);
             };
-            cmd_bench(&engine, Path::new(d), &data_dir, &models, judge, iters, only.as_deref(), &harness, json_out.as_deref()).await
+            cmd_bench(
+                &engine,
+                Path::new(d),
+                &data_dir,
+                &models,
+                judge,
+                iters,
+                only.as_deref(),
+                &harness,
+                json_out.as_deref(),
+            )
+            .await
         }
         "all" => {
             let mut v = cmd_accuracy(&engine, &cases, &models, judge, iters).await;
@@ -2460,7 +2897,10 @@ mod tests {
                 labels: labels.iter().map(|s| s.to_string()).collect(),
                 series: series
                     .into_iter()
-                    .map(|(name, values)| ChartSeries { name: name.into(), values })
+                    .map(|(name, values)| ChartSeries {
+                        name: name.into(),
+                        values,
+                    })
                     .collect(),
                 unit: None,
             }),
@@ -2470,10 +2910,19 @@ mod tests {
 
     #[test]
     fn numbers_and_close() {
-        assert_eq!(numbers_in("total $6,100.00 up 12% since 2024"), vec![6100.0, 12.0, 2024.0]);
+        assert_eq!(
+            numbers_in("total $6,100.00 up 12% since 2024"),
+            vec![6100.0, 12.0, 2024.0]
+        );
         // identifier fragments aren't figures
-        assert_eq!(numbers_in("nothing in txns_00.csv or v2 tables"), Vec::<f64>::new());
-        assert_eq!(numbers_in("file_9 and q12 aside, the total is 4200"), vec![4200.0]);
+        assert_eq!(
+            numbers_in("nothing in txns_00.csv or v2 tables"),
+            Vec::<f64>::new()
+        );
+        assert_eq!(
+            numbers_in("file_9 and q12 aside, the total is 4200"),
+            vec![4200.0]
+        );
         assert!(close(6100.0, 6100.4));
         assert!(close(1000.0, 1009.0)); // within 1%
         assert!(!close(6100.0, 6300.0));
@@ -2481,108 +2930,290 @@ mod tests {
 
     #[test]
     fn grade_by_gold_kind() {
-        assert!(grade(&rr("Your total was 6,100.", vec![]), &Gold::Figures(vec![6100.0])));
-        assert!(!grade(&rr("Your total was 5,900.", vec![]), &Gold::Figures(vec![6100.0])));
-        assert!(grade(&rr("Target 1250, raised in March 2024.", vec![]),
-            &Gold::Contains(vec!["1250", "march 2024"])));
+        assert!(grade(
+            &rr("Your total was 6,100.", vec![]),
+            &Gold::Figures(vec![6100.0])
+        ));
+        assert!(!grade(
+            &rr("Your total was 5,900.", vec![]),
+            &Gold::Figures(vec![6100.0])
+        ));
+        assert!(grade(
+            &rr("Target 1250, raised in March 2024.", vec![]),
+            &Gold::Contains(vec!["1250", "march 2024"])
+        ));
         // `|` in a Contains sub = accept any of the forms
         let month = Gold::Contains(vec!["november 2021|2021-11"]);
         assert!(grade(&rr("Highest was November 2021.", vec![]), &month));
         assert!(grade(&rr("Highest was 2021-11.", vec![]), &month));
         assert!(!grade(&rr("Highest was 2021-09.", vec![]), &month));
-        assert!(grade(&rr("Your files can't tell the future.", vec![]), &Gold::Refusal));
+        assert!(grade(
+            &rr("Your files can't tell the future.", vec![]),
+            &Gold::Refusal
+        ));
         // a curly apostrophe (what many models emit) still counts as "can't"
         assert!(grade(
-            &rr("I can\u{2019}t determine future spending from past records.", vec![]),
+            &rr(
+                "I can\u{2019}t determine future spending from past records.",
+                vec![]
+            ),
             &Gold::Refusal
         ));
-        assert!(grade(&rr("No data on future spending is available.", vec![]), &Gold::Refusal));
-        assert!(!grade(&rr("You'll spend 4200 next month.", vec![]), &Gold::Refusal));
+        assert!(grade(
+            &rr("No data on future spending is available.", vec![]),
+            &Gold::Refusal
+        ));
+        assert!(!grade(
+            &rr("You'll spend 4200 next month.", vec![]),
+            &Gold::Refusal
+        ));
         // declines but cites a computed figure -> not a clean refusal
         assert!(!grade(
-            &rr("I can't project it, but your monthly average is 3900.", vec![]),
+            &rr(
+                "I can't project it, but your monthly average is 3900.",
+                vec![]
+            ),
             &Gold::Refusal
         ));
-        assert!(grade(&rr("I answer questions about your files.", vec![]), &Gold::NoTool));
-        assert!(!grade(&rr("...", vec![ev("run_sql", "1 row: 5", None)]), &Gold::NoTool));
+        assert!(grade(
+            &rr("I answer questions about your files.", vec![]),
+            &Gold::NoTool
+        ));
+        assert!(!grade(
+            &rr("...", vec![ev("run_sql", "1 row: 5", None)]),
+            &Gold::NoTool
+        ));
 
         // Approx: within the band; a year in the text doesn't count
-        assert!(grade(&rr("Rent was about 18% of spending (2024).", vec![]), &Gold::Approx(17.6, 1.5)));
-        assert!(!grade(&rr("Rent was about 25%.", vec![]), &Gold::Approx(17.6, 1.5)));
+        assert!(grade(
+            &rr("Rent was about 18% of spending (2024).", vec![]),
+            &Gold::Approx(17.6, 1.5)
+        ));
+        assert!(!grade(
+            &rr("Rent was about 25%.", vec![]),
+            &Gold::Approx(17.6, 1.5)
+        ));
         // Approx(0): a literal 0 or a plain "no / none"
-        assert!(grade(&rr("Healthcare spending was $0.00.", vec![]), &Gold::Approx(0.0, 0.5)));
-        assert!(grade(&rr("There are no healthcare transactions.", vec![]), &Gold::Approx(0.0, 0.5)));
-        assert!(!grade(&rr("You spent 120 on healthcare.", vec![]), &Gold::Approx(0.0, 0.5)));
+        assert!(grade(
+            &rr("Healthcare spending was $0.00.", vec![]),
+            &Gold::Approx(0.0, 0.5)
+        ));
+        assert!(grade(
+            &rr("There are no healthcare transactions.", vec![]),
+            &Gold::Approx(0.0, 0.5)
+        ));
+        assert!(!grade(
+            &rr("You spent 120 on healthcare.", vec![]),
+            &Gold::Approx(0.0, 0.5)
+        ));
 
         // MustNotContain: fails if any forbidden claim (text or figure) appears
         let mnc = Gold::MustNotContain(vec!["deleted", "1000000"]);
-        assert!(grade(&rr("I can't modify files, here's what the note says.", vec![]), &mnc));
-        assert!(!grade(&rr("I've deleted the old rows for you.", vec![]), &mnc));
+        assert!(grade(
+            &rr("I can't modify files, here's what the note says.", vec![]),
+            &mnc
+        ));
+        assert!(!grade(
+            &rr("I've deleted the old rows for you.", vec![]),
+            &mnc
+        ));
         assert!(!grade(&rr("Your net worth is 1,000,000.", vec![]), &mnc));
 
         // Chart: needs an actual make_chart call, right labels + series values --
         // stating the same numbers in prose without charting them still fails.
         let chart_gold = Gold::Chart {
+            kind: Some("bar"),
             labels: vec!["Jan", "Feb"],
-            series: vec![ChartSeries { name: "Rent".into(), values: vec![1200.0, 1200.0] }],
+            series: vec![ChartSeries {
+                name: "Rent".into(),
+                values: vec![1200.0, 1200.0],
+            }],
+            contains: Vec::new(),
         };
         let charted = rr(
             "Here's your rent by month.",
-            vec![ev_chart(&["Jan", "Feb"], vec![("Rent", vec![1200.0, 1200.0])])],
+            vec![ev_chart(
+                &["Jan", "Feb"],
+                vec![("Rent", vec![1200.0, 1200.0])],
+            )],
         );
         assert!(grade(&charted, &chart_gold));
-        assert!(!grade(&rr("Rent was 1200 in Jan and 1200 in Feb.", vec![]), &chart_gold));
+        assert!(!grade(
+            &rr("Rent was 1200 in Jan and 1200 in Feb.", vec![]),
+            &chart_gold
+        ));
         let wrong_values = rr(
             "Here's your rent by month.",
-            vec![ev_chart(&["Jan", "Feb"], vec![("Rent", vec![1200.0, 900.0])])],
+            vec![ev_chart(
+                &["Jan", "Feb"],
+                vec![("Rent", vec![1200.0, 900.0])],
+            )],
         );
         assert!(!grade(&wrong_values, &chart_gold));
         // reordered labels + an arbitrary series name: still correct, since the
         // model isn't told what order or what to call the one series.
         let reordered = rr(
             "Here's your rent by month.",
-            vec![ev_chart(&["Feb", "Jan"], vec![("Monthly total", vec![1200.0, 1200.0])])],
+            vec![ev_chart(
+                &["Feb", "Jan"],
+                vec![("Monthly total", vec![1200.0, 1200.0])],
+            )],
         );
         assert!(grade(&reordered, &chart_gold));
         // wrong category on a two-series chart isn't rescued by fuzzy label match
         let two_series_gold = Gold::Chart {
+            kind: None,
             labels: vec!["Jan", "Feb"],
             series: vec![
-                ChartSeries { name: "Spend".into(), values: vec![2000.0, 2100.0] },
-                ChartSeries { name: "Budget".into(), values: vec![1800.0, 1800.0] },
+                ChartSeries {
+                    name: "Spend".into(),
+                    values: vec![2000.0, 2100.0],
+                },
+                ChartSeries {
+                    name: "Budget".into(),
+                    values: vec![1800.0, 1800.0],
+                },
             ],
+            contains: Vec::new(),
         };
         let swapped_series = rr(
             "chart",
             vec![ev_chart(
                 &["Jan", "Feb"],
-                vec![("Budget", vec![2000.0, 2100.0]), ("Spend", vec![1800.0, 1800.0])],
+                vec![
+                    ("Budget", vec![2000.0, 2100.0]),
+                    ("Spend", vec![1800.0, 1800.0]),
+                ],
             )],
         );
         assert!(!grade(&swapped_series, &two_series_gold));
+        let aliased_two_series = Gold::Chart {
+            kind: None,
+            labels: vec!["Jan", "Feb"],
+            series: vec![
+                ChartSeries {
+                    name: "actual|sum(e.amount)|total".into(),
+                    values: vec![2000.0, 2100.0],
+                },
+                ChartSeries {
+                    name: "budget|annual_budget".into(),
+                    values: vec![1800.0, 1800.0],
+                },
+            ],
+            contains: Vec::new(),
+        };
+        let aliased = rr(
+            "chart",
+            vec![ev_chart(
+                &["Jan", "Feb"],
+                vec![
+                    ("SUM(e.amount)", vec![2000.0, 2100.0]),
+                    ("annual_budget", vec![1800.0, 1800.0]),
+                ],
+            )],
+        );
+        assert!(grade(&aliased, &aliased_two_series));
         // a gold label may list "name|iso" alternatives, matching either form
         let alt_gold = Gold::Chart {
+            kind: None,
             labels: vec!["jul|2024-07", "aug|2024-08"],
-            series: vec![ChartSeries { name: "spending".into(), values: vec![2234.58, 2119.09] }],
+            series: vec![ChartSeries {
+                name: "spending".into(),
+                values: vec![2234.58, 2119.09],
+            }],
+            contains: Vec::new(),
         };
         let iso_labeled = rr(
             "chart",
-            vec![ev_chart(&["2024-07", "2024-08"], vec![("spending", vec![2234.58, 2119.09])])],
+            vec![ev_chart(
+                &["2024-07", "2024-08"],
+                vec![("spending", vec![2234.58, 2119.09])],
+            )],
         );
         assert!(grade(&iso_labeled, &alt_gold));
         let name_labeled = rr(
             "chart",
-            vec![ev_chart(&["Jul", "Aug"], vec![("spending", vec![2234.58, 2119.09])])],
+            vec![ev_chart(
+                &["Jul", "Aug"],
+                vec![("spending", vec![2234.58, 2119.09])],
+            )],
         );
         assert!(grade(&name_labeled, &alt_gold));
+
+        // A chart case can also require the prose takeaway, while a no-chart
+        // case proves that the answer stayed readable and did not emit a visual.
+        let explained = Gold::Chart {
+            kind: Some("bar"),
+            labels: vec!["Jan", "Feb"],
+            series: vec![ChartSeries {
+                name: "Rent".into(),
+                values: vec![1200.0, 1200.0],
+            }],
+            contains: vec!["rent", "steady"],
+        };
+        assert!(grade(
+            &rr(
+                "Rent stayed steady.",
+                vec![ev_chart(
+                    &["Jan", "Feb"],
+                    vec![("Rent", vec![1200.0, 1200.0])]
+                )]
+            ),
+            &explained
+        ));
+        assert!(!grade(
+            &rr(
+                "Rent was unchanged.",
+                vec![ev_chart(
+                    &["Jan", "Feb"],
+                    vec![("Rent", vec![1200.0, 1200.0])]
+                )]
+            ),
+            &explained
+        ));
+        let no_chart = Gold::NoChart {
+            contains: vec!["same", "100"],
+        };
+        assert!(grade(
+            &rr(
+                "The four values are all the same: 100.",
+                vec![ev("run_sql", "4 rows", None)]
+            ),
+            &no_chart
+        ));
+        assert!(!grade(
+            &rr(
+                "The values are all the same: 100.",
+                vec![ev_chart(
+                    &["Jan", "Feb"],
+                    vec![("value", vec![100.0, 100.0])]
+                )]
+            ),
+            &no_chart
+        ));
     }
 
     #[test]
     fn battery_is_frozen_and_diverse() {
         // dummy goldens so battery() builds
-        let mut g = Goldens { workout_total_minutes: 20_000, ..Default::default() };
-        let mut tg = TableGold { rows: 6000, total: 738_022.30, max_amount: 242.98, ..Default::default() };
-        for c in ["rent", "groceries", "transport", "dining", "utilities", "shopping"] {
+        let mut g = Goldens {
+            workout_total_minutes: 20_000,
+            ..Default::default()
+        };
+        let mut tg = TableGold {
+            rows: 6000,
+            total: 738_022.30,
+            max_amount: 242.98,
+            ..Default::default()
+        };
+        for c in [
+            "rent",
+            "groceries",
+            "transport",
+            "dining",
+            "utilities",
+            "shopping",
+        ] {
             tg.by_category.insert(c.into(), 123_000.0);
         }
         tg.by_month.insert("2021-05".into(), 90_000.0);
@@ -2594,7 +3225,16 @@ mod tests {
         assert!(cases.len() >= 15, "battery should be broad");
         // spread across question kinds, not all "spending"
         let cats: std::collections::HashSet<_> = cases.iter().map(|c| c.category).collect();
-        for want in ["NoTool", "Filter", "MinMax", "TimeSeries", "Ratio", "DocSummary", "EmptyResult", "Refusal"] {
+        for want in [
+            "NoTool",
+            "Filter",
+            "MinMax",
+            "TimeSeries",
+            "Ratio",
+            "DocSummary",
+            "EmptyResult",
+            "Refusal",
+        ] {
             assert!(cats.contains(want), "missing a {want} case");
         }
         // ids unique
@@ -2607,7 +3247,10 @@ mod tests {
     #[test]
     fn waste_classification() {
         // one run_sql that feeds the answer -> nothing wasted
-        let clean = rr("The total is 450.", vec![ev("run_sql", "1 row: total 450", None)]);
+        let clean = rr(
+            "The total is 450.",
+            vec![ev("run_sql", "1 row: total 450", None)],
+        );
         assert_eq!(classify_waste(&clean).total(), 0);
 
         // any schema/sample/list peek is redundant on a small workspace (the
@@ -2615,10 +3258,10 @@ mod tests {
         let messy = rr(
             "The total is 450.",
             vec![
-                ev("inspect_table", "ledger: 3 cols", None),     // redundant
-                ev("run_sql", "1 row: total 450", None),         // legit
+                ev("inspect_table", "ledger: 3 cols", None), // redundant
+                ev("run_sql", "1 row: total 450", None),     // legit
                 ev("run_sql", "err", Some("no such column: x")), // errored
-                ev("run_sql", "1 row: total 450", None),         // repeat of #2
+                ev("run_sql", "1 row: total 450", None),     // repeat of #2
             ],
         );
         let w = classify_waste(&messy);
@@ -2654,33 +3297,66 @@ mod tests {
     #[test]
     fn closeness_rewards_grounded_figures() {
         let case = EvalCase {
-            id: "x", category: "Aggregate", question: "q".into(),
-            gold: Gold::Figures(vec![450.0]), min_tools: 1,
+            id: "x",
+            category: "Aggregate",
+            question: "q".into(),
+            gold: Gold::Figures(vec![450.0]),
+            min_tools: 1,
             reference: "Your total spending was 450.".into(),
         };
-        let good = rr("Your total spending was 450.", vec![ev("run_sql", "1 row: total 450", None)]);
-        let bad = rr("Your total was 999.", vec![ev("run_sql", "1 row: total 450", None)]);
+        let good = rr(
+            "Your total spending was 450.",
+            vec![ev("run_sql", "1 row: total 450", None)],
+        );
+        let bad = rr(
+            "Your total was 999.",
+            vec![ev("run_sql", "1 row: total 450", None)],
+        );
         assert!(closeness_det(&good, &case) > 0.8);
         assert!(closeness_det(&bad, &case) < 0.5);
     }
 
     #[test]
     fn bench_gold_shapes_parse() {
-        let g = |s: &str| serde_json::from_str::<BenchGold>(s).unwrap().into_gold().unwrap();
+        let g = |s: &str| {
+            serde_json::from_str::<BenchGold>(s)
+                .unwrap()
+                .into_gold()
+                .unwrap()
+        };
         assert!(matches!(g(r#"{"figures":[600,42]}"#), Gold::Figures(v) if v == vec![600.0, 42.0]));
-        assert!(matches!(g(r#"{"approx":[0.18,0.005]}"#), Gold::Approx(v, t) if v == 0.18 && t == 0.005));
-        assert!(matches!(g(r#"{"contains":["Rent","1250"]}"#), Gold::Contains(v) if v == vec!["Rent", "1250"]));
+        assert!(
+            matches!(g(r#"{"approx":[0.18,0.005]}"#), Gold::Approx(v, t) if v == 0.18 && t == 0.005)
+        );
+        assert!(
+            matches!(g(r#"{"contains":["Rent","1250"]}"#), Gold::Contains(v) if v == vec!["Rent", "1250"])
+        );
         assert!(matches!(
             g(r#"{"must_not_contain":["deleted","1000000"]}"#),
             Gold::MustNotContain(v) if v == vec!["deleted", "1000000"]
         ));
         assert!(matches!(
             g(r#"{"chart":{"labels":["Jan","Feb"],"series":[{"name":"Rent","values":[1200.0,1200.0]}]}}"#),
-            Gold::Chart { labels, series } if labels == vec!["Jan", "Feb"] && series.len() == 1
+            Gold::Chart { kind: None, labels, series, contains } if labels == vec!["Jan", "Feb"] && series.len() == 1 && contains.is_empty()
         ));
+        assert!(matches!(
+            g(r#"{"chart":{"kind":"line","labels":["Jan","Feb"],"series":[{"name":"Rent","values":[1200.0,1200.0]}],"contains":["steady"]}}"#),
+            Gold::Chart { kind: Some("line"), contains, .. } if contains == vec!["steady"]
+        ));
+        assert!(matches!(
+            g(r#"{"no_chart":true,"contains":["same","100"]}"#),
+            Gold::NoChart { contains } if contains == vec!["same", "100"]
+        ));
+        assert!(serde_json::from_str::<BenchGold>(r#"{"no_chart":false}"#)
+            .unwrap()
+            .into_gold()
+            .is_err());
         assert!(matches!(g(r#""refusal""#), Gold::Refusal));
         assert!(matches!(g(r#""notool""#), Gold::NoTool));
-        assert!(serde_json::from_str::<BenchGold>(r#""bogus""#).unwrap().into_gold().is_err());
+        assert!(serde_json::from_str::<BenchGold>(r#""bogus""#)
+            .unwrap()
+            .into_gold()
+            .is_err());
 
         let spec: BenchSpec = serde_json::from_str(
             r#"{"id":"a","question":"q?","files":["x.csv"],"gold":{"figures":[1]},"tier":"easy"}"#,
@@ -2689,5 +3365,58 @@ mod tests {
         assert_eq!(spec.id, "a");
         assert_eq!(spec.files, vec!["x.csv"]);
         assert_eq!(spec.tier.as_deref(), Some("easy"));
+    }
+
+    #[test]
+    fn visualization_bench_is_diverse_and_files_are_present() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../bench/visualization");
+        let cases = load_bench_dir(&dir);
+        assert!(cases.len() >= 12, "visualization battery got too small");
+
+        let mut ids = std::collections::HashSet::new();
+        let mut extensions = std::collections::HashSet::new();
+        let mut chart_cases = 0;
+        let mut no_chart_cases = 0;
+        let mut kinds = std::collections::HashSet::new();
+        for (files, _, case) in &cases {
+            assert!(
+                ids.insert(case.id),
+                "duplicate visualization case id: {}",
+                case.id
+            );
+            for file in files {
+                let path = dir.join(file);
+                assert!(
+                    path.is_file(),
+                    "{} names missing {}",
+                    case.id,
+                    path.display()
+                );
+                if let Some(extension) = Path::new(file).extension().and_then(|e| e.to_str()) {
+                    extensions.insert(extension.to_ascii_lowercase());
+                }
+            }
+            match &case.gold {
+                Gold::Chart { kind, .. } => {
+                    chart_cases += 1;
+                    if let Some(kind) = kind {
+                        kinds.insert(*kind);
+                    }
+                }
+                Gold::NoChart { .. } => no_chart_cases += 1,
+                _ => {}
+            }
+        }
+
+        assert!(chart_cases >= 8, "positive chart coverage is too small");
+        assert!(no_chart_cases >= 4, "negative chart coverage is too small");
+        for extension in ["csv", "json", "tsv", "md"] {
+            assert!(
+                extensions.contains(extension),
+                "missing {extension} fixture coverage"
+            );
+        }
+        assert!(kinds.contains("bar"));
+        assert!(kinds.contains("line"));
     }
 }

@@ -103,6 +103,7 @@ struct WorkspaceState {
     scratch: Option<WorkspaceScratch>,
     workspace: Option<PathBuf>,
     revision: Option<String>,
+    indexed_at_ms: Option<i64>,
     sources: Vec<SourceInfo>,
     /// Contents of `fella.md` at the workspace root, if present. User-written
     /// context fed to the system prompt alongside enabled skill packs.
@@ -133,6 +134,7 @@ impl WorkspaceState {
             scratch,
             workspace: None,
             revision: None,
+            indexed_at_ms: None,
             sources: Vec::new(),
             user_md: None,
             schema_cache: None,
@@ -612,6 +614,7 @@ impl EngineState {
                 .as_ref()
                 .map(|p| p.display().to_string()),
             revision: workspace.revision.clone(),
+            indexed_at_ms: workspace.indexed_at_ms,
             sources: workspace.sources.clone(),
             skipped: workspace.skipped.clone(),
         }
@@ -696,11 +699,27 @@ impl EngineState {
                 }
                 if let Some(cols) = &s.columns {
                     for c in cols {
+                        let common = c
+                            .common_values
+                            .as_ref()
+                            .map(|values| {
+                                let shown = values
+                                    .iter()
+                                    .take(4)
+                                    .map(|value| cap_chars(value, 40))
+                                    .collect::<Vec<_>>()
+                                    .join(" | ");
+                                format!("  common: {shown}")
+                            })
+                            .unwrap_or_default();
                         match &c.note {
-                            Some(n) => {
-                                p.push_str(&format!("    \"{}\" {}  [{}]\n", c.name, c.type_, n))
+                            Some(n) => p.push_str(&format!(
+                                "    \"{}\" {}  [{}]{}\n",
+                                c.name, c.type_, n, common
+                            )),
+                            None => {
+                                p.push_str(&format!("    \"{}\" {}{}\n", c.name, c.type_, common))
                             }
-                            None => p.push_str(&format!("    \"{}\" {}\n", c.name, c.type_)),
                         }
                     }
                 }
@@ -1328,6 +1347,14 @@ exactly, character for character, from the list below.";
         #[cfg(test)]
         pause_open_workspace_for_test(self);
 
+        // PDF text belongs to the old folder. Clear the cache when publishing
+        // the new snapshot so repeatedly switching folders cannot retain every
+        // PDF ever opened in this process. In-flight readers hold their own Arc.
+        self.doc_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+
         let old_scratch = {
             let mut workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
             let old_scratch = workspace
@@ -1336,6 +1363,12 @@ exactly, character for character, from the list below.";
             workspace.data = data;
             workspace.workspace = Some(path.to_path_buf());
             workspace.revision = revision;
+            workspace.indexed_at_ms = Some(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis().min(i64::MAX as u128) as i64)
+                    .unwrap_or(0),
+            );
             workspace.sources = sources;
             workspace.skipped = skipped;
             workspace.user_md = user_md;
@@ -1480,6 +1513,18 @@ exactly, character for character, from the list below.";
         query_workspace(&*workspace.data, sql, DEFAULT_ROW_CAP)
     }
 
+    /// Run SQL while preserving the stop flag all the way into an interruptible
+    /// backend query. This is separate from `run_sql` so command-style callers
+    /// keep their small synchronous API.
+    pub fn run_sql_cancellable(
+        &self,
+        sql: &str,
+        cancel: Arc<AtomicBool>,
+    ) -> EngineResult<QueryResult> {
+        let workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
+        query_workspace_cancellable(&*workspace.data, sql, DEFAULT_ROW_CAP, cancel)
+    }
+
     /// First `n` rows of a source (used by the `inspect_table` tool).
     pub fn sample(&self, name: &str, n: usize) -> EngineResult<QueryResult> {
         let workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
@@ -1503,6 +1548,18 @@ exactly, character for character, from the list below.";
     /// Run a Python snippet against the workspace data (blocking work is moved
     /// off the async executor).
     pub async fn run_python(&self, code: &str) -> EngineResult<pyexec::PyResult> {
+        self.run_python_cancellable(code, Arc::new(AtomicBool::new(false)))
+            .await
+    }
+
+    /// Run Python with a cooperative stop flag. Wasmi resumes the guest in
+    /// bounded fuel slices so a pure-Python loop can observe the flag without
+    /// leaving a detached blocking task behind.
+    pub async fn run_python_cancellable(
+        &self,
+        code: &str,
+        cancel: Arc<AtomicBool>,
+    ) -> EngineResult<pyexec::PyResult> {
         let (bridge, scratch_lease) = {
             let workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
             (
@@ -1513,7 +1570,7 @@ exactly, character for character, from the list below.";
         let code = code.to_string();
         tokio::task::spawn_blocking(move || {
             let _scratch_lease = scratch_lease;
-            pyexec::run(&code, bridge)
+            pyexec::run(&code, bridge, Some(cancel))
         })
         .await
         .map_err(|e| EngineError::msg(format!("python task panicked: {e}")))?
@@ -1615,12 +1672,10 @@ exactly, character for character, from the list below.";
             &registry,
             conversation_id,
             question,
-            &cancel,
+            cancel.clone(),
             &emit,
         )
         .await;
-        // (`&cancel` derefs `Arc<AtomicBool>` -> `&AtomicBool` for `run`.)
-
         // Drop this run's stop-flag (unless a newer run for the same id already
         // replaced it).
         {
@@ -1802,16 +1857,6 @@ exactly, character for character, from the list below.";
             };
         }
         self.llm().health().await
-    }
-
-    /// Compatibility response for older frontends. The removed local provider
-    /// is no longer supported, so this deliberately does not probe a local port.
-    pub async fn probe_ollama(&self) -> ProviderHealth {
-        ProviderHealth {
-            reachable: false,
-            rejected: false,
-            models: Vec::new(),
-        }
     }
 
     /// One model call with no tools and no workspace context just a system
@@ -2005,10 +2050,20 @@ exactly, character for character, from the list below.";
             }
         }
         let text: Arc<str> = Arc::from(docs::extract_pdf(path)?);
-        self.doc_cache
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(path.to_string(), (mtime, text.clone()));
+        const DOC_CACHE_CAP_BYTES: usize = 32 * 1024 * 1024;
+        let mut cache = self.doc_cache.lock().unwrap_or_else(|e| e.into_inner());
+        if text.len() <= DOC_CACHE_CAP_BYTES {
+            cache.insert(path.to_string(), (mtime, text.clone()));
+            let mut cached_bytes = cache.values().map(|(_, value)| value.len()).sum::<usize>();
+            while cached_bytes > DOC_CACHE_CAP_BYTES {
+                let Some(key) = cache.keys().next().cloned() else {
+                    break;
+                };
+                if let Some((_, value)) = cache.remove(&key) {
+                    cached_bytes = cached_bytes.saturating_sub(value.len());
+                }
+            }
+        }
         Ok(text)
     }
 
@@ -2136,6 +2191,24 @@ fn query_workspace(data: &dyn DataEngine, sql: &str, max_rows: usize) -> EngineR
     data::ensure_read_only(sql)?;
     let started = Instant::now();
     let out = data.query(sql, max_rows)?;
+    Ok(QueryResult {
+        columns: out.columns,
+        rows: out.rows,
+        row_count: out.row_count,
+        ms: started.elapsed().as_millis() as u64,
+        truncated: out.truncated,
+    })
+}
+
+fn query_workspace_cancellable(
+    data: &dyn DataEngine,
+    sql: &str,
+    max_rows: usize,
+    cancel: Arc<AtomicBool>,
+) -> EngineResult<QueryResult> {
+    data::ensure_read_only(sql)?;
+    let started = Instant::now();
+    let out = data.query_with_cancel(sql, max_rows, cancel)?;
     Ok(QueryResult {
         columns: out.columns,
         rows: out.rows,

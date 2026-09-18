@@ -3,6 +3,10 @@
 //! fresh `SQLITE_OPEN_READ_ONLY` connection.
 
 use std::path::{Path, PathBuf};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 use rusqlite::functions::FunctionFlags;
 use rusqlite::types::ValueRef;
@@ -214,6 +218,7 @@ impl DataEngine for SqliteEngine {
                 min,
                 max,
                 example: None,
+                common_values: common_values(&ro, &t, &q, distinct),
                 note: None,
             });
         }
@@ -225,9 +230,45 @@ impl DataEngine for SqliteEngine {
         query_connection(ro, sql, max_rows)
     }
 
+    fn query_with_cancel(
+        &self,
+        sql: &str,
+        max_rows: usize,
+        cancel: Arc<AtomicBool>,
+    ) -> EngineResult<QueryOutcome> {
+        let ro = self.ro()?;
+        query_connection_cancellable(ro, sql, max_rows, Some(cancel))
+    }
+
     fn python_bridge(&self) -> PythonBridge {
         PythonBridge::SqliteFile(self.path.clone())
     }
+}
+
+/// Return a compact, bounded list of frequent values for low-cardinality text
+/// columns. The query is only useful as a human/model hint, so high-cardinality
+/// columns skip the extra work and long values are clipped before serialization.
+fn common_values(ro: &Connection, table: &str, column: &str, distinct: i64) -> Option<Vec<String>> {
+    const DISTINCT_CAP: i64 = 32;
+    const VALUE_CAP: usize = 80;
+    if !(1..=DISTINCT_CAP).contains(&distinct) {
+        return None;
+    }
+    let mut stmt = ro
+        .prepare(&format!(
+            "SELECT CAST({column} AS TEXT) FROM {table} \
+             WHERE {column} IS NOT NULL GROUP BY {column} \
+             ORDER BY count(*) DESC, CAST({column} AS TEXT) LIMIT 8"
+        ))
+        .ok()?;
+    let values = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|value| value.chars().take(VALUE_CAP).collect::<String>())
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    (!values.is_empty()).then_some(values)
 }
 
 /// Query the workspace file from a separate read-only connection. The
@@ -247,30 +288,65 @@ pub(crate) fn query_read_only(
     query_connection(conn, sql, max_rows)
 }
 
-fn query_connection(ro: Connection, sql: &str, max_rows: usize) -> EngineResult<QueryOutcome> {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Arc;
+pub(crate) fn query_read_only_cancellable(
+    path: &Path,
+    sql: &str,
+    max_rows: usize,
+    cancel: Arc<AtomicBool>,
+) -> EngineResult<QueryOutcome> {
+    let conn = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
+    )
+    .map_err(|e| EngineError::msg(format!("open read-only: {e}")))?;
+    register_parse_num(&conn)?;
+    query_connection_cancellable(conn, sql, max_rows, Some(cancel))
+}
 
+fn query_connection(ro: Connection, sql: &str, max_rows: usize) -> EngineResult<QueryOutcome> {
+    query_connection_cancellable(ro, sql, max_rows, None)
+}
+
+fn query_connection_cancellable(
+    ro: Connection,
+    sql: &str,
+    max_rows: usize,
+    cancel: Option<Arc<AtomicBool>>,
+) -> EngineResult<QueryOutcome> {
     // Watchdog: interrupt the statement after QUERY_TIMEOUT_SECS. The handle
     // is Send + Sync; `interrupt()` makes an in-flight step return SQLITE_INTERRUPT.
     let handle = ro.get_interrupt_handle();
     let done = Arc::new(AtomicBool::new(false));
     let timed_out = Arc::new(AtomicBool::new(false));
+    let cancelled = Arc::new(AtomicBool::new(false));
     let watchdog = {
         let done = done.clone();
         let timed_out = timed_out.clone();
+        let cancelled = cancelled.clone();
+        let cancel = cancel.clone();
         std::thread::spawn(move || {
             let secs = crate::engine::analytics::data::query_timeout_secs();
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
-            while std::time::Instant::now() < deadline {
+            loop {
                 if done.load(Ordering::Relaxed) {
                     return;
                 }
+                if cancel
+                    .as_ref()
+                    .is_some_and(|flag| flag.load(Ordering::Relaxed))
+                {
+                    cancelled.store(true, Ordering::Relaxed);
+                    handle.interrupt();
+                    return;
+                }
+                if std::time::Instant::now() >= deadline {
+                    if !done.load(Ordering::Relaxed) {
+                        timed_out.store(true, Ordering::Relaxed);
+                        handle.interrupt();
+                    }
+                    return;
+                }
                 std::thread::sleep(std::time::Duration::from_millis(50));
-            }
-            if !done.load(Ordering::Relaxed) {
-                timed_out.store(true, Ordering::Relaxed);
-                handle.interrupt();
             }
         })
     };
@@ -308,6 +384,9 @@ fn query_connection(ro: Connection, sql: &str, max_rows: usize) -> EngineResult<
     done.store(true, Ordering::Relaxed);
     let _ = watchdog.join();
 
+    if cancelled.load(Ordering::Relaxed) {
+        return Err(EngineError::msg("query stopped by user"));
+    }
     if timed_out.load(Ordering::Relaxed) {
         return Err(EngineError::msg(format!(
             "query stopped after {} s try narrowing it (add a WHERE or LIMIT)",
@@ -386,12 +465,24 @@ fn read_delimited(path: &str, default_delim: u8) -> EngineResult<Parsed> {
         .map_err(|e| EngineError::msg(format!("read {path}: {e}")))?;
 
     let cap = crate::engine::analytics::data::ingest_row_cap();
+    let byte_cap = crate::engine::analytics::data::ingest_byte_cap();
     let mut dropped = 0usize;
     let mut truncated = false;
+    let mut byte_truncated = false;
+    let mut retained_bytes = 0usize;
     let mut records: Vec<csv::StringRecord> = Vec::new();
     for r in rdr.records() {
         match r {
-            Ok(rec) => records.push(rec),
+            Ok(rec) => {
+                let record_bytes = rec.iter().map(str::len).sum::<usize>();
+                if retained_bytes.saturating_add(record_bytes) > byte_cap {
+                    truncated = true;
+                    byte_truncated = true;
+                    break;
+                }
+                retained_bytes = retained_bytes.saturating_add(record_bytes);
+                records.push(rec);
+            }
             Err(_) => dropped += 1,
         }
         if records.len() >= cap {
@@ -410,7 +501,13 @@ fn read_delimited(path: &str, default_delim: u8) -> EngineResult<Parsed> {
     if truncated {
         note = merge_note(
             note,
-            format!("only the first {cap} rows were loaded (the file is larger)"),
+            if byte_truncated {
+                format!(
+                    "only the first {retained_bytes} bytes of the file were loaded (input is larger)"
+                )
+            } else {
+                format!("only the first {cap} rows were loaded (the file is larger)")
+            },
         );
     }
 
@@ -560,6 +657,15 @@ fn looks_like_total_row(row: &[&str], width: usize) -> bool {
 }
 
 fn read_json(path: &str, ndjson: bool) -> EngineResult<Parsed> {
+    let byte_cap = crate::engine::analytics::data::ingest_byte_cap();
+    if std::fs::metadata(path)
+        .map(|metadata| metadata.len() > byte_cap as u64)
+        .unwrap_or(false)
+    {
+        return Err(EngineError::msg(format!(
+            "{path}: JSON input is larger than the {byte_cap} byte ingest limit"
+        )));
+    }
     let text =
         std::fs::read_to_string(path).map_err(|e| EngineError::io(format!("read {path}"), e))?;
 

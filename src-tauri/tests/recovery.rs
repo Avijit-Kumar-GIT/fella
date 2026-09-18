@@ -8,7 +8,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use fella_lib::engine::EngineState;
 
 fn scratch(tag: &str) -> PathBuf {
-    let n = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let n = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
     let p = std::env::temp_dir().join(format!("fella-{tag}-{n}"));
     fs::create_dir_all(&p).unwrap();
     p
@@ -18,7 +21,11 @@ fn scratch(tag: &str) -> PathBuf {
 fn a_corrupt_fella_db_is_moved_aside_and_recreated() {
     let data = scratch("recover-data");
     // Not a SQLite file at all.
-    fs::write(data.join("fella.db"), b"this is not a database, it is garbage").unwrap();
+    fs::write(
+        data.join("fella.db"),
+        b"this is not a database, it is garbage",
+    )
+    .unwrap();
 
     let engine = EngineState::new(&data).expect("engine should start despite the bad db");
 
@@ -27,7 +34,9 @@ fn a_corrupt_fella_db_is_moved_aside_and_recreated() {
     assert!(!before.provider.is_empty());
     engine
         .save_settings(
-            serde_json::json!({ "model": "recovery-check" }).as_object().unwrap(),
+            serde_json::json!({ "model": "recovery-check" })
+                .as_object()
+                .unwrap(),
         )
         .unwrap();
     assert_eq!(engine.settings().model, "recovery-check");
@@ -36,7 +45,11 @@ fn a_corrupt_fella_db_is_moved_aside_and_recreated() {
     let moved = fs::read_dir(&data)
         .unwrap()
         .filter_map(|e| e.ok())
-        .any(|e| e.file_name().to_string_lossy().starts_with("fella.db.corrupt-"));
+        .any(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .starts_with("fella.db.corrupt-")
+        });
     assert!(moved, "the corrupt db should be kept as fella.db.corrupt-*");
 
     let _ = fs::remove_dir_all(&data);

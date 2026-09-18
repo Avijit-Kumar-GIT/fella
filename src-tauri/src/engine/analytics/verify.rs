@@ -505,6 +505,7 @@ fn check_tables(
 /// used to flag obviously-wrong table names and to check a multi-table join.
 pub(crate) fn referenced_relations(sql: &str) -> HashSet<String> {
     let lower = sql.to_lowercase();
+    let ctes = cte_names(&lower);
     let toks: Vec<&str> = lower
         .split(|c: char| c.is_whitespace())
         .filter(|s| !s.is_empty())
@@ -513,12 +514,25 @@ pub(crate) fn referenced_relations(sql: &str) -> HashSet<String> {
     for (i, t) in toks.iter().enumerate() {
         if (*t == "from" || *t == "join") && i + 1 < toks.len() {
             let name = toks[i + 1].trim_matches(|c: char| !c.is_alphanumeric() && c != '_');
-            if !name.is_empty() {
+            if !name.is_empty() && !ctes.contains(name) {
                 out.insert(name.to_string());
             }
         }
     }
     out
+}
+
+/// Names introduced by a `WITH` clause are query-local relations, not
+/// catalogued sources. Keep them out of `referenced_relations` so a perfectly
+/// valid CTE does not produce a missing-table warning or look like a second
+/// physical table to the join checks.
+fn cte_names(sql: &str) -> HashSet<String> {
+    let re =
+        regex::Regex::new(r"(?i)(?:\bwith\s+(?:recursive\s+)?|,\s*)([a-z_][a-z0-9_]*)\s+as\s*\(")
+            .expect("CTE name pattern is valid");
+    re.captures_iter(sql)
+        .filter_map(|capture| capture.get(1).map(|name| name.as_str().to_lowercase()))
+        .collect()
 }
 
 /// True when `needle` occurs in `haystack` on a word boundary (not as part of
@@ -853,19 +867,20 @@ fn check_numbers(answer: &str, evidence: &[EvidenceItem], out: &mut Vec<Verifica
         .collect::<Vec<_>>()
         .join("\n");
 
+    let answer_numbers = answer_number_tokens(&checked);
     let mut unsupported: Vec<String> = Vec::new();
-    for (raw, val) in number_tokens(&checked) {
-        if is_probable_year(val) {
+    for (raw, val) in &answer_numbers {
+        if is_probable_year(*val) {
             continue;
         }
-        if !supported.iter().any(|s| close(*s, val)) {
-            unsupported.push(raw);
+        if !supported.iter().any(|s| close(*s, *val)) {
+            unsupported.push(raw.clone());
         }
     }
     unsupported.dedup();
 
     if unsupported.is_empty() {
-        if number_tokens(&checked).next().is_some() {
+        if !answer_numbers.is_empty() {
             out.push(ok("every number in the answer came from the data above"));
         }
     } else {
@@ -878,6 +893,58 @@ fn check_numbers(answer: &str, evidence: &[EvidenceItem], out: &mut Vec<Verifica
             Some("check these against the evidence below".into()),
         ));
     }
+}
+
+/// Number-shaped tokens in answer prose, excluding the numeric part of a
+/// leading ordered-list marker (`1.`, `1)`, or `(1)`). Those digits describe
+/// the answer's structure rather than a claim about the user's data.
+fn answer_number_tokens(text: &str) -> Vec<(String, f64)> {
+    let date = regex::Regex::new(r"\b(?:19|20)\d{2}(?:[-/]\d{1,2}){1,2}\b")
+        .expect("ISO date pattern is valid");
+    text.lines()
+        .flat_map(|line| {
+            // Dates are labels/context, not standalone claims about a metric.
+            // Mask common ISO forms before extracting figures so a failed chart
+            // that is explained with its date does not flag the month/day.
+            let line_without_dates = date.replace_all(line, " ");
+            let line = line_without_dates.as_ref();
+            let skip_first = is_ordered_list_marker(line);
+            number_tokens(line)
+                .enumerate()
+                .filter_map(move |(index, token)| (index != 0 || !skip_first).then_some(token))
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+fn is_ordered_list_marker(line: &str) -> bool {
+    let line = line.trim_start();
+    let bytes = line.as_bytes();
+    let (mut index, closing) = if bytes.first() == Some(&b'(') {
+        (1, b')')
+    } else {
+        (0, 0)
+    };
+    let start = index;
+    while index < bytes.len() && bytes[index].is_ascii_digit() {
+        index += 1;
+    }
+    if index == start {
+        return false;
+    }
+    let expected = if closing == 0 {
+        bytes.get(index).copied()
+    } else {
+        Some(closing)
+    };
+    if !matches!(expected, Some(b'.' | b')')) {
+        return false;
+    }
+    if closing != 0 && bytes.get(index) != Some(&closing) {
+        return false;
+    }
+    let after = index + 1;
+    after == bytes.len() || bytes[after].is_ascii_whitespace()
 }
 
 fn collect_numbers(text: &str, out: &mut Vec<f64>) {
@@ -1210,6 +1277,16 @@ mod tests {
     }
 
     #[test]
+    fn cte_names_are_not_catalogued_tables() {
+        let r = referenced_relations(
+            "WITH sorted AS (SELECT * FROM mood), scored AS (SELECT * FROM sorted) \
+             SELECT * FROM scored JOIN costs ON scored.day = costs.day",
+        );
+        assert!(r.contains("mood") && r.contains("costs"));
+        assert!(!r.contains("sorted") && !r.contains("scored"));
+    }
+
+    #[test]
     fn rows_match_tolerates_float_jitter_only() {
         let a = vec![vec![Json::from(738022.3)]];
         let b = vec![vec![Json::from(738022.3 + 1e-6)]];
@@ -1517,6 +1594,48 @@ mod tests {
             .map(|(_, v)| v)
             .collect();
         assert_eq!(got2, vec![738022.3]);
+    }
+
+    #[test]
+    fn ordered_list_markers_are_not_treated_as_figures() {
+        let got: Vec<_> = answer_number_tokens(
+            "(1) A chart can make a pattern easier to understand.\n\
+             2. A chart is unnecessary for one isolated value.\n\
+             3) Keep the analysis local.",
+        )
+        .into_iter()
+        .map(|(_, value)| value)
+        .collect();
+        assert!(
+            got.is_empty(),
+            "list markers leaked into answer figures: {got:?}"
+        );
+
+        let got_with_data: Vec<_> = answer_number_tokens("1. Total spending was $450.")
+            .into_iter()
+            .map(|(_, value)| value)
+            .collect();
+        assert_eq!(got_with_data, vec![450.0]);
+    }
+
+    #[test]
+    fn iso_dates_are_not_treated_as_figures() {
+        let got: Vec<_> = answer_number_tokens(
+            "The missing reading was on 2024-01-02; the chart needs a valid value.",
+        )
+        .into_iter()
+        .map(|(_, value)| value)
+        .collect();
+        assert!(
+            got.is_empty(),
+            "date components leaked into figures: {got:?}"
+        );
+
+        let got_with_data: Vec<_> = answer_number_tokens("On 2024-01, spending was $450.")
+            .into_iter()
+            .map(|(_, value)| value)
+            .collect();
+        assert_eq!(got_with_data, vec![450.0]);
     }
 
     #[test]

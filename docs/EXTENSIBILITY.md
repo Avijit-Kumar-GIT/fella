@@ -29,13 +29,31 @@ A pack is **exactly one of four kinds**. Nothing else is a pack.
 
 | Kind | Payload | What it does | Cost when active |
 |------|---------|--------------|------------------|
-| **`theme`** | `theme.json` a map of the app's `:root` CSS tokens (`src/app.css`), optionally an `appearance` hint | changes colours and spacing; one theme active at a time | none; inert data |
+| **`theme`** | `theme.json` a map of the app's `:root` CSS tokens (`src/app.css`) | changes colours and spacing; one theme active at a time | none; inert data |
 | **`skill`** | `skill.md` Markdown, size-capped | text injected into the system prompt as a "Your context" section: vocabulary, file conventions, caveats the model should always apply. Several can be enabled at once. It can only shape how Fella words and interprets an answer there is no tool for it to call. | none; inert text |
 | **`mcp`** | `connector.json` (`{ "transport": "http", "url", "auth", "setup" }`) | lets Fella read a source outside the local folder (Notion, a notes repo, a wiki) via a **remote** [Model Context Protocol](https://modelcontextprotocol.io) server. The server's tools appear in the agent loop and evidence panel like the built-ins, namespaced `<id>__<tool>`. The token goes in `auth.json` (`Secrets`); you paste it with `/connect <id>`. | a live connection only while an enabled `mcp` pack is used |
 | **`augment`** | `augment.json` (`{ "capability", "command", "file", "syntax" }`) | turns on a small **first-party capability the app already ships** and binds it to a slash command: `buffer` (a plain-text tab saving `.md`/`.txt`) or `grid` (a minimal editable table saving `.csv`). The tab saves a file **into the open folder when you type in it** the agent still never writes. | a tab you can open; no cost otherwise |
 
 A pack is a directory with a `fella-pack.json` manifest plus its one payload
 file. No app code. No archive format, no package manager.
+
+### What enabling a pack means
+
+The Packs screen shows a short capability disclosure next to every installed
+pack. The disclosure is tied to the pack kind, not to the pack's marketing
+description:
+
+- a `theme` can change only the approved visual tokens; appearance mode remains
+  the user's local System/Light/Dark preference;
+- a `skill` adds prompt guidance to an answer and has no tool or file access;
+- an `mcp` pack is a remote connection that can read through its server, while
+  tools declaring modifying or destructive behavior are withheld;
+- an `augment` is a first-party editor that can save the file the person is
+  editing inside the mounted folder; the agent still has no write tool.
+
+Marketplace packs are content-hash checked before installation and labeled
+Reviewed in the UI. A locally added pack is labeled Local/Unverified so the
+person can see where the trust decision came from.
 
 ### `augment` packs in detail
 
@@ -124,6 +142,9 @@ an unknown `kind` as "needs a newer Fella" rather than erroring, ignores unknown
   offered normally. One with no annotation is offered but its evidence row is
   marked "effects not declared". One marked `readOnlyHint: false` or
   `destructiveHint: true` is withheld, and Fella says so.
+- Remote calls have a 30-second timeout and their returned text is capped before
+  it enters the agent context. The connector does not create a local
+  subprocess, and its token stays in `auth.json`.
 - **The MCP client is the `mcp` build feature** (in the shipped app;
   `--no-default-features` drops it). It uses the official `rmcp` SDK over
   Fella's existing HTTP client.

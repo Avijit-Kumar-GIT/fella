@@ -35,6 +35,7 @@ mod tests {
         Catalog {
             workspace: Some("/tmp/ws".into()),
             revision: Some("rtest".into()),
+            indexed_at_ms: None,
             sources: vec![
                 SourceInfo {
                     name: "sales.csv".into(),

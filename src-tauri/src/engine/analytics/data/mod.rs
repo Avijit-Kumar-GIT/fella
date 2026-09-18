@@ -7,6 +7,10 @@
 
 use serde::Serialize;
 use serde_json::Value as Json;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 use crate::engine::catalog::{ColumnInfo, SourceKind};
 use crate::engine::error::{EngineError, EngineResult};
@@ -35,6 +39,15 @@ pub fn query_timeout_secs() -> u64 {
 /// loads its first `n` rows are usable, with a note that it was truncated.
 /// `FELLA_INGEST_ROW_CAP` overrides it (and lets tests hit the path cheaply).
 pub const INGEST_ROW_CAP: usize = 2_000_000;
+
+/// Approximate amount of delimited input we retain while ingesting one source.
+/// Row count alone is not a useful memory guard when a single export contains
+/// very wide text fields.
+pub const INGEST_BYTE_CAP: usize = 256 * 1024 * 1024;
+
+pub fn ingest_byte_cap() -> usize {
+    crate::engine::env::positive("FELLA_INGEST_BYTE_CAP", INGEST_BYTE_CAP)
+}
 
 pub fn ingest_row_cap() -> usize {
     crate::engine::env::positive("FELLA_INGEST_ROW_CAP", INGEST_ROW_CAP)
@@ -123,6 +136,26 @@ pub trait DataEngine: Send {
 
     /// Run a read-only query; materialise up to `max_rows` rows.
     fn query(&self, sql: &str, max_rows: usize) -> EngineResult<QueryOutcome>;
+
+    /// Run a read-only query while observing a question's stop flag. Backends
+    /// that can interrupt an in-flight statement should override this. The
+    /// default keeps the API safe for optional backends and checks the flag at
+    /// the boundary.
+    fn query_with_cancel(
+        &self,
+        sql: &str,
+        max_rows: usize,
+        cancel: Arc<AtomicBool>,
+    ) -> EngineResult<QueryOutcome> {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(EngineError::msg("query stopped by user"));
+        }
+        let result = self.query(sql, max_rows)?;
+        if cancel.load(Ordering::Relaxed) {
+            return Err(EngineError::msg("query stopped by user"));
+        }
+        Ok(result)
+    }
 
     fn python_bridge(&self) -> PythonBridge;
 }

@@ -52,7 +52,12 @@ pub fn path_for(data_dir: &Path, workspace: &Path) -> PathBuf {
     let base = canon
         .file_name()
         .and_then(|s| s.to_str())
-        .map(|s| s.chars().filter(|c| c.is_alphanumeric()).take(24).collect::<String>())
+        .map(|s| {
+            s.chars()
+                .filter(|c| c.is_alphanumeric())
+                .take(24)
+                .collect::<String>()
+        })
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "folder".into());
     data_dir.join("memory").join(format!("{base}-{h:016x}.md"))
@@ -93,8 +98,13 @@ enum Section {
 impl FolderMemory {
     /// Load from disk; an absent file is an empty memory.
     pub fn load(path: &Path) -> Self {
-        let mut m = FolderMemory { path: path.to_path_buf(), ..Default::default() };
-        let Ok(text) = std::fs::read_to_string(path) else { return m };
+        let mut m = FolderMemory {
+            path: path.to_path_buf(),
+            ..Default::default()
+        };
+        let Ok(text) = std::fs::read_to_string(path) else {
+            return m;
+        };
         let mut sec = Section::None;
         for raw in text.lines() {
             if sec == Section::Trailer {
@@ -125,7 +135,9 @@ impl FolderMemory {
                     }
                 }
                 Section::Vocab | Section::Tables => {
-                    let Some(item) = line.strip_prefix("- ") else { continue };
+                    let Some(item) = line.strip_prefix("- ") else {
+                        continue;
+                    };
                     let (key, txt) = split_note(item);
                     let note = Note { key, text: txt };
                     if sec == Section::Vocab {
@@ -222,7 +234,10 @@ The \"## Notes\" section and any sections you add are left untouched. -->\n",
         }
         match list.iter_mut().find(|n| n.key.eq_ignore_ascii_case(key)) {
             Some(n) => n.text = text.to_string(),
-            None => list.push(Note { key: key.to_string(), text: text.to_string() }),
+            None => list.push(Note {
+                key: key.to_string(),
+                text: text.to_string(),
+            }),
         }
     }
 
@@ -238,7 +253,10 @@ The \"## Notes\" section and any sections you add are left untouched. -->\n",
     /// correction updates one of these or is genuinely new. Cloned; the list
     /// stays small (a handful to dozens of entries over a folder's life).
     pub fn vocabulary_entries(&self) -> Vec<(String, String)> {
-        self.vocabulary.iter().map(|n| (n.key.clone(), n.text.clone())).collect()
+        self.vocabulary
+            .iter()
+            .map(|n| (n.key.clone(), n.text.clone()))
+            .collect()
     }
 
     /// The block prepended to the system prompt: preferences, all vocabulary,
@@ -304,8 +322,16 @@ fn episodes_path(mem_path: &Path) -> PathBuf {
 pub fn is_correction(q: &str) -> bool {
     let l = q.trim().to_lowercase();
     const MARKERS: [&str; 10] = [
-        "no,", "no ", "actually", "that's wrong", "that's not right", "that is wrong",
-        "wrong,", "should be", "it's actually", "correction:",
+        "no,",
+        "no ",
+        "actually",
+        "that's wrong",
+        "that's not right",
+        "that is wrong",
+        "wrong,",
+        "should be",
+        "it's actually",
+        "correction:",
     ];
     MARKERS.iter().any(|m| l.starts_with(m))
 }
@@ -328,7 +354,6 @@ fn render_note(n: &Note) -> String {
         format!("- {} \u{2014} {}\n", n.key, n.text)
     }
 }
-
 
 #[cfg(test)]
 mod tests {

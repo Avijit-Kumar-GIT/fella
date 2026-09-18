@@ -168,6 +168,7 @@ fn columns(conn: &Connection, view: &str) -> EngineResult<Vec<ColumnInfo>> {
             min: None,
             max: None,
             example: None,
+            common_values: None,
             note: None,
         })
         .collect())
@@ -192,6 +193,7 @@ fn describe(conn: &Connection, view: &str) -> EngineResult<Vec<ColumnInfo>> {
             min: str_at(row, ix.get("min")),
             max: str_at(row, ix.get("max")),
             example: None,
+            common_values: None,
             note: None,
         });
     }

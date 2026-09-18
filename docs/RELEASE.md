@@ -20,7 +20,12 @@ The release candidate is ready only when these items are complete:
 - [x] Run the hostile embedded-Python checks, including blocked host-file
       access, fuel exhaustion, bounded output, and the SQL bridge, then record
       the result in `docs/SECURITY-REVIEW-v0.1.md` or a versioned successor —
-      2026-09-17: 7 `python_tool` tests passed.
+      2026-09-17: 8 `python_tool` tests passed, including user cancellation.
+- [x] Run `scripts/check-memory.sh` in the optimized profile and record guest
+      memory plus host RSS results in the security review. 2026-09-17: the
+      extended 256-iteration run peaked at 6.1 MiB of guest Wasm memory and
+      grew Linux RSS by 9.9 MiB, under the default 128 MiB gate. Repeat on
+      Windows and macOS when those hosts are available.
 - [ ] Build `pnpm tauri build` on each reachable desktop target, record
       installer sizes, and launch at least one packaged build through the
       folder-open, question, evidence, stop, login, model, packs, tabs, and

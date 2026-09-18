@@ -7,6 +7,12 @@ today's) kept for the reasoning trail, not as a live status check current
 facts are [`ARCHITECTURE.md`](ARCHITECTURE.md), current commitments are
 [`PRINCIPLES.md`](PRINCIPLES.md)/[`NON-GOALS.md`](NON-GOALS.md).
 
+This file is historical. Its point-in-time table still contains references to
+the former local Ollama default and to the pre-WASM Python subprocess. The
+current product is BYOK-only in the UI and uses the embedded RustPython/WASM
+guest; see [`ARCHITECTURE.md`](ARCHITECTURE.md) and
+[`PYTHON-SANDBOX.md`](PYTHON-SANDBOX.md).
+
 Assessed 2026-08-27, at commit `609f878`. The brief being audited against is the
 general-purpose **AI agent microharness** spec (task → agent loop → artifact;
 filesystem + Python tools; workspace as security boundary; Task/Work/Result UI;

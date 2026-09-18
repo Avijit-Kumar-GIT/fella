@@ -5,7 +5,7 @@
 
 use serde::Serialize;
 use tauri::ipc::Channel;
-use tauri::State;
+use tauri::{State, Window};
 
 use crate::engine::{
     Answer, AskEvent, Catalog, ConversationSummary, ConversationsInfo, EngineError, EngineResult,
@@ -21,8 +21,7 @@ use crate::AppState;
 fn expand_tilde(path: &str) -> std::path::PathBuf {
     if let Some(rest) = path.strip_prefix('~') {
         if rest.is_empty() || rest.starts_with('/') || rest.starts_with('\\') {
-            if let Some(home) =
-                std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))
+            if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))
             {
                 return std::path::Path::new(&home).join(rest.trim_start_matches(['/', '\\']));
             }
@@ -292,22 +291,39 @@ pub async fn ask(
 ) -> Result<Answer, EngineError> {
     let inspect = mode.as_deref() == Some("inspect");
     engine
-        .ask_with_mode(&conversation_id, &question, model.as_deref(), inspect, move |ev| {
-            let _ = channel.send(ev);
-        })
+        .ask_with_mode(
+            &conversation_id,
+            &question,
+            model.as_deref(),
+            inspect,
+            move |ev| {
+                let _ = channel.send(ev);
+            },
+        )
         .await
 }
 
 #[tauri::command]
-pub async fn ollama_health(engine: State<'_, EngineState>) -> Result<ProviderHealth, EngineError> {
+pub async fn provider_health(
+    engine: State<'_, EngineState>,
+) -> Result<ProviderHealth, EngineError> {
     Ok(engine.provider_health().await)
 }
 
-/// Compatibility response for older frontends. The removed local provider is
-/// no longer supported, so this never makes a network request.
+/// Keep the native window surface in step with the webview when the user
+/// chooses an explicit appearance. This matters on frameless Windows windows
+/// and during a theme switch, where a strip outside the document can otherwise
+/// flash the old color.
 #[tauri::command]
-pub async fn probe_ollama(engine: State<'_, EngineState>) -> Result<ProviderHealth, EngineError> {
-    Ok(engine.probe_ollama().await)
+pub fn set_window_appearance(window: Window, dark: bool) -> Result<(), String> {
+    let color = if dark {
+        tauri::webview::Color(14, 14, 16, 255)
+    } else {
+        tauri::webview::Color(252, 252, 251, 255)
+    };
+    window
+        .set_background_color(Some(color))
+        .map_err(|error| error.to_string())
 }
 
 // --- conversation archive ----------------------------------------------------
@@ -338,7 +354,10 @@ pub fn conversations_list(engine: State<'_, EngineState>) -> Vec<ConversationSum
 
 /// Raw JSON of one archived conversation, by id (see `conversations_list`).
 #[tauri::command]
-pub fn conversation_load(id: String, engine: State<'_, EngineState>) -> Result<String, EngineError> {
+pub fn conversation_load(
+    id: String,
+    engine: State<'_, EngineState>,
+) -> Result<String, EngineError> {
     engine.conversation_load(&id)
 }
 
@@ -403,16 +422,25 @@ mod tilde_tests {
     #[test]
     fn expands_home_relative_paths_only() {
         std::env::set_var("HOME", "/home/somebody");
-        assert_eq!(expand_tilde("~"), std::path::PathBuf::from("/home/somebody"));
+        assert_eq!(
+            expand_tilde("~"),
+            std::path::PathBuf::from("/home/somebody")
+        );
         assert_eq!(
             expand_tilde("~/Downloads/pack"),
             std::path::PathBuf::from("/home/somebody/Downloads/pack")
         );
         // A bare relative or absolute path passes through untouched.
         assert_eq!(expand_tilde("./pack"), std::path::PathBuf::from("./pack"));
-        assert_eq!(expand_tilde("/tmp/pack"), std::path::PathBuf::from("/tmp/pack"));
+        assert_eq!(
+            expand_tilde("/tmp/pack"),
+            std::path::PathBuf::from("/tmp/pack")
+        );
         // "~foo" (another user's home) is left alone, same as a shell with no
         // matching user would leave it we don't try to resolve /etc/passwd.
-        assert_eq!(expand_tilde("~foo/pack"), std::path::PathBuf::from("~foo/pack"));
+        assert_eq!(
+            expand_tilde("~foo/pack"),
+            std::path::PathBuf::from("~foo/pack")
+        );
     }
 }

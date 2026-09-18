@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::engine::analytics::{provenance, verify};
@@ -77,7 +78,7 @@ pub async fn run(
     registry: &Registry,
     conversation_id: &str,
     question: &str,
-    cancel: &AtomicBool,
+    cancel: Arc<AtomicBool>,
     emit: &(dyn Fn(AskEvent) + Send + Sync),
 ) -> EngineResult<Answer> {
     let catalog = engine.catalog();
@@ -177,7 +178,7 @@ you did not get from a tool.\n",
                 }
                 Err(e) => return Err(e),
             },
-            _ = cancelled(cancel) => {
+            _ = cancelled(cancel.as_ref()) => {
                 return Ok(stopped(engine, workspace.as_ref(), question, evidence, usage, emit))
             }
         };
@@ -216,7 +217,7 @@ corrected answer to match the re-run."
                     )));
                     let r = tokio::select! {
                         r = llm.chat(&messages, &[], &notify, &on_delta) => r.unwrap_or_default(),
-                        _ = cancelled(cancel) => Default::default(),
+                        _ = cancelled(cancel.as_ref()) => Default::default(),
                     };
                     usage = Usage::merge(usage, r.usage);
                     if !r.content.trim().is_empty() {
@@ -244,7 +245,7 @@ filter word in the question exactly, and state just the number(s) don't round or
                 ));
                 let r = tokio::select! {
                     r = llm.chat(&messages, &[], &notify, &on_delta) => r.unwrap_or_default(),
-                    _ = cancelled(cancel) => Default::default(),
+                    _ = cancelled(cancel.as_ref()) => Default::default(),
                 };
                 usage = Usage::merge(usage, r.usage);
                 if let Some(check) = verify::self_consistency_check(&text, &r.content) {
@@ -320,11 +321,15 @@ not run again. Its result is repeated below - use it, refine the call, or give y
             }
         }
 
-        let ran = futures_util::future::join_all(
-            pending
-                .iter()
-                .map(|&i| run_tool_call(engine, &catalog, registry, &resp.tool_calls[i])),
-        )
+        let ran = futures_util::future::join_all(pending.iter().map(|&i| {
+            run_tool_call(
+                engine,
+                &catalog,
+                registry,
+                &resp.tool_calls[i],
+                cancel.clone(),
+            )
+        }))
         .await;
         for (&i, res) in pending.iter().zip(ran) {
             outcomes[i] = Some(res);
@@ -391,7 +396,7 @@ you're not confident, say so plainly rather than guessing."
     ));
     let resp = tokio::select! {
         r = llm.chat(&messages, &[], &notify, &on_delta) => r.unwrap_or_default(),
-        _ = cancelled(cancel) => {
+        _ = cancelled(cancel.as_ref()) => {
             return Ok(stopped(engine, workspace.as_ref(), question, evidence, usage, emit))
         }
     };
@@ -568,6 +573,7 @@ async fn run_tool_call(
     catalog: &Catalog,
     registry: &Registry,
     call: &ToolCall,
+    cancel: Arc<AtomicBool>,
 ) -> (EvidenceItem, String) {
     let started = Instant::now();
     if !catalog_matches(engine, catalog) {
@@ -578,7 +584,9 @@ async fn run_tool_call(
             started,
         );
     }
-    let result = registry.run(engine, &call.name, &call.arguments).await;
+    let result = registry
+        .run_with_cancel(engine, &call.name, &call.arguments, cancel)
+        .await;
     if !catalog_matches(engine, catalog) {
         return tool_error(
             &call.name,
@@ -874,14 +882,17 @@ RustPython sandbox with no filesystem, network, environment, or subprocess acces
     }
     if profile.chart_rule {
         rules.push(
-            "make_chart draws a bar or line chart from a read-only SQL query. The first query \
-            column must be the label or date and the remaining one or two columns must be numeric; \
-            it derives the values itself, so never pass labels or series arrays. It renders itself, \
-            so don't describe it in prose. Use it for a breakdown across categories or a trend over \
-            time skip it for a single figure, a yes/no answer, or values that barely differ (it will \
-            refuse near-flat data a sentence says more than a flat chart would). One chart per \
-            answer: put every category or series you want compared into that one query (up to 12 \
-            labels and two series) instead of calling it again for a second chart."
+            "make_chart draws a chart from a read-only SQL query. Use kind `auto` unless the user \
+            clearly asks for a bar or line chart; auto chooses a line for time periods and a bar for \
+            categories. The first query column must be the label or date and the remaining one or two \
+            columns must be numeric; it derives the values itself, so never pass labels or series \
+            arrays. It renders as a visual answer block. After the chart call, lead with one short \
+            sentence explaining the main pattern, then at most one supporting sentence; do not list \
+            every value in prose. Use it for a breakdown, ranking, comparison, or trend over time; \
+            skip it for a single figure, a yes/no answer, or values that barely differ (it will refuse \
+            near-flat data a sentence says more than a flat chart would). One chart per answer: put \
+            every category or series you want compared into that one query (up to 12 labels and two \
+            series) instead of calling it again for a second chart."
                 .into(),
         );
     }
@@ -891,7 +902,10 @@ RustPython sandbox with no filesystem, network, environment, or subprocess acces
 also show a first line, PDFs don't, so don't call list_files for them. For a \
 question about their content, call read_file directly (pass `names: [...]` to \
 read several at once); they are short. Use grep_files only to locate one \
-specific term across many documents."
+specific term across many documents. When a document question has multiple parts, \
+answer each requested part explicitly. If it asks for a policy or rule, state the \
+action, scope, and reason in the document's own terms; do not replace an explicit \
+instruction with only a general summary."
                 .into(),
         );
     }
@@ -1005,6 +1019,7 @@ mod tests {
         Catalog {
             workspace: Some("/tmp/ws".into()),
             revision: Some("rtest".into()),
+            indexed_at_ms: None,
             sources: Vec::new(),
             skipped: Vec::new(),
         }
@@ -1129,20 +1144,26 @@ correlation/regression via the always-available `pearsonr(x, y)` / \
 `linregress(x, y)` helpers. Its `sql(query)` helper returns a list of \
 dictionaries. It runs in a local WASM + RustPython sandbox with no \
 filesystem, network, environment, or subprocess access.\n\
-- make_chart draws a bar or line chart from a read-only SQL query. The first \
- query column must be the label or date and the remaining one or two columns \
- must be numeric; it derives the values itself, so never pass labels or series \
- arrays. It renders itself, so don't describe it in prose. Use it for a \
- breakdown across categories or a trend over time skip it for a single figure, \
- a yes/no answer, or values that barely differ (it will refuse near-flat data \
- a sentence says more than a flat chart would). One chart per answer: put \
- every category or series you want compared into that one query (up to 12 \
- labels and two series) instead of calling it again for a second chart.\n\
+- make_chart draws a chart from a read-only SQL query. Use kind `auto` unless \
+the user clearly asks for a bar or line chart; auto chooses a line for time \
+periods and a bar for categories. The first query column must be the label or \
+date and the remaining one or two columns must be numeric; it derives the values \
+itself, so never pass labels or series arrays. It renders as a visual answer \
+block. After the chart call, lead with one short sentence explaining the main \
+pattern, then at most one supporting sentence; do not list every value in prose. \
+Use it for a breakdown, ranking, comparison, or trend over time; skip it for a \
+single figure, a yes/no answer, or values that barely differ (it will refuse \
+near-flat data a sentence says more than a flat chart would). One chart per \
+answer: put every category or series you want compared into that one query (up \
+to 12 labels and two series) instead of calling it again for a second chart.\n\
 - Documents (notes, PDFs) are already listed below by name; plain-text notes \
 also show a first line, PDFs don't, so don't call list_files for them. For a \
 question about their content, call read_file directly (pass `names: [...]` to \
 read several at once); they are short. Use grep_files only to locate one \
-specific term across many documents.\n\
+specific term across many documents. When a document question has multiple parts, \
+answer each requested part explicitly. If it asks for a policy or rule, state the \
+action, scope, and reason in the document's own terms; do not replace an explicit \
+instruction with only a general summary.\n\
 - If the files can't answer, say so plainly don't guess, forecast, or \
 project, and don't run a query to estimate one. A question about the future \
 (\"next month\", \"next year\", \"will I\", \"how many will I\") has no answer in \

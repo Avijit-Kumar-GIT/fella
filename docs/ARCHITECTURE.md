@@ -67,7 +67,8 @@ src/                         SvelteKit frontend presentation only
   routes/+layout.svelte      global CSS, key handling
   routes/+page.svelte        the single REPL view
   lib/ipc.ts                 typed wrappers over invoke() + Channel events
-  lib/components/            Transcript, Message, EvidenceBlock, Composer, StatusBar
+  lib/components/            Transcript, Message, EvidenceBlock, Composer, Sidebar,
+                             Titlebar, Sources, Packs, Analyses
 
 src-tauri/src/
   lib.rs                     tauri::Builder, managed state, command registration
@@ -76,7 +77,8 @@ src-tauri/src/
     state.rs                 EngineState { data: Mutex<Box<dyn DataEngine>>,
                                            sqlite: Mutex<Connection>, inner: Mutex<Inner>,
                                            http: reqwest::Client, secrets: Secrets,
-                                           data_dir, cancel: AtomicBool }
+                                           data_dir, cancel: HashMap<String, Arc<AtomicBool>>,
+                                           doc_cache: bounded PDF cache }
     catalog.rs               walk workspace (depth ≤ 8), classify, slugify names, dedupe;
                              honour .fellaignore; skip a root fella.md
     analytics/                the engine: deterministic compute + verification, no LLM
@@ -89,10 +91,13 @@ src-tauri/src/
         mod.rs                 DataEngine trait + shared read-only guard, quote_ident
         sqlite.rs              default engine: type sniff → CREATE TABLE + bulk INSERT
         duck.rs                #[cfg(feature="duckdb")] engine: read_*_auto views
-      pyexec.rs               Wasmi host for the embedded RustPython/WASM guest; bounded output,
-                             fuel, memory, stack, SQL bridge, and pearsonr/linregress helpers
-      chart.rs                ChartData/Series/ChartKind + validate() (flat/degenerate
-                             data refused before it reaches the UI)
+      pyexec.rs               Wasmi host for the embedded RustPython/WASM guest; fresh Store
+                             per call, Store-owned guest allocation lifetime, resumable
+                             fuel slices, cancellation, bounded output/memory/stack, SQL bridge, and
+                             pearsonr/linregress helpers
+      chart.rs                VisualizationSpec/Series/ChartKind + validate() (flat/degenerate
+                             data refused before it reaches the UI; `auto` resolves to a
+                             deterministic bar/line renderer from the query shape)
       verify.rs               ten deterministic post-answer checks against `&dyn
                              AnalyticsSource` (re-run cited SQL, catalog/column
                              sanity, text-aggregate and case-filter traps, a NULL
@@ -147,7 +152,10 @@ suffix); recorded in `fella.db` `sources`.
 - XLSX → `calamine` reads each sheet → inferred rows → `DataEngine::add_rows`.
 
 `describe` (the `inspect_table` tool): SQLite composes `count(*) / count(col) /
-count(DISTINCT col) / min / max` per column; DuckDB uses `SUMMARIZE`.
+count(DISTINCT col) / min / max` per column and adds a few frequent values for
+low-cardinality columns; DuckDB uses `SUMMARIZE`. The catalog carries a stable
+workspace revision and the time it was indexed so the UI and answer evidence can
+show which snapshot was used.
 
 **Documents** (`ingest/docs.rs`): `.pdf` / `.txt` / `.md` / `.log` are catalogued
 but not loaded as tables. There is no index and no embedding step: the agent
@@ -160,8 +168,17 @@ embed-and-cosine pipeline see `docs/DECISIONS.md`, 2026-08-29.)
 workspace backend itself and exposes only a bounded read-only `sql()` bridge to
 the embedded RustPython/WASM guest. The guest returns a Python list of
 dictionaries and carries no workspace path, filesystem, network, environment,
-or subprocess capability. It has no package installer or pandas dependency;
-`median`, `stdev`, `pearsonr`, and `linregress` are injected as small helpers.
+or subprocess capability. Each call gets a fresh Wasmi Store; dropping that
+Store releases the guest input, SQL response, interpreter heap, and Wasm memory
+together. Resumable fuel slices let Stop reach a pure-Python loop. It has
+no package installer or pandas dependency; `median`, `stdev`, `pearsonr`, and
+`linregress` are injected as small helpers.
+
+All generated calculations have explicit bounds: 64 KiB source and output,
+256 MiB guest memory, 2 MiB stack, 10,000 SQL rows, a 1 MiB SQL response, a
+60-second Python wall budget, and a 1 billion fuel budget. CSV/JSON ingestion
+also has a 256 MiB source retention cap. The release memory probe exercises
+these allocation and teardown paths repeatedly in an optimized build.
 
 ## AI layer
 
@@ -193,7 +210,8 @@ run(question):
     if not resp.tool_calls:
      return finish(resp.content)                  # verify + AnswerDone
     for call:
-      out = registry.run(call.name, args)          # built-in, then MCP; the only data access
+      out = registry.run_with_cancel(call.name, args, cancel)
+                                                   # built-in, then MCP; only data access
       evidence.push({ tool, args, note, sql?, rows, result_summary, output, ms, error })
       msgs.push(assistant tool_call); msgs.push(tool result)
   # out of steps: one last turn with no tools, telling the model why, for a hedged answer
@@ -246,11 +264,11 @@ enabled `mcp` pack (`mcp.rs`, held in a separate `Registry.mcp` list).
 |------|------|----------------------|
 | `list_files` | | workspace files: kind, row count / size, which table each maps to |
 | `inspect_table` | `name`, `rows=5` | per column: type, null %, distinct, min/max; plus the first `rows` rows (0-50). Merged `describe_schema` + `sample_rows` (2026-09-08) |
-| `run_sql` | `sql` | columns + rows (capped), row_count, ms. Read-only guard: single SELECT/WITH statement; rejects DDL/DML/`ATTACH`/`COPY`/`INSTALL`, `read_text`/`read_blob`/`glob`; a watchdog interrupts a runaway query (`FELLA_QUERY_TIMEOUT_SECS`, 15 s) |
+| `run_sql` | `sql` | columns + rows (capped), row_count, ms. Read-only guard: single SELECT/WITH statement; rejects DDL/DML/`ATTACH`/`COPY`/`INSTALL`, `read_text`/`read_blob`/`glob`; a watchdog interrupts a runaway query (`FELLA_QUERY_TIMEOUT_SECS`, 15 s), and Stop interrupts SQLite immediately |
 | `grep_files` | `pattern`, `max_hits=30` (max 100) | matching lines (file + line) from every catalogued document, case-insensitive regex. No index |
 | `read_file` | `name` or `names` | extracted text by catalogued name, capped 12k chars per document and 16k combined for a multi-file call |
 | `run_python` | `code` | stdout / stderr from the embedded RustPython/WASM guest. No filesystem, network, environment, or subprocess capability; bounded source/output/fuel/memory/stack, plus `sql(q)` → a list of dictionaries from bounded read-only host SQL. Built-in `median`, `stdev`, `pearsonr(x, y)`, and `linregress(x, y)` need no packages |
-| `make_chart` | `kind`, `labels`, `series` | a validated bar/line chart (`analytics::chart`) — refuses flat/degenerate data server-side rather than rendering a useless chart |
+| `make_chart` | `kind`, `sql`, `title?`, `unit?` | a validated structured visualization (`analytics::chart`) from a read-only query; `kind=auto` chooses a line for temporal labels or a bar for categories, and refuses flat/degenerate data server-side |
 
 Every tool call takes an optional plain-language `note` (shown in the evidence
 panel). Every call and result is captured as evidence whether or not the model
@@ -264,6 +282,7 @@ un-annotated one is offered but flagged.
 `set_api_key(provider, key)` / `logout(provider)` · `ask(conversation_id,
 question, channel)` streams `assistant_delta` / `tool_start` / `tool_end` /
 `notice` / `answer_done` · `cancel()` · `provider_health()` ·
+`set_window_appearance(dark)` ·
 `archive_conversation(id, body)` / `conversations_info()` · **packs**
 `packs_list` / `packs_add` / `packs_remove` / `packs_set_enabled` /
 `packs_install` / `packs_theme` · **connectors** `mcp_set_token` /
@@ -280,19 +299,24 @@ folder). Installed under `<app-data>/extensions/<id>/`; tracked in the
 `extensions` table. Browsed on an external website, installed by id
 (`/packs install`), hash-checked. Connectors use `rmcp` behind the `mcp`
 feature, connected lazily per `ask`, token in `auth.json`. The agent's tool set
-is unchanged by any pack. Full design: `docs/EXTENSIBILITY.md`.
+is unchanged by any pack. A pack's kind-specific disclosure is shown before
+enabling it; appearance mode stays outside the pack system. Full design:
+`docs/EXTENSIBILITY.md`.
 
 ## UI
 
-One window: an informative empty state, a scrolling **Transcript**, a bottom
-**Composer**, a one-line **StatusBar** (workspace · model · provider status ·
-last answer time). Plain-language and sans-serif; monospace only where data
-lines up (tables, SQL). Light/dark via `prefers-color-scheme`, plus optional
-`theme` packs (CSS-token overrides on `<html>`, `prefs.svelte.ts`). No routes,
-no sidebars the "data workspace" is the `/files` output. Assistant answers
-render as markdown (`marked`, raw HTML stripped); user/system lines stay plain
-text. The evidence block is collapsed by default. `Ctrl+K` opens a command
-palette; `↑` recalls input; `Esc` stops a run or collapses evidence.
+One window with a focused shell: **Ask** is the default conversation, **Search**
+is the Ctrl/Command+K palette, and **Packs**, **Sources**, **Analyses**, and
+**Context** are organized workspace panes. The bottom **Composer** carries the
+active model name and brand icon. Plain-language and sans-serif; monospace only
+where data lines up (tables, SQL). System/Light/Dark appearance is a local
+preference, while optional theme packs provide approved visual tokens.
+Assistant prose renders as markdown (`marked`, raw HTML stripped), while charts
+cross the boundary as typed visualization data and render through the native
+Svelte chart component; user/system lines stay plain text. A chart answer leads
+with the model's takeaway, places the visual below it, and keeps exact values in
+the chart card. The evidence block is collapsed by default. `↑` recalls input;
+`Esc` stops a run or collapses evidence.
 
 ## Build milestones
 

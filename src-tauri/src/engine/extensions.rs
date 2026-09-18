@@ -132,16 +132,18 @@ impl Manifest {
         }
         let ext_ok = match self.kind {
             PackKind::Skill => self.payload.ends_with(".md"),
-            PackKind::Theme | PackKind::Mcp | PackKind::Augment => {
-                self.payload.ends_with(".json")
-            }
+            PackKind::Theme | PackKind::Mcp | PackKind::Augment => self.payload.ends_with(".json"),
             PackKind::Unknown => true, // unreachable rejected above
         };
         if !ext_ok {
             return Err(EngineError::msg(format!(
                 "a {} pack's payload should be a {} file",
                 self.kind.as_str(),
-                if matches!(self.kind, PackKind::Skill) { ".md" } else { ".json" }
+                if matches!(self.kind, PackKind::Skill) {
+                    ".md"
+                } else {
+                    ".json"
+                }
             )));
         }
         Ok(())
@@ -273,18 +275,17 @@ fn write_pack(
 
 /// Add a pack from a local directory (or a path to its `fella-pack.json`).
 /// Side-loaded: recorded as `source = "local"` and left disabled.
-pub fn install_local(
-    data_dir: &Path,
-    conn: &rusqlite::Connection,
-    src: &Path,
-) -> EngineResult<()> {
+pub fn install_local(data_dir: &Path, conn: &rusqlite::Connection, src: &Path) -> EngineResult<()> {
     let src_dir = if src.file_name() == Some(std::ffi::OsStr::new("fella-pack.json")) {
         src.parent().unwrap_or(src).to_path_buf()
     } else {
         src.to_path_buf()
     };
     if !src_dir.is_dir() {
-        return Err(EngineError::msg(format!("not a folder: {}", src_dir.display())));
+        return Err(EngineError::msg(format!(
+            "not a folder: {}",
+            src_dir.display()
+        )));
     }
 
     let manifest_text = std::fs::read_to_string(src_dir.join("fella-pack.json"))
@@ -294,12 +295,23 @@ pub fn install_local(
     let payload_src = src_dir.join(&m.payload);
     let payload_bytes = std::fs::read(&payload_src).map_err(|e| {
         EngineError::io(
-            format!("read pack payload '{}' from {}", m.payload, src_dir.display()),
+            format!(
+                "read pack payload '{}' from {}",
+                m.payload,
+                src_dir.display()
+            ),
             e,
         )
     })?;
 
-    write_pack(data_dir, conn, &manifest_text, &payload_bytes, "local", None)
+    write_pack(
+        data_dir,
+        conn,
+        &manifest_text,
+        &payload_bytes,
+        "local",
+        None,
+    )
 }
 
 // --- marketplace install -------------------------------------------------
@@ -369,8 +381,9 @@ pub async fn download_pack(
     catalog_url: &str,
     id: &str,
 ) -> EngineResult<DownloadedPack> {
-    let catalog: MarketplaceCatalog = serde_json::from_slice(&fetch_bytes(http, catalog_url).await?)
-        .map_err(|e| EngineError::msg(format!("the marketplace catalog is not valid: {e}")))?;
+    let catalog: MarketplaceCatalog =
+        serde_json::from_slice(&fetch_bytes(http, catalog_url).await?)
+            .map_err(|e| EngineError::msg(format!("the marketplace catalog is not valid: {e}")))?;
     let entry = catalog
         .packs
         .into_iter()
@@ -406,7 +419,10 @@ pub async fn download_pack(
     let payload_bytes = files
         .get(&m.payload)
         .ok_or_else(|| {
-            EngineError::msg(format!("catalog entry is missing the payload file '{}'", m.payload))
+            EngineError::msg(format!(
+                "catalog entry is missing the payload file '{}'",
+                m.payload
+            ))
         })?
         .clone();
 
@@ -470,7 +486,8 @@ pub fn enabled_skill_texts(data_dir: &Path, conn: &rusqlite::Connection) -> Vec<
 }
 
 /// The CSS token map of the enabled `theme` pack, if any. Keys are filtered to
-/// `THEME_TOKEN_KEYS`; a passthrough `"appearance"` string is kept if present.
+/// `THEME_TOKEN_KEYS`; appearance is a local user preference and is never
+/// controlled by a pack.
 pub fn active_theme_tokens(
     data_dir: &Path,
     conn: &rusqlite::Connection,
@@ -483,7 +500,7 @@ pub fn active_theme_tokens(
     let obj = v.as_object()?;
     let mut out = BTreeMap::new();
     for (k, val) in obj {
-        let keep = k == "appearance" || THEME_TOKEN_KEYS.contains(&k.as_str());
+        let keep = THEME_TOKEN_KEYS.contains(&k.as_str());
         if let (true, Some(s)) = (keep, val.as_str()) {
             out.insert(k.clone(), s.to_string());
         }
@@ -625,7 +642,8 @@ impl AugmentConfig {
         let p = Path::new(&c.file);
         let path_ok = !c.file.is_empty()
             && !p.is_absolute()
-            && p.components().all(|comp| matches!(comp, Component::Normal(_)));
+            && p.components()
+                .all(|comp| matches!(comp, Component::Normal(_)));
         let ext_ok = c
             .file
             .rsplit('.')
@@ -673,7 +691,6 @@ pub fn augment_config(data_dir: &Path, id: &str) -> EngineResult<AugmentConfig> 
         .ok_or_else(|| EngineError::msg(format!("no augment pack '{id}' is installed")))?;
     AugmentConfig::parse(&raw)
 }
-
 
 fn now_secs() -> i64 {
     std::time::SystemTime::now()

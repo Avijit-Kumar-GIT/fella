@@ -76,8 +76,8 @@ pub fn run() {
             commands::list_providers,
             commands::set_api_key,
             commands::logout,
-            commands::ollama_health,
-            commands::probe_ollama,
+            commands::provider_health,
+            commands::set_window_appearance,
             commands::ask,
             commands::cancel,
             commands::forget_conversation,
@@ -128,7 +128,10 @@ fn migrate_from_woody(new_dir: &std::path::Path) {
     for entry in entries.flatten() {
         let from = entry.path();
         // Rename the settings db as it moves; leave everything else as-is.
-        let name = entry.file_name().to_string_lossy().replacen("woody.db", "fella.db", 1);
+        let name = entry
+            .file_name()
+            .to_string_lossy()
+            .replacen("woody.db", "fella.db", 1);
         let to = new_dir.join(name);
         if to.exists() {
             continue;

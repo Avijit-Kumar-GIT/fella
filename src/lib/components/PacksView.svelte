@@ -49,6 +49,21 @@
 		return pack.verified ? 'Reviewed pack' : pack.source === 'local' ? 'Added from this computer' : 'Unverified pack';
 	}
 
+	function disclosure(pack: InstalledPack): string {
+		switch (pack.kind) {
+			case 'theme':
+				return 'Visual only. Changes approved colors and spacing tokens.';
+			case 'skill':
+				return 'Prompt guidance. Adds context to the model instructions for each answer.';
+			case 'mcp':
+				return 'Remote connection. Its tools can read outside this folder; modifying tools are withheld.';
+			case 'augment':
+				return 'Workspace helper. Saves the file you edit into the mounted folder; the agent cannot write it.';
+			default:
+				return 'Review this pack before enabling its additional behavior.';
+		}
+	}
+
 	async function addPack(): Promise<void> {
 		if (!isTauri()) {
 			error = 'Adding packs is available in the desktop app.';
@@ -173,6 +188,10 @@
 										<span class:verified={pack.verified} class="trust">{pack.verified ? 'Reviewed' : 'Local'}</span>
 									</div>
 									<p>{pack.description || 'No description provided.'}</p>
+									<div class="pack-disclosure">
+										<Icon name="info" size={12} />
+										<span>{disclosure(pack)}</span>
+									</div>
 									<div class="pack-meta">
 										<code>{pack.id}</code><span>v{pack.version}</span><span>{sourceLabel(pack)}</span>
 										{#if pack.needs_token}<span class="needs">Needs connection</span>{/if}
@@ -403,6 +422,20 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+	}
+	.pack-disclosure {
+		display: flex;
+		align-items: flex-start;
+		gap: 5px;
+		margin-top: 5px;
+		color: var(--text-faint);
+		font-size: 10px;
+		line-height: 1.4;
+	}
+	.pack-disclosure :global(svg) {
+		flex: none;
+		margin-top: 1px;
+		color: var(--brand);
 	}
 	.pack-meta {
 		display: flex;

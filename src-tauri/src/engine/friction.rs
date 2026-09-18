@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 
 use serde_json::json;
 
-use crate::engine::evidence::{EvidenceItem, VerificationCheck};
 use crate::engine::analytics::verify;
+use crate::engine::evidence::{EvidenceItem, VerificationCheck};
 
 /// Keep the log from growing unbounded on a long-lived install, same cap
 /// style as `memory::record_episode`'s `.episodes.jsonl`.
@@ -19,7 +19,10 @@ const MAX_SIGNALS: usize = 500;
 /// Which trigger, if any, this answer hits. `checks` is the *final* set (post
 /// corrective re-ask); `evidence` this answer's tool calls. Pure so it's
 /// testable without touching disk.
-pub(crate) fn trigger(checks: &[VerificationCheck], evidence: &[EvidenceItem]) -> Option<&'static str> {
+pub(crate) fn trigger(
+    checks: &[VerificationCheck],
+    evidence: &[EvidenceItem],
+) -> Option<&'static str> {
     if verify::hard_fail(checks).is_some() {
         return Some("hard_fail_unresolved");
     }
@@ -46,8 +49,11 @@ pub(crate) fn record(data_dir: &Path, reason: &str, evidence: &[EvidenceItem]) {
         "steps": evidence.len(),
         "errors": evidence.iter().filter(|e| e.error.is_some()).count(),
     });
-    let mut lines: Vec<String> =
-        std::fs::read_to_string(&p).unwrap_or_default().lines().map(str::to_string).collect();
+    let mut lines: Vec<String> = std::fs::read_to_string(&p)
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_string)
+        .collect();
     lines.push(line.to_string());
     let n = lines.len();
     if n > MAX_SIGNALS {
@@ -80,15 +86,25 @@ mod tests {
     }
 
     fn ok(label: &str) -> VerificationCheck {
-        VerificationCheck { label: label.into(), ok: true, detail: None }
+        VerificationCheck {
+            label: label.into(),
+            ok: true,
+            detail: None,
+        }
     }
     fn warn(label: &str) -> VerificationCheck {
-        VerificationCheck { label: label.into(), ok: false, detail: None }
+        VerificationCheck {
+            label: label.into(),
+            ok: false,
+            detail: None,
+        }
     }
 
     #[test]
     fn hard_fail_wins_over_repeated_errors() {
-        let checks = vec![warn("a query behind this answer gives a different result now")];
+        let checks = vec![warn(
+            "a query behind this answer gives a different result now",
+        )];
         let evidence = vec![ev(Some("timeout")), ev(Some("timeout"))];
         assert_eq!(trigger(&checks, &evidence), Some("hard_fail_unresolved"));
     }
@@ -130,7 +146,12 @@ mod tests {
         assert_eq!(first["reason"], "hard_fail_unresolved");
         assert_eq!(first["steps"], 1);
         // no question/answer/tool/file content anywhere in the record
-        let mut keys: Vec<&str> = first.as_object().unwrap().keys().map(String::as_str).collect();
+        let mut keys: Vec<&str> = first
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
         keys.sort_unstable();
         assert_eq!(keys, vec!["at_ms", "errors", "reason", "steps"]);
 

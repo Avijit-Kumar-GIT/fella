@@ -10,12 +10,16 @@
 //! Windows. The sandbox is still defense in depth: the Wasmi/RustPython
 //! versions and the checked-in guest artifact are part of the trusted base.
 
-use std::sync::OnceLock;
-use std::time::Instant;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, OnceLock,
+};
+use std::time::{Duration, Instant};
 
 use serde_json::json;
 use wasmi::{
-    Caller, Config, Engine, Extern, Linker, Memory, Module, Store, StoreLimits, StoreLimitsBuilder,
+    Caller, CompilationMode, Config, Engine, Extern, Linker, Memory, Module, Store, StoreLimits,
+    StoreLimitsBuilder, TypedResumableCall,
 };
 
 use crate::engine::analytics::data::{self, PythonBridge, QueryOutcome};
@@ -25,6 +29,11 @@ use crate::engine::error::{EngineError, EngineResult};
 // Wasmi fuel metering is enabled. This is a portable execution budget, not a
 // wall clock; the SQL backend has its own query watchdog.
 const FUEL: u64 = 1_000_000_000;
+/// A resumable fuel slice bounds how long a pure-Python loop can ignore Stop.
+/// The value is large enough not to dominate normal analytics, while keeping
+/// cancellation responsive on slower desktop CPUs.
+const FUEL_SLICE: u64 = 20_000_000;
+const PYTHON_TIMEOUT_SECS: u64 = 60;
 const CODE_CAP: usize = 64 * 1024;
 const OUTPUT_CAP: usize = 64 * 1024;
 const SQL_QUERY_CAP: usize = 64 * 1024;
@@ -47,6 +56,11 @@ fn sandbox_engine() -> &'static Engine {
     ENGINE.get_or_init(|| {
         let mut config = Config::default();
         config.consume_fuel(true);
+        // Compile every guest function before execution starts. Wasmi's
+        // default lazy translation can otherwise spend the execution slice
+        // compiling a function discovered deep in RustPython, which makes a
+        // valid resume fail with an out-of-fuel error before user code runs.
+        config.compilation_mode(CompilationMode::Eager);
         config.set_max_stack_height(STACK_CAP_BYTES);
         Engine::new(&config)
     })
@@ -69,6 +83,11 @@ pub struct PyResult {
     pub stderr: String,
     pub exit_code: Option<i32>,
     pub timed_out: bool,
+    /// The caller set Stop while the guest was running.
+    pub cancelled: bool,
+    /// Current Wasm linear-memory size at the end of this disposable run.
+    /// Wasm memory only grows, so this is also the run's peak guest memory.
+    pub guest_memory_bytes: usize,
     pub ms: u64,
 }
 
@@ -77,10 +96,11 @@ struct HostState {
     stdout: CapturedOutput,
     stderr: CapturedOutput,
     limits: StoreLimits,
+    cancel: Option<Arc<AtomicBool>>,
 }
 
 impl HostState {
-    fn new(bridge: PythonBridge) -> Self {
+    fn new(bridge: PythonBridge, cancel: Option<Arc<AtomicBool>>) -> Self {
         Self {
             bridge,
             stdout: CapturedOutput::default(),
@@ -94,8 +114,13 @@ impl HostState {
                 .instances(2)
                 .tables(4)
                 .memories(1)
-                .trap_on_grow_failure(true)
+                // A memory.grow can legitimately run out of the current
+                // Wasmi fuel slice. Let that become a resumable fuel
+                // boundary instead of translating it into the generic
+                // GrowthOperationLimited trap.
+                .trap_on_grow_failure(false)
                 .build(),
+            cancel,
         }
     }
 }
@@ -130,8 +155,14 @@ impl CapturedOutput {
 }
 
 /// Run one snippet with a fresh Wasmi Store. A fresh store is what makes the
-/// guest's allocator and module state disposable between questions.
-pub fn run(code: &str, bridge: PythonBridge) -> EngineResult<PyResult> {
+/// guest's allocator and module state disposable between questions. The guest
+/// invocation is resumable, which lets us inspect cancellation and a wall-clock
+/// budget between fuel slices.
+pub fn run(
+    code: &str,
+    bridge: PythonBridge,
+    cancel: Option<Arc<AtomicBool>>,
+) -> EngineResult<PyResult> {
     let script = format!("{STATS_HELPERS}\n# ---- user code ----\n{code}\n");
     if script.len() > CODE_CAP {
         return Err(EngineError::msg(format!(
@@ -144,7 +175,7 @@ pub fn run(code: &str, bridge: PythonBridge) -> EngineResult<PyResult> {
     let engine = sandbox_engine();
     let module = sandbox_module()?;
 
-    let mut store = Store::new(engine, HostState::new(bridge));
+    let mut store = Store::new(engine, HostState::new(bridge, cancel.clone()));
     store.limiter(|state| &mut state.limits);
     store
         .set_fuel(FUEL)
@@ -247,7 +278,11 @@ pub fn run(code: &str, bridge: PythonBridge) -> EngineResult<PyResult> {
                     }
                 };
 
-                let response = match query_bridge(&caller.data().bridge, query) {
+                let response = match query_bridge(
+                    &caller.data().bridge,
+                    query,
+                    caller.data().cancel.clone(),
+                ) {
                     Ok(result) => serde_json::to_vec(&result).unwrap_or_default(),
                     Err(error) => serde_json::to_vec(&json!({ "error": error.to_string() }))
                         .unwrap_or_default(),
@@ -282,7 +317,6 @@ pub fn run(code: &str, bridge: PythonBridge) -> EngineResult<PyResult> {
     let run_fn = instance
         .get_typed_func::<(i32, i32), i32>(&store, "run")
         .map_err(|e| EngineError::msg(format!("embedded Python sandbox has no runner: {e}")))?;
-
     let code_ptr = alloc
         .call(&mut store, script.len() as i32)
         .map_err(|e| EngineError::msg(format!("allocate Python input: {e}")))?;
@@ -295,40 +329,96 @@ pub fn run(code: &str, bridge: PythonBridge) -> EngineResult<PyResult> {
         .write(&mut store, code_ptr, script.as_bytes())
         .map_err(|e| EngineError::msg(format!("write Python input: {e}")))?;
 
-    let wasm_result = run_fn.call(&mut store, (code_ptr as i32, code_len as i32));
+    // Instantiation uses the full setup budget. Reset the store to a bounded
+    // execution slice only after the interpreter has been created.
+    store
+        .set_fuel(FUEL_SLICE.min(FUEL))
+        .map_err(|e| EngineError::msg(format!("configure Python execution slice: {e}")))?;
+    let mut fuel_left = FUEL.saturating_sub(FUEL_SLICE.min(FUEL));
+    let deadline = Instant::now()
+        + Duration::from_secs(crate::engine::env::positive(
+            "FELLA_PYTHON_TIMEOUT_SECS",
+            PYTHON_TIMEOUT_SECS,
+        ));
+    let mut invocation = run_fn
+        .call_resumable(&mut store, (code_ptr as i32, code_len as i32))
+        .map_err(|e| EngineError::msg(format!("run embedded Python sandbox: {e}")))?;
+    let mut cancelled = false;
+    let mut timed_out = false;
+    let mut host_error: Option<String> = None;
+    let exit_code = loop {
+        match invocation {
+            TypedResumableCall::Finished(code) => break Some(code),
+            TypedResumableCall::HostTrap(trap) => {
+                host_error = Some(trap.host_error().to_string());
+                break None;
+            }
+            TypedResumableCall::OutOfFuel(next) => {
+                if cancel
+                    .as_ref()
+                    .is_some_and(|flag| flag.load(Ordering::Relaxed))
+                {
+                    cancelled = true;
+                    break None;
+                }
+                if Instant::now() >= deadline {
+                    timed_out = true;
+                    break None;
+                }
+                let slice = fuel_left.min(FUEL_SLICE);
+                if slice == 0 {
+                    timed_out = true;
+                    break None;
+                }
+                fuel_left -= slice;
+                store
+                    .set_fuel(slice)
+                    .map_err(|e| EngineError::msg(format!("refill Python sandbox fuel: {e}")))?;
+                invocation = next.resume(&mut store).map_err(|e| {
+                    EngineError::msg(format!("resume embedded Python sandbox: {e}"))
+                })?;
+            }
+        }
+    };
+    // Dropping the Store releases the guest input buffer and the remaining
+    // RustPython heap in one cleanup boundary, including interrupted runs.
     let elapsed_ms = started.elapsed().as_millis() as u64;
+    let guest_memory_bytes = memory.data_size(&store);
     let host = store.into_data();
     let (stdout, stderr) = (host.stdout.into_text(), host.stderr.into_text());
 
-    match wasm_result {
-        Ok(exit_code) => Ok(PyResult {
+    match (exit_code, cancelled, timed_out, host_error) {
+        (Some(exit_code), false, false, None) => Ok(PyResult {
             stdout,
             stderr,
             exit_code: Some(exit_code),
             timed_out: false,
+            cancelled: false,
+            guest_memory_bytes,
             ms: elapsed_ms,
         }),
-        Err(error) => {
-            let error_text = error.to_string();
-            let out_of_fuel = error_text.to_ascii_lowercase().contains("fuel");
+        (exit_code, cancelled, timed_out, host_error) => {
             let mut stderr = stderr;
             if !stderr.is_empty() {
                 stderr.push('\n');
             }
-            stderr.push_str(if out_of_fuel {
-                "Python stopped by the local sandbox fuel limit"
+            if cancelled {
+                stderr.push_str("Python stopped by you");
+            } else if timed_out {
+                stderr.push_str("Python stopped by the local sandbox execution limit");
+            } else if let Some(error) = host_error {
+                stderr.push_str("Python stopped inside the local sandbox: ");
+                stderr.push_str(&error);
             } else {
-                "Python stopped inside the local sandbox"
-            });
-            if !out_of_fuel {
-                stderr.push_str(": ");
-                stderr.push_str(&error_text);
+                stderr.push_str("Python stopped inside the local sandbox");
             }
             Ok(PyResult {
                 stdout,
                 stderr,
-                exit_code: None,
-                timed_out: out_of_fuel,
+                exit_code,
+                timed_out,
+                cancelled,
+                guest_memory_bytes,
                 ms: elapsed_ms,
             })
         }
@@ -358,10 +448,19 @@ fn write_json_error(
     response.len() as i32
 }
 
-fn query_bridge(bridge: &PythonBridge, sql: &str) -> EngineResult<QueryOutcome> {
+fn query_bridge(
+    bridge: &PythonBridge,
+    sql: &str,
+    cancel: Option<Arc<AtomicBool>>,
+) -> EngineResult<QueryOutcome> {
     data::ensure_read_only(sql)?;
     match bridge {
-        PythonBridge::SqliteFile(path) => data::sqlite::query_read_only(path, sql, SQL_ROW_CAP),
+        PythonBridge::SqliteFile(path) => match cancel {
+            Some(cancel) => {
+                data::sqlite::query_read_only_cancellable(path, sql, SQL_ROW_CAP, cancel)
+            }
+            None => data::sqlite::query_read_only(path, sql, SQL_ROW_CAP),
+        },
         #[cfg(feature = "duckdb")]
         PythonBridge::DuckReaders(readers) => {
             data::duck::query_read_only(readers, sql, SQL_ROW_CAP)

@@ -29,7 +29,8 @@ gets held to before it counts as documented:
 - SQL execution over ingested files (SQLite default, DuckDB opt-in)
 - Deterministic verification (re-run cited queries, flag untraced figures)
 - Basic stats only: median, stdev, correlation, linear regression — stdlib, zero new deps
-- Charts: bar/line, colored, validated against flat/degenerate data
+- Charts: typed bar/line visualizations from read-only SQL, with deterministic
+  `auto` selection, theme-aware rendering, and validation against flat/degenerate data
 - `depth_rule`: decompose a change/trend/correlation question before answering
 - `aside_rule`: one brief, notable aside on a plain lookup (a category
   that's most of its total, exactly zero, a clear outlier), only when a

@@ -11,7 +11,7 @@ import type {
 	Catalog,
 	ConversationSummary,
 	InstalledPack,
-	OllamaHealth,
+	ProviderHealth,
 	ProviderInfo,
 	QueryResult,
 	Settings,
@@ -90,9 +90,8 @@ export const ipc = {
 	logout: (provider: string, forget = false) =>
 		invoke<Settings>('logout', { provider, forget }),
 
-	ollamaHealth: () => invoke<OllamaHealth>('ollama_health'),
-	/** Is a local Ollama running, regardless of the configured provider? */
-	probeOllama: () => invoke<OllamaHealth>('probe_ollama'),
+	providerHealth: () => invoke<ProviderHealth>('provider_health'),
+	setWindowAppearance: (dark: boolean) => invoke<void>('set_window_appearance', { dark }),
 	cancel: (conversationId: string) => invoke<void>('cancel', { conversationId }),
 	forgetConversation: (conversationId: string) =>
 		invoke<void>('forget_conversation', { conversationId }),

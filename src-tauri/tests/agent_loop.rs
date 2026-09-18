@@ -91,7 +91,9 @@ async fn agent_calls_a_tool_then_answers() {
                         "arguments": "{\"sql\":\"SELECT sum(amount) AS total FROM sales\"}" } }
                 ]
         })),
-        openai_response(serde_json::json!({ "role": "assistant", "content": "Total sales were 450." })),
+        openai_response(
+            serde_json::json!({ "role": "assistant", "content": "Total sales were 450." }),
+        ),
     ]);
 
     let engine = EngineState::new(&data).unwrap();
@@ -164,6 +166,77 @@ async fn agent_calls_a_tool_then_answers() {
     assert!(kinds.contains(&"tool_start"));
     assert!(kinds.contains(&"tool_end"));
     assert_eq!(kinds.last(), Some(&"answer_done"));
+
+    let _ = fs::remove_dir_all(&ws);
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[tokio::test]
+async fn agent_calls_make_chart_then_answers_with_verified_visual_evidence() {
+    let ws = scratch("chart-agent-ws");
+    let data = scratch("chart-agent-data");
+    fs::write(
+        ws.join("sales.csv"),
+        "month,amount\n2024-01,100\n2024-02,150\n2024-03,200\n",
+    )
+    .unwrap();
+
+    let (url, server) = fake_openai(vec![
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{
+                "id": "chart_call_1",
+                "type": "function",
+                "function": {
+                    "name": "make_chart",
+                    "arguments": "{\"kind\":\"auto\",\"title\":\"Sales over time\",\"sql\":\"SELECT month, amount FROM sales ORDER BY month\"}"
+                }
+            }]
+        })),
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "Sales rose steadily from January through March."
+        })),
+    ]);
+
+    let engine = EngineState::new(&data).unwrap();
+    engine
+        .save_settings(
+            serde_json::json!({ "provider": "custom", "base_url": url, "model": "test" })
+                .as_object()
+                .unwrap(),
+        )
+        .unwrap();
+    engine.set_api_key("custom", "sk-test").unwrap();
+    engine.open_workspace(&ws).unwrap();
+
+    let answer = engine
+        .ask("chart-c1", "Show sales over time.", None, |_| {})
+        .await
+        .unwrap();
+
+    server.join().unwrap();
+
+    assert!(answer.text.contains("rose"), "answer: {}", answer.text);
+    assert_eq!(answer.evidence.len(), 1);
+    let evidence = &answer.evidence[0];
+    assert_eq!(evidence.tool, "make_chart");
+    assert_eq!(evidence.row_count, Some(3));
+    assert!(evidence.error.is_none());
+    let chart = evidence.chart.as_ref().expect("chart evidence");
+    assert_eq!(
+        chart.kind,
+        fella_lib::engine::analytics::chart::ChartKind::Line
+    );
+    assert_eq!(chart.labels, vec!["2024-01", "2024-02", "2024-03"]);
+    assert_eq!(chart.series[0].values, vec![100.0, 150.0, 200.0]);
+    assert_eq!(answer.status, VerificationStatus::Verified);
+    assert!(
+        answer.verification.iter().all(|check| check.ok),
+        "{:?}",
+        answer.verification
+    );
 
     let _ = fs::remove_dir_all(&ws);
     let _ = fs::remove_dir_all(&data);

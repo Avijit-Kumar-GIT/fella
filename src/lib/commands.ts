@@ -8,7 +8,7 @@ import type {
 	ContextReference,
 	InstalledPack,
 	Message,
-	OllamaHealth,
+	ProviderHealth,
 	ProviderInfo
 } from './types';
 
@@ -42,9 +42,9 @@ showing the exact steps it took. You never need these commands, but here they ar
   /retry           ask the last question again
   /help            this list
 
-keys  Enter send · Shift+Enter new line · ↑ last input · Ctrl+K commands
-      Ctrl+T new tab · Ctrl+W close tab · Ctrl+1…9 switch tab
-      Ctrl+L clear · Esc stop a run / hide details`;
+keys  Enter send · Shift+Enter new line · Ctrl/Cmd+K commands
+      Ctrl/Cmd+T new tab · Ctrl/Cmd+W close tab · Ctrl/Cmd+1…9 switch tab
+      Ctrl/Cmd+L clear · Esc stop a run / hide details`;
 
 export const SLASH_COMMANDS = [
 	'/open',
@@ -399,10 +399,9 @@ async function loadProviders(): Promise<ProviderInfo[]> {
 
 /** Nudge the health indicator to re-probe after an auth change. Returns the
  *  probe result so the caller can react to a key the provider won't take. */
-async function refreshHealthSoon(): Promise<OllamaHealth | null> {
+async function refreshHealthSoon(): Promise<ProviderHealth | null> {
 	try {
-		session.health = await ipc.ollamaHealth();
-		await reconcileModel();
+		session.health = await ipc.providerHealth();
 		return session.health;
 	} catch {
 		/* ignore the status bar will re-probe on its own timer */
@@ -410,42 +409,10 @@ async function refreshHealthSoon(): Promise<OllamaHealth | null> {
 	}
 }
 
-/** When connected to Ollama, make sure the configured model is one that's
- *  actually pulled Fella's default `llama3.1` often isn't (people have
- *  `llama3.1:8b`). Silently switches to an available chat model; the status
- *  bar shows the result. Ollama only gateways expose hundreds of models and
- *  must be chosen deliberately. Never posts to the transcript, so it doesn't
- *  push the welcome screen away before the user has asked anything. */
-export async function reconcileModel(): Promise<void> {
-	const s = session.settings;
-	const h = session.health;
-	if (!s || s.provider !== 'ollama' || !h?.reachable) return;
-
-	const models = h.models ?? [];
-	if (!models.length) return;
-	const chat = models.filter((m) => !/embed/i.test(m));
-	if (!chat.length) return; // only embedding models pulled UI nudges a pull
-
-	// Keep the saved default valid (what a fresh tab inherits).
-	if (!s.model || !models.includes(s.model)) {
-		try {
-			session.settings = await ipc.setSettings({ model: chat[0] });
-		} catch {
-			/* leave it the empty-screen prompt still guides a manual pick */
-		}
-	}
-	// And each conversation tab that has explicitly picked a now-unavailable
-	// model. A tab with no pick uses the (just-reconciled) default, so leave
-	// those alone; augment tabs have no model.
-	for (const t of session.tabs) {
-		if (t.kind === 'chat' && t.model && !models.includes(t.model)) t.model = chat[0];
-	}
-}
-
 /** After a key is saved, say so if the provider wouldn't take it. The key stays
  *  saved either way a probe can fail for offline or transient reasons, and we
  *  don't want to block someone who knows their key is fine. */
-function warnIfKeyUnverified(display: string, health: OllamaHealth | null): void {
+function warnIfKeyUnverified(display: string, health: ProviderHealth | null): void {
 	if (!health || health.reachable) return;
 	session.addSystem(
 		health.rejected
@@ -661,13 +628,6 @@ async function runCommand(text: string): Promise<void> {
 				session.addSystem(`unknown provider: ${name}\n\n${renderProviders(list)}`);
 				return;
 			}
-			if (p.auth === 'none') {
-				session.addSystem(
-					`${p.display} runs on your computer and needs no sign-in. Start it, then pick it with /model.`
-				);
-				return;
-			}
-
 			const saidKey = words[1]?.toLowerCase() === 'key';
 			const inlineKey = saidKey ? words.slice(2).join(' ').trim() : '';
 			if (inlineKey) {
@@ -739,7 +699,7 @@ async function runCommand(text: string): Promise<void> {
 							session.settings = await ipc.logout(named, forget);
 							session.providers = await ipc.listProviders();
 							session.addSystem(
-								`Stopped using ${named}. Fella is back on the local default.` + kept(named)
+								`Stopped using ${named}. Run /login to choose another model service.` + kept(named)
 							);
 							await refreshHealthSoon();
 						} catch (e) {
@@ -748,10 +708,6 @@ async function runCommand(text: string): Promise<void> {
 						return;
 					}
 					session.addSystem(`unknown provider: ${named}\n\n${renderProviders(list)}`);
-					return;
-				}
-				if (target.auth === 'none') {
-					session.addSystem(`${target.display} runs on your computer, so there's no sign-in to undo.`);
 					return;
 				}
 			} else if (active && active.auth !== 'none') {
@@ -765,10 +721,7 @@ async function runCommand(text: string): Promise<void> {
 				);
 				return;
 			} else {
-				const ollama = list.find((x) => x.id === 'ollama')?.display ?? 'Ollama';
-				session.addSystem(
-					`You're not connected to any model service. Fella is on ${ollama}, which needs no sign-in.`
-				);
+				session.addSystem("You're not connected to a model service. Use /login to connect one.");
 				return;
 			}
 
@@ -776,19 +729,12 @@ async function runCommand(text: string): Promise<void> {
 				const hadKey = target.authed;
 				session.settings = await ipc.logout(target.id, forget);
 				session.providers = await ipc.listProviders();
-				const resetToOllama = session.settings?.provider === 'ollama' && target.id !== 'ollama';
-				const ollama = session.providers.find((x) => x.id === 'ollama')?.display ?? 'Ollama';
 				const head = !hadKey
 					? `${target.display} had no saved key.`
 					: forget
 						? `Disconnected from ${target.display} and deleted its saved key.`
 						: `Stopped using ${target.display}.${kept(target.id)}`;
-				session.addSystem(
-					head +
-						(resetToOllama
-							? ` Fella is back on ${ollama}; start it, or /login to another service.`
-							: '')
-				);
+				session.addSystem(head + ' Use /login to choose another connected service.');
 				await refreshHealthSoon();
 			} catch (e) {
 				session.addSystem(`error: ${errMsg(e)}`);
@@ -853,14 +799,10 @@ async function runCommand(text: string): Promise<void> {
 				session.addSystem(
 					`model service:   ${prov?.display ?? s.provider}\n` +
 						`address:         ${s.base_url}\n` +
-						`model:           ${tabModel}   (this tab)\n` +
-						`connected:       ${s.has_credential ? 'yes' : 'no'}` +
-						renderModelChoices(session.health?.models ?? [], tabModel) +
-						perTab +
-						(s.provider === 'ollama'
-							? '\n\nOnly downloaded models show above. Browse more at ollama.com/library, ' +
-								'then run  ollama pull <name>  (or add Ollama Cloud with /login ollama-cloud).'
-							: '')
+					`model:           ${tabModel}   (this tab)\n` +
+					`connected:       ${s.has_credential ? 'yes' : 'no'}` +
+					renderModelChoices(session.health?.models ?? [], tabModel) +
+					perTab
 				);
 			} catch (e) {
 				session.addSystem(`error: ${errMsg(e)}`);
@@ -1284,8 +1226,7 @@ function renderConnectors(list: InstalledPack[]): string {
 function renderProviders(list: ProviderInfo[]): string {
 	const rows = list.map((p) => {
 		const bullet = p.current ? '●' : ' ';
-		const status =
-			p.auth === 'none' ? 'on your computer' : p.authed ? 'connected' : 'not connected';
+		const status = p.authed ? 'connected' : 'not connected';
 		return `${bullet} ${p.id.padEnd(11)} ${p.display.padEnd(26)} ${status}${p.current ? '   (current)' : ''}`;
 	});
 	return [

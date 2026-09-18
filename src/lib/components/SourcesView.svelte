@@ -82,6 +82,15 @@
 		const label = kind.toLowerCase();
 		return label.charAt(0).toUpperCase() + label.slice(1);
 	}
+
+	function formatIndexed(ms: number | undefined): string {
+		if (!ms) return 'Not indexed yet';
+		return new Date(ms).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+	}
+
+	function shortRevision(revision: string | undefined): string {
+		return revision ? revision.slice(0, 8) : '—';
+	}
 </script>
 
 <section class="sources-page" aria-labelledby="sources-title">
@@ -115,6 +124,12 @@
 			<div class="summary-item"><strong>{tabularCount}</strong><span>data files</span></div>
 			<div class="summary-item"><strong>{documentCount}</strong><span>documents</span></div>
 			{#if skipped.length}<div class="summary-item warn"><strong>{skipped.length}</strong><span>skipped</span></div>{/if}
+		</div>
+		<div class="freshness" title={session.catalog.revision ?? undefined}>
+			<Icon name="check" size={13} />
+			<span>Indexed {formatIndexed(session.catalog.indexed_at_ms)}</span>
+			<span class="dot">·</span>
+			<span>Snapshot <code>{shortRevision(session.catalog.revision)}</code></span>
 		</div>
 
 		<div class="toolbar">
@@ -173,6 +188,7 @@
 						<div><span>Rows</span><strong>{formatCount(selected.row_count)}</strong></div>
 						<div><span>Columns</span><strong>{formatCount(selected.columns?.length)}</strong></div>
 					</div>
+					<p class="source-freshness">File updated {selected.mtime ? new Date(selected.mtime * 1000).toLocaleString([], { dateStyle: 'medium' }) : 'unknown'}</p>
 
 					{#if selected.synopsis}
 						<p class="synopsis">{selected.synopsis}</p>
@@ -188,8 +204,13 @@
 							<div class="subhead"><span>Columns</span><span>{selected.columns.length}</span></div>
 							{#each selected.columns.slice(0, 16) as column (column.name)}
 								<div class="column-row">
-									<code>{column.name}</code>
-									<span>{column.type}</span>
+									<div class="column-main"><code>{column.name}</code><span>{column.type}</span></div>
+									{#if column.distinct != null}<small>{formatCount(column.distinct)} values</small>{/if}
+									{#if column.common_values?.length}
+										<div class="common-values" title="Frequent values from the latest index">
+											<span>Common</span>{column.common_values.slice(0, 4).join(' · ')}
+										</div>
+									{/if}
 								</div>
 							{/each}
 							{#if selected.columns.length > 16}<p class="more">+ {selected.columns.length - 16} more columns</p>{/if}
@@ -290,6 +311,25 @@
 	}
 	.summary-item.warn strong {
 		color: var(--warn);
+	}
+	.freshness {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		margin: -12px 0 var(--space-4);
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+	}
+	.freshness :global(svg) {
+		color: var(--ok);
+		flex: none;
+	}
+	.freshness .dot {
+		color: var(--border-strong);
+	}
+	.freshness code {
+		font-family: var(--mono);
+		font-size: 10px;
 	}
 	.toolbar {
 		display: flex;
@@ -466,6 +506,11 @@
 		font-size: var(--fs-sm);
 		font-weight: 560;
 	}
+	.source-freshness {
+		margin: -8px 0 var(--space-4);
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+	}
 	.synopsis {
 		margin: 0 0 var(--space-4);
 		color: var(--text-dim);
@@ -505,10 +550,26 @@
 	}
 	.column-row {
 		display: flex;
+		flex-direction: column;
+		align-items: stretch;
 		justify-content: space-between;
-		gap: var(--space-3);
+		gap: 3px;
 		padding: 4px 0;
 		font-size: var(--fs-sm);
+	}
+	.column-main {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: var(--space-3);
+		min-width: 0;
+	}
+	.column-main span {
+		font-family: var(--sans);
+	}
+	.column-row > small {
+		color: var(--text-faint);
+		font-size: 10px;
 	}
 	.column-row code {
 		min-width: 0;
@@ -521,6 +582,20 @@
 		color: var(--text-faint);
 		font-family: var(--mono);
 		font-size: var(--fs-xs);
+	}
+	.common-values {
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		color: var(--text-dim);
+		font-size: 10px;
+	}
+	.common-values span {
+		margin-right: 6px;
+		color: var(--text-faint);
+		font-family: var(--sans);
+		font-weight: 600;
 	}
 	.more {
 		margin: var(--space-2) 0 0;

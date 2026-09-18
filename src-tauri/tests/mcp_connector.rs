@@ -18,7 +18,10 @@ use fella_lib::engine::{AskEvent, EngineState};
 fn scratch(tag: &str) -> PathBuf {
     // Point-at-a-mock tests: the warm-up ping would steal a scripted response.
     std::env::set_var("FELLA_SKIP_MODEL_WARMUP", "1");
-    let n = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let n = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
     let p = std::env::temp_dir().join(format!("fella-{tag}-{n}"));
     fs::create_dir_all(&p).unwrap();
     p
@@ -76,7 +79,9 @@ fn stub_mcp() -> String {
 
             if id.is_none() {
                 // a notification (e.g. notifications/initialized)
-                let _ = stream.write_all(b"HTTP/1.1 202 Accepted\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                let _ = stream.write_all(
+                    b"HTTP/1.1 202 Accepted\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                );
                 continue;
             }
             let result = match method {
@@ -172,12 +177,14 @@ fn rejects_a_non_http_connector() {
         r#"{"transport":"stdio","url":"x","auth":{"type":"none"}}"#,
     );
     let engine = EngineState::new(&data).unwrap();
-    assert!(engine.packs_add(&src.join("shell")).is_err() || {
-        // parse happens on add; if add succeeded the manifest was fine but the
-        // connector.json is not surfaced until enable/use. Enabling then asking
-        // must not blow up, and the connector is simply skipped.
-        engine.packs_set_enabled("shell", true).is_ok()
-    });
+    assert!(
+        engine.packs_add(&src.join("shell")).is_err() || {
+            // parse happens on add; if add succeeded the manifest was fine but the
+            // connector.json is not surfaced until enable/use. Enabling then asking
+            // must not blow up, and the connector is simply skipped.
+            engine.packs_set_enabled("shell", true).is_ok()
+        }
+    );
     let _ = fs::remove_dir_all(&src);
     let _ = fs::remove_dir_all(&data);
 }
@@ -230,7 +237,9 @@ async fn connector_tool_runs_through_the_agent_and_non_read_only_is_withheld() {
     let events: Arc<Mutex<Vec<AskEvent>>> = Arc::new(Mutex::new(Vec::new()));
     let sink = events.clone();
     let answer = engine
-        .ask("c1", "ask the connector to echo hi", None, move |ev| sink.lock().unwrap().push(ev))
+        .ask("c1", "ask the connector to echo hi", None, move |ev| {
+            sink.lock().unwrap().push(ev)
+        })
         .await
         .unwrap();
     server.join().unwrap();
@@ -242,7 +251,10 @@ async fn connector_tool_runs_through_the_agent_and_non_read_only_is_withheld() {
         .expect("the namespaced connector tool ran");
     assert!(call.error.is_none());
     assert!(
-        call.output.as_deref().unwrap_or_default().contains("echoed: hi"),
+        call.output
+            .as_deref()
+            .unwrap_or_default()
+            .contains("echoed: hi"),
         "output was {:?}",
         call.output
     );

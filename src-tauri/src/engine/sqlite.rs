@@ -108,7 +108,10 @@ pub fn load_settings(conn: &Connection) -> Settings {
             .or_else(|| p.map(|p| p.base_url.to_string()).filter(|s| !s.is_empty()))
             .unwrap_or_default(),
         model: get(conn, "model")
-            .or_else(|| p.map(|p| p.default_model.to_string()).filter(|s| !s.is_empty()))
+            .or_else(|| {
+                p.map(|p| p.default_model.to_string())
+                    .filter(|s| !s.is_empty())
+            })
             .unwrap_or_default(),
         embed_model: get(conn, "embed_model").unwrap_or_else(|| {
             p.map(|p| p.default_embed_model)
@@ -261,7 +264,9 @@ mod tests {
         // model falls back to the provider default when unset
         assert_eq!(
             s.model,
-            crate::engine::provider::get("openai").unwrap().default_model
+            crate::engine::provider::get("openai")
+                .unwrap()
+                .default_model
         );
     }
 

@@ -102,6 +102,7 @@ class Prefs {
 		root.dataset.appearance = this.appearance;
 		root.dataset.colorMode = this.isDark ? 'dark' : 'light';
 		root.style.colorScheme = this.isDark ? 'dark' : 'light';
+		if (isTauri()) void ipc.setWindowAppearance(this.isDark).catch(() => {});
 		for (const k of THEME_TOKEN_KEYS) root.style.removeProperty(k);
 		const t = this.themeTokens;
 		if (!t) return;

@@ -1,0 +1,13 @@
+date,category,amount,merchant
+2024-01-03,Rent,1200,Landlord
+2024-01-05,Groceries,80,Market
+2024-01-12,Dining,40,Cafe
+2024-01-20,Transport,20,Metro
+2024-02-01,Rent,1200,Landlord
+2024-02-08,Groceries,120,Market
+2024-02-12,Dining,60,Cafe
+2024-02-22,Transport,30,Metro
+2024-03-01,Rent,1200,Landlord
+2024-03-10,Groceries,150,Market
+2024-03-18,Dining,80,Cafe
+2024-03-23,Transport,10,Metro

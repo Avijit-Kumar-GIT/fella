@@ -9,7 +9,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use fella_lib::engine::EngineState;
 
 fn scratch(tag: &str) -> PathBuf {
-    let n = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let n = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
     let p = std::env::temp_dir().join(format!("fella-{tag}-{n}"));
     fs::create_dir_all(&p).unwrap();
     p
@@ -68,14 +71,19 @@ fn local_skill_install_enable_disable_roundtrip() {
 
     engine.packs_set_enabled("finance", true).unwrap();
     let ctx = engine.user_context();
-    assert!(ctx.iter().any(|c| c.contains("MERCH means the merchant column")));
+    assert!(ctx
+        .iter()
+        .any(|c| c.contains("MERCH means the merchant column")));
 
     engine.packs_set_enabled("finance", false).unwrap();
     assert!(engine.user_context().is_empty());
 
     engine.packs_remove("finance").unwrap();
     assert!(engine.packs_list().is_empty());
-    assert!(!data.join("extensions/finance").exists(), "pack dir is removed");
+    assert!(
+        !data.join("extensions/finance").exists(),
+        "pack dir is removed"
+    );
 
     let _ = fs::remove_dir_all(&src);
     let _ = fs::remove_dir_all(&data);
@@ -136,7 +144,10 @@ fn only_one_theme_is_active_and_its_tokens_are_filtered() {
 
     engine.packs_add(&src.join("nord")).unwrap();
     engine.packs_add(&src.join("solar")).unwrap();
-    assert!(engine.packs_theme().is_none(), "nothing active until enabled");
+    assert!(
+        engine.packs_theme().is_none(),
+        "nothing active until enabled"
+    );
 
     engine.packs_set_enabled("nord", true).unwrap();
     engine.packs_set_enabled("solar", true).unwrap();
@@ -147,10 +158,18 @@ fn only_one_theme_is_active_and_its_tokens_are_filtered() {
         .filter(|p| p.enabled)
         .map(|p| p.id)
         .collect();
-    assert_eq!(enabled, vec!["solar"], "enabling one theme disables the other");
+    assert_eq!(
+        enabled,
+        vec!["solar"],
+        "enabling one theme disables the other"
+    );
 
     let tokens = engine.packs_theme().unwrap();
     assert_eq!(tokens.get("--bg").map(String::as_str), Some("#002b36"));
+    assert!(
+        !tokens.contains_key("appearance"),
+        "packs cannot override appearance"
+    );
     assert!(!tokens.contains_key("--bogus"), "unknown tokens dropped");
 
     let _ = fs::remove_dir_all(&src);
@@ -173,7 +192,10 @@ fn augment_pack_install_and_config() {
     let list = engine.packs_add(&src.join("notes")).unwrap();
     let p = list.iter().find(|p| p.id == "notes").unwrap();
     assert_eq!(p.kind, "augment");
-    let a = p.augment.as_ref().expect("augment config populated on the row");
+    let a = p
+        .augment
+        .as_ref()
+        .expect("augment config populated on the row");
     assert_eq!(a.command, "note");
     assert_eq!(a.file, "notes.md");
     assert_eq!(a.capability, "buffer");
@@ -200,9 +222,18 @@ fn augment_pack_install_and_config() {
 
     // malformed augment.json -> rejected at install
     for (id, payload) in [
-        ("bad1", r#"{"capability":"buffer","command":"/note","file":"notes.md"}"#),
-        ("bad2", r#"{"capability":"buffer","command":"note","file":"notes.exe"}"#),
-        ("bad3", r#"{"capability":"buffer","command":"note","file":"../out.md"}"#),
+        (
+            "bad1",
+            r#"{"capability":"buffer","command":"/note","file":"notes.md"}"#,
+        ),
+        (
+            "bad2",
+            r#"{"capability":"buffer","command":"note","file":"notes.exe"}"#,
+        ),
+        (
+            "bad3",
+            r#"{"capability":"buffer","command":"note","file":"../out.md"}"#,
+        ),
     ] {
         write_pack(&src, id, &augment_manifest(id), "augment.json", payload);
         assert!(
@@ -235,14 +266,22 @@ fn installing_a_pack_touches_only_the_extensions_table() {
     engine.packs_add(&src.join("notes")).unwrap();
     engine.packs_set_enabled("notes", true).unwrap();
 
-    assert_eq!(before, format!("{:?}", engine.settings()), "settings unchanged");
+    assert_eq!(
+        before,
+        format!("{:?}", engine.settings()),
+        "settings unchanged"
+    );
     // Install didn't conjure a workspace no folder is open.
     assert!(engine.augment_save("buffer", "notes.md", "x").is_err());
     // Enabling an augment adds no system prompt context (that's skills only).
     assert!(engine.user_context().is_empty());
 
     engine.packs_remove("notes").unwrap();
-    assert_eq!(before, format!("{:?}", engine.settings()), "settings unchanged after remove");
+    assert_eq!(
+        before,
+        format!("{:?}", engine.settings()),
+        "settings unchanged after remove"
+    );
     assert!(engine.packs_list().is_empty());
 
     let _ = fs::remove_dir_all(&src);
@@ -260,8 +299,13 @@ fn augment_save_writes_only_into_the_open_folder() {
     assert!(engine.augment_save("buffer", "notes.md", "hi").is_err());
 
     engine.open_workspace(&ws).unwrap();
-    engine.augment_save("buffer", "notes.md", "# hello\n").unwrap();
-    assert_eq!(fs::read_to_string(ws.join("notes.md")).unwrap(), "# hello\n");
+    engine
+        .augment_save("buffer", "notes.md", "# hello\n")
+        .unwrap();
+    assert_eq!(
+        fs::read_to_string(ws.join("notes.md")).unwrap(),
+        "# hello\n"
+    );
     assert_eq!(
         engine.augment_load("notes.md").unwrap().as_deref(),
         Some("# hello\n")
@@ -269,8 +313,13 @@ fn augment_save_writes_only_into_the_open_folder() {
     assert_eq!(engine.augment_load("absent.md").unwrap(), None);
 
     assert!(engine.augment_save("buffer", "../evil.md", "x").is_err());
-    engine.augment_save("grid", "table.csv", "a,b\n1,2\n").unwrap();
-    assert_eq!(fs::read_to_string(ws.join("table.csv")).unwrap(), "a,b\n1,2\n");
+    engine
+        .augment_save("grid", "table.csv", "a,b\n1,2\n")
+        .unwrap();
+    assert_eq!(
+        fs::read_to_string(ws.join("table.csv")).unwrap(),
+        "a,b\n1,2\n"
+    );
     assert!(
         engine.augment_save("hologram", "t.csv", "x").is_err(),
         "an unknown capability is refused"

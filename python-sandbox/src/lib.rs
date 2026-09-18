@@ -46,7 +46,9 @@ unsafe extern "C" {
     fn fella_random(ptr: i32, len: i32) -> i32;
 }
 
-/// Allocate a byte range in the guest's linear memory for the host ABI.
+/// Allocate a byte range in the guest's linear memory for the host ABI. The
+/// enclosing Wasmi Store owns the allocation and releases it when the Python
+/// run ends.
 #[no_mangle]
 pub extern "C" fn alloc(len: i32) -> i32 {
     if len <= 0 {
@@ -55,9 +57,6 @@ pub extern "C" fn alloc(len: i32) -> i32 {
     let Ok(layout) = Layout::from_size_align(len as usize, 8) else {
         return 0;
     };
-    // The allocation lives until the module is discarded after one run. This
-    // is intentional: a run gets a fresh Wasmi Store and cannot accumulate
-    // allocations across user questions.
     unsafe { std::alloc::alloc(layout) as i32 }
 }
 
@@ -148,8 +147,11 @@ mod fella {
             ));
         }
 
-        let bytes = unsafe { core::slice::from_raw_parts(out_ptr as *const u8, size as usize) };
-        let value: serde_json::Value = serde_json::from_slice(bytes).map_err(|_| {
+        let value = {
+            let bytes = unsafe { core::slice::from_raw_parts(out_ptr as *const u8, size as usize) };
+            serde_json::from_slice(bytes)
+        };
+        let value: serde_json::Value = value.map_err(|_| {
             vm.new_exception_msg(
                 vm.ctx.exceptions.runtime_error.to_owned(),
                 "sql() returned invalid data".into(),

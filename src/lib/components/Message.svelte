@@ -38,10 +38,28 @@
 		return { background: lines.slice(0, i).join('\n'), body: lines.slice(i).join('\n') };
 	});
 
-	// Only the assistant's prose is markdown the model is asked to structure
-	// its final answer, and rendering it lets that structure actually show.
-	// User input and system/`/sql` dumps stay plain text (see below).
+	// Only the assistant's prose is markdown. When a chart is present, keep the
+	// first plain paragraph as the takeaway and place the visual immediately
+	// after it; the remaining prose follows as supporting detail. This is a UI
+	// composition rule, not a new model-facing markup language.
+	function composeAnswer(body: string): { lead: string; remainder: string } {
+		const trimmed = body.trim();
+		if (!trimmed) return { lead: '', remainder: '' };
+		const boundary = trimmed.search(/\n\s*\n/);
+		if (boundary < 0) return { lead: trimmed, remainder: '' };
+		const lead = trimmed.slice(0, boundary).trim();
+		// Keep headings, lists, quotes, and code blocks together. Splitting one of
+		// those before the chart would make the answer feel arbitrary.
+		if (/^(?:#{1,6}\s|[-*+]\s|>\s|```)/.test(lead)) {
+			return { lead: trimmed, remainder: '' };
+		}
+		return { lead, remainder: trimmed.slice(boundary).trim() };
+	}
+
+	let composition = $derived(composeAnswer(split.body));
 	let bodyHtml = $derived(renderMarkdown(split.body));
+	let leadHtml = $derived(renderMarkdown(composition.lead));
+	let remainderHtml = $derived(renderMarkdown(composition.remainder));
 
 	// Set when a query behind the answer still disagrees after the agent's
 	// one-shot corrective re-ask the trust gap the verification system
@@ -52,12 +70,13 @@
 			: undefined
 	);
 
-	// A chart renders itself below the prose, independent of whether the
-	// model's text references it correctness shouldn't depend on a small
-	// model correctly placing a chart mention in freeform text.
+	// A chart is selected from evidence, independent of whether the model's text
+	// references it. Correctness shouldn't depend on a small model correctly
+	// placing a chart mention in freeform text.
 	let chartItems = $derived(
 		(message.answer?.evidence ?? []).filter((e) => e.tool === 'make_chart' && e.chart)
 	);
+	let hasVisualAnswer = $derived(chartItems.length > 0 && !message.pending);
 
 	// Keep the useful trust signal close to the finding. This deliberately uses
 	// only evidence already returned by the engine; it never invents a row count
@@ -141,9 +160,23 @@
 				<span>Fella couldn't confirm this figure against the data — here's its best answer.</span>
 			</div>
 		{/if}
-		<div class="text rich" class:pending={message.pending}>{@html bodyHtml}{#if message.pending}<span
+		{#if hasVisualAnswer}
+			<div class="text rich answer-lead">{@html leadHtml}</div>
+			<div class="answer-visuals" aria-label="Visual answer">
+				{#each chartItems as e, i (e.id ?? `chart-${i}`)}
+					{#if e.chart}
+						<Chart spec={e.chart} source={scopeLabel} verified={status === 'verified'} />
+					{/if}
+				{/each}
+			</div>
+			{#if composition.remainder}
+				<div class="text rich answer-supporting">{@html remainderHtml}</div>
+			{/if}
+		{:else}
+			<div class="text rich" class:pending={message.pending}>{@html bodyHtml}{#if message.pending}<span
 					class="thinking" aria-hidden="true"></span
 				>{/if}</div>
+		{/if}
 		{#if message.answer && !message.pending}
 			<div class="answer-meta" aria-label="Answer context">
 				{#if statusLabel}
@@ -152,9 +185,6 @@
 				<span class="answer-scope" title={scopeDetail}>{scopeLabel}</span>
 			</div>
 		{/if}
-		{#each chartItems as e, i (e.id ?? `chart-${i}`)}
-			{#if e.chart}<Chart spec={e.chart} />{/if}
-		{/each}
 	{:else}
 		<div class="text">{message.text}</div>
 	{/if}
@@ -248,6 +278,15 @@
 	.answer-actions {
 		display: flex;
 		margin-top: var(--space-2);
+	}
+	.answer-visuals {
+		margin-top: var(--space-3);
+	}
+	.answer-visuals :global(.chart-card) {
+		margin-top: 0;
+	}
+	.answer-supporting {
+		margin-top: var(--space-3);
 	}
 	.answer-actions button {
 		display: inline-flex;

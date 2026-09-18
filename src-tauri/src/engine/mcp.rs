@@ -8,7 +8,11 @@
 //! Compiled only with `--features mcp`.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+use std::time::Duration;
 
 use futures::stream::{BoxStream, StreamExt};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
@@ -27,6 +31,9 @@ use sse_stream::{Error as SseError, Sse, SseStream};
 
 use crate::engine::error::{EngineError, EngineResult};
 use crate::engine::extensions::{ConnectorAuth, ConnectorConfig};
+
+const MCP_TOOL_TIMEOUT_SECS: u64 = 30;
+const MCP_RESULT_CAP: usize = 32_000;
 
 /// An HTTP backend for `rmcp`'s Streamable-HTTP transport, over Fella's shared
 /// `reqwest::Client`. Auth headers are baked in at construction.
@@ -49,8 +56,9 @@ impl FellaHttp {
             }
             ConnectorAuth::Header { header, .. } => {
                 let t = token.ok_or_else(|| EngineError::msg("this connector needs a token"))?;
-                let name = HeaderName::from_bytes(header.as_bytes())
-                    .map_err(|_| EngineError::msg(format!("invalid auth header name '{header}'")))?;
+                let name = HeaderName::from_bytes(header.as_bytes()).map_err(|_| {
+                    EngineError::msg(format!("invalid auth header name '{header}'"))
+                })?;
                 let value = HeaderValue::from_str(t)
                     .map_err(|_| EngineError::msg("invalid token for a custom header"))?;
                 headers.insert(name, value);
@@ -89,7 +97,11 @@ impl StreamableHttpClient for FellaHttp {
         if let Some(sid) = &session_id {
             req = req.header(HEADER_SESSION_ID, sid.as_ref());
         }
-        let resp = req.json(&message).send().await.map_err(StreamableHttpError::Client)?;
+        let resp = req
+            .json(&message)
+            .send()
+            .await
+            .map_err(StreamableHttpError::Client)?;
         let status = resp.status();
         if matches!(
             status,
@@ -157,7 +169,9 @@ impl StreamableHttpClient for FellaHttp {
         if resp.status() == reqwest::StatusCode::METHOD_NOT_ALLOWED {
             return Err(StreamableHttpError::ServerDoesNotSupportSse);
         }
-        let resp = resp.error_for_status().map_err(StreamableHttpError::Client)?;
+        let resp = resp
+            .error_for_status()
+            .map_err(StreamableHttpError::Client)?;
         Ok(sse_box(resp.bytes_stream()))
     }
 
@@ -179,7 +193,8 @@ impl StreamableHttpClient for FellaHttp {
         if resp.status() == reqwest::StatusCode::METHOD_NOT_ALLOWED {
             return Ok(());
         }
-        resp.error_for_status().map_err(StreamableHttpError::Client)?;
+        resp.error_for_status()
+            .map_err(StreamableHttpError::Client)?;
         Ok(())
     }
 }
@@ -272,7 +287,13 @@ fn namespaced_name(id: &str, tool: &str) -> String {
     let mut s = format!("{id}__{tool}");
     s = s
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     if s.len() > 64 {
         s.truncate(64);
@@ -284,15 +305,39 @@ fn namespaced_name(id: &str, tool: &str) -> String {
 pub async fn run_mcp_tool(
     tool: &McpTool,
     args: &serde_json::Value,
+    cancel: Option<Arc<AtomicBool>>,
 ) -> EngineResult<crate::engine::tools::ToolOutput> {
-    let mut map = args
-        .as_object()
-        .cloned()
-        .unwrap_or_default();
+    let mut map = args.as_object().cloned().unwrap_or_default();
     map.remove("note");
 
-    let result = tool.conn.call(&tool.server_name, map).await?;
-    let text = result_text(&result);
+    let call = tool.conn.call(&tool.server_name, map);
+    let result: EngineResult<CallToolResult> = if let Some(flag) = cancel {
+        tokio::select! {
+            result = tokio::time::timeout(Duration::from_secs(MCP_TOOL_TIMEOUT_SECS), call) => {
+                result
+                    .map_err(|_| EngineError::msg(format!(
+                        "connector tool '{}' timed out after {MCP_TOOL_TIMEOUT_SECS}s",
+                        tool.namespaced
+                    )))
+                    .and_then(|result| result)
+            }
+            _ = wait_for_cancel(flag) => {
+                return Err(EngineError::msg("connector tool stopped by user"));
+            }
+        }
+    } else {
+        tokio::time::timeout(Duration::from_secs(MCP_TOOL_TIMEOUT_SECS), call)
+            .await
+            .map_err(|_| {
+                EngineError::msg(format!(
+                    "connector tool '{}' timed out after {MCP_TOOL_TIMEOUT_SECS}s",
+                    tool.namespaced
+                ))
+            })
+            .and_then(|result| result)
+    };
+    let result = result?;
+    let text = crate::engine::state::cap_chars(&result_text(&result), MCP_RESULT_CAP);
 
     if result.is_error == Some(true) {
         return Err(EngineError::msg(if text.is_empty() {
@@ -309,7 +354,11 @@ pub async fn run_mcp_tool(
     };
     Ok(crate::engine::tools::ToolOutput {
         summary: format!("{}{flag}", tool.namespaced),
-        llm_text: if text.is_empty() { "(no content)".into() } else { text.clone() },
+        llm_text: if text.is_empty() {
+            "(no content)".into()
+        } else {
+            text.clone()
+        },
         sql: None,
         columns: None,
         rows: None,
@@ -317,6 +366,12 @@ pub async fn run_mcp_tool(
         output: (!text.is_empty()).then_some(text),
         chart: None,
     })
+}
+
+async fn wait_for_cancel(flag: Arc<AtomicBool>) {
+    while !flag.load(Ordering::Relaxed) {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 }
 
 /// Flatten a `CallToolResult` into the text Fella feeds back to the model.

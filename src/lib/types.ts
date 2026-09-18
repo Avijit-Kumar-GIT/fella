@@ -8,15 +8,18 @@ export interface ChartSeries {
 	values: number[];
 }
 
-/** Structured chart data from a chart tool (e.g. `make_chart`) -- labels
+/** Typed visualization data from a chart tool (e.g. `make_chart`) -- labels
  *  and numbers only, never markup. Rendered by `$lib/components/Chart.svelte`. */
-export interface ChartSpec {
+export interface VisualizationSpec {
 	kind: 'bar' | 'line';
 	title?: string;
 	labels: string[];
 	series: ChartSeries[];
 	unit?: string;
 }
+
+/** Compatibility name used by chart-facing components. */
+export type ChartSpec = VisualizationSpec;
 
 export interface EvidenceItem {
 	/** Stable within one answer; older archived answers may not have one. */
@@ -38,8 +41,8 @@ export interface EvidenceItem {
 	row_count?: number;
 	/** Free-form text output, e.g. Python stdout/stderr. */
 	output?: string;
-	/** Structured chart data, when the tool was `make_chart`. */
-	chart?: ChartSpec;
+	/** Structured visualization data, when the tool was `make_chart`. */
+	chart?: VisualizationSpec;
 	ms: number;
 	error?: string;
 }
@@ -162,6 +165,8 @@ export interface ColumnInfo {
 	min?: string;
 	max?: string;
 	example?: string;
+	/** A few frequent values for low-cardinality label columns. */
+	common_values?: string[];
 	/** Ingest caveat: amounts coerced from text, or a mixed column left as text. */
 	note?: string;
 }
@@ -174,6 +179,8 @@ export interface SkippedFile {
 export interface Catalog {
 	workspace: string | null;
 	revision?: string;
+	/** Unix milliseconds when this workspace snapshot was indexed. */
+	indexed_at_ms?: number;
 	sources: SourceInfo[];
 	/** Files found but not loaded (unsupported type, unreadable, parse failure).
 	 *  Absent when nothing was skipped. */
@@ -181,7 +188,7 @@ export interface Catalog {
 }
 
 export interface Settings {
-	/** A provider id from the registry (`ollama`, `openai`, `vercel`, `xai`, `custom`, …). */
+	/** A provider id from the registry (`ollama-cloud`, `openai`, `vercel`, `xai`, `custom`, …). */
 	provider: string;
 	base_url: string;
 	model: string;
@@ -207,7 +214,7 @@ export interface ProviderInfo {
 	current: boolean;
 }
 
-export interface OllamaHealth {
+export interface ProviderHealth {
 	reachable: boolean;
 	/** Endpoint answered with 401/403: it's up, but the key is wrong or
 	 *  unauthorized. Always false when `reachable`. */

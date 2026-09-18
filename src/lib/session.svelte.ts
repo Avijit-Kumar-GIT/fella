@@ -20,7 +20,7 @@ import type {
 	InspectorSelection,
 	InstalledPack,
 	Message,
-	OllamaHealth,
+	ProviderHealth,
 	ProviderInfo,
 	RunStep,
 	Settings
@@ -279,11 +279,7 @@ class Session {
 	 *  screen as a one-click "reopen". Fella no longer opens it automatically. */
 	lastFolder = $state<string | null>(null);
 	settings = $state<Settings | null>(null);
-	health = $state<OllamaHealth | null>(null);
-	/** A local Ollama probed regardless of the configured provider so the empty
-	 *  screen can offer "use Ollama" when it's installed after signing in
-	 *  elsewhere. */
-	ollamaLocal = $state<OllamaHealth | null>(null);
+	health = $state<ProviderHealth | null>(null);
 	/** Built-in providers from the engine, cached so the composer can hint
 	 *  valid `/login` / `/logout` names without an await. */
 	providers = $state<ProviderInfo[]>([]);

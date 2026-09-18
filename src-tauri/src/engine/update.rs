@@ -73,7 +73,6 @@ fn is_newer(current: &str, latest: &str) -> bool {
     }
 }
 
-
 async fn fetch_bytes(http: &reqwest::Client, url: &str) -> EngineResult<Vec<u8>> {
     let resp = http
         .get(url)
@@ -159,8 +158,7 @@ fn find_checksum(sums_text: &str, filename: &str) -> Option<String> {
         // Require at least one real separator character between the hash
         // and the filename, so a line that merely *ends* with this
         // filename as a substring of something longer doesn't false-match.
-        (!hash.is_empty() && hash.len() < rest.len())
-            .then(|| hash.to_ascii_lowercase())
+        (!hash.is_empty() && hash.len() < rest.len()).then(|| hash.to_ascii_lowercase())
     })
 }
 
@@ -200,7 +198,11 @@ pub async fn check(http: &reqwest::Client) -> EngineResult<UpdateStatus> {
     let release = fetch_json(http, &latest_release_url()).await?;
     let latest = release.tag_name.trim_start_matches('v').to_string();
     let available = is_newer(&current, &latest);
-    Ok(UpdateStatus { current, latest, available })
+    Ok(UpdateStatus {
+        current,
+        latest,
+        available,
+    })
 }
 
 /// Check, and if a newer version exists: download the right installer for
@@ -228,10 +230,10 @@ pub async fn apply(http: &reqwest::Client, app: tauri::AppHandle) -> EngineResul
     verify_checksum(http, &release.assets, &asset.name, &bytes).await?;
 
     let dir = std::env::temp_dir().join("fella-update");
-    std::fs::create_dir_all(&dir)
-        .map_err(|e| EngineError::io("create update staging dir", e))?;
+    std::fs::create_dir_all(&dir).map_err(|e| EngineError::io("create update staging dir", e))?;
     let staged = dir.join(&asset.name);
-    std::fs::write(&staged, &bytes).map_err(|e| EngineError::io("write downloaded installer", e))?;
+    std::fs::write(&staged, &bytes)
+        .map_err(|e| EngineError::io("write downloaded installer", e))?;
 
     platform::apply(&staged, &app)?;
     // `platform::apply` exits the process once the handoff is spawned, so
@@ -492,7 +494,10 @@ mod tests {
         assert!(is_newer("0.1.0", "1.0.0"));
         assert!(!is_newer("0.1.1", "0.1.0"));
         assert!(!is_newer("0.1.0", "0.1.0"));
-        assert!(!is_newer("0.1.0", "0.1.0-rc.1"), "prerelease tags don't parse as a plain triple");
+        assert!(
+            !is_newer("0.1.0", "0.1.0-rc.1"),
+            "prerelease tags don't parse as a plain triple"
+        );
         assert!(!is_newer("garbage", "0.1.1"));
     }
 
@@ -512,7 +517,10 @@ mod tests {
     #[test]
     fn finds_checksum_with_two_space_text_mode_form() {
         let sums = "deadbeef  Fella_0.1.0_amd64.deb\n";
-        assert_eq!(find_checksum(sums, "Fella_0.1.0_amd64.deb").as_deref(), Some("deadbeef"));
+        assert_eq!(
+            find_checksum(sums, "Fella_0.1.0_amd64.deb").as_deref(),
+            Some("deadbeef")
+        );
     }
 
     #[test]
@@ -543,7 +551,10 @@ mod tests {
         // ...before the relaunch line, not racing it.
         let install_at = s.find("-ArgumentList '/S' -PassThru").unwrap();
         let relaunch_at = s.find("Start-Process -FilePath $exe").unwrap();
-        assert!(install_at < relaunch_at, "relaunch must come after the install");
+        assert!(
+            install_at < relaunch_at,
+            "relaunch must come after the install"
+        );
         // Written out as a .ps1 file.
         assert!(s.ends_with("\r\n"));
     }

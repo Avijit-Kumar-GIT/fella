@@ -19,7 +19,10 @@ use fella_lib::engine::EngineState;
 fn scratch(tag: &str) -> PathBuf {
     // Point-at-a-mock tests: the warm-up ping would steal a scripted response.
     std::env::set_var("FELLA_SKIP_MODEL_WARMUP", "1");
-    let n = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let n = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
     let p = std::env::temp_dir().join(format!("fella-{tag}-{n}"));
     fs::create_dir_all(&p).unwrap();
     p
@@ -30,7 +33,11 @@ fn scratch(tag: &str) -> PathBuf {
 /// what was sent on a given turn.
 fn fake_openai(
     responses: Vec<serde_json::Value>,
-) -> (String, Arc<Mutex<Vec<serde_json::Value>>>, std::thread::JoinHandle<()>) {
+) -> (
+    String,
+    Arc<Mutex<Vec<serde_json::Value>>>,
+    std::thread::JoinHandle<()>,
+) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     let url = format!("http://{addr}");
@@ -118,10 +125,15 @@ async fn step_cap_and_forced_final_turn() {
     let (url, _seen, server) = fake_openai(vec![
         tool_call_response(),
         tool_call_response(),
-        openai_response(serde_json::json!({ "role": "assistant", "content": "Here's my best guess from what I found." })),
+        openai_response(
+            serde_json::json!({ "role": "assistant", "content": "Here's my best guess from what I found." }),
+        ),
     ]);
     let engine = engine_on(&ws, &data, &url);
-    let answer = engine.ask("c1", "how much did we sell?", None, |_| {}).await.unwrap();
+    let answer = engine
+        .ask("c1", "how much did we sell?", None, |_| {})
+        .await
+        .unwrap();
     server.join().unwrap();
 
     assert_eq!(answer.evidence.len(), 2, "should stop at the 2-step cap");
@@ -142,7 +154,10 @@ async fn step_cap_and_forced_final_turn() {
         openai_response(serde_json::json!({ "role": "assistant", "content": "" })),
     ]);
     let engine = engine_on(&ws, &data, &url);
-    let answer = engine.ask("c1", "how much did we sell?", None, |_| {}).await.unwrap();
+    let answer = engine
+        .ask("c1", "how much did we sell?", None, |_| {})
+        .await
+        .unwrap();
     server.join().unwrap();
 
     assert_eq!(
@@ -164,11 +179,16 @@ async fn step_cap_and_forced_final_turn() {
         openai_response(serde_json::json!({ "role": "assistant", "content": "my best guess" })),
     ]);
     let engine = engine_on(&ws, &data, &url);
-    engine.ask("c1", "how much did we sell?", None, |_| {}).await.unwrap();
+    engine
+        .ask("c1", "how much did we sell?", None, |_| {})
+        .await
+        .unwrap();
     server.join().unwrap();
 
     let requests = seen.lock().unwrap();
-    let last = requests.last().expect("the forced final turn should have sent a request");
+    let last = requests
+        .last()
+        .expect("the forced final turn should have sent a request");
     let messages = last["messages"].as_array().expect("messages array");
     let has_nudge = messages.iter().any(|m| {
         m["content"]
@@ -176,7 +196,10 @@ async fn step_cap_and_forced_final_turn() {
             .map(|c| c.contains("out of tool-calling steps"))
             .unwrap_or(false)
     });
-    assert!(has_nudge, "forced turn should tell the model why: {messages:#?}");
+    assert!(
+        has_nudge,
+        "forced turn should tell the model why: {messages:#?}"
+    );
 
     let _ = fs::remove_dir_all(&ws);
     let _ = fs::remove_dir_all(&data);

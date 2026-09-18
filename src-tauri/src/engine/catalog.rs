@@ -67,6 +67,10 @@ pub struct ColumnInfo {
     pub max: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub example: Option<String>,
+    /// A few common values for low-cardinality label columns. This helps a
+    /// person spot spelling/capitalisation differences before asking a query.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub common_values: Option<Vec<String>>,
     /// Ingest-time caveat about this column, e.g. amounts that were stored as
     /// text and coerced to numbers, or a column that looks numeric but was
     /// left as text. Surfaced in the schema digest and `inspect_table`.
@@ -85,6 +89,7 @@ impl ColumnInfo {
             min: None,
             max: None,
             example: None,
+            common_values: None,
             note: None,
         }
     }
@@ -119,6 +124,9 @@ pub struct Catalog {
     /// Deterministic identity of the currently loaded workspace snapshot.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub revision: Option<String>,
+    /// Wall-clock time of the scan that produced this catalog, in Unix ms.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub indexed_at_ms: Option<i64>,
     pub sources: Vec<SourceInfo>,
     /// Files the scan noticed but couldn't use, with a plain reason. Shown to
     /// the user so an incomplete dataset isn't analysed silently.
@@ -154,10 +162,15 @@ pub fn workspace_revision(root: &Path, sources: &[SourceInfo], skipped: &[Skippe
                         .iter()
                         .map(|column| {
                             format!(
-                                "{}\u{1f}{}\u{1f}{}",
+                                "{}\u{1f}{}\u{1f}{}\u{1f}{}",
                                 column.name,
                                 column.type_,
-                                column.note.as_deref().unwrap_or("")
+                                column.note.as_deref().unwrap_or(""),
+                                column
+                                    .common_values
+                                    .as_ref()
+                                    .map(|values| values.join("\u{1d}"))
+                                    .unwrap_or_default()
                             )
                         })
                         .collect::<Vec<_>>()
@@ -192,7 +205,11 @@ pub fn workspace_revision(root: &Path, sources: &[SourceInfo], skipped: &[Skippe
     }
 
     if let Ok(metadata) = std::fs::metadata(root.join("fella.md")) {
-        feed(&format!("fella.md\u{1f}{}\u{1f}{:?}", metadata.len(), metadata.modified()));
+        feed(&format!(
+            "fella.md\u{1f}{}\u{1f}{:?}",
+            metadata.len(),
+            metadata.modified()
+        ));
     }
     format!("r{hash:016x}")
 }
@@ -220,13 +237,26 @@ pub struct ScannedFile {
 fn worth_mentioning(ext: &str) -> bool {
     matches!(
         ext.to_ascii_lowercase().as_str(),
-        "doc" | "docx" | "rtf" | "odt" | "pages" | "numbers" | "ods" | "eml" | "msg"
-            | "html" | "htm" | "xml"
+        "doc"
+            | "docx"
+            | "rtf"
+            | "odt"
+            | "pages"
+            | "numbers"
+            | "ods"
+            | "eml"
+            | "msg"
+            | "html"
+            | "htm"
+            | "xml"
     )
 }
 
 fn file_name(p: &Path) -> String {
-    p.file_name().and_then(|n| n.to_str()).unwrap_or("?").to_string()
+    p.file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("?")
+        .to_string()
 }
 
 /// Walk `root`, returning recognised files sorted by path, plus a list of files
@@ -271,8 +301,7 @@ pub fn scan(root: &Path) -> EngineResult<(Vec<ScannedFile>, Vec<SkippedFile>)> {
         }
         // `fella.md` at the workspace root is user context (see the extensions
         // system), not a data file skip it the way `.fellaignore` is skipped.
-        if path.parent() == Some(root)
-            && path.file_name() == Some(std::ffi::OsStr::new("fella.md"))
+        if path.parent() == Some(root) && path.file_name() == Some(std::ffi::OsStr::new("fella.md"))
         {
             continue;
         }
@@ -346,11 +375,9 @@ impl Ignore {
         let rel = path.strip_prefix(root).unwrap_or(path);
         let rel_str = rel.to_string_lossy().replace('\\', "/");
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        self.patterns.iter().any(|p| {
-            p == name
-                || rel_str == *p
-                || rel_str.starts_with(&format!("{p}/"))
-        })
+        self.patterns
+            .iter()
+            .any(|p| p == name || rel_str == *p || rel_str.starts_with(&format!("{p}/")))
     }
 }
 

@@ -21,8 +21,22 @@ pub const CATEGORIES: [&str; 6] = [
 ];
 
 const MERCHANTS: [&str; 16] = [
-    "Aldi", "Tesco", "Uber", "Shell", "Amazon", "Netflix", "Spotify", "EDF", "Thameslink", "Pret",
-    "Nando's", "IKEA", "Boots", "Costa", "Greggs", "Deliveroo",
+    "Aldi",
+    "Tesco",
+    "Uber",
+    "Shell",
+    "Amazon",
+    "Netflix",
+    "Spotify",
+    "EDF",
+    "Thameslink",
+    "Pret",
+    "Nando's",
+    "IKEA",
+    "Boots",
+    "Costa",
+    "Greggs",
+    "Deliveroo",
 ];
 
 /// A small deterministic xorshift64. Same recurrence `agent_bench.rs` uses.
@@ -119,7 +133,12 @@ pub struct WorkspaceSpec {
 
 impl WorkspaceSpec {
     pub fn small_clean() -> Self {
-        WorkspaceSpec { n_tables: 1, rows_per_table: 6_000, messiness: Messiness::Clean, seed: 1 }
+        WorkspaceSpec {
+            n_tables: 1,
+            rows_per_table: 6_000,
+            messiness: Messiness::Clean,
+            seed: 1,
+        }
     }
 }
 
@@ -207,10 +226,19 @@ fn gen_table(path: &Path, rows: usize, spec: &WorkspaceSpec, table_seed: u64) ->
         gold.total += amount;
         gold.max_amount = gold.max_amount.max(amount);
         *gold.by_category.entry(cat.to_string()).or_default() += amount;
-        *gold.by_month.entry(format!("{year:04}-{month:02}")).or_default() += amount;
+        *gold
+            .by_month
+            .entry(format!("{year:04}-{month:02}"))
+            .or_default() += amount;
         *per_merchant.entry(merch.to_string()).or_default() += amount;
 
-        s.push_str(&date_cell(&mut rng, year, month, dom, spec.messiness.mixed_dates()));
+        s.push_str(&date_cell(
+            &mut rng,
+            year,
+            month,
+            dom,
+            spec.messiness.mixed_dates(),
+        ));
         s.push(',');
         s.push_str(&amount_cell(amount, text_amt));
         s.push_str(&format!(",{cat},{merch}\n"));
@@ -246,7 +274,11 @@ fn gen_table(path: &Path, rows: usize, spec: &WorkspaceSpec, table_seed: u64) ->
 /// Materialise a synthetic workspace under `dir` and return its goldens.
 pub fn synth_workspace(dir: &Path, spec: &WorkspaceSpec) -> Goldens {
     std::fs::create_dir_all(dir).unwrap();
-    let mut goldens = Goldens { rent_target: 1250.0, rent_changed: "March 2024", ..Default::default() };
+    let mut goldens = Goldens {
+        rent_target: 1250.0,
+        rent_changed: "March 2024",
+        ..Default::default()
+    };
 
     for t in 0..spec.n_tables {
         let stem = format!("txns_{t:02}");
@@ -293,7 +325,9 @@ fn gen_workouts(path: &Path, seed: u64) -> (u64, (String, u64)) {
         let calories = minutes * (4 + rng.below(6)); // rough
         total += minutes;
         *by_act.entry(act.to_string()).or_default() += minutes;
-        s.push_str(&format!("{y:04}-{m:02}-{d:02},{act},{minutes},{calories}\n"));
+        s.push_str(&format!(
+            "{y:04}-{m:02}-{d:02},{act},{minutes},{calories}\n"
+        ));
     }
     std::fs::write(path, s).unwrap();
     let top = by_act
@@ -353,7 +387,12 @@ mod tests {
             .lines()
             .skip(1)
             .filter_map(|l| l.split(',').nth(1))
-            .filter_map(|a| a.trim_matches(['"', '$']).replace(',', "").parse::<f64>().ok())
+            .filter_map(|a| {
+                a.trim_matches(['"', '$'])
+                    .replace(',', "")
+                    .parse::<f64>()
+                    .ok()
+            })
             .sum();
         assert!(
             (file_total - g1.tables["txns_00"].total).abs() < 0.02,
@@ -371,21 +410,24 @@ mod tests {
         // messiness=TotalsRow appends a summary row that is NOT counted in gold
         let messy = synth_workspace(
             &dir,
-            &WorkspaceSpec { messiness: Messiness::TotalsRow, ..spec.clone() },
+            &WorkspaceSpec {
+                messiness: Messiness::TotalsRow,
+                ..spec.clone()
+            },
         );
         let messy_csv = std::fs::read_to_string(dir.join("txns_00.csv")).unwrap();
         assert!(messy_csv.lines().last().unwrap().starts_with("TOTAL,"));
-        assert_eq!(messy.tables["txns_00"].rows, 500, "the TOTAL row is not a data row");
+        assert_eq!(
+            messy.tables["txns_00"].rows, 500,
+            "the TOTAL row is not a data row"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn rent_fixture_total_is_6100() {
-        let dir = std::env::temp_dir().join(format!(
-            "fella-rent-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("fella-rent-{}", std::process::id()));
         assert_eq!(write_rent_fixture(&dir), 6100.0);
         let _ = std::fs::remove_dir_all(&dir);
     }

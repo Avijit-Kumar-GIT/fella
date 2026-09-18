@@ -9,7 +9,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use fella_lib::engine::EngineState;
 
 fn scratch(tag: &str) -> PathBuf {
-    let n = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let n = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
     let p = std::env::temp_dir().join(format!("fella-{tag}-{n}"));
     fs::create_dir_all(&p).unwrap();
     p
@@ -25,7 +28,10 @@ fn set_key_switches_provider_and_persists_outside_the_db() {
         engine.settings().provider,
         fella_lib::engine::provider::DEFAULT_ID
     );
-    assert!(engine.list_providers().iter().any(|p| p.id == "vercel" && !p.authed));
+    assert!(engine
+        .list_providers()
+        .iter()
+        .any(|p| p.id == "vercel" && !p.authed));
 
     let s = engine.set_api_key("vercel", "  vk-123  ").unwrap();
     assert_eq!(s.provider, "vercel");
@@ -34,7 +40,9 @@ fn set_key_switches_provider_and_persists_outside_the_db() {
     // switching moves to the target provider's defaults
     assert_eq!(
         s.model,
-        fella_lib::engine::provider::get("vercel").unwrap().default_model
+        fella_lib::engine::provider::get("vercel")
+            .unwrap()
+            .default_model
     );
     assert!(!s.model.is_empty());
 
@@ -47,7 +55,10 @@ fn set_key_switches_provider_and_persists_outside_the_db() {
     // a fresh engine over the same dir still sees it
     let again = EngineState::new(&data).unwrap();
     assert!(again.settings().has_credential);
-    assert!(again.list_providers().iter().any(|p| p.id == "vercel" && p.authed && p.current));
+    assert!(again
+        .list_providers()
+        .iter()
+        .any(|p| p.id == "vercel" && p.authed && p.current));
 
     let _ = fs::remove_dir_all(&data);
 }
@@ -62,14 +73,23 @@ fn logout_keeps_the_key_unless_forget_and_touches_only_that_provider() {
 
     // Plain logout of a non-active provider: key stays, nothing else moves.
     engine.logout("openai", false).unwrap();
-    assert!(engine.list_providers().iter().any(|p| p.id == "openai" && p.authed));
+    assert!(engine
+        .list_providers()
+        .iter()
+        .any(|p| p.id == "openai" && p.authed));
 
     // `forget` deletes openai's key; xai's is untouched.
     let s = engine.logout("openai", true).unwrap();
     assert_eq!(s.provider, "xai");
     assert!(s.has_credential);
-    assert!(engine.list_providers().iter().any(|p| p.id == "openai" && !p.authed));
-    assert!(engine.list_providers().iter().any(|p| p.id == "xai" && p.authed));
+    assert!(engine
+        .list_providers()
+        .iter()
+        .any(|p| p.id == "openai" && !p.authed));
+    assert!(engine
+        .list_providers()
+        .iter()
+        .any(|p| p.id == "xai" && p.authed));
 
     let _ = fs::remove_dir_all(&data);
 }
@@ -90,10 +110,8 @@ fn a_keyed_provider_with_no_saved_key_reverts_to_the_default_provider() {
     // Next run reconciles: keyed provider + no key -> back to the default.
     let engine = EngineState::new(&data).unwrap();
     let s = engine.settings();
-    let default = fella_lib::engine::provider::get(
-        fella_lib::engine::provider::DEFAULT_ID,
-    )
-    .unwrap();
+    let default =
+        fella_lib::engine::provider::get(fella_lib::engine::provider::DEFAULT_ID).unwrap();
     assert_eq!(s.provider, default.id);
     assert_eq!(s.base_url, default.base_url);
     assert_eq!(s.model, default.default_model);
@@ -116,10 +134,8 @@ fn an_unknown_stored_provider_reverts_to_the_default_provider() {
 
     // Next run can't use it and reverts to the default provider.
     let engine = EngineState::new(&data).unwrap();
-    let default = fella_lib::engine::provider::get(
-        fella_lib::engine::provider::DEFAULT_ID,
-    )
-    .unwrap();
+    let default =
+        fella_lib::engine::provider::get(fella_lib::engine::provider::DEFAULT_ID).unwrap();
     assert_eq!(engine.settings().provider, default.id);
     assert_eq!(engine.settings().model, default.default_model);
 
@@ -143,7 +159,9 @@ fn switching_provider_through_settings_moves_the_address_and_model() {
     assert_eq!(s.base_url, "https://api.openai.com/v1");
     assert_eq!(
         s.model,
-        fella_lib::engine::provider::get("openai").unwrap().default_model
+        fella_lib::engine::provider::get("openai")
+            .unwrap()
+            .default_model
     );
 
     let _ = fs::remove_dir_all(&data);
@@ -162,10 +180,17 @@ fn switching_to_a_provider_with_a_saved_key_needs_no_re_entry() {
 
     // `/login openai` with a key already on file -> { "provider": "openai" }.
     let s = engine
-        .save_settings(serde_json::json!({ "provider": "openai" }).as_object().unwrap())
+        .save_settings(
+            serde_json::json!({ "provider": "openai" })
+                .as_object()
+                .unwrap(),
+        )
         .unwrap();
     assert_eq!(s.provider, "openai");
-    assert!(s.has_credential, "the saved key should make this a signed-in switch");
+    assert!(
+        s.has_credential,
+        "the saved key should make this a signed-in switch"
+    );
     assert!(engine
         .list_providers()
         .iter()
@@ -186,19 +211,23 @@ fn logout_of_the_active_provider_resets_to_the_default_provider() {
 
     // Plain logout of the active provider: back on the default provider...
     let s = engine.logout("openai", false).unwrap();
-    let default = fella_lib::engine::provider::get(
-        fella_lib::engine::provider::DEFAULT_ID,
-    )
-    .unwrap();
+    let default =
+        fella_lib::engine::provider::get(fella_lib::engine::provider::DEFAULT_ID).unwrap();
     assert_eq!(s.provider, default.id);
     assert_eq!(s.base_url, default.base_url);
     assert_eq!(s.model, default.default_model);
     // ...but the key is kept, so /login openai reconnects with no re-paste.
-    assert!(engine.list_providers().iter().any(|p| p.id == "openai" && p.authed));
+    assert!(engine
+        .list_providers()
+        .iter()
+        .any(|p| p.id == "openai" && p.authed));
 
     // `forget` is what actually removes it.
     engine.logout("openai", true).unwrap();
-    assert!(!engine.list_providers().iter().any(|p| p.id == "openai" && p.authed));
+    assert!(!engine
+        .list_providers()
+        .iter()
+        .any(|p| p.id == "openai" && p.authed));
 
     let _ = fs::remove_dir_all(&data);
 }
@@ -272,7 +301,11 @@ fn migrates_a_legacy_plaintext_key_out_of_the_settings_table() {
     assert!(auth.contains("apikey:custom"));
     let conn = rusqlite::Connection::open(data.join("fella.db")).unwrap();
     let leftover: Option<String> = conn
-        .query_row("SELECT value FROM settings WHERE key = 'api_key'", [], |r| r.get(0))
+        .query_row(
+            "SELECT value FROM settings WHERE key = 'api_key'",
+            [],
+            |r| r.get(0),
+        )
         .ok();
     assert_eq!(leftover, None);
 

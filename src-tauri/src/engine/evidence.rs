@@ -88,8 +88,8 @@ impl Usage {
     pub fn merge(a: Option<Usage>, b: Option<Usage>) -> Option<Usage> {
         match (a, b) {
             (Some(x), Some(y)) => Some(Usage {
-                prompt_tokens: x.prompt_tokens + y.prompt_tokens,
-                completion_tokens: x.completion_tokens + y.completion_tokens,
+                prompt_tokens: x.prompt_tokens.saturating_add(y.prompt_tokens),
+                completion_tokens: x.completion_tokens.saturating_add(y.completion_tokens),
             }),
             (x, y) => x.or(y),
         }
@@ -114,11 +114,20 @@ mod tests {
 
     #[test]
     fn usage_merge_sums_and_tolerates_missing() {
-        let a = Usage { prompt_tokens: 100, completion_tokens: 10 };
-        let b = Usage { prompt_tokens: 40, completion_tokens: 5 };
+        let a = Usage {
+            prompt_tokens: 100,
+            completion_tokens: 10,
+        };
+        let b = Usage {
+            prompt_tokens: 40,
+            completion_tokens: 5,
+        };
         assert_eq!(
             Usage::merge(Some(a), Some(b)),
-            Some(Usage { prompt_tokens: 140, completion_tokens: 15 })
+            Some(Usage {
+                prompt_tokens: 140,
+                completion_tokens: 15
+            })
         );
         assert_eq!(Usage::merge(None, Some(b)), Some(b));
         assert_eq!(Usage::merge(Some(a), None), Some(a));
@@ -138,13 +147,24 @@ mod tests {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AskEvent {
-    AssistantDelta { text: String },
-    ToolStart { tool: String, args: Json },
+    AssistantDelta {
+        text: String,
+    },
+    ToolStart {
+        tool: String,
+        args: Json,
+    },
     // Boxed: `EvidenceItem` grew past clippy's large-enum-variant threshold
     // once `chart` started carrying structured data (labels/series) inline
     // instead of a single SVG string.
-    ToolEnd { item: Box<EvidenceItem> },
+    ToolEnd {
+        item: Box<EvidenceItem>,
+    },
     /// A transient status line for the UI (e.g. "rate limited retrying in 3s…").
-    Notice { text: String },
-    AnswerDone { answer: Answer },
+    Notice {
+        text: String,
+    },
+    AnswerDone {
+        answer: Answer,
+    },
 }

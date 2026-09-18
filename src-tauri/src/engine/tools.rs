@@ -4,6 +4,7 @@
 
 use async_trait::async_trait;
 use serde_json::{json, Value as Json};
+use std::sync::{atomic::AtomicBool, Arc};
 
 use crate::engine::analytics::chart::{self, ChartData, ChartKind};
 use crate::engine::analytics::verify::truncate as truncate_chars;
@@ -47,6 +48,18 @@ pub trait Tool: Send + Sync {
     fn description(&self) -> &'static str;
     fn parameters(&self) -> Json;
     async fn run(&self, engine: &EngineState, args: &Json) -> EngineResult<ToolOutput>;
+
+    /// Cancellation-aware entry point. Existing deterministic tools inherit
+    /// the ordinary implementation; tools that can block add the flag to
+    /// their backend call without changing the public tool contract.
+    async fn run_with_cancel(
+        &self,
+        engine: &EngineState,
+        args: &Json,
+        _cancel: Arc<AtomicBool>,
+    ) -> EngineResult<ToolOutput> {
+        self.run(engine, args).await
+    }
 }
 
 pub struct Registry {
@@ -123,12 +136,25 @@ impl Registry {
         name: &str,
         args: &Json,
     ) -> Option<EngineResult<ToolOutput>> {
+        self.run_with_cancel(engine, name, args, Arc::new(AtomicBool::new(false)))
+            .await
+    }
+
+    /// Run a tool while allowing long-running built-ins and remote connector
+    /// calls to observe the question's stop flag.
+    pub async fn run_with_cancel(
+        &self,
+        engine: &EngineState,
+        name: &str,
+        args: &Json,
+        cancel: Arc<AtomicBool>,
+    ) -> Option<EngineResult<ToolOutput>> {
         if let Some(tool) = self.get(name) {
-            return Some(tool.run(engine, args).await);
+            return Some(tool.run_with_cancel(engine, args, cancel).await);
         }
         #[cfg(feature = "mcp")]
         if let Some(t) = self.mcp.iter().find(|t| t.namespaced == name) {
-            return Some(crate::engine::mcp::run_mcp_tool(t, args).await);
+            return Some(crate::engine::mcp::run_mcp_tool(t, args, Some(cancel)).await);
         }
         None
     }
@@ -431,28 +457,42 @@ impl Tool for RunSql {
     async fn run(&self, engine: &EngineState, args: &Json) -> EngineResult<ToolOutput> {
         let sql = str_arg(args, "sql")?;
         let q = engine.run_sql(sql)?;
-        let table = table_text(&q, 30);
-        let warning = text_agg_warning(engine, sql).or_else(|| case_filter_warning(engine, sql));
-        let llm_text = match warning {
-            Some(w) => format!("{w}\n{table}"),
-            None => table,
-        };
-        Ok(ToolOutput {
-            summary: format!(
-                "{} row{}{} in {}ms",
-                q.row_count,
-                if q.row_count == 1 { "" } else { "s" },
-                if q.truncated { " (capped)" } else { "" },
-                q.ms
-            ),
-            llm_text,
-            sql: Some(sql.to_string()),
-            columns: Some(q.columns),
-            rows: Some(q.rows),
-            row_count: Some(q.row_count),
-            output: None,
-            chart: None,
-        })
+        Ok(sql_output(engine, sql, q))
+    }
+    async fn run_with_cancel(
+        &self,
+        engine: &EngineState,
+        args: &Json,
+        cancel: Arc<AtomicBool>,
+    ) -> EngineResult<ToolOutput> {
+        let sql = str_arg(args, "sql")?;
+        let q = engine.run_sql_cancellable(sql, cancel)?;
+        Ok(sql_output(engine, sql, q))
+    }
+}
+
+fn sql_output(engine: &EngineState, sql: &str, q: QueryResult) -> ToolOutput {
+    let table = table_text(&q, 30);
+    let warning = text_agg_warning(engine, sql).or_else(|| case_filter_warning(engine, sql));
+    let llm_text = match warning {
+        Some(w) => format!("{w}\n{table}"),
+        None => table,
+    };
+    ToolOutput {
+        summary: format!(
+            "{} row{}{} in {}ms",
+            q.row_count,
+            if q.row_count == 1 { "" } else { "s" },
+            if q.truncated { " (capped)" } else { "" },
+            q.ms
+        ),
+        llm_text,
+        sql: Some(sql.to_string()),
+        columns: Some(q.columns),
+        rows: Some(q.rows),
+        row_count: Some(q.row_count),
+        output: None,
+        chart: None,
     }
 }
 
@@ -686,49 +726,64 @@ over the mounted data, not for fetching anything."
     async fn run(&self, engine: &EngineState, args: &Json) -> EngineResult<ToolOutput> {
         let code = str_arg(args, "code")?;
         let r = engine.run_python(code).await?;
+        Ok(python_output(r))
+    }
+    async fn run_with_cancel(
+        &self,
+        engine: &EngineState,
+        args: &Json,
+        cancel: Arc<AtomicBool>,
+    ) -> EngineResult<ToolOutput> {
+        let code = str_arg(args, "code")?;
+        let r = engine.run_python_cancellable(code, cancel).await?;
+        Ok(python_output(r))
+    }
+}
 
-        let mut combined = String::new();
-        if !r.stdout.is_empty() {
-            combined.push_str(&r.stdout);
+fn python_output(r: crate::engine::analytics::pyexec::PyResult) -> ToolOutput {
+    let mut combined = String::new();
+    if !r.stdout.is_empty() {
+        combined.push_str(&r.stdout);
+    }
+    if !r.stderr.is_empty() {
+        if !combined.is_empty() {
+            combined.push('\n');
         }
-        if !r.stderr.is_empty() {
-            if !combined.is_empty() {
-                combined.push('\n');
-            }
-            combined.push_str("stderr:\n");
-            combined.push_str(&r.stderr);
-        }
-        if combined.is_empty() {
-            combined.push_str("(no output)");
-        }
+        combined.push_str("stderr:\n");
+        combined.push_str(&r.stderr);
+    }
+    if combined.is_empty() {
+        combined.push_str("(no output)");
+    }
 
-        let summary = if r.timed_out {
-            format!(
-                "python execution budget ended after {}ms · local sandbox",
+    let summary = if r.cancelled {
+        format!("python stopped by you after {}ms · local sandbox", r.ms)
+    } else if r.timed_out {
+        format!(
+            "python execution budget ended after {}ms · local sandbox",
+            r.ms
+        )
+    } else {
+        match r.exit_code {
+            Some(0) => format!("python finished in {}ms · local sandbox", r.ms),
+            Some(c) => format!("python exited with code {c} in {}ms · local sandbox", r.ms),
+            None => format!(
+                "python was stopped after {}ms inside the local sandbox",
                 r.ms
-            )
-        } else {
-            match r.exit_code {
-                Some(0) => format!("python finished in {}ms · local sandbox", r.ms),
-                Some(c) => format!("python exited with code {c} in {}ms · local sandbox", r.ms),
-                None => format!(
-                    "python was stopped after {}ms inside the local sandbox",
-                    r.ms
-                ),
-            }
-        };
-        let llm_text = format!("{summary}\n\n{}", truncate_chars(&combined, 6000));
+            ),
+        }
+    };
+    let llm_text = format!("{summary}\n\n{}", truncate_chars(&combined, 6000));
 
-        Ok(ToolOutput {
-            summary,
-            llm_text,
-            sql: None,
-            columns: None,
-            rows: None,
-            row_count: None,
-            output: Some(combined),
-            chart: None,
-        })
+    ToolOutput {
+        summary,
+        llm_text,
+        sql: None,
+        columns: None,
+        rows: None,
+        row_count: None,
+        output: Some(combined),
+        chart: None,
     }
 }
 
@@ -760,15 +815,19 @@ impl Tool for MakeChart {
         "make_chart"
     }
     fn description(&self) -> &'static str {
-        "Draw a bar or line chart from a read-only SQL query. The first query column \
-        must be the label or date and the remaining one or two columns must be numeric. \
-        It renders itself in the answer; don't describe it in prose."
+        "Draw a chart from a read-only SQL query. Use auto unless the user clearly asks for \
+        a bar or line chart. The first query column must be the label or date and the remaining \
+        one or two columns must be numeric. It renders itself in the answer."
     }
     fn parameters(&self) -> Json {
         json!({
             "type": "object",
             "properties": {
-                "kind": { "type": "string", "enum": ["bar", "line"] },
+                "kind": {
+                    "type": "string",
+                    "enum": ["auto", "bar", "line"],
+                    "description": "auto chooses a line for time periods and a bar chart for categories"
+                },
                 "title": { "type": "string", "description": "short chart title, e.g. \"Spending by category\"" },
                 "sql": {
                     "type": "string",
@@ -801,6 +860,9 @@ impl Tool for MakeChart {
         let n_series = data.series.len();
         let n_labels = data.labels.len();
         let kind_word = match data.kind {
+            // `from_query` resolves auto before returning. Keep this arm for
+            // exhaustiveness if a future caller constructs the type directly.
+            ChartKind::Auto => "chart",
             ChartKind::Bar => "bar",
             ChartKind::Line => "line",
         };
@@ -810,8 +872,9 @@ impl Tool for MakeChart {
                 if n_labels == 1 { "y" } else { "ies" }
             ),
             llm_text: format!(
-                "Chart drawn from the query result below; it renders below this message. \
-                 Don't restate every value in prose.\n\n{}",
+                "Chart drawn from the query result below; it renders as a visual answer block. \
+                 Lead with one short sentence explaining the main pattern. Do not list every \
+                 value in prose.\n\n{}",
                 table_text(&q, chart::MAX_CATEGORIES)
             ),
             sql: Some(sql.to_string()),

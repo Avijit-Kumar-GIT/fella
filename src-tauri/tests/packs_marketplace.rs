@@ -12,7 +12,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use fella_lib::engine::EngineState;
 
 fn scratch(tag: &str) -> PathBuf {
-    let n = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let n = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
     let p = std::env::temp_dir().join(format!("fella-{tag}-{n}"));
     fs::create_dir_all(&p).unwrap();
     p
@@ -24,9 +27,7 @@ fn serve(listener: TcpListener, routes: HashMap<String, (u16, Vec<u8>)>) {
     std::thread::spawn(move || {
         for stream in listener.incoming() {
             let Ok(mut stream) = stream else { break };
-            let mut reader = BufReader::new(
-                stream.try_clone().expect("clone stream"),
-            );
+            let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
             let mut request_line = String::new();
             if reader.read_line(&mut request_line).is_err() {
                 continue;
@@ -80,8 +81,14 @@ async fn marketplace_install_verifies_hashes() {
     let base = format!("http://{}", listener.local_addr().unwrap());
 
     let mut routes = HashMap::new();
-    routes.insert("/catalog.json".into(), (200u16, catalog(&base, PAYLOAD_SHA).into_bytes()));
-    routes.insert("/p/fella-pack.json".into(), (200, MANIFEST.as_bytes().to_vec()));
+    routes.insert(
+        "/catalog.json".into(),
+        (200u16, catalog(&base, PAYLOAD_SHA).into_bytes()),
+    );
+    routes.insert(
+        "/p/fella-pack.json".into(),
+        (200, MANIFEST.as_bytes().to_vec()),
+    );
     routes.insert("/p/theme.json".into(), (200, PAYLOAD.as_bytes().to_vec()));
     // A second catalog whose theme.json hash is wrong.
     routes.insert(
@@ -105,7 +112,11 @@ async fn marketplace_install_verifies_hashes() {
     );
     engine.packs_set_enabled("nord-mkt", true).unwrap();
     assert_eq!(
-        engine.packs_theme().unwrap().get("--bg").map(String::as_str),
+        engine
+            .packs_theme()
+            .unwrap()
+            .get("--bg")
+            .map(String::as_str),
         Some("#101010")
     );
 

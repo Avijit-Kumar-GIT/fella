@@ -65,7 +65,7 @@
 		}
 	}
 	let messageCount = $derived(session.activeChat?.messages.length ?? 0);
-	let providerId = $derived(session.settings?.provider ?? 'ollama');
+	let providerId = $derived(session.settings?.provider ?? 'ollama-cloud');
 	let providerName = $derived(
 		session.providers.find((p) => p.id === providerId)?.display ?? providerId
 	);
@@ -97,6 +97,7 @@
 	// keeps its native frame, so it doesn't.
 	const isWindows =
 		typeof navigator !== 'undefined' && /Win/i.test(navigator.platform || navigator.userAgent);
+	const shortcutModifier = isMac ? '⌘' : 'Ctrl';
 
 </script>
 
@@ -113,7 +114,7 @@
 			class="navbtn"
 			data-tauri-drag-region="false"
 			aria-expanded={!session.sidebarCollapsed}
-			title="Toggle sidebar (Ctrl+B)"
+			title={`Toggle sidebar (${shortcutModifier}+B)`}
 			onclick={() => session.toggleSidebar()}
 		>
 			<Icon name="panel" size={14} />
@@ -207,7 +208,7 @@
 			{/if}
 		</div>
 		<button class="hint" data-tauri-drag-region="false" onclick={onpalette} title="Command palette">
-			<kbd>Ctrl</kbd><kbd>K</kbd>
+			<kbd>{shortcutModifier}</kbd><kbd>K</kbd>
 		</button>
 	{/if}
 

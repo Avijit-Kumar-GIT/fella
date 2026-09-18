@@ -24,6 +24,10 @@
 				analysis.answer.workspace.path === session.catalog.workspace
 		).length
 	);
+	const shortcutModifier =
+		typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform || navigator.userAgent)
+			? '⌘'
+			: 'Ctrl';
 
 	function toggleSearch() {
 		searchOpen = !searchOpen;
@@ -237,14 +241,14 @@
 		<button
 			class="nav-row"
 			type="button"
-			title="Search (Ctrl+K)"
-			aria-keyshortcuts="Control+K"
+			title={`Search (${shortcutModifier}+K)`}
+			aria-keyshortcuts="Control+K Meta+K"
 			aria-haspopup="dialog"
 			onclick={() => onsearch?.()}
 		>
 			<Icon name="search" size={14} />
 			<span>Search</span>
-			<kbd>Ctrl+K</kbd>
+			<kbd>{shortcutModifier}K</kbd>
 		</button>
 		<button
 			class="nav-row"

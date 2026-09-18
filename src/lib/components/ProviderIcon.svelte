@@ -17,7 +17,6 @@
 		},
 		xai: { light: '/brand/providers/xai.ico', invertLight: true },
 		'ollama-cloud': { light: '/brand/providers/ollama.svg', invertDark: true },
-		ollama: { light: '/brand/providers/ollama.svg', invertDark: true },
 		openrouter: { light: '/brand/providers/openrouter.svg' }
 	};
 

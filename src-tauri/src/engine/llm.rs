@@ -130,22 +130,22 @@ fn openai_gpt5_family(model: &str) -> bool {
 fn is_text_generation_model(id: &str) -> bool {
     let id = id.to_ascii_lowercase();
     const NON_CHAT: &[&str] = &[
-        "embed",          // text-embedding-3-*, nomic-embed-text, mxbai-embed-large
+        "embed", // text-embedding-3-*, nomic-embed-text, mxbai-embed-large
         "dall-e",
         "gpt-image",
-        "-image-",        // …-image-generation
+        "-image-", // …-image-generation
         "stable-diffusion",
         "sora",
-        "tts",            // tts-1, gpt-4o-mini-tts
+        "tts", // tts-1, gpt-4o-mini-tts
         "whisper",
         "transcribe",
         "speech",
-        "-audio",         // gpt-4o-audio-preview
-        "-realtime",      // gpt-4o-realtime-preview
+        "-audio",    // gpt-4o-audio-preview
+        "-realtime", // gpt-4o-realtime-preview
         "moderation",
-        "-guard",         // llama-guard-*
+        "-guard", // llama-guard-*
         "rerank",
-        "davinci-",       // legacy base completion
+        "davinci-", // legacy base completion
         "babbage-",
     ];
     !NON_CHAT.iter().any(|p| id.contains(p))
@@ -304,7 +304,10 @@ impl LlmClient {
                                 // The API id is what `chat` sends. Some gateways
                                 // also carry a spaced display `name` never use
                                 // it. Ollama's `/api/tags` has only `name`.
-                                m["id"].as_str().or_else(|| m["name"].as_str()).map(String::from)
+                                m["id"]
+                                    .as_str()
+                                    .or_else(|| m["name"].as_str())
+                                    .map(String::from)
                             })
                             // Only models you can actually chat with the
                             // `/models` list also carries embeddings, image,
@@ -313,7 +316,11 @@ impl LlmClient {
                             .collect()
                     })
                     .unwrap_or_default();
-                ProviderHealth { reachable: true, rejected: false, models }
+                ProviderHealth {
+                    reachable: true,
+                    rejected: false,
+                    models,
+                }
             }
             Ok(r) => {
                 let status = r.status();
@@ -321,14 +328,17 @@ impl LlmClient {
                 log::warn!("health: {url} returned {status}");
                 ProviderHealth {
                     reachable: false,
-                    rejected: matches!(status.as_u16(), 401 | 403)
-                        || body_says_bad_key(&body),
+                    rejected: matches!(status.as_u16(), 401 | 403) || body_says_bad_key(&body),
                     models: Vec::new(),
                 }
             }
             Err(e) => {
                 log::warn!("health: {url} unreachable: {e}");
-                ProviderHealth { reachable: false, rejected: false, models: Vec::new() }
+                ProviderHealth {
+                    reachable: false,
+                    rejected: false,
+                    models: Vec::new(),
+                }
             }
         }
     }
@@ -348,7 +358,11 @@ impl LlmClient {
             "stream": false,
             "keep_alive": model_keep_alive(),
         });
-        let mut req = self.http.post(&url).timeout(Duration::from_secs(20)).json(&body);
+        let mut req = self
+            .http
+            .post(&url)
+            .timeout(Duration::from_secs(20))
+            .json(&body);
         if let Some(k) = &self.api_key {
             req = req.bearer_auth(k);
         }
@@ -371,7 +385,11 @@ impl LlmClient {
         if self.is_openai() {
             let url = format!("{}/embeddings", self.base_url);
             let v = self
-                .send(&url, &json!({ "model": self.embed_model, "input": inputs }), on_retry)
+                .send(
+                    &url,
+                    &json!({ "model": self.embed_model, "input": inputs }),
+                    on_retry,
+                )
                 .await?;
             v["data"]
                 .as_array()
@@ -382,7 +400,11 @@ impl LlmClient {
         } else {
             let url = format!("{}/api/embed", self.base_url);
             let v = self
-                .send(&url, &json!({ "model": self.embed_model, "input": inputs }), on_retry)
+                .send(
+                    &url,
+                    &json!({ "model": self.embed_model, "input": inputs }),
+                    on_retry,
+                )
                 .await?;
             v["embeddings"]
                 .as_array()
@@ -404,8 +426,8 @@ impl LlmClient {
     ) -> EngineResult<ChatResponse> {
         let url = format!("{}/api/chat", self.base_url);
         let messages_json = Json::Array(messages.iter().map(ollama_message).collect());
-        let tools_json = (!tools.is_empty())
-            .then(|| Json::Array(tools.iter().map(tool_schema_json).collect()));
+        let tools_json =
+            (!tools.is_empty()).then(|| Json::Array(tools.iter().map(tool_schema_json).collect()));
         // `FELLA_MODEL_NUM_CTX_FIXED` pins num_ctx to the floor (no growth) so
         // the eval harness can measure fixed-vs-adaptive on a big workspace.
         let num_ctx = if std::env::var_os("FELLA_MODEL_NUM_CTX_FIXED").is_some() {
@@ -439,7 +461,11 @@ impl LlmClient {
         let msg = &v["message"];
         let content = msg["content"].as_str().unwrap_or_default().to_string();
         let tool_calls = parse_tool_calls(msg["tool_calls"].as_array(), false);
-        Ok(ChatResponse { content, tool_calls, usage: parse_usage(&v) })
+        Ok(ChatResponse {
+            content,
+            tool_calls,
+            usage: parse_usage(&v),
+        })
     }
 
     // --- OpenAI-compatible {base_url}/chat/completions -------------------
@@ -488,7 +514,11 @@ impl LlmClient {
         let msg = &v["message"];
         let content = msg["content"].as_str().unwrap_or_default().to_string();
         let tool_calls = parse_tool_calls(msg["tool_calls"].as_array(), true);
-        Ok(ChatResponse { content, tool_calls, usage: parse_usage(&v) })
+        Ok(ChatResponse {
+            content,
+            tool_calls,
+            usage: parse_usage(&v),
+        })
     }
 
     /// POST `body` to `url`, retrying transient failures (429, 5xx, timeouts,
@@ -712,7 +742,11 @@ impl LlmClient {
                     .iter()
                     .enumerate()
                     .map(|(i, t)| {
-                        let id = if t.id.is_empty() { format!("call_{i}") } else { t.id.clone() };
+                        let id = if t.id.is_empty() {
+                            format!("call_{i}")
+                        } else {
+                            t.id.clone()
+                        };
                         json!({
                             "id": id,
                             "function": { "name": t.name, "arguments": t.arguments },
@@ -764,10 +798,7 @@ fn absorb_stream_line(
         }
     }
     // The `done: true` summary line carries the token counts.
-    if let (Some(p), Some(c)) = (
-        v["prompt_eval_count"].as_u64(),
-        v["eval_count"].as_u64(),
-    ) {
+    if let (Some(p), Some(c)) = (v["prompt_eval_count"].as_u64(), v["eval_count"].as_u64()) {
         *usage = Some(Usage {
             prompt_tokens: p as u32,
             completion_tokens: c as u32,
@@ -887,7 +918,9 @@ fn parse_usage(v: &Json) -> Option<Usage> {
 }
 
 fn parse_tool_calls(calls: Option<&Vec<Json>>, openai_style: bool) -> Vec<ToolCall> {
-    let Some(calls) = calls else { return Vec::new() };
+    let Some(calls) = calls else {
+        return Vec::new();
+    };
     calls
         .iter()
         .enumerate()
@@ -912,7 +945,11 @@ fn parse_tool_calls(calls: Option<&Vec<Json>>, openai_style: bool) -> Vec<ToolCa
             } else {
                 format!("call_{i}")
             };
-            Some(ToolCall { id, name, arguments })
+            Some(ToolCall {
+                id,
+                name,
+                arguments,
+            })
         })
         .collect()
 }
@@ -997,14 +1034,28 @@ mod tests {
     #[test]
     fn reasoning_models_are_matched_by_family_prefix() {
         for m in [
-            "o1", "o1-mini", "o3", "o3-mini", "o4-mini", "gpt-5", "gpt-5-mini",
-            "gpt-5.6-luna", "gpt-5.6-sol", "openai/gpt-5.6-luna", "openai/o3-mini",
+            "o1",
+            "o1-mini",
+            "o3",
+            "o3-mini",
+            "o4-mini",
+            "gpt-5",
+            "gpt-5-mini",
+            "gpt-5.6-luna",
+            "gpt-5.6-sol",
+            "openai/gpt-5.6-luna",
+            "openai/o3-mini",
         ] {
             assert!(openai_reasoning_model(m), "{m} should be a reasoning model");
         }
         for m in [
-            "gpt-4o", "gpt-4o-mini", "gpt-4.1", "grok-2-latest", "grok-4.3",
-            "x-ai/grok-4.3", "llama3.1",
+            "gpt-4o",
+            "gpt-4o-mini",
+            "gpt-4.1",
+            "grok-2-latest",
+            "grok-4.3",
+            "x-ai/grok-4.3",
+            "llama3.1",
         ] {
             assert!(!openai_reasoning_model(m), "{m} should not be");
         }
@@ -1032,7 +1083,13 @@ mod tests {
             &mut None,
             &mut u,
         );
-        assert_eq!(u, Some(Usage { prompt_tokens: 812, completion_tokens: 41 }));
+        assert_eq!(
+            u,
+            Some(Usage {
+                prompt_tokens: 812,
+                completion_tokens: 41
+            })
+        );
 
         // OpenAI: the trailing usage chunk from `stream_options.include_usage`.
         let mut u = None;
@@ -1043,12 +1100,21 @@ mod tests {
             &mut Vec::new(),
             &mut u,
         );
-        assert_eq!(u, Some(Usage { prompt_tokens: 900, completion_tokens: 50 }));
+        assert_eq!(
+            u,
+            Some(Usage {
+                prompt_tokens: 900,
+                completion_tokens: 50
+            })
+        );
 
         // `parse_usage` reads the normalised block `send_stream` attaches.
         assert_eq!(
             parse_usage(&json!({ "usage": { "prompt_tokens": 5, "completion_tokens": 7 } })),
-            Some(Usage { prompt_tokens: 5, completion_tokens: 7 })
+            Some(Usage {
+                prompt_tokens: 5,
+                completion_tokens: 7
+            })
         );
         assert_eq!(parse_usage(&json!({ "message": {} })), None);
     }
@@ -1071,18 +1137,40 @@ mod tests {
     #[test]
     fn model_list_keeps_only_chat_models() {
         for m in [
-            "gpt-4o", "gpt-4o-mini", "gpt-4.1", "o3-mini", "gpt-5", "gpt-5-nano",
-            "grok-2-latest", "deepseek/deepseek-chat", "google/gemini-2.5-flash",
-            "gemma4:31b", "qwen3", "llama3.1:8b", "meta-llama/llama-3.2-11b-vision-instruct",
+            "gpt-4o",
+            "gpt-4o-mini",
+            "gpt-4.1",
+            "o3-mini",
+            "gpt-5",
+            "gpt-5-nano",
+            "grok-2-latest",
+            "deepseek/deepseek-chat",
+            "google/gemini-2.5-flash",
+            "gemma4:31b",
+            "qwen3",
+            "llama3.1:8b",
+            "meta-llama/llama-3.2-11b-vision-instruct",
         ] {
             assert!(is_text_generation_model(m), "{m} should be kept");
         }
         for m in [
-            "text-embedding-3-small", "nomic-embed-text", "mxbai-embed-large",
-            "dall-e-3", "gpt-image-1", "tts-1", "gpt-4o-mini-tts", "whisper-1",
-            "gpt-4o-transcribe", "omni-moderation-latest", "text-moderation-latest",
-            "gpt-4o-audio-preview", "gpt-4o-realtime-preview", "davinci-002", "babbage-002",
-            "meta-llama/llama-guard-3-8b", "gemini-2.0-flash-exp-image-generation",
+            "text-embedding-3-small",
+            "nomic-embed-text",
+            "mxbai-embed-large",
+            "dall-e-3",
+            "gpt-image-1",
+            "tts-1",
+            "gpt-4o-mini-tts",
+            "whisper-1",
+            "gpt-4o-transcribe",
+            "omni-moderation-latest",
+            "text-moderation-latest",
+            "gpt-4o-audio-preview",
+            "gpt-4o-realtime-preview",
+            "davinci-002",
+            "babbage-002",
+            "meta-llama/llama-guard-3-8b",
+            "gemini-2.0-flash-exp-image-generation",
         ] {
             assert!(!is_text_generation_model(m), "{m} should be filtered out");
         }
@@ -1207,8 +1295,7 @@ mod tests {
             let (mut s, _) = listener.accept().unwrap();
             let mut line = String::new();
             std::io::BufReader::new(&s).read_line(&mut line).unwrap();
-            let body =
-                r#"{"code":"invalid-argument","error":"Incorrect API key provided."}"#;
+            let body = r#"{"code":"invalid-argument","error":"Incorrect API key provided."}"#;
             write!(
                 s,
                 "HTTP/1.1 400 Bad Request\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -1228,10 +1315,15 @@ mod tests {
         server.join().unwrap();
 
         assert!(!health.reachable);
-        assert!(health.rejected, "a 400 'Incorrect API key' must read as rejected");
+        assert!(
+            health.rejected,
+            "a 400 'Incorrect API key' must read as rejected"
+        );
 
         // …and an in-flight question gets the key message, not a raw 400 dump.
-        assert!(body_says_bad_key(r#"{"error":"Incorrect API key provided."}"#));
+        assert!(body_says_bad_key(
+            r#"{"error":"Incorrect API key provided."}"#
+        ));
         assert!(!body_says_bad_key(r#"{"error":"Model not found: grok-9"}"#));
     }
 
@@ -1298,7 +1390,12 @@ mod tests {
             retries.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         };
         let resp = client
-            .chat(&[ChatMessage::User("q".into())], &[], &notify, &|_: &str| {})
+            .chat(
+                &[ChatMessage::User("q".into())],
+                &[],
+                &notify,
+                &|_: &str| {},
+            )
             .await
             .unwrap();
         server.join().unwrap();
@@ -1329,7 +1426,12 @@ mod tests {
         let base = format!("http://127.0.0.1:{port}");
         let client = LlmClient::new(reqwest::Client::new(), &settings("vercel", &base), None);
         let err = client
-            .chat(&[ChatMessage::User("q".into())], &[], &|_: &str| {}, &|_: &str| {})
+            .chat(
+                &[ChatMessage::User("q".into())],
+                &[],
+                &|_: &str| {},
+                &|_: &str| {},
+            )
             .await
             .unwrap_err()
             .to_string();
@@ -1358,10 +1460,14 @@ mod tests {
                 );
             });
             let base = format!("http://127.0.0.1:{port}");
-            let client =
-                LlmClient::new(reqwest::Client::new(), &settings(provider, &base), None);
+            let client = LlmClient::new(reqwest::Client::new(), &settings(provider, &base), None);
             let e = client
-                .chat(&[ChatMessage::User("q".into())], &[], &|_: &str| {}, &|_: &str| {})
+                .chat(
+                    &[ChatMessage::User("q".into())],
+                    &[],
+                    &|_: &str| {},
+                    &|_: &str| {},
+                )
                 .await
                 .unwrap_err()
                 .to_string();
@@ -1370,17 +1476,29 @@ mod tests {
         }
 
         let e401 = err_for("401 Unauthorized", "openai").await;
-        assert!(e401.contains("rejected the API key") && e401.contains("/login"), "{e401}");
+        assert!(
+            e401.contains("rejected the API key") && e401.contains("/login"),
+            "{e401}"
+        );
         assert!(!e401.contains("\"error\""), "raw body leaked: {e401}");
 
         // 403 is not treated as a bad key it's an account/plan/credit block
         // (e.g. Vercel AI Gateway free-credit restrictions), and the provider's
         // own words are passed through so the user can act on them.
         let e403 = err_for("403 Forbidden", "vercel").await;
-        assert!(e403.contains("403") && e403.contains("not a bad key"), "{e403}");
-        assert!(!e403.contains("/login"), "403 should not send them back to /login: {e403}");
+        assert!(
+            e403.contains("403") && e403.contains("not a bad key"),
+            "{e403}"
+        );
+        assert!(
+            !e403.contains("/login"),
+            "403 should not send them back to /login: {e403}"
+        );
 
         let e402 = err_for("402 Payment Required", "vercel").await;
-        assert!(e402.contains("plan doesn't cover") && e402.contains("/model"), "{e402}");
+        assert!(
+            e402.contains("plan doesn't cover") && e402.contains("/model"),
+            "{e402}"
+        );
     }
 }

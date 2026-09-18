@@ -11,7 +11,7 @@
 	import Titlebar from '$lib/components/Titlebar.svelte';
 	import Transcript from '$lib/components/Transcript.svelte';
 	import AugmentView from '$lib/components/AugmentView.svelte';
-	import { dispatch, loadStartupCatalog, reconcileModel, stop } from '$lib/commands';
+	import { dispatch, loadStartupCatalog, stop } from '$lib/commands';
 	import { ipc, isTauri } from '$lib/ipc';
 	import { fadeQuick } from '$lib/motion';
 	import { prefs } from '$lib/prefs.svelte';
@@ -28,18 +28,9 @@
 	async function refreshHealth() {
 		if (!isTauri()) return;
 		try {
-			session.health = await ipc.ollamaHealth();
-			await reconcileModel();
+			session.health = await ipc.providerHealth();
 		} catch {
 			/* keep the last value; the next tick retries */
-		}
-		// Also look for a local Ollama regardless of the current provider, so
-		// "you just installed it" gets noticed. Skip when we're already on a
-		// reachable Ollama that check would be redundant.
-		if (!(session.settings?.provider === 'ollama' && session.health?.reachable)) {
-			void ipc.probeOllama().then((h) => { session.ollamaLocal = h; }).catch(() => {});
-		} else {
-			session.ollamaLocal = session.health;
 		}
 	}
 
@@ -59,8 +50,8 @@
 		void ipc.augmentCapabilities().then((c) => { session.augmentCapabilities = c; }).catch(() => {});
 		void prefs.load();
 
-		// Poll quickly while disconnected so a freshly-started Ollama or a
-		// just-fixed key is picked up within seconds; back off once healthy.
+		// Poll quickly while disconnected so a just-fixed key is picked up within
+		// seconds; back off once healthy.
 		let timer: ReturnType<typeof setTimeout>;
 		const tick = () => {
 			void refreshHealth().finally(() => {
@@ -100,32 +91,34 @@
 	});
 
 	function onKey(e: KeyboardEvent) {
-		if (e.ctrlKey && e.key === 'l') {
+		const commandKey = e.ctrlKey || e.metaKey;
+		const key = e.key.toLowerCase();
+		if (commandKey && key === 'l') {
 			e.preventDefault();
 			void session.clear();
-		} else if (e.ctrlKey && e.key === 'k') {
+		} else if (commandKey && key === 'k') {
 			e.preventDefault();
 			paletteOpen = !paletteOpen;
-		} else if (e.ctrlKey && (e.key === 'b' || e.key === 'B')) {
+		} else if (commandKey && key === 'b') {
 			e.preventDefault();
 			session.toggleSidebar();
-		} else if (e.ctrlKey && (e.key === 't' || e.key === 'T')) {
+		} else if (commandKey && key === 't') {
 			e.preventDefault();
 			session.setWorkspaceView('ask');
 			session.newTab();
 			composer?.focus();
-		} else if (e.ctrlKey && (e.key === 'w' || e.key === 'W')) {
+		} else if (commandKey && key === 'w') {
 			e.preventDefault();
 			void session.closeTab(session.active);
 			composer?.focus();
-		} else if (e.ctrlKey && e.key >= '1' && e.key <= '9') {
+		} else if (commandKey && e.key >= '1' && e.key <= '9') {
 			const i = Number(e.key) - 1;
 			if (i < session.tabs.length) {
 				e.preventDefault();
 				session.activateTab(i);
 				composer?.focus();
 			}
-		} else if (e.ctrlKey && e.shiftKey && (e.key === 'f' || e.key === 'F')) {
+		} else if (commandKey && e.shiftKey && key === 'f') {
 			e.preventDefault();
 			session.focus = !session.focus;
 		} else if (e.key === 'Escape' && !paletteOpen) {

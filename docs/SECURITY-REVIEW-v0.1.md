@@ -56,10 +56,12 @@ interpreter startup, and bounded read-only SQL.
 - **Release integrity**: `release.yml` attaches `SHA256SUMS`; `install.sh` /
   `install.ps1` verify the download against it (fatal on mismatch).
 - **Embedded Python hostile baseline (2026-09-17)**: `tests/python_tool.rs`
-  passes seven checks covering output capture, the read-only SQL bridge, a
-  blocked host-file read, fuel exhaustion, and the bounded-output marker. The
-  tests confirm the current capability contract; they do not replace the
-  future OS-worker acceptance suite described in `docs/PYTHON-SANDBOX.md`.
+  passes eight checks covering output capture, the read-only SQL bridge, a
+  blocked host-file read, fuel exhaustion, user cancellation, and the
+  bounded-output marker. The repeatable `scripts/check-memory.sh` probe covers
+  guest-store teardown and post-warm-up RSS on Linux. These checks confirm the
+  current capability contract; they do not replace the future OS-worker
+  acceptance suite described in `docs/PYTHON-SANDBOX.md`.
 
 ## Known limitations for the release notes and first-run copy
 
@@ -74,10 +76,11 @@ interpreter startup, and bounded read-only SQL.
    and response limits. A vulnerability in Wasmi, RustPython, or the guest
    artifact is outside those limits, so this is a stronger capability boundary,
    not a claim that hostile code is impossible.
-3. **`mcp` connectors reach the network by design.** Off by default; installing
-   and enabling one is the user's explicit choice; the token is theirs. Fella
-   vouches only for the review of catalog-listed packs; side-loaded packs are
-   marked unverified.
+3. **`mcp` connectors reach the network by design.** Connector packs are
+   disabled until the user enables one; doing so is an explicit choice and the
+   token is theirs. Fella vouches only for the review of catalog-listed packs;
+   side-loaded packs are marked unverified. Remote calls time out after 30
+   seconds and returned text is capped before it enters the model context.
 4. **`script-src 'unsafe-inline'`.** Tightening to SvelteKit hash-mode CSP needs
    a GUI build to verify hydration tracked for v0.1.1.
 5. **No frontend test harness.** `svelte-check` plus the manual smoke list is

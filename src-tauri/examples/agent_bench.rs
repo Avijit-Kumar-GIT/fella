@@ -94,10 +94,31 @@ fn write_fixtures(ws: &Path) {
 }
 
 fn gen_txns(path: &Path, n: usize, start_year: i32) {
-    let cats = ["groceries", "rent", "transport", "dining", "utilities", "shopping"];
+    let cats = [
+        "groceries",
+        "rent",
+        "transport",
+        "dining",
+        "utilities",
+        "shopping",
+    ];
     let merchants = [
-        "Aldi", "Tesco", "Uber", "Shell", "Amazon", "Netflix", "Spotify", "EDF",
-        "Thameslink", "Pret", "Nando's", "IKEA", "Boots", "Costa", "Greggs", "Deliveroo",
+        "Aldi",
+        "Tesco",
+        "Uber",
+        "Shell",
+        "Amazon",
+        "Netflix",
+        "Spotify",
+        "EDF",
+        "Thameslink",
+        "Pret",
+        "Nando's",
+        "IKEA",
+        "Boots",
+        "Costa",
+        "Greggs",
+        "Deliveroo",
     ];
     let mut s = String::with_capacity(n * 40);
     s.push_str("date,amount,category,merchant\n");
@@ -193,19 +214,32 @@ async fn run_one(engine: &EngineState, conv: &str, q: &Q) -> Sample {
         i += 1;
     }
     let _ = (i, last_batch_start_at);
-    let done_at = evs.iter().rev().find(|e| e.kind == "answer_done").map(|e| e.at).unwrap_or(total);
+    let done_at = evs
+        .iter()
+        .rev()
+        .find(|e| e.kind == "answer_done")
+        .map(|e| e.at)
+        .unwrap_or(total);
     let model_time = done_at.saturating_sub(tool_time);
 
     if std::env::var_os("BENCH_SHOW_ANSWERS").is_some() {
         match &res {
             Ok(a) => {
-                eprintln!("\n[{}] Q: {}\n  A: {}", q.id, q.text, a.text.replace('\n', "\n     "));
+                eprintln!(
+                    "\n[{}] Q: {}\n  A: {}",
+                    q.id,
+                    q.text,
+                    a.text.replace('\n', "\n     ")
+                );
                 for e in &a.evidence {
                     eprintln!(
                         "     · {} {}ms{}",
                         e.tool,
                         e.ms,
-                        e.sql.as_deref().map(|s| format!("  {s}")).unwrap_or_default()
+                        e.sql
+                            .as_deref()
+                            .map(|s| format!("  {s}"))
+                            .unwrap_or_default()
                     );
                 }
                 for c in &a.verification {
@@ -275,15 +309,16 @@ async fn main() {
     let data_dir = match std::env::var("BENCH_DATA_DIR") {
         Ok(d) => PathBuf::from(d),
         Err(_) => {
-            eprintln!(
-                "set BENCH_DATA_DIR to a dir holding a copy of your fella.db + auth.json"
-            );
+            eprintln!("set BENCH_DATA_DIR to a dir holding a copy of your fella.db + auth.json");
             std::process::exit(2);
         }
     };
     let ws = PathBuf::from(env(
         "BENCH_WS",
-        std::env::temp_dir().join("fella-bench-ws").to_str().unwrap_or("/tmp/fella-bench-ws"),
+        std::env::temp_dir()
+            .join("fella-bench-ws")
+            .to_str()
+            .unwrap_or("/tmp/fella-bench-ws"),
     ));
     let iters: usize = env("BENCH_ITERS", "3").parse().unwrap_or(3);
     let only = std::env::var("BENCH_ONLY").ok();
@@ -344,16 +379,29 @@ async fn main() {
         let n = env("BENCH_ITERS", "2").parse().unwrap_or(2);
         let core: Vec<Q> = battery()
             .into_iter()
-            .filter(|q| matches!(q.id, "agg_tiny" | "agg_medium" | "group_medium" | "multi_step" | "doc_lookup"))
+            .filter(|q| {
+                matches!(
+                    q.id,
+                    "agg_tiny" | "agg_medium" | "group_medium" | "multi_step" | "doc_lookup"
+                )
+            })
             .collect();
         println!("\n# Cross-model sweep\n");
-        println!("num_ctx {} · keep_alive {} · think {} · {n} warm iters/question after 1 warm-up\n",
+        println!(
+            "num_ctx {} · keep_alive {} · think {} · {n} warm iters/question after 1 warm-up\n",
             env("FELLA_MODEL_NUM_CTX", "8192"),
             env("FELLA_MODEL_KEEP_ALIVE", "30m"),
-            env("FELLA_MODEL_THINK", "false"));
-        println!("| model | total s (mean) | 1st tok s | model calls | steps>1 | verif ok | worst q |");
+            env("FELLA_MODEL_THINK", "false")
+        );
+        println!(
+            "| model | total s (mean) | 1st tok s | model calls | steps>1 | verif ok | worst q |"
+        );
         println!("|---|--:|--:|--:|--:|:-:|---|");
-        for m in models.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        for m in models
+            .split(',')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+        {
             let mut patch = serde_json::Map::new();
             patch.insert("model".into(), serde_json::Value::String(m.to_string()));
             if engine.save_settings(&patch).is_err() {
@@ -391,7 +439,13 @@ async fn main() {
                     }
                 }
             }
-            let mean = |v: &[f64]| if v.is_empty() { 0.0 } else { v.iter().sum::<f64>() / v.len() as f64 };
+            let mean = |v: &[f64]| {
+                if v.is_empty() {
+                    0.0
+                } else {
+                    v.iter().sum::<f64>() / v.len() as f64
+                }
+            };
             println!(
                 "| {m} | {:.1} | {:.1} | {:.1} | {} | {} | {} {:.1}s |",
                 mean(&totals),
@@ -436,10 +490,15 @@ async fn main() {
             let conv = format!("{}-{it}", q.id);
             let sm = run_one(&engine, &conv, q).await;
             let tag = if it == 0 { "cold" } else { "warm" };
-            let first_token =
-                sm.first_token.map(|d| format!("{:.1}", secs(d))).unwrap_or_else(|| "-".into());
+            let first_token = sm
+                .first_token
+                .map(|d| format!("{:.1}", secs(d)))
+                .unwrap_or_else(|| "-".into());
             let verif = format!("{}/{}", sm.verif_pass, sm.verif_total);
-            let last = sm.err.clone().unwrap_or_else(|| format!("{}c", sm.answer_chars));
+            let last = sm
+                .err
+                .clone()
+                .unwrap_or_else(|| format!("{}c", sm.answer_chars));
             println!(
                 "| {} | {} {} | {:.1} | {} | {} | {} | {:.1} | {:.1} | {} | {} | {} | {} |",
                 q.id,
@@ -466,7 +525,11 @@ async fn main() {
     println!("| question | n | total s | model s | tool s | model calls | tool calls | tool ms sum | verif |");
     println!("|---|--:|--:|--:|--:|--:|--:|--:|:-:|");
     for (id, samples) in &agg {
-        let warm: Vec<&Sample> = if samples.len() > 1 { samples[1..].iter().collect() } else { samples.iter().collect() };
+        let warm: Vec<&Sample> = if samples.len() > 1 {
+            samples[1..].iter().collect()
+        } else {
+            samples.iter().collect()
+        };
         let n = warm.len().max(1) as f64;
         let mean = |f: &dyn Fn(&Sample) -> f64| warm.iter().map(|s| f(s)).sum::<f64>() / n;
         println!(
@@ -496,7 +559,13 @@ async fn main() {
             let cold = secs(samples[0].total);
             let warm = samples[1..].iter().map(|s| secs(s.total)).sum::<f64>()
                 / (samples.len() - 1) as f64;
-            println!("| {} | {:.1} | {:.1} | {:+.1} |", id, cold, warm, cold - warm);
+            println!(
+                "| {} | {:.1} | {:.1} | {:+.1} |",
+                id,
+                cold,
+                warm,
+                cold - warm
+            );
         }
     }
 
@@ -506,8 +575,14 @@ async fn main() {
         println!("| turn | total s | model calls | tool calls | verif | note |");
         println!("|---|--:|--:|--:|:-:|---|");
         let conv = "followup-scenario";
-        let q1 = Q { id: "fu1", text: "in transactions.csv, what did I spend on groceries in total?" };
-        let q2 = Q { id: "fu2", text: "and what about dining?" };
+        let q1 = Q {
+            id: "fu1",
+            text: "in transactions.csv, what did I spend on groceries in total?",
+        };
+        let q2 = Q {
+            id: "fu2",
+            text: "and what about dining?",
+        };
         for (label, q) in [("1 (fresh)", &q1), ("2 (follow-up)", &q2)] {
             let sm = run_one(&engine, conv, q).await;
             println!(
@@ -528,7 +603,9 @@ async fn main() {
     if std::env::var_os("BENCH_SWEEP").is_some() {
         println!("\n## Knob sweep\n");
         println!("(each cell: fresh conversation, model already warm from the runs above)\n");
-        println!("| question | num_ctx | total s | model calls | tool calls | steps | cap | verif |");
+        println!(
+            "| question | num_ctx | total s | model calls | tool calls | steps | cap | verif |"
+        );
         println!("|---|--:|--:|--:|--:|--:|:-:|:-:|");
         let sweep_qs = [
             Q { id: "sweep_group", text: "in transactions.csv, what did I spend per category? give the top 3." },
