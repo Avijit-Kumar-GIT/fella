@@ -296,7 +296,7 @@ inert command whose only purpose is to mark this future seam. See
 One window with a focused shell: **Ask** is the default conversation, **Search**
 is the Ctrl/Command+K palette, **Workspace** contains **Sources** and
 user-authored **Context**, and **Settings** contains provider, model, appearance,
-and folder controls. Recent conversations form the History surface. The bottom **Composer** carries the
+folder, and experimental analysis capability controls. Recent conversations form the History surface. The bottom **Composer** carries the
 active model name and brand icon. Plain-language and sans-serif; monospace only
 where data lines up (tables, SQL). System/Light/Dark appearance is a local
 preference.
@@ -306,6 +306,18 @@ Svelte chart component; user/system lines stay plain text. A chart answer leads
 with the model's takeaway, places the visual below it, and keeps exact values in
 the chart card. The evidence block is collapsed by default. `↑` recalls input;
 `Esc` stops a run or collapses evidence.
+
+### Capability policy (experimental)
+
+Settings can turn the current analysis paths on or off locally: table analysis,
+document analysis, Python calculations, and visualizations. The tool registry
+uses the policy when it builds the model's schemas, while `EngineState` checks
+the same policy at its data boundaries so a disabled path cannot be reached
+through a direct command. Visualization also depends on table analysis. File
+listing, evidence, verification, and the read-only boundary remain core
+harness behavior. The policy is intentionally a small personal seam; the
+enterprise profile and context governance ideas are recorded in
+[`CAPABILITY-POLICY.md`](CAPABILITY-POLICY.md) for later reference.
 
 ## Build milestones
 

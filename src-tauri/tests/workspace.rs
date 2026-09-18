@@ -106,6 +106,39 @@ fn scans_queries_and_guards_a_workspace() {
 }
 
 #[test]
+fn capability_policy_blocks_disabled_table_and_document_paths() {
+    let ws = scratch("capabilities-ws");
+    let data = scratch("capabilities-data");
+    fs::write(ws.join("sales.csv"), "month,amount\n2024-01,100\n").unwrap();
+    fs::write(ws.join("notes.txt"), "the business context\n").unwrap();
+
+    let engine = EngineState::new(&data).unwrap();
+    engine.open_workspace(&ws).unwrap();
+
+    let patch = serde_json::json!({
+        "capabilities": {
+            "table_analysis": false,
+            "document_analysis": false,
+            "python_analysis": true,
+            "visualizations": false
+        }
+    });
+    engine.save_settings(patch.as_object().unwrap()).unwrap();
+
+    let sql_error = engine.run_sql("SELECT count(*) FROM sales").unwrap_err();
+    assert!(sql_error.to_string().contains("Table analysis is disabled"));
+    let document_error = engine.grep_files("business", 10).unwrap_err();
+    assert!(document_error
+        .to_string()
+        .contains("Document analysis is disabled"));
+    assert!(!engine.settings().capabilities.table_analysis);
+    assert!(!engine.settings().capabilities.document_analysis);
+
+    let _ = fs::remove_dir_all(&ws);
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[test]
 fn messy_ledger_csv_coerces_currency_and_sums_right() {
     let ws = scratch("messy-ws");
     let data = scratch("messy-data");

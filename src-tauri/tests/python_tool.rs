@@ -39,6 +39,28 @@ async fn runs_python_and_captures_stdout_and_stderr() {
 }
 
 #[tokio::test]
+async fn capability_policy_blocks_python_analysis() {
+    let data = scratch("py-capability-data");
+    let engine = EngineState::new(&data).unwrap();
+    let patch = serde_json::json!({
+        "capabilities": {
+            "table_analysis": true,
+            "document_analysis": true,
+            "python_analysis": false,
+            "visualizations": true
+        }
+    });
+    engine.save_settings(patch.as_object().unwrap()).unwrap();
+
+    match engine.run_python("print(42)").await {
+        Err(error) => assert!(error.to_string().contains("Python analysis is disabled")),
+        Ok(_) => panic!("disabled Python analysis unexpectedly ran"),
+    }
+
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[tokio::test]
 async fn python_nonzero_exit_is_reported_not_errored() {
     let data = scratch("py-data2");
     let engine = EngineState::new(&data).unwrap();

@@ -143,6 +143,16 @@ impl WorkspaceState {
     }
 }
 
+fn require_capability(enabled: bool, label: &str) -> EngineResult<()> {
+    if enabled {
+        Ok(())
+    } else {
+        Err(EngineError::msg(format!(
+            "{label} is disabled in Settings under Experimental analysis capabilities."
+        )))
+    }
+}
+
 struct WorkspaceScratch {
     path: PathBuf,
     users: Arc<AtomicUsize>,
@@ -662,13 +672,18 @@ impl EngineState {
     /// sample rows for a small workspace; a large/messy folder falls back to
     /// names + shape only (keeps the prompt small).
     pub(crate) fn schema_block(&self) -> String {
+        let capabilities = self.settings().capabilities;
         let mut workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(cached) = &workspace.schema_cache {
             return cached.clone();
         }
         let sources = workspace.sources.clone();
         let inspected = workspace.inspected_tables.clone();
-        let tables: Vec<&SourceInfo> = sources.iter().filter(|s| s.view.is_some()).collect();
+        let tables: Vec<&SourceInfo> = if capabilities.table_analysis {
+            sources.iter().filter(|s| s.view.is_some()).collect()
+        } else {
+            Vec::new()
+        };
         let total_cols: usize = tables
             .iter()
             .map(|s| s.columns.as_ref().map(|c| c.len()).unwrap_or(0))
@@ -681,7 +696,11 @@ impl EngineState {
         let small = tables.len() <= 4;
 
         let mut p = String::new();
-        if tables.is_empty() {
+        if !capabilities.table_analysis {
+            p.push_str(
+                "Table analysis is disabled by the current experimental capability policy.\n",
+            );
+        } else if tables.is_empty() {
             p.push_str("No tables were detected.\n");
         } else if full {
             p.push_str("Tables (columns and types shown; use inspect_table for values):\n");
@@ -758,7 +777,11 @@ impl EngineState {
         }
 
         let docs: Vec<&SourceInfo> = sources.iter().filter(|s| s.view.is_none()).collect();
-        if !docs.is_empty() {
+        if !capabilities.document_analysis {
+            p.push_str(
+                "Document analysis is disabled by the current experimental capability policy.\n",
+            );
+        } else if !docs.is_empty() {
             p.push_str("Documents (list_files/grep_files/read_file):\n");
             for d in docs {
                 match &d.synopsis {
@@ -1062,6 +1085,12 @@ exactly, character for character, from the list below.";
             &self.sqlite.lock().unwrap_or_else(|e| e.into_inner()),
             &patch,
         )?;
+        if patch.contains_key("capabilities") {
+            self.workspace
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .schema_cache = None;
+        }
         // A model or provider change: warm a hosted Ollama-wire model when a
         // credential is available.
         self.warm_model();
@@ -1408,6 +1437,10 @@ exactly, character for character, from the list below.";
 
     /// Full per-column stats for one source.
     pub fn describe_source(&self, name: &str) -> EngineResult<SourceInfo> {
+        require_capability(
+            self.settings().capabilities.table_analysis,
+            "Table analysis",
+        )?;
         let mut workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
         let mut info = workspace
             .sources
@@ -1469,6 +1502,10 @@ exactly, character for character, from the list below.";
 
     /// Run a read-only SQL statement (used by `/sql` and the agent).
     pub fn run_sql(&self, sql: &str) -> EngineResult<QueryResult> {
+        require_capability(
+            self.settings().capabilities.table_analysis,
+            "Table analysis",
+        )?;
         let workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
         query_workspace(&*workspace.data, sql, DEFAULT_ROW_CAP)
     }
@@ -1481,12 +1518,20 @@ exactly, character for character, from the list below.";
         sql: &str,
         cancel: Arc<AtomicBool>,
     ) -> EngineResult<QueryResult> {
+        require_capability(
+            self.settings().capabilities.table_analysis,
+            "Table analysis",
+        )?;
         let workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
         query_workspace_cancellable(&*workspace.data, sql, DEFAULT_ROW_CAP, cancel)
     }
 
     /// First `n` rows of a source (used by the `inspect_table` tool).
     pub fn sample(&self, name: &str, n: usize) -> EngineResult<QueryResult> {
+        require_capability(
+            self.settings().capabilities.table_analysis,
+            "Table analysis",
+        )?;
         let workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
         let view = workspace
             .sources
@@ -1520,6 +1565,10 @@ exactly, character for character, from the list below.";
         code: &str,
         cancel: Arc<AtomicBool>,
     ) -> EngineResult<pyexec::PyResult> {
+        require_capability(
+            self.settings().capabilities.python_analysis,
+            "Python analysis",
+        )?;
         let (bridge, scratch_lease) = {
             let workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
             (
@@ -1618,9 +1667,9 @@ exactly, character for character, from the list below.";
         let llm = self.llm_with_model(&effective_model);
         #[allow(unused_mut)]
         let mut registry = if inspect {
-            Registry::inspect()
+            Registry::inspect_with(settings.capabilities)
         } else {
-            Registry::standard()
+            Registry::standard_with(settings.capabilities)
         };
         let answer = agent::run(
             self,
@@ -1833,6 +1882,10 @@ exactly, character for character, from the list below.";
     /// catalogued document. No index to build or keep in sync just reads
     /// the files that are there right now.
     pub fn grep_files(&self, pattern: &str, max_hits: usize) -> EngineResult<Vec<GrepHit>> {
+        require_capability(
+            self.settings().capabilities.document_analysis,
+            "Document analysis",
+        )?;
         let re = regex::RegexBuilder::new(pattern)
             .case_insensitive(true)
             .build()
@@ -1883,6 +1936,10 @@ exactly, character for character, from the list below.";
     /// document can't blow the context window `grep_files` can find a spot
     /// in a bigger file first.
     pub fn read_file(&self, name: &str) -> EngineResult<(String, bool)> {
+        require_capability(
+            self.settings().capabilities.document_analysis,
+            "Document analysis",
+        )?;
         let (path, kind) = self
             .documents()
             .into_iter()

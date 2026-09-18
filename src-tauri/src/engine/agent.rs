@@ -93,7 +93,7 @@ pub async fn run(
     let schema = engine.schema_block();
     let recent = engine.session_block(conversation_id);
     let learned = engine.folder_memory_block();
-    let sys = system_prompt(
+    let mut sys = system_prompt(
         &PromptProfile::from_env(),
         &catalog,
         &user_context,
@@ -101,6 +101,13 @@ pub async fn run(
         recent.as_deref(),
         learned.as_deref(),
     );
+    if let Some(notice) = registry.capability_notice() {
+        sys.push_str("\n\nCapability policy (experimental):\n");
+        sys.push_str(&notice);
+        sys.push_str(
+            " Use only the enabled analysis paths and explain when the requested analysis is unavailable.",
+        );
+    }
     let mut messages = vec![
         ChatMessage::System(sys),
         ChatMessage::User(question.to_string()),

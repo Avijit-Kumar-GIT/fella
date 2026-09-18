@@ -58,6 +58,8 @@ The shipped release keeps customization deliberately small: the user-authored
 extension points. MCP is documented as an inert experimental command; packs and
 augments are archived design work rather than runtime features. The whole thing
 stays understandable by one person. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for how it's built,
+[`docs/CAPABILITY-POLICY.md`](docs/CAPABILITY-POLICY.md) for the experimental
+analysis switches and longer-term enterprise reference,
 [`docs/WHY.md`](docs/WHY.md) for the reasoning, [`docs/PRINCIPLES.md`](docs/PRINCIPLES.md)
 for the commitments, and [`docs/NON-GOALS.md`](docs/NON-GOALS.md) for what it deliberately
 doesn't do.

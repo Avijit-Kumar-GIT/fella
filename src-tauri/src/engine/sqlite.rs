@@ -6,6 +6,7 @@ use std::path::Path;
 use rusqlite::Connection;
 use serde::Serialize;
 
+use crate::engine::capabilities::AnalysisCapabilities;
 use crate::engine::error::EngineResult;
 
 const SCHEMA: &str = "
@@ -41,6 +42,9 @@ pub struct Settings {
     pub base_url: String,
     pub model: String,
     pub embed_model: String,
+    /// User-selected analysis paths. Older databases omit these keys and use
+    /// the current all-enabled defaults.
+    pub capabilities: AnalysisCapabilities,
     /// Whether a usable credential exists for `provider`. Filled in by
     /// `EngineState` (it owns the credential store); `load_settings` leaves it
     /// `false`.
@@ -61,6 +65,14 @@ fn put(conn: &Connection, key: &str, value: &str) -> EngineResult<()> {
         (key, value),
     )?;
     Ok(())
+}
+
+fn get_bool(conn: &Connection, key: &str, default: bool) -> bool {
+    match get(conn, key).as_deref() {
+        Some("1") | Some("true") => true,
+        Some("0") | Some("false") => false,
+        _ => default,
+    }
 }
 
 /// The folder opened most recently (by `opened_at`), if any. Used on launch to
@@ -108,13 +120,20 @@ pub fn load_settings(conn: &Connection) -> Settings {
                 .unwrap_or("")
                 .into()
         }),
+        capabilities: AnalysisCapabilities {
+            table_analysis: get_bool(conn, "capability_table_analysis", true),
+            document_analysis: get_bool(conn, "capability_document_analysis", true),
+            python_analysis: get_bool(conn, "capability_python_analysis", true),
+            visualizations: get_bool(conn, "capability_visualizations", true),
+        },
         provider: provider_id,
         has_credential: false,
     }
 }
 
 /// Apply a partial settings update. Recognised keys: `provider`, `base_url`,
-/// `model`, `embed_model`. Credentials go through the credential store, not here.
+/// `model`, `embed_model`, and the nested `capabilities` object. Credentials go
+/// through the credential store, not here.
 pub fn save_settings(
     conn: &Connection,
     patch: &serde_json::Map<String, serde_json::Value>,
@@ -122,6 +141,18 @@ pub fn save_settings(
     for key in ["provider", "base_url", "model", "embed_model"] {
         if let Some(v) = patch.get(key).and_then(|v| v.as_str()) {
             put(conn, key, v)?;
+        }
+    }
+    if let Some(capabilities) = patch.get("capabilities").and_then(|v| v.as_object()) {
+        for (field, key) in [
+            ("table_analysis", "capability_table_analysis"),
+            ("document_analysis", "capability_document_analysis"),
+            ("python_analysis", "capability_python_analysis"),
+            ("visualizations", "capability_visualizations"),
+        ] {
+            if let Some(value) = capabilities.get(field).and_then(|v| v.as_bool()) {
+                put(conn, key, if value { "1" } else { "0" })?;
+            }
         }
     }
     Ok(load_settings(conn))
@@ -149,6 +180,31 @@ mod tests {
         let json = serde_json::to_string(&s).unwrap();
         assert!(!json.contains("secret"));
         assert!(!json.contains("has_api_key"));
+        assert!(s.capabilities.table_analysis);
+    }
+
+    #[test]
+    fn capability_switches_roundtrip_inside_settings() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA).unwrap();
+
+        let mut capabilities = serde_json::Map::new();
+        capabilities.insert("table_analysis".into(), false.into());
+        capabilities.insert("python_analysis".into(), false.into());
+        let mut patch = serde_json::Map::new();
+        patch.insert(
+            "capabilities".into(),
+            serde_json::Value::Object(capabilities),
+        );
+
+        let settings = save_settings(&conn, &patch).unwrap();
+        assert!(!settings.capabilities.table_analysis);
+        assert!(settings.capabilities.document_analysis);
+        assert!(!settings.capabilities.python_analysis);
+        assert!(settings.capabilities.visualizations);
+
+        let loaded = load_settings(&conn);
+        assert_eq!(loaded.capabilities, settings.capabilities);
     }
 
     #[test]

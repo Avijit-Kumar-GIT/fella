@@ -3,6 +3,7 @@
 
 pub mod agent;
 pub mod analytics;
+pub mod capabilities;
 pub mod catalog;
 mod env;
 pub mod error;
@@ -22,6 +23,7 @@ pub mod testkit;
 pub mod tools;
 pub mod update;
 
+pub use capabilities::AnalysisCapabilities;
 pub use catalog::{Catalog, SourceInfo};
 pub use error::{EngineError, EngineResult};
 pub use evidence::{Answer, AskEvent};

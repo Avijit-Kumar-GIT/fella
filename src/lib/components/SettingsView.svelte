@@ -3,6 +3,7 @@
 	import { ipc, isTauri } from '$lib/ipc';
 	import { prefs, type Appearance } from '$lib/prefs.svelte';
 	import { session } from '$lib/session.svelte';
+	import type { AnalysisCapabilities } from '$lib/types';
 	import Icon from './Icon.svelte';
 	import ProviderIcon from './ProviderIcon.svelte';
 
@@ -11,11 +12,43 @@
 		{ id: 'light', label: 'Light', detail: 'Bright workspace' },
 		{ id: 'dark', label: 'Dark', detail: 'Low light workspace' }
 	];
+	const defaultCapabilities: AnalysisCapabilities = {
+		table_analysis: true,
+		document_analysis: true,
+		python_analysis: true,
+		visualizations: true
+	};
+	const capabilityOptions: {
+		key: keyof AnalysisCapabilities;
+		label: string;
+		detail: string;
+	}[] = [
+		{ key: 'table_analysis', label: 'Table analysis', detail: 'Schemas, samples, and SQL queries' },
+		{ key: 'document_analysis', label: 'Document analysis', detail: 'Search and read text and PDF files' },
+		{ key: 'python_analysis', label: 'Python calculations', detail: 'Sandboxed calculations for advanced statistics' },
+		{ key: 'visualizations', label: 'Visualizations', detail: 'Validated charts from table queries' }
+	];
 
 	let currentProvider = $derived(session.settings?.provider ?? '');
 	let currentModel = $derived(session.model || session.settings?.model || '');
 	let provider = $derived(session.providers.find((item) => item.id === currentProvider));
 	let workspace = $derived(session.catalog.workspace);
+	let capabilities = $derived(session.settings?.capabilities ?? defaultCapabilities);
+	let capabilityError = $state('');
+
+	async function toggleCapability(key: keyof AnalysisCapabilities): Promise<void> {
+		if (!isTauri()) return;
+		const current = session.settings?.capabilities ?? defaultCapabilities;
+		const enabled = !current[key];
+		const next: AnalysisCapabilities = { ...current, [key]: enabled };
+		if (key === 'table_analysis' && !enabled) next.visualizations = false;
+		capabilityError = '';
+		try {
+			session.settings = await ipc.setSettings({ capabilities: next });
+		} catch (error) {
+			capabilityError = error instanceof Error ? error.message : String(error);
+		}
+	}
 
 	function command(commandText: string): void {
 		session.setWorkspaceView('ask');
@@ -127,6 +160,43 @@
 				<Icon name="folder" size={13} /> {workspace ? 'Change folder' : 'Choose a folder'}
 			</button>
 		</section>
+
+		<section class="settings-card capability-card" aria-labelledby="capability-title">
+			<div class="card-head">
+				<div>
+					<div class="title-line">
+						<h2 id="capability-title">Analysis capabilities</h2>
+						<span class="experimental-badge">Experimental</span>
+					</div>
+					<p>Choose which analysis paths the model may use on this computer.</p>
+				</div>
+				<Icon name="settings" size={20} />
+			</div>
+			<div class="capability-list">
+				{#each capabilityOptions as item (item.key)}
+					<div class="capability-row">
+						<div class="capability-copy">
+							<strong>{item.label}</strong>
+							<small>{item.detail}</small>
+						</div>
+						<button
+							class="capability-toggle"
+							class:on={capabilities[item.key]}
+							type="button"
+							role="switch"
+							aria-checked={capabilities[item.key]}
+							aria-label={`${item.label}: ${capabilities[item.key] ? 'on' : 'off'}`}
+							disabled={!capabilities.table_analysis && item.key === 'visualizations'}
+							onclick={() => void toggleCapability(item.key)}
+						>
+							<span></span>
+						</button>
+					</div>
+				{/each}
+			</div>
+			<p class="capability-note">Evidence, verification, and the read-only boundary always stay on.</p>
+			{#if capabilityError}<p class="error-note">{capabilityError}</p>{/if}
+		</section>
 	</div>
 </section>
 
@@ -178,6 +248,9 @@
 	.workspace-card {
 		grid-column: 1 / -1;
 	}
+	.capability-card {
+		grid-column: 1 / -1;
+	}
 	.card-head {
 		display: flex;
 		align-items: flex-start;
@@ -199,6 +272,22 @@
 		color: var(--text-faint);
 		font-size: var(--fs-xs);
 		line-height: 1.45;
+	}
+	.title-line {
+		display: flex;
+		align-items: center;
+		flex-wrap: wrap;
+		gap: 8px;
+	}
+	.experimental-badge {
+		padding: 3px 7px;
+		border: 1px solid var(--brand);
+		border-radius: 999px;
+		color: var(--brand);
+		font-size: 10px;
+		font-weight: 650;
+		letter-spacing: 0.02em;
+		white-space: nowrap;
 	}
 	.current-row,
 	.provider-row,
@@ -240,6 +329,74 @@
 	.provider-list,
 	.appearance-list {
 		border-top: 1px solid var(--border);
+	}
+	.capability-list {
+		border-top: 1px solid var(--border);
+	}
+	.capability-row {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: var(--space-4);
+		padding: 10px 0;
+	}
+	.capability-row + .capability-row {
+		border-top: 1px solid var(--border);
+	}
+	.capability-copy {
+		min-width: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 3px;
+	}
+	.capability-copy strong {
+		font-size: var(--fs-sm);
+		font-weight: 560;
+	}
+	.capability-copy small,
+	.capability-note,
+	.error-note {
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+		line-height: 1.45;
+	}
+	.capability-note,
+	.error-note {
+		margin: 0;
+	}
+	.error-note {
+		color: var(--danger, #c15d5d);
+	}
+	.capability-toggle {
+		position: relative;
+		flex: none;
+		width: 38px;
+		height: 22px;
+		padding: 2px;
+		border: 1px solid var(--border-strong, var(--border));
+		border-radius: 999px;
+		background: var(--bg-inset);
+		transition: background 120ms ease, border-color 120ms ease;
+	}
+	.capability-toggle span {
+		display: block;
+		width: 16px;
+		height: 16px;
+		border-radius: 50%;
+		background: var(--text-faint);
+		transition: transform 120ms ease, background 120ms ease;
+	}
+	.capability-toggle.on {
+		border-color: var(--brand);
+		background: var(--brand);
+	}
+	.capability-toggle.on span {
+		background: var(--on-brand, #fff);
+		transform: translateX(16px);
+	}
+	.capability-toggle:disabled {
+		cursor: not-allowed;
+		opacity: 0.45;
 	}
 	.section-label {
 		margin: var(--space-3) 0 var(--space-1);

@@ -1027,6 +1027,7 @@ mod tests {
             base_url: base_url.into(),
             model: "m".into(),
             embed_model: "e".into(),
+            capabilities: crate::engine::capabilities::AnalysisCapabilities::default(),
             has_credential: false,
         }
     }

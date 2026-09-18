@@ -173,6 +173,13 @@ export interface Catalog {
 	skipped?: SkippedFile[];
 }
 
+export interface AnalysisCapabilities {
+	table_analysis: boolean;
+	document_analysis: boolean;
+	python_analysis: boolean;
+	visualizations: boolean;
+}
+
 export interface Settings {
 	/** A provider id from the registry (`ollama-cloud`, `openai`, `vercel`, `xai`, `custom`, …). */
 	provider: string;
@@ -181,6 +188,8 @@ export interface Settings {
 	embed_model: string;
 	/** A usable credential exists for `provider` (or it needs none). */
 	has_credential: boolean;
+	/** Local switches for the analysis paths exposed to the model. */
+	capabilities: AnalysisCapabilities;
 }
 
 /** One built-in provider, as returned by `list_providers`. */

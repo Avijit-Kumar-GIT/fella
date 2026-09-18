@@ -57,6 +57,38 @@ async fn make_chart_returns_structured_chart_data() {
 }
 
 #[tokio::test]
+async fn make_chart_respects_a_disabled_visualization_capability() {
+    let ws = scratch("chart-capability-ws");
+    let data = scratch("chart-capability-data");
+    fs::write(ws.join("sales.csv"), "category,amount\nRent,1250\n").unwrap();
+    let engine = EngineState::new(&data).unwrap();
+    engine.open_workspace(&ws).unwrap();
+    let patch = serde_json::json!({
+        "capabilities": {
+            "table_analysis": true,
+            "document_analysis": true,
+            "python_analysis": true,
+            "visualizations": false
+        }
+    });
+    engine.save_settings(patch.as_object().unwrap()).unwrap();
+
+    let args = serde_json::json!({
+        "kind": "bar",
+        "sql": "SELECT category, amount FROM sales"
+    });
+    let registry = Registry::standard();
+    match registry.run(&engine, "make_chart", &args).await {
+        Some(Err(error)) => assert!(error.to_string().contains("Visualizations are disabled")),
+        Some(Ok(_)) => panic!("disabled visualizations unexpectedly ran"),
+        None => panic!("make_chart was missing from the default registry"),
+    }
+
+    let _ = fs::remove_dir_all(&ws);
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[tokio::test]
 async fn make_chart_auto_chooses_a_line_for_time_periods() {
     let ws = scratch("chart-auto-ws");
     let data = scratch("chart-auto-data");

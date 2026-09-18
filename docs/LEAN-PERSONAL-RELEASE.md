@@ -38,12 +38,19 @@ The lean navigation should contain:
 - **Workspace** for sources and explicit folder context.
 - **History** for previous conversations and complete answer transcripts.
 - **Search** through the command palette.
-- **Settings** for the provider, model, and appearance.
+- **Settings** for the provider, model, appearance, folder, and experimental
+  analysis capabilities.
 
 The separate Overview, Packs, Augments, and standalone Analyses surfaces are
 removed from the main navigation. A useful answer already carries its chart,
 evidence, query, and workspace snapshot, so answers remain in conversation
 history instead of becoming a second saved-analysis artifact system.
+
+The experimental capability policy provides four local switches for the
+existing table, document, Python, and visualization paths. All are enabled by
+default and enforced by the engine. This is a small user control surface, not
+enterprise policy or a new extension runtime. The future enterprise direction
+is recorded in [`CAPABILITY-POLICY.md`](CAPABILITY-POLICY.md).
 
 The normal composer remains the primary way to ask follow-up questions. This
 release does not add a general model-driven clarification workflow. Result

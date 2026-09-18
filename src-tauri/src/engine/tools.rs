@@ -9,6 +9,7 @@ use std::sync::{atomic::AtomicBool, Arc};
 use crate::engine::analytics::chart::{self, ChartData, ChartKind};
 use crate::engine::analytics::data::DEFAULT_ROW_CAP;
 use crate::engine::analytics::verify::truncate as truncate_chars;
+use crate::engine::capabilities::AnalysisCapabilities;
 use crate::engine::error::{EngineError, EngineResult};
 use crate::engine::llm::ToolSchema;
 use crate::engine::state::{EngineState, GrepHit, QueryResult};
@@ -72,35 +73,51 @@ pub trait Tool: Send + Sync {
 
 pub struct Registry {
     tools: Vec<Box<dyn Tool>>,
+    capabilities: AnalysisCapabilities,
 }
 
 impl Registry {
     pub fn standard() -> Self {
-        Self::build(true)
+        Self::standard_with(AnalysisCapabilities::default())
+    }
+
+    pub fn standard_with(capabilities: AnalysisCapabilities) -> Self {
+        Self::build(true, capabilities)
     }
 
     /// Read-only inspection tools for the non-developer path. Python is kept
     /// out of this registry because Inspect is deliberately limited to the
     /// deterministic workspace tools.
     pub fn inspect() -> Self {
-        Self::build(false)
+        Self::inspect_with(AnalysisCapabilities::default())
     }
 
-    fn build(include_python: bool) -> Self {
-        let mut tools: Vec<Box<dyn Tool>> = vec![
-            Box::new(ListFiles),
-            Box::new(InspectTable),
-            Box::new(RunSql),
-            Box::new(GrepFiles),
-            Box::new(ReadFile),
-            Box::new(MakeChart),
-        ];
-        if include_python {
+    pub fn inspect_with(capabilities: AnalysisCapabilities) -> Self {
+        Self::build(false, capabilities)
+    }
+
+    fn build(include_python: bool, capabilities: AnalysisCapabilities) -> Self {
+        let mut tools: Vec<Box<dyn Tool>> = vec![Box::new(ListFiles)];
+        if capabilities.table_analysis {
+            tools.push(Box::new(InspectTable));
+            tools.push(Box::new(RunSql));
+        }
+        if capabilities.document_analysis {
+            tools.push(Box::new(GrepFiles));
+            tools.push(Box::new(ReadFile));
+        }
+        if include_python && capabilities.python_analysis {
             // Python is available only in ordinary Ask mode; Inspect stays a
             // deterministic read-only surface even though Python is sandboxed.
-            tools.insert(5, Box::new(RunPython));
+            tools.push(Box::new(RunPython));
         }
-        Self { tools }
+        if capabilities.charts_enabled() {
+            tools.push(Box::new(MakeChart));
+        }
+        Self {
+            tools,
+            capabilities,
+        }
     }
 
     fn get(&self, name: &str) -> Option<&dyn Tool> {
@@ -145,6 +162,10 @@ impl Registry {
                 parameters: with_note_param(t.parameters()),
             })
             .collect()
+    }
+
+    pub fn capability_notice(&self) -> Option<String> {
+        self.capabilities.prompt_notice()
     }
 }
 
@@ -805,6 +826,17 @@ impl Tool for MakeChart {
         })
     }
     async fn run(&self, engine: &EngineState, args: &Json) -> EngineResult<ToolOutput> {
+        let capabilities = engine.settings().capabilities;
+        if !capabilities.visualizations {
+            return Err(EngineError::msg(
+                "Visualizations are disabled in Settings under Experimental analysis capabilities.",
+            ));
+        }
+        if !capabilities.table_analysis {
+            return Err(EngineError::msg(
+                "Visualizations require table analysis, which is disabled in Settings under Experimental analysis capabilities.",
+            ));
+        }
         let parsed: ChartArgs = serde_json::from_value(args.clone())
             .map_err(|e| EngineError::msg(format!("invalid make_chart arguments: {e}")))?;
         let sql = parsed.sql.trim();
@@ -932,5 +964,22 @@ mod tests {
             .map(|schema| schema.name)
             .collect();
         assert!(standard_names.iter().any(|name| name == "run_python"));
+    }
+
+    #[test]
+    fn registry_only_exposes_enabled_analysis_paths() {
+        let capabilities = AnalysisCapabilities {
+            table_analysis: false,
+            document_analysis: false,
+            python_analysis: false,
+            visualizations: false,
+        };
+        let names: Vec<String> = Registry::standard_with(capabilities)
+            .schemas()
+            .into_iter()
+            .map(|schema| schema.name)
+            .collect();
+
+        assert_eq!(names, vec!["list_files"]);
     }
 }
