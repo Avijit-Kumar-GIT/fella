@@ -13,6 +13,13 @@ use crate::engine::error::{EngineError, EngineResult};
 use crate::engine::llm::ToolSchema;
 use crate::engine::state::{EngineState, GrepHit, QueryResult};
 
+/// Keep the model's context bounded for large result sets, while allowing it
+/// to answer complete-table requests for ordinary small results. A 50-row
+/// category table is still a small result; hiding its last 20 rows makes an
+/// exact transcription request impossible to answer safely.
+const MODEL_TABLE_PREVIEW_ROWS: usize = 30;
+const MODEL_TABLE_COMPLETE_ROWS: usize = 100;
+
 /// What a tool produces: a human-facing summary + optional tabular detail for
 /// the evidence panel, and a compact text rendering for the model.
 pub struct ToolOutput {
@@ -218,7 +225,7 @@ fn str_arg<'a>(args: &'a Json, key: &str) -> EngineResult<&'a str> {
         .ok_or_else(|| EngineError::msg(format!("missing required argument `{key}`")))
 }
 
-/// Render a QueryResult as a small monospace table for the model.
+/// Render a QueryResult as a compact monospace table for the model.
 fn table_text(q: &QueryResult, max_rows: usize) -> String {
     if q.columns.is_empty() {
         return format!("(0 columns, {} rows)", q.row_count);
@@ -265,6 +272,14 @@ fn table_text(q: &QueryResult, max_rows: usize) -> String {
     }
     out.push_str(&format!("({} rows total)", q.row_count));
     out
+}
+
+fn model_table_limit(q: &QueryResult) -> usize {
+    if !q.truncated && q.row_count <= MODEL_TABLE_COMPLETE_ROWS {
+        q.rows.len()
+    } else {
+        MODEL_TABLE_PREVIEW_ROWS
+    }
 }
 
 fn cell_str(v: &Json) -> String {
@@ -445,7 +460,7 @@ impl Tool for RunSql {
         "run_sql"
     }
     fn description(&self) -> &'static str {
-        "Run a read-only SQL query (SELECT / WITH only) and return the rows. Text comparisons are case-sensitive; for category or status values whose case may vary, use lower(column) = lower(value)."
+        "Run a read-only SQL query (SELECT / WITH only) and return the rows. Complete results up to 100 rows are shown; larger results receive a bounded preview. Text comparisons are case-sensitive; for category or status values whose case may vary, use lower(column) = lower(value)."
     }
     fn parameters(&self) -> Json {
         json!({
@@ -473,7 +488,7 @@ impl Tool for RunSql {
 }
 
 fn sql_output(engine: &EngineState, sql: &str, q: QueryResult) -> ToolOutput {
-    let table = table_text(&q, 30);
+    let table = table_text(&q, model_table_limit(&q));
     let warning = text_agg_warning(engine, sql).or_else(|| case_filter_warning(engine, sql));
     let llm_text = match warning {
         Some(w) => format!("{w}\n{table}"),
@@ -921,6 +936,37 @@ mod tests {
         // A normal result is untouched.
         let r = table_text(&qr(&["x"], vec![vec![Json::from(5)]]), 30);
         assert!(!r.contains("nothing matched"), "{r}");
+    }
+
+    #[test]
+    fn small_sql_results_are_rendered_completely_for_the_model() {
+        let rows: Vec<Vec<Json>> = (0..50)
+            .map(|i| vec![Json::from(format!("category-{i}")), Json::from(i)])
+            .collect();
+        let q = qr(&["category", "total"], rows);
+        let text = table_text(&q, model_table_limit(&q));
+
+        assert!(text.contains("category-49"), "last row was hidden: {text}");
+        assert!(
+            !text.contains("more rows"),
+            "small result was previewed: {text}"
+        );
+    }
+
+    #[test]
+    fn large_sql_results_keep_a_bounded_model_preview() {
+        let rows: Vec<Vec<Json>> = (0..101).map(|i| vec![Json::from(i)]).collect();
+        let q = qr(&["value"], rows);
+        let text = table_text(&q, model_table_limit(&q));
+
+        assert!(
+            !text.lines().any(|line| line.trim() == "100"),
+            "large result was rendered in full: {text}"
+        );
+        assert!(
+            text.contains("… 71 more rows"),
+            "preview count was missing: {text}"
+        );
     }
 
     #[test]
