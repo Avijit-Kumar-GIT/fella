@@ -14,10 +14,15 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 
-/// A folder's worth of tables rarely needs more than this many categories in
-/// one chart before it stops being readable; past this, tell the model to
-/// aggregate first.
+/// A folder's worth of categorical data rarely needs more than this many
+/// labels in one bar chart before it stops being readable; past this, tell the
+/// model to aggregate first.
 pub const MAX_CATEGORIES: usize = 12;
+/// Line charts can carry a much longer time axis than a categorical bar chart.
+/// The query layer already caps materialised results at 1,000 rows, so keep the
+/// visualization limit aligned with that safety boundary. Longer periods
+/// should be rolled up to weeks/months or narrowed to a date range.
+pub const MAX_TIME_POINTS: usize = 1_000;
 /// Two series is already two colors on a near-monochrome palette (see
 /// `src/app.css`); a third would need a real color system this isn't
 /// building yet.
@@ -78,14 +83,41 @@ pub fn from_query(
     if rows.is_empty() {
         return Err("the chart query returned no rows -- nothing to chart".into());
     }
-    if rows.len() > MAX_CATEGORIES {
-        return Err(format!(
-            "the chart query returned {} rows (max {MAX_CATEGORIES}) -- aggregate first",
-            rows.len()
-        ));
+
+    let labels: Vec<String> = rows
+        .iter()
+        .enumerate()
+        .map(|(row_index, row)| {
+            if row.len() != columns.len() {
+                return Err(format!(
+                    "chart query row {} has {} values but the result has {} columns",
+                    row_index + 1,
+                    row.len(),
+                    columns.len()
+                ));
+            }
+            label_value(&row[0], row_index)
+        })
+        .collect::<Result<_, _>>()?;
+    let resolved_kind = resolve_kind(kind, &columns[0], &labels);
+    let max_points = match resolved_kind {
+        ChartKind::Line => MAX_TIME_POINTS,
+        ChartKind::Auto | ChartKind::Bar => MAX_CATEGORIES,
+    };
+    if rows.len() > max_points {
+        return Err(match resolved_kind {
+            ChartKind::Line => format!(
+                "the chart query returned {} time-series points (max {MAX_TIME_POINTS}) -- \
+aggregate to a coarser time period or narrow the date range",
+                rows.len()
+            ),
+            ChartKind::Auto | ChartKind::Bar => format!(
+                "the chart query returned {} categories (max {MAX_CATEGORIES}) -- aggregate first",
+                rows.len()
+            ),
+        });
     }
 
-    let mut labels = Vec::with_capacity(rows.len());
     let mut values = vec![Vec::with_capacity(rows.len()); series_count];
     for (row_index, row) in rows.iter().enumerate() {
         if row.len() != columns.len() {
@@ -96,7 +128,6 @@ pub fn from_query(
                 columns.len()
             ));
         }
-        labels.push(label_value(&row[0], row_index)?);
         for (series_index, value) in row[1..].iter().enumerate() {
             values[series_index].push(number_value(value, &columns[series_index + 1], row_index)?);
         }
@@ -111,7 +142,7 @@ pub fn from_query(
         })
         .collect();
     let data = ChartData {
-        kind: resolve_kind(kind, &columns[0], &labels),
+        kind: resolved_kind,
         title,
         labels,
         series,
@@ -238,12 +269,23 @@ pub fn validate(data: &ChartData) -> Result<(), String> {
     if data.series.is_empty() {
         return Err("series is empty -- nothing to chart".into());
     }
-    if data.labels.len() > MAX_CATEGORIES {
-        return Err(format!(
-            "{} categories is too many to chart clearly (max {MAX_CATEGORIES}) -- \
+    let max_points = match data.kind {
+        ChartKind::Line => MAX_TIME_POINTS,
+        ChartKind::Auto | ChartKind::Bar => MAX_CATEGORIES,
+    };
+    if data.labels.len() > max_points {
+        return Err(match data.kind {
+            ChartKind::Line => format!(
+                "{} time-series points is too many to chart safely (max {MAX_TIME_POINTS}) -- \
+aggregate to a coarser time period or narrow the date range",
+                data.labels.len()
+            ),
+            ChartKind::Auto | ChartKind::Bar => format!(
+                "{} categories is too many to chart clearly (max {MAX_CATEGORIES}) -- \
 aggregate to the top few first",
-            data.labels.len()
-        ));
+                data.labels.len()
+            ),
+        });
     }
     if data.series.len() > MAX_SERIES {
         return Err(format!(
@@ -340,6 +382,48 @@ mod tests {
         assert_eq!(data.labels, vec!["Rent", "Groceries"]);
         assert_eq!(data.series[0].name, "amount");
         assert_eq!(data.series[0].values, vec![1250.0, 412.5]);
+    }
+
+    #[test]
+    fn from_query_allows_more_than_category_limit_for_time_series() {
+        let rows: Vec<Vec<Json>> = (1..=13)
+            .map(|day| {
+                vec![
+                    Json::from(format!("2024-01-{day:02}")),
+                    Json::from(day as f64),
+                ]
+            })
+            .collect();
+        let data = from_query(
+            ChartKind::Auto,
+            None,
+            None,
+            &["date".into(), "value".into()],
+            &rows,
+        )
+        .unwrap();
+
+        assert_eq!(data.kind, ChartKind::Line);
+        assert_eq!(data.labels.len(), 13);
+        assert_eq!(data.series[0].values.len(), 13);
+    }
+
+    #[test]
+    fn from_query_keeps_a_large_time_series_bounded() {
+        let rows: Vec<Vec<Json>> = (0..=MAX_TIME_POINTS)
+            .map(|point| vec![Json::from(point), Json::from(point as f64)])
+            .collect();
+        let error = from_query(
+            ChartKind::Line,
+            None,
+            None,
+            &["date".into(), "value".into()],
+            &rows,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("max 1000"), "{error}");
+        assert!(error.contains("coarser time period"), "{error}");
     }
 
     #[test]

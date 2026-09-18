@@ -891,8 +891,10 @@ RustPython sandbox with no filesystem, network, environment, or subprocess acces
             every value in prose. Use it for a breakdown, ranking, comparison, or trend over time; \
             skip it for a single figure, a yes/no answer, or values that barely differ (it will refuse \
             near-flat data a sentence says more than a flat chart would). One chart per answer: put \
-            every category or series you want compared into that one query (up to 12 labels and two \
-            series) instead of calling it again for a second chart."
+            every category or series you want compared into that one query. Category/bar charts \
+            support up to 12 labels; time-series/line charts support up to 1000 points. For a \
+            longer period, aggregate to a coarser time period or narrow the date range, and say \
+            so instead of silently omitting rows. Use two series maximum."
                 .into(),
         );
     }
@@ -1154,8 +1156,10 @@ pattern, then at most one supporting sentence; do not list every value in prose.
 Use it for a breakdown, ranking, comparison, or trend over time; skip it for a \
 single figure, a yes/no answer, or values that barely differ (it will refuse \
 near-flat data a sentence says more than a flat chart would). One chart per \
-answer: put every category or series you want compared into that one query (up \
-to 12 labels and two series) instead of calling it again for a second chart.\n\
+answer: put every category or series you want compared into that one query. Category/bar charts \
+support up to 12 labels; time-series/line charts support up to 1000 points. For a longer period, \
+aggregate to a coarser time period or narrow the date range, and say so instead of silently \
+omitting rows. Use two series maximum.\n\
 - Documents (notes, PDFs) are already listed below by name; plain-text notes \
 also show a first line, PDFs don't, so don't call list_files for them. For a \
 question about their content, call read_file directly (pass `names: [...]` to \

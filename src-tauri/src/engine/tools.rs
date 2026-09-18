@@ -7,6 +7,7 @@ use serde_json::{json, Value as Json};
 use std::sync::{atomic::AtomicBool, Arc};
 
 use crate::engine::analytics::chart::{self, ChartData, ChartKind};
+use crate::engine::analytics::data::DEFAULT_ROW_CAP;
 use crate::engine::analytics::verify::truncate as truncate_chars;
 use crate::engine::error::{EngineError, EngineResult};
 use crate::engine::llm::ToolSchema;
@@ -817,7 +818,9 @@ impl Tool for MakeChart {
     fn description(&self) -> &'static str {
         "Draw a chart from a read-only SQL query. Use auto unless the user clearly asks for \
         a bar or line chart. The first query column must be the label or date and the remaining \
-        one or two columns must be numeric. It renders itself in the answer."
+        one or two columns must be numeric. Category charts support up to 12 labels; time-series \
+        line charts support up to 1000 points. For longer periods, aggregate to a coarser time \
+        period or narrow the date range. It renders itself in the answer."
     }
     fn parameters(&self) -> Json {
         json!({
@@ -847,11 +850,11 @@ impl Tool for MakeChart {
             return Err(EngineError::msg("make_chart needs a non-empty SQL query"));
         }
         let q = engine.run_sql(sql)?;
-        if q.truncated || q.row_count > chart::MAX_CATEGORIES {
+        if q.truncated {
             return Err(EngineError::msg(format!(
-                "the chart query returned {} rows (max {}); aggregate or limit it first",
-                q.row_count,
-                chart::MAX_CATEGORIES
+                "the chart query returned {} rows, beyond the {}-row raw result limit; aggregate \
+to a coarser time period or narrow the date range first",
+                q.row_count, DEFAULT_ROW_CAP
             )));
         }
         let data = chart::from_query(parsed.kind, parsed.title, parsed.unit, &q.columns, &q.rows)

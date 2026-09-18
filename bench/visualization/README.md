@@ -9,7 +9,13 @@ This battery exercises the personal analytics visualization path end to end:
 
 It covers category breakdowns, time trends, negative values, two-series comparisons,
 CSV/TSV/JSON inputs, currency-formatted text, joins, and cases where a chart should
-be skipped or rejected.
+be skipped or rejected. Category charts cap at 12 labels for readability; time-series
+line charts can carry up to 1,000 points, with longer ranges expected to use a coarser
+time period or a narrower date range.
+
+The hosted cases describe user-visible outcomes and do not assert a particular internal
+row-cap implementation. Capacity boundaries are covered separately by deterministic
+tests in `src-tauri/tests/chart_tool.rs`.
 
 The hosted run is opt in and BYOK only. It defaults to the hosted Ollama provider
 and Gemma 4 31B; it never starts or calls a local Ollama server.

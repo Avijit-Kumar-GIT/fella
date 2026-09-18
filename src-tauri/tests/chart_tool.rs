@@ -338,11 +338,11 @@ async fn make_chart_rejects_missing_numeric_values() {
 async fn make_chart_rejects_more_than_the_readable_category_limit() {
     let ws = scratch("chart-limit-ws");
     let data = scratch("chart-limit-data");
-    let mut csv = String::from("date,value\n");
-    for day in 1..=13 {
-        csv.push_str(&format!("2024-01-{day:02},{}\n", day * 10));
+    let mut csv = String::from("category,value\n");
+    for category in 1..=13 {
+        csv.push_str(&format!("category-{category},{}\n", category * 10));
     }
-    fs::write(ws.join("daily.csv"), csv).unwrap();
+    fs::write(ws.join("categories.csv"), csv).unwrap();
     let engine = EngineState::new(&data).unwrap();
     engine.open_workspace(&ws).unwrap();
 
@@ -351,8 +351,8 @@ async fn make_chart_rejects_more_than_the_readable_category_limit() {
             &engine,
             "make_chart",
             &serde_json::json!({
-                "kind": "line",
-                "sql": "SELECT date, value FROM daily ORDER BY date"
+                "kind": "bar",
+                "sql": "SELECT category, value FROM categories ORDER BY category"
             }),
         )
         .await
@@ -362,6 +362,77 @@ async fn make_chart_rejects_more_than_the_readable_category_limit() {
         Err(error) => error,
     };
     assert!(error.to_string().contains("max 12"), "{error}");
+
+    let _ = fs::remove_dir_all(&ws);
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[tokio::test]
+async fn make_chart_allows_more_than_twelve_daily_points() {
+    let ws = scratch("chart-time-series-ws");
+    let data = scratch("chart-time-series-data");
+    let mut csv = String::from("date,value\n");
+    for day in 1..=13 {
+        csv.push_str(&format!("2024-01-{day:02},{}\n", day * 10));
+    }
+    fs::write(ws.join("daily.csv"), csv).unwrap();
+    let engine = EngineState::new(&data).unwrap();
+    engine.open_workspace(&ws).unwrap();
+
+    let chart = Registry::standard()
+        .run(
+            &engine,
+            "make_chart",
+            &serde_json::json!({
+                "kind": "auto",
+                "sql": "SELECT date, value FROM daily ORDER BY date"
+            }),
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .chart
+        .expect("daily time series chart");
+
+    assert_eq!(
+        chart.kind,
+        fella_lib::engine::analytics::chart::ChartKind::Line
+    );
+    assert_eq!(chart.labels.len(), 13);
+    assert_eq!(chart.series[0].values.last(), Some(&130.0));
+
+    let _ = fs::remove_dir_all(&ws);
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[tokio::test]
+async fn make_chart_rejects_a_truncated_long_time_series() {
+    let ws = scratch("chart-long-time-series-ws");
+    let data = scratch("chart-long-time-series-data");
+    let mut csv = String::from("date,value\n");
+    for day in 0..=1_000 {
+        csv.push_str(&format!("day-{day:04},{}\n", day + 1));
+    }
+    fs::write(ws.join("long_daily.csv"), csv).unwrap();
+    let engine = EngineState::new(&data).unwrap();
+    engine.open_workspace(&ws).unwrap();
+
+    let out = Registry::standard()
+        .run(
+            &engine,
+            "make_chart",
+            &serde_json::json!({
+                "kind": "line",
+                "sql": "SELECT date, value FROM long_daily ORDER BY date"
+            }),
+        )
+        .await
+        .unwrap();
+    let error = match out {
+        Ok(_) => panic!("a truncated long time series should be rejected"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("raw result limit"), "{error}");
 
     let _ = fs::remove_dir_all(&ws);
     let _ = fs::remove_dir_all(&data);
