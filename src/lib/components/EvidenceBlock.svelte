@@ -23,6 +23,7 @@
 		insufficient_data: 'insufficient data',
 		failed: 'failed'
 	};
+	const COMPLETE_TABLE_ROWS = 100;
 
 	// Which steps have their raw detail (SQL, table, output) revealed.
 	let openDetail = $state<Record<number, boolean>>({});
@@ -114,6 +115,10 @@
 						{/if}
 
 						{#if openDetail[i] && hasDetail}
+							{@const visibleRows =
+								e.columns && e.rows && e.row_count != null && e.row_count <= COMPLETE_TABLE_ROWS
+									? e.rows
+									: e.rows?.slice(0, 20)}
 							<div class="detail rich">
 								{#if e.sql}
 									<pre class="sql">{e.sql}</pre>
@@ -137,13 +142,16 @@
 													<tr>{#each e.columns as c (c)}<th>{c}</th>{/each}</tr>
 												</thead>
 												<tbody>
-													{#each e.rows.slice(0, 20) as row, ri (ri)}
+													{#each visibleRows ?? [] as row, ri (ri)}
 														<tr>{#each row as cell, ci (ci)}<td>{cell}</td>{/each}</tr>
 													{/each}
 												</tbody>
 											</table>
 										</div>
-									{/if}
+											{#if e.row_count != null && visibleRows && visibleRows.length < e.row_count}
+												<p class="table-note">Showing {visibleRows.length} of {e.row_count} rows.</p>
+											{/if}
+										{/if}
 								{/if}
 							</div>
 						{/if}
@@ -303,6 +311,11 @@
 	.tablewrap {
 		overflow-x: auto;
 		margin-top: 4px;
+	}
+	.table-note {
+		margin: 3px 0 0;
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
 	}
 	.detail :global(td) {
 		white-space: nowrap;
