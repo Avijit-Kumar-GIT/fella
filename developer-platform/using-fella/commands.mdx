@@ -4,7 +4,7 @@ description: "Complete reference for Fella's slash commands and keyboard control
 icon: "command"
 ---
 
-Commands are optional. Use buttons for common actions, type `/` for completions, or press `Ctrl+K` to search the built-in command palette.
+Commands are optional. Use buttons for common actions, type `/` for completions, or press `Ctrl+K` to search the built-in command palette. `Ctrl+Shift+P` opens the same palette for people coming from Cursor or other desktop tools.
 
 ## Commands
 
@@ -38,17 +38,24 @@ Commands are optional. Use buttons for common actions, type `/` for completions,
 | `Enter` | Send |
 | `Shift+Enter` | Insert a newline |
 | `Up` | Recall the last input |
-| `Ctrl+K` | Open the command palette |
+| `Ctrl+K` / `Ctrl+Shift+P` | Open the command palette |
+| `Ctrl+N` | Start a new conversation |
+| `Ctrl+Shift+A` | Go to Ask |
+| `Ctrl+Shift+S` | Go to Sources |
+| `Ctrl+Shift+C` | Go to Context |
+| `Ctrl+,` | Open Settings |
+| `Ctrl+O` | Open the folder picker |
 | `Ctrl+B` | Toggle the history sidebar |
 | `Ctrl+T` / `Ctrl+W` | New tab / close tab |
+| `Ctrl+[` / `Ctrl+]` | Previous / next conversation tab |
 | `Ctrl+1` through `Ctrl+9` | Switch tabs |
 | `Ctrl+L` | Clear the screen |
 | `Ctrl+Shift+F` | Toggle focus mode |
 | `Esc` | Stop a run, otherwise collapse evidence |
 
-<Warning>
-  Use `Ctrl`, including on macOS. Fella's handlers do not map these shortcuts to `Cmd`.
-</Warning>
+<Note>
+  The table uses `Ctrl` for brevity. On macOS, use `Cmd` in the same combinations. Navigation shortcuts work from anywhere in the app; Sources and Context return to Ask when no folder is mounted.
+</Note>
 
 <Note>
   `/sql` bypasses the model and prints a plain system result. Unlike an agent answer, it does not create an evidence fold or run post-answer verification.

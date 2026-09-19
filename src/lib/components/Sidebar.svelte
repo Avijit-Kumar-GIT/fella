@@ -153,7 +153,7 @@
 				class="icon-btn"
 				type="button"
 				aria-label="New conversation"
-				title="New conversation"
+				title={`New conversation (${shortcutModifier}+N)`}
 				onclick={() => {
 					session.setWorkspaceView('ask');
 					session.newTab();
@@ -189,6 +189,8 @@
 		<div class="nav-heading">Work</div>
 		<button
 			class="nav-row"
+			title={`Ask (${shortcutModifier}+Shift+A)`}
+			aria-keyshortcuts="Control+Shift+A Meta+Shift+A"
 			class:active={session.workspaceView === 'ask'}
 			type="button"
 			aria-current={session.workspaceView === 'ask' ? 'page' : undefined}
@@ -214,6 +216,8 @@
 		<div class="nav-heading">Workspace</div>
 		<button
 			class="nav-row"
+			title={`Sources (${shortcutModifier}+Shift+S)`}
+			aria-keyshortcuts="Control+Shift+S Meta+Shift+S"
 			class:active={session.workspaceView === 'workspace' && session.workspacePane === 'sources'}
 			type="button"
 			disabled={!session.catalog.workspace}
@@ -228,6 +232,8 @@
 		</button>
 		<button
 			class="nav-row"
+			title={`Context (${shortcutModifier}+Shift+C)`}
+			aria-keyshortcuts="Control+Shift+C Meta+Shift+C"
 			class:active={session.workspaceView === 'workspace' && session.workspacePane === 'context'}
 			type="button"
 			disabled={!session.catalog.workspace}
@@ -309,7 +315,7 @@
 			<button
 				class="mount-status"
 				type="button"
-				title={session.catalog.workspace}
+				title={`${session.catalog.workspace} · Change folder (${shortcutModifier}+O)`}
 				aria-label={`Change folder: ${folderName}`}
 				onclick={() => void openFolder()}
 			>
@@ -321,7 +327,12 @@
 				<Icon name="chevron-right" size={13} />
 			</button>
 		{:else}
-			<button class="mount-status" type="button" onclick={() => void openFolder()}>
+			<button
+				class="mount-status"
+				type="button"
+				title={`Open a folder (${shortcutModifier}+O)`}
+				onclick={() => void openFolder()}
+			>
 				<span class="mount-icon"><Icon name="folder" size={14} /></span>
 				<span class="mount-copy">
 					<strong>Open a folder</strong>
@@ -332,6 +343,8 @@
 		{/if}
 		<button
 			class="nav-row settings-row"
+			title={`Settings (${shortcutModifier}+,)`}
+			aria-keyshortcuts="Control+Comma Meta+Comma"
 			class:active={session.workspaceView === 'settings'}
 			type="button"
 			aria-current={session.workspaceView === 'settings' ? 'page' : undefined}

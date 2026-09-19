@@ -9,7 +9,7 @@
 	import Titlebar from '$lib/components/Titlebar.svelte';
 	import Transcript from '$lib/components/Transcript.svelte';
 	import WorkspaceView from '$lib/components/WorkspaceView.svelte';
-	import { dispatch, loadStartupCatalog, stop } from '$lib/commands';
+	import { dispatch, loadStartupCatalog, openFolder, stop } from '$lib/commands';
 	import { ipc, isTauri } from '$lib/ipc';
 	import { fadeQuick } from '$lib/motion';
 	import { prefs } from '$lib/prefs.svelte';
@@ -84,15 +84,58 @@
 		};
 	});
 
+	function moveTab(delta: number): void {
+		if (session.tabs.length < 2) return;
+		const next = (session.active + delta + session.tabs.length) % session.tabs.length;
+		session.activateTab(next);
+		composer?.focus();
+	}
+
 	function onKey(e: KeyboardEvent) {
+		if (e.defaultPrevented) return;
 		const commandKey = e.ctrlKey || e.metaKey;
 		const key = e.key.toLowerCase();
-		if (commandKey && key === 'l') {
-			e.preventDefault();
-			void session.clear();
-		} else if (commandKey && key === 'k') {
+		if (commandKey && key === 'k') {
 			e.preventDefault();
 			paletteOpen = !paletteOpen;
+			return;
+		}
+		if (commandKey && e.shiftKey && key === 'p') {
+			e.preventDefault();
+			paletteOpen = !paletteOpen;
+			return;
+		}
+		if (paletteOpen) return;
+		if (commandKey && e.shiftKey && key === 'a') {
+			e.preventDefault();
+			session.setWorkspaceView('ask');
+			composer?.focus();
+		} else if (commandKey && e.shiftKey && key === 's') {
+			e.preventDefault();
+			session.setWorkspacePane('sources');
+		} else if (commandKey && e.shiftKey && key === 'c') {
+			e.preventDefault();
+			session.setWorkspacePane('context');
+		} else if (commandKey && key === ',') {
+			e.preventDefault();
+			session.setWorkspaceView('settings');
+		} else if (commandKey && key === 'o') {
+			e.preventDefault();
+			void openFolder();
+		} else if (commandKey && key === 'n') {
+			e.preventDefault();
+			session.setWorkspaceView('ask');
+			session.newTab();
+			composer?.focus();
+		} else if (commandKey && e.key === '[') {
+			e.preventDefault();
+			moveTab(-1);
+		} else if (commandKey && e.key === ']') {
+			e.preventDefault();
+			moveTab(1);
+		} else if (commandKey && key === 'l') {
+			e.preventDefault();
+			void session.clear();
 		} else if (commandKey && key === 'b') {
 			e.preventDefault();
 			session.toggleSidebar();

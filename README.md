@@ -170,9 +170,12 @@ own model. Slash commands below are a power-user shortcut; you never need them.
 | `/help` | Show all commands |
 
 **Keys:** `Enter` send · `Shift+Enter` newline · `↑` recall last input ·
-`Ctrl+K` command palette · `Ctrl+T` new tab · `Ctrl+W` close tab ·
-`Ctrl+1`…`9` switch tab · `Ctrl+L` clear screen · `Esc` stop a running
-answer, otherwise collapse all evidence.
+`Ctrl+K` / `Ctrl+Shift+P` command palette · `Ctrl+N` new conversation ·
+`Ctrl+T` new tab · `Ctrl+W` close tab · `Ctrl+[` / `Ctrl+]` previous or next tab ·
+`Ctrl+1`…`9` switch tab · `Ctrl+Shift+A/S/C` Ask, Sources, Context ·
+`Ctrl+,` settings · `Ctrl+O` open folder · `Ctrl+B` sidebar · `Ctrl+L` clear screen ·
+`Ctrl+Shift+F` focus mode · `Esc` stop a running answer, otherwise collapse all evidence.
+On macOS, use `Cmd` in place of `Ctrl`.
 
 You can also click the pulsing dot next to the composer to stop a run. A stopped
 run keeps whatever evidence it had gathered and answers `Stopped.`
