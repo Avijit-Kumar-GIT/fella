@@ -156,7 +156,6 @@
 						<span class="source-icon"><Icon name={source.view ? 'table' : 'file'} size={15} /></span>
 						<span class="source-copy">
 							<strong>{source.name}</strong>
-							<span>{relativePath(source.path)}</span>
 						</span>
 						<span class="source-meta">
 							<small>{kindLabel(source.kind)}</small>
@@ -174,10 +173,12 @@
 						<div class="detail-icon"><Icon name={selected.view ? 'table' : 'file'} size={17} /></div>
 						<div>
 							<p class="eyebrow">{kindLabel(selected.kind)}</p>
-							<h2>{selected.name}</h2>
-						</div>
-					</div>
-					<p class="path">{relativePath(selected.path)}</p>
+											<h2>{selected.name}</h2>
+										</div>
+									</div>
+									{#if relativePath(selected.path) !== selected.name}
+										<p class="path">{relativePath(selected.path)}</p>
+									{/if}
 					<div class="detail-actions">
 						<button class="pill primary" type="button" onclick={useSelected}><Icon name="plus" size={13} /> Use in Ask</button>
 						<button class="pill ghost" type="button" onclick={inspectSelected}><Icon name="info" size={13} /> Inspect</button>
@@ -417,17 +418,11 @@
 		font-size: var(--fs-sm);
 		font-weight: 560;
 	}
-	.source-copy span,
 	.source-meta small,
 	.path,
 	.more {
 		color: var(--text-faint);
 		font-size: var(--fs-xs);
-	}
-	.source-copy span {
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
 	}
 	.source-meta {
 		display: flex;
