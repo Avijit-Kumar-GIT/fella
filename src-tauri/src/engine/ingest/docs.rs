@@ -56,10 +56,7 @@ pub fn looks_like_no_text_layer(text: &str) -> bool {
 
 /// Scan a text file line by line without holding the whole file in memory,
 /// calling `f(line_number, line)` for each. Stops early when `f` returns `false`.
-pub fn grep_lines(
-    path: &str,
-    mut f: impl FnMut(usize, &str) -> bool,
-) -> EngineResult<()> {
+pub fn grep_lines(path: &str, mut f: impl FnMut(usize, &str) -> bool) -> EngineResult<()> {
     use std::io::BufRead;
     let file = std::fs::File::open(path).map_err(|e| EngineError::io(format!("read {path}"), e))?;
     let mut reader = std::io::BufReader::new(file);

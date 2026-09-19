@@ -1,6 +1,7 @@
 <script lang="ts">
-	import type { Answer, EvidenceItem } from '$lib/types';
+	import type { Answer, EvidenceItem, VerificationStatus } from '$lib/types';
 	import Icon from './Icon.svelte';
+	import { answerStatus } from '$lib/verify';
 
 	let {
 		answer,
@@ -14,7 +15,15 @@
 	let stepCount = $derived(answer.evidence.length);
 	let ms = $derived(answer.evidence.reduce((n, e) => n + e.ms, 0));
 	let warns = $derived(answer.verification.filter((v) => !v.ok).length);
+	let status = $derived(answerStatus(answer));
 	let hasBackground = $derived(/^\s*Background:/m.test(answer.text));
+	const STATUS_LABEL: Record<VerificationStatus, string> = {
+		verified: 'verified',
+		needs_review: 'needs review',
+		insufficient_data: 'insufficient data',
+		failed: 'failed'
+	};
+	const COMPLETE_TABLE_ROWS = 100;
 
 	// Which steps have their raw detail (SQL, table, output) revealed.
 	let openDetail = $state<Record<number, boolean>>({});
@@ -36,9 +45,6 @@
 	function stepLabel(e: EvidenceItem): string {
 		if (e.note?.trim()) return e.note.trim();
 		if (FALLBACK[e.tool]) return FALLBACK[e.tool];
-		// An mcp connector tool is named `<connector>__<tool>`.
-		const i = e.tool.indexOf('__');
-		if (i > 0) return `Used the ${e.tool.slice(0, i)} connector`;
 		return e.tool;
 	}
 
@@ -47,6 +53,9 @@
 	function argsWithoutNote(args: Record<string, unknown>): Record<string, unknown> {
 		const { note: _note, ...rest } = args;
 		return rest;
+	}
+	function sourceLabel(e: EvidenceItem): string {
+		return (e.sources ?? []).map((s) => `${s.source} (${s.table})`).join(', ');
 	}
 </script>
 
@@ -65,22 +74,28 @@
 		{:else}
 			Evidence · {stepCount} step{stepCount === 1 ? '' : 's'} · {(ms / 1000).toFixed(1)}s
 			{#if hasBackground}<span class="bg">· background</span>{/if}
+			{#if answer.workspace}<span class="snapshot">· folder snapshot checked</span>{/if}
 		{/if}
+		<span class="status {status}">· {STATUS_LABEL[status]}</span>
 		{#if warns > 0}<span class="warn">· {warns} to check</span>{/if}
 	</button>
 
 	{#if expanded}
 		<div class="body" id={bodyId}>
 			<ol class="steps">
-				{#each answer.evidence as e, i (i)}
+				{#each answer.evidence as e, i (e.id ?? `evidence-${i}`)}
 					{@const shownArgs = argsWithoutNote(e.args)}
 					{@const hasDetail =
 						!!e.sql ||
+						!!e.sources?.length ||
 						Object.keys(shownArgs).length > 0 ||
 						!!e.output ||
 						!!(e.columns && e.rows)}
 					<li class="step" class:failed={!!e.error}>
 						<span class="line">{stepLabel(e)}</span>
+						{#if e.sources?.length}
+							<div class="source-line">from {sourceLabel(e)}</div>
+						{/if}
 
 						{#if e.error}
 							<div class="steperr">didn't work: {e.error}</div>
@@ -97,6 +112,10 @@
 						{/if}
 
 						{#if openDetail[i] && hasDetail}
+							{@const visibleRows =
+								e.columns && e.rows && e.row_count != null && e.row_count <= COMPLETE_TABLE_ROWS
+									? e.rows
+									: e.rows?.slice(0, 20)}
 							<div class="detail rich">
 								{#if e.sql}
 									<pre class="sql">{e.sql}</pre>
@@ -120,13 +139,16 @@
 													<tr>{#each e.columns as c (c)}<th>{c}</th>{/each}</tr>
 												</thead>
 												<tbody>
-													{#each e.rows.slice(0, 20) as row, ri (ri)}
+													{#each visibleRows ?? [] as row, ri (ri)}
 														<tr>{#each row as cell, ci (ci)}<td>{cell}</td>{/each}</tr>
 													{/each}
 												</tbody>
 											</table>
 										</div>
-									{/if}
+											{#if e.row_count != null && visibleRows && visibleRows.length < e.row_count}
+												<p class="table-note">Showing {visibleRows.length} of {e.row_count} rows.</p>
+											{/if}
+										{/if}
 								{/if}
 							</div>
 						{/if}
@@ -164,8 +186,8 @@
 		display: inline-flex;
 		align-items: center;
 		gap: var(--space-1);
-		text-transform: uppercase;
-		letter-spacing: 0.06em;
+		white-space: nowrap;
+		letter-spacing: 0.01em;
 		font-size: var(--fs-xs);
 	}
 	.summary:hover {
@@ -185,6 +207,21 @@
 	}
 	.bg {
 		color: var(--text-faint);
+	}
+	.snapshot {
+		color: var(--text-faint);
+	}
+	.status.verified {
+		color: var(--ok);
+	}
+	.status.needs_review {
+		color: var(--warn);
+	}
+	.status.insufficient_data {
+		color: var(--text-faint);
+	}
+	.status.failed {
+		color: var(--err);
 	}
 	.body {
 		margin: 6px 0 2px;
@@ -209,6 +246,11 @@
 	}
 	.line {
 		color: var(--text);
+	}
+	.source-line {
+		margin-top: 2px;
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
 	}
 	.step.failed .line {
 		color: var(--warn);
@@ -266,6 +308,11 @@
 	.tablewrap {
 		overflow-x: auto;
 		margin-top: 4px;
+	}
+	.table-note {
+		margin: 3px 0 0;
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
 	}
 	.detail :global(td) {
 		white-space: nowrap;

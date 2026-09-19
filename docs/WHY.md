@@ -86,32 +86,31 @@ can see. That one line does three jobs at once: it's the data, it's the
 boundary, and it's a mental model the person already has ("everything in this
 folder"). Nothing outside it is read. The agent has no tool to write, move, or
 delete anything in it, and that's structural: there is no write tool to
-disable. An opt-in augment view lets you save a note or a small table
-yourself, one keystroke, one named file, never the model. There is no
-permission dialog for the agent because there is nothing it can do that needs
-permitting.
+disable. The user may explicitly edit the root `fella.md` context file, but
+the agent cannot write it. There is no permission dialog for the agent because
+there is nothing it can do that needs permitting.
 
 ### It can't reach the network on its own
 
-The base makes one outbound call, to the model you chose, and by default that
-model runs on your machine. Your questions about your money and your health do
-not leave the room. If you want Fella to reach a notes service or a wiki, you
-connect that yourself, one vetted connector at a time, and it does exactly what
-its label says.
+The base makes one outbound call, to the BYOK model provider you chose. With a
+hosted provider, the question, context, tool results, and answer leave the
+machine under that provider's policy; with a provider running locally, they can
+stay on the machine. `/mcp` is an inert experimental command and creates no
+additional network path. `/update` runs only when explicitly invoked.
 
 ### It can't grow without your hand on it
 
-No capability arrives on its own. Extensions are themes, skills, and connectors,
-installed one at a time by you, each a known quantity. The base ships closed.
-You decide what to open, and nothing opens quietly.
+No dynamic capability arrives on its own. The base ships with a fixed tool
+registry and no plugin, pack, augment, or connector runtime. The user's
+explicit `fella.md` context, provider/model settings, and appearance are the
+supported customization points; the former extension designs are archived.
 
 ### It's built for someone who won't read a stack trace
 
 The person using Fella isn't a developer. The whole surface is plain language,
-it copes with a messy real folder instead of expecting a clean dataset, and
-there is no wizard and no settings screen. Setting it up means dropping a
-`fella.md` in the folder to explain your own terms. There is no code for you to
-write.
+it copes with a messy real folder instead of expecting a clean dataset. Setting
+it up means mounting a folder, choosing a provider, and optionally editing
+`fella.md` to explain your own terms. There is no code for you to write.
 
 ### It's small enough to check
 

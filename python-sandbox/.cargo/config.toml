@@ -1,0 +1,5 @@
+[build]
+# Bare wasm has no built-in OS entropy source. The custom backend in the guest
+# links getrandom to Fella's narrow `fella.random` host import instead of
+# enabling browser, WASI, or another host-specific capability.
+rustflags = ['--cfg', 'getrandom_backend="custom"']

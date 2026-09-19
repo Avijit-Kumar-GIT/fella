@@ -36,8 +36,8 @@ re-runs the cited query and flags any number in the answer that doesn't actually
 appear in a result, before you ever see it.
 
 **Read-only.** Fella reads your folder; it never writes, moves or deletes anything.
-Nothing leaves your computer except the request to the model you choose (a local one
-by default).
+Nothing leaves your computer except the request to the model provider you choose.
+Fella is BYOK-only: you connect a provider with your own API key.
 
 ## Philosophy
 
@@ -53,10 +53,13 @@ binary with nothing bundled. Local-first. Minimal dependencies. It's for a regul
 person doing enterprise-grade personal analytics not analysts, not developers so it's plain-language
 throughout and copes with a messy real-world folder. It is deliberately *not* a general
 task agent: no file-management, no chores, and the base has a fixed, small tool set.
-Customisation is opt-in and stays out of the base: vetted themes, skills, MCP
-connectors, and augments (a notes tab, a small table) a user can install
-themselves (see [`docs/EXTENSIBILITY.md`](docs/EXTENSIBILITY.md)). The whole thing stays understandable
-by one person. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for how it's built,
+The shipped release keeps customization deliberately small: the user-authored
+`fella.md` context file, provider/model settings, and appearance are the active
+extension points. MCP is documented as an inert experimental command; packs and
+augments are archived design work rather than runtime features. The whole thing
+stays understandable by one person. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for how it's built,
+[`docs/CAPABILITY-POLICY.md`](docs/CAPABILITY-POLICY.md) for the experimental
+analysis switches and longer-term enterprise reference,
 [`docs/WHY.md`](docs/WHY.md) for the reasoning, [`docs/PRINCIPLES.md`](docs/PRINCIPLES.md)
 for the commitments, and [`docs/NON-GOALS.md`](docs/NON-GOALS.md) for what it deliberately
 doesn't do.
@@ -70,10 +73,9 @@ contributing or curious how a specific decision got made, not required reading.
 
 - **macOS** 10.15+, **Windows** 10+, or **Linux** with WebKitGTK 4.1
   (`libwebkit2gtk-4.1`, present on current GNOME/KDE desktops).
-- **A model.** A local [Ollama](https://ollama.com) works out of the box and
-  keeps everything on your machine; no local machine to run one on? `/login`
-  with [Ollama Cloud](https://ollama.com/settings/keys) for free-tier hosted
-  models. Other providers (`/login`) are there if you want them, usually paid.
+- **A model provider.** Fella is BYOK-only. Connect [Ollama Cloud](https://ollama.com/settings/keys),
+  OpenAI, Vercel AI Gateway, xAI, OpenRouter, or a custom OpenAI-compatible
+  endpoint with `/login` and your own API key.
 - No account, no sign-up. The app is a single small binary.
 
 ## Install
@@ -97,16 +99,13 @@ the **`.dmg`** (macOS drag Fella to Applications, then right-click it →
 anyway* if SmartScreen warns), or the **`.AppImage`** / **`.deb`** (Linux). The
 scripts above just do this for you.
 
-Then give Fella a model:
+Then give Fella a model provider:
 
-- **Local, private (default):** install [Ollama](https://ollama.com) and
-  `ollama pull llama3.1`. Fella uses it on `localhost:11434` automatically.
-- **Hosted, free:** no local install needed. On first run type `/login`, pick
-  **Ollama Cloud**, and paste an API key from
+- **Ollama Cloud:** on first run type `/login`, pick **Ollama Cloud**, and paste an API key from
   [ollama.com/settings/keys](https://ollama.com/settings/keys) its free tier
   covers a set of starter models at no cost (1 request at a time; more models
   and concurrency need paid credits). Then `/model` picks the model.
-- **Hosted, other providers:** Vercel AI Gateway, OpenAI, xAI, OpenRouter, or
+- **Other providers:** Vercel AI Gateway, OpenAI, xAI, OpenRouter, or
   any OpenAI-compatible endpoint the same way (`/login`), at your discretion
   these are typically paid per token. An API key is kept in a `0600` file,
   never the database or the browser, regardless of provider.
@@ -120,7 +119,7 @@ Signing, notarisation, and Homebrew/winget are planned.
 
 ## Build from source
 
-For contributors, or to run an unreleased revision. Needs Rust 1.88+, Node 22+
+For contributors, or to run an unreleased revision. Needs Rust 1.93+, Node 22+
 with pnpm, and on Linux the GTK/WebKit libraries in
 [`docs/DEV_SETUP.md`](docs/DEV_SETUP.md).
 
@@ -155,16 +154,14 @@ own model. Slash commands below are a power-user shortcut; you never need them.
 | `/open` | Choose a folder (or use the button / drag one in). `/open <path>` skips the picker |
 | `/files` | List detected files and tables |
 | `/schema <name>` | Show a table's columns, types and null rates |
-| `/sql <query>` | Run SQL directly, bypassing the model (still recorded as evidence) |
+| `/sql <query>` | Run SQL directly, bypassing the model (plain result; no evidence fold or post-answer verification) |
 | `/login` `/logout` `/auth` | Sign in to a hosted provider (Vercel AI Gateway, OpenAI, xAI, Ollama Cloud, OpenRouter, or a custom OpenAI-compatible endpoint); list what's signed in |
 | `/model` | Show or change the LLM provider, base URL and model. Per-tab: each tab can run a different model, but all tabs share one login |
 | `/reindex` | Check the folder again for new or changed files |
 | `/memory` | See what Fella has learned about this folder on its own (`/memory forget` clears it) |
-| `/context` | Open `fella.md` in an editor tab: tell Fella how your files are organised and what your terms mean, in your own words. Saves as you type, read at the start of every question |
+| `/context` | Open `fella.md` in the Workspace editor: tell Fella how your files are organised and what your terms mean, in your own words |
 | `/update` | Check for a newer release and install it (checksum-verified, same as the install scripts); Fella closes and you reopen it once the installer finishes |
-| `/packs` | Packs you've added themes, skills, mcp connectors, augments. `/packs add <path>` for a local one, `/packs install <id>` from the seed catalog ([`docs/EXTENSIBILITY.md`](docs/EXTENSIBILITY.md)) |
-| `/connect` | Connect a data source you installed as an `mcp` pack (paste its token) |
-| _(augment)_ | An installed `augment` pack adds its own command e.g. `/note` opens a notes tab, `/table` a small editable table, each saved into the open folder. Add a name to use a different file: `/note shopping` → `shopping.md`, default is `/note` alone → `notes.md` |
+| `/mcp` | Experimental and inert. No official connectors are enabled; custom implementations require a fork or experimental build |
 | `/tab` | Open another conversation in a new tab |
 | `/focus` | Hide the tabs and header for a plain view (again to undo) |
 | `/clear` | Start a new conversation (the old one is saved) |
@@ -173,9 +170,12 @@ own model. Slash commands below are a power-user shortcut; you never need them.
 | `/help` | Show all commands |
 
 **Keys:** `Enter` send · `Shift+Enter` newline · `↑` recall last input ·
-`Ctrl+K` command palette · `Ctrl+T` new tab · `Ctrl+W` close tab ·
-`Ctrl+1`…`9` switch tab · `Ctrl+L` clear screen · `Esc` stop a running
-answer, otherwise collapse all evidence.
+`Ctrl+K` / `Ctrl+Shift+P` command palette · `Ctrl+N` new conversation ·
+`Ctrl+T` new tab · `Ctrl+W` close tab · `Ctrl+[` / `Ctrl+]` previous or next tab ·
+`Ctrl+1`…`9` switch tab · `Ctrl+Shift+A/S/C` Ask, Sources, Context ·
+`Ctrl+,` settings · `Ctrl+O` open folder · `Ctrl+B` sidebar · `Ctrl+L` clear screen ·
+`Ctrl+Shift+F` focus mode · `Esc` stop a running answer, otherwise collapse all evidence.
+On macOS, use `Cmd` in place of `Ctrl`.
 
 You can also click the pulsing dot next to the composer to stop a run. A stopped
 run keeps whatever evidence it had gathered and answers `Stopped.`
@@ -194,24 +194,19 @@ worked) instead of starting over each time.
 
 ### Personalizing
 
-Fella works with nothing set up. If you want more: `/context` opens `fella.md` right
-in the app, an editor tab where you tell Fella how your files are organised and what
-your terms mean, in your own words (dropping the file in by hand works too, if you'd
-rather). Or add a pack: a
-`theme` (colours), a `skill` (vocabulary/rules for the model), an `mcp` connector
-(a remote data source), or an `augment` (a notes tab or a small table, saved into
-the folder), from a local folder with `/packs add <path>`. A small seed
-catalog is installable by id (`/packs install <id>`); a browsable gallery of packs
-comes later. All optional. See [`docs/EXTENSIBILITY.md`](docs/EXTENSIBILITY.md).
+Fella works with nothing set up. If you want to add local guidance, `/context`
+opens `fella.md` in the Workspace editor so you can describe how your files are
+organised and what your terms mean. The file can also be created by hand. `/mcp`
+is present as an inert experimental signpost; it does not connect to anything in
+the personal release.
 
 ## Contributing
 
-Fella is open source and takes contributions two ways: to the **app** (features,
-fixes, new file formats, engine or UI work, new augment capabilities) here, and
-to **packs** (themes, skills, MCP connectors, augments) in the `fella-extensions`
-repo. Start with
-[`CONTRIBUTING.md`](CONTRIBUTING.md); the pack model is in
-[`docs/EXTENSIBILITY.md`](docs/EXTENSIBILITY.md).
+Fella is open source and takes contributions to the **app**: features, fixes,
+new file formats, engine, UI, sandbox, and verification work. Extension and MCP
+designs remain archived for future forks. Start with
+[`CONTRIBUTING.md`](CONTRIBUTING.md); the current release boundary is in
+[`docs/LEAN-PERSONAL-RELEASE.md`](docs/LEAN-PERSONAL-RELEASE.md).
 
 ## Status
 

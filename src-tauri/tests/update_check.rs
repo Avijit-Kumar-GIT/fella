@@ -1,6 +1,6 @@
 //! `/update`'s version-check step against a fake GitHub releases API. Its
 //! own test binary because it sets the process-global
-//! `FELLA_RELEASE_API_URL` (same reasoning as packs_marketplace.rs); both
+//! `FELLA_RELEASE_API_URL` (the network fixture is opt-in); both
 //! scenarios below share one test function rather than two, so two
 //! concurrently-run tests can't race on that same env var.
 
@@ -19,14 +19,21 @@ fn serve(listener: TcpListener, routes: HashMap<String, (u16, Vec<u8>)>) {
             if reader.read_line(&mut request_line).is_err() {
                 continue;
             }
-            let path = request_line.split_whitespace().nth(1).unwrap_or("/").to_string();
+            let path = request_line
+                .split_whitespace()
+                .nth(1)
+                .unwrap_or("/")
+                .to_string();
             loop {
                 let mut h = String::new();
                 if reader.read_line(&mut h).is_err() || h == "\r\n" || h.is_empty() {
                     break;
                 }
             }
-            let (status, body) = routes.get(&path).cloned().unwrap_or((404, b"not found".to_vec()));
+            let (status, body) = routes
+                .get(&path)
+                .cloned()
+                .unwrap_or((404, b"not found".to_vec()));
             let head = format!(
                 "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                 body.len()
@@ -60,7 +67,10 @@ async fn reports_up_to_date_then_available_as_the_fake_release_changes() {
     let status = update::check(&http).await.unwrap();
     assert_eq!(status.current, current);
     assert_eq!(status.latest, current);
-    assert!(!status.available, "same version must not be reported as available");
+    assert!(
+        !status.available,
+        "same version must not be reported as available"
+    );
 
     // A clearly newer version: available.
     let newer_body = br#"{"tag_name":"v99.0.0","assets":[]}"#.to_vec();
@@ -68,12 +78,18 @@ async fn reports_up_to_date_then_available_as_the_fake_release_changes() {
     std::env::set_var("FELLA_RELEASE_API_URL", format!("{base2}/r2"));
     let status = update::check(&http).await.unwrap();
     assert_eq!(status.latest, "99.0.0");
-    assert!(status.available, "a newer tag must be reported as available");
+    assert!(
+        status.available,
+        "a newer tag must be reported as available"
+    );
 
     // An older version (e.g. a stale cache, or a rollback): not available.
     let older_body = br#"{"tag_name":"v0.0.1","assets":[]}"#.to_vec();
     let base3 = start_server(HashMap::from([("/r3".to_string(), (200, older_body))]));
     std::env::set_var("FELLA_RELEASE_API_URL", format!("{base3}/r3"));
     let status = update::check(&http).await.unwrap();
-    assert!(!status.available, "an older tag must not be reported as available");
+    assert!(
+        !status.available,
+        "an older tag must not be reported as available"
+    );
 }

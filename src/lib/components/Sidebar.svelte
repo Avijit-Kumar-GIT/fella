@@ -1,15 +1,25 @@
 <script lang="ts">
 	import { ipc, isTauri } from '$lib/ipc';
-	import { baseName, errMsg, openFolder, relativeAge } from '$lib/commands';
+	import { errMsg, openFolder, relativeAge } from '$lib/commands';
 	import { session } from '$lib/session.svelte';
 	import type { ConversationSummary, Message } from '$lib/types';
 	import Icon from './Icon.svelte';
 	import Logo from './Logo.svelte';
 
+	let { onsearch }: { onsearch?: () => void } = $props();
+
 	let list = $state<ConversationSummary[]>([]);
 	let query = $state('');
 	let searchOpen = $state(false);
 	let searchInput = $state<HTMLInputElement | null>(null);
+	let folderName = $derived(
+		session.catalog.workspace?.replace(/[/\\]+$/, '').replace(/^.*[/\\]/, '') ?? ''
+	);
+	let fileCount = $derived(session.catalog.sources.length);
+	const shortcutModifier =
+		typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform || navigator.userAgent)
+			? '⌘'
+			: 'Ctrl';
 
 	function toggleSearch() {
 		searchOpen = !searchOpen;
@@ -32,13 +42,11 @@
 		void refresh();
 	});
 
-	/** A custom name, if renamed; otherwise "folder — first message" -- the
-	 *  folder is what actually distinguishes two similarly-phrased
-	 *  conversations. */
+	/** Keep the question as the primary history label. Workspace identity lives
+	 *  in the workspace card and only appears in a row when it disambiguates a
+	 *  conversation from the currently open folder. */
 	function title(c: ConversationSummary): string {
-		if (c.title) return c.title;
-		const folder = c.workspace ? baseName(c.workspace) : 'No project';
-		return `${folder} — ${c.preview}`;
+		return c.title ?? c.preview;
 	}
 
 	let renamingId = $state<string | null>(null);
@@ -104,6 +112,7 @@
 
 	async function open(c: ConversationSummary) {
 		try {
+			session.setWorkspaceView('ask');
 			const raw = await ipc.conversationLoad(c.id);
 			const saved: { workspace?: string | null; messages?: unknown; title?: string | null } =
 				JSON.parse(raw);
@@ -144,16 +153,19 @@
 				class="icon-btn"
 				type="button"
 				aria-label="New conversation"
-				title="New conversation"
-				onclick={() => session.newTab()}
+				title={`New conversation (${shortcutModifier}+N)`}
+				onclick={() => {
+					session.setWorkspaceView('ask');
+					session.newTab();
+				}}
 			>
 				<Icon name="plus" size={15} />
 			</button>
 			<button
 				class="icon-btn"
 				type="button"
-				aria-label="Search history"
-				title="Search"
+				aria-label="Filter conversations"
+				title="Filter conversations"
 				aria-pressed={searchOpen}
 				onclick={toggleSearch}
 			>
@@ -173,6 +185,71 @@
 			/>
 		</div>
 	{/if}
+	<nav class="nav-section" aria-label="Main">
+		<div class="nav-heading">Work</div>
+		<button
+			class="nav-row"
+			title={`Ask (${shortcutModifier}+Shift+A)`}
+			aria-keyshortcuts="Control+Shift+A Meta+Shift+A"
+			class:active={session.workspaceView === 'ask'}
+			type="button"
+			aria-current={session.workspaceView === 'ask' ? 'page' : undefined}
+			onclick={() => session.setWorkspaceView('ask')}
+		>
+			<Icon name="compose" size={14} />
+			<span>Ask</span>
+		</button>
+		<button
+			class="nav-row"
+			type="button"
+			title={`Search (${shortcutModifier}+K)`}
+			aria-keyshortcuts="Control+K Meta+K"
+			aria-haspopup="dialog"
+			onclick={() => onsearch?.()}
+		>
+			<Icon name="search" size={14} />
+			<span>Search</span>
+			<kbd>{shortcutModifier}K</kbd>
+		</button>
+	</nav>
+	<nav class="nav-section" aria-label="Workspace">
+		<div class="nav-heading">Workspace</div>
+		<button
+			class="nav-row"
+			title={`Sources (${shortcutModifier}+Shift+S)`}
+			aria-keyshortcuts="Control+Shift+S Meta+Shift+S"
+			class:active={session.workspaceView === 'workspace' && session.workspacePane === 'sources'}
+			type="button"
+			disabled={!session.catalog.workspace}
+			aria-current={
+				session.workspaceView === 'workspace' && session.workspacePane === 'sources' ? 'page' : undefined
+			}
+			onclick={() => session.setWorkspacePane('sources')}
+		>
+			<Icon name="table" size={14} />
+			<span>Sources</span>
+			{#if fileCount}<small>{fileCount}</small>{/if}
+		</button>
+		<button
+			class="nav-row"
+			title={`Context (${shortcutModifier}+Shift+C)`}
+			aria-keyshortcuts="Control+Shift+C Meta+Shift+C"
+			class:active={session.workspaceView === 'workspace' && session.workspacePane === 'context'}
+			type="button"
+			disabled={!session.catalog.workspace}
+			aria-current={
+				session.workspaceView === 'workspace' && session.workspacePane === 'context' ? 'page' : undefined
+			}
+			onclick={() => session.setWorkspacePane('context')}
+		>
+			<Icon name="file" size={14} />
+			<span>Context</span>
+		</button>
+	</nav>
+	<div class="history-label">
+		<span>Recent</span>
+		{#if list.length}<span class="history-count">{list.length}</span>{/if}
+	</div>
 	<div class="list">
 		{#each groups as group (group.label)}
 			<div class="group-label">{group.label}</div>
@@ -191,11 +268,15 @@
 							aria-label="Rename conversation"
 						/>
 					{:else}
-						<button class="rowbtn item" type="button" onclick={() => open(c)} title={title(c)}>
-							<span class="row-top">
-								<span class="preview">{title(c)}</span>
-							</span>
-							<span class="meta">
+						<button
+							class="rowbtn item"
+							type="button"
+							onclick={() => open(c)}
+							title={title(c)}
+							aria-label={`Open conversation: ${title(c)}`}
+						>
+							<span class="preview">{title(c)}</span>
+							<span class="row-end">
 								<span class="age">{relativeAge(c.saved_at_ms)}</span>
 							</span>
 						</button>
@@ -228,6 +309,50 @@
 				{query ? 'No matches' : "No past conversations yet — they're saved here once you /clear or close a tab."}
 			</div>
 		{/if}
+	</div>
+	<div class="sidebar-footer">
+		{#if session.catalog.workspace}
+			<button
+				class="mount-status"
+				type="button"
+				title={`${session.catalog.workspace} · Change folder (${shortcutModifier}+O)`}
+				aria-label={`Change folder: ${folderName}`}
+				onclick={() => void openFolder()}
+			>
+				<span class="mount-icon"><Icon name="folder" size={14} /></span>
+				<span class="mount-copy">
+					<strong>{folderName}</strong>
+					<small>Mounted folder</small>
+				</span>
+				<Icon name="chevron-right" size={13} />
+			</button>
+		{:else}
+			<button
+				class="mount-status"
+				type="button"
+				title={`Open a folder (${shortcutModifier}+O)`}
+				onclick={() => void openFolder()}
+			>
+				<span class="mount-icon"><Icon name="folder" size={14} /></span>
+				<span class="mount-copy">
+					<strong>Open a folder</strong>
+					<small>Choose a local workspace</small>
+				</span>
+				<Icon name="chevron-right" size={13} />
+			</button>
+		{/if}
+		<button
+			class="nav-row settings-row"
+			title={`Settings (${shortcutModifier}+,)`}
+			aria-keyshortcuts="Control+Comma Meta+Comma"
+			class:active={session.workspaceView === 'settings'}
+			type="button"
+			aria-current={session.workspaceView === 'settings' ? 'page' : undefined}
+			onclick={() => session.setWorkspaceView('settings')}
+		>
+			<Icon name="settings" size={14} />
+			<span>Settings</span>
+		</button>
 	</div>
 </aside>
 
@@ -294,9 +419,96 @@
 	.search input::placeholder {
 		color: var(--text-faint);
 	}
+	.nav-section {
+		display: grid;
+		gap: 2px;
+		padding: var(--space-3) var(--space-1) var(--space-2);
+	}
+	.nav-section + .nav-section {
+		padding-top: var(--space-2);
+		border-top: 1px solid var(--border);
+	}
+	.nav-heading {
+		padding: 0 var(--space-2) var(--space-1);
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+		font-weight: 650;
+		letter-spacing: 0.01em;
+	}
+	.nav-row {
+		position: relative;
+		width: 100%;
+		display: flex;
+		align-items: center;
+		gap: var(--space-2);
+		padding: var(--space-2) var(--space-2);
+		border-radius: var(--radius-sm);
+		color: var(--text-dim);
+		font-size: var(--fs-sm);
+		text-align: left;
+		white-space: nowrap;
+		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+	}
+	.nav-row:hover:not(:disabled) {
+		background: var(--bg-inset);
+		color: var(--text);
+	}
+	.nav-row.active {
+		background: var(--bg-raised);
+		color: var(--text);
+		font-weight: 620;
+	}
+	.nav-row.active::before {
+		content: '';
+		position: absolute;
+		left: 0;
+		top: 6px;
+		bottom: 6px;
+		width: 3px;
+		border-radius: 2px;
+		background: var(--brand);
+	}
+	.nav-row.active :global(svg) {
+		color: var(--brand);
+	}
+	.nav-row:disabled {
+		color: var(--border-strong);
+		cursor: default;
+	}
+	.nav-row small {
+		margin-left: auto;
+		color: var(--text-faint);
+		font-family: var(--mono);
+		font-size: 10px;
+	}
+	.nav-row kbd {
+		margin-left: auto;
+		color: var(--text-faint);
+		font-family: var(--mono);
+		font-size: 10px;
+	}
+	.history-label {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		padding: var(--space-3) var(--space-2) var(--space-1);
+		border-top: 1px solid var(--border);
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+		font-weight: 650;
+		letter-spacing: 0.01em;
+	}
+	.history-count {
+		font-family: var(--mono);
+		font-size: 10px;
+		font-weight: 500;
+		letter-spacing: 0;
+		text-transform: none;
+	}
 	.list {
 		flex: 1;
 		min-height: 0;
+		padding: 0 var(--space-1);
 		overflow-y: auto;
 	}
 	.group-label {
@@ -304,24 +516,40 @@
 		color: var(--text-faint);
 		font-size: var(--fs-xs);
 		font-weight: 600;
-		text-transform: uppercase;
-		letter-spacing: 0.04em;
+		letter-spacing: 0.01em;
 	}
 	.item-wrap {
 		position: relative;
 	}
 	.item {
 		display: flex;
-		flex-direction: column;
-		align-items: stretch;
-		gap: 2px;
-		width: 100%;
-	}
-	.row-top {
-		display: flex;
 		align-items: center;
 		gap: var(--space-2);
-		padding-right: 40px;
+		width: 100%;
+		min-height: 30px;
+		padding-top: 6px;
+		padding-bottom: 6px;
+		border-radius: var(--radius-sm);
+	}
+	.item:hover,
+	.item:focus-visible {
+		background: var(--bg-inset);
+	}
+	.item-wrap:focus-within .row-actions,
+	.item-wrap:hover .row-actions {
+		display: flex;
+	}
+	.item-wrap:hover .row-end,
+	.item-wrap:focus-within .row-end {
+		opacity: 0;
+	}
+	.row-end {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		flex: none;
+		max-width: 42%;
+		transition: opacity var(--dur-fast) var(--ease);
 	}
 	.preview {
 		flex: 1;
@@ -345,14 +573,11 @@
 	}
 	.row-actions {
 		position: absolute;
-		top: var(--space-2);
-		right: var(--space-2);
+		top: 5px;
+		right: 6px;
 		display: none;
 		align-items: center;
 		gap: 2px;
-	}
-	.item-wrap:hover .row-actions {
-		display: flex;
 	}
 	.ren,
 	.del {
@@ -371,15 +596,69 @@
 		color: var(--text);
 		background: var(--bg-inset);
 	}
-	.meta {
-		display: flex;
-		align-items: center;
+	.age {
 		color: var(--text-faint);
-		font-size: var(--fs-xs);
+		font-family: var(--mono);
+		font-size: 10px;
+		white-space: nowrap;
 	}
 	.empty {
 		padding: var(--space-2);
 		color: var(--text-faint);
 		font-size: var(--fs-sm);
+	}
+	.sidebar-footer {
+		flex: none;
+		display: grid;
+		gap: 2px;
+		padding: var(--space-2) var(--space-1) 0;
+		border-top: 1px solid var(--border);
+	}
+	.mount-status {
+		width: 100%;
+		display: flex;
+		align-items: center;
+		gap: var(--space-2);
+		min-width: 0;
+		padding: var(--space-2);
+		border-radius: var(--radius-sm);
+		color: var(--text-dim);
+		text-align: left;
+		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+	}
+	.mount-status:hover {
+		background: var(--bg-inset);
+		color: var(--text);
+	}
+	.mount-icon {
+		display: grid;
+		place-items: center;
+		flex: none;
+		color: var(--brand);
+	}
+	.mount-copy {
+		min-width: 0;
+		flex: 1;
+		display: flex;
+		flex-direction: column;
+		gap: 1px;
+	}
+	.mount-copy strong,
+	.mount-copy small {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.mount-copy strong {
+		color: var(--text);
+		font-size: var(--fs-sm);
+		font-weight: 580;
+	}
+	.mount-copy small {
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+	}
+	.settings-row {
+		margin-top: 1px;
 	}
 </style>

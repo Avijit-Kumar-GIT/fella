@@ -1,0 +1,203 @@
+---
+title: "The analytics engine"
+description: "How Fella catalogs files and produces local SQL, document, Python, and chart results."
+icon: "database"
+---
+
+> The engine turns supported local files into inputs and results the harness can record as evidence.
+
+## Definition
+
+The analytics engine is Rust code with no LLM calls or conversation loop. It scans the workspace, loads supported tables, reads documents, executes analytics operations, and exposes the narrow interfaces used by built-in tools and deterministic verification.
+
+## Why it exists
+
+The model is allowed to propose a query or an analysis, but it is not allowed to be the computation layer. The engine makes the result:
+
+- deterministic enough to rerun and inspect;
+- independent of the selected model, provider, UI, and conversation state;
+- testable with ordinary Rust inputs without starting a model or a Tauri window.
+
+The engine is not a database service or a general-purpose code runner. It is the local capability that turns the current folder into bounded, queryable inputs and returns structured results to the harness.
+
+## What makes up the engine
+
+`engine/analytics/` contains the compute-and-check modules. The catalog and ingest modules are the input boundary immediately around it:
+
+| Module | Responsibility | Does not do |
+| --- | --- | --- |
+| [`catalog.rs`](https://github.com/Avijit-Kumar-GIT/fella/blob/main/src-tauri/src/engine/catalog.rs) | Walk the folder, classify files, derive safe names, and report skipped inputs | Execute SQL or call a model |
+| [`analytics/data/mod.rs`](https://github.com/Avijit-Kumar-GIT/fella/blob/main/src-tauri/src/engine/analytics/data/mod.rs) | Define `DataEngine`, shared limits, SQL safety checks, type helpers, and quoting | Know about prompts or answers |
+| [`analytics/data/sqlite.rs`](https://github.com/Avijit-Kumar-GIT/fella/blob/main/src-tauri/src/engine/analytics/data/sqlite.rs) | Default file-backed SQLite backend, ingestion, type inference, and read-only queries | Depend on a model provider |
+| [`analytics/data/duck.rs`](https://github.com/Avijit-Kumar-GIT/fella/blob/main/src-tauri/src/engine/analytics/data/duck.rs) | Optional DuckDB backend with file-reader views for larger/Parquet workloads | Run in the default release build |
+| [`ingest/excel.rs`](https://github.com/Avijit-Kumar-GIT/fella/blob/main/src-tauri/src/engine/ingest/excel.rs) | Read each usable spreadsheet sheet and send typed rows to `DataEngine::add_rows` | Treat a workbook as one opaque file |
+| [`ingest/docs.rs`](https://github.com/Avijit-Kumar-GIT/fella/blob/main/src-tauri/src/engine/ingest/docs.rs) | Extract PDF text and stream text-file lines to document tools | Build an embedding index |
+| [`analytics/pyexec.rs`](https://github.com/Avijit-Kumar-GIT/fella/blob/main/src-tauri/src/engine/analytics/pyexec.rs) | Run bounded Python for statistics SQL does not express conveniently | Keep the embedded guest small and its host ABI narrow |
+| [`analytics/chart.rs`](https://github.com/Avijit-Kumar-GIT/fella/blob/main/src-tauri/src/engine/analytics/chart.rs) | Convert bounded query results into validated chart data before the client renders it | Generate SVG or HTML |
+| [`analytics/verify.rs`](https://github.com/Avijit-Kumar-GIT/fella/blob/main/src-tauri/src/engine/analytics/verify.rs) | Compare an answer with its recorded work using deterministic checks | Grade meaning with another model |
+
+## Inputs and backends
+
+The shipped desktop build uses bundled SQLite as its data engine. Compiling with the non-default `duckdb` Cargo feature swaps SQLite for DuckDB; it does not run both analytics backends together.
+
+| Input | Current path |
+| --- | --- |
+| CSV, TSV, and `.tab` | Delimiter sniffing, header detection, type inference, and loading into the active SQL engine |
+| JSON, NDJSON, and JSONL | Object parsing, first-seen column union, type inference, and loading into the active SQL engine |
+| XLSX, XLSM, XLSB, and XLS | One table per readable sheet when the `xlsx` feature is built |
+| Parquet and PQ | Supported only by a build compiled with `--features duckdb` |
+| PDF | Local text extraction when the `pdf` feature is built |
+| TXT, text, Markdown, and logs | Direct local text reading |
+
+Documents are not embedded or vector-indexed. `grep_files` searches their text and `read_file` reads cataloged document content, independent of model-provider embedding support.
+
+The default Cargo features are `pdf` and `xlsx`. `duckdb` is deliberately opt-in; the release data path is SQLite.
+
+The analytics module depends on a deliberately small application capability:
+
+```rust
+pub trait AnalyticsSource {
+    fn catalog(&self) -> Catalog;
+    fn run_sql(&self, sql: &str) -> EngineResult<QueryResult>;
+}
+```
+
+The backend itself is hidden behind `DataEngine`:
+
+```rust
+pub trait DataEngine: Send {
+    fn add_source(&mut self, name: &str, kind: SourceKind, path: &str)
+        -> EngineResult<SourceLoad>;
+    fn add_rows(
+        &mut self,
+        name: &str,
+        columns: &[(String, ColType)],
+        rows: &[Vec<Cell>],
+    ) -> EngineResult<i64>;
+    fn drop_source(&mut self, name: &str);
+    fn describe(&self, name: &str) -> EngineResult<Vec<ColumnInfo>>;
+    fn query(&self, sql: &str, max_rows: usize) -> EngineResult<QueryOutcome>;
+    fn python_bridge(&self) -> PythonBridge;
+}
+```
+
+`EngineState` implements `AnalyticsSource`; `open_engine` selects SQLite by default or DuckDB only when the Cargo feature is compiled. Neither trait contains model or UI behavior.
+
+## Flow
+
+1. The scanner walks to a default depth of eight, does not follow symlinks, skips hidden entries, and applies a root `.fellaignore`.
+2. Recognized files become catalog entries; relevant files that cannot be loaded appear in `skipped` with a reason instead of failing silently.
+3. Tabular sources receive sanitized, collision-safe view names and are loaded into the active backend. Root `fella.md` is user context, not a data source. The resulting catalog carries a deterministic revision marker for the loaded snapshot.
+4. Built-in tools ask for schema statistics, sample rows, SQL, document matches, Python output, or chart data. A chart request runs its own read-only SQL query and derives the labels and values from that result.
+5. The engine returns bounded structured results. The tools layer turns them into `ToolOutput`; the harness records `ToolOutput` as evidence.
+6. Verification receives only the `AnalyticsSource` capability it needs, reruns eligible SQL after the answer, and emits one typed status alongside the individual checks.
+
+## Behavior
+
+`EngineState::run_sql` is the narrow execution path used by both `/sql` and the `run_sql` tool:
+
+```rust
+pub fn run_sql(&self, sql: &str) -> EngineResult<QueryResult> {
+    data::ensure_read_only(sql)?;
+    let data = self.data.lock().unwrap_or_else(|e| e.into_inner());
+    let t = Instant::now();
+    let out = data.query(sql, DEFAULT_ROW_CAP)?;
+    Ok(QueryResult {
+        columns: out.columns,
+        rows: out.rows,
+        row_count: out.row_count,
+        ms: t.elapsed().as_millis() as u64,
+        truncated: out.truncated,
+    })
+}
+```
+
+Before `data.query` runs, `ensure_read_only` strips SQL comments, permits one statement, checks an allowlist of read-oriented starters, rejects mutation/attachment/extension operations, and blocks file-reading SQL functions such as `read_csv_auto` and `read_parquet`. SQLite then opens a fresh read-only connection as a second enforcement layer. The lexical guard is a guard rail, not a complete security boundary.
+
+SQLite materializes at most 1,000 rows by default and interrupts queries after 15 seconds (`FELLA_QUERY_TIMEOUT_SECS` can override it). DuckDB is an opt-in build feature intended for Parquet and larger-file workloads; its backend uses an in-memory connection, four threads, and a 2 GB memory setting rather than SQLite's interrupt watchdog. Current release builds remain SQLite-based unless explicitly built otherwise.
+
+Python is an escape hatch for analysis shapes such as median, standard deviation, correlation, and simple linear regression. It runs the machine's Python interpreter in a temporary directory and captures output as evidence.
+
+Charts are structured bar or line data derived from a bounded read-only SQL result, validated in Rust, and rendered by the client; the model supplies the query, not the chart's numeric arrays or executable markup.
+
+### Ingestion and normalization
+
+The SQLite reader is intentionally opinionated about messy personal exports:
+
+- Delimited files use a quote-aware delimiter sniff over comma, semicolon, tab, and pipe. The reader examines the first 15 rows for a header, skips report preambles, synthesizes `colN` names when no header is found, and deduplicates repeated names with numeric suffixes.
+- A trailing `Total`, `Subtotal`, `Sum`, or `Grand total` row is treated as a report summary rather than data, so a later `SUM` does not double-count it.
+- CSV rows are read flexibly. Decode failures and the ingest cap are reported as notes; only the first `FELLA_INGEST_ROW_CAP` rows are loaded.
+- JSON accepts one object or an array of objects. NDJSON reads non-empty object records line by line. Columns are the first-seen union of object keys and absent values become `NULL`.
+- Excel uses `calamine`, creates one table per usable sheet, skips empty/unreadable sheets, applies the same header/summary-row handling, and loads typed rows through `DataEngine::add_rows`.
+
+Type inference produces `Int`, `Float`, `Bool`, `Text`, or `Date`. Blank-ish numeric values such as `N/A`, `-`, and `null` become SQL `NULL`. Written numbers such as `$1,200`, `1,200`, `12%`, and `(45)` can be coerced to `Float` with an ingest note; mixed columns remain `Text` with guidance to use the read-only `parse_num()` SQL helper. Named dates such as `Aug 1, 2026` are normalized to ISO text for `strftime()` and `date()`; ambiguous numeric dates are intentionally left alone. Text label columns with case collisions such as `Rent` and `rent` receive a case-folding note.
+
+### SQL and schema
+
+`DataEngine` gives the rest of the app one backend-neutral interface for adding sources, adding rows, dropping sources, describing columns, running queries, and building the Python bridge. `open_engine()` selects `SqliteEngine` by default or `DuckEngine` when compiled with `--features duckdb`.
+
+SQLite stores the current workspace in a scratch `analysis.db`, rebuilt when the engine starts. It creates real tables with bulk inserts and registers a deterministic `parse_num()` scalar function on read-only query connections. `describe()` reports column type, null fraction, distinct count, minimum, and maximum. `query()` returns column names, a materialized row sample, the total row count, and whether the result was truncated.
+
+DuckDB uses an in-memory connection, four threads, and a 2 GB memory setting. Path-backed CSV, TSV, JSON, NDJSON, and Parquet sources become DuckDB reader views; Excel still enters through the shared `add_rows` path. Its `describe()` uses `SUMMARIZE`. This backend is a feature-gated power build, not a runtime fallback in the shipped SQLite build.
+
+### Documents
+
+Documents stay outside the SQL tables. `ingest/docs.rs` reads text files line by line and extracts PDFs when the `pdf` feature is present. PDF text is cached by path and modification time; a malformed PDF becomes a tool error, and a PDF with almost no text is reported as a likely scan. `grep_files` applies a case-insensitive regex without an index, streaming text files and scanning cached PDF text. `read_file` resolves a catalogued name rather than accepting an arbitrary path and returns bounded extracted text.
+
+### Python analysis
+
+`PythonBridge` connects generated Python to the active backend without passing a path into Python. The host opens SQLite or DuckDB itself, checks the query, and returns a bounded JSON result that the guest turns into a list of dictionaries. `median()`, `stdev()`, `pearsonr()`, and `linregress()` are injected helpers; no third-party package is present.
+
+`pyexec::run()` loads the checked-in `wasm32-unknown-unknown` RustPython guest into a fresh Wasmi store. The guest has no filesystem, network, environment, clock, or subprocess import. Wasmi caps fuel, linear memory, value-stack height, source, output, SQL rows, and SQL response size; the host data engine also keeps its query watchdog.
+
+### Charts
+
+`make_chart` accepts a read-only SQL query whose first result column is the label or date and whose remaining one or two columns are numeric series. The tool executes that query through the same guarded `EngineState::run_sql` path used by `run_sql`, so the chart carries SQL, columns, rows, and row count in its evidence. The pure `analytics::chart::from_query()` conversion then creates `ChartData` and `chart::validate()` rejects empty labels or series, mismatched lengths, more than 12 categories, more than 2 series, non-finite values, and near-flat data. The backend emits no SVG or HTML; `Chart.svelte` renders the validated data and offers a collapsed exact-values table as an accessible alternative.
+
+### Provenance
+
+An answer captures the workspace path and catalog revision present when its run
+started. SQL-backed evidence maps referenced views back to catalogued files or
+workbook sheets and carries any source-level ingest note. The revision is a
+freshness marker, not a cryptographic integrity proof; it changes when loaded
+source metadata, schema, ingest notes, skipped files, or root context changes.
+
+### Verification boundary
+
+`verify.rs` belongs in the analytics module because its checks are deterministic operations over the catalog, SQL, answers, and recorded evidence. It receives only `AnalyticsSource`, never the full `EngineState`, and never calls a model. The [verification page](/concepts/verification) documents its ten checks, SQL rerun policy, corrective re-ask boundary, and known false-negative/false-positive limits.
+
+## Limits
+
+- SQLite is the default and shipped analytics backend. Parquet is unavailable in that build; DuckDB support is feature-gated, not an automatically selected runtime mode.
+- Scans, ingestion, queries, document reads, and displayed rows are bounded. Large inputs may be truncated with a note.
+- Type inference and normalization are best effort. Ingest notes and verifier warnings should be inspected for messy data.
+- `run_python` runs in the embedded WASM guest. It has no filesystem, network, environment, clock, or subprocess capability; Wasmi and the host data engine apply resource and query limits.
+- The app also uses a separate SQLite database for settings, cached source metadata, and conversation metadata. Provider credentials are stored in `auth.json`, not that database.
+
+## Execution limits
+
+| Path | Default guardrail | Why it exists |
+| --- | ---: | --- |
+| Workspace scan | 8 levels deep; `FELLA_SCAN_DEPTH` can override | Find nested exports without walking an unbounded tree |
+| Text synopses at open | 250 documents | Avoid opening thousands of text files just to render the catalog |
+| Delimited ingest | 2,000,000 rows per source; `FELLA_INGEST_ROW_CAP` can override | Prevent a large export from consuming unbounded memory |
+| SQL materialization | 1,000 rows returned to callers | Keep tool results and evidence bounded while retaining total `row_count` |
+| SQLite SQL runtime | 15 seconds; `FELLA_QUERY_TIMEOUT_SECS` can override | Interrupt runaway analysis in the default backend |
+| Document search | 30 hits by default, 100 maximum | Keep regex scans and evidence manageable |
+| Document read | 12,000 characters per document; 16,000 combined in a multi-file tool call | Keep extracted text out of an oversized model context |
+| Table sample | 0-50 rows for `inspect_table` | Make schema inspection useful without dumping a table |
+| Python execution | 1 billion Wasmi fuel, 256 MiB memory, 2 MiB stack, and 64 KiB output; SQL rows/response are capped | Keep generated analytics bounded without requiring Python or an OS-specific sandbox |
+| Chart data | 12 categories and 2 series | Keep the rendered result readable |
+
+The history behind this module matters: [commit `08d0b6e`](https://github.com/Avijit-Kumar-GIT/fella/commit/08d0b6e) made the analytics boundary explicit, while [PR #102](https://github.com/Avijit-Kumar-GIT/fella/pull/102) added structured chart data and [commit `9072c8d`](https://github.com/Avijit-Kumar-GIT/fella/commit/9072c8d) moved chart rendering to the client so the backend emits data rather than SVG markup.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="See the tools" icon="wrench" href="/concepts/tools">
+    Review the interfaces exposed over engine operations.
+  </Card>
+  <Card title="See the checks" icon="badge-check" href="/concepts/verification">
+    Learn which engine results are rerun and compared.
+  </Card>
+</CardGroup>

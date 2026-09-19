@@ -37,6 +37,11 @@ Real numbers exist: `docs/PERFORMANCE.md`, `docs/PERFORMANCE-LOG.md`. As of
 the SQLite-default migration: **11 MB stripped**, down from 54 MB with
 DuckDB default (−80%); cold release build ~3 min, down from ~9 min.
 
+The embedded Python guest adds about **6.7 MB** to the shipped source artifact.
+That is the deliberate cost of carrying one capability boundary across the
+three desktop OSes without requiring a Python installation or maintaining an
+OS-specific sandbox executable.
+
 **Is sub-50MB the actual bar?** No, and the DuckDB number itself shows why
 a round absolute threshold is the wrong tool: 54 MB would have *snuck
 under* a naive "under 50 MB" rule despite being the single change that made
@@ -53,7 +58,7 @@ the largest single crate share is `std` itself at 15%.
 |---|---|---|
 | `analytics::data` (SQLite backend) | ~1.3% of `.text` (bundled, tiny) | Stays default. This is the floor. |
 | `analytics::data` (DuckDB backend) | Was >50% of `.text` alone | **Opt-in only** (`--features duckdb`). Not revisited by the retrieval-at-scale work (#125) unless the SQLite-side fixes (streaming/lazy ingestion, parallelism — already the roadmap's stated candidates) genuinely can't get there. |
-| `analytics::pyexec` + stats helpers | Zero — pure stdlib, no new crate | Deliberately kept dependency-free this session (`pearsonr`/`linregress` exist specifically so `run_python`'s claimed capability doesn't require scipy/numpy). |
+| `analytics::pyexec` + embedded Python guest | Was subprocess-only; now adds Wasmi plus a stripped ~6.7 MB RustPython/WASM artifact | This is the deliberate portability/security tradeoff: one capability boundary across Linux, macOS, and Windows, with no Python install or OS-specific sandbox executable. |
 | `analytics::chart` | Near-zero — a few structs + one validation function; rendering is 100% client-side JS, not in this binary at all | Fine to grow modestly (a new chart kind, e.g.) — it was never a weight concern. |
 | `analytics::verify` | Zero new deps | N/A |
 | `tools.rs` (the fixed tool set) | Whatever each tool's own backend costs (already accounted above) | Locked at 7 tools by axis 4, not a weight decision. |
@@ -96,7 +101,7 @@ see the linear-loop section below for where that starts to cost real time.
 | Component | Axis-2 cost | Notes |
 |---|---|---|
 | `analytics::data::run_sql` | ~10–50 ms | Not the bottleneck, ever. |
-| `analytics::pyexec::run` | Process spawn + interpreter start, on top of the script's own time | A real, distinct cost `run_sql` doesn't have — every `run_python` call pays a subprocess-startup tax measured in tens of ms at least. Not currently budgeted or measured anywhere; worth adding to `measure.sh` if `run_python` use grows with the stats-helper push. |
+| `analytics::pyexec::run` | Wasmi + RustPython startup, on top of the script's own time | Release tests run the two basic snippets in ~0.18 s on the development machine. The guest artifact is the main size cost; keep Python focused on calculations SQL cannot express. |
 | `analytics::verify::rerun_queries` | One extra `run_sql` per *distinct* cited query, deduped, and **skipped** for a query that was already slow (>500 ms) or truncated | Already axis-2-aware by design — a good existing example to match going forward, not something this doc is introducing. |
 | Model round trips | **Seconds. The dominant cost, by a wide margin.** | Everything else on this list is noise next to this one. |
 | The system prompt itself | Every rule added (`depth_rule`, the expanded `python_rule`, the strengthened no-workspace instruction, `chart_rule`'s one-chart clause) costs **every single turn**, whether or not that rule is relevant to the question asked | This is the real, direct tension with this session's own prompt additions. `FELLA_PROMPT_DROP` (the ablation-testing env var already built for `agent_eval`) is the actual tool for measuring whether a given rule earns its place on this axis — it hasn't been re-run against the rules added this session. Worth doing before adding more. |

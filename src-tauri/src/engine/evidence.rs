@@ -6,7 +6,13 @@ use serde_json::Value as Json;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct EvidenceItem {
+    /// Stable within one answer and ordered by the tool-call result presented
+    /// to the user. This is also the UI key for evidence and chart items.
+    pub id: String,
     pub tool: String,
+    /// Catalogued files/sheets behind a SQL-backed result.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<EvidenceSource>,
     pub args: Json,
     /// One plain sentence the model wrote describing what this step does, for a
     /// non-technical reader (e.g. "Add up spending by month"). Absent if the
@@ -36,6 +42,29 @@ pub struct EvidenceItem {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct EvidenceSource {
+    pub table: String,
+    pub source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct WorkspaceSnapshot {
+    pub path: String,
+    pub revision: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VerificationStatus {
+    Verified,
+    NeedsReview,
+    InsufficientData,
+    Failed,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct VerificationCheck {
     pub label: String,
@@ -45,7 +74,7 @@ pub struct VerificationCheck {
 }
 
 /// Token accounting for one `ask`, summed across every model turn. Populated
-/// only when the provider reports it (Ollama always; an OpenAI-compatible
+/// only when the provider reports it (Ollama-compatible providers always; an OpenAI-compatible
 /// endpoint when it honours `stream_options.include_usage`). `None` otherwise.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 pub struct Usage {
@@ -59,8 +88,8 @@ impl Usage {
     pub fn merge(a: Option<Usage>, b: Option<Usage>) -> Option<Usage> {
         match (a, b) {
             (Some(x), Some(y)) => Some(Usage {
-                prompt_tokens: x.prompt_tokens + y.prompt_tokens,
-                completion_tokens: x.completion_tokens + y.completion_tokens,
+                prompt_tokens: x.prompt_tokens.saturating_add(y.prompt_tokens),
+                completion_tokens: x.completion_tokens.saturating_add(y.completion_tokens),
             }),
             (x, y) => x.or(y),
         }
@@ -72,6 +101,9 @@ pub struct Answer {
     pub text: String,
     pub evidence: Vec<EvidenceItem>,
     pub verification: Vec<VerificationCheck>,
+    pub status: VerificationStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<WorkspaceSnapshot>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usage: Option<Usage>,
 }
@@ -82,15 +114,32 @@ mod tests {
 
     #[test]
     fn usage_merge_sums_and_tolerates_missing() {
-        let a = Usage { prompt_tokens: 100, completion_tokens: 10 };
-        let b = Usage { prompt_tokens: 40, completion_tokens: 5 };
+        let a = Usage {
+            prompt_tokens: 100,
+            completion_tokens: 10,
+        };
+        let b = Usage {
+            prompt_tokens: 40,
+            completion_tokens: 5,
+        };
         assert_eq!(
             Usage::merge(Some(a), Some(b)),
-            Some(Usage { prompt_tokens: 140, completion_tokens: 15 })
+            Some(Usage {
+                prompt_tokens: 140,
+                completion_tokens: 15
+            })
         );
         assert_eq!(Usage::merge(None, Some(b)), Some(b));
         assert_eq!(Usage::merge(Some(a), None), Some(a));
         assert_eq!(Usage::merge(None, None), None);
+    }
+
+    #[test]
+    fn verification_status_serializes_as_a_stable_code() {
+        assert_eq!(
+            serde_json::to_value(VerificationStatus::NeedsReview).unwrap(),
+            serde_json::json!("needs_review")
+        );
     }
 }
 
@@ -98,13 +147,24 @@ mod tests {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AskEvent {
-    AssistantDelta { text: String },
-    ToolStart { tool: String, args: Json },
+    AssistantDelta {
+        text: String,
+    },
+    ToolStart {
+        tool: String,
+        args: Json,
+    },
     // Boxed: `EvidenceItem` grew past clippy's large-enum-variant threshold
     // once `chart` started carrying structured data (labels/series) inline
     // instead of a single SVG string.
-    ToolEnd { item: Box<EvidenceItem> },
+    ToolEnd {
+        item: Box<EvidenceItem>,
+    },
     /// A transient status line for the UI (e.g. "rate limited retrying in 3s…").
-    Notice { text: String },
-    AnswerDone { answer: Answer },
+    Notice {
+        text: String,
+    },
+    AnswerDone {
+        answer: Answer,
+    },
 }

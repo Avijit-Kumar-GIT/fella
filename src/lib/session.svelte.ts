@@ -10,19 +10,34 @@
 
 import { ipc, isTauri } from './ipc';
 import type {
-	AugmentConfig,
+	AskMode,
 	Catalog,
-	InstalledPack,
+	ContextReference,
+	EvidenceItem,
+	InspectorSelection,
 	Message,
-	OllamaHealth,
+	ProviderHealth,
 	ProviderInfo,
+	RunStep,
 	Settings
 } from './types';
 
-export type { AugmentConfig };
 
 function uid(): string {
 	return Math.random().toString(36).slice(2, 10);
+}
+
+function humanToolName(tool: string): string {
+	const labels: Record<string, string> = {
+		list_files: 'Looking through the workspace',
+		inspect_file: 'Inspecting a source',
+		read_file: 'Reading a source',
+		search_files: 'Searching the workspace',
+		query: 'Calculating from the data',
+		make_chart: 'Preparing a chart',
+		memory: 'Checking workspace notes'
+	};
+	return labels[tool] ?? tool.replace(/[_-]+/g, ' ').replace(/^./, (c) => c.toUpperCase());
 }
 
 const PREFIX = 'fella:conversation:'; // one key per tab: fella:conversation:<id>
@@ -39,6 +54,7 @@ function readSidebarCollapsed(): boolean {
 	}
 }
 
+
 /** One conversation tab: its transcript, its in-flight run, its input history. */
 export class Conversation {
 	readonly kind = 'chat' as const;
@@ -50,9 +66,6 @@ export class Conversation {
 	/** Set by `/login <provider>`: the next composer line is taken as the API
 	 *  key for this provider not echoed to the transcript, not persisted. */
 	pendingKey = $state<{ provider: string; display: string } | null>(null);
-	/** Set by `/connect <id>`: the next composer line is the connector's key
-	 *  same masked-input treatment as `pendingKey`. */
-	pendingConnect = $state<{ id: string } | null>(null);
 	/** ↑-recall history for the composer while this tab is focused. */
 	history: string[] = [];
 	/** The model this tab answers with. Empty = use the saved default. All tabs
@@ -61,6 +74,15 @@ export class Conversation {
 	/** A user-given name. null = derive one from the folder + first message,
 	 *  the same as an un-renamed conversation always has. */
 	title = $state<string | null>(null);
+	/** The current question's intent. Inspect selects the stricter read-only
+	 *  tool registry and makes the source-first workflow explicit to the model. */
+	mode = $state<AskMode>('ask');
+	/** Sources and fields chosen from the workspace for this tab. */
+	contextRefs = $state<ContextReference[]>([]);
+	/** The compact, local run trace shown beneath the transcript. */
+	runSteps = $state<RunStep[]>([]);
+	runStartedAt = $state<number | null>(null);
+	runDurationMs = $state<number | null>(null);
 
 	/** `id` defaults to a fresh one (a genuinely new conversation). Reopening
 	 *  an archived conversation passes its real id back in, so re-archiving
@@ -85,6 +107,81 @@ export class Conversation {
 	addSystem(text: string): Message {
 		this.messages.push({ id: uid(), role: 'system', text, ts: Date.now() });
 		return this.messages[this.messages.length - 1];
+	}
+
+	setMode(mode: AskMode): void {
+		this.mode = mode;
+	}
+
+	addContext(ref: ContextReference): void {
+		if (this.contextRefs.some((item) => item.kind === ref.kind && item.key === ref.key)) return;
+		this.contextRefs = [...this.contextRefs, ref];
+	}
+
+	removeContext(kind: ContextReference['kind'], key: string): void {
+		this.contextRefs = this.contextRefs.filter((item) => item.kind !== kind || item.key !== key);
+	}
+
+	clearContext(): void {
+		this.contextRefs = [];
+	}
+
+	startRun(): void {
+		const now = Date.now();
+		this.runStartedAt = now;
+		this.runDurationMs = null;
+		this.runSteps = [
+			{
+				id: uid(),
+				label: 'Planning the question',
+				state: 'running',
+				started_at_ms: now
+			}
+		];
+	}
+
+	beginRunStep(tool: string, note?: string): void {
+		const now = Date.now();
+		const steps = this.runSteps.map((step) =>
+			step.state === 'running' && !step.tool
+				? { ...step, state: 'complete' as const, finished_at_ms: now }
+				: step
+		);
+		this.runSteps = [
+			...steps,
+			{
+				id: uid(),
+				label: note || humanToolName(tool),
+				state: 'running',
+				started_at_ms: now,
+				tool,
+				note
+			}
+		];
+	}
+
+	completeRunStep(item: EvidenceItem): void {
+		const now = Date.now();
+		const index = this.runSteps.findLastIndex(
+			(step) => step.state === 'running' && (!step.tool || step.tool === item.tool)
+		);
+		if (index < 0) return;
+		this.runSteps = this.runSteps.map((step, i) =>
+			i === index
+				? { ...step, state: item.error ? ('error' as const) : ('complete' as const), finished_at_ms: now, evidence: item }
+				: step
+		);
+	}
+
+	finishRun(error = false): void {
+		const now = Date.now();
+		this.runSteps = this.runSteps.map((step) =>
+			step.state === 'running'
+				? { ...step, state: error ? ('error' as const) : ('complete' as const), finished_at_ms: now }
+				: step
+		);
+		if (this.runStartedAt !== null) this.runDurationMs = Math.max(0, now - this.runStartedAt);
+		this.runStartedAt = null;
 	}
 
 	/** Coalesce writes while a run streams; flush immediately once it settles. */
@@ -117,60 +214,26 @@ export class Conversation {
 	}
 }
 
-/** A non-conversation tab: an augment view (a notes buffer, later a grid)
- *  editing one file in the open folder. Not persisted to localStorage the
- *  file on disk is the source of truth and it isn't restored on relaunch. */
-export class AugmentTab {
-	readonly kind = 'augment' as const;
-	readonly id = uid();
-	readonly capability: string;
-	readonly command: string;
-	readonly file: string;
-	readonly syntax: string;
-	/** Current editor contents. */
-	text = $state<string>('');
-	/** Last value confirmed written to disk. */
-	saved = $state<string>('');
-	savedAt = $state<number | null>(null);
-	saving = $state<boolean>(false);
-	loadError = $state<string | null>(null);
 
-	constructor(cfg: AugmentConfig) {
-		this.capability = cfg.capability;
-		this.command = cfg.command;
-		this.file = cfg.file;
-		this.syntax = cfg.syntax;
-	}
-
-	get dirty(): boolean {
-		return this.text !== this.saved;
-	}
-}
-
-export type Tab = Conversation | AugmentTab;
+export type Tab = Conversation;
+export type WorkspaceView = 'ask' | 'workspace' | 'settings';
+export type WorkspacePane = 'sources' | 'context';
 
 class Session {
 	catalog = $state<Catalog>({ workspace: null, sources: [] });
+	/** The lightweight workspace surface currently shown beside the tab state. */
+	workspaceView = $state<WorkspaceView>('ask');
+	/** The active pane inside Workspace. */
+	workspacePane = $state<WorkspacePane>('sources');
 	/** Folder from the last session, if it still exists shown on the welcome
 	 *  screen as a one-click "reopen". Fella no longer opens it automatically. */
 	lastFolder = $state<string | null>(null);
 	settings = $state<Settings | null>(null);
-	health = $state<OllamaHealth | null>(null);
-	/** A local Ollama probed regardless of the configured provider so the empty
-	 *  screen can offer "use Ollama" when it's installed after signing in
-	 *  elsewhere. */
-	ollamaLocal = $state<OllamaHealth | null>(null);
+	health = $state<ProviderHealth | null>(null);
 	/** Built-in providers from the engine, cached so the composer can hint
 	 *  valid `/login` / `/logout` names without an await. */
 	providers = $state<ProviderInfo[]>([]);
-	/** Installed packs, cached so `/packs` completion can offer ids without an
-	 *  await. */
-	packs = $state<InstalledPack[]>([]);
-	/** Augment capabilities this build ships (from the engine, not a hardcoded
-	 *  list) an augment pack is only reachable if its capability is here. */
-	augmentCapabilities = $state<string[]>([]);
-
-	/** The open tabs (conversations, and augment views), and the focused index. */
+	/** The open conversation tabs and the focused index. */
 	tabs = $state<Tab[]>([new Conversation()]);
 	active = $state<number>(0);
 	/** Focus mode: hide the tab strip and the folder header for a plain,
@@ -183,6 +246,9 @@ class Session {
 	/** Bumped whenever a conversation is archived, so the sidebar's list
 	 *  knows to refetch without polling. */
 	historyVersion = $state<number>(0);
+	/** Right-hand contextual inspector, shared by Ask and Workspace. */
+	inspectorOpen = $state<boolean>(false);
+	inspectorSelection = $state<InspectorSelection>(null);
 
 	toggleSidebar(): void {
 		this.sidebarCollapsed = !this.sidebarCollapsed;
@@ -193,23 +259,70 @@ class Session {
 		}
 	}
 
+	setWorkspaceView(view: WorkspaceView): void {
+		if (view === 'workspace' && !this.catalog.workspace) {
+			this.workspaceView = 'ask';
+			return;
+		}
+		this.workspaceView = view;
+	}
+
+	setWorkspacePane(pane: WorkspacePane): void {
+		if (!this.catalog.workspace) {
+			this.workspaceView = 'ask';
+			return;
+		}
+		this.workspacePane = pane;
+		this.workspaceView = 'workspace';
+	}
+
+	/** Focus a conversation tab. */
+	activateTab(index: number): void {
+		if (!this.tabs[index]) return;
+		this.active = index;
+		this.workspaceView = 'ask';
+	}
+
+
+	setAskMode(mode: AskMode): void {
+		this.ensureChat().setMode(mode);
+	}
+
+	addContextReference(ref: ContextReference): void {
+		this.ensureChat().addContext(ref);
+	}
+
+	removeContextReference(kind: ContextReference['kind'], key: string): void {
+		this.activeChat?.removeContext(kind, key);
+	}
+
+	clearContextReferences(): void {
+		this.activeChat?.clearContext();
+	}
+
+	openInspector(selection: InspectorSelection): void {
+		this.inspectorSelection = selection;
+		this.inspectorOpen = selection !== null;
+	}
+
+	closeInspector(): void {
+		this.inspectorOpen = false;
+		this.inspectorSelection = null;
+	}
+
+
 	get activeTab(): Tab {
 		return this.tabs[this.active] ?? this.tabs[0];
 	}
 
-	/** The focused tab if it's a conversation, else the first conversation tab,
-	 *  else null. The `session.addSystem(...)` / `ask` paths route here so a
-	 *  slash command run while an augment tab is focused still lands somewhere
-	 *  sensible. */
-	get activeChat(): Conversation | null {
-		const t = this.activeTab;
-		if (t.kind === 'chat') return t;
-		return (this.tabs.find((x) => x.kind === 'chat') as Conversation | undefined) ?? null;
+	/** The focused conversation used by the command and ask paths. */
+	get activeChat(): Conversation {
+		return this.activeTab;
 	}
 
 	/** The active tab's model, or the saved default when it hasn't picked one. */
 	get model(): string {
-		const m = this.activeTab.kind === 'chat' ? this.activeTab.model : '';
+		const m = this.activeTab.model;
 		return m || this.settings?.model || '';
 	}
 
@@ -241,25 +354,9 @@ class Session {
 	set pendingKey(v: { provider: string; display: string } | null) {
 		if (this.activeChat) this.activeChat.pendingKey = v;
 	}
-	get pendingConnect(): { id: string } | null {
-		return this.activeChat?.pendingConnect ?? null;
-	}
-	set pendingConnect(v: { id: string } | null) {
-		if (this.activeChat) this.activeChat.pendingConnect = v;
-	}
-
-	/** The conversation to act on for a slash command: the focused tab if it's a
-	 *  conversation, otherwise the first conversation tab (focusing it), or a
-	 *  fresh one. Slash commands are dispatched from the Composer, which is
-	 *  hidden on an augment tab, so in practice this is just the active tab. */
+	/** The conversation to act on for a slash command. */
 	ensureChat(): Conversation {
-		const existing = this.activeChat;
-		if (existing) {
-			if (this.activeTab.kind !== 'chat') this.active = this.tabs.indexOf(existing);
-			return existing;
-		}
-		this.newTab();
-		return this.tabs[this.active] as Conversation;
+		return this.activeChat;
 	}
 
 	addUser(text: string): Message {
@@ -278,7 +375,7 @@ class Session {
 		const c = new Conversation();
 		c.model = inherit;
 		this.tabs.push(c);
-		this.active = this.tabs.length - 1;
+		this.activateTab(this.tabs.length - 1);
 		this.#writeIndex();
 	}
 
@@ -303,7 +400,7 @@ class Session {
 		// A reloaded transcript never has a run in flight.
 		c.messages = messages.map((m) => (m.pending ? { ...m, pending: false } : m));
 		this.tabs.push(c);
-		this.active = this.tabs.length - 1;
+		this.activateTab(this.tabs.length - 1);
 		this.#writeIndex();
 	}
 
@@ -324,47 +421,15 @@ class Session {
 		this.historyVersion++;
 	}
 
-	/** Open (or focus) an augment view for `cfg`, loading the file's current
-	 *  contents from the open folder. */
-	async openAugment(cfg: AugmentConfig): Promise<void> {
-		const existing = this.tabs.findIndex((t) => t.kind === 'augment' && t.file === cfg.file);
-		if (existing >= 0) {
-			this.active = existing;
-			return;
-		}
-		const tab = new AugmentTab(cfg);
-		this.tabs.push(tab);
-		this.active = this.tabs.length - 1;
-		this.#writeIndex();
-		if (!isTauri()) return;
-		try {
-			const cur = await ipc.augmentLoad(cfg.file);
-			tab.text = cur ?? '';
-			tab.saved = tab.text;
-		} catch (e) {
-			tab.loadError = e instanceof Error ? e.message : String(e);
-		}
-	}
 
 	async closeTab(i: number): Promise<void> {
 		const tab = this.tabs[i];
 		if (!tab) return;
-		if (tab.kind === 'chat') {
-			await this.#archive(tab);
-			tab.dropSnapshot();
-			if (isTauri()) void ipc.forgetConversation(tab.id).catch(() => {});
-		} else if (tab.dirty && isTauri()) {
-			// Flush a final save so nothing typed is lost on close.
-			try {
-				await ipc.augmentSave(tab.capability, tab.file, tab.text);
-			} catch (e) {
-				console.warn('augment final save failed', e);
-			}
-		}
+		await this.#archive(tab);
+		tab.dropSnapshot();
+		if (isTauri()) void ipc.forgetConversation(tab.id).catch(() => {});
 		this.tabs.splice(i, 1);
 		if (this.tabs.length === 0) this.tabs.push(new Conversation());
-		// Keep the focus on the same tab where possible: shift left if we closed
-		// one before it, then clamp.
 		if (this.active > i) this.active -= 1;
 		this.active = Math.min(this.active, this.tabs.length - 1);
 		this.#writeIndex();
@@ -391,20 +456,11 @@ class Session {
 		this.#writeIndex();
 	}
 
-	/** End the active tab: archive a conversation / flush an augment, then start
-	 *  the slot blank. */
+	/** End the active conversation and start the slot blank. */
 	async clear(): Promise<void> {
-		const tab = this.activeTab;
-		if (tab.kind === 'chat') {
-			await this.#archive(tab);
-			tab.dropSnapshot();
-		} else if (tab.dirty && isTauri()) {
-			try {
-				await ipc.augmentSave(tab.capability, tab.file, tab.text);
-			} catch {
-				/* ignore */
-			}
-		}
+		const tab = this.activeChat;
+		await this.#archive(tab);
+		tab.dropSnapshot();
 		this.tabs[this.active] = new Conversation();
 		this.#writeIndex();
 	}
@@ -449,7 +505,7 @@ class Session {
 	}
 
 	/** Persist every conversation tab's transcript (each debounces its own
-	 *  write). Augment tabs aren't persisted the file on disk is the truth.
+	 *  write).
 	 *
 	 *  Also archives a tab into history as soon as its first exchange
 	 *  settles, not just on close/clear -- otherwise a conversation you're
@@ -461,7 +517,6 @@ class Session {
 	persist(): void {
 		const ws = this.catalog.workspace ?? null;
 		for (const t of this.tabs) {
-			if (t.kind !== 'chat') continue;
 			t.persist(ws);
 			if (!t.busy && t.messages.length > 0) void this.#archive(t);
 		}

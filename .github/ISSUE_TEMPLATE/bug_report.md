@@ -17,7 +17,7 @@ the working fold under it and include what it shows.
 **Your setup**
 - OS and version:
 - Fella version (`/version` once it exists, or the release tag):
-- Model provider (Ollama local, Vercel, OpenAI, ...):
+- Model provider/API (Vercel, OpenAI, Ollama Cloud, ...):
 
 **The folder**
 Roughly what kind of files were in the workspace (a few CSVs, a folder of PDFs,

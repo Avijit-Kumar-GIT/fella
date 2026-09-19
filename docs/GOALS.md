@@ -29,7 +29,8 @@ gets held to before it counts as documented:
 - SQL execution over ingested files (SQLite default, DuckDB opt-in)
 - Deterministic verification (re-run cited queries, flag untraced figures)
 - Basic stats only: median, stdev, correlation, linear regression — stdlib, zero new deps
-- Charts: bar/line, colored, validated against flat/degenerate data
+- Charts: typed bar/line visualizations from read-only SQL, with deterministic
+  `auto` selection, theme-aware rendering, and validation against flat/degenerate data
 - `depth_rule`: decompose a change/trend/correlation question before answering
 - `aside_rule`: one brief, notable aside on a plain lookup (a category
   that's most of its total, exactly zero, a clear outlier), only when a
@@ -45,9 +46,10 @@ gets held to before it counts as documented:
 - Non-linear correlation, robust regression
 - Any math upgrade that needs a new dependency
 
-**Adjacent, not part of v1:** MCP server mode (the same six tools, reachable
-by an outside agent, not new capability, a new door). Its own initiative
-once v1 is actually done, not a v1 blocker.
+**Adjacent, not part of v1:** MCP server mode (the same fixed tools, reachable
+by an outside agent, not new capability, a new door). Its own initiative once
+the personal release is actually done, not a v1 blocker. The shipped `/mcp`
+command remains inert until that separate initiative is designed and reviewed.
 
 ## Release goals
 

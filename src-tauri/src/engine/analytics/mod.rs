@@ -13,6 +13,7 @@
 
 pub mod chart;
 pub mod data;
+pub mod provenance;
 pub mod pyexec;
 pub mod verify;
 

@@ -9,6 +9,10 @@ analytics for non-developers, read-only, local-first, every answer a
 deterministic computation that shows its working. See [`DECISIONS.md`](DECISIONS.md) and
 [`EXTENSIBILITY.md`](EXTENSIBILITY.md).
 
+**Next-release build brief:** [`ANALYTICS-RELEASE.md`](ANALYTICS-RELEASE.md) is
+the prioritized plan for making the existing engine feel like a natural-
+language analytics platform without broadening Fella's scope.
+
 The "Harness quality, measured" section below, plus the four fella-web
 `/next` initiatives it feeds (fella#121-128), is the concrete path toward
 one named identity: enterprise-grade analytics depth on a folder that
@@ -78,25 +82,16 @@ testing, anything in that shape) is explicitly cut, not deferred.
 - **One example per command.** Extend the completion menu (`completionsFor()`) to
   show a sample invocation, not just the argument list.
 
-## Extensibility that ships as words, not code
+## Extensibility stays archived
 
-- **Starter skills.** Vetted Markdown packs for personal-finance, fitness and
-  health-export vocabulary. Zero code, zero size, real value for non-developers.
-- **A starter theme or two.**
-- **Vetted-connector list in `/connect`.** Even before the marketplace is live,
-  `/connect` with no argument can name the connectors the core team has reviewed.
-- **Skill and theme scaffold.** A template and a short "how to write one" so
-  contributors can add them without touching the base.
-- **Hosted pack marketplace.** The in-app `/packs` flow works today: local
-  `/packs add`, and by-id `/packs install` with hash-checked downloads against
-  the `fella-extensions` catalog. `fella-extensions` is public and now carries
-  the `packs/_template/<kind>/` scaffold + `docs/WRITING-A-PACK.md`; the
-  `fella-web` browse page is built and its copy is ready. What remains: choose
-  starter packs, then flip the `fella-web` `/packs` route on (sync the catalog
-  snapshot, drop the two `_redirects` lines, add the nav link) and point the
-  app's `MARKETPLACE_URL` at the site. The install-counter proxy
-  (`fella-web/packs-proxy/`) stays deferred until counts are wanted. See
-  [`DECISIONS.md`](DECISIONS.md), 2026-09-02 and 2026-09-09.
+The lean personal release does not plan starter packs, a theme marketplace,
+`/connect`, or `/packs`. The active customization surface is the user's root
+`fella.md` file, provider/model settings, and appearance preferences. `/mcp`
+remains an inert experimental signpost.
+
+The former pack and connector designs remain in [`EXTENSIBILITY.md`](EXTENSIBILITY.md)
+for future custom forks. They should return to the product roadmap only after a
+specific use case, permission model, and implementation owner are agreed on.
 
 ## Harness quality, measured
 
@@ -113,18 +108,21 @@ optimisation that costs it isn't taken.
   block beside `fella.db`, per-folder, never leaving the machine — no new
   dependency. See [`HARNESS.md`](HARNESS.md#shipped) and
   [`FOLDER-MEMORY.md`](FOLDER-MEMORY.md).
-- **Case-mismatch on a uniformly-cased column** *(next, unfixed)* and
-  **semantic near-duplicate category labels** *(next, no candidate fix yet)*
-  two distinct gaps a new benchmark pass surfaced 2026-09-12, neither caught
-  by the shipped case-sensitivity flag (which only fires on a real collision
-  in the data, not a model-invented wrong-case literal against clean data).
-  gemma4:31b: 5/9 on the new messiness axis, the worst of ten axes measured.
-  See [`HARNESS.md`](HARNESS.md#next).
+- **Case-mismatch on a uniformly-cased column** *(partially addressed
+  2026-09-17)* and **semantic near-duplicate category labels** *(next, no
+  candidate fix yet)* remain two distinct gaps surfaced by the 2026-09-12
+  benchmark pass. The SQL tool now gives pre-query case-folding guidance for
+  likely label columns even when the data has only one case, with a registry
+  regression test. Zero-result detection, candidate-value discovery, and a
+  frozen model-battery result remain open; `lower()` also cannot resolve
+  aliases such as `HOUSING` and `mortgage`. gemma4:31b scored 5/9 on the new
+  messiness axis, the worst of ten axes measured. See
+  [`HARNESS.md`](HARNESS.md#next).
 - **Correction-trigger breadth** *(open question, unmeasured).*
   `memory::is_correction()` only recognises a fixed marker-word list; whether
   it needs to recognise more natural phrasings hasn't been tested, only
   assumed. See [`HARNESS.md`](HARNESS.md#next).
-- **Few-shot worked examples** in the system prompt for small local models
+- **Few-shot worked examples** in the system prompt for smaller models
   *deferred:* `prompt-ablation` on gemma4:31b (2026-09-07) shows no prompt slack
   to trade the shipped prompt already loses a case or a feature at every cut
   above the core rules + schema.
@@ -190,8 +188,8 @@ rule, above) doesn't apply to them.
 ## Would need a positioning decision
 
 Recorded, not planned. Each touches a locked constraint; picking one up means
-amending [`DECISIONS.md`](DECISIONS.md) first, the way the 2026-08-29 entry amended
-the "No MCP" non-goal.
+amending [`DECISIONS.md`](DECISIONS.md) first and reopening the lean release
+boundary in [`LEAN-PERSONAL-RELEASE.md`](LEAN-PERSONAL-RELEASE.md).
 
 - **Web search and fetch tools.** `web_search` plus `web_fetch`, off by default,
   key-gated, so the model can answer what the folder cannot. Touches "the base
@@ -201,18 +199,15 @@ the "No MCP" non-goal.
 - **Export a result.** Save a query result as CSV or Parquet. Against "Fella
   produces answers, not files" and "no generated artifacts"
   ([`AUDIT.md`](AUDIT.md), [`ARCHITECTURE.md`](ARCHITECTURE.md)). Distinct from
-  the 2026-09-10 `augment` amendment: an augment saves a file **you** type into
-  a tab; this item is the agent's own *computed output* becoming a file, which
-  is still undecided.
-- **A new `augment` capability.** `engine/augment.rs`'s `CAPABILITIES` is
-  `buffer` and `grid` only. A third capability is app code shipped to every
-  install regardless of who uses it, so it's gated exactly like a new built-in
-  tool or the item below: a GitHub issue, real demand, and a `DECISIONS.md`
-  entry first (2026-09-10) not something a pack idea gets to add on its own.
-- **stdio MCP transport.** Connect local-subprocess MCP servers, not only remote
-  HTTP ones ([`DECISIONS.md`](DECISIONS.md), 2026-08-29 deferred this). Pulls a few
-  more `rmcp` transport crates, the only item here with a real, if modest, size
-  cost.
+  the removed user-authored Context editor: this item is the agent's own
+  *computed output* becoming a file, which is still undecided.
+- **A reviewed extension boundary.** Reintroduce a narrowly scoped pack,
+  augment, or connector system only after a concrete use case, permission model,
+  trust story, and maintainer owner exist. The current release keeps the
+  design archived and `/mcp` inert.
+- **MCP server mode.** Expose the fixed built-in tools to an outside agent as a
+  separate protocol boundary. This is distinct from adding an MCP client to the
+  desktop app and requires its own host and network review.
 - **Local embeddings and semantic doc search.** `LlmClient::embed()` and the
   `embeddings` provider fields are dormant infra; the index-free `grep_files` /
   `read_file` design was a deliberate 2026-08-29 choice. Reviving embeddings adds

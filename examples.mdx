@@ -1,0 +1,113 @@
+---
+title: "Examples"
+description: "Task recipes for inspecting, comparing, joining, searching, and charting personal data."
+icon: "list-checks"
+---
+
+# Start from an outcome
+
+These recipes are prompt shapes, not guaranteed results. Replace file, table, column, unit, and date names with values confirmed by `/files` and `/schema`.
+
+## Inspect before calculating
+
+**Outcome:** confirm that the source Fella will query matches your assumptions.
+
+```text filename="fella commands"
+/files
+/schema transactions
+```
+
+Check inferred numeric types, date formats, nulls, units, capitalization, skipped files, preamble removal, and dropped total-row notes. Fix or clarify bad source assumptions before asking for a total.
+
+## Compare two periods
+
+**Outcome:** get two totals and a reproducible delta.
+
+```text filename="prompt"
+Using transactions.csv, calculate total grocery spending for January 2025 and February 2025. Show both totals, the absolute change, and the percentage change. Treat refunds as negative amounts.
+```
+
+Inspect the date boundaries, category filter, refund handling, denominator, and units in the working fold.
+
+## Rank categories
+
+**Outcome:** find the largest contributors rather than list raw rows.
+
+```text filename="prompt"
+Using workouts.csv, rank activity types by total minutes in 2025. Return the top five with minutes and share of all workout minutes.
+```
+
+If you mean completed workouts only, say so and name the status value. Verification cannot infer a missing business rule.
+
+## Join two files
+
+**Outcome:** combine records through an explicit key.
+
+```text filename="prompt"
+Join books.csv to authors.csv using author_id. Among books where status is finished, total pages by author nationality and return the top three.
+```
+
+Inspect that both tables appear in the SQL, the join key is correct, and filters run before aggregation. If keys have different types or spelling, normalize the source or state the intended mapping.
+
+## Reconcile a document and a table
+
+**Outcome:** use a stated target from text with observed values from rows.
+
+```text filename="prompt"
+Read goals.md for my annual running-distance target, then use workouts.csv to calculate distance logged through June 30, 2025. Report progress and remaining kilometers. Do not extrapolate the rest of the year.
+```
+
+Text claims appear as document evidence; calculations should still be grounded in tool output. A scanned PDF needs OCR before this recipe works.
+
+## Find and summarize document facts
+
+**Outcome:** locate relevant passages without an embeddings index.
+
+```text filename="prompt"
+Search my Markdown, text, log, and PDF documents for cancellation terms. List each matching file and summarize only the terms stated in that file.
+```
+
+Fella uses direct regex search and document reads. Ask for file names or quoted passages when source traceability matters.
+
+## Create a compact chart
+
+**Outcome:** visualize a small aggregated result.
+
+```text filename="prompt"
+Create a line chart of monthly sleep hours for January through June 2025 from sleep.jsonl. Use one series and include the monthly average in the answer.
+```
+
+Charts support bar and line data with at most 12 categories and 2 series. Aggregate first instead of requesting thousands of points.
+The chart is derived from a read-only query result, so its labels and values are
+recorded with the same evidence as the calculation behind it.
+
+## Query directly
+
+**Outcome:** bypass model interpretation when you know the table and SQLite query.
+
+```text filename="fella command"
+/sql SELECT category, ROUND(SUM(amount), 2) AS total FROM transactions GROUP BY category ORDER BY total DESC LIMIT 10
+```
+
+Direct SQL remains read-only and prints a system result; unlike an agent tool call, it does not create an evidence fold or run post-answer verification. The shipped backend is SQLite, so use SQLite syntax. A DuckDB-only function will not work in a normal release build.
+
+## Ask an unanswerable question safely
+
+**Outcome:** separate recorded facts from a forecast.
+
+```text filename="prompt"
+Do these files contain a stated 2026 budget? If yes, quote the source and amount. If not, say the files cannot answer; do not estimate from prior spending.
+```
+
+The prompt improves the chance of a proper refusal, but policy adherence remains model-dependent. Review the evidence whenever Fella supplies a number.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Troubleshoot a recipe" icon="wrench" href="/troubleshooting">
+    Diagnose source, provider, tool, and interpretation failures.
+  </Card>
+  <Card title="Inspect evidence" icon="search-check" href="/developer-platform/using-fella/evidence">
+    Review source selection, query logic, rows, and checks.
+  </Card>
+</CardGroup>

@@ -1,16 +1,26 @@
 <script lang="ts">
-	import type { Message } from '$lib/types';
+	import type { Answer, Message } from '$lib/types';
 	import EvidenceBlock from './EvidenceBlock.svelte';
 	import Chart from './Chart.svelte';
 	import Icon from './Icon.svelte';
 	import { renderMarkdown } from '$lib/markdown';
 	import { enterUp } from '$lib/motion';
-	import { hardFail } from '$lib/verify';
+	import { answerStatus } from '$lib/verify';
 
-	let { message, expanded = false, ontoggle }: {
+	let {
+		message,
+		expanded = false,
+		ontoggle,
+		question = '',
+		showFollowups = false,
+		onfollowup
+	}: {
 		message: Message;
 		expanded?: boolean;
 		ontoggle?: () => void;
+		question?: string;
+		showFollowups?: boolean;
+		onfollowup?: (question: string) => void;
 	} = $props();
 
 	// The model marks a one-line general-knowledge aside with "Background:" on
@@ -24,25 +34,107 @@
 		return { background: lines.slice(0, i).join('\n'), body: lines.slice(i).join('\n') };
 	});
 
-	// Only the assistant's prose is markdown the model is asked to structure
-	// its final answer, and rendering it lets that structure actually show.
-	// User input and system/`/sql` dumps stay plain text (see below).
+	// Only the assistant's prose is markdown. When a chart is present, keep the
+	// first plain paragraph as the takeaway and place the visual immediately
+	// after it; the remaining prose follows as supporting detail. This is a UI
+	// composition rule, not a new model-facing markup language.
+	function composeAnswer(body: string): { lead: string; remainder: string } {
+		const trimmed = body.trim();
+		if (!trimmed) return { lead: '', remainder: '' };
+		const boundary = trimmed.search(/\n\s*\n/);
+		if (boundary < 0) return { lead: trimmed, remainder: '' };
+		const lead = trimmed.slice(0, boundary).trim();
+		// Keep headings, lists, quotes, and code blocks together. Splitting one of
+		// those before the chart would make the answer feel arbitrary.
+		if (/^(?:#{1,6}\s|[-*+]\s|>\s|```)/.test(lead)) {
+			return { lead: trimmed, remainder: '' };
+		}
+		return { lead, remainder: trimmed.slice(boundary).trim() };
+	}
+
+	let composition = $derived(composeAnswer(split.body));
 	let bodyHtml = $derived(renderMarkdown(split.body));
+	let leadHtml = $derived(renderMarkdown(composition.lead));
+	let remainderHtml = $derived(renderMarkdown(composition.remainder));
 
 	// Set when a query behind the answer still disagrees after the agent's
 	// one-shot corrective re-ask the trust gap the verification system
 	// exists to close, surfaced at the point the user actually reads it.
 	let unconfirmed = $derived(
 		message.role === 'assistant' && message.answer
-			? hardFail(message.answer.verification)
+			? answerStatus(message.answer) === 'failed'
 			: undefined
 	);
 
-	// A chart renders itself below the prose, independent of whether the
-	// model's text references it correctness shouldn't depend on a small
-	// model correctly placing a chart mention in freeform text.
+	// A chart is selected from evidence, independent of whether the model's text
+	// references it. Correctness shouldn't depend on a small model correctly
+	// placing a chart mention in freeform text.
 	let chartItems = $derived(
 		(message.answer?.evidence ?? []).filter((e) => e.tool === 'make_chart' && e.chart)
+	);
+	let hasVisualAnswer = $derived(chartItems.length > 0 && !message.pending);
+
+	// Keep the useful trust signal close to the finding. This deliberately uses
+	// only evidence already returned by the engine; it never invents a row count
+	// or claims that a selected source was a hard filter when it was only a
+	// starting point for the model.
+	let answerSources = $derived.by(() => {
+		const names = new Set<string>();
+		for (const item of message.answer?.evidence ?? []) {
+			for (const source of item.sources ?? []) {
+				if (source.source.trim()) names.add(source.source.trim());
+			}
+		}
+		return [...names];
+	});
+	let scopeLabel = $derived.by(() => {
+		if (answerSources.length === 1) return `Based on ${answerSources[0]}`;
+		if (answerSources.length > 1) return `Based on ${answerSources.length} sources`;
+		return message.answer?.workspace ? 'Based on this workspace' : 'Based on the available evidence';
+	});
+	let scopeDetail = $derived(
+		answerSources.length ? answerSources.join(', ') : 'The current workspace snapshot'
+	);
+	let status = $derived(message.answer ? answerStatus(message.answer) : null);
+	let statusLabel = $derived.by(() => {
+		switch (status) {
+			case 'verified':
+				return 'Checked against your data';
+			case 'needs_review':
+				return 'Needs a closer look';
+			case 'insufficient_data':
+				return 'Not enough data';
+			case 'failed':
+				return 'Could not fully check';
+			default:
+				return '';
+		}
+	});
+
+	function followupQuestions(text: string, answer: Answer): string[] {
+		const q = text.toLowerCase();
+		const suggestions: string[] = [];
+		const add = (value: string) => {
+			if (!suggestions.includes(value)) suggestions.push(value);
+		};
+		if (/\b(change|trend|over time|year|month|week|daily|monthly)\b/.test(q)) {
+			add('What explains the biggest change?');
+			add('Break this down by category');
+		} else if (/\b(total|how much|how many|average|mean|count|sum)\b/.test(q)) {
+			add('Show this over time');
+			add('Break this down by category');
+		} else {
+			add('What else stands out?');
+			add('Show this over time');
+		}
+		if (!answer.evidence.some((item) => item.tool === 'make_chart' && item.chart)) {
+			add('Show this as a chart');
+		}
+		return suggestions.slice(0, 3);
+	}
+
+	let followups = $derived(
+		message.answer && question ? followupQuestions(question, message.answer) : []
 	);
 </script>
 
@@ -64,17 +156,44 @@
 				<span>Fella couldn't confirm this figure against the data — here's its best answer.</span>
 			</div>
 		{/if}
-		<div class="text rich" class:pending={message.pending}>{@html bodyHtml}{#if message.pending}<span
+		{#if hasVisualAnswer}
+			<div class="text rich answer-lead">{@html leadHtml}</div>
+			<div class="answer-visuals" aria-label="Visual answer">
+				{#each chartItems as e, i (e.id ?? `chart-${i}`)}
+					{#if e.chart}
+						<Chart spec={e.chart} source={scopeLabel} verified={status === 'verified'} />
+					{/if}
+				{/each}
+			</div>
+			{#if composition.remainder}
+				<div class="text rich answer-supporting">{@html remainderHtml}</div>
+			{/if}
+		{:else}
+			<div class="text rich" class:pending={message.pending}>{@html bodyHtml}{#if message.pending}<span
 					class="thinking" aria-hidden="true"></span
 				>{/if}</div>
-		{#each chartItems as e, i (i)}
-			{#if e.chart}<Chart spec={e.chart} />{/if}
-		{/each}
+		{/if}
+		{#if message.answer && !message.pending}
+			<div class="answer-meta" aria-label="Answer context">
+				{#if statusLabel}
+					<span class="answer-status {status}"><span class="status-dot" aria-hidden="true"></span>{statusLabel}</span>
+				{/if}
+				<span class="answer-scope" title={scopeDetail}>{scopeLabel}</span>
+			</div>
+		{/if}
 	{:else}
 		<div class="text">{message.text}</div>
 	{/if}
 	{#if message.answer}
 		<EvidenceBlock answer={message.answer} {expanded} {ontoggle} />
+		{#if showFollowups && onfollowup && followups.length}
+			<div class="followups" aria-label="Suggested follow-up questions">
+				<span class="followup-label">Continue with</span>
+				{#each followups as next (next)}
+					<button type="button" onclick={() => onfollowup?.(next)}>{next}<Icon name="arrow-up-right" size={11} /></button>
+				{/each}
+			</div>
+		{/if}
 	{/if}
 </div>
 
@@ -143,6 +262,90 @@
 	}
 	.unconfirmed :global(svg) {
 		align-self: center;
+	}
+	.answer-visuals {
+		margin-top: var(--space-3);
+	}
+	.answer-visuals :global(.chart-card) {
+		margin-top: 0;
+	}
+	.answer-supporting {
+		margin-top: var(--space-3);
+	}
+	.answer-meta {
+		display: flex;
+		align-items: center;
+		flex-wrap: wrap;
+		gap: 6px 12px;
+		margin-top: var(--space-3);
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+	}
+	.answer-status,
+	.answer-scope {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+	}
+	.answer-status {
+		color: var(--text-dim);
+	}
+	.answer-status.needs_review,
+	.answer-status.failed {
+		color: var(--warn);
+	}
+	.answer-status.insufficient_data {
+		color: var(--text-faint);
+	}
+	.answer-status .status-dot {
+		width: 5px;
+		height: 5px;
+		border-radius: 50%;
+		background: var(--ok);
+	}
+	.answer-status.needs_review .status-dot,
+	.answer-status.failed .status-dot {
+		background: var(--warn);
+	}
+	.answer-status.insufficient_data .status-dot {
+		background: var(--text-faint);
+	}
+	.answer-scope {
+		min-width: 0;
+		max-width: 100%;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.followups {
+		display: flex;
+		align-items: center;
+		flex-wrap: wrap;
+		gap: 6px;
+		margin-top: var(--space-3);
+	}
+	.followup-label {
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+		margin-right: 2px;
+	}
+	.followups button {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		padding: 5px 8px;
+		border: 1px solid var(--border);
+		border-radius: var(--radius-chip);
+		color: var(--text-dim);
+		background: var(--bg-raised);
+		font-size: var(--fs-xs);
+		text-align: left;
+		transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+	}
+	.followups button:hover {
+		border-color: var(--border-strong);
+		background: var(--bg-inset);
+		color: var(--text);
 	}
 
 	/* The assistant's answer is rendered from markdown (see markdown.ts). Code,

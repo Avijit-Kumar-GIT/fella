@@ -1,9 +1,55 @@
 # Releasing Fella
 
-Internal maintainer runbook for cutting v0.1 the first public build and the
-repo move it ships from. Not user-facing.
+Internal maintainer runbook. The v0.1 sections below preserve the first-public
+release history; the current gate for the next version starts here.
 
-## Shape of the v0.1 release
+## Next release from v0.1.5
+
+The next version should remain the personal analytics release. It can improve
+correctness, sandbox behavior, and packaging without expanding the product into
+a general agent, hosted marketplace, or enterprise control plane.
+
+The implemented product boundary for the next lean personal release is documented
+in [`LEAN-PERSONAL-RELEASE.md`](LEAN-PERSONAL-RELEASE.md). It supersedes the
+historical extension and pack plans below for the next release scope; the
+historical entries remain for context.
+
+The release candidate is ready only when these items are complete:
+
+- [x] Run the current Rust and frontend gates after the latest code changes:
+      `cd src-tauri && cargo test --locked`, `cargo clippy --all-targets
+      --locked -- -D warnings`, `pnpm run check`, and `pnpm run build` —
+      2026-09-17: 148 library tests and all runnable integration tests passed
+      (one timing test remains ignored), with 0/0 Svelte diagnostics and a
+      production build.
+- [x] Run the hostile embedded-Python checks, including blocked host-file
+      access, fuel exhaustion, bounded output, and the SQL bridge, then record
+      the result in `docs/SECURITY-REVIEW-v0.1.md` or a versioned successor —
+      2026-09-17: 8 `python_tool` tests passed, including user cancellation.
+- [x] Run `scripts/check-memory.sh` in the optimized profile and record guest
+      memory plus host RSS results in the security review. 2026-09-17: the
+      extended 256-iteration run peaked at 6.1 MiB of guest Wasm memory and
+      grew Linux RSS by 9.9 MiB, under the default 128 MiB gate. Repeat on
+      Windows and macOS when those hosts are available.
+- [ ] Build `pnpm tauri build` on each reachable desktop target, record
+      installer sizes, and launch at least one packaged build through the
+      folder-open, question, evidence, stop, login, model, workspace, tabs, and
+      focus flows.
+- [x] Capture a hosted BYOK baseline in `docs/PERFORMANCE-LOG.md`; local model
+      server measurements are outside the product's supported deployment.
+- [ ] Freeze the release question battery across the supported model set and
+      confirm every answer number and chart has source and verification data.
+- [ ] Set the package version, update `CHANGELOG.md`, and have the release
+      notes describe any remaining platform or installer coverage gaps.
+
+The semantic filter work in this tree addresses the known case-mismatch gap for
+likely label columns with pre-query guidance and regression coverage. A frozen
+model-battery result is still open. Near-duplicate labels such as `HOUSING` and
+`mortgage`, arbitrary Python replay verification, and DuckDB parity remain
+follow-up work; they should stay visible in the release notes rather than
+silently becoming a new promise.
+
+## Historical v0.1 release shape
 
 - **Fresh public repo.** v0.1 ships from a new `github.com/Avijit-Kumar-GIT/fella`
   created with a clean `git init` (v0.1.0 is the first commit and the first tag).
@@ -25,15 +71,17 @@ repo move it ships from. Not user-facing.
   browse site and the install-counter proxy are paused (`docs/DECISIONS.md`,
   2026-09-02) until there's demand. Nothing about them is part of v0.1.
 
-## State going in (all resolved)
+## Historical v0.1 state going in (all resolved)
 
 - `LICENSE` present (MIT, © 2026 Avijit Kumar). `Cargo.toml` `authors`,
   `tauri.conf.json` `publisher`/`copyright`, `package.json` `license` all agree.
 - `tauri.macos.conf.json` / `tauri.linux.conf.json` override only the window
   frame (custom titlebar); version/publisher/bundle metadata live in the base
   `tauri.conf.json` only — the pre-flight lint reads that file.
-- Versions aligned at `0.1.0` (`package.json`, `Cargo.toml`, `Cargo.lock`;
-  `tauri.conf.json` derives from `package.json`). MSRV `1.88` everywhere.
+- Versions were aligned at `0.1.0` (`package.json`, `Cargo.toml`, `Cargo.lock`;
+  `tauri.conf.json` derives from `package.json`). The historical MSRV was
+  `1.88`; the current tree requires Rust `1.93` for the embedded RustPython
+  guest.
 - `.github/workflows/{ci.yml,release.yml}` exist, actions SHA-pinned.
   `ci.yml`: `pnpm check` + `pnpm build` + `clippy -D warnings` + `cargo test`
   (SQLite default features) on Linux, plus an advisory-only `audit` job
@@ -45,10 +93,12 @@ repo move it ships from. Not user-facing.
 - `.gitignore` covers `auth.json*`, `*.db`, local tooling (`CLAUDE.md`,
   `.claude/`, `.agents/`, `skills-lock.json`), `STUDY.md`, `demo-data/`.
 
-## 1. Pre-flight verification gate
+## Historical v0.1 pre-flight verification gate
 
-Run on the current tree; nothing tags until this is green. Record numbers in
-`docs/PERFORMANCE.md` and the sign-off in `docs/SECURITY-REVIEW-v0.1.md`.
+These are the recorded v0.1 checks. The current release gate is the section at
+the top of this file; nothing tags until its open items are green. Record new
+numbers in `docs/PERFORMANCE.md` and the sign-off in the current security
+review.
 
 - [x] `cd src-tauri && cargo test --locked` (SQLite default features)
       — 2026-09-04, commit `cfca646`: 108 tests, 0 failed.
@@ -63,7 +113,7 @@ Run on the current tree; nothing tags until this is green. Record numbers in
       — recorded 2026-08-30, commit `67c3508` (`docs/PERFORMANCE-LOG.md`).
 - [ ] `pnpm tauri build` on Linux → `.deb` + `.AppImage`; **record each
       installer's size**. Launch the AppImage: open a folder, ask a question
-      (local Ollama or a keyed provider), check the evidence fold, the `/login`
+      (a keyed provider), check the evidence fold, the `/login`
       rejected-key path, `/packs add` a local pack, `/model` switch, mid-run
       stop, tabs + `/focus`. **Still open** the `.deb` built cleanly
       (2026-08-30) but the AppImage has never actually launched here WSLg
@@ -75,13 +125,13 @@ Run on the current tree; nothing tags until this is green. Record numbers in
       exercised on *any* GUI build: `/login` rejected-key path, `/packs add`,
       `/model` switch, mid-run stop, tabs + `/focus`. Needs either a real
       Linux display or accepting Windows-only GUI coverage for v0.1.
-- [x] `cargo run --release --example agent_bench` against a local Ollama
+- [x] `cargo run --release --example agent_bench` against a hosted BYOK provider
       capture the first baseline table into `docs/PERFORMANCE-LOG.md`. — captured
-      2026-09-04 against `ollama-cloud`/`gemma4:31b` (PR #8); **local** Ollama
-      still unmeasured, noted as a gap in `docs/PERFORMANCE-LOG.md`.
+      2026-09-04 against `ollama-cloud`/`gemma4:31b` (PR #8).
 - [x] Static security review written: the four `SECURITY.md` guarantees
-      re-confirmed against the tree, the egress map, CSP active, the
-      `run_python`-is-not-a-sandbox caveat that must appear in the release notes.
+      re-confirmed against the tree, the egress map, CSP active, and the
+      embedded Python boundary plus its Wasmi/RustPython trusted-base caveat
+      captured in the release notes.
       — `docs/SECURITY-REVIEW-v0.1.md` exists (from the fresh-repo cut).
 
 ## 2. Cut the `fella` repo

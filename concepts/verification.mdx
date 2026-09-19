@@ -1,0 +1,123 @@
+---
+title: "Verification and evidence"
+description: "How deterministic answer checks and optional model second opinions differ."
+icon: "badge-check"
+---
+
+> Verification ties an answer to recorded work; it does not make the model a trusted grader.
+
+## Definition
+
+Evidence is the record of tool execution. Verification is the post-answer process that compares the response with that evidence and checks several common SQL mistakes.
+
+The primary verification pass is deterministic, local application code. It does not call a model. Model re-asks are separate, conditional behavior owned by the harness.
+
+The public stages have different guarantees:
+
+| Stage | Deterministic? | Call model again? | What it uses |
+| --- | ---: | ---: | --- |
+| Ten checks in `verify::run` | Yes | No | Question, answer, catalog, and recorded evidence |
+| SQL rerun correction | The rerun is deterministic | Yes, once | A cited query that changed or no longer runs |
+| Self-consistency second opinion | No | Yes, only after a warning | Existing results and a stricter tool-free prompt |
+| Chart SQL evidence | Yes | No | Chart queries use the same SQL checks and rerun policy as `run_sql` |
+| Python independent rerun | No | No | Python results are not independently re-executed by the verifier |
+
+## Architecture
+
+The deterministic verifier runs these checks in order:
+
+1. Tables referenced by cited SQL exist.
+2. Distinct inexpensive SQL queries rerun to the same rows.
+3. Numbers in the answer appear in summaries, outputs, or result cells.
+4. `SUM`, `AVG`, or `TOTAL` is not applied suspiciously to text.
+5. Exact-case filters do not overlook known mixed-case labels.
+6. The SQL aggregate matches aggregate wording in the question.
+7. A meaningful column named in the question was not dropped from the SQL.
+8. A likely shared-column join was not missed.
+9. Date grouping did not produce a `NULL` bucket.
+10. Values from a multi-aggregate row are labelled with the correct result column.
+
+These checks are fixed Rust functions over the question, answer, catalog, and evidence.
+
+The dispatch is explicit and ordered:
+
+```rust
+pub fn run(
+    engine: &dyn AnalyticsSource,
+    question: &str,
+    answer: &str,
+    evidence: &[EvidenceItem],
+) -> Vec<VerificationCheck> {
+    let mut checks = Vec::new();
+    check_tables(engine, evidence, &mut checks);
+    rerun_queries(engine, evidence, &mut checks);
+    check_numbers(answer, evidence, &mut checks);
+    check_text_agg(engine, evidence, &mut checks);
+    check_case_filter(engine, evidence, &mut checks);
+    check_aggregate_verb(question, evidence, &mut checks);
+    check_dropped_column(engine, question, evidence, &mut checks);
+    check_multi_table_join(engine, question, evidence, &mut checks);
+    check_null_group_key(evidence, &mut checks);
+    check_row_value_labels(answer, evidence, &mut checks);
+    checks
+}
+```
+
+## Flow
+
+1. The model returns an answer with no more tool calls.
+2. The harness runs the deterministic verifier.
+3. Queries that originally took more than 500 ms or returned truncated rows are not rerun; the first result is retained with a check explaining the skip.
+4. If a rerun now fails or changes, the default-on corrective path may make one tool-free model call to reconcile the answer (`FELLA_VERIFY_REASK=0` disables it).
+5. If any deterministic warning remains, the default-on self-check may make one stricter, tool-free model call from existing results (`FELLA_SELF_CHECK=0` disables it).
+6. The second answer is compared numerically with the first. A disagreement becomes another visible check; it does not replace deterministic verification.
+
+## Behavior
+
+Evidence can include a stable per-answer ID, tool names and arguments, SQL-backed source mappings, plain-language notes, SQL and returned rows, document or Python output, chart data, timings, and errors. The answer also records the workspace revision it started against and one typed status: `verified`, `needs_review`, `insufficient_data`, or `failed`. A `make_chart` item includes the guarded SQL query and its result rows alongside the derived chart, so the visual does not introduce a second untracked numeric source. Partial evidence remains available if a run is stopped or a provider fails after tools have run.
+
+Not every warning is a hard failure. Text aggregation, possible case sensitivity, or a likely missed join are conservative prompts to inspect the work. A changed rerun, failed rerun, unsupported figure, mislabelled aggregate, or disagreeing second answer is a stronger signal.
+
+## Limits
+
+- Numeric grounding uses tolerant number matching. It is useful but cannot prove a derived percentage or narrative interpretation is correct in every form.
+- A successful rerun proves repeatability at that moment, not source completeness or truth.
+- Heuristic SQL checks can produce warnings on valid queries and miss semantic mistakes.
+- Python output can support number grounding, but the verifier does not independently rerun arbitrary Python programs.
+- A model second opinion costs another provider request and remains model output, not deterministic validation.
+
+For high-stakes use, inspect the query, rows, and source data yourself.
+
+### Test the failure shape, not just the happy path
+
+Verifier tests construct a small `EvidenceItem` without starting the app:
+
+```rust
+let evidence = vec![run_sql_ev(
+    "SELECT strftime('%Y-%m', Date) AS month, SUM(amount) AS total FROM ledger GROUP BY strftime('%Y-%m', Date)",
+    &["month", "total"],
+    vec![vec![Json::Null, Json::from(15_797)]],
+)];
+
+let mut checks = Vec::new();
+check_null_group_key(&evidence, &mut checks);
+
+assert!(!checks[0].ok);
+assert!(hard_fail(&checks).is_some());
+```
+
+The real regression came from a ledger whose dates were written as `Aug 1, 2026`. SQLite's date functions returned `NULL`, collapsed several months into one bucket, and still produced a plausible total. [PR #107](https://github.com/Avijit-Kumar-GIT/fella/pull/107) fixed named-month normalization at ingest; [commit `e51d981`](https://github.com/Avijit-Kumar-GIT/fella/commit/e51d981) added the multi-aggregate value-label check after a separate live failure. Tests for both keep those cases from disappearing into a generic "numbers matched" pass.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Read the evidence" icon="search-check" href="/developer-platform/using-fella/evidence">
+    Follow files, queries, outputs, and checks in the product.
+  </Card>
+  <Card title="The analytics engine" icon="database" href="/concepts/engine">
+    See where deterministic query results come from.
+  </Card>
+  <Card title="Built-in tools" icon="wrench" href="/concepts/tools">
+    Review what is and is not independently rerunnable.
+  </Card>
+</CardGroup>

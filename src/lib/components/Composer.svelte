@@ -11,14 +11,17 @@
 	} from '$lib/commands';
 	import { session } from '$lib/session.svelte';
 	import { enterUp } from '$lib/motion';
+	import type { ContextReference, SourceInfo } from '$lib/types';
 	import Icon from './Icon.svelte';
+	import ProviderIcon from './ProviderIcon.svelte';
 
 	let { onafterrun }: { onafterrun?: () => void } = $props();
 
 	let value = $state('');
 	let ta: HTMLTextAreaElement;
+	let contextInput = $state<HTMLInputElement>();
+	let wrapEl = $state<HTMLDivElement>();
 	// ↑-recall history lives on the active conversation, so each tab has its own.
-	// (The composer is hidden on an augment tab, so activeChat is the focused tab.)
 	let history = $derived(session.activeChat?.history ?? []);
 	let histIx = -1;
 
@@ -28,38 +31,28 @@
 	let placeholder = $derived(
 		session.pendingKey
 			? `Paste your ${session.pendingKey.display} API key…`
-			: session.pendingConnect
-				? `Paste the ${session.pendingConnect.id} key…`
-				: folderName
-					? `Ask about ${folderName}…`
-					: 'Open a folder to ask, or type /help'
+			: folderName
+				? `Ask about ${folderName}…`
+				: 'Choose a folder to ask about…'
 	);
 
 	// --- live-state chips (moved from the retired StatusBar) -------------
 	let up = $derived(session.health?.reachable ?? null);
 	let rejected = $derived(session.health?.rejected === true);
-	let providerId = $derived(session.settings?.provider ?? 'ollama');
+	let providerId = $derived(session.settings?.provider ?? 'ollama-cloud');
 	let providerName = $derived(
 		session.providers.find((p) => p.id === providerId)?.display ?? providerId
 	);
 	let hasFolder = $derived(!!session.catalog.workspace);
 	let fileCount = $derived(session.catalog.sources.length);
-	// provider/model, only once the provider has actually answered. Shows the
-	// active tab's model (each tab can pick its own).
-	let modelLabel = $derived(up === true && session.model ? `${providerName}/${session.model}` : '');
-	// The health chip's text when there's nothing to show yet, or something
-	// needs doing. Points at the fix.
-	let healthState = $derived.by(() => {
-		if (up === null) return 'connecting…';
-		if (rejected) return 'key refused — /login';
-		if (up === false) return 'offline';
-		if (up === true && !session.model) return 'pick a model — /model';
-		return '';
-	});
+	// Show the effective model rather than a generic connection state. A tab can
+	// choose its own model, so this is the model the next answer will use; when
+	// no tab override exists it is the saved provider default.
+	let modelLabel = $derived(session.model || session.settings?.model || '');
 	let activityNote = $derived.by(() => {
 		if (session.activity) return session.activity;
 		if (session.busy) return 'working…';
-		if ((up === false || rejected) && providerId !== 'ollama') return providerName;
+		if (up === false || rejected) return providerName;
 		if (session.focus) return 'focus mode · /focus to exit';
 		return null;
 	});
@@ -68,8 +61,31 @@
 	const MAX_ITEMS = 8;
 	let menuSel = $state(-1); // -1 = nothing highlighted; Enter still submits
 	let menuOff = $state(false); // dismissed with Esc until the text changes
+	let contextOpen = $state(false);
+	let modeOpen = $state(false);
+	let contextQuery = $state('');
+	let mode = $derived(session.activeChat?.mode ?? 'ask');
+	let contextRefs = $derived(session.activeChat?.contextRefs ?? []);
+	let contextSources = $derived.by((): SourceInfo[] => {
+		const q = contextQuery.trim().toLowerCase();
+		return session.catalog.sources
+			.filter((source) => !q || `${source.name} ${source.path} ${source.kind} ${source.synopsis ?? ''}`.toLowerCase().includes(q))
+			.slice(0, 8);
+	});
+	let contextColumns = $derived.by(() => {
+		const q = contextQuery.trim().toLowerCase();
+		return session.catalog.sources
+			.flatMap((source) => (source.columns ?? []).map((column) => ({ source, column })))
+			.filter(({ source, column }) =>
+				!q || `${source.name} ${column.name} ${column.type}`.toLowerCase().includes(q)
+			)
+			.slice(0, 8);
+	});
+	$effect(() => {
+		if (contextOpen) queueMicrotask(() => contextInput?.focus());
+	});
 
-	let pendingInput = $derived(!!session.pendingKey || !!session.pendingConnect);
+	let pendingInput = $derived(!!session.pendingKey);
 	// `session.busy` alone isn't specific enough to mean "an answer is
 	// streaming, steering it makes sense" -- it's also true while a folder
 	// is still loading (openFolder reuses it for progress feedback), which
@@ -83,7 +99,7 @@
 	function describe(item: string): string {
 		if (item.startsWith('/')) return COMMAND_DESCRIPTIONS[item] ?? '';
 		const p = session.providers.find((x) => x.id === item);
-		if (p) return p.auth === 'none' ? 'runs on your machine' : 'sign in with an API key';
+		if (p) return 'sign in with an API key';
 		return '';
 	}
 
@@ -94,6 +110,12 @@
 	}
 
 	function onInput() {
+		if (!pendingInput && value.endsWith('@')) {
+			value = value.slice(0, -1);
+			contextOpen = true;
+			modeOpen = false;
+			contextQuery = '';
+		}
 		grow();
 		menuSel = -1;
 		menuOff = false;
@@ -116,6 +138,8 @@
 	async function submit() {
 		const text = value.trim();
 		if (!text) return;
+		contextOpen = false;
+		modeOpen = false;
 		// Mid-run: a plain line (not a command, not a key paste) steers the live
 		// answer — cancel and re-ask with it appended. A command or key still
 		// waits for the run to end.
@@ -156,6 +180,19 @@
 	}
 
 	function onKey(e: KeyboardEvent) {
+		if (contextOpen && e.key === 'Escape') {
+			contextOpen = false;
+			contextQuery = '';
+			e.preventDefault();
+			e.stopPropagation();
+			return;
+		}
+		if (modeOpen && e.key === 'Escape') {
+			modeOpen = false;
+			e.preventDefault();
+			e.stopPropagation();
+			return;
+		}
 		// While the menu is open it owns the arrows / Tab / Esc, and Enter
 		// only when a row is highlighted; otherwise Enter submits.
 		if (menuOpen) {
@@ -239,10 +276,98 @@
 			ta?.setSelectionRange(t.length, t.length);
 		});
 	}
+
+	function sourceDetail(source: SourceInfo): string {
+		const root = session.catalog.workspace?.replace(/[/\\]+$/, '');
+		const path = root && (source.path.startsWith(root + '/') || source.path.startsWith(root + '\\'))
+			? source.path.slice(root.length + 1).replace(/\\/g, '/')
+			: source.path;
+		return source.view ? `${path} · ${source.view}` : path;
+	}
+
+	function addSource(source: SourceInfo): void {
+		session.addContextReference({ kind: 'source', key: source.path, label: source.name, detail: sourceDetail(source) });
+		contextOpen = false;
+		contextQuery = '';
+	}
+
+	function addColumn(source: SourceInfo, name: string, type: string): void {
+		session.addContextReference({
+			kind: 'column',
+			key: `${source.path}:${name}`,
+			label: `${source.name}.${name}`,
+			detail: `${type} field`
+		});
+		contextOpen = false;
+		contextQuery = '';
+	}
+
+	function inspectSource(source: SourceInfo): void {
+		contextOpen = false;
+		session.openInspector({ kind: 'source', path: source.path });
+	}
+
+	function removeReference(ref: ContextReference): void {
+		session.removeContextReference(ref.kind, ref.key);
+	}
+
+	function chooseMode(next: 'ask' | 'inspect'): void {
+		session.setAskMode(next);
+		modeOpen = false;
+	}
+
+	function onWindowClick(e: MouseEvent): void {
+		if (!wrapEl?.contains(e.target as Node)) {
+			contextOpen = false;
+			modeOpen = false;
+		}
+	}
 </script>
 
-<div class="wrap">
-	{#if menuOpen}
+<svelte:window onclick={onWindowClick} />
+
+<div class="wrap" bind:this={wrapEl}>
+	{#if contextOpen}
+		<div class="context-menu" transition:enterUp>
+			<div class="context-search">
+				<Icon name="search" size={13} />
+				<input bind:this={contextInput} bind:value={contextQuery} placeholder="Find a source or field…" spellcheck="false" />
+				<button type="button" aria-label="Close context picker" onclick={() => (contextOpen = false)}><Icon name="x" size={13} /></button>
+			</div>
+			{#if contextSources.length}
+				<p class="context-heading">Sources</p>
+				<div class="context-list">
+					{#each contextSources as source (source.path)}
+						<div class="context-item">
+							<button class="context-main" type="button" onclick={() => addSource(source)}>
+								<span class="context-icon"><Icon name={source.view ? 'table' : 'file'} size={13} /></span>
+								<span class="context-copy"><strong>{source.name}</strong><small>{sourceDetail(source)}</small></span>
+							</button>
+							<button class="context-inspect" type="button" aria-label={`Inspect ${source.name}`} title="Inspect source" onclick={() => inspectSource(source)}>
+								<Icon name="info" size={13} />
+							</button>
+						</div>
+					{/each}
+				</div>
+			{/if}
+			{#if contextColumns.length}
+				<p class="context-heading">Fields</p>
+				<div class="context-list compact-list">
+					{#each contextColumns as item (item.source.path + ':' + item.column.name)}
+						<button class="context-field" type="button" onclick={() => addColumn(item.source, item.column.name, item.column.type)}>
+							<span class="context-icon"><Icon name="table" size={13} /></span>
+							<span class="context-copy"><strong>{item.source.name}.{item.column.name}</strong><small>{item.column.type}</small></span>
+						</button>
+					{/each}
+				</div>
+			{/if}
+			{#if !contextSources.length && !contextColumns.length}
+				<p class="context-empty">No matching sources or fields.</p>
+			{/if}
+			<p class="context-hint">Add a source or field to guide your next question.</p>
+		</div>
+	{/if}
+	{#if menuOpen && !contextOpen && !modeOpen}
 		<ul
 			class="menu"
 			id="composer-completions"
@@ -278,6 +403,20 @@
 	{/if}
 
 	<div class="field" class:secret={pendingInput}>
+		{#if !pendingInput}
+			<div class="context-row">
+				{#each contextRefs as ref (ref.kind + ':' + ref.key)}
+					<span class="ref-pill" title={ref.detail ?? ref.label}>
+						<Icon name={ref.kind === 'source' ? 'file' : 'table'} size={11} />
+						<span>{ref.label}</span>
+						<button type="button" aria-label={`Remove ${ref.label} from context`} onclick={() => removeReference(ref)}><Icon name="x" size={11} /></button>
+					</span>
+				{/each}
+				<button class="context-add" type="button" aria-expanded={contextOpen} onclick={() => { contextOpen = !contextOpen; modeOpen = false; }}>
+					<Icon name="plus" size={12} /> Add context{#if contextRefs.length} · {contextRefs.length}{/if}
+				</button>
+			</div>
+		{/if}
 		<textarea
 			bind:this={ta}
 			bind:value
@@ -286,10 +425,10 @@
 			autocapitalize="off"
 			autocomplete="off"
 			role="combobox"
-			aria-expanded={menuOpen}
+			aria-expanded={menuOpen && !contextOpen && !modeOpen}
 			aria-controls="composer-completions"
 			aria-autocomplete="list"
-			aria-activedescendant={menuOpen && menuSel >= 0 ? 'composer-opt-' + menuSel : undefined}
+			aria-activedescendant={menuOpen && !contextOpen && !modeOpen && menuSel >= 0 ? 'composer-opt-' + menuSel : undefined}
 			aria-label={folderName ? `Ask about ${folderName}` : 'Ask a question'}
 			{placeholder}
 			oninput={onInput}
@@ -298,21 +437,36 @@
 		></textarea>
 		<div class="bottom-row">
 			{#if !session.focus}
-				<div class="chips">
-					<span class="chip">
-						{#if up === true}
-							<Icon name="asterisk" size={11} />
-						{:else}
-							<span class="dot" class:down={up === false} aria-hidden="true"></span>
-						{/if}
-						{modelLabel || healthState}
-					</span>
-					{#if activityNote}
-						<span class="chip">
-							{#if session.busy}<span class="thinking" aria-hidden="true"></span>{/if}
-							{activityNote}
-						</span>
+				<div class="mode-wrap">
+					<button class="mode-trigger" type="button" aria-expanded={modeOpen} onclick={() => { modeOpen = !modeOpen; contextOpen = false; }}>
+						<span class="mode-mark" class:inspect={mode === 'inspect'}></span>
+						{mode === 'inspect' ? 'Check data' : 'Ask'}
+						<Icon name="chevron-right" size={11} />
+					</button>
+					{#if modeOpen}
+						<div class="mode-menu">
+							<button class:chosen={mode === 'ask'} type="button" onclick={() => chooseMode('ask')}>
+								<span class="mode-mark"></span><span><strong>Ask</strong><small>Answer from the workspace.</small></span>
+							</button>
+							<button class:chosen={mode === 'inspect'} type="button" onclick={() => chooseMode('inspect')}>
+								<span class="mode-mark inspect"></span><span><strong>Check data</strong><small>Start with the files and show the checks.</small></span>
+							</button>
+						</div>
 					{/if}
+				</div>
+			{/if}
+			{#if !session.focus}
+				<div class="chips">
+					<span class="chip model-chip" title={modelLabel ? `${providerName} · ${modelLabel}` : providerName}>
+						<ProviderIcon providerId={providerId} size={13} />
+						{modelLabel || 'No model selected'}
+					</span>
+				{#if activityNote}
+					<span class="chip">
+						{#if session.busy}<span class="thinking" aria-hidden="true"></span>{/if}
+						{activityNote}
+					</span>
+				{/if}
 				</div>
 			{/if}
 			{#if answering && value.trim() && !pendingInput && !value.startsWith('/')}
@@ -339,7 +493,7 @@
 		<div class="below">
 			<button class="below-btn" type="button" onclick={() => void openFolder()}>
 				<Icon name="folder" size={12} />
-				{hasFolder ? `${folderName} · ${fileCount} file${fileCount === 1 ? '' : 's'}` : 'choose a folder'}
+				{hasFolder ? `${folderName} · ${fileCount} file${fileCount === 1 ? '' : 's'}` : 'Choose a folder'}
 			</button>
 		</div>
 	{/if}
@@ -348,7 +502,10 @@
 <style>
 	.wrap {
 		position: relative;
-		flex: none;
+		flex: 0 1 var(--content-max);
+		width: 100%;
+		max-width: var(--content-max);
+		margin-inline: auto;
 		padding: var(--space-1) var(--pad) var(--space-2);
 	}
 	/* Live session state, moved here from the retired StatusBar so it reads
@@ -360,6 +517,7 @@
 		flex-wrap: wrap;
 		align-items: center;
 		gap: var(--space-4);
+		flex: 1;
 		min-width: 0;
 	}
 	.chip {
@@ -370,17 +528,282 @@
 		font-size: var(--fs-sm);
 		white-space: nowrap;
 	}
-	.chip .dot {
+	.context-row {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		min-width: 0;
+		min-height: 18px;
+		overflow-x: auto;
+		scrollbar-width: none;
+	}
+	.context-row::-webkit-scrollbar {
+		display: none;
+	}
+	.ref-pill {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		max-width: 210px;
+		padding: 3px 4px 3px 7px;
+		border: 1px solid var(--border-strong);
+		border-radius: var(--radius-chip);
+		background: var(--bg-inset);
+		color: var(--text-dim);
+		font-size: 10.5px;
+		white-space: nowrap;
+	}
+	.ref-pill > span {
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+	.ref-pill :global(svg) {
+		color: var(--brand);
+	}
+	.ref-pill button {
+		display: grid;
+		place-items: center;
+		width: 16px;
+		height: 16px;
+		border-radius: 3px;
+		color: var(--text-faint);
+	}
+	.ref-pill button:hover {
+		background: var(--bg-inset);
+		color: var(--text);
+	}
+	.context-add {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		flex: none;
+		padding: 3px 6px;
+		border-radius: var(--radius-chip);
+		color: var(--text-faint);
+		font-size: 10.5px;
+		white-space: nowrap;
+	}
+	.context-add:hover,
+	.context-add[aria-expanded='true'] {
+		background: var(--bg-inset);
+		color: var(--text-dim);
+	}
+	.mode-wrap {
+		position: relative;
+		flex: none;
+	}
+	.mode-trigger {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		padding: 4px 6px;
+		border-radius: var(--radius-chip);
+		color: var(--text-dim);
+		font-size: var(--fs-xs);
+		font-weight: 560;
+		white-space: nowrap;
+	}
+	.mode-trigger:hover,
+	.mode-trigger[aria-expanded='true'] {
+		background: var(--bg-inset);
+		color: var(--text);
+	}
+	.mode-trigger :global(svg) {
+		transform: rotate(90deg);
+		color: var(--text-faint);
+	}
+	.mode-mark {
 		width: 6px;
 		height: 6px;
 		border-radius: 50%;
-		background: var(--text-faint);
-		flex: none;
-		box-shadow: 0 0 0 3px color-mix(in srgb, var(--text-faint) 18%, transparent);
+		background: var(--link);
 	}
-	.chip .dot.down {
-		background: var(--err);
-		box-shadow: 0 0 0 3px color-mix(in srgb, var(--err) 20%, transparent);
+	.mode-mark.inspect {
+		background: var(--brand);
+	}
+	.mode-menu {
+		position: absolute;
+		bottom: calc(100% + 8px);
+		left: -6px;
+		z-index: 22;
+		width: 224px;
+		padding: 5px;
+		border: 1px solid var(--border);
+		border-radius: var(--radius);
+		background: var(--bg-raised);
+		box-shadow: var(--shadow-pop);
+	}
+	.mode-menu button {
+		display: flex;
+		align-items: flex-start;
+		gap: 9px;
+		width: 100%;
+		padding: 8px;
+		border-radius: var(--radius-chip);
+		text-align: left;
+	}
+	.mode-menu button:hover,
+	.mode-menu button.chosen {
+		background: var(--bg-inset);
+	}
+	.mode-menu button > span:last-child {
+		display: flex;
+		flex-direction: column;
+		gap: 1px;
+	}
+	.mode-menu strong {
+		font-size: var(--fs-xs);
+		font-weight: 600;
+	}
+	.mode-menu small {
+		color: var(--text-faint);
+		font-size: 10.5px;
+	}
+	.context-menu {
+		position: absolute;
+		bottom: calc(100% + 8px);
+		left: var(--pad);
+		z-index: 21;
+		width: min(420px, calc(100% - (var(--pad) * 2)));
+		padding: var(--space-2);
+		max-height: min(70vh, 520px);
+		overflow: auto;
+		border: 1px solid var(--border);
+		border-radius: var(--radius);
+		background: var(--bg-raised);
+		box-shadow: var(--shadow-pop);
+	}
+	.context-search {
+		display: flex;
+		align-items: center;
+		gap: 7px;
+		padding: 7px 8px;
+		border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
+		color: var(--text-faint);
+	}
+	.context-search:focus-within {
+		border-color: var(--link);
+		box-shadow: var(--focus-ring);
+	}
+	.context-search input {
+		min-width: 0;
+		width: 100%;
+		border: 0;
+		outline: 0;
+		background: transparent;
+		color: var(--text);
+		font: inherit;
+		font-size: var(--fs-sm);
+	}
+	.context-search input::placeholder {
+		color: var(--text-faint);
+	}
+	.context-search > button {
+		display: grid;
+		place-items: center;
+		width: 20px;
+		height: 20px;
+		flex: none;
+		color: var(--text-faint);
+	}
+	.context-heading {
+		margin: var(--space-3) var(--space-2) var(--space-1);
+		color: var(--text-faint);
+		font-size: 10px;
+		font-weight: 650;
+		letter-spacing: 0.01em;
+	}
+	.context-list {
+		max-height: 220px;
+		overflow: auto;
+	}
+	.compact-list {
+		max-height: 150px;
+	}
+	.context-item {
+		display: flex;
+		align-items: center;
+		gap: 2px;
+		border-radius: var(--radius-chip);
+	}
+	.context-item:hover,
+	.context-item:focus-within {
+		background: var(--bg-inset);
+	}
+	.context-main {
+		min-width: 0;
+		display: flex;
+		align-items: center;
+		gap: 9px;
+		flex: 1;
+		padding: 7px 6px 7px 8px;
+		text-align: left;
+	}
+	.context-field {
+		width: 100%;
+		display: flex;
+		align-items: center;
+		gap: 9px;
+		padding: 6px 8px;
+		border-radius: var(--radius-chip);
+		text-align: left;
+	}
+	.context-field:hover {
+		background: var(--bg-inset);
+	}
+	.context-icon {
+		display: grid;
+		place-items: center;
+		width: 24px;
+		height: 24px;
+		flex: none;
+		border-radius: var(--radius-chip);
+		background: var(--bg-inset);
+		color: var(--brand);
+	}
+	.context-copy {
+		min-width: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 1px;
+	}
+	.context-copy strong,
+	.context-copy small {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.context-copy strong {
+		font-size: var(--fs-xs);
+		font-weight: 560;
+	}
+	.context-copy small {
+		color: var(--text-faint);
+		font-size: 10.5px;
+	}
+	.context-inspect {
+		display: grid;
+		place-items: center;
+		width: 26px;
+		height: 26px;
+		margin-right: 4px;
+		border-radius: var(--radius-chip);
+		color: var(--text-faint);
+	}
+	.context-inspect:hover {
+		background: var(--bg-raised);
+		color: var(--text);
+	}
+	.context-empty,
+	.context-hint {
+		margin: var(--space-3) var(--space-2) var(--space-2);
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+	}
+	.context-hint {
+		padding-top: var(--space-2);
+		border-top: 1px solid var(--border);
 	}
 	/* Outlined but unfilled it sits on the footer surface, no card colour.
 	   Softly rounded; stays sane when the textarea grows tall. */
@@ -417,6 +840,7 @@
 		gap: 6px;
 		color: var(--text-faint);
 		font-size: var(--fs-xs);
+		white-space: nowrap;
 		padding: 3px 6px;
 		border-radius: var(--radius-chip);
 		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
@@ -475,7 +899,7 @@
 		color: var(--err);
 	}
 	.act.stop:hover {
-		background: color-mix(in srgb, var(--err) 12%, transparent);
+		background: var(--bg-inset);
 	}
 
 	/* completion menu drops up, since the composer sits at the bottom */

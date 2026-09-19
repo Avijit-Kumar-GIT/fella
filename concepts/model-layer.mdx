@@ -1,0 +1,99 @@
+---
+title: "The model layer"
+description: "Current model providers, protocols, credentials, selection, and network boundaries."
+icon: "cpu"
+---
+
+> The model proposes work and writes answers; the harness and engine own execution and checks.
+
+## Definition
+
+The model layer is Fella's replaceable connection to a chat model. Changing it does not change workspace ingestion, the built-in tool implementations, or deterministic verification.
+
+The model receives prompts, registered tool schemas, and selected tool results. It does not receive a direct filesystem, database, or Tauri API.
+
+## Architecture
+
+Fella currently ships these provider registry entries:
+
+| Provider | Authentication | Wire protocol |
+| --- | --- | --- |
+| OpenAI | API key | OpenAI-compatible |
+| Vercel AI Gateway | API key | OpenAI-compatible |
+| xAI (Grok) | API key | OpenAI-compatible |
+| Ollama Cloud | API key | Ollama |
+| OpenRouter | API key | OpenAI-compatible |
+| Custom endpoint | API key | OpenAI-compatible |
+
+Fella is BYOK-only and starts the connection flow on Ollama Cloud. Ollama Cloud
+uses Ollama's API shape at a hosted endpoint; it is not an OpenAI-compatible
+provider. The custom option expects an OpenAI-compatible API root.
+
+Some registry rows describe embedding endpoints, but Fella does not currently use embeddings for document retrieval.
+
+## Flow
+
+Use `/login` to view and authenticate supported providers. Use `/model` to inspect or change the active provider, base URL, and model; where supported, Fella fetches the service's current model list.
+
+```text filename="fella commands"
+/login
+/login ollama-cloud
+/model
+/model gemma4:31b
+```
+
+For a custom endpoint:
+
+```text filename="fella commands"
+/model provider custom
+/model base_url https://example.com/v1
+/model key YOUR_API_KEY
+/model YOUR_MODEL_ID
+```
+
+Each tab can select a model. Provider authentication is stored at the application level rather than inside a conversation.
+
+## Behavior
+
+Ollama connections use `/api/chat`; OpenAI-compatible connections use `/chat/completions`. Both stream output into the same harness, which assembles tool calls, executes them through the registry, and returns results in later turns. Transient provider failures retry with backoff.
+
+Provider API keys are kept in `auth.json` under Fella's application data directory, with mode `0600` on platforms that support it. Secret-bearing configuration commands are redacted from conversation transcripts. The inert `/mcp` command stores no connector tokens and makes no network request.
+
+Document search remains local and direct through `grep_files` and `read_file`, so it works even when the provider has no embeddings endpoint.
+
+The wire choice is independent of which hosted service you choose:
+
+```rust
+let response = if self.is_openai() {
+    self.chat_openai(messages, tools, on_retry, on_delta).await?
+} else {
+    self.chat_ollama(messages, tools, on_retry, on_delta).await?
+};
+```
+
+That is why Ollama Cloud uses the Ollama wire, while OpenAI, Vercel AI Gateway,
+xAI, OpenRouter, and custom endpoints use the OpenAI-compatible wire. The
+streamed response is normalized before it reaches `agent::run`; provider-specific
+framing does not leak into the tool loop.
+
+## Limits
+
+- With a hosted or custom provider, prompts and tool results sent for the conversation leave the machine and are subject to that provider's policies.
+- The inert `/mcp` command does not create a connector or make a separate network request.
+- `run_python` is local execution inside the embedded WASM guest. The guest has no filesystem, network, environment, or subprocess capability; the prompt describes the boundary, while the host ABI enforces it.
+- Provider model catalogs and default model IDs can change. `/model` is the source of the active service's available models when listing is supported.
+- The model can make reasoning and tool-selection mistakes regardless of provider. Deterministic checks cover evidence consistency, not every semantic error.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="The harness" icon="workflow" href="/concepts/harness">
+    See how provider output enters the tool loop.
+  </Card>
+  <Card title="Privacy and security" icon="shield-check" href="/developer-platform/using-fella/privacy">
+    Review provider, credential, and local-execution boundaries.
+  </Card>
+  <Card title="Using Fella" icon="folder-open" href="/developer-platform/using-fella">
+    Configure a workspace and ask a first question.
+  </Card>
+</CardGroup>

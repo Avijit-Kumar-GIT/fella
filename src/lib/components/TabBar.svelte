@@ -3,10 +3,8 @@
 	import type { Tab } from '$lib/session.svelte';
 	import Icon from './Icon.svelte';
 
-	/** A chip-sized label: the augment's file, a custom name if renamed, or
-	 *  a conversation's first line. */
+	/** A chip-sized label: a custom name if renamed, or a conversation's first line. */
 	function label(tab: Tab): string {
-		if (tab.kind === 'augment') return tab.file;
 		if (tab.title) return tab.title;
 		const first = tab.messages.find((m) => m.role === 'user');
 		const t = first?.text.replace(/\s+/g, ' ').trim();
@@ -18,10 +16,10 @@
 		if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
 			e.preventDefault();
 			const n = session.tabs.length;
-			session.active = (i + (e.key === 'ArrowRight' ? 1 : n - 1)) % n;
+			session.activateTab((i + (e.key === 'ArrowRight' ? 1 : n - 1)) % n);
 		} else if (e.key === 'Enter' || e.key === ' ') {
 			e.preventDefault();
-			session.active = i;
+			session.activateTab(i);
 		}
 	}
 </script>
@@ -34,19 +32,17 @@
 			role="tab"
 			aria-selected={i === session.active}
 			tabindex={i === session.active ? 0 : -1}
-			onclick={() => (session.active = i)}
+			onclick={() => session.activateTab(i)}
 			onkeydown={(e) => onKey(e, i)}
 			data-tauri-drag-region="false"
 		>
-			{#if tab.kind === 'chat' && tab.busy}
+			{#if tab.busy}
 				<span class="thinking" aria-hidden="true"></span>
-			{:else if tab.kind === 'augment' && tab.dirty}
-				<span class="unsaved" aria-hidden="true" title="unsaved changes"></span>
 			{/if}
 			<span class="label">{label(tab)}</span>
 			<button
 				class="close"
-				aria-label={tab.kind === 'augment' ? 'Close this tab' : 'Close this conversation'}
+				aria-label="Close this conversation"
 				tabindex="-1"
 				onclick={(e) => {
 					e.stopPropagation();
@@ -105,15 +101,6 @@
 	.label {
 		overflow: hidden;
 		text-overflow: ellipsis;
-	}
-	/* Same halo treatment as Composer's connection-status chip dot. */
-	.unsaved {
-		width: 6px;
-		height: 6px;
-		border-radius: 50%;
-		background: var(--warn);
-		box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 20%, transparent);
-		flex: none;
 	}
 	.close,
 	.add {

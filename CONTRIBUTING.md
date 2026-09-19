@@ -13,18 +13,13 @@ built-in tools, engine or UI work. This is the normal path for anything that
 needs app code. Flow: open an issue, discuss the approach, send a PR, it ships
 in the next release.
 
-**2. Packs (the `fella-extensions` repo).** A pack is one of exactly four
-things: a **theme**, a **skill** (instructions/vocabulary fed to the model), an
-**mcp** connector, or an **augment** (a manifest that switches on a built-in
-capability like a notes tab or a small table). Packs carry no app code new
-capabilities are lane 1. They are submitted, reviewed, and listed in the
-marketplace repo, not here. See its `CONTRIBUTING.md` for the rules and the
-per-kind bar.
-
-If you are unsure which lane a change belongs in: anything that changes what the
-compiled binary can do including a new augment capability is lane 1;
-anything that is only data the app reads (colours, prompt text, a connector
-config, an augment manifest) is lane 2.
+**2. Experimental boundaries.** The pack, augment, and MCP designs are archived
+on this branch and documented for future forks, but they are not part of the
+lean release or an active contribution lane. The only user-authored workspace
+extension shipped today is `fella.md`; `/mcp` is an inert experimental command.
+If an extension is proposed later, start with the reopening criteria in
+[`docs/LEAN-PERSONAL-RELEASE.md`](docs/LEAN-PERSONAL-RELEASE.md) and keep it out
+of the default tool registry until it has a reviewed design.
 
 ## What the app will and won't take
 
@@ -39,8 +34,8 @@ that come up most in review:
 - **Local-first.** The base makes one network call, to the model the user chose.
 - **Credentials** live in `auth.json` (mode `0600`), never the settings DB,
   `localStorage`, or the transcript.
-- **Anti-bloat in the base.** A new dependency needs a real justification. No
-  settings modal. The codebase stays understandable by one person.
+- **Anti-bloat in the base.** A new dependency needs a real justification. The
+  codebase stays understandable by one person.
 - Not a general task agent: no file management, no chores.
 
 Good contributions: a new file format behind the existing ingest path; a

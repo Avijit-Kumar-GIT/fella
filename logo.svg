@@ -1,7 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <!-- the fella mark: a lowercase "f" on the brand teal. No icon, no period. -->
-  <rect x="0" y="0" width="32" height="32" rx="9" fill="#008080"/>
-  <text x="16" y="23" text-anchor="middle"
-        font-family="'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
-        font-size="21" font-weight="600" letter-spacing="-1" fill="#ffffff">f</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="124 168 264 226" role="img" aria-labelledby="title">
+  <title>fella</title>
+  <path d="M256 178 C330 178 378 228 378 292 C378 340 342 384 284 384 L228 384 C170 384 134 340 134 292 C134 228 182 178 256 178 Z" fill="#ffffff" />
+  <ellipse cx="211" cy="278" rx="20" ry="25" fill="#008080" />
+  <ellipse cx="301" cy="278" rx="20" ry="25" fill="#008080" />
 </svg>

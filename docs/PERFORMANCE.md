@@ -90,17 +90,17 @@ No crate dominates any more the sign of a small binary.
 
 `measure.sh` covers *startup* and *size*. The other number a user feels is how
 long a question takes. It is dominated by **model round trips**, not by Fella's
-own code (a `run_sql` is ~10–50 ms; a model turn on a small local model is
-seconds). The loop's job is to keep the round-trip count low and the model warm.
+own code (a `run_sql` is ~10–50 ms; a model turn is seconds). The loop's job is
+to keep the round-trip count low and the provider responsive.
 
 **What we do about it**
 
-- **Keep the model resident.** Every Ollama request sends `keep_alive` (default
-  `30m`, `FELLA_OLLAMA_KEEP_ALIVE`), and opening a workspace or changing the
-  model fires a warm-up load, so a question doesn't wait 10–20 s for a cold
-  reload. `FELLA_SKIP_MODEL_WARMUP` disables the warm-up (tests).
+- **Keep Ollama-wire models resident.** Every Ollama-wire request sends
+  `keep_alive` (default `30m`, `FELLA_MODEL_KEEP_ALIVE`), and opening a
+  workspace or changing the model fires a warm-up load. `FELLA_SKIP_MODEL_WARMUP`
+  disables the warm-up (tests).
 - **Size the context window.** `num_ctx` defaults to **8192**
-  (`FELLA_OLLAMA_NUM_CTX`). Ollama's own default (2–4k) is smaller than Fella's
+  (`FELLA_MODEL_NUM_CTX`). Ollama's own default (2–4k) is smaller than Fella's
   prompt, so it silently truncates the schema or the question — which makes the
   model flail and *adds* round trips. Bigger `num_ctx` = more accurate but a
   slower first token and more RAM; 8192 is the balance for a low-spec box.
@@ -126,8 +126,8 @@ agent run: 8.4s, 2 model call(s), 1 tool call(s), 1 evidence
 A simple question on a small dataset should be **one or two model calls** and
 land in well under 30 s once the model is warm. If `agent run` shows 4+ model
 calls for a simple question, the model is flailing — check that `num_ctx` is
-large enough that the whole system prompt survives (grep the Ollama server log,
-or raise `FELLA_OLLAMA_NUM_CTX`).
+large enough that the whole system prompt survives (inspect the provider logs,
+or raise `FELLA_MODEL_NUM_CTX`).
 
 ## Deeper tools (optional, need `sudo apt-get install`)
 

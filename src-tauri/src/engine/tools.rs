@@ -4,12 +4,22 @@
 
 use async_trait::async_trait;
 use serde_json::{json, Value as Json};
+use std::sync::{atomic::AtomicBool, Arc};
 
-use crate::engine::analytics::chart::{self, ChartData, ChartKind, Series};
+use crate::engine::analytics::chart::{self, ChartData, ChartKind};
+use crate::engine::analytics::data::DEFAULT_ROW_CAP;
 use crate::engine::analytics::verify::truncate as truncate_chars;
+use crate::engine::capabilities::AnalysisCapabilities;
 use crate::engine::error::{EngineError, EngineResult};
 use crate::engine::llm::ToolSchema;
 use crate::engine::state::{EngineState, GrepHit, QueryResult};
+
+/// Keep the model's context bounded for large result sets, while allowing it
+/// to answer complete-table requests for ordinary small results. A 50-row
+/// category table is still a small result; hiding its last 20 rows makes an
+/// exact transcription request impossible to answer safely.
+const MODEL_TABLE_PREVIEW_ROWS: usize = 30;
+const MODEL_TABLE_COMPLETE_ROWS: usize = 100;
 
 /// What a tool produces: a human-facing summary + optional tabular detail for
 /// the evidence panel, and a compact text rendering for the model.
@@ -47,53 +57,74 @@ pub trait Tool: Send + Sync {
     fn description(&self) -> &'static str;
     fn parameters(&self) -> Json;
     async fn run(&self, engine: &EngineState, args: &Json) -> EngineResult<ToolOutput>;
+
+    /// Cancellation-aware entry point. Existing deterministic tools inherit
+    /// the ordinary implementation; tools that can block add the flag to
+    /// their backend call without changing the public tool contract.
+    async fn run_with_cancel(
+        &self,
+        engine: &EngineState,
+        args: &Json,
+        _cancel: Arc<AtomicBool>,
+    ) -> EngineResult<ToolOutput> {
+        self.run(engine, args).await
+    }
 }
 
 pub struct Registry {
     tools: Vec<Box<dyn Tool>>,
-    /// Tools contributed at runtime by enabled `mcp` connector packs. Kept
-    /// separate because their names/schemas are owned `String`s, not the
-    /// `&'static str` the `Tool` trait wants.
-    #[cfg(feature = "mcp")]
-    mcp: Vec<crate::engine::mcp::McpTool>,
+    capabilities: AnalysisCapabilities,
 }
 
 impl Registry {
     pub fn standard() -> Self {
+        Self::standard_with(AnalysisCapabilities::default())
+    }
+
+    pub fn standard_with(capabilities: AnalysisCapabilities) -> Self {
+        Self::build(true, capabilities)
+    }
+
+    /// Read-only inspection tools for the non-developer path. Python is kept
+    /// out of this registry because Inspect is deliberately limited to the
+    /// deterministic workspace tools.
+    pub fn inspect() -> Self {
+        Self::inspect_with(AnalysisCapabilities::default())
+    }
+
+    pub fn inspect_with(capabilities: AnalysisCapabilities) -> Self {
+        Self::build(false, capabilities)
+    }
+
+    fn build(include_python: bool, capabilities: AnalysisCapabilities) -> Self {
+        let mut tools: Vec<Box<dyn Tool>> = vec![Box::new(ListFiles)];
+        if capabilities.table_analysis {
+            tools.push(Box::new(InspectTable));
+            tools.push(Box::new(RunSql));
+        }
+        if capabilities.document_analysis {
+            tools.push(Box::new(GrepFiles));
+            tools.push(Box::new(ReadFile));
+        }
+        if include_python && capabilities.python_analysis {
+            // Python is available only in ordinary Ask mode; Inspect stays a
+            // deterministic read-only surface even though Python is sandboxed.
+            tools.push(Box::new(RunPython));
+        }
+        if capabilities.charts_enabled() {
+            tools.push(Box::new(MakeChart));
+        }
         Self {
-            tools: vec![
-                Box::new(ListFiles),
-                Box::new(InspectTable),
-                Box::new(RunSql),
-                Box::new(GrepFiles),
-                Box::new(ReadFile),
-                Box::new(RunPython),
-                Box::new(MakeChart),
-            ],
-            #[cfg(feature = "mcp")]
-            mcp: Vec::new(),
-        }
-    }
-
-    #[cfg(feature = "mcp")]
-    pub fn set_mcp(&mut self, tools: Vec<crate::engine::mcp::McpTool>) {
-        self.mcp = tools;
-    }
-
-    /// Whether any runtime (MCP) tools are present.
-    pub fn has_mcp(&self) -> bool {
-        #[cfg(feature = "mcp")]
-        {
-            !self.mcp.is_empty()
-        }
-        #[cfg(not(feature = "mcp"))]
-        {
-            false
+            tools,
+            capabilities,
         }
     }
 
     fn get(&self, name: &str) -> Option<&dyn Tool> {
-        self.tools.iter().find(|t| t.name() == name).map(|b| b.as_ref())
+        self.tools
+            .iter()
+            .find(|t| t.name() == name)
+            .map(|b| b.as_ref())
     }
 
     /// Run the tool named `name`. `None` = no such tool.
@@ -103,48 +134,39 @@ impl Registry {
         name: &str,
         args: &Json,
     ) -> Option<EngineResult<ToolOutput>> {
+        self.run_with_cancel(engine, name, args, Arc::new(AtomicBool::new(false)))
+            .await
+    }
+
+    /// Run a built-in tool while allowing long-running calls to observe the
+    /// question's stop flag.
+    pub async fn run_with_cancel(
+        &self,
+        engine: &EngineState,
+        name: &str,
+        args: &Json,
+        cancel: Arc<AtomicBool>,
+    ) -> Option<EngineResult<ToolOutput>> {
         if let Some(tool) = self.get(name) {
-            return Some(tool.run(engine, args).await);
-        }
-        #[cfg(feature = "mcp")]
-        if let Some(t) = self.mcp.iter().find(|t| t.namespaced == name) {
-            return Some(crate::engine::mcp::run_mcp_tool(t, args).await);
+            return Some(tool.run_with_cancel(engine, args, cancel).await);
         }
         None
     }
 
     pub fn schemas(&self) -> Vec<ToolSchema> {
-        #[cfg_attr(not(feature = "mcp"), allow(unused_mut))]
-        let mut out: Vec<ToolSchema> = self
-            .tools
+        self.tools
             .iter()
             .map(|t| ToolSchema {
                 name: t.name().to_string(),
                 description: t.description().to_string(),
                 parameters: with_note_param(t.parameters()),
             })
-            .collect();
-        #[cfg(feature = "mcp")]
-        out.extend(self.mcp.iter().map(|t| ToolSchema {
-            name: t.namespaced.clone(),
-            description: t.description.clone(),
-            parameters: with_note_param(object_schema(t.input_schema.clone())),
-        }));
-        out
+            .collect()
     }
-}
 
-/// Ensure a schema is an object with a `properties` map so `with_note_param`
-/// can attach `note` (some MCP servers send a bare `{"type":"object"}`).
-#[cfg(feature = "mcp")]
-fn object_schema(mut s: Json) -> Json {
-    if !s.is_object() {
-        s = json!({ "type": "object" });
+    pub fn capability_notice(&self) -> Option<String> {
+        self.capabilities.prompt_notice()
     }
-    let obj = s.as_object_mut().unwrap();
-    obj.entry("type").or_insert_with(|| json!("object"));
-    obj.entry("properties").or_insert_with(|| json!({}));
-    s
 }
 
 /// Add a shared optional `note` string to a tool's parameter schema. The model
@@ -157,7 +179,7 @@ fn with_note_param(mut params: Json) -> Json {
             json!({
                 "type": "string",
                 "description": "Optional. 4-8 plain words for the activity display, \
-e.g. \"Add up spending by month\"."
+            e.g. \"Add up spending by month\"."
             }),
         );
     }
@@ -171,7 +193,7 @@ fn str_arg<'a>(args: &'a Json, key: &str) -> EngineResult<&'a str> {
         .ok_or_else(|| EngineError::msg(format!("missing required argument `{key}`")))
 }
 
-/// Render a QueryResult as a small monospace table for the model.
+/// Render a QueryResult as a compact monospace table for the model.
 fn table_text(q: &QueryResult, max_rows: usize) -> String {
     if q.columns.is_empty() {
         return format!("(0 columns, {} rows)", q.row_count);
@@ -211,13 +233,21 @@ fn table_text(q: &QueryResult, max_rows: usize) -> String {
     // renders as a blank cell; a smaller model reads that as "the query failed"
     // and starts probing whether the category/filter exists. Say plainly that
     // nothing matched so an empty SUM/COUNT is taken as the answer (0 / none).
-    let nothing_matched = q.row_count == 0
-        || (q.rows.len() == 1 && q.rows[0].iter().all(|c| c.is_null()));
+    let nothing_matched =
+        q.row_count == 0 || (q.rows.len() == 1 && q.rows[0].iter().all(|c| c.is_null()));
     if nothing_matched {
         out.push_str("nothing matched this query an empty SUM/COUNT is 0, an empty MIN/MAX/AVG is none; that is the answer\n");
     }
     out.push_str(&format!("({} rows total)", q.row_count));
     out
+}
+
+fn model_table_limit(q: &QueryResult) -> usize {
+    if !q.truncated && q.row_count <= MODEL_TABLE_COMPLETE_ROWS {
+        q.rows.len()
+    } else {
+        MODEL_TABLE_PREVIEW_ROWS
+    }
 }
 
 fn cell_str(v: &Json) -> String {
@@ -254,7 +284,9 @@ impl Tool for ListFiles {
                 Some(v) => lines.push(format!(
                     "table {v}  (from {}, {} rows)",
                     s.name,
-                    s.row_count.map(|n| n.to_string()).unwrap_or_else(|| "?".into())
+                    s.row_count
+                        .map(|n| n.to_string())
+                        .unwrap_or_else(|| "?".into())
                 )),
                 None => lines.push(format!(
                     "document {}  ({:?}, {} KB)",
@@ -316,14 +348,20 @@ many sample rows to return (default 5, max 50)."
     }
     async fn run(&self, engine: &EngineState, args: &Json) -> EngineResult<ToolOutput> {
         let name = str_arg(args, "name")?;
-        let n = args.get("rows").and_then(|v| v.as_u64()).unwrap_or(5).clamp(0, 50) as usize;
+        let n = args
+            .get("rows")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(5)
+            .clamp(0, 50) as usize;
 
         let info = engine.describe_source(name)?;
         let cols = info.columns.unwrap_or_default();
         let mut lines = vec![format!(
             "{} {} rows, {} columns",
             name,
-            info.row_count.map(|n| n.to_string()).unwrap_or_else(|| "?".into()),
+            info.row_count
+                .map(|n| n.to_string())
+                .unwrap_or_else(|| "?".into()),
             cols.len()
         )];
         if let Some(note) = &info.note {
@@ -337,14 +375,23 @@ many sample rows to return (default 5, max 50)."
                 c.null_fraction
                     .map(|f| format!("{:.0}%", f * 100.0))
                     .unwrap_or_else(|| "?".into()),
-                c.distinct.map(|d| d.to_string()).unwrap_or_else(|| "?".into()),
+                c.distinct
+                    .map(|d| d.to_string())
+                    .unwrap_or_else(|| "?".into()),
                 c.min.clone().unwrap_or_default(),
                 c.max.clone().unwrap_or_default(),
-                c.note.as_deref().map(|n| format!("  [{n}]")).unwrap_or_default(),
+                c.note
+                    .as_deref()
+                    .map(|n| format!("  [{n}]"))
+                    .unwrap_or_default(),
             ));
         }
 
-        let sample = if n > 0 { engine.sample(name, n).ok() } else { None };
+        let sample = if n > 0 {
+            engine.sample(name, n).ok()
+        } else {
+            None
+        };
         if let Some(s) = &sample {
             if !s.rows.is_empty() {
                 lines.push(String::new());
@@ -381,7 +428,7 @@ impl Tool for RunSql {
         "run_sql"
     }
     fn description(&self) -> &'static str {
-        "Run a read-only SQL query (SELECT / WITH only) and return the rows."
+        "Run a read-only SQL query (SELECT / WITH only) and return the rows. Complete results up to 100 rows are shown; larger results receive a bounded preview. Text comparisons are case-sensitive; for category or status values whose case may vary, use lower(column) = lower(value)."
     }
     fn parameters(&self) -> Json {
         json!({
@@ -394,28 +441,42 @@ impl Tool for RunSql {
     async fn run(&self, engine: &EngineState, args: &Json) -> EngineResult<ToolOutput> {
         let sql = str_arg(args, "sql")?;
         let q = engine.run_sql(sql)?;
-        let table = table_text(&q, 30);
-        let warning = text_agg_warning(engine, sql).or_else(|| case_filter_warning(engine, sql));
-        let llm_text = match warning {
-            Some(w) => format!("{w}\n{table}"),
-            None => table,
-        };
-        Ok(ToolOutput {
-            summary: format!(
-                "{} row{}{} in {}ms",
-                q.row_count,
-                if q.row_count == 1 { "" } else { "s" },
-                if q.truncated { " (capped)" } else { "" },
-                q.ms
-            ),
-            llm_text,
-            sql: Some(sql.to_string()),
-            columns: Some(q.columns),
-            rows: Some(q.rows),
-            row_count: Some(q.row_count),
-            output: None,
-            chart: None,
-        })
+        Ok(sql_output(engine, sql, q))
+    }
+    async fn run_with_cancel(
+        &self,
+        engine: &EngineState,
+        args: &Json,
+        cancel: Arc<AtomicBool>,
+    ) -> EngineResult<ToolOutput> {
+        let sql = str_arg(args, "sql")?;
+        let q = engine.run_sql_cancellable(sql, cancel)?;
+        Ok(sql_output(engine, sql, q))
+    }
+}
+
+fn sql_output(engine: &EngineState, sql: &str, q: QueryResult) -> ToolOutput {
+    let table = table_text(&q, model_table_limit(&q));
+    let warning = text_agg_warning(engine, sql).or_else(|| case_filter_warning(engine, sql));
+    let llm_text = match warning {
+        Some(w) => format!("{w}\n{table}"),
+        None => table,
+    };
+    ToolOutput {
+        summary: format!(
+            "{} row{}{} in {}ms",
+            q.row_count,
+            if q.row_count == 1 { "" } else { "s" },
+            if q.truncated { " (capped)" } else { "" },
+            q.ms
+        ),
+        llm_text,
+        sql: Some(sql.to_string()),
+        columns: Some(q.columns),
+        rows: Some(q.rows),
+        row_count: Some(q.row_count),
+        output: None,
+        chart: None,
     }
 }
 
@@ -438,18 +499,33 @@ SUM(CAST(REPLACE(REPLACE(\"{name}\", '$', ''), ',', '') AS REAL))."
     ))
 }
 
-/// If `sql` filters a mixed-case label column by exact case, tell the model to
-/// fold case values like `Rent` and `rent` won't all match otherwise.
+/// If `sql` filters a likely label column by exact case, tell the model to fold
+/// case. This also catches a uniformly cased source when the model writes
+/// `Leisure` for stored `leisure`.
 fn case_filter_warning(engine: &EngineState, sql: &str) -> Option<String> {
-    let cols = crate::engine::analytics::verify::mixed_case_columns(engine);
+    let cols = crate::engine::analytics::verify::filterable_text_columns(engine);
     let lowered: Vec<String> = cols.iter().map(|(l, _)| l.clone()).collect();
     let hit = crate::engine::analytics::verify::case_sensitive_label_filter(sql, &lowered)?;
-    let name = cols.iter().find(|(l, _)| l == hit).map_or(hit, |(_, n)| n.as_str());
-    Some(format!(
-        "NOTE: \"{name}\" has values that differ only in capitalisation (e.g. Rent / rent). \
+    let name = cols
+        .iter()
+        .find(|(l, _)| l == hit)
+        .map_or(hit, |(_, n)| n.as_str());
+    let mixed_case = crate::engine::analytics::verify::mixed_case_columns(engine)
+        .iter()
+        .any(|(l, _)| l == hit);
+    let detail = if mixed_case {
+        format!(
+            "NOTE: \"{name}\" has values that differ only in capitalisation (e.g. Rent / rent). \
 This filter matches exact case fold it: lower(\"{name}\") = lower('value'), or \
 \"{name}\" = 'value' COLLATE NOCASE."
-    ))
+        )
+    } else {
+        format!(
+            "NOTE: text filters on \"{name}\" match exact case. If the source value's \
+spelling or case may differ, fold it: lower(\"{name}\") = lower('value')."
+        )
+    };
+    Some(detail)
 }
 
 // --- grep_files ------------------------------------------------------
@@ -508,7 +584,11 @@ different word.",
             rows: Some(
                 hits.iter()
                     .map(|h: &GrepHit| {
-                        vec![Json::from(h.source.clone()), Json::from(h.line), Json::from(h.text.clone())]
+                        vec![
+                            Json::from(h.source.clone()),
+                            Json::from(h.line),
+                            Json::from(h.text.clone()),
+                        ]
                     })
                     .collect(),
             ),
@@ -549,9 +629,11 @@ summarization question needs the documents' actual content."
     }
     async fn run(&self, engine: &EngineState, args: &Json) -> EngineResult<ToolOutput> {
         let names: Vec<String> = match args.get("names").and_then(|v| v.as_array()) {
-            Some(arr) if !arr.is_empty() => {
-                arr.iter().filter_map(|v| v.as_str()).map(str::to_string).collect()
-            }
+            Some(arr) if !arr.is_empty() => arr
+                .iter()
+                .filter_map(|v| v.as_str())
+                .map(str::to_string)
+                .collect(),
             _ => vec![str_arg(args, "name")?.to_string()],
         };
 
@@ -609,17 +691,18 @@ impl Tool for RunPython {
         "run_python"
     }
     fn description(&self) -> &'static str {
-        "Run a short Python 3 snippet for analysis that SQL can't express: median/stdev \
-(stdlib `statistics`), correlation (`pearsonr(x, y)`), or a simple linear regression \
-(`linregress(x, y)` -> slope, intercept, r) both always available, pure stdlib, no scipy \
-needed. A helper `sql(query)` returns a pandas DataFrame of the workspace tables (a plain \
-list of dicts if pandas isn't installed). Print results to stdout. About 20s and 1 GB; use \
-it only to compute over the workspace data, not to fetch anything."
+        "Run a short Python 3 snippet for analysis that SQL can't express: `median(values)`, \
+`stdev(values)`, correlation (`pearsonr(x, y)`), or a simple linear regression \
+(`linregress(x, y)` -> slope, intercept, r). These helpers are built in. `sql(query)` \
+returns a list of dictionaries from the workspace tables. The snippet runs in Fella's \
+local WASM + RustPython sandbox: it has no filesystem, network, environment, or subprocess \
+access, and can only print or request bounded read-only workspace SQL. Use it for computation \
+over the mounted data, not for fetching anything."
     }
     fn parameters(&self) -> Json {
         json!({
             "type": "object",
-            "properties": { "code": { "type": "string", "description": "Python 3 source" } },
+            "properties": { "code": { "type": "string", "description": "Python 3 source using the core language, Fella's built-in analytics helpers, and sql(query)" } },
             "required": ["code"],
             "additionalProperties": false
         })
@@ -627,45 +710,64 @@ it only to compute over the workspace data, not to fetch anything."
     async fn run(&self, engine: &EngineState, args: &Json) -> EngineResult<ToolOutput> {
         let code = str_arg(args, "code")?;
         let r = engine.run_python(code).await?;
+        Ok(python_output(r))
+    }
+    async fn run_with_cancel(
+        &self,
+        engine: &EngineState,
+        args: &Json,
+        cancel: Arc<AtomicBool>,
+    ) -> EngineResult<ToolOutput> {
+        let code = str_arg(args, "code")?;
+        let r = engine.run_python_cancellable(code, cancel).await?;
+        Ok(python_output(r))
+    }
+}
 
-        let mut combined = String::new();
-        if !r.stdout.is_empty() {
-            combined.push_str(&r.stdout);
+fn python_output(r: crate::engine::analytics::pyexec::PyResult) -> ToolOutput {
+    let mut combined = String::new();
+    if !r.stdout.is_empty() {
+        combined.push_str(&r.stdout);
+    }
+    if !r.stderr.is_empty() {
+        if !combined.is_empty() {
+            combined.push('\n');
         }
-        if !r.stderr.is_empty() {
-            if !combined.is_empty() {
-                combined.push('\n');
-            }
-            combined.push_str("stderr:\n");
-            combined.push_str(&r.stderr);
-        }
-        if combined.is_empty() {
-            combined.push_str("(no output)");
-        }
+        combined.push_str("stderr:\n");
+        combined.push_str(&r.stderr);
+    }
+    if combined.is_empty() {
+        combined.push_str("(no output)");
+    }
 
-        let summary = if r.timed_out {
-            format!("python timed out after {}ms", r.ms)
-        } else {
-            match r.exit_code {
-                Some(0) => format!("python finished in {}ms", r.ms),
-                Some(c) => format!("python exited with code {c} in {}ms", r.ms),
-                // No exit code = the process was killed by a signal, usually the
-                // memory or CPU rlimit.
-                None => format!("python was stopped after {}ms (it ran out of memory or time)", r.ms),
-            }
-        };
-        let llm_text = format!("{summary}\n\n{}", truncate_chars(&combined, 6000));
+    let summary = if r.cancelled {
+        format!("python stopped by you after {}ms · local sandbox", r.ms)
+    } else if r.timed_out {
+        format!(
+            "python execution budget ended after {}ms · local sandbox",
+            r.ms
+        )
+    } else {
+        match r.exit_code {
+            Some(0) => format!("python finished in {}ms · local sandbox", r.ms),
+            Some(c) => format!("python exited with code {c} in {}ms · local sandbox", r.ms),
+            None => format!(
+                "python was stopped after {}ms inside the local sandbox",
+                r.ms
+            ),
+        }
+    };
+    let llm_text = format!("{summary}\n\n{}", truncate_chars(&combined, 6000));
 
-        Ok(ToolOutput {
-            summary,
-            llm_text,
-            sql: None,
-            columns: None,
-            rows: None,
-            row_count: None,
-            output: Some(combined),
-            chart: None,
-        })
+    ToolOutput {
+        summary,
+        llm_text,
+        sql: None,
+        columns: None,
+        rows: None,
+        row_count: None,
+        output: Some(combined),
+        chart: None,
     }
 }
 
@@ -677,14 +779,16 @@ it only to compute over the workspace data, not to fetch anything."
 // `ToolOutput`, same as every other tool here.
 
 #[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ChartArgs {
     kind: ChartKind,
     #[serde(default)]
     title: Option<String>,
-    labels: Vec<String>,
-    series: Vec<Series>,
+    sql: String,
     #[serde(default)]
     unit: Option<String>,
+    #[serde(default, rename = "note")]
+    _note: Option<String>,
 }
 
 pub struct MakeChart;
@@ -695,53 +799,67 @@ impl Tool for MakeChart {
         "make_chart"
     }
     fn description(&self) -> &'static str {
-        "Draw a bar or line chart from labels + one or more numeric series you already have \
-(e.g. from a prior run_sql). It renders itself in the answer; don't describe it in prose."
+        "Draw a chart from a read-only SQL query. Use auto unless the user clearly asks for \
+        a bar or line chart. The first query column must be the label or date and the remaining \
+        one or two columns must be numeric. Category charts support up to 12 labels; time-series \
+        line charts support up to 1000 points. For longer periods, aggregate to a coarser time \
+        period or narrow the date range. It renders itself in the answer."
     }
     fn parameters(&self) -> Json {
         json!({
             "type": "object",
             "properties": {
-                "kind": { "type": "string", "enum": ["bar", "line"] },
-                "title": { "type": "string", "description": "short chart title, e.g. \"Spending by category\"" },
-                "labels": {
-                    "type": "array", "items": { "type": "string" },
-                    "description": "x-axis / category labels, in order"
+                "kind": {
+                    "type": "string",
+                    "enum": ["auto", "bar", "line"],
+                    "description": "auto chooses a line for time periods and a bar chart for categories"
                 },
-                "series": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "name": { "type": "string" },
-                            "values": { "type": "array", "items": { "type": "number" } }
-                        },
-                        "required": ["name", "values"],
-                        "additionalProperties": false
-                    },
-                    "description": "one or more named numeric series, each with one value per label"
+                "title": { "type": "string", "description": "short chart title, e.g. \"Spending by category\"" },
+                "sql": {
+                    "type": "string",
+                    "description": "single read-only SELECT/WITH query; first column is the label/date and the next one or two columns are numeric"
                 },
                 "unit": { "type": "string", "description": "optional short suffix/prefix for values, e.g. \"$\" or \"%\"" }
             },
-            "required": ["kind", "labels", "series"],
+            "required": ["kind", "sql"],
             "additionalProperties": false
         })
     }
-    async fn run(&self, _engine: &EngineState, args: &Json) -> EngineResult<ToolOutput> {
+    async fn run(&self, engine: &EngineState, args: &Json) -> EngineResult<ToolOutput> {
+        let capabilities = engine.settings().capabilities;
+        if !capabilities.visualizations {
+            return Err(EngineError::msg(
+                "Visualizations are disabled in Settings under Experimental analysis capabilities.",
+            ));
+        }
+        if !capabilities.table_analysis {
+            return Err(EngineError::msg(
+                "Visualizations require table analysis, which is disabled in Settings under Experimental analysis capabilities.",
+            ));
+        }
         let parsed: ChartArgs = serde_json::from_value(args.clone())
             .map_err(|e| EngineError::msg(format!("invalid make_chart arguments: {e}")))?;
-        let data = ChartData {
-            kind: parsed.kind,
-            title: parsed.title,
-            labels: parsed.labels,
-            series: parsed.series,
-            unit: parsed.unit,
-        };
-        chart::validate(&data).map_err(EngineError::msg)?;
+        let sql = parsed.sql.trim();
+        if sql.is_empty() {
+            return Err(EngineError::msg("make_chart needs a non-empty SQL query"));
+        }
+        let q = engine.run_sql(sql)?;
+        if q.truncated {
+            return Err(EngineError::msg(format!(
+                "the chart query returned {} rows, beyond the {}-row raw result limit; aggregate \
+to a coarser time period or narrow the date range first",
+                q.row_count, DEFAULT_ROW_CAP
+            )));
+        }
+        let data = chart::from_query(parsed.kind, parsed.title, parsed.unit, &q.columns, &q.rows)
+            .map_err(EngineError::msg)?;
 
         let n_series = data.series.len();
         let n_labels = data.labels.len();
         let kind_word = match data.kind {
+            // `from_query` resolves auto before returning. Keep this arm for
+            // exhaustiveness if a future caller constructs the type directly.
+            ChartKind::Auto => "chart",
             ChartKind::Bar => "bar",
             ChartKind::Line => "line",
         };
@@ -750,13 +868,16 @@ impl Tool for MakeChart {
                 "{kind_word} chart, {n_labels} categor{}, {n_series} series",
                 if n_labels == 1 { "y" } else { "ies" }
             ),
-            llm_text: "Chart drawn — it renders below this message; don't restate the numbers \
-in prose."
-                .to_string(),
-            sql: None,
-            columns: None,
-            rows: None,
-            row_count: None,
+            llm_text: format!(
+                "Chart drawn from the query result below; it renders as a visual answer block. \
+                 Lead with one short sentence explaining the main pattern. Do not list every \
+                 value in prose.\n\n{}",
+                table_text(&q, chart::MAX_CATEGORIES)
+            ),
+            sql: Some(sql.to_string()),
+            columns: Some(q.columns),
+            rows: Some(q.rows),
+            row_count: Some(q.row_count),
             output: None,
             chart: Some(data),
         })
@@ -794,5 +915,71 @@ mod tests {
         // A normal result is untouched.
         let r = table_text(&qr(&["x"], vec![vec![Json::from(5)]]), 30);
         assert!(!r.contains("nothing matched"), "{r}");
+    }
+
+    #[test]
+    fn small_sql_results_are_rendered_completely_for_the_model() {
+        let rows: Vec<Vec<Json>> = (0..50)
+            .map(|i| vec![Json::from(format!("category-{i}")), Json::from(i)])
+            .collect();
+        let q = qr(&["category", "total"], rows);
+        let text = table_text(&q, model_table_limit(&q));
+
+        assert!(text.contains("category-49"), "last row was hidden: {text}");
+        assert!(
+            !text.contains("more rows"),
+            "small result was previewed: {text}"
+        );
+    }
+
+    #[test]
+    fn large_sql_results_keep_a_bounded_model_preview() {
+        let rows: Vec<Vec<Json>> = (0..101).map(|i| vec![Json::from(i)]).collect();
+        let q = qr(&["value"], rows);
+        let text = table_text(&q, model_table_limit(&q));
+
+        assert!(
+            !text.lines().any(|line| line.trim() == "100"),
+            "large result was rendered in full: {text}"
+        );
+        assert!(
+            text.contains("… 71 more rows"),
+            "preview count was missing: {text}"
+        );
+    }
+
+    #[test]
+    fn inspect_registry_excludes_python() {
+        let inspect_names: Vec<String> = Registry::inspect()
+            .schemas()
+            .into_iter()
+            .map(|schema| schema.name)
+            .collect();
+        assert!(!inspect_names.iter().any(|name| name == "run_python"));
+        assert!(inspect_names.iter().any(|name| name == "run_sql"));
+
+        let standard_names: Vec<String> = Registry::standard()
+            .schemas()
+            .into_iter()
+            .map(|schema| schema.name)
+            .collect();
+        assert!(standard_names.iter().any(|name| name == "run_python"));
+    }
+
+    #[test]
+    fn registry_only_exposes_enabled_analysis_paths() {
+        let capabilities = AnalysisCapabilities {
+            table_analysis: false,
+            document_analysis: false,
+            python_analysis: false,
+            visualizations: false,
+        };
+        let names: Vec<String> = Registry::standard_with(capabilities)
+            .schemas()
+            .into_iter()
+            .map(|schema| schema.name)
+            .collect();
+
+        assert_eq!(names, vec!["list_files"]);
     }
 }

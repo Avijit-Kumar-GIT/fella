@@ -1,6 +1,7 @@
 //! Cross-question memory: a follow-up question in the same conversation gets a
 //! distilled recap of the earlier turn in its system prompt; a new
-//! conversation id starts clean. Driven by a scripted fake Ollama.
+//! conversation id starts clean. Driven by a scripted fake OpenAI-compatible
+//! endpoint.
 
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -15,17 +16,24 @@ use fella_lib::engine::EngineState;
 fn scratch(tag: &str) -> PathBuf {
     // Point-at-a-mock tests: the warm-up ping would steal a scripted response.
     std::env::set_var("FELLA_SKIP_MODEL_WARMUP", "1");
-    let n = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let n = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
     let p = std::env::temp_dir().join(format!("fella-{tag}-{n}"));
     fs::create_dir_all(&p).unwrap();
     p
 }
 
-/// Fake `/api/chat` that replays `responses` in order and records every parsed
-/// request body for inspection.
-fn fake_ollama(
+/// Fake `/chat/completions` that replays `responses` in order and records every
+/// parsed request body for inspection.
+fn fake_openai(
     responses: Vec<serde_json::Value>,
-) -> (String, Arc<Mutex<Vec<serde_json::Value>>>, std::thread::JoinHandle<()>) {
+) -> (
+    String,
+    Arc<Mutex<Vec<serde_json::Value>>>,
+    std::thread::JoinHandle<()>,
+) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     let url = format!("http://{addr}");
@@ -68,31 +76,36 @@ fn fake_ollama(
     (url, seen, handle)
 }
 
+fn openai_response(message: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({ "choices": [{ "message": message }] })
+}
+
 fn engine_on(ws: &std::path::Path, data: &std::path::Path, url: &str) -> EngineState {
     let engine = EngineState::new(data).unwrap();
     engine
         .save_settings(
-            serde_json::json!({ "provider": "ollama", "base_url": url, "model": "test" })
+            serde_json::json!({ "provider": "custom", "base_url": url, "model": "test" })
                 .as_object()
                 .unwrap(),
         )
         .unwrap();
+    engine.set_api_key("custom", "sk-test").unwrap();
     engine.open_workspace(ws).unwrap();
     engine
 }
 
 fn sql_turn(sql: &str) -> serde_json::Value {
-    serde_json::json!({
-        "message": {
+    openai_response(serde_json::json!({
             "role": "assistant",
             "content": "",
-            "tool_calls": [ { "function": { "name": "run_sql", "arguments": { "sql": sql } } } ]
-        }
-    })
+            "tool_calls": [ { "id": "call_1", "type": "function", "function": {
+                "name": "run_sql", "arguments": serde_json::json!({ "sql": sql }).to_string()
+            } } ]
+    }))
 }
 
 fn answer_turn(text: &str) -> serde_json::Value {
-    serde_json::json!({ "message": { "role": "assistant", "content": text } })
+    openai_response(serde_json::json!({ "role": "assistant", "content": text }))
 }
 
 fn system_of(req: &serde_json::Value) -> String {
@@ -110,18 +123,28 @@ fn system_of(req: &serde_json::Value) -> String {
 async fn follow_up_question_sees_the_earlier_turn() {
     let ws = scratch("mem-ws");
     let data = scratch("mem-data");
-    fs::write(ws.join("ledger.csv"), "month,amount\n2024-01,1200\n2024-02,1300\n").unwrap();
+    fs::write(
+        ws.join("ledger.csv"),
+        "month,amount\n2024-01,1200\n2024-02,1300\n",
+    )
+    .unwrap();
 
     // Q1: one SQL call then an answer.  Q2: straight to an answer (no tools).
-    let (url, seen, server) = fake_ollama(vec![
+    let (url, seen, server) = fake_openai(vec![
         sql_turn("SELECT SUM(amount) AS total FROM ledger"),
         answer_turn("You paid 2500 in total."),
         answer_turn("For 2024 it was 2500."),
     ]);
     let engine = engine_on(&ws, &data, &url);
 
-    engine.ask("conv-A", "what did I pay in total?", None, |_| {}).await.unwrap();
-    engine.ask("conv-A", "and just for 2024?", None, |_| {}).await.unwrap();
+    engine
+        .ask("conv-A", "what did I pay in total?", None, |_| {})
+        .await
+        .unwrap();
+    engine
+        .ask("conv-A", "and just for 2024?", None, |_| {})
+        .await
+        .unwrap();
     server.join().unwrap();
 
     let reqs = seen.lock().unwrap();
@@ -146,21 +169,24 @@ async fn each_tab_answers_with_its_own_model() {
     let data = scratch("model-data");
     fs::write(ws.join("t.csv"), "a\n1\n").unwrap();
 
-    let (url, seen, server) = fake_ollama(vec![
-        answer_turn("a"),
-        answer_turn("b"),
-        answer_turn("c"),
-    ]);
+    let (url, seen, server) =
+        fake_openai(vec![answer_turn("a"), answer_turn("b"), answer_turn("c")]);
     let engine = engine_on(&ws, &data, &url);
 
-    engine.ask("tab-1", "q", Some("llama3.1"), |_| {}).await.unwrap();
-    engine.ask("tab-2", "q", Some("gemma2"), |_| {}).await.unwrap();
+    engine
+        .ask("tab-1", "q", Some("model-a"), |_| {})
+        .await
+        .unwrap();
+    engine
+        .ask("tab-2", "q", Some("model-b"), |_| {})
+        .await
+        .unwrap();
     engine.ask("tab-3", "q", None, |_| {}).await.unwrap();
     server.join().unwrap();
 
     let reqs = seen.lock().unwrap();
-    assert_eq!(reqs[0]["model"], "llama3.1");
-    assert_eq!(reqs[1]["model"], "gemma2");
+    assert_eq!(reqs[0]["model"], "model-a");
+    assert_eq!(reqs[1]["model"], "model-b");
     assert_eq!(reqs[2]["model"], "test", "None uses the saved default");
 
     let _ = fs::remove_dir_all(&ws);
@@ -168,31 +194,35 @@ async fn each_tab_answers_with_its_own_model() {
 }
 
 #[tokio::test]
-async fn ollama_request_carries_tuning_and_budget() {
+async fn openai_request_carries_budget() {
     let ws = scratch("tune-ws");
     let data = scratch("tune-data");
     fs::write(ws.join("t.csv"), "a\n1\n").unwrap();
 
-    let (url, seen, server) = fake_ollama(vec![answer_turn("ok")]);
+    let (url, seen, server) = fake_openai(vec![answer_turn("ok")]);
     let engine = engine_on(&ws, &data, &url);
     engine.ask("c", "hi", None, |_| {}).await.unwrap();
     server.join().unwrap();
 
     let reqs = seen.lock().unwrap();
     let req = &reqs[0];
-    assert_eq!(req["keep_alive"], "30m", "model is kept warm between questions");
-    assert_eq!(req["think"], false, "reasoning trace is off by default");
-    assert_eq!(req["options"]["num_ctx"], 8192, "context window is sized up");
-    assert_eq!(req["options"]["num_predict"], 1024, "generation is bounded");
-    assert_eq!(req["options"]["temperature"], 0.2);
+    assert_eq!(req["stream_options"]["include_usage"], true);
+    assert_eq!(req["max_tokens"], 1024, "generation is bounded");
+    assert_eq!(req["temperature"], 0.2);
 
     // The step budget is stated once in the system prompt, not spliced into
     // the running history mid-run.
     let sys = system_of(req);
-    assert!(sys.contains("at most"), "budget stated in the prompt:\n{sys}");
+    assert!(
+        sys.contains("at most"),
+        "budget stated in the prompt:\n{sys}"
+    );
     for m in req["messages"].as_array().unwrap() {
         assert!(
-            !m["content"].as_str().unwrap_or_default().contains("tool calls left"),
+            !m["content"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("tool calls left"),
             "no mid-run nudge should land in history"
         );
     }
@@ -205,22 +235,29 @@ async fn ollama_request_carries_tuning_and_budget() {
 async fn inspect_table_includes_sample_rows() {
     let ws = scratch("desc-ws");
     let data = scratch("desc-data");
-    fs::write(ws.join("ledger.csv"), "month,amount\n2024-01,1200\n2024-02,1300\n").unwrap();
+    fs::write(
+        ws.join("ledger.csv"),
+        "month,amount\n2024-01,1200\n2024-02,1300\n",
+    )
+    .unwrap();
 
-    let (url, seen, server) = fake_ollama(vec![
-        serde_json::json!({
-            "message": {
+    let (url, seen, server) = fake_openai(vec![
+        openai_response(serde_json::json!({
                 "role": "assistant",
                 "content": "",
                 "tool_calls": [
-                    { "function": { "name": "inspect_table", "arguments": { "name": "ledger" } } }
+                    { "id": "call_1", "type": "function", "function": {
+                        "name": "inspect_table", "arguments": "{\"name\":\"ledger\"}"
+                    } }
                 ]
-            }
-        }),
+        })),
         answer_turn("The ledger has two columns."),
     ]);
     let engine = engine_on(&ws, &data, &url);
-    engine.ask("c", "what's in the ledger?", None, |_| {}).await.unwrap();
+    engine
+        .ask("c", "what's in the ledger?", None, |_| {})
+        .await
+        .unwrap();
     server.join().unwrap();
 
     // The post-tool request carries the inspect_table result as a tool message.
@@ -250,16 +287,25 @@ async fn interleaved_conversations_keep_their_own_memory() {
     let data = scratch("mem-mix-data");
     fs::write(ws.join("ledger.csv"), "month,amount\n2024-01,1200\n").unwrap();
 
-    let (url, seen, server) = fake_ollama(vec![
-        answer_turn("Apples are 5."),   // [0] conv-A Q1
-        answer_turn("Bananas are 7."),  // [1] conv-B Q1
-        answer_turn("Still apples."),   // [2] conv-A Q2
+    let (url, seen, server) = fake_openai(vec![
+        answer_turn("Apples are 5."),  // [0] conv-A Q1
+        answer_turn("Bananas are 7."), // [1] conv-B Q1
+        answer_turn("Still apples."),  // [2] conv-A Q2
     ]);
     let engine = engine_on(&ws, &data, &url);
 
-    engine.ask("conv-A", "how much are apples?", None, |_| {}).await.unwrap();
-    engine.ask("conv-B", "how much are bananas?", None, |_| {}).await.unwrap();
-    engine.ask("conv-A", "and are they fresh?", None, |_| {}).await.unwrap();
+    engine
+        .ask("conv-A", "how much are apples?", None, |_| {})
+        .await
+        .unwrap();
+    engine
+        .ask("conv-B", "how much are bananas?", None, |_| {})
+        .await
+        .unwrap();
+    engine
+        .ask("conv-A", "and are they fresh?", None, |_| {})
+        .await
+        .unwrap();
     server.join().unwrap();
 
     let reqs = seen.lock().unwrap();
@@ -283,15 +329,21 @@ async fn forget_conversation_clears_the_memory() {
     let data = scratch("mem-forget-data");
     fs::write(ws.join("ledger.csv"), "month,amount\n2024-01,1200\n").unwrap();
 
-    let (url, seen, server) = fake_ollama(vec![
+    let (url, seen, server) = fake_openai(vec![
         answer_turn("First."),
         answer_turn("After forgetting."),
     ]);
     let engine = engine_on(&ws, &data, &url);
 
-    engine.ask("conv-X", "first question?", None, |_| {}).await.unwrap();
+    engine
+        .ask("conv-X", "first question?", None, |_| {})
+        .await
+        .unwrap();
     engine.forget_conversation("conv-X");
-    engine.ask("conv-X", "second question?", None, |_| {}).await.unwrap();
+    engine
+        .ask("conv-X", "second question?", None, |_| {})
+        .await
+        .unwrap();
     server.join().unwrap();
 
     let reqs = seen.lock().unwrap();
@@ -311,14 +363,20 @@ async fn a_new_conversation_id_starts_clean() {
     let data = scratch("mem2-data");
     fs::write(ws.join("ledger.csv"), "month,amount\n2024-01,1200\n").unwrap();
 
-    let (url, seen, server) = fake_ollama(vec![
+    let (url, seen, server) = fake_openai(vec![
         answer_turn("First answer."),
         answer_turn("Second answer."),
     ]);
     let engine = engine_on(&ws, &data, &url);
 
-    engine.ask("conv-1", "first question?", None, |_| {}).await.unwrap();
-    engine.ask("conv-2", "unrelated question?", None, |_| {}).await.unwrap();
+    engine
+        .ask("conv-1", "first question?", None, |_| {})
+        .await
+        .unwrap();
+    engine
+        .ask("conv-2", "unrelated question?", None, |_| {})
+        .await
+        .unwrap();
     server.join().unwrap();
 
     let reqs = seen.lock().unwrap();

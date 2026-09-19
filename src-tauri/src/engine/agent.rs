@@ -3,11 +3,14 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::engine::analytics::verify;
+use crate::engine::analytics::{provenance, verify};
 use crate::engine::error::{EngineError, EngineResult};
-use crate::engine::evidence::{Answer, AskEvent, EvidenceItem, Usage, VerificationCheck};
+use crate::engine::evidence::{
+    Answer, AskEvent, EvidenceItem, Usage, VerificationCheck, WorkspaceSnapshot,
+};
 use crate::engine::llm::{ChatMessage, LlmClient, ToolCall};
 use crate::engine::state::EngineState;
 use crate::engine::tools::Registry;
@@ -39,7 +42,11 @@ fn soft_stop_round_trips() -> usize {
 /// `max_steps` ceiling or hoping the static "stop early" prompt rule takes.
 /// `None` below the threshold. Pure and testable without a real run, same
 /// pattern as `trim_history`.
-fn stop_pressure_nudge(rounds_done: usize, soft_threshold: usize, evidence_count: usize) -> Option<String> {
+fn stop_pressure_nudge(
+    rounds_done: usize,
+    soft_threshold: usize,
+    evidence_count: usize,
+) -> Option<String> {
     if rounds_done < soft_threshold {
         return None;
     }
@@ -71,10 +78,17 @@ pub async fn run(
     registry: &Registry,
     conversation_id: &str,
     question: &str,
-    cancel: &AtomicBool,
+    cancel: Arc<AtomicBool>,
     emit: &(dyn Fn(AskEvent) + Send + Sync),
 ) -> EngineResult<Answer> {
     let catalog = engine.catalog();
+    let workspace = match (&catalog.workspace, &catalog.revision) {
+        (Some(path), Some(revision)) => Some(WorkspaceSnapshot {
+            path: path.clone(),
+            revision: revision.clone(),
+        }),
+        _ => None,
+    };
     let user_context = engine.user_context();
     let schema = engine.schema_block();
     let recent = engine.session_block(conversation_id);
@@ -87,12 +101,11 @@ pub async fn run(
         recent.as_deref(),
         learned.as_deref(),
     );
-    if registry.has_mcp() {
+    if let Some(notice) = registry.capability_notice() {
+        sys.push_str("\n\nCapability policy (experimental):\n");
+        sys.push_str(&notice);
         sys.push_str(
-            "\nSome tools are named `connector__tool` these reach an outside service \
-the user connected (e.g. their notes). Use one when the question is about that \
-service. Its result is a tool result like any other still never state a figure \
-you did not get from a tool.\n",
+            " Use only the enabled analysis paths and explain when the requested analysis is unavailable.",
         );
     }
     let mut messages = vec![
@@ -102,8 +115,8 @@ you did not get from a tool.\n",
     // With no folder open there is nothing to compute don't hand the model
     // tools it can only fail to call. This keeps a plain "hello" (or "what can
     // you do?") to a single fast turn instead of a many-step loop of
-    // NoWorkspace errors, which on a small local model can take minutes.
-    let schemas = if catalog.workspace.is_some() || registry.has_mcp() {
+    // NoWorkspace errors, which can take minutes on a slow provider.
+    let schemas = if catalog.workspace.is_some() {
         registry.schemas()
     } else {
         Vec::new()
@@ -111,9 +124,17 @@ you did not get from a tool.\n",
     let mut evidence: Vec<EvidenceItem> = Vec::new();
 
     // Forward a retry/backoff line from the model client to the transcript.
-    let notify = |line: &str| emit(AskEvent::Notice { text: line.to_string() });
+    let notify = |line: &str| {
+        emit(AskEvent::Notice {
+            text: line.to_string(),
+        })
+    };
     // Forward each token as the model streams it.
-    let on_delta = |text: &str| emit(AskEvent::AssistantDelta { text: text.to_string() });
+    let on_delta = |text: &str| {
+        emit(AskEvent::AssistantDelta {
+            text: text.to_string(),
+        })
+    };
 
     // Exact `(tool, args)` pairs already run this question, mapped to the result
     // text we fed back. A small model re-issuing the same call is a common way
@@ -143,6 +164,7 @@ you did not get from a tool.\n",
                     log::warn!("agent: model call failed mid-run: {e}");
                     return Ok(finish(
                         engine,
+                        workspace.as_ref(),
                         question,
                         format!(
                             "I couldn't finish the model call failed ({e}). \
@@ -155,7 +177,9 @@ you did not get from a tool.\n",
                 }
                 Err(e) => return Err(e),
             },
-            _ = cancelled(cancel) => return Ok(stopped(engine, question, evidence, usage, emit)),
+            _ = cancelled(cancel.as_ref()) => {
+                return Ok(stopped(engine, workspace.as_ref(), question, evidence, usage, emit))
+            }
         };
         model_calls += 1;
         usage = Usage::merge(usage, resp.usage);
@@ -192,7 +216,7 @@ corrected answer to match the re-run."
                     )));
                     let r = tokio::select! {
                         r = llm.chat(&messages, &[], &notify, &on_delta) => r.unwrap_or_default(),
-                        _ = cancelled(cancel) => Default::default(),
+                        _ = cancelled(cancel.as_ref()) => Default::default(),
                     };
                     usage = Usage::merge(usage, r.usage);
                     if !r.content.trim().is_empty() {
@@ -220,14 +244,22 @@ filter word in the question exactly, and state just the number(s) don't round or
                 ));
                 let r = tokio::select! {
                     r = llm.chat(&messages, &[], &notify, &on_delta) => r.unwrap_or_default(),
-                    _ = cancelled(cancel) => Default::default(),
+                    _ = cancelled(cancel.as_ref()) => Default::default(),
                 };
                 usage = Usage::merge(usage, r.usage);
                 if let Some(check) = verify::self_consistency_check(&text, &r.content) {
                     checks.push(check);
                 }
             }
-            return Ok(finish_with(engine, text, evidence, usage, checks, emit));
+            return Ok(finish_with(
+                engine,
+                workspace.as_ref(),
+                text,
+                evidence,
+                usage,
+                checks,
+                emit,
+            ));
         }
         tool_calls_total += resp.tool_calls.len();
 
@@ -266,7 +298,9 @@ not run again. Its result is repeated below - use it, refine the call, or give y
                     );
                     outcomes[i] = Some((
                         EvidenceItem {
+                            id: String::new(),
                             tool: call.name.clone(),
+                            sources: Vec::new(),
                             args: call.arguments.clone(),
                             note: note_of(&call.arguments),
                             sql: None,
@@ -286,9 +320,15 @@ not run again. Its result is repeated below - use it, refine the call, or give y
             }
         }
 
-        let ran = futures_util::future::join_all(
-            pending.iter().map(|&i| run_tool_call(engine, registry, &resp.tool_calls[i])),
-        )
+        let ran = futures_util::future::join_all(pending.iter().map(|&i| {
+            run_tool_call(
+                engine,
+                &catalog,
+                registry,
+                &resp.tool_calls[i],
+                cancel.clone(),
+            )
+        }))
         .await;
         for (&i, res) in pending.iter().zip(ran) {
             outcomes[i] = Some(res);
@@ -297,9 +337,13 @@ not run again. Its result is repeated below - use it, refine the call, or give y
         for (call, outcome) in resp.tool_calls.iter().zip(outcomes) {
             // Every slot is filled above (dup branch or the `pending`/`ran` zip);
             // treat a gap as a broken invariant that ends the run cleanly.
-            let (item, llm_text) = outcome
-                .ok_or_else(|| EngineError::msg("internal error: a tool call produced no outcome"))?;
-            emit(AskEvent::ToolEnd { item: Box::new(item.clone()) });
+            let (mut item, llm_text) = outcome.ok_or_else(|| {
+                EngineError::msg("internal error: a tool call produced no outcome")
+            })?;
+            item.id = evidence_id(evidence.len());
+            emit(AskEvent::ToolEnd {
+                item: Box::new(item.clone()),
+            });
             // Remember a fresh, successful built-in result so a later exact
             // repeat is answered from the memo rather than re-run.
             if !call.name.contains("__")
@@ -318,7 +362,14 @@ not run again. Its result is repeated below - use it, refine the call, or give y
         }
 
         if cancel.load(Ordering::Relaxed) {
-            return Ok(stopped(engine, question, evidence, usage, emit));
+            return Ok(stopped(
+                engine,
+                workspace.as_ref(),
+                question,
+                evidence,
+                usage,
+                emit,
+            ));
         }
         trim_history(&mut messages);
         if let Some(nudge) = stop_pressure_nudge(step + 1, soft_stop, evidence.len()) {
@@ -344,7 +395,9 @@ you're not confident, say so plainly rather than guessing."
     ));
     let resp = tokio::select! {
         r = llm.chat(&messages, &[], &notify, &on_delta) => r.unwrap_or_default(),
-        _ = cancelled(cancel) => return Ok(stopped(engine, question, evidence, usage, emit)),
+        _ = cancelled(cancel.as_ref()) => {
+            return Ok(stopped(engine, workspace.as_ref(), question, evidence, usage, emit))
+        }
     };
     model_calls += 1;
     usage = Usage::merge(usage, resp.usage);
@@ -358,17 +411,50 @@ you're not confident, say so plainly rather than guessing."
         run_start.elapsed(),
         evidence.len()
     );
-    Ok(finish(engine, question, text, evidence, usage, emit))
+    Ok(finish(
+        engine,
+        workspace.as_ref(),
+        question,
+        text,
+        evidence,
+        usage,
+        emit,
+    ))
 }
 
 fn stopped(
     engine: &EngineState,
+    workspace: Option<&WorkspaceSnapshot>,
     question: &str,
     evidence: Vec<EvidenceItem>,
     usage: Option<Usage>,
     emit: &(dyn Fn(AskEvent) + Send + Sync),
 ) -> Answer {
-    finish(engine, question, "Stopped.".to_string(), evidence, usage, emit)
+    finish(
+        engine,
+        workspace,
+        question,
+        "Stopped.".to_string(),
+        evidence,
+        usage,
+        emit,
+    )
+}
+
+fn catalog_matches(engine: &EngineState, expected: &Catalog) -> bool {
+    let current = engine.catalog();
+    current.workspace == expected.workspace && current.revision == expected.revision
+}
+
+fn workspace_matches(engine: &EngineState, expected: Option<&WorkspaceSnapshot>) -> bool {
+    let current = engine.catalog();
+    match expected {
+        Some(expected) => {
+            current.workspace.as_deref() == Some(expected.path.as_str())
+                && current.revision.as_deref() == Some(expected.revision.as_str())
+        }
+        None => current.workspace.is_none() && current.revision.is_none(),
+    }
 }
 
 /// The corrective re-ask fires unless `FELLA_VERIFY_REASK=0`.
@@ -383,6 +469,7 @@ fn self_check_enabled() -> bool {
 
 fn finish(
     engine: &EngineState,
+    workspace: Option<&WorkspaceSnapshot>,
     question: &str,
     text: String,
     evidence: Vec<EvidenceItem>,
@@ -390,17 +477,28 @@ fn finish(
     emit: &(dyn Fn(AskEvent) + Send + Sync),
 ) -> Answer {
     let checks = verify::run(engine, question, &text, &evidence);
-    finish_with(engine, text, evidence, usage, checks, emit)
+    finish_with(engine, workspace, text, evidence, usage, checks, emit)
 }
 
 fn finish_with(
     engine: &EngineState,
+    workspace: Option<&WorkspaceSnapshot>,
     text: String,
     evidence: Vec<EvidenceItem>,
     usage: Option<Usage>,
-    verification: Vec<VerificationCheck>,
+    mut verification: Vec<VerificationCheck>,
     emit: &(dyn Fn(AskEvent) + Send + Sync),
 ) -> Answer {
+    if !workspace_matches(engine, workspace) {
+        verification.push(VerificationCheck {
+            label: "workspace changed while this answer was running".into(),
+            ok: false,
+            detail: Some(
+                "the data changed during this question, so its evidence may not describe the current workspace; ask again"
+                    .into(),
+            ),
+        });
+    }
     log::info!(
         "agent done: {} char answer, {} evidence item(s)",
         text.len(),
@@ -409,10 +507,13 @@ fn finish_with(
     if let Some(reason) = friction::trigger(&verification, &evidence) {
         engine.record_friction_signal(reason, &evidence);
     }
+    let status = verify::status(&verification, &evidence);
     let answer = Answer {
         text,
         evidence,
         verification,
+        status,
+        workspace: workspace.cloned(),
         usage,
     };
     emit(AskEvent::AnswerDone {
@@ -468,14 +569,42 @@ fn note_of(args: &serde_json::Value) -> Option<String> {
 /// through `join_all` concurrently.
 async fn run_tool_call(
     engine: &EngineState,
+    catalog: &Catalog,
     registry: &Registry,
     call: &ToolCall,
+    cancel: Arc<AtomicBool>,
 ) -> (EvidenceItem, String) {
     let started = Instant::now();
-    match registry.run(engine, &call.name, &call.arguments).await {
+    if !catalog_matches(engine, catalog) {
+        return tool_error(
+            &call.name,
+            &call.arguments,
+            "the workspace changed while this question was running; the tool call was not used ask again".into(),
+            started,
+        );
+    }
+    let result = registry
+        .run_with_cancel(engine, &call.name, &call.arguments, cancel)
+        .await;
+    if !catalog_matches(engine, catalog) {
+        return tool_error(
+            &call.name,
+            &call.arguments,
+            "the workspace changed while this question was running; the tool result was discarded ask again".into(),
+            started,
+        );
+    }
+    match result {
         Some(Ok(out)) => {
+            let sources = out
+                .sql
+                .as_deref()
+                .map(|sql| provenance::for_sql(catalog, sql))
+                .unwrap_or_default();
             let item = EvidenceItem {
+                id: String::new(),
                 tool: call.name.clone(),
+                sources,
                 args: call.arguments.clone(),
                 note: note_of(&call.arguments),
                 sql: out.sql,
@@ -517,7 +646,9 @@ fn tool_error(
 ) -> (EvidenceItem, String) {
     (
         EvidenceItem {
+            id: String::new(),
             tool: name.to_string(),
+            sources: Vec::new(),
             args: args.clone(),
             note: note_of(args),
             sql: None,
@@ -532,6 +663,10 @@ fn tool_error(
         },
         format!("ERROR: {message}"),
     )
+}
+
+fn evidence_id(position: usize) -> String {
+    format!("evidence-{}", position + 1)
 }
 
 /// Which sections of the system prompt to emit. `PromptProfile::full()` is the
@@ -568,8 +703,13 @@ impl PromptProfile {
     /// the eval harness's prompt-minimalism ablation sets this per run. Unset
     /// (the normal case) is exactly `full()`. Unknown names are ignored.
     pub fn from_env() -> Self {
+        let drop = std::env::var("FELLA_PROMPT_DROP").ok();
+        Self::from_drop(drop.as_deref())
+    }
+
+    fn from_drop(drop: Option<&str>) -> Self {
         let mut p = Self::full();
-        let Ok(drop) = std::env::var("FELLA_PROMPT_DROP") else {
+        let Some(drop) = drop else {
             return p;
         };
         for name in drop.split(',').map(str::trim).filter(|s| !s.is_empty()) {
@@ -635,7 +775,11 @@ fn system_prompt(
     recent: Option<&str>,
     learned: Option<&str>,
 ) -> String {
-    let dialect = if cfg!(feature = "duckdb") { "DuckDB" } else { "SQLite" };
+    let dialect = if cfg!(feature = "duckdb") {
+        "DuckDB"
+    } else {
+        "SQLite"
+    };
     let steps = max_steps();
     let mut p = String::new();
 
@@ -733,21 +877,28 @@ no obvious larger total to compare against."
     }
     if profile.python_rule {
         rules.push(
-            "run_python for stats SQL can't do: median/stdev (stdlib `statistics`), or \
+            "run_python for stats SQL can't do: `median(values)`, `stdev(values)`, or \
 correlation/regression via the always-available `pearsonr(x, y)` / `linregress(x, y)` \
-helpers (pure stdlib, work with no scipy installed). It also has a sql() helper."
+helpers. Its `sql(query)` helper returns a list of dictionaries. It runs in a local WASM + \
+RustPython sandbox with no filesystem, network, environment, or subprocess access."
                 .into(),
         );
     }
     if profile.chart_rule {
         rules.push(
-            "make_chart draws a bar or line chart from labels + numeric series you already \
-have; it renders itself, so don't describe it in prose. Use it for a breakdown across \
-categories or a trend over time skip it for a single figure, a yes/no answer, or values \
-that barely differ (it will refuse near-flat data a sentence says more than a flat chart \
-would). One chart per answer: put every category or series you want compared into that \
-one call (multiple labels, up to two series) instead of calling it again for a second \
-chart."
+            "make_chart draws a chart from a read-only SQL query. Use kind `auto` unless the user \
+            clearly asks for a bar or line chart; auto chooses a line for time periods and a bar for \
+            categories. The first query column must be the label or date and the remaining one or two \
+            columns must be numeric; it derives the values itself, so never pass labels or series \
+            arrays. It renders as a visual answer block. After the chart call, lead with one short \
+            sentence explaining the main pattern, then at most one supporting sentence; do not list \
+            every value in prose. Use it for a breakdown, ranking, comparison, or trend over time; \
+            skip it for a single figure, a yes/no answer, or values that barely differ (it will refuse \
+            near-flat data a sentence says more than a flat chart would). One chart per answer: put \
+            every category or series you want compared into that one query. Category/bar charts \
+            support up to 12 labels; time-series/line charts support up to 1000 points. For a \
+            longer period, aggregate to a coarser time period or narrow the date range, and say \
+            so instead of silently omitting rows. Use two series maximum."
                 .into(),
         );
     }
@@ -757,7 +908,10 @@ chart."
 also show a first line, PDFs don't, so don't call list_files for them. For a \
 question about their content, call read_file directly (pass `names: [...]` to \
 read several at once); they are short. Use grep_files only to locate one \
-specific term across many documents."
+specific term across many documents. When a document question has multiple parts, \
+answer each requested part explicitly. If it asks for a policy or rule, state the \
+action, scope, and reason in the document's own terms; do not replace an explicit \
+instruction with only a general summary."
                 .into(),
         );
     }
@@ -870,6 +1024,8 @@ mod tests {
     fn open_catalog() -> Catalog {
         Catalog {
             workspace: Some("/tmp/ws".into()),
+            revision: Some("rtest".into()),
+            indexed_at_ms: None,
             sources: Vec::new(),
             skipped: Vec::new(),
         }
@@ -881,7 +1037,14 @@ mod tests {
         let recent = "Earlier in this conversation (reuse what still applies):\n- Q: \"total?\"  A: \"$4,850\"\n  used: SELECT SUM(\"Amount Paid\") FROM ledger\n";
         let full = PromptProfile::full();
         let learned = "Learned notes for this folder (reference, not rules):\nPreferences:\n- amounts are GBP\n";
-        let p = system_prompt(&full, &open_catalog(), &[], schema, Some(recent), Some(learned));
+        let p = system_prompt(
+            &full,
+            &open_catalog(),
+            &[],
+            schema,
+            Some(recent),
+            Some(learned),
+        );
         assert!(p.contains("\"Amount Paid\" REAL  [coerced]"));
         assert!(p.contains("Earlier in this conversation"));
         assert!(p.contains("SELECT SUM(\"Amount Paid\") FROM ledger"));
@@ -897,19 +1060,15 @@ mod tests {
     }
 
     #[test]
-    fn prompt_drop_env_clears_named_sections() {
-        std::env::set_var("FELLA_PROMPT_DROP", "persona, docs_rule ,session_block, folder_memory");
-        let p = PromptProfile::from_env();
-        std::env::remove_var("FELLA_PROMPT_DROP");
+    fn prompt_drop_clears_named_sections() {
+        let p = PromptProfile::from_drop(Some("persona, docs_rule ,session_block, folder_memory"));
         assert!(!p.persona && !p.docs_rule && !p.session_block && !p.folder_memory);
         assert!(p.core_rules && p.schema, "unnamed sections stay");
     }
 
     #[test]
     fn chart_and_structure_rules_are_droppable() {
-        std::env::set_var("FELLA_PROMPT_DROP", "chart_rule, structure_rule");
-        let p = PromptProfile::from_env();
-        std::env::remove_var("FELLA_PROMPT_DROP");
+        let p = PromptProfile::from_drop(Some("chart_rule, structure_rule"));
         assert!(!p.chart_rule && !p.structure_rule);
         assert!(p.python_rule && p.background_rule, "unnamed sections stay");
     }
@@ -919,7 +1078,8 @@ mod tests {
     #[test]
     fn full_profile_matches_the_shipped_prompt() {
         let schema = "Tables:\n  ledger  (12 rows)\n";
-        let recent = "Earlier in this conversation (reuse what still applies):\n- Q: \"x\"  A: \"y\"\n";
+        let recent =
+            "Earlier in this conversation (reuse what still applies):\n- Q: \"x\"  A: \"y\"\n";
         let got = system_prompt(
             &PromptProfile::full(),
             &open_catalog(),
@@ -928,6 +1088,11 @@ mod tests {
             Some(recent),
             None,
         );
+        let dialect = if cfg!(feature = "duckdb") {
+            "DuckDB"
+        } else {
+            "SQLite"
+        };
         let expected = format!(
             "You are Fella, a careful data analyst. You answer questions about the \
 user's local files by calling tools that run real computations.\n\n\
@@ -952,7 +1117,7 @@ need from it, and reconcile it with the query result.\n\
 - Independent lookups go in one reply as several tool calls; they run together.\n\
 - Stop as soon as you can answer. Most questions are one or two run_sql calls; \
 you have at most {} tool-calling steps, so don't wander past the question.\n\
-- SQLite SQL, one SELECT / WITH per call. Dates are ISO-8601 text, so use \
+- {} SQL, one SELECT / WITH per call. Dates are ISO-8601 text, so use \
 strftime()/date() (e.g. strftime('%Y-%m', d)).\n\
 - For a change, trend, correlation, or comparison question, check the shape \
 of the data before answering, not just the headline number: is a change \
@@ -973,22 +1138,33 @@ tells you whether the figure you just found is most of the total, exactly \
 zero, or a clear outlier. If it is, add one short sentence saying so; if \
 not, answer as normal and add nothing. Skip this second query entirely \
 when the question has no obvious larger total to compare against.\n\
-- run_python for stats SQL can't do: median/stdev (stdlib `statistics`), or \
+- run_python for stats SQL can't do: `median(values)`, `stdev(values)`, or \
 correlation/regression via the always-available `pearsonr(x, y)` / \
-`linregress(x, y)` helpers (pure stdlib, work with no scipy installed). It \
-also has a sql() helper.\n\
-- make_chart draws a bar or line chart from labels + numeric series you \
-already have; it renders itself, so don't describe it in prose. Use it for a \
-breakdown across categories or a trend over time skip it for a single figure, \
-a yes/no answer, or values that barely differ (it will refuse near-flat data \
-a sentence says more than a flat chart would). One chart per answer: put \
-every category or series you want compared into that one call (multiple \
-labels, up to two series) instead of calling it again for a second chart.\n\
+`linregress(x, y)` helpers. Its `sql(query)` helper returns a list of \
+dictionaries. It runs in a local WASM + RustPython sandbox with no \
+filesystem, network, environment, or subprocess access.\n\
+- make_chart draws a chart from a read-only SQL query. Use kind `auto` unless \
+the user clearly asks for a bar or line chart; auto chooses a line for time \
+periods and a bar for categories. The first query column must be the label or \
+date and the remaining one or two columns must be numeric; it derives the values \
+itself, so never pass labels or series arrays. It renders as a visual answer \
+block. After the chart call, lead with one short sentence explaining the main \
+pattern, then at most one supporting sentence; do not list every value in prose. \
+Use it for a breakdown, ranking, comparison, or trend over time; skip it for a \
+single figure, a yes/no answer, or values that barely differ (it will refuse \
+near-flat data a sentence says more than a flat chart would). One chart per \
+answer: put every category or series you want compared into that one query. Category/bar charts \
+support up to 12 labels; time-series/line charts support up to 1000 points. For a longer period, \
+aggregate to a coarser time period or narrow the date range, and say so instead of silently \
+omitting rows. Use two series maximum.\n\
 - Documents (notes, PDFs) are already listed below by name; plain-text notes \
 also show a first line, PDFs don't, so don't call list_files for them. For a \
 question about their content, call read_file directly (pass `names: [...]` to \
 read several at once); they are short. Use grep_files only to locate one \
-specific term across many documents.\n\
+specific term across many documents. When a document question has multiple parts, \
+answer each requested part explicitly. If it asks for a policy or rule, state the \
+action, scope, and reason in the document's own terms; do not replace an explicit \
+instruction with only a general summary.\n\
 - If the files can't answer, say so plainly don't guess, forecast, or \
 project, and don't run a query to estimate one. A question about the future \
 (\"next month\", \"next year\", \"will I\", \"how many will I\") has no answer in \
@@ -1013,6 +1189,7 @@ apply. It is background, not data: never take a figure from it.\n\
 ---\namounts are GBP\n---\n\n\
 Workspace: /tmp/ws\n{}\n{}",
             max_steps(),
+            dialect,
             schema,
             recent,
         );
@@ -1050,7 +1227,10 @@ Workspace: /tmp/ws\n{}\n{}",
 
     #[test]
     fn trim_history_blanks_old_tool_results_only() {
-        let mut msgs = vec![ChatMessage::System("sys".into()), ChatMessage::User("q".into())];
+        let mut msgs = vec![
+            ChatMessage::System("sys".into()),
+            ChatMessage::User("q".into()),
+        ];
         for i in 0..9 {
             msgs.push(ChatMessage::Assistant {
                 content: String::new(),
@@ -1078,6 +1258,12 @@ Workspace: /tmp/ws\n{}\n{}",
         assert_eq!(tool_contents.last(), Some(&"result 8"));
         // Non-tool messages untouched.
         assert!(matches!(&msgs[0], ChatMessage::System(s) if s == "sys"));
+    }
+
+    #[test]
+    fn evidence_ids_are_stable_for_answer_order() {
+        assert_eq!(evidence_id(0), "evidence-1");
+        assert_eq!(evidence_id(4), "evidence-5");
     }
 
     #[test]

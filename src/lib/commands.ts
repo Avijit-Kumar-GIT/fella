@@ -1,12 +1,21 @@
 // Slash-command parsing and input dispatch for the REPL.
 
-import { ipc, isTauri, openExternal, pickFolder } from './ipc';
-import { prefs } from './prefs.svelte';
+import { ipc, isTauri, pickFolder } from './ipc';
 import { Conversation, session } from './session.svelte';
-import type { AskEvent, InstalledPack, Message, OllamaHealth, ProviderInfo } from './types';
+import type {
+	AskEvent,
+	ContextReference,
+	Message,
+	ProviderHealth,
+	ProviderInfo
+} from './types';
 
 const HELP = `Ask a question in plain language and Fella answers from your files,
 showing the exact steps it took. You never need these commands, but here they are:
+
+  Ask / Inspect     choose the normal answer flow or a stricter source-first,
+                   read-only inspection flow from the composer
+  + Context / @     attach a source or field to your next question
 
   /open <path>     choose the folder Fella looks at
   /files           see what Fella found in your folder
@@ -22,8 +31,7 @@ showing the exact steps it took. You never need these commands, but here they ar
   /memory          see what Fella has learned about this folder (/memory forget to clear)
   /context         open fella.md, where you tell Fella about your files
   /update          check for a newer version of Fella and install it
-  /packs           themes and skills you've added (/packs browse to find more)
-  /connect         connect a data source you've added
+  /mcp             experimental and inert; no connectors are enabled
   /tab             open another conversation in a new tab
   /focus           hide the tabs and header for a plain view (again to undo)
   /clear           start this conversation over (the old one is saved)
@@ -31,9 +39,12 @@ showing the exact steps it took. You never need these commands, but here they ar
   /retry           ask the last question again
   /help            this list
 
-keys  Enter send · Shift+Enter new line · ↑ last input · Ctrl+K commands
-      Ctrl+T new tab · Ctrl+W close tab · Ctrl+1…9 switch tab
-      Ctrl+L clear · Esc stop a run / hide details`;
+keys  Enter send · Shift+Enter new line · Ctrl/Cmd+K or Ctrl/Cmd+Shift+P commands
+      Ctrl/Cmd+N new conversation · Ctrl/Cmd+T new tab · Ctrl/Cmd+W close tab
+      Ctrl/Cmd+[ / ] previous or next tab · Ctrl/Cmd+1…9 switch tab
+      Ctrl/Cmd+Shift+A Ask · Ctrl/Cmd+Shift+S Sources · Ctrl/Cmd+Shift+C Context
+      Ctrl/Cmd+, settings · Ctrl/Cmd+O open folder · Ctrl/Cmd+B sidebar · Ctrl/Cmd+L clear
+      Ctrl/Cmd+Shift+F focus mode · Esc stop a run / hide details`;
 
 export const SLASH_COMMANDS = [
 	'/open',
@@ -48,8 +59,7 @@ export const SLASH_COMMANDS = [
 	'/memory',
 	'/context',
 	'/update',
-	'/packs',
-	'/connect',
+	'/mcp',
 	'/tab',
 	'/focus',
 	'/clear',
@@ -58,41 +68,7 @@ export const SLASH_COMMANDS = [
 	'/help'
 ] as const;
 
-/** Resolve `/<command> [name]` to the file an augment view should open: the
- *  pack's default file when no name is given, else `name` with the pack's
- *  default extension appended if `name` has none of its own (so `/note` still
- *  opens `notes.md`, `/note shopping` opens `shopping.md`, and `/note x.txt`
- *  is honoured as-is). Any path safety (no `..`, no absolute path, extension
- *  allowlist) is still enforced backend-side, same as the pack's own file. */
-function resolveAugmentFile(defaultFile: string, arg: string): string {
-	const name = arg.trim();
-	if (!name) return defaultFile;
-	if (/\.[^./\\]+$/.test(name)) return name;
-	const dot = defaultFile.lastIndexOf('.');
-	return name + (dot >= 0 ? defaultFile.slice(dot) : '');
-}
-
-/** `/`-prefixed commands contributed by enabled augment packs whose capability
- *  this build actually ships (`session.augmentCapabilities`, from the engine
- *  the UI keeps no list of its own). */
-function augmentCommands(): { cmd: string; pack: InstalledPack }[] {
-	return session.packs
-		.filter(
-			(p) =>
-				p.enabled &&
-				p.kind === 'augment' &&
-				p.augment &&
-				session.augmentCapabilities.includes(p.augment.capability)
-		)
-		.map((p) => ({ cmd: '/' + (p.augment as NonNullable<InstalledPack['augment']>).command, pack: p }));
-}
-
 const MODEL_FIELDS = ['provider', 'base_url', 'model', 'embed_model'];
-
-/** Where `/packs browse` sends you to find packs and their ids. Points at the
- *  `fella-extensions` repo until the marketplace site (`packs.fella.dev`) is
- *  deployed from `fella-web`. */
-const MARKETPLACE_URL = 'https://github.com/Avijit-Kumar-GIT/fella-extensions';
 
 /** One-line summary per command, for the composer menu and the ⌘K palette. */
 export const COMMAND_DESCRIPTIONS: Record<string, string> = {
@@ -108,8 +84,7 @@ export const COMMAND_DESCRIPTIONS: Record<string, string> = {
 	'/memory': 'see what Fella has learned about this folder',
 	'/context': 'open fella.md, where you tell Fella about your files',
 	'/update': 'check for a newer version of Fella and install it',
-	'/packs': "themes and skills you've added",
-	'/connect': "connect a data source you've added",
+	'/mcp': 'experimental and inert; no connectors are enabled',
 	'/tab': 'open another conversation in a new tab',
 	'/focus': 'hide the tabs and header for a plain view',
 	'/clear': 'start this conversation over (the old one is saved)',
@@ -132,7 +107,7 @@ export function completionsFor(input: string): string[] {
 
 	// Still on the command word itself.
 	if (parts.length === 1) {
-		const all = [...SLASH_COMMANDS, ...augmentCommands().map((a) => a.cmd)];
+		const all = [...SLASH_COMMANDS];
 		const m = all.filter((c) => c.startsWith(cmd));
 		return m.length === 1 && m[0] === cmd ? [] : [...new Set(m)];
 	}
@@ -158,20 +133,7 @@ export function completionsFor(input: string): string[] {
 				return pick(tables());
 			case '/memory':
 				return pick(['forget']);
-			case '/packs':
-				return pick(['browse', 'install', 'add', 'enable', 'disable', 'remove']);
-			case '/connect':
-				return pick(session.packs.filter((p) => p.kind === 'mcp').map((p) => p.id));
 		}
-	}
-	if (parts.length === 3 && cmd === '/packs') {
-		const sub = parts[1].toLowerCase();
-		if (sub === 'enable') return pick(session.packs.filter((p) => !p.enabled).map((p) => p.id));
-		if (sub === 'disable') return pick(session.packs.filter((p) => p.enabled).map((p) => p.id));
-		if (sub === 'remove') return pick(session.packs.map((p) => p.id));
-	}
-	if (parts.length === 3 && cmd === '/connect') {
-		return pick(['off', 'forget']);
 	}
 	if (parts.length === 3 && cmd === '/login') {
 		// `/login <provider> …` the only meaningful trailing word is `key`.
@@ -194,6 +156,7 @@ export function completionsFor(input: string): string[] {
 /** Open a folder as the workspace. With no path, shows the native picker. */
 export async function openFolder(path?: string): Promise<void> {
 	if (!isTauri()) {
+		session.setWorkspaceView('ask');
 		session.addSystem('Fella needs the desktop app to do that.');
 		return;
 	}
@@ -250,6 +213,18 @@ export async function resumeLastFolder(): Promise<void> {
 	if (session.lastFolder) await openFolder(session.lastFolder);
 }
 
+/** Open the workspace's fella.md editor from a navigation surface. Unlike the
+ *  slash-command path this does not add a command message to the transcript. */
+export async function openContext(): Promise<void> {
+	if (!requireEngine()) return;
+	if (!session.catalog.workspace) {
+		session.setWorkspaceView('ask');
+		session.addSystem('Open a folder first with /open — fella.md saves into it.');
+		return;
+	}
+	session.setWorkspacePane('context');
+}
+
 /** Ask the engine to stop one tab's in-progress run (the active tab by
  *  default). The `ask` promise then resolves normally (a "Stopped." answer) and
  *  clears that tab's `busy`. */
@@ -274,7 +249,7 @@ export async function steerRun(conv: Conversation, extra: string): Promise<void>
 	// Let the cancelled run unwind (its `ask` resolves "Stopped." and clears busy).
 	for (let i = 0; i < 60 && conv.busy; i++) await new Promise((r) => setTimeout(r, 50));
 	conv.addUser(extra);
-	await ask(`${prior.text}\n\nAlso: ${extra}`, conv);
+	await ask(buildQuestion(`${prior.text}\n\nAlso: ${extra}`, conv), conv);
 }
 
 /** Entry point: called with the raw composer text. */
@@ -300,21 +275,6 @@ export async function dispatch(raw: string): Promise<void> {
 		}
 	}
 
-	// Capturing an MCP connector token for `/connect <id>`.
-	if (session.pendingConnect) {
-		const { id } = session.pendingConnect;
-		session.pendingConnect = null;
-		if (!text.startsWith('/')) {
-			try {
-				await ipc.mcpSetToken(id, text);
-				session.packs = await ipc.packsSetEnabled(id, true);
-				session.addSystem(`Connected ${id}.`);
-			} catch (e) {
-				session.addSystem(`Couldn't save that key: ${errMsg(e)}`);
-			}
-			return;
-		}
-	}
 
 	if (text.startsWith('/')) {
 		await runCommand(text);
@@ -323,7 +283,29 @@ export async function dispatch(raw: string): Promise<void> {
 
 	const conv = session.ensureChat();
 	conv.addUser(text);
-	await ask(text, conv);
+	await ask(buildQuestion(text, conv), conv);
+}
+
+/** Turn the small UI context selection into explicit model guidance. The
+ * catalog and engine still decide what can be read; this only makes the
+ * user's chosen starting points visible in the prompt. */
+function buildQuestion(question: string, conv: Conversation): string {
+	const instructions =
+		conv.mode === 'inspect'
+			? 'Start by inspecting the relevant workspace sources and schema. Briefly explain what you used and any caveats before giving the answer.'
+			: '';
+	const refs = conv.contextRefs;
+	if (!instructions && refs.length === 0) return question;
+	const context = refs.length
+		? `Use these references as the starting point for this question. Treat saved results as hypotheses and verify them against the current workspace:\n${refs
+				.map((ref) => `- ${contextReferenceText(ref)}`)
+				.join('\n')}`
+		: '';
+	return [instructions, context, question].filter(Boolean).join('\n\n');
+}
+
+function contextReferenceText(ref: ContextReference): string {
+	return `${ref.label}${ref.detail ? ` (${ref.detail})` : ''}`;
 }
 
 /** Fetch the provider list and cache it on the session so the composer hint
@@ -336,10 +318,9 @@ async function loadProviders(): Promise<ProviderInfo[]> {
 
 /** Nudge the health indicator to re-probe after an auth change. Returns the
  *  probe result so the caller can react to a key the provider won't take. */
-async function refreshHealthSoon(): Promise<OllamaHealth | null> {
+async function refreshHealthSoon(): Promise<ProviderHealth | null> {
 	try {
-		session.health = await ipc.ollamaHealth();
-		await reconcileModel();
+		session.health = await ipc.providerHealth();
 		return session.health;
 	} catch {
 		/* ignore the status bar will re-probe on its own timer */
@@ -347,42 +328,10 @@ async function refreshHealthSoon(): Promise<OllamaHealth | null> {
 	}
 }
 
-/** When connected to Ollama, make sure the configured model is one that's
- *  actually pulled Fella's default `llama3.1` often isn't (people have
- *  `llama3.1:8b`). Silently switches to an available chat model; the status
- *  bar shows the result. Ollama only gateways expose hundreds of models and
- *  must be chosen deliberately. Never posts to the transcript, so it doesn't
- *  push the welcome screen away before the user has asked anything. */
-export async function reconcileModel(): Promise<void> {
-	const s = session.settings;
-	const h = session.health;
-	if (!s || s.provider !== 'ollama' || !h?.reachable) return;
-
-	const models = h.models ?? [];
-	if (!models.length) return;
-	const chat = models.filter((m) => !/embed/i.test(m));
-	if (!chat.length) return; // only embedding models pulled UI nudges a pull
-
-	// Keep the saved default valid (what a fresh tab inherits).
-	if (!s.model || !models.includes(s.model)) {
-		try {
-			session.settings = await ipc.setSettings({ model: chat[0] });
-		} catch {
-			/* leave it the empty-screen prompt still guides a manual pick */
-		}
-	}
-	// And each conversation tab that has explicitly picked a now-unavailable
-	// model. A tab with no pick uses the (just-reconciled) default, so leave
-	// those alone; augment tabs have no model.
-	for (const t of session.tabs) {
-		if (t.kind === 'chat' && t.model && !models.includes(t.model)) t.model = chat[0];
-	}
-}
-
 /** After a key is saved, say so if the provider wouldn't take it. The key stays
  *  saved either way a probe can fail for offline or transient reasons, and we
  *  don't want to block someone who knows their key is fine. */
-function warnIfKeyUnverified(display: string, health: OllamaHealth | null): void {
+function warnIfKeyUnverified(display: string, health: ProviderHealth | null): void {
 	if (!health || health.reachable) return;
 	session.addSystem(
 		health.rejected
@@ -408,8 +357,7 @@ async function announceSignedIn(display: string): Promise<void> {
 export function carriesSecret(text: string): boolean {
 	const t = text.trim();
 	if (/^\/(login\s+\S+\s+key|model\s+key)\s+\S/i.test(t)) return true;
-	// `/connect <id> <token>` but not `/connect <id> off|forget`
-	return /^\/connect\s+\S+\s+(?!off\s*$|forget\s*$)\S/i.test(t);
+	return false;
 }
 
 /** The same line with the secret blanked, for the transcript. */
@@ -417,7 +365,6 @@ function redactSecret(text: string): string {
 	return text
 		.replace(/^(\/login\s+\S+\s+key)\s+.+/i, '$1 ••••••')
 		.replace(/^(\/model\s+key)\s+.+/i, '$1 ••••••')
-		.replace(/^(\/connect\s+\S+)\s+(?!off$|forget$).+/i, '$1 ••••••');
 }
 
 async function runCommand(text: string): Promise<void> {
@@ -453,7 +400,8 @@ async function runCommand(text: string): Promise<void> {
 				session.addSystem('Nothing to retry yet. Ask a question first.');
 				return;
 			}
-			await ask(q, session.ensureChat());
+			const retryChat = session.ensureChat();
+			await ask(buildQuestion(q, retryChat), retryChat);
 			return;
 		}
 
@@ -597,13 +545,6 @@ async function runCommand(text: string): Promise<void> {
 				session.addSystem(`unknown provider: ${name}\n\n${renderProviders(list)}`);
 				return;
 			}
-			if (p.auth === 'none') {
-				session.addSystem(
-					`${p.display} runs on your computer and needs no sign-in. Start it, then pick it with /model.`
-				);
-				return;
-			}
-
 			const saidKey = words[1]?.toLowerCase() === 'key';
 			const inlineKey = saidKey ? words.slice(2).join(' ').trim() : '';
 			if (inlineKey) {
@@ -675,7 +616,7 @@ async function runCommand(text: string): Promise<void> {
 							session.settings = await ipc.logout(named, forget);
 							session.providers = await ipc.listProviders();
 							session.addSystem(
-								`Stopped using ${named}. Fella is back on the local default.` + kept(named)
+								`Stopped using ${named}. Run /login to choose another model service.` + kept(named)
 							);
 							await refreshHealthSoon();
 						} catch (e) {
@@ -684,10 +625,6 @@ async function runCommand(text: string): Promise<void> {
 						return;
 					}
 					session.addSystem(`unknown provider: ${named}\n\n${renderProviders(list)}`);
-					return;
-				}
-				if (target.auth === 'none') {
-					session.addSystem(`${target.display} runs on your computer, so there's no sign-in to undo.`);
 					return;
 				}
 			} else if (active && active.auth !== 'none') {
@@ -701,10 +638,7 @@ async function runCommand(text: string): Promise<void> {
 				);
 				return;
 			} else {
-				const ollama = list.find((x) => x.id === 'ollama')?.display ?? 'Ollama';
-				session.addSystem(
-					`You're not connected to any model service. Fella is on ${ollama}, which needs no sign-in.`
-				);
+				session.addSystem("You're not connected to a model service. Use /login to connect one.");
 				return;
 			}
 
@@ -712,19 +646,12 @@ async function runCommand(text: string): Promise<void> {
 				const hadKey = target.authed;
 				session.settings = await ipc.logout(target.id, forget);
 				session.providers = await ipc.listProviders();
-				const resetToOllama = session.settings?.provider === 'ollama' && target.id !== 'ollama';
-				const ollama = session.providers.find((x) => x.id === 'ollama')?.display ?? 'Ollama';
 				const head = !hadKey
 					? `${target.display} had no saved key.`
 					: forget
 						? `Disconnected from ${target.display} and deleted its saved key.`
 						: `Stopped using ${target.display}.${kept(target.id)}`;
-				session.addSystem(
-					head +
-						(resetToOllama
-							? ` Fella is back on ${ollama}; start it, or /login to another service.`
-							: '')
-				);
+				session.addSystem(head + ' Use /login to choose another connected service.');
 				await refreshHealthSoon();
 			} catch (e) {
 				session.addSystem(`error: ${errMsg(e)}`);
@@ -789,14 +716,10 @@ async function runCommand(text: string): Promise<void> {
 				session.addSystem(
 					`model service:   ${prov?.display ?? s.provider}\n` +
 						`address:         ${s.base_url}\n` +
-						`model:           ${tabModel}   (this tab)\n` +
-						`connected:       ${s.has_credential ? 'yes' : 'no'}` +
-						renderModelChoices(session.health?.models ?? [], tabModel) +
-						perTab +
-						(s.provider === 'ollama'
-							? '\n\nOnly downloaded models show above. Browse more at ollama.com/library, ' +
-								'then run  ollama pull <name>  (or add Ollama Cloud with /login ollama-cloud).'
-							: '')
+					`model:           ${tabModel}   (this tab)\n` +
+					`connected:       ${s.has_credential ? 'yes' : 'no'}` +
+					renderModelChoices(session.health?.models ?? [], tabModel) +
+					perTab
 				);
 			} catch (e) {
 				session.addSystem(`error: ${errMsg(e)}`);
@@ -851,21 +774,8 @@ async function runCommand(text: string): Promise<void> {
 		}
 
 		case '/context': {
-			// Not routed through the generic augment-command path: fella.md's
-			// filename is load-bearing (the engine reads that exact name as
-			// system-prompt context, see catalog.rs/state.rs), so unlike
-			// /note it can't be renamed via an argument.
-			if (!requireEngine()) return;
-			if (!session.catalog.workspace) {
-				session.addSystem('Open a folder first with /open — fella.md saves into it.');
-				return;
-			}
-			await session.openAugment({
-				capability: 'buffer',
-				command: 'context',
-				file: 'fella.md',
-				syntax: 'markdown'
-			});
+			// fella.md is the one explicit workspace context file the engine reads.
+			await openContext();
 			return;
 		}
 
@@ -894,175 +804,19 @@ async function runCommand(text: string): Promise<void> {
 			}
 			return;
 
-		case '/packs': {
-			if (!requireEngine()) return;
-			const words = arg.split(/\s+/).filter(Boolean);
-			const sub = words[0]?.toLowerCase();
-			try {
-				if (!sub) {
-					session.packs = await ipc.packsList();
-					session.addSystem(renderPacks(session.packs));
-					return;
-				}
-				if (sub === 'browse') {
-					session.addSystem(
-						"The browse site isn't live yet — opening the packs repo, " +
-							`where the packs and their ids are listed:\n${MARKETPLACE_URL}`
-					);
-					void openExternal(MARKETPLACE_URL);
-					return;
-				}
-				if (sub === 'add') {
-					const path = words.slice(1).join(' ').trim();
-					if (!path) {
-						session.addSystem(
-							'Point /packs add at a folder on this computer that holds a pack, ' +
-								'for example: /packs add ~/Downloads/ocean-theme'
-						);
-						return;
-					}
-					session.packs = await ipc.packsAdd(path);
-					await prefs.load();
-					session.addSystem(
-						`Added from a local folder, so it's marked unverified (nobody reviewed it but you).\n${renderPacks(session.packs)}`
-					);
-					warnAugmentCollisions();
-					return;
-				}
-				if (sub === 'install') {
-					const id = words[1];
-					if (!id) {
-						session.addSystem(
-							'Which pack? Run /packs browse to see what’s available, ' +
-								'then /packs install <id> with an id from that list.'
-						);
-						return;
-					}
-					session.addSystem(`Installing ${id}…`);
-					try {
-						session.packs = await ipc.packsInstall(id);
-					} catch (e) {
-						// The hosted catalog isn't fully live yet — a missing or
-						// unreachable catalog shouldn't read as a raw HTTP error.
-						// Real failures (checksum mismatch, unknown id, disk) fall
-						// through to the outer catch unchanged.
-						if (/could not reach|catalog is not valid|: HTTP [45]\d\d/i.test(errMsg(e))) {
-							session.addSystem(
-								"Couldn't reach the pack catalog (the marketplace isn't fully live yet). " +
-									'You can still add a pack from a local folder: /packs add <path>.'
-							);
-							return;
-						}
-						throw e;
-					}
-					await prefs.load();
-					session.addSystem(`Installed ${id}. Enable it with /packs enable ${id}.\n${renderPacks(session.packs)}`);
-					warnAugmentCollisions();
-					return;
-				}
-				if (sub === 'enable' || sub === 'disable' || sub === 'remove') {
-					const id = words[1];
-					if (!id) {
-						const pool =
-							sub === 'enable'
-								? session.packs.filter((p) => !p.enabled)
-								: sub === 'disable'
-									? session.packs.filter((p) => p.enabled)
-									: session.packs;
-						session.addSystem(
-							pool.length
-								? `Which one? /packs ${sub} <id>, where <id> is one of:\n  ${pool
-										.map((p) => p.id)
-										.join('\n  ')}`
-								: `Nothing to ${sub}. Run /packs to see what you have.`
-						);
-						return;
-					}
-					session.packs =
-						sub === 'remove'
-							? await ipc.packsRemove(id)
-							: await ipc.packsSetEnabled(id, sub === 'enable');
-					await prefs.load();
-					session.addSystem(renderPacks(session.packs));
-					return;
-				}
-				session.addSystem(
-					`unknown: /packs ${sub}\n\n` +
-						'/packs · /packs browse · /packs install <id> · /packs add <path> · /packs enable <id> · /packs disable <id> · /packs remove <id>'
-				);
-			} catch (e) {
-				session.addSystem(`error: ${errMsg(e)}`);
-			}
+		case '/mcp':
+			session.addSystem(
+				'MCP is experimental and closed in this release.\n' +
+					'No official connectors are enabled.\n' +
+					'Custom implementations require a fork or experimental build.'
+			);
 			return;
-		}
 
-		case '/connect': {
-			if (!requireEngine()) return;
-			const words = arg.split(/\s+/).filter(Boolean);
-			const id = words[0];
-			const sub = words[1]?.toLowerCase();
-			try {
-				const connectors = session.packs.filter((p) => p.kind === 'mcp');
-				if (!id) {
-					session.addSystem(renderConnectors(connectors));
-					return;
-				}
-				const c = connectors.find((p) => p.id === id);
-				if (!c) {
-					session.addSystem(`No data connection called "${id}".\n\n${renderConnectors(connectors)}`);
-					return;
-				}
-				if (sub === 'off') {
-					session.packs = await ipc.packsSetEnabled(id, false);
-					session.addSystem(`Disconnected ${id}.`);
-					return;
-				}
-				if (sub === 'forget') {
-					await ipc.mcpClearToken(id);
-					session.packs = await ipc.packsSetEnabled(id, false);
-					session.addSystem(`Forgot the ${id} key and disconnected it.`);
-					return;
-				}
-				if (words.length >= 2) {
-					await ipc.mcpSetToken(id, words.slice(1).join(' '));
-					session.packs = await ipc.packsSetEnabled(id, true);
-					session.addSystem(`Connected ${id}.`);
-					return;
-				}
-				if (!c.needs_token) {
-					session.packs = await ipc.packsSetEnabled(id, true);
-					session.addSystem(c.enabled ? `${id} is already connected.` : `Connected ${id}.`);
-					return;
-				}
-				session.pendingConnect = { id };
-				session.addSystem(
-					`Paste the ${id} key and press Enter. It's stored on this computer, ` +
-						'never shown or logged. Esc to cancel.'
-				);
-			} catch (e) {
-				session.addSystem(`error: ${errMsg(e)}`);
-			}
-			return;
-		}
-
-		default: {
-			// A slash command contributed by an enabled augment pack? An argument
-			// names a different file than the pack's default, so one `buffer`/
-			// `grid` augment can hold many independently-named notes/tables.
-			const aug = augmentCommands().find((a) => a.cmd === cmd)?.pack.augment;
-			if (aug) {
-				if (!requireEngine()) return;
-				if (!session.catalog.workspace) {
-					session.addSystem('Open a folder first with /open — the file saves into it.');
-					return;
-				}
-				await session.openAugment({ ...aug, file: resolveAugmentFile(aug.file, arg) });
-				return;
-			}
+		default:
 			session.addSystem(`unknown command: ${cmd}\n\n${HELP}`);
+			return;
 		}
 	}
-}
 
 /** Run one question in `conv` (its own tab). Bound to the tab, not "the active
  *  tab", so it keeps streaming there after the user switches away. */
@@ -1070,6 +824,7 @@ async function ask(question: string, conv: Conversation): Promise<void> {
 	if (!requireEngine()) return;
 
 	const msg = conv.addAssistant('');
+	conv.startRun();
 	conv.busy = true;
 	conv.activity = 'thinking…';
 
@@ -1084,10 +839,11 @@ async function ask(question: string, conv: Conversation): Promise<void> {
 		}
 	}, 1000);
 
-	// Transient engine notices (retry/backoff, connector problems) normally only
+	// Transient engine notices (retry/backoff, provider problems) normally only
 	// flash in the status bar. Keep them so that if the run ends badly the user
 	// has the warning that explains why.
 	const notices: string[] = [];
+	let failed = false;
 
 	const onEvent = (e: AskEvent) => {
 		switch (e.kind) {
@@ -1102,10 +858,12 @@ async function ask(question: string, conv: Conversation): Promise<void> {
 				if (!msg.plan && msg.text.trim()) msg.plan = msg.text.trim();
 				msg.text = '';
 				const note = typeof e.args?.note === 'string' ? e.args.note.trim() : '';
+				conv.beginRunStep(e.tool, note || undefined);
 				conv.activity = note ? `${note}…` : 'working…';
 				break;
 			}
 			case 'tool_end':
+				conv.completeRunStep(e.item);
 				// Back to the model for the next step keep a heartbeat showing.
 				conv.activity = 'thinking…';
 				break;
@@ -1123,10 +881,11 @@ async function ask(question: string, conv: Conversation): Promise<void> {
 	};
 
 	try {
-		const answer = await ipc.ask(conv.id, question, onEvent, conv.model || undefined);
+		const answer = await ipc.ask(conv.id, question, onEvent, conv.model || undefined, conv.mode);
 		msg.answer = answer;
 		msg.text = answer.text;
 	} catch (e) {
+		failed = true;
 		const kind = errKind(e);
 		// If the model already streamed part of an answer, keep it rather than
 		// replacing what the user watched appear with a bare "error:".
@@ -1148,6 +907,7 @@ async function ask(question: string, conv: Conversation): Promise<void> {
 		msg.plan = undefined;
 		conv.busy = false;
 		conv.activity = '';
+		conv.finishRun(failed);
 	}
 }
 
@@ -1168,64 +928,10 @@ function parseModelArg(arg: string): SettingsPatch | null {
 	return { model: arg };
 }
 
-/** Warn when an installed augment's command is shadowed by a built-in it
- *  stays installed but can't be opened by that name. */
-function warnAugmentCollisions(): void {
-	const builtins = new Set<string>(SLASH_COMMANDS);
-	const clashes = session.packs
-		.filter((p) => p.kind === 'augment' && p.augment && builtins.has('/' + p.augment.command))
-		.map((p) => `/${p.augment?.command} (${p.id})`);
-	if (clashes.length) {
-		session.addSystem(
-			`Note: ${clashes.join(', ')} — that name is a built-in command, so the augment can't be ` +
-				`opened by it. It stays installed.`
-		);
-	}
-}
-
-function renderPacks(list: InstalledPack[]): string {
-	if (list.length === 0) {
-		return 'No packs installed.\n\n/packs browse  to find some · /packs install <id>  ·  /packs add <path>';
-	}
-	const rows = list.map((p) => {
-		const mark = p.enabled ? '●' : '○';
-		const unver = p.verified ? '' : '  (unverified)';
-		const extra =
-			p.kind === 'augment' && p.augment
-				? `  →  /${p.augment.command} [name]  (default: ${p.augment.file})`
-				: '';
-		return `${mark} ${p.id.padEnd(20)} ${p.kind.padEnd(7)} ${(p.enabled ? 'on' : 'off').padEnd(3)}  ${p.name}${unver}${extra}`;
-	});
-	const out = ['  id                   kind    state', ...rows, ''];
-	if (list.some((p) => !p.verified)) {
-		out.push('(unverified) = added from a local folder, not the reviewed marketplace');
-	}
-	out.push('/packs enable <id> · /packs disable <id> · /packs remove <id> · /packs browse');
-	return out.join('\n');
-}
-
-function renderConnectors(list: InstalledPack[]): string {
-	if (list.length === 0) {
-		return 'No data connections yet.\n\nAdd one with /packs browse, then /connect it.';
-	}
-	const rows = list.map((c) => {
-		const status = c.needs_token ? 'needs a key' : c.enabled ? 'connected' : 'off';
-		const mark = c.enabled && !c.needs_token ? '●' : '○';
-		return `${mark} ${c.id.padEnd(20)} ${status}`;
-	});
-	return [
-		'  data connection',
-		...rows,
-		'',
-		'/connect <id> to connect (paste a key) · /connect <id> off · /connect <id> forget'
-	].join('\n');
-}
-
 function renderProviders(list: ProviderInfo[]): string {
 	const rows = list.map((p) => {
 		const bullet = p.current ? '●' : ' ';
-		const status =
-			p.auth === 'none' ? 'on your computer' : p.authed ? 'connected' : 'not connected';
+		const status = p.authed ? 'connected' : 'not connected';
 		return `${bullet} ${p.id.padEnd(11)} ${p.display.padEnd(26)} ${status}${p.current ? '   (current)' : ''}`;
 	});
 	return [
@@ -1294,7 +1000,7 @@ function summarizeCatalog(full = false): string {
 		lines.push(`  ${f.name}  ·  ${f.row_count ?? '?'} rows${f.note ? `  (${f.note})` : ''}`);
 	}
 	for (const f of docs) {
-		lines.push(`  ${f.name}  ·  ${f.kind === 'pdf' ? 'PDF' : 'text'}`);
+		lines.push(`  ${f.name}  ·  ${f.kind.toUpperCase()}`);
 	}
 	lines.push(...skippedLines());
 	lines.push('', 'Ask a question, or /help.');

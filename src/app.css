@@ -2,12 +2,9 @@
    breathe a lightweight macOS register. Sans for the conversation; monospace
    only where data lines up (tables, SQL, output, identifiers).
 
-   Tokens come in two groups:
-   - PACK-OVERRIDABLE: a theme pack may replace these (see THEME_TOKEN_KEYS in
-     src/lib/prefs.svelte.ts and src-tauri/src/engine/extensions.rs keep both in
-     sync). All colors, plus --radius and --pad.
-   - FIXED: the type scale, fonts, spacing scale, shadows, radii, motion. Not
-     overridable; changing them would break layout a pack can't reason about.
+   Tokens are intentionally local to the application. All colors, plus --radius
+   and --pad, live here; the type scale, fonts, spacing scale, shadows, radii,
+   and motion are fixed so the layout remains predictable.
 
    Rules of the house:
    - Monochrome first, with one accent. Color (--ok / --warn / --err / --link)
@@ -42,7 +39,7 @@
 }
 
 :root {
-	/* --- pack-overridable ------------------------------------------------ */
+	/* --- application tokens --------------------------------------------- */
 	/* Warm neutrals with real depth: --bg is the window tint, --bg-raised the
 	   writing surface (they differ now), --bg-inset the recessed fill. */
 	--bg: #fcfcfb;
@@ -88,6 +85,7 @@
 	--space-4: 16px;
 	--space-5: 24px;
 	--space-6: 32px;
+	--content-max: 960px;
 
 	--radius-sm: 6px;
 	--radius-chip: 4px;
@@ -102,25 +100,23 @@
 	--ease: cubic-bezier(0.32, 0.72, 0, 1);
 }
 
-@media (prefers-color-scheme: dark) {
-	:root {
-		--bg: #0e0e10;
-		--bg-raised: #17171a;
-		--bg-inset: #1e1e22;
-		--border: #26262a;
-		--border-strong: #37373d;
-		--text: #ededec;
-		--text-dim: #8f8d88;
-		--text-faint: #838079;
-		--accent: #ededec;
-		--brand: #008080;
-		--link: #8fb0dd;
-		--ok: #7cc07c;
-		--warn: #d8a640;
-		--err: #e06c6c;
-		--shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 12px rgba(0, 0, 0, 0.35);
-		--shadow-pop: 0 4px 12px rgba(0, 0, 0, 0.4), 0 20px 56px rgba(0, 0, 0, 0.55);
-	}
+:root[data-color-mode='dark'] {
+	--bg: #0e0e10;
+	--bg-raised: #17171a;
+	--bg-inset: #1e1e22;
+	--border: #26262a;
+	--border-strong: #37373d;
+	--text: #ededec;
+	--text-dim: #8f8d88;
+	--text-faint: #838079;
+	--accent: #ededec;
+	--brand: #008080;
+	--link: #8fb0dd;
+	--ok: #7cc07c;
+	--warn: #d8a640;
+	--err: #e06c6c;
+	--shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 12px rgba(0, 0, 0, 0.35);
+	--shadow-pop: 0 4px 12px rgba(0, 0, 0, 0.4), 0 20px 56px rgba(0, 0, 0, 0.55);
 }
 
 * {
@@ -217,6 +213,11 @@ kbd {
 
 /* A bordered, low-emphasis action button (onboarding CTAs, provider chips). */
 .pill {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: var(--space-2);
+	white-space: nowrap;
 	color: var(--text);
 	background: var(--bg-raised);
 	border: 1px solid var(--border-strong);
@@ -226,7 +227,8 @@ kbd {
 	transition:
 		background var(--dur-fast) var(--ease),
 		border-color var(--dur-fast) var(--ease),
-		box-shadow var(--dur-fast) var(--ease);
+		box-shadow var(--dur-fast) var(--ease),
+		filter var(--dur-fast) var(--ease);
 }
 .pill:hover {
 	background: var(--bg-inset);
@@ -248,7 +250,8 @@ kbd {
 	border-color: var(--brand);
 }
 .pill.primary:hover {
-	background: color-mix(in srgb, var(--brand) 88%, var(--bg));
+	background: var(--brand);
+	filter: brightness(0.92);
 }
 
 /* A full-width row inside a drop-up / palette list. Selection is marked by the

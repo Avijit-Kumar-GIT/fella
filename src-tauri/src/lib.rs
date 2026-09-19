@@ -66,6 +66,7 @@ pub fn run() {
             commands::get_catalog,
             commands::last_workspace_path,
             commands::describe,
+            commands::sample_source,
             commands::run_sql_direct,
             commands::reindex,
             commands::memory_file,
@@ -75,23 +76,14 @@ pub fn run() {
             commands::list_providers,
             commands::set_api_key,
             commands::logout,
-            commands::ollama_health,
-            commands::probe_ollama,
+            commands::context_file,
+            commands::save_context,
+            commands::provider_health,
+            commands::set_window_appearance,
             commands::ask,
             commands::cancel,
             commands::forget_conversation,
             commands::unhide_cursor,
-            commands::packs_list,
-            commands::packs_add,
-            commands::packs_remove,
-            commands::packs_set_enabled,
-            commands::packs_install,
-            commands::packs_theme,
-            commands::mcp_set_token,
-            commands::mcp_clear_token,
-            commands::augment_save,
-            commands::augment_load,
-            commands::augment_capabilities,
             commands::archive_conversation,
             commands::conversations_info,
             commands::conversations_list,
@@ -106,7 +98,7 @@ pub fn run() {
 
 /// One-time: the app shipped as "Woody" with identifier `dev.woody.app`. The
 /// first launch under the new identifier moves the old data dir's contents
-/// (`auth.json`, the settings db, saved conversations, installed packs) into the
+/// (`auth.json`, the settings db, and saved conversations) into the
 /// new location, so the rename doesn't cost anyone their keys or history. Only
 /// runs into a fresh install; never overwrites.
 fn migrate_from_woody(new_dir: &std::path::Path) {
@@ -127,7 +119,10 @@ fn migrate_from_woody(new_dir: &std::path::Path) {
     for entry in entries.flatten() {
         let from = entry.path();
         // Rename the settings db as it moves; leave everything else as-is.
-        let name = entry.file_name().to_string_lossy().replacen("woody.db", "fella.db", 1);
+        let name = entry
+            .file_name()
+            .to_string_lossy()
+            .replacen("woody.db", "fella.db", 1);
         let to = new_dir.join(name);
         if to.exists() {
             continue;

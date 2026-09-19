@@ -1,49 +1,39 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "fella | Developer Documentation",
-  "description": "How fella is built: the harness, the engine, and the model, for contributors.",
+  "theme": "aspen",
+  "name": "fella",
+  "description": "Documentation for Fella, a local-first desktop app for asking auditable questions about your own files.",
   "colors": {
     "primary": "#3fc7bc",
     "light": "#74d8cf",
     "dark": "#3fc7bc"
   },
-  "fonts": {
-    "heading": {
-      "family": "Geist",
-      "format": "woff2"
-    },
-    "body": {
-      "family": "Geist",
-      "format": "woff2"
-    }
+  "favicon": "/favicon.svg",
+  "logo": {
+    "light": "/logo.svg",
+    "dark": "/logo.svg"
   },
   "icons": {
     "library": "lucide"
   },
-  "styling": {
-    "eyebrows": "breadcrumbs"
-  },
   "contextual": {
-    "options": ["copy", "view", "assistant", "chatgpt", "claude"]
+    "options": ["copy", "view", "assistant"]
   },
-  "logo": "/logo.svg",
-  "favicon": "/favicon.svg",
   "navbar": {
     "links": [
       {
-        "label": "Changelog",
-        "href": "https://github.com/Avijit-Kumar-GIT/fella/blob/main/CHANGELOG.md"
+        "label": "GitHub",
+        "href": "https://github.com/Avijit-Kumar-GIT/fella"
       },
       {
-        "label": "Support",
-        "href": "https://github.com/Avijit-Kumar-GIT/fella/issues"
+        "label": "Releases",
+        "href": "https://github.com/Avijit-Kumar-GIT/fella/releases"
       }
     ],
     "primary": {
       "type": "button",
-      "label": "Get fella",
-      "href": "https://fella.app"
+      "label": "Download Fella",
+      "href": "https://github.com/Avijit-Kumar-GIT/fella/releases/latest"
     }
   },
   "navigation": {
@@ -54,53 +44,109 @@
         "pages": ["index"]
       },
       {
-        "tab": "Developer Platform",
-        "icon": "code",
-        "anchors": [
+        "tab": "Getting started",
+        "icon": "play",
+        "groups": [
           {
-            "anchor": "Guide",
-            "icon": "compass",
+            "group": "Getting started",
+            "pages": ["getting-started"]
+          },
+          {
+            "group": "Recipes",
+            "pages": ["examples"]
+          },
+          {
+            "group": "Troubleshooting and limits",
+            "pages": ["troubleshooting", "limitations"]
+          }
+        ]
+      },
+      {
+        "tab": "Use Fella",
+        "icon": "compass",
+        "groups": [
+          {
+            "group": "Using Fella",
+            "pages": ["developer-platform/using-fella"]
+          },
+          {
+            "group": "Workspace",
+            "icon": "folder-open",
             "pages": [
-              "getting-started",
-              {
-                "group": "Concepts",
-                "icon": "layers",
-                "pages": [
-                  "concepts/architecture",
-                  "concepts/harness",
-                  "concepts/engine",
-                  "concepts/verification",
-                  "concepts/model-layer"
-                ]
-              }
+              "developer-platform/using-fella/open-folder",
+              "developer-platform/using-fella/files",
+              "developer-platform/using-fella/context-and-memory"
             ]
           },
           {
-            "anchor": "Reference",
-            "icon": "terminal",
+            "group": "Ask and inspect",
+            "icon": "search-check",
             "pages": [
-              {
-                "group": "Tools & commands",
-                "icon": "wrench",
-                "pages": ["concepts/tools", "developer-platform/using-fella"]
-              },
-              {
-                "group": "Other resources",
-                "icon": "book-open",
-                "pages": [
-                  "other-resources/benchmarks",
-                  "other-resources/evaluation",
-                  "other-resources/contributing"
-                ]
-              }
+              "developer-platform/using-fella/asking-questions",
+              "developer-platform/using-fella/evidence"
+            ]
+          },
+          {
+            "group": "Models and sessions",
+            "icon": "cpu",
+            "pages": [
+              "developer-platform/using-fella/models",
+              "developer-platform/using-fella/sessions"
+            ]
+          },
+          {
+            "group": "Extensions",
+            "icon": "puzzle",
+            "pages": ["extensions-and-mcp"]
+          }
+        ]
+      },
+      {
+        "tab": "Concepts",
+        "icon": "layers",
+        "groups": [
+          {
+            "group": "How Fella works",
+            "pages": [
+              "concepts/triad",
+              "concepts/harness",
+              "concepts/engine",
+              "concepts/tools",
+              "concepts/model-layer"
+            ]
+          },
+          {
+            "group": "Trust and correctness",
+            "icon": "badge-check",
+            "pages": [
+              "concepts/verification",
+              "developer-platform/using-fella/privacy"
             ]
           }
         ]
       },
       {
-        "tab": "Extensions and MCP",
-        "icon": "puzzle",
-        "pages": ["extensions-and-mcp"]
+        "tab": "Resources",
+        "icon": "book-open",
+        "groups": [
+          {
+            "group": "Reference",
+            "pages": ["developer-platform/using-fella/commands"]
+          },
+          {
+            "group": "Testing and evaluation",
+            "icon": "test-tube",
+            "pages": [
+              "other-resources/benchmarks",
+              "other-resources/evaluation"
+            ]
+          },
+          {
+            "group": "Project",
+            "icon": "git-pull-request",
+            "pages": ["other-resources/contributing"]
+          }
+        ]
       }
     ]
   },
@@ -108,5 +154,8 @@
     "socials": {
       "github": "https://github.com/Avijit-Kumar-GIT/fella"
     }
+  },
+  "styling": {
+    "eyebrows": "breadcrumbs"
   }
 }

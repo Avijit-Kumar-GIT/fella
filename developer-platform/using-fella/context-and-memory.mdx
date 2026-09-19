@@ -1,0 +1,66 @@
+---
+title: "Context and memory"
+description: "Teach Fella your vocabulary and understand what it remembers about a workspace."
+icon: "brain"
+---
+
+Fella can use context you write and vocabulary it learns from explicit corrections. Context can guide interpretation, but it is not evidence and cannot grant a tool or permission.
+
+## `fella.md`
+
+<Steps>
+  <Step title="Open the context editor">
+    Type `/context`, or create `fella.md` at the workspace root.
+  </Step>
+  <Step title="Describe stable conventions">
+
+```markdown filename="fella.md"
+Statements are one file per month, named statement-YYYY-MM.csv.
+Amounts are in GBP. "Spending" excludes transfers between my own accounts.
+The category called housing is part of rent for my reports.
+```
+
+  </Step>
+  <Step title="Ask with the new context">
+    Fella reads the file at the start of each question. It can use the conventions to interpret a request, but figures still need tool evidence from workspace data.
+  </Step>
+</Steps>
+
+## Folder memory
+
+Folder memory lives as human-readable Markdown in Fella's application data directory, separate from the workspace. It is keyed to the folder path and re-read for each question.
+
+```text filename="fella commands"
+/memory
+/memory forget
+```
+
+Automatic learning is deliberately narrow: an ordinary question teaches memory nothing. A follow-up recognized as a correction can add, update, or deduplicate a vocabulary note, using the active model to reconcile it with existing notes. Fella also records a bounded local episode log, but does not read that log back as memory or cache old query results as facts.
+
+<Warning>
+  A correction may trigger an additional model request to reconcile vocabulary. With a hosted provider, that correction and the existing vocabulary notes are sent to the provider.
+</Warning>
+
+## Context is not permission
+
+`fella.md` and memory can influence how the model interprets a question, but
+they cannot grant it a new tool or a write capability. The read-only boundary
+comes from the registry and engine.
+
+## When to use which
+
+| Need | Use |
+| --- | --- |
+| Stable file conventions | `fella.md` |
+| An explicit vocabulary correction that should carry across conversations | Folder memory |
+| Provider-specific or domain-wide guidance | `fella.md` plus the normal question |
+| New external data | Mount the files in the workspace |
+
+<CardGroup cols={2}>
+  <Card title="Experimental MCP" icon="puzzle" href="/extensions-and-mcp">
+    Read the inert extension boundary for future forks.
+  </Card>
+  <Card title="The model prompt" icon="scroll-text" href="/concepts/harness">
+    See where context enters the reasoning loop.
+  </Card>
+</CardGroup>

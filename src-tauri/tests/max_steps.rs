@@ -19,18 +19,25 @@ use fella_lib::engine::EngineState;
 fn scratch(tag: &str) -> PathBuf {
     // Point-at-a-mock tests: the warm-up ping would steal a scripted response.
     std::env::set_var("FELLA_SKIP_MODEL_WARMUP", "1");
-    let n = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let n = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
     let p = std::env::temp_dir().join(format!("fella-{tag}-{n}"));
     fs::create_dir_all(&p).unwrap();
     p
 }
 
-/// A fake `/api/chat` that returns `responses[i]` for the i-th request, and
+/// A fake `/chat/completions` endpoint that returns `responses[i]` for the i-th request, and
 /// records every request's parsed JSON body so a test can inspect exactly
 /// what was sent on a given turn.
-fn fake_ollama(
+fn fake_openai(
     responses: Vec<serde_json::Value>,
-) -> (String, Arc<Mutex<Vec<serde_json::Value>>>, std::thread::JoinHandle<()>) {
+) -> (
+    String,
+    Arc<Mutex<Vec<serde_json::Value>>>,
+    std::thread::JoinHandle<()>,
+) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     let url = format!("http://{addr}");
@@ -76,27 +83,32 @@ fn fake_ollama(
     (url, seen, handle)
 }
 
+fn openai_response(message: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({ "choices": [{ "message": message }] })
+}
+
 fn tool_call_response() -> serde_json::Value {
-    serde_json::json!({
-        "message": {
+    openai_response(serde_json::json!({
             "role": "assistant",
             "content": "",
             "tool_calls": [
-                { "function": { "name": "list_files", "arguments": {} } }
+                { "id": "call_1", "type": "function", "function": {
+                    "name": "list_files", "arguments": "{}"
+                } }
             ]
-        }
-    })
+    }))
 }
 
 fn engine_on(ws: &std::path::Path, data: &std::path::Path, url: &str) -> EngineState {
     let engine = EngineState::new(data).unwrap();
     engine
         .save_settings(
-            serde_json::json!({ "provider": "ollama", "base_url": url, "model": "test" })
+            serde_json::json!({ "provider": "custom", "base_url": url, "model": "test" })
                 .as_object()
                 .unwrap(),
         )
         .unwrap();
+    engine.set_api_key("custom", "sk-test").unwrap();
     engine.open_workspace(ws).unwrap();
     engine
 }
@@ -110,15 +122,18 @@ async fn step_cap_and_forced_final_turn() {
     let data = scratch("steps-data");
     fs::write(ws.join("sales.csv"), "amount\n10\n20\n").unwrap();
 
-    let (url, _seen, server) = fake_ollama(vec![
+    let (url, _seen, server) = fake_openai(vec![
         tool_call_response(),
         tool_call_response(),
-        serde_json::json!({
-            "message": { "role": "assistant", "content": "Here's my best guess from what I found." }
-        }),
+        openai_response(
+            serde_json::json!({ "role": "assistant", "content": "Here's my best guess from what I found." }),
+        ),
     ]);
     let engine = engine_on(&ws, &data, &url);
-    let answer = engine.ask("c1", "how much did we sell?", None, |_| {}).await.unwrap();
+    let answer = engine
+        .ask("c1", "how much did we sell?", None, |_| {})
+        .await
+        .unwrap();
     server.join().unwrap();
 
     assert_eq!(answer.evidence.len(), 2, "should stop at the 2-step cap");
@@ -134,12 +149,15 @@ async fn step_cap_and_forced_final_turn() {
     let data = scratch("steps-data2");
     fs::write(ws.join("sales.csv"), "amount\n10\n20\n").unwrap();
 
-    let (url, _seen, server) = fake_ollama(vec![
+    let (url, _seen, server) = fake_openai(vec![
         tool_call_response(),
-        serde_json::json!({ "message": { "role": "assistant", "content": "" } }),
+        openai_response(serde_json::json!({ "role": "assistant", "content": "" })),
     ]);
     let engine = engine_on(&ws, &data, &url);
-    let answer = engine.ask("c1", "how much did we sell?", None, |_| {}).await.unwrap();
+    let answer = engine
+        .ask("c1", "how much did we sell?", None, |_| {})
+        .await
+        .unwrap();
     server.join().unwrap();
 
     assert_eq!(
@@ -156,16 +174,21 @@ async fn step_cap_and_forced_final_turn() {
     let data = scratch("steps-data3");
     fs::write(ws.join("sales.csv"), "amount\n10\n20\n").unwrap();
 
-    let (url, seen, server) = fake_ollama(vec![
+    let (url, seen, server) = fake_openai(vec![
         tool_call_response(),
-        serde_json::json!({ "message": { "role": "assistant", "content": "my best guess" } }),
+        openai_response(serde_json::json!({ "role": "assistant", "content": "my best guess" })),
     ]);
     let engine = engine_on(&ws, &data, &url);
-    engine.ask("c1", "how much did we sell?", None, |_| {}).await.unwrap();
+    engine
+        .ask("c1", "how much did we sell?", None, |_| {})
+        .await
+        .unwrap();
     server.join().unwrap();
 
     let requests = seen.lock().unwrap();
-    let last = requests.last().expect("the forced final turn should have sent a request");
+    let last = requests
+        .last()
+        .expect("the forced final turn should have sent a request");
     let messages = last["messages"].as_array().expect("messages array");
     let has_nudge = messages.iter().any(|m| {
         m["content"]
@@ -173,7 +196,10 @@ async fn step_cap_and_forced_final_turn() {
             .map(|c| c.contains("out of tool-calling steps"))
             .unwrap_or(false)
     });
-    assert!(has_nudge, "forced turn should tell the model why: {messages:#?}");
+    assert!(
+        has_nudge,
+        "forced turn should tell the model why: {messages:#?}"
+    );
 
     let _ = fs::remove_dir_all(&ws);
     let _ = fs::remove_dir_all(&data);

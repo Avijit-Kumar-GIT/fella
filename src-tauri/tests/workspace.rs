@@ -65,7 +65,11 @@ fn scans_queries_and_guards_a_workspace() {
         .any(|s| s.view.as_deref() == Some("sales_2")));
 
     // Non-tabular file is catalogued but has no view.
-    let notes = catalog.sources.iter().find(|s| s.name == "notes.txt").unwrap();
+    let notes = catalog
+        .sources
+        .iter()
+        .find(|s| s.name == "notes.txt")
+        .unwrap();
     assert!(notes.view.is_none());
 
     // Query the view.
@@ -102,6 +106,39 @@ fn scans_queries_and_guards_a_workspace() {
 }
 
 #[test]
+fn capability_policy_blocks_disabled_table_and_document_paths() {
+    let ws = scratch("capabilities-ws");
+    let data = scratch("capabilities-data");
+    fs::write(ws.join("sales.csv"), "month,amount\n2024-01,100\n").unwrap();
+    fs::write(ws.join("notes.txt"), "the business context\n").unwrap();
+
+    let engine = EngineState::new(&data).unwrap();
+    engine.open_workspace(&ws).unwrap();
+
+    let patch = serde_json::json!({
+        "capabilities": {
+            "table_analysis": false,
+            "document_analysis": false,
+            "python_analysis": true,
+            "visualizations": false
+        }
+    });
+    engine.save_settings(patch.as_object().unwrap()).unwrap();
+
+    let sql_error = engine.run_sql("SELECT count(*) FROM sales").unwrap_err();
+    assert!(sql_error.to_string().contains("Table analysis is disabled"));
+    let document_error = engine.grep_files("business", 10).unwrap_err();
+    assert!(document_error
+        .to_string()
+        .contains("Document analysis is disabled"));
+    assert!(!engine.settings().capabilities.table_analysis);
+    assert!(!engine.settings().capabilities.document_analysis);
+
+    let _ = fs::remove_dir_all(&ws);
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[test]
 fn messy_ledger_csv_coerces_currency_and_sums_right() {
     let ws = scratch("messy-ws");
     let data = scratch("messy-data");
@@ -123,7 +160,11 @@ fn messy_ledger_csv_coerces_currency_and_sums_right() {
     let engine = EngineState::new(&data).unwrap();
     let catalog = engine.open_workspace(&ws).unwrap();
 
-    let ledger = catalog.sources.iter().find(|s| s.name == "ledger.csv").unwrap();
+    let ledger = catalog
+        .sources
+        .iter()
+        .find(|s| s.name == "ledger.csv")
+        .unwrap();
     let amount = ledger
         .columns
         .as_ref()
@@ -131,7 +172,10 @@ fn messy_ledger_csv_coerces_currency_and_sums_right() {
         .iter()
         .find(|c| c.name == "Amount Paid")
         .unwrap();
-    assert_eq!(amount.type_, "REAL", "currency text should be coerced to a number");
+    assert_eq!(
+        amount.type_, "REAL",
+        "currency text should be coerced to a number"
+    );
     assert!(amount.note.is_some(), "the coercion should be surfaced");
 
     let out = engine
@@ -178,10 +222,30 @@ fn named_month_dates_are_normalized_so_group_by_month_works() {
     let engine = EngineState::new(&data).unwrap();
     let catalog = engine.open_workspace(&ws).unwrap();
 
-    let rent = catalog.sources.iter().find(|s| s.name == "rent.csv").unwrap();
-    let date_col = rent.columns.as_ref().unwrap().iter().find(|c| c.name == "Date").unwrap();
-    assert_eq!(date_col.type_, "TEXT", "normalized dates still store as TEXT (ISO-8601)");
-    assert!(date_col.note.as_ref().is_some_and(|n| n.contains("ISO-8601")), "{:?}", date_col.note);
+    let rent = catalog
+        .sources
+        .iter()
+        .find(|s| s.name == "rent.csv")
+        .unwrap();
+    let date_col = rent
+        .columns
+        .as_ref()
+        .unwrap()
+        .iter()
+        .find(|c| c.name == "Date")
+        .unwrap();
+    assert_eq!(
+        date_col.type_, "TEXT",
+        "normalized dates still store as TEXT (ISO-8601)"
+    );
+    assert!(
+        date_col
+            .note
+            .as_ref()
+            .is_some_and(|n| n.contains("ISO-8601")),
+        "{:?}",
+        date_col.note
+    );
 
     let out = engine
         .run_sql(r#"SELECT strftime('%Y-%m', "Date") AS month, SUM(Rent) AS total FROM rent GROUP BY month ORDER BY month"#)
@@ -296,21 +360,32 @@ fn messy_ledger_xlsx_skips_preamble_coerces_currency_drops_total() {
         .iter()
         .find(|c| c.name == "Amount Paid ($)")
         .unwrap();
-    assert_eq!(amount.type_, "REAL", "currency text should coerce to a number");
+    assert_eq!(
+        amount.type_, "REAL",
+        "currency text should coerce to a number"
+    );
     assert!(amount.note.is_some(), "the coercion should be noted");
 
     // The trailing "Total" row is dropped: 5 data rows, and the SUM is the true
     // total (1200 + 1150 + 1200 + 1250), not doubled by the summary line.
     assert_eq!(ledger.row_count, Some(5));
     let out = engine
-        .run_sql(&format!(r#"SELECT sum("Amount Paid ($)") AS total FROM {view}"#))
+        .run_sql(&format!(
+            r#"SELECT sum("Amount Paid ($)") AS total FROM {view}"#
+        ))
         .unwrap();
     assert_eq!(out.rows[0][0], serde_json::json!(4800.0));
 
     // Both structural fixes are recorded on the source note.
     let note = ledger.note.as_deref().unwrap_or("");
-    assert!(note.contains("preamble"), "note mentions the skipped preamble: {note:?}");
-    assert!(note.contains("total"), "note mentions the dropped total row: {note:?}");
+    assert!(
+        note.contains("preamble"),
+        "note mentions the skipped preamble: {note:?}"
+    );
+    assert!(
+        note.contains("total"),
+        "note mentions the dropped total row: {note:?}"
+    );
 
     // The column note survives a describe_source round-trip.
     let described = engine.describe_source(&ledger.name).unwrap();
@@ -344,7 +419,11 @@ fn sniffs_a_semicolon_delimiter_and_strips_a_bom() {
     let engine = EngineState::new(&data).unwrap();
     let catalog = engine.open_workspace(&ws).unwrap();
 
-    let bank = catalog.sources.iter().find(|s| s.name == "bank.csv").unwrap();
+    let bank = catalog
+        .sources
+        .iter()
+        .find(|s| s.name == "bank.csv")
+        .unwrap();
     let cols: Vec<_> = bank
         .columns
         .as_ref()
@@ -352,10 +431,20 @@ fn sniffs_a_semicolon_delimiter_and_strips_a_bom() {
         .iter()
         .map(|c| c.name.as_str())
         .collect();
-    assert_eq!(cols, vec!["Date", "Amount", "Payee"], "not one jammed column");
-    assert!(bank.note.as_deref().unwrap_or("").contains("';'"), "delimiter noted: {:?}", bank.note);
+    assert_eq!(
+        cols,
+        vec!["Date", "Amount", "Payee"],
+        "not one jammed column"
+    );
+    assert!(
+        bank.note.as_deref().unwrap_or("").contains("';'"),
+        "delimiter noted: {:?}",
+        bank.note
+    );
 
-    let out = engine.run_sql(r#"SELECT sum("Amount") AS t FROM bank"#).unwrap();
+    let out = engine
+        .run_sql(r#"SELECT sum("Amount") AS t FROM bank"#)
+        .unwrap();
     assert_eq!(out.rows[0][0], serde_json::json!(15.5));
 
     let _ = fs::remove_dir_all(&ws);
@@ -375,7 +464,10 @@ fn reports_files_it_could_not_use() {
     let catalog = engine.open_workspace(&ws).unwrap();
 
     // The good file still loads.
-    assert!(catalog.sources.iter().any(|s| s.name == "good.csv" && s.view.is_some()));
+    assert!(catalog
+        .sources
+        .iter()
+        .any(|s| s.name == "good.csv" && s.view.is_some()));
     // The broken JSON is not fabricated as a source.
     assert!(!catalog.sources.iter().any(|s| s.name == "broken.json"));
 
@@ -398,10 +490,19 @@ fn a_headerless_numeric_csv_keeps_its_first_row() {
     let engine = EngineState::new(&data).unwrap();
     let catalog = engine.open_workspace(&ws).unwrap();
 
-    let t = catalog.sources.iter().find(|s| s.name == "nums.csv").unwrap();
+    let t = catalog
+        .sources
+        .iter()
+        .find(|s| s.name == "nums.csv")
+        .unwrap();
     assert_eq!(t.row_count, Some(3), "all three rows kept");
-    let cols: Vec<_> =
-        t.columns.as_ref().unwrap().iter().map(|c| c.name.as_str()).collect();
+    let cols: Vec<_> = t
+        .columns
+        .as_ref()
+        .unwrap()
+        .iter()
+        .map(|c| c.name.as_str())
+        .collect();
     assert_eq!(cols, vec!["col1", "col2"], "synthesised names");
 
     let out = engine.run_sql("SELECT sum(col1) AS s FROM nums").unwrap();
@@ -425,11 +526,21 @@ fn a_trailing_total_row_is_left_out_of_the_csv() {
     let engine = EngineState::new(&data).unwrap();
     let catalog = engine.open_workspace(&ws).unwrap();
 
-    let t = catalog.sources.iter().find(|s| s.name == "spend.csv").unwrap();
-    assert_eq!(t.row_count, Some(3), "the Grand Total line is not a data row");
+    let t = catalog
+        .sources
+        .iter()
+        .find(|s| s.name == "spend.csv")
+        .unwrap();
+    assert_eq!(
+        t.row_count,
+        Some(3),
+        "the Grand Total line is not a data row"
+    );
 
     // SUM is the real 450, not doubled to 900.
-    let out = engine.run_sql(r#"SELECT sum("Amount") AS s FROM spend"#).unwrap();
+    let out = engine
+        .run_sql(r#"SELECT sum("Amount") AS s FROM spend"#)
+        .unwrap();
     assert_eq!(out.rows[0][0], serde_json::json!(450));
 
     let _ = fs::remove_dir_all(&ws);
@@ -451,9 +562,18 @@ fn csv_preamble_above_the_header_is_skipped() {
     let engine = EngineState::new(&data).unwrap();
     let catalog = engine.open_workspace(&ws).unwrap();
 
-    let t = catalog.sources.iter().find(|s| s.name == "report.csv").unwrap();
-    let cols: Vec<_> =
-        t.columns.as_ref().unwrap().iter().map(|c| c.name.as_str()).collect();
+    let t = catalog
+        .sources
+        .iter()
+        .find(|s| s.name == "report.csv")
+        .unwrap();
+    let cols: Vec<_> = t
+        .columns
+        .as_ref()
+        .unwrap()
+        .iter()
+        .map(|c| c.name.as_str())
+        .collect();
     assert_eq!(cols, vec!["Month", "Category", "Amount"]);
     assert_eq!(t.row_count, Some(2));
 
@@ -485,7 +605,9 @@ fn reindex_re_ingests_a_table_it_already_loaded() {
     // /reindex is typed does not matter to the bug, but exercises the same
     // path a real session takes.
     let view = t.view.as_deref().unwrap();
-    engine.run_sql(&format!("SELECT count(*) FROM {view}")).unwrap();
+    engine
+        .run_sql(&format!("SELECT count(*) FROM {view}"))
+        .unwrap();
 
     let second = engine.reindex().unwrap();
     assert!(
@@ -523,7 +645,11 @@ fn parse_num_sums_a_mixed_currency_column_correctly() {
     let engine = EngineState::new(&data).unwrap();
     let catalog = engine.open_workspace(&ws).unwrap();
 
-    let ledger = catalog.sources.iter().find(|s| s.name == "ledger.csv").unwrap();
+    let ledger = catalog
+        .sources
+        .iter()
+        .find(|s| s.name == "ledger.csv")
+        .unwrap();
     let amount = ledger
         .columns
         .as_ref()
@@ -531,13 +657,21 @@ fn parse_num_sums_a_mixed_currency_column_correctly() {
         .iter()
         .find(|c| c.name == "Amount")
         .unwrap();
-    assert_eq!(amount.type_, "TEXT", "a mixed column stays TEXT, not silently coerced");
+    assert_eq!(
+        amount.type_, "TEXT",
+        "a mixed column stays TEXT, not silently coerced"
+    );
     let note = amount.note.as_deref().expect("the mix should be noted");
-    assert!(note.contains("parse_num"), "note should point at parse_num: {note:?}");
+    assert!(
+        note.contains("parse_num"),
+        "note should point at parse_num: {note:?}"
+    );
 
     let view = ledger.view.as_deref().unwrap();
     let out = engine
-        .run_sql(&format!(r#"SELECT SUM(parse_num("Amount")) AS total FROM {view}"#))
+        .run_sql(&format!(
+            r#"SELECT SUM(parse_num("Amount")) AS total FROM {view}"#
+        ))
         .unwrap();
     // The 3 clean values (1316 + 1316 + 100); the 2 annotated ones are
     // skipped, not truncated into a wrong-but-plausible number.
@@ -548,7 +682,11 @@ fn parse_num_sums_a_mixed_currency_column_correctly() {
             r#"SELECT COUNT(*) - COUNT(parse_num("Amount")) AS unparsed FROM {view}"#
         ))
         .unwrap();
-    assert_eq!(out.rows[0][0], serde_json::json!(2), "exactly the 2 annotated rows should be unparsed");
+    assert_eq!(
+        out.rows[0][0],
+        serde_json::json!(2),
+        "exactly the 2 annotated rows should be unparsed"
+    );
 
     let _ = fs::remove_dir_all(&ws);
     let _ = fs::remove_dir_all(&data);
@@ -563,15 +701,17 @@ fn a_workbook_with_no_usable_sheet_gives_a_specific_reason() {
     // regression this test guards).
     let ws = scratch("empty-sheet-ws");
     let data = scratch("empty-sheet-data");
-    let fixture =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/empty_sheet.xlsx");
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/empty_sheet.xlsx");
     fs::copy(&fixture, ws.join("empty_sheet.xlsx")).unwrap();
 
     let engine = EngineState::new(&data).unwrap();
     let catalog = engine.open_workspace(&ws).unwrap();
 
     assert!(
-        catalog.sources.iter().all(|s| !s.name.contains("empty_sheet")),
+        catalog
+            .sources
+            .iter()
+            .all(|s| !s.name.contains("empty_sheet")),
         "no source should have been created from an unusable workbook"
     );
     let skipped = catalog
@@ -579,7 +719,10 @@ fn a_workbook_with_no_usable_sheet_gives_a_specific_reason() {
         .iter()
         .find(|s| s.name == "empty_sheet.xlsx")
         .expect("the file is reported as skipped");
-    assert_ne!(skipped.reason, "no readable sheets", "must not be the old generic reason");
+    assert_ne!(
+        skipped.reason, "no readable sheets",
+        "must not be the old generic reason"
+    );
     assert!(
         skipped.reason.contains("empty sheet"),
         "reason should name the actual cause: {:?}",
@@ -594,7 +737,11 @@ fn a_workbook_with_no_usable_sheet_gives_a_specific_reason() {
 fn reopens_the_last_workspace_on_a_fresh_engine() {
     let ws = scratch("reopen-ws");
     let data = scratch("reopen-data");
-    fs::write(ws.join("sales.csv"), "month,amount\n2024-01,100\n2024-02,150\n").unwrap();
+    fs::write(
+        ws.join("sales.csv"),
+        "month,amount\n2024-01,100\n2024-02,150\n",
+    )
+    .unwrap();
 
     // Session 1: open the folder (records it in recent_workspaces).
     {
@@ -604,8 +751,13 @@ fn reopens_the_last_workspace_on_a_fresh_engine() {
 
     // Session 2: a fresh engine on the same data dir reopens it on request.
     let engine = EngineState::new(&data).unwrap();
-    assert!(engine.catalog().workspace.is_none(), "starts with no folder");
-    let cat = engine.reopen_last_workspace().expect("reopens the last folder");
+    assert!(
+        engine.catalog().workspace.is_none(),
+        "starts with no folder"
+    );
+    let cat = engine
+        .reopen_last_workspace()
+        .expect("reopens the last folder");
     assert_eq!(cat.workspace.as_deref(), Some(ws.to_str().unwrap()));
     assert!(cat.sources.iter().any(|s| s.name == "sales.csv"));
     // A second call is a no-op (a folder is already open).
@@ -631,7 +783,9 @@ fn memory_file_and_forget() {
     assert!(engine.folder_memory_file().is_none());
 
     engine.open_workspace(&ws).unwrap();
-    let (path, contents) = engine.folder_memory_file().expect("path once a folder is open");
+    let (path, contents) = engine
+        .folder_memory_file()
+        .expect("path once a folder is open");
     assert!(contents.is_none(), "no notes learned yet");
 
     // Simulate a written notes file + episode log.
@@ -648,7 +802,10 @@ fn memory_file_and_forget() {
         !std::path::Path::new(&path.replace(".md", ".episodes.jsonl")).exists(),
         "episode log removed too"
     );
-    assert!(!engine.forget_folder_memory().unwrap(), "nothing left to remove");
+    assert!(
+        !engine.forget_folder_memory().unwrap(),
+        "nothing left to remove"
+    );
 
     let _ = fs::remove_dir_all(&ws);
     let _ = fs::remove_dir_all(&data);

@@ -62,11 +62,14 @@ impl EngineError {
             Self::Duck(_) => "query",
             Self::Msg(m) => {
                 let l = m.to_lowercase();
-                if l.contains("refused the api key") || l.contains("unauthorized") {
+                if l.contains("refused the api key")
+                    || l.contains("unauthorized")
+                    || l.contains("connect a model service")
+                {
                     "auth"
                 } else if l.contains("plan doesn't cover") || l.contains("payment required") {
                     "payment"
-                } else if l.contains("no model chosen") || l.contains("isn't downloaded in ollama") {
+                } else if l.contains("no model chosen") || l.contains("isn't available from") {
                     "no_model"
                 } else if l.contains("retrying")
                     || l.contains("limiting how many requests")
@@ -120,7 +123,10 @@ mod tests {
             EngineError::msg("the model is busy retrying in 3s").kind(),
             "transient"
         );
-        assert_eq!(EngineError::msg("something odd happened").kind(), "internal");
+        assert_eq!(
+            EngineError::msg("something odd happened").kind(),
+            "internal"
+        );
     }
 
     #[test]

@@ -1,0 +1,66 @@
+---
+title: "Privacy and security"
+description: "Understand the read-only boundary, network behavior, credentials, and Python guard rails."
+icon: "shield-check"
+---
+
+The base agent has no workspace write tools, but local execution and provider
+network behavior have important limits.
+
+## Read-only by construction
+
+The base agent has no write, move, or delete tool. SQL accepts one `SELECT` or `WITH` statement and runs through a read-only data connection. Document tools resolve only catalogued names from the selected workspace.
+
+The user can explicitly edit `fella.md` from the Workspace surface. The model
+still has no path to that write operation.
+
+## Network behavior
+
+| Destination | When Fella connects | Data involved |
+| --- | --- | --- |
+| Selected model provider | Health/model-list probes and model turns after you connect it; Ollama-wire providers can also receive a warm-up request | Your API key, prompts, tool schemas, conversation digest, context, and tool results |
+| GitHub releases | Only for `/update` | Version check and installer download |
+
+The selected provider can receive multiple requests for one question because the
+agent loop is multi-turn, retries transient failures, and may perform a
+corrective or second-opinion turn. Fella does not proxy these requests through
+a Fella service.
+
+## Credentials
+
+Provider API keys are stored in `auth.json` with restrictive permissions. They
+are not stored in the settings database, browser `localStorage`, or conversation
+archives. Secret-bearing command lines are redacted from the transcript.
+
+## Python runs inside a local capability boundary
+
+`run_python` executes model-generated Python 3 inside an embedded
+`wasm32-unknown-unknown` RustPython guest under Wasmi. It has no filesystem,
+network, environment, clock, or subprocess access. The host provides captured
+stdout/stderr, OS entropy for interpreter startup, and a bounded read-only
+`sql(query)` bridge. It applies fuel, memory, stack, source, output, row, and
+response limits.
+
+<Warning>
+  This is a stronger boundary for generated analytics, but it remains defense
+  in depth: Wasmi, RustPython, and the checked-in guest artifact are trusted
+  computing-base components. The guest does not include pandas, NumPy, SciPy,
+  or a package installer.
+</Warning>
+
+## Hosted-provider decision
+
+Before using a hosted model with sensitive files, review that service's
+retention, logging, and training terms. Locally archived conversations include
+messages and evidence. Local folder-memory episode logs and friction signals
+are not telemetry and are not transmitted by Fella. `/mcp` is inert in this
+release and creates no connector network activity.
+
+<CardGroup cols={2}>
+  <Card title="Verification" icon="badge-check" href="/concepts/verification">
+    See what Fella checks before presenting a result.
+  </Card>
+  <Card title="Experimental MCP" icon="puzzle" href="/extensions-and-mcp">
+    Read the closed extension boundary for future forks.
+  </Card>
+</CardGroup>

@@ -7,6 +7,17 @@ this app repo (now **`fella`**; `fella-ai` is a private pre-v0.1 archive),
 `fella-marketplace` to mean the browse-site half of the **`fella-web`** repo,
 and any `CODE_OF_CONDUCT.md` mention as folded into `CONTRIBUTING.md` (§Conduct).
 
+- **2026-09-17** **`run_python` uses one embedded RustPython/WASM guest under
+  Wasmi.** The guest is compiled for `wasm32-unknown-unknown`, so it carries no
+  WASI filesystem, network, environment, clock, or process imports. A tiny
+  host ABI provides captured output, OS entropy needed by the interpreter, and
+  bounded read-only SQL; the SQL result becomes a Python list of dictionaries.
+  This gives the personal build the same capability boundary on Linux, macOS,
+  and Windows without a Python installation or three OS-specific sandboxes.
+  The guest is core-only rather than a full package ecosystem: the four
+  analytics helpers are injected and pandas/NumPy/SciPy/packages are out of
+  scope. The tradeoff is a stripped guest of about 6.7 MB and a larger trusted
+  computing base (Wasmi, RustPython, and the checked-in artifact).
 - **2026-09-14** **New deterministic check, `check_row_value_labels`: catches
   a real number attached to the wrong column's name.** Found live, not
   theorized: testing `fqah-goal-ontrack` (a question needing both a document,

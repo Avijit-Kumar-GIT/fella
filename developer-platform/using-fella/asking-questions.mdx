@@ -1,0 +1,84 @@
+---
+title: "Ask questions"
+description: "How to phrase questions and how Fella chooses deterministic tools."
+icon: "message-circle-question"
+---
+
+Ask in plain language. The model coordinates a fixed set of read-only tools; the tools, not the model, perform data access and computation.
+
+## Ask a question
+
+<Steps>
+  <Step title="State the result you need">
+    Ask about the data as you would ask a person who knows the folder.
+
+```text filename="question"
+Is my spending increase seasonal, or was it a few large purchases?
+```
+
+    You do not need to name a file, write SQL, or choose a tool.
+  </Step>
+  <Step title="Add constraints">
+    Include the period, exclusions, grouping, or definition that matters. For example: `Exclude transfers and compare monthly spending in 2025 with 2024.`
+  </Step>
+  <Step title="Inspect and refine">
+    Open **Evidence** to confirm the source and computation. If the interpretation is wrong, state the correction in a follow-up.
+  </Step>
+</Steps>
+
+## Match the question to the data
+
+| Question shape | Usual path |
+| --- | --- |
+| Total, average, count, filter, trend, or join | `run_sql` |
+| Targeted word, phrase, or regular-expression search in documents | `grep_files` |
+| Broad summary or comparison across documents | `read_file` |
+| Median, standard deviation, correlation, or regression | `run_python` |
+| A breakdown or time series worth seeing | `make_chart` after a query |
+
+SQL is preferred because its result is compact and can often be re-run during verification. Python is an analysis escape hatch, not a file-management shell, and requires Python 3 on the computer.
+
+## Ask for the shape, not just the headline
+
+For a simple lookup, ask directly:
+
+```text filename="question"
+How much did I spend on rent in 2024?
+```
+
+For a change, comparison, or correlation, ask for the explanation too:
+
+```text filename="question"
+Did my spending increase because of a few outliers, or did most months move together?
+```
+
+The harness prompt tells the model to inspect whether a trend is broad-based, whether a correlation has enough points, and whether a difference is meaningful rather than reporting only one number.
+
+## Follow-up questions
+
+Follow-ups can reuse a bounded digest of the last three useful turns in that conversation, including recent headlines and successful SQL. Narrow a question when the first answer used the wrong interpretation:
+
+```text filename="conversation"
+You included transfers. Exclude them and group the remaining spending by month.
+```
+
+If a correction represents a durable vocabulary rule, Fella can record it in folder memory. See [context and memory](/developer-platform/using-fella/context-and-memory).
+
+## When Fella refuses
+
+Past files cannot establish a future value. Questions such as "How many books will I finish next year?" should be declined rather than turned into a forecast. If the folder does not contain enough information, Fella says so.
+
+Definitions and general explanations can be answered without a tool. A leading `Background:` line marks general knowledge, not workspace evidence, and the prompt bars it from supplying specific figures.
+
+## Stop or retry
+
+Press `Esc` or click the stop button beside the composer to stop. The run keeps evidence already collected and returns `Stopped.` While an answer is running, submitting a plain-text correction cancels it and re-asks with that correction. Use `/retry` after a transient provider error or after changing models.
+
+<CardGroup cols={2}>
+  <Card title="Inspect the evidence" icon="search-check" href="/developer-platform/using-fella/evidence">
+    See the exact computation behind a response.
+  </Card>
+  <Card title="Learn the harness" icon="workflow" href="/concepts/harness">
+    Read the loop and its limits in source-backed detail.
+  </Card>
+</CardGroup>

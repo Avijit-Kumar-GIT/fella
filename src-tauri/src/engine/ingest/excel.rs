@@ -7,8 +7,8 @@ use std::collections::HashSet;
 use calamine::{open_workbook_auto, Data, Reader};
 use serde_json::Value as Json;
 
-use crate::engine::catalog::{self, ColumnInfo};
 use crate::engine::analytics::data::{ColType, DataEngine};
+use crate::engine::catalog::{self, ColumnInfo};
 use crate::engine::error::{EngineError, EngineResult};
 
 /// One sheet that became a queryable table.
@@ -154,7 +154,11 @@ fn names_from(row: &[Data], width: usize) -> Vec<String> {
                 Some(Data::String(s)) => s.trim().to_string(),
                 _ => String::new(),
             };
-            let base = if raw.is_empty() { format!("col{}", i + 1) } else { raw };
+            let base = if raw.is_empty() {
+                format!("col{}", i + 1)
+            } else {
+                raw
+            };
             let mut name = base.clone();
             let mut n = 2;
             while !seen.insert(name.clone()) {
@@ -185,7 +189,11 @@ fn header_row(rows: &[&[Data]]) -> (Vec<String>, usize) {
         // Fill bar: every column named for a row-0 header (no preamble to lean
         // on), but only a majority once we've already skipped a banner/spacer,
         // so `Date | (unnamed) | Method` under a title still counts.
-        let min_fill = if skipped_any { width.div_ceil(2) } else { width };
+        let min_fill = if skipped_any {
+            width.div_ceil(2)
+        } else {
+            width
+        };
         let all_str = r.iter().take(width).all(|c| match c {
             Data::Empty => true,
             Data::String(s) => !s.trim().is_empty(),
@@ -237,7 +245,8 @@ fn infer_columns(data: &[&[Data]], width: usize) -> Vec<ColInfer> {
 
     (0..width)
         .map(|i| {
-            let (mut nonblank, mut numeric, mut booleans, mut others) = (0usize, 0usize, 0usize, 0usize);
+            let (mut nonblank, mut numeric, mut booleans, mut others) =
+                (0usize, 0usize, 0usize, 0usize);
             let (mut all_integral, mut saw_coerced) = (true, false);
             // Only every non-blank cell being a date-parseable *string* counts
             // a column with a genuine Excel date type already round-trips via
@@ -297,20 +306,36 @@ fn infer_columns(data: &[&[Data]], width: usize) -> Vec<ColInfer> {
             }
 
             let coerce_note = || {
-                Some("amounts were stored as text (currency, commas, percent) and read as numbers".to_string())
+                Some(
+                    "amounts were stored as text (currency, commas, percent) and read as numbers"
+                        .to_string(),
+                )
             };
 
             if nonblank == 0 {
-                return ColInfer { ty: ColType::Text, note: None };
+                return ColInfer {
+                    ty: ColType::Text,
+                    note: None,
+                };
             }
             if booleans == nonblank {
-                return ColInfer { ty: ColType::Bool, note: None };
+                return ColInfer {
+                    ty: ColType::Bool,
+                    note: None,
+                };
             }
             if numeric > 0 && numeric == nonblank {
                 if saw_coerced {
-                    return ColInfer { ty: ColType::Float, note: coerce_note() };
+                    return ColInfer {
+                        ty: ColType::Float,
+                        note: coerce_note(),
+                    };
                 }
-                let ty = if all_integral { ColType::Int } else { ColType::Float };
+                let ty = if all_integral {
+                    ColType::Int
+                } else {
+                    ColType::Float
+                };
                 return ColInfer { ty, note: None };
             }
             // Only when every non-blank cell parses -- a wrong guess on an
@@ -347,7 +372,10 @@ fn infer_columns(data: &[&[Data]], width: usize) -> Vec<ColInfer> {
                     )),
                 };
             }
-            ColInfer { ty: ColType::Text, note: None }
+            ColInfer {
+                ty: ColType::Text,
+                note: None,
+            }
         })
         .collect()
 }
@@ -370,19 +398,21 @@ fn cell_to_json(cell: &Data, ty: ColType) -> Json {
         (Data::Int(n), ColType::Int) => Json::from(*n),
         (Data::Int(n), ColType::Float) => Json::from(*n as f64),
         (Data::Float(f), ColType::Int) => Json::from(*f as i64),
-        (Data::Float(f), ColType::Float) => {
-            serde_json::Number::from_f64(*f).map(Json::Number).unwrap_or(Json::Null)
-        }
+        (Data::Float(f), ColType::Float) => serde_json::Number::from_f64(*f)
+            .map(Json::Number)
+            .unwrap_or(Json::Null),
         (Data::Bool(b), ColType::Bool) => Json::Bool(*b),
         (Data::String(s), ColType::Float) => parse_numeric(s)
             .and_then(serde_json::Number::from_f64)
             .map(Json::Number)
             .unwrap_or(Json::Null),
-        (Data::String(s), ColType::Int) => {
-            parse_numeric(s).map(|v| Json::from(v as i64)).unwrap_or(Json::Null)
-        }
+        (Data::String(s), ColType::Int) => parse_numeric(s)
+            .map(|v| Json::from(v as i64))
+            .unwrap_or(Json::Null),
         (Data::String(s), ColType::Date) => {
-            crate::engine::analytics::data::parse_named_month_date(s).map(Json::from).unwrap_or(Json::Null)
+            crate::engine::analytics::data::parse_named_month_date(s)
+                .map(Json::from)
+                .unwrap_or(Json::Null)
         }
         (_, ColType::Text) => Json::from(cell_to_string(cell)),
         _ => Json::Null,
@@ -443,7 +473,12 @@ mod tests {
 
     #[test]
     fn infers_column_types() {
-        let r1 = [Data::Int(1), Data::Float(1.5), Data::Bool(true), Data::String("x".into())];
+        let r1 = [
+            Data::Int(1),
+            Data::Float(1.5),
+            Data::Bool(true),
+            Data::String("x".into()),
+        ];
         let r2 = [Data::Int(2), Data::Int(3), Data::Bool(false), Data::Empty];
         let rows: Vec<&[Data]> = vec![&r1, &r2];
         let t = infer_columns(&rows, 4);
@@ -461,10 +496,20 @@ mod tests {
         let r4 = [Data::String("N/A".into())];
         let rows: Vec<&[Data]> = vec![&r1, &r2, &r3, &r4];
         let c = infer_columns(&rows, 1);
-        assert_eq!(c[0].ty, ColType::Float, "currency text should coerce to Float");
+        assert_eq!(
+            c[0].ty,
+            ColType::Float,
+            "currency text should coerce to Float"
+        );
         assert!(c[0].note.is_some());
-        assert_eq!(cell_to_json(&Data::String("$1,200.00".into()), ColType::Float), Json::from(1200.0));
-        assert_eq!(cell_to_json(&Data::String("N/A".into()), ColType::Float), Json::Null);
+        assert_eq!(
+            cell_to_json(&Data::String("$1,200.00".into()), ColType::Float),
+            Json::from(1200.0)
+        );
+        assert_eq!(
+            cell_to_json(&Data::String("N/A".into()), ColType::Float),
+            Json::Null
+        );
     }
 
     #[test]
@@ -508,24 +553,49 @@ mod tests {
         let rows: Vec<&[Data]> = vec![&r1, &r2, &r3, &r4, &r5];
         let c = infer_columns(&rows, 1);
         assert_eq!(c[0].ty, ColType::Text);
-        let note = c[0].note.as_deref().expect("a mixed column should be noted");
-        assert!(note.contains("parse_num"), "note should mention parse_num: {note:?}");
-        assert!(!note.contains("CAST it for a total"), "note should not tell the model to CAST: {note:?}");
+        let note = c[0]
+            .note
+            .as_deref()
+            .expect("a mixed column should be noted");
+        assert!(
+            note.contains("parse_num"),
+            "note should mention parse_num: {note:?}"
+        );
+        assert!(
+            !note.contains("CAST it for a total"),
+            "note should not tell the model to CAST: {note:?}"
+        );
     }
 
     #[test]
     fn text_column_keeps_placeholder_cells() {
         // A "none" / "-" cell is a real value in a text column, NULL in a
         // numeric one; an empty string is NULL either way.
-        assert_eq!(cell_to_json(&Data::String("none".into()), ColType::Text), Json::from("none"));
-        assert_eq!(cell_to_json(&Data::String("-".into()), ColType::Text), Json::from("-"));
-        assert_eq!(cell_to_json(&Data::String("  ".into()), ColType::Text), Json::Null);
-        assert_eq!(cell_to_json(&Data::String("none".into()), ColType::Float), Json::Null);
+        assert_eq!(
+            cell_to_json(&Data::String("none".into()), ColType::Text),
+            Json::from("none")
+        );
+        assert_eq!(
+            cell_to_json(&Data::String("-".into()), ColType::Text),
+            Json::from("-")
+        );
+        assert_eq!(
+            cell_to_json(&Data::String("  ".into()), ColType::Text),
+            Json::Null
+        );
+        assert_eq!(
+            cell_to_json(&Data::String("none".into()), ColType::Float),
+            Json::Null
+        );
     }
 
     #[test]
     fn header_row_skips_title_and_spacer() {
-        let title = [Data::String("Rent Ledger 2024".into()), Data::Empty, Data::Empty];
+        let title = [
+            Data::String("Rent Ledger 2024".into()),
+            Data::Empty,
+            Data::Empty,
+        ];
         let spacer = [Data::Empty, Data::Empty, Data::Empty];
         let hdr = [
             Data::String("Date".into()),
@@ -546,7 +616,11 @@ mod tests {
     #[test]
     fn header_row_allows_an_unnamed_column_below_a_title() {
         let title = [Data::String("2024 spend".into()), Data::Empty, Data::Empty];
-        let hdr = [Data::String("Date".into()), Data::Empty, Data::String("Method".into())];
+        let hdr = [
+            Data::String("Date".into()),
+            Data::Empty,
+            Data::String("Method".into()),
+        ];
         let d1 = [
             Data::String("2024-01-01".into()),
             Data::Float(12.0),
@@ -565,9 +639,17 @@ mod tests {
 
     #[test]
     fn detects_trailing_total_row() {
-        let total = [Data::String("Total".into()), Data::Float(3550.0), Data::Empty];
+        let total = [
+            Data::String("Total".into()),
+            Data::Float(3550.0),
+            Data::Empty,
+        ];
         assert!(looks_like_total_row(&total, 3));
-        let data = [Data::String("2024-03-01".into()), Data::Float(1200.0), Data::String("ACH".into())];
+        let data = [
+            Data::String("2024-03-01".into()),
+            Data::Float(1200.0),
+            Data::String("ACH".into()),
+        ];
         assert!(!looks_like_total_row(&data, 3));
     }
 }

@@ -1,11 +1,10 @@
-//! Chart data: validates labels + one or more numeric series the model
-//! already has (e.g. from a prior `run_sql`) and passes them through as
-//! structured data -- rendering happens entirely client-side
+//! Chart data: converts a bounded query result into validated structured chart
+//! data. Rendering happens entirely client-side
 //! (`src/lib/components/Chart.svelte`, `d3-scale`/`d3-shape` for the
 //! line-chart math), so real DOM/CSS owns layout and theming instead of
 //! Rust estimating character widths into a hand-built SVG string. This
-//! module only ever emits data (labels, numbers, short strings); it does
-//! not generate markup, so there's no sanitizer boundary on the way out.
+//! module only ever emits data (labels, numbers, short strings); it does not
+//! generate markup, so there's no sanitizer boundary on the way out.
 //!
 //! The `make_chart` tool that wraps this for the agent loop lives in
 //! `tools.rs`, not here -- it's app-calling glue (`Tool`/`ToolOutput`),
@@ -13,11 +12,17 @@
 //! function, independent of the rest of the app.
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value as Json;
 
-/// A folder's worth of tables rarely needs more than this many categories in
-/// one chart before it stops being readable; past this, tell the model to
-/// aggregate first.
+/// A folder's worth of categorical data rarely needs more than this many
+/// labels in one bar chart before it stops being readable; past this, tell the
+/// model to aggregate first.
 pub const MAX_CATEGORIES: usize = 12;
+/// Line charts can carry a much longer time axis than a categorical bar chart.
+/// The query layer already caps materialised results at 1,000 rows, so keep the
+/// visualization limit aligned with that safety boundary. Longer periods
+/// should be rolled up to weeks/months or narrowed to a date range.
+pub const MAX_TIME_POINTS: usize = 1_000;
 /// Two series is already two colors on a near-monochrome palette (see
 /// `src/app.css`); a third would need a real color system this isn't
 /// building yet.
@@ -26,6 +31,9 @@ pub const MAX_SERIES: usize = 2;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ChartKind {
+    /// Request-time choice. `from_query` resolves this to a concrete kind
+    /// before the data crosses the engine/UI boundary.
+    Auto,
     Bar,
     Line,
 }
@@ -37,7 +45,7 @@ pub struct Series {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChartData {
+pub struct VisualizationSpec {
     pub kind: ChartKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
@@ -45,6 +53,210 @@ pub struct ChartData {
     pub series: Vec<Series>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unit: Option<String>,
+}
+
+/// Compatibility name for the existing engine/UI boundary. New code should
+/// think of this as a visualization specification: typed data for a known
+/// renderer, never model-generated markup.
+pub type ChartData = VisualizationSpec;
+
+/// Build chart data from a query result whose first column is the label and
+/// remaining columns are numeric series. Keeping this conversion here makes
+/// the shape rule testable without `EngineState`; the tool layer only runs the
+/// read-only query and supplies its result.
+pub fn from_query(
+    kind: ChartKind,
+    title: Option<String>,
+    unit: Option<String>,
+    columns: &[String],
+    rows: &[Vec<Json>],
+) -> Result<ChartData, String> {
+    if columns.len() < 2 {
+        return Err("a chart query needs one label column and at least one numeric column".into());
+    }
+    let series_count = columns.len() - 1;
+    if series_count > MAX_SERIES {
+        return Err(format!(
+            "a chart query returned {series_count} numeric columns (max {MAX_SERIES})"
+        ));
+    }
+    if rows.is_empty() {
+        return Err("the chart query returned no rows -- nothing to chart".into());
+    }
+
+    let labels: Vec<String> = rows
+        .iter()
+        .enumerate()
+        .map(|(row_index, row)| {
+            if row.len() != columns.len() {
+                return Err(format!(
+                    "chart query row {} has {} values but the result has {} columns",
+                    row_index + 1,
+                    row.len(),
+                    columns.len()
+                ));
+            }
+            label_value(&row[0], row_index)
+        })
+        .collect::<Result<_, _>>()?;
+    let resolved_kind = resolve_kind(kind, &columns[0], &labels);
+    let max_points = match resolved_kind {
+        ChartKind::Line => MAX_TIME_POINTS,
+        ChartKind::Auto | ChartKind::Bar => MAX_CATEGORIES,
+    };
+    if rows.len() > max_points {
+        return Err(match resolved_kind {
+            ChartKind::Line => format!(
+                "the chart query returned {} time-series points (max {MAX_TIME_POINTS}) -- \
+aggregate to a coarser time period or narrow the date range",
+                rows.len()
+            ),
+            ChartKind::Auto | ChartKind::Bar => format!(
+                "the chart query returned {} categories (max {MAX_CATEGORIES}) -- aggregate first",
+                rows.len()
+            ),
+        });
+    }
+
+    let mut values = vec![Vec::with_capacity(rows.len()); series_count];
+    for (row_index, row) in rows.iter().enumerate() {
+        if row.len() != columns.len() {
+            return Err(format!(
+                "chart query row {} has {} values but the result has {} columns",
+                row_index + 1,
+                row.len(),
+                columns.len()
+            ));
+        }
+        for (series_index, value) in row[1..].iter().enumerate() {
+            values[series_index].push(number_value(value, &columns[series_index + 1], row_index)?);
+        }
+    }
+
+    let series = columns[1..]
+        .iter()
+        .enumerate()
+        .map(|(i, name)| Series {
+            name: name.clone(),
+            values: values[i].clone(),
+        })
+        .collect();
+    let data = ChartData {
+        kind: resolved_kind,
+        title,
+        labels,
+        series,
+        unit,
+    };
+    validate(&data)?;
+    Ok(data)
+}
+
+/// Resolve the model's `auto` request using only the query shape. Temporal
+/// labels read naturally as a line; categorical labels read naturally as
+/// bars. The inference is intentionally conservative and deterministic so a
+/// provider cannot inject a renderer or change the wire format.
+fn resolve_kind(requested: ChartKind, label_column: &str, labels: &[String]) -> ChartKind {
+    match requested {
+        ChartKind::Auto => {
+            if looks_temporal(label_column, labels) {
+                ChartKind::Line
+            } else {
+                ChartKind::Bar
+            }
+        }
+        concrete => concrete,
+    }
+}
+
+fn looks_temporal(column: &str, labels: &[String]) -> bool {
+    let name = column
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|part| !part.is_empty())
+        .map(|part| part.to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    if name.iter().any(|part| {
+        matches!(
+            part.as_str(),
+            "date"
+                | "datetime"
+                | "day"
+                | "month"
+                | "quarter"
+                | "time"
+                | "timestamp"
+                | "week"
+                | "year"
+        )
+    }) {
+        return true;
+    }
+
+    // SQL aliases are not always descriptive, so accept common ISO periods
+    // and dates when most labels have the same temporal shape.
+    let temporal_labels = labels.iter().filter(|label| looks_like_date(label)).count();
+    temporal_labels * 2 >= labels.len().max(1)
+}
+
+fn looks_like_date(label: &str) -> bool {
+    let label = label.trim();
+    let bytes = label.as_bytes();
+    let digits = |mut range: std::ops::Range<usize>| {
+        range.end <= bytes.len() && range.all(|i| bytes[i].is_ascii_digit())
+    };
+
+    // YYYY, YYYY-MM, YYYY-MM-DD, and their slash-separated equivalents.
+    if digits(0..4) && bytes.get(4).is_some_and(|b| *b == b'-' || *b == b'/') {
+        if label.len() == 7 {
+            return digits(5..7);
+        }
+        if label.len() >= 10
+            && bytes.get(7).is_some_and(|b| *b == b'-' || *b == b'/')
+            && digits(5..7)
+            && digits(8..10)
+        {
+            return true;
+        }
+    }
+
+    // A year-only grouping is also a time axis in analytics.
+    label.len() == 4 && digits(0..4)
+}
+
+fn label_value(value: &Json, row: usize) -> Result<String, String> {
+    let label = match value {
+        Json::String(s) => s.clone(),
+        Json::Number(n) => n.to_string(),
+        Json::Bool(b) => b.to_string(),
+        Json::Null => return Err(format!("chart query row {} has an empty label", row + 1)),
+        Json::Array(_) | Json::Object(_) => {
+            return Err(format!(
+                "chart query row {} has a non-scalar label",
+                row + 1
+            ))
+        }
+    };
+    if label.trim().is_empty() {
+        return Err(format!("chart query row {} has an empty label", row + 1));
+    }
+    Ok(label)
+}
+
+fn number_value(value: &Json, column: &str, row: usize) -> Result<f64, String> {
+    let number = match value {
+        Json::Number(n) => n.as_f64(),
+        // DuckDB can serialize decimal values as strings. Accept only strings
+        // that are unambiguously numeric; arbitrary text must fail loudly.
+        Json::String(s) => s.trim().parse::<f64>().ok(),
+        Json::Null | Json::Bool(_) | Json::Array(_) | Json::Object(_) => None,
+    };
+    match number.filter(|n| n.is_finite()) {
+        Some(n) => Ok(n),
+        None => Err(format!(
+            "chart query row {} column \"{column}\" is not a finite number",
+            row + 1
+        )),
+    }
 }
 
 /// Rejects shapes that can't be charted meaningfully. Doesn't reject
@@ -57,15 +269,29 @@ pub fn validate(data: &ChartData) -> Result<(), String> {
     if data.series.is_empty() {
         return Err("series is empty -- nothing to chart".into());
     }
-    if data.labels.len() > MAX_CATEGORIES {
-        return Err(format!(
-            "{} categories is too many to chart clearly (max {MAX_CATEGORIES}) -- \
+    let max_points = match data.kind {
+        ChartKind::Line => MAX_TIME_POINTS,
+        ChartKind::Auto | ChartKind::Bar => MAX_CATEGORIES,
+    };
+    if data.labels.len() > max_points {
+        return Err(match data.kind {
+            ChartKind::Line => format!(
+                "{} time-series points is too many to chart safely (max {MAX_TIME_POINTS}) -- \
+aggregate to a coarser time period or narrow the date range",
+                data.labels.len()
+            ),
+            ChartKind::Auto | ChartKind::Bar => format!(
+                "{} categories is too many to chart clearly (max {MAX_CATEGORIES}) -- \
 aggregate to the top few first",
-            data.labels.len()
-        ));
+                data.labels.len()
+            ),
+        });
     }
     if data.series.len() > MAX_SERIES {
-        return Err(format!("{} series is too many (max {MAX_SERIES})", data.series.len()));
+        return Err(format!(
+            "{} series is too many (max {MAX_SERIES})",
+            data.series.len()
+        ));
     }
     for s in &data.series {
         if s.values.len() != data.labels.len() {
@@ -77,7 +303,10 @@ aggregate to the top few first",
             ));
         }
         if let Some(bad) = s.values.iter().find(|v| !v.is_finite()) {
-            return Err(format!("series \"{}\" has a non-finite value ({bad})", s.name));
+            return Err(format!(
+                "series \"{}\" has a non-finite value ({bad})",
+                s.name
+            ));
         }
     }
     if !meaningfully_varies(data) {
@@ -127,10 +356,87 @@ mod tests {
             labels: labels.iter().map(|s| s.to_string()).collect(),
             series: series
                 .into_iter()
-                .map(|(name, values)| Series { name: name.into(), values })
+                .map(|(name, values)| Series {
+                    name: name.into(),
+                    values,
+                })
                 .collect(),
             unit: None,
         }
+    }
+
+    #[test]
+    fn from_query_uses_the_first_column_as_labels_and_the_rest_as_series() {
+        let data = from_query(
+            ChartKind::Bar,
+            Some("Spending".into()),
+            Some("$".into()),
+            &["category".into(), "amount".into()],
+            &[
+                vec![Json::from("Rent"), Json::from(1250.0)],
+                vec![Json::from("Groceries"), Json::from(412.5)],
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(data.labels, vec!["Rent", "Groceries"]);
+        assert_eq!(data.series[0].name, "amount");
+        assert_eq!(data.series[0].values, vec![1250.0, 412.5]);
+    }
+
+    #[test]
+    fn from_query_allows_more_than_category_limit_for_time_series() {
+        let rows: Vec<Vec<Json>> = (1..=13)
+            .map(|day| {
+                vec![
+                    Json::from(format!("2024-01-{day:02}")),
+                    Json::from(day as f64),
+                ]
+            })
+            .collect();
+        let data = from_query(
+            ChartKind::Auto,
+            None,
+            None,
+            &["date".into(), "value".into()],
+            &rows,
+        )
+        .unwrap();
+
+        assert_eq!(data.kind, ChartKind::Line);
+        assert_eq!(data.labels.len(), 13);
+        assert_eq!(data.series[0].values.len(), 13);
+    }
+
+    #[test]
+    fn from_query_keeps_a_large_time_series_bounded() {
+        let rows: Vec<Vec<Json>> = (0..=MAX_TIME_POINTS)
+            .map(|point| vec![Json::from(point), Json::from(point as f64)])
+            .collect();
+        let error = from_query(
+            ChartKind::Line,
+            None,
+            None,
+            &["date".into(), "value".into()],
+            &rows,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("max 1000"), "{error}");
+        assert!(error.contains("coarser time period"), "{error}");
+    }
+
+    #[test]
+    fn from_query_rejects_a_non_numeric_series_value() {
+        let result = from_query(
+            ChartKind::Bar,
+            None,
+            None,
+            &["category".into(), "amount".into()],
+            &[vec![Json::from("Rent"), Json::from("unknown")]],
+        );
+
+        assert!(result.unwrap_err().contains("amount"));
     }
 
     #[test]
@@ -139,7 +445,10 @@ mod tests {
             kind: ChartKind::Bar,
             title: Some("Spending".into()),
             labels: vec!["Groceries".into()],
-            series: vec![Series { name: "amount".into(), values: vec![412.5] }],
+            series: vec![Series {
+                name: "amount".into(),
+                values: vec![412.5],
+            }],
             unit: Some("$".into()),
         };
         let v = serde_json::to_value(&data).unwrap();
@@ -154,7 +463,12 @@ mod tests {
     #[test]
     fn omits_absent_title_and_unit_rather_than_nulling_them() {
         let data = bar(&["a"], vec![("s", vec![1.0])]);
-        let v = serde_json::to_value(ChartData { title: None, unit: None, ..data }).unwrap();
+        let v = serde_json::to_value(ChartData {
+            title: None,
+            unit: None,
+            ..data
+        })
+        .unwrap();
         assert!(v.get("title").is_none());
         assert!(v.get("unit").is_none());
     }
@@ -172,7 +486,10 @@ mod tests {
             kind: ChartKind::Bar,
             title: None,
             labels: labels.clone(),
-            series: vec![Series { name: "s".into(), values: vec![1.0; labels.len()] }],
+            series: vec![Series {
+                name: "s".into(),
+                values: vec![1.0; labels.len()],
+            }],
             unit: None,
         };
         assert!(validate(&data).is_err());
@@ -180,7 +497,10 @@ mod tests {
 
     #[test]
     fn validate_rejects_too_many_series() {
-        let data = bar(&["a"], vec![("s1", vec![1.0]), ("s2", vec![1.0]), ("s3", vec![1.0])]);
+        let data = bar(
+            &["a"],
+            vec![("s1", vec![1.0]), ("s2", vec![1.0]), ("s3", vec![1.0])],
+        );
         assert!(validate(&data).is_err());
     }
 
@@ -190,7 +510,10 @@ mod tests {
             kind: ChartKind::Bar,
             title: None,
             labels: vec![],
-            series: vec![Series { name: "s".into(), values: vec![] }],
+            series: vec![Series {
+                name: "s".into(),
+                values: vec![],
+            }],
             unit: None,
         };
         assert!(validate(&empty_labels).is_err());
@@ -224,7 +547,10 @@ mod tests {
             kind: ChartKind::Bar,
             title: None,
             labels,
-            series: vec![Series { name: "rent".into(), values }],
+            series: vec![Series {
+                name: "rent".into(),
+                values,
+            }],
             unit: Some("$".into()),
         };
         assert!(validate(&data).is_err());
@@ -248,7 +574,10 @@ mod tests {
     fn validate_allows_one_varying_series_even_if_another_is_flat() {
         let data = bar(
             &["a", "b", "c"],
-            vec![("flat", vec![10.0, 10.0, 10.0]), ("varies", vec![5.0, 50.0, 8.0])],
+            vec![
+                ("flat", vec![10.0, 10.0, 10.0]),
+                ("varies", vec![5.0, 50.0, 8.0]),
+            ],
         );
         assert!(validate(&data).is_ok());
     }

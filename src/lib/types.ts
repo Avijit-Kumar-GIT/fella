@@ -8,9 +8,9 @@ export interface ChartSeries {
 	values: number[];
 }
 
-/** Structured chart data from a chart tool (e.g. `make_chart`) -- labels
+/** Typed visualization data from a chart tool (e.g. `make_chart`) -- labels
  *  and numbers only, never markup. Rendered by `$lib/components/Chart.svelte`. */
-export interface ChartSpec {
+export interface VisualizationSpec {
 	kind: 'bar' | 'line';
 	title?: string;
 	labels: string[];
@@ -18,8 +18,14 @@ export interface ChartSpec {
 	unit?: string;
 }
 
+/** Compatibility name used by chart-facing components. */
+export type ChartSpec = VisualizationSpec;
+
 export interface EvidenceItem {
+	/** Stable within one answer; older archived answers may not have one. */
+	id?: string;
 	tool: string;
+	sources?: EvidenceSource[];
 	args: Record<string, unknown>;
 	/** One plain sentence the model wrote describing what this step does, for a
 	 *  non-technical reader (e.g. "Add up spending by month"). */
@@ -35,10 +41,16 @@ export interface EvidenceItem {
 	row_count?: number;
 	/** Free-form text output, e.g. Python stdout/stderr. */
 	output?: string;
-	/** Structured chart data, when the tool was `make_chart`. */
-	chart?: ChartSpec;
+	/** Structured visualization data, when the tool was `make_chart`. */
+	chart?: VisualizationSpec;
 	ms: number;
 	error?: string;
+}
+
+export interface EvidenceSource {
+	table: string;
+	source: string;
+	note?: string;
 }
 
 export interface VerificationCheck {
@@ -47,13 +59,49 @@ export interface VerificationCheck {
 	detail?: string;
 }
 
+export type VerificationStatus = 'verified' | 'needs_review' | 'insufficient_data' | 'failed';
+
 export interface Answer {
 	text: string;
 	evidence: EvidenceItem[];
 	verification: VerificationCheck[];
+	/** Optional for archived answers written before typed verification status. */
+	status?: VerificationStatus;
+	workspace?: { path: string; revision: string };
 	/** Token counts for the whole run, when the provider reported them. */
 	usage?: { prompt_tokens: number; completion_tokens: number };
 }
+
+/** The two user-facing ways to work with a mounted workspace. Ask is the
+ * default conversational surface; Inspect is the stricter source-first path
+ * with a read-only tool registry. */
+export type AskMode = 'ask' | 'inspect';
+
+/** A small, local reference attached to the next conversation turn. It is a
+ * UI affordance for choosing context; the engine still decides which files to
+ * read and the backend remains the source of truth for access. */
+export type ContextReference =
+	| { kind: 'source'; key: string; label: string; detail?: string }
+	| { kind: 'column'; key: string; label: string; detail?: string };
+
+/** One observable step in a local question run. Kept in the conversation so
+ * switching tabs never loses the small amount of run history shown in the UI. */
+export interface RunStep {
+	id: string;
+	label: string;
+	state: 'running' | 'complete' | 'error';
+	started_at_ms: number;
+	finished_at_ms?: number;
+	tool?: string;
+	note?: string;
+	evidence?: EvidenceItem;
+}
+
+/** Selection rendered by the right-hand inspector drawer. */
+export type InspectorSelection =
+	| { kind: 'source'; path: string }
+	| { kind: 'answer'; messageId: string; stepIndex?: number }
+	| null;
 
 export interface Message {
 	id: string;
@@ -103,6 +151,8 @@ export interface ColumnInfo {
 	min?: string;
 	max?: string;
 	example?: string;
+	/** A few frequent values for low-cardinality label columns. */
+	common_values?: string[];
 	/** Ingest caveat: amounts coerced from text, or a mixed column left as text. */
 	note?: string;
 }
@@ -114,20 +164,32 @@ export interface SkippedFile {
 
 export interface Catalog {
 	workspace: string | null;
+	revision?: string;
+	/** Unix milliseconds when this workspace snapshot was indexed. */
+	indexed_at_ms?: number;
 	sources: SourceInfo[];
 	/** Files found but not loaded (unsupported type, unreadable, parse failure).
 	 *  Absent when nothing was skipped. */
 	skipped?: SkippedFile[];
 }
 
+export interface AnalysisCapabilities {
+	table_analysis: boolean;
+	document_analysis: boolean;
+	python_analysis: boolean;
+	visualizations: boolean;
+}
+
 export interface Settings {
-	/** A provider id from the registry (`ollama`, `openai`, `vercel`, `xai`, `custom`, …). */
+	/** A provider id from the registry (`ollama-cloud`, `openai`, `vercel`, `xai`, `custom`, …). */
 	provider: string;
 	base_url: string;
 	model: string;
 	embed_model: string;
 	/** A usable credential exists for `provider` (or it needs none). */
 	has_credential: boolean;
+	/** Local switches for the analysis paths exposed to the model. */
+	capabilities: AnalysisCapabilities;
 }
 
 /** One built-in provider, as returned by `list_providers`. */
@@ -147,7 +209,7 @@ export interface ProviderInfo {
 	current: boolean;
 }
 
-export interface OllamaHealth {
+export interface ProviderHealth {
 	reachable: boolean;
 	/** Endpoint answered with 401/403: it's up, but the key is wrong or
 	 *  unauthorized. Always false when `reachable`. */
@@ -182,37 +244,6 @@ export interface ConversationSummary {
 	message_count: number;
 	/** A user-given name, if this conversation was renamed. */
 	title: string | null;
-}
-
-/** A pack: a theme, a skill, an mcp connector, or an augment. See
- *  docs/EXTENSIBILITY.md. A kind this build doesn't know arrives as a string. */
-export type PackKind = 'theme' | 'skill' | 'mcp' | 'augment' | (string & {});
-
-/** An `augment` pack's `augment.json`, parsed by the engine. */
-export interface AugmentConfig {
-	capability: string;
-	command: string;
-	file: string;
-	syntax: string;
-}
-
-/** One installed pack, as returned by the `packs_*` commands. */
-export interface InstalledPack {
-	id: string;
-	kind: PackKind;
-	name: string;
-	version: string;
-	description: string;
-	/** `"local"` (side-loaded) or `"marketplace"`. */
-	source: string;
-	/** Installed from the reviewed marketplace. */
-	verified: boolean;
-	enabled: boolean;
-	/** `mcp` packs: enabled but still missing the token `/connect` needs. */
-	needs_token?: boolean;
-	/** `augment` packs: the parsed config, or absent for other kinds / an
-	 *  unparseable payload. */
-	augment?: AugmentConfig;
 }
 
 /** Streaming events emitted by the `ask` command over a Tauri Channel. */

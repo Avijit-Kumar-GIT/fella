@@ -1,0 +1,53 @@
+---
+title: "Experimental MCP"
+description: "The extension boundary in Fella's lean personal release."
+icon: "puzzle"
+---
+
+# The extension door is closed for this release
+
+Fella's personal release is intentionally small. It mounts a folder, uses a
+fixed set of read-only tools, and returns answers with evidence and
+verification. There is no pack manager, plugin runtime, or official connector
+system in the shipped application.
+
+## MCP is experimental and inert
+
+The `/mcp` command is a signpost for future work. Its only supported response
+is:
+
+```text
+MCP is experimental and closed in this release.
+No official connectors are enabled.
+Custom implementations require a fork or experimental build.
+```
+
+The default build does not include an MCP client, connector authentication,
+dynamic tool discovery, outbound connector connections, or an MCP marketplace.
+The built-in agent registry contains only Fella's fixed local tools.
+
+## What remains extensible
+
+The product boundary is documented so a future implementation has a clear seam:
+
+- `fella.md` is a user-authored context file in the mounted folder.
+- The agent remains read-only and cannot create workspace files.
+- A fork or experimental build may add a reviewed connector implementation.
+- Any future connector must declare its data access, network destinations,
+  write behavior, limits, enablement flow, and evidence behavior.
+
+Custom builds are the user's responsibility. A connector should not become an
+official Fella feature merely because it speaks the MCP protocol; it must also
+fit the local-first, bounded, auditable request path.
+
+## Removed from the personal release
+
+The following surfaces are intentionally absent from the default build:
+
+- Packs and the `fella-extensions` marketplace relationship.
+- `/packs` and `/connect`.
+- Augment tabs, `/note`, and `/table`.
+- Dynamic tools supplied by a user-installed extension.
+
+For the current product boundary and the criteria for reopening extensibility,
+see [`LEAN-PERSONAL-RELEASE.md`](/docs/LEAN-PERSONAL-RELEASE).

@@ -11,7 +11,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use fella_lib::engine::EngineState;
 
 fn scratch(tag: &str) -> PathBuf {
-    let n = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let n = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
     let p = std::env::temp_dir().join(format!("fella-{tag}-{n}"));
     fs::create_dir_all(&p).unwrap();
     p
@@ -30,7 +33,11 @@ fn a_mangled_auth_json_does_not_stop_startup() {
 
     // And a fresh setting can still be saved over the top.
     engine
-        .save_settings(serde_json::json!({ "model": "qc-check" }).as_object().unwrap())
+        .save_settings(
+            serde_json::json!({ "model": "qc-check" })
+                .as_object()
+                .unwrap(),
+        )
         .unwrap();
     assert_eq!(engine.settings().model, "qc-check");
 

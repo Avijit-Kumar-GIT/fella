@@ -1,0 +1,67 @@
+---
+title: "Read the evidence"
+description: "Inspect the tools, queries, rows, timings, and verification checks behind an answer."
+icon: "search-check"
+---
+
+Every assistant answer has a collapsed **Evidence** row. Tool-backed answers show the recorded steps and checks; a tool-free answer is labeled `Evidence · general knowledge`.
+
+## Evidence and verification
+
+| Layer | What it records | What it means |
+| --- | --- | --- |
+| Evidence | Tool name and arguments, a plain-language note when supplied, result summary, SQL, rows or text output, chart data, duration, and errors | What a tool was asked to do and what it returned |
+| Verification | Passes and warnings produced after the draft answer | Whether specific consistency checks found a problem |
+
+Evidence is not proof that the model chose the right source or interpreted the question correctly. Verification is not new source material; it checks the answer against existing evidence.
+
+## Inspect an answer
+
+<Steps>
+  <Step title="Open Evidence">
+    The summary shows the number of steps, total tool time, and how many findings need review.
+  </Step>
+  <Step title="Open step details">
+    Expand each step to see its SQL or arguments, result summary, output, and up to 20 displayed table rows. Charts render below the answer rather than inside the fold.
+  </Step>
+  <Step title="Read verification findings">
+    A check mark is a passed check. A warning means the check found something to review; it does not automatically invalidate the entire answer.
+  </Step>
+</Steps>
+
+## What to inspect first
+
+1. **Source selection:** Did Fella use the right file or table?
+2. **Schema:** Are the column type, casing, units, and nulls what you expected?
+3. **Query:** Does the `WHERE`, grouping, join, and aggregate match the words in your question?
+4. **Rows:** Do the returned values support the sentence in the answer?
+5. **Checks:** Did verification find a warning or a query that changed on re-run?
+
+## What verification checks
+
+The deterministic pass can flag unknown tables, changed or broken query re-runs, unsupported figures, text-column aggregates, exact-case filters, missing aggregate operations or columns, likely missed joins, null date buckets, and mislabeled values in single-row aggregate results.
+
+If a query re-run changes or fails, Fella can make one tool-free corrective model request. If any warning remains, an optional cost-gated second opinion can compare the answer's figures. That second opinion is model-based, not deterministic.
+
+## Warnings are signals
+
+A warning is not proof that the whole answer is wrong. For example, a `TEXT` amount column may be intentionally textual, but aggregating it without a cast is risky. Read the query and decide whether the warning matters to your files.
+
+Queries slower than 500 ms and truncated queries are not re-run; verification records that it trusted the first result. Number matching is tolerant and heuristic, so a pass does not establish semantic correctness.
+
+## Evidence after stopping
+
+Stopping a run does not throw away the work. Partial tool results remain available in the transcript, so you can understand where the run stopped or ask a narrower follow-up.
+
+<Warning>
+  `/sql` prints a direct query result without an assistant answer. It therefore has no evidence fold and no post-answer verification.
+</Warning>
+
+<CardGroup cols={2}>
+  <Card title="Verification details" icon="badge-check" href="/concepts/verification">
+    See every deterministic check and its limits.
+  </Card>
+  <Card title="Tool catalog" icon="wrench" href="/concepts/tools">
+    See the guardrails on each built-in tool.
+  </Card>
+</CardGroup>

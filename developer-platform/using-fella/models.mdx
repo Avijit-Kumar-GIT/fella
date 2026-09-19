@@ -1,0 +1,111 @@
+---
+title: "Models and providers"
+description: "Connect a hosted provider or custom OpenAI-compatible endpoint with your own key."
+icon: "cpu"
+---
+
+Fella is BYOK-only. It supports hosted Ollama Cloud, OpenAI, gateway choices,
+and custom OpenAI-compatible endpoints. Switching providers changes where
+prompts and tool results are sent, but not the local ingestion engine or
+verification code.
+
+## Ollama Cloud
+
+## Use Ollama Cloud
+
+<Steps>
+  <Step title="Create an Ollama Cloud key">
+
+Get a key from [Ollama Cloud](https://ollama.com/settings/keys), then enter it
+through the command below. Fella uses Ollama Cloud's hosted Ollama API.
+
+```bash filename="terminal"
+/login ollama-cloud key [api-key]
+```
+
+  </Step>
+  <Step title="Select a hosted model">
+
+```text filename="fella commands"
+/model
+/model gemma4:31b
+```
+
+    Run `/model` to list the text-generation models returned for your account,
+    then select one with `/model <name>`.
+  </Step>
+</Steps>
+
+## Hosted providers
+
+| Provider ID | Service | Default model |
+| --- | --- | --- |
+| `openai` | OpenAI | `gpt-5.6-luna` |
+| `vercel` | Vercel AI Gateway | `openai/gpt-5.6-luna` |
+| `xai` | xAI | `grok-4.3` |
+| `ollama-cloud` | Ollama Cloud | `gemma4:31b` |
+| `openrouter` | OpenRouter | `openai/gpt-5.6-luna` |
+| `custom` | Custom OpenAI-compatible endpoint | None |
+
+<Steps>
+  <Step title="Connect a provider">
+
+If you have connected to a single provider before, run the following:
+
+```text filename="fella commands"
+/login
+```
+If you have connected to multiple providers before, specify the provider:
+
+```text filename="fella commands"
+/login openrouter
+```
+
+    Fella masks the key entry and stores it locally. `/auth` shows connection status.
+  </Step>
+  <Step title="Choose a model">
+
+```text filename="fella commands"
+/model
+/model openai/gpt-5.6-luna
+```
+
+    `/model` lists up to 60 models returned by the provider and offers filtering as you type. Provider catalogues drift, so the live list is the source of truth when the provider exposes one.
+  </Step>
+</Steps>
+
+## Custom endpoint
+
+```text filename="fella commands"
+/model provider custom
+/model base_url https://example.com/v1
+/model key YOUR_API_KEY
+/model YOUR_MODEL_ID
+```
+
+`custom` uses the OpenAI `/chat/completions` wire format. Fella redacts recognized secret-bearing command lines from the transcript. Do not paste keys into ordinary questions or commit them to a repository.
+
+## Provider and tab behavior
+
+Provider credentials and the active provider are shared by the app. Each conversation tab can select a different model with `/model <name>`. A new tab inherits the current model. Changing the provider or base URL clears per-tab selections so a stale model ID is not reused.
+
+## Credential storage
+
+Provider API keys live in `auth.json` in Fella's application data directory with mode `0600` where supported. They are not stored in the SQLite settings database, browser storage, or archived transcripts. The inert `/mcp` command stores no connector tokens.
+
+## Embeddings are not required
+
+Document search uses local `grep_files` and `read_file`, not embeddings. PDFs and notes therefore work the same with providers that do not expose an embeddings endpoint.
+
+<Warning>
+  A hosted provider may see the prompt and tool results sent to it. Review its retention and privacy terms before using it with sensitive files.
+</Warning>
+
+<CardGroup cols={2}>
+  <Card title="Privacy and security" icon="shield-check" href="/developer-platform/using-fella/privacy">
+    Review provider traffic, credentials, and local execution limits.
+  </Card>
+  <Card title="Manage sessions" icon="panels-top-left" href="/developer-platform/using-fella/sessions">
+    Use a different model in each conversation tab.
+  </Card>
+</CardGroup>

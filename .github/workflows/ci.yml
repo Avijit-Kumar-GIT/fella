@@ -46,6 +46,9 @@ jobs:
       - name: Frontend build
         run: pnpm run build
 
+      - name: BYOK test surface
+        run: bash scripts/check-byok-test-surface.sh
+
       # SQLite default features only never --features duckdb (OOMs CI, CI-only path).
       - name: Clippy
         working-directory: src-tauri

@@ -10,7 +10,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use fella_lib::engine::EngineState;
 
 fn scratch(tag: &str) -> PathBuf {
-    let n = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let n = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
     let p = std::env::temp_dir().join(format!("fella-{tag}-{n}"));
     fs::create_dir_all(&p).unwrap();
     p
@@ -27,7 +30,11 @@ fn archives_a_transcript_to_a_pretty_json_file() {
     let path = engine.archive_conversation("abcd1234", body).unwrap();
 
     // named conv_<ms>_<id>.json under conversations/
-    let name = std::path::Path::new(&path).file_name().unwrap().to_string_lossy().to_string();
+    let name = std::path::Path::new(&path)
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
     assert!(name.starts_with("conv_"), "{name}");
     assert!(name.ends_with("_abcd1234.json"), "{name}");
     assert!(path.contains("conversations"));
@@ -52,7 +59,10 @@ fn a_second_archive_for_the_same_id_reuses_the_file_and_updates_it() {
         .archive_conversation("dup777", r#"{"id":"dup777","messages":[]}"#)
         .unwrap();
     let again = engine
-        .archive_conversation("dup777", r#"{"id":"dup777","messages":[{"role":"user","text":"changed"}]}"#)
+        .archive_conversation(
+            "dup777",
+            r#"{"id":"dup777","messages":[{"role":"user","text":"changed"}]}"#,
+        )
         .unwrap();
 
     // same file (same path, no second conv_<ms>_dup777.json created)...
@@ -144,7 +154,9 @@ fn renames_a_conversation_and_an_empty_title_clears_it() {
     engine.archive_conversation("renameme", body).unwrap();
     assert_eq!(engine.conversations_list()[0].title, None);
 
-    engine.rename_conversation("renameme", "  My trip budget  ").unwrap();
+    engine
+        .rename_conversation("renameme", "  My trip budget  ")
+        .unwrap();
     let list = engine.conversations_list();
     assert_eq!(list[0].title.as_deref(), Some("My trip budget"), "trimmed");
 
@@ -166,9 +178,16 @@ fn a_weird_id_is_sanitized_and_bad_json_is_rejected() {
     let path = engine
         .archive_conversation("../../etc/passwd", r#"{"messages":[]}"#)
         .unwrap();
-    let name = std::path::Path::new(&path).file_name().unwrap().to_string_lossy().to_string();
+    let name = std::path::Path::new(&path)
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
     assert!(name.ends_with("_etcpasswd.json"), "{name}");
-    assert_eq!(std::path::Path::new(&path).parent().unwrap(), data.join("conversations"));
+    assert_eq!(
+        std::path::Path::new(&path).parent().unwrap(),
+        data.join("conversations")
+    );
 
     assert!(engine.archive_conversation("x", "not json at all").is_err());
 

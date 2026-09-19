@@ -6,11 +6,11 @@
 
 import type {
 	Answer,
+	AskMode,
 	AskEvent,
 	Catalog,
 	ConversationSummary,
-	InstalledPack,
-	OllamaHealth,
+	ProviderHealth,
 	ProviderInfo,
 	QueryResult,
 	Settings,
@@ -79,6 +79,7 @@ export const ipc = {
 	getCatalog: () => invoke<Catalog>('get_catalog'),
 	lastWorkspacePath: () => invoke<string | null>('last_workspace_path'),
 	describe: (name: string) => invoke<SourceInfo>('describe', { name }),
+	sampleSource: (name: string, rows = 5) => invoke<QueryResult>('sample_source', { name, rows }),
 	runSqlDirect: (sql: string) => invoke<QueryResult>('run_sql_direct', { sql }),
 	getSettings: () => invoke<Settings>('get_settings'),
 	setSettings: (settings: Partial<Settings>) => invoke<Settings>('set_settings', { settings }),
@@ -88,9 +89,8 @@ export const ipc = {
 	logout: (provider: string, forget = false) =>
 		invoke<Settings>('logout', { provider, forget }),
 
-	ollamaHealth: () => invoke<OllamaHealth>('ollama_health'),
-	/** Is a local Ollama running, regardless of the configured provider? */
-	probeOllama: () => invoke<OllamaHealth>('probe_ollama'),
+	providerHealth: () => invoke<ProviderHealth>('provider_health'),
+	setWindowAppearance: (dark: boolean) => invoke<void>('set_window_appearance', { dark }),
 	cancel: (conversationId: string) => invoke<void>('cancel', { conversationId }),
 	forgetConversation: (conversationId: string) =>
 		invoke<void>('forget_conversation', { conversationId }),
@@ -98,30 +98,9 @@ export const ipc = {
 	memoryFile: () => invoke<[string, string | null] | null>('memory_file'),
 	forgetMemory: () => invoke<boolean>('forget_memory'),
 
-	/** Installed packs (themes, skills, mcp connectors, augments). */
-	packsList: () => invoke<InstalledPack[]>('packs_list'),
-	/** Add a pack from a local directory; returns the updated list. */
-	packsAdd: (path: string) => invoke<InstalledPack[]>('packs_add', { path }),
-	packsRemove: (id: string) => invoke<InstalledPack[]>('packs_remove', { id }),
-	packsSetEnabled: (id: string, enabled: boolean) =>
-		invoke<InstalledPack[]>('packs_set_enabled', { id, enabled }),
-	/** Install a pack from the marketplace by id (files are hash-checked). */
-	packsInstall: (id: string) => invoke<InstalledPack[]>('packs_install', { id }),
-	/** Store the token an `mcp` connector pack needs. */
-	mcpSetToken: (id: string, token: string) => invoke<void>('mcp_set_token', { id, token }),
-	/** Forget an `mcp` connector pack's token. */
-	mcpClearToken: (id: string) => invoke<boolean>('mcp_clear_token', { id }),
-	/** CSS token map of the active theme pack, or null. */
-	packsTheme: () => invoke<Record<string, string> | null>('packs_theme'),
-
-	/** Write a note/table the user typed in an `augment` view into the open
-	 *  folder. Only the UI calls this; the agent has no path here. */
-	augmentSave: (capability: string, file: string, contents: string) =>
-		invoke<void>('augment_save', { capability, file, contents }),
-	/** Read an augment file back for its editor; null if it doesn't exist yet. */
-	augmentLoad: (file: string) => invoke<string | null>('augment_load', { file }),
-	/** Augment capabilities this build ships (so the UI carries no copy). */
-	augmentCapabilities: () => invoke<string[]>('augment_capabilities'),
+	/** Read and write the explicit user-authored workspace context file. */
+	contextFile: () => invoke<[string, string | null] | null>('context_file'),
+	saveContext: (contents: string) => invoke<void>('save_context', { contents }),
 
 	/** Check for a newer release and, if one exists, download + verify +
 	 * install it and exit. Only ever called by `/update`; never automatic. */
@@ -157,7 +136,8 @@ export const ipc = {
 		conversationId: string,
 		question: string,
 		onEvent: (e: AskEvent) => void,
-		model?: string
+		model?: string,
+		mode?: AskMode
 	): Promise<Answer> {
 		const { Channel } = await import('@tauri-apps/api/core');
 		const channel = new Channel<AskEvent>();
@@ -166,6 +146,7 @@ export const ipc = {
 			conversationId,
 			question,
 			model: model || null,
+			mode: mode || null,
 			channel
 		});
 	}

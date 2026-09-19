@@ -75,5 +75,4 @@ Remove-Item $tmp -ErrorAction SilentlyContinue
 
 Write-Host ''
 Write-Host 'Fella installed. Find it in the Start menu.'
-Write-Host 'Next: install Ollama (https://ollama.com) and run "ollama pull llama3.1"'
-Write-Host 'for a local model, or open Fella and type /login to use a hosted one.'
+Write-Host 'Next: open Fella and type /login to connect a model provider with your API key.'

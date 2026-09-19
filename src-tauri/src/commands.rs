@@ -5,24 +5,22 @@
 
 use serde::Serialize;
 use tauri::ipc::Channel;
-use tauri::State;
+use tauri::{State, Window};
 
 use crate::engine::{
     Answer, AskEvent, Catalog, ConversationSummary, ConversationsInfo, EngineError, EngineResult,
-    EngineState, InstalledPack, ProviderHealth, ProviderInfo, QueryResult, Settings, SourceInfo,
-    UpdateStatus,
+    EngineState, ProviderHealth, ProviderInfo, QueryResult, Settings, SourceInfo, UpdateStatus,
 };
 use crate::AppState;
 
 /// Expand a leading `~` (or `~/…`, `~\…`) to the user's home directory. Typed
 /// paths come from the composer, a text field, not a shell, so nothing else
 /// expands this the way a terminal would. Used by every command that takes a
-/// user-typed filesystem path (`open_workspace`, `packs_add`).
+/// user-typed filesystem path (`open_workspace`).
 fn expand_tilde(path: &str) -> std::path::PathBuf {
     if let Some(rest) = path.strip_prefix('~') {
         if rest.is_empty() || rest.starts_with('/') || rest.starts_with('\\') {
-            if let Some(home) =
-                std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))
+            if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))
             {
                 return std::path::Path::new(&home).join(rest.trim_start_matches(['/', '\\']));
             }
@@ -89,6 +87,15 @@ pub fn last_workspace_path(engine: State<'_, EngineState>) -> Option<String> {
 #[tauri::command]
 pub fn describe(name: String, engine: State<'_, EngineState>) -> EngineResult<SourceInfo> {
     engine.describe_source(&name)
+}
+
+#[tauri::command]
+pub fn sample_source(
+    name: String,
+    rows: Option<usize>,
+    engine: State<'_, EngineState>,
+) -> EngineResult<QueryResult> {
+    engine.sample(&name, rows.unwrap_or(5).clamp(1, 50))
 }
 
 #[tauri::command]
@@ -160,50 +167,10 @@ pub fn logout(
     engine.logout(&provider, forget)
 }
 
-// --- packs (installed extensions) --------------------------------------
-
-#[tauri::command]
-pub fn packs_list(engine: State<'_, EngineState>) -> Vec<InstalledPack> {
-    engine.packs_list()
-}
-
-#[tauri::command]
-pub fn packs_add(
-    path: String,
-    engine: State<'_, EngineState>,
-) -> Result<Vec<InstalledPack>, EngineError> {
-    engine.packs_add(&expand_tilde(&path))
-}
-
-#[tauri::command]
-pub fn packs_remove(
-    id: String,
-    engine: State<'_, EngineState>,
-) -> Result<Vec<InstalledPack>, EngineError> {
-    engine.packs_remove(&id)
-}
-
-#[tauri::command]
-pub fn packs_set_enabled(
-    id: String,
-    enabled: bool,
-    engine: State<'_, EngineState>,
-) -> Result<Vec<InstalledPack>, EngineError> {
-    engine.packs_set_enabled(&id, enabled)
-}
-
-/// Install a pack from the marketplace by id.
-#[tauri::command]
-pub async fn packs_install(
-    id: String,
-    engine: State<'_, EngineState>,
-) -> Result<Vec<InstalledPack>, EngineError> {
-    engine.packs_install(&id).await
-}
+// --- update --------------------------------------------------------------
 
 /// Check for a newer release and, if one exists, download + verify +
-/// install it and exit. Only ever called by the user typing `/update` no
-/// background/startup check.
+/// install it and exit. Only ever called by the user typing `/update`.
 #[tauri::command]
 pub async fn update(
     app: tauri::AppHandle,
@@ -212,60 +179,18 @@ pub async fn update(
     engine.update(app).await
 }
 
-/// Store the token an `mcp` connector pack needs.
+// --- user context -------------------------------------------------------
+
+/// `[path, contents_or_null]` for the current workspace's `fella.md`.
 #[tauri::command]
-pub fn mcp_set_token(
-    id: String,
-    token: String,
-    engine: State<'_, EngineState>,
-) -> Result<(), EngineError> {
-    engine.mcp_set_token(&id, &token)
+pub fn context_file(engine: State<'_, EngineState>) -> Option<(String, Option<String>)> {
+    engine.context_file()
 }
 
-/// Forget an `mcp` connector pack's token.
+/// Save the explicitly user-authored `fella.md` context file.
 #[tauri::command]
-pub fn mcp_clear_token(id: String, engine: State<'_, EngineState>) -> Result<bool, EngineError> {
-    engine.mcp_clear_token(&id)
-}
-
-/// CSS token map of the active theme pack, or null. The UI applies it to
-/// `document.documentElement`.
-#[tauri::command]
-pub fn packs_theme(
-    engine: State<'_, EngineState>,
-) -> Option<std::collections::BTreeMap<String, String>> {
-    engine.packs_theme()
-}
-
-// --- augments (user-authored files in the open folder) -----------------
-
-/// Write a note/table the user typed in an `augment` view into the open folder.
-/// The UI is the only caller; the agent has no path here.
-#[tauri::command]
-pub fn augment_save(
-    capability: String,
-    file: String,
-    contents: String,
-    engine: State<'_, EngineState>,
-) -> Result<(), EngineError> {
-    engine.augment_save(&capability, &file, &contents)
-}
-
-/// Read an augment file back for its editor. Null if it doesn't exist yet.
-#[tauri::command]
-pub fn augment_load(
-    file: String,
-    engine: State<'_, EngineState>,
-) -> Result<Option<String>, EngineError> {
-    engine.augment_load(&file)
-}
-
-/// The augment capabilities this build ships. The UI reads this instead of
-/// carrying its own copy of the list, so a new capability is one Rust entry
-/// plus its view no per-pack code, ever.
-#[tauri::command]
-pub fn augment_capabilities() -> Vec<&'static str> {
-    crate::engine::augment::CAPABILITIES.to_vec()
+pub fn save_context(contents: String, engine: State<'_, EngineState>) -> Result<(), EngineError> {
+    engine.save_context(&contents)
 }
 
 // --- ask (the agent loop) -------------------------------------------------
@@ -277,25 +202,45 @@ pub async fn ask(
     conversation_id: String,
     question: String,
     model: Option<String>,
+    mode: Option<String>,
     channel: Channel<AskEvent>,
     engine: State<'_, EngineState>,
 ) -> Result<Answer, EngineError> {
+    let inspect = mode.as_deref() == Some("inspect");
     engine
-        .ask(&conversation_id, &question, model.as_deref(), move |ev| {
-            let _ = channel.send(ev);
-        })
+        .ask_with_mode(
+            &conversation_id,
+            &question,
+            model.as_deref(),
+            inspect,
+            move |ev| {
+                let _ = channel.send(ev);
+            },
+        )
         .await
 }
 
 #[tauri::command]
-pub async fn ollama_health(engine: State<'_, EngineState>) -> Result<ProviderHealth, EngineError> {
+pub async fn provider_health(
+    engine: State<'_, EngineState>,
+) -> Result<ProviderHealth, EngineError> {
     Ok(engine.provider_health().await)
 }
 
-/// Is a local Ollama running, whatever the configured provider is?
+/// Keep the native window surface in step with the webview when the user
+/// chooses an explicit appearance. This matters on frameless Windows windows
+/// and during a theme switch, where a strip outside the document can otherwise
+/// flash the old color.
 #[tauri::command]
-pub async fn probe_ollama(engine: State<'_, EngineState>) -> Result<ProviderHealth, EngineError> {
-    Ok(engine.probe_ollama().await)
+pub fn set_window_appearance(window: Window, dark: bool) -> Result<(), String> {
+    let color = if dark {
+        tauri::webview::Color(14, 14, 16, 255)
+    } else {
+        tauri::webview::Color(252, 252, 251, 255)
+    };
+    window
+        .set_background_color(Some(color))
+        .map_err(|error| error.to_string())
 }
 
 // --- conversation archive ----------------------------------------------------
@@ -326,7 +271,10 @@ pub fn conversations_list(engine: State<'_, EngineState>) -> Vec<ConversationSum
 
 /// Raw JSON of one archived conversation, by id (see `conversations_list`).
 #[tauri::command]
-pub fn conversation_load(id: String, engine: State<'_, EngineState>) -> Result<String, EngineError> {
+pub fn conversation_load(
+    id: String,
+    engine: State<'_, EngineState>,
+) -> Result<String, EngineError> {
     engine.conversation_load(&id)
 }
 
@@ -391,16 +339,25 @@ mod tilde_tests {
     #[test]
     fn expands_home_relative_paths_only() {
         std::env::set_var("HOME", "/home/somebody");
-        assert_eq!(expand_tilde("~"), std::path::PathBuf::from("/home/somebody"));
+        assert_eq!(
+            expand_tilde("~"),
+            std::path::PathBuf::from("/home/somebody")
+        );
         assert_eq!(
             expand_tilde("~/Downloads/pack"),
             std::path::PathBuf::from("/home/somebody/Downloads/pack")
         );
         // A bare relative or absolute path passes through untouched.
         assert_eq!(expand_tilde("./pack"), std::path::PathBuf::from("./pack"));
-        assert_eq!(expand_tilde("/tmp/pack"), std::path::PathBuf::from("/tmp/pack"));
+        assert_eq!(
+            expand_tilde("/tmp/pack"),
+            std::path::PathBuf::from("/tmp/pack")
+        );
         // "~foo" (another user's home) is left alone, same as a shell with no
         // matching user would leave it we don't try to resolve /etc/passwd.
-        assert_eq!(expand_tilde("~foo/pack"), std::path::PathBuf::from("~foo/pack"));
+        assert_eq!(
+            expand_tilde("~foo/pack"),
+            std::path::PathBuf::from("~foo/pack")
+        );
     }
 }

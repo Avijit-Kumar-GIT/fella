@@ -1,14 +1,12 @@
 //! The set of model providers Fella knows how to talk to.
 //!
 //! Adding a provider is a single row in [`PROVIDERS`] that is the whole
-//! "bring your own provider" surface. A row only needs a new [`Wire`] or
-//! [`AuthKind`] variant if it speaks a protocol we don't already handle.
+//! "bring your own provider" surface. A row only needs a new [`Wire`] variant
+//! if it speaks a protocol we don't already handle.
 
 /// How a provider is authenticated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuthKind {
-    /// No credential at all (a local server).
-    None,
     /// A bearer API key the user pastes in.
     ApiKey,
 }
@@ -16,7 +14,6 @@ pub enum AuthKind {
 impl AuthKind {
     pub fn as_str(&self) -> &'static str {
         match self {
-            AuthKind::None => "none",
             AuthKind::ApiKey => "key",
         }
     }
@@ -25,7 +22,7 @@ impl AuthKind {
 /// Which HTTP shape the provider speaks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Wire {
-    /// `POST {base_url}/api/chat`, `POST {base_url}/api/embed` (Ollama).
+    /// `POST {base_url}/api/chat`, `POST {base_url}/api/embed` (Ollama wire).
     Ollama,
     /// `POST {base_url}/chat/completions`, `/embeddings` so `base_url` is the
     /// API root *including* any `/v1` (e.g. `https://api.openai.com/v1`).
@@ -57,17 +54,6 @@ pub struct Provider {
 /// Hosted model names drift; if a `default_model` 404s, `/model <name>` fixes
 /// it and `docs/DEV_SETUP.md` carries the current-good values.
 pub const PROVIDERS: &[Provider] = &[
-    Provider {
-        id: "ollama",
-        display: "Ollama (local)",
-        auth: AuthKind::None,
-        base_url: "http://localhost:11434",
-        default_model: "llama3.1",
-        default_embed_model: "nomic-embed-text",
-        wire: Wire::Ollama,
-        embeddings: true,
-        get_key_url: "",
-    },
     Provider {
         id: "openai",
         display: "OpenAI",
@@ -114,7 +100,7 @@ pub const PROVIDERS: &[Provider] = &[
         id: "ollama-cloud",
         display: "Ollama Cloud",
         auth: AuthKind::ApiKey,
-        // Same wire as local Ollama, just hosted and behind a key. `/api/tags`
+        // Ollama wire at a hosted endpoint, behind a key. `/api/tags`
         // with the bearer lists the models your account can run; browse the
         // catalogue at ollama.com/search?c=cloud.
         base_url: "https://ollama.com",
@@ -155,8 +141,10 @@ pub const PROVIDERS: &[Provider] = &[
     },
 ];
 
-/// The provider Fella starts on before anything is configured.
-pub const DEFAULT_ID: &str = "ollama";
+/// The provider Fella starts on before anything is configured. Every provider
+/// in the product requires an API key this is the starting point for the
+/// connection flow, not an unauthenticated model endpoint.
+pub const DEFAULT_ID: &str = "ollama-cloud";
 
 /// Look a provider up by id, after normalizing legacy names.
 pub fn get(id: &str) -> Option<&'static Provider> {
@@ -168,6 +156,9 @@ pub fn get(id: &str) -> Option<&'static Provider> {
 pub fn normalize_id(stored: &str) -> &str {
     match stored {
         "" => DEFAULT_ID,
+        // Older builds stored the local provider under this id. Keep existing
+        // databases usable by moving them into the hosted BYOK flow.
+        "ollama" => DEFAULT_ID,
         "openai-compatible" => "custom",
         other => other,
     }
@@ -185,13 +176,12 @@ mod tests {
     #[test]
     fn legacy_names_normalize() {
         assert_eq!(normalize_id("openai-compatible"), "custom");
-        assert_eq!(normalize_id(""), "ollama");
+        assert_eq!(normalize_id(""), DEFAULT_ID);
         assert_eq!(normalize_id("openai"), "openai");
     }
 
     #[test]
     fn registry_lookups() {
-        assert_eq!(get("ollama").unwrap().wire, Wire::Ollama);
         assert_eq!(get("vercel").unwrap().wire, Wire::OpenAi);
         assert!(get("vercel").unwrap().embeddings);
         assert!(!get("xai").unwrap().embeddings);

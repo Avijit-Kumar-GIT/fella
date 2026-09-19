@@ -8,6 +8,12 @@ All notable changes to Fella are recorded here. Format follows
 
 ### Added
 
+- **Embedded Python analytics sandbox.** Model-generated Python now runs in a
+  fresh bare-WASM RustPython guest through Wasmi. It has no filesystem,
+  network, environment, or subprocess capability; only bounded output and a
+  read-only SQL bridge cross the host boundary. Source, output, memory, stack,
+  fuel, row, and response limits keep the personal analytics path predictable
+  on Linux, macOS, and Windows. See [`docs/PYTHON-SANDBOX.md`](docs/PYTHON-SANDBOX.md).
 - **Augment packs: `/note` and `/table`.** A new pack kind, `augment`, switches
   on a first-party capability a plain-text tab (`buffer`) or a small
   editable table (`grid`) and binds it to a slash command. Type in the tab
@@ -22,6 +28,14 @@ All notable changes to Fella are recorded here. Format follows
 
 ### Changed
 
+- **Text label filters now receive case-sensitivity guidance.** The SQL tool
+  warns the model when an exact-value filter targets a likely category, status,
+  or label column, including uniformly cased data where `Leisure` would miss
+  stored `leisure`. It keeps the stricter mixed-case answer check while
+  teaching the query to use `lower(column) = lower(value)` when needed.
+- **Python output is bounded without silent loss.** A single oversized write
+  now keeps the allowed prefix and labels the result as truncated, so a model
+  can tell that its calculation output was capped.
 - **The self-check now catches a wrong aggregate, not just an ungrounded
   number.** If a question says "how many"/"how much"/"average" and none of the
   queries behind the answer actually used `COUNT`/`SUM`/`AVG`, the evidence

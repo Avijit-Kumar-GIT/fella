@@ -7,7 +7,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use fella_lib::engine::EngineState;
 
 fn scratch(tag: &str) -> PathBuf {
-    let n = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let n = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
     let p = std::env::temp_dir().join(format!("fella-{tag}-{n}"));
     fs::create_dir_all(&p).unwrap();
     p
@@ -24,7 +27,11 @@ fn grep_files_finds_matching_lines_with_source_and_line_number() {
     let ws = scratch("grep-ws");
     let data = scratch("grep-data");
     fs::write(ws.join("a.txt"), "just some prose\nnothing special here\n").unwrap();
-    fs::write(ws.join("b.txt"), "line one\na distinctive phrase appears here\nline three\n").unwrap();
+    fs::write(
+        ws.join("b.txt"),
+        "line one\na distinctive phrase appears here\nline three\n",
+    )
+    .unwrap();
 
     let engine = open(&ws, &data);
     let hits = engine.grep_files("distinctive phrase", 10).unwrap();
@@ -42,7 +49,11 @@ fn grep_files_finds_matching_lines_with_source_and_line_number() {
 fn grep_files_is_case_insensitive_and_caps_hits() {
     let ws = scratch("grep-ws2");
     let data = scratch("grep-data2");
-    fs::write(ws.join("a.txt"), "Coffee in the morning\ncoffee again at noon\nCOFFEE at night\n").unwrap();
+    fs::write(
+        ws.join("a.txt"),
+        "Coffee in the morning\ncoffee again at noon\nCOFFEE at night\n",
+    )
+    .unwrap();
 
     let engine = open(&ws, &data);
     let hits = engine.grep_files("coffee", 2).unwrap();
@@ -99,7 +110,11 @@ async fn read_file_tool_reads_several_names_in_one_call() {
 
     // The single-name form still works.
     let out1 = reg
-        .run(&engine, "read_file", &serde_json::json!({ "name": "two.md" }))
+        .run(
+            &engine,
+            "read_file",
+            &serde_json::json!({ "name": "two.md" }),
+        )
         .await
         .unwrap()
         .unwrap();
@@ -136,7 +151,10 @@ fn read_file_and_grep_files_reject_unknown_or_tabular_names() {
     let engine = open(&ws, &data);
 
     assert!(engine.read_file("does-not-exist.txt").is_err());
-    assert!(engine.read_file("sales.csv").is_err(), "tables aren't documents");
+    assert!(
+        engine.read_file("sales.csv").is_err(),
+        "tables aren't documents"
+    );
 
     let _ = fs::remove_dir_all(&ws);
     let _ = fs::remove_dir_all(&data);

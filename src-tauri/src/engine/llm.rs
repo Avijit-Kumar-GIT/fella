@@ -1,7 +1,7 @@
 //! Model-agnostic chat client. One struct, branching on the configured
-//! provider Ollama by default, any OpenAI-compatible endpoint as an
-//! override. The Ollama path streams tokens as they arrive; OpenAI-compatible
-//! endpoints deliver the reply in one delta.
+//! provider-specific wire formats. Hosted Ollama-compatible providers stream
+//! tokens as they arrive; OpenAI-compatible endpoints deliver the reply in one
+//! delta.
 
 use futures_util::StreamExt;
 use serde::Serialize;
@@ -31,12 +31,13 @@ fn retry_budget() -> u32 {
         .unwrap_or(3)
 }
 
-/// How long Ollama should keep the model resident in memory after a call. The
-/// default (5 min) drops it between questions, so the next question eats a
-/// 10-20 s reload; `"30m"` keeps a conversation warm. `FELLA_OLLAMA_KEEP_ALIVE`
-/// overrides (any Ollama duration string, e.g. `"-1"` for "never unload").
-fn ollama_keep_alive() -> String {
-    std::env::var("FELLA_OLLAMA_KEEP_ALIVE")
+/// How long an Ollama-wire provider should keep the model resident in memory
+/// after a call. The default (5 min) drops it between questions, so the next
+/// question eats a 10-20 s reload; `"30m"` keeps a conversation warm.
+/// `FELLA_MODEL_KEEP_ALIVE` overrides (any Ollama duration string, e.g. `"-1"`
+/// for "never unload").
+fn model_keep_alive() -> String {
+    std::env::var("FELLA_MODEL_KEEP_ALIVE")
         .ok()
         .filter(|v| !v.trim().is_empty())
         .unwrap_or_else(|| "30m".to_string())
@@ -47,9 +48,9 @@ fn ollama_keep_alive() -> String {
 /// tail (the schema, or the question) is silently truncated and the model looks
 /// dumb. 8192 fits a typical prompt with room for a few tool-result rounds;
 /// `fit_num_ctx` grows past this when the actual payload needs it.
-/// `FELLA_OLLAMA_NUM_CTX` raises (or lowers, min 512) the floor.
-fn ollama_num_ctx() -> u32 {
-    std::env::var("FELLA_OLLAMA_NUM_CTX")
+/// `FELLA_MODEL_NUM_CTX` raises (or lowers, min 512) the floor.
+fn model_num_ctx() -> u32 {
+    std::env::var("FELLA_MODEL_NUM_CTX")
         .ok()
         .and_then(|v| v.parse().ok())
         .filter(|&n: &u32| n >= 512)
@@ -60,7 +61,7 @@ fn ollama_num_ctx() -> u32 {
 /// oversized prompt (many tables, a long `fella.md`, deep history) which would
 /// otherwise be silently truncated. `chars/4` is a crude token estimate; the
 /// 5/4 headroom and 2048 rounding absorb its error. Clamped at 32k the point
-/// past which the first-token stall on a local model isn't worth it; the caller
+/// past which first-token latency isn't worth the extra context; the caller
 /// logs a warning when the estimate still crowds that ceiling.
 /// ponytail: chars/4, swap for a real tokenizer only if the clamp/warn misfires.
 fn fit_num_ctx(messages_json: &Json, tools_json: Option<&Json>) -> u32 {
@@ -68,7 +69,7 @@ fn fit_num_ctx(messages_json: &Json, tools_json: Option<&Json>) -> u32 {
     let approx_tok = ((len(messages_json) + tools_json.map(len).unwrap_or(0)) / 4) as u32;
     ((approx_tok * 5 / 4) + max_output_tokens())
         .next_multiple_of(2048)
-        .clamp(ollama_num_ctx(), 32768)
+        .clamp(model_num_ctx(), 32768)
 }
 
 /// Cap on tokens the model may generate in one turn (`num_predict` on Ollama,
@@ -85,11 +86,11 @@ fn max_output_tokens() -> u32 {
 
 /// Whether to let a reasoning model (gpt-oss, deepseek-r1, qwen3, …) emit its
 /// chain-of-thought. Fella never shows it, and generating it adds seconds to
-/// every turn's first token, so the loop asks for it off. `FELLA_OLLAMA_THINK=1`
+/// every turn's first token, so the loop asks for it off. `FELLA_MODEL_THINK=1`
 /// re-enables it. Ignored by models that don't think.
-fn ollama_think() -> bool {
+fn model_think() -> bool {
     matches!(
-        std::env::var("FELLA_OLLAMA_THINK").ok().as_deref(),
+        std::env::var("FELLA_MODEL_THINK").ok().as_deref(),
         Some("1") | Some("true") | Some("yes")
     )
 }
@@ -129,22 +130,22 @@ fn openai_gpt5_family(model: &str) -> bool {
 fn is_text_generation_model(id: &str) -> bool {
     let id = id.to_ascii_lowercase();
     const NON_CHAT: &[&str] = &[
-        "embed",          // text-embedding-3-*, nomic-embed-text, mxbai-embed-large
+        "embed", // text-embedding-3-*, nomic-embed-text, mxbai-embed-large
         "dall-e",
         "gpt-image",
-        "-image-",        // …-image-generation
+        "-image-", // …-image-generation
         "stable-diffusion",
         "sora",
-        "tts",            // tts-1, gpt-4o-mini-tts
+        "tts", // tts-1, gpt-4o-mini-tts
         "whisper",
         "transcribe",
         "speech",
-        "-audio",         // gpt-4o-audio-preview
-        "-realtime",      // gpt-4o-realtime-preview
+        "-audio",    // gpt-4o-audio-preview
+        "-realtime", // gpt-4o-realtime-preview
         "moderation",
-        "-guard",         // llama-guard-*
+        "-guard", // llama-guard-*
         "rerank",
-        "davinci-",       // legacy base completion
+        "davinci-", // legacy base completion
         "babbage-",
     ];
     !NON_CHAT.iter().any(|p| id.contains(p))
@@ -303,7 +304,10 @@ impl LlmClient {
                                 // The API id is what `chat` sends. Some gateways
                                 // also carry a spaced display `name` never use
                                 // it. Ollama's `/api/tags` has only `name`.
-                                m["id"].as_str().or_else(|| m["name"].as_str()).map(String::from)
+                                m["id"]
+                                    .as_str()
+                                    .or_else(|| m["name"].as_str())
+                                    .map(String::from)
                             })
                             // Only models you can actually chat with the
                             // `/models` list also carries embeddings, image,
@@ -312,7 +316,11 @@ impl LlmClient {
                             .collect()
                     })
                     .unwrap_or_default();
-                ProviderHealth { reachable: true, rejected: false, models }
+                ProviderHealth {
+                    reachable: true,
+                    rejected: false,
+                    models,
+                }
             }
             Ok(r) => {
                 let status = r.status();
@@ -320,24 +328,27 @@ impl LlmClient {
                 log::warn!("health: {url} returned {status}");
                 ProviderHealth {
                     reachable: false,
-                    rejected: matches!(status.as_u16(), 401 | 403)
-                        || body_says_bad_key(&body),
+                    rejected: matches!(status.as_u16(), 401 | 403) || body_says_bad_key(&body),
                     models: Vec::new(),
                 }
             }
             Err(e) => {
                 log::warn!("health: {url} unreachable: {e}");
-                ProviderHealth { reachable: false, rejected: false, models: Vec::new() }
+                ProviderHealth {
+                    reachable: false,
+                    rejected: false,
+                    models: Vec::new(),
+                }
             }
         }
     }
 
     /// Ask Ollama to load the model into memory now and hold it (`keep_alive`),
     /// so the first real question doesn't pay the 10-20 s cold-load stall.
-    /// Fire-and-forget: unreachable server, a hosted provider, or a model that
-    /// isn't pulled yet are all swallowed.
+    /// Fire-and-forget: an unreachable provider or unavailable model is
+    /// swallowed because warming is only a latency optimization.
     pub async fn warm(&self) {
-        if self.is_openai() {
+        if self.is_openai() || self.api_key.is_none() {
             return;
         }
         let url = format!("{}/api/chat", self.base_url);
@@ -345,9 +356,13 @@ impl LlmClient {
             "model": self.model,
             "messages": [],
             "stream": false,
-            "keep_alive": ollama_keep_alive(),
+            "keep_alive": model_keep_alive(),
         });
-        let mut req = self.http.post(&url).timeout(Duration::from_secs(20)).json(&body);
+        let mut req = self
+            .http
+            .post(&url)
+            .timeout(Duration::from_secs(20))
+            .json(&body);
         if let Some(k) = &self.api_key {
             req = req.bearer_auth(k);
         }
@@ -370,7 +385,11 @@ impl LlmClient {
         if self.is_openai() {
             let url = format!("{}/embeddings", self.base_url);
             let v = self
-                .send(&url, &json!({ "model": self.embed_model, "input": inputs }), on_retry)
+                .send(
+                    &url,
+                    &json!({ "model": self.embed_model, "input": inputs }),
+                    on_retry,
+                )
                 .await?;
             v["data"]
                 .as_array()
@@ -381,7 +400,11 @@ impl LlmClient {
         } else {
             let url = format!("{}/api/embed", self.base_url);
             let v = self
-                .send(&url, &json!({ "model": self.embed_model, "input": inputs }), on_retry)
+                .send(
+                    &url,
+                    &json!({ "model": self.embed_model, "input": inputs }),
+                    on_retry,
+                )
                 .await?;
             v["embeddings"]
                 .as_array()
@@ -403,12 +426,12 @@ impl LlmClient {
     ) -> EngineResult<ChatResponse> {
         let url = format!("{}/api/chat", self.base_url);
         let messages_json = Json::Array(messages.iter().map(ollama_message).collect());
-        let tools_json = (!tools.is_empty())
-            .then(|| Json::Array(tools.iter().map(tool_schema_json).collect()));
-        // `FELLA_OLLAMA_NUM_CTX_FIXED` pins num_ctx to the floor (no growth) so
+        let tools_json =
+            (!tools.is_empty()).then(|| Json::Array(tools.iter().map(tool_schema_json).collect()));
+        // `FELLA_MODEL_NUM_CTX_FIXED` pins num_ctx to the floor (no growth) so
         // the eval harness can measure fixed-vs-adaptive on a big workspace.
-        let num_ctx = if std::env::var_os("FELLA_OLLAMA_NUM_CTX_FIXED").is_some() {
-            ollama_num_ctx()
+        let num_ctx = if std::env::var_os("FELLA_MODEL_NUM_CTX_FIXED").is_some() {
+            model_num_ctx()
         } else {
             fit_num_ctx(&messages_json, tools_json.as_ref())
         };
@@ -422,8 +445,8 @@ impl LlmClient {
             "model": self.model,
             "messages": messages_json,
             "stream": true,
-            "keep_alive": ollama_keep_alive(),
-            "think": ollama_think(),
+            "keep_alive": model_keep_alive(),
+            "think": model_think(),
             "options": {
                 "temperature": 0.2,
                 "num_ctx": num_ctx,
@@ -438,7 +461,11 @@ impl LlmClient {
         let msg = &v["message"];
         let content = msg["content"].as_str().unwrap_or_default().to_string();
         let tool_calls = parse_tool_calls(msg["tool_calls"].as_array(), false);
-        Ok(ChatResponse { content, tool_calls, usage: parse_usage(&v) })
+        Ok(ChatResponse {
+            content,
+            tool_calls,
+            usage: parse_usage(&v),
+        })
     }
 
     // --- OpenAI-compatible {base_url}/chat/completions -------------------
@@ -487,7 +514,11 @@ impl LlmClient {
         let msg = &v["message"];
         let content = msg["content"].as_str().unwrap_or_default().to_string();
         let tool_calls = parse_tool_calls(msg["tool_calls"].as_array(), true);
-        Ok(ChatResponse { content, tool_calls, usage: parse_usage(&v) })
+        Ok(ChatResponse {
+            content,
+            tool_calls,
+            usage: parse_usage(&v),
+        })
     }
 
     /// POST `body` to `url`, retrying transient failures (429, 5xx, timeouts,
@@ -634,16 +665,16 @@ impl LlmClient {
                 "the model service kept failing ({status}) after {attempt} attempt(s) it's \
                  having trouble. Try again shortly. ({snippet})"
             )),
-            // Ollama returns 404 "model '...' not found" when the id isn't
-            // pulled (default `llama3.1` vs a pulled `llama3.1:8b`). Say what
-            // to do instead of echoing the raw 404.
-            _ if crate::engine::provider::normalize_id(&self.provider) == "ollama"
+            // Hosted Ollama-wire providers return 404 when a model id is not
+            // available to the account. Give the user a useful next step
+            // instead of echoing the raw response.
+            _ if crate::engine::provider::wire_of(&self.provider)
+                == crate::engine::provider::Wire::Ollama
                 && snippet.contains("not found") =>
             {
                 EngineError::msg(format!(
-                    "The model \"{}\" isn't downloaded in Ollama. Run `ollama pull {}` in a \
-                     terminal, or pick one you already have with /model.",
-                    self.model, self.model
+                    "The model \"{}\" isn't available from {}. Pick another with /model.",
+                    self.model, provider
                 ))
             }
             _ => EngineError::msg(format!(
@@ -711,7 +742,11 @@ impl LlmClient {
                     .iter()
                     .enumerate()
                     .map(|(i, t)| {
-                        let id = if t.id.is_empty() { format!("call_{i}") } else { t.id.clone() };
+                        let id = if t.id.is_empty() {
+                            format!("call_{i}")
+                        } else {
+                            t.id.clone()
+                        };
                         json!({
                             "id": id,
                             "function": { "name": t.name, "arguments": t.arguments },
@@ -763,10 +798,7 @@ fn absorb_stream_line(
         }
     }
     // The `done: true` summary line carries the token counts.
-    if let (Some(p), Some(c)) = (
-        v["prompt_eval_count"].as_u64(),
-        v["eval_count"].as_u64(),
-    ) {
+    if let (Some(p), Some(c)) = (v["prompt_eval_count"].as_u64(), v["eval_count"].as_u64()) {
         *usage = Some(Usage {
             prompt_tokens: p as u32,
             completion_tokens: c as u32,
@@ -886,7 +918,9 @@ fn parse_usage(v: &Json) -> Option<Usage> {
 }
 
 fn parse_tool_calls(calls: Option<&Vec<Json>>, openai_style: bool) -> Vec<ToolCall> {
-    let Some(calls) = calls else { return Vec::new() };
+    let Some(calls) = calls else {
+        return Vec::new();
+    };
     calls
         .iter()
         .enumerate()
@@ -911,7 +945,11 @@ fn parse_tool_calls(calls: Option<&Vec<Json>>, openai_style: bool) -> Vec<ToolCa
             } else {
                 format!("call_{i}")
             };
-            Some(ToolCall { id, name, arguments })
+            Some(ToolCall {
+                id,
+                name,
+                arguments,
+            })
         })
         .collect()
 }
@@ -989,6 +1027,7 @@ mod tests {
             base_url: base_url.into(),
             model: "m".into(),
             embed_model: "e".into(),
+            capabilities: crate::engine::capabilities::AnalysisCapabilities::default(),
             has_credential: false,
         }
     }
@@ -996,14 +1035,28 @@ mod tests {
     #[test]
     fn reasoning_models_are_matched_by_family_prefix() {
         for m in [
-            "o1", "o1-mini", "o3", "o3-mini", "o4-mini", "gpt-5", "gpt-5-mini",
-            "gpt-5.6-luna", "gpt-5.6-sol", "openai/gpt-5.6-luna", "openai/o3-mini",
+            "o1",
+            "o1-mini",
+            "o3",
+            "o3-mini",
+            "o4-mini",
+            "gpt-5",
+            "gpt-5-mini",
+            "gpt-5.6-luna",
+            "gpt-5.6-sol",
+            "openai/gpt-5.6-luna",
+            "openai/o3-mini",
         ] {
             assert!(openai_reasoning_model(m), "{m} should be a reasoning model");
         }
         for m in [
-            "gpt-4o", "gpt-4o-mini", "gpt-4.1", "grok-2-latest", "grok-4.3",
-            "x-ai/grok-4.3", "llama3.1",
+            "gpt-4o",
+            "gpt-4o-mini",
+            "gpt-4.1",
+            "grok-2-latest",
+            "grok-4.3",
+            "x-ai/grok-4.3",
+            "llama3.1",
         ] {
             assert!(!openai_reasoning_model(m), "{m} should not be");
         }
@@ -1031,7 +1084,13 @@ mod tests {
             &mut None,
             &mut u,
         );
-        assert_eq!(u, Some(Usage { prompt_tokens: 812, completion_tokens: 41 }));
+        assert_eq!(
+            u,
+            Some(Usage {
+                prompt_tokens: 812,
+                completion_tokens: 41
+            })
+        );
 
         // OpenAI: the trailing usage chunk from `stream_options.include_usage`.
         let mut u = None;
@@ -1042,12 +1101,21 @@ mod tests {
             &mut Vec::new(),
             &mut u,
         );
-        assert_eq!(u, Some(Usage { prompt_tokens: 900, completion_tokens: 50 }));
+        assert_eq!(
+            u,
+            Some(Usage {
+                prompt_tokens: 900,
+                completion_tokens: 50
+            })
+        );
 
         // `parse_usage` reads the normalised block `send_stream` attaches.
         assert_eq!(
             parse_usage(&json!({ "usage": { "prompt_tokens": 5, "completion_tokens": 7 } })),
-            Some(Usage { prompt_tokens: 5, completion_tokens: 7 })
+            Some(Usage {
+                prompt_tokens: 5,
+                completion_tokens: 7
+            })
         );
         assert_eq!(parse_usage(&json!({ "message": {} })), None);
     }
@@ -1070,18 +1138,40 @@ mod tests {
     #[test]
     fn model_list_keeps_only_chat_models() {
         for m in [
-            "gpt-4o", "gpt-4o-mini", "gpt-4.1", "o3-mini", "gpt-5", "gpt-5-nano",
-            "grok-2-latest", "deepseek/deepseek-chat", "google/gemini-2.5-flash",
-            "gemma4:31b", "qwen3", "llama3.1:8b", "meta-llama/llama-3.2-11b-vision-instruct",
+            "gpt-4o",
+            "gpt-4o-mini",
+            "gpt-4.1",
+            "o3-mini",
+            "gpt-5",
+            "gpt-5-nano",
+            "grok-2-latest",
+            "deepseek/deepseek-chat",
+            "google/gemini-2.5-flash",
+            "gemma4:31b",
+            "qwen3",
+            "llama3.1:8b",
+            "meta-llama/llama-3.2-11b-vision-instruct",
         ] {
             assert!(is_text_generation_model(m), "{m} should be kept");
         }
         for m in [
-            "text-embedding-3-small", "nomic-embed-text", "mxbai-embed-large",
-            "dall-e-3", "gpt-image-1", "tts-1", "gpt-4o-mini-tts", "whisper-1",
-            "gpt-4o-transcribe", "omni-moderation-latest", "text-moderation-latest",
-            "gpt-4o-audio-preview", "gpt-4o-realtime-preview", "davinci-002", "babbage-002",
-            "meta-llama/llama-guard-3-8b", "gemini-2.0-flash-exp-image-generation",
+            "text-embedding-3-small",
+            "nomic-embed-text",
+            "mxbai-embed-large",
+            "dall-e-3",
+            "gpt-image-1",
+            "tts-1",
+            "gpt-4o-mini-tts",
+            "whisper-1",
+            "gpt-4o-transcribe",
+            "omni-moderation-latest",
+            "text-moderation-latest",
+            "gpt-4o-audio-preview",
+            "gpt-4o-realtime-preview",
+            "davinci-002",
+            "babbage-002",
+            "meta-llama/llama-guard-3-8b",
+            "gemini-2.0-flash-exp-image-generation",
         ] {
             assert!(!is_text_generation_model(m), "{m} should be filtered out");
         }
@@ -1206,8 +1296,7 @@ mod tests {
             let (mut s, _) = listener.accept().unwrap();
             let mut line = String::new();
             std::io::BufReader::new(&s).read_line(&mut line).unwrap();
-            let body =
-                r#"{"code":"invalid-argument","error":"Incorrect API key provided."}"#;
+            let body = r#"{"code":"invalid-argument","error":"Incorrect API key provided."}"#;
             write!(
                 s,
                 "HTTP/1.1 400 Bad Request\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -1227,10 +1316,15 @@ mod tests {
         server.join().unwrap();
 
         assert!(!health.reachable);
-        assert!(health.rejected, "a 400 'Incorrect API key' must read as rejected");
+        assert!(
+            health.rejected,
+            "a 400 'Incorrect API key' must read as rejected"
+        );
 
         // …and an in-flight question gets the key message, not a raw 400 dump.
-        assert!(body_says_bad_key(r#"{"error":"Incorrect API key provided."}"#));
+        assert!(body_says_bad_key(
+            r#"{"error":"Incorrect API key provided."}"#
+        ));
         assert!(!body_says_bad_key(r#"{"error":"Model not found: grok-9"}"#));
     }
 
@@ -1297,7 +1391,12 @@ mod tests {
             retries.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         };
         let resp = client
-            .chat(&[ChatMessage::User("q".into())], &[], &notify, &|_: &str| {})
+            .chat(
+                &[ChatMessage::User("q".into())],
+                &[],
+                &notify,
+                &|_: &str| {},
+            )
             .await
             .unwrap();
         server.join().unwrap();
@@ -1328,7 +1427,12 @@ mod tests {
         let base = format!("http://127.0.0.1:{port}");
         let client = LlmClient::new(reqwest::Client::new(), &settings("vercel", &base), None);
         let err = client
-            .chat(&[ChatMessage::User("q".into())], &[], &|_: &str| {}, &|_: &str| {})
+            .chat(
+                &[ChatMessage::User("q".into())],
+                &[],
+                &|_: &str| {},
+                &|_: &str| {},
+            )
             .await
             .unwrap_err()
             .to_string();
@@ -1357,10 +1461,14 @@ mod tests {
                 );
             });
             let base = format!("http://127.0.0.1:{port}");
-            let client =
-                LlmClient::new(reqwest::Client::new(), &settings(provider, &base), None);
+            let client = LlmClient::new(reqwest::Client::new(), &settings(provider, &base), None);
             let e = client
-                .chat(&[ChatMessage::User("q".into())], &[], &|_: &str| {}, &|_: &str| {})
+                .chat(
+                    &[ChatMessage::User("q".into())],
+                    &[],
+                    &|_: &str| {},
+                    &|_: &str| {},
+                )
                 .await
                 .unwrap_err()
                 .to_string();
@@ -1369,17 +1477,29 @@ mod tests {
         }
 
         let e401 = err_for("401 Unauthorized", "openai").await;
-        assert!(e401.contains("rejected the API key") && e401.contains("/login"), "{e401}");
+        assert!(
+            e401.contains("rejected the API key") && e401.contains("/login"),
+            "{e401}"
+        );
         assert!(!e401.contains("\"error\""), "raw body leaked: {e401}");
 
         // 403 is not treated as a bad key it's an account/plan/credit block
         // (e.g. Vercel AI Gateway free-credit restrictions), and the provider's
         // own words are passed through so the user can act on them.
         let e403 = err_for("403 Forbidden", "vercel").await;
-        assert!(e403.contains("403") && e403.contains("not a bad key"), "{e403}");
-        assert!(!e403.contains("/login"), "403 should not send them back to /login: {e403}");
+        assert!(
+            e403.contains("403") && e403.contains("not a bad key"),
+            "{e403}"
+        );
+        assert!(
+            !e403.contains("/login"),
+            "403 should not send them back to /login: {e403}"
+        );
 
         let e402 = err_for("402 Payment Required", "vercel").await;
-        assert!(e402.contains("plan doesn't cover") && e402.contains("/model"), "{e402}");
+        assert!(
+            e402.contains("plan doesn't cover") && e402.contains("/model"),
+            "{e402}"
+        );
     }
 }

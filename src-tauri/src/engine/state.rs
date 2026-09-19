@@ -2,20 +2,18 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use serde::Serialize;
 
 use crate::engine::agent;
-use crate::engine::analytics::data::{self, DataEngine, PythonBridge, DEFAULT_ROW_CAP};
+use crate::engine::analytics::data::{self, DataEngine, DEFAULT_ROW_CAP};
 use crate::engine::analytics::pyexec;
-use crate::engine::augment;
 use crate::engine::catalog::{self, Catalog, SourceInfo, SourceKind};
 use crate::engine::error::{EngineError, EngineResult};
 use crate::engine::evidence::{Answer, AskEvent};
-use crate::engine::extensions::{self, InstalledPack};
 use crate::engine::ingest::docs;
 use crate::engine::llm::{LlmClient, ProviderHealth};
 use crate::engine::memory::{self, FolderMemory};
@@ -26,7 +24,7 @@ use crate::engine::tools::Registry;
 use crate::engine::update;
 
 pub struct EngineState {
-    data: Mutex<Box<dyn DataEngine>>,
+    workspace: Mutex<WorkspaceState>,
     sqlite: Mutex<rusqlite::Connection>,
     inner: Mutex<Inner>,
     http: reqwest::Client,
@@ -72,12 +70,12 @@ pub struct ConversationSummary {
 pub struct ProviderInfo {
     pub id: String,
     pub display: String,
-    /// `"none"` or `"key"`.
+    /// `"key"` all model providers are BYOK.
     pub auth: String,
     pub base_url: String,
     pub get_key_url: String,
     pub embeddings: bool,
-    /// A credential is present, or the provider needs none.
+    /// A credential is present for this provider.
     pub authed: bool,
     /// This is the currently-selected provider.
     pub current: bool,
@@ -85,11 +83,6 @@ pub struct ProviderInfo {
 
 #[derive(Default)]
 struct Inner {
-    workspace: Option<PathBuf>,
-    sources: Vec<SourceInfo>,
-    /// Contents of `fella.md` at the workspace root, if present. User-written
-    /// context fed to the system prompt alongside enabled skill packs.
-    user_md: Option<String>,
     /// Distilled context from earlier questions, one entry per conversation
     /// (tab). Bounded by `SESSION_CAP`, LRU by `last_used`. Cleared on workspace
     /// (re)open; an entry is dropped when its tab is closed
@@ -98,6 +91,21 @@ struct Inner {
     /// Monotonic counter stamped onto `SessionMemory::last_used` so the least
     /// recently asked conversation can be evicted when `sessions` is full.
     session_tick: u64,
+}
+
+struct WorkspaceState {
+    data: Box<dyn DataEngine>,
+    /// Temporary directory for this backend's scratch database. DuckDB uses
+    /// memory here, but keeping the directory in the state gives SQLite a
+    /// private file that can be built without touching the active engine.
+    scratch: Option<WorkspaceScratch>,
+    workspace: Option<PathBuf>,
+    revision: Option<String>,
+    indexed_at_ms: Option<i64>,
+    sources: Vec<SourceInfo>,
+    /// Contents of `fella.md` at the workspace root, if present. User-written
+    /// context fed to the system prompt.
+    user_md: Option<String>,
     /// Rendered `schema_block()` for the current sources - it re-samples every
     /// table, so we build it once per workspace and clear it on (re)open or
     /// when `describe_source` refreshes a table's stats.
@@ -117,8 +125,178 @@ struct Inner {
     memory_path: Option<PathBuf>,
 }
 
+impl WorkspaceState {
+    fn new(data: Box<dyn DataEngine>, scratch: Option<WorkspaceScratch>) -> Self {
+        Self {
+            data,
+            scratch,
+            workspace: None,
+            revision: None,
+            indexed_at_ms: None,
+            sources: Vec::new(),
+            user_md: None,
+            schema_cache: None,
+            inspected_tables: HashSet::new(),
+            skipped: Vec::new(),
+            memory_path: None,
+        }
+    }
+}
+
+fn require_capability(enabled: bool, label: &str) -> EngineResult<()> {
+    if enabled {
+        Ok(())
+    } else {
+        Err(EngineError::msg(format!(
+            "{label} is disabled in Settings under Experimental analysis capabilities."
+        )))
+    }
+}
+
+struct WorkspaceScratch {
+    path: PathBuf,
+    users: Arc<AtomicUsize>,
+    owner: Arc<AtomicBool>,
+}
+
+impl WorkspaceScratch {
+    fn new(path: PathBuf) -> Self {
+        Self {
+            path,
+            users: Arc::new(AtomicUsize::new(0)),
+            owner: Arc::new(AtomicBool::new(true)),
+        }
+    }
+
+    fn lease(&self) -> ScratchLease {
+        self.users.fetch_add(1, Ordering::AcqRel);
+        ScratchLease {
+            path: self.path.clone(),
+            users: Arc::clone(&self.users),
+            owner: Arc::clone(&self.owner),
+        }
+    }
+
+    fn cleanup(&self) {
+        self.owner.store(false, Ordering::Release);
+        cleanup_scratch(&self.path, &self.users, &self.owner);
+    }
+}
+
+impl Drop for WorkspaceScratch {
+    fn drop(&mut self) {
+        self.cleanup();
+    }
+}
+
+struct ScratchLease {
+    path: PathBuf,
+    users: Arc<AtomicUsize>,
+    owner: Arc<AtomicBool>,
+}
+
+impl Drop for ScratchLease {
+    fn drop(&mut self) {
+        self.users.fetch_sub(1, Ordering::AcqRel);
+        cleanup_scratch(&self.path, &self.users, &self.owner);
+    }
+}
+
+fn cleanup_scratch(path: &Path, users: &AtomicUsize, owner: &AtomicBool) {
+    // The active workspace owns its scratch directory. A Python lease only
+    // keeps a replaced workspace alive long enough for its in-flight guest to
+    // finish; it must never delete the current directory while another tool
+    // is about to open a read-only connection to it.
+    if !owner.load(Ordering::Acquire) && users.load(Ordering::Acquire) == 0 {
+        let _ = std::fs::remove_dir_all(path);
+    }
+}
+
+#[cfg(test)]
+mod scratch_tests {
+    use super::*;
+
+    #[test]
+    fn active_workspace_keeps_scratch_after_last_python_lease() {
+        let path = std::env::temp_dir().join(format!("fella-scratch-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir(&path).unwrap();
+
+        let scratch = WorkspaceScratch::new(path.clone());
+        let lease = scratch.lease();
+        drop(lease);
+        assert!(
+            path.exists(),
+            "the active workspace still owns its scratch dir"
+        );
+
+        drop(scratch);
+        assert!(
+            !path.exists(),
+            "scratch is removed after the workspace owner drops"
+        );
+    }
+
+    #[test]
+    fn replaced_workspace_keeps_scratch_until_its_lease_drops() {
+        let path = std::env::temp_dir().join(format!("fella-scratch-old-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir(&path).unwrap();
+
+        let scratch = WorkspaceScratch::new(path.clone());
+        let lease = scratch.lease();
+        drop(scratch);
+        assert!(
+            path.exists(),
+            "an in-flight Python call still owns the scratch dir"
+        );
+
+        drop(lease);
+        assert!(
+            !path.exists(),
+            "replaced scratch is removed after the last lease drops"
+        );
+    }
+}
+
+#[cfg(test)]
+static TEST_OPEN_WORKSPACE_TARGET: AtomicUsize = AtomicUsize::new(0);
+#[cfg(test)]
+static TEST_OPEN_WORKSPACE_PAUSE: AtomicBool = AtomicBool::new(false);
+#[cfg(test)]
+static TEST_OPEN_WORKSPACE_READY: AtomicBool = AtomicBool::new(false);
+#[cfg(test)]
+static TEST_OPEN_WORKSPACE_RESUME: AtomicBool = AtomicBool::new(false);
+
+#[cfg(test)]
+fn pause_open_workspace_for_test(state: &EngineState) {
+    let target = state as *const EngineState as usize;
+    if TEST_OPEN_WORKSPACE_TARGET.load(Ordering::SeqCst) != target
+        || !TEST_OPEN_WORKSPACE_PAUSE.swap(false, Ordering::SeqCst)
+    {
+        return;
+    }
+    TEST_OPEN_WORKSPACE_READY.store(true, Ordering::SeqCst);
+    while !TEST_OPEN_WORKSPACE_RESUME.load(Ordering::SeqCst) {
+        std::thread::yield_now();
+    }
+}
+
 /// Most conversations we keep distilled memory for at once.
 const SESSION_CAP: usize = 24;
+
+fn workspace_scratch_dir(data_dir: &Path) -> EngineResult<PathBuf> {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    loop {
+        let suffix = NEXT.fetch_add(1, Ordering::Relaxed);
+        let path = data_dir.join(format!(".analysis-{}-{suffix}", std::process::id()));
+        match std::fs::create_dir(&path) {
+            Ok(()) => return Ok(path),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(EngineError::io(format!("create {}", path.display()), e)),
+        }
+    }
+}
 
 /// A few earlier turns of one conversation, distilled so a follow-up question
 /// doesn't have to rediscover the schema. In-memory only.
@@ -187,7 +365,7 @@ impl EngineState {
             // recoverable, so surface it.
             .expect("build HTTP client");
         Ok(Self {
-            data: Mutex::new(data),
+            workspace: Mutex::new(WorkspaceState::new(data, None)),
             sqlite: Mutex::new(sqlite),
             inner: Mutex::new(Inner::default()),
             http,
@@ -242,7 +420,11 @@ impl EngineState {
             .filter(|c| c.is_ascii_alphanumeric())
             .take(32)
             .collect();
-        let slug = if slug.is_empty() { "unknown".to_string() } else { slug };
+        let slug = if slug.is_empty() {
+            "unknown".to_string()
+        } else {
+            slug
+        };
         let suffix = format!("_{slug}.json");
 
         let dir = self.data_dir.join("conversations");
@@ -305,7 +487,10 @@ impl EngineState {
             if trimmed.is_empty() {
                 obj.remove("title");
             } else {
-                obj.insert("title".into(), serde_json::Value::String(trimmed.to_string()));
+                obj.insert(
+                    "title".into(),
+                    serde_json::Value::String(trimmed.to_string()),
+                );
             }
         }
         let pretty = serde_json::to_string_pretty(&value).unwrap_or(text);
@@ -326,11 +511,7 @@ impl EngineState {
             .map(|entries| {
                 entries
                     .flatten()
-                    .filter(|e| {
-                        e.file_name()
-                            .to_string_lossy()
-                            .ends_with(".json")
-                    })
+                    .filter(|e| e.file_name().to_string_lossy().ends_with(".json"))
                     .count()
             })
             .unwrap_or(0);
@@ -434,11 +615,27 @@ impl EngineState {
     }
 
     pub fn catalog(&self) -> Catalog {
-        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
         Catalog {
-            workspace: inner.workspace.as_ref().map(|p| p.display().to_string()),
-            sources: inner.sources.clone(),
-            skipped: inner.skipped.clone(),
+            workspace: workspace
+                .workspace
+                .as_ref()
+                .map(|p| p.display().to_string()),
+            revision: workspace.revision.clone(),
+            indexed_at_ms: workspace.indexed_at_ms,
+            sources: workspace.sources.clone(),
+            skipped: workspace.skipped.clone(),
+        }
+    }
+
+    fn answer_workspace_is_current(&self, answer: &Answer) -> bool {
+        let workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
+        match &answer.workspace {
+            Some(snapshot) => {
+                workspace.workspace.as_deref() == Some(Path::new(&snapshot.path))
+                    && workspace.revision.as_deref() == Some(snapshot.revision.as_str())
+            }
+            None => workspace.workspace.is_none() && workspace.revision.is_none(),
         }
     }
 
@@ -452,9 +649,9 @@ impl EngineState {
     /// Compact one-line-per-table schema: `view("col" TYPE, ...)`. Used to echo
     /// the real schema back to the model after a SQL error.
     pub(crate) fn schema_oneline(&self) -> String {
-        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
         let mut out = String::new();
-        for s in inner.sources.iter().filter(|s| s.view.is_some()) {
+        for s in workspace.sources.iter().filter(|s| s.view.is_some()) {
             let cols = s
                 .columns
                 .as_ref()
@@ -475,15 +672,18 @@ impl EngineState {
     /// sample rows for a small workspace; a large/messy folder falls back to
     /// names + shape only (keeps the prompt small).
     pub(crate) fn schema_block(&self) -> String {
-        // Clone out first: `self.sample` re-locks `inner`.
-        let (sources, inspected) = {
-            let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(cached) = &inner.schema_cache {
-                return cached.clone();
-            }
-            (inner.sources.clone(), inner.inspected_tables.clone())
+        let capabilities = self.settings().capabilities;
+        let mut workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(cached) = &workspace.schema_cache {
+            return cached.clone();
+        }
+        let sources = workspace.sources.clone();
+        let inspected = workspace.inspected_tables.clone();
+        let tables: Vec<&SourceInfo> = if capabilities.table_analysis {
+            sources.iter().filter(|s| s.view.is_some()).collect()
+        } else {
+            Vec::new()
         };
-        let tables: Vec<&SourceInfo> = sources.iter().filter(|s| s.view.is_some()).collect();
         let total_cols: usize = tables
             .iter()
             .map(|s| s.columns.as_ref().map(|c| c.len()).unwrap_or(0))
@@ -496,29 +696,56 @@ impl EngineState {
         let small = tables.len() <= 4;
 
         let mut p = String::new();
-        if tables.is_empty() {
+        if !capabilities.table_analysis {
+            p.push_str(
+                "Table analysis is disabled by the current experimental capability policy.\n",
+            );
+        } else if tables.is_empty() {
             p.push_str("No tables were detected.\n");
         } else if full {
             p.push_str("Tables (columns and types shown; use inspect_table for values):\n");
             for s in &tables {
                 let view = s.view.as_deref().unwrap_or("");
-                let rows = s.row_count.map(|n| n.to_string()).unwrap_or_else(|| "?".into());
+                let rows = s
+                    .row_count
+                    .map(|n| n.to_string())
+                    .unwrap_or_else(|| "?".into());
                 p.push_str(&format!("  {view}  ({rows} rows)\n"));
                 if let Some(note) = &s.note {
                     p.push_str(&format!("    note: {note}\n"));
                 }
                 if let Some(cols) = &s.columns {
                     for c in cols {
+                        let common = c
+                            .common_values
+                            .as_ref()
+                            .map(|values| {
+                                let shown = values
+                                    .iter()
+                                    .take(4)
+                                    .map(|value| cap_chars(value, 40))
+                                    .collect::<Vec<_>>()
+                                    .join(" | ");
+                                format!("  common: {shown}")
+                            })
+                            .unwrap_or_default();
                         match &c.note {
-                            Some(n) => {
-                                p.push_str(&format!("    \"{}\" {}  [{}]\n", c.name, c.type_, n))
+                            Some(n) => p.push_str(&format!(
+                                "    \"{}\" {}  [{}]{}\n",
+                                c.name, c.type_, n, common
+                            )),
+                            None => {
+                                p.push_str(&format!("    \"{}\" {}{}\n", c.name, c.type_, common))
                             }
-                            None => p.push_str(&format!("    \"{}\" {}\n", c.name, c.type_)),
                         }
                     }
                 }
                 if small || inspected.contains(&view.to_lowercase()) {
-                    if let Ok(sample) = self.sample(view, 3) {
+                    if let Ok(sample) = query_workspace(
+                        &*workspace.data,
+                        &format!("SELECT * FROM {} LIMIT 3", data::quote_ident(view)),
+                        3,
+                    ) {
                         for line in mini_table(&sample) {
                             p.push_str(&format!("    {line}\n"));
                         }
@@ -532,7 +759,9 @@ impl EngineState {
                 p.push_str(&format!(
                     "  {}  {} rows, {ncols} columns\n",
                     s.view.as_deref().unwrap_or(""),
-                    s.row_count.map(|n| n.to_string()).unwrap_or_else(|| "?".into()),
+                    s.row_count
+                        .map(|n| n.to_string())
+                        .unwrap_or_else(|| "?".into()),
                 ));
             }
         }
@@ -548,7 +777,11 @@ impl EngineState {
         }
 
         let docs: Vec<&SourceInfo> = sources.iter().filter(|s| s.view.is_none()).collect();
-        if !docs.is_empty() {
+        if !capabilities.document_analysis {
+            p.push_str(
+                "Document analysis is disabled by the current experimental capability policy.\n",
+            );
+        } else if !docs.is_empty() {
             p.push_str("Documents (list_files/grep_files/read_file):\n");
             for d in docs {
                 match &d.synopsis {
@@ -557,7 +790,7 @@ impl EngineState {
                 }
             }
         }
-        self.inner.lock().unwrap_or_else(|e| e.into_inner()).schema_cache = Some(p.clone());
+        workspace.schema_cache = Some(p.clone());
         p
     }
 
@@ -579,24 +812,29 @@ impl EngineState {
         Some(p)
     }
 
-    /// User-written context for the system prompt: the workspace `fella.md`
-    /// followed by the Markdown of every enabled `skill` pack.
+    /// User-written context for the system prompt: the workspace `fella.md`.
     pub fn user_context(&self) -> Vec<String> {
         let mut out = Vec::new();
-        if let Some(md) = self.inner.lock().unwrap_or_else(|e| e.into_inner()).user_md.clone() {
+        if let Some(md) = self
+            .workspace
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .user_md
+            .clone()
+        {
             out.push(md);
         }
-        out.extend(extensions::enabled_skill_texts(
-            &self.data_dir,
-            &self.sqlite.lock().unwrap_or_else(|e| e.into_inner()),
-        ));
         out
     }
 
     // --- per-folder memory ---------------------------------------------------
 
     fn memory_path(&self) -> Option<PathBuf> {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner()).memory_path.clone()
+        self.workspace
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .memory_path
+            .clone()
     }
 
     /// `(file path, contents)` of the current folder's `memory.md` for the
@@ -622,7 +860,11 @@ impl EngineState {
     /// when `reason` fires (see `friction::trigger`). Never transmitted; never
     /// contains question/answer text, file paths, or data values. Best-effort
     /// a write failure here must never fail the actual answer.
-    pub(crate) fn record_friction_signal(&self, reason: &str, evidence: &[crate::engine::evidence::EvidenceItem]) {
+    pub(crate) fn record_friction_signal(
+        &self,
+        reason: &str,
+        evidence: &[crate::engine::evidence::EvidenceItem],
+    ) {
         crate::engine::friction::record(&self.data_dir, reason, evidence);
     }
 
@@ -640,7 +882,7 @@ impl EngineState {
     }
 
     fn known_views(&self) -> Vec<String> {
-        self.inner
+        self.workspace
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .sources
@@ -659,12 +901,14 @@ impl EngineState {
         if !memory::writes_enabled() {
             return;
         }
-        let Some(path) = self.memory_path() else { return };
+        let Some(path) = self.memory_path() else {
+            return;
+        };
 
         let sqls: Vec<&str> = answer
             .evidence
             .iter()
-            .filter(|e| e.tool == "run_sql" && e.error.is_none())
+            .filter(|e| matches!(e.tool.as_str(), "run_sql" | "make_chart") && e.error.is_none())
             .filter_map(|e| e.sql.as_deref())
             .collect();
         let corrected = prior_q.is_some() && memory::is_correction(question);
@@ -680,7 +924,10 @@ impl EngineState {
                 "q": question.chars().take(300).collect::<String>(),
                 "headline": answer.text.lines().find(|l| !l.trim().is_empty()).unwrap_or("").chars().take(200).collect::<String>(),
                 "queries": sqls.iter().take(3).collect::<Vec<_>>(),
-                "verified": crate::engine::analytics::verify::reran_clean(&answer.verification),
+                "verified": matches!(
+                    answer.status,
+                    crate::engine::evidence::VerificationStatus::Verified
+                ),
                 "corrected_prior": corrected,
             }),
         );
@@ -708,12 +955,19 @@ impl EngineState {
     /// 2026-09-12). Uses whichever model is currently active no override so
     /// the memory file stays legible to any model that later reads it, and
     /// costs nothing when there's nothing yet to reconcile against.
-    async fn reconcile_vocab_key(&self, correction: &str, existing: &[(String, String)]) -> VocabAction {
+    async fn reconcile_vocab_key(
+        &self,
+        correction: &str,
+        existing: &[(String, String)],
+    ) -> VocabAction {
         if existing.is_empty() {
             return VocabAction::Add(default_topic_key(correction));
         }
-        let list =
-            existing.iter().map(|(k, v)| format!("- {k}: {v}")).collect::<Vec<_>>().join("\n");
+        let list = existing
+            .iter()
+            .map(|(k, v)| format!("- {k}: {v}"))
+            .collect::<Vec<_>>()
+            .join("\n");
         let sys = "You maintain a short list of facts Fella has learned from a user's corrections \
 about their own data. Given a new correction and the existing facts, decide: does it UPDATE one of \
 them (replace its text with this correction), is it genuinely a NEW fact (ADD), or does it just \
@@ -728,87 +982,58 @@ exactly, character for character, from the list below.";
         }
     }
 
-    // --- packs (installed extensions) ------------------------------------
+    /// Return the current workspace context file and its contents.
+    /// The file is user-authored context, not an agent write surface.
+    pub fn context_file(&self) -> Option<(String, Option<String>)> {
+        let ws = self
+            .workspace
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .workspace
+            .clone()?;
+        let path = ws.join("fella.md");
+        Some((
+            path.display().to_string(),
+            std::fs::read_to_string(path).ok(),
+        ))
+    }
 
-    pub fn packs_list(&self) -> Vec<InstalledPack> {
-        let mut list = extensions::list(
-            &self.data_dir,
-            &self.sqlite.lock().unwrap_or_else(|e| e.into_inner()),
-        );
-        for p in &mut list {
-            if p.kind == "mcp" && !self.mcp_has_token(&p.id) {
-                p.needs_token = true;
+    /// Save the explicit user context file at the root of the open workspace.
+    /// This is the one supported workspace write outside the agent tool path.
+    pub fn save_context(&self, contents: &str) -> EngineResult<()> {
+        let ws = self
+            .workspace
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .workspace
+            .clone()
+            .ok_or(EngineError::NoWorkspace)?;
+        let path = ws.join("fella.md");
+        let tmp = ws.join(".fella.md.fella-tmp");
+        std::fs::write(&tmp, contents)
+            .map_err(|e| EngineError::io(format!("write {}", tmp.display()), e))?;
+        if let Err(e) = Self::replace_file(&tmp, &path) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(EngineError::io(format!("replace {}", path.display()), e));
+        }
+        let normalized = contents.trim().to_string();
+        let mut workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
+        workspace.user_md = (!normalized.is_empty()).then_some(normalized);
+        Ok(())
+    }
+
+    /// Replace a file after writing a sibling temporary file. Unix rename is an
+    /// atomic replacement; Windows refuses to rename over an existing file, so the
+    /// small fallback removes the old context file before moving the completed
+    /// temporary file into place.
+    fn replace_file(tmp: &Path, destination: &Path) -> std::io::Result<()> {
+        #[cfg(windows)]
+        {
+            if destination.exists() {
+                std::fs::remove_file(destination)?;
             }
         }
-        list
-    }
-
-    pub fn packs_add(&self, src: &Path) -> EngineResult<Vec<InstalledPack>> {
-        let conn = self.sqlite.lock().unwrap_or_else(|e| e.into_inner());
-        extensions::install_local(&self.data_dir, &conn, src)?;
-        Ok(extensions::list(&self.data_dir, &conn))
-    }
-
-    pub fn packs_remove(&self, id: &str) -> EngineResult<Vec<InstalledPack>> {
-        let conn = self.sqlite.lock().unwrap_or_else(|e| e.into_inner());
-        extensions::remove(&self.data_dir, &conn, id)?;
-        Ok(extensions::list(&self.data_dir, &conn))
-    }
-
-    pub fn packs_set_enabled(
-        &self,
-        id: &str,
-        enabled: bool,
-    ) -> EngineResult<Vec<InstalledPack>> {
-        let conn = self.sqlite.lock().unwrap_or_else(|e| e.into_inner());
-        extensions::set_enabled(&conn, id, enabled)?;
-        Ok(extensions::list(&self.data_dir, &conn))
-    }
-
-    /// Install a pack from the marketplace by id (files are SHA-256 checked
-    /// against the catalog). Network happens before the DB lock is taken.
-    pub async fn packs_install(&self, id: &str) -> EngineResult<Vec<InstalledPack>> {
-        let downloaded =
-            extensions::download_pack(&self.http, &extensions::catalog_url(), id).await?;
-        let conn = self.sqlite.lock().unwrap_or_else(|e| e.into_inner());
-        extensions::install_downloaded(&self.data_dir, &conn, &downloaded)?;
-        Ok(extensions::list(&self.data_dir, &conn))
-    }
-
-    // --- augments (user-authored files in the open folder) --------------
-
-    /// Write a user-authored augment file into the open folder. Called by the UI
-    /// when a person types in a `buffer` / `grid` view never by the agent.
-    /// Write only; the UI calls `reindex()` (on tab close / idle) so Fella then
-    /// sees the file like any other in the folder.
-    pub fn augment_save(&self, capability: &str, file: &str, contents: &str) -> EngineResult<()> {
-        let ws = self
-            .inner
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .workspace
-            .clone()
-            .ok_or(EngineError::NoWorkspace)?;
-        match capability {
-            // The grid is serialised to CSV text by the UI, so both persist the
-            // same way; `capability` is only the compatibility checkpoint.
-            "buffer" | "grid" => augment::write_buffer(&ws, file, contents).map(|_| ()),
-            other => Err(EngineError::msg(format!(
-                "this build doesn't support the '{other}' augment update Fella"
-            ))),
-        }
-    }
-
-    /// Read an augment file back for the editor. `None` if it doesn't exist yet.
-    pub fn augment_load(&self, file: &str) -> EngineResult<Option<String>> {
-        let ws = self
-            .inner
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .workspace
-            .clone()
-            .ok_or(EngineError::NoWorkspace)?;
-        augment::read_buffer(&ws, file)
+        std::fs::rename(tmp, destination)
     }
 
     /// Check the latest GitHub release and, if it's newer, download +
@@ -820,16 +1045,10 @@ exactly, character for character, from the list below.";
         update::apply(&self.http, app).await
     }
 
-    /// CSS token map of the active theme pack, for the frontend to apply.
-    pub fn packs_theme(&self) -> Option<std::collections::BTreeMap<String, String>> {
-        extensions::active_theme_tokens(&self.data_dir, &self.sqlite.lock().unwrap_or_else(|e| e.into_inner()))
-    }
-
     pub fn settings(&self) -> Settings {
         let mut s = sqlite::load_settings(&self.sqlite.lock().unwrap_or_else(|e| e.into_inner()));
         let id = provider::normalize_id(&s.provider);
-        let needs_none = provider::get(id).map(|p| p.auth == AuthKind::None).unwrap_or(false);
-        s.has_credential = needs_none || self.secrets.has(id);
+        s.has_credential = self.secrets.has(id);
         s
     }
 
@@ -862,8 +1081,18 @@ exactly, character for character, from the list below.";
             }
         }
 
-        sqlite::save_settings(&self.sqlite.lock().unwrap_or_else(|e| e.into_inner()), &patch)?;
-        // A model or provider change: pre-load the new local model.
+        sqlite::save_settings(
+            &self.sqlite.lock().unwrap_or_else(|e| e.into_inner()),
+            &patch,
+        )?;
+        if patch.contains_key("capabilities") {
+            self.workspace
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .schema_cache = None;
+        }
+        // A model or provider change: warm a hosted Ollama-wire model when a
+        // credential is available.
         self.warm_model();
         Ok(self.settings())
     }
@@ -881,7 +1110,7 @@ exactly, character for character, from the list below.";
                 base_url: p.base_url.to_string(),
                 get_key_url: p.get_key_url.to_string(),
                 embeddings: p.embeddings,
-                authed: p.auth == AuthKind::None || self.secrets.has(p.id),
+                authed: self.secrets.has(p.id),
                 current: p.id == current,
             })
             .collect()
@@ -893,7 +1122,10 @@ exactly, character for character, from the list below.";
         let p = provider::get(provider_id)
             .ok_or_else(|| EngineError::msg(format!("unknown provider: {provider_id}")))?;
         if p.auth != AuthKind::ApiKey {
-            return Err(EngineError::msg(format!("{} does not use an API key", p.display)));
+            return Err(EngineError::msg(format!(
+                "{} does not use an API key",
+                p.display
+            )));
         }
         let key = key.trim();
         if key.is_empty() {
@@ -968,21 +1200,18 @@ exactly, character for character, from the list below.";
         }
         let (scanned, mut skipped) = catalog::scan(path)?;
 
-        // Lock order is always inner -> data, and never both at once.
-        let old_views: Vec<String> = {
-            let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-            inner.sources.iter().filter_map(|s| s.view.clone()).collect()
+        // Build in an isolated backend. The active workspace remains fully
+        // queryable until the new catalog and data engine are published below.
+        let scratch_dir = workspace_scratch_dir(&self.data_dir)?;
+        let mut data = match data::open_engine(&scratch_dir) {
+            Ok(data) => data,
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(&scratch_dir);
+                return Err(e);
+            }
         };
 
         let mut sources = Vec::with_capacity(scanned.len());
-        {
-            // Clear the previous workspace's views in one short critical section.
-            let mut data = self.data.lock().unwrap_or_else(|e| e.into_inner());
-            for v in &old_views {
-                data.drop_source(v);
-            }
-        }
-
         {
             let mut used: HashSet<String> = HashSet::new();
             // Each text-doc synopsis is a file open + short read; cap how many we
@@ -996,7 +1225,11 @@ exactly, character for character, from the list below.";
                     .and_then(|n| n.to_str())
                     .unwrap_or("source")
                     .to_string();
-                let stem = f.path.file_stem().and_then(|s| s.to_str()).unwrap_or("source");
+                let stem = f
+                    .path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("source");
                 let path_str = f.path.display().to_string();
 
                 let synopsis = if f.kind == SourceKind::Text && synopsis_budget > 0 {
@@ -1021,15 +1254,8 @@ exactly, character for character, from the list below.";
                 match f.kind {
                     #[cfg(feature = "xlsx")]
                     catalog::SourceKind::Xlsx => {
-                        // Lock the data engine only for this one file's ingest,
-                        // so a question asked mid-(re)scan isn't blocked for the
-                        // whole folder just for one big file.
-                        let mut data = self.data.lock().unwrap_or_else(|e| e.into_inner());
                         match crate::engine::ingest::excel::ingest_workbook(
-                            &mut **data,
-                            &path_str,
-                            stem,
-                            &mut used,
+                            &mut *data, &path_str, stem, &mut used,
                         ) {
                             Ok((sheets, _)) if !sheets.is_empty() => {
                                 for sh in sheets {
@@ -1073,7 +1299,6 @@ exactly, character for character, from the list below.";
                     }
                     k if k.is_tabular() && k != SourceKind::Xlsx => {
                         let view = catalog::unique_view_name(stem, &mut used);
-                        let mut data = self.data.lock().unwrap_or_else(|e| e.into_inner());
                         match data.add_source(&view, f.kind, &path_str) {
                             Ok(load) => {
                                 info.row_count = Some(load.row_count);
@@ -1097,8 +1322,6 @@ exactly, character for character, from the list below.";
             }
         }
 
-        self.persist_sources(path, &sources);
-
         // `fella.md` at the root is optional user context, not a data file.
         let user_md = std::fs::read_to_string(path.join("fella.md"))
             .ok()
@@ -1107,20 +1330,51 @@ exactly, character for character, from the list below.";
 
         skipped.sort_by(|a, b| a.name.cmp(&b.name));
         skipped.dedup_by(|a, b| a.name == b.name);
+        let revision = Some(catalog::workspace_revision(path, &sources, &skipped));
         let mem_path = memory::path_for(&self.data_dir, path);
+
+        #[cfg(test)]
+        pause_open_workspace_for_test(self);
+
+        // PDF text belongs to the old folder. Clear the cache when publishing
+        // the new snapshot so repeatedly switching folders cannot retain every
+        // PDF ever opened in this process. In-flight readers hold their own Arc.
+        self.doc_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+
+        let old_scratch = {
+            let mut workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
+            let old_scratch = workspace
+                .scratch
+                .replace(WorkspaceScratch::new(scratch_dir));
+            workspace.data = data;
+            workspace.workspace = Some(path.to_path_buf());
+            workspace.revision = revision;
+            workspace.indexed_at_ms = Some(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis().min(i64::MAX as u128) as i64)
+                    .unwrap_or(0),
+            );
+            workspace.sources = sources;
+            workspace.skipped = skipped;
+            workspace.user_md = user_md;
+            workspace.memory_path = Some(mem_path);
+            workspace.schema_cache = None;
+            workspace.inspected_tables.clear();
+            self.persist_sources(path, &workspace.sources);
+            old_scratch
+        };
+
+        // The sources changed, so every conversation's distilled memory
+        // (schema hints, prior queries) is now stale.
         {
             let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-            inner.workspace = Some(path.to_path_buf());
-            inner.sources = sources;
-            inner.skipped = skipped;
-            inner.user_md = user_md;
-            inner.memory_path = Some(mem_path);
-            // The sources changed, so every conversation's distilled memory
-            // (schema hints, prior queries) is now stale.
             inner.sessions.clear();
-            inner.schema_cache = None;
-            inner.inspected_tables.clear();
         }
+        drop(old_scratch);
         // The user is about to ask something: warm the model now so the first
         // question doesn't wait on a cold load.
         self.warm_model();
@@ -1143,7 +1397,13 @@ exactly, character for character, from the list below.";
     /// history, the folder is gone, or it won't open no error is surfaced.
     /// A no-op if a workspace is already open.
     pub fn reopen_last_workspace(&self) -> Option<Catalog> {
-        if self.inner.lock().unwrap_or_else(|e| e.into_inner()).workspace.is_some() {
+        if self
+            .workspace
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .workspace
+            .is_some()
+        {
             return None;
         }
         let path = {
@@ -1166,8 +1426,8 @@ exactly, character for character, from the list below.";
     /// Re-open the current workspace (used by `/reindex`).
     pub fn reindex(&self) -> EngineResult<Catalog> {
         let ws = {
-            let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-            inner.workspace.clone()
+            let workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
+            workspace.workspace.clone()
         };
         match ws {
             Some(path) => self.open_workspace(&path),
@@ -1177,105 +1437,152 @@ exactly, character for character, from the list below.";
 
     /// Full per-column stats for one source.
     pub fn describe_source(&self, name: &str) -> EngineResult<SourceInfo> {
-        let mut info = {
-            let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-            inner
-                .sources
-                .iter()
-                .find(|s| s.name == name || s.view.as_deref() == Some(name))
-                .cloned()
-                .ok_or_else(|| EngineError::UnknownSource(name.to_string()))?
-        };
+        require_capability(
+            self.settings().capabilities.table_analysis,
+            "Table analysis",
+        )?;
+        let mut workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
+        let mut info = workspace
+            .sources
+            .iter()
+            .find(|s| s.name == name || s.view.as_deref() == Some(name))
+            .cloned()
+            .ok_or_else(|| EngineError::UnknownSource(name.to_string()))?;
         let view = info
             .view
             .clone()
             .ok_or_else(|| EngineError::msg(format!("{name} is not a tabular source")))?;
 
-        let columns = {
-            let data = self.data.lock().unwrap_or_else(|e| e.into_inner());
-            let mut cols = data.describe(&view)?;
-            if info.row_count.is_none() {
-                info.row_count = data
-                    .query(&format!("SELECT count(*) FROM {}", data::quote_ident(&view)), 1)
-                    .ok()
-                    .and_then(|o| o.rows.first().and_then(|r| r.first()).and_then(|v| v.as_i64()));
-            }
-            // Carry any ingest-time note (coercion, mixed column) onto the
-            // freshly-computed stats, keyed by column name.
-            if let Some(prior) = &info.columns {
-                for c in &mut cols {
-                    if c.note.is_none() {
-                        c.note = prior.iter().find(|p| p.name == c.name).and_then(|p| p.note.clone());
-                    }
+        let mut columns = workspace.data.describe(&view)?;
+        if info.row_count.is_none() {
+            info.row_count = workspace
+                .data
+                .query(
+                    &format!("SELECT count(*) FROM {}", data::quote_ident(&view)),
+                    1,
+                )
+                .ok()
+                .and_then(|o| {
+                    o.rows
+                        .first()
+                        .and_then(|r| r.first())
+                        .and_then(|v| v.as_i64())
+                });
+        }
+        // Carry any ingest-time note (coercion, mixed column) onto the
+        // freshly-computed stats, keyed by column name.
+        if let Some(prior) = &info.columns {
+            for c in &mut columns {
+                if c.note.is_none() {
+                    c.note = prior
+                        .iter()
+                        .find(|p| p.name == c.name)
+                        .and_then(|p| p.note.clone());
                 }
             }
-            cols
-        };
+        }
         info.columns = Some(columns.clone());
 
         // Cache the enriched schema back so a later turn's describe / the
         // system-prompt digest is instant and carries the stats.
+        if let Some(s) = workspace
+            .sources
+            .iter_mut()
+            .find(|s| s.name == name || s.view.as_deref() == Some(name))
         {
-            let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(s) = inner
-                .sources
-                .iter_mut()
-                .find(|s| s.name == name || s.view.as_deref() == Some(name))
-            {
-                s.columns = Some(columns);
-                if s.row_count.is_none() {
-                    s.row_count = info.row_count;
-                }
+            s.columns = Some(columns);
+            if s.row_count.is_none() {
+                s.row_count = info.row_count;
             }
-            inner.inspected_tables.insert(view.to_lowercase());
-            inner.schema_cache = None;
         }
+        workspace.inspected_tables.insert(view.to_lowercase());
+        workspace.schema_cache = None;
         Ok(info)
     }
 
     /// Run a read-only SQL statement (used by `/sql` and the agent).
     pub fn run_sql(&self, sql: &str) -> EngineResult<QueryResult> {
-        data::ensure_read_only(sql)?;
-        let data = self.data.lock().unwrap_or_else(|e| e.into_inner());
-        let t = Instant::now();
-        let out = data.query(sql, DEFAULT_ROW_CAP)?;
-        Ok(QueryResult {
-            columns: out.columns,
-            rows: out.rows,
-            row_count: out.row_count,
-            ms: t.elapsed().as_millis() as u64,
-            truncated: out.truncated,
-        })
+        require_capability(
+            self.settings().capabilities.table_analysis,
+            "Table analysis",
+        )?;
+        let workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
+        query_workspace(&*workspace.data, sql, DEFAULT_ROW_CAP)
+    }
+
+    /// Run SQL while preserving the stop flag all the way into an interruptible
+    /// backend query. This is separate from `run_sql` so command-style callers
+    /// keep their small synchronous API.
+    pub fn run_sql_cancellable(
+        &self,
+        sql: &str,
+        cancel: Arc<AtomicBool>,
+    ) -> EngineResult<QueryResult> {
+        require_capability(
+            self.settings().capabilities.table_analysis,
+            "Table analysis",
+        )?;
+        let workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
+        query_workspace_cancellable(&*workspace.data, sql, DEFAULT_ROW_CAP, cancel)
     }
 
     /// First `n` rows of a source (used by the `inspect_table` tool).
     pub fn sample(&self, name: &str, n: usize) -> EngineResult<QueryResult> {
-        let view = self.view_for(name)?;
-        self.run_sql(&format!(
-            "SELECT * FROM {} LIMIT {}",
-            data::quote_ident(&view),
-            n.clamp(1, 200)
-        ))
+        require_capability(
+            self.settings().capabilities.table_analysis,
+            "Table analysis",
+        )?;
+        let workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
+        let view = workspace
+            .sources
+            .iter()
+            .find(|s| s.name == name || s.view.as_deref() == Some(name))
+            .and_then(|s| s.view.clone())
+            .ok_or_else(|| EngineError::UnknownSource(name.to_string()))?;
+        query_workspace(
+            &*workspace.data,
+            &format!(
+                "SELECT * FROM {} LIMIT {}",
+                data::quote_ident(&view),
+                n.clamp(1, 200)
+            ),
+            n.clamp(1, 200),
+        )
     }
 
     /// Run a Python snippet against the workspace data (blocking work is moved
     /// off the async executor).
     pub async fn run_python(&self, code: &str) -> EngineResult<pyexec::PyResult> {
-        let bridge: PythonBridge = self.data.lock().unwrap_or_else(|e| e.into_inner()).python_bridge();
-        let code = code.to_string();
-        tokio::task::spawn_blocking(move || pyexec::run(&code, bridge))
+        self.run_python_cancellable(code, Arc::new(AtomicBool::new(false)))
             .await
-            .map_err(|e| EngineError::msg(format!("python task panicked: {e}")))?
     }
 
-    fn view_for(&self, name: &str) -> EngineResult<String> {
-        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        inner
-            .sources
-            .iter()
-            .find(|s| s.name == name || s.view.as_deref() == Some(name))
-            .and_then(|s| s.view.clone())
-            .ok_or_else(|| EngineError::UnknownSource(name.to_string()))
+    /// Run Python with a cooperative stop flag. Wasmi resumes the guest in
+    /// bounded fuel slices so a pure-Python loop can observe the flag without
+    /// leaving a detached blocking task behind.
+    pub async fn run_python_cancellable(
+        &self,
+        code: &str,
+        cancel: Arc<AtomicBool>,
+    ) -> EngineResult<pyexec::PyResult> {
+        require_capability(
+            self.settings().capabilities.python_analysis,
+            "Python analysis",
+        )?;
+        let (bridge, scratch_lease) = {
+            let workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
+            (
+                workspace.data.python_bridge(),
+                workspace.scratch.as_ref().map(WorkspaceScratch::lease),
+            )
+        };
+        let code = code.to_string();
+        tokio::task::spawn_blocking(move || {
+            let _scratch_lease = scratch_lease;
+            pyexec::run(&code, bridge, Some(cancel))
+        })
+        .await
+        .map_err(|e| EngineError::msg(format!("python task panicked: {e}")))?
     }
 
     /// Run the agent loop for one question, streaming progress through `emit`.
@@ -1294,11 +1601,32 @@ exactly, character for character, from the list below.";
         model: Option<&str>,
         emit: impl Fn(AskEvent) + Send + Sync,
     ) -> EngineResult<Answer> {
+        self.ask_with_mode(conversation_id, question, model, false, emit)
+            .await
+    }
+
+    /// Run the agent loop with the user's interaction mode. Inspect keeps the
+    /// same evidence and verification path but exposes only deterministic
+    /// workspace tools.
+    pub async fn ask_with_mode(
+        &self,
+        conversation_id: &str,
+        question: &str,
+        model: Option<&str>,
+        inspect: bool,
+        emit: impl Fn(AskEvent) + Send + Sync,
+    ) -> EngineResult<Answer> {
+        let settings = self.settings();
+        if !settings.has_credential {
+            return Err(EngineError::msg(
+                "Connect a model service with /login before asking a question.",
+            ));
+        }
         let effective_model = model
             .map(str::trim)
             .filter(|m| !m.is_empty())
             .map(str::to_string)
-            .unwrap_or_else(|| self.settings().model);
+            .unwrap_or(settings.model);
         if effective_model.trim().is_empty() {
             return Err(EngineError::msg(
                 "No model chosen yet. Run /model to see the options and pick one.",
@@ -1338,18 +1666,29 @@ exactly, character for character, from the list below.";
 
         let llm = self.llm_with_model(&effective_model);
         #[allow(unused_mut)]
-        let mut registry = Registry::standard();
-        #[cfg(feature = "mcp")]
-        self.attach_mcp_tools(&mut registry, &emit).await;
-        let answer =
-            agent::run(self, &llm, &registry, conversation_id, question, &cancel, &emit).await;
-        // (`&cancel` derefs `Arc<AtomicBool>` -> `&AtomicBool` for `run`.)
-
+        let mut registry = if inspect {
+            Registry::inspect_with(settings.capabilities)
+        } else {
+            Registry::standard_with(settings.capabilities)
+        };
+        let answer = agent::run(
+            self,
+            &llm,
+            &registry,
+            conversation_id,
+            question,
+            cancel.clone(),
+            &emit,
+        )
+        .await;
         // Drop this run's stop-flag (unless a newer run for the same id already
         // replaced it).
         {
             let mut flags = self.cancel.lock().unwrap_or_else(|e| e.into_inner());
-            if flags.get(conversation_id).is_some_and(|f| Arc::ptr_eq(f, &cancel)) {
+            if flags
+                .get(conversation_id)
+                .is_some_and(|f| Arc::ptr_eq(f, &cancel))
+            {
                 flags.remove(conversation_id);
             }
         }
@@ -1359,7 +1698,7 @@ exactly, character for character, from the list below.";
         // a vocabulary note; an ordinary question teaches nothing). Needs the
         // previous question in this conversation for the correction check, so
         // read it before the distil step below pushes this one.
-        if !cancel.load(Ordering::Relaxed) {
+        if !cancel.load(Ordering::Relaxed) && self.answer_workspace_is_current(&answer) {
             let prior_q = {
                 let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
                 inner
@@ -1368,7 +1707,8 @@ exactly, character for character, from the list below.";
                     .and_then(|s| s.turns.last())
                     .map(|t| t.question.clone())
             };
-            self.record_turn_memory(prior_q.as_deref(), question, &answer).await;
+            self.record_turn_memory(prior_q.as_deref(), question, &answer)
+                .await;
         }
 
         // Distil this turn for the next question in the conversation - but not a
@@ -1387,9 +1727,18 @@ exactly, character for character, from the list below.";
             let queries: Vec<String> = answer
                 .evidence
                 .iter()
-                .filter(|e| e.tool == "run_sql" && e.error.is_none())
+                .filter(|e| {
+                    matches!(e.tool.as_str(), "run_sql" | "make_chart") && e.error.is_none()
+                })
                 .filter_map(|e| e.sql.clone())
-                .map(|s| s.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(160).collect())
+                .map(|s| {
+                    s.split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                        .chars()
+                        .take(160)
+                        .collect()
+                })
                 .take(3)
                 .collect();
             let uninformative = queries.is_empty()
@@ -1397,100 +1746,45 @@ exactly, character for character, from the list below.";
                     || headline == "Stopped."
                     || headline.starts_with("I ran out of analysis steps"));
             if !uninformative {
-                let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-                let entry = inner.sessions.entry(conversation_id.to_string()).or_default();
-                entry.turns.push(TurnDigest {
-                    question: question.chars().take(200).collect(),
-                    headline,
-                    queries,
-                });
-                let n = entry.turns.len();
-                if n > 3 {
-                    entry.turns.drain(0..n - 3);
+                let workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
+                let current = match &answer.workspace {
+                    Some(snapshot) => {
+                        workspace.workspace.as_deref() == Some(Path::new(&snapshot.path))
+                            && workspace.revision.as_deref() == Some(snapshot.revision.as_str())
+                    }
+                    None => workspace.workspace.is_none() && workspace.revision.is_none(),
+                };
+                if current {
+                    let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+                    let entry = inner
+                        .sessions
+                        .entry(conversation_id.to_string())
+                        .or_default();
+                    entry.turns.push(TurnDigest {
+                        question: question.chars().take(200).collect(),
+                        headline,
+                        queries,
+                    });
+                    let n = entry.turns.len();
+                    if n > 3 {
+                        entry.turns.drain(0..n - 3);
+                    }
                 }
             }
         }
         Ok(answer)
     }
 
-    /// Connect every enabled `mcp` connector and register its tools. Failures
-    /// and withheld (non-read-only) tools are reported as notices, never fatal.
-    #[cfg(feature = "mcp")]
-    async fn attach_mcp_tools(
-        &self,
-        registry: &mut Registry,
-        emit: &(impl Fn(AskEvent) + Send + Sync),
-    ) {
-        let connectors = {
-            let conn = self.sqlite.lock().unwrap_or_else(|e| e.into_inner());
-            extensions::enabled_mcp_connectors(&self.data_dir, &conn)
-        };
-        let mut tools = Vec::new();
-        for (id, cfg) in connectors {
-            let token = cfg
-                .auth
-                .secret_name()
-                .and_then(|v| self.secrets.api_key(&format!("mcp:{id}:{v}")));
-            if cfg.auth.secret_name().is_some() && token.is_none() {
-                emit(AskEvent::Notice {
-                    text: format!("connector '{id}' has no token yet run /connect {id}"),
-                });
-                continue;
-            }
-            match crate::engine::mcp::connect(&self.http, &id, &cfg, token.as_deref()).await {
-                Ok((mut offered, withheld)) => {
-                    if !withheld.is_empty() {
-                        emit(AskEvent::Notice {
-                            text: format!(
-                                "connector '{id}': skipped {} tool(s) that can modify the service ({})",
-                                withheld.len(),
-                                withheld.join(", ")
-                            ),
-                        });
-                    }
-                    tools.append(&mut offered);
-                }
-                Err(e) => emit(AskEvent::Notice {
-                    text: format!("couldn't use connector '{id}': {e}"),
-                }),
-            }
-        }
-        registry.set_mcp(tools);
-    }
-
-    /// Store the token for an `mcp` connector pack (its `connector.json` names
-    /// which credential it reads).
-    pub fn mcp_set_token(&self, id: &str, token: &str) -> EngineResult<()> {
-        let cfg = extensions::connector_config(&self.data_dir, id)?;
-        let var = cfg
-            .auth
-            .secret_name()
-            .ok_or_else(|| EngineError::msg(format!("connector '{id}' needs no token")))?;
-        self.secrets.set_api_key(&format!("mcp:{id}:{var}"), token)
-    }
-
-    /// Forget an `mcp` connector's token.
-    pub fn mcp_clear_token(&self, id: &str) -> EngineResult<bool> {
-        let cfg = extensions::connector_config(&self.data_dir, id)?;
-        match cfg.auth.secret_name() {
-            Some(var) => self.secrets.clear(&format!("mcp:{id}:{var}")),
-            None => Ok(false),
-        }
-    }
-
-    /// Whether an `mcp` connector pack has its token stored (or needs none).
-    pub fn mcp_has_token(&self, id: &str) -> bool {
-        match extensions::connector_config(&self.data_dir, id) {
-            Ok(cfg) => match cfg.auth.secret_name() {
-                Some(var) => self.secrets.has(&format!("mcp:{id}:{var}")),
-                None => true,
-            },
-            Err(_) => false,
-        }
-    }
-
     /// Is the configured model provider reachable?
     pub async fn provider_health(&self) -> ProviderHealth {
+        let settings = self.settings();
+        if !settings.has_credential || settings.base_url.trim().is_empty() {
+            return ProviderHealth {
+                reachable: false,
+                rejected: false,
+                models: Vec::new(),
+            };
+        }
         self.llm().health().await
     }
 
@@ -1536,23 +1830,6 @@ exactly, character for character, from the list below.";
         Ok((resp.content, resp.usage))
     }
 
-    /// Probe a local Ollama regardless of which provider is configured, so the
-    /// UI can offer "use Ollama" when someone installs it after signing in
-    /// somewhere else. Returns `reachable: false` when nothing is listening.
-    pub async fn probe_ollama(&self) -> ProviderHealth {
-        let Some(p) = provider::get("ollama") else {
-            return ProviderHealth { reachable: false, rejected: false, models: Vec::new() };
-        };
-        let s = Settings {
-            provider: p.id.to_string(),
-            base_url: p.base_url.to_string(),
-            model: String::new(),
-            embed_model: String::new(),
-            has_credential: true,
-        };
-        LlmClient::new(self.http.clone(), &s, None).health().await
-    }
-
     fn llm(&self) -> LlmClient {
         self.llm_with_model("")
     }
@@ -1570,12 +1847,16 @@ exactly, character for character, from the list below.";
         LlmClient::new(self.http.clone(), &settings, key)
     }
 
-    /// Fire-and-forget: ask a local Ollama to load the configured model now so
-    /// the next question doesn't stall on a cold load. No-op off a Tokio
-    /// runtime, for a hosted provider, or when `FELLA_SKIP_MODEL_WARMUP` is set
-    /// (tests point at a fixed-count mock server).
+    /// Fire-and-forget: ask a hosted Ollama-wire provider to load the
+    /// configured model now so the next question doesn't stall on a cold load.
+    /// No-op without a saved BYOK credential, off a Tokio runtime, for an
+    /// OpenAI-wire provider, or when `FELLA_SKIP_MODEL_WARMUP` is set (tests
+    /// point at a fixed-count mock server).
     fn warm_model(&self) {
         if std::env::var_os("FELLA_SKIP_MODEL_WARMUP").is_some() {
+            return;
+        }
+        if !self.settings().has_credential {
             return;
         }
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
@@ -1587,8 +1868,9 @@ exactly, character for character, from the list below.";
     /// Catalogued documents (text/PDF, not tables SQL already covers those),
     /// as (name, path, kind), for the `grep_files`/`read_file` tools.
     fn documents(&self) -> Vec<(String, String, SourceKind)> {
-        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        inner
+        self.workspace
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
             .sources
             .iter()
             .filter(|s| s.view.is_none())
@@ -1600,6 +1882,10 @@ exactly, character for character, from the list below.";
     /// catalogued document. No index to build or keep in sync just reads
     /// the files that are there right now.
     pub fn grep_files(&self, pattern: &str, max_hits: usize) -> EngineResult<Vec<GrepHit>> {
+        require_capability(
+            self.settings().capabilities.document_analysis,
+            "Document analysis",
+        )?;
         let re = regex::RegexBuilder::new(pattern)
             .case_insensitive(true)
             .build()
@@ -1608,7 +1894,9 @@ exactly, character for character, from the list below.";
         for (name, path, kind) in self.documents() {
             if kind == SourceKind::Pdf {
                 // PDF text isn't streamable parse (cached) and scan in memory.
-                let Ok(text) = self.pdf_text(&path) else { continue };
+                let Ok(text) = self.pdf_text(&path) else {
+                    continue;
+                };
                 for (i, line) in text.lines().enumerate() {
                     if re.is_match(line) {
                         hits.push(GrepHit {
@@ -1648,6 +1936,10 @@ exactly, character for character, from the list below.";
     /// document can't blow the context window `grep_files` can find a spot
     /// in a bigger file first.
     pub fn read_file(&self, name: &str) -> EngineResult<(String, bool)> {
+        require_capability(
+            self.settings().capabilities.document_analysis,
+            "Document analysis",
+        )?;
         let (path, kind) = self
             .documents()
             .into_iter()
@@ -1684,16 +1976,31 @@ exactly, character for character, from the list below.";
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        if let Some((ts, text)) = self.doc_cache.lock().unwrap_or_else(|e| e.into_inner()).get(path) {
+        if let Some((ts, text)) = self
+            .doc_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(path)
+        {
             if *ts == mtime {
                 return Ok(text.clone());
             }
         }
         let text: Arc<str> = Arc::from(docs::extract_pdf(path)?);
-        self.doc_cache
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(path.to_string(), (mtime, text.clone()));
+        const DOC_CACHE_CAP_BYTES: usize = 32 * 1024 * 1024;
+        let mut cache = self.doc_cache.lock().unwrap_or_else(|e| e.into_inner());
+        if text.len() <= DOC_CACHE_CAP_BYTES {
+            cache.insert(path.to_string(), (mtime, text.clone()));
+            let mut cached_bytes = cache.values().map(|(_, value)| value.len()).sum::<usize>();
+            while cached_bytes > DOC_CACHE_CAP_BYTES {
+                let Some(key) = cache.keys().next().cloned() else {
+                    break;
+                };
+                if let Some((_, value)) = cache.remove(&key) {
+                    cached_bytes = cached_bytes.saturating_sub(value.len());
+                }
+            }
+        }
         Ok(text)
     }
 
@@ -1775,7 +2082,12 @@ fn parse_vocab_action(reply: &str, existing: &[(String, String)]) -> Option<Voca
     if key.is_empty() {
         return None;
     }
-    let exact = |k: &str| existing.iter().find(|(ek, _)| ek.eq_ignore_ascii_case(k)).map(|(ek, _)| ek.clone());
+    let exact = |k: &str| {
+        existing
+            .iter()
+            .find(|(ek, _)| ek.eq_ignore_ascii_case(k))
+            .map(|(ek, _)| ek.clone())
+    };
     match verb.to_ascii_uppercase().as_str() {
         "UPDATE" => exact(key).map(VocabAction::Update),
         "NOOP" => exact(key).map(|_| VocabAction::Noop),
@@ -1812,6 +2124,37 @@ pub(crate) fn cap_chars(s: &str, cap: usize) -> String {
 
 /// Render a small `QueryResult` as compact `col=val` sample lines for the
 /// system-prompt schema digest.
+fn query_workspace(data: &dyn DataEngine, sql: &str, max_rows: usize) -> EngineResult<QueryResult> {
+    data::ensure_read_only(sql)?;
+    let started = Instant::now();
+    let out = data.query(sql, max_rows)?;
+    Ok(QueryResult {
+        columns: out.columns,
+        rows: out.rows,
+        row_count: out.row_count,
+        ms: started.elapsed().as_millis() as u64,
+        truncated: out.truncated,
+    })
+}
+
+fn query_workspace_cancellable(
+    data: &dyn DataEngine,
+    sql: &str,
+    max_rows: usize,
+    cancel: Arc<AtomicBool>,
+) -> EngineResult<QueryResult> {
+    data::ensure_read_only(sql)?;
+    let started = Instant::now();
+    let out = data.query_with_cancel(sql, max_rows, cancel)?;
+    Ok(QueryResult {
+        columns: out.columns,
+        rows: out.rows,
+        row_count: out.row_count,
+        ms: started.elapsed().as_millis() as u64,
+        truncated: out.truncated,
+    })
+}
+
 fn mini_table(q: &QueryResult) -> Vec<String> {
     q.rows
         .iter()
@@ -1841,11 +2184,30 @@ fn mini_table(q: &QueryResult) -> Vec<String> {
 /// stoplist drops names that are almost never cross-table keys.
 fn shared_column_hints(tables: &[&SourceInfo]) -> Vec<String> {
     const STOP: &[&str] = &[
-        "id", "name", "title", "description", "note", "notes", "memo", "comment",
-        "comments", "type", "status", "value", "amount", "total", "subtotal",
-        "count", "price", "cost", "qty", "quantity", "label",
+        "id",
+        "name",
+        "title",
+        "description",
+        "note",
+        "notes",
+        "memo",
+        "comment",
+        "comments",
+        "type",
+        "status",
+        "value",
+        "amount",
+        "total",
+        "subtotal",
+        "count",
+        "price",
+        "cost",
+        "qty",
+        "quantity",
+        "label",
     ];
-    let mut by_col: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
+    let mut by_col: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
     for t in tables {
         let view = t.view.as_deref().unwrap_or("");
         for c in t.columns.iter().flatten() {
@@ -1869,15 +2231,18 @@ fn shared_column_hints(tables: &[&SourceInfo]) -> Vec<String> {
 
 /// Open `fella.db`, or, if it's corrupt (a truncated write, a bad disk),
 /// move it aside as `fella.db.corrupt-<unix>` and start fresh. Losing it costs
-/// the user their settings and pack list, not their API keys (`auth.json` is
-/// separate) or their archived conversations. Better than a non-starting app
-/// with a stderr-only message.
+/// the user their settings and workspace/session metadata, not their API keys
+/// (`auth.json` is separate) or their archived conversations. Better than a
+/// non-starting app with a stderr-only message.
 fn open_or_recover(path: &Path) -> rusqlite::Connection {
     // The app was "Woody" until the rename: carry a `woody.db` (and its WAL
     // sidecars) forward the first time we open at the new name.
     if !path.exists() {
         for suffix in ["", "-wal", "-shm"] {
-            let old = PathBuf::from(format!("{}{suffix}", path.with_file_name("woody.db").display()));
+            let old = PathBuf::from(format!(
+                "{}{suffix}",
+                path.with_file_name("woody.db").display()
+            ));
             let new = PathBuf::from(format!("{}{suffix}", path.display()));
             if old.exists() {
                 let _ = std::fs::rename(&old, &new);
@@ -1911,9 +2276,13 @@ fn migrate_legacy_key(conn: &rusqlite::Connection, secrets: &Secrets) {
     let stored = sqlite::load_settings(conn).provider;
     let id = provider::normalize_id(&stored);
     // A pre-registry key almost always belonged to the "openai-compatible"
-    // (now `custom`) path; if the provider still reads as the local default,
-    // park it there rather than on `ollama` (which needs no key).
-    let target: &str = if id == provider::DEFAULT_ID { "custom" } else { id };
+    // (now `custom`) path; if the provider still reads as the BYOK default,
+    // park it there rather than guessing a hosted provider.
+    let target: &str = if id == provider::DEFAULT_ID {
+        "custom"
+    } else {
+        id
+    };
     if secrets.set_api_key(target, &key).is_ok() {
         let _ = sqlite::clear_legacy_api_key(conn);
         log::info!("migrated a stored API key out of the settings table into auth.json");
@@ -1921,14 +2290,14 @@ fn migrate_legacy_key(conn: &rusqlite::Connection, secrets: &Secrets) {
 }
 
 /// On startup: if the stored provider needs an API key but none is saved (a
-/// past `/logout`, a deleted `auth.json`), fall back to the local default so
-/// the app doesn't come up pointed at a service it can't reach with a stale
+/// past `/logout`, a deleted `auth.json`), fall back to the BYOK default so
+/// the app doesn't come up pointed at a service it can't use with a stale
 /// model still showing in the status bar.
 fn reconcile_provider(conn: &rusqlite::Connection, secrets: &Secrets) {
     let stored = sqlite::load_settings(conn).provider;
     match provider::get(&stored) {
-        // Registered provider that needs no key, or has one saved nothing to do.
-        Some(p) if p.auth == AuthKind::None || secrets.has(p.id) => return,
+        // Registered provider with a saved key needs no reconciliation.
+        Some(p) if secrets.has(p.id) => return,
         // Registered but keyless: fall through and reset.
         Some(_) => {}
         // An id no build knows (a stray `/model provider x`, a removed registry
@@ -1942,7 +2311,10 @@ fn reconcile_provider(conn: &rusqlite::Connection, secrets: &Secrets) {
     patch.insert("model".into(), d.default_model.into());
     patch.insert("embed_model".into(), d.default_embed_model.into());
     if sqlite::save_settings(conn, &patch).is_ok() {
-        log::info!("no usable credential for provider {stored:?}; reset to {}", d.id);
+        log::info!(
+            "no usable credential for provider {stored:?}; reset to {}",
+            d.id
+        );
     }
 }
 
@@ -1985,7 +2357,10 @@ mod schema_hint_tests {
         let customers = tbl("customers", &["Customer_ID", "name", "region"]);
         let hints = shared_column_hints(&[&orders, &customers]);
         // matched case-insensitively; each side shown with its own casing
-        assert_eq!(hints, vec![r#"orders."customer_id" ↔ customers."Customer_ID""#]);
+        assert_eq!(
+            hints,
+            vec![r#"orders."customer_id" ↔ customers."Customer_ID""#]
+        );
     }
 
     #[test]
@@ -2003,7 +2378,10 @@ mod vocab_reconcile_tests {
 
     #[test]
     fn default_topic_key_skips_filler_words() {
-        assert_eq!(default_topic_key("no, actually rent should include housing"), "rent should include");
+        assert_eq!(
+            default_topic_key("no, actually rent should include housing"),
+            "rent should include"
+        );
         assert_eq!(default_topic_key("gym is under health"), "gym is under");
     }
 
@@ -2038,7 +2416,10 @@ mod vocab_reconcile_tests {
     #[test]
     fn parses_noop_against_an_exact_existing_key() {
         let existing = vec![("for rent totals".to_string(), "old text".to_string())];
-        assert_eq!(parse_vocab_action("NOOP for rent totals", &existing), Some(VocabAction::Noop));
+        assert_eq!(
+            parse_vocab_action("NOOP for rent totals", &existing),
+            Some(VocabAction::Noop)
+        );
     }
 
     #[test]
@@ -2053,7 +2434,10 @@ mod vocab_reconcile_tests {
     #[test]
     fn unparseable_replies_fall_back_to_none() {
         let existing = vec![("for rent totals".to_string(), "old text".to_string())];
-        assert_eq!(parse_vocab_action("I think this updates the rent note.", &existing), None);
+        assert_eq!(
+            parse_vocab_action("I think this updates the rent note.", &existing),
+            None
+        );
         assert_eq!(parse_vocab_action("", &existing), None);
     }
 }
@@ -2065,7 +2449,10 @@ mod jit_schema_tests {
     use super::*;
 
     fn scratch(tag: &str) -> std::path::PathBuf {
-        let n = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let n = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         let p = std::env::temp_dir().join(format!("fella-jit-{tag}-{n}"));
         std::fs::create_dir_all(&p).unwrap();
         p
@@ -2091,13 +2478,25 @@ mod jit_schema_tests {
         let before = engine.schema_block();
         assert!(before.contains("t0"), "table names still listed");
         assert!(before.contains("\"city\""), "columns still listed eagerly");
-        assert!(!before.contains("town0"), "no sample rows before any inspection");
-        assert!(!before.contains("town3"), "no sample rows before any inspection");
+        assert!(
+            !before.contains("town0"),
+            "no sample rows before any inspection"
+        );
+        assert!(
+            !before.contains("town3"),
+            "no sample rows before any inspection"
+        );
 
         engine.describe_source("t0").unwrap();
         let after = engine.schema_block();
-        assert!(after.contains("town0"), "t0's sample rows enter the digest once inspected");
-        assert!(!after.contains("town3"), "t3 wasn't inspected, still no samples for it");
+        assert!(
+            after.contains("town0"),
+            "t0's sample rows enter the digest once inspected"
+        );
+        assert!(
+            !after.contains("town3"),
+            "t3 wasn't inspected, still no samples for it"
+        );
     }
 
     #[test]
@@ -2118,5 +2517,77 @@ mod jit_schema_tests {
         let block = engine.schema_block();
         assert!(block.contains("town0"));
         assert!(block.contains("town1"));
+    }
+}
+
+#[cfg(test)]
+mod workspace_swap_tests {
+    use std::sync::Arc;
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+    use super::*;
+
+    fn scratch(tag: &str) -> PathBuf {
+        let n = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("fella-atomic-{tag}-{n}"));
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    #[test]
+    fn replacement_never_exposes_catalog_without_its_data() {
+        let old_workspace = scratch("old-workspace");
+        let new_workspace = scratch("new-workspace");
+        let data_dir = scratch("data");
+        std::fs::write(old_workspace.join("sales.csv"), "value\n1\n").unwrap();
+        std::fs::write(new_workspace.join("sales.csv"), "value\n2\n").unwrap();
+
+        let engine = Arc::new(EngineState::new(&data_dir).unwrap());
+        engine.open_workspace(&old_workspace).unwrap();
+
+        TEST_OPEN_WORKSPACE_TARGET.store(Arc::as_ptr(&engine) as usize, Ordering::SeqCst);
+        TEST_OPEN_WORKSPACE_READY.store(false, Ordering::SeqCst);
+        TEST_OPEN_WORKSPACE_RESUME.store(false, Ordering::SeqCst);
+        TEST_OPEN_WORKSPACE_PAUSE.store(true, Ordering::SeqCst);
+
+        let opening = {
+            let engine = Arc::clone(&engine);
+            let new_workspace = new_workspace.clone();
+            std::thread::spawn(move || engine.open_workspace(&new_workspace))
+        };
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !TEST_OPEN_WORKSPACE_READY.load(Ordering::SeqCst) && Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        let paused = TEST_OPEN_WORKSPACE_READY.load(Ordering::SeqCst);
+        let observed_catalog = engine.catalog();
+        let observed_query = engine.run_sql("SELECT value FROM sales");
+        TEST_OPEN_WORKSPACE_RESUME.store(true, Ordering::SeqCst);
+        TEST_OPEN_WORKSPACE_TARGET.store(0, Ordering::SeqCst);
+        let opened = opening.join().unwrap().unwrap();
+
+        assert!(paused, "workspace replacement did not reach its test pause");
+        assert_eq!(
+            observed_catalog.workspace.as_deref(),
+            Some(old_workspace.to_str().unwrap())
+        );
+        let query = observed_query.expect("the old catalog must still have its old table");
+        assert_eq!(query.rows[0][0], serde_json::json!(1));
+        assert_eq!(
+            opened.workspace.as_deref(),
+            Some(new_workspace.to_str().unwrap())
+        );
+        assert_eq!(
+            engine.run_sql("SELECT value FROM sales").unwrap().rows[0][0],
+            serde_json::json!(2)
+        );
+
+        let _ = std::fs::remove_dir_all(old_workspace);
+        let _ = std::fs::remove_dir_all(new_workspace);
+        let _ = std::fs::remove_dir_all(data_dir);
     }
 }

@@ -67,6 +67,10 @@ pub struct ColumnInfo {
     pub max: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub example: Option<String>,
+    /// A few common values for low-cardinality label columns. This helps a
+    /// person spot spelling/capitalisation differences before asking a query.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub common_values: Option<Vec<String>>,
     /// Ingest-time caveat about this column, e.g. amounts that were stored as
     /// text and coerced to numbers, or a column that looks numeric but was
     /// left as text. Surfaced in the schema digest and `inspect_table`.
@@ -85,6 +89,7 @@ impl ColumnInfo {
             min: None,
             max: None,
             example: None,
+            common_values: None,
             note: None,
         }
     }
@@ -116,11 +121,97 @@ pub struct SourceInfo {
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct Catalog {
     pub workspace: Option<String>,
+    /// Deterministic identity of the currently loaded workspace snapshot.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision: Option<String>,
+    /// Wall-clock time of the scan that produced this catalog, in Unix ms.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub indexed_at_ms: Option<i64>,
     pub sources: Vec<SourceInfo>,
     /// Files the scan noticed but couldn't use, with a plain reason. Shown to
     /// the user so an incomplete dataset isn't analysed silently.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub skipped: Vec<SkippedFile>,
+}
+
+/// Derive a stable identity for the catalog that was actually loaded. This is
+/// a freshness marker, not a cryptographic integrity hash: it changes when the
+/// workspace path, source metadata, schema, ingest notes, or skipped files do.
+pub fn workspace_revision(root: &Path, sources: &[SourceInfo], skipped: &[SkippedFile]) -> String {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    let mut feed = |value: &str| {
+        for byte in value.as_bytes() {
+            hash ^= *byte as u64;
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        hash ^= 0xff;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    };
+
+    let canonical = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    feed(&canonical.to_string_lossy());
+
+    let mut source_rows: Vec<String> = sources
+        .iter()
+        .map(|source| {
+            let columns = source
+                .columns
+                .as_ref()
+                .map(|columns| {
+                    columns
+                        .iter()
+                        .map(|column| {
+                            format!(
+                                "{}\u{1f}{}\u{1f}{}\u{1f}{}",
+                                column.name,
+                                column.type_,
+                                column.note.as_deref().unwrap_or(""),
+                                column
+                                    .common_values
+                                    .as_ref()
+                                    .map(|values| values.join("\u{1d}"))
+                                    .unwrap_or_default()
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\u{1e}")
+                })
+                .unwrap_or_default();
+            format!(
+                "{}\u{1f}{}\u{1f}{:?}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
+                source.name,
+                source.path,
+                source.kind,
+                source.view.as_deref().unwrap_or(""),
+                source.size_bytes,
+                source.mtime,
+                source.note.as_deref().unwrap_or(""),
+                columns
+            )
+        })
+        .collect();
+    source_rows.sort();
+    for row in source_rows {
+        feed(&row);
+    }
+
+    let mut skipped_rows: Vec<String> = skipped
+        .iter()
+        .map(|file| format!("{}\u{1f}{}", file.name, file.reason))
+        .collect();
+    skipped_rows.sort();
+    for row in skipped_rows {
+        feed(&row);
+    }
+
+    if let Ok(metadata) = std::fs::metadata(root.join("fella.md")) {
+        feed(&format!(
+            "fella.md\u{1f}{}\u{1f}{:?}",
+            metadata.len(),
+            metadata.modified()
+        ));
+    }
+    format!("r{hash:016x}")
 }
 
 /// A file that was found but not loaded (unsupported type, unreadable, or a
@@ -146,13 +237,26 @@ pub struct ScannedFile {
 fn worth_mentioning(ext: &str) -> bool {
     matches!(
         ext.to_ascii_lowercase().as_str(),
-        "doc" | "docx" | "rtf" | "odt" | "pages" | "numbers" | "ods" | "eml" | "msg"
-            | "html" | "htm" | "xml"
+        "doc"
+            | "docx"
+            | "rtf"
+            | "odt"
+            | "pages"
+            | "numbers"
+            | "ods"
+            | "eml"
+            | "msg"
+            | "html"
+            | "htm"
+            | "xml"
     )
 }
 
 fn file_name(p: &Path) -> String {
-    p.file_name().and_then(|n| n.to_str()).unwrap_or("?").to_string()
+    p.file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("?")
+        .to_string()
 }
 
 /// Walk `root`, returning recognised files sorted by path, plus a list of files
@@ -195,10 +299,9 @@ pub fn scan(root: &Path) -> EngineResult<(Vec<ScannedFile>, Vec<SkippedFile>)> {
         if ignore.matches(root, path) {
             continue;
         }
-        // `fella.md` at the workspace root is user context (see the extensions
+        // `fella.md` at the workspace root is user context (see the workspace
         // system), not a data file skip it the way `.fellaignore` is skipped.
-        if path.parent() == Some(root)
-            && path.file_name() == Some(std::ffi::OsStr::new("fella.md"))
+        if path.parent() == Some(root) && path.file_name() == Some(std::ffi::OsStr::new("fella.md"))
         {
             continue;
         }
@@ -272,11 +375,9 @@ impl Ignore {
         let rel = path.strip_prefix(root).unwrap_or(path);
         let rel_str = rel.to_string_lossy().replace('\\', "/");
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        self.patterns.iter().any(|p| {
-            p == name
-                || rel_str == *p
-                || rel_str.starts_with(&format!("{p}/"))
-        })
+        self.patterns
+            .iter()
+            .any(|p| p == name || rel_str == *p || rel_str.starts_with(&format!("{p}/")))
     }
 }
 
@@ -351,5 +452,31 @@ mod tests {
         assert_eq!(SourceKind::from_ext("db"), None);
         assert!(SourceKind::Parquet.is_tabular());
         assert!(!SourceKind::Pdf.is_tabular());
+    }
+
+    #[test]
+    fn workspace_revision_changes_when_loaded_source_changes() {
+        let source = SourceInfo {
+            name: "sales.csv".into(),
+            path: "/tmp/sales.csv".into(),
+            kind: SourceKind::Csv,
+            view: Some("sales".into()),
+            row_count: Some(2),
+            columns: Some(vec![ColumnInfo::bare("amount", "REAL")]),
+            size_bytes: 20,
+            mtime: 1,
+            synopsis: None,
+            note: None,
+        };
+        let first = workspace_revision(
+            Path::new("/tmp/workspace"),
+            std::slice::from_ref(&source),
+            &[],
+        );
+        let mut changed = source;
+        changed.size_bytes += 1;
+        let second = workspace_revision(Path::new("/tmp/workspace"), &[changed], &[]);
+        assert_ne!(first, second);
+        assert!(first.starts_with('r'));
     }
 }
