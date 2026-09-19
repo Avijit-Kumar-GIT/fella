@@ -703,8 +703,13 @@ impl PromptProfile {
     /// the eval harness's prompt-minimalism ablation sets this per run. Unset
     /// (the normal case) is exactly `full()`. Unknown names are ignored.
     pub fn from_env() -> Self {
+        let drop = std::env::var("FELLA_PROMPT_DROP").ok();
+        Self::from_drop(drop.as_deref())
+    }
+
+    fn from_drop(drop: Option<&str>) -> Self {
         let mut p = Self::full();
-        let Ok(drop) = std::env::var("FELLA_PROMPT_DROP") else {
+        let Some(drop) = drop else {
             return p;
         };
         for name in drop.split(',').map(str::trim).filter(|s| !s.is_empty()) {
@@ -1055,22 +1060,15 @@ mod tests {
     }
 
     #[test]
-    fn prompt_drop_env_clears_named_sections() {
-        std::env::set_var(
-            "FELLA_PROMPT_DROP",
-            "persona, docs_rule ,session_block, folder_memory",
-        );
-        let p = PromptProfile::from_env();
-        std::env::remove_var("FELLA_PROMPT_DROP");
+    fn prompt_drop_clears_named_sections() {
+        let p = PromptProfile::from_drop(Some("persona, docs_rule ,session_block, folder_memory"));
         assert!(!p.persona && !p.docs_rule && !p.session_block && !p.folder_memory);
         assert!(p.core_rules && p.schema, "unnamed sections stay");
     }
 
     #[test]
     fn chart_and_structure_rules_are_droppable() {
-        std::env::set_var("FELLA_PROMPT_DROP", "chart_rule, structure_rule");
-        let p = PromptProfile::from_env();
-        std::env::remove_var("FELLA_PROMPT_DROP");
+        let p = PromptProfile::from_drop(Some("chart_rule, structure_rule"));
         assert!(!p.chart_rule && !p.structure_rule);
         assert!(p.python_rule && p.background_rule, "unnamed sections stay");
     }
