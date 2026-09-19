@@ -37,21 +37,6 @@
 		selectedPath = source.path;
 	}
 
-	function useSelected(): void {
-		if (!selected) return;
-		session.addContextReference({
-			kind: 'source',
-			key: selected.path,
-			label: selected.name,
-			detail: relativePath(selected.path)
-		});
-		session.setWorkspaceView('ask');
-	}
-
-	function inspectSelected(): void {
-		if (selected) session.openInspector({ kind: 'source', path: selected.path });
-	}
-
 	function relativePath(path: string): string {
 		if (!workspace) return path;
 		const root = workspace.replace(/[/\\]+$/, '');
@@ -173,16 +158,12 @@
 						<div class="detail-icon"><Icon name={selected.view ? 'table' : 'file'} size={17} /></div>
 						<div>
 							<p class="eyebrow">{kindLabel(selected.kind)}</p>
-											<h2>{selected.name}</h2>
-										</div>
-									</div>
-									{#if relativePath(selected.path) !== selected.name}
-										<p class="path">{relativePath(selected.path)}</p>
-									{/if}
-					<div class="detail-actions">
-						<button class="pill primary" type="button" onclick={useSelected}><Icon name="plus" size={13} /> Use in Ask</button>
-						<button class="pill ghost" type="button" onclick={inspectSelected}><Icon name="info" size={13} /> Inspect</button>
+							<h2>{selected.name}</h2>
+						</div>
 					</div>
+					{#if relativePath(selected.path) !== selected.name}
+						<p class="path">{relativePath(selected.path)}</p>
+					{/if}
 
 					<div class="facts">
 						<div><span>Size</span><strong>{formatBytes(selected.size_bytes)}</strong></div>
@@ -286,6 +267,8 @@
 	}
 	.summary {
 		display: flex;
+		width: fit-content;
+		max-width: 100%;
 		align-items: stretch;
 		gap: 1px;
 		margin-bottom: var(--space-5);
@@ -466,19 +449,6 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
-	}
-	.detail-actions {
-		display: flex;
-		flex-wrap: wrap;
-		gap: var(--space-2);
-		margin: 0 0 var(--space-4);
-	}
-	.detail-actions .pill {
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
-		padding: 6px 10px;
-		font-size: var(--fs-xs);
 	}
 	.facts {
 		display: grid;
@@ -683,6 +653,7 @@
 			align-self: flex-start;
 		}
 		.summary {
+			width: 100%;
 			flex-wrap: wrap;
 		}
 		.summary-item {
