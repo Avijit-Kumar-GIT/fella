@@ -30,9 +30,10 @@ use crate::engine::error::{EngineError, EngineResult};
 // wall clock; the SQL backend has its own query watchdog.
 const FUEL: u64 = 1_000_000_000;
 /// A resumable fuel slice bounds how long a pure-Python loop can ignore Stop.
-/// The value is large enough not to dominate normal analytics, while keeping
-/// cancellation responsive on slower desktop CPUs.
-const FUEL_SLICE: u64 = 20_000_000;
+/// Keep this conservative because a Python worker can run beside another
+/// worker on a two-core machine. A larger slice can make cancellation miss its
+/// UI budget when both workers are CPU-bound.
+const FUEL_SLICE: u64 = 1_000_000;
 const PYTHON_TIMEOUT_SECS: u64 = 60;
 const CODE_CAP: usize = 64 * 1024;
 const OUTPUT_CAP: usize = 64 * 1024;
