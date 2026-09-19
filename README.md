@@ -4,6 +4,8 @@
 
 [![CI](https://github.com/Avijit-Kumar-GIT/fella/actions/workflows/ci.yml/badge.svg)](https://github.com/Avijit-Kumar-GIT/fella/actions/workflows/ci.yml)
 
+[Documentation](https://lilfella.app/docs) · [Releases](https://github.com/Avijit-Kumar-GIT/fella/releases)
+
 *The more an AI can do for you, the more it can do to you.*
 
 **Ask questions about your own files, and see exactly how it got the answer.**
