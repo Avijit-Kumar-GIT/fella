@@ -997,7 +997,7 @@ function summarizeCatalog(full = false): string {
 		lines.push(`  ${f.name}  ·  ${f.row_count ?? '?'} rows${f.note ? `  (${f.note})` : ''}`);
 	}
 	for (const f of docs) {
-		lines.push(`  ${f.name}  ·  ${f.kind === 'pdf' ? 'PDF' : 'text'}`);
+		lines.push(`  ${f.name}  ·  ${f.kind.toUpperCase()}`);
 	}
 	lines.push(...skippedLines());
 	lines.push('', 'Ask a question, or /help.');

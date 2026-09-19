@@ -38,8 +38,7 @@
 	}
 
 	function kindLabel(item: SourceInfo): string {
-		const kind = item.kind.toLowerCase();
-		return kind.charAt(0).toUpperCase() + kind.slice(1);
+		return item.kind.toUpperCase();
 	}
 
 	function formatBytes(bytes: number): string {

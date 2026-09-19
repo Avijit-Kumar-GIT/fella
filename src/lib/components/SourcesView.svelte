@@ -64,8 +64,7 @@
 	}
 
 	function kindLabel(kind: SourceInfo['kind']): string {
-		const label = kind.toLowerCase();
-		return label.charAt(0).toUpperCase() + label.slice(1);
+		return kind.toUpperCase();
 	}
 
 	function formatIndexed(ms: number | undefined): string {
