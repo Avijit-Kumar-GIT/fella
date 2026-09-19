@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { ipc, isTauri } from '$lib/ipc';
-	import { baseName, errMsg, openFolder, relativeAge } from '$lib/commands';
+	import { errMsg, openFolder, relativeAge } from '$lib/commands';
 	import { session } from '$lib/session.svelte';
 	import type { ConversationSummary, Message } from '$lib/types';
 	import Icon from './Icon.svelte';
@@ -47,10 +47,6 @@
 	 *  conversation from the currently open folder. */
 	function title(c: ConversationSummary): string {
 		return c.title ?? c.preview;
-	}
-
-	function conversationWorkspace(c: ConversationSummary): string {
-		return c.workspace ? baseName(c.workspace) : 'No workspace';
 	}
 
 	let renamingId = $state<string | null>(null);
@@ -189,37 +185,8 @@
 			/>
 		</div>
 	{/if}
-	<div class="workspace-block">
-		<div class="section-label">Workspace</div>
-		{#if session.catalog.workspace}
-			<div class="workspace-card" title={session.catalog.workspace}>
-				<span class="workspace-mark"><Icon name="folder" size={15} /></span>
-				<span class="workspace-copy">
-					<strong>{folderName}</strong>
-					<span>{fileCount} file{fileCount === 1 ? '' : 's'} ready</span>
-				</span>
-				<button
-					class="change-folder"
-					type="button"
-					aria-label="Change workspace folder"
-					title="Change folder"
-					onclick={() => void openFolder()}
-				>
-					<Icon name="chevron-right" size={13} />
-				</button>
-			</div>
-		{:else}
-			<button class="workspace-empty" type="button" onclick={() => void openFolder()}>
-				<span class="workspace-mark"><Icon name="folder" size={15} /></span>
-				<span class="workspace-copy">
-					<strong>Choose a folder</strong>
-					<span>Start a local workspace</span>
-				</span>
-				<Icon name="chevron-right" size={13} />
-			</button>
-		{/if}
-	</div>
-	<nav class="workspace-nav" aria-label="Workspace">
+	<nav class="nav-section" aria-label="Main">
+		<div class="nav-heading">Work</div>
 		<button
 			class="nav-row"
 			class:active={session.workspaceView === 'ask'}
@@ -242,27 +209,35 @@
 			<span>Search</span>
 			<kbd>{shortcutModifier}K</kbd>
 		</button>
+	</nav>
+	<nav class="nav-section" aria-label="Workspace">
+		<div class="nav-heading">Workspace</div>
 		<button
 			class="nav-row"
-			class:active={session.workspaceView === 'workspace'}
+			class:active={session.workspaceView === 'workspace' && session.workspacePane === 'sources'}
 			type="button"
 			disabled={!session.catalog.workspace}
-			aria-current={session.workspaceView === 'workspace' ? 'page' : undefined}
+			aria-current={
+				session.workspaceView === 'workspace' && session.workspacePane === 'sources' ? 'page' : undefined
+			}
 			onclick={() => session.setWorkspacePane('sources')}
 		>
 			<Icon name="table" size={14} />
-			<span>Workspace</span>
+			<span>Sources</span>
 			{#if fileCount}<small>{fileCount}</small>{/if}
 		</button>
 		<button
 			class="nav-row"
-			class:active={session.workspaceView === 'settings'}
+			class:active={session.workspaceView === 'workspace' && session.workspacePane === 'context'}
 			type="button"
-			aria-current={session.workspaceView === 'settings' ? 'page' : undefined}
-			onclick={() => session.setWorkspaceView('settings')}
+			disabled={!session.catalog.workspace}
+			aria-current={
+				session.workspaceView === 'workspace' && session.workspacePane === 'context' ? 'page' : undefined
+			}
+			onclick={() => session.setWorkspacePane('context')}
 		>
-			<Icon name="settings" size={14} />
-			<span>Settings</span>
+			<Icon name="file" size={14} />
+			<span>Context</span>
 		</button>
 	</nav>
 	<div class="history-label">
@@ -296,9 +271,6 @@
 						>
 							<span class="preview">{title(c)}</span>
 							<span class="row-end">
-								{#if conversationWorkspace(c) !== folderName}
-									<span class="location" title={conversationWorkspace(c)}>{conversationWorkspace(c)}</span>
-								{/if}
 								<span class="age">{relativeAge(c.saved_at_ms)}</span>
 							</span>
 						</button>
@@ -331,6 +303,43 @@
 				{query ? 'No matches' : "No past conversations yet — they're saved here once you /clear or close a tab."}
 			</div>
 		{/if}
+	</div>
+	<div class="sidebar-footer">
+		{#if session.catalog.workspace}
+			<button
+				class="mount-status"
+				type="button"
+				title={session.catalog.workspace}
+				aria-label={`Change folder: ${folderName}`}
+				onclick={() => void openFolder()}
+			>
+				<span class="mount-icon"><Icon name="folder" size={14} /></span>
+				<span class="mount-copy">
+					<strong>{folderName}</strong>
+					<small>Mounted folder</small>
+				</span>
+				<Icon name="chevron-right" size={13} />
+			</button>
+		{:else}
+			<button class="mount-status" type="button" onclick={() => void openFolder()}>
+				<span class="mount-icon"><Icon name="folder" size={14} /></span>
+				<span class="mount-copy">
+					<strong>Open a folder</strong>
+					<small>Choose a local workspace</small>
+				</span>
+				<Icon name="chevron-right" size={13} />
+			</button>
+		{/if}
+		<button
+			class="nav-row settings-row"
+			class:active={session.workspaceView === 'settings'}
+			type="button"
+			aria-current={session.workspaceView === 'settings' ? 'page' : undefined}
+			onclick={() => session.setWorkspaceView('settings')}
+		>
+			<Icon name="settings" size={14} />
+			<span>Settings</span>
+		</button>
 	</div>
 </aside>
 
@@ -397,85 +406,21 @@
 	.search input::placeholder {
 		color: var(--text-faint);
 	}
-	.workspace-block {
-		padding: var(--space-2) var(--space-1) 0;
+	.nav-section {
+		display: grid;
+		gap: 2px;
+		padding: var(--space-3) var(--space-1) var(--space-2);
 	}
-	.section-label,
-	.history-label {
+	.nav-section + .nav-section {
+		padding-top: var(--space-2);
+		border-top: 1px solid var(--border);
+	}
+	.nav-heading {
 		padding: 0 var(--space-2) var(--space-1);
 		color: var(--text-faint);
 		font-size: var(--fs-xs);
 		font-weight: 650;
 		letter-spacing: 0.01em;
-	}
-	.workspace-card,
-	.workspace-empty {
-		width: 100%;
-		display: flex;
-		align-items: center;
-		gap: var(--space-2);
-		padding: var(--space-2);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		background: var(--bg-raised);
-		text-align: left;
-	}
-	.workspace-empty {
-		color: var(--text-dim);
-		cursor: pointer;
-		transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
-	}
-	.workspace-empty:hover {
-		border-color: var(--border-strong);
-		background: var(--bg-inset);
-	}
-	.workspace-mark {
-		display: grid;
-		place-items: center;
-		width: 28px;
-		height: 28px;
-		flex: none;
-		border-radius: var(--radius-sm);
-		background: var(--bg-inset);
-		color: var(--brand);
-	}
-	.workspace-copy {
-		min-width: 0;
-		flex: 1;
-		display: flex;
-		flex-direction: column;
-		gap: 1px;
-	}
-	.workspace-copy strong {
-		overflow: hidden;
-		color: var(--text);
-		font-size: var(--fs-sm);
-		font-weight: 580;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-	.workspace-copy span {
-		color: var(--text-faint);
-		font-size: var(--fs-xs);
-	}
-	.change-folder {
-		display: grid;
-		place-items: center;
-		width: 22px;
-		height: 22px;
-		flex: none;
-		border-radius: var(--radius-chip);
-		color: var(--text-faint);
-	}
-	.change-folder:hover {
-		background: var(--bg-inset);
-		color: var(--text);
-	}
-	.workspace-nav {
-		display: grid;
-		gap: 2px;
-		padding: var(--space-2) var(--space-1) var(--space-3);
-		border-bottom: 1px solid var(--border);
 	}
 	.nav-row {
 		position: relative;
@@ -496,19 +441,22 @@
 		color: var(--text);
 	}
 	.nav-row.active {
-		background: transparent;
+		background: var(--bg-raised);
 		color: var(--text);
-		font-weight: 560;
+		font-weight: 620;
 	}
 	.nav-row.active::before {
 		content: '';
 		position: absolute;
-		left: 1px;
-		top: 7px;
-		bottom: 7px;
-		width: 2px;
+		left: 0;
+		top: 6px;
+		bottom: 6px;
+		width: 3px;
 		border-radius: 2px;
 		background: var(--brand);
+	}
+	.nav-row.active :global(svg) {
+		color: var(--brand);
 	}
 	.nav-row:disabled {
 		color: var(--border-strong);
@@ -530,7 +478,12 @@
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
-		padding-top: var(--space-3);
+		padding: var(--space-3) var(--space-2) var(--space-1);
+		border-top: 1px solid var(--border);
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+		font-weight: 650;
+		letter-spacing: 0.01em;
 	}
 	.history-count {
 		font-family: var(--mono);
@@ -542,6 +495,7 @@
 	.list {
 		flex: 1;
 		min-height: 0;
+		padding: 0 var(--space-1);
 		overflow-y: auto;
 	}
 	.group-label {
@@ -629,14 +583,6 @@
 		color: var(--text);
 		background: var(--bg-inset);
 	}
-	.location {
-		min-width: 0;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-		color: var(--text-faint);
-		font-size: 10px;
-	}
 	.age {
 		color: var(--text-faint);
 		font-family: var(--mono);
@@ -647,5 +593,59 @@
 		padding: var(--space-2);
 		color: var(--text-faint);
 		font-size: var(--fs-sm);
+	}
+	.sidebar-footer {
+		flex: none;
+		display: grid;
+		gap: 2px;
+		padding: var(--space-2) var(--space-1) 0;
+		border-top: 1px solid var(--border);
+	}
+	.mount-status {
+		width: 100%;
+		display: flex;
+		align-items: center;
+		gap: var(--space-2);
+		min-width: 0;
+		padding: var(--space-2);
+		border-radius: var(--radius-sm);
+		color: var(--text-dim);
+		text-align: left;
+		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+	}
+	.mount-status:hover {
+		background: var(--bg-inset);
+		color: var(--text);
+	}
+	.mount-icon {
+		display: grid;
+		place-items: center;
+		flex: none;
+		color: var(--brand);
+	}
+	.mount-copy {
+		min-width: 0;
+		flex: 1;
+		display: flex;
+		flex-direction: column;
+		gap: 1px;
+	}
+	.mount-copy strong,
+	.mount-copy small {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.mount-copy strong {
+		color: var(--text);
+		font-size: var(--fs-sm);
+		font-weight: 580;
+	}
+	.mount-copy small {
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+	}
+	.settings-row {
+		margin-top: 1px;
 	}
 </style>
