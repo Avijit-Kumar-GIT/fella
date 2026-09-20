@@ -3,7 +3,7 @@
 Internal maintainer runbook. The v0.1 sections below preserve the first-public
 release history; the current gate for the next version starts here.
 
-## Next release from v0.1.5
+## v0.2.0 draft release
 
 The next version should remain the personal analytics release. It can improve
 correctness, sandbox behavior, and packaging without expanding the product into
@@ -14,18 +14,19 @@ in [`LEAN-PERSONAL-RELEASE.md`](LEAN-PERSONAL-RELEASE.md). It supersedes the
 historical extension and pack plans below for the next release scope; the
 historical entries remain for context.
 
-The release candidate is ready only when these items are complete:
+The v0.2.0 draft is a substantial personal analytics update, not an enterprise
+edition. The release gate is:
 
 - [x] Run the current Rust and frontend gates after the latest code changes:
       `cd src-tauri && cargo test --locked`, `cargo clippy --all-targets
       --locked -- -D warnings`, `pnpm run check`, and `pnpm run build` —
-      2026-09-17: 148 library tests and all runnable integration tests passed
-      (one timing test remains ignored), with 0/0 Svelte diagnostics and a
+      2026-09-20: 155 library tests and 85 integration tests passed (one
+      timing test remains ignored), with 0/0 Svelte diagnostics and a
       production build.
 - [x] Run the hostile embedded-Python checks, including blocked host-file
       access, fuel exhaustion, bounded output, and the SQL bridge, then record
       the result in `docs/SECURITY-REVIEW-v0.1.md` or a versioned successor —
-      2026-09-17: 8 `python_tool` tests passed, including user cancellation.
+      2026-09-20: 9 `python_tool` tests passed, including user cancellation.
 - [x] Run `scripts/check-memory.sh` in the optimized profile and record guest
       memory plus host RSS results in the security review. 2026-09-17: the
       extended 256-iteration run peaked at 6.1 MiB of guest Wasm memory and
@@ -39,8 +40,10 @@ The release candidate is ready only when these items are complete:
       server measurements are outside the product's supported deployment.
 - [ ] Freeze the release question battery across the supported model set and
       confirm every answer number and chart has source and verification data.
-- [ ] Set the package version, update `CHANGELOG.md`, and have the release
-      notes describe any remaining platform or installer coverage gaps.
+- [x] Set the package version to `0.2.0`, update `CHANGELOG.md`, and describe
+      the remaining platform or installer coverage gaps in the draft notes.
+- [x] Move documentation to the canonical `docs.lilfella.app` custom domain;
+      the old `/docs` path redirects there.
 
 The semantic filter work in this tree addresses the known case-mismatch gap for
 likely label columns with pre-query guidance and regression coverage. A frozen

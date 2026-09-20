@@ -6,77 +6,66 @@ All notable changes to Fella are recorded here. Format follows
 
 ## [Unreleased]
 
+No unreleased changes.
+
+## [0.2.0] - 2026-09-20
+
+Fella's first focused personal analytics release. It keeps the local-first,
+BYOK, read-only product boundary while making the analysis engine, evidence,
+and workspace experience substantially more capable.
+
 ### Added
 
-- **Embedded Python analytics sandbox.** Model-generated Python now runs in a
-  fresh bare-WASM RustPython guest through Wasmi. It has no filesystem,
-  network, environment, or subprocess capability; only bounded output and a
-  read-only SQL bridge cross the host boundary. Source, output, memory, stack,
-  fuel, row, and response limits keep the personal analytics path predictable
-  on Linux, macOS, and Windows. See [`docs/PYTHON-SANDBOX.md`](docs/PYTHON-SANDBOX.md).
-- **Augment packs: `/note` and `/table`.** A new pack kind, `augment`, switches
-  on a first-party capability a plain-text tab (`buffer`) or a small
-  editable table (`grid`) and binds it to a slash command. Type in the tab
-  and it autosaves into the currently-open folder; Fella then reads that file
-  like any other. The pack ships no code and the agent still has no write
-  tool only your keystroke writes, and only the file the pack names. Two
-  starter packs, `notes` (`/note` → `notes.md`) and `table` (`/table` →
-  `table.csv`), are the marketplace's first listed packs (`fella-extensions`).
-  A new capability beyond `buffer`/`grid` is deliberately rare, gated the same
-  way as a new built-in tool (`docs/DECISIONS.md`, `docs/EXTENSIBILITY.md`).
-  Tracking: #74.
+- **Personal analytics workspace.** A calmer Ask-first desktop experience now
+  brings together folder mounting, sources, context, conversations, settings,
+  light/dark appearance, keyboard navigation, and provider setup.
+- **Query-derived visualizations.** Bar and line charts are created from
+  bounded read-only query results, retain exact values, support longer
+  time-series data, and carry source and verification evidence.
+- **Embedded Python analytics.** Model-generated Python runs inside a bounded
+  WASM RustPython guest through Wasmi, with no filesystem, network, environment,
+  or subprocess capability. A read-only SQL bridge and explicit resource limits
+  support the personal analytics path. See [`docs/PYTHON-SANDBOX.md`](docs/PYTHON-SANDBOX.md).
+- **Experimental capability policy.** Table, document, Python, and
+  visualization analysis paths can be enabled or disabled in Settings, with
+  the engine enforcing the same policy used by the UI.
+- **Inspectable analysis contracts.** Evidence IDs, provenance, workspace
+  revisions, typed verification status, query replay, chart evidence, and
+  deterministic self-checks make the path from source files to answer visible.
+- **Mintlify documentation.** Product, architecture, sandbox, capability,
+  security, benchmarking, and contributor documentation now live at
+  [`docs.lilfella.app`](https://docs.lilfella.app).
 
 ### Changed
 
-- **Text label filters now receive case-sensitivity guidance.** The SQL tool
-  warns the model when an exact-value filter targets a likely category, status,
-  or label column, including uniformly cased data where `Leisure` would miss
-  stored `leisure`. It keeps the stricter mixed-case answer check while
-  teaching the query to use `lower(column) = lower(value)` when needed.
-- **Python output is bounded without silent loss.** A single oversized write
-  now keeps the allowed prefix and labels the result as truncated, so a model
-  can tell that its calculation output was capped.
-- **The self-check now catches a wrong aggregate, not just an ungrounded
-  number.** If a question says "how many"/"how much"/"average" and none of the
-  queries behind the answer actually used `COUNT`/`SUM`/`AVG`, the evidence
-  fold now flags it — the answer may have come from a precomputed column or a
-  different computation than the question asked for. A soft warning, same
-  tier as the existing case-sensitivity and text-aggregate checks; it doesn't
-  block the answer or trigger a re-ask. First of a few checks aimed at the
-  "valid query, wrong question" class of miss the folder-QA benchmark found
-  (#67); tracking: #78.
-- **The self-check now also catches a date/time `GROUP BY` that collapsed to
-  a blank bucket.** A query grouping by `strftime()`/`date()`/`datetime()`
-  whose result has a `NULL` group key — the "Month: (blank), $X total" shape —
-  now gets flagged, so a non-ISO date column doesn't quietly produce one big
-  ungrouped bucket labeled as a real breakdown. Same #67/#78 tracking.
-- **Per-folder memory no longer caches a question's SQL as a reusable
-  "recipe."** It stores durable facts instead. A cached recipe could be
-  recorded "verified" against a check set that later got stronger, then keep
-  replaying the same now-known-wrong query indefinitely. `## Recipes` in an
-  existing `memory.md` is silently dropped the next time Fella touches the
-  file. `docs/DECISIONS.md` (2026-09-11).
-- **A correction that overlaps something memory already learned now updates
-  it instead of adding a second, possibly contradictory note.** A follow-up
-  correction on the same topic, worded differently from the first, used to
-  land as its own vocabulary entry rather than superseding the earlier one.
-  The model currently active in the workspace now judges add-vs-update-vs-
-  restate against the short existing list before writing, so the same
-  correction typed twice, two ways, ends up as one note, not two. Verified
-  with a new sandboxed multi-session test (`agent_eval memory-sandbox`).
-  `docs/DECISIONS.md` (2026-09-12).
+- The release surface is intentionally personal and lightweight: BYOK provider
+  connections, local workspace context, deterministic tools, bounded Python,
+  charts, evidence, and conversation history remain the core product.
+- Provider setup no longer supports a local Ollama deployment path; Ollama
+  Cloud remains available as a hosted BYOK provider.
+- The analytics engine now handles longer time-series charts, complete small
+  result previews, case-aware label filters, written-month date normalization,
+  atomic workspace snapshots, and stronger answer verification.
+- The model loop keeps cancellation, step limits, concurrent independent tool
+  calls, bounded tool output, and a final deterministic verification pass.
 
-### Fixed
+### Removed
 
-- **A date column written as text ("Aug 1, 2026" rather than a real date
-  cell) is normalized to ISO-8601 at ingest, in CSV/JSON *and* Excel.** A
-  spelled-out-month date `strftime()`/`date()` can't parse used to collapse
-  a `GROUP BY month` into one ungrouped bucket ("Month: (blank), $X total").
-  The fix originally only covered the CSV/JSON ingest path; a real `.xlsx`
-  ledger reproduced the same bug afterward because Excel ingestion has its
-  own independent column-type inference that never got the same treatment —
-  now it does. Ambiguous numeric formats (`08/01/2026`) are deliberately
-  left alone rather than guessed at.
+- The plugin, packs, and augment runtime ecosystem was removed from the
+  default release surface, including `/note`, `/table`, and marketplace
+  installation flows. The historical design remains documented for reference.
+- `/mcp` remains as an experimental, inert command and documentation
+  scaffold. Fella ships no official MCP connector in this release.
+
+### Release notes
+
+- This is an unsigned early release. Use the published checksums and the
+  installer scripts, and review the platform coverage in the draft release.
+- The embedded WASM/RustPython boundary is a strong application guardrail for
+  generated analysis code, not a substitute for the longer-term OS-level
+  sandbox design documented in the project.
+- Enterprise capability policy and context-engineering directions remain
+  documented as future work; they are not part of this personal release.
 
 ## [0.1.5]
 
@@ -373,7 +362,8 @@ folder of your own files with deterministic SQL / Python, and shows its working.
 - The hosted pack browser isn't live yet: `/packs add <path>` works offline, and
   `/packs install <id>` pulls from a small seed catalog.
 
-[Unreleased]: https://github.com/Avijit-Kumar-GIT/fella/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/Avijit-Kumar-GIT/fella/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Avijit-Kumar-GIT/fella/compare/v0.1.5...v0.2.0
 [0.1.5]: https://github.com/Avijit-Kumar-GIT/fella/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/Avijit-Kumar-GIT/fella/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/Avijit-Kumar-GIT/fella/compare/v0.1.2...v0.1.3

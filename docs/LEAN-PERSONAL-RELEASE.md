@@ -1,7 +1,7 @@
 # Lean personal release scope
 
-**Status:** Implemented on `feat/lean-personal-release`. The experimental branch
-and `main` remain unchanged until this pass is reviewed.
+**Status:** Implemented on `main` for the v0.2.0 personal release. The default
+product surface is intentionally smaller than the historical extension plans.
 
 ## Decision
 
