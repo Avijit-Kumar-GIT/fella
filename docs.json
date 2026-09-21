@@ -5,7 +5,7 @@
   "description": "Documentation for Fella, a local-first desktop app for asking auditable questions about your own files.",
   "seo": {
     "metatags": {
-      "canonical": "https://lilfella.app/docs"
+      "canonical": "https://docs.lilfella.app"
     }
   },
   "colors": {
@@ -113,6 +113,7 @@
           {
             "group": "How Fella works",
             "pages": [
+              "concepts/triad",
               "concepts/architecture",
               "concepts/harness",
               "concepts/engine",
