@@ -4,6 +4,7 @@
 	import { isTauri, openExternal } from '$lib/ipc';
 	import { fadeQuick } from '$lib/motion';
 	import Icon from './Icon.svelte';
+	import Logo from './Logo.svelte';
 	import Message from './Message.svelte';
 	import RunTimeline from './RunTimeline.svelte';
 
@@ -115,7 +116,8 @@
 	<RunTimeline />
 	{#if session.messages.length === 0}
 		<div class="onboard" class:center={!hasFolder && !showSetup}>
-			<div class="wordmark" aria-label="Fella">Fella</div>
+			<div class="hero-kicker"><span class="hero-index">01</span><span>Personal data workspace</span></div>
+			<div class="wordmark" aria-label="Fella"><Logo size={24} /><span>Fella</span></div>
 			<h1 class="hero">Ask about your own files</h1>
 
 			{#if !hasFolder}
@@ -144,6 +146,11 @@
 					e.g. <em>“how did my spending change this year?”</em> ·
 					<em>“what stands out in my workout log?”</em>
 				</p>
+				<div class="principles" aria-label="Fella principles">
+					<span><i aria-hidden="true"></i>Local-first</span>
+					<span><i aria-hidden="true"></i>Read-only</span>
+					<span><i aria-hidden="true"></i>Evidence-backed</span>
+				</div>
 			{:else if fileCount === 0}
 				<p class="lead"><strong>{folderName}</strong> is open, but nothing in it is readable yet.</p>
 				<p>
@@ -301,7 +308,7 @@
 		max-width: 68ch;
 	}
 	.onboard {
-		max-width: 52ch;
+		max-width: 58ch;
 		margin: var(--space-6) auto 0;
 		color: var(--text-dim);
 	}
@@ -313,30 +320,55 @@
 		display: flex;
 		flex-direction: column;
 		justify-content: center;
+		align-items: flex-start;
+		text-align: left;
+	}
+	.hero-kicker {
+		display: flex;
 		align-items: center;
-		text-align: center;
+		gap: var(--space-2);
+		margin-bottom: var(--space-5);
+		color: var(--text-faint);
+		font-size: 10px;
+		font-weight: 650;
+		letter-spacing: 0.11em;
+		line-height: 1;
+		text-transform: uppercase;
+	}
+	.hero-index {
+		color: var(--brand);
+		font-family: var(--mono);
+		font-size: 10px;
+		letter-spacing: 0;
 	}
 	.wordmark {
-		font-size: var(--fs-xl);
-		font-weight: 560;
+		display: inline-flex;
+		align-items: center;
+		gap: var(--space-2);
+		margin: 0 0 var(--space-4);
+		color: var(--text-dim);
+		font-size: var(--fs-sm);
+		font-weight: 650;
 		letter-spacing: -0.02em;
-		color: var(--text);
-		margin: 0 0 var(--space-2);
 	}
 	.hero {
-		font-size: var(--fs-lg);
-		font-weight: 600;
-		letter-spacing: -0.01em;
+		max-width: 12ch;
+		margin: 0 0 var(--space-4);
+		color: var(--text);
+		font-size: clamp(34px, 5vw, 52px);
+		font-weight: 570;
+		letter-spacing: -0.055em;
+		line-height: 1.02;
 		text-wrap: balance;
-		color: var(--text-dim);
-		margin: 0 0 var(--space-3);
 	}
 	.onboard p {
 		margin: 0 0 var(--space-3);
 	}
 	.onboard .lead {
-		color: var(--text);
-		font-size: var(--fs-lg);
+		max-width: 54ch;
+		color: var(--text-dim);
+		font-size: 16px;
+		line-height: 1.6;
 	}
 	.onboard .lead strong {
 		font-weight: 600;
@@ -360,7 +392,7 @@
 		margin: var(--space-5) 0 var(--space-2);
 	}
 	.onboard.center .cta {
-		justify-content: center;
+		justify-content: flex-start;
 	}
 	.cta .pill {
 		display: inline-flex;
@@ -377,6 +409,27 @@
 	.egs em {
 		font-style: italic;
 		color: var(--text-dim);
+	}
+	.principles {
+		display: flex;
+		flex-wrap: wrap;
+		gap: var(--space-3) var(--space-5);
+		margin-top: var(--space-6);
+		padding-top: var(--space-4);
+		border-top: 1px solid var(--border);
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+	}
+	.principles span {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+	}
+	.principles i {
+		width: 5px;
+		height: 5px;
+		border-radius: 50%;
+		background: var(--brand);
 	}
 	.personalize {
 		margin-top: 22px;

@@ -145,9 +145,12 @@
 	}
 </script>
 
-<aside class="sidebar">
+	<aside class="sidebar">
 	<div class="header">
-		<span class="logo"><Logo size={18} /></span>
+		<div class="brand-lockup" aria-label="Fella">
+			<span class="logo"><Logo size={18} /></span>
+			<span class="brand-name">Fella</span>
+		</div>
 		<div class="header-actions">
 			<button
 				class="icon-btn"
@@ -381,6 +384,18 @@
 	.logo {
 		display: flex;
 		align-items: center;
+	}
+	.brand-lockup {
+		display: inline-flex;
+		align-items: center;
+		gap: var(--space-2);
+		min-width: 0;
+	}
+	.brand-name {
+		color: var(--text);
+		font-size: var(--fs-sm);
+		font-weight: 650;
+		letter-spacing: -0.02em;
 	}
 	.header-actions {
 		display: flex;

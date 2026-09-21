@@ -812,8 +812,8 @@
 		flex-direction: column;
 		gap: var(--space-2);
 		background: var(--bg-raised);
-		border: 1px solid var(--border);
-		border-radius: 18px;
+		border: 1px solid color-mix(in srgb, var(--border-strong) 72%, var(--border));
+		border-radius: 20px;
 		box-shadow: var(--shadow-sm);
 		padding: var(--space-3) var(--space-3) var(--space-2) var(--space-4);
 		transition:
@@ -822,7 +822,7 @@
 	}
 	.field:focus-within {
 		border-color: var(--link);
-		box-shadow: var(--focus-ring);
+		box-shadow: var(--focus-ring), var(--shadow-sm);
 	}
 	.bottom-row {
 		display: flex;
