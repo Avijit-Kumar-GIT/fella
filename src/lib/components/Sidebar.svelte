@@ -359,15 +359,15 @@
 <style>
 	.sidebar {
 		flex: none;
-		width: 240px;
+		width: 248px;
 		display: flex;
 		flex-direction: column;
 		gap: var(--space-1);
-		padding: 0 var(--space-2) var(--space-2);
-		/* No top padding: .header is 38px flush against the top edge, to
-		   match the titlebar's height exactly across the sidebar seam. */
-		background: var(--bg);
-		border-right: 1px solid var(--border);
+		padding: 8px;
+		background: var(--panel);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-window);
+		box-shadow: var(--shadow-sm);
 		overflow: hidden;
 	}
 	.header {
@@ -375,7 +375,7 @@
 		align-items: center;
 		justify-content: space-between;
 		flex: none;
-		height: 38px;
+		height: 44px;
 		padding: 0 var(--space-2);
 	}
 	.logo {
@@ -422,18 +422,19 @@
 	.nav-section {
 		display: grid;
 		gap: 2px;
-		padding: var(--space-3) var(--space-1) var(--space-2);
+		padding: var(--space-3) 0 var(--space-2);
 	}
 	.nav-section + .nav-section {
 		padding-top: var(--space-2);
-		border-top: 1px solid var(--border);
+		border-top: 0;
 	}
 	.nav-heading {
 		padding: 0 var(--space-2) var(--space-1);
 		color: var(--text-faint);
 		font-size: var(--fs-xs);
 		font-weight: 650;
-		letter-spacing: 0.01em;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
 	}
 	.nav-row {
 		position: relative;
@@ -441,7 +442,7 @@
 		display: flex;
 		align-items: center;
 		gap: var(--space-2);
-		padding: var(--space-2) var(--space-2);
+		padding: 9px var(--space-2);
 		border-radius: var(--radius-sm);
 		color: var(--text-dim);
 		font-size: var(--fs-sm);
@@ -454,19 +455,9 @@
 		color: var(--text);
 	}
 	.nav-row.active {
-		background: var(--bg-raised);
+		background: var(--bg-inset);
 		color: var(--text);
 		font-weight: 620;
-	}
-	.nav-row.active::before {
-		content: '';
-		position: absolute;
-		left: 0;
-		top: 6px;
-		bottom: 6px;
-		width: 3px;
-		border-radius: 2px;
-		background: var(--brand);
 	}
 	.nav-row.active :global(svg) {
 		color: var(--brand);
@@ -491,8 +482,8 @@
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
-		padding: var(--space-3) var(--space-2) var(--space-1);
-		border-top: 1px solid var(--border);
+		padding: var(--space-4) var(--space-2) var(--space-1);
+		border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
 		color: var(--text-faint);
 		font-size: var(--fs-xs);
 		font-weight: 650;
@@ -526,9 +517,9 @@
 		align-items: center;
 		gap: var(--space-2);
 		width: 100%;
-		min-height: 30px;
-		padding-top: 6px;
-		padding-bottom: 6px;
+		min-height: 34px;
+		padding-top: 7px;
+		padding-bottom: 7px;
 		border-radius: var(--radius-sm);
 	}
 	.item:hover,
@@ -611,8 +602,8 @@
 		flex: none;
 		display: grid;
 		gap: 2px;
-		padding: var(--space-2) var(--space-1) 0;
-		border-top: 1px solid var(--border);
+		padding: var(--space-3) 0 0;
+		border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
 	}
 	.mount-status {
 		width: 100%;
@@ -620,8 +611,10 @@
 		align-items: center;
 		gap: var(--space-2);
 		min-width: 0;
-		padding: var(--space-2);
+		padding: 10px var(--space-2);
 		border-radius: var(--radius-sm);
+		background: color-mix(in srgb, var(--bg-raised) 42%, transparent);
+		border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
 		color: var(--text-dim);
 		text-align: left;
 		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);

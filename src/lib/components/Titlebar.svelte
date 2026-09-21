@@ -236,9 +236,9 @@
 		display: flex;
 		align-items: center;
 		gap: var(--space-2);
-		height: 38px;
-		padding: 0 var(--space-2) 0 var(--pad);
-		background: var(--bg);
+		height: 52px;
+		padding: 0 12px 0 14px;
+		background: var(--panel);
 		color: var(--text-faint);
 		font-size: var(--fs-sm);
 		user-select: none;
@@ -260,8 +260,8 @@
 		flex: none;
 		display: grid;
 		place-items: center;
-		width: 24px;
-		height: 24px;
+		width: 28px;
+		height: 28px;
 		border-radius: var(--radius-chip);
 		color: var(--text-faint);
 		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
