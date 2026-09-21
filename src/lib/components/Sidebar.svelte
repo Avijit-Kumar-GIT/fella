@@ -366,8 +366,8 @@
 		padding: 8px;
 		background: var(--panel);
 		border: 1px solid var(--border);
-		border-radius: var(--radius-window);
-		box-shadow: var(--shadow-sm);
+		border-right: 1px solid var(--border);
+		border-radius: var(--radius-window) 0 0 var(--radius-window);
 		overflow: hidden;
 	}
 	.header {

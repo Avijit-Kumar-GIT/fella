@@ -276,7 +276,7 @@
 	.shell {
 		position: relative;
 		display: flex;
-		gap: 8px;
+		gap: 0;
 		padding: 10px;
 		height: 100%;
 		background: var(--window);
@@ -292,8 +292,8 @@
 		min-height: 0;
 		background: var(--panel);
 		border: 1px solid var(--border);
-		border-radius: var(--radius-window);
-		box-shadow: var(--shadow-sm);
+		border-left: 0;
+		border-radius: 0 var(--radius-window) var(--radius-window) 0;
 		overflow: hidden;
 	}
 	main {
@@ -301,10 +301,8 @@
 		min-height: 0;
 		display: flex;
 		flex-direction: column;
-		margin: 0 8px;
+		margin: 0;
 		background: var(--bg);
-		border: 1px solid var(--border);
-		border-radius: 14px;
 		overflow: hidden;
 	}
 	.main-row {
@@ -344,7 +342,6 @@
 	}
 	@media (max-width: 680px) {
 		.shell {
-			gap: 0;
 			padding: 0;
 		}
 		.app {

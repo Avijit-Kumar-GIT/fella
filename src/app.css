@@ -12,7 +12,7 @@
    - Monochrome first, with one accent. Color (--ok / --warn / --err / --link)
      only carries meaning state, a link, a result and is always paired with a
      word or shape, never color alone. --brand is the single exception: one
-     warm hue standing in for "this is the thing to notice," reused everywhere
+     teal hue standing in for "this is the thing to notice," reused everywhere
      that applies (the primary action, the empty-state glyph, and a
      connected-status icon) rather than invented per-component.
    - Hierarchy comes from type, spacing, and nested rounded surfaces. Earn a
@@ -61,8 +61,8 @@
 	/* the one hue used outside the neutral/status palette: the primary-action
 	   pill, the empty-state glyph, and the composer connected-icon -- one
 	   consistent "notice me" color, not a different one per component. */
-	--brand: #789621;
-	--link: #496796;
+	--brand: #008080;
+	--link: #3a5c8a;
 	--ok: #3f7d3f;
 	--warn: #855800;
 	--err: #b23b3b;
@@ -117,8 +117,8 @@
 	--text-dim: #a2a7a0;
 	--text-faint: #7c827b;
 	--accent: #f0f2ed;
-	--brand: #d4e74d;
-	--link: #a8c5ef;
+	--brand: #008080;
+	--link: #8fb0dd;
 	--ok: #7cc07c;
 	--warn: #d8a640;
 	--err: #e06c6c;
@@ -154,7 +154,7 @@ body {
    like a pane in one desktop app. */
 html[data-color-mode='dark'] body {
 	background:
-		radial-gradient(circle at 18% -12%, rgba(212, 231, 77, 0.045), transparent 33rem),
+		radial-gradient(circle at 18% -12%, rgba(0, 128, 128, 0.045), transparent 33rem),
 		var(--window);
 }
 
@@ -262,7 +262,7 @@ kbd {
    one thing to do here" reads as one consistent color language. */
 .pill.primary {
 	background: var(--brand);
-	color: #151710;
+	color: #fff;
 	border-color: var(--brand);
 }
 .pill.primary:hover {
