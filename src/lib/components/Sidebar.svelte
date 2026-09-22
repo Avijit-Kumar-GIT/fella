@@ -177,7 +177,7 @@
 
 <aside class="sidebar">
 	<div class="header">
-		<span class="logo"><Logo size={18} /></span>
+		<span class="logo"><Logo size={18} active={session.busy} /></span>
 		<div class="header-actions">
 			<button
 				class="icon-btn"

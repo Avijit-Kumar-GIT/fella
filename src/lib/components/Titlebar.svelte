@@ -106,7 +106,7 @@
 	{#if isMac}<span class="lights" aria-hidden="true"></span>{/if}
 
 	{#if !session.focus && session.sidebarCollapsed}
-		<span class="logo"><Logo size={16} /></span>
+		<span class="logo"><Logo size={16} active={session.busy} /></span>
 		<button
 			class="navbtn"
 			data-tauri-drag-region="false"

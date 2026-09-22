@@ -4,6 +4,7 @@
 	import { isTauri, openExternal } from '$lib/ipc';
 	import { fadeQuick } from '$lib/motion';
 	import Icon from './Icon.svelte';
+	import Logo from './Logo.svelte';
 	import Message from './Message.svelte';
 	import RunTimeline from './RunTimeline.svelte';
 
@@ -115,6 +116,7 @@
 	<RunTimeline />
 	{#if session.messages.length === 0}
 		<div class="onboard" class:center={!hasFolder && !showSetup}>
+			<div class="onboard-mark"><Logo size={40} active={session.busy} /></div>
 			<div class="wordmark" aria-label="Fella">Fella</div>
 			<h1 class="hero">Ask about your own files</h1>
 
@@ -322,6 +324,11 @@
 		letter-spacing: -0.02em;
 		color: var(--text);
 		margin: 0 0 var(--space-2);
+	}
+	.onboard-mark {
+		display: flex;
+		justify-content: center;
+		margin: 0 0 var(--space-3);
 	}
 	.hero {
 		font-size: var(--fs-lg);
