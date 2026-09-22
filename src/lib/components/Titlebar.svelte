@@ -113,7 +113,7 @@
 			title={`Expand sidebar (${shortcutModifier}+B)`}
 			onclick={() => session.toggleSidebar()}
 		>
-			<Icon name="panel" size={14} />
+			<Icon name="panel" size={16} />
 		</button>
 	{/if}
 
@@ -149,7 +149,7 @@
 				aria-expanded={appearanceOpen}
 				aria-haspopup="menu"
 			>
-				<Icon name={appearanceIcon(prefs.appearance)} size={14} />
+				<Icon name={appearanceIcon(prefs.appearance)} size={16} />
 			</button>
 			{#if appearanceOpen}
 				<div
@@ -171,10 +171,10 @@
 								appearanceOpen = false;
 							}}
 						>
-							<Icon name={option.icon} size={14} />
+							<Icon name={option.icon} size={16} />
 							<span>{option.label}</span>
 							{#if prefs.appearance === option.id}
-								<Icon name="check" size={13} />
+								<Icon name="check" size={12} />
 							{/if}
 						</button>
 					{/each}
@@ -193,7 +193,7 @@
 				title="Session info"
 				aria-expanded={infoOpen}
 			>
-				<Icon name="info" size={14} />
+				<Icon name="info" size={16} />
 			</button>
 			{#if infoOpen}
 				<div class="info-pop" role="dialog" aria-label="Session info">
@@ -216,13 +216,13 @@
 	{#if isWindows && isTauri()}
 		<div class="winctl" data-tauri-drag-region="false">
 			<button aria-label="Minimize" onclick={() => void win.minimize()}>
-				<Icon name="minus" size={14} />
+				<Icon name="minus" size={16} />
 			</button>
 			<button aria-label="Maximize" onclick={() => void win.toggleMaximize()}>
-				<Icon name="square" size={11} />
+				<Icon name="square" size={12} />
 			</button>
 			<button class="x" aria-label="Close" onclick={() => void win.close()}>
-				<Icon name="x" size={14} />
+				<Icon name="x" size={16} />
 			</button>
 		</div>
 	{/if}

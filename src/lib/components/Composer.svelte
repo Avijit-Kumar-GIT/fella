@@ -330,9 +330,9 @@
 	{#if contextOpen}
 		<div class="context-menu" transition:enterUp>
 			<div class="context-search">
-				<Icon name="search" size={13} />
+				<Icon name="search" size={16} />
 				<input bind:this={contextInput} bind:value={contextQuery} placeholder="Find a source or field…" spellcheck="false" />
-				<button type="button" aria-label="Close context picker" onclick={() => (contextOpen = false)}><Icon name="x" size={13} /></button>
+				<button type="button" aria-label="Close context picker" onclick={() => (contextOpen = false)}><Icon name="x" size={16} /></button>
 			</div>
 			{#if contextSources.length}
 				<p class="context-heading">Sources</p>
@@ -340,11 +340,11 @@
 					{#each contextSources as source (source.path)}
 						<div class="context-item">
 							<button class="context-main" type="button" onclick={() => addSource(source)}>
-								<span class="context-icon"><Icon name={source.view ? 'table' : 'file'} size={13} /></span>
+								<span class="context-icon"><Icon name={source.view ? 'table' : 'file'} size={16} /></span>
 								<span class="context-copy"><strong>{source.name}</strong><small>{sourceDetail(source)}</small></span>
 							</button>
 							<button class="context-inspect" type="button" aria-label={`Inspect ${source.name}`} title="Inspect source" onclick={() => inspectSource(source)}>
-								<Icon name="info" size={13} />
+								<Icon name="info" size={16} />
 							</button>
 						</div>
 					{/each}
@@ -355,7 +355,7 @@
 				<div class="context-list compact-list">
 					{#each contextColumns as item (item.source.path + ':' + item.column.name)}
 						<button class="context-field" type="button" onclick={() => addColumn(item.source, item.column.name, item.column.type)}>
-							<span class="context-icon"><Icon name="table" size={13} /></span>
+							<span class="context-icon"><Icon name="table" size={16} /></span>
 							<span class="context-copy"><strong>{item.source.name}.{item.column.name}</strong><small>{item.column.type}</small></span>
 						</button>
 					{/each}
@@ -407,13 +407,13 @@
 			<div class="context-row">
 				{#each contextRefs as ref (ref.kind + ':' + ref.key)}
 					<span class="ref-pill" title={ref.detail ?? ref.label}>
-						<Icon name={ref.kind === 'source' ? 'file' : 'table'} size={11} />
-						<span>{ref.label}</span>
-						<button type="button" aria-label={`Remove ${ref.label} from context`} onclick={() => removeReference(ref)}><Icon name="x" size={11} /></button>
+							<Icon name={ref.kind === 'source' ? 'file' : 'table'} size={12} />
+							<span>{ref.label}</span>
+							<button type="button" aria-label={`Remove ${ref.label} from context`} onclick={() => removeReference(ref)}><Icon name="x" size={12} /></button>
 					</span>
 				{/each}
 				<button class="context-add" type="button" aria-expanded={contextOpen} onclick={() => { contextOpen = !contextOpen; modeOpen = false; }}>
-					<Icon name="plus" size={12} /> Add context{#if contextRefs.length} · {contextRefs.length}{/if}
+					<Icon name="plus" size={16} /> Add context{#if contextRefs.length} · {contextRefs.length}{/if}
 				</button>
 			</div>
 		{/if}
@@ -441,7 +441,7 @@
 					<button class="mode-trigger" type="button" aria-expanded={modeOpen} onclick={() => { modeOpen = !modeOpen; contextOpen = false; }}>
 						<span class="mode-mark" class:inspect={mode === 'inspect'}></span>
 						{mode === 'inspect' ? 'Check data' : 'Ask'}
-						<Icon name="chevron-right" size={11} />
+						<Icon name="chevron-right" size={12} />
 					</button>
 					{#if modeOpen}
 						<div class="mode-menu">
@@ -458,7 +458,7 @@
 			{#if !session.focus}
 				<div class="chips">
 					<span class="chip model-chip" title={modelLabel ? `${providerName} · ${modelLabel}` : providerName}>
-						<ProviderIcon providerId={providerId} size={13} />
+						<ProviderIcon providerId={providerId} size={12} />
 						{modelLabel || 'No model selected'}
 					</span>
 				{#if activityNote}
@@ -476,15 +476,15 @@
 					aria-label="Cancel and re-ask with this"
 					onclick={() => void submit()}
 				>
-					<Icon name="corner-down-left" size={15} />
+						<Icon name="corner-down-left" size={16} />
 				</button>
 			{:else if session.busy}
 				<button class="act stop" title="Stop (Esc)" aria-label="Stop" onclick={() => stop()}>
-					<Icon name="stop" fill size={13} />
+					<Icon name="stop" fill size={16} />
 				</button>
 			{:else if value.trim()}
 				<button class="act send" aria-label="Send" onclick={() => void submit()}>
-					<Icon name="corner-down-left" size={15} />
+					<Icon name="corner-down-left" size={16} />
 				</button>
 			{/if}
 		</div>
@@ -492,7 +492,7 @@
 	{#if !session.focus}
 		<div class="below">
 			<button class="below-btn" type="button" onclick={() => void openFolder()}>
-				<Icon name="folder" size={12} />
+				<Icon name="folder" size={16} />
 				{hasFolder ? `${folderName} · ${fileCount} file${fileCount === 1 ? '' : 's'}` : 'Choose a folder'}
 			</button>
 		</div>

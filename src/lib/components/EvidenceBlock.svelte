@@ -67,7 +67,7 @@
 		aria-controls={bodyId}
 	>
 		<span class="caret" class:open={expanded} aria-hidden="true">
-			<Icon name="chevron-right" size={13} />
+			<Icon name="chevron-right" size={12} />
 		</span>
 		{#if stepCount === 0}
 			Evidence · general knowledge
@@ -161,7 +161,7 @@
 					{#each answer.verification as v (v.label)}
 						<div class="check">
 							<span class="mark" class:ok={v.ok} class:bad={!v.ok} aria-hidden="true">
-								<Icon name={v.ok ? 'check' : 'alert'} size={13} />
+								<Icon name={v.ok ? 'check' : 'alert'} size={12} />
 							</span>
 							<span>{v.label}</span>
 							{#if v.detail}<span class="detail-note">— {v.detail}</span>{/if}

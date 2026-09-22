@@ -83,7 +83,7 @@
 			<p class="lede">A short note about your files that Fella reads before it answers.</p>
 		</div>
 		<button class="pill ghost" type="button" onclick={() => void openFolder()}>
-			<Icon name="folder" size={14} /> Change folder
+			<Icon name="folder" size={16} /> Change folder
 		</button>
 	</header>
 
@@ -98,7 +98,7 @@
 					<button class="text-button" type="button" onclick={useTemplate}>Use a template</button>
 				{/if}
 				<button class="pill primary" type="button" disabled={saving || loading || contents === savedContents} onclick={() => void save()}>
-					<Icon name="check" size={13} />
+					<Icon name="check" size={16} />
 					{saving ? 'Saving…' : 'Save'}
 				</button>
 			</div>
@@ -120,7 +120,7 @@
 	</div>
 
 	<div class="tip">
-		<Icon name="info" size={14} />
+		<Icon name="info" size={16} />
 		<span>Use context for definitions and guidance. Fella can read it, but it does not rewrite it.</span>
 	</div>
 </section>

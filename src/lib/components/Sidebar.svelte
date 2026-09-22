@@ -173,7 +173,7 @@
 				title={`Collapse sidebar (${shortcutModifier}+B)`}
 				onclick={() => session.toggleSidebar()}
 			>
-				<Icon name="panel" size={15} />
+				<Icon name="panel" size={16} />
 			</button>
 			<button
 				class="icon-btn"
@@ -185,7 +185,7 @@
 					session.newTab();
 				}}
 			>
-				<Icon name="plus" size={15} />
+				<Icon name="plus" size={16} />
 			</button>
 		</div>
 	</div>
@@ -200,7 +200,7 @@
 			aria-current={session.workspaceView === 'ask' ? 'page' : undefined}
 			onclick={() => session.setWorkspaceView('ask')}
 		>
-			<Icon name="compose" size={14} />
+			<Icon name="compose" size={16} />
 			<span>Ask</span>
 		</button>
 		<button
@@ -211,7 +211,7 @@
 			aria-haspopup="dialog"
 			onclick={() => onsearch?.()}
 		>
-			<Icon name="search" size={14} />
+			<Icon name="search" size={16} />
 			<span>Search</span>
 		</button>
 	</nav>
@@ -225,7 +225,7 @@
 				title={`Add repository (${shortcutModifier}+O)`}
 				onclick={() => void addRepository()}
 			>
-				<Icon name="plus" size={14} />
+				<Icon name="plus" size={16} />
 			</button>
 		</div>
 		<div class="repositories">
@@ -240,7 +240,7 @@
 						onclick={() => toggleRepository(repo)}
 					>
 						<Icon name="chevron-right" size={12} />
-						<span class="repository-icon"><Icon name="folder" size={14} /></span>
+						<span class="repository-icon"><Icon name="folder" size={16} /></span>
 						<span class="repository-copy">{repo.name}</span>
 					</button>
 					{#if repo.expanded}
@@ -255,7 +255,7 @@
 										title={`Sources (${shortcutModifier}+Shift+S)`}
 										onclick={() => void openRepositoryPane(repo, 'sources')}
 									>
-										<Icon name="table" size={12} />
+										<Icon name="table" size={16} />
 									</button>
 									<button
 										class="repository-tool"
@@ -265,7 +265,7 @@
 										title={`Context (${shortcutModifier}+Shift+C)`}
 										onclick={() => void openRepositoryPane(repo, 'context')}
 									>
-										<Icon name="file" size={12} />
+										<Icon name="file" size={16} />
 									</button>
 									<button
 										class="repository-tool"
@@ -274,7 +274,7 @@
 										title="New conversation"
 										onclick={() => void newConversation(repo)}
 									>
-										<Icon name="plus" size={12} />
+										<Icon name="plus" size={16} />
 									</button>
 								</div>
 							{/if}
@@ -319,7 +319,7 @@
 			{/each}
 			{#if repositories.length === 0}
 				<button class="add-repository" type="button" onclick={() => void addRepository()}>
-					<Icon name="folder" size={14} /> Add a repository
+					<Icon name="folder" size={16} /> Add a repository
 				</button>
 			{/if}
 		</div>
@@ -340,7 +340,7 @@
 			aria-current={session.workspaceView === 'settings' ? 'page' : undefined}
 			onclick={() => session.setWorkspaceView('settings')}
 		>
-			<Icon name="settings" size={14} />
+			<Icon name="settings" size={16} />
 		</button>
 	</div>
 </aside>

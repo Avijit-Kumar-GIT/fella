@@ -59,7 +59,7 @@
 		data-tauri-drag-region="false"
 		onclick={() => session.newTab()}
 	>
-		<Icon name="plus" size={14} />
+		<Icon name="plus" size={16} />
 	</button>
 </div>
 

@@ -87,13 +87,13 @@
 			<h2>{source?.name ?? (evidence ? 'Run step' : 'Answer details')}</h2>
 		</div>
 		<button class="close" type="button" aria-label="Close inspector" title="Close inspector" onclick={() => session.closeInspector()}>
-			<Icon name="x" size={15} />
+			<Icon name="x" size={16} />
 		</button>
 	</header>
 
 	<div class="inspector-body">
 		{#if source}
-			<div class="object-mark"><Icon name={source.view ? 'table' : 'file'} size={18} /></div>
+			<div class="object-mark"><Icon name={source.view ? 'table' : 'file'} size={20} /></div>
 			<p class="type-label">{kindLabel(source)}</p>
 			<p class="path" title={source.path}>{relativePath(source.path)}</p>
 			<div class="facts">
@@ -114,7 +114,7 @@
 				</div>
 			{/if}
 			<div class="actions">
-				<button class="pill primary" type="button" onclick={useSource}><Icon name="plus" size={13} /> Use in Ask</button>
+			<button class="pill primary" type="button" onclick={useSource}><Icon name="plus" size={16} /> Use in Ask</button>
 				<button class="pill ghost" type="button" onclick={openSourcePage}>Open Sources</button>
 			</div>
 		{:else if answerMessage?.answer}
@@ -144,7 +144,7 @@
 			</div>
 		{:else}
 			<div class="empty-inspector">
-				<div class="object-mark"><Icon name="info" size={18} /></div>
+				<div class="object-mark"><Icon name="info" size={20} /></div>
 				<strong>Nothing selected yet</strong>
 					<p>Choose a source or run step to see its shape and provenance here.</p>
 			</div>

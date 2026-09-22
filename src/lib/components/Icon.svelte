@@ -34,6 +34,8 @@
 	} as const;
 
 	export type IconName = keyof typeof ICONS;
+	/** 12px compact detail, 16px standard UI, 20px display mark. */
+	export type IconSize = 12 | 16 | 20;
 </script>
 
 <script lang="ts">
@@ -41,7 +43,7 @@
 		name,
 		size = 16,
 		fill = false
-	}: { name: IconName; size?: number; fill?: boolean } = $props();
+	}: { name: IconName; size?: IconSize; fill?: boolean } = $props();
 </script>
 
 <svg

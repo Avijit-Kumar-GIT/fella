@@ -73,7 +73,7 @@
 					aria-expanded={expanded}
 					onclick={() => (expanded = !expanded)}
 				>
-					<Icon name="chevron-right" size={13} />
+					<Icon name="chevron-right" size={12} />
 				</button>
 			</div>
 		</div>
@@ -84,9 +84,9 @@
 					<button class="step" class:clickable={!!lastAnswer()} type="button" onclick={() => inspect(step, i)}>
 						<span class="step-mark" class:running={step.state === 'running'} class:error={step.state === 'error'}>
 							{#if step.state === 'complete'}
-								<Icon name="check" size={11} />
+								<Icon name="check" size={12} />
 							{:else if step.state === 'error'}
-								<Icon name="alert" size={11} />
+								<Icon name="alert" size={12} />
 							{:else}
 								<span class="mini-thinking" aria-hidden="true"></span>
 							{/if}
@@ -95,7 +95,7 @@
 							<strong>{step.label}</strong>
 							<small>{stepResult(step)}</small>
 						</span>
-						{#if lastAnswer()}<span class="step-info"><Icon name="info" size={13} /></span>{/if}
+						{#if lastAnswer()}<span class="step-info"><Icon name="info" size={12} /></span>{/if}
 					</button>
 				{/each}
 				{#if steps.length > visibleSteps.length}

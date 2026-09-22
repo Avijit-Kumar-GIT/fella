@@ -82,7 +82,7 @@
 					<h2 id="model-title">Model</h2>
 					<p>Fella uses your provider key and sends only the question and requested evidence.</p>
 				</div>
-				{#if provider}<ProviderIcon providerId={provider.id} size={22} />{/if}
+				{#if provider}<ProviderIcon providerId={provider.id} size={20} />{/if}
 			</div>
 			<div class="current-row">
 				<div>
@@ -108,7 +108,7 @@
 							type="button"
 							onclick={() => command(`/login ${item.id}`)}
 						>
-							<ProviderIcon providerId={item.id} size={17} />
+							<ProviderIcon providerId={item.id} size={16} />
 							<span>{item.display}</span>
 							<small>{item.id === currentProvider ? 'Current' : item.authed ? 'Connected' : 'Connect'}</small>
 						</button>
@@ -116,7 +116,7 @@
 				</div>
 			{/if}
 			<button class="text-button" type="button" onclick={() => void refreshSettings()}>
-				<Icon name="check" size={12} /> Refresh connection status
+				<Icon name="check" size={16} /> Refresh connection status
 			</button>
 		</section>
 
@@ -137,7 +137,7 @@
 						onclick={() => prefs.setAppearance(option.id)}
 					>
 						<span><strong>{option.label}</strong><small>{option.detail}</small></span>
-						{#if prefs.appearance === option.id}<Icon name="check" size={14} />{/if}
+						{#if prefs.appearance === option.id}<Icon name="check" size={16} />{/if}
 					</button>
 				{/each}
 			</div>
@@ -157,7 +157,7 @@
 				<p class="muted">No folder mounted yet.</p>
 			{/if}
 			<button class="pill ghost" type="button" onclick={() => void openFolder()}>
-				<Icon name="folder" size={13} /> {workspace ? 'Change folder' : 'Choose a folder'}
+					<Icon name="folder" size={16} /> {workspace ? 'Change folder' : 'Choose a folder'}
 			</button>
 		</section>
 

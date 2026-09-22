@@ -152,7 +152,7 @@
 		{/if}
 		{#if unconfirmed}
 			<div class="unconfirmed">
-				<Icon name="alert" size={13} />
+				<Icon name="alert" size={16} />
 				<span>Fella couldn't confirm this figure against the data — here's its best answer.</span>
 			</div>
 		{/if}
@@ -190,7 +190,7 @@
 			<div class="followups" aria-label="Suggested follow-up questions">
 				<span class="followup-label">Continue with</span>
 				{#each followups as next (next)}
-					<button type="button" onclick={() => onfollowup?.(next)}>{next}<Icon name="arrow-up-right" size={11} /></button>
+			<button type="button" onclick={() => onfollowup?.(next)}>{next}<Icon name="arrow-up-right" size={12} /></button>
 				{/each}
 			</div>
 		{/if}

@@ -91,13 +91,13 @@
 			</p>
 		</div>
 		<button class="pill ghost" type="button" onclick={() => void openFolder()}>
-			<Icon name="folder" size={14} /> {workspace ? 'Change folder' : 'Choose folder'}
+			<Icon name="folder" size={16} /> {workspace ? 'Change folder' : 'Choose folder'}
 		</button>
 	</header>
 
 	{#if !workspace}
 		<div class="empty-state">
-			<div class="empty-icon"><Icon name="folder" size={22} /></div>
+			<div class="empty-icon"><Icon name="folder" size={20} /></div>
 			<h2>Your workspace is still empty</h2>
 			<p>Choose a folder and Fella will catalog spreadsheets, documents, and notes without changing them.</p>
 			<button class="pill primary" type="button" onclick={() => void openFolder()}>Choose a folder</button>
@@ -110,7 +110,7 @@
 			{#if skipped.length}<div class="summary-item warn"><strong>{skipped.length}</strong><span>skipped</span></div>{/if}
 		</div>
 		<div class="freshness" title={session.catalog.revision ?? undefined}>
-			<Icon name="check" size={13} />
+			<Icon name="check" size={16} />
 			<span>Indexed {formatIndexed(session.catalog.indexed_at_ms)}</span>
 			<span class="dot">·</span>
 			<span>Snapshot <code>{shortRevision(session.catalog.revision)}</code></span>
@@ -118,7 +118,7 @@
 
 		<div class="toolbar">
 			<label class="searchbox">
-				<Icon name="search" size={14} />
+				<Icon name="search" size={16} />
 				<span class="sr-only">Filter sources</span>
 				<input bind:value={query} placeholder="Filter sources…" spellcheck="false" />
 			</label>
@@ -137,7 +137,7 @@
 						aria-selected={selectedPath === source.path}
 						onclick={() => select(source)}
 					>
-						<span class="source-icon"><Icon name={source.view ? 'table' : 'file'} size={15} /></span>
+				<span class="source-icon"><Icon name={source.view ? 'table' : 'file'} size={16} /></span>
 						<span class="source-copy">
 							<strong>{source.name}</strong>
 						</span>
@@ -154,7 +154,7 @@
 			<aside class="detail" aria-label="Selected source details">
 				{#if selected}
 					<div class="detail-head">
-						<div class="detail-icon"><Icon name={selected.view ? 'table' : 'file'} size={17} /></div>
+				<div class="detail-icon"><Icon name={selected.view ? 'table' : 'file'} size={20} /></div>
 						<div>
 							<p class="eyebrow">{kindLabel(selected.kind)}</p>
 							<h2>{selected.name}</h2>

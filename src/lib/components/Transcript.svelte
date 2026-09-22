@@ -130,12 +130,12 @@
 							title="Reopen your last folder (Enter)"
 							onclick={() => void resumeLastFolder()}
 						>
-							<Icon name="folder" size={14} /> Reopen {lastFolderName}
+							<Icon name="folder" size={16} /> Reopen {lastFolderName}
 						</button>
 						<button class="pill" onclick={() => void openFolder()}>Choose another</button>
 					{:else}
 						<button class="pill primary" onclick={() => void openFolder()}>
-							<Icon name="folder" size={14} /> Choose a folder
+							<Icon name="folder" size={16} /> Choose a folder
 						</button>
 					{/if}
 				</div>
@@ -152,7 +152,7 @@
 				</p>
 				<div class="cta">
 					<button class="pill primary" onclick={() => void openFolder()}>
-						<Icon name="folder" size={14} /> Choose a different folder
+						<Icon name="folder" size={16} /> Choose a different folder
 					</button>
 				</div>
 			{:else}
@@ -178,7 +178,7 @@
 							<button class="pill" onclick={() => void dispatch(`/login ${providerId}`)}>Enter a new key</button>
 							{#if getKeyUrl}
 								<button class="pill ghost" onclick={() => void openExternal(getKeyUrl)}>
-									Get a new key <Icon name="arrow-up-right" size={13} />
+									Get a new key <Icon name="arrow-up-right" size={12} />
 								</button>
 							{/if}
 						</div>

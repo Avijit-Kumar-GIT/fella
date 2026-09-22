@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { prefs } from '$lib/prefs.svelte';
 
+	type ProviderIconSize = 12 | 16 | 20;
+
 	type ProviderAsset = {
 		light: string;
 		dark?: string;
@@ -20,7 +22,7 @@
 		openrouter: { light: '/brand/providers/openrouter.svg' }
 	};
 
-	let { providerId, size = 13 }: { providerId: string; size?: number } = $props();
+	let { providerId, size = 16 }: { providerId: string; size?: ProviderIconSize } = $props();
 	let asset = $derived(PROVIDER_ASSETS[providerId.toLowerCase()]);
 	let src = $derived(prefs.isDark && asset?.dark ? asset.dark : asset?.light ?? '');
 	let invert = $derived(

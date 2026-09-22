@@ -297,7 +297,7 @@
 			transition:pop
 		>
 			<div class="search">
-				<Icon name="search" size={18} />
+				<Icon name="search" size={16} />
 				<input
 					bind:this={input}
 					bind:value={query}
@@ -323,7 +323,7 @@
 			</div>
 			<ul>
 				{#if !query.trim()}
-					<li class="hint"><Icon name="search" size={18} /> <span>Search your workspace, conversations, files, and actions.</span></li>
+					<li class="hint"><Icon name="search" size={16} /> <span>Search your workspace, conversations, files, and actions.</span></li>
 				{:else if results.length === 0}
 					<li class="empty">No results</li>
 				{:else}
@@ -333,7 +333,7 @@
 							<li class:sel={isSelected(result)}>
 								<button class="search-result" type="button" onclick={() => void select(result)}>
 									<span class:repository={result.kind === 'repository'} class:conversation={result.kind === 'conversation'} class:source={result.kind === 'source'} class:command={result.kind === 'command'} class="result-icon">
-										<Icon name={icon(result)} size={18} />
+										<Icon name={icon(result)} size={16} />
 									</span>
 									<span class="result-copy">
 										<strong>{label(result)}</strong>

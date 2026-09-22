@@ -15,7 +15,7 @@
 			aria-current={pane === 'sources' ? 'page' : undefined}
 			onclick={() => session.setWorkspacePane('sources')}
 		>
-			<Icon name="table" size={14} />
+			<Icon name="table" size={16} />
 			<span>Sources</span>
 			<small>{session.catalog.sources.length}</small>
 		</button>
@@ -25,7 +25,7 @@
 			aria-current={pane === 'context' ? 'page' : undefined}
 			onclick={() => session.setWorkspacePane('context')}
 		>
-			<Icon name="file" size={14} />
+			<Icon name="file" size={16} />
 			<span>Context</span>
 		</button>
 	</nav>
