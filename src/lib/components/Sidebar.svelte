@@ -20,6 +20,7 @@
 	const LOCAL_REPOSITORY = '__no-repository__';
 	let list = $state<ConversationSummary[]>([]);
 	let expandedRepos = $state<Record<string, boolean>>({});
+	let menuRepository = $state<string | null>(null);
 	const shortcutModifier =
 		typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform || navigator.userAgent)
 			? '⌘'
@@ -98,6 +99,7 @@
 	});
 
 	function toggleRepository(repo: Repository): void {
+		menuRepository = null;
 		expandedRepos = { ...expandedRepos, [repo.key]: !repo.expanded };
 		if (repo.expanded || !repo.path) return;
 		session.setWorkspaceView('ask');
@@ -105,12 +107,14 @@
 	}
 
 	async function openRepositoryPane(repo: Repository, pane: 'sources' | 'context'): Promise<void> {
+		menuRepository = null;
 		expandedRepos = { ...expandedRepos, [repo.key]: true };
 		if (repo.path && repo.path !== session.catalog.workspace) await openFolder(repo.path);
 		session.setWorkspacePane(pane);
 	}
 
 	async function newConversation(repo: Repository): Promise<void> {
+		menuRepository = null;
 		if (repo.path && repo.path !== session.catalog.workspace) await openFolder(repo.path);
 		session.setWorkspaceView('ask');
 		session.newTab();
@@ -123,6 +127,7 @@
 
 	function hideRepository(repo: Repository, event: MouseEvent): void {
 		event.stopPropagation();
+		menuRepository = null;
 		if (repo.path && repo.path !== session.catalog.workspace) session.forgetRepository(repo.path);
 	}
 
@@ -187,18 +192,6 @@
 				onclick={() => session.toggleSidebar()}
 			>
 				<Icon name="panel" size={16} />
-			</button>
-			<button
-				class="icon-btn"
-				type="button"
-				aria-label="New conversation"
-				title={`New conversation (${shortcutModifier}+N)`}
-				onclick={() => {
-					session.setWorkspaceView('ask');
-					session.newTab();
-				}}
-			>
-				<Icon name="plus" size={16} />
 			</button>
 		</div>
 	</div>
@@ -279,13 +272,29 @@
 									<button
 										class="repository-action"
 										type="button"
-										aria-label="Hide repository"
-										title="Hide repository"
-										onclick={(event) => hideRepository(repo, event)}
+										aria-label="Repository actions"
+										aria-haspopup="menu"
+										aria-expanded={menuRepository === repo.key}
+										title="Repository actions"
+										onclick={(event) => {
+											event.stopPropagation();
+											menuRepository = menuRepository === repo.key ? null : repo.key;
+										}}
 									>
-										<Icon name="x" size={14} />
+										<Icon name="more-horizontal" size={14} />
 									</button>
 								{/if}
+							</div>
+						{/if}
+						{#if menuRepository === repo.key && repo.path && !repo.active}
+							<div class="repository-menu" role="menu">
+								<button
+									type="button"
+									role="menuitem"
+									onclick={(event) => hideRepository(repo, event)}
+								>
+									Hide repository
+								</button>
 							</div>
 						{/if}
 					</div>
@@ -301,7 +310,8 @@
 										title={`Sources (${shortcutModifier}+Shift+S)`}
 										onclick={() => void openRepositoryPane(repo, 'sources')}
 									>
-										<Icon name="table" size={16} />
+										<Icon name="table" size={14} />
+										<span>Sources</span>
 									</button>
 									<button
 										class="repository-tool"
@@ -311,16 +321,8 @@
 										title={`Context (${shortcutModifier}+Shift+C)`}
 										onclick={() => void openRepositoryPane(repo, 'context')}
 									>
-										<Icon name="file" size={16} />
-									</button>
-									<button
-										class="repository-tool"
-										type="button"
-										aria-label="New conversation"
-										title="New conversation"
-										onclick={() => void newConversation(repo)}
-									>
-										<Icon name="plus" size={16} />
+										<Icon name="file" size={14} />
+										<span>Context</span>
 									</button>
 								</div>
 							{/if}
@@ -484,16 +486,18 @@
 	.section-head {
 		display: flex;
 		align-items: center;
-		min-height: 20px;
+		min-height: 24px;
 	}
 	.section-head .nav-heading {
 		flex: 1;
+		padding: 0 var(--space-2);
+		line-height: 24px;
 	}
 	.section-action {
 		display: grid;
 		place-items: center;
-		width: 20px;
-		height: 20px;
+		width: 22px;
+		height: 22px;
 		border-radius: var(--radius-chip);
 		color: var(--text-faint);
 	}
@@ -522,7 +526,7 @@
 		gap: 6px;
 		min-width: 0;
 		min-height: 28px;
-		padding: 4px 52px 4px var(--space-2);
+		padding: 4px 56px 4px var(--space-2);
 		border-radius: var(--radius-sm);
 		color: var(--text-dim);
 		text-align: left;
@@ -565,12 +569,12 @@
 	}
 	.repository-actions {
 		position: absolute;
-		top: 2px;
+		top: 3px;
 		right: 4px;
 		display: none;
 		align-items: center;
-		gap: 1px;
-		padding-left: 5px;
+		gap: 2px;
+		padding-left: 4px;
 		background: transparent;
 		color: var(--text-faint);
 	}
@@ -583,8 +587,8 @@
 	.repository-action {
 		display: grid;
 		place-items: center;
-		width: 24px;
-		height: 24px;
+		width: 22px;
+		height: 22px;
 		border-radius: var(--radius-chip);
 		color: inherit;
 	}
@@ -594,6 +598,30 @@
 	}
 	.repository-action :global(svg) {
 		color: inherit;
+	}
+	.repository-menu {
+		position: absolute;
+		top: calc(100% - 2px);
+		right: 4px;
+		z-index: 4;
+		min-width: 136px;
+		padding: 4px;
+		border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
+		background: var(--bg-raised);
+		box-shadow: var(--shadow-pop);
+	}
+	.repository-menu button {
+		width: 100%;
+		padding: 7px 8px;
+		border-radius: var(--radius-chip);
+		color: var(--text-dim);
+		font-size: var(--fs-sm);
+		text-align: left;
+	}
+	.repository-menu button:hover {
+		background: var(--bg-inset);
+		color: var(--text);
 	}
 	.repository-icon {
 		display: grid;
@@ -614,18 +642,19 @@
 	}
 	.repository-tools {
 		display: flex;
-		gap: 1px;
+		gap: 2px;
 		padding: 1px 0 2px;
 	}
 	.repository-tool {
-		display: grid;
-		place-items: center;
-		width: 24px;
-		height: 22px;
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		min-height: 24px;
 		flex: none;
-		padding: 0;
+		padding: 0 6px;
 		border-radius: var(--radius-chip);
 		color: var(--text-faint);
+		font-size: var(--fs-sm);
 	}
 	.repository-tool:hover {
 		background: var(--bg-inset);
@@ -702,6 +731,8 @@
 		gap: var(--space-2);
 		width: 100%;
 		min-height: 27px;
+		padding-left: 26px;
+		padding-right: 48px;
 		padding-top: 4px;
 		padding-bottom: 4px;
 		border-radius: var(--radius-sm);
