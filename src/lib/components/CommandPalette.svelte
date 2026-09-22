@@ -21,12 +21,27 @@
 	let dialog: HTMLDivElement | undefined = $state();
 	let returnFocus: HTMLElement | null = null;
 	let history = $state<ConversationSummary[]>([]);
+	let activeFilter = $state<SearchFilter>('all');
+	const shortcutModifier =
+		typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform || navigator.userAgent)
+			? '⌘'
+			: 'Ctrl';
 
 	type SearchResult =
 		| { kind: 'repository'; path: string; name: string; count: number }
 		| { kind: 'conversation'; item: ConversationSummary }
 		| { kind: 'source'; source: SourceInfo }
 		| { kind: 'command'; command: string };
+	type SearchKind = SearchResult['kind'];
+	type SearchFilter = 'all' | SearchKind;
+
+	const filters: { id: SearchFilter; label: string }[] = [
+		{ id: 'all', label: 'All' },
+		{ id: 'repository', label: 'Repositories' },
+		{ id: 'conversation', label: 'Conversations' },
+		{ id: 'source', label: 'Files' },
+		{ id: 'command', label: 'Actions' }
+	];
 
 	async function loadHistory(): Promise<void> {
 		if (!isTauri()) return;
@@ -66,7 +81,7 @@
 		return [...grouped.values()];
 	});
 
-	let results = $derived.by((): SearchResult[] => {
+	let allResults = $derived.by((): SearchResult[] => {
 		const q = query.trim().toLowerCase();
 		if (!q) return [];
 		const includes = (value: string) => value.toLowerCase().includes(q);
@@ -91,11 +106,26 @@
 		return [...repositoryHits, ...conversationHits, ...sourceHits, ...commandHits];
 	});
 
+	let resultGroups = $derived.by(() => {
+		const kinds: SearchKind[] = ['repository', 'conversation', 'source', 'command'];
+		return kinds
+			.filter((kind) => activeFilter === 'all' || activeFilter === kind)
+			.map((kind) => ({
+				kind,
+				label: filters.find((filter) => filter.id === kind)?.label ?? kind,
+				items: allResults.filter((result) => result.kind === kind)
+			}))
+			.filter((group) => group.items.length > 0);
+	});
+
+	let results = $derived.by(() => resultGroups.flatMap((group) => group.items));
+
 	$effect(() => {
 		if (open) {
 			returnFocus = document.activeElement as HTMLElement | null;
 			query = '';
 			sel = 0;
+			activeFilter = 'all';
 			queueMicrotask(() => input?.focus());
 		} else if (returnFocus) {
 			// Put focus back where it was when the palette opened.
@@ -113,10 +143,27 @@
 		open = false;
 	}
 
+	function setFilter(filter: SearchFilter): void {
+		activeFilter = filter;
+		sel = 0;
+	}
+
+	function cycleFilter(direction: 1 | -1): void {
+		const index = filters.findIndex((filter) => filter.id === activeFilter);
+		const next = (index + direction + filters.length) % filters.length;
+		setFilter(filters[next].id);
+	}
+
 	function key(e: KeyboardEvent) {
 		if (e.key === 'Escape') {
 			e.stopPropagation();
 			close();
+		} else if ((e.ctrlKey || e.metaKey) && e.key === '[') {
+			cycleFilter(-1);
+			e.preventDefault();
+		} else if ((e.ctrlKey || e.metaKey) && e.key === ']') {
+			cycleFilter(1);
+			e.preventDefault();
 		} else if (e.key === 'ArrowDown') {
 			sel = (sel + 1) % Math.max(results.length, 1);
 			e.preventDefault();
@@ -167,17 +214,9 @@
 		}
 	}
 
-	function kindLabel(result: SearchResult): string {
-		switch (result.kind) {
-			case 'repository':
-				return 'Repository';
-			case 'conversation':
-				return 'Conversation';
-			case 'source':
-				return 'Source';
-			case 'command':
-				return 'Command';
-		}
+	function isSelected(result: SearchResult): boolean {
+		const current = results[sel];
+		return current ? resultKey(current) === resultKey(result) : false;
 	}
 
 	function icon(result: SearchResult): 'folder' | 'compose' | 'file' | 'asterisk' {
@@ -258,7 +297,7 @@
 			transition:pop
 		>
 			<div class="search">
-				<Icon name="search" size={15} />
+				<Icon name="search" size={18} />
 				<input
 					bind:this={input}
 					bind:value={query}
@@ -268,26 +307,50 @@
 					aria-label="Search Fella"
 				/>
 			</div>
+			<div class="filters" aria-label="Search filters" role="tablist">
+				{#each filters as filter}
+					<button
+						class:active={activeFilter === filter.id}
+						class="filter"
+						type="button"
+						role="tab"
+						aria-selected={activeFilter === filter.id}
+						onclick={() => setFilter(filter.id)}
+					>
+						{filter.label}
+					</button>
+				{/each}
+			</div>
 			<ul>
 				{#if !query.trim()}
-					<li class="hint">Search conversations, repositories, sources, and commands.</li>
+					<li class="hint"><Icon name="search" size={18} /> <span>Search your workspace, conversations, files, and actions.</span></li>
 				{:else if results.length === 0}
 					<li class="empty">No results</li>
 				{:else}
-					{#each results as result, i (resultKey(result))}
-						<li class:sel={i === sel}>
-							<button class="search-result" type="button" onclick={() => void select(result)}>
-								<span class="result-icon"><Icon name={icon(result)} size={14} /></span>
-								<span class="result-copy">
-									<strong>{label(result)}</strong>
-									<small>{detail(result)}</small>
-								</span>
-								<span class="result-kind">{kindLabel(result)}</span>
-							</button>
-						</li>
+					{#each resultGroups as group}
+						<li class="group-label">{group.label}</li>
+						{#each group.items as result (resultKey(result))}
+							<li class:sel={isSelected(result)}>
+								<button class="search-result" type="button" onclick={() => void select(result)}>
+									<span class:repository={result.kind === 'repository'} class:conversation={result.kind === 'conversation'} class:source={result.kind === 'source'} class:command={result.kind === 'command'} class="result-icon">
+										<Icon name={icon(result)} size={18} />
+									</span>
+									<span class="result-copy">
+										<strong>{label(result)}</strong>
+										{#if detail(result)}<small>{detail(result)}</small>{/if}
+									</span>
+								</button>
+							</li>
+						{/each}
 					{/each}
 				{/if}
 			</ul>
+			<div class="palette-footer" aria-hidden="true">
+				<span><kbd>↑↓</kbd> Select</span>
+				<span><kbd>↵</kbd> Open</span>
+				<span class="footer-spacer"></span>
+				<span><kbd>{shortcutModifier}+[ / ]</kbd> Change filter</span>
+			</div>
 		</div>
 	</div>
 {/if}
@@ -299,7 +362,7 @@
 		display: flex;
 		justify-content: center;
 		align-items: flex-start;
-		padding-top: 12vh;
+		padding-top: 10vh;
 		z-index: 50;
 	}
 	.backdrop {
@@ -312,18 +375,19 @@
 	}
 	.palette {
 		position: relative;
-		width: min(620px, 92vw);
+		width: min(680px, 92vw);
 		background: var(--bg-raised);
 		border: 1px solid var(--border);
-		border-radius: var(--radius);
+		border-radius: 12px;
 		box-shadow: var(--shadow-pop);
 		overflow: hidden;
 	}
 	.search {
 		display: flex;
 		align-items: center;
-		gap: var(--space-2);
-		padding: 0 var(--space-3);
+		gap: 10px;
+		min-height: 52px;
+		padding: 0 16px;
 		border-bottom: 1px solid var(--border);
 		color: var(--text-faint);
 	}
@@ -333,7 +397,8 @@
 		background: transparent;
 		color: var(--text);
 		font: inherit;
-		padding: var(--space-3) 0;
+		font-size: 15px;
+		padding: 0;
 		outline: none;
 	}
 	input::placeholder {
@@ -342,43 +407,99 @@
 	input:focus-visible {
 		box-shadow: none;
 	}
+	.filters {
+		display: flex;
+		align-items: center;
+		gap: 2px;
+		padding: 7px 10px;
+		border-bottom: 1px solid var(--border);
+	}
+	.filter {
+		padding: 5px 10px;
+		border-radius: 5px;
+		color: var(--text-faint);
+		font-size: var(--fs-sm);
+		white-space: nowrap;
+		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+	}
+	.filter:hover {
+		color: var(--text);
+		background: var(--bg-inset);
+	}
+	.filter.active {
+		background: var(--bg-inset);
+		color: var(--text);
+		font-weight: 560;
+	}
 	ul {
 		list-style: none;
 		margin: 0;
-		padding: var(--space-1);
-		max-height: 50vh;
+		padding: 6px;
+		max-height: 52vh;
 		overflow-y: auto;
 	}
 	li.sel .search-result {
-		background: var(--bg-inset);
+		background: color-mix(in srgb, var(--brand) 8%, var(--bg-inset));
 	}
 	.hint {
-		padding: var(--space-3) var(--space-3) var(--space-2);
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		min-height: 72px;
+		padding: 16px 12px;
 		color: var(--text-faint);
 		font-size: var(--fs-sm);
+	}
+	.hint :global(svg) {
+		flex: none;
+		color: var(--brand);
+	}
+	.group-label {
+		padding: 9px 10px 4px;
+		color: var(--text-faint);
+		font-size: 10.5px;
+		font-weight: 620;
+		letter-spacing: 0.02em;
 	}
 	.search-result {
 		width: 100%;
 		display: flex;
 		align-items: center;
-		gap: var(--space-2);
-		padding: 8px var(--space-3);
-		border-radius: var(--radius-chip);
+		gap: 10px;
+		min-height: 42px;
+		padding: 6px 10px;
+		border-radius: 6px;
 		text-align: left;
 		transition: background var(--dur-fast) var(--ease);
 	}
 	.search-result:hover {
-		background: var(--bg-inset);
+		background: color-mix(in srgb, var(--brand) 8%, var(--bg-inset));
 	}
 	.result-icon {
 		display: grid;
 		place-items: center;
-		width: 26px;
-		height: 26px;
+		width: 30px;
+		height: 30px;
 		flex: none;
-		border-radius: var(--radius-chip);
+		border-radius: 7px;
 		background: var(--bg-inset);
+		color: var(--text-faint);
+	}
+	.result-icon.repository {
 		color: var(--brand);
+		background: color-mix(in srgb, var(--brand) 15%, var(--bg-inset));
+	}
+	.result-icon.conversation {
+		color: var(--link);
+		background: color-mix(in srgb, var(--link) 14%, var(--bg-inset));
+	}
+	.result-icon.source {
+		color: var(--warn);
+		background: color-mix(in srgb, var(--warn) 14%, var(--bg-inset));
+	}
+	.result-icon.command {
+		color: var(--ok);
+		background: color-mix(in srgb, var(--ok) 14%, var(--bg-inset));
 	}
 	.result-copy {
 		min-width: 0;
@@ -394,22 +515,42 @@
 		white-space: nowrap;
 	}
 	.result-copy strong {
-		color: var(--accent);
-		font-size: var(--fs-sm);
+		color: var(--text);
+		font-size: var(--fs);
 		font-weight: 560;
 	}
 	.result-copy small {
 		color: var(--text-faint);
-		font-size: var(--fs-xs);
-	}
-	.result-kind {
-		flex: none;
-		color: var(--text-faint);
-		font-size: 10px;
-		text-transform: capitalize;
+		font-size: var(--fs-sm);
 	}
 	.empty {
-		padding: var(--space-2) var(--space-3);
+		padding: 24px 12px;
 		color: var(--text-faint);
+		font-size: var(--fs-sm);
+	}
+	.palette-footer {
+		display: flex;
+		align-items: center;
+		gap: 14px;
+		min-height: 32px;
+		padding: 0 12px;
+		border-top: 1px solid var(--border);
+		background: var(--bg-inset);
+		color: var(--text-faint);
+		font-size: 10.5px;
+	}
+	.palette-footer span {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		white-space: nowrap;
+	}
+	.palette-footer kbd {
+		color: var(--text-dim);
+		font-family: var(--mono);
+		font-size: 10px;
+	}
+	.footer-spacer {
+		flex: 1;
 	}
 </style>
