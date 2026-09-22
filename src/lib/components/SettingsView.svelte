@@ -222,7 +222,7 @@
 	h1 {
 		margin: 0;
 		font-size: clamp(24px, 3vw, 32px);
-		font-weight: 620;
+		font-weight: 650;
 		letter-spacing: -0.03em;
 	}
 	.lede {
@@ -264,7 +264,7 @@
 	h2 {
 		margin: 0;
 		font-size: var(--fs-md);
-		font-weight: 620;
+		font-weight: 650;
 	}
 	.card-head p {
 		max-width: 42ch;
@@ -318,7 +318,7 @@
 		text-overflow: ellipsis;
 		white-space: nowrap;
 		font-size: var(--fs-sm);
-		font-weight: 560;
+		font-weight: 600;
 	}
 	.current-row .pill,
 	.workspace-card .pill {
@@ -351,7 +351,7 @@
 	}
 	.capability-copy strong {
 		font-size: var(--fs-sm);
-		font-weight: 560;
+		font-weight: 600;
 	}
 	.capability-copy small,
 	.capability-note,
@@ -446,7 +446,7 @@
 	}
 	.appearance-row strong {
 		font-size: var(--fs-sm);
-		font-weight: 560;
+		font-weight: 600;
 	}
 	.appearance-row small {
 		color: var(--text-faint);

@@ -53,7 +53,7 @@
 	viewBox="0 0 24 24"
 	fill={fill ? 'currentColor' : 'none'}
 	stroke="currentColor"
-	stroke-width="1.75"
+	stroke-width={size === 12 ? 1.8 : 2}
 	stroke-linecap="round"
 	stroke-linejoin="round"
 	aria-hidden="true"

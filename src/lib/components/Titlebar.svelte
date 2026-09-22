@@ -357,7 +357,7 @@
 	}
 	.wordmark {
 		color: var(--text-dim);
-		font-weight: 560;
+		font-weight: 600;
 		letter-spacing: -0.02em;
 	}
 	.folder {

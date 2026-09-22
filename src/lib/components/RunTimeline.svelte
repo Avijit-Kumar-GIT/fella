@@ -135,7 +135,7 @@
 		text-overflow: ellipsis;
 		white-space: nowrap;
 		font-size: var(--fs-xs);
-		font-weight: 560;
+		font-weight: 600;
 	}
 	.run-dot {
 		width: 7px;
@@ -241,7 +241,7 @@
 	}
 	.step-copy strong {
 		font-size: var(--fs-xs);
-		font-weight: 560;
+		font-weight: 600;
 		white-space: nowrap;
 	}
 	.step-copy small {

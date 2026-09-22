@@ -600,7 +600,7 @@
 		border-radius: var(--radius-chip);
 		color: var(--text-dim);
 		font-size: var(--fs-xs);
-		font-weight: 560;
+		font-weight: 600;
 		white-space: nowrap;
 	}
 	.mode-trigger:hover,
@@ -776,7 +776,7 @@
 	}
 	.context-copy strong {
 		font-size: var(--fs-xs);
-		font-weight: 560;
+		font-weight: 600;
 	}
 	.context-copy small {
 		color: var(--text-faint);

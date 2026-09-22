@@ -66,7 +66,7 @@
 		border-bottom: 2px solid transparent;
 		color: var(--text-faint);
 		font-size: var(--fs-sm);
-		font-weight: 560;
+		font-weight: 600;
 		white-space: nowrap;
 	}
 	.workspace-tabs button:hover {

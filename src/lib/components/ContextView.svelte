@@ -152,7 +152,7 @@
 	h1 {
 		margin: 0;
 		font-size: clamp(24px, 3vw, 32px);
-		font-weight: 620;
+		font-weight: 650;
 		letter-spacing: -0.03em;
 	}
 	.lede {

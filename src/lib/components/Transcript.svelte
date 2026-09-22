@@ -318,7 +318,7 @@
 	}
 	.wordmark {
 		font-size: var(--fs-xl);
-		font-weight: 560;
+		font-weight: 600;
 		letter-spacing: -0.02em;
 		color: var(--text);
 		margin: 0 0 var(--space-2);

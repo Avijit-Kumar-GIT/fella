@@ -539,7 +539,7 @@
 	}
 	.repository.active .repository-row {
 		color: var(--text);
-		font-weight: 560;
+		font-weight: 600;
 	}
 	.repository.active .repository-row::before {
 		content: '';
@@ -680,7 +680,7 @@
 	}
 	.nav-row.active {
 		color: var(--text);
-		font-weight: 620;
+		font-weight: 650;
 	}
 	.nav-row.active::before {
 		content: '';
@@ -719,7 +719,7 @@
 	}
 	.item.active {
 		color: var(--text);
-		font-weight: 560;
+		font-weight: 600;
 	}
 	.item.active::before {
 		content: '';
@@ -770,7 +770,7 @@
 	}
 	.project-row.active {
 		color: var(--text);
-		font-weight: 560;
+		font-weight: 600;
 	}
 	.project-row.active::before {
 		content: '';

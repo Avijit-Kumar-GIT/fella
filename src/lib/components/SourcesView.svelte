@@ -249,7 +249,7 @@
 	h1,
 	h2 {
 		margin: 0;
-		font-weight: 620;
+		font-weight: 650;
 		letter-spacing: -0.03em;
 	}
 	h1 {
@@ -286,7 +286,7 @@
 	}
 	.summary-item strong {
 		font-size: var(--fs-lg);
-		font-weight: 620;
+		font-weight: 650;
 	}
 	.summary-item span {
 		color: var(--text-faint);
@@ -398,7 +398,7 @@
 		text-overflow: ellipsis;
 		white-space: nowrap;
 		font-size: var(--fs-sm);
-		font-weight: 560;
+		font-weight: 600;
 	}
 	.source-meta small,
 	.path,
@@ -468,7 +468,7 @@
 	}
 	.facts strong {
 		font-size: var(--fs-sm);
-		font-weight: 560;
+		font-weight: 600;
 	}
 	.source-freshness {
 		margin: -8px 0 var(--space-4);

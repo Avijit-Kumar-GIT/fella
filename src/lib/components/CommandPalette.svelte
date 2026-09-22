@@ -451,7 +451,7 @@
 	.filter.active {
 		background: var(--bg-inset);
 		color: var(--text);
-		font-weight: 560;
+		font-weight: 600;
 	}
 	ul {
 		list-style: none;
@@ -480,7 +480,7 @@
 		padding: 9px 10px 4px;
 		color: var(--text-faint);
 		font-size: 10.5px;
-		font-weight: 620;
+		font-weight: 650;
 		letter-spacing: 0.02em;
 	}
 	.search-result {
@@ -543,7 +543,7 @@
 	.result-copy strong {
 		color: var(--text);
 		font-size: var(--fs);
-		font-weight: 560;
+		font-weight: 600;
 	}
 	.result-copy small {
 		color: var(--text-faint);

@@ -191,7 +191,7 @@
 	label {
 		color: var(--text-dim);
 		font-size: var(--fs-sm);
-		font-weight: 560;
+		font-weight: 600;
 	}
 	input,
 	select {

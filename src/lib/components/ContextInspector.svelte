@@ -249,7 +249,7 @@
 	}
 	.facts strong {
 		font-size: var(--fs-sm);
-		font-weight: 580;
+		font-weight: 600;
 	}
 	.description {
 		margin: 0 0 var(--space-4);
@@ -374,7 +374,7 @@
 	.evidence-card > strong {
 		display: block;
 		font-size: var(--fs-xs);
-		font-weight: 560;
+		font-weight: 600;
 	}
 	.evidence-card > small {
 		display: block;

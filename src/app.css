@@ -135,6 +135,7 @@ body {
 	color: var(--text);
 	font-family: var(--sans);
 	font-size: var(--fs);
+	font-weight: 450;
 	line-height: var(--lh);
 	letter-spacing: -0.006em;
 	-webkit-font-smoothing: antialiased;
@@ -156,6 +157,7 @@ a:hover {
 
 button {
 	font: inherit;
+	font-weight: 500;
 	color: inherit;
 	background: transparent;
 	border: none;
@@ -224,6 +226,7 @@ kbd {
 	border-radius: var(--radius-sm);
 	padding: 7px 14px;
 	font: inherit;
+	font-weight: 500;
 	transition:
 		background var(--dur-fast) var(--ease),
 		border-color var(--dur-fast) var(--ease),
@@ -267,6 +270,7 @@ kbd {
 	border-radius: var(--radius-chip);
 	text-align: left;
 	font: inherit;
+	font-weight: 500;
 	color: var(--text);
 	transition: background var(--dur-fast) var(--ease);
 }
