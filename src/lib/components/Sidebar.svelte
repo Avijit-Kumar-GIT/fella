@@ -332,9 +332,7 @@
 					<span class="mount-icon"><Icon name="folder" size={14} /></span>
 					<span class="mount-copy">
 						<strong>{folderName}</strong>
-						<small>Mounted folder</small>
 					</span>
-					<Icon name="chevron-right" size={13} />
 				</button>
 			{:else}
 				<button
@@ -346,13 +344,11 @@
 					<span class="mount-icon"><Icon name="folder" size={14} /></span>
 					<span class="mount-copy">
 						<strong>Open a folder</strong>
-						<small>Choose a local workspace</small>
 					</span>
-					<Icon name="chevron-right" size={13} />
 				</button>
 			{/if}
 			<button
-				class="nav-row settings-row"
+				class="icon-btn settings-btn"
 				title={`Settings (${shortcutModifier}+,)`}
 				aria-label="Settings"
 				aria-keyshortcuts="Control+Comma Meta+Comma"
@@ -636,7 +632,7 @@
 		display: flex;
 		align-items: center;
 		gap: var(--space-2);
-		padding: var(--space-2);
+		padding: 6px 8px;
 		border-radius: var(--radius-sm);
 		color: var(--text-dim);
 		text-align: left;
@@ -656,29 +652,25 @@
 		min-width: 0;
 		flex: 1;
 		display: flex;
-		flex-direction: column;
-		gap: 1px;
 	}
-	.mount-copy strong,
-	.mount-copy small {
+	.mount-copy strong {
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
-	}
-	.mount-copy strong {
 		color: var(--text);
 		font-size: var(--fs-sm);
 		font-weight: 580;
 	}
-	.mount-copy small {
-		color: var(--text-faint);
-		font-size: var(--fs-xs);
-	}
-	.settings-row {
+	.settings-btn {
 		flex: none;
-		justify-content: center;
 		width: 30px;
-		padding-inline: 0;
-		margin-top: 0;
+		height: 30px;
+	}
+	.settings-btn.active {
+		background: var(--bg-raised);
+		color: var(--text);
+	}
+	.settings-btn.active :global(svg) {
+		color: var(--brand);
 	}
 </style>
