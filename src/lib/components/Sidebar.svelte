@@ -152,6 +152,15 @@
 			<button
 				class="icon-btn"
 				type="button"
+				aria-label="Collapse sidebar"
+				title={`Collapse sidebar (${shortcutModifier}+B)`}
+				onclick={() => session.toggleSidebar()}
+			>
+				<Icon name="panel" size={15} />
+			</button>
+			<button
+				class="icon-btn"
+				type="button"
 				aria-label="New conversation"
 				title={`New conversation (${shortcutModifier}+N)`}
 				onclick={() => {
@@ -311,63 +320,65 @@
 		{/if}
 	</div>
 	<div class="sidebar-footer">
-		{#if session.catalog.workspace}
+		<div class="footer-row">
+			{#if session.catalog.workspace}
+				<button
+					class="mount-status"
+					type="button"
+					title={`${session.catalog.workspace} · Change folder (${shortcutModifier}+O)`}
+					aria-label={`Change folder: ${folderName}`}
+					onclick={() => void openFolder()}
+				>
+					<span class="mount-icon"><Icon name="folder" size={14} /></span>
+					<span class="mount-copy">
+						<strong>{folderName}</strong>
+						<small>Mounted folder</small>
+					</span>
+					<Icon name="chevron-right" size={13} />
+				</button>
+			{:else}
+				<button
+					class="mount-status"
+					type="button"
+					title={`Open a folder (${shortcutModifier}+O)`}
+					onclick={() => void openFolder()}
+				>
+					<span class="mount-icon"><Icon name="folder" size={14} /></span>
+					<span class="mount-copy">
+						<strong>Open a folder</strong>
+						<small>Choose a local workspace</small>
+					</span>
+					<Icon name="chevron-right" size={13} />
+				</button>
+			{/if}
 			<button
-				class="mount-status"
+				class="nav-row settings-row"
+				title={`Settings (${shortcutModifier}+,)`}
+				aria-label="Settings"
+				aria-keyshortcuts="Control+Comma Meta+Comma"
+				class:active={session.workspaceView === 'settings'}
 				type="button"
-				title={`${session.catalog.workspace} · Change folder (${shortcutModifier}+O)`}
-				aria-label={`Change folder: ${folderName}`}
-				onclick={() => void openFolder()}
+				aria-current={session.workspaceView === 'settings' ? 'page' : undefined}
+				onclick={() => session.setWorkspaceView('settings')}
 			>
-				<span class="mount-icon"><Icon name="folder" size={14} /></span>
-				<span class="mount-copy">
-					<strong>{folderName}</strong>
-					<small>Mounted folder</small>
-				</span>
-				<Icon name="chevron-right" size={13} />
+				<Icon name="settings" size={14} />
 			</button>
-		{:else}
-			<button
-				class="mount-status"
-				type="button"
-				title={`Open a folder (${shortcutModifier}+O)`}
-				onclick={() => void openFolder()}
-			>
-				<span class="mount-icon"><Icon name="folder" size={14} /></span>
-				<span class="mount-copy">
-					<strong>Open a folder</strong>
-					<small>Choose a local workspace</small>
-				</span>
-				<Icon name="chevron-right" size={13} />
-			</button>
-		{/if}
-		<button
-			class="nav-row settings-row"
-			title={`Settings (${shortcutModifier}+,)`}
-			aria-keyshortcuts="Control+Comma Meta+Comma"
-			class:active={session.workspaceView === 'settings'}
-			type="button"
-			aria-current={session.workspaceView === 'settings' ? 'page' : undefined}
-			onclick={() => session.setWorkspaceView('settings')}
-		>
-			<Icon name="settings" size={14} />
-			<span>Settings</span>
-		</button>
+		</div>
 	</div>
 </aside>
 
 <style>
 	.sidebar {
 		flex: none;
-		width: 248px;
+		width: 240px;
 		display: flex;
 		flex-direction: column;
 		gap: var(--space-1);
-		padding: 8px;
-		background: var(--panel);
-		border: 1px solid var(--border);
+		padding: 0 var(--space-2) var(--space-2);
+		/* No top padding: .header is 38px flush against the top edge, to
+		   match the titlebar's height exactly across the sidebar seam. */
+		background: var(--bg);
 		border-right: 1px solid var(--border);
-		border-radius: var(--radius-window) 0 0 var(--radius-window);
 		overflow: hidden;
 	}
 	.header {
@@ -375,7 +386,7 @@
 		align-items: center;
 		justify-content: space-between;
 		flex: none;
-		height: 44px;
+		height: 38px;
 		padding: 0 var(--space-2);
 	}
 	.logo {
@@ -422,19 +433,18 @@
 	.nav-section {
 		display: grid;
 		gap: 2px;
-		padding: var(--space-3) 0 var(--space-2);
+		padding: var(--space-3) var(--space-1) var(--space-2);
 	}
 	.nav-section + .nav-section {
 		padding-top: var(--space-2);
-		border-top: 0;
+		border-top: 1px solid var(--border);
 	}
 	.nav-heading {
 		padding: 0 var(--space-2) var(--space-1);
 		color: var(--text-faint);
 		font-size: var(--fs-xs);
 		font-weight: 650;
-		letter-spacing: 0.08em;
-		text-transform: uppercase;
+		letter-spacing: 0.01em;
 	}
 	.nav-row {
 		position: relative;
@@ -442,7 +452,7 @@
 		display: flex;
 		align-items: center;
 		gap: var(--space-2);
-		padding: 9px var(--space-2);
+		padding: var(--space-2) var(--space-2);
 		border-radius: var(--radius-sm);
 		color: var(--text-dim);
 		font-size: var(--fs-sm);
@@ -455,9 +465,19 @@
 		color: var(--text);
 	}
 	.nav-row.active {
-		background: var(--bg-inset);
+		background: var(--bg-raised);
 		color: var(--text);
 		font-weight: 620;
+	}
+	.nav-row.active::before {
+		content: '';
+		position: absolute;
+		left: 0;
+		top: 6px;
+		bottom: 6px;
+		width: 3px;
+		border-radius: 2px;
+		background: var(--brand);
 	}
 	.nav-row.active :global(svg) {
 		color: var(--brand);
@@ -482,8 +502,8 @@
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
-		padding: var(--space-4) var(--space-2) var(--space-1);
-		border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+		padding: var(--space-3) var(--space-2) var(--space-1);
+		border-top: 1px solid var(--border);
 		color: var(--text-faint);
 		font-size: var(--fs-xs);
 		font-weight: 650;
@@ -517,9 +537,9 @@
 		align-items: center;
 		gap: var(--space-2);
 		width: 100%;
-		min-height: 34px;
-		padding-top: 7px;
-		padding-bottom: 7px;
+		min-height: 30px;
+		padding-top: 6px;
+		padding-bottom: 6px;
 		border-radius: var(--radius-sm);
 	}
 	.item:hover,
@@ -602,19 +622,22 @@
 		flex: none;
 		display: grid;
 		gap: 2px;
-		padding: var(--space-3) 0 0;
-		border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+		padding: var(--space-2) var(--space-1) 0;
+		border-top: 1px solid var(--border);
+	}
+	.footer-row {
+		display: flex;
+		align-items: center;
+		gap: 2px;
 	}
 	.mount-status {
-		width: 100%;
+		flex: 1;
+		min-width: 0;
 		display: flex;
 		align-items: center;
 		gap: var(--space-2);
-		min-width: 0;
-		padding: 10px var(--space-2);
+		padding: var(--space-2);
 		border-radius: var(--radius-sm);
-		background: color-mix(in srgb, var(--bg-raised) 42%, transparent);
-		border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
 		color: var(--text-dim);
 		text-align: left;
 		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
@@ -652,6 +675,10 @@
 		font-size: var(--fs-xs);
 	}
 	.settings-row {
-		margin-top: 1px;
+		flex: none;
+		justify-content: center;
+		width: 30px;
+		padding-inline: 0;
+		margin-top: 0;
 	}
 </style>

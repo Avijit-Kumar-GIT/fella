@@ -20,7 +20,7 @@
 		</script>
 		<!-- Paint the themed window background on the first frame, before the app
 		     stylesheet loads, so there's no flash when an explicit mode is saved.
-		     These values mirror --window in src/app.css. -->
+		     The two values mirror --bg in src/app.css. -->
 		<style>
 			:root {
 				color-scheme: light;
@@ -29,10 +29,10 @@
 				color-scheme: dark;
 			}
 			html {
-				background: #dededb;
+				background: #fcfcfb;
 			}
 			html[data-color-mode='dark'] {
-				background: #0c0d0d;
+				background: #0e0e10;
 			}
 		</style>
 		<!-- Start the UI fonts downloading alongside the JS bundle instead of

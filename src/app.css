@@ -1,8 +1,6 @@
 /* Fella one hand-written stylesheet. Calm and uncluttered, with room to
-   breathe a lightweight macOS register. The app is built as a dark, rounded
-   desktop window first, while the light appearance keeps the same geometry.
-   Sans for the conversation; monospace only where data lines up (tables, SQL,
-   output, identifiers).
+   breathe a lightweight macOS register. Sans for the conversation; monospace
+   only where data lines up (tables, SQL, output, identifiers).
 
    Tokens are intentionally local to the application. All colors, plus --radius
    and --pad, live here; the type scale, fonts, spacing scale, shadows, radii,
@@ -12,10 +10,10 @@
    - Monochrome first, with one accent. Color (--ok / --warn / --err / --link)
      only carries meaning state, a link, a result and is always paired with a
      word or shape, never color alone. --brand is the single exception: one
-     teal hue standing in for "this is the thing to notice," reused everywhere
-     that applies (the primary action, the empty-state glyph, and a
-     connected-status icon) rather than invented per-component.
-   - Hierarchy comes from type, spacing, and nested rounded surfaces. Earn a
+     warm hue standing in for "this is the thing to notice," reused everywhere
+     that applies (the primary action, the empty-state glyph, the top
+     hairline, a connected-status icon) rather than invented per-component.
+   - Hierarchy comes from type and spacing before borders or fills. Earn a
      border/surface only for selection, grouping, or a raised layer.
    - One focus ring: a soft --link glow (:focus-visible below).
    - One primary action per screen (.pill.primary, filled with --brand);
@@ -42,31 +40,29 @@
 
 :root {
 	/* --- application tokens --------------------------------------------- */
-	/* Warm neutrals with real depth: --window is the area around the two
-	   rounded panes, --bg is the content canvas, --bg-raised is a floating
-	   surface, and --bg-inset is a recessed control fill. */
-	--window: #dededb;
-	--panel: #f1f1ef;
-	--bg: #f8f8f6;
+	/* Warm neutrals with real depth: --bg is the window tint, --bg-raised the
+	   writing surface (they differ now), --bg-inset the recessed fill. */
+	--bg: #fcfcfb;
 	--bg-raised: #ffffff;
-	--bg-inset: #e8e8e4;
-	--border: #deded9;
-	--border-strong: #c8c8c1;
-	--text: #1a1b19;
-	--text-dim: #666963;
+	--bg-inset: #f2f2f0;
+	--border: #e9e8e4;
+	--border-strong: #d7d5d0;
+	--text: #1a1a17;
+	--text-dim: #605e58;
 	/* faint text still carries real content (status line, evidence summary,
 	   completion hints), so it holds WCAG AA (>= 4.5:1 on --bg). */
-	--text-faint: #7a7d76;
-	--accent: #1a1b19;
+	--text-faint: #6c6a63;
+	--accent: #1a1a17;
 	/* the one hue used outside the neutral/status palette: the primary-action
-	   pill, the empty-state glyph, and the composer connected-icon -- one
-	   consistent "notice me" color, not a different one per component. */
+	   pill, the empty-state glyph, the composer connected-icon, the top
+	   hairline -- one consistent "notice me" color, not a different one per
+	   component. */
 	--brand: #008080;
 	--link: #3a5c8a;
 	--ok: #3f7d3f;
 	--warn: #855800;
 	--err: #b23b3b;
-	--radius: 14px;
+	--radius: 8px;
 	--pad: 28px;
 
 	/* --- fixed --------------------------------------------------------- */
@@ -91,13 +87,12 @@
 	--space-6: 32px;
 	--content-max: 960px;
 
-	--radius-window: 16px;
-	--radius-sm: 9px;
-	--radius-chip: 7px;
+	--radius-sm: 6px;
+	--radius-chip: 4px;
 
 	/* soft, diffuse, layered the macOS elevation feel */
-	--shadow-sm: 0 1px 2px rgba(20, 20, 26, 0.05), 0 8px 22px rgba(20, 20, 26, 0.08);
-	--shadow-pop: 0 8px 18px rgba(20, 20, 26, 0.12), 0 24px 60px rgba(20, 20, 26, 0.18);
+	--shadow-sm: 0 1px 2px rgba(20, 20, 26, 0.05), 0 4px 12px rgba(20, 20, 26, 0.06);
+	--shadow-pop: 0 4px 12px rgba(20, 20, 26, 0.08), 0 16px 48px rgba(20, 20, 26, 0.16);
 	--focus-ring: 0 0 0 3px color-mix(in srgb, var(--link) 38%, transparent);
 
 	--dur-fast: 110ms;
@@ -106,24 +101,22 @@
 }
 
 :root[data-color-mode='dark'] {
-	--window: #0c0d0d;
-	--panel: #171918;
-	--bg: #141615;
-	--bg-raised: #1b1d1c;
-	--bg-inset: #252827;
-	--border: #2c302e;
-	--border-strong: #414541;
-	--text: #f0f2ed;
-	--text-dim: #a2a7a0;
-	--text-faint: #7c827b;
-	--accent: #f0f2ed;
+	--bg: #0e0e10;
+	--bg-raised: #17171a;
+	--bg-inset: #1e1e22;
+	--border: #26262a;
+	--border-strong: #37373d;
+	--text: #ededec;
+	--text-dim: #8f8d88;
+	--text-faint: #838079;
+	--accent: #ededec;
 	--brand: #008080;
 	--link: #8fb0dd;
 	--ok: #7cc07c;
 	--warn: #d8a640;
 	--err: #e06c6c;
-	--shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.28), 0 8px 24px rgba(0, 0, 0, 0.32);
-	--shadow-pop: 0 8px 18px rgba(0, 0, 0, 0.38), 0 24px 60px rgba(0, 0, 0, 0.56);
+	--shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 12px rgba(0, 0, 0, 0.35);
+	--shadow-pop: 0 4px 12px rgba(0, 0, 0, 0.4), 0 20px 56px rgba(0, 0, 0, 0.55);
 }
 
 * {
@@ -138,7 +131,7 @@ body {
 }
 
 body {
-	background: var(--window);
+	background: var(--bg);
 	color: var(--text);
 	font-family: var(--sans);
 	font-size: var(--fs);
@@ -147,15 +140,6 @@ body {
 	-webkit-font-smoothing: antialiased;
 	text-rendering: optimizeLegibility;
 	overflow: hidden;
-}
-
-/* The web build and the native window share the same inset-window treatment.
-   Keeping this here, instead of in individual views, makes every screen feel
-   like a pane in one desktop app. */
-html[data-color-mode='dark'] body {
-	background:
-		radial-gradient(circle at 18% -12%, rgba(0, 128, 128, 0.045), transparent 33rem),
-		var(--window);
 }
 
 #app {

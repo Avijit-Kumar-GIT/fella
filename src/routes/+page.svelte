@@ -276,34 +276,33 @@
 	.shell {
 		position: relative;
 		display: flex;
-		gap: 0;
-		padding: 10px;
 		height: 100%;
-		background: var(--window);
 	}
 	.shell::before {
-		display: none;
+		content: '';
+		position: absolute;
+		top: 0;
+		left: 0;
+		right: 0;
+		height: 2px;
+		background: var(--brand);
+		pointer-events: none;
 	}
 	.app {
 		display: flex;
 		flex-direction: column;
 		flex: 1;
 		min-width: 0;
-		min-height: 0;
-		background: var(--panel);
-		border: 1px solid var(--border);
-		border-left: 0;
-		border-radius: 0 var(--radius-window) var(--radius-window) 0;
-		overflow: hidden;
+		background: var(--bg);
 	}
 	main {
 		flex: 1;
 		min-height: 0;
 		display: flex;
 		flex-direction: column;
-		margin: 0;
+		/* Same fill as the titlebar/sidebar/panel so the whole shell reads as
+		   one open canvas, not stacked boxes -- no seam, no colour change. */
 		background: var(--bg);
-		overflow: hidden;
 	}
 	.main-row {
 		position: relative;
@@ -316,7 +315,7 @@
 	   transcript surface above it no rule, no colour change. */
 	.dock {
 		flex: none;
-		padding: 0 8px 8px;
+		padding-bottom: var(--space-4);
 	}
 	.dropzone {
 		position: fixed;
@@ -339,21 +338,5 @@
 		box-shadow: var(--shadow-sm);
 		color: var(--text-dim);
 		font-size: var(--fs-sm);
-	}
-	@media (max-width: 680px) {
-		.shell {
-			padding: 0;
-		}
-		.app {
-			border-radius: 0;
-			border-left: 0;
-			border-right: 0;
-		}
-		main {
-			margin: 0;
-			border-radius: 0;
-			border-left: 0;
-			border-right: 0;
-		}
 	}
 </style>

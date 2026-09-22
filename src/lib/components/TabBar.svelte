@@ -67,7 +67,7 @@
 	.tabs {
 		display: flex;
 		align-items: center;
-		gap: 4px;
+		gap: 2px;
 		min-width: 0;
 		overflow-x: auto;
 		scrollbar-width: none;
@@ -80,8 +80,8 @@
 		align-items: center;
 		gap: var(--space-1);
 		max-width: 20ch;
-		padding: 6px var(--space-1) 6px var(--space-2);
-		border-radius: var(--radius-sm);
+		padding: 3px var(--space-1) 3px var(--space-2);
+		border-radius: var(--radius-chip);
 		color: var(--text-faint);
 		font-size: var(--fs-sm);
 		cursor: pointer;
@@ -97,7 +97,6 @@
 	.tab.active {
 		color: var(--text);
 		background: var(--bg-inset);
-		box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border-strong) 55%, transparent);
 	}
 	.label {
 		overflow: hidden;

@@ -104,15 +104,13 @@
 <div class="titlebar" class:mac={isMac} class:focus={session.focus} data-tauri-drag-region>
 	{#if isMac}<span class="lights" aria-hidden="true"></span>{/if}
 
-	{#if !session.focus}
-		{#if session.sidebarCollapsed}
-			<span class="logo"><Logo size={16} /></span>
-		{/if}
+	{#if !session.focus && session.sidebarCollapsed}
+		<span class="logo"><Logo size={16} /></span>
 		<button
 			class="navbtn"
 			data-tauri-drag-region="false"
 			aria-expanded={!session.sidebarCollapsed}
-			title={`Toggle sidebar (${shortcutModifier}+B)`}
+			title={`Expand sidebar (${shortcutModifier}+B)`}
 			onclick={() => session.toggleSidebar()}
 		>
 			<Icon name="panel" size={14} />
@@ -236,9 +234,9 @@
 		display: flex;
 		align-items: center;
 		gap: var(--space-2);
-		height: 52px;
-		padding: 0 12px 0 14px;
-		background: var(--panel);
+		height: 38px;
+		padding: 0 var(--space-2) 0 var(--pad);
+		background: var(--bg);
 		color: var(--text-faint);
 		font-size: var(--fs-sm);
 		user-select: none;
@@ -260,8 +258,8 @@
 		flex: none;
 		display: grid;
 		place-items: center;
-		width: 28px;
-		height: 28px;
+		width: 24px;
+		height: 24px;
 		border-radius: var(--radius-chip);
 		color: var(--text-faint);
 		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);

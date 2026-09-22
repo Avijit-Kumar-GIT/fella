@@ -1,6 +1,6 @@
 <script lang="ts">
-	// The fella mark: a blob in --brand with two eyes punched out to --bg, so it
-	// reads correctly against either theme without a second color.
+	// The fella mark: a blob in --brand teal with two eyes punched out to --bg,
+	// so it reads correctly against either theme without a second color.
 	let { size = 18 }: { size?: number } = $props();
 </script>
 
