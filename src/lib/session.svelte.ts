@@ -343,17 +343,6 @@ class Session {
 		this.#writeStringList(HIDDEN_REPOSITORIES_KEY, this.hiddenRepositoryPaths);
 	}
 
-	/** Place one repository before another in the local sidebar order. */
-	reorderRepositories(path: string, before: string): void {
-		if (path === before) return;
-		const next = this.repositoryPaths.filter((item) => item !== path);
-		const target = next.indexOf(before);
-		if (target < 0) return;
-		next.splice(target, 0, path);
-		this.repositoryPaths = next;
-		this.#writeStringList(REPOSITORIES_KEY, next);
-	}
-
 	get activeProject(): Project | null {
 		return this.projects.find((project) => project.id === this.activeProjectId) ?? null;
 	}

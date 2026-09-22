@@ -20,8 +20,6 @@
 	const LOCAL_REPOSITORY = '__no-repository__';
 	let list = $state<ConversationSummary[]>([]);
 	let expandedRepos = $state<Record<string, boolean>>({});
-	let draggedRepoKey = $state<string | null>(null);
-	let dropRepoKey = $state<string | null>(null);
 	const shortcutModifier =
 		typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform || navigator.userAgent)
 			? '⌘'
@@ -72,7 +70,9 @@
 		for (const path of session.repositoryPaths) add(path);
 		if (session.catalog.workspace) add(session.catalog.workspace);
 		for (const item of list) {
-			if (!item.workspace) add(null, item);
+			if (!item.workspace || !session.hiddenRepositoryPaths.includes(item.workspace)) {
+				add(item.workspace, item);
+			}
 		}
 
 		const current = session.catalog.workspace;
@@ -119,33 +119,6 @@
 	async function addRepository(): Promise<void> {
 		session.setWorkspaceView('ask');
 		await openFolder();
-	}
-
-	function startRepositoryDrag(repo: Repository, event: DragEvent): void {
-		if (!repo.path) return;
-		draggedRepoKey = repo.key;
-		event.dataTransfer?.setData('text/plain', repo.key);
-		if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
-	}
-
-	function dragOverRepository(repo: Repository, event: DragEvent): void {
-		if (!draggedRepoKey || !repo.path || draggedRepoKey === repo.key) return;
-		event.preventDefault();
-		dropRepoKey = repo.key;
-		if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
-	}
-
-	function dropRepository(repo: Repository, event: DragEvent): void {
-		event.preventDefault();
-		const dragged = repositories.find((item) => item.key === draggedRepoKey);
-		if (dragged?.path && repo.path) session.reorderRepositories(dragged.path, repo.path);
-		draggedRepoKey = null;
-		dropRepoKey = null;
-	}
-
-	function endRepositoryDrag(): void {
-		draggedRepoKey = null;
-		dropRepoKey = null;
 	}
 
 	function hideRepository(repo: Repository, event: MouseEvent): void {
@@ -274,14 +247,6 @@
 					class="repository"
 					class:active={repo.active}
 					class:expanded={repo.expanded}
-					class:dragging={draggedRepoKey === repo.key}
-					class:drop-target={dropRepoKey === repo.key}
-					role="listitem"
-					draggable={repo.path ? 'true' : undefined}
-					ondragstart={(event) => startRepositoryDrag(repo, event)}
-					ondragover={(event) => dragOverRepository(repo, event)}
-					ondrop={(event) => dropRepository(repo, event)}
-					ondragend={endRepositoryDrag}
 				>
 					<div class="repository-row-wrap">
 						<button
@@ -606,10 +571,13 @@
 		gap: 1px;
 		padding-left: 5px;
 		background: var(--bg);
+		color: var(--text-faint);
 	}
 	.repository:hover .repository-actions,
-	.repository:focus-within .repository-actions {
+	.repository:focus-within .repository-actions,
+	.repository.active .repository-actions {
 		display: flex;
+		color: var(--text);
 	}
 	.repository-action {
 		display: grid;
@@ -617,17 +585,14 @@
 		width: 24px;
 		height: 24px;
 		border-radius: var(--radius-chip);
-		color: var(--text-faint);
+		color: inherit;
 	}
 	.repository-action:hover {
 		background: var(--bg-inset);
-		color: var(--text);
+		color: inherit;
 	}
-	.repository.dragging {
-		opacity: 0.45;
-	}
-	.repository.drop-target > .repository-row-wrap {
-		box-shadow: inset 0 -2px 0 var(--brand);
+	.repository-action :global(svg) {
+		color: inherit;
 	}
 	.repository-icon {
 		display: grid;
