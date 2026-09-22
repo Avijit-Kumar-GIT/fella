@@ -207,7 +207,7 @@
 			class="hint"
 			data-tauri-drag-region="false"
 			onclick={onpalette}
-			title={`Command palette (${shortcutModifier}+K or ${shortcutModifier}+Shift+P)`}
+			title={`Search Fella (${shortcutModifier}+K or ${shortcutModifier}+Shift+P)`}
 		>
 			<kbd>{shortcutModifier}</kbd><kbd>K</kbd>
 		</button>

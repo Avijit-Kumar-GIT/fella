@@ -5,6 +5,7 @@ import { Conversation, session } from './session.svelte';
 import type {
 	AskEvent,
 	ContextReference,
+	ConversationSummary,
 	Message,
 	ProviderHealth,
 	ProviderInfo
@@ -39,7 +40,7 @@ showing the exact steps it took. You never need these commands, but here they ar
   /retry           ask the last question again
   /help            this list
 
-keys  Enter send · Shift+Enter new line · Ctrl/Cmd+K or Ctrl/Cmd+Shift+P commands
+keys  Enter send · Shift+Enter new line · Ctrl/Cmd+K or Ctrl/Cmd+Shift+P search Fella
       Ctrl/Cmd+N new conversation · Ctrl/Cmd+T new tab · Ctrl/Cmd+W close tab
       Ctrl/Cmd+[ / ] previous or next tab · Ctrl/Cmd+1…9 switch tab
       Ctrl/Cmd+Shift+A Ask · Ctrl/Cmd+Shift+S Sources · Ctrl/Cmd+Shift+C Context
@@ -211,6 +212,27 @@ export async function loadStartupCatalog(): Promise<void> {
  *  button, and Enter on an empty composer with no folder open). */
 export async function resumeLastFolder(): Promise<void> {
 	if (session.lastFolder) await openFolder(session.lastFolder);
+}
+
+/** Reopen an archived conversation and restore the folder it belongs to. */
+export async function openConversation(summary: ConversationSummary): Promise<void> {
+	if (!isTauri()) {
+		session.addSystem('Saved conversations need the desktop app.');
+		return;
+	}
+	try {
+		session.setWorkspaceView('ask');
+		const raw = await ipc.conversationLoad(summary.id);
+		const saved: { workspace?: string | null; messages?: unknown; title?: string | null } =
+			JSON.parse(raw);
+		const messages = Array.isArray(saved.messages) ? (saved.messages as Message[]) : [];
+		session.loadArchivedTab(summary.id, messages, saved.title ?? null);
+		if (saved.workspace && saved.workspace !== session.catalog.workspace) {
+			await openFolder(saved.workspace);
+		}
+	} catch (e) {
+		session.addSystem(`error: ${errMsg(e)}`);
+	}
 }
 
 /** Open the workspace's fella.md editor from a navigation surface. Unlike the
