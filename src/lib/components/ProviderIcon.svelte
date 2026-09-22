@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { prefs } from '$lib/prefs.svelte';
 
-	type ProviderIconSize = 12 | 16 | 20;
+	type ProviderIconSize = 12 | 14 | 16 | 20;
 
 	type ProviderAsset = {
 		light: string;

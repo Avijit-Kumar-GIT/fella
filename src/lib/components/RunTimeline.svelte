@@ -109,8 +109,7 @@
 <style>
 	.run-timeline {
 		max-width: 76ch;
-		margin: 0 auto var(--space-4);
-		border-bottom: 1px solid var(--border);
+		margin: 0 auto var(--space-3);
 		color: var(--text-dim);
 	}
 	.timeline-head {
@@ -118,7 +117,7 @@
 		align-items: center;
 		justify-content: space-between;
 		gap: var(--space-3);
-		min-height: 34px;
+		min-height: 30px;
 	}
 	.run-status,
 	.timeline-tools,
@@ -134,7 +133,7 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
-		font-size: var(--fs-xs);
+		font-size: var(--fs-sm);
 		font-weight: 600;
 	}
 	.run-dot {
@@ -184,7 +183,7 @@
 	}
 	.steps {
 		position: relative;
-		padding: 2px 0 var(--space-3) 15px;
+		padding: 2px 0 var(--space-2) 15px;
 	}
 	.steps::before {
 		content: '';
@@ -201,7 +200,7 @@
 		display: flex;
 		align-items: center;
 		gap: var(--space-2);
-		min-height: 28px;
+		min-height: 26px;
 		padding: 3px var(--space-2);
 		border-radius: var(--radius-chip);
 		text-align: left;
@@ -249,7 +248,7 @@
 		text-overflow: ellipsis;
 		white-space: nowrap;
 		color: var(--text-faint);
-		font-size: 10.5px;
+		font-size: var(--fs-xs);
 	}
 	.step-info {
 		flex: none;
@@ -258,7 +257,7 @@
 	.more-steps {
 		margin: var(--space-1) 0 0;
 		color: var(--text-faint);
-		font-size: 10.5px;
+		font-size: var(--fs-xs);
 	}
 	.mini-thinking {
 		width: 3px;

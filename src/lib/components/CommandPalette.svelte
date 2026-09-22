@@ -479,7 +479,7 @@
 	.group-label {
 		padding: 9px 10px 4px;
 		color: var(--text-faint);
-		font-size: 10.5px;
+		font-size: var(--fs-xs);
 		font-weight: 650;
 		letter-spacing: 0.02em;
 	}
@@ -543,7 +543,7 @@
 		border-top: 1px solid var(--border);
 		background: var(--bg-inset);
 		color: var(--text-faint);
-		font-size: 10.5px;
+		font-size: var(--fs-xs);
 	}
 	.palette-footer span {
 		display: inline-flex;
@@ -554,7 +554,7 @@
 	.palette-footer kbd {
 		color: var(--text-dim);
 		font-family: var(--mono);
-		font-size: 10px;
+		font-size: var(--fs-xs);
 	}
 	.footer-spacer {
 		flex: 1;

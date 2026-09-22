@@ -113,7 +113,7 @@
 		border-collapse: collapse;
 		min-width: 100%;
 		font-family: var(--mono);
-		font-size: 10px;
+		font-size: var(--fs-xs);
 		white-space: nowrap;
 	}
 	th,

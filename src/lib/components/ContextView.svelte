@@ -160,9 +160,10 @@
 		color: var(--text-dim);
 	}
 	.editor-card {
-		border: 1px solid var(--border);
-		border-radius: var(--radius);
-		background: var(--bg-raised);
+		border-block: 1px solid var(--border);
+		border-inline: 0;
+		border-radius: 0;
+		background: transparent;
 		overflow: hidden;
 	}
 	.editor-head,
@@ -171,7 +172,7 @@
 		align-items: center;
 		justify-content: space-between;
 		gap: var(--space-3);
-		padding: var(--space-3) var(--space-4);
+		padding: var(--space-3) 0;
 	}
 	.editor-head {
 		border-bottom: 1px solid var(--border);
@@ -186,7 +187,7 @@
 		margin: 3px 0 0;
 		color: var(--text-faint);
 		font-family: var(--mono);
-		font-size: 10px;
+		font-size: var(--fs-xs);
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
@@ -216,11 +217,11 @@
 		display: block;
 		width: 100%;
 		min-height: 360px;
-		padding: var(--space-4);
+		padding: var(--space-4) 0;
 		border: 0;
 		outline: 0;
 		resize: vertical;
-		background: var(--bg-raised);
+		background: transparent;
 		color: var(--text);
 		font: 14px/1.65 var(--mono);
 	}

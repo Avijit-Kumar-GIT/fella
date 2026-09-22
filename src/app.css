@@ -57,10 +57,17 @@
 	   hairline -- one consistent "notice me" color, not a different one per
 	   component. */
 	--brand: #008080;
+	--on-brand: #ffffff;
 	--link: #3a5c8a;
 	--ok: #3f7d3f;
 	--warn: #855800;
 	--err: #b23b3b;
+	/* Analytical series have their own palette. Status colors stay reserved for
+	   verification and errors instead of becoming arbitrary chart categories. */
+	--chart-violet: #7462a8;
+	--chart-cyan: #2e9da4;
+	--chart-slate: #78818a;
+	--chart-plum: #a26478;
 	--radius: 8px;
 	--pad: 28px;
 
@@ -110,10 +117,15 @@
 	--text-faint: #838079;
 	--accent: #ededec;
 	--brand: #008080;
+	--on-brand: #ffffff;
 	--link: #8fb0dd;
 	--ok: #7cc07c;
 	--warn: #d8a640;
 	--err: #e06c6c;
+	--chart-violet: #aa99e2;
+	--chart-cyan: #56d1cf;
+	--chart-slate: #b0b7bd;
+	--chart-plum: #df9aae;
 	--shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 12px rgba(0, 0, 0, 0.35);
 	--shadow-pop: 0 4px 12px rgba(0, 0, 0, 0.4), 0 20px 56px rgba(0, 0, 0, 0.55);
 }
@@ -248,7 +260,7 @@ kbd {
    one thing to do here" reads as one consistent color language. */
 .pill.primary {
 	background: var(--brand);
-	color: #fff;
+	color: var(--on-brand);
 	border-color: var(--brand);
 }
 .pill.primary:hover {

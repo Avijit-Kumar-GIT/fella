@@ -175,7 +175,9 @@
 
 <style>
 	.evidence {
-		margin-top: 6px;
+		margin-top: var(--space-4);
+		padding-top: var(--space-3);
+		border-top: 1px solid var(--border);
 		font-size: var(--fs-sm);
 	}
 	.summary {

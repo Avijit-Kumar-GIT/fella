@@ -230,9 +230,9 @@
 		color: var(--text-dim);
 	}
 	.settings-grid {
-		display: grid;
-		grid-template-columns: repeat(2, minmax(0, 1fr));
-		gap: var(--space-3);
+		display: flex;
+		flex-direction: column;
+		gap: 0;
 		max-width: 760px;
 	}
 	.settings-card {
@@ -240,16 +240,19 @@
 		display: flex;
 		flex-direction: column;
 		gap: var(--space-4);
-		padding: var(--space-4);
-		border: 1px solid var(--border);
-		border-radius: var(--radius);
-		background: var(--bg-raised);
+		padding: var(--space-5) 0;
+		border: 0;
+		border-top: 1px solid var(--border);
+		border-radius: 0;
+		background: transparent;
 	}
-	.workspace-card {
-		grid-column: 1 / -1;
+	.settings-card:first-child {
+		padding-top: 0;
+		border-top: 0;
 	}
+	.workspace-card,
 	.capability-card {
-		grid-column: 1 / -1;
+		grid-column: auto;
 	}
 	.card-head {
 		display: flex;
@@ -284,7 +287,7 @@
 		border: 1px solid var(--brand);
 		border-radius: 999px;
 		color: var(--brand);
-		font-size: 10px;
+		font-size: var(--fs-xs);
 		font-weight: 650;
 		letter-spacing: 0.02em;
 		white-space: nowrap;
@@ -426,7 +429,7 @@
 	}
 	.provider-row small {
 		color: var(--text-faint);
-		font-size: 10px;
+		font-size: var(--fs-xs);
 	}
 	.text-button {
 		display: inline-flex;
@@ -468,10 +471,7 @@
 	}
 	@media (max-width: 680px) {
 		.settings-grid {
-			grid-template-columns: 1fr;
-		}
-		.workspace-card {
-			grid-column: auto;
+			width: 100%;
 		}
 	}
 </style>

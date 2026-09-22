@@ -269,20 +269,24 @@
 		width: fit-content;
 		max-width: 100%;
 		align-items: stretch;
-		gap: 1px;
+		gap: var(--space-5);
 		margin-bottom: var(--space-5);
-		background: var(--border);
-		border: 1px solid var(--border);
-		border-radius: var(--radius);
-		overflow: hidden;
+		background: transparent;
+		border: 0;
+		border-radius: 0;
+		overflow: visible;
 	}
 	.summary-item {
-		min-width: 100px;
+		min-width: 0;
 		display: flex;
 		flex-direction: column;
 		gap: 2px;
-		padding: var(--space-3) var(--space-4);
-		background: var(--bg-raised);
+		padding: 0;
+		background: transparent;
+	}
+	.summary-item + .summary-item {
+		padding-left: var(--space-5);
+		border-left: 1px solid var(--border);
 	}
 	.summary-item strong {
 		font-size: var(--fs-lg);
@@ -312,7 +316,7 @@
 	}
 	.freshness code {
 		font-family: var(--mono);
-		font-size: 10px;
+		font-size: var(--fs-xs);
 	}
 	.toolbar {
 		display: flex;
@@ -356,14 +360,15 @@
 		display: grid;
 		grid-template-columns: minmax(0, 1.15fr) minmax(260px, 0.85fr);
 		min-height: 340px;
-		border: 1px solid var(--border);
-		border-radius: var(--radius);
+		border-block: 1px solid var(--border);
+		border-inline: 0;
+		border-radius: 0;
 		overflow: hidden;
-		background: var(--bg-raised);
+		background: transparent;
 	}
 	.source-list {
 		min-width: 0;
-		padding: var(--space-2);
+		padding: var(--space-2) 0;
 		overflow: auto;
 	}
 	.source-row {
@@ -416,13 +421,13 @@
 	.source-meta small:first-child {
 		color: var(--text-dim);
 		font-family: var(--mono);
-		font-size: 10px;
+		font-size: var(--fs-xs);
 	}
 	.detail {
 		min-width: 0;
 		padding: var(--space-5);
 		border-left: 1px solid var(--border);
-		background: var(--bg-raised);
+		background: transparent;
 		overflow: auto;
 	}
 	.detail-head {
@@ -533,7 +538,7 @@
 	}
 	.column-row > small {
 		color: var(--text-faint);
-		font-size: 10px;
+		font-size: var(--fs-xs);
 	}
 	.column-row code {
 		min-width: 0;
@@ -553,7 +558,7 @@
 		text-overflow: ellipsis;
 		white-space: nowrap;
 		color: var(--text-dim);
-		font-size: 10px;
+		font-size: var(--fs-xs);
 	}
 	.common-values span {
 		margin-right: 6px;
@@ -622,9 +627,10 @@
 	}
 	.no-sources {
 		padding: var(--space-6) var(--space-5);
-		border: 1px solid var(--border);
-		border-radius: var(--radius);
-		background: var(--bg-raised);
+		border-block: 1px solid var(--border);
+		border-inline: 0;
+		border-radius: 0;
+		background: transparent;
 		text-align: center;
 	}
 	.no-sources .empty-icon {

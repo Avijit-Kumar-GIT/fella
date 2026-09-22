@@ -9,9 +9,9 @@
 		verified = false
 	}: { spec: VisualizationSpec; source?: string; verified?: boolean } = $props();
 
-	// Keep the palette inside Fella's existing theme. A label and legend always
-	// accompany color, so color never carries the only meaning in the chart.
-	const CAT_COLORS = ['--brand', '--link', '--ok', '--warn', '--err'];
+	// Keep chart series distinct from semantic status colors. A label and legend
+	// always accompany color, so color never carries the only meaning.
+	const CAT_COLORS = ['--brand', '--chart-violet', '--chart-cyan', '--chart-slate', '--chart-plum'];
 	function catColor(i: number): string {
 		return `var(${CAT_COLORS[i % CAT_COLORS.length]})`;
 	}

@@ -458,7 +458,7 @@
 			{#if !session.focus}
 				<div class="chips">
 					<span class="chip model-chip" title={modelLabel ? `${providerName} · ${modelLabel}` : providerName}>
-						<ProviderIcon providerId={providerId} size={12} />
+						<ProviderIcon providerId={providerId} size={14} />
 						{modelLabel || 'No model selected'}
 					</span>
 				{#if activityNote}
@@ -516,7 +516,7 @@
 		display: flex;
 		flex-wrap: wrap;
 		align-items: center;
-		gap: var(--space-4);
+		gap: var(--space-3);
 		flex: 1;
 		min-width: 0;
 	}
@@ -527,6 +527,12 @@
 		color: var(--text-dim);
 		font-size: var(--fs-sm);
 		white-space: nowrap;
+	}
+	.model-chip {
+		color: var(--text-faint);
+	}
+	.model-chip :global(.provider-icon) {
+		opacity: 0.78;
 	}
 	.context-row {
 		display: flex;
@@ -545,12 +551,12 @@
 		align-items: center;
 		gap: 5px;
 		max-width: 210px;
-		padding: 3px 4px 3px 7px;
+		padding: 4px 5px 4px 8px;
 		border: 1px solid var(--border-strong);
 		border-radius: var(--radius-chip);
 		background: var(--bg-inset);
 		color: var(--text-dim);
-		font-size: 10.5px;
+		font-size: var(--fs-xs);
 		white-space: nowrap;
 	}
 	.ref-pill > span {
@@ -558,7 +564,7 @@
 		text-overflow: ellipsis;
 	}
 	.ref-pill :global(svg) {
-		color: var(--brand);
+		color: var(--text-faint);
 	}
 	.ref-pill button {
 		display: grid;
@@ -580,7 +586,7 @@
 		padding: 3px 6px;
 		border-radius: var(--radius-chip);
 		color: var(--text-faint);
-		font-size: 10.5px;
+		font-size: var(--fs-xs);
 		white-space: nowrap;
 	}
 	.context-add:hover,
@@ -616,7 +622,7 @@
 		width: 6px;
 		height: 6px;
 		border-radius: 50%;
-		background: var(--link);
+		background: var(--text-faint);
 	}
 	.mode-mark.inspect {
 		background: var(--brand);
@@ -657,7 +663,7 @@
 	}
 	.mode-menu small {
 		color: var(--text-faint);
-		font-size: 10.5px;
+		font-size: var(--fs-xs);
 	}
 	.context-menu {
 		position: absolute;
@@ -710,7 +716,7 @@
 	.context-heading {
 		margin: var(--space-3) var(--space-2) var(--space-1);
 		color: var(--text-faint);
-		font-size: 10px;
+		font-size: var(--fs-xs);
 		font-weight: 650;
 		letter-spacing: 0.01em;
 	}
@@ -760,7 +766,7 @@
 		flex: none;
 		border-radius: var(--radius-chip);
 		background: var(--bg-inset);
-		color: var(--brand);
+		color: var(--text-faint);
 	}
 	.context-copy {
 		min-width: 0;
@@ -780,7 +786,7 @@
 	}
 	.context-copy small {
 		color: var(--text-faint);
-		font-size: 10.5px;
+		font-size: var(--fs-xs);
 	}
 	.context-inspect {
 		display: grid;
@@ -827,7 +833,7 @@
 	.bottom-row {
 		display: flex;
 		align-items: center;
-		gap: var(--space-3);
+		gap: var(--space-2);
 		min-height: 28px;
 	}
 	.below {
@@ -838,12 +844,15 @@
 		display: inline-flex;
 		align-items: center;
 		gap: 6px;
-		color: var(--text-faint);
+		color: var(--text-dim);
 		font-size: var(--fs-xs);
 		white-space: nowrap;
 		padding: 3px 6px;
 		border-radius: var(--radius-chip);
 		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+	}
+	.below-btn :global(svg) {
+		color: var(--text-faint);
 	}
 	.below-btn:hover {
 		background: var(--bg-inset);
@@ -857,7 +866,8 @@
 		background: transparent;
 		color: var(--text);
 		font: inherit;
-		line-height: var(--lh);
+		font-size: var(--fs-lg);
+		line-height: 1.5;
 		max-height: 200px;
 		overflow-y: auto;
 		padding: var(--space-1) 0;
@@ -888,12 +898,13 @@
 			color var(--dur-fast) var(--ease);
 	}
 	.act.send {
-		background: var(--bg-inset);
-		color: var(--text-dim);
+		background: var(--brand);
+		color: var(--on-brand);
 	}
 	.act.send:hover {
-		color: var(--bg-raised);
-		background: var(--text);
+		color: var(--on-brand);
+		background: var(--brand);
+		filter: brightness(0.9);
 	}
 	.act.stop {
 		color: var(--err);

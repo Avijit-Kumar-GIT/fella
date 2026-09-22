@@ -285,10 +285,11 @@
 		align-items: center;
 		gap: var(--space-2);
 		margin-top: var(--space-5);
-		padding: 10px 12px;
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		background: var(--bg-inset);
+		padding: 8px 0 8px 12px;
+		border: 0;
+		border-left: 2px solid var(--border-strong);
+		border-radius: 0;
+		background: transparent;
 		color: var(--text-dim);
 		font-size: var(--fs-sm);
 	}
@@ -311,16 +312,17 @@
 	.project-grid {
 		display: grid;
 		grid-template-columns: minmax(0, 1fr) minmax(220px, 280px);
-		gap: var(--space-4);
+		gap: var(--space-6);
 		margin-top: var(--space-5);
 	}
 	.wiki-card,
 	.snapshot-card {
 		min-width: 0;
-		padding: 18px;
-		border: 1px solid var(--border);
-		border-radius: var(--radius);
-		background: var(--bg-raised);
+		padding: var(--space-4) 0;
+		border: 0;
+		border-top: 1px solid var(--border);
+		border-radius: 0;
+		background: transparent;
 	}
 	.wiki-card {
 		display: flex;

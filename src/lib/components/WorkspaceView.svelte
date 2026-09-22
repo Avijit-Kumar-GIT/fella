@@ -82,7 +82,7 @@
 	}
 	.workspace-tabs small {
 		color: var(--text-faint);
-		font-size: 10px;
+		font-size: var(--fs-xs);
 		font-variant-numeric: tabular-nums;
 	}
 </style>

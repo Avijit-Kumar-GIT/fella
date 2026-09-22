@@ -209,14 +209,25 @@
 		white-space: pre-wrap;
 		word-break: break-word;
 	}
-	/* The user's turn is marked like a shell prompt; Fella's reply is unprefixed. */
+	/* Keep the conversation editorial: the speaker label carries the hierarchy,
+	   while the body stays free of command-line decoration. */
 	.you::before {
-		content: '❯ ';
-		font-family: var(--mono);
-		color: var(--text-dim);
+		content: 'You';
+		display: block;
+		margin-bottom: var(--space-1);
+		font-family: var(--sans);
+		font-size: var(--fs-xs);
+		font-weight: 650;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+		color: var(--text-faint);
 	}
 	.text {
 		word-break: break-word;
+	}
+	.msg.assistant .text {
+		font-size: var(--fs-lg);
+		line-height: 1.6;
 	}
 	/* The model's one-line plan, shown dimmed while its tools run. */
 	.plan {
@@ -321,8 +332,10 @@
 		display: flex;
 		align-items: center;
 		flex-wrap: wrap;
-		gap: 6px;
+		gap: var(--space-3);
 		margin-top: var(--space-3);
+		padding-top: var(--space-3);
+		border-top: 1px solid var(--border);
 	}
 	.followup-label {
 		color: var(--text-faint);
@@ -333,19 +346,18 @@
 		display: inline-flex;
 		align-items: center;
 		gap: 5px;
-		padding: 5px 8px;
-		border: 1px solid var(--border);
-		border-radius: var(--radius-chip);
-		color: var(--text-dim);
-		background: var(--bg-raised);
-		font-size: var(--fs-xs);
+		padding: 0;
+		border: 0;
+		border-radius: 0;
+		color: var(--link);
+		background: transparent;
+		font-size: var(--fs-sm);
 		text-align: left;
-		transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+		transition: color var(--dur-fast) var(--ease);
 	}
 	.followups button:hover {
-		border-color: var(--border-strong);
-		background: var(--bg-inset);
 		color: var(--text);
+		text-decoration: underline;
 	}
 
 	/* The assistant's answer is rendered from markdown (see markdown.ts). Code,
