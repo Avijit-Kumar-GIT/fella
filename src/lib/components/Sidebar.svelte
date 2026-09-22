@@ -525,14 +525,15 @@
 		padding: 4px 52px 4px var(--space-2);
 		border-radius: var(--radius-sm);
 		color: var(--text-dim);
-		cursor: grab;
 		text-align: left;
 		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 	}
-	.repository-row:active {
-		cursor: grabbing;
-	}
 	.repository-row:hover {
+		background: var(--bg-inset);
+		color: var(--text);
+	}
+	.repository:hover .repository-row,
+	.repository:focus-within .repository-row {
 		background: var(--bg-inset);
 		color: var(--text);
 	}
@@ -570,7 +571,7 @@
 		align-items: center;
 		gap: 1px;
 		padding-left: 5px;
-		background: var(--bg);
+		background: transparent;
 		color: var(--text-faint);
 	}
 	.repository:hover .repository-actions,
