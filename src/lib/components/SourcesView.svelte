@@ -385,7 +385,7 @@
 	.empty-icon {
 		display: grid;
 		place-items: center;
-		color: var(--brand);
+		color: var(--text-faint);
 	}
 	.source-copy {
 		min-width: 0;

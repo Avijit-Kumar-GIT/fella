@@ -236,16 +236,16 @@
 		return current ? resultKey(current) === resultKey(result) : false;
 	}
 
-	function icon(result: SearchResult): 'folder' | 'compose' | 'file' | 'bookmark' | 'asterisk' {
+	function icon(result: SearchResult): 'repository' | 'ask' | 'file' | 'project' | 'asterisk' {
 		switch (result.kind) {
 			case 'repository':
-				return 'folder';
+				return 'repository';
 			case 'conversation':
-				return 'compose';
+				return 'ask';
 			case 'source':
 				return 'file';
 			case 'project':
-				return 'bookmark';
+				return 'project';
 			case 'command':
 				return 'asterisk';
 		}
@@ -354,7 +354,7 @@
 						{#each group.items as result (resultKey(result))}
 							<li class:sel={isSelected(result)}>
 								<button class="search-result" type="button" onclick={() => void select(result)}>
-									<span class:repository={result.kind === 'repository'} class:conversation={result.kind === 'conversation'} class:source={result.kind === 'source'} class:project={result.kind === 'project'} class:command={result.kind === 'command'} class="result-icon">
+									<span class="result-icon">
 										<Icon name={icon(result)} size={16} />
 									</span>
 									<span class="result-copy">
@@ -400,7 +400,7 @@
 		width: min(680px, 92vw);
 		background: var(--bg-raised);
 		border: 1px solid var(--border);
-		border-radius: 12px;
+		border-radius: var(--radius);
 		box-shadow: var(--shadow-pop);
 		overflow: hidden;
 	}
@@ -474,7 +474,7 @@
 	}
 	.hint :global(svg) {
 		flex: none;
-		color: var(--brand);
+		color: var(--text-faint);
 	}
 	.group-label {
 		padding: 9px 10px 4px;
@@ -495,37 +495,17 @@
 		transition: background var(--dur-fast) var(--ease);
 	}
 	.search-result:hover {
-		background: color-mix(in srgb, var(--brand) 8%, var(--bg-inset));
+		background: var(--bg-inset);
 	}
 	.result-icon {
 		display: grid;
 		place-items: center;
-		width: 30px;
-		height: 30px;
+		width: 24px;
+		height: 24px;
 		flex: none;
-		border-radius: 7px;
-		background: var(--bg-inset);
+		border-radius: var(--radius-chip);
+		background: transparent;
 		color: var(--text-faint);
-	}
-	.result-icon.repository {
-		color: var(--brand);
-		background: color-mix(in srgb, var(--brand) 15%, var(--bg-inset));
-	}
-	.result-icon.conversation {
-		color: var(--link);
-		background: color-mix(in srgb, var(--link) 14%, var(--bg-inset));
-	}
-	.result-icon.source {
-		color: var(--warn);
-		background: color-mix(in srgb, var(--warn) 14%, var(--bg-inset));
-	}
-	.result-icon.project {
-		color: var(--link);
-		background: color-mix(in srgb, var(--link) 14%, var(--bg-inset));
-	}
-	.result-icon.command {
-		color: var(--ok);
-		background: color-mix(in srgb, var(--ok) 14%, var(--bg-inset));
 	}
 	.result-copy {
 		min-width: 0;

@@ -77,7 +77,7 @@
 		color: var(--text);
 	}
 	.workspace-tabs button :global(svg) {
-		color: var(--brand);
+		color: var(--text-faint);
 		flex: none;
 	}
 	.workspace-tabs small {

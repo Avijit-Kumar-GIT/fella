@@ -225,7 +225,7 @@
 		font: 14px/1.65 var(--mono);
 	}
 	textarea:focus {
-		box-shadow: inset 0 0 0 2px var(--brand);
+		box-shadow: inset 0 0 0 2px var(--link);
 	}
 	textarea::placeholder {
 		color: var(--text-faint);
@@ -255,7 +255,7 @@
 	}
 	.tip :global(svg) {
 		flex: none;
-		color: var(--brand);
+		color: var(--text-faint);
 	}
 	@media (max-width: 680px) {
 		.page-head,

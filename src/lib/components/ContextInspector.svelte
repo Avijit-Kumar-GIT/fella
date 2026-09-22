@@ -211,9 +211,10 @@
 		width: 42px;
 		height: 42px;
 		margin-bottom: var(--space-3);
-		border-radius: 12px;
+		border: 1px solid var(--border);
+		border-radius: var(--radius);
 		background: var(--bg-inset);
-		color: var(--brand);
+		color: var(--text-dim);
 	}
 	.type-label {
 		font-size: 10px;

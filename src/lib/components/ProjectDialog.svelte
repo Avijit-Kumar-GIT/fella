@@ -59,7 +59,7 @@
 		<form class="dialog" aria-labelledby="project-dialog-title" aria-describedby="project-dialog-description" onsubmit={(event) => { event.preventDefault(); create(); }}>
 			<div class="dialog-heading">
 				<div>
-					<p class="eyebrow"><Icon name="bookmark" size={12} /> Project</p>
+					<p class="eyebrow"><Icon name="project" size={12} /> Project</p>
 					<h1 id="project-dialog-title">Create a project</h1>
 					<p id="project-dialog-description" class="dialog-description">Keep notes and context alongside one repository.</p>
 				</div>
@@ -149,7 +149,7 @@
 		align-items: center;
 		gap: 5px;
 		margin: 0 0 var(--space-1);
-		color: var(--brand);
+		color: var(--text-faint);
 		font-size: var(--fs-xs);
 		font-weight: 650;
 		letter-spacing: 0.04em;

@@ -213,7 +213,7 @@
 			aria-current={session.workspaceView === 'ask' ? 'page' : undefined}
 			onclick={() => session.setWorkspaceView('ask')}
 		>
-			<Icon name="compose" size={16} />
+			<Icon name="ask" size={16} />
 			<span>Ask</span>
 		</button>
 		<button
@@ -258,7 +258,7 @@
 							onclick={() => toggleRepository(repo)}
 						>
 							<Icon name="chevron-right" size={12} />
-							<span class="repository-icon"><Icon name="folder" size={16} /></span>
+							<span class="repository-icon"><Icon name="repository" size={16} /></span>
 							<span class="repository-copy">{repo.name}</span>
 						</button>
 						{#if repo.path}
@@ -273,7 +273,7 @@
 										void newConversation(repo);
 									}}
 								>
-									<Icon name="plus" size={12} />
+									<Icon name="plus" size={14} />
 								</button>
 								{#if !repo.active}
 									<button
@@ -283,7 +283,7 @@
 										title="Hide repository"
 										onclick={(event) => hideRepository(repo, event)}
 									>
-										<Icon name="x" size={12} />
+										<Icon name="x" size={14} />
 									</button>
 								{/if}
 							</div>
@@ -352,10 +352,10 @@
 										</button>
 										<div class="row-actions">
 											<button class="ren" type="button" aria-label="Rename conversation" title="Rename" onclick={(e) => startRename(c, e)}>
-												<Icon name="pencil" size={12} />
+													<Icon name="pencil" size={14} />
 											</button>
 											<button class="del" type="button" aria-label="Delete conversation" title="Delete" onclick={(e) => remove(c, e)}>
-												<Icon name="x" size={12} />
+													<Icon name="x" size={14} />
 											</button>
 										</div>
 									{/if}
@@ -394,7 +394,7 @@
 					title={project.workspace}
 					onclick={() => session.openProject(project.id)}
 				>
-					<Icon name="bookmark" size={16} />
+					<Icon name="project" size={16} />
 					<span>{project.name}</span>
 				</button>
 			{/each}
@@ -561,7 +561,7 @@
 	}
 	.repository.active .repository-row > :global(svg:first-child),
 	.repository.active .repository-icon {
-		color: var(--brand);
+		color: var(--text-dim);
 	}
 	.repository-actions {
 		position: absolute;
@@ -627,12 +627,11 @@
 		border-radius: var(--radius-chip);
 		color: var(--text-faint);
 	}
-	.repository-tool:hover,
-	.repository-tool.active {
+	.repository-tool:hover {
 		background: var(--bg-inset);
 		color: var(--text);
 	}
-	.repository-tool :global(svg) {
+	.repository-tool.active {
 		color: var(--brand);
 	}
 	.add-repository {
@@ -648,9 +647,6 @@
 	.add-repository:hover {
 		background: var(--bg-inset);
 		color: var(--text);
-	}
-	.add-repository :global(svg) {
-		color: var(--brand);
 	}
 	.nav-heading {
 		padding: 0 var(--space-2) var(--space-1);
@@ -691,9 +687,6 @@
 		width: 2px;
 		border-radius: 2px;
 		background: var(--brand);
-	}
-	.nav-row.active :global(svg) {
-		color: var(--brand);
 	}
 	.nav-row:disabled {
 		color: var(--border-strong);
@@ -786,9 +779,6 @@
 		flex: none;
 		color: var(--text-faint);
 	}
-	.project-row.active :global(svg) {
-		color: var(--brand);
-	}
 	.rename-input {
 		width: 100%;
 		padding: var(--space-2) var(--space-3);
@@ -838,10 +828,7 @@
 		height: 30px;
 	}
 	.settings-btn.active {
-		background: var(--bg-raised);
+		background: color-mix(in srgb, var(--brand) 9%, var(--bg-inset));
 		color: var(--text);
-	}
-	.settings-btn.active :global(svg) {
-		color: var(--brand);
 	}
 </style>

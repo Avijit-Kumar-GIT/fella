@@ -102,7 +102,7 @@
 	<section class="project-page" aria-labelledby="project-title">
 		<header class="project-header">
 			<div class="project-heading">
-				<span class="project-mark"><Icon name="bookmark" size={20} /></span>
+				<span class="project-mark"><Icon name="project" size={20} /></span>
 				<div class="project-title-wrap">
 					<p class="eyebrow">Project</p>
 					<input id="project-title" class="project-title" bind:value={name} onblur={commitName} aria-label="Project name" />
@@ -110,7 +110,7 @@
 			</div>
 			<div class="project-actions">
 				<button class="pill ghost" type="button" onclick={() => void askRepository()}>
-					<Icon name="compose" size={16} /> Ask repository
+					<Icon name="ask" size={16} /> Ask repository
 				</button>
 				<button class="pill ghost" type="button" onclick={() => void openSources()}>
 					<Icon name="table" size={16} /> Sources
@@ -207,8 +207,9 @@
 		height: 42px;
 		flex: none;
 		border-radius: var(--radius);
-		background: color-mix(in srgb, var(--brand) 13%, var(--bg-inset));
-		color: var(--brand);
+		background: var(--bg-inset);
+		border: 1px solid var(--border);
+		color: var(--text-dim);
 	}
 	.project-title-wrap {
 		min-width: 0;
@@ -274,7 +275,7 @@
 	}
 	.project-location :global(svg) {
 		flex: none;
-		color: var(--brand);
+		color: var(--text-faint);
 	}
 	.location-separator {
 		color: var(--border-strong);
@@ -293,7 +294,7 @@
 	}
 	.mount-note > :global(svg) {
 		flex: none;
-		color: var(--brand);
+		color: var(--text-faint);
 	}
 	.mount-note span {
 		min-width: 0;

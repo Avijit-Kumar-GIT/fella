@@ -259,7 +259,7 @@
 	}
 	.card-head > :global(svg) {
 		flex: none;
-		color: var(--brand);
+		color: var(--text-faint);
 	}
 	h2 {
 		margin: 0;
@@ -453,7 +453,7 @@
 		font-size: var(--fs-xs);
 	}
 	.appearance-row :global(svg:last-child) {
-		color: var(--brand);
+		color: var(--text-dim);
 	}
 	.workspace-card code {
 		padding: 8px 10px;

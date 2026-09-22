@@ -15,6 +15,10 @@
 			'M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z',
 		search: 'M11 3a8 8 0 1 0 0 16 8 8 0 0 0 0-16ZM21 21l-4.35-4.35',
 		'corner-down-left': 'M9 10 4 15l5 5M20 4v7a4 4 0 0 1-4 4H4',
+		ask: 'M4 5h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H9l-5 4v-4H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1Z',
+		repository:
+			'M3 7.5A1.5 1.5 0 0 1 4.5 6h5l1.75 2H19.5A1.5 1.5 0 0 1 21 9.5v8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5v-10ZM7 12h10M7 15h6',
+		project: 'M5.5 4h13A1.5 1.5 0 0 1 20 5.5v13a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 18.5v-13A1.5 1.5 0 0 1 5.5 4ZM8 9h8M8 13h5M8 17h3',
 		stop: 'M7 6h10a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1Z',
 		asterisk: 'M12 6v12M17.196 9 6.804 15M6.804 9l10.392 6',
 		info: 'M2 12a10 10 0 1 0 20 0 10 10 0 1 0-20 0M12 16v-4M12 8h.01',
@@ -34,8 +38,8 @@
 	} as const;
 
 	export type IconName = keyof typeof ICONS;
-	/** 12px compact detail, 16px standard UI, 20px display mark. */
-	export type IconSize = 12 | 16 | 20;
+	/** 12px metadata, 14px compact controls, 16px standard UI, 20px display. */
+	export type IconSize = 12 | 14 | 16 | 20;
 </script>
 
 <script lang="ts">
