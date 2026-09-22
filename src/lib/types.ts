@@ -246,6 +246,16 @@ export interface ConversationSummary {
 	title: string | null;
 }
 
+/** A user-created local wiki attached to one mounted repository. */
+export interface Project {
+	id: string;
+	name: string;
+	workspace: string;
+	body: string;
+	created_at_ms: number;
+	updated_at_ms: number;
+}
+
 /** Streaming events emitted by the `ask` command over a Tauri Channel. */
 export type AskEvent =
 	| { kind: 'assistant_delta'; text: string }

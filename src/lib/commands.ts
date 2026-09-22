@@ -182,6 +182,7 @@ export async function openFolder(path?: string): Promise<void> {
 		session.busy = true;
 		session.activity = 'reading the folder…';
 		session.catalog = await ipc.openWorkspace(chosen);
+		session.rememberRepository(session.catalog.workspace ?? chosen);
 		session.addSystem(summarizeCatalog());
 	} catch (e) {
 		session.addSystem(`Couldn't open that folder: ${errMsg(e)}`);
@@ -198,6 +199,7 @@ export async function loadStartupCatalog(): Promise<void> {
 	if (!isTauri() || session.catalog.workspace) return;
 	try {
 		session.catalog = await ipc.getCatalog();
+		session.rememberRepository(session.catalog.workspace);
 	} catch {
 		/* no engine yet the welcome screen handles it */
 	}

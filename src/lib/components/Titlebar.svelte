@@ -45,6 +45,7 @@
 	let displayTitle = $derived.by(() => {
 		const prefix = folder || 'Workspace';
 		if (session.workspaceView === 'workspace') return `${prefix} — Workspace`;
+		if (session.workspaceView === 'project') return `${session.activeProject?.name ?? 'Project'} — Project`;
 		if (session.workspaceView === 'settings') return `${prefix} — Settings`;
 		return conversationTitle;
 	});

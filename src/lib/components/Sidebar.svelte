@@ -6,7 +6,7 @@
 	import Icon from './Icon.svelte';
 	import Logo from './Logo.svelte';
 
-	let { onsearch }: { onsearch?: () => void } = $props();
+	let { onsearch, onnewproject }: { onsearch?: () => void; onnewproject?: () => void } = $props();
 
 	type Repository = {
 		key: string;
@@ -20,6 +20,8 @@
 	const LOCAL_REPOSITORY = '__no-repository__';
 	let list = $state<ConversationSummary[]>([]);
 	let expandedRepos = $state<Record<string, boolean>>({});
+	let draggedRepoKey = $state<string | null>(null);
+	let dropRepoKey = $state<string | null>(null);
 	const shortcutModifier =
 		typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform || navigator.userAgent)
 			? '⌘'
@@ -28,7 +30,9 @@
 	async function refresh() {
 		if (!isTauri()) return;
 		try {
-			list = await ipc.conversationsList();
+			const next = await ipc.conversationsList();
+			session.rememberRepositories(next.map((item) => item.workspace));
+			list = next;
 		} catch {
 			/* leave the last-known list rather than blanking it on a hiccup */
 		}
@@ -65,15 +69,19 @@
 			grouped.set(key, group);
 		};
 
+		for (const path of session.repositoryPaths) add(path);
 		if (session.catalog.workspace) add(session.catalog.workspace);
-		for (const item of list) add(item.workspace, item);
+		for (const item of list) {
+			if (!item.workspace) add(null, item);
+		}
 
 		const current = session.catalog.workspace;
+		const order = new Map(session.repositoryPaths.map((path, index) => [path, index]));
 		return [...grouped.values()]
 			.sort((a, b) => {
-				if (a.path === current && b.path !== current) return -1;
-				if (b.path === current && a.path !== current) return 1;
-				return (b.items[0]?.saved_at_ms ?? 0) - (a.items[0]?.saved_at_ms ?? 0);
+				if (a.path === null) return 1;
+				if (b.path === null) return -1;
+				return (order.get(a.path) ?? Number.MAX_SAFE_INTEGER) - (order.get(b.path) ?? Number.MAX_SAFE_INTEGER);
 			})
 			.map((group) => {
 				const key = repositoryKey(group.path);
@@ -111,6 +119,38 @@
 	async function addRepository(): Promise<void> {
 		session.setWorkspaceView('ask');
 		await openFolder();
+	}
+
+	function startRepositoryDrag(repo: Repository, event: DragEvent): void {
+		if (!repo.path) return;
+		draggedRepoKey = repo.key;
+		event.dataTransfer?.setData('text/plain', repo.key);
+		if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
+	}
+
+	function dragOverRepository(repo: Repository, event: DragEvent): void {
+		if (!draggedRepoKey || !repo.path || draggedRepoKey === repo.key) return;
+		event.preventDefault();
+		dropRepoKey = repo.key;
+		if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+	}
+
+	function dropRepository(repo: Repository, event: DragEvent): void {
+		event.preventDefault();
+		const dragged = repositories.find((item) => item.key === draggedRepoKey);
+		if (dragged?.path && repo.path) session.reorderRepositories(dragged.path, repo.path);
+		draggedRepoKey = null;
+		dropRepoKey = null;
+	}
+
+	function endRepositoryDrag(): void {
+		draggedRepoKey = null;
+		dropRepoKey = null;
+	}
+
+	function hideRepository(repo: Repository, event: MouseEvent): void {
+		event.stopPropagation();
+		if (repo.path && repo.path !== session.catalog.workspace) session.forgetRepository(repo.path);
 	}
 
 	let renamingId = $state<string | null>(null);
@@ -230,19 +270,60 @@
 		</div>
 		<div class="repositories">
 			{#each repositories as repo (repo.key)}
-				<div class="repository" class:active={repo.active} class:expanded={repo.expanded}>
-					<button
-						class="repository-row"
-						type="button"
-						title={repo.path ?? 'No repository'}
-						aria-expanded={repo.expanded}
-						aria-current={repo.active ? 'true' : undefined}
-						onclick={() => toggleRepository(repo)}
-					>
-						<Icon name="chevron-right" size={12} />
-						<span class="repository-icon"><Icon name="folder" size={16} /></span>
-						<span class="repository-copy">{repo.name}</span>
-					</button>
+				<div
+					class="repository"
+					class:active={repo.active}
+					class:expanded={repo.expanded}
+					class:dragging={draggedRepoKey === repo.key}
+					class:drop-target={dropRepoKey === repo.key}
+					role="listitem"
+					draggable={repo.path ? 'true' : undefined}
+					ondragstart={(event) => startRepositoryDrag(repo, event)}
+					ondragover={(event) => dragOverRepository(repo, event)}
+					ondrop={(event) => dropRepository(repo, event)}
+					ondragend={endRepositoryDrag}
+				>
+					<div class="repository-row-wrap">
+						<button
+							class="repository-row"
+							type="button"
+							title={repo.path ?? 'No repository'}
+							aria-expanded={repo.expanded}
+							aria-current={repo.active ? 'true' : undefined}
+							onclick={() => toggleRepository(repo)}
+						>
+							<Icon name="chevron-right" size={12} />
+							<span class="repository-icon"><Icon name="folder" size={16} /></span>
+							<span class="repository-copy">{repo.name}</span>
+						</button>
+						{#if repo.path}
+							<div class="repository-actions">
+								<button
+									class="repository-action"
+									type="button"
+									aria-label="New conversation in repository"
+									title="New conversation in repository"
+									onclick={(event) => {
+										event.stopPropagation();
+										void newConversation(repo);
+									}}
+								>
+									<Icon name="plus" size={12} />
+								</button>
+								{#if !repo.active}
+									<button
+										class="repository-action"
+										type="button"
+										aria-label="Hide repository"
+										title="Hide repository"
+										onclick={(event) => hideRepository(repo, event)}
+									>
+										<Icon name="x" size={12} />
+									</button>
+								{/if}
+							</div>
+						{/if}
+					</div>
 					{#if repo.expanded}
 						<div class="repository-contents">
 							{#if repo.path}
@@ -295,10 +376,12 @@
 									{:else}
 										<button
 											class="rowbtn item"
+											class:active={session.conversationId === c.id}
 											type="button"
 											onclick={() => void open(c)}
 											title={title(c)}
 											aria-label={`Open conversation: ${title(c)}`}
+											aria-current={session.conversationId === c.id ? 'page' : undefined}
 										>
 											<span class="preview">{title(c)}</span>
 										</button>
@@ -327,6 +410,29 @@
 	<section class="projects-section" aria-labelledby="projects-heading">
 		<div class="section-head">
 			<div class="nav-heading" id="projects-heading">Projects</div>
+			<button
+				class="section-action"
+				type="button"
+				aria-label="New project"
+				title="New project"
+				onclick={() => onnewproject?.()}
+			>
+				<Icon name="plus" size={16} />
+			</button>
+		</div>
+		<div class="project-list">
+			{#each session.projects as project (project.id)}
+				<button
+					class="project-row"
+					class:active={session.workspaceView === 'project' && session.activeProjectId === project.id}
+					type="button"
+					title={project.workspace}
+					onclick={() => session.openProject(project.id)}
+				>
+					<Icon name="bookmark" size={16} />
+					<span>{project.name}</span>
+				</button>
+			{/each}
 		</div>
 	</section>
 	<div class="sidebar-footer">
@@ -440,6 +546,9 @@
 	.repository {
 		min-width: 0;
 	}
+	.repository-row-wrap {
+		position: relative;
+	}
 	.repository-row {
 		position: relative;
 		width: 100%;
@@ -448,21 +557,25 @@
 		gap: 6px;
 		min-width: 0;
 		min-height: 28px;
-		padding: 4px var(--space-2);
+		padding: 4px 52px 4px var(--space-2);
 		border-radius: var(--radius-sm);
 		color: var(--text-dim);
+		cursor: grab;
 		text-align: left;
 		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+	}
+	.repository-row:active {
+		cursor: grabbing;
 	}
 	.repository-row:hover {
 		background: var(--bg-inset);
 		color: var(--text);
 	}
-	.repository.active > .repository-row {
+	.repository.active .repository-row {
 		color: var(--text);
 		font-weight: 560;
 	}
-	.repository.active > .repository-row::before {
+	.repository.active .repository-row::before {
 		content: '';
 		position: absolute;
 		left: 0;
@@ -477,12 +590,44 @@
 		color: var(--text-faint);
 		transition: transform var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 	}
-	.repository.expanded > .repository-row > :global(svg:first-child) {
+	.repository.expanded .repository-row > :global(svg:first-child) {
 		transform: rotate(90deg);
 	}
-	.repository.active > .repository-row > :global(svg:first-child),
+	.repository.active .repository-row > :global(svg:first-child),
 	.repository.active .repository-icon {
 		color: var(--brand);
+	}
+	.repository-actions {
+		position: absolute;
+		top: 2px;
+		right: 4px;
+		display: none;
+		align-items: center;
+		gap: 1px;
+		padding-left: 5px;
+		background: var(--bg);
+	}
+	.repository:hover .repository-actions,
+	.repository:focus-within .repository-actions {
+		display: flex;
+	}
+	.repository-action {
+		display: grid;
+		place-items: center;
+		width: 24px;
+		height: 24px;
+		border-radius: var(--radius-chip);
+		color: var(--text-faint);
+	}
+	.repository-action:hover {
+		background: var(--bg-inset);
+		color: var(--text);
+	}
+	.repository.dragging {
+		opacity: 0.45;
+	}
+	.repository.drop-target > .repository-row-wrap {
+		box-shadow: inset 0 -2px 0 var(--brand);
 	}
 	.repository-icon {
 		display: grid;
@@ -592,6 +737,7 @@
 		position: relative;
 	}
 	.item {
+		position: relative;
 		display: flex;
 		align-items: center;
 		gap: var(--space-2);
@@ -605,6 +751,20 @@
 	.item:focus-visible {
 		background: var(--bg-inset);
 	}
+	.item.active {
+		color: var(--text);
+		font-weight: 560;
+	}
+	.item.active::before {
+		content: '';
+		position: absolute;
+		left: 0;
+		top: 7px;
+		bottom: 7px;
+		width: 2px;
+		border-radius: 1px;
+		background: var(--brand);
+	}
 	.item-wrap:focus-within .row-actions,
 	.item-wrap:hover .row-actions {
 		display: flex;
@@ -617,6 +777,51 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+	}
+	.project-list {
+		display: grid;
+		gap: 1px;
+		max-height: 144px;
+		overflow-y: auto;
+	}
+	.project-row {
+		position: relative;
+		width: 100%;
+		display: flex;
+		align-items: center;
+		gap: var(--space-2);
+		min-width: 0;
+		min-height: 28px;
+		padding: 4px var(--space-2);
+		border-radius: var(--radius-sm);
+		color: var(--text-dim);
+		font-size: var(--fs-sm);
+		text-align: left;
+	}
+	.project-row:hover {
+		background: var(--bg-inset);
+		color: var(--text);
+	}
+	.project-row.active {
+		color: var(--text);
+		font-weight: 560;
+	}
+	.project-row.active::before {
+		content: '';
+		position: absolute;
+		left: 0;
+		top: 7px;
+		bottom: 7px;
+		width: 2px;
+		border-radius: 1px;
+		background: var(--brand);
+	}
+	.project-row :global(svg) {
+		flex: none;
+		color: var(--text-faint);
+	}
+	.project-row.active :global(svg) {
+		color: var(--brand);
 	}
 	.rename-input {
 		width: 100%;

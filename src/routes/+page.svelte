@@ -4,6 +4,8 @@
 	import Composer from '$lib/components/Composer.svelte';
 	import ContextInspector from '$lib/components/ContextInspector.svelte';
 	import Icon from '$lib/components/Icon.svelte';
+	import ProjectDialog from '$lib/components/ProjectDialog.svelte';
+	import ProjectView from '$lib/components/ProjectView.svelte';
 	import Sidebar from '$lib/components/Sidebar.svelte';
 	import SettingsView from '$lib/components/SettingsView.svelte';
 	import Titlebar from '$lib/components/Titlebar.svelte';
@@ -18,6 +20,7 @@
 	let transcript = $state<Transcript | undefined>();
 	let composer = $state<Composer | undefined>();
 	let paletteOpen = $state(false);
+	let projectDialogOpen = $state(false);
 	let dragging = $state(false);
 
 	let activeView = $derived(session.workspaceView);
@@ -236,7 +239,7 @@
 
 	<div class="shell">
 		{#if !session.focus && !session.sidebarCollapsed}
-			<Sidebar onsearch={() => (paletteOpen = true)} />
+			<Sidebar onsearch={() => (paletteOpen = true)} onnewproject={() => (projectDialogOpen = true)} />
 		{/if}
 	<div class="app" class:focus={session.focus}>
 		<Titlebar onpalette={() => (paletteOpen = true)} />
@@ -244,6 +247,8 @@
 			<div class="main-row">
 				{#if activeView === 'workspace'}
 					<WorkspaceView />
+				{:else if activeView === 'project'}
+					<ProjectView />
 				{:else if activeView === 'settings'}
 					<SettingsView />
 				{:else}
@@ -271,6 +276,7 @@
 {/if}
 
 <CommandPalette bind:open={paletteOpen} onpick={pickCommand} />
+<ProjectDialog bind:open={projectDialogOpen} />
 
 <style>
 	.shell {

@@ -18,6 +18,7 @@ import type {
 	Message,
 	ProviderHealth,
 	ProviderInfo,
+	Project,
 	RunStep,
 	Settings
 } from './types';
@@ -44,6 +45,9 @@ const PREFIX = 'fella:conversation:'; // one key per tab: fella:conversation:<id
 const LEGACY_KEY = 'fella:conversation'; // the single pre-tabs blob
 const INDEX_KEY = 'fella:tabs'; // JSON array of open tab ids
 const SIDEBAR_KEY = 'fella:sidebar-collapsed';
+const REPOSITORIES_KEY = 'fella:repositories';
+const HIDDEN_REPOSITORIES_KEY = 'fella:hidden-repositories';
+const PROJECTS_KEY = 'fella:projects';
 
 function readSidebarCollapsed(): boolean {
 	try {
@@ -51,6 +55,38 @@ function readSidebarCollapsed(): boolean {
 		return v === null ? false : v === '1';
 	} catch {
 		return false;
+	}
+}
+
+function readStringList(key: string): string[] {
+	try {
+		const parsed: unknown = JSON.parse(localStorage.getItem(key) ?? '[]');
+		return Array.isArray(parsed)
+			? parsed.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+			: [];
+	} catch {
+		return [];
+	}
+}
+
+function readProjects(): Project[] {
+	try {
+		const parsed: unknown = JSON.parse(localStorage.getItem(PROJECTS_KEY) ?? '[]');
+		if (!Array.isArray(parsed)) return [];
+		return parsed.filter((item): item is Project => {
+			if (!item || typeof item !== 'object') return false;
+			const candidate = item as Record<string, unknown>;
+			return (
+				typeof candidate.id === 'string' &&
+				typeof candidate.name === 'string' &&
+				typeof candidate.workspace === 'string' &&
+				typeof candidate.body === 'string' &&
+				typeof candidate.created_at_ms === 'number' &&
+				typeof candidate.updated_at_ms === 'number'
+			);
+		});
+	} catch {
+		return [];
 	}
 }
 
@@ -216,7 +252,7 @@ export class Conversation {
 
 
 export type Tab = Conversation;
-export type WorkspaceView = 'ask' | 'workspace' | 'settings';
+export type WorkspaceView = 'ask' | 'workspace' | 'settings' | 'project';
 export type WorkspacePane = 'sources' | 'context';
 
 class Session {
@@ -249,6 +285,117 @@ class Session {
 	/** Right-hand contextual inspector, shared by Ask and Workspace. */
 	inspectorOpen = $state<boolean>(false);
 	inspectorSelection = $state<InspectorSelection>(null);
+	/** Repositories shown in the local sidebar, in user-defined order. */
+	repositoryPaths = $state<string[]>(readStringList(REPOSITORIES_KEY));
+	/** Repositories intentionally hidden from the local sidebar. */
+	hiddenRepositoryPaths = $state<string[]>(readStringList(HIDDEN_REPOSITORIES_KEY));
+	/** User-created repository wikis, kept entirely on this computer. */
+	projects = $state<Project[]>(readProjects());
+	activeProjectId = $state<string | null>(null);
+
+	#writeStringList(key: string, values: string[]): void {
+		try {
+			localStorage.setItem(key, JSON.stringify(values));
+		} catch {
+			/* ignore */
+		}
+	}
+
+	#writeProjects(): void {
+		try {
+			localStorage.setItem(PROJECTS_KEY, JSON.stringify(this.projects));
+		} catch {
+			/* ignore */
+		}
+	}
+
+	/** Remember a folder explicitly opened by the user and unhide it if needed. */
+	rememberRepository(path: string | null | undefined): void {
+		const normalized = path?.trim();
+		if (!normalized) return;
+		if (this.hiddenRepositoryPaths.includes(normalized)) {
+			this.hiddenRepositoryPaths = this.hiddenRepositoryPaths.filter((item) => item !== normalized);
+			this.#writeStringList(HIDDEN_REPOSITORIES_KEY, this.hiddenRepositoryPaths);
+		}
+		if (this.repositoryPaths.includes(normalized)) return;
+		this.repositoryPaths = [...this.repositoryPaths, normalized];
+		this.#writeStringList(REPOSITORIES_KEY, this.repositoryPaths);
+	}
+
+	/** Migrate workspace paths found in archived conversations without unhiding one. */
+	rememberRepositories(paths: (string | null | undefined)[]): void {
+		const hidden = new Set(this.hiddenRepositoryPaths);
+		const additions = paths
+			.map((path) => path?.trim())
+			.filter((path): path is string => !!path && !hidden.has(path) && !this.repositoryPaths.includes(path));
+		if (!additions.length) return;
+		this.repositoryPaths = [...this.repositoryPaths, ...new Set(additions)];
+		this.#writeStringList(REPOSITORIES_KEY, this.repositoryPaths);
+	}
+
+	/** Hide a repository from navigation without deleting its conversations or files. */
+	forgetRepository(path: string): void {
+		this.repositoryPaths = this.repositoryPaths.filter((item) => item !== path);
+		if (!this.hiddenRepositoryPaths.includes(path)) {
+			this.hiddenRepositoryPaths = [...this.hiddenRepositoryPaths, path];
+		}
+		this.#writeStringList(REPOSITORIES_KEY, this.repositoryPaths);
+		this.#writeStringList(HIDDEN_REPOSITORIES_KEY, this.hiddenRepositoryPaths);
+	}
+
+	/** Place one repository before another in the local sidebar order. */
+	reorderRepositories(path: string, before: string): void {
+		if (path === before) return;
+		const next = this.repositoryPaths.filter((item) => item !== path);
+		const target = next.indexOf(before);
+		if (target < 0) return;
+		next.splice(target, 0, path);
+		this.repositoryPaths = next;
+		this.#writeStringList(REPOSITORIES_KEY, next);
+	}
+
+	get activeProject(): Project | null {
+		return this.projects.find((project) => project.id === this.activeProjectId) ?? null;
+	}
+
+	createProject(name: string, workspace: string): Project {
+		const now = Date.now();
+		const project: Project = {
+			id: `project-${uid()}`,
+			name: name.trim() || 'Untitled project',
+			workspace,
+			body: '',
+			created_at_ms: now,
+			updated_at_ms: now
+		};
+		this.projects = [project, ...this.projects];
+		this.#writeProjects();
+		this.activeProjectId = project.id;
+		this.workspaceView = 'project';
+		return project;
+	}
+
+	updateProject(id: string, patch: Partial<Pick<Project, 'name' | 'body'>>): void {
+		this.projects = this.projects.map((project) =>
+			project.id === id ? { ...project, ...patch, updated_at_ms: Date.now() } : project
+		);
+		this.#writeProjects();
+	}
+
+	openProject(id: string): void {
+		if (!this.projects.some((project) => project.id === id)) return;
+		this.activeProjectId = id;
+		this.workspaceView = 'project';
+	}
+
+	deleteProject(id: string): void {
+		this.projects = this.projects.filter((project) => project.id !== id);
+		this.#writeProjects();
+		if (this.activeProjectId === id) {
+			this.activeProjectId = null;
+			this.workspaceView = 'ask';
+		}
+	}
 
 	toggleSidebar(): void {
 		this.sidebarCollapsed = !this.sidebarCollapsed;
