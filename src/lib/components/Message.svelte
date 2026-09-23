@@ -126,7 +126,6 @@
 	{#if message.role === 'user'}
 		<span class="sr-only">You asked: </span>
 		<div class="you">
-			<div class="you-label">You</div>
 			<div class="you-copy">{message.text}</div>
 		</div>
 	{:else if message.role === 'assistant'}
@@ -188,23 +187,17 @@
 	.msg.user {
 		display: flex;
 		justify-content: flex-end;
-		padding-top: var(--space-5);
+		padding: var(--space-4) 0 var(--space-2);
 	}
 	.you {
 		max-width: min(72%, 58ch);
-		padding: var(--space-3) var(--space-4);
-		border: 1px solid var(--brand-line);
-		border-inline-end: 2px solid color-mix(in srgb, var(--brand) 42%, var(--border-strong));
-		border-radius: var(--radius-conversation);
-		background: var(--brand-wash);
-		color: var(--chat-question);
+		padding: 9px 14px 10px;
+		border-radius: var(--radius-conversation) var(--radius-conversation) var(--radius-sm) var(--radius-conversation);
+		background: var(--user-bubble);
+		color: var(--user-bubble-text);
+		font-size: var(--fs);
+		line-height: 1.48;
 		text-align: left;
-	}
-	.you-label {
-		margin-bottom: var(--space-2);
-		color: var(--text-faint);
-		font-size: var(--fs-xs);
-		font-weight: 600;
 	}
 	.you-copy {
 		white-space: pre-wrap;
