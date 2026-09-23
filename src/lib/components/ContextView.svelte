@@ -119,10 +119,6 @@
 		</div>
 	</div>
 
-	<div class="tip">
-		<Icon name="info" size={16} />
-		<span>Use context for definitions and guidance. Fella can read it, but it does not rewrite it.</span>
-	</div>
 </section>
 
 <style>
@@ -216,7 +212,7 @@
 	textarea {
 		display: block;
 		width: 100%;
-		min-height: 360px;
+		min-height: min(56vh, 620px);
 		padding: var(--space-4) 0;
 		border: 0;
 		outline: 0;
@@ -232,7 +228,7 @@
 		color: var(--text-faint);
 	}
 	.loading {
-		min-height: 360px;
+		min-height: min(56vh, 620px);
 		display: grid;
 		place-items: center;
 		color: var(--text-faint);
@@ -245,18 +241,6 @@
 	}
 	.editor-foot span:first-child {
 		color: var(--text-dim);
-	}
-	.tip {
-		display: flex;
-		align-items: flex-start;
-		gap: var(--space-2);
-		margin-top: var(--space-4);
-		color: var(--text-faint);
-		font-size: var(--fs-xs);
-	}
-	.tip :global(svg) {
-		flex: none;
-		color: var(--text-faint);
 	}
 	@media (max-width: 680px) {
 		.page-head,

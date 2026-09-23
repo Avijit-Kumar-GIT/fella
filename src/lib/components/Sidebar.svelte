@@ -404,7 +404,7 @@
 	</section>
 	<div class="sidebar-footer">
 		<button
-			class="icon-btn settings-btn"
+			class="nav-row settings-row"
 			title={`Settings (${shortcutModifier}+,)`}
 			aria-label="Settings"
 			aria-keyshortcuts="Control+Comma Meta+Comma"
@@ -414,6 +414,7 @@
 			onclick={() => session.setWorkspaceView('settings')}
 		>
 			<Icon name="settings" size={16} />
+			<span>Settings</span>
 		</button>
 	</div>
 </aside>
@@ -852,14 +853,5 @@
 		justify-content: flex-end;
 		padding: var(--space-2) var(--space-1) 0;
 		border-top: 1px solid var(--border);
-	}
-	.settings-btn {
-		flex: none;
-		width: 30px;
-		height: 30px;
-	}
-	.settings-btn.active {
-		background: color-mix(in srgb, var(--brand) 9%, var(--bg-inset));
-		color: var(--text);
 	}
 </style>

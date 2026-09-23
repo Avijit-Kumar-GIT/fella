@@ -284,16 +284,6 @@
 		display: flex;
 		height: 100%;
 	}
-	.shell::before {
-		content: '';
-		position: absolute;
-		top: 0;
-		left: 0;
-		right: 0;
-		height: 2px;
-		background: var(--brand);
-		pointer-events: none;
-	}
 	.app {
 		display: flex;
 		flex-direction: column;

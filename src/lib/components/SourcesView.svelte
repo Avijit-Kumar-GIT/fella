@@ -84,7 +84,7 @@
 			<h1 id="sources-title">Sources</h1>
 			<p class="lede">
 				{#if workspace}
-					{folderName} · {sources.length} readable file{sources.length === 1 ? '' : 's'}
+					{folderName}
 				{:else}
 					Open a folder to see what Fella can work with.
 				{/if}
@@ -103,26 +103,28 @@
 			<button class="pill primary" type="button" onclick={() => void openFolder()}>Choose a folder</button>
 		</div>
 	{:else}
-		<div class="summary" aria-label="Source summary">
-			<div class="summary-item"><strong>{sources.length}</strong><span>files</span></div>
-			<div class="summary-item"><strong>{tabularCount}</strong><span>data files</span></div>
-			<div class="summary-item"><strong>{documentCount}</strong><span>documents</span></div>
-			{#if skipped.length}<div class="summary-item warn"><strong>{skipped.length}</strong><span>skipped</span></div>{/if}
-		</div>
-		<div class="freshness" title={session.catalog.revision ?? undefined}>
-			<Icon name="check" size={16} />
-			<span>Indexed {formatIndexed(session.catalog.indexed_at_ms)}</span>
-			<span class="dot">·</span>
-			<span>Snapshot <code>{shortRevision(session.catalog.revision)}</code></span>
+		<div class="catalog-meta" aria-label="Source summary">
+			<span class="catalog-count">{sources.length} files</span>
+			<span>{tabularCount} data files</span>
+			<span>{documentCount} documents</span>
+			{#if skipped.length}<span class="catalog-warn">{skipped.length} skipped</span>{/if}
+			<span class="catalog-divider" aria-hidden="true">·</span>
+			<span class="catalog-status" title={session.catalog.revision ?? undefined}>
+				<Icon name="check" size={14} /> Indexed {formatIndexed(session.catalog.indexed_at_ms)}
+			</span>
+			<span class="catalog-snapshot">Snapshot <code>{shortRevision(session.catalog.revision)}</code></span>
 		</div>
 
 		<div class="toolbar">
+			<div class="toolbar-title">
+				<strong>Files</strong>
+				<span>{filtered.length} shown</span>
+			</div>
 			<label class="searchbox">
 				<Icon name="search" size={16} />
 				<span class="sr-only">Filter sources</span>
 				<input bind:value={query} placeholder="Filter sources…" spellcheck="false" />
 			</label>
-			<span class="result-count">{filtered.length} shown</span>
 		</div>
 
 		{#if sources.length}
@@ -140,6 +142,9 @@
 				<span class="source-icon"><Icon name={source.view ? 'table' : 'file'} size={16} /></span>
 						<span class="source-copy">
 							<strong>{source.name}</strong>
+							{#if relativePath(source.path) !== source.name}
+								<small>{relativePath(source.path)}</small>
+							{/if}
 						</span>
 						<span class="source-meta">
 							<small>{kindLabel(source.kind)}</small>
@@ -264,57 +269,35 @@
 		margin: var(--space-2) 0 0;
 		color: var(--text-dim);
 	}
-	.summary {
-		display: flex;
-		width: fit-content;
-		max-width: 100%;
-		align-items: stretch;
-		gap: var(--space-5);
-		margin-bottom: var(--space-5);
-		background: transparent;
-		border: 0;
-		border-radius: 0;
-		overflow: visible;
-	}
-	.summary-item {
-		min-width: 0;
-		display: flex;
-		flex-direction: column;
-		gap: 2px;
-		padding: 0;
-		background: transparent;
-	}
-	.summary-item + .summary-item {
-		padding-left: var(--space-5);
-		border-left: 1px solid var(--border);
-	}
-	.summary-item strong {
-		font-size: var(--fs-lg);
-		font-weight: 650;
-	}
-	.summary-item span {
-		color: var(--text-faint);
-		font-size: var(--fs-xs);
-	}
-	.summary-item.warn strong {
-		color: var(--warn);
-	}
-	.freshness {
+	.catalog-meta {
 		display: flex;
 		align-items: center;
-		gap: 6px;
-		margin: -12px 0 var(--space-4);
+		flex-wrap: wrap;
+		gap: 4px 10px;
+		margin: 0 0 var(--space-5);
 		color: var(--text-faint);
 		font-size: var(--fs-xs);
 	}
-	.freshness :global(svg) {
+	.catalog-count {
+		color: var(--text-dim);
+		font-weight: 600;
+	}
+	.catalog-warn {
+		color: var(--warn);
+	}
+	.catalog-divider {
+		color: var(--border-strong);
+	}
+	.catalog-status {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+	}
+	.catalog-status :global(svg) {
 		color: var(--ok);
 		flex: none;
 	}
-	.freshness .dot {
-		color: var(--border-strong);
-	}
-	.freshness code {
+	.catalog-snapshot code {
 		font-family: var(--mono);
 		font-size: var(--fs-xs);
 	}
@@ -324,8 +307,22 @@
 		gap: var(--space-3);
 		margin-bottom: var(--space-2);
 	}
+	.toolbar-title {
+		display: inline-flex;
+		align-items: baseline;
+		gap: var(--space-2);
+		margin-right: auto;
+	}
+	.toolbar-title strong {
+		font-size: var(--fs-sm);
+		font-weight: 650;
+	}
+	.toolbar-title span {
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+	}
 	.searchbox {
-		flex: 1;
+		flex: 0 1 360px;
 		max-width: 360px;
 		display: flex;
 		align-items: center;
@@ -351,10 +348,6 @@
 	}
 	.searchbox input::placeholder {
 		color: var(--text-faint);
-	}
-	.result-count {
-		color: var(--text-faint);
-		font-size: var(--fs-xs);
 	}
 	.source-layout {
 		display: grid;
@@ -404,6 +397,13 @@
 		white-space: nowrap;
 		font-size: var(--fs-sm);
 		font-weight: 600;
+	}
+	.source-copy small {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
 	}
 	.source-meta small,
 	.path,
@@ -657,12 +657,18 @@
 		.page-head .pill {
 			align-self: flex-start;
 		}
-		.summary {
-			width: 100%;
-			flex-wrap: wrap;
+		.catalog-meta {
+			margin-bottom: var(--space-4);
 		}
-		.summary-item {
-			flex: 1 0 40%;
+		.toolbar {
+			align-items: stretch;
+			flex-direction: column;
+		}
+		.toolbar-title {
+			margin-right: 0;
+		}
+		.searchbox {
+			max-width: none;
 		}
 		.source-layout {
 			grid-template-columns: 1fr;
