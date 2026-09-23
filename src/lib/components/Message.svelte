@@ -59,15 +59,6 @@
 	let leadHtml = $derived(renderMarkdown(composition.lead));
 	let remainderHtml = $derived(renderMarkdown(composition.remainder));
 
-	// Set when a query behind the answer still disagrees after the agent's
-	// one-shot corrective re-ask the trust gap the verification system
-	// exists to close, surfaced at the point the user actually reads it.
-	let unconfirmed = $derived(
-		message.role === 'assistant' && message.answer
-			? answerStatus(message.answer) === 'failed'
-			: undefined
-	);
-
 	// A chart is selected from evidence, independent of whether the model's text
 	// references it. Correctness shouldn't depend on a small model correctly
 	// placing a chart mention in freeform text.
@@ -151,12 +142,6 @@
 		{/if}
 		{#if split.background}
 			<div class="background">{split.background}</div>
-		{/if}
-		{#if unconfirmed}
-			<div class="unconfirmed">
-				<Icon name="alert" size={16} />
-				<span>Fella couldn't confirm this figure against the data — here's its best answer.</span>
-			</div>
 		{/if}
 		{#if hasVisualAnswer}
 			<div class="text rich answer-lead">{@html leadHtml}</div>
@@ -285,19 +270,6 @@
 	}
 	.text.pending {
 		color: var(--text-dim);
-	}
-	/* A hard-failed answer (verify's re-ask still disagreed) reads distinctly
-	   from a clean one, at the point the user actually reads it. */
-	.unconfirmed {
-		display: flex;
-		align-items: baseline;
-		gap: var(--space-2);
-		color: var(--warn);
-		font-size: var(--fs-sm);
-		margin-bottom: 4px;
-	}
-	.unconfirmed :global(svg) {
-		align-self: center;
 	}
 	.answer-visuals {
 		margin-top: var(--space-3);
