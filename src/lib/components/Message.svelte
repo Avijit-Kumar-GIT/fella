@@ -131,7 +131,7 @@
 		<div class="assistant-heading">
 			<Logo size={18} active={message.pending} />
 			<strong>Fella</strong>
-			{#if message.pending}<span>Working through the workspace</span>{/if}
+			{#if message.pending}<span class="status">Working through the workspace</span>{/if}
 		</div>
 		{#if message.plan}
 			<div class="plan">{message.plan}</div>
@@ -190,8 +190,8 @@
 	.you {
 		max-width: min(68%, 58ch);
 		padding: 0 var(--space-3) 0 0;
-		border-right: 2px solid var(--border-strong);
-		color: var(--text);
+		border-right: 2px solid color-mix(in srgb, var(--brand) 58%, var(--border-strong));
+		color: var(--chat-question);
 		text-align: right;
 		white-space: pre-wrap;
 		word-break: break-word;
@@ -207,18 +207,23 @@
 		font-weight: 650;
 		letter-spacing: 0.04em;
 		text-transform: uppercase;
-		color: var(--text-faint);
+		color: var(--chat-meta);
 	}
 	.assistant-heading {
 		display: flex;
 		align-items: center;
 		gap: var(--space-2);
 		margin-bottom: var(--space-2);
-		color: var(--text);
+		color: var(--chat-meta);
 		font-size: var(--fs-sm);
 	}
 	.assistant-heading strong {
-		font-weight: 650;
+		color: var(--chat-meta);
+		font-weight: 600;
+	}
+	.assistant-heading .status {
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
 	}
 	.text {
 		word-break: break-word;
@@ -226,12 +231,20 @@
 	.msg.assistant .text {
 		font-size: var(--fs-lg);
 		line-height: 1.6;
+		color: var(--chat-body);
+	}
+	/* Markdown emphasis is deliberately brighter, not dramatically heavier.
+	   The color step makes a finding legible in both themes without turning
+	   every bold phrase into an accent-colored badge. */
+	.msg.assistant .text :global(strong) {
+		color: var(--chat-strong);
+		font-weight: 650;
 	}
 	/* The model's one-line plan, shown dimmed while its tools run. */
 	.plan {
 		white-space: pre-wrap;
 		word-break: break-word;
-		color: var(--text-faint);
+		color: var(--chat-meta);
 		font-size: 0.95em;
 		margin-bottom: 4px;
 		font-style: italic;
@@ -240,7 +253,7 @@
 	.background {
 		white-space: pre-wrap;
 		word-break: break-word;
-		color: var(--text-faint);
+		color: var(--chat-meta);
 		font-size: 0.95em;
 		margin-bottom: 4px;
 	}
@@ -332,14 +345,15 @@
 	.msg.assistant .text :global(h3),
 	.msg.assistant .text :global(h4) {
 		font-size: 1.05em;
-		font-weight: 600;
+		color: var(--chat-strong);
+		font-weight: 650;
 		margin: 0.6em 0 0.25em;
 	}
 	.msg.assistant .text :global(blockquote) {
 		margin: 0.4em 0;
 		padding-left: 0.6em;
 		border-left: 2px solid var(--border-strong);
-		color: var(--text-dim);
+		color: var(--chat-meta);
 	}
 	/* markdown tables can't be wrapped in a scroll container (they come from
 	   @html), so let the table itself scroll. */

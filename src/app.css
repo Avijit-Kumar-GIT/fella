@@ -51,6 +51,13 @@
 	/* faint text still carries real content (status line, evidence summary,
 	   completion hints), so it holds WCAG AA (>= 4.5:1 on --bg). */
 	--text-faint: #6c6a63;
+	/* Conversation text has its own two-step reading scale. Body copy is
+	   intentionally softer than the ink used for findings and headings; the
+	   relationship is repeated with tuned values in dark mode below. */
+	--chat-body: #4d4b45;
+	--chat-strong: #1a1a17;
+	--chat-meta: #6c6a63;
+	--chat-question: #262521;
 	--accent: #1a1a17;
 	/* the one hue used outside the neutral/status palette: the primary-action
 	   pill, the empty-state glyph, the composer connected-icon, the top
@@ -115,6 +122,10 @@
 	--text: #ededec;
 	--text-dim: #8f8d88;
 	--text-faint: #838079;
+	--chat-body: #c8c7c2;
+	--chat-strong: #f1f1ee;
+	--chat-meta: #9b9992;
+	--chat-question: #ededec;
 	--accent: #ededec;
 	--brand: #008080;
 	--on-brand: #ffffff;
