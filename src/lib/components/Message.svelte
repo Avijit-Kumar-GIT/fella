@@ -3,6 +3,7 @@
 	import EvidenceBlock from './EvidenceBlock.svelte';
 	import Chart from './Chart.svelte';
 	import Icon from './Icon.svelte';
+	import Logo from './Logo.svelte';
 	import { renderMarkdown } from '$lib/markdown';
 	import { enterUp } from '$lib/motion';
 	import { answerStatus } from '$lib/verify';
@@ -92,24 +93,7 @@
 		if (answerSources.length > 1) return `Based on ${answerSources.length} sources`;
 		return message.answer?.workspace ? 'Based on this workspace' : 'Based on the available evidence';
 	});
-	let scopeDetail = $derived(
-		answerSources.length ? answerSources.join(', ') : 'The current workspace snapshot'
-	);
 	let status = $derived(message.answer ? answerStatus(message.answer) : null);
-	let statusLabel = $derived.by(() => {
-		switch (status) {
-			case 'verified':
-				return 'Checked against your data';
-			case 'needs_review':
-				return 'Needs a closer look';
-			case 'insufficient_data':
-				return 'Not enough data';
-			case 'failed':
-				return 'Could not fully check';
-			default:
-				return '';
-		}
-	});
 
 	function followupQuestions(text: string, answer: Answer): string[] {
 		const q = text.toLowerCase();
@@ -144,6 +128,11 @@
 		<div class="you">{message.text}</div>
 	{:else if message.role === 'assistant'}
 		<span class="sr-only">Fella replied: </span>
+		<div class="assistant-heading">
+			<Logo size={18} active={message.pending} />
+			<strong>Fella</strong>
+			{#if message.pending}<span>Working through the workspace</span>{/if}
+		</div>
 		{#if message.plan}
 			<div class="plan">{message.plan}</div>
 		{/if}
@@ -173,19 +162,11 @@
 					class="thinking" aria-hidden="true"></span
 				>{/if}</div>
 		{/if}
-		{#if message.answer && !message.pending}
-			<div class="answer-meta" aria-label="Answer context">
-				{#if statusLabel}
-					<span class="answer-status {status}"><span class="status-dot" aria-hidden="true"></span>{statusLabel}</span>
-				{/if}
-				<span class="answer-scope" title={scopeDetail}>{scopeLabel}</span>
-			</div>
-		{/if}
 	{:else}
 		<div class="text">{message.text}</div>
 	{/if}
 	{#if message.answer}
-		<EvidenceBlock answer={message.answer} {expanded} {ontoggle} />
+		<EvidenceBlock answer={message.answer} scope={scopeLabel} {expanded} {ontoggle} />
 		{#if showFollowups && onfollowup && followups.length}
 			<div class="followups" aria-label="Suggested follow-up questions">
 				<span class="followup-label">Continue with</span>
@@ -202,10 +183,16 @@
 		padding: var(--space-3) 0;
 	}
 	.msg.user {
+		display: flex;
+		justify-content: flex-end;
 		padding-top: var(--space-5);
 	}
 	.you {
-		color: var(--text-dim);
+		max-width: min(68%, 58ch);
+		padding: 0 var(--space-3) 0 0;
+		border-right: 2px solid var(--border-strong);
+		color: var(--text);
+		text-align: right;
 		white-space: pre-wrap;
 		word-break: break-word;
 	}
@@ -221,6 +208,17 @@
 		letter-spacing: 0.04em;
 		text-transform: uppercase;
 		color: var(--text-faint);
+	}
+	.assistant-heading {
+		display: flex;
+		align-items: center;
+		gap: var(--space-2);
+		margin-bottom: var(--space-2);
+		color: var(--text);
+		font-size: var(--fs-sm);
+	}
+	.assistant-heading strong {
+		font-weight: 650;
 	}
 	.text {
 		word-break: break-word;
@@ -282,51 +280,6 @@
 	}
 	.answer-supporting {
 		margin-top: var(--space-3);
-	}
-	.answer-meta {
-		display: flex;
-		align-items: center;
-		flex-wrap: wrap;
-		gap: 6px 12px;
-		margin-top: var(--space-3);
-		color: var(--text-faint);
-		font-size: var(--fs-xs);
-	}
-	.answer-status,
-	.answer-scope {
-		display: inline-flex;
-		align-items: center;
-		gap: 5px;
-	}
-	.answer-status {
-		color: var(--text-dim);
-	}
-	.answer-status.needs_review,
-	.answer-status.failed {
-		color: var(--warn);
-	}
-	.answer-status.insufficient_data {
-		color: var(--text-faint);
-	}
-	.answer-status .status-dot {
-		width: 5px;
-		height: 5px;
-		border-radius: 50%;
-		background: var(--ok);
-	}
-	.answer-status.needs_review .status-dot,
-	.answer-status.failed .status-dot {
-		background: var(--warn);
-	}
-	.answer-status.insufficient_data .status-dot {
-		background: var(--text-faint);
-	}
-	.answer-scope {
-		min-width: 0;
-		max-width: 100%;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
 	}
 	.followups {
 		display: flex;

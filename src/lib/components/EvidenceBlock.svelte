@@ -5,9 +5,10 @@
 
 	let {
 		answer,
+		scope = '',
 		expanded = false,
 		ontoggle
-	}: { answer: Answer; expanded?: boolean; ontoggle?: () => void } = $props();
+	}: { answer: Answer; scope?: string; expanded?: boolean; ontoggle?: () => void } = $props();
 
 	// Stable id so the toggle can point at the panel it controls.
 	const bodyId = 'evidence-' + Math.random().toString(36).slice(2, 9);
@@ -18,10 +19,10 @@
 	let status = $derived(answerStatus(answer));
 	let hasBackground = $derived(/^\s*Background:/m.test(answer.text));
 	const STATUS_LABEL: Record<VerificationStatus, string> = {
-		verified: 'verified',
+		verified: 'checked against your data',
 		needs_review: 'needs review',
-		insufficient_data: 'insufficient data',
-		failed: 'failed'
+		insufficient_data: 'not enough data',
+		failed: 'could not fully check'
 	};
 	const COMPLETE_TABLE_ROWS = 100;
 
@@ -70,12 +71,13 @@
 			<Icon name="chevron-right" size={12} />
 		</span>
 		{#if stepCount === 0}
-			Evidence · general knowledge
+			Checked context · general knowledge
 		{:else}
-			Evidence · {stepCount} step{stepCount === 1 ? '' : 's'} · {(ms / 1000).toFixed(1)}s
+			Checked workspace · {stepCount} step{stepCount === 1 ? '' : 's'} · {(ms / 1000).toFixed(1)}s
 			{#if hasBackground}<span class="bg">· background</span>{/if}
-			{#if answer.workspace}<span class="snapshot">· folder snapshot checked</span>{/if}
+			{#if answer.workspace}<span class="snapshot">· folder snapshot</span>{/if}
 		{/if}
+		{#if scope}<span class="scope">· {scope}</span>{/if}
 		<span class="status {status}">· {STATUS_LABEL[status]}</span>
 		{#if warns > 0}<span class="warn">· {warns} to check</span>{/if}
 	</button>
@@ -188,7 +190,7 @@
 		display: inline-flex;
 		align-items: center;
 		gap: var(--space-1);
-		white-space: nowrap;
+		white-space: normal;
 		letter-spacing: 0.01em;
 		font-size: var(--fs-xs);
 	}
@@ -211,6 +213,13 @@
 		color: var(--text-faint);
 	}
 	.snapshot {
+		color: var(--text-faint);
+	}
+	.scope {
+		max-width: 100%;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 		color: var(--text-faint);
 	}
 	.status.verified {

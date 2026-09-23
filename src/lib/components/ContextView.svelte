@@ -4,6 +4,7 @@
 	import { ipc, isTauri } from '$lib/ipc';
 	import { session } from '$lib/session.svelte';
 	import Icon from './Icon.svelte';
+	import DataLoader from './DataLoader.svelte';
 
 	let contents = $state('');
 	let savedContents = $state('');
@@ -82,42 +83,48 @@
 			<h1 id="context-title">Context</h1>
 			<p class="lede">A short note about your files that Fella reads before it answers.</p>
 		</div>
-		<button class="pill ghost" type="button" onclick={() => void openFolder()}>
-			<Icon name="folder" size={16} /> Change folder
-		</button>
 	</header>
 
-	<div class="editor-card">
-		<div class="editor-head">
-			<div>
-				<strong>fella.md</strong>
-				{#if path}<p>{path}</p>{/if}
+	{#if !session.catalog.workspace}
+		<div class="empty-state">
+			<div class="empty-icon"><Icon name="folder" size={20} /></div>
+			<h2>Mount a workspace to add context</h2>
+			<p>Choose a folder and Fella will keep its workspace note beside the files it understands.</p>
+			<button class="pill primary" type="button" onclick={() => void openFolder()}>Choose a folder</button>
+		</div>
+	{:else}
+		<div class="editor-card">
+			<div class="editor-head">
+				<div>
+					<strong>fella.md</strong>
+					{#if path}<p>{path}</p>{/if}
+				</div>
+				<div class="editor-actions">
+					{#if contents.trim() === ''}
+						<button class="text-button" type="button" onclick={useTemplate}>Use a template</button>
+					{/if}
+					<button class="pill primary" type="button" disabled={saving || loading || contents === savedContents} onclick={() => void save()}>
+						<Icon name="check" size={16} />
+						{saving ? 'Saving…' : 'Save'}
+					</button>
+				</div>
 			</div>
-			<div class="editor-actions">
-				{#if contents.trim() === ''}
-					<button class="text-button" type="button" onclick={useTemplate}>Use a template</button>
-				{/if}
-				<button class="pill primary" type="button" disabled={saving || loading || contents === savedContents} onclick={() => void save()}>
-					<Icon name="check" size={16} />
-					{saving ? 'Saving…' : 'Save'}
-				</button>
+			{#if loading}
+				<div class="loading"><DataLoader size={28} /><span>Loading your workspace context…</span></div>
+			{:else}
+				<textarea
+					bind:value={contents}
+					aria-label="Workspace context"
+					placeholder="Tell Fella what your files mean, which fields matter, and what it should keep in mind…"
+					oninput={scheduleSave}
+				></textarea>
+			{/if}
+			<div class="editor-foot">
+				<span>{error || (saving ? 'Saving to the workspace…' : contents === savedContents ? 'Saved locally in this folder' : 'Unsaved changes')}</span>
+				<span>Only you can edit this file.</span>
 			</div>
 		</div>
-		{#if loading}
-			<div class="loading">Loading your workspace context…</div>
-		{:else}
-			<textarea
-				bind:value={contents}
-				aria-label="Workspace context"
-				placeholder="Tell Fella what your files mean, which fields matter, and what it should keep in mind…"
-				oninput={scheduleSave}
-			></textarea>
-		{/if}
-		<div class="editor-foot">
-			<span>{error || (saving ? 'Saving to the workspace…' : contents === savedContents ? 'Saved locally in this folder' : 'Unsaved changes')}</span>
-			<span>Only you can edit this file.</span>
-		</div>
-	</div>
+	{/if}
 
 </section>
 
@@ -153,6 +160,30 @@
 	}
 	.lede {
 		margin: var(--space-2) 0 0;
+		color: var(--text-dim);
+	}
+	.empty-state {
+		max-width: 46ch;
+		margin: 10vh auto 0;
+		text-align: center;
+	}
+	.empty-icon {
+		display: grid;
+		place-items: center;
+		width: 42px;
+		height: 42px;
+		margin: 0 auto var(--space-3);
+		border-radius: 50%;
+		background: var(--bg-inset);
+		color: var(--text-faint);
+	}
+	.empty-state h2 {
+		margin: 0;
+		font-size: var(--fs-lg);
+		font-weight: 650;
+	}
+	.empty-state p {
+		margin: var(--space-2) 0 var(--space-4);
 		color: var(--text-dim);
 	}
 	.editor-card {
@@ -231,6 +262,8 @@
 		min-height: min(56vh, 620px);
 		display: grid;
 		place-items: center;
+		align-content: center;
+		gap: var(--space-3);
 		color: var(--text-faint);
 		font-size: var(--fs-sm);
 	}

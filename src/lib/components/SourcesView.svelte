@@ -90,9 +90,6 @@
 				{/if}
 			</p>
 		</div>
-		<button class="pill ghost" type="button" onclick={() => void openFolder()}>
-			<Icon name="folder" size={16} /> {workspace ? 'Change folder' : 'Choose folder'}
-		</button>
 	</header>
 
 	{#if !workspace}
@@ -653,9 +650,6 @@
 		.page-head {
 			align-items: stretch;
 			flex-direction: column;
-		}
-		.page-head .pill {
-			align-self: flex-start;
 		}
 		.catalog-meta {
 			margin-bottom: var(--space-4);

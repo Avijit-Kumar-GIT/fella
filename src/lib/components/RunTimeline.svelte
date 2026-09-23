@@ -2,6 +2,7 @@
 	import { session } from '$lib/session.svelte';
 	import type { Message, RunStep } from '$lib/types';
 	import Icon from './Icon.svelte';
+	import DataLoader from './DataLoader.svelte';
 
 	let chat = $derived(session.activeChat);
 	let steps = $derived(chat?.runSteps ?? []);
@@ -53,13 +54,22 @@
 		if (step.state === 'error') return 'Could not complete this step';
 		return 'Complete';
 	}
+
+	let hasCompletedAnswer = $derived.by(() => {
+		const answer = lastAnswer();
+		return !!answer?.answer && !answer.pending;
+	});
 </script>
 
-{#if steps.length}
+{#if steps.length && (running || !hasCompletedAnswer)}
 	<section class="run-timeline" class:active={running} aria-label="Question run">
 		<div class="timeline-head">
 			<div class="run-status">
-				<span class="run-dot" class:pulse={running} class:error={failed && !running} aria-hidden="true"></span>
+				{#if running}
+					<DataLoader size={18} />
+				{:else}
+					<span class="run-dot" class:error={failed} aria-hidden="true"></span>
+				{/if}
 				<strong>{running ? chat?.activity || 'Working through the workspace' : failed ? 'Run needs review' : evidenceSteps ? 'Workspace checked' : 'Question answered'}</strong>
 			</div>
 			<div class="timeline-tools">
@@ -142,10 +152,6 @@
 		flex: none;
 		border-radius: 50%;
 		background: var(--ok);
-	}
-	.run-dot.pulse {
-		background: var(--brand);
-		animation: run-pulse 1.4s ease-in-out infinite;
 	}
 	.run-dot.error {
 		background: var(--err);
@@ -266,9 +272,6 @@
 		background: currentColor;
 		box-shadow: 4px 0 currentColor, -4px 0 currentColor;
 		animation: mini-thinking 1.2s ease-in-out infinite;
-	}
-	@keyframes run-pulse {
-		50% { opacity: 0.42; }
 	}
 	@keyframes mini-thinking {
 		0%, 100% { opacity: 0.35; }

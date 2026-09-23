@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { ipc, isTauri } from '$lib/ipc';
 	import type { QueryResult, SourceInfo } from '$lib/types';
+	import DataLoader from './DataLoader.svelte';
 
 	let { source }: { source: SourceInfo } = $props();
 	let preview = $state<QueryResult | null>(null);
@@ -52,7 +53,7 @@
 			<span>{preview ? `${preview.rows.length} rows shown` : ''}</span>
 		</div>
 		{#if loading}
-			<p class="preview-note">Loading a few rows…</p>
+			<div class="preview-loading"><DataLoader size={18} /><span>Loading a few rows…</span></div>
 		{:else if error}
 			<p class="preview-note">{error}</p>
 		{:else if preview?.columns.length}
@@ -100,6 +101,13 @@
 	}
 	.preview-note {
 		margin: 0;
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+	}
+	.preview-loading {
+		display: inline-flex;
+		align-items: center;
+		gap: var(--space-2);
 		color: var(--text-faint);
 		font-size: var(--fs-xs);
 	}

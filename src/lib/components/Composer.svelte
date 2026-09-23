@@ -4,7 +4,6 @@
 		COMMAND_DESCRIPTIONS,
 		completionsFor,
 		dispatch,
-		openFolder,
 		resumeLastFolder,
 		steerRun,
 		stop
@@ -13,7 +12,6 @@
 	import { enterUp } from '$lib/motion';
 	import type { ContextReference, SourceInfo } from '$lib/types';
 	import Icon from './Icon.svelte';
-	import ProviderIcon from './ProviderIcon.svelte';
 
 	let { onafterrun }: { onafterrun?: () => void } = $props();
 
@@ -35,27 +33,6 @@
 				? `Ask about ${folderName}…`
 				: 'Choose a folder to ask about…'
 	);
-
-	// --- live-state chips (moved from the retired StatusBar) -------------
-	let up = $derived(session.health?.reachable ?? null);
-	let rejected = $derived(session.health?.rejected === true);
-	let providerId = $derived(session.settings?.provider ?? 'ollama-cloud');
-	let providerName = $derived(
-		session.providers.find((p) => p.id === providerId)?.display ?? providerId
-	);
-	let hasFolder = $derived(!!session.catalog.workspace);
-	let fileCount = $derived(session.catalog.sources.length);
-	// Show the effective model rather than a generic connection state. A tab can
-	// choose its own model, so this is the model the next answer will use; when
-	// no tab override exists it is the saved provider default.
-	let modelLabel = $derived(session.model || session.settings?.model || '');
-	let activityNote = $derived.by(() => {
-		if (session.activity) return session.activity;
-		if (session.busy) return 'working…';
-		if (up === false || rejected) return providerName;
-		if (session.focus) return 'focus mode · /focus to exit';
-		return null;
-	});
 
 	// --- completion menu -------------------------------------------------
 	const MAX_ITEMS = 8;
@@ -413,7 +390,7 @@
 					</span>
 				{/each}
 				<button class="context-add" type="button" aria-expanded={contextOpen} onclick={() => { contextOpen = !contextOpen; modeOpen = false; }}>
-					<Icon name="plus" size={16} /> Add context{#if contextRefs.length} · {contextRefs.length}{/if}
+					<Icon name="plus" size={16} /> Context{#if contextRefs.length} · {contextRefs.length}{/if}
 				</button>
 			</div>
 		{/if}
@@ -455,20 +432,6 @@
 					{/if}
 				</div>
 			{/if}
-			{#if !session.focus}
-				<div class="chips">
-					<span class="chip model-chip" title={modelLabel ? `${providerName} · ${modelLabel}` : providerName}>
-						<ProviderIcon providerId={providerId} size={14} />
-						{modelLabel || 'No model selected'}
-					</span>
-				{#if activityNote}
-					<span class="chip">
-						{#if session.busy}<span class="thinking" aria-hidden="true"></span>{/if}
-						{activityNote}
-					</span>
-				{/if}
-				</div>
-			{/if}
 			{#if answering && value.trim() && !pendingInput && !value.startsWith('/')}
 				<button
 					class="act send"
@@ -489,14 +452,6 @@
 			{/if}
 		</div>
 	</div>
-	{#if !session.focus}
-		<div class="below">
-			<button class="below-btn" type="button" onclick={() => void openFolder()}>
-				<Icon name="folder" size={16} />
-				{hasFolder ? `${folderName} · ${fileCount} file${fileCount === 1 ? '' : 's'}` : 'Choose a folder'}
-			</button>
-		</div>
-	{/if}
 </div>
 
 <style>
@@ -507,32 +462,6 @@
 		max-width: var(--content-max);
 		margin-inline: auto;
 		padding: var(--space-1) var(--pad) var(--space-2);
-	}
-	/* Live session state, moved here from the retired StatusBar so it reads
-	   as part of the composer instead of a separate strip -- plain inline
-	   labels, not bordered chips, so the box holds one surface, not nested
-	   ones. */
-	.chips {
-		display: flex;
-		flex-wrap: wrap;
-		align-items: center;
-		gap: var(--space-3);
-		flex: 1;
-		min-width: 0;
-	}
-	.chip {
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
-		color: var(--text-dim);
-		font-size: var(--fs-sm);
-		white-space: nowrap;
-	}
-	.model-chip {
-		color: var(--text-faint);
-	}
-	.model-chip :global(.provider-icon) {
-		opacity: 0.78;
 	}
 	.context-row {
 		display: flex;
@@ -835,28 +764,6 @@
 		align-items: center;
 		gap: var(--space-2);
 		min-height: 28px;
-	}
-	.below {
-		display: flex;
-		margin-top: var(--space-2);
-	}
-	.below-btn {
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
-		color: var(--text-dim);
-		font-size: var(--fs-xs);
-		white-space: nowrap;
-		padding: 3px 6px;
-		border-radius: var(--radius-chip);
-		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
-	}
-	.below-btn :global(svg) {
-		color: var(--text-faint);
-	}
-	.below-btn:hover {
-		background: var(--bg-inset);
-		color: var(--text-dim);
 	}
 	textarea {
 		width: 100%;
