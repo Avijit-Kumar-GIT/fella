@@ -1,12 +1,12 @@
 <script lang="ts">
-	import { session } from '$lib/session.svelte';
+	import { firstActualQuestion, session } from '$lib/session.svelte';
 	import type { Tab } from '$lib/session.svelte';
 	import Icon from './Icon.svelte';
 
-	/** A chip-sized label: a custom name if renamed, or a conversation's first line. */
+	/** A chip-sized label: a custom name if renamed, or the first actual question. */
 	function label(tab: Tab): string {
 		if (tab.title) return tab.title;
-		const first = tab.messages.find((m) => m.role === 'user');
+		const first = firstActualQuestion(tab.messages);
 		const t = first?.text.replace(/\s+/g, ' ').trim();
 		if (!t) return 'New conversation';
 		return t.length > 24 ? t.slice(0, 23) + '…' : t;

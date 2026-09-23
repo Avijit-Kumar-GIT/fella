@@ -79,9 +79,7 @@
 <section class="context-page" aria-labelledby="context-title">
 	<header class="page-head">
 		<div>
-			<p class="eyebrow">Workspace</p>
 			<h1 id="context-title">Context</h1>
-			<p class="lede">A short note about your files that Fella reads before it answers.</p>
 		</div>
 	</header>
 
@@ -145,22 +143,11 @@
 		gap: var(--space-5);
 		margin-bottom: var(--space-5);
 	}
-	.eyebrow {
-		margin: 0 0 var(--space-1);
-		color: var(--text-faint);
-		font-size: var(--fs-xs);
-		font-weight: 650;
-		letter-spacing: 0.01em;
-	}
 	h1 {
 		margin: 0;
 		font-size: clamp(24px, 3vw, 32px);
 		font-weight: 650;
 		letter-spacing: -0.03em;
-	}
-	.lede {
-		margin: var(--space-2) 0 0;
-		color: var(--text-dim);
 	}
 	.empty-state {
 		max-width: 46ch;

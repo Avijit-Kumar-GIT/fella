@@ -56,7 +56,10 @@ fn a_second_archive_for_the_same_id_reuses_the_file_and_updates_it() {
     let engine = EngineState::new(&data).unwrap();
 
     let first = engine
-        .archive_conversation("dup777", r#"{"id":"dup777","messages":[]}"#)
+        .archive_conversation(
+            "dup777",
+            r#"{"id":"dup777","messages":[{"role":"user","text":"initial"}]}"#,
+        )
         .unwrap();
     let again = engine
         .archive_conversation(
@@ -86,26 +89,52 @@ fn lists_conversations_newest_first_with_a_preview() {
         .archive_conversation(
             "older",
             r#"{"id":"older","saved_at_ms":100,"workspace":"/w1",
-                "messages":[{"role":"user","text":"How did my spending change?"},
-                            {"role":"assistant","text":"Up 12%."}]}"#,
+				"messages":[{"role":"user","text":"/files"},
+						{"role":"system","text":"catalog"},
+						{"role":"user","text":"How did my spending change?"},
+						{"role":"assistant","text":"Up 12%."}]}"#,
         )
         .unwrap();
-    engine
-        .archive_conversation(
-            "newer",
-            r#"{"id":"newer","saved_at_ms":200,"workspace":null,"messages":[]}"#,
-        )
-        .unwrap();
+    let dir = data.join("conversations");
+    fs::write(
+		dir.join("conv_200_newer.json"),
+		r#"{"id":"newer","saved_at_ms":200,"workspace":null,"messages":[{"role":"system","text":"/help output"}]}"#,
+	)
+	.unwrap();
 
     let list = engine.conversations_list();
-    assert_eq!(list.len(), 2);
-    assert_eq!(list[0].id, "newer", "newest saved_at_ms should come first");
-    assert_eq!(list[1].id, "older");
-    assert_eq!(list[1].preview, "How did my spending change?");
-    assert_eq!(list[1].message_count, 2);
-    assert_eq!(list[1].workspace.as_deref(), Some("/w1"));
-    assert_eq!(list[0].preview, "(empty conversation)");
-    assert_eq!(list[0].workspace, None);
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].id, "older");
+    assert_eq!(list[0].preview, "How did my spending change?");
+    assert_eq!(list[0].message_count, 2);
+    assert_eq!(list[0].workspace.as_deref(), Some("/w1"));
+    assert!(!dir.join("conv_200_newer.json").exists());
+
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[test]
+fn command_only_archives_are_purged() {
+    let data = scratch("conv-purge");
+    let engine = EngineState::new(&data).unwrap();
+
+    engine
+        .archive_conversation(
+            "purge-me",
+            r#"{"id":"purge-me","messages":[{"role":"user","text":"A real question"}]}"#,
+        )
+        .unwrap();
+    assert_eq!(engine.conversations_info().count, 1);
+
+    let result = engine
+        .archive_conversation(
+            "purge-me",
+            r#"{"id":"purge-me","messages":[{"role":"system","text":"/files output"}]}"#,
+        )
+        .unwrap();
+    assert!(result.is_empty());
+    assert!(engine.conversation_load("purge-me").is_err());
+    assert!(engine.conversations_list().is_empty());
 
     let _ = fs::remove_dir_all(&data);
 }
@@ -176,7 +205,10 @@ fn a_weird_id_is_sanitized_and_bad_json_is_rejected() {
     let engine = EngineState::new(&data).unwrap();
 
     let path = engine
-        .archive_conversation("../../etc/passwd", r#"{"messages":[]}"#)
+        .archive_conversation(
+            "../../etc/passwd",
+            r#"{"messages":[{"role":"user","text":"real question"}]}"#,
+        )
         .unwrap();
     let name = std::path::Path::new(&path)
         .file_name()

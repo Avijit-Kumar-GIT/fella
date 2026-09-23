@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { session } from '$lib/session.svelte';
+	import { conversationMessageCount, firstActualQuestion, session } from '$lib/session.svelte';
 	import { isTauri, win } from '$lib/ipc';
 	import { prefs, type Appearance } from '$lib/prefs.svelte';
 	import { answerStatus, hardFail } from '$lib/verify';
@@ -36,7 +36,7 @@
 	let conversationTitle = $derived.by(() => {
 		if (session.activeChat?.title) return session.activeChat.title;
 		const msgs = session.activeChat?.messages ?? [];
-		const first = msgs.find((m) => m.text?.trim());
+		const first = firstActualQuestion(msgs);
 		if (!first) return folder || 'New conversation';
 		const t = first.text.trim();
 		const clipped = t.length > 60 ? t.slice(0, 60) + '…' : t;
@@ -63,7 +63,7 @@
 			appearanceOpen = false;
 		}
 	}
-	let messageCount = $derived(session.activeChat?.messages.length ?? 0);
+	let messageCount = $derived(conversationMessageCount(session.activeChat?.messages ?? []));
 	let providerId = $derived(session.settings?.provider ?? 'ollama-cloud');
 	let providerName = $derived(
 		session.providers.find((p) => p.id === providerId)?.display ?? providerId
@@ -102,11 +102,11 @@
 
 <svelte:window onclick={onWindowClick} />
 
-<div class="titlebar" class:mac={isMac} class:focus={session.focus} data-tauri-drag-region>
+<div class="titlebar" class:mac={isMac} class:focus={session.focus} class:collapsed={!session.focus && session.sidebarCollapsed} data-tauri-drag-region>
 	{#if isMac}<span class="lights" aria-hidden="true"></span>{/if}
 
 	{#if !session.focus && session.sidebarCollapsed}
-		<span class="logo"><Logo size={16} active={session.busy} /></span>
+		<span class="logo"><Logo size={18} active={session.busy} /></span>
 		<button
 			class="navbtn"
 			data-tauri-drag-region="false"
@@ -246,6 +246,9 @@
 	.titlebar.mac {
 		padding-left: 0;
 	}
+	.titlebar.collapsed {
+		padding-left: var(--space-2);
+	}
 	.lights {
 		flex: none;
 		width: 78px;
@@ -253,6 +256,9 @@
 	.logo {
 		display: flex;
 		align-items: center;
+		justify-content: center;
+		width: 26px;
+		height: 26px;
 		flex: none;
 	}
 	.navbtn {

@@ -28,6 +28,26 @@ function uid(): string {
 	return Math.random().toString(36).slice(2, 10);
 }
 
+/** Commands are controls for the workspace, not conversational turns. Older
+ * archives may contain them as user messages, so every history surface uses
+ * this predicate when deciding what counts as a real question. */
+export function isActualQuestion(message: Pick<Message, 'role' | 'text'>): boolean {
+	return message.role === 'user' && message.text.trim().length > 0 && !message.text.trimStart().startsWith('/');
+}
+
+export function hasActualQuestion(messages: readonly Message[]): boolean {
+	return messages.some(isActualQuestion);
+}
+
+export function firstActualQuestion(messages: readonly Message[]): Message | undefined {
+	return messages.find(isActualQuestion);
+}
+
+/** The compact count shown in session history excludes command/system notes. */
+export function conversationMessageCount(messages: readonly Message[]): number {
+	return messages.filter((message) => message.role === 'assistant' || isActualQuestion(message)).length;
+}
+
 function humanToolName(tool: string): string {
 	const labels: Record<string, string> = {
 		list_files: 'Looking through the workspace',
@@ -107,8 +127,8 @@ export class Conversation {
 	/** The model this tab answers with. Empty = use the saved default. All tabs
 	 *  share one provider / login; only the model is per-tab. */
 	model = $state<string>('');
-	/** A user-given name. null = derive one from the folder + first message,
-	 *  the same as an un-renamed conversation always has. */
+	/** A user-given name. null = derive one from the folder + first actual
+	 *  question, the same as an un-renamed conversation always has. */
 	title = $state<string | null>(null);
 	/** The current question's intent. Inspect selects the stricter read-only
 	 *  tool registry and makes the source-first workflow explicit to the model. */
@@ -222,7 +242,10 @@ export class Conversation {
 
 	/** Coalesce writes while a run streams; flush immediately once it settles. */
 	persist(workspace: string | null): void {
-		if (this.messages.length === 0) return;
+		if (!hasActualQuestion(this.messages)) {
+			this.dropSnapshot();
+			return;
+		}
 		clearTimeout(this.#persistTimer);
 		if (this.busy) {
 			this.#persistTimer = setTimeout(() => this.#writeSnapshot(workspace), 250);

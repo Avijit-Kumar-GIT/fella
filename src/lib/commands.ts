@@ -1,7 +1,7 @@
 // Slash-command parsing and input dispatch for the REPL.
 
 import { ipc, isTauri, pickFolder } from './ipc';
-import { Conversation, session } from './session.svelte';
+import { Conversation, isActualQuestion, session } from './session.svelte';
 import type {
 	AskEvent,
 	ContextReference,
@@ -1107,7 +1107,7 @@ function errKind(e: unknown): string {
 function lastQuestion(): string | null {
 	for (let i = session.messages.length - 1; i >= 0; i--) {
 		const m = session.messages[i];
-		if (m.role === 'user' && !m.text.trimStart().startsWith('/')) return m.text;
+		if (isActualQuestion(m)) return m.text;
 	}
 	return null;
 }

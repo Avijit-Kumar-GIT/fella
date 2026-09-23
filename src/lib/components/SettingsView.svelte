@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { dispatch, openFolder } from '$lib/commands';
 	import { ipc, isTauri } from '$lib/ipc';
 	import { prefs, type Appearance } from '$lib/prefs.svelte';
@@ -30,7 +31,11 @@
 	];
 
 	let currentProvider = $derived(session.settings?.provider ?? '');
-	let currentModel = $derived(session.model || session.settings?.model || '');
+	let currentModel = $derived.by(() => {
+		const tabModel = session.activeChat?.model.trim() ?? '';
+		const defaultModel = session.settings?.model?.trim() ?? '';
+		return tabModel || defaultModel;
+	});
 	let provider = $derived(session.providers.find((item) => item.id === currentProvider));
 	let workspace = $derived(session.catalog.workspace);
 	let capabilities = $derived(session.settings?.capabilities ?? defaultCapabilities);
@@ -64,14 +69,16 @@
 			/* Ask remains the fallback if the engine is unavailable. */
 		}
 	}
+
+	onMount(() => {
+		if (!session.settings || session.providers.length === 0) void refreshSettings();
+	});
 </script>
 
 <section class="settings-page" aria-labelledby="settings-title">
 	<header class="page-head">
 		<div>
-			<p class="eyebrow">Fella</p>
 			<h1 id="settings-title">Settings</h1>
-			<p class="lede">Choose how Fella connects and how it looks on this computer.</p>
 		</div>
 	</header>
 
@@ -93,8 +100,8 @@
 			</div>
 			<div class="current-row">
 				<div>
-					<span class="label">Default model</span>
-					<strong>{currentModel || 'Choose a model'}</strong>
+					<span class="label">{session.activeChat?.model.trim() ? 'Conversation model' : 'Default model'}</span>
+					<strong title={currentModel}>{currentModel || 'Choose a model'}</strong>
 				</div>
 				<button class="pill ghost" type="button" onclick={() => command('/model')}>Choose</button>
 			</div>
@@ -213,21 +220,11 @@
 	.page-head {
 		margin-bottom: var(--space-5);
 	}
-	.eyebrow {
-		margin: 0 0 var(--space-1);
-		color: var(--text-faint);
-		font-size: var(--fs-xs);
-		font-weight: 650;
-	}
 	h1 {
 		margin: 0;
 		font-size: clamp(24px, 3vw, 32px);
 		font-weight: 650;
 		letter-spacing: -0.03em;
-	}
-	.lede {
-		margin: var(--space-2) 0 0;
-		color: var(--text-dim);
 	}
 	.settings-grid {
 		display: flex;

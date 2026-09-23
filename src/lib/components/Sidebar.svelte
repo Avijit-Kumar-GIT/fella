@@ -444,6 +444,9 @@
 	.logo {
 		display: flex;
 		align-items: center;
+		justify-content: center;
+		width: 26px;
+		height: 26px;
 	}
 	.header-actions {
 		display: flex;

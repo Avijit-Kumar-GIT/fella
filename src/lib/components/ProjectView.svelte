@@ -104,9 +104,8 @@
 			<div class="project-heading">
 				<span class="project-mark"><Icon name="project" size={20} /></span>
 				<div class="project-title-wrap">
-					<p class="eyebrow">Project</p>
 					<input id="project-title" class="project-title" bind:value={name} onblur={commitName} aria-label="Project name" />
-				</div>
+					</div>
 			</div>
 			<div class="project-actions">
 				<button class="pill ghost" type="button" onclick={() => void askRepository()}>
@@ -214,17 +213,8 @@
 	.project-title-wrap {
 		min-width: 0;
 	}
-	.eyebrow {
-		margin: 0;
-		color: var(--text-faint);
-		font-size: var(--fs-xs);
-		font-weight: 650;
-		letter-spacing: 0.04em;
-		text-transform: uppercase;
-	}
 	.project-title {
 		width: min(440px, 100%);
-		margin-top: 1px;
 		padding: 0;
 		border: 0;
 		background: transparent;

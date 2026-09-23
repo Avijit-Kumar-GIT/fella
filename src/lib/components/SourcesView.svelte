@@ -10,7 +10,6 @@
 
 	let sources = $derived(session.catalog.sources);
 	let workspace = $derived(session.catalog.workspace);
-	let folderName = $derived(workspace ? baseName(workspace) : 'Your workspace');
 	let skipped = $derived(session.catalog.skipped ?? []);
 	let tabularCount = $derived(
 		sources.filter((s) => ['csv', 'tsv', 'parquet', 'xlsx', 'json', 'ndjson'].includes(s.kind)).length
@@ -80,15 +79,7 @@
 <section class="sources-page" aria-labelledby="sources-title">
 	<header class="page-head">
 		<div>
-			<p class="eyebrow">Workspace</p>
 			<h1 id="sources-title">Sources</h1>
-			<p class="lede">
-				{#if workspace}
-					{folderName}
-				{:else}
-					Open a folder to see what Fella can work with.
-				{/if}
-			</p>
 		</div>
 	</header>
 
@@ -158,7 +149,7 @@
 					<div class="detail-head">
 				<div class="detail-icon"><Icon name={selected.view ? 'table' : 'file'} size={20} /></div>
 						<div>
-							<p class="eyebrow">{kindLabel(selected.kind)}</p>
+							<p class="type-label">{kindLabel(selected.kind)}</p>
 							<h2>{selected.name}</h2>
 						</div>
 					</div>
@@ -241,7 +232,7 @@
 		gap: var(--space-5);
 		margin-bottom: var(--space-5);
 	}
-	.eyebrow {
+	.type-label {
 		margin: 0 0 var(--space-1);
 		color: var(--text-faint);
 		font-size: var(--fs-xs);
@@ -261,10 +252,6 @@
 	h2 {
 		font-size: var(--fs-lg);
 		line-height: 1.3;
-	}
-	.lede {
-		margin: var(--space-2) 0 0;
-		color: var(--text-dim);
 	}
 	.catalog-meta {
 		display: flex;

@@ -65,6 +65,33 @@ pub struct ConversationSummary {
     pub title: Option<String>,
 }
 
+fn is_actual_question_message(message: &serde_json::Value) -> bool {
+    message.get("role").and_then(|role| role.as_str()) == Some("user")
+        && message
+            .get("text")
+            .and_then(|text| text.as_str())
+            .map(|text| !text.trim().is_empty() && !text.trim_start().starts_with('/'))
+            .unwrap_or(false)
+}
+
+fn has_actual_question(value: &serde_json::Value) -> bool {
+    value
+        .get("messages")
+        .and_then(|messages| messages.as_array())
+        .map(|messages| messages.iter().any(is_actual_question_message))
+        .unwrap_or(false)
+}
+
+fn conversational_message_count(messages: &[serde_json::Value]) -> usize {
+    messages
+        .iter()
+        .filter(|message| {
+            message.get("role").and_then(|role| role.as_str()) == Some("assistant")
+                || is_actual_question_message(message)
+        })
+        .count()
+}
+
 /// One row of the provider list shown by `/login` and `/auth`.
 #[derive(Debug, Serialize)]
 pub struct ProviderInfo {
@@ -438,6 +465,16 @@ impl EngineState {
                 .map(|e| e.path())
         });
 
+        // A command can leave a system note in the transcript, but it is not a
+        // conversation. If a previously archived transcript becomes command-only,
+        // remove its file instead of leaving an empty row in history.
+        if !has_actual_question(&value) {
+            if let Some(path) = existing.as_ref() {
+                let _ = std::fs::remove_file(path);
+            }
+            return Ok(String::new());
+        }
+
         let path = existing.unwrap_or_else(|| {
             let ms = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -523,44 +560,62 @@ impl EngineState {
 
     /// Every archived conversation, newest first, with enough to pick one
     /// from without knowing its id: when, what folder it was about, its
-    /// first question, and how long it ran. Best-effort a file that
-    /// doesn't parse as the expected shape is skipped, not an error, since
-    /// this is a browse list, not a data-integrity check.
+    /// first actual question, and how long it ran. Legacy command-only files
+    /// are removed while the list is read so they do not linger in history.
     pub fn conversations_list(&self) -> Vec<ConversationSummary> {
         let dir = self.data_dir.join("conversations");
         let Ok(entries) = std::fs::read_dir(&dir) else {
             return Vec::new();
         };
-        let mut out: Vec<ConversationSummary> = entries
-            .flatten()
-            .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("json"))
-            .filter_map(|e| std::fs::read_to_string(e.path()).ok())
-            .filter_map(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-            .filter_map(|v| {
-                let id = v.get("id")?.as_str()?.to_string();
-                let saved_at_ms = v.get("saved_at_ms").and_then(|x| x.as_i64()).unwrap_or(0);
-                let workspace = v
-                    .get("workspace")
-                    .and_then(|x| x.as_str())
-                    .map(str::to_string);
-                let messages = v.get("messages")?.as_array()?;
-                let preview = messages
-                    .iter()
-                    .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
-                    .and_then(|m| m.get("text")?.as_str())
-                    .map(|s| cap_chars(s, 80))
-                    .unwrap_or_else(|| "(empty conversation)".to_string());
-                let title = v.get("title").and_then(|x| x.as_str()).map(str::to_string);
-                Some(ConversationSummary {
-                    id,
-                    saved_at_ms,
-                    workspace,
-                    preview,
-                    message_count: messages.len(),
-                    title,
-                })
-            })
-            .collect();
+        let mut out = Vec::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|x| x.to_str()) != Some("json") {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
+                continue;
+            };
+            if !has_actual_question(&v) {
+                let _ = std::fs::remove_file(path);
+                continue;
+            }
+            let Some(id) = v
+                .get("id")
+                .and_then(|value| value.as_str())
+                .map(str::to_string)
+            else {
+                continue;
+            };
+            let saved_at_ms = v.get("saved_at_ms").and_then(|x| x.as_i64()).unwrap_or(0);
+            let workspace = v
+                .get("workspace")
+                .and_then(|x| x.as_str())
+                .map(str::to_string);
+            let Some(messages) = v.get("messages").and_then(|value| value.as_array()) else {
+                continue;
+            };
+            let Some(preview) = messages
+                .iter()
+                .find(|message| is_actual_question_message(message))
+                .and_then(|message| message.get("text").and_then(|text| text.as_str()))
+                .map(|s| cap_chars(s, 80))
+            else {
+                continue;
+            };
+            let title = v.get("title").and_then(|x| x.as_str()).map(str::to_string);
+            out.push(ConversationSummary {
+                id,
+                saved_at_ms,
+                workspace,
+                preview,
+                message_count: conversational_message_count(messages),
+                title,
+            });
+        }
         out.sort_by_key(|c| std::cmp::Reverse(c.saved_at_ms));
         out
     }
