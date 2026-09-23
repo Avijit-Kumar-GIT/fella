@@ -5,6 +5,7 @@
 		completionsFor,
 		dispatch,
 		resumeLastFolder,
+		selectModel,
 		steerRun,
 		stop
 	} from '$lib/commands';
@@ -12,12 +13,14 @@
 	import { enterUp } from '$lib/motion';
 	import type { ContextReference, SourceInfo } from '$lib/types';
 	import Icon from './Icon.svelte';
+	import ProviderIcon from './ProviderIcon.svelte';
 
 	let { onafterrun }: { onafterrun?: () => void } = $props();
 
 	let value = $state('');
 	let ta: HTMLTextAreaElement;
 	let contextInput = $state<HTMLInputElement>();
+	let modelInput = $state<HTMLInputElement>();
 	let wrapEl = $state<HTMLDivElement>();
 	// ↑-recall history lives on the active conversation, so each tab has its own.
 	let history = $derived(session.activeChat?.history ?? []);
@@ -40,9 +43,24 @@
 	let menuOff = $state(false); // dismissed with Esc until the text changes
 	let contextOpen = $state(false);
 	let modeOpen = $state(false);
+	let modelOpen = $state(false);
 	let contextQuery = $state('');
+	let modelQuery = $state('');
 	let mode = $derived(session.activeChat?.mode ?? 'ask');
 	let contextRefs = $derived(session.activeChat?.contextRefs ?? []);
+	let providerId = $derived(session.settings?.provider ?? '');
+	let providerName = $derived(
+		(session.providers.find((provider) => provider.id === providerId)?.display ?? providerId) || 'Provider'
+	);
+	let currentModel = $derived(session.model.trim());
+	let modelOptions = $derived.by(() => {
+		const available = new Set(session.health?.models ?? []);
+		if (currentModel) available.add(currentModel);
+		const query = modelQuery.trim().toLowerCase();
+		return [...available]
+			.filter((model) => !query || model.toLowerCase().includes(query))
+			.sort((a, b) => a.localeCompare(b));
+	});
 	let contextSources = $derived.by((): SourceInfo[] => {
 		const q = contextQuery.trim().toLowerCase();
 		return session.catalog.sources
@@ -60,6 +78,7 @@
 	});
 	$effect(() => {
 		if (contextOpen) queueMicrotask(() => contextInput?.focus());
+		if (modelOpen) queueMicrotask(() => modelInput?.focus());
 	});
 
 	let pendingInput = $derived(!!session.pendingKey);
@@ -166,6 +185,13 @@
 		}
 		if (modeOpen && e.key === 'Escape') {
 			modeOpen = false;
+			e.preventDefault();
+			e.stopPropagation();
+			return;
+		}
+		if (modelOpen && e.key === 'Escape') {
+			modelOpen = false;
+			modelQuery = '';
 			e.preventDefault();
 			e.stopPropagation();
 			return;
@@ -293,10 +319,19 @@
 		modeOpen = false;
 	}
 
+	async function chooseModel(next: string): Promise<void> {
+		if (!(await selectModel(next))) return;
+		modelOpen = false;
+		modelQuery = '';
+		ta?.focus();
+	}
+
 	function onWindowClick(e: MouseEvent): void {
 		if (!wrapEl?.contains(e.target as Node)) {
 			contextOpen = false;
 			modeOpen = false;
+			modelOpen = false;
+			modelQuery = '';
 		}
 	}
 </script>
@@ -320,7 +355,7 @@
 								<span class="context-icon"><Icon name={source.view ? 'table' : 'file'} size={16} /></span>
 								<span class="context-copy"><strong>{source.name}</strong><small>{sourceDetail(source)}</small></span>
 							</button>
-							<button class="context-inspect" type="button" aria-label={`Inspect ${source.name}`} title="Inspect source" onclick={() => inspectSource(source)}>
+							<button class="context-inspect" type="button" aria-label={`View details for ${source.name}`} title="View source details" onclick={() => inspectSource(source)}>
 								<Icon name="info" size={16} />
 							</button>
 						</div>
@@ -344,7 +379,7 @@
 			<p class="context-hint">Add a source or field to guide your next question.</p>
 		</div>
 	{/if}
-	{#if menuOpen && !contextOpen && !modeOpen}
+	{#if menuOpen && !contextOpen && !modeOpen && !modelOpen}
 		<ul
 			class="menu"
 			id="composer-completions"
@@ -385,12 +420,19 @@
 				{#each contextRefs as ref (ref.kind + ':' + ref.key)}
 					<span class="ref-pill" title={ref.detail ?? ref.label}>
 							<Icon name={ref.kind === 'source' ? 'file' : 'table'} size={12} />
-							<span>{ref.label}</span>
-							<button type="button" aria-label={`Remove ${ref.label} from context`} onclick={() => removeReference(ref)}><Icon name="x" size={12} /></button>
+						<span>{ref.label}</span>
+						<button type="button" aria-label={`Remove ${ref.label} from this question`} onclick={() => removeReference(ref)}><Icon name="x" size={12} /></button>
 					</span>
 				{/each}
-				<button class="context-add" type="button" aria-expanded={contextOpen} onclick={() => { contextOpen = !contextOpen; modeOpen = false; }}>
-					<Icon name="plus" size={16} /> Context{#if contextRefs.length} · {contextRefs.length}{/if}
+				<button
+					class="context-add"
+					type="button"
+					aria-label="Add a source or field to this question"
+					title="Add a source or field to this question"
+					aria-expanded={contextOpen}
+					onclick={() => { contextOpen = !contextOpen; modeOpen = false; modelOpen = false; modelQuery = ''; }}
+				>
+					<Icon name="plus" size={16} /> Add source{#if contextRefs.length} · {contextRefs.length}{/if}
 				</button>
 			</div>
 		{/if}
@@ -402,10 +444,10 @@
 			autocapitalize="off"
 			autocomplete="off"
 			role="combobox"
-			aria-expanded={menuOpen && !contextOpen && !modeOpen}
+			aria-expanded={menuOpen && !contextOpen && !modeOpen && !modelOpen}
 			aria-controls="composer-completions"
 			aria-autocomplete="list"
-			aria-activedescendant={menuOpen && !contextOpen && !modeOpen && menuSel >= 0 ? 'composer-opt-' + menuSel : undefined}
+			aria-activedescendant={menuOpen && !contextOpen && !modeOpen && !modelOpen && menuSel >= 0 ? 'composer-opt-' + menuSel : undefined}
 			aria-label={folderName ? `Ask about ${folderName}` : 'Ask a question'}
 			{placeholder}
 			oninput={onInput}
@@ -415,7 +457,7 @@
 		<div class="bottom-row">
 			{#if !session.focus}
 				<div class="mode-wrap">
-					<button class="mode-trigger" type="button" aria-expanded={modeOpen} onclick={() => { modeOpen = !modeOpen; contextOpen = false; }}>
+					<button class="mode-trigger" type="button" aria-expanded={modeOpen} onclick={() => { modeOpen = !modeOpen; contextOpen = false; modelOpen = false; modelQuery = ''; }}>
 						<span class="mode-mark" class:inspect={mode === 'inspect'}></span>
 						{mode === 'inspect' ? 'Check data' : 'Ask'}
 						<Icon name="chevron-right" size={12} />
@@ -431,6 +473,69 @@
 						</div>
 					{/if}
 				</div>
+				{#if !pendingInput}
+					<div class="model-wrap">
+						<button
+							class="model-trigger"
+							type="button"
+							aria-expanded={modelOpen}
+							aria-haspopup="dialog"
+							title={currentModel ? `Model: ${currentModel}` : 'Choose a model'}
+							onclick={() => { modelOpen = !modelOpen; contextOpen = false; modeOpen = false; if (!modelOpen) modelQuery = ''; }}
+						>
+							{#if providerId}<ProviderIcon providerId={providerId} size={14} />{/if}
+							<span class="model-name" class:empty={!currentModel}>{currentModel || 'Choose model'}</span>
+							<Icon name="chevron-right" size={12} />
+						</button>
+						{#if modelOpen}
+							<div class="model-menu" role="dialog" aria-label="Choose a model" transition:enterUp>
+								<div class="model-menu-head">
+									<strong>Model</strong>
+									<small>{providerName}</small>
+								</div>
+								<label class="model-search">
+									<Icon name="search" size={14} />
+									<span class="sr-only">Find a model</span>
+									<input
+										bind:this={modelInput}
+										bind:value={modelQuery}
+										placeholder="Find a model…"
+										spellcheck="false"
+										onkeydown={(event) => {
+											if (event.key === 'Escape') {
+												modelOpen = false;
+												modelQuery = '';
+												event.preventDefault();
+											}
+										}}
+									/>
+								</label>
+								{#if modelOptions.length}
+									<div class="model-list" role="listbox" aria-label="Available models">
+										{#each modelOptions as modelOption (modelOption)}
+											<button
+												class="model-option"
+												class:selected={modelOption === currentModel}
+												type="button"
+												role="option"
+												aria-selected={modelOption === currentModel}
+												onclick={() => void chooseModel(modelOption)}
+											>
+												<span>{modelOption}</span>
+												{#if modelOption === currentModel}<Icon name="check" size={14} />{/if}
+											</button>
+										{/each}
+									</div>
+								{:else}
+									<p class="model-empty">No models available from {providerName}. Refresh the connection in Settings.</p>
+								{/if}
+								<button class="model-settings" type="button" onclick={() => { modelOpen = false; session.setWorkspaceView('settings'); }}>
+									<Icon name="settings" size={14} /> Provider settings
+								</button>
+							</div>
+						{/if}
+					</div>
+				{/if}
 			{/if}
 			{#if answering && value.trim() && !pendingInput && !value.startsWith('/')}
 				<button
@@ -593,6 +698,149 @@
 	.mode-menu small {
 		color: var(--text-faint);
 		font-size: var(--fs-xs);
+	}
+	.model-wrap {
+		position: relative;
+		min-width: 0;
+		flex: none;
+	}
+	.model-trigger {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		min-width: 0;
+		max-width: min(260px, 32vw);
+		padding: 4px 6px;
+		border-radius: var(--radius-chip);
+		color: var(--text-dim);
+		font-size: var(--fs-xs);
+		font-weight: 500;
+		white-space: nowrap;
+	}
+	.model-trigger:hover,
+	.model-trigger[aria-expanded='true'] {
+		background: var(--bg-inset);
+		color: var(--text);
+	}
+	.model-trigger > :global(svg) {
+		transform: rotate(90deg);
+		color: var(--text-faint);
+	}
+	.model-name {
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+	.model-name.empty {
+		color: var(--text-faint);
+	}
+	.model-menu {
+		position: absolute;
+		bottom: calc(100% + 8px);
+		left: -6px;
+		z-index: 22;
+		width: min(300px, calc(100vw - 48px));
+		padding: var(--space-2);
+		border: 1px solid var(--border);
+		border-radius: var(--radius);
+		background: var(--bg-raised);
+		box-shadow: var(--shadow-pop);
+	}
+	.model-menu-head {
+		display: flex;
+		align-items: baseline;
+		justify-content: space-between;
+		gap: var(--space-2);
+		padding: 2px var(--space-2) var(--space-2);
+	}
+	.model-menu-head strong {
+		font-size: var(--fs-sm);
+		font-weight: 600;
+	}
+	.model-menu-head small {
+		max-width: 16ch;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+	}
+	.model-search {
+		display: flex;
+		align-items: center;
+		gap: 7px;
+		margin-bottom: var(--space-2);
+		padding: 6px 8px;
+		border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
+		color: var(--text-faint);
+	}
+	.model-search:focus-within {
+		border-color: var(--link);
+		box-shadow: var(--focus-ring);
+	}
+	.model-search input {
+		min-width: 0;
+		width: 100%;
+		border: 0;
+		outline: 0;
+		background: transparent;
+		color: var(--text);
+		font: inherit;
+		font-size: var(--fs-sm);
+	}
+	.model-search input::placeholder {
+		color: var(--text-faint);
+	}
+	.model-list {
+		max-height: min(280px, 38vh);
+		overflow: auto;
+	}
+	.model-option {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: var(--space-2);
+		width: 100%;
+		padding: 7px 8px;
+		border-radius: var(--radius-chip);
+		text-align: left;
+		font-family: var(--mono);
+		font-size: var(--fs-xs);
+	}
+	.model-option:hover,
+	.model-option.selected {
+		background: var(--bg-inset);
+	}
+	.model-option span {
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.model-option :global(svg) {
+		flex: none;
+		color: var(--brand);
+	}
+	.model-empty {
+		margin: var(--space-3) var(--space-2);
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+	}
+	.model-settings {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		width: 100%;
+		margin-top: var(--space-2);
+		padding: var(--space-2);
+		border-top: 1px solid var(--border);
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+		text-align: left;
+	}
+	.model-settings:hover {
+		color: var(--text);
 	}
 	.context-menu {
 		position: absolute;

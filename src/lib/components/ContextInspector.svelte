@@ -80,13 +80,13 @@
 	}
 </script>
 
-<aside class="inspector" aria-label="Context inspector">
+<aside class="inspector" aria-label="Details panel">
 	<header class="inspector-head">
 		<div>
-			<p class="eyebrow">Inspector</p>
+			<p class="eyebrow">Details</p>
 			<h2>{source?.name ?? (evidence ? 'Run step' : 'Answer details')}</h2>
 		</div>
-		<button class="close" type="button" aria-label="Close inspector" title="Close inspector" onclick={() => session.closeInspector()}>
+		<button class="close" type="button" aria-label="Close details" title="Close details" onclick={() => session.closeInspector()}>
 			<Icon name="x" size={16} />
 		</button>
 	</header>

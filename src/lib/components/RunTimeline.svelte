@@ -91,7 +91,14 @@
 		{#if expanded}
 			<div class="steps">
 				{#each visibleSteps as step, i (step.id)}
-					<button class="step" class:clickable={!!lastAnswer()} type="button" onclick={() => inspect(step, i)}>
+					<button
+						class="step"
+						class:clickable={!!lastAnswer()}
+						type="button"
+						aria-label={lastAnswer() ? `${step.label}. View details` : step.label}
+						title={lastAnswer() ? 'View details' : undefined}
+						onclick={() => inspect(step, i)}
+					>
 						<span class="step-mark" class:running={step.state === 'running'} class:error={step.state === 'error'}>
 							{#if step.state === 'complete'}
 								<Icon name="check" size={12} />

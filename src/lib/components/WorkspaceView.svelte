@@ -25,8 +25,8 @@
 			aria-current={pane === 'context' ? 'page' : undefined}
 			onclick={() => session.setWorkspacePane('context')}
 		>
-			<Icon name="file" size={16} />
-			<span>Context</span>
+			<Icon name="bookmark" size={16} />
+			<span>Guide</span>
 		</button>
 	</nav>
 

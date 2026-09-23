@@ -2,13 +2,15 @@
 	import type { Answer, EvidenceItem, VerificationStatus } from '$lib/types';
 	import Icon from './Icon.svelte';
 	import { answerStatus } from '$lib/verify';
+	import { session } from '$lib/session.svelte';
 
 	let {
 		answer,
 		scope = '',
 		expanded = false,
-		ontoggle
-	}: { answer: Answer; scope?: string; expanded?: boolean; ontoggle?: () => void } = $props();
+		ontoggle,
+		messageId = ''
+	}: { answer: Answer; scope?: string; expanded?: boolean; ontoggle?: () => void; messageId?: string } = $props();
 
 	// Stable id so the toggle can point at the panel it controls.
 	const bodyId = 'evidence-' + Math.random().toString(36).slice(2, 9);
@@ -58,29 +60,40 @@
 	function sourceLabel(e: EvidenceItem): string {
 		return (e.sources ?? []).map((s) => `${s.source} (${s.table})`).join(', ');
 	}
+
+	function openDetails(): void {
+		if (messageId) session.openInspector({ kind: 'answer', messageId });
+	}
 </script>
 
 <div class="evidence">
-	<button
-		class="summary"
-		onclick={ontoggle}
-		aria-expanded={expanded}
-		aria-controls={bodyId}
-	>
-		<span class="caret" class:open={expanded} aria-hidden="true">
-			<Icon name="chevron-right" size={12} />
-		</span>
-		{#if stepCount === 0}
-			Checked context · general knowledge
-		{:else}
-			Checked workspace · {stepCount} step{stepCount === 1 ? '' : 's'} · {(ms / 1000).toFixed(1)}s
-			{#if hasBackground}<span class="bg">· background</span>{/if}
-			{#if answer.workspace}<span class="snapshot">· folder snapshot</span>{/if}
+	<div class="evidence-head">
+		<button
+			class="summary"
+			onclick={ontoggle}
+			aria-expanded={expanded}
+			aria-controls={bodyId}
+		>
+			<span class="caret" class:open={expanded} aria-hidden="true">
+				<Icon name="chevron-right" size={12} />
+			</span>
+			{#if stepCount === 0}
+				Answered from general knowledge
+			{:else}
+				Checked workspace · {stepCount} step{stepCount === 1 ? '' : 's'} · {(ms / 1000).toFixed(1)}s
+				{#if hasBackground}<span class="bg">· background</span>{/if}
+				{#if answer.workspace}<span class="snapshot">· folder snapshot</span>{/if}
+			{/if}
+			{#if scope}<span class="scope">· {scope}</span>{/if}
+			<span class="status {status}">· {STATUS_LABEL[status]}</span>
+			{#if warns > 0}<span class="warn">· {warns} to check</span>{/if}
+		</button>
+		{#if messageId}
+			<button class="details-link" type="button" aria-label="Open answer details" onclick={openDetails}>
+				Details <Icon name="info" size={12} />
+			</button>
 		{/if}
-		{#if scope}<span class="scope">· {scope}</span>{/if}
-		<span class="status {status}">· {STATUS_LABEL[status]}</span>
-		{#if warns > 0}<span class="warn">· {warns} to check</span>{/if}
-	</button>
+	</div>
 
 	{#if expanded}
 		<div class="body" id={bodyId}>
@@ -182,7 +195,15 @@
 		border-top: 1px solid var(--border);
 		font-size: var(--fs-sm);
 	}
+	.evidence-head {
+		display: flex;
+		align-items: baseline;
+		justify-content: space-between;
+		gap: var(--space-3);
+	}
 	.summary {
+		min-width: 0;
+		flex: 1;
 		border: none;
 		padding: 1px 0;
 		color: var(--text-dim);
@@ -193,6 +214,18 @@
 		white-space: normal;
 		letter-spacing: 0.01em;
 		font-size: var(--fs-xs);
+	}
+	.details-link {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		flex: none;
+		padding: 1px 0;
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+	}
+	.details-link:hover {
+		color: var(--text);
 	}
 	.summary:hover {
 		background: transparent;

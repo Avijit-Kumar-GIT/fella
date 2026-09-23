@@ -317,12 +317,12 @@
 										class="repository-tool"
 										class:active={repo.active && session.workspaceView === 'workspace' && session.workspacePane === 'context'}
 										type="button"
-										aria-label="Context"
-										title={`Context (${shortcutModifier}+Shift+C)`}
+										aria-label="Guide"
+										title={`Guide (${shortcutModifier}+Shift+C)`}
 										onclick={() => void openRepositoryPane(repo, 'context')}
 									>
-										<Icon name="file" size={14} />
-										<span>Context</span>
+										<Icon name="bookmark" size={14} />
+										<span>Guide</span>
 									</button>
 								</div>
 							{/if}

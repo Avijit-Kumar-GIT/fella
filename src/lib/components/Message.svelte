@@ -166,7 +166,7 @@
 		<div class="text">{message.text}</div>
 	{/if}
 	{#if message.answer}
-		<EvidenceBlock answer={message.answer} scope={scopeLabel} {expanded} {ontoggle} />
+		<EvidenceBlock answer={message.answer} messageId={message.id} scope={scopeLabel} {expanded} {ontoggle} />
 		{#if showFollowups && onfollowup && followups.length}
 			<div class="followups" aria-label="Suggested follow-up questions">
 				<span class="followup-label">Continue with</span>

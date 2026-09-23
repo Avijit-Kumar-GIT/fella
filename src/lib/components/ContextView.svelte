@@ -79,14 +79,14 @@
 <section class="context-page" aria-labelledby="context-title">
 	<header class="page-head">
 		<div>
-			<h1 id="context-title">Context</h1>
+			<h1 id="context-title">Guide</h1>
 		</div>
 	</header>
 
 	{#if !session.catalog.workspace}
 		<div class="empty-state">
 			<div class="empty-icon"><Icon name="folder" size={20} /></div>
-			<h2>Mount a workspace to add context</h2>
+			<h2>Mount a workspace to write its guide</h2>
 			<p>Choose a folder and Fella will keep its workspace note beside the files it understands.</p>
 			<button class="pill primary" type="button" onclick={() => void openFolder()}>Choose a folder</button>
 		</div>
@@ -108,12 +108,12 @@
 				</div>
 			</div>
 			{#if loading}
-				<div class="loading"><DataLoader size={28} /><span>Loading your workspace context…</span></div>
+				<div class="loading"><DataLoader size={28} /><span>Loading your workspace guide…</span></div>
 			{:else}
 				<textarea
 					bind:value={contents}
-					aria-label="Workspace context"
-					placeholder="Tell Fella what your files mean, which fields matter, and what it should keep in mind…"
+					aria-label="Workspace guide"
+					placeholder="Tell Fella what these files mean, which fields matter, and what it should keep in mind…"
 					oninput={scheduleSave}
 				></textarea>
 			{/if}

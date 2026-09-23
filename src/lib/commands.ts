@@ -16,7 +16,7 @@ showing the exact steps it took. You never need these commands, but here they ar
 
   Ask / Inspect     choose the normal answer flow or a stricter source-first,
                    read-only inspection flow from the composer
-  + Context / @     attach a source or field to your next question
+  + Add source / @  attach a source or field to your next question
 
   /open <path>     choose the folder Fella looks at
   /files           see what Fella found in your folder
@@ -30,7 +30,7 @@ showing the exact steps it took. You never need these commands, but here they ar
   /model           see or change which model answers
   /reindex         check the folder again for new or changed files
   /memory          see what Fella has learned about this folder (/memory forget to clear)
-  /context         open fella.md, where you tell Fella about your files
+  /context         open the workspace guide (fella.md)
   /update          check for a newer version of Fella and install it
   /mcp             experimental and inert; no connectors are enabled
   /tab             open another conversation in a new tab
@@ -83,7 +83,7 @@ export const COMMAND_DESCRIPTIONS: Record<string, string> = {
 	'/model': 'see or change which model answers',
 	'/reindex': 'check the folder again for new or changed files',
 	'/memory': 'see what Fella has learned about this folder',
-	'/context': 'open fella.md, where you tell Fella about your files',
+	'/context': 'open the workspace guide (fella.md)',
 	'/update': 'check for a newer version of Fella and install it',
 	'/mcp': 'experimental and inert; no connectors are enabled',
 	'/tab': 'open another conversation in a new tab',
@@ -308,6 +308,28 @@ export async function dispatch(raw: string): Promise<void> {
 	const conv = session.ensureChat();
 	conv.addUser(text);
 	await ask(buildQuestion(text, conv), conv);
+}
+
+/** Change the active conversation's model from a UI picker without writing a
+ * slash command into the transcript. The selected model is also remembered as
+ * the default for new conversations, matching `/model <name>`. */
+export async function selectModel(model: string): Promise<boolean> {
+	const next = model.trim();
+	if (!next) return false;
+
+	const conv = session.ensureChat();
+	const previous = conv.model;
+	conv.model = next;
+	if (!isTauri()) return true;
+
+	try {
+		session.settings = await ipc.setSettings({ model: next });
+		return true;
+	} catch (e) {
+		conv.model = previous;
+		session.addSystem(`Couldn't choose ${next}: ${errMsg(e)}`);
+		return false;
+	}
 }
 
 /** Turn the small UI context selection into explicit model guidance. The
