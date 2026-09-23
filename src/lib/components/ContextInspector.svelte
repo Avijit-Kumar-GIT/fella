@@ -1,15 +1,9 @@
 <script lang="ts">
 	import { session } from '$lib/session.svelte';
-	import type { EvidenceItem, SourceInfo } from '$lib/types';
+	import type { EvidenceItem } from '$lib/types';
 	import Icon from './Icon.svelte';
-	import SourcePreview from './SourcePreview.svelte';
 
 	let selection = $derived(session.inspectorSelection);
-	let workspace = $derived(session.catalog.workspace);
-	let source = $derived.by((): SourceInfo | null => {
-		if (selection?.kind !== 'source') return null;
-		return session.catalog.sources.find((item) => item.path === selection.path) ?? null;
-	});
 	let answerMessage = $derived.by(() => {
 		if (selection?.kind !== 'answer') return null;
 		return session.activeChat?.messages.find((message) => message.id === selection.messageId) ?? null;
@@ -24,50 +18,8 @@
 		return answerMessage.answer.evidence[selection.stepIndex ?? -1] ?? null;
 	});
 
-	function relativePath(path: string): string {
-		if (!workspace) return path;
-		const root = workspace.replace(/[/\\]+$/, '');
-		if (path.startsWith(root + '/') || path.startsWith(root + '\\')) {
-			return path.slice(root.length + 1).replace(/\\/g, '/');
-		}
-		return path;
-	}
-
 	function baseName(path: string): string {
 		return path.replace(/[/\\]+$/, '').split(/[/\\]/).pop() ?? path;
-	}
-
-	function kindLabel(item: SourceInfo): string {
-		return item.kind.toUpperCase();
-	}
-
-	function formatBytes(bytes: number): string {
-		if (!Number.isFinite(bytes) || bytes < 1024) return `${Math.max(0, bytes || 0)} B`;
-		const units = ['KB', 'MB', 'GB'];
-		let value = bytes / 1024;
-		let unit = units[0];
-		for (let i = 1; value >= 1024 && i < units.length; i++) {
-			value /= 1024;
-			unit = units[i];
-		}
-		return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${unit}`;
-	}
-
-	function useSource(): void {
-		if (!source) return;
-		session.addContextReference({
-			kind: 'source',
-			key: source.path,
-			label: source.name,
-			detail: relativePath(source.path)
-		});
-		session.setWorkspaceView('ask');
-		session.closeInspector();
-	}
-
-	function openSourcePage(): void {
-		session.closeInspector();
-		session.setWorkspacePane('sources');
 	}
 
 	function answerStatus(): string {
@@ -84,7 +36,7 @@
 	<header class="inspector-head">
 		<div>
 			<p class="eyebrow">Details</p>
-			<h2>{source?.name ?? (evidence ? 'Run step' : 'Answer details')}</h2>
+			<h2>{evidence ? 'Run step' : 'Answer details'}</h2>
 		</div>
 		<button class="close" type="button" aria-label="Close details" title="Close details" onclick={() => session.closeInspector()}>
 			<Icon name="x" size={16} />
@@ -92,32 +44,7 @@
 	</header>
 
 	<div class="inspector-body">
-		{#if source}
-			<div class="object-mark"><Icon name={source.view ? 'table' : 'file'} size={20} /></div>
-			<p class="type-label">{kindLabel(source)}</p>
-			<p class="path" title={source.path}>{relativePath(source.path)}</p>
-			<div class="facts">
-				<div><span>Size</span><strong>{formatBytes(source.size_bytes)}</strong></div>
-				<div><span>Rows</span><strong>{source.row_count == null ? '—' : source.row_count.toLocaleString()}</strong></div>
-				<div><span>Fields</span><strong>{source.columns?.length ?? '—'}</strong></div>
-			</div>
-			{#if source.synopsis}<p class="description">{source.synopsis}</p>{/if}
-			{#if source.note}<div class="note"><span>Ingest note</span>{source.note}</div>{/if}
-			<SourcePreview source={source} />
-			{#if source.columns?.length}
-				<div class="section">
-					<div class="section-title"><span>Fields</span><span>{source.columns.length}</span></div>
-					{#each source.columns.slice(0, 12) as column (column.name)}
-						<div class="field-row"><code>{column.name}</code><small>{column.type}</small></div>
-					{/each}
-					{#if source.columns.length > 12}<p class="muted">+ {source.columns.length - 12} more fields</p>{/if}
-				</div>
-			{/if}
-			<div class="actions">
-			<button class="pill primary" type="button" onclick={useSource}><Icon name="plus" size={16} /> Use in Ask</button>
-				<button class="pill ghost" type="button" onclick={openSourcePage}>Open Sources</button>
-			</div>
-		{:else if answerMessage?.answer}
+		{#if answerMessage?.answer}
 			<div class="answer-state"><span class="status-dot"></span><strong>{answerStatus()}</strong></div>
 			{#if answerMessage.answer.workspace?.path}
 				<p class="path" title={answerMessage.answer.workspace.path}><Icon name="folder" size={12} /> {baseName(answerMessage.answer.workspace.path)}</p>
@@ -141,12 +68,6 @@
 				{#each answerMessage.answer.verification as check (check.label)}
 					<div class="check-row"><Icon name={check.ok ? 'check' : 'alert'} size={12} /><span>{check.label}</span></div>
 				{/each}
-			</div>
-		{:else}
-			<div class="empty-inspector">
-				<div class="object-mark"><Icon name="info" size={20} /></div>
-				<strong>Nothing selected yet</strong>
-					<p>Choose a source or run step to see its shape and provenance here.</p>
 			</div>
 		{/if}
 	</div>
@@ -205,17 +126,6 @@
 		overflow: auto;
 		padding: var(--space-5) var(--space-4);
 	}
-	.object-mark {
-		display: grid;
-		place-items: center;
-		width: 42px;
-		height: 42px;
-		margin-bottom: var(--space-3);
-		border: 1px solid var(--border);
-		border-radius: var(--radius);
-		background: var(--bg-inset);
-		color: var(--text-dim);
-	}
 	.type-label {
 		font-size: 10px;
 	}
@@ -231,47 +141,10 @@
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
-	.facts {
-		display: grid;
-		grid-template-columns: repeat(3, 1fr);
-		gap: var(--space-2);
-		margin-bottom: var(--space-4);
-	}
-	.facts div {
-		display: flex;
-		flex-direction: column;
-		gap: 2px;
-		padding-top: var(--space-2);
-		border-top: 1px solid var(--border);
-	}
-	.facts span {
-		color: var(--text-faint);
-		font-size: 10.5px;
-	}
-	.facts strong {
-		font-size: var(--fs-sm);
-		font-weight: 600;
-	}
 	.description {
 		margin: 0 0 var(--space-4);
 		color: var(--text-dim);
 		font-size: var(--fs-sm);
-	}
-	.note {
-		margin-bottom: var(--space-4);
-		padding: var(--space-2) var(--space-3);
-		border-left: 2px solid var(--warn);
-		background: var(--bg-inset);
-		color: var(--text-dim);
-		font-size: var(--fs-sm);
-	}
-	.note span {
-		display: block;
-		margin-bottom: 2px;
-		color: var(--warn);
-		font-size: 10px;
-		font-weight: 650;
-		letter-spacing: 0.01em;
 	}
 	.section {
 		margin-top: var(--space-4);
@@ -290,48 +163,17 @@
 		color: var(--text-faint);
 		font-weight: 500;
 	}
-	.field-row,
 	.check-row {
 		display: flex;
 		align-items: center;
-		justify-content: space-between;
 		gap: var(--space-2);
 		padding: 4px 0;
 		font-size: var(--fs-xs);
-	}
-	.field-row code {
-		min-width: 0;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-	.field-row small {
-		flex: none;
-		color: var(--text-faint);
-		font-family: var(--mono);
-		font-size: 10px;
-	}
-	.check-row {
 		justify-content: flex-start;
 		color: var(--text-dim);
 	}
 	.check-row :global(svg) {
 		color: var(--ok);
-	}
-	.muted {
-		margin: var(--space-2) 0 0;
-		color: var(--text-faint);
-		font-size: var(--fs-xs);
-	}
-	.actions {
-		display: flex;
-		flex-wrap: wrap;
-		gap: var(--space-2);
-		margin-top: var(--space-5);
-	}
-	.actions .pill {
-		font-size: var(--fs-xs);
-		padding: 6px 10px;
 	}
 	.answer-state {
 		display: flex;
@@ -407,24 +249,6 @@
 		margin-top: var(--space-2);
 		color: var(--err);
 		font-size: var(--fs-xs);
-	}
-	.empty-inspector {
-		display: flex;
-		flex-direction: column;
-		align-items: flex-start;
-		padding-top: var(--space-6);
-		color: var(--text-dim);
-	}
-	.empty-inspector .object-mark {
-		margin-bottom: var(--space-4);
-	}
-	.empty-inspector strong {
-		color: var(--text);
-		font-size: var(--fs-lg);
-	}
-	.empty-inspector p {
-		margin: var(--space-2) 0;
-		font-size: var(--fs-sm);
 	}
 	@keyframes inspector-in {
 		from { opacity: 0; transform: translateX(10px); }

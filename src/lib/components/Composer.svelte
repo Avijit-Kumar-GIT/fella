@@ -305,11 +305,6 @@
 		contextQuery = '';
 	}
 
-	function inspectSource(source: SourceInfo): void {
-		contextOpen = false;
-		session.openInspector({ kind: 'source', path: source.path });
-	}
-
 	function removeReference(ref: ContextReference): void {
 		session.removeContextReference(ref.kind, ref.key);
 	}
@@ -354,9 +349,6 @@
 							<button class="context-main" type="button" onclick={() => addSource(source)}>
 								<span class="context-icon"><Icon name={source.view ? 'table' : 'file'} size={16} /></span>
 								<span class="context-copy"><strong>{source.name}</strong><small>{sourceDetail(source)}</small></span>
-							</button>
-							<button class="context-inspect" type="button" aria-label={`View details for ${source.name}`} title="View source details" onclick={() => inspectSource(source)}>
-								<Icon name="info" size={16} />
 							</button>
 						</div>
 					{/each}
@@ -964,19 +956,6 @@
 	.context-copy small {
 		color: var(--text-faint);
 		font-size: var(--fs-xs);
-	}
-	.context-inspect {
-		display: grid;
-		place-items: center;
-		width: 26px;
-		height: 26px;
-		margin-right: 4px;
-		border-radius: var(--radius-chip);
-		color: var(--text-faint);
-	}
-	.context-inspect:hover {
-		background: var(--bg-raised);
-		color: var(--text);
 	}
 	.context-empty,
 	.context-hint {

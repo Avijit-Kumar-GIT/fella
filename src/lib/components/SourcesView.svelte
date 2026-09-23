@@ -28,12 +28,18 @@
 	let selected = $derived.by(() => sources.find((source) => source.path === selectedPath) ?? null);
 
 	$effect(() => {
+		const requestedPath = session.selectedSourcePath;
+		if (requestedPath && sources.some((source) => source.path === requestedPath)) {
+			selectedPath = requestedPath;
+			return;
+		}
 		if (selectedPath && sources.some((source) => source.path === selectedPath)) return;
 		selectedPath = sources[0]?.path ?? null;
 	});
 
 	function select(source: SourceInfo): void {
 		selectedPath = source.path;
+		session.selectSource(source.path);
 	}
 
 	function relativePath(path: string): string {

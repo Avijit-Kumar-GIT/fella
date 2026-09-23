@@ -265,8 +265,8 @@
 				await openConversation(result.item);
 				return;
 			case 'source':
+				session.selectSource(result.source.path);
 				session.setWorkspacePane('sources');
-				session.openInspector({ kind: 'source', path: result.source.path });
 				return;
 			case 'project':
 				session.openProject(result.project.id);

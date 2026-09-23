@@ -99,8 +99,7 @@ export interface RunStep {
 
 /** Selection rendered by the right-hand inspector drawer. */
 export type InspectorSelection =
-	| { kind: 'source'; path: string }
-	| { kind: 'answer'; messageId: string; stepIndex?: number }
+	{ kind: 'answer'; messageId: string; stepIndex?: number }
 	| null;
 
 export interface Message {

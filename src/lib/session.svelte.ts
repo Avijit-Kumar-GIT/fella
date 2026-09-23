@@ -305,9 +305,11 @@ class Session {
 	/** Bumped whenever a conversation is archived, so the sidebar's list
 	 *  knows to refetch without polling. */
 	historyVersion = $state<number>(0);
-	/** Right-hand contextual inspector, shared by Ask and Workspace. */
+	/** Right-hand details panel for answer evidence and run provenance. */
 	inspectorOpen = $state<boolean>(false);
 	inspectorSelection = $state<InspectorSelection>(null);
+	/** Source selected by global search for the Sources master/detail view. */
+	selectedSourcePath = $state<string | null>(null);
 	/** Repositories shown in the local sidebar, in user-defined order. */
 	repositoryPaths = $state<string[]>(readStringList(REPOSITORIES_KEY));
 	/** Repositories intentionally hidden from the local sidebar. */
@@ -433,6 +435,10 @@ class Session {
 		}
 		this.workspacePane = pane;
 		this.workspaceView = 'workspace';
+	}
+
+	selectSource(path: string | null): void {
+		this.selectedSourcePath = path;
 	}
 
 	/** Focus a conversation tab. */
