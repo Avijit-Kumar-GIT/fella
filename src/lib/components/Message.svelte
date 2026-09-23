@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { Answer, Message } from '$lib/types';
 	import EvidenceBlock from './EvidenceBlock.svelte';
+	import EvidenceSummary from './EvidenceSummary.svelte';
 	import Chart from './Chart.svelte';
 	import Icon from './Icon.svelte';
 	import Logo from './Logo.svelte';
@@ -131,9 +132,20 @@
 	{:else if message.role === 'assistant'}
 		<span class="sr-only">Fella replied: </span>
 		<div class="assistant-heading">
-			<Logo size={18} active={message.pending} />
-			<strong>Fella</strong>
-			{#if message.pending}<span class="status">Working through the workspace</span>{/if}
+			<div class="assistant-identity">
+				<Logo size={18} active={message.pending} />
+				<strong>Fella</strong>
+				{#if message.pending}<span class="status">Working through the workspace</span>{/if}
+			</div>
+			{#if message.answer?.evidence.length}
+				<EvidenceSummary
+					answer={message.answer}
+					bodyId={`evidence-${message.id}`}
+					{expanded}
+					{ontoggle}
+					messageId={message.id}
+				/>
+			{/if}
 		</div>
 		{#if message.plan}
 			<div class="plan">{message.plan}</div>
@@ -168,7 +180,9 @@
 		<div class="text">{message.text}</div>
 	{/if}
 	{#if message.answer}
-		<EvidenceBlock answer={message.answer} messageId={message.id} scope={scopeLabel} {expanded} {ontoggle} />
+		{#if message.answer.evidence.length}
+			<EvidenceBlock answer={message.answer} bodyId={`evidence-${message.id}`} {expanded} />
+		{/if}
 		{#if showFollowups && onfollowup && followups.length}
 			<div class="followups" aria-label="Suggested follow-up questions">
 				<span class="followup-label">Continue with</span>
@@ -206,10 +220,17 @@
 	.assistant-heading {
 		display: flex;
 		align-items: center;
+		justify-content: space-between;
 		gap: var(--space-2);
 		margin-bottom: var(--space-2);
 		color: var(--chat-meta);
 		font-size: var(--fs-sm);
+	}
+	.assistant-identity {
+		display: flex;
+		align-items: center;
+		gap: var(--space-2);
+		min-width: 0;
 	}
 	.assistant-heading strong {
 		color: var(--chat-meta);

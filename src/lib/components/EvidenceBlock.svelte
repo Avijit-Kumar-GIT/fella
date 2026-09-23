@@ -1,31 +1,13 @@
 <script lang="ts">
-	import type { Answer, EvidenceItem, VerificationStatus } from '$lib/types';
+	import type { Answer, EvidenceItem } from '$lib/types';
 	import Icon from './Icon.svelte';
-	import { answerStatus } from '$lib/verify';
-	import { session } from '$lib/session.svelte';
 
 	let {
 		answer,
-		scope = '',
 		expanded = false,
-		ontoggle,
-		messageId = ''
-	}: { answer: Answer; scope?: string; expanded?: boolean; ontoggle?: () => void; messageId?: string } = $props();
+		bodyId
+	}: { answer: Answer; expanded?: boolean; bodyId: string } = $props();
 
-	// Stable id so the toggle can point at the panel it controls.
-	const bodyId = 'evidence-' + Math.random().toString(36).slice(2, 9);
-
-	let stepCount = $derived(answer.evidence.length);
-	let ms = $derived(answer.evidence.reduce((n, e) => n + e.ms, 0));
-	let warns = $derived(answer.verification.filter((v) => !v.ok).length);
-	let status = $derived(answerStatus(answer));
-	let hasBackground = $derived(/^\s*Background:/m.test(answer.text));
-	const STATUS_LABEL: Record<VerificationStatus, string> = {
-		verified: 'checked against your data',
-		needs_review: 'needs review',
-		insufficient_data: 'not enough data',
-		failed: 'could not fully check'
-	};
 	const COMPLETE_TABLE_ROWS = 100;
 
 	// Which steps have their raw detail (SQL, table, output) revealed.
@@ -61,42 +43,10 @@
 		return (e.sources ?? []).map((s) => `${s.source} (${s.table})`).join(', ');
 	}
 
-	function openDetails(): void {
-		if (messageId) session.openInspector({ kind: 'answer', messageId });
-	}
 </script>
 
-<div class="evidence">
-	<div class="evidence-head">
-		<button
-			class="summary"
-			onclick={ontoggle}
-			aria-expanded={expanded}
-			aria-controls={bodyId}
-		>
-			<span class="caret" class:open={expanded} aria-hidden="true">
-				<Icon name="chevron-right" size={12} />
-			</span>
-			{#if stepCount === 0}
-				Answered from general knowledge
-			{:else}
-				Checked workspace · {stepCount} step{stepCount === 1 ? '' : 's'} · {(ms / 1000).toFixed(1)}s
-				{#if hasBackground}<span class="bg">· background</span>{/if}
-				{#if answer.workspace}<span class="snapshot">· folder snapshot</span>{/if}
-			{/if}
-			{#if scope}<span class="scope">· {scope}</span>{/if}
-			<span class="status {status}">· {STATUS_LABEL[status]}</span>
-			{#if warns > 0}<span class="warn">· {warns} to check</span>{/if}
-		</button>
-		{#if messageId}
-			<button class="details-link" type="button" aria-label="Open answer details" onclick={openDetails}>
-				Details <Icon name="info" size={12} />
-			</button>
-		{/if}
-	</div>
-
 	{#if expanded}
-		<div class="body" id={bodyId}>
+		<div class="evidence-body" id={bodyId}>
 			<ol class="steps">
 				{#each answer.evidence as e, i (e.id ?? `evidence-${i}`)}
 					{@const shownArgs = argsWithoutNote(e.args)}
@@ -186,93 +136,16 @@
 			{/if}
 		</div>
 	{/if}
-</div>
 
 <style>
-	.evidence {
-		margin-top: var(--space-4);
-		padding-top: var(--space-3);
+	.evidence-body {
+		margin: var(--space-3) 0 2px;
+		padding: var(--space-3) 0 var(--space-2) 10px;
 		border-top: 1px solid var(--border);
-		font-size: var(--fs-sm);
-	}
-	.evidence-head {
-		display: flex;
-		align-items: baseline;
-		justify-content: space-between;
-		gap: var(--space-3);
-	}
-	.summary {
-		min-width: 0;
-		flex: 1;
-		border: none;
-		padding: 1px 0;
-		color: var(--text-dim);
-		background: transparent;
-		display: inline-flex;
-		align-items: center;
-		gap: var(--space-1);
-		white-space: normal;
-		letter-spacing: 0.01em;
-		font-size: var(--fs-xs);
-	}
-	.details-link {
-		display: inline-flex;
-		align-items: center;
-		gap: 4px;
-		flex: none;
-		padding: 1px 0;
-		color: var(--text-faint);
-		font-size: var(--fs-xs);
-	}
-	.details-link:hover {
-		color: var(--text);
-	}
-	.summary:hover {
-		background: transparent;
-		color: var(--text);
-	}
-	.caret {
-		display: inline-flex;
-		color: var(--text-faint);
-		transition: transform var(--dur-fast) var(--ease);
-	}
-	.caret.open {
-		transform: rotate(90deg);
-	}
-	.warn {
-		color: var(--warn);
-	}
-	.bg {
-		color: var(--text-faint);
-	}
-	.snapshot {
-		color: var(--text-faint);
-	}
-	.scope {
-		max-width: 100%;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-		color: var(--text-faint);
-	}
-	.status.verified {
-		color: var(--ok);
-	}
-	.status.needs_review {
-		color: var(--warn);
-	}
-	.status.insufficient_data {
-		color: var(--text-faint);
-	}
-	.status.failed {
-		color: var(--err);
-	}
-	.body {
-		margin: 6px 0 2px;
-		padding-left: 10px;
 		border-left: 2px solid var(--border);
 		display: flex;
 		flex-direction: column;
+		font-size: var(--fs-sm);
 		gap: 10px;
 	}
 	.steps {
