@@ -97,11 +97,6 @@ export interface RunStep {
 	evidence?: EvidenceItem;
 }
 
-/** Selection rendered by the right-hand inspector drawer. */
-export type InspectorSelection =
-	{ kind: 'answer'; messageId: string; stepIndex?: number }
-	| null;
-
 export interface Message {
 	id: string;
 	role: Role;

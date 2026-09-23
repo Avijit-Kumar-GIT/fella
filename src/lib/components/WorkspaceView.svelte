@@ -17,7 +17,6 @@
 		>
 			<Icon name="table" size={16} />
 			<span>Sources</span>
-			<small>{session.catalog.sources.length}</small>
 		</button>
 		<button
 			class:active={pane === 'context'}
@@ -79,10 +78,5 @@
 	.workspace-tabs button :global(svg) {
 		color: var(--text-faint);
 		flex: none;
-	}
-	.workspace-tabs small {
-		color: var(--text-faint);
-		font-size: var(--fs-xs);
-		font-variant-numeric: tabular-nums;
 	}
 </style>

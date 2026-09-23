@@ -2,7 +2,6 @@
 	import { onMount } from 'svelte';
 	import CommandPalette from '$lib/components/CommandPalette.svelte';
 	import Composer from '$lib/components/Composer.svelte';
-	import ContextInspector from '$lib/components/ContextInspector.svelte';
 	import Icon from '$lib/components/Icon.svelte';
 	import ProjectDialog from '$lib/components/ProjectDialog.svelte';
 	import ProjectView from '$lib/components/ProjectView.svelte';
@@ -162,9 +161,7 @@
 			e.preventDefault();
 			session.focus = !session.focus;
 		} else if (e.key === 'Escape' && !paletteOpen) {
-			if (session.inspectorOpen) {
-				session.closeInspector();
-			} else if (session.pendingKey) {
+			if (session.pendingKey) {
 				session.pendingKey = null;
 				session.addSystem('Cancelled.');
 			} else if (session.busy) void stop();
@@ -253,9 +250,6 @@
 					<SettingsView />
 				{:else}
 					<Transcript bind:this={transcript} />
-				{/if}
-				{#if session.inspectorOpen}
-					<ContextInspector />
 				{/if}
 			</div>
 		</main>

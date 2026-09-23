@@ -31,16 +31,6 @@
 		return null;
 	}
 
-	function inspect(step: RunStep, visibleIndex: number): void {
-		const answer = lastAnswer();
-		if (!answer) return;
-		session.openInspector({
-			kind: 'answer',
-			messageId: answer.id,
-			stepIndex: steps.length - visibleSteps.length + visibleIndex
-		});
-	}
-
 	function duration(ms: number | null | undefined): string {
 		if (ms == null) return '';
 		if (ms < 1000) return `${ms}ms`;
@@ -90,15 +80,8 @@
 
 		{#if expanded}
 			<div class="steps">
-				{#each visibleSteps as step, i (step.id)}
-					<button
-						class="step"
-						class:clickable={!!lastAnswer()}
-						type="button"
-						aria-label={lastAnswer() ? `${step.label}. View details` : step.label}
-						title={lastAnswer() ? 'View details' : undefined}
-						onclick={() => inspect(step, i)}
-					>
+				{#each visibleSteps as step (step.id)}
+					<div class="step">
 						<span class="step-mark" class:running={step.state === 'running'} class:error={step.state === 'error'}>
 							{#if step.state === 'complete'}
 								<Icon name="check" size={12} />
@@ -112,8 +95,7 @@
 							<strong>{step.label}</strong>
 							<small>{stepResult(step)}</small>
 						</span>
-						{#if lastAnswer()}<span class="step-info"><Icon name="info" size={12} /></span>{/if}
-					</button>
+					</div>
 				{/each}
 				{#if steps.length > visibleSteps.length}
 					<p class="more-steps">Showing the last {visibleSteps.length} steps</p>
@@ -219,10 +201,6 @@
 		text-align: left;
 		color: var(--text-dim);
 	}
-	.step.clickable:hover {
-		background: var(--bg-inset);
-		color: var(--text);
-	}
 	.step-mark {
 		position: relative;
 		z-index: 1;
@@ -262,10 +240,6 @@
 		white-space: nowrap;
 		color: var(--text-faint);
 		font-size: var(--fs-xs);
-	}
-	.step-info {
-		flex: none;
-		color: var(--text-faint);
 	}
 	.more-steps {
 		margin: var(--space-1) 0 0;

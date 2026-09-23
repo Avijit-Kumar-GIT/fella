@@ -14,7 +14,6 @@ import type {
 	Catalog,
 	ContextReference,
 	EvidenceItem,
-	InspectorSelection,
 	Message,
 	ProviderHealth,
 	ProviderInfo,
@@ -41,11 +40,6 @@ export function hasActualQuestion(messages: readonly Message[]): boolean {
 
 export function firstActualQuestion(messages: readonly Message[]): Message | undefined {
 	return messages.find(isActualQuestion);
-}
-
-/** The compact count shown in session history excludes command/system notes. */
-export function conversationMessageCount(messages: readonly Message[]): number {
-	return messages.filter((message) => message.role === 'assistant' || isActualQuestion(message)).length;
 }
 
 function humanToolName(tool: string): string {
@@ -305,9 +299,6 @@ class Session {
 	/** Bumped whenever a conversation is archived, so the sidebar's list
 	 *  knows to refetch without polling. */
 	historyVersion = $state<number>(0);
-	/** Right-hand details panel for answer evidence and run provenance. */
-	inspectorOpen = $state<boolean>(false);
-	inspectorSelection = $state<InspectorSelection>(null);
 	/** Source selected by global search for the Sources master/detail view. */
 	selectedSourcePath = $state<string | null>(null);
 	/** Repositories shown in the local sidebar, in user-defined order. */
@@ -464,17 +455,6 @@ class Session {
 	clearContextReferences(): void {
 		this.activeChat?.clearContext();
 	}
-
-	openInspector(selection: InspectorSelection): void {
-		this.inspectorSelection = selection;
-		this.inspectorOpen = selection !== null;
-	}
-
-	closeInspector(): void {
-		this.inspectorOpen = false;
-		this.inspectorSelection = null;
-	}
-
 
 	get activeTab(): Tab {
 		return this.tabs[this.active] ?? this.tabs[0];

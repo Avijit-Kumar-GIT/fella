@@ -143,7 +143,6 @@
 					bodyId={`evidence-${message.id}`}
 					{expanded}
 					{ontoggle}
-					messageId={message.id}
 				/>
 			{/if}
 		</div>

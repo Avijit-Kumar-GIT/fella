@@ -106,11 +106,11 @@
 		if (repo.path !== session.catalog.workspace) void openFolder(repo.path);
 	}
 
-	async function openRepositoryPane(repo: Repository, pane: 'sources' | 'context'): Promise<void> {
+	async function openRepositoryWorkspace(repo: Repository): Promise<void> {
 		menuRepository = null;
 		expandedRepos = { ...expandedRepos, [repo.key]: true };
 		if (repo.path && repo.path !== session.catalog.workspace) await openFolder(repo.path);
-		session.setWorkspacePane(pane);
+		session.setWorkspacePane('sources');
 	}
 
 	async function newConversation(repo: Repository): Promise<void> {
@@ -304,25 +304,14 @@
 								<div class="repository-tools" aria-label={`${repo.name} tools`}>
 									<button
 										class="repository-tool"
-										class:active={repo.active && session.workspaceView === 'workspace' && session.workspacePane === 'sources'}
+										class:active={repo.active && session.workspaceView === 'workspace'}
 										type="button"
-										aria-label="Sources"
-										title={`Sources (${shortcutModifier}+Shift+S)`}
-										onclick={() => void openRepositoryPane(repo, 'sources')}
+										aria-label={`Open ${repo.name} workspace`}
+										title={`Open workspace (${shortcutModifier}+Shift+S)`}
+										onclick={() => void openRepositoryWorkspace(repo)}
 									>
-										<Icon name="table" size={14} />
-										<span>Sources</span>
-									</button>
-									<button
-										class="repository-tool"
-										class:active={repo.active && session.workspaceView === 'workspace' && session.workspacePane === 'context'}
-										type="button"
-										aria-label="Guide"
-										title={`Guide (${shortcutModifier}+Shift+C)`}
-										onclick={() => void openRepositoryPane(repo, 'context')}
-									>
-										<Icon name="bookmark" size={14} />
-										<span>Guide</span>
+										<Icon name="folder" size={14} />
+										<span>Workspace</span>
 									</button>
 								</div>
 							{/if}

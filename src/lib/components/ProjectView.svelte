@@ -36,14 +36,6 @@
 	});
 
 	let mounted = $derived(Boolean(project && project.workspace === session.catalog.workspace));
-	let sourceCount = $derived(mounted ? session.catalog.sources.length : null);
-	let tableCount = $derived(
-		mounted
-			? session.catalog.sources.filter((source) =>
-					['csv', 'tsv', 'parquet', 'xlsx', 'json', 'ndjson'].includes(source.kind)
-				).length
-			: null
-	);
 
 	async function loadHistory(workspace: string): Promise<void> {
 		const request = ++historyRequest;
@@ -155,13 +147,10 @@
 			<aside class="snapshot-card" aria-labelledby="snapshot-title">
 				<div class="card-heading">
 					<div>
-						<h1 id="snapshot-title">Workspace snapshot</h1>
-						<p>Useful context at a glance.</p>
+						<h1 id="snapshot-title">Project snapshot</h1>
 					</div>
 				</div>
 				<dl>
-					<div><dt>Files</dt><dd>{sourceCount ?? '—'}</dd></div>
-					<div><dt>Tables</dt><dd>{tableCount ?? '—'}</dd></div>
 					<div><dt>Conversations</dt><dd>{history.length || '—'}</dd></div>
 					<div><dt>Updated</dt><dd>{updatedLabel(project.updated_at_ms)}</dd></div>
 				</dl>

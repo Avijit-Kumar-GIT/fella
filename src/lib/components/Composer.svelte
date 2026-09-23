@@ -33,7 +33,7 @@
 		session.pendingKey
 			? `Paste your ${session.pendingKey.display} API key…`
 			: folderName
-				? `Ask about ${folderName}…`
+				? 'Ask a question…'
 				: 'Choose a folder to ask about…'
 	);
 

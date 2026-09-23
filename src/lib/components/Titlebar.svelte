@@ -1,28 +1,11 @@
 <script lang="ts">
-	import { conversationMessageCount, firstActualQuestion, session } from '$lib/session.svelte';
+	import { firstActualQuestion, session } from '$lib/session.svelte';
 	import { isTauri, win } from '$lib/ipc';
-	import { prefs, type Appearance } from '$lib/prefs.svelte';
-	import { answerStatus, hardFail } from '$lib/verify';
-	import Icon, { type IconName } from './Icon.svelte';
+	import Icon from './Icon.svelte';
 	import Logo from './Logo.svelte';
 	import TabBar from './TabBar.svelte';
 
 	let { onpalette }: { onpalette: () => void } = $props();
-
-	type AppearanceOption = { id: Appearance; label: string; icon: IconName };
-	const APPEARANCE_OPTIONS: AppearanceOption[] = [
-		{ id: 'system', label: 'System', icon: 'monitor' },
-		{ id: 'light', label: 'Light', icon: 'sun' },
-		{ id: 'dark', label: 'Dark', icon: 'moon' }
-	];
-
-	function appearanceLabel(mode: Appearance): string {
-		return APPEARANCE_OPTIONS.find((option) => option.id === mode)?.label ?? 'System';
-	}
-
-	function appearanceIcon(mode: Appearance): IconName {
-		return APPEARANCE_OPTIONS.find((option) => option.id === mode)?.icon ?? 'monitor';
-	}
 
 	let multiTab = $derived(session.tabs.length > 1);
 	let folder = $derived(
@@ -50,43 +33,6 @@
 		return conversationTitle;
 	});
 
-	// --- info popover: message count, model, last answer's verification --
-	let infoOpen = $state(false);
-	let infoWrapEl: HTMLDivElement | undefined = $state();
-	let appearanceOpen = $state(false);
-	let appearanceWrapEl: HTMLDivElement | undefined = $state();
-	function onWindowClick(e: MouseEvent) {
-		if (infoOpen && infoWrapEl && !infoWrapEl.contains(e.target as Node)) {
-			infoOpen = false;
-		}
-		if (appearanceOpen && appearanceWrapEl && !appearanceWrapEl.contains(e.target as Node)) {
-			appearanceOpen = false;
-		}
-	}
-	let messageCount = $derived(conversationMessageCount(session.activeChat?.messages ?? []));
-	let providerId = $derived(session.settings?.provider ?? 'ollama-cloud');
-	let providerName = $derived(
-		session.providers.find((p) => p.id === providerId)?.display ?? providerId
-	);
-	let lastAnswer = $derived.by(() => {
-		const msgs = session.activeChat?.messages ?? [];
-		for (let i = msgs.length - 1; i >= 0; i--) {
-			if (msgs[i].answer) return msgs[i].answer;
-		}
-		return null;
-	});
-	let verifySummary = $derived.by(() => {
-		if (!lastAnswer) return null;
-		const status = answerStatus(lastAnswer);
-		if (status === 'failed') {
-			const fail = hardFail(lastAnswer.verification);
-			return fail ? `failed — ${fail}` : 'failed';
-		}
-		if (status === 'insufficient_data') return 'insufficient data';
-		const n = lastAnswer.verification.length;
-		if (status === 'verified') return `verified · ${n} check${n === 1 ? '' : 's'}`;
-		return `needs review · ${n} check${n === 1 ? '' : 's'}`;
-	});
 
 	// macOS keeps its native traffic lights (titleBarStyle: Overlay), so leave a
 	// gutter for them. Windows/Linux draw nothing on the left.
@@ -99,8 +45,6 @@
 	const shortcutModifier = isMac ? '⌘' : 'Ctrl';
 
 </script>
-
-<svelte:window onclick={onWindowClick} />
 
 <div class="titlebar" class:mac={isMac} class:focus={session.focus} class:collapsed={!session.focus && session.sidebarCollapsed} data-tauri-drag-region>
 	{#if isMac}<span class="lights" aria-hidden="true"></span>{/if}
@@ -137,73 +81,6 @@
 
 		<span class="spacer" data-tauri-drag-region></span>
 
-		<div class="appearance-wrap" bind:this={appearanceWrapEl}>
-			<button
-				class="navbtn appearance-btn"
-				data-tauri-drag-region="false"
-				onclick={() => {
-					appearanceOpen = !appearanceOpen;
-					infoOpen = false;
-				}}
-				title={`Appearance: ${appearanceLabel(prefs.appearance)}`}
-				aria-label={`Appearance: ${appearanceLabel(prefs.appearance)}`}
-				aria-expanded={appearanceOpen}
-				aria-haspopup="menu"
-			>
-				<Icon name={appearanceIcon(prefs.appearance)} size={16} />
-			</button>
-			{#if appearanceOpen}
-				<div
-					class="appearance-pop"
-					data-tauri-drag-region="false"
-					role="menu"
-					aria-label="Appearance"
-				>
-					<p class="appearance-heading">Appearance</p>
-					{#each APPEARANCE_OPTIONS as option (option.id)}
-						<button
-							class="appearance-option"
-							class:selected={prefs.appearance === option.id}
-							type="button"
-							role="menuitemradio"
-							aria-checked={prefs.appearance === option.id}
-							onclick={() => {
-								prefs.setAppearance(option.id);
-								appearanceOpen = false;
-							}}
-						>
-							<Icon name={option.icon} size={16} />
-							<span>{option.label}</span>
-							{#if prefs.appearance === option.id}
-								<Icon name="check" size={12} />
-							{/if}
-						</button>
-					{/each}
-				</div>
-			{/if}
-		</div>
-
-		<div class="info-wrap" bind:this={infoWrapEl}>
-			<button
-				class="navbtn info-btn"
-				data-tauri-drag-region="false"
-				onclick={() => {
-					infoOpen = !infoOpen;
-					appearanceOpen = false;
-				}}
-				title="Session info"
-				aria-expanded={infoOpen}
-			>
-				<Icon name="info" size={16} />
-			</button>
-			{#if infoOpen}
-				<div class="info-pop" role="dialog" aria-label="Session info">
-					<p>{messageCount} message{messageCount === 1 ? '' : 's'}</p>
-					{#if session.model}<p>{providerName}/{session.model}</p>{/if}
-					{#if verifySummary}<p>{verifySummary}</p>{/if}
-				</div>
-			{/if}
-		</div>
 		<button
 			class="hint"
 			data-tauri-drag-region="false"
@@ -270,82 +147,6 @@
 		border-radius: var(--radius-chip);
 		color: var(--text-faint);
 		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
-	}
-	.info-wrap {
-		position: relative;
-		display: flex;
-	}
-	.appearance-wrap {
-		position: relative;
-		display: flex;
-	}
-	.appearance-btn[aria-expanded='true'] {
-		background: var(--bg-inset);
-		color: var(--text-dim);
-	}
-	.appearance-pop {
-		position: absolute;
-		top: calc(100% + var(--space-2));
-		right: 0;
-		z-index: 20;
-		width: 156px;
-		padding: var(--space-2);
-		background: var(--bg-raised);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		box-shadow: var(--shadow-pop);
-	}
-	.appearance-heading {
-		margin: 2px var(--space-2) var(--space-1);
-		color: var(--text-faint);
-		font-size: var(--fs-xs);
-	}
-	.appearance-option {
-		width: 100%;
-		display: flex;
-		align-items: center;
-		gap: var(--space-2);
-		padding: 6px var(--space-2);
-		border: 0;
-		border-radius: var(--radius-chip);
-		background: transparent;
-		color: var(--text-dim);
-		font: inherit;
-		font-size: var(--fs-sm);
-		text-align: left;
-		white-space: nowrap;
-		cursor: pointer;
-	}
-	.appearance-option:hover,
-	.appearance-option.selected {
-		background: var(--bg-inset);
-		color: var(--text);
-	}
-	.appearance-option :global(.icon:last-child) {
-		margin-left: auto;
-		color: var(--brand);
-	}
-	.info-pop {
-		position: absolute;
-		top: calc(100% + var(--space-2));
-		right: 0;
-		z-index: 20;
-		min-width: 180px;
-		padding: var(--space-2) var(--space-3);
-		background: var(--bg-raised);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		box-shadow: var(--shadow-pop);
-		color: var(--text-dim);
-		font-size: var(--fs-sm);
-		white-space: normal;
-	}
-	.info-pop p {
-		margin: 0;
-		padding: 3px 0;
-	}
-	.info-pop p + p {
-		border-top: 1px solid var(--border);
 	}
 	.navbtn:hover:not(:disabled) {
 		background: var(--bg-inset);
