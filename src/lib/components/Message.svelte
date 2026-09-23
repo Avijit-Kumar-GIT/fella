@@ -125,7 +125,10 @@
 <div class="msg {message.role}" transition:enterUp>
 	{#if message.role === 'user'}
 		<span class="sr-only">You asked: </span>
-		<div class="you">{message.text}</div>
+		<div class="you">
+			<div class="you-label"><span class="you-mark" aria-hidden="true"></span><span>You</span></div>
+			<div class="you-copy">{message.text}</div>
+		</div>
 	{:else if message.role === 'assistant'}
 		<span class="sr-only">Fella replied: </span>
 		<div class="assistant-heading">
@@ -188,26 +191,36 @@
 		padding-top: var(--space-5);
 	}
 	.you {
-		max-width: min(68%, 58ch);
-		padding: 0 var(--space-3) 0 0;
-		border-right: 2px solid color-mix(in srgb, var(--brand) 58%, var(--border-strong));
+		max-width: min(72%, 58ch);
+		padding: var(--space-3) var(--space-4);
+		border: 1px solid var(--brand-line);
+		border-radius: var(--radius-conversation) var(--radius-conversation) var(--radius-sm) var(--radius-conversation);
+		background: var(--brand-wash);
+		box-shadow: 0 8px 20px -16px var(--brand-shadow);
 		color: var(--chat-question);
-		text-align: right;
+		text-align: left;
+	}
+	.you-label {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		margin-bottom: var(--space-1);
+		color: var(--text);
+		font-size: var(--fs-xs);
+		font-weight: 600;
+		letter-spacing: -0.005em;
+	}
+	.you-mark {
+		width: 7px;
+		height: 7px;
+		flex: none;
+		border-radius: 50%;
+		background: var(--brand);
+		box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 14%, transparent);
+	}
+	.you-copy {
 		white-space: pre-wrap;
 		word-break: break-word;
-	}
-	/* Keep the conversation editorial: the speaker label carries the hierarchy,
-	   while the body stays free of command-line decoration. */
-	.you::before {
-		content: 'You';
-		display: block;
-		margin-bottom: var(--space-1);
-		font-family: var(--sans);
-		font-size: var(--fs-xs);
-		font-weight: 650;
-		letter-spacing: 0.04em;
-		text-transform: uppercase;
-		color: var(--chat-meta);
 	}
 	.assistant-heading {
 		display: flex;
