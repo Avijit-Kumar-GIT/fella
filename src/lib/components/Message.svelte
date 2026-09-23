@@ -126,7 +126,7 @@
 	{#if message.role === 'user'}
 		<span class="sr-only">You asked: </span>
 		<div class="you">
-			<div class="you-label"><span class="you-mark" aria-hidden="true"></span><span>You</span></div>
+			<div class="you-label">You</div>
 			<div class="you-copy">{message.text}</div>
 		</div>
 	{:else if message.role === 'assistant'}
@@ -194,29 +194,17 @@
 		max-width: min(72%, 58ch);
 		padding: var(--space-3) var(--space-4);
 		border: 1px solid var(--brand-line);
-		border-radius: var(--radius-conversation) var(--radius-conversation) var(--radius-sm) var(--radius-conversation);
+		border-inline-end: 2px solid color-mix(in srgb, var(--brand) 42%, var(--border-strong));
+		border-radius: var(--radius-conversation);
 		background: var(--brand-wash);
-		box-shadow: 0 8px 20px -16px var(--brand-shadow);
 		color: var(--chat-question);
 		text-align: left;
 	}
 	.you-label {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		margin-bottom: var(--space-1);
-		color: var(--text);
+		margin-bottom: var(--space-2);
+		color: var(--text-faint);
 		font-size: var(--fs-xs);
 		font-weight: 600;
-		letter-spacing: -0.005em;
-	}
-	.you-mark {
-		width: 7px;
-		height: 7px;
-		flex: none;
-		border-radius: 50%;
-		background: var(--brand);
-		box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 14%, transparent);
 	}
 	.you-copy {
 		white-space: pre-wrap;

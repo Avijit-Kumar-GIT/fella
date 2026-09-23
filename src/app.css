@@ -67,9 +67,8 @@
 	--on-brand: #ffffff;
 	/* Brand-tinted surfaces are reserved for personal/conversational moments;
 	   they are deliberately softer than the primary action. */
-	--brand-wash: color-mix(in srgb, var(--brand) 8%, var(--bg-raised));
-	--brand-line: color-mix(in srgb, var(--brand) 24%, var(--border));
-	--brand-shadow: color-mix(in srgb, var(--brand) 18%, transparent);
+	--brand-wash: color-mix(in srgb, var(--brand) 4%, var(--bg-raised));
+	--brand-line: color-mix(in srgb, var(--brand) 14%, var(--border));
 	--link: #3a5c8a;
 	--ok: #3f7d3f;
 	--warn: #855800;
@@ -107,7 +106,7 @@
 
 	--radius-sm: 6px;
 	--radius-chip: 4px;
-	--radius-conversation: 18px;
+	--radius-conversation: 14px;
 
 	/* soft, diffuse, layered the macOS elevation feel */
 	--shadow-sm: 0 1px 2px rgba(20, 20, 26, 0.05), 0 4px 12px rgba(20, 20, 26, 0.06);
@@ -135,9 +134,8 @@
 	--accent: #ededec;
 	--brand: #008080;
 	--on-brand: #ffffff;
-	--brand-wash: color-mix(in srgb, var(--brand) 14%, var(--bg-raised));
-	--brand-line: color-mix(in srgb, var(--brand) 34%, var(--border-strong));
-	--brand-shadow: color-mix(in srgb, var(--brand) 22%, transparent);
+	--brand-wash: color-mix(in srgb, var(--brand) 7%, var(--bg-raised));
+	--brand-line: color-mix(in srgb, var(--brand) 22%, var(--border-strong));
 	--link: #8fb0dd;
 	--ok: #7cc07c;
 	--warn: #d8a640;
