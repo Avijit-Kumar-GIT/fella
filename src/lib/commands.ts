@@ -43,7 +43,7 @@ showing the exact steps it took. You never need these commands, but here they ar
 keys  Enter send · Shift+Enter new line · Ctrl/Cmd+K or Ctrl/Cmd+Shift+P search Fella
       Ctrl/Cmd+N new conversation · Ctrl/Cmd+T new tab · Ctrl/Cmd+W close tab
       Ctrl/Cmd+[ / ] previous or next tab · Ctrl/Cmd+1…9 switch tab
-      Ctrl/Cmd+Shift+A Ask · Ctrl/Cmd+Shift+S Sources · Ctrl/Cmd+Shift+C Context
+      Ctrl/Cmd+Shift+A new conversation · Ctrl/Cmd+Shift+S Sources · Ctrl/Cmd+Shift+C Context
       Ctrl/Cmd+, settings · Ctrl/Cmd+O open folder · Ctrl/Cmd+B sidebar · Ctrl/Cmd+L clear
       Ctrl/Cmd+Shift+F focus mode · Esc stop a run / hide details`;
 

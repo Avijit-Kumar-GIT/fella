@@ -2,7 +2,7 @@
 	import { ipc, isTauri } from '$lib/ipc';
 	import { errMsg, openConversation, openFolder } from '$lib/commands';
 	import { session } from '$lib/session.svelte';
-	import type { ConversationSummary } from '$lib/types';
+	import type { ConversationSummary, Project } from '$lib/types';
 	import Icon from './Icon.svelte';
 	import Logo from './Logo.svelte';
 
@@ -13,7 +13,8 @@
 		path: string | null;
 		name: string;
 		items: ConversationSummary[];
-		active: boolean;
+		projects: Project[];
+		current: boolean;
 		expanded: boolean;
 	};
 
@@ -60,10 +61,10 @@
 	}
 
 	let repositories = $derived.by((): Repository[] => {
-		const grouped = new Map<string, { path: string | null; items: ConversationSummary[] }>();
+		const grouped = new Map<string, { path: string | null; items: ConversationSummary[]; projects: Project[] }>();
 		const add = (path: string | null, item?: ConversationSummary) => {
 			const key = repositoryKey(path);
-			const group = grouped.get(key) ?? { path, items: [] };
+			const group = grouped.get(key) ?? { path, items: [], projects: [] };
 			if (item) group.items.push(item);
 			grouped.set(key, group);
 		};
@@ -74,6 +75,12 @@
 			if (!item.workspace || !session.hiddenRepositoryPaths.includes(item.workspace)) {
 				add(item.workspace, item);
 			}
+		}
+		for (const project of session.projects) {
+			const key = repositoryKey(project.workspace);
+			const group = grouped.get(key) ?? { path: project.workspace, items: [], projects: [] };
+			group.projects.push(project);
+			grouped.set(key, group);
 		}
 
 		const current = session.catalog.workspace;
@@ -92,11 +99,18 @@
 					path: group.path,
 					name: repositoryName(group.path),
 					items: group.items,
-					active,
+					projects: group.projects,
+					current: active,
 					expanded: expandedRepos[key] ?? active
 				};
 			});
 	});
+
+	function newChat(): void {
+		menuRepository = null;
+		session.setWorkspaceView('ask');
+		session.newTab();
+	}
 
 	function toggleRepository(repo: Repository): void {
 		menuRepository = null;
@@ -113,11 +127,11 @@
 		session.setWorkspacePane('sources');
 	}
 
-	async function newConversation(repo: Repository): Promise<void> {
+	async function newProject(repo: Repository): Promise<void> {
 		menuRepository = null;
-		if (repo.path && repo.path !== session.catalog.workspace) await openFolder(repo.path);
-		session.setWorkspaceView('ask');
-		session.newTab();
+		if (!repo.path) return;
+		if (repo.path !== session.catalog.workspace) await openFolder(repo.path);
+		onnewproject?.();
 	}
 
 	async function addRepository(): Promise<void> {
@@ -199,12 +213,11 @@
 		<div class="nav-heading">General</div>
 		<button
 			class="nav-row"
-			title={`Ask (${shortcutModifier}+Shift+A)`}
+			title={`New conversation (${shortcutModifier}+Shift+A)`}
+			aria-label="New conversation"
 			aria-keyshortcuts="Control+Shift+A Meta+Shift+A"
-			class:active={session.workspaceView === 'ask'}
 			type="button"
-			aria-current={session.workspaceView === 'ask' ? 'page' : undefined}
-			onclick={() => session.setWorkspaceView('ask')}
+			onclick={newChat}
 		>
 			<Icon name="ask" size={16} />
 			<span>Ask</span>
@@ -238,7 +251,7 @@
 			{#each repositories as repo (repo.key)}
 				<div
 					class="repository"
-					class:active={repo.active}
+					class:current={repo.current}
 					class:expanded={repo.expanded}
 				>
 					<div class="repository-row-wrap">
@@ -247,28 +260,15 @@
 							type="button"
 							title={repo.path ?? 'No repository'}
 							aria-expanded={repo.expanded}
-							aria-current={repo.active ? 'true' : undefined}
 							onclick={() => toggleRepository(repo)}
 						>
-							<Icon name="chevron-right" size={12} />
-							<span class="repository-icon"><Icon name="repository" size={16} /></span>
+							<span class="row-slot row-chevron"><Icon name="chevron-right" size={12} /></span>
+							<span class="row-slot row-icon"><Icon name="repository" size={16} /></span>
 							<span class="repository-copy">{repo.name}</span>
 						</button>
 						{#if repo.path}
 							<div class="repository-actions">
-								<button
-									class="repository-action"
-									type="button"
-									aria-label="New conversation in repository"
-									title="New conversation in repository"
-									onclick={(event) => {
-										event.stopPropagation();
-										void newConversation(repo);
-									}}
-								>
-									<Icon name="plus" size={14} />
-								</button>
-								{#if !repo.active}
+								{#if !repo.current}
 									<button
 										class="repository-action"
 										type="button"
@@ -286,7 +286,7 @@
 								{/if}
 							</div>
 						{/if}
-						{#if menuRepository === repo.key && repo.path && !repo.active}
+						{#if menuRepository === repo.key && repo.path && !repo.current}
 							<div class="repository-menu" role="menu">
 								<button
 									type="button"
@@ -304,13 +304,14 @@
 								<div class="repository-tools" aria-label={`${repo.name} tools`}>
 									<button
 										class="repository-tool"
-										class:active={repo.active && session.workspaceView === 'workspace'}
+										class:active={repo.current && session.workspaceView === 'workspace'}
 										type="button"
 										aria-label={`Open ${repo.name} workspace`}
+										aria-current={repo.current && session.workspaceView === 'workspace' ? 'page' : undefined}
 										title={`Open workspace (${shortcutModifier}+Shift+S)`}
 										onclick={() => void openRepositoryWorkspace(repo)}
 									>
-										<Icon name="folder" size={14} />
+										<span class="row-slot row-icon"><Icon name="folder" size={16} /></span>
 										<span>Workspace</span>
 									</button>
 								</div>
@@ -339,56 +340,59 @@
 											aria-label={`Open conversation: ${title(c)}`}
 											aria-current={session.conversationId === c.id ? 'page' : undefined}
 										>
+											<span class="row-slot row-icon row-placeholder" aria-hidden="true"></span>
 											<span class="preview">{title(c)}</span>
 										</button>
 										<div class="row-actions">
 											<button class="ren" type="button" aria-label="Rename conversation" title="Rename" onclick={(e) => startRename(c, e)}>
-													<Icon name="pencil" size={14} />
+												<Icon name="pencil" size={14} />
 											</button>
 											<button class="del" type="button" aria-label="Delete conversation" title="Delete" onclick={(e) => remove(c, e)}>
-													<Icon name="x" size={14} />
+												<Icon name="x" size={14} />
 											</button>
 										</div>
 									{/if}
 								</div>
 							{/each}
+							{#if repo.path}
+								<div class="repository-projects">
+									<div class="repository-subhead">
+										<span class="row-slot row-icon" aria-hidden="true"></span>
+										<span class="repository-subhead-label">Projects</span>
+										<button
+											class="repository-project-action"
+											type="button"
+											aria-label={`New project in ${repo.name}`}
+											title={`New project in ${repo.name}`}
+											onclick={() => void newProject(repo)}
+										>
+											<Icon name="plus" size={16} />
+										</button>
+									</div>
+									{#each repo.projects as project (project.id)}
+										<button
+											class="project-row"
+											class:active={session.workspaceView === 'project' && session.activeProjectId === project.id}
+											type="button"
+											title={project.workspace}
+											aria-current={session.workspaceView === 'project' && session.activeProjectId === project.id ? 'page' : undefined}
+											onclick={() => session.openProject(project.id)}
+										>
+											<span class="row-slot row-icon"><Icon name="project" size={16} /></span>
+											<span>{project.name}</span>
+										</button>
+									{/each}
+								</div>
+							{/if}
 						</div>
 					{/if}
 				</div>
 			{/each}
 			{#if repositories.length === 0}
 				<button class="add-repository" type="button" onclick={() => void addRepository()}>
-					<Icon name="folder" size={16} /> Add a repository
+					<span class="row-slot row-icon"><Icon name="folder" size={16} /></span> Add a repository
 				</button>
 			{/if}
-		</div>
-	</section>
-	<section class="projects-section" aria-labelledby="projects-heading">
-		<div class="section-head">
-			<div class="nav-heading" id="projects-heading">Projects</div>
-			<button
-				class="section-action"
-				type="button"
-				aria-label="New project"
-				title="New project"
-				onclick={() => onnewproject?.()}
-			>
-				<Icon name="plus" size={16} />
-			</button>
-		</div>
-		<div class="project-list">
-			{#each session.projects as project (project.id)}
-				<button
-					class="project-row"
-					class:active={session.workspaceView === 'project' && session.activeProjectId === project.id}
-					type="button"
-					title={project.workspace}
-					onclick={() => session.openProject(project.id)}
-				>
-					<Icon name="project" size={16} />
-					<span>{project.name}</span>
-				</button>
-			{/each}
 		</div>
 	</section>
 	<div class="sidebar-footer">
@@ -416,6 +420,8 @@
 		flex-direction: column;
 		gap: var(--space-1);
 		padding: 0 var(--space-2) var(--space-2);
+		--sidebar-hover: color-mix(in srgb, var(--bg-inset) 58%, var(--bg));
+		--sidebar-selected: var(--bg-inset);
 		/* No top padding: .header is 38px flush against the top edge, to
 		   match the titlebar's height exactly across the sidebar seam. */
 		background: var(--bg);
@@ -452,18 +458,12 @@
 	}
 	.icon-btn:hover {
 		color: var(--text);
-		background: var(--bg-inset);
+		background: var(--sidebar-hover);
 	}
 	.nav-section {
 		display: grid;
 		gap: 1px;
 		padding: var(--space-3) var(--space-1) var(--space-2);
-	}
-	.projects-section {
-		flex: none;
-		display: grid;
-		gap: 1px;
-		padding: var(--space-1) var(--space-1) 0;
 	}
 	.repository-section {
 		flex: 1;
@@ -472,9 +472,6 @@
 		flex-direction: column;
 		gap: 1px;
 		padding: var(--space-2) var(--space-1);
-	}
-	.projects-section {
-		min-height: 24px;
 	}
 	.section-head {
 		display: flex;
@@ -495,7 +492,7 @@
 		color: var(--text-faint);
 	}
 	.section-action:hover {
-		background: var(--bg-inset);
+		background: var(--sidebar-hover);
 		color: var(--text);
 	}
 	.repositories {
@@ -514,51 +511,60 @@
 	.repository-row {
 		position: relative;
 		width: 100%;
-		display: flex;
+		display: grid;
+		grid-template-columns: 16px 16px minmax(0, 1fr);
 		align-items: center;
 		gap: 6px;
 		min-width: 0;
 		min-height: 28px;
-		padding: 4px 56px 4px var(--space-2);
+		padding: 4px 32px 4px var(--space-2);
 		border-radius: var(--radius-sm);
 		color: var(--text-dim);
 		text-align: left;
 		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 	}
 	.repository-row:hover {
-		background: var(--bg-inset);
+		background: var(--sidebar-hover);
 		color: var(--text);
 	}
-	.repository:hover .repository-row,
-	.repository:focus-within .repository-row {
-		background: var(--bg-inset);
-		color: var(--text);
-	}
-	.repository.active .repository-row {
-		color: var(--text);
-		font-weight: 600;
-	}
-	.repository.active .repository-row::before {
-		content: '';
-		position: absolute;
-		left: 0;
-		top: 7px;
-		bottom: 7px;
-		width: 2px;
-		border-radius: 1px;
-		background: var(--brand);
-	}
-	.repository-row > :global(svg:first-child) {
+	.row-slot {
+		display: grid;
+		place-items: center;
+		width: 16px;
+		height: 20px;
 		flex: none;
 		color: var(--text-faint);
-		transition: transform var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 	}
-	.repository.expanded .repository-row > :global(svg:first-child) {
-		transform: rotate(90deg);
+	.row-slot :global(svg) {
+		display: block;
 	}
-	.repository.active .repository-row > :global(svg:first-child),
-	.repository.active .repository-icon {
+	.row-chevron {
+		transition: color var(--dur-fast) var(--ease);
+	}
+	.repository-row:hover .row-slot,
+	.repository-row:focus-visible .row-slot {
 		color: var(--text-dim);
+	}
+	.repository.expanded .row-chevron :global(svg) {
+		transform: rotate(90deg);
+		transition: transform var(--dur-fast) var(--ease);
+	}
+	.repository.current .row-chevron,
+	.repository.current .row-icon {
+		color: var(--text-dim);
+	}
+	.repository-copy {
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		color: var(--text-dim);
+		font-size: var(--fs-sm);
+		font-weight: 550;
+	}
+	.repository-row:hover .repository-copy,
+	.repository-row:focus-visible .repository-copy {
+		color: var(--text);
 	}
 	.repository-actions {
 		position: absolute;
@@ -572,8 +578,7 @@
 		color: var(--text-faint);
 	}
 	.repository:hover .repository-actions,
-	.repository:focus-within .repository-actions,
-	.repository.active .repository-actions {
+	.repository:focus-within .repository-actions {
 		display: flex;
 		color: var(--text);
 	}
@@ -586,10 +591,11 @@
 		color: inherit;
 	}
 	.repository-action:hover {
-		background: var(--bg-inset);
+		background: var(--sidebar-hover);
 		color: inherit;
 	}
 	.repository-action :global(svg) {
+		flex: none;
 		color: inherit;
 	}
 	.repository-menu {
@@ -613,48 +619,68 @@
 		text-align: left;
 	}
 	.repository-menu button:hover {
-		background: var(--bg-inset);
+		background: var(--sidebar-hover);
 		color: var(--text);
 	}
-	.repository-icon {
-		display: grid;
-		place-items: center;
-		flex: none;
-		color: var(--text-faint);
-	}
-	.repository-copy {
-		min-width: 0;
-		flex: 1;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-		font-size: var(--fs-sm);
-	}
 	.repository-contents {
-		padding: 0 0 2px 22px;
+		padding: 0 0 2px 30px;
 	}
 	.repository-tools {
-		display: flex;
-		gap: 2px;
+		display: grid;
 		padding: 1px 0 2px;
 	}
 	.repository-tool {
-		display: inline-flex;
+		display: grid;
+		grid-template-columns: 16px minmax(0, 1fr);
 		align-items: center;
 		gap: 6px;
-		min-height: 24px;
-		flex: none;
-		padding: 0 6px;
+		width: 100%;
+		min-height: 27px;
+		padding: 4px 4px 4px 0;
 		border-radius: var(--radius-chip);
 		color: var(--text-faint);
 		font-size: var(--fs-sm);
+		text-align: left;
 	}
 	.repository-tool:hover {
-		background: var(--bg-inset);
+		background: var(--sidebar-hover);
 		color: var(--text);
 	}
 	.repository-tool.active {
-		color: var(--brand);
+		background: var(--sidebar-selected);
+		color: var(--text);
+	}
+	.repository-projects {
+		display: grid;
+		gap: 1px;
+		margin-top: 4px;
+		padding-top: 4px;
+		border-top: 1px solid var(--border);
+	}
+	.repository-subhead {
+		display: grid;
+		grid-template-columns: 16px minmax(0, 1fr) 22px;
+		align-items: center;
+		gap: 6px;
+		min-height: 24px;
+	}
+	.repository-subhead-label {
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+		font-weight: 650;
+		letter-spacing: 0.01em;
+	}
+	.repository-project-action {
+		display: grid;
+		place-items: center;
+		width: 22px;
+		height: 22px;
+		border-radius: var(--radius-chip);
+		color: var(--text-faint);
+	}
+	.repository-project-action:hover {
+		background: var(--sidebar-hover);
+		color: var(--text);
 	}
 	.add-repository {
 		display: inline-flex;
@@ -667,7 +693,7 @@
 		text-align: left;
 	}
 	.add-repository:hover {
-		background: var(--bg-inset);
+		background: var(--sidebar-hover);
 		color: var(--text);
 	}
 	.nav-heading {
@@ -693,22 +719,13 @@
 		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 	}
 	.nav-row:hover:not(:disabled) {
-		background: var(--bg-inset);
+		background: var(--sidebar-hover);
 		color: var(--text);
 	}
 	.nav-row.active {
+		background: var(--sidebar-selected);
 		color: var(--text);
-		font-weight: 650;
-	}
-	.nav-row.active::before {
-		content: '';
-		position: absolute;
-		left: 0;
-		top: 7px;
-		bottom: 7px;
-		width: 2px;
-		border-radius: 2px;
-		background: var(--brand);
+		font-weight: 500;
 	}
 	.nav-row:disabled {
 		color: var(--border-strong);
@@ -719,12 +736,13 @@
 	}
 	.item {
 		position: relative;
-		display: flex;
+		display: grid;
+		grid-template-columns: 16px minmax(0, 1fr);
 		align-items: center;
-		gap: var(--space-2);
+		gap: 6px;
 		width: 100%;
 		min-height: 27px;
-		padding-left: 26px;
+		padding-left: 0;
 		padding-right: 48px;
 		padding-top: 4px;
 		padding-bottom: 4px;
@@ -732,76 +750,50 @@
 	}
 	.item:hover,
 	.item:focus-visible {
-		background: var(--bg-inset);
+		background: var(--sidebar-hover);
 	}
 	.item.active {
+		background: var(--sidebar-selected);
 		color: var(--text);
-		font-weight: 600;
-	}
-	.item.active::before {
-		content: '';
-		position: absolute;
-		left: 0;
-		top: 7px;
-		bottom: 7px;
-		width: 2px;
-		border-radius: 1px;
-		background: var(--brand);
 	}
 	.item-wrap:focus-within .row-actions,
 	.item-wrap:hover .row-actions {
 		display: flex;
 	}
 	.preview {
-		flex: 1;
 		min-width: 0;
-		color: var(--text);
+		color: var(--text-dim);
 		font-size: var(--fs-sm);
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
-	.project-list {
-		display: grid;
-		gap: 1px;
-		max-height: 144px;
-		overflow-y: auto;
+	.item.active .preview {
+		color: var(--text);
 	}
 	.project-row {
 		position: relative;
 		width: 100%;
-		display: flex;
+		display: grid;
+		grid-template-columns: 16px minmax(0, 1fr);
 		align-items: center;
-		gap: var(--space-2);
+		gap: 6px;
 		min-width: 0;
-		min-height: 28px;
-		padding: 4px var(--space-2);
+		min-height: 27px;
+		padding: 4px 4px 4px 0;
 		border-radius: var(--radius-sm);
 		color: var(--text-dim);
 		font-size: var(--fs-sm);
 		text-align: left;
+		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 	}
 	.project-row:hover {
-		background: var(--bg-inset);
+		background: var(--sidebar-hover);
 		color: var(--text);
 	}
 	.project-row.active {
+		background: var(--sidebar-selected);
 		color: var(--text);
-		font-weight: 600;
-	}
-	.project-row.active::before {
-		content: '';
-		position: absolute;
-		left: 0;
-		top: 7px;
-		bottom: 7px;
-		width: 2px;
-		border-radius: 1px;
-		background: var(--brand);
-	}
-	.project-row :global(svg) {
-		flex: none;
-		color: var(--text-faint);
 	}
 	.rename-input {
 		width: 100%;
@@ -837,7 +829,7 @@
 	.ren:hover,
 	.del:hover {
 		color: var(--text);
-		background: var(--bg-inset);
+		background: var(--sidebar-hover);
 	}
 	.sidebar-footer {
 		flex: none;

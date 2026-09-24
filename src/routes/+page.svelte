@@ -111,6 +111,7 @@
 		if (commandKey && e.shiftKey && key === 'a') {
 			e.preventDefault();
 			session.setWorkspaceView('ask');
+			session.newTab();
 			composer?.focus();
 		} else if (commandKey && e.shiftKey && key === 's') {
 			e.preventDefault();
