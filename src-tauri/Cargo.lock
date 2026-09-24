@@ -1506,7 +1506,7 @@ dependencies = [
  "csv",
  "duckdb",
  "futures-util",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "log",
  "nix",
  "pdf-extract",
