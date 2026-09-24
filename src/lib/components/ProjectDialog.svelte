@@ -6,22 +6,24 @@
 	let { open = $bindable(false) }: { open?: boolean } = $props();
 	let name = $state('');
 	let workspace = $state('');
+	let suggestedName = $state('');
 	let nameInput = $state<HTMLInputElement>();
 	let wasOpen = $state(false);
 
-	let repositories = $derived.by(() => {
+	let allRepositories = $derived.by(() => {
 		const paths = [...session.repositoryPaths];
-		if (session.catalog.workspace && !paths.includes(session.catalog.workspace)) {
-			paths.unshift(session.catalog.workspace);
-		}
+		if (session.catalog.workspace && !paths.includes(session.catalog.workspace)) paths.unshift(session.catalog.workspace);
 		return paths.map((path) => ({ path, name: baseName(path) }));
 	});
+	let repositories = $derived(allRepositories.filter((repository) => !session.projectForWorkspace(repository.path)));
 	let selectedRepository = $derived(repositories.find((repository) => repository.path === workspace));
+	let hasMountedRepositories = $derived(allRepositories.length > 0);
 
 	$effect(() => {
 		if (open && !wasOpen) {
-			name = '';
-			workspace = session.catalog.workspace ?? repositories[0]?.path ?? '';
+			workspace = repositories[0]?.path ?? '';
+			suggestedName = workspace ? baseName(workspace) : '';
+			name = suggestedName;
 			queueMicrotask(() => nameInput?.focus());
 		}
 		wasOpen = open;
@@ -32,14 +34,28 @@
 	}
 
 	function create(): void {
-		if (!name.trim() || !workspace) return;
+		if (!name.trim() || !workspace || !repositories.some((repository) => repository.path === workspace)) return;
 		session.createProject(name, workspace);
 		close();
 	}
 
+	function selectRepository(path: string): void {
+		const nextName = baseName(path);
+		if (!name.trim() || name === suggestedName) name = nextName;
+		suggestedName = nextName;
+		workspace = path;
+	}
+
 	async function chooseRepository(): Promise<void> {
 		await openFolder();
-		workspace = session.catalog.workspace ?? workspace;
+		const next = session.catalog.workspace;
+		const available = (next && repositories.find((repository) => repository.path === next)) ?? repositories[0];
+		if (available) selectRepository(available.path);
+		else {
+			workspace = '';
+			name = '';
+			suggestedName = '';
+		}
 	}
 
 	function key(event: KeyboardEvent): void {
@@ -77,7 +93,11 @@
 				<div class="field">
 					<label for="project-repository">Repository</label>
 					{#if repositories.length}
-						<select id="project-repository" bind:value={workspace}>
+						<select
+							id="project-repository"
+							value={workspace}
+							onchange={(event) => selectRepository((event.currentTarget as HTMLSelectElement).value)}
+						>
 							{#each repositories as repository (repository.path)}
 								<option value={repository.path}>{repository.name}</option>
 							{/each}
@@ -87,10 +107,14 @@
 						{/if}
 					{:else}
 						<div class="repository-empty">
-							<span>No repository mounted.</span>
-							<button class="pill ghost" type="button" onclick={() => void chooseRepository()}>
-								<Icon name="folder" size={16} /> Mount repository
-							</button>
+							{#if hasMountedRepositories}
+								<span>Each repository already has a project.</span>
+							{:else}
+								<span>No repository mounted.</span>
+								<button class="pill ghost" type="button" onclick={() => void chooseRepository()}>
+									<Icon name="folder" size={16} /> Mount repository
+								</button>
+							{/if}
 						</div>
 					{/if}
 				</div>
@@ -102,7 +126,13 @@
 
 			<div class="dialog-actions">
 				<button class="pill ghost" type="button" onclick={close}>Cancel</button>
-				<button class="pill primary" type="submit" disabled={!name.trim() || !workspace}>Create project</button>
+				<button
+					class="pill primary"
+					type="submit"
+					disabled={!name.trim() || !workspace || !repositories.some((repository) => repository.path === workspace)}
+				>
+					Create project
+				</button>
 			</div>
 		</form>
 	</div>

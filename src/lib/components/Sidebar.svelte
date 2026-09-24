@@ -2,7 +2,7 @@
 	import { ipc, isTauri } from '$lib/ipc';
 	import { errMsg, openConversation, openFolder } from '$lib/commands';
 	import { session } from '$lib/session.svelte';
-	import type { ConversationSummary, Project } from '$lib/types';
+	import type { ConversationSummary } from '$lib/types';
 	import Icon from './Icon.svelte';
 	import Logo from './Logo.svelte';
 
@@ -13,7 +13,6 @@
 		path: string | null;
 		name: string;
 		items: ConversationSummary[];
-		projects: Project[];
 		current: boolean;
 		expanded: boolean;
 	};
@@ -61,10 +60,10 @@
 	}
 
 	let repositories = $derived.by((): Repository[] => {
-		const grouped = new Map<string, { path: string | null; items: ConversationSummary[]; projects: Project[] }>();
+		const grouped = new Map<string, { path: string | null; items: ConversationSummary[] }>();
 		const add = (path: string | null, item?: ConversationSummary) => {
 			const key = repositoryKey(path);
-			const group = grouped.get(key) ?? { path, items: [], projects: [] };
+			const group = grouped.get(key) ?? { path, items: [] };
 			if (item) group.items.push(item);
 			grouped.set(key, group);
 		};
@@ -76,13 +75,6 @@
 				add(item.workspace, item);
 			}
 		}
-		for (const project of session.projects) {
-			const key = repositoryKey(project.workspace);
-			const group = grouped.get(key) ?? { path: project.workspace, items: [], projects: [] };
-			group.projects.push(project);
-			grouped.set(key, group);
-		}
-
 		const current = session.catalog.workspace;
 		const order = new Map(session.repositoryPaths.map((path, index) => [path, index]));
 		return [...grouped.values()]
@@ -99,7 +91,6 @@
 					path: group.path,
 					name: repositoryName(group.path),
 					items: group.items,
-					projects: group.projects,
 					current: active,
 					expanded: expandedRepos[key] ?? active
 				};
@@ -125,13 +116,6 @@
 		expandedRepos = { ...expandedRepos, [repo.key]: true };
 		if (repo.path && repo.path !== session.catalog.workspace) await openFolder(repo.path);
 		session.setWorkspacePane('sources');
-	}
-
-	async function newProject(repo: Repository): Promise<void> {
-		menuRepository = null;
-		if (!repo.path) return;
-		if (repo.path !== session.catalog.workspace) await openFolder(repo.path);
-		onnewproject?.();
 	}
 
 	async function addRepository(): Promise<void> {
@@ -234,6 +218,35 @@
 			<span>Search</span>
 		</button>
 	</nav>
+	<section class="projects-section" aria-labelledby="projects-heading">
+		<div class="section-head">
+			<div class="nav-heading" id="projects-heading">Projects</div>
+			<button
+				class="section-action"
+				type="button"
+				aria-label="New project"
+				title="New project"
+				onclick={() => onnewproject?.()}
+			>
+				<Icon name="plus" size={16} />
+			</button>
+		</div>
+		<div class="project-list">
+			{#each session.projects as project (project.id)}
+				<button
+					class="project-row"
+					class:active={session.workspaceView === 'project' && session.activeProjectId === project.id}
+					type="button"
+					title={project.workspace}
+					aria-current={session.workspaceView === 'project' && session.activeProjectId === project.id ? 'page' : undefined}
+					onclick={() => session.openProject(project.id)}
+				>
+					<span class="row-slot row-icon"><Icon name="project" size={16} /></span>
+					<span>{project.name}</span>
+				</button>
+			{/each}
+		</div>
+	</section>
 	<section class="repository-section" aria-labelledby="repositories-heading">
 		<div class="section-head">
 			<div class="nav-heading" id="repositories-heading">Repositories</div>
@@ -354,36 +367,6 @@
 									{/if}
 								</div>
 							{/each}
-							{#if repo.path}
-								<div class="repository-projects">
-									<div class="repository-subhead">
-										<span class="row-slot row-icon" aria-hidden="true"></span>
-										<span class="repository-subhead-label">Projects</span>
-										<button
-											class="repository-project-action"
-											type="button"
-											aria-label={`New project in ${repo.name}`}
-											title={`New project in ${repo.name}`}
-											onclick={() => void newProject(repo)}
-										>
-											<Icon name="plus" size={16} />
-										</button>
-									</div>
-									{#each repo.projects as project (project.id)}
-										<button
-											class="project-row"
-											class:active={session.workspaceView === 'project' && session.activeProjectId === project.id}
-											type="button"
-											title={project.workspace}
-											aria-current={session.workspaceView === 'project' && session.activeProjectId === project.id ? 'page' : undefined}
-											onclick={() => session.openProject(project.id)}
-										>
-											<span class="row-slot row-icon"><Icon name="project" size={16} /></span>
-											<span>{project.name}</span>
-										</button>
-									{/each}
-								</div>
-							{/if}
 						</div>
 					{/if}
 				</div>
@@ -464,6 +447,18 @@
 		display: grid;
 		gap: 1px;
 		padding: var(--space-3) var(--space-1) var(--space-2);
+	}
+	.projects-section {
+		flex: none;
+		display: grid;
+		gap: 1px;
+		padding: var(--space-1) var(--space-1) var(--space-2);
+	}
+	.project-list {
+		display: grid;
+		gap: 1px;
+		max-height: 144px;
+		overflow-y: auto;
 	}
 	.repository-section {
 		flex: 1;
@@ -650,38 +645,6 @@
 		background: var(--sidebar-selected);
 		color: var(--text);
 	}
-	.repository-projects {
-		display: grid;
-		gap: 1px;
-		margin-top: 4px;
-		padding-top: 4px;
-		border-top: 1px solid var(--border);
-	}
-	.repository-subhead {
-		display: grid;
-		grid-template-columns: 16px minmax(0, 1fr) 22px;
-		align-items: center;
-		gap: 6px;
-		min-height: 24px;
-	}
-	.repository-subhead-label {
-		color: var(--text-faint);
-		font-size: var(--fs-xs);
-		font-weight: 650;
-		letter-spacing: 0.01em;
-	}
-	.repository-project-action {
-		display: grid;
-		place-items: center;
-		width: 22px;
-		height: 22px;
-		border-radius: var(--radius-chip);
-		color: var(--text-faint);
-	}
-	.repository-project-action:hover {
-		background: var(--sidebar-hover);
-		color: var(--text);
-	}
 	.add-repository {
 		display: inline-flex;
 		align-items: center;
@@ -780,7 +743,7 @@
 		gap: 6px;
 		min-width: 0;
 		min-height: 27px;
-		padding: 4px 4px 4px 0;
+		padding: 4px var(--space-2);
 		border-radius: var(--radius-sm);
 		color: var(--text-dim);
 		font-size: var(--fs-sm);

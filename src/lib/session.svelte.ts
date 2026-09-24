@@ -363,7 +363,18 @@ class Session {
 		return this.projects.find((project) => project.id === this.activeProjectId) ?? null;
 	}
 
+	projectForWorkspace(workspace: string): Project | null {
+		return this.projects.find((project) => project.workspace === workspace) ?? null;
+	}
+
 	createProject(name: string, workspace: string): Project {
+		const existing = this.projectForWorkspace(workspace);
+		if (existing) {
+			this.activeProjectId = existing.id;
+			this.workspaceView = 'project';
+			return existing;
+		}
+
 		const now = Date.now();
 		const project: Project = {
 			id: `project-${uid()}`,
