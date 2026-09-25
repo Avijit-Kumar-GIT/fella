@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onDestroy } from 'svelte';
 	import { openFolder } from '$lib/commands';
-	import { ipc, isTauri } from '$lib/ipc';
+	import { ipc, isDesktop } from '$lib/ipc';
 	import { session } from '$lib/session.svelte';
 	import Icon from './Icon.svelte';
 	import DataLoader from './DataLoader.svelte';
@@ -16,7 +16,7 @@
 	let saveTimer: ReturnType<typeof setTimeout> | undefined;
 
 	async function load(): Promise<void> {
-		if (!isTauri() || !session.catalog.workspace) return;
+		if (!isDesktop() || !session.catalog.workspace) return;
 		loading = true;
 		error = '';
 		try {
@@ -32,7 +32,7 @@
 	}
 
 	async function save(): Promise<void> {
-		if (!isTauri() || !session.catalog.workspace || contents === savedContents) return;
+		if (!isDesktop() || !session.catalog.workspace || contents === savedContents) return;
 		saving = true;
 		error = '';
 		try {

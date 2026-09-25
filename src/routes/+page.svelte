@@ -11,7 +11,7 @@
 	import Transcript from '$lib/components/Transcript.svelte';
 	import WorkspaceView from '$lib/components/WorkspaceView.svelte';
 	import { dispatch, loadStartupCatalog, openFolder, stop } from '$lib/commands';
-	import { ipc, isTauri } from '$lib/ipc';
+	import { ipc, isDesktop, isTauri } from '$lib/ipc';
 	import { fadeQuick } from '$lib/motion';
 	import { prefs } from '$lib/prefs.svelte';
 	import { session } from '$lib/session.svelte';
@@ -25,7 +25,7 @@
 	let activeView = $derived(session.workspaceView);
 
 	async function refreshHealth() {
-		if (!isTauri()) return;
+		if (!isDesktop()) return;
 		try {
 			session.health = await ipc.providerHealth();
 		} catch {
@@ -36,7 +36,7 @@
 	onMount(() => {
 		void session.rollOver();
 		composer?.focus();
-		if (!isTauri()) return;
+		if (!isDesktop()) return;
 
 		void ipc
 			.appReady()
@@ -65,18 +65,20 @@
 		// Native folder drop -> /open, with a full-window drop target while a
 		// drag is over the window.
 		let unlisten: (() => void) | undefined;
-		void import('@tauri-apps/api/webview')
-			.then(({ getCurrentWebview }) =>
-				getCurrentWebview().onDragDropEvent((e) => {
-					const t = e.payload.type;
-					dragging = t === 'enter' || t === 'over';
-					if (t === 'drop' && e.payload.paths.length) {
-						void dispatch(`/open ${e.payload.paths[0]}`);
-					}
-				})
-			)
-			.then((u) => (unlisten = u))
-			.catch(() => {});
+		if (isTauri()) {
+			void import('@tauri-apps/api/webview')
+				.then(({ getCurrentWebview }) =>
+					getCurrentWebview().onDragDropEvent((e) => {
+						const t = e.payload.type;
+						dragging = t === 'enter' || t === 'over';
+						if (t === 'drop' && e.payload.paths.length) {
+							void dispatch(`/open ${e.payload.paths[0]}`);
+						}
+					})
+				)
+				.then((u) => (unlisten = u))
+				.catch(() => {});
+		}
 
 		return () => {
 			clearTimeout(timer);
@@ -170,6 +172,26 @@
 		}
 	}
 
+	function onDragOver(e: DragEvent): void {
+		if (e.dataTransfer?.types.includes('Files')) {
+			e.preventDefault();
+			dragging = true;
+		}
+	}
+
+	function onDragLeave(e: DragEvent): void {
+		if (e.relatedTarget === null) dragging = false;
+	}
+
+	function onDrop(e: DragEvent): void {
+		e.preventDefault();
+		dragging = false;
+		const file = e.dataTransfer?.files?.[0];
+		if (!file) return;
+		const path = window.fella?.pathForFile(file) ?? (file as File & { path?: string }).path;
+		if (path) void dispatch(`/open ${path}`);
+	}
+
 	// Persist the conversation transcript as it changes.
 	$effect(() => {
 		session.tabs.length;
@@ -233,7 +255,7 @@
 	});
 </script>
 
-<svelte:window onkeydown={onKey} />
+<svelte:window onkeydown={onKey} ondragover={onDragOver} ondragleave={onDragLeave} ondrop={onDrop} />
 
 	<div class="shell">
 		{#if !session.focus && !session.sidebarCollapsed}

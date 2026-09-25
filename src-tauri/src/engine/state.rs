@@ -1100,6 +1100,12 @@ exactly, character for character, from the list below.";
         update::apply(&self.http, app).await
     }
 
+    /// Electron owns the installer lifecycle, so its shell uses this check
+    /// without asking the Rust engine to replace a running process.
+    pub async fn check_update(&self) -> EngineResult<update::UpdateStatus> {
+        update::check(&self.http).await
+    }
+
     pub fn settings(&self) -> Settings {
         let mut s = sqlite::load_settings(&self.sqlite.lock().unwrap_or_else(|e| e.into_inner()));
         let id = provider::normalize_id(&s.provider);

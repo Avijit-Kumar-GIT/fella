@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { ipc, isTauri } from '$lib/ipc';
+	import { ipc, isDesktop } from '$lib/ipc';
 	import type { QueryResult, SourceInfo } from '$lib/types';
 	import DataLoader from './DataLoader.svelte';
 
@@ -19,7 +19,7 @@
 		preview = null;
 		error = '';
 		loadedPath = path;
-		if (!isTauri()) {
+		if (!isDesktop()) {
 			error = 'Preview is available in the Fella desktop app.';
 			return;
 		}

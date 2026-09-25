@@ -48,6 +48,15 @@ each choice holds across weak and strong models.
 | Excel (`--features xlsx`, default on) | `calamine` → typed rows → `DataEngine::add_rows` | Pure Rust; ~8 crates |
 | PDF (`--features pdf`, default on) | `pdf-extract` | Pure Rust text extraction (scanned/OCR out of scope); ~28 crates |
 
+## Electron comparison branch
+
+The `electron-migration` branch is a shell comparison, not a second analytics
+implementation. It keeps the Svelte UI and `EngineState` intact, launches the
+Rust engine as a sidecar, and replaces Tauri's command/channel transport with a
+secure Electron preload bridge backed by line-delimited JSON. The Tauri shell
+above remains the current release architecture; [`ELECTRON.md`](ELECTRON.md)
+documents the alternative and the process-tree memory measurement.
+
 ### Cargo features
 
 ```

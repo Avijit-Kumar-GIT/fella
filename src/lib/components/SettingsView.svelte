@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { dispatch, openFolder } from '$lib/commands';
-	import { ipc, isTauri } from '$lib/ipc';
+	import { ipc, isDesktop } from '$lib/ipc';
 	import { prefs, type Appearance } from '$lib/prefs.svelte';
 	import { session } from '$lib/session.svelte';
 	import type { AnalysisCapabilities } from '$lib/types';
@@ -42,7 +42,7 @@
 	let capabilityError = $state('');
 
 	async function toggleCapability(key: keyof AnalysisCapabilities): Promise<void> {
-		if (!isTauri()) return;
+		if (!isDesktop()) return;
 		const current = session.settings?.capabilities ?? defaultCapabilities;
 		const enabled = !current[key];
 		const next: AnalysisCapabilities = { ...current, [key]: enabled };
@@ -61,7 +61,7 @@
 	}
 
 	async function refreshSettings(): Promise<void> {
-		if (!isTauri()) return;
+		if (!isDesktop()) return;
 		try {
 			session.settings = await ipc.getSettings();
 			session.providers = await ipc.listProviders();

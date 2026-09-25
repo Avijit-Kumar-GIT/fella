@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { firstActualQuestion, session } from '$lib/session.svelte';
-	import { isTauri, win } from '$lib/ipc';
+	import { isDesktop, isElectron, win } from '$lib/ipc';
 	import Icon from './Icon.svelte';
 	import Logo from './Logo.svelte';
 	import TabBar from './TabBar.svelte';
@@ -91,7 +91,7 @@
 		</button>
 	{/if}
 
-	{#if isWindows && isTauri()}
+	{#if (isWindows || (isElectron() && !isMac)) && isDesktop()}
 		<div class="winctl" data-tauri-drag-region="false">
 			<button aria-label="Minimize" onclick={() => void win.minimize()}>
 				<Icon name="minus" size={16} />
@@ -119,6 +119,11 @@
 		font-size: var(--fs-sm);
 		user-select: none;
 		white-space: nowrap;
+		-webkit-app-region: drag;
+	}
+	.titlebar button,
+	.titlebar [data-tauri-drag-region='false'] {
+		-webkit-app-region: no-drag;
 	}
 	.titlebar.mac {
 		padding-left: 0;

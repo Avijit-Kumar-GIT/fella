@@ -1,6 +1,6 @@
 // Slash-command parsing and input dispatch for the REPL.
 
-import { ipc, isTauri, pickFolder } from './ipc';
+import { ipc, isDesktop, isElectron, pickFolder } from './ipc';
 import { Conversation, isActualQuestion, session } from './session.svelte';
 import type {
 	AskEvent,
@@ -156,7 +156,7 @@ export function completionsFor(input: string): string[] {
 
 /** Open a folder as the workspace. With no path, shows the native picker. */
 export async function openFolder(path?: string): Promise<void> {
-	if (!isTauri()) {
+	if (!isDesktop()) {
 		session.setWorkspaceView('ask');
 		session.addSystem('Fella needs the desktop app to do that.');
 		return;
@@ -196,7 +196,7 @@ export async function openFolder(path?: string): Promise<void> {
  *  the welcome screen can offer a one-click reopen. Fella no longer opens that
  *  folder automatically the user picks. Called once from the page's onMount. */
 export async function loadStartupCatalog(): Promise<void> {
-	if (!isTauri() || session.catalog.workspace) return;
+	if (!isDesktop() || session.catalog.workspace) return;
 	try {
 		session.catalog = await ipc.getCatalog();
 		session.rememberRepository(session.catalog.workspace);
@@ -218,7 +218,7 @@ export async function resumeLastFolder(): Promise<void> {
 
 /** Reopen an archived conversation and restore the folder it belongs to. */
 export async function openConversation(summary: ConversationSummary): Promise<void> {
-	if (!isTauri()) {
+	if (!isDesktop()) {
 		session.addSystem('Saved conversations need the desktop app.');
 		return;
 	}
@@ -253,7 +253,7 @@ export async function openContext(): Promise<void> {
  *  default). The `ask` promise then resolves normally (a "Stopped." answer) and
  *  clears that tab's `busy`. */
 export async function stop(conv: Conversation | null = session.activeChat): Promise<void> {
-	if (!conv || !conv.busy || !isTauri()) return;
+	if (!conv || !conv.busy || !isDesktop()) return;
 	conv.activity = 'stopping…';
 	try {
 		await ipc.cancel(conv.id);
@@ -320,7 +320,7 @@ export async function selectModel(model: string): Promise<boolean> {
 	const conv = session.ensureChat();
 	const previous = conv.model;
 	conv.model = next;
-	if (!isTauri()) return true;
+	if (!isDesktop()) return true;
 
 	try {
 		session.settings = await ipc.setSettings({ model: next });
@@ -452,7 +452,7 @@ async function runCommand(text: string): Promise<void> {
 		}
 
 		case '/history': {
-			if (!isTauri()) {
+			if (!isDesktop()) {
 				session.addSystem('Saved conversations need the desktop app.');
 				return;
 			}
@@ -833,13 +833,14 @@ async function runCommand(text: string): Promise<void> {
 					conv.busy = true;
 					conv.activity = 'checking for an update…';
 					const status = await ipc.update();
-					// A found update is applied immediately (no separate confirm
-					// step) the app exits as part of that, so this message may
-					// never actually be seen before the window closes.
 					conv.addSystem(
-						status.available
-							? `Updating to ${status.latest}… Fella will close; reopen it once the installer finishes.`
-							: `You're up to date (${status.current}).`
+						isElectron()
+							? status.available
+								? `A newer build is available (${status.latest}). Electron updates are not wired into this comparison branch yet.`
+								: `You're up to date (${status.current}).`
+							: status.available
+								? `Updating to ${status.latest}… Fella will close; reopen it once the installer finishes.`
+								: `You're up to date (${status.current}).`
 					);
 				} catch (e) {
 					conv.addSystem(`error: ${errMsg(e)}`);
@@ -1011,7 +1012,7 @@ function renderModelChoices(models: string[], current: string): string {
 }
 
 function requireEngine(): boolean {
-	if (isTauri()) return true;
+	if (isDesktop()) return true;
 	session.addSystem('Fella needs the desktop app to do that.');
 	return false;
 }

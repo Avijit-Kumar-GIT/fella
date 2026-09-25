@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { dispatch, openFolder, resumeLastFolder } from '$lib/commands';
 	import { session } from '$lib/session.svelte';
-	import { isTauri, openExternal } from '$lib/ipc';
+	import { isDesktop, openExternal } from '$lib/ipc';
 	import { fadeQuick } from '$lib/motion';
 	import Icon from './Icon.svelte';
 	import Logo from './Logo.svelte';
@@ -141,7 +141,7 @@
 						</button>
 					{/if}
 				</div>
-				{#if isTauri()}<p class="drophint">or drag a folder onto this window</p>{/if}
+				{#if isDesktop()}<p class="drophint">or drag a folder onto this window</p>{/if}
 				<p class="egs">
 					e.g. <em>“how did my spending change this year?”</em> ·
 					<em>“what stands out in my workout log?”</em>

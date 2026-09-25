@@ -8,7 +8,7 @@
 // specific `Conversation` so it keeps streaming into its own tab after a
 // switch.
 
-import { ipc, isTauri } from './ipc';
+import { ipc, isDesktop } from './ipc';
 import type {
 	AskMode,
 	Catalog,
@@ -572,7 +572,7 @@ class Session {
 			await this.#archive(tab);
 			return;
 		}
-		if (!isTauri()) return;
+		if (!isDesktop()) return;
 		await ipc.renameConversation(id, trimmed);
 		this.historyVersion++;
 	}
@@ -583,7 +583,7 @@ class Session {
 		if (!tab) return;
 		await this.#archive(tab);
 		tab.dropSnapshot();
-		if (isTauri()) void ipc.forgetConversation(tab.id).catch(() => {});
+		if (isDesktop()) void ipc.forgetConversation(tab.id).catch(() => {});
 		this.tabs.splice(i, 1);
 		if (this.tabs.length === 0) this.tabs.push(new Conversation());
 		if (this.active > i) this.active -= 1;
@@ -604,7 +604,7 @@ class Session {
 		if (i < 0) return;
 		const tab = this.tabs[i] as Conversation;
 		tab.dropSnapshot();
-		if (isTauri()) void ipc.forgetConversation(tab.id).catch(() => {});
+		if (isDesktop()) void ipc.forgetConversation(tab.id).catch(() => {});
 		this.tabs.splice(i, 1);
 		if (this.tabs.length === 0) this.tabs.push(new Conversation());
 		if (this.active > i) this.active -= 1;
@@ -688,7 +688,7 @@ class Session {
 	}
 
 	async #archive(tab: Conversation): Promise<void> {
-		if (tab.messages.length === 0 || !isTauri()) return;
+		if (tab.messages.length === 0 || !isDesktop()) return;
 		const body = JSON.stringify({
 			id: tab.id,
 			saved_at_ms: Date.now(),
@@ -714,7 +714,7 @@ class Session {
 		} catch {
 			return true;
 		}
-		if (!Array.isArray(saved.messages) || saved.messages.length === 0 || !isTauri()) return true;
+		if (!Array.isArray(saved.messages) || saved.messages.length === 0 || !isDesktop()) return true;
 		// This is a previous run's leftover conversation, recovered on launch --
 		// date it by its own last message, not by "now" (the relaunch moment),
 		// or it files under today's date no matter how long ago it happened.

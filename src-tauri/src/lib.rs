@@ -6,6 +6,7 @@
 
 mod commands;
 pub mod engine;
+pub mod stdio;
 
 /// Small process-wide bits not owned by the engine.
 pub struct AppState {
@@ -94,6 +95,11 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+/// Start the engine-only JSON-lines bridge used by the Electron shell.
+pub fn run_engine_stdio(data_dir: &std::path::Path) -> Result<(), String> {
+    stdio::run(data_dir)
 }
 
 /// One-time: the app shipped as "Woody" with identifier `dev.woody.app`. The

@@ -1,6 +1,6 @@
 // Per-install UI preferences. Appearance is a local UI choice.
 
-import { ipc, isTauri } from './ipc';
+import { ipc, isDesktop } from './ipc';
 
 export type Appearance = 'system' | 'light' | 'dark';
 
@@ -68,7 +68,7 @@ class Prefs {
 		root.dataset.appearance = this.appearance;
 		root.dataset.colorMode = this.isDark ? 'dark' : 'light';
 		root.style.colorScheme = this.isDark ? 'dark' : 'light';
-		if (isTauri()) void ipc.setWindowAppearance(this.isDark).catch(() => {});
+		if (isDesktop()) void ipc.setWindowAppearance(this.isDark).catch(() => {});
 	}
 }
 

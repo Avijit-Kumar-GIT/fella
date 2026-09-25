@@ -6,7 +6,7 @@
 		openFolder,
 		SLASH_COMMANDS
 	} from '$lib/commands';
-	import { ipc, isTauri } from '$lib/ipc';
+	import { ipc, isDesktop } from '$lib/ipc';
 	import { fadeQuick, pop } from '$lib/motion';
 	import { session } from '$lib/session.svelte';
 	import type { ConversationSummary, Project, SourceInfo } from '$lib/types';
@@ -46,7 +46,7 @@
 	];
 
 	async function loadHistory(): Promise<void> {
-		if (!isTauri()) return;
+		if (!isDesktop()) return;
 		try {
 			const next = await ipc.conversationsList();
 			session.rememberRepositories(next.map((item) => item.workspace));

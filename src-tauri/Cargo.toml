@@ -53,7 +53,7 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 ring = "0.17"
 async-trait = "0.1.92"
 nix = { version = "0.31.3", features = ["resource"] }
-tokio = { version = "1.53.1", features = ["rt", "time", "macros"] }
+tokio = { version = "1.53.1", features = ["rt", "rt-multi-thread", "time", "macros", "sync"] }
 getrandom = "0.3.4"
 wasmi = { version = "2.0.0", default-features = false, features = ["std", "validate", "auto-dispatch", "extra-checks"] }
 

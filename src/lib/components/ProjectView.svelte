@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { baseName, openFolder } from '$lib/commands';
-	import { ipc, isTauri } from '$lib/ipc';
+	import { ipc, isDesktop } from '$lib/ipc';
 	import { session } from '$lib/session.svelte';
 	import type { ConversationSummary } from '$lib/types';
 	import Icon from './Icon.svelte';
@@ -28,7 +28,7 @@
 	$effect(() => {
 		const workspace = project?.workspace;
 		session.historyVersion;
-		if (!workspace || !isTauri()) {
+		if (!workspace || !isDesktop()) {
 			history = [];
 			return;
 		}

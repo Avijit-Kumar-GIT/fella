@@ -1,8 +1,8 @@
-// Typed wrappers around the Tauri command surface.
+// Typed wrappers around the desktop command surface.
 //
-// Every call degrades gracefully when the app is opened in a plain browser
-// (e.g. `pnpm dev` without Tauri, or `pnpm build` prerender): `isTauri()` is
-// false and the callers fall back to local-only behaviour.
+// The Tauri and Electron shells intentionally share this contract. The UI
+// should not know whether a command crossed a WebView IPC boundary or a Rust
+// sidecar's JSON-lines boundary.
 
 import type {
 	Answer,
@@ -18,13 +18,27 @@ import type {
 	UpdateStatus
 } from './types';
 
-export function isTauri(): boolean {
+function isTauriRuntime(): boolean {
 	return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+}
+
+export function isElectron(): boolean {
+	return typeof window !== 'undefined' && typeof window.fella?.invoke === 'function';
+}
+
+export function isDesktop(): boolean {
+	return isTauriRuntime() || isElectron();
+}
+
+/** Kept for the few places that need to call a Tauri-only API. */
+export function isTauri(): boolean {
+	return isTauriRuntime();
 }
 
 /** Native folder picker. Returns the chosen path, or null if cancelled. */
 export async function pickFolder(): Promise<string | null> {
-	if (!isTauri()) return null;
+	if (isElectron()) return window.fella?.pickFolder() ?? null;
+	if (!isTauriRuntime()) return null;
 	const { open } = await import('@tauri-apps/plugin-dialog');
 	const picked = await open({ directory: true, multiple: false, title: 'Choose a folder' });
 	return typeof picked === 'string' ? picked : null;
@@ -32,7 +46,11 @@ export async function pickFolder(): Promise<string | null> {
 
 /** Open an https URL in the user's default browser. No-op outside the app. */
 export async function openExternal(url: string): Promise<void> {
-	if (!isTauri()) return;
+	if (isElectron()) {
+		await window.fella?.openExternal(url);
+		return;
+	}
+	if (!isTauriRuntime()) return;
 	try {
 		const { openUrl } = await import('@tauri-apps/plugin-opener');
 		await openUrl(url);
@@ -43,7 +61,11 @@ export async function openExternal(url: string): Promise<void> {
 
 /** Window controls for the custom titlebar. No-op outside the app. */
 async function windowAction(fn: 'minimize' | 'toggleMaximize' | 'close'): Promise<void> {
-	if (!isTauri()) return;
+	if (isElectron()) {
+		await window.fella?.windowAction(fn);
+		return;
+	}
+	if (!isTauriRuntime()) return;
 	try {
 		const { getCurrentWindow } = await import('@tauri-apps/api/window');
 		await getCurrentWindow()[fn]();
@@ -62,7 +84,11 @@ type InvokeFn = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
 let _invoke: InvokeFn | null = null;
 
 async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
-	if (!isTauri()) {
+	if (isElectron()) {
+		if (!window.fella) throw new Error('Electron preload bridge is unavailable');
+		return window.fella.invoke<T>(cmd, args);
+	}
+	if (!isTauriRuntime()) {
 		throw new Error(`ipc: "${cmd}" is unavailable outside the desktop app`);
 	}
 	if (!_invoke) {
@@ -139,6 +165,18 @@ export const ipc = {
 		model?: string,
 		mode?: AskMode
 	): Promise<Answer> {
+		if (isElectron()) {
+			if (!window.fella) throw new Error('Electron preload bridge is unavailable');
+			return window.fella.ask(
+				{
+					conversationId,
+					question,
+					model: model || null,
+					mode: mode || null
+				},
+				onEvent
+			);
+		}
 		const { Channel } = await import('@tauri-apps/api/core');
 		const channel = new Channel<AskEvent>();
 		channel.onmessage = onEvent;

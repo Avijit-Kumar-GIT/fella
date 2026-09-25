@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { ipc, isTauri } from '$lib/ipc';
+	import { ipc, isDesktop } from '$lib/ipc';
 	import { errMsg, openConversation, openFolder } from '$lib/commands';
 	import { session } from '$lib/session.svelte';
 	import type { ConversationSummary } from '$lib/types';
@@ -27,7 +27,7 @@
 			: 'Ctrl';
 
 	async function refresh() {
-		if (!isTauri()) return;
+		if (!isDesktop()) return;
 		try {
 			const next = await ipc.conversationsList();
 			session.rememberRepositories(next.map((item) => item.workspace));
@@ -149,7 +149,7 @@
 		if (next === original) return; // unedited -- nothing to save
 		try {
 			await session.renameConversation(id, next); // empty clears a custom title
-			if (isTauri()) list = await ipc.conversationsList();
+			if (isDesktop()) list = await ipc.conversationsList();
 		} catch (e) {
 			session.addSystem(`error: ${errMsg(e)}`);
 		}

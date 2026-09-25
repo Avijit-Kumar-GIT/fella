@@ -1,4 +1,6 @@
 node_modules
+electron/engine/
+dist-electron/
 
 # Output
 .output
