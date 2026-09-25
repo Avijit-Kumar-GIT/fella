@@ -13,7 +13,7 @@ function Require-Path([string]$Path, [string]$Hint) {
     }
 }
 
-function Get-ProcessTree([int]$RootPid) {
+function Get-ProcessTree([int]$RootPid, [int[]]$PreExistingPids) {
     $snapshot = @(Get-CimInstance Win32_Process)
     $ids = [System.Collections.Generic.List[int]]::new()
     $queue = [System.Collections.Queue]::new()
@@ -45,7 +45,8 @@ function Get-ProcessTree([int]$RootPid) {
                     break
                 }
             }
-            if ($matchesProfile -and -not $ids.Contains([int]$candidate.ProcessId)) {
+            $isNewProcess = -not ($PreExistingPids -contains [int]$candidate.ProcessId)
+            if (($matchesProfile -or $isNewProcess) -and -not $ids.Contains([int]$candidate.ProcessId)) {
                 $ids.Add([int]$candidate.ProcessId)
                 $queue.Enqueue([int]$candidate.ProcessId)
             }
@@ -65,6 +66,7 @@ function Get-ProcessTree([int]$RootPid) {
     return $ids.ToArray()
 }
 
+$preExistingPids = @(Get-CimInstance Win32_Process | ForEach-Object { [int]$_.ProcessId })
 if ($Shell -eq 'Electron') {
     $launcher = Join-Path $root 'node_modules/electron/dist/electron.exe'
     $entry = Join-Path $root 'electron/main.mjs'
@@ -92,7 +94,7 @@ try {
         throw "$Shell exited before the memory sample was taken (code $($process.ExitCode))."
     }
 
-    $ids = Get-ProcessTree $process.Id
+    $ids = Get-ProcessTree $process.Id $preExistingPids
     $rows = @(
         foreach ($id in $ids) {
             $item = Get-Process -Id $id -ErrorAction SilentlyContinue
@@ -108,6 +110,9 @@ try {
         }
     )
 
+    if ($Shell -eq 'Tauri' -and -not ($rows | Where-Object { $_.Name -ieq 'msedgewebview2' })) {
+        Write-Warning 'No WebView2 process was discovered. The Tauri memory total may exclude the WebView2 runtime.'
+    }
     $rows | Sort-Object PID | Format-Table -AutoSize
     [pscustomobject]@{
         Shell = $Shell
