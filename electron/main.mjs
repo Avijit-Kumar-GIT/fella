@@ -1,7 +1,8 @@
-import { app, BrowserWindow, dialog, ipcMain, net, protocol, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, protocol, shell } from 'electron';
 import { existsSync, mkdirSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { dirname, join, relative, resolve, sep } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { EngineClient, assertBinary } from './engine.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -38,6 +39,26 @@ function engineCandidates() {
 
 function findEngine() {
 	return engineCandidates().find((candidate) => existsSync(candidate));
+}
+
+function contentType(pathname) {
+	const extension = pathname.toLowerCase().split('.').pop();
+	return {
+		css: 'text/css; charset=utf-8',
+		gif: 'image/gif',
+		html: 'text/html; charset=utf-8',
+		ico: 'image/x-icon',
+		jpeg: 'image/jpeg',
+		jpg: 'image/jpeg',
+		js: 'text/javascript; charset=utf-8',
+		json: 'application/json; charset=utf-8',
+		png: 'image/png',
+		svg: 'image/svg+xml',
+		txt: 'text/plain; charset=utf-8',
+		webp: 'image/webp',
+		woff: 'font/woff',
+		woff2: 'font/woff2'
+	}[extension] ?? 'application/octet-stream';
 }
 
 function dataDirectory() {
@@ -97,12 +118,20 @@ app.whenReady().then(() => {
 	const buildRoot = app.isPackaged
 		? resolve(app.getAppPath(), 'build')
 		: resolve(root, 'build');
-	protocol.handle('fella', (request) => {
-		const pathname = decodeURIComponent(new URL(request.url).pathname);
-		const target = resolve(buildRoot, `.${pathname || '/index.html'}`);
-		const allowed = target === buildRoot || relative(buildRoot, target).split(sep)[0] !== '..';
+	protocol.handle('fella', async (request) => {
+		const pathname = decodeURIComponent(new URL(request.url).pathname || '/index.html');
+		const relativePath = pathname.replace(/^[/\\]+/, '') || 'index.html';
+		const target = resolve(buildRoot, relativePath);
+		const relativeTarget = relative(buildRoot, target);
+		const allowed = relativeTarget === '' || (relativeTarget.split(sep)[0] !== '..' && !relativeTarget.startsWith('..' + sep));
 		if (!allowed) return new Response('Forbidden', { status: 403 });
-		return net.fetch(pathToFileURL(target).toString());
+		try {
+			const body = await readFile(target);
+			return new Response(body, { headers: { 'Content-Type': contentType(target) } });
+		} catch (error) {
+			console.error(`Fella asset not found: ${target}`, error);
+			return new Response('Not Found', { status: 404 });
+		}
 	});
 
 		const binary = findEngine();
