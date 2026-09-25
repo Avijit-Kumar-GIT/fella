@@ -30,6 +30,38 @@ function Get-ProcessTree([int]$RootPid) {
             }
         }
     }
+
+    # WebView2 can be brokered outside the Tauri process tree. Include its
+    # browser/renderer processes when their user-data directory points at the
+    # isolated app-data profile used for this probe.
+    if ($Shell -eq 'Tauri') {
+        $markers = @($env:LOCALAPPDATA, $env:APPDATA) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+        foreach ($candidate in ($snapshot | Where-Object { $_.Name -ieq 'msedgewebview2.exe' })) {
+            $commandLine = [string]$candidate.CommandLine
+            $matchesProfile = $false
+            foreach ($marker in $markers) {
+                if ($commandLine.IndexOf($marker, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+                    $matchesProfile = $true
+                    break
+                }
+            }
+            if ($matchesProfile -and -not $ids.Contains([int]$candidate.ProcessId)) {
+                $ids.Add([int]$candidate.ProcessId)
+                $queue.Enqueue([int]$candidate.ProcessId)
+            }
+        }
+
+        while ($queue.Count -gt 0) {
+            $parent = [int]$queue.Dequeue()
+            foreach ($child in ($snapshot | Where-Object { $_.ParentProcessId -eq $parent })) {
+                $childId = [int]$child.ProcessId
+                if (-not $ids.Contains($childId)) {
+                    $ids.Add($childId)
+                    $queue.Enqueue($childId)
+                }
+            }
+        }
+    }
     return $ids.ToArray()
 }
 
