@@ -96,7 +96,7 @@ function createWindow() {
 	});
 
 	const devUrl = process.env.FELLA_ELECTRON_URL;
-	const load = devUrl ? win.loadURL(devUrl) : win.loadURL('fella://app/index.html');
+	const load = devUrl ? win.loadURL(devUrl) : win.loadURL('fella://app/');
 	load.catch((error) => {
 		console.error('Fella window failed to load:', error);
 		void dialog.showErrorBox('Fella could not start', String(error));
