@@ -94,7 +94,9 @@ async function openExternal(url) {
 }
 
 app.whenReady().then(() => {
-	const buildRoot = resolve(app.getAppPath(), 'build');
+	const buildRoot = app.isPackaged
+		? resolve(app.getAppPath(), 'build')
+		: resolve(root, 'build');
 	protocol.handle('fella', (request) => {
 		const pathname = decodeURIComponent(new URL(request.url).pathname);
 		const target = resolve(buildRoot, `.${pathname || '/index.html'}`);
