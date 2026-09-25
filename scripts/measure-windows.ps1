@@ -49,7 +49,11 @@ if ($Shell -eq 'Electron') {
     $arguments = @()
 }
 
-$process = Start-Process -FilePath $launcher -ArgumentList $arguments -WorkingDirectory $root -PassThru
+if ($Shell -eq 'Electron') {
+    $process = Start-Process -FilePath $launcher -ArgumentList $arguments -WorkingDirectory $root -PassThru
+} else {
+    $process = Start-Process -FilePath $launcher -WorkingDirectory $root -PassThru
+}
 try {
     Start-Sleep -Seconds $Seconds
     if ($process.HasExited) {
