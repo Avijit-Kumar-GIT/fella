@@ -3,15 +3,18 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
-const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
+const windows = process.platform === 'win32';
+const pnpm = windows ? 'pnpm.cmd' : 'pnpm';
 const devUrl = process.env.FELLA_ELECTRON_URL || 'http://localhost:1420';
 const env = { ...process.env, FELLA_ELECTRON_URL: devUrl };
-
-const vite = spawn(pnpm, ['dev'], {
+const pnpmOptions = {
 	cwd: root,
 	env,
-	stdio: 'inherit'
-});
+	stdio: 'inherit',
+	...(windows ? { shell: true } : {})
+};
+
+const vite = spawn(pnpm, ['dev'], pnpmOptions);
 
 let stopping = false;
 
@@ -46,11 +49,7 @@ async function waitForVite(timeoutMs = 30000) {
 async function main() {
 	try {
 		await waitForVite();
-		const electron = spawn(pnpm, ['exec', 'electron', 'electron/main.mjs'], {
-			cwd: root,
-			env,
-			stdio: 'inherit'
-		});
+		const electron = spawn(pnpm, ['exec', 'electron', 'electron/main.mjs'], pnpmOptions);
 
 		const exitCode = await new Promise((resolveExit) => {
 			electron.once('exit', (code) => resolveExit(code ?? 1));
