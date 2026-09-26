@@ -71,6 +71,10 @@
 		min-width: 0;
 		overflow-x: auto;
 		scrollbar-width: none;
+		/* TabBar is rendered inside Electron's draggable titlebar. Keep the
+		   whole strip interactive; Titlebar.svelte's scoped no-drag rule cannot
+		   style elements rendered by this child component. */
+		-webkit-app-region: no-drag;
 	}
 	.tabs::-webkit-scrollbar {
 		display: none;
@@ -86,6 +90,7 @@
 		font-size: var(--fs-sm);
 		cursor: pointer;
 		white-space: nowrap;
+		-webkit-app-region: no-drag;
 		transition:
 			background var(--dur-fast) var(--ease),
 			color var(--dur-fast) var(--ease);
@@ -112,6 +117,7 @@
 			background var(--dur-fast) var(--ease),
 			color var(--dur-fast) var(--ease),
 			opacity var(--dur-fast) var(--ease);
+		-webkit-app-region: no-drag;
 	}
 	.close {
 		width: 16px;
