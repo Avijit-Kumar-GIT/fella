@@ -144,7 +144,9 @@ async fn dispatch(
                 .params
                 .get("rows")
                 .and_then(Value::as_u64)
-                .unwrap_or(5) as usize;
+                .and_then(|rows| usize::try_from(rows).ok())
+                .unwrap_or(5)
+                .clamp(1, 50);
             value_result(engine.sample(&name, rows))
         }
         "run_sql_direct" => {

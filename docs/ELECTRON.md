@@ -14,9 +14,11 @@ The bridge preserves streamed `ask` events, folder selection, external links,
 window controls, conversation history, settings, workspace operations, theme
 surfaces, and the explicit update flow. Windows uses Fella's frameless controls;
 Linux and macOS retain native window decorations, matching the Tauri configs.
-The Electron branch keeps its data under `dev.fella.app-electron` by default so
-it can be opened beside the Tauri build. Set `FELLA_DATA_DIR` to compare against
-a specific data directory.
+Electron uses the same `dev.fella.app` data directory as Tauri by default, so
+`auth.json`, settings, memory, and conversation history are shared. On Windows
+this is `%APPDATA%\dev.fella.app`. Set `FELLA_DATA_DIR` only when intentionally
+running an isolated benchmark or test. Do not run Tauri and Electron at the
+same time against the same data directory.
 
 ## Run it
 

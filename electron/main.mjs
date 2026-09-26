@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, protocol, shell } from 'electron';
 import { existsSync, mkdirSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { EngineClient, assertBinary } from './engine.mjs';
@@ -65,9 +66,15 @@ function contentType(pathname) {
 function dataDirectory() {
 	const configured = process.env.FELLA_DATA_DIR?.trim();
 	if (configured) return resolve(configured);
-	// Keep the experiment's data separate from the Tauri install while both
-	// branches may be open during a comparison.
-	return join(app.getPath('appData'), 'dev.fella.app-electron');
+	// Match Tauri's app.path().app_data_dir() for the dev.fella.app
+	// identifier. FELLA_DATA_DIR remains available for isolated tests and
+	// benchmarks.
+	if (process.platform === 'linux') {
+		const xdgDataHome = process.env.XDG_DATA_HOME?.trim();
+		const dataHome = xdgDataHome ? resolve(xdgDataHome) : join(homedir(), '.local', 'share');
+		return join(dataHome, 'dev.fella.app');
+	}
+	return join(app.getPath('appData'), 'dev.fella.app');
 }
 
 const DARK_WINDOW = '#0e0e10';
@@ -177,6 +184,7 @@ app.whenReady().then(() => {
 			assertBinary(binary);
 			const dataDir = dataDirectory();
 			mkdirSync(dataDir, { recursive: true });
+			console.info(`Fella data directory: ${dataDir}`);
 			engine = new EngineClient(binary, dataDir);
 		} catch (error) {
 			void dialog.showErrorBox('Fella engine unavailable', String(error));
