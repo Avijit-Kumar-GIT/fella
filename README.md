@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="src-tauri/icons/icon.png" width="88" alt="Fella logo">
+  <img src="logo.svg" width="88" alt="Fella logo">
   <h1>Fella</h1>
   <p><strong>Personal analytics for the files on your computer.</strong></p>
   <p>Ask questions about your own data and inspect exactly how each answer was computed.</p>
