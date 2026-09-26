@@ -1,8 +1,8 @@
 <div align="center">
   <img src="logo.svg" width="88" alt="Fella logo">
   <h1>Fella</h1>
-  <p><strong>Your life is already in files. Fella makes it queryable.</strong></p>
-  <p>Turn a folder of statements, exports, notes, and logs into answers you can inspect all the way back to the source.</p>
+  <p><strong>An opinionated analytics engine and harness for personal data.</strong></p>
+  <p>Turn messy files into consistent, correctness-first analysis&mdash;with no tool sprawl and no write access.</p>
 
   <p>
     <a href="https://lilfella.app">Website</a> ·
@@ -20,40 +20,46 @@
 
 > *The more an AI can do for you, the more it can do to you.*
 
-Most of the data that matters to you is already somewhere on your computer:
-bank exports, health records, receipts, spreadsheets, notes, and the half-clean
-folder you never got around to organizing. Fella gives that pile a boundary and
-a way to speak.
+General-purpose agents are built to do more. Fella is built to get one class of
+work right: analytics over the data you already have.
 
-Point it at a folder, ask a question in plain language, and get a computed
-answer with the path back to the evidence. Fella turns the question into
-read-only analysis, produces a chart when one makes the pattern clearer, and
-keeps the underlying queries, rows, and checks available for inspection.
+Your computer is full of data that never became insight: a year of expenses, a
+workout log, project exports, PDFs, notes, and files with names you no longer
+remember. Fella gives those fragments a bounded workspace you can actually
+explore. Ask in plain language, compare periods, follow a thread, and find the
+pattern hiding in the mess.
 
-It is the kind of queryable surface a company might build with a warehouse and
-a data team, brought down to the files you already have. The model helps
-translate the question; Fella's analytics engine does the work. That distinction
-is the product.
+Fella combines a Rust analytics engine with an opinionated AI harness. The
+harness breaks broad questions into smaller analytical steps, keeps context
+deliberate, and uses the fewest tools needed. The engine catalogs files, queries
+local data, searches documents, makes charts, and checks the result before it
+reaches you.
 
-It is deliberately not a general-purpose computer agent: Fella reads your data,
-but it does not write, move, delete, send, or act on your behalf.
+For analytics, a plausible answer is not good enough. The goal is to reach the
+right answer the first time, with as little unnecessary reasoning between the
+question and result as possible. That is why Fella does not ship as a general-
+purpose agent with a large tool belt. Analytics rarely needs to write files,
+run shell commands, browse the web, or act on your behalf.
 
-## A personal data engine with a conversational front door
+The result is an opinionated system: small enough for the model to reason about,
+powerful enough to cover the major families of personal analysis, and bounded
+enough to trust with the files you already have.
 
-Fella is not another dashboard that asks you to create a new data silo. It
-starts with the folder you already own and makes it useful without asking you
-to become a data analyst first.
+## Three things Fella optimizes for
+
+Fella does one useful thing deeply: it makes the personal data already on your
+computer understandable without making the reasoning needlessly complicated.
 
 | | |
 | --- | --- |
-| **Start with a folder** | Mount the files you already have and keep the workspace bounded to that source. |
-| **Ask the question you actually have** | Explore spending, health, workouts, projects, documents, or any other personal dataset without learning SQL first. |
-| **Make messy data useful** | Fella catalogs mixed files, infers tables, searches documents, and chooses the right read-only computation. |
-| **See where the answer came from** | Answers retain the tools, queries, source rows, timings, provenance, charts, and verification checks behind them. |
-| **Keep the power on your side** | The agent can analyze the workspace, but it cannot write, move, delete, send, or act. |
+| **Consistency** | A small fixed tool set and structured decomposition keep the route from question to analysis predictable across questions. |
+| **Correctness** | The engine computes the numbers, the harness checks the work, and the result should be right the first time whenever the data can support it. |
+| **Efficiency** | Deliberate context, bounded steps, duplicate-call avoidance, and only the tools analytics needs keep wasted reasoning and tokens down. |
+| **Read-only by design** | Fella can analyze the workspace, but it cannot write, move, delete, send, or act. The boundary is part of the architecture, not a setting. |
+| **Useful on real files** | Mount the folder you already have, ask in plain language, and get a concise analysis or chart without building a warehouse or learning SQL first. |
 | **Bring your own model** | Connect OpenAI, Vercel AI Gateway, xAI, Ollama Cloud, OpenRouter, or a custom OpenAI-compatible endpoint. |
 
-## How an answer is produced
+## From a question to an answer
 
 ```text
 your folder, as it is
@@ -62,15 +68,20 @@ bounded workspace + typed local tables
         ↓
 question → read-only SQL · document search · bounded Python · charts
         ↓
-verification + provenance checks
+patterns · comparisons · charts · caveats
         ↓
-an answer with a path back to the source
+a clear answer you can use
 ```
 
 The model is the conversational front door, not the source of truth for the
-numbers. The Rust analytics engine performs the computation, and a separate
-verification pass re-runs cited queries and checks the answer against real
-results. If the folder cannot support the claim, Fella should say so.
+numbers. It can suggest a route through the data; it cannot decide what the
+data says. Fella's Rust analytics engine performs the computation, and a
+separate verification pass checks the result against real data. If the folder
+cannot support the claim, Fella should say so.
+
+When you want to go deeper, the result opens up: source files, calculations,
+and verification are there to inspect. Evidence supports the analysis without
+getting in the way of using it.
 
 That makes Fella useful for questions such as:
 
