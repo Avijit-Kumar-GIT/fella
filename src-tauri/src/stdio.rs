@@ -118,6 +118,11 @@ async fn dispatch(
     let id = request.id;
     let result = match request.method.as_str() {
         "ping" => Ok(Value::String("pong".into())),
+        "app_info" => serialized(serde_json::json!({
+            "name": "fella",
+            "version": env!("CARGO_PKG_VERSION"),
+            "uptime_ms": started.elapsed().as_millis(),
+        })),
         "app_ready" => {
             let ms = started.elapsed().as_millis();
             eprintln!("fella: interactive in {ms} ms");

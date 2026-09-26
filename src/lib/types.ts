@@ -211,6 +211,12 @@ export interface ProviderHealth {
 	models: string[];
 }
 
+export interface AppInfo {
+	name: string;
+	version: string;
+	uptime_ms: number;
+}
+
 export interface QueryResult {
 	columns: string[];
 	rows: unknown[][];

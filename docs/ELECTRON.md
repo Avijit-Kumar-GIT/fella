@@ -11,10 +11,12 @@ Electron main / preload  →  Rust engine sidecar
 ```
 
 The bridge preserves streamed `ask` events, folder selection, external links,
-window controls, conversation history, settings, and workspace operations. The
-Electron branch keeps its data under `dev.fella.app-electron` by default so it
-can be opened beside the Tauri build. Set `FELLA_DATA_DIR` to compare against a
-specific data directory.
+window controls, conversation history, settings, workspace operations, theme
+surfaces, and the explicit update flow. Windows uses Fella's frameless controls;
+Linux and macOS retain native window decorations, matching the Tauri configs.
+The Electron branch keeps its data under `dev.fella.app-electron` by default so
+it can be opened beside the Tauri build. Set `FELLA_DATA_DIR` to compare against
+a specific data directory.
 
 ## Run it
 
@@ -22,9 +24,22 @@ From Windows PowerShell:
 
 ```powershell
 pnpm install
-pnpm electron:build
-node_modules/electron/dist/electron.exe electron/main.mjs
+pnpm electron:run
 ```
+
+For a hot-reloading development session, `electron:dev` builds the Rust
+sidecar, starts Vite, waits until port 1420 is serving, and then starts
+Electron as one process tree:
+
+```powershell
+pnpm electron:dev
+```
+
+The equivalent two-terminal flow is `pnpm dev` in one terminal and
+`pnpm exec electron .\electron\main.mjs` with `FELLA_ELECTRON_URL` set in the
+other. The shell waits for that URL before loading, so starting Electron a
+little before Vite is ready no longer produces a transient 404 or refused
+connection.
 
 `electron:build` builds the existing Rust crate in release mode, prepares the
 sidecar, and builds the static Svelte app. The packaged build is:

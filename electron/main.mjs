@@ -1,9 +1,10 @@
-import { app, BrowserWindow, dialog, ipcMain, protocol, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, protocol, shell } from 'electron';
 import { existsSync, mkdirSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { EngineClient, assertBinary } from './engine.mjs';
+import { checkAndApply } from './update.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '..');
@@ -69,18 +70,46 @@ function dataDirectory() {
 	return join(app.getPath('appData'), 'dev.fella.app-electron');
 }
 
-function createWindow() {
+const DARK_WINDOW = '#0e0e10';
+const LIGHT_WINDOW = '#fcfcfb';
+
+function setWindowAppearance(win, dark) {
+	win.setBackgroundColor(dark ? DARK_WINDOW : LIGHT_WINDOW);
+}
+
+async function waitForDevServer(url, timeoutMs = 15000) {
+	const deadline = Date.now() + timeoutMs;
+	let lastError;
+	while (Date.now() < deadline) {
+		try {
+			const response = await fetch(url, { method: 'HEAD', signal: AbortSignal.timeout(1000) });
+			if (response.ok || response.status < 500) return;
+			lastError = new Error(`development server returned HTTP ${response.status}`);
+		} catch (error) {
+			lastError = error;
+		}
+		await new Promise((resolvePromise) => setTimeout(resolvePromise, 200));
+	}
+	throw new Error(`development server did not become ready at ${url}: ${lastError ?? 'timed out'}`);
+}
+
+async function createWindow() {
 	const mac = process.platform === 'darwin';
+	const windows = process.platform === 'win32';
 	const win = new BrowserWindow({
 		width: 1280,
 		height: 800,
 		minWidth: 960,
 		minHeight: 640,
+		resizable: true,
 		show: false,
-		frame: mac,
+		// Match the Tauri overlays: Windows is frameless because Fella draws its
+		// own controls; Linux and macOS retain the native frame.
+		frame: !windows,
 		titleBarStyle: mac ? 'hiddenInset' : undefined,
-		backgroundColor: '#0e0e10',
+		backgroundColor: nativeTheme.shouldUseDarkColors ? DARK_WINDOW : LIGHT_WINDOW,
 		autoHideMenuBar: true,
+		title: 'Fella',
 		webPreferences: {
 			preload: join(here, 'preload.mjs'),
 			contextIsolation: true,
@@ -88,6 +117,7 @@ function createWindow() {
 			sandbox: true
 		}
 	});
+	setWindowAppearance(win, nativeTheme.shouldUseDarkColors);
 
 	win.once('ready-to-show', () => win.show());
 	win.webContents.setWindowOpenHandler(({ url }) => {
@@ -96,11 +126,14 @@ function createWindow() {
 	});
 
 	const devUrl = process.env.FELLA_ELECTRON_URL;
-	const load = devUrl ? win.loadURL(devUrl) : win.loadURL('fella://app/');
-	load.catch((error) => {
+	try {
+		if (devUrl) await waitForDevServer(devUrl);
+		await (devUrl ? win.loadURL(devUrl) : win.loadURL('fella://app/'));
+	} catch (error) {
 		console.error('Fella window failed to load:', error);
 		void dialog.showErrorBox('Fella could not start', String(error));
-	});
+		app.quit();
+	}
 	return win;
 }
 
@@ -146,9 +179,14 @@ app.whenReady().then(() => {
 			return;
 		}
 
-		ipcMain.handle('fella:invoke', (_event, request) =>
-			engine.request(request.command, request.args ?? {})
-		);
+		ipcMain.handle('fella:invoke', (_event, request) => {
+			if (request.command === 'update') return checkAndApply(app);
+			return engine.request(request.command, request.args ?? {});
+		});
+		ipcMain.handle('fella:set-window-appearance', (event, dark) => {
+			const owner = BrowserWindow.fromWebContents(event.sender);
+			if (owner) setWindowAppearance(owner, Boolean(dark));
+		});
 		ipcMain.handle('fella:ask', (event, request) =>
 			engine.request('ask', request.params ?? {}, (item) => {
 				if (!event.sender.isDestroyed()) {
@@ -173,12 +211,16 @@ app.whenReady().then(() => {
 			else if (action === 'close') owner.close();
 		});
 
-		createWindow();
+		void createWindow();
 	});
 
 app.on('window-all-closed', () => {
-		if (process.platform !== 'darwin') app.quit();
-	});
+	if (process.platform !== 'darwin') app.quit();
+});
+
+app.on('activate', () => {
+	if (BrowserWindow.getAllWindows().length === 0) void createWindow();
+});
 
 app.on('before-quit', () => {
 		engine?.dispose();

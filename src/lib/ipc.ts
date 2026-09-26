@@ -6,6 +6,7 @@
 
 import type {
 	Answer,
+	AppInfo,
 	AskMode,
 	AskEvent,
 	Catalog,
@@ -79,6 +80,17 @@ export const win = {
 	close: () => windowAction('close')
 };
 
+/** Keep the native Electron surface in step with the document theme. */
+async function setWindowAppearance(dark: boolean): Promise<void> {
+	if (isElectron()) {
+		await window.fella?.setWindowAppearance(dark);
+		return;
+	}
+	if (isTauriRuntime()) {
+		await invoke<void>('set_window_appearance', { dark });
+	}
+}
+
 type InvokeFn = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
 
 let _invoke: InvokeFn | null = null;
@@ -101,6 +113,7 @@ async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T
 export const ipc = {
 	/** Signals the app is interactive; returns cold-start ms. */
 	appReady: () => invoke<number>('app_ready'),
+	appInfo: () => invoke<AppInfo>('app_info'),
 	openWorkspace: (path: string) => invoke<Catalog>('open_workspace', { path }),
 	getCatalog: () => invoke<Catalog>('get_catalog'),
 	lastWorkspacePath: () => invoke<string | null>('last_workspace_path'),
@@ -116,7 +129,7 @@ export const ipc = {
 		invoke<Settings>('logout', { provider, forget }),
 
 	providerHealth: () => invoke<ProviderHealth>('provider_health'),
-	setWindowAppearance: (dark: boolean) => invoke<void>('set_window_appearance', { dark }),
+	setWindowAppearance,
 	cancel: (conversationId: string) => invoke<void>('cancel', { conversationId }),
 	forgetConversation: (conversationId: string) =>
 		invoke<void>('forget_conversation', { conversationId }),

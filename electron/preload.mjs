@@ -28,6 +28,10 @@ contextBridge.exposeInMainWorld('fella', {
 		return ipcRenderer.invoke('fella:open-external', url);
 	},
 
+	setWindowAppearance(dark) {
+		return ipcRenderer.invoke('fella:set-window-appearance', dark);
+	},
+
 	pathForFile(file) {
 		return webUtils.getPathForFile(file);
 	},

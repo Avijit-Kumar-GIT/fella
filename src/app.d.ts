@@ -18,6 +18,7 @@ declare global {
 			): Promise<import('./lib/types').Answer>;
 			pickFolder(): Promise<string | null>;
 			openExternal(url: string): Promise<void>;
+			setWindowAppearance(dark: boolean): Promise<void>;
 			pathForFile(file: File): string;
 			windowAction(action: 'minimize' | 'toggleMaximize' | 'close'): Promise<void>;
 		};

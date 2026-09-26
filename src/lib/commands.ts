@@ -836,7 +836,7 @@ async function runCommand(text: string): Promise<void> {
 					conv.addSystem(
 						isElectron()
 							? status.available
-								? `A newer build is available (${status.latest}). Electron updates are not wired into this comparison branch yet.`
+								? `Updating to ${status.latest}… Fella will close; reopen it once the installer finishes.`
 								: `You're up to date (${status.current}).`
 							: status.available
 								? `Updating to ${status.latest}… Fella will close; reopen it once the installer finishes.`

@@ -99,7 +99,11 @@ pub fn run() {
 
 /// Start the engine-only JSON-lines bridge used by the Electron shell.
 pub fn run_engine_stdio(data_dir: &std::path::Path) -> Result<(), String> {
-    stdio::run(data_dir)
+	// The sidecar must follow the same one-time rename migration as the Tauri
+	// shell. Otherwise an Electron launch after an older Woody install would
+	// appear to lose its settings, keys, and saved conversations.
+	migrate_from_woody(data_dir);
+	stdio::run(data_dir)
 }
 
 /// One-time: the app shipped as "Woody" with identifier `dev.woody.app`. The

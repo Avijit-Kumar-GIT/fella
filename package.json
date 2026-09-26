@@ -12,6 +12,7 @@
 		"dev": "vite dev",
 		"build": "vite build",
 		"electron:build": "pnpm build && cargo build --release --manifest-path src-tauri/Cargo.toml && node electron/prepare-engine.mjs",
+		"electron:dev": "pnpm electron:build && node electron/dev.mjs",
 		"electron:run": "pnpm electron:build && electron electron/main.mjs",
 		"electron:package": "pnpm electron:build && electron-builder",
 		"preview": "vite preview",
