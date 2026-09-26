@@ -111,7 +111,9 @@ async function createWindow() {
 		autoHideMenuBar: true,
 		title: 'Fella',
 		webPreferences: {
-			preload: join(here, 'preload.mjs'),
+			// Sandboxed preloads cannot use ESM imports. Keep this bridge CommonJS
+			// so it executes on Electron 20+ without disabling the renderer sandbox.
+			preload: join(here, 'preload.cjs'),
 			contextIsolation: true,
 			nodeIntegration: false,
 			sandbox: true
@@ -120,6 +122,9 @@ async function createWindow() {
 	setWindowAppearance(win, nativeTheme.shouldUseDarkColors);
 
 	win.once('ready-to-show', () => win.show());
+	win.webContents.on('preload-error', (_event, preloadPath, error) => {
+		console.error(`Fella preload failed (${preloadPath}):`, error);
+	});
 	win.webContents.setWindowOpenHandler(({ url }) => {
 		void openExternal(url);
 		return { action: 'deny' };

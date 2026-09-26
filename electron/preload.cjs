@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, webUtils } from 'electron';
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 const listeners = new Map();
 let nextAskId = 1;
