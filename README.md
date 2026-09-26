@@ -1,8 +1,8 @@
 <div align="center">
   <img src="logo.svg" width="88" alt="Fella logo">
   <h1>Fella</h1>
-  <p><strong>Personal analytics for the files on your computer.</strong></p>
-  <p>Ask questions about your own data and inspect exactly how each answer was computed.</p>
+  <p><strong>Your life is already in files. Fella makes it queryable.</strong></p>
+  <p>Turn a folder of statements, exports, notes, and logs into answers you can inspect all the way back to the source.</p>
 
   <p>
     <a href="https://lilfella.app">Website</a> ·
@@ -20,41 +20,64 @@
 
 > *The more an AI can do for you, the more it can do to you.*
 
-Fella is a local-first analytics agent. Mount a folder of statements, exports,
-notes, logs, or receipts, then ask questions in plain language. Fella turns the
-question into read-only computations, returns the result with charts when useful,
-and keeps the underlying queries, rows, and checks available for inspection.
+Most of the data that matters to you is already somewhere on your computer:
+bank exports, health records, receipts, spreadsheets, notes, and the half-clean
+folder you never got around to organizing. Fella gives that pile a boundary and
+a way to speak.
+
+Point it at a folder, ask a question in plain language, and get a computed
+answer with the path back to the evidence. Fella turns the question into
+read-only analysis, produces a chart when one makes the pattern clearer, and
+keeps the underlying queries, rows, and checks available for inspection.
+
+It is the kind of queryable surface a company might build with a warehouse and
+a data team, brought down to the files you already have. The model helps
+translate the question; Fella's analytics engine does the work. That distinction
+is the product.
 
 It is deliberately not a general-purpose computer agent: Fella reads your data,
 but it does not write, move, delete, send, or act on your behalf.
 
-## What Fella does
+## A personal data engine with a conversational front door
+
+Fella is not another dashboard that asks you to create a new data silo. It
+starts with the folder you already own and makes it useful without asking you
+to become a data analyst first.
 
 | | |
 | --- | --- |
-| **Mount a workspace** | Organize folder mounts as repositories, with conversations and optional local projects alongside them. |
-| **Ask in plain language** | Ask about spending, health exports, workouts, projects, documents, or any other personal dataset. |
-| **Compute locally** | A Rust analytics engine uses read-only SQL, validated charts, and a bounded Python/WASM sandbox. |
-| **Show its work** | Answers retain the tools, queries, source rows, timings, provenance, and verification checks behind them. |
+| **Start with a folder** | Mount the files you already have and keep the workspace bounded to that source. |
+| **Ask the question you actually have** | Explore spending, health, workouts, projects, documents, or any other personal dataset without learning SQL first. |
+| **Make messy data useful** | Fella catalogs mixed files, infers tables, searches documents, and chooses the right read-only computation. |
+| **See where the answer came from** | Answers retain the tools, queries, source rows, timings, provenance, charts, and verification checks behind them. |
+| **Keep the power on your side** | The agent can analyze the workspace, but it cannot write, move, delete, send, or act. |
 | **Bring your own model** | Connect OpenAI, Vercel AI Gateway, xAI, Ollama Cloud, OpenRouter, or a custom OpenAI-compatible endpoint. |
 
 ## How an answer is produced
 
 ```text
-your folder
-    ↓
-catalog + typed local tables
-    ↓
-read-only SQL · document search · bounded Python · charts
-    ↓
-deterministic verification and provenance checks
-    ↓
-answer with inspectable evidence
+your folder, as it is
+        ↓
+bounded workspace + typed local tables
+        ↓
+question → read-only SQL · document search · bounded Python · charts
+        ↓
+verification + provenance checks
+        ↓
+an answer with a path back to the source
 ```
 
-The model plans the analysis; it is not the source of truth for the numbers.
-The analytics engine performs the computation and a separate verification pass
-re-runs cited queries and checks the answer against real results.
+The model is the conversational front door, not the source of truth for the
+numbers. The Rust analytics engine performs the computation, and a separate
+verification pass re-runs cited queries and checks the answer against real
+results. If the folder cannot support the claim, Fella should say so.
+
+That makes Fella useful for questions such as:
+
+- “Where did my spending change over the last six months?”
+- “How does my sleep relate to my workout days?”
+- “Which projects have the most unresolved work?”
+- “Show me the trend, and let me see the records behind it.”
 
 ## Supported files
 
