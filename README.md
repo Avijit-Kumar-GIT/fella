@@ -8,38 +8,65 @@
 
 *The more an AI can do for you, the more it can do to you.*
 
-**Ask questions about your own files, and see exactly how it got the answer.**
+**An opinionated analytics engine and harness for personal data.**
+
+Turn messy files into consistent, correctness-first analysis—with no tool
+sprawl and no write access.
 
 <!-- TODO(demo): a ~20s GIF here, before anything else: open a folder of real-looking
-     files -> ask a question -> answer streams in -> open the evidence fold -> show
-     the SQL and rows behind it. This is the single highest-leverage thing missing
-     from this README. Record with the actual app; no product work needed. -->
+     files -> ask a question -> a useful answer and chart appear. This is the
+     single highest-leverage thing missing from this README. Record with the
+     actual app; no product work needed. -->
 
-Most of what's being built right now is a bet that more agency is the way to
-more useful: read, write, act, and assume capability only ever adds up. Fella
-is running the opposite experiment, in public: how much can an agent
-actually do for you if the answer to "can it act" stays permanently no? So
-far: further than it has any right to be. (The full argument, and the actual
-tradeoffs it costs, is in [`docs/WHY.md`](docs/WHY.md).)
+General-purpose agents are built to do more. Fella is built to get one class of
+work right: analytics over the data you already have.
 
-Fella is a small local-first desktop app for enterprise-grade personal analytics. Point it at a folder
-of your own stuff bank statements, health exports, workout logs, notes, receipts
-and ask questions in plain language:
+Your computer is full of data that never became insight: a year of expenses, a
+workout log, project exports, PDFs, notes, and files with names you no longer
+remember. Fella gives those fragments a bounded workspace you can actually
+explore. Ask in plain language, compare periods, follow a thread, and find the
+pattern hiding in the mess.
+
+Fella combines a Rust analytics engine with an opinionated AI harness. The
+harness breaks broad questions into smaller analytical steps, keeps context
+deliberate, and uses the fewest tools needed. The engine catalogs files, queries
+local data, searches documents, makes charts, and checks the result before it
+reaches you.
+
+For analytics, a plausible answer is not good enough. The goal is to reach the
+right answer the first time, with as little unnecessary reasoning between the
+question and result as possible. Analytics rarely needs to write files, run
+shell commands, browse the web, or act on your behalf, so Fella does not ship
+with those capabilities.
+
+The result is an opinionated system: small enough for the model to reason about,
+powerful enough to cover the major families of personal analysis, and bounded
+enough to trust with the files you already have.
+
+Ask questions such as:
 
 - *"How did my spending change this year?"*
 - *"What patterns are in my workouts?"*
 - *"Which factors affect my coffee brewing results?"*
 - *"Summarize the trends in these documents."*
 
-The model never computes anything itself. It writes SQL, or Python when SQL can't
-express the question, and every answer shows its **working**: open the fold under
-any reply for the exact files, queries and rows. A separate deterministic check
-re-runs the cited query and flags any number in the answer that doesn't actually
-appear in a result, before you ever see it.
+The model helps translate the question; the engine does the computation. The
+primary result stays concise—a clear answer, a useful chart, and relevant
+caveats. When you want to go deeper, the underlying queries, source rows, and
+verification checks are available to inspect.
 
 **Read-only.** Fella reads your folder; it never writes, moves or deletes anything.
 Nothing leaves your computer except the request to the model provider you choose.
 Fella is BYOK-only: you connect a provider with your own API key.
+
+## Three things Fella optimizes for
+
+| | |
+| --- | --- |
+| **Consistency** | A small fixed tool set and structured decomposition keep the route from question to analysis predictable across questions. |
+| **Correctness** | The engine computes the numbers, the harness checks the work, and the result should be right the first time whenever the data can support it. |
+| **Efficiency** | Deliberate context, bounded steps, duplicate-call avoidance, and only the tools analytics needs keep wasted reasoning and tokens down. |
+| **Read-only by design** | The agent can analyze the workspace, but it cannot write, move, delete, send, or act. The boundary is part of the architecture, not a setting. |
 
 ## Philosophy
 
@@ -51,10 +78,11 @@ local-first version isn't the compromise. It's the one that gets to keep
 
 **Reads your files, computes real answers, never writes anything back.** Small,
 fast, and resistant to feature bloat *in the base version*, which ships as one
-binary with nothing bundled. Local-first. Minimal dependencies. It's for a regular
-person doing enterprise-grade personal analytics not analysts, not developers so it's plain-language
-throughout and copes with a messy real-world folder. It is deliberately *not* a general
-task agent: no file-management, no chores, and the base has a fixed, small tool set.
+binary with nothing bundled. Local-first. Minimal dependencies. It is for a
+regular person doing enterprise-grade personal analytics—not analysts or
+developers—so it stays plain-language throughout and copes with a messy
+real-world folder. It is deliberately *not* a general task agent: no
+file-management, no chores, and the base has a fixed, small tool set.
 The shipped release keeps customization deliberately small: the user-authored
 `fella.md` context file, provider/model settings, and appearance are the active
 extension points. MCP is documented as an inert experimental command; packs and
@@ -182,17 +210,14 @@ On macOS, use `Cmd` in place of `Ctrl`.
 You can also click the pulsing dot next to the composer to stop a run. A stopped
 run keeps whatever evidence it had gathered and answers `Stopped.`
 
-### The working
+### Going deeper
 
-Under each answer is a fold-away line like `▸ working · 3 steps · 412 rows · 0.7s`.
-Open it to see every tool the model called, the SQL or Python it ran, a sample of the
-rows that came back, timings, and the self-checks Fella ran afterwards: it confirms
-every table the answer cites is real, re-executes the queries and confirms every
-figure appears in a real result, and flags a total computed over a column that isn't
-actually numeric (SQLite reads non-numeric text as `0`, which would otherwise look
-like a real, if wrong, answer). Follow-up questions in the same conversation reuse
-what earlier turns already established (the schema, the queries that already
-worked) instead of starting over each time.
+The result stays clean by default. Open the fold-away line like
+`▸ working · 3 steps · 412 rows · 0.7s` when you want to understand how it was
+worked out: the tools called, SQL or Python used, source rows, timings, and the
+self-checks Fella ran afterwards. Follow-up questions in the same conversation
+reuse what earlier turns already established—the schema, the useful context, and
+the queries that worked—instead of starting over each time.
 
 ### Personalizing
 
