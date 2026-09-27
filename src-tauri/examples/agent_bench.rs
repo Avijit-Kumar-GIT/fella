@@ -165,6 +165,7 @@ async fn run_one(engine: &EngineState, conv: &str, q: &Q) -> Sample {
         .ask(conv, q.text, None, move |e: AskEvent| {
             let at = t0.elapsed();
             let (kind, tool) = match &e {
+                AskEvent::TurnState { .. } => ("turn_state", None),
                 AskEvent::AssistantDelta { .. } => ("delta", None),
                 AskEvent::ToolStart { tool, .. } => ("tool_start", Some(tool.clone())),
                 AskEvent::ToolEnd { item } => ("tool_end", Some(item.tool.clone())),

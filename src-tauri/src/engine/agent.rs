@@ -12,6 +12,7 @@ use crate::engine::evidence::{
     Answer, AskEvent, EvidenceItem, Usage, VerificationCheck, WorkspaceSnapshot,
 };
 use crate::engine::llm::{ChatMessage, LlmClient, ToolCall};
+use crate::engine::runtime::{self, ExecutionTrace, TraceStep, TurnState};
 use crate::engine::state::EngineState;
 use crate::engine::tools::Registry;
 use crate::engine::{friction, Catalog};
@@ -31,6 +32,11 @@ fn max_steps() -> usize {
 /// step above that so a normal two-round answer is never touched, only a run
 /// that's already run past it. `FELLA_SOFT_STOP` overrides it for eval sweeps.
 const SOFT_STOP_ROUND_TRIPS: usize = 3;
+
+struct RunIds {
+    turn_id: String,
+    trace_id: String,
+}
 
 fn soft_stop_round_trips() -> usize {
     super::env::positive("FELLA_SOFT_STOP", SOFT_STOP_ROUND_TRIPS)
@@ -77,10 +83,19 @@ pub async fn run(
     llm: &LlmClient,
     registry: &Registry,
     conversation_id: &str,
+    turn_id: &str,
     question: &str,
     cancel: Arc<AtomicBool>,
     emit: &(dyn Fn(AskEvent) + Send + Sync),
 ) -> EngineResult<Answer> {
+    let ids = RunIds {
+        turn_id: turn_id.to_string(),
+        trace_id: runtime::new_trace_id(),
+    };
+    emit(AskEvent::TurnState {
+        turn_id: ids.turn_id.clone(),
+        state: TurnState::Interpreting,
+    });
     let catalog = engine.catalog();
     let workspace = match (&catalog.workspace, &catalog.revision) {
         (Some(path), Some(revision)) => Some(WorkspaceSnapshot {
@@ -165,6 +180,7 @@ pub async fn run(
                     return Ok(finish(
                         engine,
                         workspace.as_ref(),
+                        &ids,
                         question,
                         format!(
                             "I couldn't finish the model call failed ({e}). \
@@ -178,13 +194,25 @@ pub async fn run(
                 Err(e) => return Err(e),
             },
             _ = cancelled(cancel.as_ref()) => {
-                return Ok(stopped(engine, workspace.as_ref(), question, evidence, usage, emit))
+                return Ok(stopped(
+                    engine,
+                    workspace.as_ref(),
+                    &ids,
+                    question,
+                    evidence,
+                    usage,
+                    emit,
+                ))
             }
         };
         model_calls += 1;
         usage = Usage::merge(usage, resp.usage);
 
         if resp.tool_calls.is_empty() {
+            emit(AskEvent::TurnState {
+                turn_id: ids.turn_id.clone(),
+                state: TurnState::Verifying,
+            });
             log::info!(
                 "agent run: {:?}, {model_calls} model call(s), {tool_calls_total} tool call(s), {} evidence",
                 run_start.elapsed(),
@@ -254,6 +282,7 @@ filter word in the question exactly, and state just the number(s) don't round or
             return Ok(finish_with(
                 engine,
                 workspace.as_ref(),
+                &ids,
                 text,
                 evidence,
                 usage,
@@ -262,6 +291,10 @@ filter word in the question exactly, and state just the number(s) don't round or
             ));
         }
         tool_calls_total += resp.tool_calls.len();
+        emit(AskEvent::TurnState {
+            turn_id: ids.turn_id.clone(),
+            state: TurnState::Executing,
+        });
 
         // `resp.content` (any "let me check…" preamble before the tool calls)
         // was already streamed through `on_delta`; just keep it in the history.
@@ -365,6 +398,7 @@ not run again. Its result is repeated below - use it, refine the call, or give y
             return Ok(stopped(
                 engine,
                 workspace.as_ref(),
+                &ids,
                 question,
                 evidence,
                 usage,
@@ -396,7 +430,15 @@ you're not confident, say so plainly rather than guessing."
     let resp = tokio::select! {
         r = llm.chat(&messages, &[], &notify, &on_delta) => r.unwrap_or_default(),
         _ = cancelled(cancel.as_ref()) => {
-            return Ok(stopped(engine, workspace.as_ref(), question, evidence, usage, emit))
+            return Ok(stopped(
+                engine,
+                workspace.as_ref(),
+                &ids,
+                question,
+                evidence,
+                usage,
+                emit,
+            ))
         }
     };
     model_calls += 1;
@@ -414,6 +456,7 @@ you're not confident, say so plainly rather than guessing."
     Ok(finish(
         engine,
         workspace.as_ref(),
+        &ids,
         question,
         text,
         evidence,
@@ -425,6 +468,7 @@ you're not confident, say so plainly rather than guessing."
 fn stopped(
     engine: &EngineState,
     workspace: Option<&WorkspaceSnapshot>,
+    ids: &RunIds,
     question: &str,
     evidence: Vec<EvidenceItem>,
     usage: Option<Usage>,
@@ -433,6 +477,7 @@ fn stopped(
     finish(
         engine,
         workspace,
+        ids,
         question,
         "Stopped.".to_string(),
         evidence,
@@ -470,6 +515,7 @@ fn self_check_enabled() -> bool {
 fn finish(
     engine: &EngineState,
     workspace: Option<&WorkspaceSnapshot>,
+    ids: &RunIds,
     question: &str,
     text: String,
     evidence: Vec<EvidenceItem>,
@@ -477,12 +523,13 @@ fn finish(
     emit: &(dyn Fn(AskEvent) + Send + Sync),
 ) -> Answer {
     let checks = verify::run(engine, question, &text, &evidence);
-    finish_with(engine, workspace, text, evidence, usage, checks, emit)
+    finish_with(engine, workspace, ids, text, evidence, usage, checks, emit)
 }
 
 fn finish_with(
     engine: &EngineState,
     workspace: Option<&WorkspaceSnapshot>,
+    ids: &RunIds,
     text: String,
     evidence: Vec<EvidenceItem>,
     usage: Option<Usage>,
@@ -508,7 +555,39 @@ fn finish_with(
         engine.record_friction_signal(reason, &evidence);
     }
     let status = verify::status(&verification, &evidence);
+    let state = match status {
+        crate::engine::evidence::VerificationStatus::Verified => TurnState::Accepted,
+        crate::engine::evidence::VerificationStatus::Failed => TurnState::Failed,
+        crate::engine::evidence::VerificationStatus::NeedsReview
+        | crate::engine::evidence::VerificationStatus::InsufficientData => TurnState::NeedsReview,
+    };
+    let trace = ExecutionTrace {
+        id: ids.trace_id.clone(),
+        turn_id: ids.turn_id.clone(),
+        workspace_revision: workspace.map(|snapshot| snapshot.revision.clone()),
+        steps: evidence
+            .iter()
+            .map(|item| TraceStep {
+                id: item.id.clone(),
+                operation: item.tool.clone(),
+                duration_ms: item.ms,
+                success: item.error.is_none(),
+                summary: Some(item.result_summary.clone()),
+                sources: item
+                    .sources
+                    .iter()
+                    .map(|source| source.source.clone())
+                    .collect(),
+            })
+            .collect(),
+    };
+    emit(AskEvent::TurnState {
+        turn_id: ids.turn_id.clone(),
+        state,
+    });
     let answer = Answer {
+        turn_id: ids.turn_id.clone(),
+        trace,
         text,
         evidence,
         verification,

@@ -1,7 +1,7 @@
 //! Types that make an answer auditable. These serialize to match
 //! `src/lib/types.ts` (EvidenceItem / VerificationCheck / Answer / AskEvent).
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 
 #[derive(Debug, Clone, Serialize)]
@@ -56,7 +56,7 @@ pub struct WorkspaceSnapshot {
     pub revision: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VerificationStatus {
     Verified,
@@ -65,7 +65,7 @@ pub enum VerificationStatus {
     Failed,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VerificationCheck {
     pub label: String,
     pub ok: bool,
@@ -98,6 +98,11 @@ impl Usage {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Answer {
+    /// Analytical turn id. Older archived answers may not have one.
+    pub turn_id: String,
+    /// Stable runtime trace for this answer. Raw rows and SQL remain in
+    /// `evidence`; this is the shell-independent execution summary.
+    pub trace: crate::engine::runtime::ExecutionTrace,
     pub text: String,
     pub evidence: Vec<EvidenceItem>,
     pub verification: Vec<VerificationCheck>,
@@ -147,6 +152,11 @@ mod tests {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AskEvent {
+    /// A lifecycle update shared by the Tauri Channel and Electron bridge.
+    TurnState {
+        turn_id: String,
+        state: crate::engine::runtime::TurnState,
+    },
     AssistantDelta {
         text: String,
     },

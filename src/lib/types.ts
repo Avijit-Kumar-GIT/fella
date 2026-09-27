@@ -62,6 +62,10 @@ export interface VerificationCheck {
 export type VerificationStatus = 'verified' | 'needs_review' | 'insufficient_data' | 'failed';
 
 export interface Answer {
+	/** Runtime turn id; older archived answers may not have one. */
+	turn_id?: string;
+	/** Compact execution summary; raw SQL/rows remain in evidence. */
+	trace?: ExecutionTrace;
 	text: string;
 	evidence: EvidenceItem[];
 	verification: VerificationCheck[];
@@ -70,6 +74,37 @@ export interface Answer {
 	workspace?: { path: string; revision: string };
 	/** Token counts for the whole run, when the provider reported them. */
 	usage?: { prompt_tokens: number; completion_tokens: number };
+}
+
+export type RuntimeTurnState =
+	| 'received'
+	| 'interpreting'
+	| 'grounding'
+	| 'planning'
+	| 'executing'
+	| 'verifying'
+	| 'accepted'
+	| 'clarify'
+	| 'retry'
+	| 'needs_review'
+	| 'unsupported'
+	| 'failed'
+	| 'cancelled';
+
+export interface ExecutionTraceStep {
+	id: string;
+	operation: string;
+	duration_ms: number;
+	success: boolean;
+	summary?: string;
+	sources: string[];
+}
+
+export interface ExecutionTrace {
+	id: string;
+	turn_id: string;
+	workspace_revision?: string;
+	steps: ExecutionTraceStep[];
 }
 
 /** The two user-facing ways to work with a mounted workspace. Ask is the
@@ -258,6 +293,7 @@ export interface Project {
 
 /** Streaming events emitted by the `ask` command over a Tauri Channel. */
 export type AskEvent =
+	| { kind: 'turn_state'; turn_id: string; state: RuntimeTurnState }
 	| { kind: 'assistant_delta'; text: string }
 	| { kind: 'tool_start'; tool: string; args: Record<string, unknown> }
 	| { kind: 'tool_end'; item: EvidenceItem }

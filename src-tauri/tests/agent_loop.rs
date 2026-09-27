@@ -156,6 +156,7 @@ async fn agent_calls_a_tool_then_answers() {
         .unwrap()
         .iter()
         .map(|e| match e {
+            AskEvent::TurnState { .. } => "turn_state",
             AskEvent::AssistantDelta { .. } => "delta",
             AskEvent::ToolStart { .. } => "tool_start",
             AskEvent::ToolEnd { .. } => "tool_end",

@@ -159,6 +159,7 @@ async fn run_case(
     let res = engine
         .ask(conv, question, model, move |e: AskEvent| {
             let kind = match &e {
+                AskEvent::TurnState { .. } => "turn_state",
                 AskEvent::AssistantDelta { .. } => "delta",
                 AskEvent::ToolStart { .. } => "tool_start",
                 AskEvent::ToolEnd { .. } => "tool_end",

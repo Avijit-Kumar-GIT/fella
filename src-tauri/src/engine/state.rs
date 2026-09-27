@@ -1726,6 +1726,11 @@ exactly, character for character, from the list below.";
             .insert(conversation_id.to_string(), cancel.clone());
 
         let llm = self.llm_with_model(&effective_model);
+        let turn_id = crate::engine::runtime::new_turn_id();
+        emit(crate::engine::evidence::AskEvent::TurnState {
+            turn_id: turn_id.clone(),
+            state: crate::engine::runtime::TurnState::Received,
+        });
         #[allow(unused_mut)]
         let mut registry = if inspect {
             Registry::inspect_with(settings.capabilities)
@@ -1737,6 +1742,7 @@ exactly, character for character, from the list below.";
             &llm,
             &registry,
             conversation_id,
+            &turn_id,
             question,
             cancel.clone(),
             &emit,
