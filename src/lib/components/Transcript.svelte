@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { dispatch, openFolder, resumeLastFolder } from '$lib/commands';
+	import { dispatch, openFolder, rerunAnalysisTurn, resumeLastFolder } from '$lib/commands';
 	import { session } from '$lib/session.svelte';
 	import { isDesktop, openExternal } from '$lib/ipc';
 	import { fadeQuick } from '$lib/motion';
@@ -71,6 +71,10 @@
 			if (session.messages[i]?.role === 'user') return session.messages[i].text;
 		}
 		return '';
+	}
+
+	function rerun(message: import('$lib/types').Message): Promise<void> {
+		return rerunAnalysisTurn(message);
 	}
 
 	let stick = true;
@@ -268,6 +272,7 @@
 							question={questionFor(i)}
 							showFollowups={i === session.messages.length - 1 && !m.pending}
 							onfollowup={(next) => void dispatch(next)}
+							onrerun={() => rerun(m)}
 						/>
 					{/each}
 					{#snippet failed(error)}

@@ -958,6 +958,72 @@ async function ask(question: string, conv: Conversation): Promise<void> {
 	}
 }
 
+/** Re-execute a persisted analytical turn against the current mount. The
+ * rerun is appended as a fresh assistant result so the original answer stays
+ * visible for comparison; the backend keeps the canonical lineage. */
+export async function rerunAnalysisTurn(message: Message): Promise<void> {
+	const turnId = message.answer?.turn_id;
+	if (!turnId || !isDesktop()) return;
+	const conv = session.activeChat;
+	if (conv.busy) {
+		conv.addSystem('Finish the current question before rerunning this answer.');
+		return;
+	}
+
+	const msg = conv.addAssistant('');
+	conv.startRun();
+	conv.busy = true;
+	conv.activity = 'rechecking the workspace…';
+	let failed = false;
+	const onEvent = (e: AskEvent) => {
+		switch (e.kind) {
+			case 'assistant_delta':
+				msg.text += e.text;
+				break;
+			case 'tool_start': {
+				if (!msg.plan && msg.text.trim()) msg.plan = msg.text.trim();
+				msg.text = '';
+				const note = typeof e.args?.note === 'string' ? e.args.note.trim() : '';
+				conv.beginRunStep(e.tool, note || undefined);
+				conv.activity = note ? `${note}…` : 'rechecking…';
+				break;
+			}
+			case 'tool_end':
+				conv.completeRunStep(e.item);
+				conv.activity = 'thinking…';
+				break;
+			case 'notice':
+				conv.activity = e.text;
+				break;
+			case 'answer_done':
+				msg.answer = e.answer;
+				msg.text = e.answer.text;
+				msg.plan = undefined;
+				break;
+		}
+	};
+
+	try {
+		const answer = await ipc.analysisTurnRerun(
+			turnId,
+			onEvent,
+			conv.model || undefined,
+			conv.mode
+		);
+		msg.answer = answer;
+		msg.text = answer.text;
+	} catch (e) {
+		failed = true;
+		msg.text = `error: ${errMsg(e)}`;
+	} finally {
+		msg.pending = false;
+		msg.plan = undefined;
+		conv.busy = false;
+		conv.activity = '';
+		conv.finishRun(failed);
+	}
+}
+
 // --- helpers ---------------------------------------------------------------
 
 type SettingsPatch = Partial<import('./types').Settings> & { api_key?: string };

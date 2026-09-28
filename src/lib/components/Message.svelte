@@ -15,7 +15,8 @@
 		ontoggle,
 		question = '',
 		showFollowups = false,
-		onfollowup
+		onfollowup,
+		onrerun
 	}: {
 		message: Message;
 		expanded?: boolean;
@@ -23,6 +24,7 @@
 		question?: string;
 		showFollowups?: boolean;
 		onfollowup?: (question: string) => void;
+		onrerun?: () => Promise<void>;
 	} = $props();
 
 	// The model marks a one-line general-knowledge aside with "Background:" on
@@ -165,7 +167,12 @@
 	{/if}
 	{#if message.answer}
 		{#if message.answer.evidence.length}
-			<EvidenceBlock answer={message.answer} bodyId={`evidence-${message.id}`} {expanded} />
+			<EvidenceBlock
+				answer={message.answer}
+				bodyId={`evidence-${message.id}`}
+				{expanded}
+				onrerun={message.answer.turn_id ? onrerun : undefined}
+			/>
 		{/if}
 		{#if showFollowups && onfollowup && followups.length}
 			<div class="followups" aria-label="Suggested follow-up questions">

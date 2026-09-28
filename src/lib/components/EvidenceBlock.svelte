@@ -1,12 +1,14 @@
 <script lang="ts">
 	import type { Answer, EvidenceItem } from '$lib/types';
 	import Icon from './Icon.svelte';
+	import ReplayStatus from './ReplayStatus.svelte';
 
 	let {
 		answer,
 		expanded = false,
-		bodyId
-	}: { answer: Answer; expanded?: boolean; bodyId: string } = $props();
+		bodyId,
+		onrerun
+	}: { answer: Answer; expanded?: boolean; bodyId: string; onrerun?: () => Promise<void> } = $props();
 
 	const COMPLETE_TABLE_ROWS = 100;
 
@@ -133,6 +135,10 @@
 						</div>
 					{/each}
 				</div>
+			{/if}
+
+			{#if answer.turn_id}
+				<ReplayStatus turnId={answer.turn_id} {onrerun} />
 			{/if}
 		</div>
 	{/if}

@@ -10,6 +10,7 @@
 		alert:
 			'm10.24 4.5-8 14A2 2 0 0 0 4 21.5h16a2 2 0 0 0 1.76-3l-8-14a2 2 0 0 0-3.52 0ZM12 9.5v4M12 17.5h.01',
 		'arrow-up-right': 'M7 17 17 7M7 7h10v10',
+		refresh: 'M20 11a8 8 0 1 1-2.34-5.66L20 8M20 4v4h-4',
 		minus: 'M5 12h14',
 		square: 'M5 5h14v14H5z',
 		folder:
