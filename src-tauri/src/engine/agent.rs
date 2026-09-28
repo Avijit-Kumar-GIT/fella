@@ -398,6 +398,10 @@ filter word in the question exactly, and state just the number(s) don't round or
                                         name: "run_sql".into(),
                                         arguments: args.clone(),
                                     };
+                                    emit(AskEvent::TurnState {
+                                        turn_id: ids.turn_id.clone(),
+                                        state: TurnState::Executing,
+                                    });
                                     emit(AskEvent::ToolStart {
                                         tool: planned_call.name.clone(),
                                         args: args.clone(),
