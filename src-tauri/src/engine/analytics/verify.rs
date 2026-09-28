@@ -86,6 +86,7 @@ pub fn hard_fail(checks: &[VerificationCheck]) -> Option<String> {
             "returned no value for at least one row",
             "actually came from",
             "period comparison arithmetic",
+            "derived metric arithmetic",
         ],
     )
 }
@@ -205,6 +206,7 @@ pub fn contract_checks(
     }
     for (index, derived) in contract.derived_metrics.iter().enumerate() {
         check_derived_usage(&mut checks, contract, index, derived, &sql);
+        check_derived_arithmetic(&mut checks, contract, index, derived, evidence);
     }
     for join in &contract.joins {
         check_join_usage(&mut checks, join, &sql);
@@ -487,6 +489,129 @@ fn check_derived_usage(
             Some("the executed evidence did not carry the requested derived calculation".into()),
         ));
     }
+}
+
+fn check_derived_arithmetic(
+    checks: &mut Vec<VerificationCheck>,
+    contract: &AnalysisContract,
+    index: usize,
+    derived: &ContractDerivedMetric,
+    evidence: &[EvidenceItem],
+) {
+    let Some(numerator_index) = measure_index_for_reference(contract, &derived.numerator) else {
+        return;
+    };
+    let Some(denominator_index) = measure_index_for_reference(contract, &derived.denominator)
+    else {
+        return;
+    };
+    let derived_alias = format!("derived_{index}");
+    let numerator_alias = format!("measure_{numerator_index}");
+    let denominator_alias = format!("measure_{denominator_index}");
+    let mut saw_shape = false;
+    let mut mismatches = Vec::new();
+    for item in evidence
+        .iter()
+        .filter(|item| is_sql_evidence(item) && item.error.is_none())
+    {
+        let Some(columns) = item.columns.as_deref() else {
+            continue;
+        };
+        let Some(rows) = item.rows.as_deref() else {
+            continue;
+        };
+        let Some(numerator_column) = columns
+            .iter()
+            .position(|column| column.eq_ignore_ascii_case(&numerator_alias))
+        else {
+            continue;
+        };
+        let Some(denominator_column) = columns
+            .iter()
+            .position(|column| column.eq_ignore_ascii_case(&denominator_alias))
+        else {
+            continue;
+        };
+        let Some(derived_column) = columns
+            .iter()
+            .position(|column| column.eq_ignore_ascii_case(&derived_alias))
+        else {
+            continue;
+        };
+        saw_shape = true;
+        for (row_index, row) in rows.iter().enumerate() {
+            let numerator = row.get(numerator_column).and_then(num_of);
+            let denominator = row.get(denominator_column).and_then(num_of);
+            let actual = row.get(derived_column).and_then(num_of);
+            let expected = numerator
+                .zip(denominator)
+                .and_then(|(numerator, denominator)| {
+                    if denominator.abs() <= f64::EPSILON {
+                        None
+                    } else {
+                        Some(numerator / denominator)
+                    }
+                });
+            let matches = match (expected, actual) {
+                (Some(expected), Some(actual)) => invariant_close(expected, actual),
+                (None, None) => true,
+                _ => false,
+            };
+            if !matches {
+                mismatches.push(format!(
+                    "derived `{}` row {} expected {:?}, got {:?}",
+                    derived.concept,
+                    row_index + 1,
+                    expected,
+                    actual
+                ));
+                if mismatches.len() >= 3 {
+                    break;
+                }
+            }
+        }
+        if mismatches.len() >= 3 {
+            break;
+        }
+    }
+    if !saw_shape {
+        return;
+    }
+    if mismatches.is_empty() {
+        checks.push(ok(format!(
+            "derived metric `{}` reconciled from returned rows",
+            derived.concept
+        )));
+    } else {
+        checks.push(warn(
+            format!(
+                "derived metric arithmetic did not reconcile for `{}`",
+                derived.concept
+            ),
+            Some(mismatches.join("; ")),
+        ));
+    }
+}
+
+fn measure_index_for_reference(contract: &AnalysisContract, requested: &str) -> Option<usize> {
+    let matches: Vec<_> = contract
+        .measures
+        .iter()
+        .enumerate()
+        .filter(|(_, measure)| {
+            measure.concept.eq_ignore_ascii_case(requested)
+                || measure
+                    .field
+                    .as_deref()
+                    .is_some_and(|field| field.eq_ignore_ascii_case(requested))
+        })
+        .map(|(index, _)| index)
+        .collect();
+    matches
+        .as_slice()
+        .first()
+        .copied()
+        .filter(|_| matches.len() == 1)
 }
 
 fn check_join_usage(checks: &mut Vec<VerificationCheck>, join: &ContractJoin, sql: &[String]) {
@@ -2876,6 +3001,17 @@ mod tests {
         )];
         let good_checks = contract_checks(&contract, Some(&report), &good);
         assert!(good_checks.iter().all(|check| check.ok), "{good_checks:?}");
+
+        let arithmetic_bad = vec![run_sql_ev(
+            "SELECT SUM(amount) AS measure_0, COUNT(*) AS measure_1, (SUM(amount)) / NULLIF((COUNT(*)), 0) AS derived_0 FROM spend",
+            &["measure_0", "measure_1", "derived_0"],
+            vec![vec![Json::from(12), Json::from(2), Json::from(7)]],
+        )];
+        let arithmetic_checks = contract_checks(&contract, Some(&report), &arithmetic_bad);
+        assert!(arithmetic_checks
+            .iter()
+            .any(|check| { !check.ok && check.label.contains("derived metric arithmetic") }));
+        assert!(hard_fail(&arithmetic_checks).is_some());
 
         let bad = vec![run_sql_ev(
             "SELECT SUM(amount) AS measure_0, COUNT(*) AS measure_1 FROM spend",

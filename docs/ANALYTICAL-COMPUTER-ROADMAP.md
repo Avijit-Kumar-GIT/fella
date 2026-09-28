@@ -69,6 +69,8 @@ This is the implementation form of Fella's core loop:
   filter values, time buckets, ranking limits, derived ratios, and typed
   comparison windows must also survive into that evidence. Period comparison
   change and percent-change columns are now reconciled against returned rows;
+  declared ratio outputs are now reconciled against their returned numerator
+  and denominator values, including zero-denominator null behavior;
   broader grouped-total, ratio-population, average-bound, and chart-shape
   invariants remain ahead, and
   ambiguous/unsupported contracts remain review states even when a query is
