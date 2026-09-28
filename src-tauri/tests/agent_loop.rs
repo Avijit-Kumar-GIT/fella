@@ -238,7 +238,7 @@ async fn unresolved_contract_blocks_data_tools_in_the_same_response() {
         0,
         "blocked SQL must not become evidence"
     );
-    assert_eq!(answer.status, VerificationStatus::InsufficientData);
+    assert_eq!(answer.status, VerificationStatus::NeedsReview);
     assert_eq!(
         answer.contract.as_ref().unwrap().interpretation,
         fella_lib::engine::runtime::InterpretationStatus::Ambiguous
@@ -251,6 +251,85 @@ async fn unresolved_contract_blocks_data_tools_in_the_same_response() {
         )),
         "blocked SQL must not emit a start event"
     );
+
+    let _ = fs::remove_dir_all(&ws);
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[tokio::test]
+async fn compiled_plan_replaces_redundant_model_data_calls() {
+    let ws = scratch("compiled-plan-gate-ws");
+    let data = scratch("compiled-plan-gate-data");
+    fs::write(
+        ws.join("sales.csv"),
+        "month,amount\n2024-01,10\n2024-02,20\n2024-03,30\n",
+    )
+    .unwrap();
+
+    let (url, server) = fake_openai(vec![
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "I will compare the monthly totals.",
+            "tool_calls": [
+                { "id": "model-sql", "type": "function", "function": {
+                    "name": "run_sql",
+                    "arguments": "{\"sql\":\"SELECT month, SUM(amount) AS total FROM sales GROUP BY month\"}"
+                } },
+                { "id": "contract", "type": "function", "function": {
+                    "name": "__analysis_contract",
+                    "arguments": serde_json::json!({
+                        "interpretation": "assumed",
+                        "subject": "sales",
+                        "measures": [{ "concept": "amount", "field": "amount", "operation": "sum" }],
+                        "time": { "field": "month", "bucket": "month" }
+                    }).to_string()
+                } }
+            ]
+        })),
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "Monthly sales were 10, 20, and 30."
+        })),
+    ]);
+
+    let engine = EngineState::new(&data).unwrap();
+    engine
+        .save_settings(
+            serde_json::json!({ "provider": "custom", "base_url": url, "model": "test" })
+                .as_object()
+                .unwrap(),
+        )
+        .unwrap();
+    engine.set_api_key("custom", "sk-test").unwrap();
+    engine.open_workspace(&ws).unwrap();
+
+    let events: Arc<Mutex<Vec<AskEvent>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink = events.clone();
+    let answer = engine
+        .ask(
+            "compiled-plan-gate",
+            "show sales by month",
+            None,
+            move |event| sink.lock().unwrap().push(event),
+        )
+        .await
+        .unwrap();
+    server.join().unwrap();
+
+    assert_eq!(answer.evidence.len(), 1);
+    assert_eq!(answer.evidence[0].tool, "run_sql");
+    assert!(answer.evidence[0]
+        .sql
+        .as_deref()
+        .unwrap()
+        .contains("strftime('%Y-%m'"));
+    let sql_starts = events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|event| matches!(event, AskEvent::ToolStart { tool, .. } if tool == "run_sql"))
+        .count();
+    assert_eq!(sql_starts, 1, "only the compiled plan should execute SQL");
 
     let _ = fs::remove_dir_all(&ws);
     let _ = fs::remove_dir_all(&data);

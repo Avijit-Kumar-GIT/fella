@@ -212,6 +212,15 @@ ambiguous, put the ambiguity in `unresolved`.",
     let mut usage: Option<Usage> = None;
     let steps = max_steps();
     let soft_stop = soft_stop_round_trips();
+    // Once a contract is grounded, later model responses in this same turn
+    // inherit that approval. The model should not have to repeat the contract
+    // merely because it wants to write the final answer or a presentation
+    // tool call.
+    let mut contract_established = false;
+    // A successful compiled plan is the authoritative data computation for
+    // this turn. Keep presentation tools available, but don't let a later
+    // model-generated SQL/Python call silently create a second computation.
+    let mut compiled_plan_executed = false;
     for step in 0..steps {
         log::info!("agent step {}/{steps}", step + 1);
         let step_start = Instant::now();
@@ -434,7 +443,10 @@ filter word in the question exactly, and state just the number(s) don't round or
             .filter(|call| call.name != runtime::CONTRACT_TOOL_NAME)
             .count();
         if risk.requires_contract() && data_call_count > 0 && contract_calls_seen == 0 {
-            contract_gate_blocked = true;
+            contract_gate_blocked = !contract_established;
+        }
+        if contract_calls_seen > 0 {
+            contract_established = !contract_gate_blocked;
         }
 
         // Only execute an automatic deterministic plan after every contract
@@ -477,6 +489,9 @@ filter word in the question exactly, and state just the number(s) don't round or
                 }
                 evidence.push(item);
                 tool_calls_total += 1;
+                if evidence.last().is_some_and(|item| item.error.is_none()) {
+                    compiled_plan_executed = true;
+                }
                 if let Some(text) = internal_results.get_mut(&index) {
                     text.push_str(&format!(
                         "\n\nDeterministic plan executed as data evidence:\n{result}"
@@ -502,6 +517,17 @@ filter word in the question exactly, and state just the number(s) don't round or
                     i,
                     format!(
                         "The runtime did not execute `{}` because {blocked_reason}. Ask a focused clarification instead of choosing silently.",
+                        call.name
+                    ),
+                );
+                continue;
+            }
+
+            if compiled_plan_executed && matches!(call.name.as_str(), "run_sql" | "run_python") {
+                internal_results.insert(
+                    i,
+                    format!(
+                        "The runtime already executed the grounded deterministic plan for this turn, so `{}` was not executed again. Use the plan evidence above; if the requested analysis is different, state a revised analytical contract.",
                         call.name
                     ),
                 );
@@ -786,10 +812,12 @@ fn finish_with(
     if matches!(
         interpretation,
         Some(runtime::InterpretationStatus::Ambiguous | runtime::InterpretationStatus::Unsupported)
-    ) && status == crate::engine::evidence::VerificationStatus::Verified
+    ) && status != crate::engine::evidence::VerificationStatus::Failed
     {
         // A query can be numerically reproducible while still answering the
-        // wrong interpretation. Keep that distinction in the result status.
+        // wrong interpretation. Likewise, a clarification with no evidence
+        // is not merely missing data: it is an explicit acceptance failure
+        // that needs review or a user decision.
         status = crate::engine::evidence::VerificationStatus::NeedsReview;
     }
     let state = match interpretation {
