@@ -68,6 +68,7 @@ mod tests {
             question: "total sales?".into(),
             workspace: Some("/tmp/workspace".into()),
             workspace_revision: Some("revision-1".into()),
+            workspace_snapshot: None,
             rerun_of: None,
             state: TurnState::Accepted,
             contract: None,

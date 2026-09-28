@@ -7,6 +7,7 @@
 import type {
 	Answer,
 	AnalysisTurn,
+	AnalysisTurnReplayStatus,
 	AppInfo,
 	AskMode,
 	AskEvent,
@@ -165,6 +166,9 @@ export const ipc = {
 	conversationLoad: (id: string) => invoke<string>('conversation_load', { id }),
 	/** Load the canonical backend record for one analytical turn. */
 	analysisTurnLoad: (turnId: string) => invoke<AnalysisTurn>('analysis_turn_load', { turnId }),
+	/** Compare a stored turn's source snapshot with the mounted workspace. */
+	analysisTurnReplayStatus: (turnId: string) =>
+		invoke<AnalysisTurnReplayStatus>('analysis_turn_replay_status', { turnId }),
 	/** Rerun a canonical turn against the currently mounted workspace. */
 	async analysisTurnRerun(
 		turnId: string,

@@ -8,9 +8,9 @@ use tauri::ipc::Channel;
 use tauri::{State, Window};
 
 use crate::engine::{
-    AnalysisTurn, Answer, AskEvent, Catalog, ConversationSummary, ConversationsInfo, EngineError,
-    EngineResult, EngineState, ProviderHealth, ProviderInfo, QueryResult, Settings, SourceInfo,
-    UpdateStatus, WorkspaceModel,
+    AnalysisTurn, AnalysisTurnReplayStatus, Answer, AskEvent, Catalog, ConversationSummary,
+    ConversationsInfo, EngineError, EngineResult, EngineState, ProviderHealth, ProviderInfo,
+    QueryResult, Settings, SourceInfo, UpdateStatus, WorkspaceModel,
 };
 use crate::AppState;
 
@@ -291,6 +291,14 @@ pub fn analysis_turn_load(
     engine: State<'_, EngineState>,
 ) -> Result<AnalysisTurn, EngineError> {
     engine.analysis_turn_load(&turn_id)
+}
+
+#[tauri::command]
+pub fn analysis_turn_replay_status(
+    turn_id: String,
+    engine: State<'_, EngineState>,
+) -> Result<AnalysisTurnReplayStatus, EngineError> {
+    engine.analysis_turn_replay_status(&turn_id)
 }
 
 /// Rerun one canonical analytical turn against the currently mounted folder.

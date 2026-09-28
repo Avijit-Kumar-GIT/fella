@@ -6,6 +6,7 @@
 //! while semantic interpretation, planning, and acceptance gates attach to
 //! the same objects in later slices.
 
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -331,6 +332,157 @@ pub struct ExecutionTrace {
     pub steps: Vec<TraceStep>,
 }
 
+/// Compact catalog metadata captured with a canonical turn. It is deliberately
+/// smaller than `WorkspaceModel`: replay needs to explain freshness changes,
+/// not persist every inferred statistic or sample value.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceColumnSnapshot {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub type_: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceSourceSnapshot {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub view: Option<String>,
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub row_count: Option<i64>,
+    #[serde(default)]
+    pub columns: Vec<WorkspaceColumnSnapshot>,
+    pub size_bytes: u64,
+    pub mtime: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceRevisionSnapshot {
+    pub path: String,
+    pub revision: String,
+    #[serde(default)]
+    pub sources: Vec<WorkspaceSourceSnapshot>,
+    #[serde(default)]
+    pub skipped: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceChangeKind {
+    Added,
+    Removed,
+    Changed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceSourceChange {
+    pub name: String,
+    pub kind: WorkspaceChangeKind,
+    #[serde(default)]
+    pub details: Vec<String>,
+}
+
+impl WorkspaceRevisionSnapshot {
+    /// Compare the compact catalog metadata from two revisions. The revision
+    /// hash remains the authoritative freshness check; these details make a
+    /// replay explainable to a person and to evaluation tooling.
+    pub fn changes_to(&self, current: &Self) -> Vec<WorkspaceSourceChange> {
+        let mut previous = BTreeMap::new();
+        for source in &self.sources {
+            previous.insert(source_key(source), source);
+        }
+        let mut next = BTreeMap::new();
+        for source in &current.sources {
+            next.insert(source_key(source), source);
+        }
+
+        let mut changes = Vec::new();
+        for key in previous.keys() {
+            if !next.contains_key(key) {
+                changes.push(WorkspaceSourceChange {
+                    name: (*key).clone(),
+                    kind: WorkspaceChangeKind::Removed,
+                    details: vec!["source removed".into()],
+                });
+            }
+        }
+        for (key, source) in &next {
+            let Some(previous_source) = previous.get(key) else {
+                changes.push(WorkspaceSourceChange {
+                    name: (*key).clone(),
+                    kind: WorkspaceChangeKind::Added,
+                    details: vec!["source added".into()],
+                });
+                continue;
+            };
+            let mut details = Vec::new();
+            if previous_source.kind != source.kind {
+                details.push(format!(
+                    "kind changed from {} to {}",
+                    previous_source.kind, source.kind
+                ));
+            }
+            if previous_source.row_count != source.row_count {
+                details.push(format!(
+                    "row count changed from {} to {}",
+                    display_optional(previous_source.row_count),
+                    display_optional(source.row_count)
+                ));
+            }
+            if previous_source.columns != source.columns {
+                details.push("columns changed".into());
+            }
+            if previous_source.size_bytes != source.size_bytes
+                || previous_source.mtime != source.mtime
+            {
+                details.push("file metadata changed".into());
+            }
+            if !details.is_empty() {
+                changes.push(WorkspaceSourceChange {
+                    name: (*key).clone(),
+                    kind: WorkspaceChangeKind::Changed,
+                    details,
+                });
+            }
+        }
+        if self.skipped != current.skipped {
+            changes.push(WorkspaceSourceChange {
+                name: "workspace scan".into(),
+                kind: WorkspaceChangeKind::Changed,
+                details: vec!["skipped-file set changed".into()],
+            });
+        }
+        changes
+    }
+}
+
+fn source_key(source: &WorkspaceSourceSnapshot) -> String {
+    source.view.clone().unwrap_or_else(|| source.name.clone())
+}
+
+fn display_optional(value: Option<i64>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "unknown".into())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AnalysisTurnReplayStatus {
+    pub turn_id: TurnId,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub original_revision: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_revision: Option<String>,
+    pub same_workspace: bool,
+    pub revision_changed: bool,
+    pub snapshot_available: bool,
+    pub can_rerun: bool,
+    #[serde(default)]
+    pub source_changes: Vec<WorkspaceSourceChange>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VerificationReport {
     pub status: VerificationStatus,
@@ -363,6 +515,10 @@ pub struct AnalysisTurn {
     pub workspace: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workspace_revision: Option<String>,
+    /// Compact source metadata for explaining what changed before a rerun.
+    /// Optional so records written before revision-aware replay remain valid.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_snapshot: Option<WorkspaceRevisionSnapshot>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rerun_of: Option<TurnId>,
     pub state: TurnState,
@@ -616,5 +772,56 @@ mod tests {
             "unresolved": []
         }));
         assert!(invalid.is_err());
+    }
+
+    #[test]
+    fn revision_snapshots_explain_source_changes() {
+        let before = WorkspaceRevisionSnapshot {
+            path: "/tmp/workspace".into(),
+            revision: "rev-a".into(),
+            sources: vec![WorkspaceSourceSnapshot {
+                name: "sales.csv".into(),
+                view: Some("sales".into()),
+                kind: "csv".into(),
+                row_count: Some(2),
+                columns: vec![WorkspaceColumnSnapshot {
+                    name: "amount".into(),
+                    type_: "DOUBLE".into(),
+                }],
+                size_bytes: 20,
+                mtime: 1,
+            }],
+            skipped: vec![],
+        };
+        let after = WorkspaceRevisionSnapshot {
+            path: before.path.clone(),
+            revision: "rev-b".into(),
+            sources: vec![WorkspaceSourceSnapshot {
+                name: "sales.csv".into(),
+                view: Some("sales".into()),
+                kind: "csv".into(),
+                row_count: Some(3),
+                columns: vec![WorkspaceColumnSnapshot {
+                    name: "amount".into(),
+                    type_: "DOUBLE".into(),
+                }],
+                size_bytes: 30,
+                mtime: 2,
+            }],
+            skipped: vec![],
+        };
+
+        let changes = before.changes_to(&after);
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].name, "sales");
+        assert_eq!(changes[0].kind, WorkspaceChangeKind::Changed);
+        assert!(changes[0]
+            .details
+            .iter()
+            .any(|detail| detail.contains("row count")));
+        assert!(changes[0]
+            .details
+            .iter()
+            .any(|detail| detail == "file metadata changed"));
     }
 }

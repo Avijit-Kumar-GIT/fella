@@ -213,6 +213,10 @@ async fn dispatch(
             let turn_id: String = required(&request.params, "turnId")?;
             value_result(engine.analysis_turn_load(&turn_id))
         }
+        "analysis_turn_replay_status" => {
+            let turn_id: String = required(&request.params, "turnId")?;
+            value_result(engine.analysis_turn_replay_status(&turn_id))
+        }
         "analysis_turn_rerun" => {
             let turn_id: String = required(&request.params, "turnId")?;
             let model = request

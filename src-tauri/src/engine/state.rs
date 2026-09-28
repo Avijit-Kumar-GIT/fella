@@ -21,8 +21,9 @@ use crate::engine::llm::{LlmClient, ProviderHealth};
 use crate::engine::memory::{self, FolderMemory};
 use crate::engine::provider::{self, AuthKind, PROVIDERS};
 use crate::engine::runtime::{
-    AnalysisResult, AnalysisTurn, InterpretationStatus, LogicalPlan, PlanStrategy, TurnState,
-    VerificationReport,
+    AnalysisResult, AnalysisTurn, AnalysisTurnReplayStatus, InterpretationStatus, LogicalPlan,
+    PlanStrategy, TurnState, VerificationReport, WorkspaceColumnSnapshot,
+    WorkspaceRevisionSnapshot, WorkspaceSourceSnapshot,
 };
 use crate::engine::secrets::Secrets;
 use crate::engine::semantic_memory::{self, FactAuthority, FactKind, SemanticFact, SemanticMemory};
@@ -53,6 +54,43 @@ pub struct EngineState {
 }
 
 /// Where past conversations are archived, and how many are there.
+fn revision_snapshot(catalog: &Catalog) -> Option<WorkspaceRevisionSnapshot> {
+    Some(WorkspaceRevisionSnapshot {
+        path: catalog.workspace.clone()?,
+        revision: catalog.revision.clone()?,
+        sources: catalog
+            .sources
+            .iter()
+            .map(|source| WorkspaceSourceSnapshot {
+                name: source.name.clone(),
+                view: source.view.clone(),
+                kind: serde_json::to_value(source.kind)
+                    .ok()
+                    .and_then(|value| value.as_str().map(str::to_owned))
+                    .unwrap_or_else(|| format!("{:?}", source.kind).to_ascii_lowercase()),
+                row_count: source.row_count,
+                columns: source
+                    .columns
+                    .as_deref()
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|column| WorkspaceColumnSnapshot {
+                        name: column.name.clone(),
+                        type_: column.type_.clone(),
+                    })
+                    .collect(),
+                size_bytes: source.size_bytes,
+                mtime: source.mtime,
+            })
+            .collect(),
+        skipped: catalog
+            .skipped
+            .iter()
+            .map(|file| format!("{}: {}", file.name, file.reason))
+            .collect(),
+    })
+}
+
 #[derive(Debug, Serialize)]
 pub struct ConversationsInfo {
     pub path: String,
@@ -813,6 +851,49 @@ impl EngineState {
         analysis_store::load(&self.data_dir, turn_id)
     }
 
+    /// Compare a stored turn's source snapshot with the currently mounted
+    /// workspace before a replay. A revision hash answers whether the data
+    /// changed; the compact source diff explains how it changed when the turn
+    /// was written by a revision-aware runtime.
+    pub fn analysis_turn_replay_status(
+        &self,
+        turn_id: &str,
+    ) -> EngineResult<AnalysisTurnReplayStatus> {
+        let original = self.analysis_turn_load(turn_id)?;
+        let current = self.catalog();
+        let same_workspace = match (&original.workspace, &current.workspace) {
+            (Some(original), Some(current)) => original == current,
+            (None, None) => true,
+            _ => false,
+        };
+        let revision_changed = original.workspace_revision != current.revision;
+        let current_snapshot = revision_snapshot(&current);
+        let source_changes = if same_workspace {
+            match (
+                original.workspace_snapshot.as_ref(),
+                current_snapshot.as_ref(),
+            ) {
+                (Some(previous), Some(current)) => previous.changes_to(current),
+                _ => Vec::new(),
+            }
+        } else {
+            Vec::new()
+        };
+        Ok(AnalysisTurnReplayStatus {
+            turn_id: original.id,
+            workspace: original.workspace,
+            original_revision: original.workspace_revision,
+            current_revision: current.revision,
+            same_workspace,
+            revision_changed,
+            snapshot_available: original.workspace_snapshot.is_some()
+                && same_workspace
+                && current_snapshot.is_some(),
+            can_rerun: same_workspace && current.workspace.is_some(),
+            source_changes,
+        })
+    }
+
     /// Rerun a stored analytical question against the currently mounted
     /// workspace. The original folder is part of the canonical record, so a
     /// rerun cannot silently execute against a different mount. The new turn
@@ -906,7 +987,13 @@ impl EngineState {
     /// This is best-effort so a local disk problem never turns a valid answer
     /// into a failed question; the conversation archive remains an independent
     /// fallback projection.
-    fn persist_analysis_turn(&self, conversation_id: &str, question: &str, answer: &Answer) {
+    fn persist_analysis_turn(
+        &self,
+        conversation_id: &str,
+        question: &str,
+        catalog: &Catalog,
+        answer: &Answer,
+    ) {
         let state = match answer
             .contract
             .as_ref()
@@ -928,6 +1015,11 @@ impl EngineState {
             .iter()
             .filter_map(|item| serde_json::to_value(item).ok())
             .collect();
+        let workspace_snapshot = revision_snapshot(catalog).filter(|snapshot| {
+            answer.workspace.as_ref().is_some_and(|workspace| {
+                snapshot.path == workspace.path && snapshot.revision == workspace.revision
+            })
+        });
         let record = AnalysisTurn {
             id: answer.turn_id.clone(),
             conversation_id: conversation_id.to_string(),
@@ -940,6 +1032,7 @@ impl EngineState {
                 .workspace
                 .as_ref()
                 .map(|workspace| workspace.revision.clone()),
+            workspace_snapshot,
             rerun_of: None,
             state,
             contract: answer.contract.clone(),
@@ -2134,6 +2227,7 @@ exactly, character for character, from the list below.";
         } else {
             Registry::standard_with(settings.capabilities)
         };
+        let turn_catalog = self.catalog();
         let answer = agent::run(
             self,
             &llm,
@@ -2157,7 +2251,7 @@ exactly, character for character, from the list below.";
             }
         }
         let answer = answer?;
-        self.persist_analysis_turn(conversation_id, question, &answer);
+        self.persist_analysis_turn(conversation_id, question, &turn_catalog, &answer);
 
         // Fold this turn into the folder's learned notes (a correction becomes
         // a vocabulary note; an ordinary question teaches nothing). Needs the

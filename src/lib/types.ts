@@ -176,6 +176,28 @@ export interface ExecutionTrace {
 	steps: ExecutionTraceStep[];
 }
 
+export interface WorkspaceColumnSnapshot {
+	name: string;
+	type: string;
+}
+
+export interface WorkspaceSourceSnapshot {
+	name: string;
+	view?: string;
+	kind: string;
+	row_count?: number;
+	columns: WorkspaceColumnSnapshot[];
+	size_bytes: number;
+	mtime: number;
+}
+
+export interface WorkspaceRevisionSnapshot {
+	path: string;
+	revision: string;
+	sources: WorkspaceSourceSnapshot[];
+	skipped: string[];
+}
+
 /** Backend-owned record persisted for one analytical turn. */
 export interface AnalysisTurn {
 	id: string;
@@ -183,6 +205,7 @@ export interface AnalysisTurn {
 	question: string;
 	workspace?: string;
 	workspace_revision?: string;
+	workspace_snapshot?: WorkspaceRevisionSnapshot;
 	rerun_of?: string;
 	state: RuntimeTurnState;
 	contract?: AnalysisContract;
@@ -195,6 +218,27 @@ export interface AnalysisTurn {
 		verification: VerificationCheck[];
 		evidence: unknown[];
 	};
+}
+
+export type WorkspaceChangeKind = 'added' | 'removed' | 'changed';
+
+export interface WorkspaceSourceChange {
+	name: string;
+	kind: WorkspaceChangeKind;
+	details: string[];
+}
+
+/** Freshness/diff information shown before inspecting or rerunning a turn. */
+export interface AnalysisTurnReplayStatus {
+	turn_id: string;
+	workspace?: string;
+	original_revision?: string;
+	current_revision?: string;
+	same_workspace: boolean;
+	revision_changed: boolean;
+	snapshot_available: boolean;
+	can_rerun: boolean;
+	source_changes: WorkspaceSourceChange[];
 }
 
 /** The two user-facing ways to work with a mounted workspace. Ask is the

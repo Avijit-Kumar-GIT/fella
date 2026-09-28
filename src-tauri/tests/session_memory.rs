@@ -272,6 +272,53 @@ async fn canonical_turn_rerun_requires_the_same_workspace_and_records_lineage() 
 }
 
 #[tokio::test]
+async fn canonical_turn_reports_source_changes_before_replay() {
+    let ws = scratch("replay-status-ws");
+    let data = scratch("replay-status-data");
+    fs::write(ws.join("ledger.csv"), "amount\n12\n").unwrap();
+
+    let (url, _seen, server) = fake_openai(vec![answer_turn("The total is 12.")]);
+    let engine = engine_on(&ws, &data, &url);
+    let first = engine
+        .ask(
+            "replay-status-conversation",
+            "what is the total?",
+            None,
+            |_| {},
+        )
+        .await
+        .unwrap();
+
+    let before = engine.analysis_turn_replay_status(&first.turn_id).unwrap();
+    assert!(before.same_workspace);
+    assert!(!before.revision_changed);
+    assert!(before.snapshot_available);
+    assert!(before.can_rerun);
+    assert!(before.source_changes.is_empty());
+
+    fs::write(ws.join("ledger.csv"), "amount\n12\n17\n").unwrap();
+    engine.reindex().unwrap();
+
+    let after = engine.analysis_turn_replay_status(&first.turn_id).unwrap();
+    assert!(after.same_workspace);
+    assert!(after.revision_changed);
+    assert!(after.snapshot_available);
+    assert_eq!(after.source_changes.len(), 1);
+    assert_eq!(
+        after.source_changes[0].kind,
+        fella_lib::engine::runtime::WorkspaceChangeKind::Changed
+    );
+    assert!(after.source_changes[0]
+        .details
+        .iter()
+        .any(|detail| detail.contains("row count")));
+
+    server.join().unwrap();
+    let _ = fs::remove_dir_all(&ws);
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[tokio::test]
 async fn each_tab_answers_with_its_own_model() {
     // Same provider / login, different model per conversation. `None` falls
     // back to the saved default ("test" from `engine_on`).

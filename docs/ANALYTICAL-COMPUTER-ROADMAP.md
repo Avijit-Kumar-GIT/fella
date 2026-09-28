@@ -91,7 +91,10 @@ This is the implementation form of Fella's core loop:
   persists a typed backend-owned turn record with its contract, direct-tool
   plan, execution trace, verification report, and bounded result/evidence. The
   same record can be loaded or rerun through the Tauri and Electron bridges;
-  reruns are mount-checked and linked to their source turn.
+  reruns are mount-checked and linked to their source turn. A compact catalog
+  snapshot and shared replay-status command now explain revision drift and
+  source-level changes before a rerun; user-facing inspect/rerun controls remain
+  ahead.
 - **M7 — evaluation, replay, and optimization:** first context-assembly slice
   implemented; the shared Rust runtime now applies deterministic, question-aware
   budgets to schema, user definitions, folder memory, and conversation history
@@ -327,9 +330,11 @@ AnalysisTurn
 The first slice persists and loads this record after every completed turn. A
 restart can restore the bounded analytical context from the archived transcript,
 and an explicit rerun executes the stored question against the currently
-mounted copy of the same workspace while preserving rerun lineage. A richer
-revision-diff view and UI controls for inspecting/rerunning stored turns remain
-follow-up work in this milestone.
+mounted copy of the same workspace while preserving rerun lineage. The stored
+record now also carries compact source metadata, and the shared
+analysis_turn_replay_status command can explain whether the current mount is
+the same revision and which sources changed. User-facing inspect/rerun controls
+remain follow-up work in this milestone.
 
 The UI then becomes a projection:
 
