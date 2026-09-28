@@ -146,13 +146,19 @@ def write_csv(out_path, bare_path, fella_path):
                 "steps": r.get("steps", 0),
                 "hard_fail": int(bool(r.get("hard_fail"))),
                 "verification_status": r.get("verification_status") or "",
+                "interpretation_status": r.get("interpretation_status") or "",
+                "plan_strategy": r.get("plan_strategy") or "",
+                "interpretation_correct_rate": r.get("interpretation_correct_rate"),
+                "plan_correct_rate": r.get("plan_correct_rate"),
                 "total_s": round(r.get("total_s", 0), 3),
                 "err": r.get("err") or "",
             })
     rows.sort(key=lambda x: (x["rung"], x["harness"], x["case"]))
     cols = ["rung", "model", "harness", "case", "tier", "correct", "correct_rate",
             "closeness_det", "waste", "prompt_tok", "completion_tok", "steps",
-            "hard_fail", "verification_status", "total_s", "err"]
+            "hard_fail", "verification_status", "interpretation_status",
+            "plan_strategy", "interpretation_correct_rate", "plan_correct_rate",
+            "total_s", "err"]
     with open(out_path, "w", newline="") as f:
         w = csv.DictWriter(f, cols)
         w.writeheader()

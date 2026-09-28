@@ -48,6 +48,7 @@
 //!          | {"no_chart": true, "contains": ["1200"]}
 //!          | "refusal" | "notool",
 //!    "tier": "easy", "reference": "...",
+//!    "expected_interpretation": "grounded", "expected_plan": "compiled_sql",
 //!    "setup_turns": ["turn 1 text", "turn 2 text"]}
 //! `setup_turns` (optional, Fella harness only): prior conversation turns sent
 //! on the same conversation before `question` -- for cases that only make
@@ -72,6 +73,7 @@ use std::time::{Duration, Instant};
 
 use fella_lib::engine::analytics::chart::Series as ChartSeries;
 use fella_lib::engine::evidence::{EvidenceItem, VerificationStatus};
+use fella_lib::engine::runtime::{InterpretationStatus, PlanStrategy};
 use fella_lib::engine::testkit::{self, Goldens, Messiness, TableGold, WorkspaceSpec};
 use fella_lib::engine::{memory, AskEvent, EngineState};
 
@@ -125,6 +127,11 @@ struct EvalCase {
     min_tools: usize,
     /// the ideal answer, for closeness scoring
     reference: String,
+    /// Optional expected runtime semantics. External benchmark cases can use
+    /// these to score interpretation and plan choice independently of prose
+    /// answer correctness.
+    expected_interpretation: Option<InterpretationStatus>,
+    expected_plan: Option<PlanStrategy>,
 }
 
 // --- one run of one case -------------------------------------------------
@@ -134,6 +141,8 @@ struct RunResult {
     evidence: Vec<EvidenceItem>,
     verification: Vec<fella_lib::engine::evidence::VerificationCheck>,
     verification_status: Option<VerificationStatus>,
+    interpretation_status: Option<InterpretationStatus>,
+    plan_strategy: Option<PlanStrategy>,
     hard_fail: bool,
     prompt_tok: u32,
     completion_tok: u32,
@@ -197,6 +206,8 @@ async fn run_case(
                 evidence: a.evidence,
                 verification: a.verification,
                 verification_status: Some(a.status),
+                interpretation_status: a.contract.map(|contract| contract.interpretation),
+                plan_strategy: a.plan.map(|plan| plan.strategy),
                 prompt_tok: p,
                 completion_tok: c,
                 total,
@@ -210,6 +221,8 @@ async fn run_case(
             evidence: Vec::new(),
             verification: Vec::new(),
             verification_status: None,
+            interpretation_status: None,
+            plan_strategy: None,
             hard_fail: false,
             prompt_tok: 0,
             completion_tok: 0,
@@ -725,6 +738,8 @@ fn battery(g: &Goldens, rent_total: f64) -> Vec<EvalCase> {
         gold,
         min_tools: 1,
         reference,
+        expected_interpretation: None,
+        expected_plan: None,
     };
 
     vec![
@@ -954,6 +969,15 @@ struct CaseScore {
     /// Baseline runners have `None` because they do not produce Fella's
     /// evidence/verification envelope.
     verification_status: Option<VerificationStatus>,
+    /// Worst interpretation authority observed across the iterations.
+    interpretation_status: Option<InterpretationStatus>,
+    /// The chosen plan when every observed iteration used the same strategy.
+    /// `None` means no plan was emitted or iterations disagreed.
+    plan_strategy: Option<PlanStrategy>,
+    /// Optional semantic scores, populated only when a benchmark case declares
+    /// the corresponding expected value.
+    interpretation_correct_rate: Option<f32>,
+    plan_correct_rate: Option<f32>,
     waste: Waste,
     prompt_tok: u32,
     completion_tok: u32,
@@ -977,6 +1001,24 @@ fn worst_verification_status(statuses: &[VerificationStatus]) -> Option<Verifica
     } else {
         Some(VerificationStatus::Verified)
     }
+}
+
+fn worst_interpretation_status(statuses: &[InterpretationStatus]) -> Option<InterpretationStatus> {
+    statuses.iter().copied().max_by_key(|status| match status {
+        InterpretationStatus::Grounded => 0,
+        InterpretationStatus::Assumed => 1,
+        InterpretationStatus::Unresolved => 2,
+        InterpretationStatus::Ambiguous => 3,
+        InterpretationStatus::Unsupported => 4,
+    })
+}
+
+fn stable_plan_strategy(strategies: &[PlanStrategy]) -> Option<PlanStrategy> {
+    let first = strategies.first().copied()?;
+    strategies
+        .iter()
+        .all(|strategy| *strategy == first)
+        .then_some(first)
 }
 
 // --- comparison harness: OpenAI code_interpreter -------------------------
@@ -1047,6 +1089,8 @@ async fn run_bare(engine: &EngineState, dir: &Path, question: &str, files: &[Str
                 evidence: Vec::new(),
                 verification: Vec::new(),
                 verification_status: None,
+                interpretation_status: None,
+                plan_strategy: None,
                 hard_fail: false,
                 prompt_tok: 0,
                 completion_tok: 0,
@@ -1078,6 +1122,8 @@ number or short phrase, no explanation. If the files can't answer it, say so pla
                 evidence: Vec::new(),
                 verification: Vec::new(),
                 verification_status: None,
+                interpretation_status: None,
+                plan_strategy: None,
                 hard_fail: false,
                 prompt_tok: p,
                 completion_tok: c,
@@ -1092,6 +1138,8 @@ number or short phrase, no explanation. If the files can't answer it, say so pla
             evidence: Vec::new(),
             verification: Vec::new(),
             verification_status: None,
+            interpretation_status: None,
+            plan_strategy: None,
             hard_fail: false,
             prompt_tok: 0,
             completion_tok: 0,
@@ -1152,6 +1200,8 @@ async fn run_openai_ci(h: &CiHarness, dir: &Path, question: &str, files: &[Strin
         evidence: Vec::new(),
         verification: Vec::new(),
         verification_status: None,
+        interpretation_status: None,
+        plan_strategy: None,
         hard_fail: false,
         prompt_tok: 0,
         completion_tok: 0,
@@ -1208,6 +1258,8 @@ async fn run_openai_ci(h: &CiHarness, dir: &Path, question: &str, files: &[Strin
         evidence: Vec::new(),
         verification: Vec::new(),
         verification_status: None,
+        interpretation_status: None,
+        plan_strategy: None,
         hard_fail: false,
         prompt_tok: v["usage"]["input_tokens"].as_u64().unwrap_or(0) as u32,
         completion_tok: v["usage"]["output_tokens"].as_u64().unwrap_or(0) as u32,
@@ -1233,12 +1285,17 @@ async fn score_case(
     setup_turns: &[String],
 ) -> CaseScore {
     let iters = iters.max(1);
+    let scores_runtime_semantics = matches!(runner, Runner::Fella);
     let mut oks = 0usize;
     let (mut cd, mut cj_sum, mut cj_n) = (0f32, 0f32, 0usize);
     let (mut ptok, mut ctok, mut secs, mut steps) = (0u64, 0u64, 0f64, 0usize);
     let mut first_toks: Vec<f64> = Vec::new();
     let mut wastes: Vec<Waste> = Vec::new();
     let mut verification_statuses: Vec<VerificationStatus> = Vec::new();
+    let mut interpretation_statuses: Vec<InterpretationStatus> = Vec::new();
+    let mut plan_strategies: Vec<PlanStrategy> = Vec::new();
+    let (mut interpretation_matches, mut interpretation_observations) = (0usize, 0usize);
+    let (mut plan_matches, mut plan_observations) = (0usize, 0usize);
     let mut any_hard = false;
     let mut last_err = None;
 
@@ -1331,6 +1388,24 @@ async fn score_case(
         if let Some(status) = r.verification_status {
             verification_statuses.push(status);
         }
+        if let Some(status) = r.interpretation_status {
+            interpretation_statuses.push(status);
+            if let Some(expected) = case.expected_interpretation {
+                interpretation_observations += 1;
+                if status == expected {
+                    interpretation_matches += 1;
+                }
+            }
+        }
+        if let Some(strategy) = r.plan_strategy {
+            plan_strategies.push(strategy);
+            if let Some(expected) = case.expected_plan {
+                plan_observations += 1;
+                if strategy == expected {
+                    plan_matches += 1;
+                }
+            }
+        }
         any_hard |= r.hard_fail;
         last_err = r.err;
     }
@@ -1346,6 +1421,28 @@ async fn score_case(
         closeness_det: cd / n,
         closeness_judge: (cj_n > 0).then(|| cj_sum / cj_n as f32),
         verification_status: worst_verification_status(&verification_statuses),
+        interpretation_status: worst_interpretation_status(&interpretation_statuses),
+        plan_strategy: stable_plan_strategy(&plan_strategies),
+        interpretation_correct_rate: case
+            .expected_interpretation
+            .filter(|_| scores_runtime_semantics)
+            .map(|_| {
+                if interpretation_observations == 0 {
+                    0.0
+                } else {
+                    interpretation_matches as f32 / interpretation_observations as f32
+                }
+            }),
+        plan_correct_rate: case
+            .expected_plan
+            .filter(|_| scores_runtime_semantics)
+            .map(|_| {
+                if plan_observations == 0 {
+                    0.0
+                } else {
+                    plan_matches as f32 / plan_observations as f32
+                }
+            }),
         waste: fold_waste(&wastes),
         prompt_tok: (ptok / iters as u64) as u32,
         completion_tok: (ctok / iters as u64) as u32,
@@ -1700,6 +1797,13 @@ struct BenchSpec {
     tier: Option<String>,
     #[serde(default)]
     reference: Option<String>,
+    /// Optional semantic expectations for the interpretation/replay matrix.
+    /// They are deliberately separate from `gold`: a correct-looking answer
+    /// can still come from an unsafe interpretation or an unexpected plan.
+    #[serde(default)]
+    expected_interpretation: Option<InterpretationStatus>,
+    #[serde(default)]
+    expected_plan: Option<PlanStrategy>,
     /// Prior conversation turns sent (same `conv`, Fella harness only) before
     /// `question`, so a case can test behaviour that only makes sense with
     /// context already established -- a fact stated earlier, or pressure
@@ -1818,6 +1922,8 @@ fn load_bench_dir(dir: &Path) -> Vec<(Vec<String>, Vec<String>, EvalCase)> {
                 gold,
                 min_tools: 1,
                 reference: spec.reference.unwrap_or_default(),
+                expected_interpretation: spec.expected_interpretation,
+                expected_plan: spec.expected_plan,
             },
         ));
     }
@@ -2079,6 +2185,8 @@ async fn cmd_session_memory(
         gold: Gold::Figures(vec![a]),
         min_tools: 1,
         reference: format!("You spent {a:.2} on {c}."),
+        expected_interpretation: None,
+        expected_plan: None,
     };
     let mut all = Vec::new();
     for (label, keep) in [("memory on", true), ("memory off", false)] {
@@ -2119,6 +2227,10 @@ async fn cmd_session_memory(
             closeness_det: cd / n,
             closeness_judge: None,
             verification_status: None,
+            interpretation_status: None,
+            plan_strategy: None,
+            interpretation_correct_rate: None,
+            plan_correct_rate: None,
             waste: Waste::default(),
             prompt_tok: (ptok / iters as u64) as u32,
             completion_tok: (ctok / iters as u64) as u32,
@@ -2236,6 +2348,8 @@ async fn cmd_memory(
         gold: gold.clone(),
         min_tools: 1,
         reference: format!("You spent {rent_all:.2} on rent (rent + housing + mortgage)."),
+        expected_interpretation: None,
+        expected_plan: None,
     };
     println!(
         "session 2 gold: {rent_all:.0} (rent+housing+mortgage); literal `rent` only = {rent_literal:.0}\n"
@@ -2303,6 +2417,10 @@ async fn cmd_memory(
             closeness_det: cd / n,
             closeness_judge: None,
             verification_status: None,
+            interpretation_status: None,
+            plan_strategy: None,
+            interpretation_correct_rate: None,
+            plan_correct_rate: None,
             waste: Waste::default(),
             prompt_tok: (ptok / iters as u64) as u32,
             completion_tok: (ctok / iters as u64) as u32,
@@ -2363,6 +2481,10 @@ async fn cmd_memory_axes(
             closeness_det: if correct { 1.0 } else { 0.0 },
             closeness_judge: None,
             verification_status: None,
+            interpretation_status: None,
+            plan_strategy: None,
+            interpretation_correct_rate: None,
+            plan_correct_rate: None,
             waste: Waste::default(),
             prompt_tok: 0,
             completion_tok: 0,
@@ -2691,6 +2813,10 @@ fn write_json(path: &str, scores: &[CaseScore]) {
                 "closeness_det": s.closeness_det,
                 "closeness_judge": s.closeness_judge,
                 "verification_status": s.verification_status,
+                "interpretation_status": s.interpretation_status,
+                "plan_strategy": s.plan_strategy,
+                "interpretation_correct_rate": s.interpretation_correct_rate,
+                "plan_correct_rate": s.plan_correct_rate,
                 "waste": s.waste.total(), "prompt_tok": s.prompt_tok,
                 "completion_tok": s.completion_tok, "total_s": s.total_s,
                 "steps": s.steps, "hard_fail": s.hard_fail, "err": s.err,
@@ -2899,6 +3025,8 @@ mod tests {
             evidence: ev,
             verification: Vec::new(),
             verification_status: None,
+            interpretation_status: None,
+            plan_strategy: None,
             hard_fail: false,
             prompt_tok: 0,
             completion_tok: 0,
@@ -2966,6 +3094,32 @@ mod tests {
                 VerificationStatus::Failed,
             ]),
             Some(VerificationStatus::Failed)
+        );
+    }
+
+    #[test]
+    fn interpretation_and_plan_matrix_aggregation_is_explicit() {
+        assert_eq!(
+            worst_interpretation_status(&[
+                InterpretationStatus::Grounded,
+                InterpretationStatus::Ambiguous,
+            ]),
+            Some(InterpretationStatus::Ambiguous)
+        );
+        assert_eq!(
+            worst_interpretation_status(&[
+                InterpretationStatus::Assumed,
+                InterpretationStatus::Unsupported,
+            ]),
+            Some(InterpretationStatus::Unsupported)
+        );
+        assert_eq!(
+            stable_plan_strategy(&[PlanStrategy::CompiledSql, PlanStrategy::CompiledSql]),
+            Some(PlanStrategy::CompiledSql)
+        );
+        assert_eq!(
+            stable_plan_strategy(&[PlanStrategy::CompiledSql, PlanStrategy::DirectTools]),
+            None
         );
     }
 
@@ -3364,6 +3518,8 @@ mod tests {
             gold: Gold::Figures(vec![450.0]),
             min_tools: 1,
             reference: "Your total spending was 450.".into(),
+            expected_interpretation: None,
+            expected_plan: None,
         };
         let good = rr(
             "Your total spending was 450.",
@@ -3420,12 +3576,17 @@ mod tests {
             .is_err());
 
         let spec: BenchSpec = serde_json::from_str(
-            r#"{"id":"a","question":"q?","files":["x.csv"],"gold":{"figures":[1]},"tier":"easy"}"#,
+            r#"{"id":"a","question":"q?","files":["x.csv"],"gold":{"figures":[1]},"tier":"easy","expected_interpretation":"grounded","expected_plan":"compiled_sql"}"#,
         )
         .unwrap();
         assert_eq!(spec.id, "a");
         assert_eq!(spec.files, vec!["x.csv"]);
         assert_eq!(spec.tier.as_deref(), Some("easy"));
+        assert_eq!(
+            spec.expected_interpretation,
+            Some(InterpretationStatus::Grounded)
+        );
+        assert_eq!(spec.expected_plan, Some(PlanStrategy::CompiledSql));
     }
 
     #[test]

@@ -64,6 +64,10 @@ def main():
                 "completion_tok": r["completion_tok"],
                 "total_s": r["total_s"],
                 "verification_status": r.get("verification_status"),
+                "interpretation_status": r.get("interpretation_status"),
+                "plan_strategy": r.get("plan_strategy"),
+                "interpretation_correct_rate": r.get("interpretation_correct_rate"),
+                "plan_correct_rate": r.get("plan_correct_rate"),
                 "err": r.get("err"),
             })
 

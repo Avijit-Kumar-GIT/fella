@@ -97,8 +97,10 @@ This is the implementation form of Fella's core loop:
   budgets to schema, user definitions, folder memory, and conversation history
   before either desktop shell sends a prompt. The evaluator now preserves the
   runtime's typed acceptance status in JSON/CSV output, so correctness and
-  trust can be measured separately. Scored interpretation/replay matrices and
-  cost/quality dashboards remain ahead.
+  trust can be measured separately. External cases can also declare expected
+  interpretation and plan semantics, which the evaluator scores independently
+  from the final prose answer. Cost/quality dashboards and broader replay
+  matrices remain ahead.
 
 ## Where the current code starts
 
@@ -364,7 +366,11 @@ selects relevant lines for definitions and schemas, keeps the newest session
 turns, and makes omissions explicit so the model can fall back to the read-only
 tools. This applies the minimal-relevant-context principle described by
 [CHESS: Contextual Harnessing for Efficient SQL](https://arxiv.org/abs/2405.16755)
-without introducing a vector store into the local-first base product.
+without introducing a vector store into the local-first base product. The
+evaluation harness now carries the runtime's acceptance status plus optional
+expected interpretation/plan labels into JSON, CSV, and rollup artifacts, so a
+benchmark can distinguish a numerically correct answer from one produced by an
+unsafe interpretation or unexpected execution strategy.
 
 ## Research-informed design choices
 
