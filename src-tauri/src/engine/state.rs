@@ -26,7 +26,9 @@ use crate::engine::runtime::{
     WorkspaceRevisionSnapshot, WorkspaceSourceSnapshot,
 };
 use crate::engine::secrets::Secrets;
-use crate::engine::semantic_memory::{self, FactAuthority, FactKind, SemanticFact, SemanticMemory};
+use crate::engine::semantic_memory::{
+    self, FactAuthority, FactKind, SemanticFact, SemanticFactInput, SemanticMemory,
+};
 use crate::engine::sqlite::{self, Settings};
 use crate::engine::tools::Registry;
 use crate::engine::update;
@@ -1426,17 +1428,17 @@ impl EngineState {
         // updates gain authority, revision, and provenance metadata.
         if !facts.has_kind(FactKind::Vocabulary) {
             for (key, statement) in mem.vocabulary_entries() {
-                facts.upsert(SemanticFact::new(
-                    FactKind::Vocabulary,
+                facts.upsert(SemanticFact::new(SemanticFactInput {
+                    kind: FactKind::Vocabulary,
                     key,
                     statement,
-                    FactAuthority::User,
-                    scope.clone(),
-                    revision.clone(),
-                    None,
-                    Vec::new(),
+                    authority: FactAuthority::User,
+                    workspace: scope.clone(),
+                    revision: revision.clone(),
+                    supporting_turn: None,
+                    evidence_ids: Vec::new(),
                     at_ms,
-                ));
+                }));
             }
         }
 
@@ -1446,17 +1448,17 @@ impl EngineState {
             match self.reconcile_vocab_key(correction, &existing).await {
                 VocabAction::Update(key) | VocabAction::Add(key) => {
                     mem.set_vocab(&key, correction);
-                    facts.upsert(SemanticFact::new(
-                        FactKind::Vocabulary,
+                    facts.upsert(SemanticFact::new(SemanticFactInput {
+                        kind: FactKind::Vocabulary,
                         key,
-                        correction,
-                        FactAuthority::User,
-                        scope.clone(),
-                        revision.clone(),
-                        Some(answer.turn_id.clone()),
-                        evidence_ids.clone(),
+                        statement: correction.to_string(),
+                        authority: FactAuthority::User,
+                        workspace: scope.clone(),
+                        revision: revision.clone(),
+                        supporting_turn: Some(answer.turn_id.clone()),
+                        evidence_ids: evidence_ids.clone(),
                         at_ms,
-                    ));
+                    }));
                 }
                 VocabAction::Noop => {}
             }
@@ -2247,18 +2249,18 @@ exactly, character for character, from the list below.";
             Registry::standard_with(settings.capabilities)
         };
         let turn_catalog = self.catalog();
-        let answer = agent::run(
-            self,
-            &llm,
-            &registry,
+        let answer = agent::run(agent::RunRequest {
+            engine: self,
+            llm: &llm,
+            registry: &registry,
             conversation_id,
-            &turn_id,
+            turn_id: &turn_id,
             question,
             inspect,
             context_refs,
-            cancel.clone(),
-            &emit,
-        )
+            cancel: cancel.clone(),
+            emit: &emit,
+        })
         .await;
         // Drop this run's stop-flag (unless a newer run for the same id already
         // replaced it).
@@ -2644,17 +2646,17 @@ fn observed_contract_facts(
     }
 
     let make = |key: String, statement: String| {
-        SemanticFact::new(
-            FactKind::FieldBinding,
+        SemanticFact::new(SemanticFactInput {
+            kind: FactKind::FieldBinding,
             key,
             statement,
-            FactAuthority::Observed,
-            scope.to_string(),
-            revision.clone(),
-            Some(answer.turn_id.clone()),
-            evidence_ids.to_vec(),
+            authority: FactAuthority::Observed,
+            workspace: scope.to_string(),
+            revision: revision.clone(),
+            supporting_turn: Some(answer.turn_id.clone()),
+            evidence_ids: evidence_ids.to_vec(),
             at_ms,
-        )
+        })
     };
     let mut facts = Vec::new();
     for measure in &contract.measures {

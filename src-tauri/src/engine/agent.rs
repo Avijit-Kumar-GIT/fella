@@ -44,6 +44,40 @@ struct RunIds {
     plan: Option<LogicalPlan>,
 }
 
+pub(crate) struct RunRequest<'a> {
+    pub(crate) engine: &'a EngineState,
+    pub(crate) llm: &'a LlmClient,
+    pub(crate) registry: &'a Registry,
+    pub(crate) conversation_id: &'a str,
+    pub(crate) turn_id: &'a str,
+    pub(crate) question: &'a str,
+    pub(crate) inspect: bool,
+    pub(crate) context_refs: &'a [ContextReference],
+    pub(crate) cancel: Arc<AtomicBool>,
+    pub(crate) emit: &'a (dyn Fn(AskEvent) + Send + Sync + 'a),
+}
+
+struct FinishContext<'a> {
+    engine: &'a EngineState,
+    workspace: Option<&'a WorkspaceSnapshot>,
+    ids: &'a RunIds,
+    emit: &'a (dyn Fn(AskEvent) + Send + Sync + 'a),
+}
+
+fn finish_context<'a>(
+    engine: &'a EngineState,
+    workspace: Option<&'a WorkspaceSnapshot>,
+    ids: &'a RunIds,
+    emit: &'a (dyn Fn(AskEvent) + Send + Sync + 'a),
+) -> FinishContext<'a> {
+    FinishContext {
+        engine,
+        workspace,
+        ids,
+        emit,
+    }
+}
+
 fn soft_stop_round_trips() -> usize {
     super::env::positive("FELLA_SOFT_STOP", SOFT_STOP_ROUND_TRIPS)
 }
@@ -84,18 +118,19 @@ async fn cancelled(flag: &AtomicBool) {
     }
 }
 
-pub async fn run(
-    engine: &EngineState,
-    llm: &LlmClient,
-    registry: &Registry,
-    conversation_id: &str,
-    turn_id: &str,
-    question: &str,
-    inspect: bool,
-    context_refs: &[ContextReference],
-    cancel: Arc<AtomicBool>,
-    emit: &(dyn Fn(AskEvent) + Send + Sync),
-) -> EngineResult<Answer> {
+pub(crate) async fn run(request: RunRequest<'_>) -> EngineResult<Answer> {
+    let RunRequest {
+        engine,
+        llm,
+        registry,
+        conversation_id,
+        turn_id,
+        question,
+        inspect,
+        context_refs,
+        cancel,
+        emit,
+    } = request;
     let mut ids = RunIds {
         turn_id: turn_id.to_string(),
         trace_id: runtime::new_trace_id(),
@@ -239,9 +274,7 @@ ambiguous, put the ambiguity in `unresolved`.",
                         state: TurnState::Retry,
                     });
                     return Ok(finish(
-                        engine,
-                        workspace.as_ref(),
-                        &ids,
+                        finish_context(engine, workspace.as_ref(), &ids, emit),
                         question,
                         format!(
                             "I couldn't finish the model call failed ({e}). \
@@ -249,20 +282,16 @@ ambiguous, put the ambiguity in `unresolved`.",
                         ),
                         evidence,
                         usage,
-                        emit,
                     ));
                 }
                 Err(e) => return Err(e),
             },
             _ = cancelled(cancel.as_ref()) => {
                 return Ok(stopped(
-                    engine,
-                    workspace.as_ref(),
-                    &ids,
+                    finish_context(engine, workspace.as_ref(), &ids, emit),
                     question,
                     evidence,
                     usage,
-                    emit,
                 ))
             }
         };
@@ -345,14 +374,11 @@ filter word in the question exactly, and state just the number(s) don't round or
                 }
             }
             return Ok(finish_with(
-                engine,
-                workspace.as_ref(),
-                &ids,
+                finish_context(engine, workspace.as_ref(), &ids, emit),
                 text,
                 evidence,
                 usage,
                 checks,
-                emit,
             ));
         }
         // `resp.content` (any "let me check…" preamble before the tool calls)
@@ -675,14 +701,11 @@ not run again. Its result is repeated below - use it, refine the call, or give y
                 state: TurnState::Retry,
             });
             return Ok(finish(
-                engine,
-                workspace.as_ref(),
-                &ids,
+                finish_context(engine, workspace.as_ref(), &ids, emit),
                 question,
                 "The workspace changed while this question was running. I kept the partial trace, but the result needs to be run again against the current files.".into(),
                 evidence,
                 usage,
-                emit,
             ));
         }
 
@@ -695,13 +718,10 @@ not run again. Its result is repeated below - use it, refine the call, or give y
 
         if cancel.load(Ordering::Relaxed) {
             return Ok(stopped(
-                engine,
-                workspace.as_ref(),
-                &ids,
+                finish_context(engine, workspace.as_ref(), &ids, emit),
                 question,
                 evidence,
                 usage,
-                emit,
             ));
         }
         trim_history(&mut messages);
@@ -730,13 +750,10 @@ you're not confident, say so plainly rather than guessing."
         r = llm.chat(&messages, &[], &notify, &on_delta) => r.unwrap_or_default(),
         _ = cancelled(cancel.as_ref()) => {
             return Ok(stopped(
-                engine,
-                workspace.as_ref(),
-                &ids,
+                finish_context(engine, workspace.as_ref(), &ids, emit),
                 question,
                 evidence,
                 usage,
-                emit,
             ))
         }
     };
@@ -753,14 +770,11 @@ you're not confident, say so plainly rather than guessing."
         evidence.len()
     );
     Ok(finish(
-        engine,
-        workspace.as_ref(),
-        &ids,
+        finish_context(engine, workspace.as_ref(), &ids, emit),
         question,
         text,
         evidence,
         usage,
-        emit,
     ))
 }
 
@@ -769,24 +783,12 @@ fn prompt_reference_value(value: &str) -> String {
 }
 
 fn stopped(
-    engine: &EngineState,
-    workspace: Option<&WorkspaceSnapshot>,
-    ids: &RunIds,
+    context: FinishContext<'_>,
     question: &str,
     evidence: Vec<EvidenceItem>,
     usage: Option<Usage>,
-    emit: &(dyn Fn(AskEvent) + Send + Sync),
 ) -> Answer {
-    finish(
-        engine,
-        workspace,
-        ids,
-        question,
-        "Stopped.".to_string(),
-        evidence,
-        usage,
-        emit,
-    )
+    finish(context, question, "Stopped.".to_string(), evidence, usage)
 }
 
 fn catalog_matches(engine: &EngineState, expected: &Catalog) -> bool {
@@ -820,30 +822,24 @@ fn self_check_enabled() -> bool {
 }
 
 fn finish(
-    engine: &EngineState,
-    workspace: Option<&WorkspaceSnapshot>,
-    ids: &RunIds,
+    context: FinishContext<'_>,
     question: &str,
     text: String,
     evidence: Vec<EvidenceItem>,
     usage: Option<Usage>,
-    emit: &(dyn Fn(AskEvent) + Send + Sync),
 ) -> Answer {
-    let checks = verify::run(engine, question, &text, &evidence);
-    finish_with(engine, workspace, ids, text, evidence, usage, checks, emit)
+    let checks = verify::run(context.engine, question, &text, &evidence);
+    finish_with(context, text, evidence, usage, checks)
 }
 
 fn finish_with(
-    engine: &EngineState,
-    workspace: Option<&WorkspaceSnapshot>,
-    ids: &RunIds,
+    context: FinishContext<'_>,
     text: String,
     evidence: Vec<EvidenceItem>,
     usage: Option<Usage>,
     mut verification: Vec<VerificationCheck>,
-    emit: &(dyn Fn(AskEvent) + Send + Sync),
 ) -> Answer {
-    if !workspace_matches(engine, workspace) {
+    if !workspace_matches(context.engine, context.workspace) {
         verification.push(VerificationCheck {
             label: "workspace changed while this answer was running".into(),
             ok: false,
@@ -853,11 +849,11 @@ fn finish_with(
             ),
         });
     }
-    if let Some(contract) = ids.contract.as_ref() {
+    if let Some(contract) = context.ids.contract.as_ref() {
         verification.extend(verify::execution_checks(
-            engine,
+            context.engine,
             contract,
-            ids.grounding.as_ref(),
+            context.ids.grounding.as_ref(),
             &evidence,
         ));
     }
@@ -867,10 +863,11 @@ fn finish_with(
         evidence.len()
     );
     if let Some(reason) = friction::trigger(&verification, &evidence) {
-        engine.record_friction_signal(reason, &evidence);
+        context.engine.record_friction_signal(reason, &evidence);
     }
     let mut status = verify::status(&verification, &evidence);
-    let interpretation = ids
+    let interpretation = context
+        .ids
         .contract
         .as_ref()
         .map(|contract| contract.interpretation);
@@ -902,9 +899,9 @@ fn finish_with(
         },
     };
     let trace = ExecutionTrace {
-        id: ids.trace_id.clone(),
-        turn_id: ids.turn_id.clone(),
-        workspace_revision: workspace.map(|snapshot| snapshot.revision.clone()),
+        id: context.ids.trace_id.clone(),
+        turn_id: context.ids.turn_id.clone(),
+        workspace_revision: context.workspace.map(|snapshot| snapshot.revision.clone()),
         steps: evidence
             .iter()
             .map(|item| TraceStep {
@@ -921,7 +918,7 @@ fn finish_with(
             })
             .collect(),
     };
-    let plan = ids.plan.clone().unwrap_or_else(|| LogicalPlan {
+    let plan = context.ids.plan.clone().unwrap_or_else(|| LogicalPlan {
         strategy: PlanStrategy::DirectTools,
         steps: trace
             .steps
@@ -929,25 +926,25 @@ fn finish_with(
             .map(|step| step.operation.clone())
             .collect(),
     });
-    emit(AskEvent::TurnState {
-        turn_id: ids.turn_id.clone(),
+    (context.emit)(AskEvent::TurnState {
+        turn_id: context.ids.turn_id.clone(),
         state,
     });
     let answer = Answer {
-        turn_id: ids.turn_id.clone(),
+        turn_id: context.ids.turn_id.clone(),
         trace,
         plan: Some(plan),
-        contract: ids.contract.clone(),
-        grounding: ids.grounding.clone(),
+        contract: context.ids.contract.clone(),
+        grounding: context.ids.grounding.clone(),
         text,
         evidence,
         verification,
         status,
-        workspace: workspace.cloned(),
+        workspace: context.workspace.cloned(),
         usage,
     };
-    emit(AskEvent::AnswerDone {
-        answer: answer.clone(),
+    (context.emit)(AskEvent::AnswerDone {
+        answer: Box::new(answer.clone()),
     });
     answer
 }

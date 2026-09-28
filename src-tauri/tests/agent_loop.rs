@@ -120,7 +120,12 @@ async fn agent_calls_a_tool_then_answers() {
 
     assert!(answer.text.contains("450"), "answer was: {}", answer.text);
     assert_eq!(answer.evidence.len(), 1);
-    assert_eq!(answer.status, VerificationStatus::Verified);
+    assert_eq!(
+        answer.status,
+        VerificationStatus::Verified,
+        "verification checks: {:?}",
+        answer.verification
+    );
     let workspace = answer
         .workspace
         .as_ref()

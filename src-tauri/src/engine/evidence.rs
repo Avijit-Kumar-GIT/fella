@@ -159,6 +159,36 @@ mod tests {
             serde_json::json!("needs_review")
         );
     }
+
+    #[test]
+    fn boxed_answer_done_keeps_the_frontend_wire_shape() {
+        let answer = Answer {
+            turn_id: "turn-1".into(),
+            trace: crate::engine::runtime::ExecutionTrace {
+                id: "trace-1".into(),
+                turn_id: "turn-1".into(),
+                workspace_revision: None,
+                steps: Vec::new(),
+            },
+            plan: None,
+            contract: None,
+            grounding: None,
+            text: "done".into(),
+            evidence: Vec::new(),
+            verification: Vec::new(),
+            status: VerificationStatus::InsufficientData,
+            workspace: None,
+            usage: None,
+        };
+        let wire = serde_json::to_value(AskEvent::AnswerDone {
+            answer: Box::new(answer),
+        })
+        .unwrap();
+
+        assert_eq!(wire["kind"], "answer_done");
+        assert_eq!(wire["answer"]["turn_id"], "turn-1");
+        assert!(wire["answer"].is_object());
+    }
 }
 
 /// Streamed to the UI over a Tauri channel during `ask`.
@@ -188,6 +218,6 @@ pub enum AskEvent {
         text: String,
     },
     AnswerDone {
-        answer: Answer,
+        answer: Box<Answer>,
     },
 }

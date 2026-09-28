@@ -128,7 +128,7 @@ pub fn assess(question: &str) -> RiskAssessment {
 }
 
 fn has_word(words: &[&str], expected: &str) -> bool {
-    words.iter().any(|word| *word == expected)
+    words.contains(&expected)
 }
 
 fn has_any_word(words: &[&str], expected: &[&str]) -> bool {

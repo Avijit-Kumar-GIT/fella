@@ -65,33 +65,46 @@ pub struct SemanticFact {
     pub conflicts_with: Vec<String>,
 }
 
+pub struct SemanticFactInput {
+    pub kind: FactKind,
+    pub key: String,
+    pub statement: String,
+    pub authority: FactAuthority,
+    pub workspace: String,
+    pub revision: Option<String>,
+    pub supporting_turn: Option<String>,
+    pub evidence_ids: Vec<String>,
+    pub at_ms: u64,
+}
+
 impl SemanticFact {
-    pub fn new(
-        kind: FactKind,
-        key: impl Into<String>,
-        statement: impl Into<String>,
-        authority: FactAuthority,
-        workspace: impl Into<String>,
-        revision: Option<String>,
-        supporting_turn: Option<String>,
-        evidence_ids: Vec<String>,
-        at_ms: u64,
-    ) -> Self {
+    pub fn new(input: SemanticFactInput) -> Self {
+        let SemanticFactInput {
+            kind,
+            key,
+            statement,
+            authority,
+            workspace,
+            revision,
+            supporting_turn,
+            evidence_ids,
+            at_ms,
+        } = input;
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let sequence = NEXT.fetch_add(1, Ordering::Relaxed);
         let id = format!("fact-{at_ms:x}-{sequence:x}");
         Self {
             id,
             kind,
-            key: key.into().trim().to_string(),
-            statement: statement.into().trim().to_string(),
+            key: key.trim().to_string(),
+            statement: statement.trim().to_string(),
             authority,
             state: if authority == FactAuthority::ModelSuggestion {
                 FactState::Proposed
             } else {
                 FactState::Active
             },
-            workspace: workspace.into(),
+            workspace,
             revision,
             supporting_turn,
             evidence_ids,
@@ -511,17 +524,17 @@ mod tests {
         revision: &str,
         at_ms: u64,
     ) -> SemanticFact {
-        SemanticFact::new(
+        SemanticFact::new(SemanticFactInput {
             kind,
-            key,
-            statement,
+            key: key.into(),
+            statement: statement.into(),
             authority,
-            "/workspace",
-            Some(revision.into()),
-            Some(format!("turn-{at_ms}")),
-            vec![format!("e-{at_ms}")],
+            workspace: "/workspace".into(),
+            revision: Some(revision.into()),
+            supporting_turn: Some(format!("turn-{at_ms}")),
+            evidence_ids: vec![format!("e-{at_ms}")],
             at_ms,
-        )
+        })
     }
 
     #[test]

@@ -56,7 +56,7 @@ fn respond(output: &Output, id: u64, result: EngineResult<Value>) {
                 result: Some(result),
                 error: None,
             })
-            .unwrap_or_else(|_| Value::Null),
+            .unwrap_or(Value::Null),
         ),
         Err(error) => emit(
             output,
@@ -66,7 +66,7 @@ fn respond(output: &Output, id: u64, result: EngineResult<Value>) {
                 result: None,
                 error: Some(error),
             })
-            .unwrap_or_else(|_| Value::Null),
+            .unwrap_or(Value::Null),
         ),
     }
 }
