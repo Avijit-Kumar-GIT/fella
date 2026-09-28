@@ -978,6 +978,11 @@ struct CaseScore {
     /// the corresponding expected value.
     interpretation_correct_rate: Option<f32>,
     plan_correct_rate: Option<f32>,
+    /// Fraction of Fella runtime observations that were accepted as verified.
+    accepted_rate: Option<f32>,
+    /// Fraction of all Fella runtime observations that emitted a non-error,
+    /// non-empty answer without a verified runtime status.
+    unsafe_guess_rate: Option<f32>,
     waste: Waste,
     prompt_tok: u32,
     completion_tok: u32,
@@ -1019,6 +1024,24 @@ fn stable_plan_strategy(strategies: &[PlanStrategy]) -> Option<PlanStrategy> {
         .iter()
         .all(|strategy| *strategy == first)
         .then_some(first)
+}
+
+fn acceptance_rates(observations: &[(VerificationStatus, bool)]) -> Option<(f32, f32)> {
+    if observations.is_empty() {
+        return None;
+    }
+    let accepted = observations
+        .iter()
+        .filter(|(status, _)| *status == VerificationStatus::Verified)
+        .count();
+    let unsafe_guesses = observations
+        .iter()
+        .filter(|(status, answer_emitted)| {
+            *status != VerificationStatus::Verified && *answer_emitted
+        })
+        .count();
+    let n = observations.len() as f32;
+    Some((accepted as f32 / n, unsafe_guesses as f32 / n))
 }
 
 // --- comparison harness: OpenAI code_interpreter -------------------------
@@ -1292,6 +1315,7 @@ async fn score_case(
     let mut first_toks: Vec<f64> = Vec::new();
     let mut wastes: Vec<Waste> = Vec::new();
     let mut verification_statuses: Vec<VerificationStatus> = Vec::new();
+    let mut acceptance_observations: Vec<(VerificationStatus, bool)> = Vec::new();
     let mut interpretation_statuses: Vec<InterpretationStatus> = Vec::new();
     let mut plan_strategies: Vec<PlanStrategy> = Vec::new();
     let (mut interpretation_matches, mut interpretation_observations) = (0usize, 0usize);
@@ -1387,6 +1411,7 @@ async fn score_case(
         wastes.push(classify_waste(&r));
         if let Some(status) = r.verification_status {
             verification_statuses.push(status);
+            acceptance_observations.push((status, r.err.is_none() && !r.text.trim().is_empty()));
         }
         if let Some(status) = r.interpretation_status {
             interpretation_statuses.push(status);
@@ -1411,6 +1436,9 @@ async fn score_case(
     }
 
     let n = iters as f32;
+    let (accepted_rate, unsafe_guess_rate) = acceptance_rates(&acceptance_observations)
+        .map(|(accepted, unsafe_guesses)| (Some(accepted), Some(unsafe_guesses)))
+        .unwrap_or((None, None));
     CaseScore {
         id: case.id.to_string(),
         model: model.to_string(),
@@ -1443,6 +1471,8 @@ async fn score_case(
                     plan_matches as f32 / plan_observations as f32
                 }
             }),
+        accepted_rate,
+        unsafe_guess_rate,
         waste: fold_waste(&wastes),
         prompt_tok: (ptok / iters as u64) as u32,
         completion_tok: (ctok / iters as u64) as u32,
@@ -2231,6 +2261,8 @@ async fn cmd_session_memory(
             plan_strategy: None,
             interpretation_correct_rate: None,
             plan_correct_rate: None,
+            accepted_rate: None,
+            unsafe_guess_rate: None,
             waste: Waste::default(),
             prompt_tok: (ptok / iters as u64) as u32,
             completion_tok: (ctok / iters as u64) as u32,
@@ -2421,6 +2453,8 @@ async fn cmd_memory(
             plan_strategy: None,
             interpretation_correct_rate: None,
             plan_correct_rate: None,
+            accepted_rate: None,
+            unsafe_guess_rate: None,
             waste: Waste::default(),
             prompt_tok: (ptok / iters as u64) as u32,
             completion_tok: (ctok / iters as u64) as u32,
@@ -2485,6 +2519,8 @@ async fn cmd_memory_axes(
             plan_strategy: None,
             interpretation_correct_rate: None,
             plan_correct_rate: None,
+            accepted_rate: None,
+            unsafe_guess_rate: None,
             waste: Waste::default(),
             prompt_tok: 0,
             completion_tok: 0,
@@ -2817,6 +2853,8 @@ fn write_json(path: &str, scores: &[CaseScore]) {
                 "plan_strategy": s.plan_strategy,
                 "interpretation_correct_rate": s.interpretation_correct_rate,
                 "plan_correct_rate": s.plan_correct_rate,
+                "accepted_rate": s.accepted_rate,
+                "unsafe_guess_rate": s.unsafe_guess_rate,
                 "waste": s.waste.total(), "prompt_tok": s.prompt_tok,
                 "completion_tok": s.completion_tok, "total_s": s.total_s,
                 "steps": s.steps, "hard_fail": s.hard_fail, "err": s.err,
@@ -3120,6 +3158,22 @@ mod tests {
         assert_eq!(
             stable_plan_strategy(&[PlanStrategy::CompiledSql, PlanStrategy::DirectTools]),
             None
+        );
+    }
+
+    #[test]
+    fn acceptance_metrics_separate_verified_and_unsafe_answers() {
+        assert_eq!(acceptance_rates(&[]), None);
+        assert_eq!(
+            acceptance_rates(&[
+                (VerificationStatus::Verified, true),
+                (VerificationStatus::NeedsReview, true),
+            ]),
+            Some((0.5, 0.5))
+        );
+        assert_eq!(
+            acceptance_rates(&[(VerificationStatus::Failed, false)]),
+            Some((0.0, 0.0))
         );
     }
 

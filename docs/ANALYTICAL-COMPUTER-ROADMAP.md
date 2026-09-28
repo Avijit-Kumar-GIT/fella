@@ -99,7 +99,8 @@ This is the implementation form of Fella's core loop:
   runtime's typed acceptance status in JSON/CSV output, so correctness and
   trust can be measured separately. External cases can also declare expected
   interpretation and plan semantics, which the evaluator scores independently
-  from the final prose answer. Cost/quality dashboards and broader replay
+  from the final prose answer. It now also reports accepted-answer and
+  unsafe-guess rates for Fella runs. Cost/quality dashboards and broader replay
   matrices remain ahead.
 
 ## Where the current code starts
@@ -370,7 +371,10 @@ without introducing a vector store into the local-first base product. The
 evaluation harness now carries the runtime's acceptance status plus optional
 expected interpretation/plan labels into JSON, CSV, and rollup artifacts, so a
 benchmark can distinguish a numerically correct answer from one produced by an
-unsafe interpretation or unexpected execution strategy.
+unsafe interpretation or unexpected execution strategy. It also records the
+fraction of runs the runtime accepted as verified and the fraction that still
+emitted a non-empty answer without verification, making the correctness-first
+tradeoff visible before a dashboard exists.
 
 ## Research-informed design choices
 

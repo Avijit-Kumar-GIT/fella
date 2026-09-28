@@ -68,6 +68,8 @@ def main():
                 "plan_strategy": r.get("plan_strategy"),
                 "interpretation_correct_rate": r.get("interpretation_correct_rate"),
                 "plan_correct_rate": r.get("plan_correct_rate"),
+                "accepted_rate": r.get("accepted_rate"),
+                "unsafe_guess_rate": r.get("unsafe_guess_rate"),
                 "err": r.get("err"),
             })
 
