@@ -16,6 +16,14 @@ declare global {
 				},
 				onEvent: (event: AskEvent) => void
 			): Promise<import('./lib/types').Answer>;
+			rerunAnalysisTurn(
+				params: {
+					turnId: string;
+					model: string | null;
+					mode: string | null;
+				},
+				onEvent: (event: AskEvent) => void
+			): Promise<import('./lib/types').Answer>;
 			pickFolder(): Promise<string | null>;
 			openExternal(url: string): Promise<void>;
 			setWindowAppearance(dark: boolean): Promise<void>;

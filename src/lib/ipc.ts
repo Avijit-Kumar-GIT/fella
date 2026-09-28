@@ -165,6 +165,30 @@ export const ipc = {
 	conversationLoad: (id: string) => invoke<string>('conversation_load', { id }),
 	/** Load the canonical backend record for one analytical turn. */
 	analysisTurnLoad: (turnId: string) => invoke<AnalysisTurn>('analysis_turn_load', { turnId }),
+	/** Rerun a canonical turn against the currently mounted workspace. */
+	async analysisTurnRerun(
+		turnId: string,
+		onEvent: (event: AskEvent) => void,
+		model?: string,
+		mode?: AskMode
+	): Promise<Answer> {
+		if (isElectron()) {
+			if (!window.fella) throw new Error('Electron preload bridge is unavailable');
+			return window.fella.rerunAnalysisTurn(
+				{ turnId, model: model || null, mode: mode || null },
+				onEvent
+			);
+		}
+		const { Channel } = await import('@tauri-apps/api/core');
+		const channel = new Channel<AskEvent>();
+		channel.onmessage = onEvent;
+		return invoke<Answer>('analysis_turn_rerun', {
+			turnId,
+			model: model || null,
+			mode: mode || null,
+			channel
+		});
+	},
 	/** Remove one archived conversation from the sidebar's history. */
 	deleteConversation: (id: string) => invoke<void>('delete_conversation', { id }),
 	/** Set (empty string clears) a custom title, for a conversation not

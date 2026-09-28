@@ -293,6 +293,23 @@ pub fn analysis_turn_load(
     engine.analysis_turn_load(&turn_id)
 }
 
+/// Rerun one canonical analytical turn against the currently mounted folder.
+#[tauri::command]
+pub async fn analysis_turn_rerun(
+    turn_id: String,
+    model: Option<String>,
+    mode: Option<String>,
+    channel: Channel<AskEvent>,
+    engine: State<'_, EngineState>,
+) -> Result<Answer, EngineError> {
+    let inspect = mode.as_deref() == Some("inspect");
+    engine
+        .analysis_turn_rerun(&turn_id, model.as_deref(), inspect, move |event| {
+            let _ = channel.send(event);
+        })
+        .await
+}
+
 /// Remove one archived conversation. Used by the sidebar's per-row delete.
 #[tauri::command]
 pub fn delete_conversation(id: String, engine: State<'_, EngineState>) -> Result<(), EngineError> {

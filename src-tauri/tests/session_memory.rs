@@ -162,6 +162,116 @@ async fn follow_up_question_sees_the_earlier_turn() {
 }
 
 #[tokio::test]
+async fn archived_conversation_restores_backend_context_after_restart() {
+    let ws = scratch("restore-ws");
+    let data = scratch("restore-data");
+    fs::write(
+        ws.join("ledger.csv"),
+        "month,amount\n2024-01,1200\n2024-02,1300\n",
+    )
+    .unwrap();
+
+    let (url, seen, server) = fake_openai(vec![answer_turn("For 2024 it was 2500.")]);
+    let engine = engine_on(&ws, &data, &url);
+    engine
+        .archive_conversation(
+            "restored-conversation",
+            &serde_json::json!({
+                "id": "restored-conversation",
+                "saved_at_ms": 1,
+                "workspace": ws.to_string_lossy(),
+                "messages": [
+                    {
+                        "id": "user-1",
+                        "role": "user",
+                        "text": "what did I pay in total?",
+                        "ts": 1
+                    },
+                    {
+                        "id": "assistant-1",
+                        "role": "assistant",
+                        "text": "You paid 2500 in total.",
+                        "ts": 2,
+                        "answer": {
+                            "text": "You paid 2500 in total.",
+                            "evidence": [{
+                                "tool": "run_sql",
+                                "sql": "SELECT SUM(amount) AS total FROM ledger"
+                            }]
+                        }
+                    }
+                ]
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+    engine
+        .ask("restored-conversation", "and just for 2024?", None, |_| {})
+        .await
+        .unwrap();
+    server.join().unwrap();
+
+    let reqs = seen.lock().unwrap();
+    let system = system_of(&reqs[0]);
+    assert!(
+        system.contains("Earlier in this conversation"),
+        "archived context should be restored:\n{system}"
+    );
+    assert!(system.contains("what did I pay in total?"));
+    assert!(system.contains("SELECT SUM(amount)"));
+
+    let _ = fs::remove_dir_all(&ws);
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[tokio::test]
+async fn canonical_turn_rerun_requires_the_same_workspace_and_records_lineage() {
+    let ws = scratch("rerun-ws");
+    let other_ws = scratch("rerun-other-ws");
+    let data = scratch("rerun-data");
+    fs::write(ws.join("ledger.csv"), "amount\n12\n").unwrap();
+    fs::write(other_ws.join("other.csv"), "amount\n99\n").unwrap();
+
+    let (url, _seen, server) = fake_openai(vec![
+        answer_turn("The total is 12."),
+        answer_turn("The total is still 12."),
+    ]);
+    let engine = engine_on(&ws, &data, &url);
+    let first = engine
+        .ask("rerun-conversation", "what is the total?", None, |_| {})
+        .await
+        .unwrap();
+    let stored = engine.analysis_turn_load(&first.turn_id).unwrap();
+    assert_eq!(stored.workspace.as_deref(), ws.to_str());
+    assert_eq!(stored.rerun_of, None);
+
+    engine.open_workspace(&other_ws).unwrap();
+    let mismatch = engine
+        .analysis_turn_rerun(&first.turn_id, None, false, |_| {})
+        .await;
+    assert!(mismatch.is_err(), "a rerun must not cross workspace mounts");
+
+    engine.open_workspace(&ws).unwrap();
+    let rerun = engine
+        .analysis_turn_rerun(&first.turn_id, None, false, |_| {})
+        .await
+        .unwrap();
+    let rerun_record = engine.analysis_turn_load(&rerun.turn_id).unwrap();
+    assert_eq!(
+        rerun_record.rerun_of.as_deref(),
+        Some(first.turn_id.as_str())
+    );
+    assert_eq!(rerun_record.workspace.as_deref(), ws.to_str());
+    assert_eq!(rerun_record.workspace_revision, stored.workspace_revision);
+
+    server.join().unwrap();
+    let _ = fs::remove_dir_all(&ws);
+    let _ = fs::remove_dir_all(&other_ws);
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[tokio::test]
 async fn each_tab_answers_with_its_own_model() {
     // Same provider / login, different model per conversation. `None` falls
     // back to the saved default ("test" from `engine_on`).

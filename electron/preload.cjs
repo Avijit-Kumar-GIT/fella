@@ -20,6 +20,14 @@ contextBridge.exposeInMainWorld('fella', {
 			.finally(() => listeners.delete(requestId));
 	},
 
+	rerunAnalysisTurn(params, onEvent) {
+		const requestId = `rerun-${nextAskId++}`;
+		listeners.set(requestId, onEvent);
+		return ipcRenderer
+			.invoke('fella:analysis-turn-rerun', { requestId, params })
+			.finally(() => listeners.delete(requestId));
+	},
+
 	pickFolder() {
 		return ipcRenderer.invoke('fella:pick-folder');
 	},

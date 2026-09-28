@@ -225,7 +225,11 @@ pub struct AnalysisTurn {
     pub conversation_id: String,
     pub question: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub workspace_revision: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rerun_of: Option<TurnId>,
     pub state: TurnState,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub contract: Option<AnalysisContract>,

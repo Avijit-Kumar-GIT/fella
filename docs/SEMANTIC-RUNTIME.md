@@ -482,7 +482,7 @@ The target can fit the existing architecture without replacing the harness:
 | state.rs | Workspace model lifecycle, revisions, sessions, memory scope |
 | catalog.rs | Source discovery and base profiling |
 | memory.rs / semantic_memory.rs | Human-readable memory projection plus versioned semantic facts and correction history |
-| analysis_store.rs | Backend-owned persisted turn records for inspection and future replay |
+| analysis_store.rs | Backend-owned persisted turn records, workspace-safe reruns, and lineage |
 | agent.rs | Risk gating, interpretation calls, execution orchestration |
 | planner.rs / analytics/ | Deterministic logical-plan compilation, profiles, probes, and invariants |
 | tools.rs | Fixed read-only execution boundary |

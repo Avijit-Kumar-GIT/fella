@@ -66,7 +66,9 @@ mod tests {
             id: "turn-test-1".into(),
             conversation_id: "conversation-1".into(),
             question: "total sales?".into(),
+            workspace: Some("/tmp/workspace".into()),
             workspace_revision: Some("revision-1".into()),
+            rerun_of: None,
             state: TurnState::Accepted,
             contract: None,
             plan: LogicalPlan {

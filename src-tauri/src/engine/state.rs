@@ -350,6 +350,94 @@ struct TurnDigest {
     queries: Vec<String>,
 }
 
+/// Recover the small backend session projection from a transcript archive.
+/// The transcript remains the UI source of truth; this deliberately extracts
+/// only the question, answer headline, and successful analytical queries that
+/// the prompt has always carried for an in-memory follow-up.
+fn archived_turns(value: &serde_json::Value, workspace: Option<&str>) -> Vec<TurnDigest> {
+    let archived_workspace = value.get("workspace").and_then(|value| value.as_str());
+    if archived_workspace != workspace {
+        return Vec::new();
+    }
+    let Some(messages) = value.get("messages").and_then(|value| value.as_array()) else {
+        return Vec::new();
+    };
+
+    let mut turns = Vec::new();
+    for (index, message) in messages.iter().enumerate() {
+        if !is_actual_question_message(message) {
+            continue;
+        }
+        let assistant = messages[index + 1..]
+            .iter()
+            .take_while(|candidate| !is_actual_question_message(candidate))
+            .find(|candidate| {
+                candidate.get("role").and_then(|role| role.as_str()) == Some("assistant")
+            });
+        let Some(assistant) = assistant else {
+            continue;
+        };
+        let answer = assistant.get("answer");
+        let headline = assistant
+            .get("text")
+            .and_then(|text| text.as_str())
+            .or_else(|| {
+                answer
+                    .and_then(|answer| answer.get("text"))
+                    .and_then(|text| text.as_str())
+            })
+            .map(|text| {
+                text.lines()
+                    .map(str::trim)
+                    .find(|line| !line.is_empty())
+                    .unwrap_or("")
+            })
+            .filter(|text| !text.is_empty())
+            .map(|text| cap_chars(text, 200));
+        let Some(headline) = headline else {
+            continue;
+        };
+        let queries = answer
+            .and_then(|answer| answer.get("evidence"))
+            .and_then(|evidence| evidence.as_array())
+            .into_iter()
+            .flatten()
+            .filter(|item| {
+                matches!(
+                    item.get("tool").and_then(|tool| tool.as_str()),
+                    Some("run_sql" | "make_chart")
+                ) && item
+                    .get("error")
+                    .map(|error| error.is_null())
+                    .unwrap_or(true)
+            })
+            .filter_map(|item| item.get("sql").and_then(|sql| sql.as_str()))
+            .map(|sql| {
+                sql.split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .chars()
+                    .take(160)
+                    .collect()
+            })
+            .take(3)
+            .collect();
+        turns.push(TurnDigest {
+            question: message
+                .get("text")
+                .and_then(|text| text.as_str())
+                .map(|text| cap_chars(text, 200))
+                .unwrap_or_default(),
+            headline,
+            queries,
+        });
+    }
+    if turns.len() > 3 {
+        turns.drain(0..turns.len() - 3);
+    }
+    turns
+}
+
 #[derive(Debug, Serialize)]
 pub struct QueryResult {
     pub columns: Vec<String>,
@@ -437,6 +525,43 @@ impl EngineState {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remove(conversation_id);
+    }
+
+    /// Rebuild a conversation's bounded prompt projection after a restart.
+    /// Only archives for the currently mounted workspace are eligible; a
+    /// transcript from another folder must never leak into this workspace's
+    /// analytical context.
+    fn hydrate_session_from_archive(&self, conversation_id: &str) {
+        let already_hydrated = self
+            .inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .sessions
+            .contains_key(conversation_id);
+        if already_hydrated {
+            return;
+        }
+        let Some(workspace) = self.catalog().workspace else {
+            return;
+        };
+        let Ok(body) = self.conversation_load(conversation_id) else {
+            return;
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&body) else {
+            return;
+        };
+        let turns = archived_turns(&value, Some(workspace.as_str()));
+        if turns.is_empty() {
+            return;
+        }
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        inner
+            .sessions
+            .entry(conversation_id.to_string())
+            .or_insert_with(|| SessionMemory {
+                turns,
+                last_used: 0,
+            });
     }
 
     /// Write a transcript to `<data_dir>/conversations/`. `body` is the JSON
@@ -687,6 +812,60 @@ impl EngineState {
         analysis_store::load(&self.data_dir, turn_id)
     }
 
+    /// Rerun a stored analytical question against the currently mounted
+    /// workspace. The original folder is part of the canonical record, so a
+    /// rerun cannot silently execute against a different mount. The new turn
+    /// is persisted normally and linked back to the original record.
+    pub async fn analysis_turn_rerun(
+        &self,
+        turn_id: &str,
+        model: Option<&str>,
+        inspect: bool,
+        emit: impl Fn(AskEvent) + Send + Sync,
+    ) -> EngineResult<Answer> {
+        let original = self.analysis_turn_load(turn_id)?;
+        let current = self.catalog();
+        let Some(current_workspace) = current.workspace.as_deref() else {
+            return Err(EngineError::msg(
+                "open the original workspace before rerunning this analysis",
+            ));
+        };
+        if let Some(expected_workspace) = original.workspace.as_deref() {
+            if expected_workspace != current_workspace {
+                return Err(EngineError::msg(format!(
+                    "rerun requires the original workspace: {}",
+                    expected_workspace
+                )));
+            }
+        }
+
+        let answer = self
+            .ask_with_mode(
+                &original.conversation_id,
+                &original.question,
+                model,
+                inspect,
+                emit,
+            )
+            .await?;
+        match analysis_store::load(&self.data_dir, &answer.turn_id) {
+            Ok(mut rerun) => {
+                rerun.rerun_of = Some(original.id);
+                if let Err(error) = analysis_store::save(&self.data_dir, &rerun) {
+                    log::warn!(
+                        "analysis rerun {} was saved without lineage: {error}",
+                        answer.turn_id
+                    );
+                }
+            }
+            Err(error) => log::warn!(
+                "analysis rerun {} could not attach lineage: {error}",
+                answer.turn_id
+            ),
+        }
+        Ok(answer)
+    }
+
     pub fn catalog(&self) -> Catalog {
         let workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
         Catalog {
@@ -752,10 +931,15 @@ impl EngineState {
             id: answer.turn_id.clone(),
             conversation_id: conversation_id.to_string(),
             question: question.to_string(),
+            workspace: answer
+                .workspace
+                .as_ref()
+                .map(|workspace| workspace.path.clone()),
             workspace_revision: answer
                 .workspace
                 .as_ref()
                 .map(|workspace| workspace.revision.clone()),
+            rerun_of: None,
             state,
             contract: answer.contract.clone(),
             plan: answer.plan.clone().unwrap_or_else(|| LogicalPlan {
@@ -1885,6 +2069,7 @@ exactly, character for character, from the list below.";
                 "No model chosen yet. Run /model to see the options and pick one.",
             ));
         }
+        self.hydrate_session_from_archive(conversation_id);
         // Touch this conversation's memory slot (create it, mark it most-recently
         // used) and evict the least-recently-used one if we're over the cap.
         {

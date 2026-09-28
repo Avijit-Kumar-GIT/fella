@@ -158,7 +158,9 @@ export interface AnalysisTurn {
 	id: string;
 	conversation_id: string;
 	question: string;
+	workspace?: string;
 	workspace_revision?: string;
+	rerun_of?: string;
 	state: RuntimeTurnState;
 	contract?: AnalysisContract;
 	plan: { strategy: 'direct_tools' | 'compiled_sql' | 'python_fallback' | 'document_fallback'; steps: string[] };

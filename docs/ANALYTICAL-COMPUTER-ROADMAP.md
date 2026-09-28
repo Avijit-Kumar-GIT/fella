@@ -70,7 +70,8 @@ This is the implementation form of Fella's core loop:
 - **M6 — canonical persistence:** first slice implemented; every completed ask
   persists a typed backend-owned turn record with its contract, direct-tool
   plan, execution trace, verification report, and bounded result/evidence. The
-  same record can be loaded through Tauri or the Electron bridge.
+  same record can be loaded or rerun through the Tauri and Electron bridges;
+  reruns are mount-checked and linked to their source turn.
 - **M7:** planned; each stage should build on the same turn, revision, and
   trace identifiers.
 
@@ -285,9 +286,12 @@ AnalysisTurn
   memory events
 ```
 
-The first slice persists and loads this record after every completed turn.
-Conversation transcript integration and rerunning a stored question against a
-newer revision remain follow-up work in this milestone.
+The first slice persists and loads this record after every completed turn. A
+restart can restore the bounded analytical context from the archived transcript,
+and an explicit rerun executes the stored question against the currently
+mounted copy of the same workspace while preserving rerun lineage. A richer
+revision-diff view and UI controls for inspecting/rerunning stored turns remain
+follow-up work in this milestone.
 
 The UI then becomes a projection:
 

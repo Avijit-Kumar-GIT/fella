@@ -213,6 +213,22 @@ async fn dispatch(
             let turn_id: String = required(&request.params, "turnId")?;
             value_result(engine.analysis_turn_load(&turn_id))
         }
+        "analysis_turn_rerun" => {
+            let turn_id: String = required(&request.params, "turnId")?;
+            let model = request
+                .params
+                .get("model")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            let inspect = request.params.get("mode").and_then(Value::as_str) == Some("inspect");
+            let events = output.clone();
+            let answer = engine
+                .analysis_turn_rerun(&turn_id, model.as_deref(), inspect, move |item| {
+                    event(&events, id, item)
+                })
+                .await;
+            value_result(answer)
+        }
         "delete_conversation" => {
             let id: String = required(&request.params, "id")?;
             value_result(engine.delete_conversation(&id))

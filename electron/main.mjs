@@ -207,6 +207,13 @@ app.whenReady().then(() => {
 				}
 			})
 		);
+		ipcMain.handle('fella:analysis-turn-rerun', (event, request) =>
+			engine.request('analysis_turn_rerun', request.params ?? {}, (item) => {
+				if (!event.sender.isDestroyed()) {
+					event.sender.send('fella:ask-event', { requestId: request.requestId, event: item });
+				}
+			})
+		);
 		ipcMain.handle('fella:pick-folder', async (event) => {
 			const owner = BrowserWindow.fromWebContents(event.sender);
 			const result = await dialog.showOpenDialog(owner, {
