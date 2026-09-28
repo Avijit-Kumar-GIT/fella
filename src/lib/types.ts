@@ -117,6 +117,12 @@ export interface AnalysisContract {
 		right_field: string;
 		kind: 'inner' | 'left';
 	}[];
+	comparison_spec?: {
+		kind: 'period_over_period';
+		current_range: string;
+		previous_range: string;
+	};
+	/** Legacy freeform field retained for archived contracts; it is not a deterministic plan. */
 	comparison?: string;
 	presentation?: string;
 	assumptions: string[];

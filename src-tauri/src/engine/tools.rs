@@ -292,6 +292,27 @@ fn contract_schema() -> Json {
                 },
                 "description": "Optional explicit read-only joins. Use only relationships grounded in the current workspace."
             },
+            "comparison_spec": {
+                "type": "object",
+                "properties": {
+                    "kind": {
+                        "type": "string",
+                        "enum": ["period_over_period"],
+                        "description": "Compare two explicit observed time windows and return current, previous, absolute change, and percent change."
+                    },
+                    "current_range": {
+                        "type": "string",
+                        "description": "The current observed year, month, or ISO date range, such as 2024, 2024-06, or 2024-01-01..2024-01-31."
+                    },
+                    "previous_range": {
+                        "type": "string",
+                        "description": "The previous observed year, month, or ISO date range in the same format as current_range."
+                    }
+                },
+                "required": ["kind", "current_range", "previous_range"],
+                "additionalProperties": false,
+                "description": "Use this typed object for a period comparison. Keep the time field in `time.field`; do not encode comparison meaning in prose."
+            },
             "comparison": { "type": "string" },
             "presentation": { "type": "string" },
             "assumptions": { "type": "array", "items": { "type": "string" } },

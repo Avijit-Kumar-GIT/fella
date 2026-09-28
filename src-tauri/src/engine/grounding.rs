@@ -213,6 +213,10 @@ pub fn ground(engine: &EngineState, mut contract: AnalysisContract) -> Grounding
         }
     }
 
+    if contract.comparison_spec.is_some() {
+        ground_comparison_ranges(engine, &view, &contract, &mut report);
+    }
+
     for group in &mut contract.group_by {
         let requested = group.clone();
         match resolve_field(&source, &requested) {
@@ -362,6 +366,12 @@ fn ground_join(
     catalog: Catalog,
     mut report: GroundingReport,
 ) -> GroundingResult {
+    if contract.comparison_spec.is_some() {
+        add_unresolved(
+            &mut report,
+            "typed period comparisons are currently limited to one queryable source".into(),
+        );
+    }
     let queryable: Vec<&SourceInfo> = catalog
         .sources
         .iter()
@@ -649,6 +659,84 @@ fn ground_join(
     }
 
     finish(contract, report)
+}
+
+fn ground_comparison_ranges(
+    engine: &EngineState,
+    view: &str,
+    contract: &AnalysisContract,
+    report: &mut GroundingReport,
+) {
+    let Some(comparison) = contract.comparison_spec.as_ref() else {
+        return;
+    };
+    let Some(field) = contract
+        .time
+        .as_ref()
+        .and_then(|time| time.field.as_deref())
+    else {
+        add_unresolved(
+            report,
+            "typed period comparison has no grounded time field".into(),
+        );
+        return;
+    };
+    for (label, range) in [
+        ("current", comparison.current_range.as_str()),
+        ("previous", comparison.previous_range.as_str()),
+    ] {
+        match probe_time_range(engine, view, field, range) {
+            Ok(rows) if rows > 0 => report.probes.push(GroundingProbe {
+                kind: "comparison_range".into(),
+                target: format!("{label}:{range}"),
+                outcome: ProbeOutcome::Resolved,
+                detail: format!("observed {rows} row(s) in this snapshot"),
+            }),
+            Ok(_) => {
+                let detail = format!("no rows were observed for the {label} comparison range");
+                add_unresolved(
+                    report,
+                    format!("{label} comparison range {range:?} was not observed"),
+                );
+                report.probes.push(GroundingProbe {
+                    kind: "comparison_range".into(),
+                    target: format!("{label}:{range}"),
+                    outcome: ProbeOutcome::NotObserved,
+                    detail,
+                });
+            }
+            Err(error) => {
+                let detail = format!("could not probe the {label} comparison range: {error}");
+                add_unresolved(report, detail.clone());
+                report.probes.push(GroundingProbe {
+                    kind: "comparison_range".into(),
+                    target: format!("{label}:{range}"),
+                    outcome: ProbeOutcome::Unavailable,
+                    detail,
+                });
+            }
+        }
+    }
+}
+
+fn probe_time_range(
+    engine: &EngineState,
+    view: &str,
+    field: &str,
+    range: &str,
+) -> Result<i64, String> {
+    let predicate = crate::engine::planner::time_predicate(field, range)?;
+    let sql = format!(
+        "SELECT COUNT(*) AS rows FROM {} WHERE {predicate}",
+        quote_ident(view)
+    );
+    let result = engine.run_sql(&sql).map_err(|error| error.to_string())?;
+    result
+        .rows
+        .first()
+        .and_then(|row| row.first())
+        .and_then(value_count)
+        .ok_or_else(|| "time range probe returned no count".into())
 }
 
 fn find_source<'a>(sources: &[&'a SourceInfo], requested: &str) -> Option<&'a SourceInfo> {

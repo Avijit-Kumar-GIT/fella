@@ -153,6 +153,22 @@ pub struct ContractTime {
     pub timezone: Option<String>,
 }
 
+/// The first typed comparison primitive. Explicit windows keep date alignment
+/// in the contract instead of asking the executor or answer prose to infer it
+/// from a label such as "year over year".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ComparisonKind {
+    PeriodOverPeriod,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContractComparison {
+    pub kind: ComparisonKind,
+    pub current_range: String,
+    pub previous_range: String,
+}
+
 /// The compact intermediate representation between the user's language and
 /// physical execution.  It is intentionally not chain-of-thought.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -179,6 +195,11 @@ pub struct AnalysisContract {
     pub derived_metrics: Vec<ContractDerivedMetric>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub joins: Vec<ContractJoin>,
+    /// Structured comparison semantics. The legacy freeform `comparison`
+    /// field remains readable for archived contracts but is not executable by
+    /// the deterministic planner.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comparison_spec: Option<ContractComparison>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub comparison: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -235,6 +256,19 @@ impl AnalysisContract {
                     && join.left_field.eq_ignore_ascii_case(&join.right_field)
                 {
                     return Err("a join cannot join a field to itself".into());
+                }
+            }
+            if contract.comparison.is_some() && contract.comparison_spec.is_some() {
+                return Err("use either comparison_spec or legacy comparison, not both".into());
+            }
+            if let Some(comparison) = &contract.comparison_spec {
+                if comparison.current_range.trim().is_empty()
+                    || comparison.previous_range.trim().is_empty()
+                {
+                    return Err("a comparison needs current and previous observed ranges".into());
+                }
+                if comparison.current_range.trim() == comparison.previous_range.trim() {
+                    return Err("a comparison needs two different ranges".into());
                 }
             }
             if !contract.unresolved.is_empty() {
@@ -537,6 +571,47 @@ mod tests {
                 "right_field": "customer_id",
                 "kind": "inner"
             }],
+            "assumptions": [],
+            "unresolved": []
+        }));
+        assert!(invalid.is_err());
+    }
+
+    #[test]
+    fn typed_period_comparisons_validate_explicit_windows() {
+        let contract = AnalysisContract::from_tool_args(&serde_json::json!({
+            "interpretation": "assumed",
+            "subject": "sales",
+            "measures": [{"concept": "revenue", "operation": "sum"}],
+            "filters": [],
+            "time": {"field": "month"},
+            "group_by": [],
+            "comparison_spec": {
+                "kind": "period_over_period",
+                "current_range": "2024",
+                "previous_range": "2023"
+            },
+            "assumptions": [],
+            "unresolved": []
+        }))
+        .unwrap();
+        assert_eq!(
+            contract.comparison_spec.unwrap().kind,
+            ComparisonKind::PeriodOverPeriod
+        );
+
+        let invalid = AnalysisContract::from_tool_args(&serde_json::json!({
+            "interpretation": "assumed",
+            "subject": "sales",
+            "measures": [{"concept": "revenue", "operation": "sum"}],
+            "filters": [],
+            "time": {"field": "month"},
+            "group_by": [],
+            "comparison_spec": {
+                "kind": "period_over_period",
+                "current_range": "2024",
+                "previous_range": "2024"
+            },
             "assumptions": [],
             "unresolved": []
         }));

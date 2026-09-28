@@ -60,11 +60,14 @@ This is the implementation form of Fella's core loop:
   ratios over declared measures into read-only SQL. Explicit join edges are
   now revision-grounded, cardinality-probed, and compilable when the join graph
   is connected and every reference is unambiguous; disconnected/ambiguous joins
-  and richer comparison semantics still use the direct fallback.
+  still use the direct fallback. Typed single-source period comparisons now
+  ground both explicit windows and compile current, previous, absolute-change,
+  and guarded percent-change columns; joins plus derived-metric comparisons
+  remain fallback cases.
 - **M4 — semantic verification:** first slice implemented; grounded bindings
   must be present in executed SQL, requested aggregate operations and observed
-  filter values, time buckets, ranking limits, and derived ratios must also
-  survive into that evidence, and
+  filter values, time buckets, ranking limits, derived ratios, and typed
+  comparison windows must also survive into that evidence, and
   ambiguous/unsupported contracts remain review states even when a query is
   numerically reproducible.
 - **M5 — versioned semantic memory:** first slice implemented; corrections and
@@ -230,7 +233,10 @@ ratios whose operands are declared measures, and explicit join edges whose
 sources and keys are grounded against the current snapshot. Connected joins
 with qualified, unambiguous references now compile into read-only SQL; the
 fallback remains the safety valve for disconnected graphs and unsupported
-comparison semantics.
+comparison semantics. A first typed comparison slice also supports one-source
+period-over-period contracts with explicit current and previous ranges, bounded
+range probes, and deterministic change columns. It intentionally does not yet
+combine comparisons with joins, time buckets, or derived metrics.
 When any of those conditions is not provably satisfied, Fella keeps the
 contract for verification but returns to the existing model-driven path.
 

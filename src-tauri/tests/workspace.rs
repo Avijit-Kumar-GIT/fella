@@ -6,8 +6,8 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use fella_lib::engine::{
-    grounding, planner, AnalysisContract, ContractFilter, ContractJoin, ContractMeasure,
-    EngineState, FieldRole, InterpretationStatus, JoinKind,
+    grounding, planner, AnalysisContract, ComparisonKind, ContractComparison, ContractFilter,
+    ContractJoin, ContractMeasure, EngineState, FieldRole, InterpretationStatus, JoinKind,
 };
 
 fn scratch(tag: &str) -> PathBuf {
@@ -972,6 +972,76 @@ fn grounds_a_declared_join_and_probes_its_cardinality() {
     assert!(plan.sql.contains("LEFT JOIN"));
     let result = engine.run_sql(&plan.sql).unwrap();
     assert_eq!(result.row_count, 2);
+
+    let _ = fs::remove_dir_all(&ws);
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[test]
+fn grounds_and_executes_a_typed_period_comparison() {
+    let ws = scratch("comparison-ws");
+    let data = scratch("comparison-data");
+    fs::write(
+        ws.join("sales.csv"),
+        "month,amount,category\n2023-01-01,90,A\n2024-01-01,120,A\n2023-01-01,40,B\n2024-01-01,50,B\n",
+    )
+    .unwrap();
+
+    let engine = EngineState::new(&data).unwrap();
+    engine.open_workspace(&ws).unwrap();
+    let grounded = grounding::ground(
+        &engine,
+        AnalysisContract {
+            interpretation: InterpretationStatus::Assumed,
+            subject: Some("sales".into()),
+            measures: vec![ContractMeasure {
+                concept: "revenue".into(),
+                field: Some("amount".into()),
+                operation: "sum".into(),
+                unit: None,
+            }],
+            time: Some(fella_lib::engine::runtime::ContractTime {
+                field: Some("month".into()),
+                range: None,
+                bucket: None,
+                timezone: None,
+            }),
+            group_by: vec!["category".into()],
+            comparison_spec: Some(ContractComparison {
+                kind: ComparisonKind::PeriodOverPeriod,
+                current_range: "2024".into(),
+                previous_range: "2023".into(),
+            }),
+            ..Default::default()
+        },
+    );
+
+    assert_eq!(
+        grounded.contract.interpretation,
+        InterpretationStatus::Grounded
+    );
+    assert_eq!(
+        grounded
+            .report
+            .probes
+            .iter()
+            .filter(|probe| probe.kind == "comparison_range")
+            .count(),
+        2
+    );
+    assert!(grounded
+        .report
+        .probes
+        .iter()
+        .filter(|probe| probe.kind == "comparison_range")
+        .all(|probe| probe.outcome == grounding::ProbeOutcome::Resolved));
+
+    let plan = planner::compile(&engine.catalog(), &grounded.contract, Some("sales")).unwrap();
+    let result = engine.run_sql(&plan.sql).unwrap();
+    assert_eq!(result.row_count, 2);
+    assert!(result.columns.contains(&"measure_0_current".into()));
+    assert!(result.columns.contains(&"measure_0_previous".into()));
+    assert!(result.columns.contains(&"measure_0_change_pct".into()));
 
     let _ = fs::remove_dir_all(&ws);
     let _ = fs::remove_dir_all(&data);

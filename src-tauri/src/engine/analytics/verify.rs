@@ -208,7 +208,54 @@ pub fn contract_checks(
     for join in &contract.joins {
         check_join_usage(&mut checks, join, &sql);
     }
+    if let Some(comparison) = &contract.comparison_spec {
+        check_comparison_usage(&mut checks, contract, comparison, &sql);
+    }
     checks
+}
+
+fn check_comparison_usage(
+    checks: &mut Vec<VerificationCheck>,
+    contract: &AnalysisContract,
+    comparison: &crate::engine::runtime::ContractComparison,
+    sql: &[String],
+) {
+    let ranges_used = contract
+        .time
+        .as_ref()
+        .and_then(|time| time.field.as_deref())
+        .and_then(|field| {
+            Some((
+                crate::engine::planner::time_predicate(field, &comparison.current_range).ok()?,
+                crate::engine::planner::time_predicate(field, &comparison.previous_range).ok()?,
+            ))
+        })
+        .is_some_and(|(current, previous)| {
+            sql.iter().any(|query| {
+                query.contains("case when")
+                    && query.contains(&current.to_ascii_lowercase())
+                    && query.contains(&previous.to_ascii_lowercase())
+            })
+        });
+    let output_shape_used = contract.measures.iter().enumerate().all(|(index, _)| {
+        sql.iter().any(|query| {
+            query.contains(&format!("measure_{index}_current"))
+                && query.contains(&format!("measure_{index}_previous"))
+                && query.contains(&format!("measure_{index}_change"))
+                && query.contains(&format!("measure_{index}_change_pct"))
+        })
+    });
+    if ranges_used && output_shape_used {
+        checks.push(ok(format!(
+            "period comparison `{}` vs `{}` was used by the query",
+            comparison.current_range, comparison.previous_range
+        )));
+    } else {
+        checks.push(warn(
+            "requested period comparison was not used by the query",
+            Some("the executed evidence did not carry both explicit comparison windows".into()),
+        ));
+    }
 }
 
 fn check_order_usage(
@@ -2559,6 +2606,58 @@ mod tests {
         let bad_checks = contract_checks(&contract, Some(&report), &bad);
         assert!(bad_checks.iter().any(|check| {
             !check.ok && check.label.contains("time bucket `month` was not used")
+        }));
+    }
+
+    #[test]
+    fn contract_checks_require_both_typed_comparison_windows() {
+        let contract = AnalysisContract {
+            interpretation: InterpretationStatus::Grounded,
+            subject: Some("spend".into()),
+            measures: vec![crate::engine::runtime::ContractMeasure {
+                concept: "revenue".into(),
+                field: Some("amount".into()),
+                operation: "sum".into(),
+                unit: None,
+            }],
+            time: Some(crate::engine::runtime::ContractTime {
+                field: Some("date".into()),
+                range: None,
+                bucket: None,
+                timezone: None,
+            }),
+            comparison_spec: Some(crate::engine::runtime::ContractComparison {
+                kind: crate::engine::runtime::ComparisonKind::PeriodOverPeriod,
+                current_range: "2024".into(),
+                previous_range: "2023".into(),
+            }),
+            ..Default::default()
+        };
+        let report = GroundingReport {
+            source: Some("spend".into()),
+            sources: vec![],
+            probes: vec![],
+            unresolved: vec![],
+        };
+        let good = vec![run_sql_ev(
+            "SELECT SUM(CASE WHEN \"date\" >= '2024-01-01' AND \"date\" < '2025-01-01' THEN \"amount\" END) AS measure_0_current, SUM(CASE WHEN \"date\" >= '2023-01-01' AND \"date\" < '2024-01-01' THEN \"amount\" END) AS measure_0_previous, ((SUM(CASE WHEN \"date\" >= '2024-01-01' AND \"date\" < '2025-01-01' THEN \"amount\" END)) - (SUM(CASE WHEN \"date\" >= '2023-01-01' AND \"date\" < '2024-01-01' THEN \"amount\" END))) AS measure_0_change, (((SUM(CASE WHEN \"date\" >= '2024-01-01' AND \"date\" < '2025-01-01' THEN \"amount\" END)) - (SUM(CASE WHEN \"date\" >= '2023-01-01' AND \"date\" < '2024-01-01' THEN \"amount\" END))) / NULLIF(ABS(SUM(CASE WHEN \"date\" >= '2023-01-01' AND \"date\" < '2024-01-01' THEN \"amount\" END)), 0)) * 100 AS measure_0_change_pct FROM spend",
+            &["measure_0_current", "measure_0_previous", "measure_0_change", "measure_0_change_pct"],
+            vec![vec![Json::from(12), Json::from(10), Json::from(2), Json::from(20.0)]],
+        )];
+        let checks = contract_checks(&contract, Some(&report), &good);
+        assert!(checks.iter().all(|check| check.ok), "{checks:?}");
+
+        let bad = vec![run_sql_ev(
+            "SELECT SUM(amount) AS measure_0_current FROM spend",
+            &["measure_0_current"],
+            vec![vec![Json::from(12)]],
+        )];
+        let bad_checks = contract_checks(&contract, Some(&report), &bad);
+        assert!(bad_checks.iter().any(|check| {
+            !check.ok
+                && check
+                    .label
+                    .contains("requested period comparison was not used")
         }));
     }
 

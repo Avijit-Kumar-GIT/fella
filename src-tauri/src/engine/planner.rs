@@ -9,8 +9,8 @@
 use crate::engine::analytics::data::{quote_ident, quote_str};
 use crate::engine::catalog::{Catalog, ColumnInfo, SourceInfo};
 use crate::engine::runtime::{
-    AnalysisContract, ContractMeasure, DerivedMetricKind, InterpretationStatus, JoinKind,
-    SortDirection, TimeBucket,
+    AnalysisContract, ComparisonKind, ContractMeasure, DerivedMetricKind, InterpretationStatus,
+    JoinKind, SortDirection, TimeBucket,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,6 +30,9 @@ pub fn compile(
     }
     if contract.comparison.is_some() {
         return Err("comparison compilation is not implemented yet".into());
+    }
+    if contract.comparison_spec.is_some() {
+        return compile_period_comparison(catalog, contract, source_hint);
     }
     if !contract.joins.is_empty() {
         return compile_join(catalog, contract, source_hint);
@@ -169,6 +172,202 @@ pub fn compile(
         source: view.to_string(),
         steps,
     })
+}
+
+fn compile_period_comparison(
+    catalog: &Catalog,
+    contract: &AnalysisContract,
+    source_hint: Option<&str>,
+) -> Result<CompiledPlan, String> {
+    if !contract.joins.is_empty() {
+        return Err("period comparison compilation with joins is not implemented yet".into());
+    }
+    if !contract.derived_metrics.is_empty() {
+        return Err(
+            "period comparison compilation with derived metrics is not implemented yet".into(),
+        );
+    }
+    let comparison = contract
+        .comparison_spec
+        .as_ref()
+        .ok_or_else(|| "comparison spec is missing".to_string())?;
+    if comparison.kind != ComparisonKind::PeriodOverPeriod {
+        return Err("comparison kind is not supported by the compiler".into());
+    }
+    let source = select_source(catalog, contract, source_hint)?;
+    let view = source
+        .view
+        .as_deref()
+        .ok_or_else(|| format!("{} is not queryable", source.name))?;
+    let time = contract
+        .time
+        .as_ref()
+        .ok_or_else(|| "period comparison has no time field".to_string())?;
+    if time.bucket.is_some() {
+        return Err("period comparisons cannot also use a time bucket yet".into());
+    }
+    if let Some(range) = time.range.as_deref() {
+        if normalize(range) != normalize(&comparison.current_range) {
+            return Err("comparison current_range conflicts with the contract time range".into());
+        }
+    }
+    let time_field = time
+        .field
+        .as_deref()
+        .ok_or_else(|| "period comparison has no grounded time field".to_string())?;
+    let time_column = resolve_column(source, time_field)?;
+    let current_predicate = time_predicate(&time_column.name, &comparison.current_range)?;
+    let previous_predicate = time_predicate(&time_column.name, &comparison.previous_range)?;
+
+    let mut select = Vec::new();
+    let mut group = Vec::new();
+    let mut steps = vec![format!(
+        "compare {} with {}",
+        comparison.current_range, comparison.previous_range
+    )];
+    for field in &contract.group_by {
+        let column = resolve_column(source, field)?;
+        let expression = quote_ident(&column.name);
+        group.push(expression.clone());
+        select.push(expression);
+        steps.push(format!("group by {}", column.name));
+    }
+
+    for (index, measure) in contract.measures.iter().enumerate() {
+        let current = comparison_measure_expression(source, measure, &current_predicate)?;
+        let previous = comparison_measure_expression(source, measure, &previous_predicate)?;
+        let current_alias = quote_ident(&format!("measure_{index}_current"));
+        let previous_alias = quote_ident(&format!("measure_{index}_previous"));
+        let change_alias = quote_ident(&format!("measure_{index}_change"));
+        let percent_alias = quote_ident(&format!("measure_{index}_change_pct"));
+        select.push(format!("{current} AS {current_alias}"));
+        select.push(format!("{previous} AS {previous_alias}"));
+        select.push(format!("(({current}) - ({previous})) AS {change_alias}"));
+        select.push(format!(
+            "((({current}) - ({previous})) / NULLIF(ABS({previous}), 0)) * 100 AS {percent_alias}"
+        ));
+        steps.push(format!("compare {} {}", measure.operation, measure.concept));
+    }
+    if contract.measures.is_empty() {
+        return Err("the grounded comparison has no measure to compute".into());
+    }
+
+    let mut predicates = Vec::new();
+    for filter in &contract.filters {
+        let field = filter
+            .field
+            .as_deref()
+            .ok_or_else(|| format!("filter {:?} has no grounded field", filter.concept))?;
+        let column = resolve_column(source, field)?;
+        if filter.resolved_values.is_empty() {
+            return Err(format!(
+                "filter {:?} has no observed value to compile",
+                filter.concept
+            ));
+        }
+        let values = filter
+            .resolved_values
+            .iter()
+            .map(|value| quote_str(value))
+            .collect::<Vec<_>>()
+            .join(", ");
+        predicates.push(format!("{} IN ({values})", quote_ident(&column.name)));
+        steps.push(format!("filter {}", filter.concept));
+    }
+
+    let order_clause = contract
+        .order_by
+        .as_ref()
+        .map(|order| {
+            let expression = comparison_order_expression(source, contract, order)?;
+            let direction = match order.direction {
+                SortDirection::Asc => "ASC",
+                SortDirection::Desc => "DESC",
+            };
+            steps.push(format!("order by {} {direction}", order.by));
+            Ok::<String, String>(format!("ORDER BY {expression} {direction}"))
+        })
+        .transpose()?;
+
+    let mut sql = format!("SELECT {} FROM {}", select.join(", "), quote_ident(view));
+    if !predicates.is_empty() {
+        sql.push_str(" WHERE ");
+        sql.push_str(&predicates.join(" AND "));
+    }
+    if !group.is_empty() {
+        sql.push_str(" GROUP BY ");
+        sql.push_str(&group.join(", "));
+    }
+    if let Some(order_clause) = order_clause {
+        sql.push(' ');
+        sql.push_str(&order_clause);
+    }
+    sql.push_str(&format!(" LIMIT {}", contract.limit.unwrap_or(1000)));
+
+    Ok(CompiledPlan {
+        sql,
+        source: view.to_string(),
+        steps,
+    })
+}
+
+fn comparison_measure_expression(
+    source: &SourceInfo,
+    measure: &ContractMeasure,
+    predicate: &str,
+) -> Result<String, String> {
+    let operation = normalize_operation(&measure.operation)?;
+    if operation == "COUNT" && measure.field.is_none() {
+        return Ok(format!("SUM(CASE WHEN {predicate} THEN 1 ELSE 0 END)"));
+    }
+    let field = measure
+        .field
+        .as_deref()
+        .ok_or_else(|| format!("measure {:?} has no grounded field", measure.concept))?;
+    let column = resolve_column(source, field)?;
+    let value = value_expression(column);
+    Ok(match operation {
+        "COUNT" => format!("COUNT(CASE WHEN {predicate} THEN {value} END)"),
+        operation => format!("{operation}(CASE WHEN {predicate} THEN {value} END)"),
+    })
+}
+
+fn comparison_order_expression(
+    source: &SourceInfo,
+    contract: &AnalysisContract,
+    order: &crate::engine::runtime::ContractOrder,
+) -> Result<String, String> {
+    let requested = normalize(&order.by);
+    let measure_matches: Vec<_> = contract
+        .measures
+        .iter()
+        .enumerate()
+        .filter(|(_, measure)| {
+            normalize(&measure.concept) == requested
+                || measure
+                    .field
+                    .as_deref()
+                    .is_some_and(|field| normalize(field) == requested)
+        })
+        .collect();
+    if let [(index, _)] = measure_matches.as_slice() {
+        return Ok(quote_ident(&format!("measure_{index}_current")));
+    }
+    if measure_matches.len() > 1 {
+        return Err(format!("order_by {:?} is ambiguous", order.by));
+    }
+    if contract
+        .group_by
+        .iter()
+        .any(|field| normalize(field) == requested)
+    {
+        let column = resolve_column(source, &order.by)?;
+        return Ok(quote_ident(&column.name));
+    }
+    Err(format!(
+        "order_by {:?} must reference a comparison measure or grouping field",
+        order.by
+    ))
 }
 
 fn compile_join(
@@ -804,7 +1003,7 @@ fn normalize_operation(operation: &str) -> Result<&'static str, String> {
     }
 }
 
-fn time_predicate(field: &str, range: &str) -> Result<String, String> {
+pub(crate) fn time_predicate(field: &str, range: &str) -> Result<String, String> {
     time_predicate_expression(&quote_ident(field), range)
 }
 
@@ -1125,6 +1324,29 @@ mod tests {
             .steps
             .iter()
             .any(|step| step == "ratio revenue per order"));
+    }
+
+    #[test]
+    fn compiles_a_typed_period_comparison_with_safe_change_columns() {
+        let mut contract = contract();
+        contract.group_by = vec!["category".into()];
+        contract.comparison_spec = Some(crate::engine::runtime::ContractComparison {
+            kind: ComparisonKind::PeriodOverPeriod,
+            current_range: "2024".into(),
+            previous_range: "2023".into(),
+        });
+        contract.limit = Some(12);
+
+        let plan = compile(&catalog(), &contract, Some("sales")).unwrap();
+
+        assert!(plan.sql.contains("SUM(CASE WHEN \"month\" >= '2024-01-01'"));
+        assert!(plan.sql.contains("SUM(CASE WHEN \"month\" >= '2023-01-01'"));
+        assert!(plan.sql.contains("AS \"measure_0_current\""));
+        assert!(plan.sql.contains("AS \"measure_0_previous\""));
+        assert!(plan.sql.contains("AS \"measure_0_change\""));
+        assert!(plan.sql.contains("AS \"measure_0_change_pct\""));
+        assert!(plan.sql.contains("GROUP BY \"category\""));
+        assert!(plan.sql.ends_with("LIMIT 12"));
     }
 
     #[test]
