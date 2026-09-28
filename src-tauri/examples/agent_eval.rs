@@ -3695,4 +3695,25 @@ mod tests {
         assert!(kinds.contains("bar"));
         assert!(kinds.contains("line"));
     }
+
+    #[test]
+    fn folder_qa_has_a_representative_semantic_matrix() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../bench/folder-qa");
+        let cases = load_bench_dir(&dir);
+        let semantic: Vec<_> = cases
+            .iter()
+            .filter(|(_, _, case)| case.expected_interpretation.is_some())
+            .collect();
+        assert!(
+            semantic.len() >= 10,
+            "semantic fixture matrix got too small"
+        );
+        assert!(semantic
+            .iter()
+            .any(|(_, _, case)| { case.expected_plan == Some(PlanStrategy::CompiledSql) }));
+        assert!(semantic.iter().any(|(_, _, case)| {
+            case.expected_interpretation == Some(InterpretationStatus::Unsupported)
+                && case.expected_plan.is_none()
+        }));
+    }
 }

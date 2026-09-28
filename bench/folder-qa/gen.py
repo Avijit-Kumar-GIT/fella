@@ -610,6 +610,45 @@ DOMAIN_BY_ID = {  # multi-file / cross-format cases get their primary domain
     "fqa-refusal-trips": "travel", "fqa-notool": "general",
 }
 
+# A small, explicit semantic matrix for the cases whose intended runtime path
+# is part of the benchmark contract. Most cases intentionally omit these
+# labels: direct document lookup, free-form search, and advanced joins should
+# remain observable rather than being forced into the compiled core. The
+# evaluator scores these expectations separately from the answer goldens.
+SEMANTIC_EXPECTATIONS = {
+    "fqa-fin-total-2024": {
+        "expected_interpretation": "grounded", "expected_plan": "compiled_sql"
+    },
+    "fqa-fin-top-cat": {
+        "expected_interpretation": "grounded", "expected_plan": "compiled_sql"
+    },
+    "fqa-fin-yoy": {
+        "expected_interpretation": "grounded", "expected_plan": "compiled_sql"
+    },
+    "fqa-read-avg-rating": {
+        "expected_interpretation": "grounded", "expected_plan": "compiled_sql"
+    },
+    "fqa-mf-pages-british": {
+        "expected_interpretation": "grounded", "expected_plan": "compiled_sql"
+    },
+    "fqa-mf-rent-vs-budget": {
+        "expected_interpretation": "grounded", "expected_plan": "compiled_sql"
+    },
+    "fqa-rentl-total": {
+        "expected_interpretation": "grounded", "expected_plan": "compiled_sql"
+    },
+    "fqa-rentl-chart": {
+        "expected_interpretation": "grounded", "expected_plan": "compiled_sql"
+    },
+    "fqa-fin-chart-cat": {
+        "expected_interpretation": "grounded", "expected_plan": "compiled_sql"
+    },
+    "fqa-fin-empty-category": {
+        "expected_interpretation": "grounded", "expected_plan": "compiled_sql"
+    },
+    "fqa-refusal": {"expected_interpretation": "unsupported"},
+}
+
 
 def _ext(name):
     return name.rsplit(".", 1)[-1].lower() if "." in name else ""
@@ -628,6 +667,7 @@ with open("cases.jsonl", "w") as f:
             "cluttered": any(d in files for d in DISTRACT),
             "formats": sorted({_ext(x) for x in real if _ext(x)}),
         }
+        rec.update(SEMANTIC_EXPECTATIONS.get(fid, {}))
         f.write(json.dumps(rec) + "\n")
 
 n_clut = sum(1 for _, _, files, _, _ in cases if any(d in files for d in DISTRACT))
