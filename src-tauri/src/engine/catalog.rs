@@ -95,6 +95,43 @@ impl ColumnInfo {
     }
 }
 
+/// Match a model-proposed field to a catalogued column without making fuzzy
+/// guesses across unrelated fields. Exact normalized names always match. A
+/// single-word request may also match a distinct word in a human column label
+/// such as `Sleep (hrs)` or `Amount Paid`; multiple candidate columns remain
+/// ambiguous and are rejected by the caller.
+pub(crate) fn field_name_matches(column: &str, requested: &str) -> bool {
+    let column_normalized = normalize_field_name(column);
+    let requested_normalized = normalize_field_name(requested);
+    if column_normalized == requested_normalized {
+        return true;
+    }
+
+    let requested_tokens = field_tokens(requested);
+    if requested_tokens.len() != 1 || requested_tokens[0].len() < 3 {
+        return false;
+    }
+    field_tokens(column)
+        .iter()
+        .any(|token| token == &requested_tokens[0])
+}
+
+fn normalize_field_name(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .flat_map(|character| character.to_lowercase())
+        .collect()
+}
+
+fn field_tokens(value: &str) -> Vec<String> {
+    value
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .map(|token| token.to_ascii_lowercase())
+        .collect()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SourceInfo {
     pub name: String,
@@ -452,6 +489,15 @@ mod tests {
         assert_eq!(SourceKind::from_ext("db"), None);
         assert!(SourceKind::Parquet.is_tabular());
         assert!(!SourceKind::Pdf.is_tabular());
+    }
+
+    #[test]
+    fn field_matching_handles_human_unit_labels_without_guessing_short_names() {
+        assert!(field_name_matches("Sleep (hrs)", "sleep"));
+        assert!(field_name_matches("Amount Paid", "amount"));
+        assert!(field_name_matches("sleep_hours", "sleep_hours"));
+        assert!(!field_name_matches("Customer ID", "id"));
+        assert!(!field_name_matches("Sleep (hrs)", "duration"));
     }
 
     #[test]

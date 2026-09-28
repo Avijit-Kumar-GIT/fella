@@ -1116,8 +1116,16 @@ mod tests {
         // A column that's mostly-but-not-cleanly numeric (60-100%) stays TEXT;
         // the note must steer toward parse_num(), not the bare CAST that
         // silently truncates comma-formatted text instead of erroring.
-        let (ty, note) =
-            sniff_strings(["$1,200.00", "$1,300.00", "$1,300.00 (paid)", "500", "600"].into_iter());
+        let (ty, note) = sniff_strings(
+            [
+                "$1,200.00",
+                "$1,300.00",
+                "$1,300.00 (fee $1.95)",
+                "500",
+                "600",
+            ]
+            .into_iter(),
+        );
         assert_eq!(ty, ColType::Text);
         let note = note.expect("a mixed column should be noted");
         assert!(
@@ -1235,7 +1243,8 @@ mod tests {
         register_parse_num(&conn).unwrap();
         let get = |sql: &str| -> Option<f64> { conn.query_row(sql, [], |r| r.get(0)).unwrap() };
         assert_eq!(get("SELECT parse_num('$1,200.00')"), Some(1200.0));
-        assert_eq!(get("SELECT parse_num('1,300.00 (paid)')"), None);
+        assert_eq!(get("SELECT parse_num('1,300.00 (paid)')"), Some(1300.0));
+        assert_eq!(get("SELECT parse_num('1,300.00 (fee $1.95)')"), None);
         assert_eq!(get("SELECT parse_num(42)"), Some(42.0));
         assert_eq!(get("SELECT parse_num(42.5)"), Some(42.5));
         assert_eq!(get("SELECT parse_num(NULL)"), None);
@@ -1243,7 +1252,7 @@ mod tests {
         // than erroring or silently truncating them like CAST would.
         conn.execute_batch(
             "CREATE TABLE t (amount TEXT);
-             INSERT INTO t VALUES ('$1,200.00'), ('$1,300.00 (paid)'), ('500');",
+             INSERT INTO t VALUES ('$1,200.00'), ('$1,300.00 (fee $1.95)'), ('500');",
         )
         .unwrap();
         let total: f64 = conn

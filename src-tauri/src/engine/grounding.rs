@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 
 use crate::engine::analytics::data::{quote_ident, quote_str};
-use crate::engine::catalog::{Catalog, ColumnInfo, SourceInfo};
+use crate::engine::catalog::{field_name_matches, Catalog, ColumnInfo, SourceInfo};
 use crate::engine::runtime::{
     AnalysisContract, ContextReference, ContractJoin, InterpretationStatus, JoinKind,
 };
@@ -958,7 +958,7 @@ fn resolve_join_field<'a>(
                 .as_deref()
                 .unwrap_or_default()
                 .iter()
-                .filter(move |column| normalize(&column.name) == normalize(field))
+                .filter(move |column| field_name_matches(&column.name, field))
                 .map(move |column| (source, column))
         })
         .collect();
@@ -1098,7 +1098,7 @@ fn select_source(
                     .as_deref()
                     .unwrap_or_default()
                     .iter()
-                    .any(|column| normalize(&column.name) == normalize(name))
+                    .any(|column| field_name_matches(&column.name, name))
             })
         })
         .collect();
@@ -1113,7 +1113,7 @@ fn resolve_field<'a>(source: &'a SourceInfo, requested: &str) -> Result<&'a Colu
     let columns = source.columns.as_deref().unwrap_or_default();
     let matches: Vec<&ColumnInfo> = columns
         .iter()
-        .filter(|column| normalize(&column.name) == normalize(requested))
+        .filter(|column| field_name_matches(&column.name, requested))
         .collect();
     match matches.len() {
         1 => Ok(matches[0]),

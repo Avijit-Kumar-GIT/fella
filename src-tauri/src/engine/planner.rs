@@ -7,7 +7,7 @@
 //! representation and dedicated checks.
 
 use crate::engine::analytics::data::{quote_ident, quote_str};
-use crate::engine::catalog::{Catalog, ColumnInfo, SourceInfo};
+use crate::engine::catalog::{field_name_matches, Catalog, ColumnInfo, SourceInfo};
 use crate::engine::runtime::{
     AnalysisContract, ComparisonKind, ContractMeasure, DerivedMetricKind, InterpretationStatus,
     JoinKind, SortDirection, TimeBucket,
@@ -931,7 +931,7 @@ fn select_source<'a>(
                     .as_deref()
                     .unwrap_or_default()
                     .iter()
-                    .any(|column| normalize(&column.name) == normalize(field))
+                    .any(|column| field_name_matches(&column.name, field))
             })
         })
         .collect();
@@ -948,7 +948,7 @@ fn resolve_column<'a>(source: &'a SourceInfo, field: &str) -> Result<&'a ColumnI
         .as_deref()
         .unwrap_or_default()
         .iter()
-        .filter(|column| normalize(&column.name) == normalize(field))
+        .filter(|column| field_name_matches(&column.name, field))
         .collect();
     match matches.as_slice() {
         [column] => Ok(column),

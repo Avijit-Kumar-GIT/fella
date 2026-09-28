@@ -9,15 +9,16 @@
 //!   7. a column named in the question is never mentioned in any cited query
 //!   8. a question naming a shared join column was answered from one table
 //!   9. a date/time GROUP BY produced a NULL key instead of a real bucket
-//!  10. a query that packed several aggregates into one row has a value in
+//!  10. a positive missing/unparseable quality count makes a result partial
+//!  11. a query that packed several aggregates into one row has a value in
 //!      the answer sitting next to a different column's name than the one
 //!      it actually came from
-//!  11. a structured chart still matches the rows returned by its source query
+//!  12. a structured chart still matches the rows returned by its source query
 //!
 //! Plus one cost-gated check that *does* spend an extra LLM round-trip, used
 //! sparingly (agent.rs only calls it once a cheap check above already left a
 //! warning standing) and isn't part of `run()`'s list above:
-//!   11. a stricter, independent second opinion agrees with the first answer
+//!   13. a stricter, independent second opinion agrees with the first answer
 
 use std::collections::HashSet;
 
@@ -54,6 +55,7 @@ pub fn run(
     check_dropped_column(engine, question, evidence, &mut checks);
     check_multi_table_join(engine, question, evidence, &mut checks);
     check_null_group_key(evidence, &mut checks);
+    check_incomplete_quality_audit(question, evidence, &mut checks);
     check_row_value_labels(answer, evidence, &mut checks);
     check_chart_values(evidence, &mut checks);
 
@@ -1738,6 +1740,92 @@ fn check_text_agg(
     }
 }
 
+/// A model will often pair a SUM/AVG with a quality count such as
+/// `COUNT(*) - COUNT(parse_num(amount)) AS unparseable_rows`. That is good
+/// analytical practice, but a positive quality count means a total over the
+/// usable rows is not a complete answer unless the question explicitly scopes
+/// itself to observed/available values. Keep this as a soft acceptance warning:
+/// the computation is reproducible, but its completeness needs to be visible
+/// to the user.
+fn check_incomplete_quality_audit(
+    question: &str,
+    evidence: &[EvidenceItem],
+    out: &mut Vec<VerificationCheck>,
+) {
+    if question_explicitly_scopes_missing_values(question) {
+        return;
+    }
+
+    for item in evidence
+        .iter()
+        .filter(|item| is_sql_evidence(item) && item.error.is_none())
+    {
+        let Some(columns) = item.columns.as_deref() else {
+            continue;
+        };
+        let Some(rows) = item.rows.as_deref() else {
+            continue;
+        };
+        let quality_positions: Vec<usize> = columns
+            .iter()
+            .enumerate()
+            .filter_map(|(index, name)| {
+                let normalized = name.to_ascii_lowercase();
+                (normalized.contains("missing")
+                    || normalized.contains("unparse")
+                    || normalized.contains("invalid")
+                    || normalized.contains("null_count"))
+                .then_some(index)
+            })
+            .collect();
+
+        for index in quality_positions {
+            let positive = rows.iter().any(|row| {
+                row.get(index)
+                    .and_then(|value| match value {
+                        Json::Number(number) => number.as_f64(),
+                        Json::String(value) => value.trim().parse::<f64>().ok(),
+                        _ => None,
+                    })
+                    .is_some_and(|value| value > 0.0)
+            });
+            if positive {
+                out.push(warn(
+                    "the result excludes rows with missing or unusable values",
+                    Some(format!(
+                        "the query reported a positive `{}` count; this is a partial result and should not be labelled complete",
+                        columns[index]
+                    )),
+                ));
+                return;
+            }
+        }
+    }
+}
+
+fn question_explicitly_scopes_missing_values(question: &str) -> bool {
+    let question = question.to_ascii_lowercase();
+    [
+        "missing",
+        "unparse",
+        "null",
+        "invalid",
+        "available values",
+        "available data",
+        "observed values",
+        "observed data",
+        "measured values",
+        "measured data",
+        "valid values",
+        "valid data",
+        "non-null",
+        "non null",
+        "not null",
+    ]
+    .iter()
+    .any(|term| question.contains(term))
+}
+
 fn ok(label: impl Into<String>) -> VerificationCheck {
     VerificationCheck {
         label: label.into(),
@@ -2689,6 +2777,32 @@ mod tests {
             aggregates_text_column("select avg(distinct method) from x", &cols),
             Some("method")
         );
+    }
+
+    #[test]
+    fn positive_quality_count_keeps_a_partial_total_out_of_verified_status() {
+        let evidence = vec![run_sql_ev(
+            "SELECT SUM(parse_num(amount)) AS total, \
+             COUNT(*) - COUNT(parse_num(amount)) AS unparseable_rows FROM ledger",
+            &["total", "unparseable_rows"],
+            vec![vec![Json::from(3434.94), Json::from(2)]],
+        )];
+        let mut checks = Vec::new();
+        check_incomplete_quality_audit("what was total spending?", &evidence, &mut checks);
+        assert!(
+            checks
+                .iter()
+                .any(|check| !check.ok && check.label.contains("excludes rows")),
+            "a positive quality count should make the result visibly partial: {checks:?}"
+        );
+
+        let mut scoped_checks = Vec::new();
+        check_incomplete_quality_audit(
+            "what was the average measured sleep excluding missing values?",
+            &evidence,
+            &mut scoped_checks,
+        );
+        assert!(scoped_checks.is_empty());
     }
 
     #[test]

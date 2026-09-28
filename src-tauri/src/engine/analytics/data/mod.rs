@@ -338,18 +338,35 @@ pub fn is_blankish(s: &str) -> bool {
 
 /// Parse a number a human wrote into a cell: tolerates a leading currency sign
 /// (`$`, `\u{00A3}`, `\u{20AC}`, `\u{00A5}`), thousands separators (`,` or
-/// spaces), a trailing `%` (scaled by 1/100), and accounting-style negatives
-/// `(1,234.50)`. Returns `None` if what remains isn't a plain number. Used by
-/// the CSV and Excel ingests to rescue an amount column stored as text.
+/// spaces), a trailing `%` (scaled by 1/100), accounting-style negatives
+/// `(1,234.50)`, and a trailing parenthetical note with no digits (for example
+/// `$210.00 (cash)`). Returns `None` if what remains isn't a plain number.
+/// An annotation containing another number (for example
+/// `$1,300.00 (fee $1.95)`) remains unresolved because its meaning is
+/// ambiguous. Used by the CSV and Excel ingests to rescue an amount column
+/// stored as text without silently choosing between multiple figures.
 ///
 /// Assumes **US/UK** number grammar: `,` (or space) groups thousands and `.` is
 /// the decimal point. EU-formatted text (`1.234,56`) is not recognised and would
 /// be misread the ingest can only coerce one convention and this is the one the
 /// `$`/`\u{00A3}` fast path already implies.
 pub fn parse_numeric(s: &str) -> Option<f64> {
-    let t = s.trim();
+    let mut t = s.trim();
     if t.is_empty() {
         return None;
+    }
+
+    // People commonly append a non-numeric note to a value in an export. It is
+    // safe to remove only a final parenthetical suffix that contains no digit;
+    // a suffix such as "(fee $1.95)" carries a second candidate amount and
+    // must remain unresolved instead of being guessed at.
+    if t.ends_with(')') {
+        if let Some(open) = t.rfind(" (") {
+            let annotation = &t[open + 2..t.len() - 1];
+            if !annotation.is_empty() && !annotation.bytes().any(|b| b.is_ascii_digit()) {
+                t = t[..open].trim_end();
+            }
+        }
     }
     // Fast path: already a clean number. Reject non-finite ("inf", "nan") so a
     // column of those doesn't sniff as numeric and then store as NULL.
@@ -538,6 +555,9 @@ mod tests {
         assert_eq!(parse_numeric("12%"), Some(0.12));
         assert_eq!(parse_numeric("1 200"), Some(1200.0));
         assert_eq!(parse_numeric("12,345"), Some(12345.0));
+        assert_eq!(parse_numeric("$210.00 (cash)"), Some(210.0));
+        assert_eq!(parse_numeric("1,300.00 (paid)"), Some(1300.0));
+        assert_eq!(parse_numeric("1,300.00 (fee $1.95)"), None);
         assert_eq!(parse_numeric("N/A"), None);
         assert_eq!(parse_numeric("pending"), None);
         assert_eq!(parse_numeric(""), None);
