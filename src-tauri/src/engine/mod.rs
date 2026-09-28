@@ -6,6 +6,7 @@ pub mod analysis_store;
 pub mod analytics;
 pub mod capabilities;
 pub mod catalog;
+pub mod context;
 mod env;
 pub mod error;
 pub mod evidence;

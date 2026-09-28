@@ -113,17 +113,14 @@ pub async fn run(
         }),
         _ => None,
     };
-    let user_context = engine.user_context();
-    let schema = engine.schema_block();
-    let recent = engine.session_block(conversation_id);
-    let learned = engine.folder_memory_block();
+    let context = engine.context_packet(question, conversation_id);
     let mut sys = system_prompt(
         &PromptProfile::from_env(),
         &catalog,
-        &user_context,
-        &schema,
-        recent.as_deref(),
-        learned.as_deref(),
+        &context.user_context,
+        &context.schema,
+        context.recent.as_deref(),
+        context.learned.as_deref(),
     );
     if let Some(notice) = registry.capability_notice() {
         sys.push_str("\n\nCapability policy (experimental):\n");

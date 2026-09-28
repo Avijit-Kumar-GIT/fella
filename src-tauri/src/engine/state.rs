@@ -13,6 +13,7 @@ use crate::engine::analysis_store;
 use crate::engine::analytics::data::{self, DataEngine, DEFAULT_ROW_CAP};
 use crate::engine::analytics::pyexec;
 use crate::engine::catalog::{self, Catalog, SourceInfo, SourceKind};
+use crate::engine::context::{ContextAssembler, ContextPacket};
 use crate::engine::error::{EngineError, EngineResult};
 use crate::engine::evidence::{Answer, AskEvent};
 use crate::engine::ingest::docs;
@@ -1124,6 +1125,23 @@ impl EngineState {
         }
         workspace.schema_cache = Some(p.clone());
         p
+    }
+
+    /// Assemble one bounded, prompt-ready projection of the current
+    /// workspace context. Keeping this policy in the engine gives both
+    /// desktop shells the same context budget and provenance behavior.
+    pub(crate) fn context_packet(&self, question: &str, conversation_id: &str) -> ContextPacket {
+        let user_context = self.user_context();
+        let schema = self.schema_block();
+        let recent = self.session_block(conversation_id);
+        let learned = self.folder_memory_block();
+        ContextAssembler::default().assemble(
+            question,
+            &user_context,
+            &schema,
+            recent.as_deref(),
+            learned.as_deref(),
+        )
     }
 
     /// The "Earlier in this conversation" block for `conversation_id`, or `None`

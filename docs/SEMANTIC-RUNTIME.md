@@ -62,6 +62,34 @@ protocol.
 | `AnalysisResult` | The user-facing answer plus assumptions, status, evidence, scope, and usage. |
 | `SemanticMemory` | Versioned, authority-aware facts that help Fella interpret future questions consistently. |
 
+### Context assembly
+
+These objects are assembled into one bounded `ContextPacket` before the model
+call. The packet is a prompt projection, not another source of truth:
+
+~~~text
+WorkspaceModel schema + user definitions + semantic memory + recent session
+                                |
+                                v
+                         ContextAssembler
+                    - section budgets
+                    - question-aware selection
+                    - newest-turn retention
+                    - explicit omission notices
+                                |
+                                v
+                         analytical prompt
+~~~
+
+Normal-sized sections pass through unchanged. If a section exceeds its budget,
+the assembler keeps relevant schema/definition lines, retains the newest
+conversation material, and tells the model that more context was omitted so it
+can use the bounded read-only tools. This is the local, deterministic form of
+the minimal-relevant-context principle used by [CHESS: Contextual Harnessing
+for Efficient SQL](https://arxiv.org/abs/2405.16755). The goal is not to make
+the model memorize less by default; it is to stop an accidental oversized file
+or transcript from crowding out the actual analytical question.
+
 ### Authority boundaries
 
 The model proposes meaning and explains results. The runtime owns workspace

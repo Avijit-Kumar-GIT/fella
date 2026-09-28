@@ -72,8 +72,11 @@ This is the implementation form of Fella's core loop:
   plan, execution trace, verification report, and bounded result/evidence. The
   same record can be loaded or rerun through the Tauri and Electron bridges;
   reruns are mount-checked and linked to their source turn.
-- **M7:** planned; each stage should build on the same turn, revision, and
-  trace identifiers.
+- **M7 — evaluation, replay, and optimization:** first context-assembly slice
+  implemented; the shared Rust runtime now applies deterministic, question-aware
+  budgets to schema, user definitions, folder memory, and conversation history
+  before either desktop shell sends a prompt. Scored interpretation/replay
+  matrices and cost/quality dashboards remain ahead.
 
 ## Where the current code starts
 
@@ -323,6 +326,15 @@ Extend the existing benchmark system to score:
 Every semantic rule should ship with a fixture and a replayable trace. The
 runtime should make it possible to compare a prompt, model, planner, or
 compiler change against the same analytical turns.
+
+The first implementation slice is the shared `ContextAssembler`. It keeps
+ordinary context unchanged, but prevents unusually large user guides, schemas,
+memory ledgers, or transcripts from consuming the entire model budget. It
+selects relevant lines for definitions and schemas, keeps the newest session
+turns, and makes omissions explicit so the model can fall back to the read-only
+tools. This applies the minimal-relevant-context principle described by
+[CHESS: Contextual Harnessing for Efficient SQL](https://arxiv.org/abs/2405.16755)
+without introducing a vector store into the local-first base product.
 
 ## Research-informed design choices
 
