@@ -92,7 +92,9 @@ def agg(rows):
     return dict(n=n, ok=ok, allk=allk, caught=caught, wrong=wrong,
                tok=tok, ptok=ptok, ctok=ctok, waste=waste,
                accepted_rate=weighted_runtime_rate(rows, "accepted_rate"),
-               unsafe_guess_rate=weighted_runtime_rate(rows, "unsafe_guess_rate"))
+               unsafe_guess_rate=weighted_runtime_rate(rows, "unsafe_guess_rate"),
+               verification_catch_rate=weighted_runtime_rate(
+                   rows, "verification_catch_rate"))
 
 
 def usd_per_correct(a, model):
@@ -170,6 +172,7 @@ def write_csv(out_path, bare_path, fella_path):
                 "plan_correct_rate": r.get("plan_correct_rate"),
                 "accepted_rate": r.get("accepted_rate"),
                 "unsafe_guess_rate": r.get("unsafe_guess_rate"),
+                "verification_catch_rate": r.get("verification_catch_rate"),
                 "replay_refs": json.dumps(r.get("replays", []), separators=(",", ":")),
                 "total_s": round(r.get("total_s", 0), 3),
                 "err": r.get("err") or "",
@@ -180,6 +183,7 @@ def write_csv(out_path, bare_path, fella_path):
             "hard_fail", "verification_status", "interpretation_status",
             "plan_strategy", "interpretation_correct_rate", "plan_correct_rate",
             "accepted_rate", "unsafe_guess_rate",
+            "verification_catch_rate",
             "replay_refs",
             "total_s", "err"]
     with open(out_path, "w", newline="") as f:
@@ -192,8 +196,8 @@ def write_csv(out_path, bare_path, fella_path):
 def lift(bare_path, fella_path, prices):
     B = by_model(json.load(open(bare_path)))
     F = by_model(json.load(open(fella_path)))
-    hdr = "| model | bare acc | fella acc | Δacc | Δacc 95% CI | fella all-iters | fella accepted | fella unsafe | fella tok/correct | bare tok/correct | self-catch"
-    sep = "|---|--:|--:|--:|:-:|--:|--:|--:|--:|--:|--:"
+    hdr = "| model | bare acc | fella acc | Δacc | Δacc 95% CI | fella all-iters | fella accepted | fella unsafe | fella catch | fella tok/correct | bare tok/correct | self-catch"
+    sep = "|---|--:|--:|--:|:-:|--:|--:|--:|--:|--:|--:|--:"
     if prices:
         hdr += " | fella $/100-correct | bare $/100-correct"
         sep += "|--:|--:"
@@ -221,6 +225,7 @@ def lift(bare_path, fella_path, prices):
             f"{f['allk']}/{f['n']}" if has_f else "—",
             f"{f['accepted_rate']:.0%}" if has_f and f["accepted_rate"] is not None else "—",
             f"{f['unsafe_guess_rate']:.0%}" if has_f and f["unsafe_guess_rate"] is not None else "—",
+            f"{f['verification_catch_rate']:.0%}" if has_f and f["verification_catch_rate"] is not None else "—",
             f"{f['tok']/max(f['ok'],1):,.0f}" if has_f else "—",
             f"{b['tok']/max(b['ok'],1):,.0f}" if b["n"] else "—",
             (f"{f['caught']}/{f['wrong']}" if f["wrong"] else "0/0") if has_f else "—",
@@ -234,20 +239,21 @@ def lift(bare_path, fella_path, prices):
 
 
 def generic(specs, prices):
-    print("| label | n | acc | accepted | unsafe | close | waste | tok/correct" + (" | $/correct |" if prices else " |"))
-    print("|---|--:|:-:|--:|--:|--:|--:|--:" + ("|--:|" if prices else "|"))
+    print("| label | n | acc | accepted | unsafe | catch | close | waste | tok/correct" + (" | $/correct |" if prices else " |"))
+    print("|---|--:|:-:|--:|--:|--:|--:|--:|--:" + ("|--:|" if prices else "|"))
     for spec in specs:
         label, rest = spec.split("=", 1)
         path, _, mf = rest.partition(":")
         rows = [r for r in json.load(open(path)) if not mf or r["model"] == mf]
         if not rows:
-            print(f"| {label} | 0 | — | — | — | — | — | — |")
+            print(f"| {label} | 0 | — | — | — | — | — | — | — |")
             continue
         a = agg(rows)
         close = sum(r["closeness_det"] for r in rows) / a["n"]
         cells = [label, str(a["n"]), f"{a['ok']}/{a['n']}",
                  f"{a['accepted_rate']:.0%}" if a["accepted_rate"] is not None else "—",
                  f"{a['unsafe_guess_rate']:.0%}" if a["unsafe_guess_rate"] is not None else "—",
+                 f"{a['verification_catch_rate']:.0%}" if a["verification_catch_rate"] is not None else "—",
                  f"{close:.2f}", str(a["waste"]),
                  f"{a['tok']/max(a['ok'],1):,.0f}"]
         if prices:

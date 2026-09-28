@@ -70,6 +70,7 @@ def main():
                 "plan_correct_rate": r.get("plan_correct_rate"),
                 "accepted_rate": r.get("accepted_rate"),
                 "unsafe_guess_rate": r.get("unsafe_guess_rate"),
+                "verification_catch_rate": r.get("verification_catch_rate"),
                 "replays": r.get("replays", []),
                 "err": r.get("err"),
             })

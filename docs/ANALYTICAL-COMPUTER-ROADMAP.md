@@ -376,8 +376,11 @@ benchmark can distinguish a numerically correct answer from one produced by an
 unsafe interpretation or unexpected execution strategy. It also records the
 fraction of runs the runtime accepted as verified and the fraction that still
 emitted a non-empty answer without verification, making the correctness-first
-tradeoff visible before a dashboard exists. The aggregate CLI keeps those rates
-weighted by iteration count and leaves non-Fella baselines as not applicable.
+tradeoff visible before a dashboard exists. It also reports verification-catch
+rate: among incorrect Fella runs, how often the verifier refused to accept the
+result instead of incorrectly marking it verified. The aggregate CLI keeps
+those rates weighted by iteration count and leaves non-Fella baselines as not
+applicable.
 Each Fella result also carries the persisted turn id and workspace revision,
 connecting evaluation output to the existing `analysis_turn_load` and
 `analysis_turn_rerun` protocol instead of inventing a second trace format.

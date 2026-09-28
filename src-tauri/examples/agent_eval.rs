@@ -1001,6 +1001,11 @@ struct CaseScore {
     /// Fraction of all Fella runtime observations that emitted a non-error,
     /// non-empty answer without a verified runtime status.
     unsafe_guess_rate: Option<f32>,
+    /// Fraction of incorrect Fella observations that the verifier refused to
+    /// accept. A wrong answer with `needs_review`, `insufficient_data`, or
+    /// `failed` counts as caught; a wrong answer marked `verified` is a miss.
+    /// `None` means this case produced no incorrect runtime observations.
+    verification_catch_rate: Option<f32>,
     /// Canonical backend turn records produced by the Fella iterations. These
     /// references make a benchmark result inspectable and rerunnable.
     replays: Vec<ReplayRef>,
@@ -1063,6 +1068,21 @@ fn acceptance_rates(observations: &[(VerificationStatus, bool)]) -> Option<(f32,
         .count();
     let n = observations.len() as f32;
     Some((accepted as f32 / n, unsafe_guesses as f32 / n))
+}
+
+fn verification_catch_rate(observations: &[(bool, VerificationStatus)]) -> Option<f32> {
+    let incorrect: Vec<_> = observations
+        .iter()
+        .filter(|(correct, _)| !*correct)
+        .collect();
+    if incorrect.is_empty() {
+        return None;
+    }
+    let caught = incorrect
+        .iter()
+        .filter(|(_, status)| *status != VerificationStatus::Verified)
+        .count();
+    Some(caught as f32 / incorrect.len() as f32)
 }
 
 // --- comparison harness: OpenAI code_interpreter -------------------------
@@ -1342,6 +1362,7 @@ async fn score_case(
     let mut wastes: Vec<Waste> = Vec::new();
     let mut verification_statuses: Vec<VerificationStatus> = Vec::new();
     let mut acceptance_observations: Vec<(VerificationStatus, bool)> = Vec::new();
+    let mut verification_observations: Vec<(bool, VerificationStatus)> = Vec::new();
     let mut interpretation_statuses: Vec<InterpretationStatus> = Vec::new();
     let mut plan_strategies: Vec<PlanStrategy> = Vec::new();
     let mut replays: Vec<ReplayRef> = Vec::new();
@@ -1439,6 +1460,7 @@ async fn score_case(
         if let Some(status) = r.verification_status {
             verification_statuses.push(status);
             acceptance_observations.push((status, r.err.is_none() && !r.text.trim().is_empty()));
+            verification_observations.push((ok, status));
         }
         if let Some(replay) = r.replay {
             replays.push(replay);
@@ -1503,6 +1525,7 @@ async fn score_case(
             }),
         accepted_rate,
         unsafe_guess_rate,
+        verification_catch_rate: verification_catch_rate(&verification_observations),
         replays,
         waste: fold_waste(&wastes),
         prompt_tok: (ptok / iters as u64) as u32,
@@ -2294,6 +2317,7 @@ async fn cmd_session_memory(
             plan_correct_rate: None,
             accepted_rate: None,
             unsafe_guess_rate: None,
+            verification_catch_rate: None,
             replays: Vec::new(),
             waste: Waste::default(),
             prompt_tok: (ptok / iters as u64) as u32,
@@ -2487,6 +2511,7 @@ async fn cmd_memory(
             plan_correct_rate: None,
             accepted_rate: None,
             unsafe_guess_rate: None,
+            verification_catch_rate: None,
             replays: Vec::new(),
             waste: Waste::default(),
             prompt_tok: (ptok / iters as u64) as u32,
@@ -2554,6 +2579,7 @@ async fn cmd_memory_axes(
             plan_correct_rate: None,
             accepted_rate: None,
             unsafe_guess_rate: None,
+            verification_catch_rate: None,
             replays: Vec::new(),
             waste: Waste::default(),
             prompt_tok: 0,
@@ -2889,6 +2915,7 @@ fn write_json(path: &str, scores: &[CaseScore]) {
                 "plan_correct_rate": s.plan_correct_rate,
                 "accepted_rate": s.accepted_rate,
                 "unsafe_guess_rate": s.unsafe_guess_rate,
+                "verification_catch_rate": s.verification_catch_rate,
                 "replays": s.replays,
                 "waste": s.waste.total(), "prompt_tok": s.prompt_tok,
                 "completion_tok": s.completion_tok, "total_s": s.total_s,
@@ -3210,6 +3237,23 @@ mod tests {
         assert_eq!(
             acceptance_rates(&[(VerificationStatus::Failed, false)]),
             Some((0.0, 0.0))
+        );
+    }
+
+    #[test]
+    fn verification_catch_rate_only_scores_incorrect_observations() {
+        assert_eq!(verification_catch_rate(&[]), None);
+        assert_eq!(
+            verification_catch_rate(&[(true, VerificationStatus::Verified)]),
+            None
+        );
+        assert_eq!(
+            verification_catch_rate(&[
+                (false, VerificationStatus::NeedsReview),
+                (false, VerificationStatus::Verified),
+                (true, VerificationStatus::Failed),
+            ]),
+            Some(0.5)
         );
     }
 
