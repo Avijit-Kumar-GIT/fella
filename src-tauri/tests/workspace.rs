@@ -5,7 +5,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use fella_lib::engine::EngineState;
+use fella_lib::engine::{EngineState, FieldRole};
 
 fn scratch(tag: &str) -> PathBuf {
     let n = SystemTime::now()
@@ -41,6 +41,22 @@ fn scans_queries_and_guards_a_workspace() {
 
     assert_eq!(catalog.workspace.as_deref(), Some(ws.to_str().unwrap()));
     assert_eq!(catalog.sources.len(), 4);
+
+    let model = engine
+        .workspace_model()
+        .expect("mounted workspace has a model");
+    assert_eq!(model.revision, catalog.revision.clone().unwrap());
+    let sales_model = model.source("sales").unwrap();
+    assert_eq!(sales_model.row_count, Some(3));
+    assert_eq!(
+        sales_model
+            .fields
+            .iter()
+            .find(|field| field.name == "amount")
+            .unwrap()
+            .role,
+        FieldRole::Measure
+    );
 
     let sales = catalog
         .sources
@@ -100,6 +116,18 @@ fn scans_queries_and_guards_a_workspace() {
         .unwrap();
     assert!(amount.null_fraction.is_some());
     assert!(amount.min.is_some());
+
+    let enriched_model = engine.workspace_model().unwrap();
+    assert_eq!(enriched_model.revision, model.revision);
+    assert!(enriched_model
+        .source("sales")
+        .unwrap()
+        .fields
+        .iter()
+        .find(|field| field.name == "amount")
+        .unwrap()
+        .min
+        .is_some());
 
     let _ = fs::remove_dir_all(&ws);
     let _ = fs::remove_dir_all(&data);

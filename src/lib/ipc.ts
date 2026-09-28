@@ -16,6 +16,7 @@ import type {
 	QueryResult,
 	Settings,
 	SourceInfo,
+	WorkspaceModel,
 	UpdateStatus
 } from './types';
 
@@ -116,6 +117,7 @@ export const ipc = {
 	appInfo: () => invoke<AppInfo>('app_info'),
 	openWorkspace: (path: string) => invoke<Catalog>('open_workspace', { path }),
 	getCatalog: () => invoke<Catalog>('get_catalog'),
+	getWorkspaceModel: () => invoke<WorkspaceModel | null>('get_workspace_model'),
 	lastWorkspacePath: () => invoke<string | null>('last_workspace_path'),
 	describe: (name: string) => invoke<SourceInfo>('describe', { name }),
 	sampleSource: (name: string, rows = 5) => invoke<QueryResult>('sample_source', { name, rows }),

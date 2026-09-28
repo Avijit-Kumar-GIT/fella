@@ -22,6 +22,7 @@ use crate::engine::secrets::Secrets;
 use crate::engine::sqlite::{self, Settings};
 use crate::engine::tools::Registry;
 use crate::engine::update;
+use crate::engine::workspace_model::WorkspaceModel;
 
 pub struct EngineState {
     workspace: Mutex<WorkspaceState>,
@@ -150,6 +151,9 @@ struct WorkspaceState {
     /// notes). `None` with no workspace. The file itself is the source of truth
     /// re-read each turn so a hand edit takes effect immediately.
     memory_path: Option<PathBuf>,
+    /// Revision-bound semantic projection of the catalog. It is rebuilt only
+    /// when the workspace snapshot changes or a source is enriched.
+    model: Option<WorkspaceModel>,
 }
 
 impl WorkspaceState {
@@ -166,6 +170,7 @@ impl WorkspaceState {
             inspected_tables: HashSet::new(),
             skipped: Vec::new(),
             memory_path: None,
+            model: None,
         }
     }
 }
@@ -681,6 +686,16 @@ impl EngineState {
             sources: workspace.sources.clone(),
             skipped: workspace.skipped.clone(),
         }
+    }
+
+    /// Return the semantic projection for the current workspace. `None` means
+    /// there is no mounted workspace or no valid revision yet.
+    pub fn workspace_model(&self) -> Option<WorkspaceModel> {
+        self.workspace
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .model
+            .clone()
     }
 
     fn answer_workspace_is_current(&self, answer: &Answer) -> bool {
@@ -1426,6 +1441,16 @@ exactly, character for character, from the list below.";
             workspace.schema_cache = None;
             workspace.inspected_tables.clear();
             self.persist_sources(path, &workspace.sources);
+            workspace.model = WorkspaceModel::from_catalog(&Catalog {
+                workspace: workspace
+                    .workspace
+                    .as_ref()
+                    .map(|p| p.display().to_string()),
+                revision: workspace.revision.clone(),
+                indexed_at_ms: workspace.indexed_at_ms,
+                sources: workspace.sources.clone(),
+                skipped: workspace.skipped.clone(),
+            });
             old_scratch
         };
 
@@ -1558,6 +1583,16 @@ exactly, character for character, from the list below.";
         }
         workspace.inspected_tables.insert(view.to_lowercase());
         workspace.schema_cache = None;
+        workspace.model = WorkspaceModel::from_catalog(&Catalog {
+            workspace: workspace
+                .workspace
+                .as_ref()
+                .map(|p| p.display().to_string()),
+            revision: workspace.revision.clone(),
+            indexed_at_ms: workspace.indexed_at_ms,
+            sources: workspace.sources.clone(),
+            skipped: workspace.skipped.clone(),
+        });
         Ok(info)
     }
 

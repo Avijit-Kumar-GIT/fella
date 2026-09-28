@@ -23,6 +23,7 @@ pub mod state;
 pub mod testkit;
 pub mod tools;
 pub mod update;
+pub mod workspace_model;
 
 pub use capabilities::AnalysisCapabilities;
 pub use catalog::{Catalog, SourceInfo};
@@ -33,3 +34,4 @@ pub use provider::{AuthKind, Provider, PROVIDERS};
 pub use sqlite::Settings;
 pub use state::{ConversationSummary, ConversationsInfo, EngineState, ProviderInfo, QueryResult};
 pub use update::UpdateStatus;
+pub use workspace_model::{FieldProfile, FieldRole, SourceModel, WorkspaceModel};

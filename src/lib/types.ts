@@ -202,6 +202,34 @@ export interface Catalog {
 	skipped?: SkippedFile[];
 }
 
+export type FieldRole = 'date' | 'measure' | 'dimension' | 'identifier' | 'text';
+
+export interface FieldProfile extends ColumnInfo {
+	role: FieldRole;
+}
+
+export interface SourceModel {
+	name: string;
+	path: string;
+	kind: SourceKind;
+	view?: string;
+	row_count?: number;
+	fields: FieldProfile[];
+	size_bytes: number;
+	mtime: number;
+	synopsis?: string;
+	note?: string;
+}
+
+/** Revision-bound semantic projection of a mounted workspace. */
+export interface WorkspaceModel {
+	workspace: string;
+	revision: string;
+	indexed_at_ms?: number;
+	sources: SourceModel[];
+	skipped?: SkippedFile[];
+}
+
 export interface AnalysisCapabilities {
 	table_analysis: boolean;
 	document_analysis: boolean;

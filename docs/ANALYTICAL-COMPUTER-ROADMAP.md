@@ -40,6 +40,17 @@ This is the implementation form of Fella's core loop:
 > The model proposes. The runtime grounds. The data computes. The verifier
 > judges. The user confirms. Memory compounds.
 
+## Delivery status
+
+- **M0 — runtime spine:** implemented in the typed `runtime` module and the
+  shared Tauri/Electron answer protocol.
+- **M1 — WorkspaceModel:** first slice implemented; the mounted catalog now
+  has a revision-bound semantic projection with cautious field-role hints and
+  an inspectable cross-shell command. Profile enrichment and definitions are
+  still ahead.
+- **M2–M7:** planned; each stage should build on the same turn, revision, and
+  trace identifiers.
+
 ## Where the current code starts
 
 Fella already has a strong analytical data plane:
@@ -337,4 +348,3 @@ This roadmap does not require a multi-agent graph, a hosted memory service, a
 vector database, a plugin marketplace, write-capable tools, or a dashboard
 platform. The ambition is analytical depth and reliability, not general
 autonomy or feature breadth.
-

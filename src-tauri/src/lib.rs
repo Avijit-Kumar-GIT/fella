@@ -65,6 +65,7 @@ pub fn run() {
             commands::app_ready,
             commands::open_workspace,
             commands::get_catalog,
+            commands::get_workspace_model,
             commands::last_workspace_path,
             commands::describe,
             commands::sample_source,

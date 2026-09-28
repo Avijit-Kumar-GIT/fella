@@ -10,6 +10,7 @@ use tauri::{State, Window};
 use crate::engine::{
     Answer, AskEvent, Catalog, ConversationSummary, ConversationsInfo, EngineError, EngineResult,
     EngineState, ProviderHealth, ProviderInfo, QueryResult, Settings, SourceInfo, UpdateStatus,
+    WorkspaceModel,
 };
 use crate::AppState;
 
@@ -74,6 +75,11 @@ pub async fn open_workspace(
 #[tauri::command]
 pub fn get_catalog(engine: State<'_, EngineState>) -> Catalog {
     engine.catalog()
+}
+
+#[tauri::command]
+pub fn get_workspace_model(engine: State<'_, EngineState>) -> Option<WorkspaceModel> {
+    engine.workspace_model()
 }
 
 /// Path of the folder from the last session, if it still exists. The welcome

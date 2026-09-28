@@ -52,7 +52,7 @@ impl SourceKind {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ColumnInfo {
     pub name: String,
     #[serde(rename = "type")]
@@ -95,7 +95,7 @@ impl ColumnInfo {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SourceInfo {
     pub name: String,
     pub path: String,
@@ -118,7 +118,7 @@ pub struct SourceInfo {
     pub note: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Catalog {
     pub workspace: Option<String>,
     /// Deterministic identity of the currently loaded workspace snapshot.
@@ -216,7 +216,7 @@ pub fn workspace_revision(root: &Path, sources: &[SourceInfo], skipped: &[Skippe
 
 /// A file that was found but not loaded (unsupported type, unreadable, or a
 /// parse failure).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SkippedFile {
     pub name: String,
     pub reason: String,

@@ -133,6 +133,7 @@ async fn dispatch(
             value_result(engine.open_workspace(&expand_tilde(&path)))
         }
         "get_catalog" => serialized(engine.catalog()),
+        "get_workspace_model" => serialized(engine.workspace_model()),
         "last_workspace_path" => serialized(engine.last_workspace_path()),
         "describe" => {
             let name: String = required(&request.params, "name")?;
