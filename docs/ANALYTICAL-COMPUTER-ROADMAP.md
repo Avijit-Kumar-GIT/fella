@@ -46,8 +46,9 @@ This is the implementation form of Fella's core loop:
   shared Tauri/Electron answer protocol.
 - **M1 — WorkspaceModel:** first slice implemented; the mounted catalog now
   has a revision-bound semantic projection with cautious field-role hints and
-  an inspectable cross-shell command. Profile enrichment and definitions are
-  still ahead.
+  an inspectable cross-shell command. A compact profile now also feeds the
+  shared bounded context packet; richer definitions and relationship inference
+  are still ahead.
 - **M2 — semantic routing:** first slice implemented; elevated questions can
   negotiate a compact contract, and Rust preserves ambiguity instead of
   treating a model proposal as verified meaning.

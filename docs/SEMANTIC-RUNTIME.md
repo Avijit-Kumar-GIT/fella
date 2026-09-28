@@ -68,7 +68,7 @@ These objects are assembled into one bounded `ContextPacket` before the model
 call. The packet is a prompt projection, not another source of truth:
 
 ~~~text
-WorkspaceModel schema + user definitions + semantic memory + recent session
+WorkspaceModel profile + schema + user definitions + semantic memory + recent session
                                 |
                                 v
                          ContextAssembler

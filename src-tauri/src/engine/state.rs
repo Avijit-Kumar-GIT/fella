@@ -1135,12 +1135,14 @@ impl EngineState {
         let schema = self.schema_block();
         let recent = self.session_block(conversation_id);
         let learned = self.folder_memory_block();
+        let semantic_model = self.workspace_model().map(|model| model.prompt_block());
         ContextAssembler::default().assemble(
             question,
             &user_context,
             &schema,
             recent.as_deref(),
             learned.as_deref(),
+            semantic_model.as_deref(),
         )
     }
 

@@ -15,6 +15,7 @@ const TRUNCATION_NOTICE: &str =
 pub enum ContextSection {
     UserContext,
     WorkspaceSchema,
+    WorkspaceModel,
     Conversation,
     FolderMemory,
 }
@@ -33,6 +34,7 @@ pub struct ContextOmission {
 pub struct ContextPacket {
     pub user_context: Vec<String>,
     pub schema: String,
+    pub semantic_model: Option<String>,
     pub recent: Option<String>,
     pub learned: Option<String>,
     pub omissions: Vec<ContextOmission>,
@@ -52,6 +54,7 @@ impl ContextPacket {
 pub struct ContextAssembler {
     pub user_context_chars: usize,
     pub schema_chars: usize,
+    pub semantic_model_chars: usize,
     pub conversation_chars: usize,
     pub memory_chars: usize,
 }
@@ -61,6 +64,7 @@ impl Default for ContextAssembler {
         Self {
             user_context_chars: 8_000,
             schema_chars: 24_000,
+            semantic_model_chars: 12_000,
             conversation_chars: 8_000,
             memory_chars: 8_000,
         }
@@ -78,6 +82,7 @@ impl ContextAssembler {
         schema: &str,
         recent: Option<&str>,
         learned: Option<&str>,
+        semantic_model: Option<&str>,
     ) -> ContextPacket {
         let mut packet = ContextPacket {
             schema: String::new(),
@@ -121,6 +126,23 @@ impl ContextAssembler {
             });
         }
         packet.schema = schema;
+
+        if let Some(semantic_model) = semantic_model.filter(|text| !text.trim().is_empty()) {
+            let (bounded, truncated) = bounded_text(
+                semantic_model,
+                question,
+                self.semantic_model_chars,
+                Retention::Relevant,
+            );
+            if truncated {
+                packet.omissions.push(ContextOmission {
+                    section: ContextSection::WorkspaceModel,
+                    original_chars: char_len(semantic_model),
+                    retained_chars: char_len(&bounded),
+                });
+            }
+            packet.semantic_model = (!bounded.is_empty()).then_some(bounded);
+        }
 
         if let Some(recent) = recent.filter(|text| !text.trim().is_empty()) {
             let (bounded, truncated) =
@@ -326,6 +348,7 @@ mod tests {
             schema,
             Some(recent),
             Some(learned),
+            None,
         );
 
         assert_eq!(packet.user_context, user);
@@ -340,6 +363,7 @@ mod tests {
         let assembler = ContextAssembler {
             user_context_chars: 180,
             schema_chars: 10_000,
+            semantic_model_chars: 10_000,
             conversation_chars: 10_000,
             memory_chars: 10_000,
         };
@@ -347,7 +371,7 @@ mod tests {
             "# Workspace rules\nIgnore this unrelated section.\nUse the amount_paid field for rent totals.\nAnother unrelated note.\nA further unrelated note that should be dropped.\nOne more long note to make this section exceed its budget."
                 .into(),
         ];
-        let packet = assembler.assemble("what is rent amount?", &user, "schema", None, None);
+        let packet = assembler.assemble("what is rent amount?", &user, "schema", None, None, None);
         let context = &packet.user_context[0];
 
         assert!(context.contains("amount_paid"));
@@ -364,11 +388,12 @@ mod tests {
         let assembler = ContextAssembler {
             user_context_chars: 10_000,
             schema_chars: 10_000,
+            semantic_model_chars: 10_000,
             conversation_chars: 180,
             memory_chars: 10_000,
         };
         let recent = "Earlier in this conversation:\n- Q: first question A: old\n- Q: second question A: middle\n- Q: third question A: older\n- Q: fourth question A: older still\n- Q: newest question A: current\n";
-        let packet = assembler.assemble("newest", &[], "schema", Some(recent), None);
+        let packet = assembler.assemble("newest", &[], "schema", Some(recent), None, None);
         let recent = packet.recent.unwrap();
 
         assert!(recent.contains("Earlier in this conversation"));

@@ -93,6 +93,78 @@ impl WorkspaceModel {
             .iter()
             .find(|source| source.name == name || source.view.as_deref() == Some(name))
     }
+
+    /// Render the revision-bound semantic profile for the model prompt. This
+    /// is metadata for interpretation and planning, not evidence: observed
+    /// figures still require a read-only tool call before they may appear in
+    /// an answer.
+    pub fn prompt_block(&self) -> String {
+        let mut block = format!(
+            "Workspace semantic profile (inferred metadata for revision {}; not answer evidence):\n",
+            self.revision
+        );
+        for source in &self.sources {
+            let name = source.view.as_deref().unwrap_or(&source.name);
+            block.push_str(&format!("  {name}:\n"));
+            if let Some(note) = &source.note {
+                block.push_str(&format!("    source note: {}\n", prompt_value(note, 160)));
+            }
+            for field in &source.fields {
+                block.push_str(&format!(
+                    "    \"{}\" role={} type={}",
+                    field.name,
+                    role_name(field.role),
+                    field.type_
+                ));
+                if let Some(null_fraction) = field.null_fraction {
+                    block.push_str(&format!(" null={null_fraction:.2}"));
+                }
+                if let Some(distinct) = field.distinct {
+                    block.push_str(&format!(" distinct={distinct}"));
+                }
+                if let Some(min) = &field.min {
+                    block.push_str(&format!(" min={}", prompt_value(min, 60)));
+                }
+                if let Some(max) = &field.max {
+                    block.push_str(&format!(" max={}", prompt_value(max, 60)));
+                }
+                if let Some(values) = &field.common_values {
+                    let values = values
+                        .iter()
+                        .take(4)
+                        .map(|value| prompt_value(value, 50))
+                        .collect::<Vec<_>>()
+                        .join(" | ");
+                    if !values.is_empty() {
+                        block.push_str(&format!(" common={values}"));
+                    }
+                }
+                if let Some(note) = &field.note {
+                    block.push_str(&format!(" note={}", prompt_value(note, 120)));
+                }
+                block.push('\n');
+            }
+        }
+        block
+    }
+}
+
+fn role_name(role: FieldRole) -> &'static str {
+    match role {
+        FieldRole::Date => "date",
+        FieldRole::Measure => "measure",
+        FieldRole::Dimension => "dimension",
+        FieldRole::Identifier => "identifier",
+        FieldRole::Text => "text",
+    }
+}
+
+fn prompt_value(value: &str, limit: usize) -> String {
+    value
+        .replace(['\n', '\r'], " ")
+        .chars()
+        .take(limit)
+        .collect()
 }
 
 impl SourceModel {
@@ -292,5 +364,16 @@ mod tests {
         assert_eq!(value["revision"], "r123");
         assert_eq!(value["sources"][0]["fields"][1]["role"], "measure");
         assert!(value["sources"][0]["fields"][1]["common_values"].is_null());
+    }
+
+    #[test]
+    fn prompt_block_exposes_roles_without_turning_metadata_into_evidence() {
+        let block = WorkspaceModel::from_catalog(&catalog())
+            .unwrap()
+            .prompt_block();
+        assert!(block.contains("revision r123"));
+        assert!(block.contains("\"amount\" role=measure type=REAL"));
+        assert!(block.contains("\"sale_date\" role=date"));
+        assert!(block.contains("not answer evidence"));
     }
 }

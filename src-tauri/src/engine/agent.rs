@@ -119,6 +119,7 @@ pub async fn run(
         &catalog,
         &context.user_context,
         &context.schema,
+        context.semantic_model.as_deref(),
         context.recent.as_deref(),
         context.learned.as_deref(),
     );
@@ -1025,6 +1026,7 @@ fn system_prompt(
     catalog: &Catalog,
     user_context: &[String],
     schema: &str,
+    semantic_model: Option<&str>,
     recent: Option<&str>,
     learned: Option<&str>,
 ) -> String {
@@ -1249,6 +1251,11 @@ were open only a plain greeting or a question about Fella itself gets a normal r
 
     if profile.schema {
         p.push_str(schema);
+        if let Some(semantic_model) = semantic_model {
+            p.push('\n');
+            p.push_str(semantic_model.trim_end());
+            p.push('\n');
+        }
     }
 
     if profile.folder_memory {
@@ -1295,6 +1302,7 @@ mod tests {
             &open_catalog(),
             &[],
             schema,
+            None,
             Some(recent),
             Some(learned),
         );
@@ -1307,7 +1315,7 @@ mod tests {
         assert!(p.find("Learned notes").unwrap() < p.find("Earlier in this conversation").unwrap());
 
         // Nothing learned, first turn: neither block.
-        let p0 = system_prompt(&full, &open_catalog(), &[], schema, None, None);
+        let p0 = system_prompt(&full, &open_catalog(), &[], schema, None, None, None);
         assert!(!p0.contains("Earlier in this conversation"));
         assert!(!p0.contains("Learned notes for this folder"));
     }
@@ -1338,6 +1346,7 @@ mod tests {
             &open_catalog(),
             &["amounts are GBP".to_string()],
             schema,
+            None,
             Some(recent),
             None,
         );
