@@ -57,7 +57,12 @@ This is the implementation form of Fella's core loop:
 - **M4 — semantic verification:** first slice implemented; grounded bindings
   must be present in executed SQL, and ambiguous/unsupported contracts remain
   review states even when a query is numerically reproducible.
-- **M5–M7:** planned; each stage should build on the same turn, revision, and
+- **M5 — versioned semantic memory:** first slice implemented; corrections and
+  verified field bindings can carry authority, workspace revision, supporting
+  turn, evidence IDs, and explicit supersession/conflict state. The typed
+  ledger projects into readable `memory.md` without making model suggestions
+  prompt authority.
+- **M6–M7:** planned; each stage should build on the same turn, revision, and
   trace identifiers.
 
 ## Where the current code starts
@@ -74,7 +79,7 @@ Fella already has a strong analytical data plane:
 | Provenance and evidence | `evidence.rs`, `analytics/provenance.rs`, `EvidenceItem` |
 | Deterministic verification | `analytics/verify.rs`, query reruns and answer checks |
 | Workspace context | root `fella.md`, loaded into the prompt |
-| Learned context | `memory.rs`, local `memory.md` and episode log |
+| Learned context | `memory.rs`, `semantic_memory.rs`, local `memory.md`, typed fact ledger, and episode log |
 | Evaluation | `bench/`, `examples/agent_eval`, Rust integration tests |
 
 The missing layer is not “more tools.” It is a typed control plane around

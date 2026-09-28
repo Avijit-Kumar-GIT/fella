@@ -17,6 +17,7 @@ pub mod provider;
 pub mod risk;
 pub mod runtime;
 pub mod secrets;
+pub mod semantic_memory;
 pub mod sqlite;
 pub mod state;
 /// Deterministic fixtures + golden answers for `examples/agent_eval`.

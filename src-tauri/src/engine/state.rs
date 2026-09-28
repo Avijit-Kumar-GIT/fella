@@ -18,7 +18,9 @@ use crate::engine::ingest::docs;
 use crate::engine::llm::{LlmClient, ProviderHealth};
 use crate::engine::memory::{self, FolderMemory};
 use crate::engine::provider::{self, AuthKind, PROVIDERS};
+use crate::engine::runtime::InterpretationStatus;
 use crate::engine::secrets::Secrets;
+use crate::engine::semantic_memory::{self, FactAuthority, FactKind, SemanticFact, SemanticMemory};
 use crate::engine::sqlite::{self, Settings};
 use crate::engine::tools::Registry;
 use crate::engine::update;
@@ -920,9 +922,11 @@ impl EngineState {
     /// `Ok(false)` if there was nothing to delete; `Err` on no folder open.
     pub fn forget_folder_memory(&self) -> EngineResult<bool> {
         let path = self.memory_path().ok_or(EngineError::NoWorkspace)?;
-        let had = path.exists();
+        let facts_path = semantic_memory::facts_path_for(&path);
+        let had = path.exists() || facts_path.exists();
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(path.with_extension("episodes.jsonl"));
+        let _ = std::fs::remove_file(facts_path);
         Ok(had)
     }
 
@@ -948,7 +952,27 @@ impl EngineState {
         let path = self.memory_path()?;
         let mut mem = FolderMemory::load(&path);
         mem.prune_tables(&self.known_views());
-        mem.semantic_core()
+        let typed = SemanticMemory::load(&semantic_memory::facts_path_for(&path));
+        let legacy = if typed.has_kind(FactKind::Vocabulary) {
+            mem.semantic_core_without_vocabulary()
+        } else {
+            mem.semantic_core()
+        };
+        let typed_block = typed.prompt_block(self.workspace_revision().as_deref());
+        match (legacy, typed_block) {
+            (Some(legacy), Some(typed)) => Some(format!("{legacy}\n\n{typed}")),
+            (Some(legacy), None) => Some(legacy),
+            (None, Some(typed)) => Some(typed),
+            (None, None) => None,
+        }
+    }
+
+    fn workspace_revision(&self) -> Option<String> {
+        self.workspace
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .revision
+            .clone()
     }
 
     fn known_views(&self) -> Vec<String> {
@@ -1002,18 +1026,75 @@ impl EngineState {
             }),
         );
 
-        if !corrected {
-            return; // an ordinary, uncorrected question teaches memory nothing
-        }
         let mut mem = FolderMemory::load(&path);
-        let correction = question.trim();
-        let existing = mem.vocabulary_entries();
-        match self.reconcile_vocab_key(correction, &existing).await {
-            VocabAction::Update(key) | VocabAction::Add(key) => mem.set_vocab(&key, correction),
-            VocabAction::Noop => {}
+        let facts_path = semantic_memory::facts_path_for(&path);
+        let mut facts = SemanticMemory::load(&facts_path);
+        let scope = answer
+            .workspace
+            .as_ref()
+            .map(|workspace| workspace.path.clone())
+            .unwrap_or_default();
+        let revision = answer
+            .workspace
+            .as_ref()
+            .map(|workspace| workspace.revision.clone());
+        let evidence_ids: Vec<String> = answer
+            .evidence
+            .iter()
+            .filter(|evidence| evidence.error.is_none())
+            .map(|evidence| evidence.id.clone())
+            .collect();
+
+        // Upgrade legacy vocabulary notes the first time the typed ledger is
+        // touched. Existing users keep their learned definitions, but future
+        // updates gain authority, revision, and provenance metadata.
+        if !facts.has_kind(FactKind::Vocabulary) {
+            for (key, statement) in mem.vocabulary_entries() {
+                facts.upsert(SemanticFact::new(
+                    FactKind::Vocabulary,
+                    key,
+                    statement,
+                    FactAuthority::User,
+                    scope.clone(),
+                    revision.clone(),
+                    None,
+                    Vec::new(),
+                    at_ms,
+                ));
+            }
+        }
+
+        if corrected {
+            let correction = question.trim();
+            let existing = mem.vocabulary_entries();
+            match self.reconcile_vocab_key(correction, &existing).await {
+                VocabAction::Update(key) | VocabAction::Add(key) => {
+                    mem.set_vocab(&key, correction);
+                    facts.upsert(SemanticFact::new(
+                        FactKind::Vocabulary,
+                        key,
+                        correction,
+                        FactAuthority::User,
+                        scope.clone(),
+                        revision.clone(),
+                        Some(answer.turn_id.clone()),
+                        evidence_ids.clone(),
+                        at_ms,
+                    ));
+                }
+                VocabAction::Noop => {}
+            }
+        }
+
+        for fact in observed_contract_facts(answer, &scope, revision, &evidence_ids, at_ms) {
+            facts.upsert(fact);
         }
         mem.prune_tables(&self.known_views());
         mem.save();
+        if !facts.facts().is_empty() {
+            facts.save();
+            semantic_memory::sync_markdown_projection(&path, &facts);
+        }
     }
 
     /// Decide whether a new correction updates an existing vocabulary note,
@@ -2133,6 +2214,96 @@ exactly, character for character, from the list below.";
             rusqlite::params![ws, now],
         );
     }
+}
+
+/// Promote only revision-bound, verified contract bindings to durable
+/// observations. A model proposal or a merely executable query is not enough
+/// to teach future turns a definition.
+fn observed_contract_facts(
+    answer: &Answer,
+    scope: &str,
+    revision: Option<String>,
+    evidence_ids: &[String],
+    at_ms: u64,
+) -> Vec<SemanticFact> {
+    if !matches!(
+        answer.status,
+        crate::engine::evidence::VerificationStatus::Verified
+    ) || evidence_ids.is_empty()
+    {
+        return Vec::new();
+    }
+    let Some(contract) = answer.contract.as_ref() else {
+        return Vec::new();
+    };
+    if contract.interpretation != InterpretationStatus::Grounded {
+        return Vec::new();
+    }
+
+    let make = |key: String, statement: String| {
+        SemanticFact::new(
+            FactKind::FieldBinding,
+            key,
+            statement,
+            FactAuthority::Observed,
+            scope.to_string(),
+            revision.clone(),
+            Some(answer.turn_id.clone()),
+            evidence_ids.to_vec(),
+            at_ms,
+        )
+    };
+    let mut facts = Vec::new();
+    for measure in &contract.measures {
+        let Some(field) = measure
+            .field
+            .as_deref()
+            .filter(|field| !field.trim().is_empty())
+        else {
+            continue;
+        };
+        facts.push(make(
+            format!("measure:{}", measure.concept),
+            format!(
+                "{} uses field `{field}` for {}",
+                measure.concept, measure.operation
+            ),
+        ));
+    }
+    for filter in &contract.filters {
+        let Some(field) = filter
+            .field
+            .as_deref()
+            .filter(|field| !field.trim().is_empty())
+        else {
+            continue;
+        };
+        facts.push(make(
+            format!("filter:{}", filter.concept),
+            format!("{} uses field `{field}`", filter.concept),
+        ));
+    }
+    if let Some(time) = &contract.time {
+        if let Some(field) = time
+            .field
+            .as_deref()
+            .filter(|field| !field.trim().is_empty())
+        {
+            facts.push(make(
+                "time-field".into(),
+                format!("time uses field `{field}`"),
+            ));
+        }
+    }
+    for field in &contract.group_by {
+        if !field.trim().is_empty() {
+            facts.push(make(
+                format!("group:{field}"),
+                format!("grouping uses field `{field}`"),
+            ));
+        }
+    }
+    facts
 }
 
 /// What to do with a new correction against the existing vocabulary list.

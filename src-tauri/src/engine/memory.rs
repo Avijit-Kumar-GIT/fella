@@ -3,10 +3,12 @@
 //! Not a memory system it's the learned sibling of `fella.md`.
 //!
 //! One `.md` per workspace under `<data_dir>/memory/`, plus an append-only
-//! `.episodes.jsonl` (the raw record; not yet read back). The `.md` is the
-//! source of truth: parsing is lenient (an unrecognised line inside a managed
+//! `.episodes.jsonl` and the typed `.facts.jsonl` ledger maintained by
+//! `semantic_memory`. The Markdown file is still the user-facing source for
+//! legacy notes: parsing is lenient (an unrecognised line inside a managed
 //! section is kept verbatim), and a user-authored `## Notes` section and any
-//! sections we don't know are preserved on rewrite.
+//! sections we don't know are preserved on rewrite. Typed facts are projected
+//! into a generated `## Semantic facts` section with their provenance visible.
 //!
 //! Deliberately stores only durable *facts* (preferences, vocabulary, table
 //! notes) never a cached *query*. An earlier version also cached
@@ -262,6 +264,17 @@ The \"## Notes\" section and any sections you add are left untouched. -->\n",
     /// The block prepended to the system prompt: preferences, all vocabulary,
     /// and all table notes. `None` if there's nothing.
     pub fn semantic_core(&self) -> Option<String> {
+        self.semantic_core_inner(true)
+    }
+
+    /// Legacy prompt projection without vocabulary. Once typed vocabulary
+    /// facts exist, the runtime uses this method to avoid presenting the same
+    /// correction twice while keeping old hand-authored notes useful.
+    pub fn semantic_core_without_vocabulary(&self) -> Option<String> {
+        self.semantic_core_inner(false)
+    }
+
+    fn semantic_core_inner(&self, include_vocabulary: bool) -> Option<String> {
         let mut p = String::new();
         if !self.preferences.is_empty() {
             p.push_str("Preferences:\n");
@@ -269,7 +282,7 @@ The \"## Notes\" section and any sections you add are left untouched. -->\n",
                 p.push_str(&format!("- {x}\n"));
             }
         }
-        if !self.vocabulary.is_empty() {
+        if include_vocabulary && !self.vocabulary.is_empty() {
             p.push_str("What the user's words mean here:\n");
             for n in &self.vocabulary {
                 p.push_str(&format!("- {} \u{2192} {}\n", n.key, n.text));

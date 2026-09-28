@@ -21,12 +21,15 @@ failure shape, and kept reproducing the same wrong answer with no fresh
 reasoning on later asks. Neither benchmark below actually showed a recipe
 earning its tokens (§Implementation), and the self-healing §Staleness called
 for a recipe demoted on a failed re-verify was never built. Memory now
-holds durable facts, never a frozen interpretation of one question — though
-as of the same date, only **vocabulary** (from a correction) is actually
-written by any live code path. `preferences.push(...)` and
+holds durable facts, never a frozen interpretation of one question. The
+legacy Markdown path still primarily writes **vocabulary** (from a correction),
+while the versioned semantic ledger now also records verified field bindings.
+`preferences.push(...)` and
 `set_table_note(...)` are real, tested, round-trip correctly, and are
 user-editable by hand, but nothing in `ask()` ever calls either — a fresh
-install's memory only ever grows a `## Vocabulary` section. (The §"Writing"
+install's legacy memory still grows a `## Vocabulary` section, alongside the
+typed ledger's generated `## Semantic facts` when a verified contract exists.
+(The §"Writing"
 table's `verify` → recipe and ingest-coercion → schema-note rows are exactly
 as stale as the Recipes text above; ingest coercion notes were deliberately
 kept in the schema block instead, see §Implementation "Deferred".)
@@ -43,6 +46,15 @@ folder worked on by different models — judges a new correction against the
 small existing vocabulary list and returns update/add/noop. Cost-gated: free
 when the list is empty, one small call only when there's something to
 reconcile against.
+
+**Versioned semantic facts (2026-09-27, roadmap M5).** New corrections and
+verified grounded field bindings are also recorded in the adjacent typed
+`.facts.jsonl` ledger. Each fact carries its authority, workspace revision,
+supporting turn, evidence IDs, and supersession/conflict state. `memory.md`
+gets a readable `## Semantic facts` projection, while only user/confirmed
+facts and observations from the current revision are eligible for prompt
+context. Model suggestions can be retained for audit but never become prompt
+authority automatically.
 
 ## The goal
 
