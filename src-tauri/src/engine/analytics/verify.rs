@@ -22,6 +22,7 @@ use std::collections::HashSet;
 
 use serde_json::Value as Json;
 
+use crate::engine::analytics::data::quote_str;
 use crate::engine::analytics::AnalyticsSource;
 use crate::engine::evidence::{EvidenceItem, VerificationCheck, VerificationStatus};
 use crate::engine::grounding::{GroundingReport, ProbeOutcome};
@@ -171,10 +172,14 @@ pub fn contract_checks(
         if let Some(field) = measure.field.as_deref() {
             check_binding_usage(&mut checks, "measure", field, &sql);
         }
+        check_measure_operation(&mut checks, &measure.operation, &sql);
     }
     for filter in &contract.filters {
         if let Some(field) = filter.field.as_deref() {
             check_binding_usage(&mut checks, "filter", field, &sql);
+        }
+        for value in &filter.resolved_values {
+            check_literal_usage(&mut checks, "filter value", value, &sql);
         }
     }
     if let Some(time) = &contract.time {
@@ -186,6 +191,82 @@ pub fn contract_checks(
         check_binding_usage(&mut checks, "grouping field", field, &sql);
     }
     checks
+}
+
+fn check_measure_operation(checks: &mut Vec<VerificationCheck>, operation: &str, sql: &[String]) {
+    let functions = match operation.trim().to_ascii_lowercase().as_str() {
+        "sum" | "total" => Some(&["sum", "total"][..]),
+        "avg" | "average" | "mean" => Some(&["avg"][..]),
+        "count" | "number" => Some(&["count"][..]),
+        "min" | "minimum" => Some(&["min"][..]),
+        "max" | "maximum" => Some(&["max"][..]),
+        _ => None,
+    };
+    let Some(functions) = functions else {
+        checks.push(warn(
+            format!("measure operation `{operation}` is unsupported"),
+            Some("the executed evidence cannot be matched to this semantic operation".into()),
+        ));
+        return;
+    };
+    if sql.iter().any(|query| {
+        functions
+            .iter()
+            .any(|function| contains_function_call(query, function))
+    }) {
+        checks.push(ok(format!(
+            "grounded measure operation `{operation}` was used by the query"
+        )));
+    } else {
+        checks.push(warn(
+            format!("grounded measure operation `{operation}` was not used by the query"),
+            Some("the executed evidence did not carry the requested aggregation".into()),
+        ));
+    }
+}
+
+fn check_literal_usage(
+    checks: &mut Vec<VerificationCheck>,
+    kind: &str,
+    value: &str,
+    sql: &[String],
+) {
+    let literal = quote_str(value).to_ascii_lowercase();
+    if sql.iter().any(|query| query.contains(&literal)) {
+        checks.push(ok(format!(
+            "grounded {kind} `{value}` was used by the query"
+        )));
+    } else {
+        checks.push(warn(
+            format!("grounded {kind} `{value}` was not used by the query"),
+            Some("the executed evidence did not carry the observed filter value".into()),
+        ));
+    }
+}
+
+fn contains_function_call(haystack: &str, function: &str) -> bool {
+    let haystack = haystack.to_ascii_lowercase();
+    let bytes = haystack.as_bytes();
+    let mut from = 0;
+    while let Some(relative) = haystack[from..].find(function) {
+        let start = from + relative;
+        let end = start + function.len();
+        let before_ok =
+            start == 0 || (!bytes[start - 1].is_ascii_alphanumeric() && bytes[start - 1] != b'_');
+        if !before_ok {
+            from = end;
+            continue;
+        }
+        let mut cursor = end;
+        while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        if bytes.get(cursor) == Some(&b'(') {
+            return true;
+        }
+        from = end;
+    }
+    false
 }
 
 fn check_binding_usage(
@@ -2205,6 +2286,45 @@ mod tests {
         };
         let checks = contract_checks(&contract, Some(&report), &evidence);
         assert!(checks.iter().all(|check| check.ok), "{checks:?}");
+    }
+
+    #[test]
+    fn contract_checks_reject_missing_operation_and_observed_value() {
+        let contract = AnalysisContract {
+            interpretation: InterpretationStatus::Grounded,
+            subject: Some("spend".into()),
+            measures: vec![crate::engine::runtime::ContractMeasure {
+                concept: "amount".into(),
+                field: Some("amount".into()),
+                operation: "sum".into(),
+                unit: None,
+            }],
+            filters: vec![crate::engine::runtime::ContractFilter {
+                concept: "category".into(),
+                field: Some("category".into()),
+                candidate_values: vec!["dining".into()],
+                resolved_values: vec!["dining".into()],
+                resolution: Some("observed".into()),
+            }],
+            ..Default::default()
+        };
+        let evidence = vec![run_sql_ev(
+            "SELECT category, amount FROM spend WHERE category = 'rent'",
+            &["category", "amount"],
+            vec![vec![Json::from("rent"), Json::from(12)]],
+        )];
+        let report = GroundingReport {
+            source: Some("spend".into()),
+            probes: vec![],
+            unresolved: vec![],
+        };
+        let checks = contract_checks(&contract, Some(&report), &evidence);
+        assert!(checks.iter().any(|check| {
+            !check.ok && check.label.contains("measure operation `sum` was not used")
+        }));
+        assert!(checks.iter().any(|check| {
+            !check.ok && check.label.contains("filter value `dining` was not used")
+        }));
     }
 
     #[test]
