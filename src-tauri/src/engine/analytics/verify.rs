@@ -85,6 +85,7 @@ pub fn hard_fail(checks: &[VerificationCheck]) -> Option<String> {
             "disagrees with this one",
             "returned no value for at least one row",
             "actually came from",
+            "period comparison arithmetic",
         ],
     )
 }
@@ -210,6 +211,7 @@ pub fn contract_checks(
     }
     if let Some(comparison) = &contract.comparison_spec {
         check_comparison_usage(&mut checks, contract, comparison, &sql);
+        check_comparison_arithmetic(&mut checks, contract, evidence);
     }
     checks
 }
@@ -256,6 +258,112 @@ fn check_comparison_usage(
             Some("the executed evidence did not carry both explicit comparison windows".into()),
         ));
     }
+}
+
+fn check_comparison_arithmetic(
+    checks: &mut Vec<VerificationCheck>,
+    contract: &AnalysisContract,
+    evidence: &[EvidenceItem],
+) {
+    let mut saw_shape = false;
+    let mut mismatches = Vec::new();
+    for item in evidence
+        .iter()
+        .filter(|item| is_sql_evidence(item) && item.error.is_none())
+    {
+        let Some(columns) = item.columns.as_deref() else {
+            continue;
+        };
+        let Some(rows) = item.rows.as_deref() else {
+            continue;
+        };
+        for (index, measure) in contract.measures.iter().enumerate() {
+            let aliases = [
+                format!("measure_{index}_current"),
+                format!("measure_{index}_previous"),
+                format!("measure_{index}_change"),
+                format!("measure_{index}_change_pct"),
+            ];
+            let Some(column_indexes) = aliases
+                .iter()
+                .map(|alias| {
+                    columns
+                        .iter()
+                        .position(|column| column.eq_ignore_ascii_case(alias))
+                })
+                .collect::<Option<Vec<_>>>()
+            else {
+                continue;
+            };
+            saw_shape = true;
+            for (row_index, row) in rows.iter().enumerate() {
+                let current = row.get(column_indexes[0]).and_then(num_of);
+                let previous = row.get(column_indexes[1]).and_then(num_of);
+                let actual_change = row.get(column_indexes[2]).and_then(num_of);
+                let actual_percent = row.get(column_indexes[3]).and_then(num_of);
+                let expected_change = current
+                    .zip(previous)
+                    .map(|(current, previous)| current - previous);
+                let expected_percent = expected_change.and_then(|change| {
+                    previous.and_then(|previous| {
+                        if previous.abs() <= f64::EPSILON {
+                            None
+                        } else {
+                            Some(change / previous.abs() * 100.0)
+                        }
+                    })
+                });
+                let change_ok = match (expected_change, actual_change) {
+                    (Some(expected), Some(actual)) => invariant_close(expected, actual),
+                    (None, None) => true,
+                    _ => false,
+                };
+                let percent_ok = match (expected_percent, actual_percent) {
+                    (Some(expected), Some(actual)) => invariant_close(expected, actual),
+                    (None, None) => true,
+                    _ => false,
+                };
+                if !change_ok || !percent_ok {
+                    mismatches.push(format!(
+                        "measure `{}` row {} expected change={:?}, change_pct={:?}; got change={:?}, change_pct={:?}",
+                        measure.concept,
+                        row_index + 1,
+                        expected_change,
+                        expected_percent,
+                        actual_change,
+                        actual_percent
+                    ));
+                    if mismatches.len() >= 3 {
+                        break;
+                    }
+                }
+            }
+        }
+        if mismatches.len() >= 3 {
+            break;
+        }
+    }
+    if !saw_shape {
+        return;
+    }
+    if mismatches.is_empty() {
+        checks.push(ok(
+            "period comparison arithmetic reconciled from returned rows",
+        ));
+    } else {
+        checks.push(warn(
+            "period comparison arithmetic did not reconcile",
+            Some(mismatches.join("; ")),
+        ));
+    }
+}
+
+fn invariant_close(actual: f64, expected: f64) -> bool {
+    if actual == expected {
+        return true;
+    }
+    let scale = actual.abs().max(expected.abs()).max(1.0);
+    (actual - expected).abs() <= scale * 1e-8
 }
 
 fn check_order_usage(
@@ -2646,6 +2754,22 @@ mod tests {
         )];
         let checks = contract_checks(&contract, Some(&report), &good);
         assert!(checks.iter().all(|check| check.ok), "{checks:?}");
+
+        let arithmetic_bad = vec![run_sql_ev(
+            "SELECT 12 AS measure_0_current, 10 AS measure_0_previous, 5 AS measure_0_change, 30 AS measure_0_change_pct FROM spend",
+            &[
+                "measure_0_current",
+                "measure_0_previous",
+                "measure_0_change",
+                "measure_0_change_pct",
+            ],
+            vec![vec![Json::from(12), Json::from(10), Json::from(5), Json::from(30)]],
+        )];
+        let arithmetic_checks = contract_checks(&contract, Some(&report), &arithmetic_bad);
+        assert!(arithmetic_checks
+            .iter()
+            .any(|check| { !check.ok && check.label.contains("period comparison arithmetic") }));
+        assert!(hard_fail(&arithmetic_checks).is_some());
 
         let bad = vec![run_sql_ev(
             "SELECT SUM(amount) AS measure_0_current FROM spend",

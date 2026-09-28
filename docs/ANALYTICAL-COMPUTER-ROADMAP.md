@@ -67,7 +67,10 @@ This is the implementation form of Fella's core loop:
 - **M4 — semantic verification:** first slice implemented; grounded bindings
   must be present in executed SQL, requested aggregate operations and observed
   filter values, time buckets, ranking limits, derived ratios, and typed
-  comparison windows must also survive into that evidence, and
+  comparison windows must also survive into that evidence. Period comparison
+  change and percent-change columns are now reconciled against returned rows;
+  broader grouped-total, ratio-population, average-bound, and chart-shape
+  invariants remain ahead, and
   ambiguous/unsupported contracts remain review states even when a query is
   numerically reproducible.
 - **M5 — versioned semantic memory:** first slice implemented; corrections and
