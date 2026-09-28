@@ -83,6 +83,20 @@ pub fn ground(engine: &EngineState, mut contract: AnalysisContract) -> Grounding
     report.source = Some(view.clone());
 
     for measure in &mut contract.measures {
+        if measure.field.is_none()
+            && matches!(
+                measure.operation.trim().to_ascii_lowercase().as_str(),
+                "count" | "number"
+            )
+        {
+            report.probes.push(GroundingProbe {
+                kind: "measure".into(),
+                target: measure.concept.clone(),
+                outcome: ProbeOutcome::Resolved,
+                detail: "resolved as a row count; no physical field required".into(),
+            });
+            continue;
+        }
         let requested = measure
             .field
             .as_deref()
