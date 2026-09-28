@@ -356,12 +356,22 @@ export interface SourceModel {
 	note?: string;
 }
 
+/** A naming-based join hypothesis; the backend still grounds and probes joins. */
+export interface RelationshipCandidate {
+	left_source: string;
+	left_field: string;
+	right_source: string;
+	right_field: string;
+	evidence: string;
+}
+
 /** Revision-bound semantic projection of a mounted workspace. */
 export interface WorkspaceModel {
 	workspace: string;
 	revision: string;
 	indexed_at_ms?: number;
 	sources: SourceModel[];
+	relationships?: RelationshipCandidate[];
 	skipped?: SkippedFile[];
 }
 

@@ -60,6 +60,18 @@ pub struct SourceModel {
     pub note: Option<String>,
 }
 
+/// A naming-based join hypothesis. Relationships are deliberately candidates,
+/// not permissions or accepted join edges; grounding still has to resolve and
+/// probe every join before execution.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RelationshipCandidate {
+    pub left_source: String,
+    pub left_field: String,
+    pub right_source: String,
+    pub right_field: String,
+    pub evidence: String,
+}
+
 /// The semantic workspace snapshot used by later interpretation and planning
 /// stages. Its revision is the same freshness boundary used by evidence.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -70,20 +82,24 @@ pub struct WorkspaceModel {
     pub indexed_at_ms: Option<i64>,
     pub sources: Vec<SourceModel>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub relationships: Vec<RelationshipCandidate>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub skipped: Vec<SkippedFile>,
 }
 
 impl WorkspaceModel {
     pub fn from_catalog(catalog: &Catalog) -> Option<Self> {
+        let sources: Vec<SourceModel> = catalog
+            .sources
+            .iter()
+            .map(SourceModel::from_catalog)
+            .collect();
         Some(Self {
             workspace: catalog.workspace.clone()?,
             revision: catalog.revision.clone()?,
             indexed_at_ms: catalog.indexed_at_ms,
-            sources: catalog
-                .sources
-                .iter()
-                .map(SourceModel::from_catalog)
-                .collect(),
+            relationships: infer_relationships(&sources),
+            sources,
             skipped: catalog.skipped.clone(),
         })
     }
@@ -143,6 +159,27 @@ impl WorkspaceModel {
                     block.push_str(&format!(" note={}", prompt_value(note, 120)));
                 }
                 block.push('\n');
+            }
+        }
+        if !self.relationships.is_empty() {
+            block.push_str(
+                "Candidate relationships (inferred naming hints; verify keys before joining):\n",
+            );
+            for relationship in self.relationships.iter().take(24) {
+                block.push_str(&format!(
+                    "  {}.{} ↔ {}.{} ({})\n",
+                    relationship.left_source,
+                    relationship.left_field,
+                    relationship.right_source,
+                    relationship.right_field,
+                    relationship.evidence
+                ));
+            }
+            if self.relationships.len() > 24 {
+                block.push_str(&format!(
+                    "  +{} more candidate relationship(s) omitted\n",
+                    self.relationships.len() - 24
+                ));
             }
         }
         block
@@ -205,6 +242,87 @@ impl FieldProfile {
             note: column.note.clone(),
         }
     }
+}
+
+fn infer_relationships(sources: &[SourceModel]) -> Vec<RelationshipCandidate> {
+    let mut relationships = Vec::new();
+    for (left_index, left) in sources.iter().enumerate() {
+        for right in sources.iter().skip(left_index + 1) {
+            let left_source = source_key(left);
+            let right_source = source_key(right);
+            for left_field in &left.fields {
+                for right_field in &right.fields {
+                    let Some(evidence) =
+                        relationship_evidence(left, left_field, right, right_field)
+                    else {
+                        continue;
+                    };
+                    relationships.push(RelationshipCandidate {
+                        left_source: left_source.to_string(),
+                        left_field: left_field.name.clone(),
+                        right_source: right_source.to_string(),
+                        right_field: right_field.name.clone(),
+                        evidence: evidence.to_string(),
+                    });
+                }
+            }
+        }
+    }
+    relationships
+}
+
+fn relationship_evidence<'a>(
+    left_source: &SourceModel,
+    left: &FieldProfile,
+    right_source: &SourceModel,
+    right: &FieldProfile,
+) -> Option<&'a str> {
+    if !compatible_key_types(left, right)
+        || (left.role != FieldRole::Identifier && right.role != FieldRole::Identifier)
+    {
+        return None;
+    }
+    let left_name = normalize_name(&left.name);
+    let right_name = normalize_name(&right.name);
+    if left_name == right_name && left_name != "id" {
+        return Some("matching identifier names");
+    }
+    if left_name == "id" && entity_prefix_matches(&right_name, left_source) {
+        return Some("right key names the left entity");
+    }
+    if right_name == "id" && entity_prefix_matches(&left_name, right_source) {
+        return Some("left key names the right entity");
+    }
+    None
+}
+
+fn source_key(source: &SourceModel) -> &str {
+    source.view.as_deref().unwrap_or(&source.name)
+}
+
+fn normalize_name(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .flat_map(|character| character.to_lowercase())
+        .collect()
+}
+
+fn entity_prefix_matches(field_name: &str, source: &SourceModel) -> bool {
+    let source_name = normalize_name(source_key(source));
+    let stem = source_name.strip_suffix('s').unwrap_or(&source_name);
+    field_name
+        .strip_suffix("id")
+        .or_else(|| field_name.strip_suffix("key"))
+        .is_some_and(|prefix| prefix == stem || prefix == source_name)
+}
+
+fn compatible_key_types(left: &FieldProfile, right: &FieldProfile) -> bool {
+    let left_type = left.type_.to_ascii_lowercase();
+    let right_type = right.type_.to_ascii_lowercase();
+    let left_numeric = is_numeric_type(&left_type);
+    let right_numeric = is_numeric_type(&right_type);
+    left_numeric == right_numeric
 }
 
 fn infer_role(column: &ColumnInfo) -> FieldRole {
@@ -375,5 +493,68 @@ mod tests {
         assert!(block.contains("\"amount\" role=measure type=REAL"));
         assert!(block.contains("\"sale_date\" role=date"));
         assert!(block.contains("not answer evidence"));
+    }
+
+    #[test]
+    fn infers_cautious_identifier_relationship_candidates() {
+        let field = |name: &str, type_: &str| FieldProfile {
+            name: name.into(),
+            type_: type_.into(),
+            role: FieldRole::Identifier,
+            null_fraction: None,
+            distinct: None,
+            min: None,
+            max: None,
+            example: None,
+            common_values: None,
+            note: None,
+        };
+        let sources = vec![
+            SourceModel {
+                name: "customers.csv".into(),
+                path: "/tmp/customers.csv".into(),
+                kind: SourceKind::Csv,
+                view: Some("customers".into()),
+                row_count: None,
+                fields: vec![field("id", "INTEGER")],
+                size_bytes: 0,
+                mtime: 0,
+                synopsis: None,
+                note: None,
+            },
+            SourceModel {
+                name: "orders.csv".into(),
+                path: "/tmp/orders.csv".into(),
+                kind: SourceKind::Csv,
+                view: Some("orders".into()),
+                row_count: None,
+                fields: vec![field("customer_id", "INTEGER")],
+                size_bytes: 0,
+                mtime: 0,
+                synopsis: None,
+                note: None,
+            },
+        ];
+        let relationships = infer_relationships(&sources);
+        assert_eq!(relationships.len(), 1);
+        assert_eq!(relationships[0].left_source, "customers");
+        assert_eq!(relationships[0].right_field, "customer_id");
+        assert!(relationships[0].evidence.contains("right key"));
+    }
+
+    #[test]
+    fn prompt_block_discloses_relationships_as_hints() {
+        let mut model = WorkspaceModel::from_catalog(&catalog()).unwrap();
+        model.relationships.push(RelationshipCandidate {
+            left_source: "customers".into(),
+            left_field: "id".into(),
+            right_source: "orders".into(),
+            right_field: "customer_id".into(),
+            evidence: "right key names the left entity".into(),
+        });
+        let block = model.prompt_block();
+        assert!(block.contains("Candidate relationships"));
+        assert!(block.contains("customers.id ↔ orders.customer_id"));
+        assert!(block.contains("verify keys before joining"));
     }
 }

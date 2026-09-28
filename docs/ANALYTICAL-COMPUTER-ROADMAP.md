@@ -47,8 +47,9 @@ This is the implementation form of Fella's core loop:
 - **M1 — WorkspaceModel:** first slice implemented; the mounted catalog now
   has a revision-bound semantic projection with cautious field-role hints and
   an inspectable cross-shell command. A compact profile now also feeds the
-  shared bounded context packet; richer definitions and relationship inference
-  are still ahead.
+  shared bounded context packet. It now includes cautious identifier-based
+  relationship candidates as prompt-visible join hints; richer user-defined
+  definitions and value semantics are still ahead.
 - **M2 — semantic routing:** first slice implemented; elevated questions can
   negotiate a compact contract, and Rust preserves ambiguity instead of
   treating a model proposal as verified meaning. The runtime now enforces the

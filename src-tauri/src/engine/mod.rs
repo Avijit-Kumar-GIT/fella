@@ -45,4 +45,6 @@ pub use runtime::{
 pub use sqlite::Settings;
 pub use state::{ConversationSummary, ConversationsInfo, EngineState, ProviderInfo, QueryResult};
 pub use update::UpdateStatus;
-pub use workspace_model::{FieldProfile, FieldRole, SourceModel, WorkspaceModel};
+pub use workspace_model::{
+    FieldProfile, FieldRole, RelationshipCandidate, SourceModel, WorkspaceModel,
+};
