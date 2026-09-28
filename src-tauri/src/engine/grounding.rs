@@ -65,13 +65,15 @@ pub fn ground_with_context(
     context_refs: &[ContextReference],
 ) -> GroundingResult {
     let context_source = context_source_hint(engine, context_refs);
-    if contract.subject.is_none() {
+    let context_applied = contract.subject.is_none() && context_source.is_some();
+    if context_applied {
         if let Some(source) = context_source.as_deref() {
             contract.subject = Some(source.to_string());
         }
     }
     let mut result = ground_unhinted(engine, contract);
-    if let Some(source) = context_source {
+    if context_applied {
+        let source = context_source.expect("context source exists when context is applied");
         result.report.probes.insert(
             0,
             GroundingProbe {
