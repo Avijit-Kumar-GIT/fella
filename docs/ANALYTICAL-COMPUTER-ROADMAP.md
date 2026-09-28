@@ -51,7 +51,10 @@ This is the implementation form of Fella's core loop:
   are still ahead.
 - **M2 — semantic routing:** first slice implemented; elevated questions can
   negotiate a compact contract, and Rust preserves ambiguity instead of
-  treating a model proposal as verified meaning.
+  treating a model proposal as verified meaning. The runtime now enforces the
+  contract-first route at dispatch: an elevated question cannot execute a data
+  tool without a contract, and an ambiguous, unsupported, or invalid contract
+  blocks sibling data calls in the same model response.
 - **M3 — grounding:** first slice implemented alongside contract routing;
   exact field bindings and bounded filter-value probes now run against the
   current workspace revision. The first deterministic planner slice now
@@ -263,7 +266,9 @@ period-over-period contracts with explicit current and previous ranges, bounded
 range probes, and deterministic change columns. It now also supports guarded
 single-source derived metrics inside the comparison, plus aligned
 month/week/day buckets; joins and non-alignable year buckets remain on the
-fallback path.
+fallback path. Contract preflight completes before any compiled plan or
+sibling model data call is dispatched, so a partially valid response cannot
+touch data after a material interpretation failure.
 When any of those conditions is not provably satisfied, Fella keeps the
 contract for verification but returns to the existing model-driven path.
 

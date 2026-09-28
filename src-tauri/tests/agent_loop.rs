@@ -173,6 +173,90 @@ async fn agent_calls_a_tool_then_answers() {
 }
 
 #[tokio::test]
+async fn unresolved_contract_blocks_data_tools_in_the_same_response() {
+    let ws = scratch("contract-gate-ws");
+    let data = scratch("contract-gate-data");
+    fs::write(ws.join("sales.csv"), "amount\n10\n20\n").unwrap();
+
+    // Deliberately put an unresolved contract and a runnable SQL call in the
+    // same model response. The contract must be handled first and the SQL
+    // call must be returned to the model as blocked, without evidence or a
+    // ToolStart event.
+    let (url, server) = fake_openai(vec![
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "I need to resolve the period first.",
+            "tool_calls": [
+                { "id": "sql", "type": "function", "function": {
+                    "name": "run_sql",
+                    "arguments": "{\"sql\":\"SELECT sum(amount) AS total FROM sales\"}"
+                } },
+                { "id": "contract", "type": "function", "function": {
+                    "name": "__analysis_contract",
+                    "arguments": serde_json::json!({
+                        "interpretation": "assumed",
+                        "subject": "sales",
+                        "measures": [{ "concept": "amount", "field": "amount", "operation": "sum" }],
+                        "unresolved": ["which period field should be used"]
+                    }).to_string()
+                } }
+            ]
+        })),
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "Which period field should I use?"
+        })),
+    ]);
+
+    let engine = EngineState::new(&data).unwrap();
+    engine
+        .save_settings(
+            serde_json::json!({ "provider": "custom", "base_url": url, "model": "test" })
+                .as_object()
+                .unwrap(),
+        )
+        .unwrap();
+    engine.set_api_key("custom", "sk-test").unwrap();
+    engine.open_workspace(&ws).unwrap();
+
+    let events: Arc<Mutex<Vec<AskEvent>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink = events.clone();
+    let answer = engine
+        .ask(
+            "contract-gate",
+            "compare sales over time",
+            None,
+            move |event| sink.lock().unwrap().push(event),
+        )
+        .await
+        .unwrap();
+    server.join().unwrap();
+
+    assert!(answer.text.contains("Which period field"));
+    assert_eq!(
+        answer.evidence.len(),
+        0,
+        "blocked SQL must not become evidence"
+    );
+    assert_eq!(answer.status, VerificationStatus::InsufficientData);
+    assert_eq!(
+        answer.contract.as_ref().unwrap().interpretation,
+        fella_lib::engine::runtime::InterpretationStatus::Ambiguous
+    );
+    let events = events.lock().unwrap();
+    assert!(
+        !events.iter().any(|event| matches!(
+            event,
+            AskEvent::ToolStart { tool, .. } if tool == "run_sql"
+        )),
+        "blocked SQL must not emit a start event"
+    );
+
+    let _ = fs::remove_dir_all(&ws);
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[tokio::test]
 async fn agent_calls_make_chart_then_answers_with_verified_visual_evidence() {
     let ws = scratch("chart-agent-ws");
     let data = scratch("chart-agent-data");
@@ -213,7 +297,7 @@ async fn agent_calls_make_chart_then_answers_with_verified_visual_evidence() {
     engine.open_workspace(&ws).unwrap();
 
     let answer = engine
-        .ask("chart-c1", "Show sales over time.", None, |_| {})
+        .ask("chart-c1", "Make a chart of sales.", None, |_| {})
         .await
         .unwrap();
 

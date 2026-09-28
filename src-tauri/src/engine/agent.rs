@@ -338,37 +338,12 @@ filter word in the question exactly, and state just the number(s) don't round or
                 emit,
             ));
         }
-        let has_data_tools = resp
-            .tool_calls
-            .iter()
-            .any(|call| call.name != runtime::CONTRACT_TOOL_NAME);
-        tool_calls_total += resp
-            .tool_calls
-            .iter()
-            .filter(|call| call.name != runtime::CONTRACT_TOOL_NAME)
-            .count();
-        if has_data_tools {
-            emit(AskEvent::TurnState {
-                turn_id: ids.turn_id.clone(),
-                state: TurnState::Executing,
-            });
-        }
-
         // `resp.content` (any "let me check…" preamble before the tool calls)
         // was already streamed through `on_delta`; just keep it in the history.
         messages.push(ChatMessage::Assistant {
             content: resp.content.clone(),
             tool_calls: resp.tool_calls.clone(),
         });
-
-        for call in &resp.tool_calls {
-            if call.name != runtime::CONTRACT_TOOL_NAME {
-                emit(AskEvent::ToolStart {
-                    tool: call.name.clone(),
-                    args: call.arguments.clone(),
-                });
-            }
-        }
 
         // Resolve exact-repeat calls from the memo synchronously (it needs
         // `&mut seen_calls`), then run the rest of this turn's calls
@@ -377,99 +352,173 @@ filter word in the question exactly, and state just the number(s) don't round or
             (0..resp.tool_calls.len()).map(|_| None).collect();
         let mut internal_results: HashMap<usize, String> = HashMap::new();
         let mut pending: Vec<usize> = Vec::new();
-        for (i, call) in resp.tool_calls.iter().enumerate() {
-            if call.name == runtime::CONTRACT_TOOL_NAME {
-                let contract_text = match AnalysisContract::from_tool_args(&call.arguments) {
-                    Ok(contract) => {
-                        emit(AskEvent::TurnState {
-                            turn_id: ids.turn_id.clone(),
-                            state: TurnState::Grounding,
-                        });
-                        let grounded = crate::engine::grounding::ground(engine, contract);
-                        let serialized = serde_json::to_string(&grounded.contract).unwrap_or_default();
-                        let grounding = serde_json::to_string(&grounded.report).unwrap_or_default();
-                        let source_hint = grounded.report.source.clone();
-                        let grounded_contract = grounded.contract;
-                        let state = match grounded_contract.interpretation {
-                            runtime::InterpretationStatus::Ambiguous => TurnState::Clarify,
-                            runtime::InterpretationStatus::Unsupported => TurnState::Unsupported,
-                            _ => TurnState::Planning,
-                        };
-                        ids.contract = Some(grounded_contract.clone());
-                        ids.grounding = Some(grounded.report);
-                        emit(AskEvent::TurnState {
-                            turn_id: ids.turn_id.clone(),
-                            state,
-                        });
-                        let mut text = format!(
-                            "Grounded interpretation (not evidence):\n{serialized}\nGrounding probes:\n{grounding}\nIf unresolved items remain, do not silently choose among them; ask a focused clarification or explain the limitation."
-                        );
-                        if registry.has_tool("run_sql")
-                            && grounded_contract.interpretation == runtime::InterpretationStatus::Grounded
+        let mut contract_calls_seen = 0usize;
+        let mut contract_gate_blocked = false;
+        let mut compiled_contracts: Vec<(usize, planner::CompiledPlan)> = Vec::new();
+
+        // Contract calls are a preflight phase. A model can return calls in
+        // any order, so resolve every interpretation before allowing a data
+        // tool to run. This matters when one response contains an ambiguous
+        // contract next to an otherwise executable SQL call.
+        for (i, call) in resp
+            .tool_calls
+            .iter()
+            .enumerate()
+            .filter(|(_, call)| call.name == runtime::CONTRACT_TOOL_NAME)
+        {
+            contract_calls_seen += 1;
+            let contract_text = match AnalysisContract::from_tool_args(&call.arguments) {
+                Ok(contract) => {
+                    emit(AskEvent::TurnState {
+                        turn_id: ids.turn_id.clone(),
+                        state: TurnState::Grounding,
+                    });
+                    let grounded = crate::engine::grounding::ground(engine, contract);
+                    let serialized = serde_json::to_string(&grounded.contract).unwrap_or_default();
+                    let grounding = serde_json::to_string(&grounded.report).unwrap_or_default();
+                    let source_hint = grounded.report.source.clone();
+                    let grounded_contract = grounded.contract;
+                    let state = match grounded_contract.interpretation {
+                        runtime::InterpretationStatus::Ambiguous => {
+                            contract_gate_blocked = true;
+                            TurnState::Clarify
+                        }
+                        runtime::InterpretationStatus::Unsupported => {
+                            contract_gate_blocked = true;
+                            TurnState::Unsupported
+                        }
+                        _ => TurnState::Planning,
+                    };
+                    ids.contract = Some(grounded_contract.clone());
+                    ids.grounding = Some(grounded.report);
+                    emit(AskEvent::TurnState {
+                        turn_id: ids.turn_id.clone(),
+                        state,
+                    });
+                    let mut text = format!(
+                        "Grounded interpretation (not evidence):\n{serialized}\nGrounding probes:\n{grounding}\nIf unresolved items remain, do not silently choose among them; ask a focused clarification or explain the limitation."
+                    );
+                    if registry.has_tool("run_sql")
+                        && grounded_contract.interpretation
+                            == runtime::InterpretationStatus::Grounded
+                    {
+                        match planner::compile(&catalog, &grounded_contract, source_hint.as_deref())
                         {
-                            match planner::compile(&catalog, &grounded_contract, source_hint.as_deref()) {
-                                Ok(compiled) => {
-                                    ids.plan = Some(LogicalPlan {
-                                        strategy: PlanStrategy::CompiledSql,
-                                        steps: compiled.steps.clone(),
-                                    });
-                                    let args = serde_json::json!({
-                                        "sql": compiled.sql,
-                                        "note": "Run the grounded deterministic analytical plan."
-                                    });
-                                    let planned_call = ToolCall {
-                                        id: format!("plan-{}", ids.turn_id),
-                                        name: "run_sql".into(),
-                                        arguments: args.clone(),
-                                    };
-                                    emit(AskEvent::TurnState {
-                                        turn_id: ids.turn_id.clone(),
-                                        state: TurnState::Executing,
-                                    });
-                                    emit(AskEvent::ToolStart {
-                                        tool: planned_call.name.clone(),
-                                        args: args.clone(),
-                                    });
-                                    let (mut item, result) = run_tool_call(
-                                        engine,
-                                        &catalog,
-                                        registry,
-                                        &planned_call,
-                                        cancel.clone(),
-                                    )
-                                    .await;
-                                    item.id = evidence_id(evidence.len());
-                                    emit(AskEvent::ToolEnd {
-                                        item: Box::new(item.clone()),
-                                    });
-                                    if item.error.is_none() {
-                                        seen_calls.insert(
-                                            (planned_call.name.clone(), args.to_string()),
-                                            result.clone(),
-                                        );
-                                    }
-                                    evidence.push(item);
-                                    tool_calls_total += 1;
-                                    text.push_str(&format!(
-                                        "\n\nDeterministic plan executed as data evidence:\n{result}"
-                                    ));
-                                }
-                                Err(reason) => {
-                                    text.push_str(&format!(
-                                        "\n\nThe grounded contract stayed on the direct tool fallback because the deterministic compiler could not safely express it: {reason}"
-                                    ));
-                                }
+                            Ok(compiled) => compiled_contracts.push((i, compiled)),
+                            Err(reason) => {
+                                text.push_str(&format!(
+                                    "\n\nThe grounded contract stayed on the direct tool fallback because the deterministic compiler could not safely express it: {reason}"
+                                ));
                             }
                         }
-                        text
                     }
-                    Err(error) => format!(
+                    text
+                }
+                Err(error) => {
+                    contract_gate_blocked = true;
+                    emit(AskEvent::TurnState {
+                        turn_id: ids.turn_id.clone(),
+                        state: TurnState::Clarify,
+                    });
+                    format!(
                         "The interpretation was not accepted: {error}. State a smaller, explicit contract or continue only if the question is unambiguous."
-                    ),
+                    )
+                }
+            };
+            internal_results.insert(i, contract_text);
+        }
+
+        let data_call_count = resp
+            .tool_calls
+            .iter()
+            .filter(|call| call.name != runtime::CONTRACT_TOOL_NAME)
+            .count();
+        if risk.requires_contract() && data_call_count > 0 && contract_calls_seen == 0 {
+            contract_gate_blocked = true;
+        }
+
+        // Only execute an automatic deterministic plan after every contract
+        // in the response has passed the gate. Otherwise even a grounded
+        // contract appearing before an ambiguous sibling could touch data.
+        if !contract_gate_blocked {
+            for (index, compiled) in compiled_contracts {
+                ids.plan = Some(LogicalPlan {
+                    strategy: PlanStrategy::CompiledSql,
+                    steps: compiled.steps.clone(),
+                });
+                let args = serde_json::json!({
+                    "sql": compiled.sql,
+                    "note": "Run the grounded deterministic analytical plan."
+                });
+                let planned_call = ToolCall {
+                    id: format!("plan-{}", ids.turn_id),
+                    name: "run_sql".into(),
+                    arguments: args.clone(),
                 };
-                internal_results.insert(i, contract_text);
+                emit(AskEvent::TurnState {
+                    turn_id: ids.turn_id.clone(),
+                    state: TurnState::Executing,
+                });
+                emit(AskEvent::ToolStart {
+                    tool: planned_call.name.clone(),
+                    args: args.clone(),
+                });
+                let (mut item, result) =
+                    run_tool_call(engine, &catalog, registry, &planned_call, cancel.clone()).await;
+                item.id = evidence_id(evidence.len());
+                emit(AskEvent::ToolEnd {
+                    item: Box::new(item.clone()),
+                });
+                if item.error.is_none() {
+                    seen_calls.insert(
+                        (planned_call.name.clone(), args.to_string()),
+                        result.clone(),
+                    );
+                }
+                evidence.push(item);
+                tool_calls_total += 1;
+                if let Some(text) = internal_results.get_mut(&index) {
+                    text.push_str(&format!(
+                        "\n\nDeterministic plan executed as data evidence:\n{result}"
+                    ));
+                }
+            }
+        }
+
+        let blocked_reason = if contract_calls_seen == 0 && risk.requires_contract() {
+            "this question requires an analytical contract before data access. State the compact interpretation first"
+        } else {
+            "the analytical interpretation was ambiguous, unsupported, or invalid. Resolve it before inspecting data"
+        };
+        let mut emitted_executing = !evidence.is_empty();
+        for (i, call) in resp
+            .tool_calls
+            .iter()
+            .enumerate()
+            .filter(|(_, call)| call.name != runtime::CONTRACT_TOOL_NAME)
+        {
+            if contract_gate_blocked {
+                internal_results.insert(
+                    i,
+                    format!(
+                        "The runtime did not execute `{}` because {blocked_reason}. Ask a focused clarification instead of choosing silently.",
+                        call.name
+                    ),
+                );
                 continue;
             }
+
+            if !emitted_executing {
+                emit(AskEvent::TurnState {
+                    turn_id: ids.turn_id.clone(),
+                    state: TurnState::Executing,
+                });
+                emitted_executing = true;
+            }
+            emit(AskEvent::ToolStart {
+                tool: call.name.clone(),
+                args: call.arguments.clone(),
+            });
             let key = (call.name.clone(), call.arguments.to_string());
             let dup = (!call.name.contains("__"))
                 .then(|| seen_calls.get(&key))
@@ -506,6 +555,8 @@ not run again. Its result is repeated below - use it, refine the call, or give y
             }
         }
 
+        tool_calls_total += pending.len();
+
         let ran = futures_util::future::join_all(pending.iter().map(|&i| {
             run_tool_call(
                 engine,
@@ -521,10 +572,7 @@ not run again. Its result is repeated below - use it, refine the call, or give y
         }
 
         for (index, (call, outcome)) in resp.tool_calls.iter().zip(outcomes).enumerate() {
-            if call.name == runtime::CONTRACT_TOOL_NAME {
-                let content = internal_results.remove(&index).ok_or_else(|| {
-                    EngineError::msg("internal error: contract negotiation produced no outcome")
-                })?;
+            if let Some(content) = internal_results.remove(&index) {
                 messages.push(ChatMessage::Tool {
                     call_id: call.id.clone(),
                     name: call.name.clone(),
