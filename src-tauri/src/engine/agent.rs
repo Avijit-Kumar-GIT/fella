@@ -37,6 +37,7 @@ struct RunIds {
     turn_id: String,
     trace_id: String,
     contract: Option<AnalysisContract>,
+    grounding: Option<crate::engine::grounding::GroundingReport>,
 }
 
 fn soft_stop_round_trips() -> usize {
@@ -93,6 +94,7 @@ pub async fn run(
         turn_id: turn_id.to_string(),
         trace_id: runtime::new_trace_id(),
         contract: None,
+        grounding: None,
     };
     emit(AskEvent::TurnState {
         turn_id: ids.turn_id.clone(),
@@ -351,14 +353,26 @@ filter word in the question exactly, and state just the number(s) don't round or
             if call.name == runtime::CONTRACT_TOOL_NAME {
                 let contract_text = match AnalysisContract::from_tool_args(&call.arguments) {
                     Ok(contract) => {
-                        let serialized = serde_json::to_string(&contract).unwrap_or_default();
-                        ids.contract = Some(contract);
                         emit(AskEvent::TurnState {
                             turn_id: ids.turn_id.clone(),
-                            state: TurnState::Planning,
+                            state: TurnState::Grounding,
+                        });
+                        let grounded = crate::engine::grounding::ground(engine, contract);
+                        let serialized = serde_json::to_string(&grounded.contract).unwrap_or_default();
+                        let grounding = serde_json::to_string(&grounded.report).unwrap_or_default();
+                        let state = match grounded.contract.interpretation {
+                            runtime::InterpretationStatus::Ambiguous => TurnState::Clarify,
+                            runtime::InterpretationStatus::Unsupported => TurnState::Unsupported,
+                            _ => TurnState::Planning,
+                        };
+                        ids.contract = Some(grounded.contract);
+                        ids.grounding = Some(grounded.report);
+                        emit(AskEvent::TurnState {
+                            turn_id: ids.turn_id.clone(),
+                            state,
                         });
                         format!(
-                            "Interpretation recorded, but not yet grounded in observed data:\n{serialized}"
+                            "Grounded interpretation (not evidence):\n{serialized}\nGrounding probes:\n{grounding}\nIf unresolved items remain, do not silently choose among them; ask a focused clarification or explain the limitation."
                         )
                     }
                     Err(error) => format!(
@@ -616,12 +630,31 @@ fn finish_with(
     if let Some(reason) = friction::trigger(&verification, &evidence) {
         engine.record_friction_signal(reason, &evidence);
     }
-    let status = verify::status(&verification, &evidence);
-    let state = match status {
-        crate::engine::evidence::VerificationStatus::Verified => TurnState::Accepted,
-        crate::engine::evidence::VerificationStatus::Failed => TurnState::Failed,
-        crate::engine::evidence::VerificationStatus::NeedsReview
-        | crate::engine::evidence::VerificationStatus::InsufficientData => TurnState::NeedsReview,
+    let mut status = verify::status(&verification, &evidence);
+    let interpretation = ids
+        .contract
+        .as_ref()
+        .map(|contract| contract.interpretation);
+    if matches!(
+        interpretation,
+        Some(runtime::InterpretationStatus::Ambiguous | runtime::InterpretationStatus::Unsupported)
+    ) && status == crate::engine::evidence::VerificationStatus::Verified
+    {
+        // A query can be numerically reproducible while still answering the
+        // wrong interpretation. Keep that distinction in the result status.
+        status = crate::engine::evidence::VerificationStatus::NeedsReview;
+    }
+    let state = match interpretation {
+        Some(runtime::InterpretationStatus::Ambiguous) => TurnState::Clarify,
+        Some(runtime::InterpretationStatus::Unsupported) => TurnState::Unsupported,
+        _ => match status {
+            crate::engine::evidence::VerificationStatus::Verified => TurnState::Accepted,
+            crate::engine::evidence::VerificationStatus::Failed => TurnState::Failed,
+            crate::engine::evidence::VerificationStatus::NeedsReview
+            | crate::engine::evidence::VerificationStatus::InsufficientData => {
+                TurnState::NeedsReview
+            }
+        },
     };
     let trace = ExecutionTrace {
         id: ids.trace_id.clone(),
@@ -651,6 +684,7 @@ fn finish_with(
         turn_id: ids.turn_id.clone(),
         trace,
         contract: ids.contract.clone(),
+        grounding: ids.grounding.clone(),
         text,
         evidence,
         verification,

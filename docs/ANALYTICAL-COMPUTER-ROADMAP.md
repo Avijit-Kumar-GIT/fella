@@ -48,7 +48,13 @@ This is the implementation form of Fella's core loop:
   has a revision-bound semantic projection with cautious field-role hints and
   an inspectable cross-shell command. Profile enrichment and definitions are
   still ahead.
-- **M2–M7:** planned; each stage should build on the same turn, revision, and
+- **M2 — semantic routing:** first slice implemented; elevated questions can
+  negotiate a compact contract, and Rust preserves ambiguity instead of
+  treating a model proposal as verified meaning.
+- **M3 — grounding:** first slice implemented alongside contract routing;
+  exact field bindings and bounded filter-value probes now run against the
+  current workspace revision. Logical-plan compilation is still ahead.
+- **M4–M7:** planned; each stage should build on the same turn, revision, and
   trace identifiers.
 
 ## Where the current code starts

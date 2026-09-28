@@ -5,7 +5,10 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use fella_lib::engine::{EngineState, FieldRole};
+use fella_lib::engine::{
+    grounding, AnalysisContract, ContractFilter, ContractMeasure, EngineState, FieldRole,
+    InterpretationStatus,
+};
 
 fn scratch(tag: &str) -> PathBuf {
     let n = SystemTime::now()
@@ -57,6 +60,42 @@ fn scans_queries_and_guards_a_workspace() {
             .role,
         FieldRole::Measure
     );
+
+    let grounded = grounding::ground(
+        &engine,
+        AnalysisContract {
+            interpretation: InterpretationStatus::Assumed,
+            subject: Some("sales".into()),
+            measures: vec![ContractMeasure {
+                concept: "amount".into(),
+                field: None,
+                operation: "sum".into(),
+                unit: None,
+            }],
+            filters: vec![ContractFilter {
+                concept: "month".into(),
+                field: None,
+                candidate_values: vec!["2024-01".into()],
+                resolved_values: Vec::new(),
+                resolution: None,
+            }],
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        grounded.contract.interpretation,
+        InterpretationStatus::Grounded
+    );
+    assert_eq!(
+        grounded.contract.measures[0].field.as_deref(),
+        Some("amount")
+    );
+    assert_eq!(grounded.contract.filters[0].field.as_deref(), Some("month"));
+    assert_eq!(
+        grounded.contract.filters[0].resolved_values,
+        vec!["2024-01"]
+    );
+    assert!(grounded.report.unresolved.is_empty());
 
     let sales = catalog
         .sources

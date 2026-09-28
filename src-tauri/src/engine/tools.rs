@@ -200,6 +200,7 @@ fn contract_schema() -> Json {
                     "type": "object",
                     "properties": {
                         "concept": { "type": "string" },
+                        "field": { "type": "string" },
                         "operation": { "type": "string" },
                         "unit": { "type": "string" }
                     },

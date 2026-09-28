@@ -68,6 +68,8 @@ export interface Answer {
 	trace?: ExecutionTrace;
 	/** Model-proposed semantic interpretation, when contract-first routing ran. */
 	contract?: AnalysisContract;
+	/** Deterministic field/value probes used to ground that interpretation. */
+	grounding?: GroundingReport;
 	text: string;
 	evidence: EvidenceItem[];
 	verification: VerificationCheck[];
@@ -84,7 +86,7 @@ export interface AnalysisContract {
 	interpretation: InterpretationStatus;
 	subject?: string;
 	grain?: string;
-	measures: { concept: string; operation: string; unit?: string }[];
+	measures: { concept: string; field?: string; operation: string; unit?: string }[];
 	filters: {
 		concept: string;
 		field?: string;
@@ -97,6 +99,21 @@ export interface AnalysisContract {
 	comparison?: string;
 	presentation?: string;
 	assumptions: string[];
+	unresolved: string[];
+}
+
+export type ProbeOutcome = 'resolved' | 'not_observed' | 'ambiguous' | 'unavailable';
+
+export interface GroundingProbe {
+	kind: string;
+	target: string;
+	outcome: ProbeOutcome;
+	detail: string;
+}
+
+export interface GroundingReport {
+	source?: string;
+	probes: GroundingProbe[];
 	unresolved: string[];
 }
 

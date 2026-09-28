@@ -108,6 +108,10 @@ pub struct Answer {
     /// ambiguous.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub contract: Option<crate::engine::runtime::AnalysisContract>,
+    /// Deterministic field/value grounding performed against the current
+    /// workspace revision, when contract-first routing ran.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grounding: Option<crate::engine::grounding::GroundingReport>,
     pub text: String,
     pub evidence: Vec<EvidenceItem>,
     pub verification: Vec<VerificationCheck>,

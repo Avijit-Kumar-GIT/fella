@@ -64,6 +64,8 @@ pub enum InterpretationStatus {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContractMeasure {
     pub concept: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field: Option<String>,
     pub operation: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unit: Option<String>,
@@ -257,6 +259,7 @@ mod tests {
             grain: Some("transaction".into()),
             measures: vec![ContractMeasure {
                 concept: "amount".into(),
+                field: None,
                 operation: "sum".into(),
                 unit: Some("USD".into()),
             }],
