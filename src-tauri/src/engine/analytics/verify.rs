@@ -208,6 +208,7 @@ pub fn contract_checks(
     for (index, derived) in contract.derived_metrics.iter().enumerate() {
         check_derived_usage(&mut checks, contract, index, derived, &sql);
         check_derived_arithmetic(&mut checks, contract, index, derived, evidence);
+        check_derived_population(&mut checks, contract, index, derived, evidence);
     }
     for join in &contract.joins {
         check_join_usage(&mut checks, join, &sql);
@@ -764,6 +765,78 @@ fn check_derived_arithmetic(
             Some(mismatches.join("; ")),
         ));
     }
+}
+
+/// A ratio is only as meaningful as the population shared by its operands.
+/// The structured compiler naturally emits one aggregate scope; for
+/// model-authored SQL, flag nested/separate SELECT or FROM scopes instead of
+/// pretending that a reproducible ratio has the same denominator semantics.
+/// This stays a review warning because explicit cross-population ratios are a
+/// valid future contract feature, not automatically an error.
+fn check_derived_population(
+    checks: &mut Vec<VerificationCheck>,
+    contract: &AnalysisContract,
+    index: usize,
+    derived: &ContractDerivedMetric,
+    evidence: &[EvidenceItem],
+) {
+    let Some(numerator_index) = measure_index_for_reference(contract, &derived.numerator) else {
+        return;
+    };
+    let Some(denominator_index) = measure_index_for_reference(contract, &derived.denominator)
+    else {
+        return;
+    };
+    let derived_alias = format!("derived_{index}");
+    let numerator_alias = format!("measure_{numerator_index}");
+    let denominator_alias = format!("measure_{denominator_index}");
+    let mut saw_shape = false;
+    let mut incompatible = Vec::new();
+    for item in evidence
+        .iter()
+        .filter(|item| is_sql_evidence(item) && item.error.is_none())
+    {
+        let Some(sql) = item.sql.as_deref() else {
+            continue;
+        };
+        if !contains_word(sql, &derived_alias)
+            || !contains_word(sql, &numerator_alias)
+            || !contains_word(sql, &denominator_alias)
+        {
+            continue;
+        }
+        saw_shape = true;
+        if !has_single_population_scope(sql) {
+            incompatible.push("the ratio uses nested or separate SQL scopes".to_string());
+        }
+    }
+    if !saw_shape {
+        return;
+    }
+    if incompatible.is_empty() {
+        checks.push(ok(format!(
+            "derived metric `{}` uses a shared query population",
+            derived.concept
+        )));
+    } else {
+        checks.push(warn(
+            format!(
+                "derived metric `{}` may use incompatible populations",
+                derived.concept
+            ),
+            Some(incompatible.join("; ")),
+        ));
+    }
+}
+
+fn has_single_population_scope(sql: &str) -> bool {
+    sql_keyword_count(sql, "select") == 1 && sql_keyword_count(sql, "from") == 1
+}
+
+fn sql_keyword_count(sql: &str, keyword: &str) -> usize {
+    sql.split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
+        .filter(|token| token.eq_ignore_ascii_case(keyword))
+        .count()
 }
 
 fn measure_index_for_reference(contract: &AnalysisContract, requested: &str) -> Option<usize> {
@@ -3198,6 +3271,62 @@ mod tests {
                     .label
                     .contains("derived metric `revenue per order` was not used")
         }));
+    }
+
+    #[test]
+    fn contract_checks_flag_ratio_operands_from_separate_populations() {
+        let contract = AnalysisContract {
+            interpretation: InterpretationStatus::Grounded,
+            subject: Some("spend".into()),
+            measures: vec![
+                crate::engine::runtime::ContractMeasure {
+                    concept: "revenue".into(),
+                    field: Some("amount".into()),
+                    operation: "sum".into(),
+                    unit: None,
+                },
+                crate::engine::runtime::ContractMeasure {
+                    concept: "orders".into(),
+                    field: None,
+                    operation: "count".into(),
+                    unit: None,
+                },
+            ],
+            derived_metrics: vec![ContractDerivedMetric {
+                concept: "revenue per order".into(),
+                kind: crate::engine::runtime::DerivedMetricKind::Ratio,
+                numerator: "revenue".into(),
+                denominator: "orders".into(),
+                unit: None,
+            }],
+            ..Default::default()
+        };
+        let report = GroundingReport {
+            source: Some("spend".into()),
+            sources: vec![],
+            probes: vec![],
+            unresolved: vec![],
+        };
+        let evidence = vec![run_sql_ev(
+            "SELECT (SELECT SUM(amount) FROM spend WHERE category = 'dining') AS measure_0, \
+                    (SELECT COUNT(*) FROM spend WHERE category = 'rent') AS measure_1, \
+                    ((SELECT SUM(amount) FROM spend WHERE category = 'dining') / \
+                     NULLIF((SELECT COUNT(*) FROM spend WHERE category = 'rent'), 0)) AS derived_0",
+            &["measure_0", "measure_1", "derived_0"],
+            vec![vec![Json::from(12), Json::from(2), Json::from(6)]],
+        )];
+        let checks = contract_checks(&contract, Some(&report), &evidence);
+        assert!(
+            checks.iter().any(|check| {
+                !check.ok
+                    && check.label.contains(
+                        "derived metric `revenue per order` may use incompatible populations",
+                    )
+            }),
+            "{checks:?}"
+        );
+        assert!(hard_fail(&checks).is_none());
+        assert_eq!(status(&checks, &evidence), VerificationStatus::NeedsReview);
     }
 
     #[test]

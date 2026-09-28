@@ -73,8 +73,10 @@ This is the implementation form of Fella's core loop:
   and denominator values, including zero-denominator null behavior;
   additive grouped results are now reconciled against an independent
   ungrouped deterministic plan (limited rankings and non-additive measures
-  remain excluded); broader ratio-population, average-bound, and chart-shape
-  invariants remain ahead, and
+  remain excluded); ratio outputs now flag nested/separate SQL scopes where
+  their numerator and denominator populations cannot be established as shared;
+  broader explicit cross-population, average-bound, and chart-shape invariants
+  remain ahead, and
   ambiguous/unsupported contracts remain review states even when a query is
   numerically reproducible.
 - **M5 — versioned semantic memory:** first slice implemented; corrections and
