@@ -785,14 +785,26 @@ fn check_comparison_usage(
                     && query.contains(&previous.to_ascii_lowercase())
             })
         });
-    let output_shape_used = contract.measures.iter().enumerate().all(|(index, _)| {
-        sql.iter().any(|query| {
-            query.contains(&format!("measure_{index}_current"))
-                && query.contains(&format!("measure_{index}_previous"))
-                && query.contains(&format!("measure_{index}_change"))
-                && query.contains(&format!("measure_{index}_change_pct"))
-        })
-    });
+    let output_shape_used = contract
+        .measures
+        .iter()
+        .enumerate()
+        .map(|(index, _)| format!("measure_{index}"))
+        .chain(
+            contract
+                .derived_metrics
+                .iter()
+                .enumerate()
+                .map(|(index, _)| format!("derived_{index}")),
+        )
+        .all(|alias| {
+            sql.iter().any(|query| {
+                query.contains(&format!("{alias}_current"))
+                    && query.contains(&format!("{alias}_previous"))
+                    && query.contains(&format!("{alias}_change"))
+                    && query.contains(&format!("{alias}_change_pct"))
+            })
+        });
     if ranges_used && output_shape_used {
         checks.push(ok(format!(
             "period comparison `{}` vs `{}` was used by the query",
@@ -823,12 +835,24 @@ fn check_comparison_arithmetic(
         let Some(rows) = item.rows.as_deref() else {
             continue;
         };
-        for (index, measure) in contract.measures.iter().enumerate() {
+        let metrics = contract
+            .measures
+            .iter()
+            .enumerate()
+            .map(|(index, measure)| (format!("measure_{index}"), measure.concept.clone()))
+            .chain(
+                contract
+                    .derived_metrics
+                    .iter()
+                    .enumerate()
+                    .map(|(index, derived)| (format!("derived_{index}"), derived.concept.clone())),
+            );
+        for (alias, label) in metrics {
             let aliases = [
-                format!("measure_{index}_current"),
-                format!("measure_{index}_previous"),
-                format!("measure_{index}_change"),
-                format!("measure_{index}_change_pct"),
+                format!("{alias}_current"),
+                format!("{alias}_previous"),
+                format!("{alias}_change"),
+                format!("{alias}_change_pct"),
             ];
             let Some(column_indexes) = aliases
                 .iter()
@@ -871,8 +895,8 @@ fn check_comparison_arithmetic(
                 };
                 if !change_ok || !percent_ok {
                     mismatches.push(format!(
-                        "measure `{}` row {} expected change={:?}, change_pct={:?}; got change={:?}, change_pct={:?}",
-                        measure.concept,
+                        "comparison metric `{}` row {} expected change={:?}, change_pct={:?}; got change={:?}, change_pct={:?}",
+                        label,
                         row_index + 1,
                         expected_change,
                         expected_percent,
@@ -1012,8 +1036,12 @@ fn check_derived_usage(
 ) {
     let alias = format!("derived_{index}");
     let used = sql.iter().any(|query| {
-        let guarded_compiled_ratio =
-            contains_word(query, &alias) && query.contains('/') && query.contains("nullif");
+        let lowered = query.to_ascii_lowercase();
+        let guarded_compiled_ratio = (contains_word(query, &alias)
+            || lowered.contains(&format!("{alias}_current"))
+            || lowered.contains(&format!("{alias}_previous")))
+            && lowered.contains('/')
+            && lowered.contains("nullif");
         let direct_ratio = query.contains('/')
             && measure_reference_used(contract, &derived.numerator, query)
             && measure_reference_used(contract, &derived.denominator, query);
@@ -1324,10 +1352,17 @@ fn check_measure_operation(checks: &mut Vec<VerificationCheck>, operation: &str,
         ));
         return;
     };
+    let count_case = matches!(
+        operation.trim().to_ascii_lowercase().as_str(),
+        "count" | "number"
+    );
     if sql.iter().any(|query| {
         functions
             .iter()
             .any(|function| contains_function_call(query, function))
+            || (count_case
+                && contains_function_call(query, "sum")
+                && query.to_ascii_lowercase().contains("then 1 else 0 end"))
     }) {
         checks.push(ok(format!(
             "grounded measure operation `{operation}` was used by the query"
@@ -3558,6 +3593,96 @@ mod tests {
                     .label
                     .contains("requested period comparison was not used")
         }));
+    }
+
+    #[test]
+    fn contract_checks_reconcile_period_comparison_derived_metrics() {
+        let contract = AnalysisContract {
+            interpretation: InterpretationStatus::Grounded,
+            subject: Some("spend".into()),
+            measures: vec![
+                crate::engine::runtime::ContractMeasure {
+                    concept: "revenue".into(),
+                    field: Some("amount".into()),
+                    operation: "sum".into(),
+                    unit: None,
+                },
+                crate::engine::runtime::ContractMeasure {
+                    concept: "orders".into(),
+                    field: None,
+                    operation: "count".into(),
+                    unit: None,
+                },
+            ],
+            derived_metrics: vec![ContractDerivedMetric {
+                concept: "revenue per order".into(),
+                kind: crate::engine::runtime::DerivedMetricKind::Ratio,
+                numerator: "revenue".into(),
+                denominator: "orders".into(),
+                unit: None,
+            }],
+            time: Some(crate::engine::runtime::ContractTime {
+                field: Some("date".into()),
+                range: None,
+                bucket: None,
+                timezone: None,
+            }),
+            comparison_spec: Some(crate::engine::runtime::ContractComparison {
+                kind: crate::engine::runtime::ComparisonKind::PeriodOverPeriod,
+                current_range: "2024".into(),
+                previous_range: "2023".into(),
+            }),
+            ..Default::default()
+        };
+        let report = GroundingReport {
+            source: Some("spend".into()),
+            sources: vec![],
+            probes: vec![],
+            unresolved: vec![],
+        };
+        let evidence = vec![run_sql_ev(
+            "select \
+                sum(case when \"date\" >= '2024-01-01' and \"date\" < '2025-01-01' then \"amount\" end) as measure_0_current, \
+                sum(case when \"date\" >= '2023-01-01' and \"date\" < '2024-01-01' then \"amount\" end) as measure_0_previous, \
+                20 as measure_0_change, 25 as measure_0_change_pct, \
+                sum(case when \"date\" >= '2024-01-01' and \"date\" < '2025-01-01' then 1 else 0 end) as measure_1_current, \
+                sum(case when \"date\" >= '2023-01-01' and \"date\" < '2024-01-01' then 1 else 0 end) as measure_1_previous, \
+                2 as measure_1_change, 25 as measure_1_change_pct, \
+                1 / nullif(1, 0) as derived_0_current, \
+                1 / nullif(1, 0) as derived_0_previous, \
+                0 as derived_0_change, 0 as derived_0_change_pct \
+             from spend",
+            &[
+                "measure_0_current",
+                "measure_0_previous",
+                "measure_0_change",
+                "measure_0_change_pct",
+                "measure_1_current",
+                "measure_1_previous",
+                "measure_1_change",
+                "measure_1_change_pct",
+                "derived_0_current",
+                "derived_0_previous",
+                "derived_0_change",
+                "derived_0_change_pct",
+            ],
+            vec![vec![
+                Json::from(100),
+                Json::from(80),
+                Json::from(20),
+                Json::from(25),
+                Json::from(10),
+                Json::from(8),
+                Json::from(2),
+                Json::from(25),
+                Json::from(10),
+                Json::from(10),
+                Json::from(0),
+                Json::from(0),
+            ]],
+        )];
+        let checks = contract_checks(&contract, Some(&report), &evidence);
+        assert!(checks.iter().all(|check| check.ok), "{checks:?}");
     }
 
     #[test]

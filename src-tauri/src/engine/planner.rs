@@ -182,11 +182,6 @@ fn compile_period_comparison(
     if !contract.joins.is_empty() {
         return Err("period comparison compilation with joins is not implemented yet".into());
     }
-    if !contract.derived_metrics.is_empty() {
-        return Err(
-            "period comparison compilation with derived metrics is not implemented yet".into(),
-        );
-    }
     let comparison = contract
         .comparison_spec
         .as_ref()
@@ -250,6 +245,22 @@ fn compile_period_comparison(
     }
     if contract.measures.is_empty() {
         return Err("the grounded comparison has no measure to compute".into());
+    }
+    for (index, derived) in contract.derived_metrics.iter().enumerate() {
+        let current = comparison_derived_expression(source, contract, derived, &current_predicate)?;
+        let previous =
+            comparison_derived_expression(source, contract, derived, &previous_predicate)?;
+        let current_alias = quote_ident(&format!("derived_{index}_current"));
+        let previous_alias = quote_ident(&format!("derived_{index}_previous"));
+        let change_alias = quote_ident(&format!("derived_{index}_change"));
+        let percent_alias = quote_ident(&format!("derived_{index}_change_pct"));
+        select.push(format!("{current} AS {current_alias}"));
+        select.push(format!("{previous} AS {previous_alias}"));
+        select.push(format!("(({current}) - ({previous})) AS {change_alias}"));
+        select.push(format!(
+            "((({current}) - ({previous})) / NULLIF(ABS({previous}), 0)) * 100 AS {percent_alias}"
+        ));
+        steps.push(format!("compare ratio {}", derived.concept));
     }
 
     let mut predicates = Vec::new();
@@ -332,6 +343,50 @@ fn comparison_measure_expression(
     })
 }
 
+fn comparison_derived_expression(
+    source: &SourceInfo,
+    contract: &AnalysisContract,
+    derived: &crate::engine::runtime::ContractDerivedMetric,
+    predicate: &str,
+) -> Result<String, String> {
+    let numerator = comparison_operand_expression(source, contract, &derived.numerator, predicate)?;
+    let denominator =
+        comparison_operand_expression(source, contract, &derived.denominator, predicate)?;
+    match derived.kind {
+        DerivedMetricKind::Ratio => Ok(format!("({numerator}) / NULLIF(({denominator}), 0)")),
+    }
+}
+
+fn comparison_operand_expression(
+    source: &SourceInfo,
+    contract: &AnalysisContract,
+    requested: &str,
+    predicate: &str,
+) -> Result<String, String> {
+    let matches: Vec<_> = contract
+        .measures
+        .iter()
+        .filter(|measure| {
+            normalize(&measure.concept) == normalize(requested)
+                || measure
+                    .field
+                    .as_deref()
+                    .is_some_and(|field| normalize(field) == normalize(requested))
+        })
+        .collect();
+    match matches.as_slice() {
+        [measure] => comparison_measure_expression(source, measure, predicate),
+        [] => Err(format!(
+            "derived metric operand {:?} is not a declared measure",
+            requested
+        )),
+        _ => Err(format!(
+            "derived metric operand {:?} is ambiguous",
+            requested
+        )),
+    }
+}
+
 fn comparison_order_expression(
     source: &SourceInfo,
     contract: &AnalysisContract,
@@ -356,6 +411,21 @@ fn comparison_order_expression(
     if measure_matches.len() > 1 {
         return Err(format!("order_by {:?} is ambiguous", order.by));
     }
+    let derived_matches: Vec<_> = contract
+        .derived_metrics
+        .iter()
+        .enumerate()
+        .filter(|(index, derived)| {
+            normalize(&derived.concept) == requested
+                || normalize(&format!("derived_{index}")) == requested
+        })
+        .collect();
+    if let [(index, _)] = derived_matches.as_slice() {
+        return Ok(quote_ident(&format!("derived_{index}_current")));
+    }
+    if derived_matches.len() > 1 {
+        return Err(format!("order_by {:?} is ambiguous", order.by));
+    }
     if contract
         .group_by
         .iter()
@@ -365,7 +435,7 @@ fn comparison_order_expression(
         return Ok(quote_ident(&column.name));
     }
     Err(format!(
-        "order_by {:?} must reference a comparison measure or grouping field",
+        "order_by {:?} must reference a comparison measure, derived metric, or grouping field",
         order.by
     ))
 }
@@ -1347,6 +1417,50 @@ mod tests {
         assert!(plan.sql.contains("AS \"measure_0_change_pct\""));
         assert!(plan.sql.contains("GROUP BY \"category\""));
         assert!(plan.sql.ends_with("LIMIT 12"));
+    }
+
+    #[test]
+    fn compiles_a_period_comparison_with_a_guarded_derived_metric() {
+        let mut contract = contract();
+        contract.filters.clear();
+        contract.group_by.clear();
+        contract
+            .measures
+            .push(crate::engine::runtime::ContractMeasure {
+                concept: "orders".into(),
+                field: None,
+                operation: "count".into(),
+                unit: None,
+            });
+        contract.derived_metrics = vec![crate::engine::runtime::ContractDerivedMetric {
+            concept: "revenue per order".into(),
+            kind: DerivedMetricKind::Ratio,
+            numerator: "revenue".into(),
+            denominator: "orders".into(),
+            unit: None,
+        }];
+        contract.comparison_spec = Some(crate::engine::runtime::ContractComparison {
+            kind: ComparisonKind::PeriodOverPeriod,
+            current_range: "2024".into(),
+            previous_range: "2023".into(),
+        });
+        contract.time.as_mut().unwrap().range = None;
+        contract.order_by = Some(crate::engine::runtime::ContractOrder {
+            by: "revenue per order".into(),
+            direction: SortDirection::Desc,
+        });
+
+        let plan = compile(&catalog(), &contract, Some("sales")).unwrap();
+
+        assert!(plan.sql.contains("AS \"derived_0_current\""));
+        assert!(plan.sql.contains("AS \"derived_0_previous\""));
+        assert!(plan.sql.contains("AS \"derived_0_change_pct\""));
+        assert!(plan.sql.contains("NULLIF((SUM(CASE WHEN"));
+        assert!(plan.sql.contains("ORDER BY \"derived_0_current\" DESC"));
+        assert!(plan
+            .steps
+            .iter()
+            .any(|step| step == "compare ratio revenue per order"));
     }
 
     #[test]

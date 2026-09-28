@@ -62,8 +62,9 @@ This is the implementation form of Fella's core loop:
   is connected and every reference is unambiguous; disconnected/ambiguous joins
   still use the direct fallback. Typed single-source period comparisons now
   ground both explicit windows and compile current, previous, absolute-change,
-  and guarded percent-change columns; joins plus derived-metric comparisons
-  remain fallback cases.
+  and guarded percent-change columns, including guarded single-source derived
+  metrics; comparisons combined with joins or time buckets remain fallback
+  cases.
 - **M4 — semantic verification:** first slice implemented; grounded bindings
   must be present in executed SQL, requested aggregate operations and observed
   filter values, time buckets, ranking limits, derived ratios, and typed
@@ -257,8 +258,9 @@ with qualified, unambiguous references now compile into read-only SQL; the
 fallback remains the safety valve for disconnected graphs and unsupported
 comparison semantics. A first typed comparison slice also supports one-source
 period-over-period contracts with explicit current and previous ranges, bounded
-range probes, and deterministic change columns. It intentionally does not yet
-combine comparisons with joins, time buckets, or derived metrics.
+range probes, and deterministic change columns. It now also supports guarded
+single-source derived metrics inside the comparison, while comparisons
+combined with joins or time buckets remain on the fallback path.
 When any of those conditions is not provably satisfied, Fella keeps the
 contract for verification but returns to the existing model-driven path.
 
