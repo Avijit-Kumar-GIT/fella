@@ -97,6 +97,33 @@ fn scans_queries_and_guards_a_workspace() {
     );
     assert!(grounded.report.unresolved.is_empty());
 
+    // A provider cannot make an arbitrary value authoritative by placing it
+    // in the contract. Grounding must discard it and promote only the value
+    // returned by the workspace probe.
+    let untrusted_value = grounding::ground(
+        &engine,
+        AnalysisContract {
+            interpretation: InterpretationStatus::Assumed,
+            subject: Some("sales".into()),
+            filters: vec![ContractFilter {
+                concept: "month".into(),
+                field: Some("month".into()),
+                candidate_values: vec!["2024-02".into()],
+                resolved_values: vec!["2024-99".into()],
+                resolution: Some("observed".into()),
+            }],
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        untrusted_value.contract.filters[0].resolved_values,
+        vec!["2024-02"]
+    );
+    assert_eq!(
+        untrusted_value.contract.filters[0].resolution.as_deref(),
+        Some("observed")
+    );
+
     let sales = catalog
         .sources
         .iter()

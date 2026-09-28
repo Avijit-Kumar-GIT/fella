@@ -100,6 +100,21 @@ pub fn ground(engine: &EngineState, mut contract: AnalysisContract) -> Grounding
     }
 
     for filter in &mut contract.filters {
+        // `resolved_values` is an output of grounding, not an authority the
+        // model can grant itself. A provider may return it in the contract
+        // payload, but only a bounded probe against this workspace revision
+        // can promote a candidate into an observed value.
+        let proposed_resolved_values = std::mem::take(&mut filter.resolved_values);
+        filter.resolution = None;
+        if filter.candidate_values.is_empty() && !proposed_resolved_values.is_empty() {
+            add_unresolved(
+                &mut report,
+                format!(
+                    "filter {:?} supplied a resolved value without a candidate to verify",
+                    filter.concept
+                ),
+            );
+        }
         let requested = filter
             .field
             .as_deref()
@@ -111,21 +126,24 @@ pub fn ground(engine: &EngineState, mut contract: AnalysisContract) -> Grounding
                 report
                     .probes
                     .push(binding_probe("filter", &requested, column));
+                let mut observed = false;
+                let mut not_observed = false;
                 for candidate in filter.candidate_values.clone() {
                     match probe_value(engine, &view, &column.name, &candidate) {
-                        Ok(Some(observed)) => {
-                            if !filter.resolved_values.contains(&observed) {
-                                filter.resolved_values.push(observed.clone());
+                        Ok(Some(observed_value)) => {
+                            observed = true;
+                            if !filter.resolved_values.contains(&observed_value) {
+                                filter.resolved_values.push(observed_value.clone());
                             }
                             report.probes.push(GroundingProbe {
                                 kind: "filter_value".into(),
                                 target: format!("{}={candidate}", column.name),
                                 outcome: ProbeOutcome::Resolved,
-                                detail: format!("matched observed value {observed}"),
+                                detail: format!("matched observed value {observed_value}"),
                             });
                         }
                         Ok(None) => {
-                            filter.resolution = Some("not_observed".into());
+                            not_observed = true;
                             report.probes.push(GroundingProbe {
                                 kind: "filter_value".into(),
                                 target: format!("{}={candidate}", column.name),
@@ -147,6 +165,13 @@ pub fn ground(engine: &EngineState, mut contract: AnalysisContract) -> Grounding
                         }
                     }
                 }
+                filter.resolution = if observed {
+                    Some("observed".into())
+                } else if not_observed {
+                    Some("not_observed".into())
+                } else {
+                    None
+                };
             }
             Err(reason) => add_unresolved(&mut report, reason),
         }
