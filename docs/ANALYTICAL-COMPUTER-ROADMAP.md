@@ -75,8 +75,9 @@ This is the implementation form of Fella's core loop:
   ungrouped deterministic plan (limited rankings and non-additive measures
   remain excluded); ratio outputs now flag nested/separate SQL scopes where
   their numerator and denominator populations cannot be established as shared;
-  broader explicit cross-population, average-bound, and chart-shape invariants
-  remain ahead, and
+  grouped and ungrouped averages are now checked against independent min/max
+  bounds under the same grounded scope; explicit cross-population and
+  chart-shape invariants remain ahead, and
   ambiguous/unsupported contracts remain review states even when a query is
   numerically reproducible.
 - **M5 — versioned semantic memory:** first slice implemented; corrections and

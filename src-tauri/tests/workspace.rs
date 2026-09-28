@@ -1091,3 +1091,87 @@ fn grounds_and_executes_a_typed_period_comparison() {
     let _ = fs::remove_dir_all(&ws);
     let _ = fs::remove_dir_all(&data);
 }
+
+#[test]
+fn grounds_and_verifies_an_average_against_observed_bounds() {
+    let ws = scratch("average-bounds-ws");
+    let data = scratch("average-bounds-data");
+    fs::write(
+        ws.join("spend.csv"),
+        "category,amount\nA,10\nA,20\nB,100\nB,200\n",
+    )
+    .unwrap();
+
+    let engine = EngineState::new(&data).unwrap();
+    engine.open_workspace(&ws).unwrap();
+    let grounded = grounding::ground(
+        &engine,
+        AnalysisContract {
+            interpretation: InterpretationStatus::Assumed,
+            subject: Some("spend".into()),
+            measures: vec![ContractMeasure {
+                concept: "average amount".into(),
+                field: Some("amount".into()),
+                operation: "average".into(),
+                unit: None,
+            }],
+            group_by: vec!["category".into()],
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        grounded.contract.interpretation,
+        InterpretationStatus::Grounded
+    );
+
+    let plan = planner::compile(&engine.catalog(), &grounded.contract, Some("spend")).unwrap();
+    let result = engine.run_sql(&plan.sql).unwrap();
+    assert_eq!(result.row_count, 2);
+    let evidence = fella_lib::engine::evidence::EvidenceItem {
+        id: "average-bounds".into(),
+        tool: "run_sql".into(),
+        sources: vec![],
+        args: serde_json::json!({ "sql": plan.sql }),
+        note: None,
+        sql: Some(plan.sql.clone()),
+        result_summary: format!("{} row(s)", result.row_count),
+        columns: Some(result.columns.clone()),
+        rows: Some(result.rows.clone()),
+        row_count: Some(result.row_count),
+        output: None,
+        chart: None,
+        ms: result.ms,
+        error: None,
+    };
+    let checks = fella_lib::engine::analytics::verify::execution_checks(
+        &engine,
+        &grounded.contract,
+        Some(&grounded.report),
+        std::slice::from_ref(&evidence),
+    );
+    assert!(
+        checks.iter().any(|check| {
+            check.ok && check.label == "average `average amount` stayed within observed bounds"
+        }),
+        "{checks:?}"
+    );
+
+    let mut bad_evidence = evidence.clone();
+    bad_evidence.rows.as_mut().unwrap()[0][1] = serde_json::json!(999);
+    let bad_checks = fella_lib::engine::analytics::verify::execution_checks(
+        &engine,
+        &grounded.contract,
+        Some(&grounded.report),
+        std::slice::from_ref(&bad_evidence),
+    );
+    assert!(
+        bad_checks.iter().any(|check| {
+            !check.ok && check.label == "average fell outside observed bounds for `average amount`"
+        }),
+        "{bad_checks:?}"
+    );
+    assert!(fella_lib::engine::analytics::verify::hard_fail(&bad_checks).is_some());
+
+    let _ = fs::remove_dir_all(&ws);
+    let _ = fs::remove_dir_all(&data);
+}

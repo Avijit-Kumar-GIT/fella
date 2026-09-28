@@ -88,6 +88,7 @@ pub fn hard_fail(checks: &[VerificationCheck]) -> Option<String> {
             "period comparison arithmetic",
             "derived metric arithmetic",
             "grouped totals did not reconcile",
+            "average fell outside observed bounds",
         ],
     )
 }
@@ -232,6 +233,7 @@ pub fn execution_checks(
 ) -> Vec<VerificationCheck> {
     let mut checks = contract_checks(contract, grounding, evidence);
     check_grouped_totals(&mut checks, engine, contract, grounding, evidence);
+    check_average_bounds(&mut checks, engine, contract, grounding, evidence);
     checks
 }
 
@@ -390,6 +392,281 @@ fn grouped_measure_aliases(contract: &AnalysisContract) -> Vec<Vec<String>> {
             }
         })
         .collect()
+}
+
+/// Check every returned average against independently computed min/max values
+/// under the same grounded filters, time range, grouping, and joins. A bound
+/// violation is a correctness failure; inability to run the bound plans is a
+/// review warning so fallback SQL remains usable without a false guarantee.
+fn check_average_bounds(
+    checks: &mut Vec<VerificationCheck>,
+    engine: &dyn AnalyticsSource,
+    contract: &AnalysisContract,
+    grounding: Option<&GroundingReport>,
+    evidence: &[EvidenceItem],
+) {
+    if contract.interpretation != InterpretationStatus::Grounded
+        || contract.comparison_spec.is_some()
+        || contract.comparison.is_some()
+    {
+        return;
+    }
+    let source_hint = grounding.and_then(|report| report.source.as_deref());
+    for (index, measure) in contract.measures.iter().enumerate() {
+        if !is_average_operation(&measure.operation) {
+            continue;
+        }
+        let alias = format!("measure_{index}");
+        let Some(average_evidence) = evidence.iter().find(|item| {
+            is_sql_evidence(item)
+                && item.error.is_none()
+                && item
+                    .row_count
+                    .is_some_and(|count| item.rows.as_ref().is_some_and(|rows| count == rows.len()))
+                && item.columns.as_ref().is_some_and(|columns| {
+                    columns
+                        .iter()
+                        .any(|column| column.eq_ignore_ascii_case(&alias))
+                })
+        }) else {
+            continue;
+        };
+        let mut min_contract = contract.clone();
+        min_contract.measures = vec![measure.clone()];
+        min_contract.measures[0].operation = "min".into();
+        min_contract.derived_metrics.clear();
+        min_contract.order_by = None;
+        min_contract.limit = None;
+        let mut max_contract = min_contract.clone();
+        max_contract.measures[0].operation = "max".into();
+
+        let min_plan =
+            match crate::engine::planner::compile(&engine.catalog(), &min_contract, source_hint) {
+                Ok(plan) => plan,
+                Err(error) => {
+                    checks.push(warn(
+                        format!(
+                            "average bounds could not be checked for `{}`",
+                            measure.concept
+                        ),
+                        Some(error),
+                    ));
+                    continue;
+                }
+            };
+        let max_plan =
+            match crate::engine::planner::compile(&engine.catalog(), &max_contract, source_hint) {
+                Ok(plan) => plan,
+                Err(error) => {
+                    checks.push(warn(
+                        format!(
+                            "average bounds could not be checked for `{}`",
+                            measure.concept
+                        ),
+                        Some(error),
+                    ));
+                    continue;
+                }
+            };
+        let min_result = match engine.run_sql(&min_plan.sql) {
+            Ok(result) => result,
+            Err(error) => {
+                checks.push(warn(
+                    format!(
+                        "average bounds could not be checked for `{}`",
+                        measure.concept
+                    ),
+                    Some(error.to_string()),
+                ));
+                continue;
+            }
+        };
+        let max_result = match engine.run_sql(&max_plan.sql) {
+            Ok(result) => result,
+            Err(error) => {
+                checks.push(warn(
+                    format!(
+                        "average bounds could not be checked for `{}`",
+                        measure.concept
+                    ),
+                    Some(error.to_string()),
+                ));
+                continue;
+            }
+        };
+        if !complete_query_result(&min_result) || !complete_query_result(&max_result) {
+            checks.push(warn(
+                format!(
+                    "average bounds could not be checked for `{}`",
+                    measure.concept
+                ),
+                Some("a bound query returned an incomplete result set".into()),
+            ));
+            continue;
+        }
+
+        let Some(average_columns) = average_evidence.columns.as_deref() else {
+            continue;
+        };
+        let Some(average_rows) = average_evidence.rows.as_deref() else {
+            continue;
+        };
+        if average_rows.is_empty() || min_result.rows.is_empty() || max_result.rows.is_empty() {
+            checks.push(warn(
+                format!(
+                    "average bounds could not be checked for `{}`",
+                    measure.concept
+                ),
+                Some("the average or bound query returned no rows".into()),
+            ));
+            continue;
+        }
+        let Some(average_index) = average_columns
+            .iter()
+            .position(|column| column.eq_ignore_ascii_case(&alias))
+        else {
+            continue;
+        };
+        let Some(min_index) = min_result
+            .columns
+            .iter()
+            .position(|column| column.eq_ignore_ascii_case("measure_0"))
+        else {
+            checks.push(warn(
+                format!(
+                    "average bounds could not be checked for `{}`",
+                    measure.concept
+                ),
+                Some("the minimum bound query omitted its measure".into()),
+            ));
+            continue;
+        };
+        let Some(max_index) = max_result
+            .columns
+            .iter()
+            .position(|column| column.eq_ignore_ascii_case("measure_0"))
+        else {
+            checks.push(warn(
+                format!(
+                    "average bounds could not be checked for `{}`",
+                    measure.concept
+                ),
+                Some("the maximum bound query omitted its measure".into()),
+            ));
+            continue;
+        };
+        let min_keys = matching_key_positions(&min_result.columns, average_columns);
+        let max_keys = matching_key_positions(&max_result.columns, average_columns);
+        if min_keys.is_none() || max_keys.is_none() {
+            checks.push(warn(
+                format!(
+                    "average bounds could not be checked for `{}`",
+                    measure.concept
+                ),
+                Some("the bound query and answer used different grouping columns".into()),
+            ));
+            continue;
+        }
+        let min_keys = min_keys.unwrap();
+        let max_keys = max_keys.unwrap();
+        let mut mismatches = Vec::new();
+        let mut incomplete = false;
+        for (row_index, average_row) in average_rows.iter().enumerate() {
+            let Some(average) = average_row.get(average_index).and_then(num_of) else {
+                incomplete = true;
+                continue;
+            };
+            let Some(min_row) = matching_row(&min_result.rows, &min_keys, average_row) else {
+                incomplete = true;
+                continue;
+            };
+            let Some(max_row) = matching_row(&max_result.rows, &max_keys, average_row) else {
+                incomplete = true;
+                continue;
+            };
+            let Some(minimum) = min_row.get(min_index).and_then(num_of) else {
+                incomplete = true;
+                continue;
+            };
+            let Some(maximum) = max_row.get(max_index).and_then(num_of) else {
+                incomplete = true;
+                continue;
+            };
+            let within_bounds = (average >= minimum || invariant_close(average, minimum))
+                && (average <= maximum || invariant_close(average, maximum));
+            if !within_bounds {
+                mismatches.push(format!(
+                    "row {} average {average} outside [{minimum}, {maximum}]",
+                    row_index + 1
+                ));
+                if mismatches.len() >= 3 {
+                    break;
+                }
+            }
+        }
+        if !mismatches.is_empty() {
+            checks.push(warn(
+                format!(
+                    "average fell outside observed bounds for `{}`",
+                    measure.concept
+                ),
+                Some(mismatches.join("; ")),
+            ));
+        } else if incomplete {
+            checks.push(warn(
+                format!(
+                    "average bounds could not be checked for `{}`",
+                    measure.concept
+                ),
+                Some("one or more average or bound cells could not be matched".into()),
+            ));
+        } else {
+            checks.push(ok(format!(
+                "average `{}` stayed within observed bounds",
+                measure.concept
+            )));
+        }
+    }
+}
+
+fn is_average_operation(operation: &str) -> bool {
+    matches!(
+        operation.trim().to_ascii_lowercase().as_str(),
+        "avg" | "average" | "mean"
+    )
+}
+
+fn complete_query_result(result: &crate::engine::state::QueryResult) -> bool {
+    result.row_count == result.rows.len()
+}
+
+fn matching_key_positions(
+    bound_columns: &[String],
+    evidence_columns: &[String],
+) -> Option<Vec<(usize, usize)>> {
+    bound_columns
+        .iter()
+        .enumerate()
+        .filter(|(_, column)| !column.eq_ignore_ascii_case("measure_0"))
+        .map(|(bound_index, column)| {
+            evidence_columns
+                .iter()
+                .position(|candidate| candidate.eq_ignore_ascii_case(column))
+                .map(|evidence_index| (bound_index, evidence_index))
+        })
+        .collect()
+}
+
+fn matching_row<'a>(
+    rows: &'a [Vec<Json>],
+    key_positions: &[(usize, usize)],
+    evidence_row: &[Json],
+) -> Option<&'a Vec<Json>> {
+    rows.iter().find(|row| {
+        key_positions.iter().all(|(bound_index, evidence_index)| {
+            row.get(*bound_index) == evidence_row.get(*evidence_index)
+        })
+    })
 }
 
 fn check_comparison_usage(
