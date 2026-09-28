@@ -128,6 +128,12 @@ impl Registry {
             .map(|b| b.as_ref())
     }
 
+    /// Whether this registry exposes a named tool. The agent uses this to
+    /// avoid compiling an automatic SQL plan when table analysis is disabled.
+    pub fn has_tool(&self, name: &str) -> bool {
+        self.get(name).is_some()
+    }
+
     /// Run the tool named `name`. `None` = no such tool.
     pub async fn run(
         &self,

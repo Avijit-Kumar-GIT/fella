@@ -14,6 +14,7 @@ pub mod grounding;
 pub mod ingest;
 pub mod llm;
 pub mod memory;
+pub mod planner;
 pub mod provider;
 pub mod risk;
 pub mod runtime;

@@ -53,7 +53,10 @@ This is the implementation form of Fella's core loop:
   treating a model proposal as verified meaning.
 - **M3 — grounding:** first slice implemented alongside contract routing;
   exact field bindings and bounded filter-value probes now run against the
-  current workspace revision. Logical-plan compilation is still ahead.
+  current workspace revision. The first deterministic planner slice now
+  compiles grounded single-source aggregates, filters, time ranges, and
+  groupings into read-only SQL; joins, ratios, ranking, and richer date
+  buckets still use the direct fallback.
 - **M4 — semantic verification:** first slice implemented; grounded bindings
   must be present in executed SQL, and ambiguous/unsupported contracts remain
   review states even when a query is numerically reproducible.
@@ -208,6 +211,12 @@ into a typed `LogicalPlan` and deterministic SQL for the common core:
 Model-generated SQL and Python remain the advanced fallback. The compiler owns
 physical table names, quoted identifiers, date functions, null behavior, and
 denominator definitions.
+
+The first implementation slice is intentionally narrower than the destination:
+it only compiles a grounded single queryable source with aggregate measures,
+observed filter values, ISO-like year/month/date ranges, and group-by fields.
+When any of those conditions is not provably satisfied, Fella keeps the
+contract for verification but returns to the existing model-driven path.
 
 **Exit criteria:** common questions execute from a validated semantic plan;
 advanced questions still work through the existing direct path.

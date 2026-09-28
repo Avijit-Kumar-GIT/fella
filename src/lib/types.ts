@@ -66,6 +66,11 @@ export interface Answer {
 	turn_id?: string;
 	/** Compact execution summary; raw SQL/rows remain in evidence. */
 	trace?: ExecutionTrace;
+	/** Validated strategy used for this answer, when the runtime produced one. */
+	plan?: {
+		strategy: 'direct_tools' | 'compiled_sql' | 'python_fallback' | 'document_fallback';
+		steps: string[];
+	};
 	/** Model-proposed semantic interpretation, when contract-first routing ran. */
 	contract?: AnalysisContract;
 	/** Deterministic field/value probes used to ground that interpretation. */

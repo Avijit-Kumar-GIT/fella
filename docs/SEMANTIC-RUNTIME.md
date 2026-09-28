@@ -484,7 +484,7 @@ The target can fit the existing architecture without replacing the harness:
 | memory.rs / semantic_memory.rs | Human-readable memory projection plus versioned semantic facts and correction history |
 | analysis_store.rs | Backend-owned persisted turn records for inspection and future replay |
 | agent.rs | Risk gating, interpretation calls, execution orchestration |
-| analytics/ | Profiles, logical plans, compilation, probes, invariants |
+| planner.rs / analytics/ | Deterministic logical-plan compilation, profiles, probes, and invariants |
 | tools.rs | Fixed read-only execution boundary |
 | verify.rs | Evidence, contract, and semantic verification |
 | evidence.rs | Contract summary, assumptions, checks, source revision |

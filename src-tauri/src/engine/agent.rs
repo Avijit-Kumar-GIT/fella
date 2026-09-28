@@ -12,10 +12,12 @@ use crate::engine::evidence::{
     Answer, AskEvent, EvidenceItem, Usage, VerificationCheck, WorkspaceSnapshot,
 };
 use crate::engine::llm::{ChatMessage, LlmClient, ToolCall};
-use crate::engine::runtime::{self, AnalysisContract, ExecutionTrace, TraceStep, TurnState};
+use crate::engine::runtime::{
+    self, AnalysisContract, ExecutionTrace, LogicalPlan, PlanStrategy, TraceStep, TurnState,
+};
 use crate::engine::state::EngineState;
 use crate::engine::tools::Registry;
-use crate::engine::{friction, risk, Catalog};
+use crate::engine::{friction, planner, risk, Catalog};
 
 /// Hard cap on tool-calling iterations per question, before the loop forces
 /// a final answer. `FELLA_MAX_STEPS` overrides it a slower or less
@@ -38,6 +40,7 @@ struct RunIds {
     trace_id: String,
     contract: Option<AnalysisContract>,
     grounding: Option<crate::engine::grounding::GroundingReport>,
+    plan: Option<LogicalPlan>,
 }
 
 fn soft_stop_round_trips() -> usize {
@@ -95,6 +98,7 @@ pub async fn run(
         trace_id: runtime::new_trace_id(),
         contract: None,
         grounding: None,
+        plan: None,
     };
     emit(AskEvent::TurnState {
         turn_id: ids.turn_id.clone(),
@@ -360,20 +364,76 @@ filter word in the question exactly, and state just the number(s) don't round or
                         let grounded = crate::engine::grounding::ground(engine, contract);
                         let serialized = serde_json::to_string(&grounded.contract).unwrap_or_default();
                         let grounding = serde_json::to_string(&grounded.report).unwrap_or_default();
-                        let state = match grounded.contract.interpretation {
+                        let source_hint = grounded.report.source.clone();
+                        let grounded_contract = grounded.contract;
+                        let state = match grounded_contract.interpretation {
                             runtime::InterpretationStatus::Ambiguous => TurnState::Clarify,
                             runtime::InterpretationStatus::Unsupported => TurnState::Unsupported,
                             _ => TurnState::Planning,
                         };
-                        ids.contract = Some(grounded.contract);
+                        ids.contract = Some(grounded_contract.clone());
                         ids.grounding = Some(grounded.report);
                         emit(AskEvent::TurnState {
                             turn_id: ids.turn_id.clone(),
                             state,
                         });
-                        format!(
+                        let mut text = format!(
                             "Grounded interpretation (not evidence):\n{serialized}\nGrounding probes:\n{grounding}\nIf unresolved items remain, do not silently choose among them; ask a focused clarification or explain the limitation."
-                        )
+                        );
+                        if registry.has_tool("run_sql")
+                            && grounded_contract.interpretation == runtime::InterpretationStatus::Grounded
+                        {
+                            match planner::compile(&catalog, &grounded_contract, source_hint.as_deref()) {
+                                Ok(compiled) => {
+                                    ids.plan = Some(LogicalPlan {
+                                        strategy: PlanStrategy::CompiledSql,
+                                        steps: compiled.steps.clone(),
+                                    });
+                                    let args = serde_json::json!({
+                                        "sql": compiled.sql,
+                                        "note": "Run the grounded deterministic analytical plan."
+                                    });
+                                    let planned_call = ToolCall {
+                                        id: format!("plan-{}", ids.turn_id),
+                                        name: "run_sql".into(),
+                                        arguments: args.clone(),
+                                    };
+                                    emit(AskEvent::ToolStart {
+                                        tool: planned_call.name.clone(),
+                                        args: args.clone(),
+                                    });
+                                    let (mut item, result) = run_tool_call(
+                                        engine,
+                                        &catalog,
+                                        registry,
+                                        &planned_call,
+                                        cancel.clone(),
+                                    )
+                                    .await;
+                                    item.id = evidence_id(evidence.len());
+                                    emit(AskEvent::ToolEnd {
+                                        item: Box::new(item.clone()),
+                                    });
+                                    if item.error.is_none() {
+                                        seen_calls.insert(
+                                            (planned_call.name.clone(), args.to_string()),
+                                            result.clone(),
+                                        );
+                                    }
+                                    evidence.push(item);
+                                    tool_calls_total += 1;
+                                    text.push_str(&format!(
+                                        "\n\nDeterministic plan executed as data evidence:\n{result}"
+                                    ));
+                                }
+                                Err(reason) => {
+                                    text.push_str(&format!(
+                                        "\n\nThe grounded contract stayed on the direct tool fallback because the deterministic compiler could not safely express it: {reason}"
+                                    ));
+                                }
+                            }
+                        }
+                        text
                     }
                     Err(error) => format!(
                         "The interpretation was not accepted: {error}. State a smaller, explicit contract or continue only if the question is unambiguous."
@@ -683,6 +743,14 @@ fn finish_with(
             })
             .collect(),
     };
+    let plan = ids.plan.clone().unwrap_or_else(|| LogicalPlan {
+        strategy: PlanStrategy::DirectTools,
+        steps: trace
+            .steps
+            .iter()
+            .map(|step| step.operation.clone())
+            .collect(),
+    });
     emit(AskEvent::TurnState {
         turn_id: ids.turn_id.clone(),
         state,
@@ -690,6 +758,7 @@ fn finish_with(
     let answer = Answer {
         turn_id: ids.turn_id.clone(),
         trace,
+        plan: Some(plan),
         contract: ids.contract.clone(),
         grounding: ids.grounding.clone(),
         text,

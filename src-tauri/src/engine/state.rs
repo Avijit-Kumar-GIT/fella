@@ -758,7 +758,7 @@ impl EngineState {
                 .map(|workspace| workspace.revision.clone()),
             state,
             contract: answer.contract.clone(),
-            plan: LogicalPlan {
+            plan: answer.plan.clone().unwrap_or_else(|| LogicalPlan {
                 strategy: PlanStrategy::DirectTools,
                 steps: answer
                     .trace
@@ -766,7 +766,7 @@ impl EngineState {
                     .iter()
                     .map(|step| step.operation.clone())
                     .collect(),
-            },
+            }),
             trace: answer.trace.clone(),
             verification: Some(VerificationReport {
                 status: answer.status,
