@@ -163,8 +163,9 @@ a memory failure).
   reused with the stale filter. How aggressively to genericise stored recipes.
 - Episodic log retention — how many sessions / how much before it rotates, and
   whether the user ever sees it directly. (Log written in v1, not read.)
-- The correction heuristic (`is_correction()` keyword match) — measure its
-  false-positive rate on real follow-ups before trusting it.
+- The correction heuristic (`is_correction()` explicit-opening match) now
+  covers several natural correction phrases and has negative unit cases; its
+  false-positive/coverage rate on real follow-ups is still unmeasured.
 
 ---
 

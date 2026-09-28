@@ -103,7 +103,8 @@ This is the implementation form of Fella's core loop:
   same record can be loaded or rerun through the Tauri and Electron bridges;
   reruns are mount-checked and linked to their source turn. A compact catalog
   snapshot and shared replay-status command now explain revision drift and
-  source-level changes before a rerun; user-facing inspect/rerun controls remain
+  source-level changes before a rerun; the expanded evidence view now exposes
+  that status and an explicit rerun action. A richer trace inspector remains
   ahead. The context picker now travels as structured, persisted starting-point
   references instead of being flattened into the user's question; a single
   selected source also scopes contract grounding when the model leaves the
