@@ -58,8 +58,10 @@ This is the implementation form of Fella's core loop:
   groupings into read-only SQL; joins, ratios, ranking, and richer date
   buckets still use the direct fallback.
 - **M4 — semantic verification:** first slice implemented; grounded bindings
-  must be present in executed SQL, and ambiguous/unsupported contracts remain
-  review states even when a query is numerically reproducible.
+  must be present in executed SQL, requested aggregate operations and observed
+  filter values must also survive into that evidence, and
+  ambiguous/unsupported contracts remain review states even when a query is
+  numerically reproducible.
 - **M5 — versioned semantic memory:** first slice implemented; corrections and
   verified field bindings can carry authority, workspace revision, supporting
   turn, evidence IDs, and explicit supersession/conflict state. The typed
