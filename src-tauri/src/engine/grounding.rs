@@ -11,7 +11,7 @@ use serde_json::Value as Json;
 
 use crate::engine::analytics::data::{quote_ident, quote_str};
 use crate::engine::catalog::{Catalog, ColumnInfo, SourceInfo};
-use crate::engine::runtime::{AnalysisContract, InterpretationStatus};
+use crate::engine::runtime::{AnalysisContract, ContractJoin, InterpretationStatus, JoinKind};
 use crate::engine::state::EngineState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -35,6 +35,8 @@ pub struct GroundingProbe {
 pub struct GroundingReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<String>,
     #[serde(default)]
     pub probes: Vec<GroundingProbe>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -51,12 +53,17 @@ pub fn ground(engine: &EngineState, mut contract: AnalysisContract) -> Grounding
     let catalog = engine.catalog();
     let mut report = GroundingReport {
         source: None,
+        sources: Vec::new(),
         probes: Vec::new(),
         unresolved: contract.unresolved.clone(),
     };
 
     if contract.interpretation == InterpretationStatus::Unsupported {
         return GroundingResult { contract, report };
+    }
+
+    if !contract.joins.is_empty() {
+        return ground_join(engine, contract, catalog, report);
     }
 
     let source = match select_source(&catalog, &contract) {
@@ -81,6 +88,7 @@ pub fn ground(engine: &EngineState, mut contract: AnalysisContract) -> Grounding
         return finish(contract, report);
     };
     report.source = Some(view.clone());
+    report.sources = vec![view.clone()];
 
     for measure in &mut contract.measures {
         if measure.field.is_none()
@@ -346,6 +354,495 @@ fn finish(mut contract: AnalysisContract, mut report: GroundingReport) -> Ground
     }
     report.unresolved = contract.unresolved.clone();
     GroundingResult { contract, report }
+}
+
+fn ground_join(
+    engine: &EngineState,
+    mut contract: AnalysisContract,
+    catalog: Catalog,
+    mut report: GroundingReport,
+) -> GroundingResult {
+    let queryable: Vec<&SourceInfo> = catalog
+        .sources
+        .iter()
+        .filter(|source| source.view.is_some())
+        .collect();
+    let mut scope = Vec::new();
+    for join in &mut contract.joins {
+        let left_source = join.left_source.clone();
+        let right_source = join.right_source.clone();
+        let left = match find_source(&queryable, &left_source) {
+            Some(source) => source,
+            None => {
+                add_unresolved(
+                    &mut report,
+                    format!("could not find join source {:?}", left_source),
+                );
+                continue;
+            }
+        };
+        let right = match find_source(&queryable, &right_source) {
+            Some(source) => source,
+            None => {
+                add_unresolved(
+                    &mut report,
+                    format!("could not find join source {:?}", right_source),
+                );
+                continue;
+            }
+        };
+        if !scope
+            .iter()
+            .any(|candidate: &&SourceInfo| std::ptr::eq(*candidate, left))
+        {
+            scope.push(left);
+        }
+        if !scope
+            .iter()
+            .any(|candidate: &&SourceInfo| std::ptr::eq(*candidate, right))
+        {
+            scope.push(right);
+        }
+        ground_join_edge(engine, join, left, right, &mut report);
+    }
+    if scope.is_empty() {
+        return finish(contract, report);
+    }
+    report.sources = scope
+        .iter()
+        .filter_map(|source| source.view.clone())
+        .collect();
+    let primary = contract
+        .subject
+        .as_deref()
+        .and_then(|subject| find_source(&scope, subject))
+        .or_else(|| scope.first().copied());
+    let Some(primary) = primary else {
+        add_unresolved(
+            &mut report,
+            "the join contract did not identify a primary source".into(),
+        );
+        return finish(contract, report);
+    };
+    report.source = primary.view.clone();
+    if contract.subject.is_none() {
+        contract.subject = primary.view.clone();
+    }
+
+    for measure in &mut contract.measures {
+        if measure.field.is_none()
+            && matches!(
+                measure.operation.trim().to_ascii_lowercase().as_str(),
+                "count" | "number"
+            )
+        {
+            report.probes.push(GroundingProbe {
+                kind: "measure".into(),
+                target: measure.concept.clone(),
+                outcome: ProbeOutcome::Resolved,
+                detail: "resolved as a row count; no physical field required".into(),
+            });
+            continue;
+        }
+        let requested = measure
+            .field
+            .as_deref()
+            .unwrap_or(&measure.concept)
+            .to_string();
+        match resolve_join_field(&scope, &requested) {
+            Ok((source, column)) => {
+                measure.field = Some(qualified_field(source, column));
+                report
+                    .probes
+                    .push(join_binding_probe("measure", &requested, source, column));
+            }
+            Err(reason) => add_unresolved(&mut report, reason),
+        }
+    }
+
+    for filter in &mut contract.filters {
+        let proposed_resolved_values = std::mem::take(&mut filter.resolved_values);
+        filter.resolution = None;
+        if filter.candidate_values.is_empty() && !proposed_resolved_values.is_empty() {
+            add_unresolved(
+                &mut report,
+                format!(
+                    "filter {:?} supplied a resolved value without a candidate to verify",
+                    filter.concept
+                ),
+            );
+        }
+        let requested = filter
+            .field
+            .as_deref()
+            .unwrap_or(&filter.concept)
+            .to_string();
+        match resolve_join_field(&scope, &requested) {
+            Ok((source, column)) => {
+                filter.field = Some(qualified_field(source, column));
+                report
+                    .probes
+                    .push(join_binding_probe("filter", &requested, source, column));
+                let view = source.view.as_deref().unwrap_or(&source.name);
+                let mut observed = false;
+                let mut not_observed = false;
+                for candidate in filter.candidate_values.clone() {
+                    match probe_value(engine, view, &column.name, &candidate) {
+                        Ok(Some(observed_value)) => {
+                            observed = true;
+                            if !filter.resolved_values.contains(&observed_value) {
+                                filter.resolved_values.push(observed_value.clone());
+                            }
+                            report.probes.push(GroundingProbe {
+                                kind: "filter_value".into(),
+                                target: format!("{}.{}={candidate}", view, column.name),
+                                outcome: ProbeOutcome::Resolved,
+                                detail: format!("matched observed value {observed_value}"),
+                            });
+                        }
+                        Ok(None) => {
+                            not_observed = true;
+                            report.probes.push(GroundingProbe {
+                                kind: "filter_value".into(),
+                                target: format!("{}.{}={candidate}", view, column.name),
+                                outcome: ProbeOutcome::NotObserved,
+                                detail: "no matching value was observed in this snapshot".into(),
+                            });
+                        }
+                        Err(error) => {
+                            add_unresolved(
+                                &mut report,
+                                format!("could not probe filter value {candidate:?}: {error}"),
+                            );
+                            report.probes.push(GroundingProbe {
+                                kind: "filter_value".into(),
+                                target: format!("{}.{}={candidate}", view, column.name),
+                                outcome: ProbeOutcome::Unavailable,
+                                detail: error,
+                            });
+                        }
+                    }
+                }
+                filter.resolution = if observed {
+                    Some("observed".into())
+                } else if not_observed {
+                    Some("not_observed".into())
+                } else {
+                    None
+                };
+            }
+            Err(reason) => add_unresolved(&mut report, reason),
+        }
+    }
+
+    if let Some(time) = &mut contract.time {
+        if let Some(requested) = time.field.clone() {
+            match resolve_join_field(&scope, &requested) {
+                Ok((source, column)) => {
+                    time.field = Some(qualified_field(source, column));
+                    report
+                        .probes
+                        .push(join_binding_probe("time", &requested, source, column));
+                }
+                Err(reason) => add_unresolved(&mut report, reason),
+            }
+        }
+    }
+
+    for group in &mut contract.group_by {
+        let requested = group.clone();
+        match resolve_join_field(&scope, &requested) {
+            Ok((source, column)) => {
+                *group = qualified_field(source, column);
+                report
+                    .probes
+                    .push(join_binding_probe("group_by", &requested, source, column));
+            }
+            Err(reason) => add_unresolved(&mut report, reason),
+        }
+    }
+
+    for derived in &contract.derived_metrics {
+        for (kind, requested) in [
+            ("derived_numerator", derived.numerator.as_str()),
+            ("derived_denominator", derived.denominator.as_str()),
+        ] {
+            let matches: Vec<_> = contract
+                .measures
+                .iter()
+                .filter(|measure| {
+                    normalize(&measure.concept) == normalize(requested)
+                        || measure
+                            .field
+                            .as_deref()
+                            .is_some_and(|field| normalize(field) == normalize(requested))
+                })
+                .collect();
+            if matches.len() == 1 {
+                report.probes.push(GroundingProbe {
+                    kind: kind.into(),
+                    target: requested.into(),
+                    outcome: ProbeOutcome::Resolved,
+                    detail: format!("resolved to measure {}", matches[0].concept),
+                });
+            } else if matches.is_empty() {
+                add_unresolved(
+                    &mut report,
+                    format!(
+                        "derived metric {:?} {kind} {:?} did not match a declared measure",
+                        derived.concept, requested
+                    ),
+                );
+            } else {
+                add_unresolved(
+                    &mut report,
+                    format!(
+                        "derived metric {:?} {kind} {:?} matched more than one measure",
+                        derived.concept, requested
+                    ),
+                );
+            }
+        }
+    }
+
+    for order in contract.order_by.iter_mut() {
+        let requested = order.by.clone();
+        let measure_matches: Vec<_> = contract
+            .measures
+            .iter()
+            .filter(|measure| {
+                normalize(&measure.concept) == normalize(&requested)
+                    || measure
+                        .field
+                        .as_deref()
+                        .is_some_and(|field| normalize(field) == normalize(&requested))
+            })
+            .collect();
+        if measure_matches.len() == 1 {
+            let target = measure_matches[0]
+                .field
+                .clone()
+                .unwrap_or_else(|| measure_matches[0].concept.clone());
+            order.by = target;
+            report.probes.push(GroundingProbe {
+                kind: "order_by".into(),
+                target: requested,
+                outcome: ProbeOutcome::Resolved,
+                detail: "resolved to a declared measure".into(),
+            });
+        } else if measure_matches.is_empty() {
+            match resolve_join_field(&scope, &requested) {
+                Ok((source, column)) => {
+                    order.by = qualified_field(source, column);
+                    report
+                        .probes
+                        .push(join_binding_probe("order_by", &requested, source, column));
+                }
+                Err(reason) => add_unresolved(&mut report, reason),
+            }
+        } else {
+            add_unresolved(
+                &mut report,
+                format!("order_by {requested:?} matched more than one measure"),
+            );
+        }
+    }
+
+    finish(contract, report)
+}
+
+fn find_source<'a>(sources: &[&'a SourceInfo], requested: &str) -> Option<&'a SourceInfo> {
+    sources.iter().copied().find(|source| {
+        source.name.eq_ignore_ascii_case(requested)
+            || source
+                .view
+                .as_deref()
+                .is_some_and(|view| view.eq_ignore_ascii_case(requested))
+    })
+}
+
+fn ground_join_edge(
+    engine: &EngineState,
+    join: &mut ContractJoin,
+    left: &SourceInfo,
+    right: &SourceInfo,
+    report: &mut GroundingReport,
+) {
+    let left_field = join.left_field.clone();
+    let right_field = join.right_field.clone();
+    let left_column = match resolve_field(left, &left_field) {
+        Ok(column) => {
+            report
+                .probes
+                .push(join_binding_probe("join_left", &left_field, left, column));
+            column
+        }
+        Err(reason) => {
+            add_unresolved(report, reason);
+            return;
+        }
+    };
+    let right_column = match resolve_field(right, &right_field) {
+        Ok(column) => {
+            report.probes.push(join_binding_probe(
+                "join_right",
+                &right_field,
+                right,
+                column,
+            ));
+            column
+        }
+        Err(reason) => {
+            add_unresolved(report, reason);
+            return;
+        }
+    };
+    let Some(left_view) = left.view.as_deref() else {
+        add_unresolved(report, format!("{} is not queryable", left.name));
+        return;
+    };
+    let Some(right_view) = right.view.as_deref() else {
+        add_unresolved(report, format!("{} is not queryable", right.name));
+        return;
+    };
+    join.left_source = left_view.to_string();
+    join.left_field = left_column.name.clone();
+    join.right_source = right_view.to_string();
+    join.right_field = right_column.name.clone();
+    let join_kind = match join.kind {
+        JoinKind::Inner => "JOIN",
+        JoinKind::Left => "LEFT JOIN",
+    };
+    let sql = format!(
+        "SELECT (SELECT COUNT(*) FROM {left_view_sql}) AS left_rows, (SELECT COUNT(*) FROM {right_view_sql}) AS right_rows, (SELECT COUNT(*) FROM {left_view_sql} AS l {join_kind} {right_view_sql} AS r ON l.{left_field_sql} = r.{right_field_sql}) AS matched_rows",
+        left_view_sql = quote_ident(left_view),
+        right_view_sql = quote_ident(right_view),
+        left_field_sql = quote_ident(&left_column.name),
+        right_field_sql = quote_ident(&right_column.name),
+    );
+    match engine.run_sql(&sql) {
+        Ok(result) => {
+            let detail = result
+                .rows
+                .first()
+                .map(|row| {
+                    let values = row.iter().filter_map(value_count).collect::<Vec<_>>();
+                    if values.len() == 3 {
+                        format!(
+                            "left rows={}, right rows={}, matched rows={}",
+                            values[0], values[1], values[2]
+                        )
+                    } else {
+                        "cardinality probe returned an unexpected shape".into()
+                    }
+                })
+                .unwrap_or_else(|| "cardinality probe returned no row".into());
+            if detail.starts_with("cardinality probe returned") {
+                add_unresolved(report, detail.clone());
+                report.probes.push(GroundingProbe {
+                    kind: "join_cardinality".into(),
+                    target: format!(
+                        "{left_view}.{} ↔ {right_view}.{}",
+                        left_column.name, right_column.name
+                    ),
+                    outcome: ProbeOutcome::Unavailable,
+                    detail,
+                });
+            } else {
+                report.probes.push(GroundingProbe {
+                    kind: "join_cardinality".into(),
+                    target: format!(
+                        "{left_view}.{} ↔ {right_view}.{}",
+                        left_column.name, right_column.name
+                    ),
+                    outcome: ProbeOutcome::Resolved,
+                    detail,
+                });
+            }
+        }
+        Err(error) => {
+            let detail = format!("join cardinality probe failed: {error}");
+            add_unresolved(report, detail.clone());
+            report.probes.push(GroundingProbe {
+                kind: "join_cardinality".into(),
+                target: format!(
+                    "{left_view}.{} ↔ {right_view}.{}",
+                    left_column.name, right_column.name
+                ),
+                outcome: ProbeOutcome::Unavailable,
+                detail,
+            });
+        }
+    }
+}
+
+fn resolve_join_field<'a>(
+    sources: &[&'a SourceInfo],
+    requested: &str,
+) -> Result<(&'a SourceInfo, &'a ColumnInfo), String> {
+    let (source_hint, field) = requested
+        .rsplit_once('.')
+        .map_or((None, requested), |(source, field)| (Some(source), field));
+    let candidates: Vec<(&SourceInfo, &ColumnInfo)> = sources
+        .iter()
+        .copied()
+        .filter(|source| {
+            source_hint.is_none_or(|hint| {
+                source.name.eq_ignore_ascii_case(hint)
+                    || source
+                        .view
+                        .as_deref()
+                        .is_some_and(|view| view.eq_ignore_ascii_case(hint))
+            })
+        })
+        .flat_map(|source| {
+            source
+                .columns
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .filter(move |column| normalize(&column.name) == normalize(field))
+                .map(move |column| (source, column))
+        })
+        .collect();
+    match candidates.as_slice() {
+        [(source, column)] => Ok((*source, *column)),
+        [] => Err(format!("could not resolve joined field {requested:?}")),
+        _ => Err(format!("joined field {requested:?} is ambiguous")),
+    }
+}
+
+fn qualified_field(source: &SourceInfo, column: &ColumnInfo) -> String {
+    format!(
+        "{}.{}",
+        source.view.as_deref().unwrap_or(&source.name),
+        column.name
+    )
+}
+
+fn join_binding_probe(
+    kind: &str,
+    requested: &str,
+    source: &SourceInfo,
+    column: &ColumnInfo,
+) -> GroundingProbe {
+    GroundingProbe {
+        kind: kind.into(),
+        target: requested.into(),
+        outcome: ProbeOutcome::Resolved,
+        detail: format!(
+            "resolved to {}.{}",
+            source.view.as_deref().unwrap_or(&source.name),
+            column.name
+        ),
+    }
+}
+
+fn value_count(value: &Json) -> Option<i64> {
+    value
+        .as_i64()
+        .or_else(|| value.as_u64().and_then(|value| i64::try_from(value).ok()))
+        .or_else(|| value.as_str().and_then(|value| value.parse().ok()))
 }
 
 fn select_source(

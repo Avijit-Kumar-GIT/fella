@@ -27,8 +27,8 @@ use crate::engine::analytics::AnalyticsSource;
 use crate::engine::evidence::{EvidenceItem, VerificationCheck, VerificationStatus};
 use crate::engine::grounding::{GroundingReport, ProbeOutcome};
 use crate::engine::runtime::{
-    AnalysisContract, ContractDerivedMetric, ContractOrder, InterpretationStatus, SortDirection,
-    TimeBucket,
+    AnalysisContract, ContractDerivedMetric, ContractJoin, ContractOrder, InterpretationStatus,
+    SortDirection, TimeBucket,
 };
 
 fn is_sql_evidence(evidence: &EvidenceItem) -> bool {
@@ -205,6 +205,9 @@ pub fn contract_checks(
     for (index, derived) in contract.derived_metrics.iter().enumerate() {
         check_derived_usage(&mut checks, contract, index, derived, &sql);
     }
+    for join in &contract.joins {
+        check_join_usage(&mut checks, join, &sql);
+    }
     checks
 }
 
@@ -257,7 +260,10 @@ fn check_order_usage(
             return false;
         };
         let ordered = &query[order_start..];
-        ordered.contains(direction) && targets.iter().any(|target| contains_word(ordered, target))
+        ordered.contains(direction)
+            && targets
+                .iter()
+                .any(|target| contains_field_reference(ordered, target))
     });
     if used {
         checks.push(ok(format!(
@@ -328,6 +334,27 @@ fn check_derived_usage(
     }
 }
 
+fn check_join_usage(checks: &mut Vec<VerificationCheck>, join: &ContractJoin, sql: &[String]) {
+    let left = format!("{}.{}", join.left_source, join.left_field);
+    let right = format!("{}.{}", join.right_source, join.right_field);
+    let used = sql.iter().any(|query| {
+        (query.contains(" join ") || query.contains("left join "))
+            && contains_field_reference(query, &left.to_ascii_lowercase())
+            && contains_field_reference(query, &right.to_ascii_lowercase())
+    });
+    let relationship = format!("{left} ↔ {right}");
+    if used {
+        checks.push(ok(format!(
+            "declared join `{relationship}` was used by the query"
+        )));
+    } else {
+        checks.push(warn(
+            format!("declared join `{relationship}` was not used by the query"),
+            Some("the executed evidence did not carry the grounded relationship".into()),
+        ));
+    }
+}
+
 fn measure_reference_used(contract: &AnalysisContract, requested: &str, query: &str) -> bool {
     contract.measures.iter().any(|measure| {
         let matches = measure.concept.eq_ignore_ascii_case(requested)
@@ -339,7 +366,7 @@ fn measure_reference_used(contract: &AnalysisContract, requested: &str, query: &
             return false;
         }
         if let Some(field) = &measure.field {
-            contains_word(query, &field.to_ascii_lowercase())
+            contains_field_reference(query, &field.to_ascii_lowercase())
         } else {
             contains_function_call(query, &measure.operation.to_ascii_lowercase())
         }
@@ -469,7 +496,7 @@ fn check_binding_usage(
 ) {
     let used = sql
         .iter()
-        .any(|query| contains_word(query, &field.to_ascii_lowercase()));
+        .any(|query| contains_field_reference(query, &field.to_ascii_lowercase()));
     if used {
         checks.push(ok(format!(
             "grounded {kind} `{field}` was used by the query"
@@ -920,6 +947,16 @@ fn contains_word(haystack: &str, needle: &str) -> bool {
         }
     }
     false
+}
+
+fn contains_field_reference(haystack: &str, field: &str) -> bool {
+    if contains_word(haystack, field) {
+        return true;
+    }
+    let Some((source, column)) = field.rsplit_once('.') else {
+        return false;
+    };
+    contains_word(haystack, source) && contains_word(haystack, column)
 }
 
 // --- 7. a column named in the question is missing from every cited query ---
@@ -2473,6 +2510,7 @@ mod tests {
         )];
         let report = GroundingReport {
             source: Some("spend".into()),
+            sources: vec![],
             probes: vec![],
             unresolved: vec![],
         };
@@ -2501,6 +2539,7 @@ mod tests {
         };
         let report = GroundingReport {
             source: Some("spend".into()),
+            sources: vec![],
             probes: vec![],
             unresolved: vec![],
         };
@@ -2544,6 +2583,7 @@ mod tests {
         };
         let report = GroundingReport {
             source: Some("spend".into()),
+            sources: vec![],
             probes: vec![],
             unresolved: vec![],
         };
@@ -2602,6 +2642,7 @@ mod tests {
         };
         let report = GroundingReport {
             source: Some("spend".into()),
+            sources: vec![],
             probes: vec![],
             unresolved: vec![],
         };
@@ -2654,6 +2695,7 @@ mod tests {
         )];
         let report = GroundingReport {
             source: Some("spend".into()),
+            sources: vec![],
             probes: vec![],
             unresolved: vec![],
         };

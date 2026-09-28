@@ -27,6 +27,9 @@ pub fn compile(
     if contract.comparison.is_some() {
         return Err("comparison compilation is not implemented yet".into());
     }
+    if !contract.joins.is_empty() {
+        return Err("declared join compilation is not implemented yet".into());
+    }
     let source = select_source(catalog, contract, source_hint)?;
     let view = source
         .view

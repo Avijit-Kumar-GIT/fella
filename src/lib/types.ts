@@ -110,6 +110,13 @@ export interface AnalysisContract {
 		denominator: string;
 		unit?: string;
 	}[];
+	joins?: {
+		left_source: string;
+		left_field: string;
+		right_source: string;
+		right_field: string;
+		kind: 'inner' | 'left';
+	}[];
 	comparison?: string;
 	presentation?: string;
 	assumptions: string[];
@@ -127,6 +134,7 @@ export interface GroundingProbe {
 
 export interface GroundingReport {
 	source?: string;
+	sources?: string[];
 	probes: GroundingProbe[];
 	unresolved: string[];
 }

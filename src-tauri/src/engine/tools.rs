@@ -276,6 +276,22 @@ fn contract_schema() -> Json {
                 },
                 "description": "Optional derived metrics over declared measures. Use ratio for a guarded numerator/denominator calculation."
             },
+            "joins": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "left_source": { "type": "string" },
+                        "left_field": { "type": "string" },
+                        "right_source": { "type": "string" },
+                        "right_field": { "type": "string" },
+                        "kind": { "type": "string", "enum": ["inner", "left"] }
+                    },
+                    "required": ["left_source", "left_field", "right_source", "right_field", "kind"],
+                    "additionalProperties": false
+                },
+                "description": "Optional explicit read-only joins. Use only relationships grounded in the current workspace."
+            },
             "comparison": { "type": "string" },
             "presentation": { "type": "string" },
             "assumptions": { "type": "array", "items": { "type": "string" } },

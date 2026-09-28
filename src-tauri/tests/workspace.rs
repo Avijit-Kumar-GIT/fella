@@ -6,8 +6,8 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use fella_lib::engine::{
-    grounding, AnalysisContract, ContractFilter, ContractMeasure, EngineState, FieldRole,
-    InterpretationStatus,
+    grounding, AnalysisContract, ContractFilter, ContractJoin, ContractMeasure, EngineState,
+    FieldRole, InterpretationStatus, JoinKind,
 };
 
 fn scratch(tag: &str) -> PathBuf {
@@ -900,6 +900,73 @@ fn memory_file_and_forget() {
         !engine.forget_folder_memory().unwrap(),
         "nothing left to remove"
     );
+
+    let _ = fs::remove_dir_all(&ws);
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[test]
+fn grounds_a_declared_join_and_probes_its_cardinality() {
+    let ws = scratch("join-ws");
+    let data = scratch("join-data");
+    fs::write(
+        ws.join("orders.csv"),
+        "customer_id,amount\n1,100\n2,150\n2,50\n",
+    )
+    .unwrap();
+    fs::write(
+        ws.join("customers.csv"),
+        "id,segment\n1,enterprise\n2,consumer\n",
+    )
+    .unwrap();
+
+    let engine = EngineState::new(&data).unwrap();
+    engine.open_workspace(&ws).unwrap();
+    let grounded = grounding::ground(
+        &engine,
+        AnalysisContract {
+            interpretation: InterpretationStatus::Assumed,
+            subject: Some("orders".into()),
+            measures: vec![ContractMeasure {
+                concept: "revenue".into(),
+                field: Some("amount".into()),
+                operation: "sum".into(),
+                unit: None,
+            }],
+            group_by: vec!["segment".into()],
+            joins: vec![ContractJoin {
+                left_source: "orders".into(),
+                left_field: "customer_id".into(),
+                right_source: "customers".into(),
+                right_field: "id".into(),
+                kind: JoinKind::Left,
+            }],
+            ..Default::default()
+        },
+    );
+
+    assert_eq!(
+        grounded.contract.interpretation,
+        InterpretationStatus::Grounded
+    );
+    assert_eq!(grounded.report.sources, vec!["orders", "customers"]);
+    assert_eq!(
+        grounded.contract.measures[0].field.as_deref(),
+        Some("orders.amount")
+    );
+    assert_eq!(grounded.contract.group_by, vec!["customers.segment"]);
+    assert_eq!(grounded.contract.joins[0].left_source, "orders");
+    assert_eq!(grounded.contract.joins[0].left_field, "customer_id");
+    assert_eq!(grounded.contract.joins[0].right_source, "customers");
+    assert_eq!(grounded.contract.joins[0].right_field, "id");
+    assert!(grounded
+        .report
+        .probes
+        .iter()
+        .any(|probe| probe.kind == "join_cardinality"
+            && probe.outcome == grounding::ProbeOutcome::Resolved
+            && probe.detail.contains("matched rows=3")));
+    assert!(grounded.report.unresolved.is_empty());
 
     let _ = fs::remove_dir_all(&ws);
     let _ = fs::remove_dir_all(&data);

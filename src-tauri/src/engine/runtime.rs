@@ -123,6 +123,22 @@ pub struct ContractDerivedMetric {
     pub unit: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum JoinKind {
+    Inner,
+    Left,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContractJoin {
+    pub left_source: String,
+    pub left_field: String,
+    pub right_source: String,
+    pub right_field: String,
+    pub kind: JoinKind,
+}
+
 /// Time semantics kept separate so date-field and range mistakes can be
 /// checked without parsing the model's prose answer.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -161,6 +177,8 @@ pub struct AnalysisContract {
     pub limit: Option<u16>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub derived_metrics: Vec<ContractDerivedMetric>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub joins: Vec<ContractJoin>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub comparison: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -203,6 +221,20 @@ impl AnalysisContract {
                     return Err(
                         "a derived metric needs a concept, numerator, and denominator".into(),
                     );
+                }
+            }
+            for join in &contract.joins {
+                if join.left_source.trim().is_empty()
+                    || join.left_field.trim().is_empty()
+                    || join.right_source.trim().is_empty()
+                    || join.right_field.trim().is_empty()
+                {
+                    return Err("a join needs left/right sources and fields".into());
+                }
+                if join.left_source.eq_ignore_ascii_case(&join.right_source)
+                    && join.left_field.eq_ignore_ascii_case(&join.right_field)
+                {
+                    return Err("a join cannot join a field to itself".into());
                 }
             }
             if !contract.unresolved.is_empty() {
@@ -464,6 +496,46 @@ mod tests {
                 "kind": "ratio",
                 "numerator": "revenue",
                 "denominator": ""
+            }],
+            "assumptions": [],
+            "unresolved": []
+        }));
+        assert!(invalid.is_err());
+    }
+
+    #[test]
+    fn join_contracts_validate_both_sides() {
+        let contract = AnalysisContract::from_tool_args(&serde_json::json!({
+            "interpretation": "assumed",
+            "subject": "orders",
+            "measures": [{"concept": "revenue", "operation": "sum"}],
+            "filters": [],
+            "group_by": [],
+            "joins": [{
+                "left_source": "orders",
+                "left_field": "customer_id",
+                "right_source": "customers",
+                "right_field": "id",
+                "kind": "left"
+            }],
+            "assumptions": [],
+            "unresolved": []
+        }))
+        .unwrap();
+        assert_eq!(contract.joins[0].kind, JoinKind::Left);
+
+        let invalid = AnalysisContract::from_tool_args(&serde_json::json!({
+            "interpretation": "assumed",
+            "subject": "orders",
+            "measures": [{"concept": "revenue", "operation": "sum"}],
+            "filters": [],
+            "group_by": [],
+            "joins": [{
+                "left_source": "orders",
+                "left_field": "customer_id",
+                "right_source": "orders",
+                "right_field": "customer_id",
+                "kind": "inner"
             }],
             "assumptions": [],
             "unresolved": []
