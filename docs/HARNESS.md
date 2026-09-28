@@ -146,6 +146,11 @@ The running list of open design questions from shaping this work is in
   18/18 on the base `accuracy` battery with zero added cost on questions
   with nothing to compare against (`agg_rent`, a whole-file total,
   correctly skipped the follow-up).
+- **2026-09-28 · Correction-opening detection broadened** (`engine::memory`).
+  The detector still requires a prior turn and an explicit opening, but now
+  recognizes natural corrections such as “wait, that's not it”, “I meant …”,
+  and “the correct …” alongside the original markers. It also keeps a
+  negative case like “wait until March” out of the memory path.
 - **2026-09-14 · `check_row_value_labels`** (`analytics/verify.rs`).
   *Remove-ambiguity.* Found live, not theorized: `fqah-goal-ontrack` against
   `gemma4:31b` — a query packing five aggregates into one row, then the same
@@ -202,15 +207,6 @@ The running list of open design questions from shaping this work is in
   `bench/messiness`'s `msy-near-duplicate-labels`/`msy-categorical-casing`).
   gemma4:31b: 5/9 on the messiness axis, the worst of the ten axes measured.
   No candidate fix yet — `lower()`-by-default doesn't touch this.
-- **2026-09-12 · Correction-trigger breadth, unmeasured.**
-  `memory::is_correction()` fires only on a fixed marker-word list ("actually",
-  "no,", "that's wrong", …) at the start of a message, and only with a prior
-  question in the same conversation (`state.rs`'s `record_turn_memory`).
-  `bench/memory`'s scored assertions (`memory-axes`, 5/6) all pass today, but
-  every scripted correction in them deliberately used a marker phrase to
-  trigger it — a correction phrased another way ("wait, that's not it", a
-  plain rephrased follow-up) is untested, not confirmed working. Add cases
-  before calling correction-detection itself validated, not just its mechanics.
 - **Distill a small model on Fella's own verified tool-use traces.** Longer-
   horizon, written up in full in [`ROADMAP.md`](ROADMAP.md#would-need-new-infrastructure) —
   the eval harness now produces exactly the two ingredients this needs: real

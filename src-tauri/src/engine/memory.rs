@@ -334,7 +334,7 @@ fn episodes_path(mem_path: &Path) -> PathBuf {
 /// A follow-up that plainly corrects the previous answer (not a new question).
 pub fn is_correction(q: &str) -> bool {
     let l = q.trim().to_lowercase();
-    const MARKERS: [&str; 10] = [
+    const MARKERS: [&str; 16] = [
         "no,",
         "no ",
         "actually",
@@ -345,6 +345,12 @@ pub fn is_correction(q: &str) -> bool {
         "should be",
         "it's actually",
         "correction:",
+        "wait,",
+        "not quite",
+        "not exactly",
+        "not what i meant",
+        "i meant ",
+        "the correct ",
     ];
     MARKERS.iter().any(|m| l.starts_with(m))
 }
@@ -464,7 +470,11 @@ mod tests {
         assert!(is_correction("no, gym is under health"));
         assert!(is_correction("Actually it's category = 'health'"));
         assert!(is_correction("that's wrong  rent excludes deposits"));
+        assert!(is_correction("wait, that's not the category I meant"));
+        assert!(is_correction("I meant the housing category"));
+        assert!(is_correction("the correct category is housing"));
         assert!(!is_correction("how much did I spend on gym?"));
         assert!(!is_correction("now show me March"));
+        assert!(!is_correction("wait until March"));
     }
 }
