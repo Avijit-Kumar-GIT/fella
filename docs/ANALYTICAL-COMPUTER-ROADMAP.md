@@ -77,7 +77,9 @@ This is the implementation form of Fella's core loop:
   their numerator and denominator populations cannot be established as shared;
   grouped and ungrouped averages are now checked against independent min/max
   bounds under the same grounded scope; explicit cross-population and
-  chart-shape invariants remain ahead, and
+  chart payloads are now re-projected from their stored source rows during
+  verification so mutated labels or values become hard failures; richer
+  chart-shape semantics remain ahead, and
   ambiguous/unsupported contracts remain review states even when a query is
   numerically reproducible.
 - **M5 — versioned semantic memory:** first slice implemented; corrections and

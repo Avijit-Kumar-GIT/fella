@@ -12,6 +12,7 @@
 //!  10. a query that packed several aggregates into one row has a value in
 //!      the answer sitting next to a different column's name than the one
 //!      it actually came from
+//!  11. a structured chart still matches the rows returned by its source query
 //!
 //! Plus one cost-gated check that *does* spend an extra LLM round-trip, used
 //! sparingly (agent.rs only calls it once a cheap check above already left a
@@ -22,6 +23,7 @@ use std::collections::HashSet;
 
 use serde_json::Value as Json;
 
+use crate::engine::analytics::chart;
 use crate::engine::analytics::data::quote_str;
 use crate::engine::analytics::AnalyticsSource;
 use crate::engine::evidence::{EvidenceItem, VerificationCheck, VerificationStatus};
@@ -53,6 +55,7 @@ pub fn run(
     check_multi_table_join(engine, question, evidence, &mut checks);
     check_null_group_key(evidence, &mut checks);
     check_row_value_labels(answer, evidence, &mut checks);
+    check_chart_values(evidence, &mut checks);
 
     checks
 }
@@ -89,6 +92,7 @@ pub fn hard_fail(checks: &[VerificationCheck]) -> Option<String> {
             "derived metric arithmetic",
             "grouped totals did not reconcile",
             "average fell outside observed bounds",
+            "chart values did not match source query",
         ],
     )
 }
@@ -219,6 +223,95 @@ pub fn contract_checks(
         check_comparison_arithmetic(&mut checks, contract, evidence);
     }
     checks
+}
+
+/// The chart renderer receives structured data derived from the same SQL rows
+/// that are stored in evidence. Rebuild that projection here so a malformed
+/// bridge payload cannot make a chart disagree with its source table.
+fn check_chart_values(evidence: &[EvidenceItem], checks: &mut Vec<VerificationCheck>) {
+    for item in evidence
+        .iter()
+        .filter(|item| item.tool == "make_chart" && item.error.is_none())
+    {
+        let Some(chart_data) = item.chart.as_ref() else {
+            continue;
+        };
+        let Some(columns) = item.columns.as_deref() else {
+            checks.push(warn(
+                "chart source query could not be checked",
+                Some("the chart evidence did not include result columns".into()),
+            ));
+            continue;
+        };
+        let Some(rows) = item.rows.as_deref() else {
+            checks.push(warn(
+                "chart source query could not be checked",
+                Some("the chart evidence did not include result rows".into()),
+            ));
+            continue;
+        };
+        if item.row_count != Some(rows.len()) {
+            checks.push(warn(
+                "chart source query could not be checked",
+                Some("the chart evidence contained an incomplete result set".into()),
+            ));
+            continue;
+        }
+        let expected = match chart::from_query(
+            chart_data.kind,
+            chart_data.title.clone(),
+            chart_data.unit.clone(),
+            columns,
+            rows,
+        ) {
+            Ok(expected) => expected,
+            Err(error) => {
+                checks.push(warn("chart values did not match source query", Some(error)));
+                continue;
+            }
+        };
+        let mut mismatches = Vec::new();
+        if expected.kind != chart_data.kind {
+            mismatches.push(format!(
+                "kind: expected {:?}, got {:?}",
+                expected.kind, chart_data.kind
+            ));
+        }
+        if expected.labels != chart_data.labels {
+            mismatches.push("labels differ".into());
+        }
+        if expected.series.len() != chart_data.series.len() {
+            mismatches.push(format!(
+                "series count: expected {}, got {}",
+                expected.series.len(),
+                chart_data.series.len()
+            ));
+        } else {
+            for (expected_series, actual_series) in expected.series.iter().zip(&chart_data.series) {
+                if expected_series.name != actual_series.name
+                    || expected_series.values.len() != actual_series.values.len()
+                    || expected_series
+                        .values
+                        .iter()
+                        .zip(&actual_series.values)
+                        .any(|(expected, actual)| !invariant_close(*expected, *actual))
+                {
+                    mismatches.push(format!(
+                        "series `{}` differs from the source rows",
+                        actual_series.name
+                    ));
+                }
+            }
+        }
+        if mismatches.is_empty() {
+            checks.push(ok("chart values matched the source query"));
+        } else {
+            checks.push(warn(
+                "chart values did not match source query",
+                Some(mismatches.join("; ")),
+            ));
+        }
+    }
 }
 
 /// Run contract checks that need the read-only execution seam as well as the
@@ -2658,6 +2751,40 @@ mod tests {
             out.is_empty(),
             "chart SQL should count as a cited aggregate: {out:?}"
         );
+    }
+
+    #[test]
+    fn chart_values_must_match_the_source_rows() {
+        let mut evidence = vec![run_sql_ev(
+            "SELECT category, amount FROM spend ORDER BY category",
+            &["category", "amount"],
+            vec![
+                vec![Json::from("dining"), Json::from(12)],
+                vec![Json::from("rent"), Json::from(24)],
+            ],
+        )];
+        evidence[0].tool = "make_chart".into();
+        evidence[0].chart = Some(
+            chart::from_query(
+                chart::ChartKind::Bar,
+                Some("Spending".into()),
+                None,
+                evidence[0].columns.as_ref().unwrap(),
+                evidence[0].rows.as_ref().unwrap(),
+            )
+            .unwrap(),
+        );
+        let mut good = Vec::new();
+        check_chart_values(&evidence, &mut good);
+        assert_eq!(good, vec![ok("chart values matched the source query")]);
+
+        evidence[0].chart.as_mut().unwrap().series[0].values[0] = 99.0;
+        let mut bad = Vec::new();
+        check_chart_values(&evidence, &mut bad);
+        assert!(bad.iter().any(|check| {
+            !check.ok && check.label == "chart values did not match source query"
+        }));
+        assert!(hard_fail(&bad).is_some());
     }
 
     #[test]
