@@ -198,7 +198,12 @@ pub fn contract_checks(
             check_binding_usage(&mut checks, "time field", field, &sql);
         }
         if let Some(bucket) = time.bucket {
-            check_time_bucket_usage(&mut checks, bucket, &sql);
+            check_time_bucket_usage(
+                &mut checks,
+                bucket,
+                &sql,
+                contract.comparison_spec.is_some(),
+            );
         }
     }
     for field in &contract.group_by {
@@ -1301,17 +1306,26 @@ fn check_time_bucket_usage(
     checks: &mut Vec<VerificationCheck>,
     bucket: TimeBucket,
     sql: &[String],
+    comparison: bool,
 ) {
-    let format = match bucket {
-        TimeBucket::Year => "%y",
-        TimeBucket::Month => "%y-%m",
-        TimeBucket::Week => "%y-%w",
-        TimeBucket::Day => "%y-%m-%d",
+    let formats: &[&str] = if comparison {
+        match bucket {
+            TimeBucket::Year => &["%y"],
+            TimeBucket::Month => &["%m"],
+            TimeBucket::Week => &["%w"],
+            TimeBucket::Day => &["%m-%d"],
+        }
+    } else {
+        match bucket {
+            TimeBucket::Year => &["%y"],
+            TimeBucket::Month => &["%y-%m"],
+            TimeBucket::Week => &["%y-%w"],
+            TimeBucket::Day => &["%y-%m-%d"],
+        }
     };
-    if sql
-        .iter()
-        .any(|query| query.contains("strftime") && query.contains(format))
-    {
+    if sql.iter().any(|query| {
+        query.contains("strftime") && formats.iter().any(|format| query.contains(format))
+    }) {
         checks.push(ok(format!(
             "time bucket `{}` was used by the query",
             format_time_bucket(bucket)
@@ -3624,7 +3638,7 @@ mod tests {
             time: Some(crate::engine::runtime::ContractTime {
                 field: Some("date".into()),
                 range: None,
-                bucket: None,
+                bucket: Some(TimeBucket::Month),
                 timezone: None,
             }),
             comparison_spec: Some(crate::engine::runtime::ContractComparison {
@@ -3642,6 +3656,7 @@ mod tests {
         };
         let evidence = vec![run_sql_ev(
             "select \
+                strftime('%m', \"date\") as time_month, \
                 sum(case when \"date\" >= '2024-01-01' and \"date\" < '2025-01-01' then \"amount\" end) as measure_0_current, \
                 sum(case when \"date\" >= '2023-01-01' and \"date\" < '2024-01-01' then \"amount\" end) as measure_0_previous, \
                 20 as measure_0_change, 25 as measure_0_change_pct, \
@@ -3651,8 +3666,9 @@ mod tests {
                 1 / nullif(1, 0) as derived_0_current, \
                 1 / nullif(1, 0) as derived_0_previous, \
                 0 as derived_0_change, 0 as derived_0_change_pct \
-             from spend",
+             from spend group by strftime('%m', \"date\")",
             &[
+                "time_month",
                 "measure_0_current",
                 "measure_0_previous",
                 "measure_0_change",
@@ -3667,6 +3683,7 @@ mod tests {
                 "derived_0_change_pct",
             ],
             vec![vec![
+                Json::from("01"),
                 Json::from(100),
                 Json::from(80),
                 Json::from(20),

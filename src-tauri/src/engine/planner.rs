@@ -198,9 +198,6 @@ fn compile_period_comparison(
         .time
         .as_ref()
         .ok_or_else(|| "period comparison has no time field".to_string())?;
-    if time.bucket.is_some() {
-        return Err("period comparisons cannot also use a time bucket yet".into());
-    }
     if let Some(range) = time.range.as_deref() {
         if normalize(range) != normalize(&comparison.current_range) {
             return Err("comparison current_range conflicts with the contract time range".into());
@@ -220,7 +217,22 @@ fn compile_period_comparison(
         "compare {} with {}",
         comparison.current_range, comparison.previous_range
     )];
+    let bucket_field = time.bucket.map(|_| time_field);
+    if let Some(bucket) = time.bucket {
+        let expression = comparison_time_bucket_expression(&time_column.name, bucket)?;
+        let alias = format!("time_{}", bucket_name(bucket));
+        select.push(format!("{expression} AS {}", quote_ident(&alias)));
+        group.push(expression);
+        steps.push(format!(
+            "align {} buckets by {}",
+            bucket_name(bucket),
+            time_column.name
+        ));
+    }
     for field in &contract.group_by {
+        if bucket_field.is_some_and(|bucket_field| normalize(bucket_field) == normalize(field)) {
+            continue;
+        }
         let column = resolve_column(source, field)?;
         let expression = quote_ident(&column.name);
         group.push(expression.clone());
@@ -425,6 +437,12 @@ fn comparison_order_expression(
     }
     if derived_matches.len() > 1 {
         return Err(format!("order_by {:?} is ambiguous", order.by));
+    }
+    if let Some(bucket) = contract.time.as_ref().and_then(|time| time.bucket) {
+        let alias = format!("time_{}", bucket_name(bucket));
+        if normalize(&alias) == requested {
+            return Ok(quote_ident(&alias));
+        }
     }
     if contract
         .group_by
@@ -1168,6 +1186,28 @@ fn time_bucket_expression_sql(field_sql: &str, bucket: TimeBucket) -> String {
     }
 }
 
+/// A period comparison needs a bucket key shared by both windows. A regular
+/// month bucket (`%Y-%m`) would keep 2024-01 and 2023-01 separate; comparison
+/// buckets deliberately align on month/week/day within the period.
+fn comparison_time_bucket_expression(field: &str, bucket: TimeBucket) -> Result<String, String> {
+    let format = match bucket {
+        TimeBucket::Year => {
+            return Err(
+                "period comparisons cannot align a year bucket; omit the bucket or use month, week, or day".into(),
+            )
+        }
+        TimeBucket::Month => "%m",
+        TimeBucket::Week => "%W",
+        TimeBucket::Day => "%m-%d",
+    };
+    let field_sql = quote_ident(field);
+    Ok(if cfg!(feature = "duckdb") {
+        format!("strftime({}, {})", field_sql, quote_str(format))
+    } else {
+        format!("strftime({}, {})", quote_str(format), field_sql)
+    })
+}
+
 fn is_iso_date(value: &str) -> bool {
     value.len() == 10
         && value.as_bytes()[4] == b'-'
@@ -1417,6 +1457,42 @@ mod tests {
         assert!(plan.sql.contains("AS \"measure_0_change_pct\""));
         assert!(plan.sql.contains("GROUP BY \"category\""));
         assert!(plan.sql.ends_with("LIMIT 12"));
+    }
+
+    #[test]
+    fn compiles_a_period_comparison_with_aligned_month_buckets() {
+        let mut contract = contract();
+        contract.filters.clear();
+        contract.group_by.clear();
+        contract.time.as_mut().unwrap().bucket = Some(TimeBucket::Month);
+        contract.comparison_spec = Some(crate::engine::runtime::ContractComparison {
+            kind: ComparisonKind::PeriodOverPeriod,
+            current_range: "2024".into(),
+            previous_range: "2023".into(),
+        });
+        contract.order_by = Some(crate::engine::runtime::ContractOrder {
+            by: "time_month".into(),
+            direction: SortDirection::Asc,
+        });
+
+        let plan = compile(&catalog(), &contract, Some("sales")).unwrap();
+
+        assert!(plan
+            .sql
+            .contains("strftime('%m', \"month\") AS \"time_month\""));
+        assert!(plan.sql.contains("GROUP BY strftime('%m', \"month\")"));
+        assert!(plan.sql.contains("AS \"measure_0_current\""));
+        assert!(plan.sql.contains("AS \"measure_0_previous\""));
+        assert!(plan.sql.contains("ORDER BY \"time_month\" ASC"));
+        assert!(plan
+            .steps
+            .iter()
+            .any(|step| step == "align month buckets by month"));
+
+        contract.time.as_mut().unwrap().bucket = Some(TimeBucket::Year);
+        assert!(compile(&catalog(), &contract, Some("sales"))
+            .unwrap_err()
+            .contains("cannot align a year bucket"));
     }
 
     #[test]
