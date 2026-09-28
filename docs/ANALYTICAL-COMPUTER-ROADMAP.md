@@ -56,13 +56,13 @@ This is the implementation form of Fella's core loop:
   exact field bindings and bounded filter-value probes now run against the
   current workspace revision. The first deterministic planner slice now
   compiles grounded single-source aggregates, filters, time ranges, typed
-  year/month/week/day buckets, groupings, and grounded top-N/ranking into
-  read-only SQL; joins, ratios, and richer comparison semantics still use the
-  direct fallback.
+  year/month/week/day buckets, groupings, grounded top-N/ranking, and guarded
+  ratios over declared measures into read-only SQL; joins and richer comparison
+  semantics still use the direct fallback.
 - **M4 — semantic verification:** first slice implemented; grounded bindings
   must be present in executed SQL, requested aggregate operations and observed
-  filter values, time buckets, and ranking limits must also survive into that
-  evidence, and
+  filter values, time buckets, ranking limits, and derived ratios must also
+  survive into that evidence, and
   ambiguous/unsupported contracts remain review states even when a query is
   numerically reproducible.
 - **M5 — versioned semantic memory:** first slice implemented; corrections and
@@ -223,7 +223,8 @@ denominator definitions.
 
 The first implementation slice is intentionally narrower than the destination:
 it only compiles a grounded single queryable source with aggregate measures,
-observed filter values, ISO-like year/month/date ranges, and group-by fields.
+observed filter values, ISO-like year/month/date ranges, group-by fields, and
+ratios whose operands are declared measures.
 When any of those conditions is not provably satisfied, Fella keeps the
 contract for verification but returns to the existing model-driven path.
 

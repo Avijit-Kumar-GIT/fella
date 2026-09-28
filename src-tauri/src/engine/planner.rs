@@ -1,10 +1,9 @@
 //! Deterministic compilation for the small, common analytical core.
 //!
 //! This compiler is deliberately conservative. It handles one grounded table,
-//! read-only aggregates, filters, date ranges, typed time buckets, and
-//! grouping. Ratios, joins, and unsupported comparison semantics remain on the
-//! model-driven fallback until they have a typed representation and dedicated
-//! checks.
+//! read-only aggregates, filters, date ranges, typed time buckets, grouping,
+//! and guarded ratios. Joins and unsupported comparison semantics remain on
+//! the model-driven fallback until they have typed representations and checks.
 
 use crate::engine::analytics::data::{quote_ident, quote_str};
 use crate::engine::catalog::{Catalog, ColumnInfo, SourceInfo};
@@ -37,24 +36,25 @@ pub fn compile(
     let mut select = Vec::new();
     let mut steps = vec![format!("read from {view}")];
     for (index, measure) in contract.measures.iter().enumerate() {
-        let operation = normalize_operation(&measure.operation)?;
-        let expression = if operation == "count" && measure.field.is_none() {
-            "COUNT(*)".to_string()
-        } else {
-            let field = measure
-                .field
-                .as_deref()
-                .ok_or_else(|| format!("measure {:?} has no grounded field", measure.concept))?;
-            let column = resolve_column(source, field)?;
-            let value = value_expression(column);
-            format!("{operation}({value})")
-        };
+        let expression = measure_expression(source, measure)?;
         let alias = format!("measure_{index}");
         select.push(format!("{expression} AS {}", quote_ident(&alias)));
-        steps.push(format!("{operation} {}", measure.concept));
+        steps.push(format!("{} {}", measure.operation, measure.concept));
     }
     if select.is_empty() {
         return Err("the grounded contract has no measure to compute".into());
+    }
+    for (index, derived) in contract.derived_metrics.iter().enumerate() {
+        let numerator = derived_expression(source, contract, &derived.numerator)?;
+        let denominator = derived_expression(source, contract, &derived.denominator)?;
+        let expression = match derived.kind {
+            crate::engine::runtime::DerivedMetricKind::Ratio => {
+                format!("({numerator}) / NULLIF(({denominator}), 0)")
+            }
+        };
+        let alias = format!("derived_{index}");
+        select.push(format!("{expression} AS {}", quote_ident(&alias)));
+        steps.push(format!("ratio {}", derived.concept));
     }
 
     let mut predicates = Vec::new();
@@ -245,6 +245,52 @@ fn resolve_column<'a>(source: &'a SourceInfo, field: &str) -> Result<&'a ColumnI
     }
 }
 
+fn measure_expression(
+    source: &SourceInfo,
+    measure: &crate::engine::runtime::ContractMeasure,
+) -> Result<String, String> {
+    let operation = normalize_operation(&measure.operation)?;
+    if operation == "COUNT" && measure.field.is_none() {
+        return Ok("COUNT(*)".to_string());
+    }
+    let field = measure
+        .field
+        .as_deref()
+        .ok_or_else(|| format!("measure {:?} has no grounded field", measure.concept))?;
+    let column = resolve_column(source, field)?;
+    let value = value_expression(column);
+    Ok(format!("{operation}({value})"))
+}
+
+fn derived_expression(
+    source: &SourceInfo,
+    contract: &AnalysisContract,
+    requested: &str,
+) -> Result<String, String> {
+    let matches: Vec<_> = contract
+        .measures
+        .iter()
+        .filter(|measure| {
+            normalize(&measure.concept) == normalize(requested)
+                || measure
+                    .field
+                    .as_deref()
+                    .is_some_and(|field| normalize(field) == normalize(requested))
+        })
+        .collect();
+    match matches.as_slice() {
+        [measure] => measure_expression(source, measure),
+        [] => Err(format!(
+            "derived metric operand {:?} is not a declared measure",
+            requested
+        )),
+        _ => Err(format!(
+            "derived metric operand {:?} is ambiguous",
+            requested
+        )),
+    }
+}
+
 fn order_expression(
     source: &SourceInfo,
     contract: &AnalysisContract,
@@ -267,6 +313,22 @@ fn order_expression(
         return Ok(quote_ident(&format!("measure_{index}")));
     }
     if measure_matches.len() > 1 {
+        return Err(format!("order_by {:?} is ambiguous", order.by));
+    }
+
+    let derived_matches: Vec<_> = contract
+        .derived_metrics
+        .iter()
+        .enumerate()
+        .filter(|(index, derived)| {
+            normalize(&derived.concept) == requested
+                || normalize(&format!("derived_{index}")) == requested
+        })
+        .collect();
+    if let [(index, _)] = derived_matches.as_slice() {
+        return Ok(quote_ident(&format!("derived_{index}")));
+    }
+    if derived_matches.len() > 1 {
         return Err(format!("order_by {:?} is ambiguous", order.by));
     }
 
@@ -565,5 +627,43 @@ mod tests {
             .steps
             .iter()
             .any(|step| step == "order by revenue DESC"));
+    }
+
+    #[test]
+    fn compiles_a_guarded_ratio_and_can_rank_by_it() {
+        let mut contract = contract();
+        contract
+            .measures
+            .push(crate::engine::runtime::ContractMeasure {
+                concept: "orders".into(),
+                field: None,
+                operation: "count".into(),
+                unit: None,
+            });
+        contract.group_by = vec!["category".into()];
+        contract.derived_metrics = vec![crate::engine::runtime::ContractDerivedMetric {
+            concept: "revenue per order".into(),
+            kind: crate::engine::runtime::DerivedMetricKind::Ratio,
+            numerator: "revenue".into(),
+            denominator: "orders".into(),
+            unit: None,
+        }];
+        contract.order_by = Some(crate::engine::runtime::ContractOrder {
+            by: "revenue per order".into(),
+            direction: SortDirection::Desc,
+        });
+        contract.limit = Some(3);
+
+        let plan = compile(&catalog(), &contract, Some("sales")).unwrap();
+
+        assert!(plan
+            .sql
+            .contains("(SUM(\"amount\")) / NULLIF((COUNT(*)), 0) AS \"derived_0\""));
+        assert!(plan.sql.contains("ORDER BY \"derived_0\" DESC"));
+        assert!(plan.sql.ends_with("LIMIT 3"));
+        assert!(plan
+            .steps
+            .iter()
+            .any(|step| step == "ratio revenue per order"));
     }
 }

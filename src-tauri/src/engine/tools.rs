@@ -260,6 +260,22 @@ fn contract_schema() -> Json {
                 "maximum": 1000,
                 "description": "Optional maximum number of grouped rows to return."
             },
+            "derived_metrics": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "concept": { "type": "string" },
+                        "kind": { "type": "string", "enum": ["ratio"] },
+                        "numerator": { "type": "string" },
+                        "denominator": { "type": "string" },
+                        "unit": { "type": "string" }
+                    },
+                    "required": ["concept", "kind", "numerator", "denominator"],
+                    "additionalProperties": false
+                },
+                "description": "Optional derived metrics over declared measures. Use ratio for a guarded numerator/denominator calculation."
+            },
             "comparison": { "type": "string" },
             "presentation": { "type": "string" },
             "assumptions": { "type": "array", "items": { "type": "string" } },

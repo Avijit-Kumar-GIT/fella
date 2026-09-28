@@ -27,7 +27,8 @@ use crate::engine::analytics::AnalyticsSource;
 use crate::engine::evidence::{EvidenceItem, VerificationCheck, VerificationStatus};
 use crate::engine::grounding::{GroundingReport, ProbeOutcome};
 use crate::engine::runtime::{
-    AnalysisContract, ContractOrder, InterpretationStatus, SortDirection, TimeBucket,
+    AnalysisContract, ContractDerivedMetric, ContractOrder, InterpretationStatus, SortDirection,
+    TimeBucket,
 };
 
 fn is_sql_evidence(evidence: &EvidenceItem) -> bool {
@@ -201,6 +202,9 @@ pub fn contract_checks(
     if let Some(limit) = contract.limit {
         check_limit_usage(&mut checks, limit, &sql);
     }
+    for (index, derived) in contract.derived_metrics.iter().enumerate() {
+        check_derived_usage(&mut checks, contract, index, derived, &sql);
+    }
     checks
 }
 
@@ -226,6 +230,13 @@ fn check_order_usage(
             if let Some(field) = &measure.field {
                 targets.push(field.to_ascii_lowercase());
             }
+        }
+    }
+    for (index, derived) in contract.derived_metrics.iter().enumerate() {
+        if derived.concept.eq_ignore_ascii_case(&order.by)
+            || format!("derived_{index}").eq_ignore_ascii_case(&order.by)
+        {
+            targets.push(format!("derived_{index}"));
         }
     }
     if let Some(time) = &contract.time {
@@ -283,6 +294,56 @@ fn check_limit_usage(checks: &mut Vec<VerificationCheck>, limit: u16, sql: &[Str
             Some("the executed evidence returned an unbounded ranking".into()),
         ));
     }
+}
+
+fn check_derived_usage(
+    checks: &mut Vec<VerificationCheck>,
+    contract: &AnalysisContract,
+    index: usize,
+    derived: &ContractDerivedMetric,
+    sql: &[String],
+) {
+    let alias = format!("derived_{index}");
+    let used = sql.iter().any(|query| {
+        let guarded_compiled_ratio =
+            contains_word(query, &alias) && query.contains('/') && query.contains("nullif");
+        let direct_ratio = query.contains('/')
+            && measure_reference_used(contract, &derived.numerator, query)
+            && measure_reference_used(contract, &derived.denominator, query);
+        guarded_compiled_ratio || direct_ratio
+    });
+    if used {
+        checks.push(ok(format!(
+            "derived metric `{}` was used by the query",
+            derived.concept
+        )));
+    } else {
+        checks.push(warn(
+            format!(
+                "derived metric `{}` was not used by the query",
+                derived.concept
+            ),
+            Some("the executed evidence did not carry the requested derived calculation".into()),
+        ));
+    }
+}
+
+fn measure_reference_used(contract: &AnalysisContract, requested: &str, query: &str) -> bool {
+    contract.measures.iter().any(|measure| {
+        let matches = measure.concept.eq_ignore_ascii_case(requested)
+            || measure
+                .field
+                .as_deref()
+                .is_some_and(|field| field.eq_ignore_ascii_case(requested));
+        if !matches {
+            return false;
+        }
+        if let Some(field) = &measure.field {
+            contains_word(query, &field.to_ascii_lowercase())
+        } else {
+            contains_function_call(query, &measure.operation.to_ascii_lowercase())
+        }
+    })
 }
 
 fn check_time_bucket_usage(
@@ -2508,6 +2569,61 @@ mod tests {
         }));
         assert!(bad_checks.iter().any(|check| {
             !check.ok && check.label.contains("requested row limit `3` was not used")
+        }));
+    }
+
+    #[test]
+    fn contract_checks_require_the_requested_derived_ratio() {
+        let contract = AnalysisContract {
+            interpretation: InterpretationStatus::Grounded,
+            subject: Some("spend".into()),
+            measures: vec![
+                crate::engine::runtime::ContractMeasure {
+                    concept: "revenue".into(),
+                    field: Some("amount".into()),
+                    operation: "sum".into(),
+                    unit: None,
+                },
+                crate::engine::runtime::ContractMeasure {
+                    concept: "orders".into(),
+                    field: None,
+                    operation: "count".into(),
+                    unit: None,
+                },
+            ],
+            derived_metrics: vec![ContractDerivedMetric {
+                concept: "revenue per order".into(),
+                kind: crate::engine::runtime::DerivedMetricKind::Ratio,
+                numerator: "revenue".into(),
+                denominator: "orders".into(),
+                unit: None,
+            }],
+            ..Default::default()
+        };
+        let report = GroundingReport {
+            source: Some("spend".into()),
+            probes: vec![],
+            unresolved: vec![],
+        };
+        let good = vec![run_sql_ev(
+            "SELECT SUM(amount) AS measure_0, COUNT(*) AS measure_1, (SUM(amount)) / NULLIF((COUNT(*)), 0) AS derived_0 FROM spend",
+            &["measure_0", "measure_1", "derived_0"],
+            vec![vec![Json::from(12), Json::from(2), Json::from(6)]],
+        )];
+        let good_checks = contract_checks(&contract, Some(&report), &good);
+        assert!(good_checks.iter().all(|check| check.ok), "{good_checks:?}");
+
+        let bad = vec![run_sql_ev(
+            "SELECT SUM(amount) AS measure_0, COUNT(*) AS measure_1 FROM spend",
+            &["measure_0", "measure_1"],
+            vec![vec![Json::from(12), Json::from(2)]],
+        )];
+        let bad_checks = contract_checks(&contract, Some(&report), &bad);
+        assert!(bad_checks.iter().any(|check| {
+            !check.ok
+                && check
+                    .label
+                    .contains("derived metric `revenue per order` was not used")
         }));
     }
 

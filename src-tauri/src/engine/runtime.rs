@@ -107,6 +107,22 @@ pub struct ContractOrder {
     pub direction: SortDirection,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DerivedMetricKind {
+    Ratio,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContractDerivedMetric {
+    pub concept: String,
+    pub kind: DerivedMetricKind,
+    pub numerator: String,
+    pub denominator: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
+}
+
 /// Time semantics kept separate so date-field and range mistakes can be
 /// checked without parsing the model's prose answer.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -143,6 +159,8 @@ pub struct AnalysisContract {
     pub order_by: Option<ContractOrder>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub limit: Option<u16>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub derived_metrics: Vec<ContractDerivedMetric>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub comparison: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -176,6 +194,16 @@ impl AnalysisContract {
                 .is_some_and(|limit| !(1..=1000).contains(&limit))
             {
                 return Err("the analytical limit must be between 1 and 1000".into());
+            }
+            for derived in &contract.derived_metrics {
+                if derived.concept.trim().is_empty()
+                    || derived.numerator.trim().is_empty()
+                    || derived.denominator.trim().is_empty()
+                {
+                    return Err(
+                        "a derived metric needs a concept, numerator, and denominator".into(),
+                    );
+                }
             }
             if !contract.unresolved.is_empty() {
                 contract.interpretation = InterpretationStatus::Ambiguous;
@@ -396,6 +424,47 @@ mod tests {
             "group_by": [],
             "order_by": {"by": "revenue", "direction": "desc"},
             "limit": 0,
+            "assumptions": [],
+            "unresolved": []
+        }));
+        assert!(invalid.is_err());
+    }
+
+    #[test]
+    fn ratio_contracts_validate_the_declared_operands() {
+        let contract = AnalysisContract::from_tool_args(&serde_json::json!({
+            "interpretation": "assumed",
+            "subject": "sales",
+            "measures": [
+                {"concept": "revenue", "operation": "sum"},
+                {"concept": "orders", "operation": "count"}
+            ],
+            "filters": [],
+            "group_by": [],
+            "derived_metrics": [{
+                "concept": "revenue per order",
+                "kind": "ratio",
+                "numerator": "revenue",
+                "denominator": "orders"
+            }],
+            "assumptions": [],
+            "unresolved": []
+        }))
+        .unwrap();
+        assert_eq!(contract.derived_metrics[0].kind, DerivedMetricKind::Ratio);
+
+        let invalid = AnalysisContract::from_tool_args(&serde_json::json!({
+            "interpretation": "assumed",
+            "subject": "sales",
+            "measures": [{"concept": "revenue", "operation": "sum"}],
+            "filters": [],
+            "group_by": [],
+            "derived_metrics": [{
+                "concept": "revenue per order",
+                "kind": "ratio",
+                "numerator": "revenue",
+                "denominator": ""
+            }],
             "assumptions": [],
             "unresolved": []
         }));

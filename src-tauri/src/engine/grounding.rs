@@ -235,15 +235,86 @@ pub fn ground(engine: &EngineState, mut contract: AnalysisContract) -> Grounding
                 &mut report,
                 format!("order_by {requested:?} matched more than one measure"),
             ),
-            [] => match resolve_field(&source, &requested) {
-                Ok(column) => {
-                    order.by = column.name.clone();
-                    report
-                        .probes
-                        .push(binding_probe("order_by", &requested, column));
+            [] => {
+                let derived_matches: Vec<_> = contract
+                    .derived_metrics
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, derived)| {
+                        normalize(&derived.concept) == normalize(&requested)
+                            || normalize(&format!("derived_{index}")) == normalize(&requested)
+                    })
+                    .collect();
+                match derived_matches.as_slice() {
+                    [(index, derived)] => {
+                        order.by = format!("derived_{index}");
+                        report.probes.push(GroundingProbe {
+                            kind: "order_by".into(),
+                            target: requested,
+                            outcome: ProbeOutcome::Resolved,
+                            detail: format!("resolved to derived metric {}", derived.concept),
+                        });
+                    }
+                    [_first, ..] => add_unresolved(
+                        &mut report,
+                        format!("order_by {requested:?} matched more than one derived metric"),
+                    ),
+                    [] => match resolve_field(&source, &requested) {
+                        Ok(column) => {
+                            order.by = column.name.clone();
+                            report
+                                .probes
+                                .push(binding_probe("order_by", &requested, column));
+                        }
+                        Err(reason) => add_unresolved(&mut report, reason),
+                    },
                 }
-                Err(reason) => add_unresolved(&mut report, reason),
-            },
+            }
+        }
+    }
+
+    for derived in &contract.derived_metrics {
+        for (kind, requested) in [
+            ("derived_numerator", derived.numerator.as_str()),
+            ("derived_denominator", derived.denominator.as_str()),
+        ] {
+            let matches: Vec<_> = contract
+                .measures
+                .iter()
+                .enumerate()
+                .filter(|(_, measure)| {
+                    normalize(&measure.concept) == normalize(requested)
+                        || measure
+                            .field
+                            .as_deref()
+                            .is_some_and(|field| normalize(field) == normalize(requested))
+                })
+                .collect();
+            match matches.len() {
+                1 => {
+                    let (_, measure) = matches[0];
+                    report.probes.push(GroundingProbe {
+                        kind: kind.into(),
+                        target: requested.into(),
+                        outcome: ProbeOutcome::Resolved,
+                        detail: format!("resolved to measure {}", measure.concept),
+                    });
+                }
+                0 => add_unresolved(
+                    &mut report,
+                    format!(
+                        "derived metric {:?} {kind} {:?} did not match a declared measure",
+                        derived.concept, requested
+                    ),
+                ),
+                _ => add_unresolved(
+                    &mut report,
+                    format!(
+                        "derived metric {:?} {kind} {:?} matched more than one measure",
+                        derived.concept, requested
+                    ),
+                ),
+            }
         }
     }
 
@@ -322,7 +393,32 @@ fn select_source(
                     .is_some_and(|field| normalize(field) == normalize(&order.by))
         });
         if !is_measure_reference {
-            requested.push(order.by.clone());
+            let is_derived_reference =
+                contract
+                    .derived_metrics
+                    .iter()
+                    .enumerate()
+                    .any(|(index, derived)| {
+                        normalize(&derived.concept) == normalize(&order.by)
+                            || normalize(&format!("derived_{index}")) == normalize(&order.by)
+                    });
+            if !is_derived_reference {
+                requested.push(order.by.clone());
+            }
+        }
+    }
+    for derived in &contract.derived_metrics {
+        for reference in [&derived.numerator, &derived.denominator] {
+            let is_measure_reference = contract.measures.iter().any(|measure| {
+                normalize(&measure.concept) == normalize(reference)
+                    || measure
+                        .field
+                        .as_deref()
+                        .is_some_and(|field| normalize(field) == normalize(reference))
+            });
+            if !is_measure_reference {
+                requested.push(reference.clone());
+            }
         }
     }
     let matches: Vec<SourceInfo> = queryable

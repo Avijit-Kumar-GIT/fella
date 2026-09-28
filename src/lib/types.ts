@@ -103,6 +103,13 @@ export interface AnalysisContract {
 	group_by: string[];
 	order_by?: { by: string; direction: 'asc' | 'desc' };
 	limit?: number;
+	derived_metrics?: {
+		concept: string;
+		kind: 'ratio';
+		numerator: string;
+		denominator: string;
+		unit?: string;
+	}[];
 	comparison?: string;
 	presentation?: string;
 	assumptions: string[];
