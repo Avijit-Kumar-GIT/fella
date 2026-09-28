@@ -63,6 +63,22 @@ def by_model(rows):
     return out
 
 
+def weighted_runtime_rate(rows, key):
+    """Aggregate an optional per-case runtime rate by iteration count.
+
+    Baseline harnesses have no runtime acceptance envelope, so an absent rate
+    stays None instead of becoming a misleading zero.
+    """
+    measured = [r for r in rows if r.get(key) is not None]
+    if not measured:
+        return None
+    total_iters = sum(max(int(r.get("iters", 1)), 1) for r in measured)
+    weighted = sum(
+        float(r[key]) * max(int(r.get("iters", 1)), 1) for r in measured
+    )
+    return weighted / total_iters
+
+
 def agg(rows):
     n = len(rows)
     ok = sum(1 for r in rows if r["correct"])
@@ -74,7 +90,9 @@ def agg(rows):
     ctok = sum(r["completion_tok"] for r in rows)
     waste = sum(r["waste"] for r in rows)
     return dict(n=n, ok=ok, allk=allk, caught=caught, wrong=wrong,
-               tok=tok, ptok=ptok, ctok=ctok, waste=waste)
+               tok=tok, ptok=ptok, ctok=ctok, waste=waste,
+               accepted_rate=weighted_runtime_rate(rows, "accepted_rate"),
+               unsafe_guess_rate=weighted_runtime_rate(rows, "unsafe_guess_rate"))
 
 
 def usd_per_correct(a, model):
@@ -172,8 +190,8 @@ def write_csv(out_path, bare_path, fella_path):
 def lift(bare_path, fella_path, prices):
     B = by_model(json.load(open(bare_path)))
     F = by_model(json.load(open(fella_path)))
-    hdr = "| model | bare acc | fella acc | Δacc | Δacc 95% CI | fella all-iters | fella tok/correct | bare tok/correct | self-catch"
-    sep = "|---|--:|--:|--:|:-:|--:|--:|--:|--:"
+    hdr = "| model | bare acc | fella acc | Δacc | Δacc 95% CI | fella all-iters | fella accepted | fella unsafe | fella tok/correct | bare tok/correct | self-catch"
+    sep = "|---|--:|--:|--:|:-:|--:|--:|--:|--:|--:|--:"
     if prices:
         hdr += " | fella $/100-correct | bare $/100-correct"
         sep += "|--:|--:"
@@ -199,6 +217,8 @@ def lift(bare_path, fella_path, prices):
             dacc_s,
             ci,
             f"{f['allk']}/{f['n']}" if has_f else "—",
+            f"{f['accepted_rate']:.0%}" if has_f and f["accepted_rate"] is not None else "—",
+            f"{f['unsafe_guess_rate']:.0%}" if has_f and f["unsafe_guess_rate"] is not None else "—",
             f"{f['tok']/max(f['ok'],1):,.0f}" if has_f else "—",
             f"{b['tok']/max(b['ok'],1):,.0f}" if b["n"] else "—",
             (f"{f['caught']}/{f['wrong']}" if f["wrong"] else "0/0") if has_f else "—",
@@ -212,19 +232,22 @@ def lift(bare_path, fella_path, prices):
 
 
 def generic(specs, prices):
-    print("| label | n | acc | close | waste | tok/correct" + (" | $/correct |" if prices else " |"))
-    print("|---|--:|:-:|--:|--:|--:" + ("|--:|" if prices else "|"))
+    print("| label | n | acc | accepted | unsafe | close | waste | tok/correct" + (" | $/correct |" if prices else " |"))
+    print("|---|--:|:-:|--:|--:|--:|--:|--:" + ("|--:|" if prices else "|"))
     for spec in specs:
         label, rest = spec.split("=", 1)
         path, _, mf = rest.partition(":")
         rows = [r for r in json.load(open(path)) if not mf or r["model"] == mf]
         if not rows:
-            print(f"| {label} | 0 | — | | | |")
+            print(f"| {label} | 0 | — | — | — | — | — | — |")
             continue
         a = agg(rows)
         close = sum(r["closeness_det"] for r in rows) / a["n"]
-        cells = [label, str(a["n"]), f"{a['ok']}/{a['n']}", f"{close:.2f}",
-                 str(a["waste"]), f"{a['tok']/max(a['ok'],1):,.0f}"]
+        cells = [label, str(a["n"]), f"{a['ok']}/{a['n']}",
+                 f"{a['accepted_rate']:.0%}" if a["accepted_rate"] is not None else "—",
+                 f"{a['unsafe_guess_rate']:.0%}" if a["unsafe_guess_rate"] is not None else "—",
+                 f"{close:.2f}", str(a["waste"]),
+                 f"{a['tok']/max(a['ok'],1):,.0f}"]
         if prices:
             u = usd_per_correct(a, rows[0]["model"])
             cells.append(f"${u:.3f}" if u is not None else "n/a")

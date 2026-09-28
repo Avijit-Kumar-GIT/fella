@@ -101,7 +101,8 @@ This is the implementation form of Fella's core loop:
   interpretation and plan semantics, which the evaluator scores independently
   from the final prose answer. It now also reports accepted-answer and
   unsafe-guess rates for Fella runs. Cost/quality dashboards and broader replay
-  matrices remain ahead.
+  matrices remain ahead; the lift rollup now carries weighted accepted and
+  unsafe rates alongside accuracy and token cost.
 
 ## Where the current code starts
 
@@ -374,7 +375,8 @@ benchmark can distinguish a numerically correct answer from one produced by an
 unsafe interpretation or unexpected execution strategy. It also records the
 fraction of runs the runtime accepted as verified and the fraction that still
 emitted a non-empty answer without verification, making the correctness-first
-tradeoff visible before a dashboard exists.
+tradeoff visible before a dashboard exists. The aggregate CLI keeps those rates
+weighted by iteration count and leaves non-Fella baselines as not applicable.
 
 ## Research-informed design choices
 
