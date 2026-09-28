@@ -48,7 +48,9 @@ pub fn run(
 
     check_tables(engine, evidence, &mut checks);
     rerun_queries(engine, evidence, &mut checks);
+    rerun_python_inputs(engine, evidence, &mut checks);
     check_numbers(answer, evidence, &mut checks);
+    check_signed_semantics(question, evidence, &mut checks);
     check_text_agg(engine, evidence, &mut checks);
     check_case_filter(engine, evidence, &mut checks);
     check_aggregate_verb(question, evidence, &mut checks);
@@ -95,6 +97,8 @@ pub fn hard_fail(checks: &[VerificationCheck]) -> Option<String> {
             "grouped totals did not reconcile",
             "average fell outside observed bounds",
             "chart values did not match source query",
+            "signed values were discarded",
+            "excluding filter `",
         ],
     )
 }
@@ -106,9 +110,11 @@ pub fn hard_fail(checks: &[VerificationCheck]) -> Option<String> {
 pub fn reran_clean(checks: &[VerificationCheck]) -> bool {
     hard_fail(checks).is_none()
         && checks.iter().any(|c| {
-            c.ok && c
+            c.ok && (c
                 .label
                 .contains("re-checked the queries behind this answer")
+                || c.label
+                    .contains("re-checked the SQL inputs to this Python computation"))
         })
 }
 
@@ -194,6 +200,7 @@ pub fn contract_checks(
         for value in &filter.resolved_values {
             check_literal_usage(&mut checks, "filter value", value, &sql);
         }
+        check_filter_polarity(&mut checks, filter, &sql);
     }
     if let Some(time) = &contract.time {
         if let Some(field) = time.field.as_deref() {
@@ -1044,15 +1051,21 @@ fn check_derived_usage(
     let alias = format!("derived_{index}");
     let used = sql.iter().any(|query| {
         let lowered = query.to_ascii_lowercase();
-        let guarded_compiled_ratio = (contains_word(query, &alias)
+        let guarded_compiled_metric = (contains_word(query, &alias)
             || lowered.contains(&format!("{alias}_current"))
             || lowered.contains(&format!("{alias}_previous")))
-            && lowered.contains('/')
-            && lowered.contains("nullif");
-        let direct_ratio = query.contains('/')
-            && measure_reference_used(contract, &derived.numerator, query)
+            && match derived.kind {
+                crate::engine::runtime::DerivedMetricKind::Ratio => {
+                    lowered.contains('/') && lowered.contains("nullif")
+                }
+                crate::engine::runtime::DerivedMetricKind::Difference => lowered.contains('-'),
+            };
+        let direct_metric = match derived.kind {
+            crate::engine::runtime::DerivedMetricKind::Ratio => query.contains('/'),
+            crate::engine::runtime::DerivedMetricKind::Difference => query.contains('-'),
+        } && measure_reference_used(contract, &derived.numerator, query)
             && measure_reference_used(contract, &derived.denominator, query);
-        guarded_compiled_ratio || direct_ratio
+        guarded_compiled_metric || direct_metric
     });
     if used {
         checks.push(ok(format!(
@@ -1124,11 +1137,21 @@ fn check_derived_arithmetic(
             let actual = row.get(derived_column).and_then(num_of);
             let expected = numerator
                 .zip(denominator)
-                .and_then(|(numerator, denominator)| {
-                    if denominator.abs() <= f64::EPSILON {
-                        None
-                    } else {
-                        Some(numerator / denominator)
+                .and_then(|(numerator, denominator)| match derived.kind {
+                    crate::engine::runtime::DerivedMetricKind::Ratio => {
+                        if denominator.abs() <= f64::EPSILON {
+                            None
+                        } else {
+                            let ratio = numerator / denominator;
+                            Some(if is_percentage_unit(derived.unit.as_deref()) {
+                                ratio * 100.0
+                            } else {
+                                ratio
+                            })
+                        }
+                    }
+                    crate::engine::runtime::DerivedMetricKind::Difference => {
+                        Some(numerator - denominator)
                     }
                 });
             let matches = match (expected, actual) {
@@ -1408,6 +1431,99 @@ fn check_literal_usage(
             Some("the executed evidence did not carry the observed filter value".into()),
         ));
     }
+}
+
+fn check_filter_polarity(
+    checks: &mut Vec<VerificationCheck>,
+    filter: &crate::engine::runtime::ContractFilter,
+    sql: &[String],
+) {
+    if !filter.exclude || filter.resolved_values.is_empty() {
+        return;
+    }
+    let Some(field) = filter.field.as_deref() else {
+        return;
+    };
+    let field = field.to_ascii_lowercase();
+    let uses_exclusion = sql.iter().any(|query| {
+        let query = query.to_ascii_lowercase();
+        let mentions_field = contains_field_reference(&query, &field);
+        mentions_field && (query.contains("not in") || query.contains("<>") || query.contains("!="))
+    });
+    if uses_exclusion {
+        checks.push(ok(format!(
+            "excluding filter `{}` was preserved by the query",
+            filter.concept
+        )));
+    } else {
+        checks.push(warn(
+            format!("excluding filter `{}` was not preserved by the query", filter.concept),
+            Some("the contract excludes observed values but the executed query did not carry that polarity".into()),
+        ));
+    }
+}
+
+fn check_signed_semantics(
+    question: &str,
+    evidence: &[EvidenceItem],
+    checks: &mut Vec<VerificationCheck>,
+) {
+    let lower = question.to_ascii_lowercase();
+    let words: Vec<&str> = lower
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .collect();
+    let signed_question = [
+        "net", "spending", "spent", "refund", "refunds", "credit", "credits",
+    ]
+    .iter()
+    .any(|word| words.contains(word))
+        || lower.contains("excluding income")
+        || lower.contains("after refunds")
+        || lower.contains("including refunds");
+    if !signed_question
+        || lower.contains("absolute")
+        || lower.contains("absolute value")
+        || lower.contains("magnitude")
+    {
+        return;
+    }
+    let mut discarded = evidence
+        .iter()
+        .filter(|item| {
+            item.error.is_none()
+                && is_sql_evidence(item)
+                && item
+                    .sql
+                    .as_deref()
+                    .is_some_and(signed_value_abs_is_discarding)
+        })
+        .map(|item| item.sql.as_deref().unwrap_or_default());
+    if let Some(sql) = discarded.next() {
+        checks.push(warn(
+            "signed values were discarded by ABS in the executed query",
+            Some(format!(
+                "this question requires signed amounts; revise the semantic plan instead of summing absolute magnitudes: {}",
+                truncate(sql, 140)
+            )),
+        ));
+    }
+}
+
+fn signed_value_abs_is_discarding(sql: &str) -> bool {
+    let lower = sql.to_ascii_lowercase();
+    let mut offset = 0;
+    while let Some(relative) = lower[offset..].find("abs(") {
+        let start = offset + relative;
+        let prefix = lower[..start].trim_end();
+        // Period-over-period percent change uses ABS only to keep a negative
+        // prior-period denominator from flipping the displayed percentage.
+        // That does not discard the signed measure used for the change itself.
+        if !prefix.ends_with("nullif(") {
+            return true;
+        }
+        offset = start + 4;
+    }
+    false
 }
 
 fn contains_function_call(haystack: &str, function: &str) -> bool {
@@ -2249,6 +2365,82 @@ fn rerun_queries(
     }
 }
 
+/// Python is a presentation path, not an unverifiable escape hatch. The
+/// sandbox records every bounded SQL input, and the verifier replays those
+/// inputs against the same workspace revision before accepting the statistic.
+/// This checks the data boundary independently of the generated Python code;
+/// the sandbox itself remains responsible for the arithmetic.
+fn rerun_python_inputs(
+    engine: &dyn AnalyticsSource,
+    evidence: &[EvidenceItem],
+    out: &mut Vec<VerificationCheck>,
+) {
+    let mut matched = 0usize;
+    let mut saw_python = false;
+    for item in evidence
+        .iter()
+        .filter(|item| item.tool == "run_python" && item.error.is_none())
+    {
+        saw_python = true;
+        if item.python_queries_complete != Some(true) {
+            out.push(warn(
+                "Python computation SQL trace was incomplete",
+                Some("the runtime capped the recorded inputs, so this result cannot be accepted as fully replayable".into()),
+            ));
+            continue;
+        }
+        let Some(queries) = item.python_queries.as_deref() else {
+            out.push(warn(
+                "Python computation had no replayable SQL input",
+                Some("the result was not grounded to a recorded workspace query".into()),
+            ));
+            continue;
+        };
+        if queries.is_empty() {
+            out.push(warn(
+                "Python computation had no replayable SQL input",
+                Some("the result was not grounded to a recorded workspace query".into()),
+            ));
+            continue;
+        }
+        let mut item_ok = true;
+        for query in queries {
+            match engine.run_sql(&query.sql) {
+                Ok(fresh) => {
+                    let same = query.columns == fresh.columns
+                        && query.row_count == fresh.row_count
+                        && query.truncated == fresh.truncated
+                        && rows_match(&query.rows, &fresh.rows);
+                    if same {
+                        matched += 1;
+                    } else {
+                        item_ok = false;
+                        out.push(warn(
+                            "a SQL input to the Python computation gives a different result now",
+                            Some(truncate(&query.sql, 120)),
+                        ));
+                    }
+                }
+                Err(error) => {
+                    item_ok = false;
+                    out.push(warn(
+                        "a SQL input to the Python computation no longer runs",
+                        Some(format!("{}: {error}", truncate(&query.sql, 100))),
+                    ));
+                }
+            }
+        }
+        if !item_ok {
+            continue;
+        }
+    }
+    if saw_python && matched > 0 {
+        out.push(ok(
+            "re-checked the SQL inputs to this Python computation  same results",
+        ));
+    }
+}
+
 // --- 3. numbers in the answer are backed by evidence ------------------
 
 fn check_numbers(answer: &str, evidence: &[EvidenceItem], out: &mut Vec<VerificationCheck>) {
@@ -2460,6 +2652,13 @@ fn num_of(v: &Json) -> Option<f64> {
         Json::String(s) => s.trim().parse::<f64>().ok(),
         _ => None,
     }
+}
+
+fn is_percentage_unit(unit: Option<&str>) -> bool {
+    unit.is_some_and(|unit| {
+        let unit = unit.to_ascii_lowercase();
+        unit.contains('%') || unit.contains("percent") || unit.contains("percentage")
+    })
 }
 
 /// Two result sets are "the same" for the re-run check if every cell matches
@@ -2744,6 +2943,95 @@ mod tests {
         assert!(!rows_match(&m1, &m2));
         let n = vec![vec![Json::from("2024-03"), Json::from(10.0001)]];
         assert!(rows_match(&m1, &n));
+    }
+
+    #[test]
+    fn signed_questions_reject_absolute_value_sql() {
+        let evidence = vec![run_sql_ev(
+            "SELECT SUM(ABS(amount)) AS total FROM ledger",
+            &["total"],
+            vec![vec![Json::from(100)]],
+        )];
+        let mut checks = Vec::new();
+        check_signed_semantics(
+            "what was net spending after refunds?",
+            &evidence,
+            &mut checks,
+        );
+        assert!(checks
+            .iter()
+            .any(|check| { !check.ok && check.label.contains("signed values were discarded") }));
+        assert!(hard_fail(&checks).is_some());
+
+        let mut explicit_absolute = Vec::new();
+        check_signed_semantics(
+            "what was the absolute magnitude of spending?",
+            &evidence,
+            &mut explicit_absolute,
+        );
+        assert!(explicit_absolute.is_empty());
+    }
+
+    #[test]
+    fn signed_check_allows_absolute_prior_period_denominator() {
+        assert!(!signed_value_abs_is_discarding(
+            "SELECT ((current - previous) / NULLIF(ABS(previous), 0)) * 100 AS change_pct"
+        ));
+        assert!(signed_value_abs_is_discarding(
+            "SELECT SUM(ABS(amount)) AS spending FROM ledger"
+        ));
+    }
+
+    #[test]
+    fn python_sql_inputs_can_be_replayed_for_acceptance() {
+        struct ReplaySource;
+
+        impl AnalyticsSource for ReplaySource {
+            fn catalog(&self) -> crate::engine::catalog::Catalog {
+                crate::engine::catalog::Catalog::default()
+            }
+
+            fn run_sql(
+                &self,
+                sql: &str,
+            ) -> crate::engine::error::EngineResult<crate::engine::state::QueryResult> {
+                assert_eq!(sql, "SELECT value FROM measurements");
+                Ok(crate::engine::state::QueryResult {
+                    columns: vec!["value".into()],
+                    rows: vec![vec![Json::from(6)], vec![Json::from(8)]],
+                    row_count: 2,
+                    ms: 1,
+                    truncated: false,
+                })
+            }
+        }
+
+        let mut evidence = run_sql_ev(
+            "SELECT value FROM measurements",
+            &["value"],
+            vec![vec![Json::from(6)], vec![Json::from(8)]],
+        );
+        evidence.tool = "run_python".into();
+        evidence.sql = None;
+        evidence.output = Some("7".into());
+        evidence.python_queries = Some(vec![crate::engine::analytics::pyexec::PythonQueryTrace {
+            sql: "SELECT value FROM measurements".into(),
+            columns: vec!["value".into()],
+            rows: vec![vec![Json::from(6)], vec![Json::from(8)]],
+            row_count: 2,
+            truncated: false,
+        }]);
+        evidence.python_queries_complete = Some(true);
+
+        let mut checks = Vec::new();
+        rerun_python_inputs(&ReplaySource, &[evidence], &mut checks);
+        assert!(checks.iter().any(|check| {
+            check.ok
+                && check
+                    .label
+                    .contains("re-checked the SQL inputs to this Python computation")
+        }));
+        assert!(reran_clean(&checks));
     }
 
     #[test]
@@ -3272,6 +3560,8 @@ mod tests {
             row_count: Some(1),
             output: None,
             chart: None,
+            python_queries: None,
+            python_queries_complete: None,
             ms: 1,
             error: None,
         }];
@@ -3304,6 +3594,8 @@ mod tests {
             row_count: Some(1),
             output: None,
             chart: None,
+            python_queries: None,
+            python_queries_complete: None,
             ms: 1,
             error: None,
         }];
@@ -3351,6 +3643,8 @@ mod tests {
                 "table ledger  (from ledger.csv, 30 rows)\ndocument notes.md  (Notes, 1 KB)".into(),
             ),
             chart: None,
+            python_queries: None,
+            python_queries_complete: None,
             ms: 1,
             error: None,
         }];
@@ -3380,6 +3674,8 @@ mod tests {
             rows: Some(rows),
             output: None,
             chart: None,
+            python_queries: None,
+            python_queries_complete: None,
             ms: 1,
             error: None,
         }
@@ -3589,6 +3885,7 @@ mod tests {
             filters: vec![crate::engine::runtime::ContractFilter {
                 concept: "category".into(),
                 field: Some("category".into()),
+                exclude: false,
                 candidate_values: vec!["dining".into()],
                 resolved_values: vec!["dining".into()],
                 resolution: Some("observed".into()),
@@ -4003,6 +4300,7 @@ mod tests {
             filters: vec![crate::engine::runtime::ContractFilter {
                 concept: "category".into(),
                 field: Some("category".into()),
+                exclude: false,
                 candidate_values: vec!["dining".into()],
                 resolved_values: vec!["dining".into()],
                 resolution: Some("observed".into()),

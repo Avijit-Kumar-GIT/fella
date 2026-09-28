@@ -75,6 +75,7 @@ fn scans_queries_and_guards_a_workspace() {
             filters: vec![ContractFilter {
                 concept: "month".into(),
                 field: None,
+                exclude: false,
                 candidate_values: vec!["2024-01".into()],
                 resolved_values: Vec::new(),
                 resolution: None,
@@ -108,6 +109,7 @@ fn scans_queries_and_guards_a_workspace() {
             filters: vec![ContractFilter {
                 concept: "month".into(),
                 field: Some("month".into()),
+                exclude: false,
                 candidate_values: vec!["2024-02".into()],
                 resolved_values: vec!["2024-99".into()],
                 resolution: Some("observed".into()),
@@ -1056,6 +1058,8 @@ fn grounds_and_executes_a_typed_period_comparison() {
         row_count: Some(result.row_count),
         output: None,
         chart: None,
+        python_queries: None,
+        python_queries_complete: None,
         ms: result.ms,
         error: None,
     };
@@ -1140,6 +1144,8 @@ fn grounds_and_verifies_an_average_against_observed_bounds() {
         row_count: Some(result.row_count),
         output: None,
         chart: None,
+        python_queries: None,
+        python_queries_complete: None,
         ms: result.ms,
         error: None,
     };

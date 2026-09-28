@@ -90,12 +90,22 @@ pub struct ContractFilter {
     pub concept: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub field: Option<String>,
+    /// `false` means the observed values are included; `true` means they are
+    /// excluded. Keeping this in the contract prevents the planner from
+    /// losing the difference between “category is Income” and “everything
+    /// except category Income”.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub exclude: bool,
     #[serde(default)]
     pub candidate_values: Vec<String>,
     #[serde(default)]
     pub resolved_values: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resolution: Option<String>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -124,6 +134,7 @@ pub struct ContractOrder {
 #[serde(rename_all = "snake_case")]
 pub enum DerivedMetricKind {
     Ratio,
+    Difference,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

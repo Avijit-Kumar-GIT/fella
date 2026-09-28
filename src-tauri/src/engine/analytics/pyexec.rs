@@ -40,6 +40,7 @@ const OUTPUT_CAP: usize = 64 * 1024;
 const SQL_QUERY_CAP: usize = 64 * 1024;
 const SQL_ROW_CAP: usize = 10_000;
 const SQL_RESPONSE_CAP: usize = 1024 * 1024;
+const SQL_TRACE_CAP: usize = 8;
 const MEMORY_CAP_BYTES: usize = 256 * 1024 * 1024;
 const STACK_CAP_BYTES: usize = 2 * 1024 * 1024;
 
@@ -90,6 +91,19 @@ pub struct PyResult {
     /// Wasm memory only grows, so this is also the run's peak guest memory.
     pub guest_memory_bytes: usize,
     pub ms: u64,
+    /// Read-only SQL calls made by the guest, captured with their bounded
+    /// results so the runtime can replay Python-backed statistics.
+    pub queries: Vec<PythonQueryTrace>,
+    pub query_trace_complete: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PythonQueryTrace {
+    pub sql: String,
+    pub columns: Vec<String>,
+    pub rows: Vec<Vec<serde_json::Value>>,
+    pub row_count: usize,
+    pub truncated: bool,
 }
 
 struct HostState {
@@ -98,6 +112,8 @@ struct HostState {
     stderr: CapturedOutput,
     limits: StoreLimits,
     cancel: Option<Arc<AtomicBool>>,
+    queries: Vec<PythonQueryTrace>,
+    query_trace_truncated: bool,
 }
 
 impl HostState {
@@ -122,6 +138,8 @@ impl HostState {
                 .trap_on_grow_failure(false)
                 .build(),
             cancel,
+            queries: Vec::new(),
+            query_trace_truncated: false,
         }
     }
 }
@@ -279,11 +297,23 @@ pub fn run(
                     }
                 };
 
-                let response = match query_bridge(
-                    &caller.data().bridge,
-                    query,
-                    caller.data().cancel.clone(),
-                ) {
+                let query_result =
+                    query_bridge(&caller.data().bridge, query, caller.data().cancel.clone());
+                if let Ok(result) = &query_result {
+                    let host = caller.data_mut();
+                    if host.queries.len() < SQL_TRACE_CAP {
+                        host.queries.push(PythonQueryTrace {
+                            sql: query.to_string(),
+                            columns: result.columns.clone(),
+                            rows: result.rows.clone(),
+                            row_count: result.row_count,
+                            truncated: result.truncated,
+                        });
+                    } else {
+                        host.query_trace_truncated = true;
+                    }
+                };
+                let response = match query_result {
                     Ok(result) => serde_json::to_vec(&result).unwrap_or_default(),
                     Err(error) => serde_json::to_vec(&json!({ "error": error.to_string() }))
                         .unwrap_or_default(),
@@ -386,6 +416,8 @@ pub fn run(
     let elapsed_ms = started.elapsed().as_millis() as u64;
     let guest_memory_bytes = memory.data_size(&store);
     let host = store.into_data();
+    let queries = host.queries;
+    let query_trace_complete = !host.query_trace_truncated;
     let (stdout, stderr) = (host.stdout.into_text(), host.stderr.into_text());
 
     match (exit_code, cancelled, timed_out, host_error) {
@@ -397,6 +429,8 @@ pub fn run(
             cancelled: false,
             guest_memory_bytes,
             ms: elapsed_ms,
+            queries,
+            query_trace_complete,
         }),
         (exit_code, cancelled, timed_out, host_error) => {
             let mut stderr = stderr;
@@ -421,6 +455,8 @@ pub fn run(
                 cancelled,
                 guest_memory_bytes,
                 ms: elapsed_ms,
+                queries,
+                query_trace_complete,
             })
         }
     }

@@ -61,6 +61,18 @@ pub fn assess(question: &str) -> RiskAssessment {
 
     let elevated = [
         (
+            "signed_values",
+            has_any_word(
+                &words,
+                &[
+                    "net", "spending", "spent", "refund", "refunds", "credit", "credits",
+                ],
+            ) || contains_any(
+                &lower,
+                &["excluding income", "after refunds", "including refunds"],
+            ),
+        ),
+        (
             "time_series",
             contains_any(&lower, &["over time", "by month", "by week", "by day"]),
         ),
@@ -166,5 +178,13 @@ mod tests {
         assert!(assessment.requires_contract());
         assert!(assessment.signals.contains(&"explanation".into()));
         assert!(assessment.signals.contains(&"forecast".into()));
+    }
+
+    #[test]
+    fn signed_financial_questions_use_the_contract_path() {
+        let assessment = assess("What was net spending, excluding income and including refunds?");
+        assert_eq!(assessment.tier, RiskTier::Elevated);
+        assert!(assessment.requires_contract());
+        assert!(assessment.signals.contains(&"signed_values".into()));
     }
 }

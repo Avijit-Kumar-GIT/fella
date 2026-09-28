@@ -89,7 +89,7 @@ impl ColType {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct QueryOutcome {
     pub columns: Vec<String>,
     pub rows: Vec<Vec<Json>>,

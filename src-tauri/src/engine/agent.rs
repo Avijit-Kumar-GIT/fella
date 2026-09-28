@@ -196,7 +196,11 @@ pub(crate) async fn run(request: RunRequest<'_>) -> EngineResult<Answer> {
             "\n\nRuntime interpretation gate: this question is routed through the {:?} path \
 ({}). Before using a data tool, call `{}` with the compact analytical \
 interpretation. Do not invent observed values; if the wording is materially \
-ambiguous, put the ambiguity in `unresolved`.",
+ambiguous, put the ambiguity in `unresolved`. Read-only inspection tools may be used \
+to resolve a contract, but never compute from an unresolved one. Preserve the meaning of \
+signed measures: do not apply ABS to a signed amount unless the user explicitly asks for \
+absolute magnitudes; use an excluding filter with `exclude: true` when the question says \
+to exclude an observed category such as income.",
             risk.tier,
             risk.signals.join(", "),
             runtime::CONTRACT_TOOL_NAME,
@@ -252,6 +256,11 @@ ambiguous, put the ambiguity in `unresolved`.",
     // merely because it wants to write the final answer or a presentation
     // tool call.
     let mut contract_established = false;
+    // A failed grounding pass gets one bounded repair turn. The model may
+    // inspect the catalog or a source, then must submit a revised contract;
+    // it cannot bypass the gate by keeping the same unresolved SQL call.
+    let mut contract_repair_attempted = false;
+    let mut semantic_repair_attempted = false;
     // A successful compiled plan is the authoritative data computation for
     // this turn. Keep presentation tools available, but don't let a later
     // model-generated SQL/Python call silently create a second computation.
@@ -346,6 +355,43 @@ corrected answer to match the re-run."
                         checks = verify::run(engine, question, &text, &evidence);
                     }
                 }
+            }
+            if !semantic_repair_attempted
+                && !evidence.is_empty()
+                && !cancel.load(Ordering::Relaxed)
+                && step + 1 < steps
+                && checks
+                    .iter()
+                    .any(|check| !check.ok && check.label.contains("signed values were discarded"))
+            {
+                semantic_repair_attempted = true;
+                contract_established = false;
+                for item in &mut evidence {
+                    if item.error.is_none()
+                        && matches!(item.tool.as_str(), "run_sql" | "make_chart")
+                        && item
+                            .sql
+                            .as_deref()
+                            .is_some_and(|sql| sql.to_ascii_lowercase().contains("abs("))
+                    {
+                        item.error = Some(
+                            "superseded: the signed-value semantic check rejected this plan".into(),
+                        );
+                    }
+                }
+                emit(AskEvent::TurnState {
+                    turn_id: ids.turn_id.clone(),
+                    state: TurnState::Retry,
+                });
+                messages.push(ChatMessage::Assistant {
+                    content: text,
+                    tool_calls: Vec::new(),
+                });
+                messages.push(ChatMessage::User(
+                    "Semantic repair: the previous query discarded signed values with ABS, so it cannot answer this question. Rebuild the analytical contract and execute a corrected read-only plan. Preserve the source signs; use an explicit excluding filter when needed. Do not reuse the rejected query."
+                        .into(),
+                ));
+                continue;
             }
             // Cost-gated self-consistency re-check (#80): the fallback tier for
             // whatever's left once the cheap checks above have already run and
@@ -482,12 +528,14 @@ filter word in the question exactly, and state just the number(s) don't round or
             internal_results.insert(i, contract_text);
         }
 
-        let data_call_count = resp
+        let compute_call_count = resp
             .tool_calls
             .iter()
-            .filter(|call| call.name != runtime::CONTRACT_TOOL_NAME)
+            .filter(|call| {
+                call.name != runtime::CONTRACT_TOOL_NAME && !is_grounding_tool(&call.name)
+            })
             .count();
-        if risk.requires_contract() && data_call_count > 0 && contract_calls_seen == 0 {
+        if risk.requires_contract() && compute_call_count > 0 && contract_calls_seen == 0 {
             contract_gate_blocked = !contract_established;
             if contract_gate_blocked && ids.contract.is_none() {
                 ids.contract = Some(AnalysisContract {
@@ -573,7 +621,7 @@ filter word in the question exactly, and state just the number(s) don't round or
             .enumerate()
             .filter(|(_, call)| call.name != runtime::CONTRACT_TOOL_NAME)
         {
-            if contract_gate_blocked {
+            if contract_gate_blocked && !is_grounding_tool(&call.name) {
                 internal_results.insert(
                     i,
                     format!(
@@ -584,7 +632,11 @@ filter word in the question exactly, and state just the number(s) don't round or
                 continue;
             }
 
-            if compiled_plan_executed && matches!(call.name.as_str(), "run_sql" | "run_python") {
+            // The compiled plan replaces a redundant model SQL call, but it
+            // must not suppress Python: median, correlation, and regression
+            // are intentionally advanced paths when the SQL compiler cannot
+            // express the requested statistic.
+            if compiled_plan_executed && call.name == "run_sql" {
                 internal_results.insert(
                     i,
                     format!(
@@ -632,6 +684,8 @@ not run again. Its result is repeated below - use it, refine the call, or give y
                             row_count: None,
                             output: None,
                             chart: None,
+                            python_queries: None,
+                            python_queries_complete: None,
                             ms: 0,
                             error: None,
                         },
@@ -724,6 +778,21 @@ not run again. Its result is repeated below - use it, refine the call, or give y
                 usage,
             ));
         }
+        if contract_gate_blocked
+            && !contract_repair_attempted
+            && !cancel.load(Ordering::Relaxed)
+            && step + 1 < steps
+        {
+            contract_repair_attempted = true;
+            emit(AskEvent::TurnState {
+                turn_id: ids.turn_id.clone(),
+                state: TurnState::Retry,
+            });
+            messages.push(ChatMessage::User(
+                "Contract repair: the runtime could not ground that interpretation. This is a repair step, not a final answer. Use the exact source/view and column names in the workspace schema; you may inspect a relevant table or document. Then call `__analysis_contract` again with a smaller, grounded interpretation. Do not compute from an unresolved contract or claim that a source is unqueryable until you have tried the exact catalog name. Preserve signed values and express exclusions explicitly."
+                    .into(),
+            ));
+        }
         trim_history(&mut messages);
         if let Some(nudge) = stop_pressure_nudge(step + 1, soft_stop, evidence.len()) {
             messages.push(ChatMessage::User(nudge));
@@ -780,6 +849,16 @@ you're not confident, say so plainly rather than guessing."
 
 fn prompt_reference_value(value: &str) -> String {
     value.replace(['\n', '\r'], " ").chars().take(240).collect()
+}
+
+/// These tools only inspect the current workspace. They are safe while a
+/// semantic contract is being repaired; computation tools remain blocked
+/// until the revised contract is grounded.
+fn is_grounding_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "list_files" | "inspect_table" | "grep_files" | "read_file"
+    )
 }
 
 fn stopped(
@@ -1041,6 +1120,8 @@ async fn run_tool_call(
                 row_count: out.row_count,
                 output: out.output,
                 chart: out.chart,
+                python_queries: out.python_queries,
+                python_queries_complete: out.python_queries_complete,
                 ms: started.elapsed().as_millis() as u64,
                 error: None,
             };
@@ -1085,6 +1166,8 @@ fn tool_error(
             row_count: None,
             output: None,
             chart: None,
+            python_queries: None,
+            python_queries_complete: None,
             ms: started.elapsed().as_millis() as u64,
             error: Some(message.clone()),
         },

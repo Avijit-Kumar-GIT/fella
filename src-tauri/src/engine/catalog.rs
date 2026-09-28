@@ -97,9 +97,11 @@ impl ColumnInfo {
 
 /// Match a model-proposed field to a catalogued column without making fuzzy
 /// guesses across unrelated fields. Exact normalized names always match. A
-/// single-word request may also match a distinct word in a human column label
-/// such as `Sleep (hrs)` or `Amount Paid`; multiple candidate columns remain
-/// ambiguous and are rejected by the caller.
+/// human request may also contain descriptive words around the physical field
+/// (`gross revenue`, `average measured sleep duration`, `sensor reading`); a
+/// shared meaningful token is a candidate in that case, and multiple candidate
+/// columns remain ambiguous and are rejected by the caller. This is a
+/// candidate matcher, not permission to silently choose a column.
 pub(crate) fn field_name_matches(column: &str, requested: &str) -> bool {
     let column_normalized = normalize_field_name(column);
     let requested_normalized = normalize_field_name(requested);
@@ -107,13 +109,40 @@ pub(crate) fn field_name_matches(column: &str, requested: &str) -> bool {
         return true;
     }
 
-    let requested_tokens = field_tokens(requested);
-    if requested_tokens.len() != 1 || requested_tokens[0].len() < 3 {
+    let requested_tokens = meaningful_field_tokens(requested);
+    let column_tokens = meaningful_field_tokens(column);
+    if requested_tokens.is_empty() || column_tokens.is_empty() {
         return false;
     }
-    field_tokens(column)
+    let overlap = requested_tokens
         .iter()
-        .any(|token| token == &requested_tokens[0])
+        .filter(|token| column_tokens.iter().any(|candidate| candidate == *token))
+        .count();
+    overlap > 0
+}
+
+/// Match a model-proposed source to either its display filename or its safe
+/// query view. Source labels are allowed the same descriptive wrapper as field
+/// labels, while the caller still rejects multiple matching sources.
+pub(crate) fn source_name_matches(name: &str, view: Option<&str>, requested: &str) -> bool {
+    let requested_normalized = normalize_field_name(requested);
+    let requested_tokens = meaningful_field_tokens(requested);
+    [Some(name), view].into_iter().flatten().any(|candidate| {
+        let candidate_normalized = normalize_field_name(candidate);
+        let candidate_tokens = meaningful_field_tokens(candidate);
+        candidate_normalized == requested_normalized
+            || requested_tokens
+                .iter()
+                .any(|token| candidate_tokens.iter().any(|candidate| candidate == token))
+    })
+}
+
+pub(crate) fn source_name_exact_matches(name: &str, view: Option<&str>, requested: &str) -> bool {
+    let requested_normalized = normalize_field_name(requested);
+    [Some(name), view]
+        .into_iter()
+        .flatten()
+        .any(|candidate| normalize_field_name(candidate) == requested_normalized)
 }
 
 fn normalize_field_name(value: &str) -> String {
@@ -129,6 +158,13 @@ fn field_tokens(value: &str) -> Vec<String> {
         .split(|character: char| !character.is_ascii_alphanumeric())
         .filter(|token| !token.is_empty())
         .map(|token| token.to_ascii_lowercase())
+        .collect()
+}
+
+fn meaningful_field_tokens(value: &str) -> Vec<String> {
+    field_tokens(value)
+        .into_iter()
+        .filter(|token| token.len() >= 3)
         .collect()
 }
 
@@ -496,8 +532,29 @@ mod tests {
         assert!(field_name_matches("Sleep (hrs)", "sleep"));
         assert!(field_name_matches("Amount Paid", "amount"));
         assert!(field_name_matches("sleep_hours", "sleep_hours"));
+        assert!(field_name_matches("Revenue", "gross revenue"));
+        assert!(field_name_matches(
+            "Sleep (hrs)",
+            "average measured sleep duration"
+        ));
+        assert!(field_name_matches("reading", "sensor reading"));
         assert!(!field_name_matches("Customer ID", "id"));
         assert!(!field_name_matches("Sleep (hrs)", "duration"));
+    }
+
+    #[test]
+    fn source_matching_accepts_a_view_or_descriptive_label() {
+        assert!(source_name_matches(
+            "forecast.json",
+            Some("forecast"),
+            "forecast"
+        ));
+        assert!(source_name_matches(
+            "Bank Export - current.csv",
+            Some("bank_export_current"),
+            "current bank export"
+        ));
+        assert!(!source_name_matches("sales.csv", Some("sales"), "health"));
     }
 
     #[test]

@@ -1,16 +1,19 @@
 //! Deterministic grounding for a model-proposed analysis contract.
 //!
 //! The model can name concepts, fields, and filter values, but it cannot make
-//! those names authoritative. This module resolves only exact or
-//! case-insensitive matches against the current catalog and uses bounded
-//! read-only probes for requested filter values. Anything else remains
+//! those names authoritative. This module resolves exact normalized names or
+//! conservative human-label candidates against the current catalog, and uses
+//! bounded read-only probes for requested filter values. Anything else remains
 //! explicitly unresolved for the model or user to handle.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 
 use crate::engine::analytics::data::{quote_ident, quote_str};
-use crate::engine::catalog::{field_name_matches, Catalog, ColumnInfo, SourceInfo};
+use crate::engine::catalog::{
+    field_name_matches, source_name_exact_matches, source_name_matches, Catalog, ColumnInfo,
+    SourceInfo,
+};
 use crate::engine::runtime::{
     AnalysisContract, ContextReference, ContractJoin, InterpretationStatus, JoinKind,
 };
@@ -778,13 +781,23 @@ fn probe_time_range(
 }
 
 fn find_source<'a>(sources: &[&'a SourceInfo], requested: &str) -> Option<&'a SourceInfo> {
-    sources.iter().copied().find(|source| {
-        source.name.eq_ignore_ascii_case(requested)
-            || source
-                .view
-                .as_deref()
-                .is_some_and(|view| view.eq_ignore_ascii_case(requested))
-    })
+    let exact: Vec<&SourceInfo> = sources
+        .iter()
+        .copied()
+        .filter(|source| source_name_exact_matches(&source.name, source.view.as_deref(), requested))
+        .collect();
+    if exact.len() == 1 {
+        return exact.into_iter().next();
+    }
+    if !exact.is_empty() {
+        return None;
+    }
+    let fuzzy: Vec<&SourceInfo> = sources
+        .iter()
+        .copied()
+        .filter(|source| source_name_matches(&source.name, source.view.as_deref(), requested))
+        .collect();
+    (fuzzy.len() == 1).then(|| fuzzy[0])
 }
 
 fn context_source_hint(engine: &EngineState, refs: &[ContextReference]) -> Option<String> {
@@ -1015,16 +1028,21 @@ fn select_source(
 
     if let Some(subject) = contract.subject.as_deref() {
         let subject = subject.trim();
-        let matches: Vec<SourceInfo> = queryable
-            .into_iter()
+        let exact_matches: Vec<SourceInfo> = queryable
+            .iter()
             .filter(|source| {
-                source
-                    .view
-                    .as_deref()
-                    .is_some_and(|view| view.eq_ignore_ascii_case(subject))
-                    || source.name.eq_ignore_ascii_case(subject)
+                source_name_exact_matches(&source.name, source.view.as_deref(), subject)
             })
+            .cloned()
             .collect();
+        let matches = if exact_matches.is_empty() {
+            queryable
+                .into_iter()
+                .filter(|source| source_name_matches(&source.name, source.view.as_deref(), subject))
+                .collect()
+        } else {
+            exact_matches
+        };
         return match matches.len() {
             0 => Err(format!("could not find queryable source {subject:?}")),
             1 => Ok(matches.into_iter().next()),
@@ -1194,5 +1212,39 @@ mod tests {
         assert_eq!(value_string(&Json::from(12)), Some("12".into()));
         assert_eq!(value_string(&Json::from(true)), Some("true".into()));
         assert_eq!(value_string(&Json::Null), None);
+    }
+
+    #[test]
+    fn source_matching_does_not_choose_the_first_fuzzy_candidate() {
+        let first = SourceInfo {
+            name: "Bank export current.csv".into(),
+            path: "/tmp/current.csv".into(),
+            kind: crate::engine::catalog::SourceKind::Csv,
+            view: Some("bank_export_current".into()),
+            row_count: None,
+            columns: None,
+            size_bytes: 0,
+            mtime: 0,
+            synopsis: None,
+            note: None,
+        };
+        let second = SourceInfo {
+            name: "Bank export archived.csv".into(),
+            path: "/tmp/archived.csv".into(),
+            kind: crate::engine::catalog::SourceKind::Csv,
+            view: Some("bank_export_archived".into()),
+            row_count: None,
+            columns: None,
+            size_bytes: 0,
+            mtime: 0,
+            synopsis: None,
+            note: None,
+        };
+        let sources = vec![&first, &second];
+        assert!(find_source(&sources, "bank export").is_none());
+        assert_eq!(
+            find_source(&sources, "bank_export_current").unwrap().name,
+            first.name
+        );
     }
 }

@@ -7,7 +7,10 @@
 //! representation and dedicated checks.
 
 use crate::engine::analytics::data::{quote_ident, quote_str};
-use crate::engine::catalog::{field_name_matches, Catalog, ColumnInfo, SourceInfo};
+use crate::engine::catalog::{
+    field_name_matches, source_name_exact_matches, source_name_matches, Catalog, ColumnInfo,
+    SourceInfo,
+};
 use crate::engine::runtime::{
     AnalysisContract, ComparisonKind, ContractMeasure, DerivedMetricKind, InterpretationStatus,
     JoinKind, SortDirection, TimeBucket,
@@ -59,12 +62,27 @@ pub fn compile(
         let denominator = derived_expression(source, contract, &derived.denominator)?;
         let expression = match derived.kind {
             crate::engine::runtime::DerivedMetricKind::Ratio => {
-                format!("({numerator}) / NULLIF(({denominator}), 0)")
+                let ratio = format!("({numerator}) / NULLIF(({denominator}), 0)");
+                if is_percentage_unit(derived.unit.as_deref()) {
+                    format!("({ratio}) * 100.0")
+                } else {
+                    ratio
+                }
+            }
+            crate::engine::runtime::DerivedMetricKind::Difference => {
+                format!("({numerator}) - ({denominator})")
             }
         };
         let alias = format!("derived_{index}");
         select.push(format!("{expression} AS {}", quote_ident(&alias)));
-        steps.push(format!("ratio {}", derived.concept));
+        steps.push(format!(
+            "{} {}",
+            match derived.kind {
+                DerivedMetricKind::Ratio => "ratio",
+                DerivedMetricKind::Difference => "difference",
+            },
+            derived.concept
+        ));
     }
 
     let mut predicates = Vec::new();
@@ -90,7 +108,11 @@ pub fn compile(
             .map(|value| quote_str(value))
             .collect::<Vec<_>>()
             .join(", ");
-        predicates.push(format!("{} IN ({values})", quote_ident(&column.name)));
+        let operator = if filter.exclude { "NOT IN" } else { "IN" };
+        predicates.push(format!(
+            "{} {operator} ({values})",
+            quote_ident(&column.name)
+        ));
         steps.push(format!("filter {}", filter.concept));
     }
 
@@ -272,7 +294,14 @@ fn compile_period_comparison(
         select.push(format!(
             "((({current}) - ({previous})) / NULLIF(ABS({previous}), 0)) * 100 AS {percent_alias}"
         ));
-        steps.push(format!("compare ratio {}", derived.concept));
+        steps.push(format!(
+            "compare {} {}",
+            match derived.kind {
+                DerivedMetricKind::Ratio => "ratio",
+                DerivedMetricKind::Difference => "difference",
+            },
+            derived.concept
+        ));
     }
 
     let mut predicates = Vec::new();
@@ -294,7 +323,11 @@ fn compile_period_comparison(
             .map(|value| quote_str(value))
             .collect::<Vec<_>>()
             .join(", ");
-        predicates.push(format!("{} IN ({values})", quote_ident(&column.name)));
+        let operator = if filter.exclude { "NOT IN" } else { "IN" };
+        predicates.push(format!(
+            "{} {operator} ({values})",
+            quote_ident(&column.name)
+        ));
         steps.push(format!("filter {}", filter.concept));
     }
 
@@ -365,7 +398,15 @@ fn comparison_derived_expression(
     let denominator =
         comparison_operand_expression(source, contract, &derived.denominator, predicate)?;
     match derived.kind {
-        DerivedMetricKind::Ratio => Ok(format!("({numerator}) / NULLIF(({denominator}), 0)")),
+        DerivedMetricKind::Ratio => {
+            let ratio = format!("({numerator}) / NULLIF(({denominator}), 0)");
+            if is_percentage_unit(derived.unit.as_deref()) {
+                Ok(format!("({ratio}) * 100.0"))
+            } else {
+                Ok(ratio)
+            }
+        }
+        DerivedMetricKind::Difference => Ok(format!("({numerator}) - ({denominator})")),
     }
 }
 
@@ -555,14 +596,27 @@ fn compile_join(
             join_derived_expression(&sources, &aliases, contract, &derived.denominator)?;
         let expression = match derived.kind {
             DerivedMetricKind::Ratio => {
-                format!("({numerator}) / NULLIF(({denominator}), 0)")
+                let ratio = format!("({numerator}) / NULLIF(({denominator}), 0)");
+                if is_percentage_unit(derived.unit.as_deref()) {
+                    format!("({ratio}) * 100.0")
+                } else {
+                    ratio
+                }
             }
+            DerivedMetricKind::Difference => format!("({numerator}) - ({denominator})"),
         };
         select.push(format!(
             "{expression} AS {}",
             quote_ident(&format!("derived_{index}"))
         ));
-        steps.push(format!("ratio {}", derived.concept));
+        steps.push(format!(
+            "{} {}",
+            match derived.kind {
+                DerivedMetricKind::Ratio => "ratio",
+                DerivedMetricKind::Difference => "difference",
+            },
+            derived.concept
+        ));
     }
 
     let mut predicates = Vec::new();
@@ -584,7 +638,8 @@ fn compile_join(
             .map(|value| quote_str(value))
             .collect::<Vec<_>>()
             .join(", ");
-        predicates.push(format!("{expression} IN ({values})"));
+        let operator = if filter.exclude { "NOT IN" } else { "IN" };
+        predicates.push(format!("{expression} {operator} ({values})"));
         steps.push(format!("filter {}", filter.concept));
     }
     if let Some(time) = &contract.time {
@@ -678,23 +733,48 @@ fn compile_join(
 }
 
 fn find_join_source<'a>(sources: &[&'a SourceInfo], requested: &str) -> Option<&'a SourceInfo> {
-    sources.iter().copied().find(|source| {
-        source.name.eq_ignore_ascii_case(requested)
-            || source
-                .view
-                .as_deref()
-                .is_some_and(|view| view.eq_ignore_ascii_case(requested))
-    })
+    let exact: Vec<&SourceInfo> = sources
+        .iter()
+        .copied()
+        .filter(|source| source_name_exact_matches(&source.name, source.view.as_deref(), requested))
+        .collect();
+    if exact.len() == 1 {
+        return exact.into_iter().next();
+    }
+    if !exact.is_empty() {
+        return None;
+    }
+    let fuzzy: Vec<&SourceInfo> = sources
+        .iter()
+        .copied()
+        .filter(|source| source_name_matches(&source.name, source.view.as_deref(), requested))
+        .collect();
+    (fuzzy.len() == 1).then(|| fuzzy[0])
 }
 
 fn join_source_index(sources: &[&SourceInfo], requested: &str) -> Option<usize> {
-    sources.iter().position(|source| {
-        source.name.eq_ignore_ascii_case(requested)
-            || source
-                .view
-                .as_deref()
-                .is_some_and(|view| view.eq_ignore_ascii_case(requested))
-    })
+    let exact: Vec<usize> = sources
+        .iter()
+        .enumerate()
+        .filter_map(|(index, source)| {
+            source_name_exact_matches(&source.name, source.view.as_deref(), requested)
+                .then_some(index)
+        })
+        .collect();
+    if exact.len() == 1 {
+        return exact.into_iter().next();
+    }
+    if !exact.is_empty() {
+        return None;
+    }
+    let fuzzy: Vec<usize> = sources
+        .iter()
+        .enumerate()
+        .filter_map(|(index, source)| {
+            source_name_matches(&source.name, source.view.as_deref(), requested).then_some(index)
+        })
+        .collect();
+    (fuzzy.len() == 1).then(|| fuzzy[0])
 }
 
 fn resolve_join_column<'a>(
@@ -888,16 +968,23 @@ fn select_source<'a>(
         .collect();
     let requested_source = source_hint.or(contract.subject.as_deref());
     if let Some(requested) = requested_source {
-        let matches: Vec<&SourceInfo> = queryable
-            .into_iter()
+        let exact_matches: Vec<&SourceInfo> = queryable
+            .iter()
+            .copied()
             .filter(|source| {
-                source.name.eq_ignore_ascii_case(requested)
-                    || source
-                        .view
-                        .as_deref()
-                        .is_some_and(|view| view.eq_ignore_ascii_case(requested))
+                source_name_exact_matches(&source.name, source.view.as_deref(), requested)
             })
             .collect();
+        let matches = if exact_matches.is_empty() {
+            queryable
+                .into_iter()
+                .filter(|source| {
+                    source_name_matches(&source.name, source.view.as_deref(), requested)
+                })
+                .collect()
+        } else {
+            exact_matches
+        };
         return match matches.as_slice() {
             [source] => Ok(source),
             [] => Err(format!("could not find source {requested:?}")),
@@ -1089,6 +1176,13 @@ fn normalize_operation(operation: &str) -> Result<&'static str, String> {
             "operation {other:?} is not supported by the compiler"
         )),
     }
+}
+
+fn is_percentage_unit(unit: Option<&str>) -> bool {
+    unit.is_some_and(|unit| {
+        let unit = unit.to_ascii_lowercase();
+        unit.contains('%') || unit.contains("percent") || unit.contains("percentage")
+    })
 }
 
 pub(crate) fn time_predicate(field: &str, range: &str) -> Result<String, String> {
@@ -1326,6 +1420,7 @@ mod tests {
             filters: vec![crate::engine::runtime::ContractFilter {
                 concept: "category".into(),
                 field: Some("category".into()),
+                exclude: false,
                 candidate_values: vec!["Dining".into()],
                 resolved_values: vec!["Dining".into()],
                 resolution: Some("observed".into()),
@@ -1434,6 +1529,48 @@ mod tests {
             .steps
             .iter()
             .any(|step| step == "ratio revenue per order"));
+    }
+
+    #[test]
+    fn compiles_signed_exclusions_and_declared_derived_units() {
+        let mut contract = contract();
+        contract.filters[0].exclude = true;
+        contract.filters[0].candidate_values = vec!["Income".into()];
+        contract.filters[0].resolved_values = vec!["Income".into()];
+        contract
+            .measures
+            .push(crate::engine::runtime::ContractMeasure {
+                concept: "refunds".into(),
+                field: Some("amount".into()),
+                operation: "sum".into(),
+                unit: None,
+            });
+        contract.derived_metrics = vec![
+            crate::engine::runtime::ContractDerivedMetric {
+                concept: "refund percentage".into(),
+                kind: crate::engine::runtime::DerivedMetricKind::Ratio,
+                numerator: "refunds".into(),
+                denominator: "revenue".into(),
+                unit: Some("percent".into()),
+            },
+            crate::engine::runtime::ContractDerivedMetric {
+                concept: "net difference".into(),
+                kind: crate::engine::runtime::DerivedMetricKind::Difference,
+                numerator: "revenue".into(),
+                denominator: "refunds".into(),
+                unit: None,
+            },
+        ];
+
+        let plan = compile(&catalog(), &contract, Some("sales")).unwrap();
+
+        assert!(plan.sql.contains("\"category\" NOT IN ('Income')"));
+        assert!(plan.sql.contains("* 100.0 AS \"derived_0\""));
+        assert!(plan.sql.contains(") - (SUM(\"amount\")) AS \"derived_1\""));
+        assert!(plan
+            .steps
+            .iter()
+            .any(|step| step == "difference net difference"));
     }
 
     #[test]

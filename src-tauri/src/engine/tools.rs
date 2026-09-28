@@ -35,6 +35,10 @@ pub struct ToolOutput {
     /// Structured chart data from a chart tool (e.g. `make_chart`) -- labels
     /// and numbers only, no markup. Rendered client-side.
     pub chart: Option<ChartData>,
+    /// Internal replay trace for Python-backed analysis. It is copied into
+    /// the runtime evidence but not shown as a second user-facing result.
+    pub python_queries: Option<Vec<crate::engine::analytics::pyexec::PythonQueryTrace>>,
+    pub python_queries_complete: Option<bool>,
 }
 
 impl ToolOutput {
@@ -48,6 +52,8 @@ impl ToolOutput {
             row_count: None,
             output: None,
             chart: None,
+            python_queries: None,
+            python_queries_complete: None,
         }
     }
 }
@@ -221,6 +227,10 @@ fn contract_schema() -> Json {
                     "properties": {
                         "concept": { "type": "string" },
                         "field": { "type": "string" },
+                        "exclude": {
+                            "type": "boolean",
+                            "description": "Exclude the observed candidate values instead of including them."
+                        },
                         "candidate_values": { "type": "array", "items": { "type": "string" } },
                         "resolved_values": { "type": "array", "items": { "type": "string" } },
                         "resolution": { "type": "string" }
@@ -266,7 +276,7 @@ fn contract_schema() -> Json {
                     "type": "object",
                     "properties": {
                         "concept": { "type": "string" },
-                        "kind": { "type": "string", "enum": ["ratio"] },
+                        "kind": { "type": "string", "enum": ["ratio", "difference"] },
                         "numerator": { "type": "string" },
                         "denominator": { "type": "string" },
                         "unit": { "type": "string" }
@@ -467,6 +477,8 @@ impl Tool for ListFiles {
             // finds them as backed, not "not found in any result".
             output: Some(text),
             chart: None,
+            python_queries: None,
+            python_queries_complete: None,
         })
     }
 }
@@ -568,6 +580,8 @@ many sample rows to return (default 5, max 50)."
             // summary answer quoting the real total isn't flagged unbacked.
             output: Some(text),
             chart: None,
+            python_queries: None,
+            python_queries_complete: None,
         })
     }
 }
@@ -631,6 +645,8 @@ fn sql_output(engine: &EngineState, sql: &str, q: QueryResult) -> ToolOutput {
         row_count: Some(q.row_count),
         output: None,
         chart: None,
+        python_queries: None,
+        python_queries_complete: None,
     }
 }
 
@@ -749,6 +765,8 @@ different word.",
             row_count: Some(hits.len()),
             output: None,
             chart: None,
+            python_queries: None,
+            python_queries_complete: None,
         })
     }
 }
@@ -831,6 +849,8 @@ summarization question needs the documents' actual content."
             row_count: None,
             output: Some(combined),
             chart: None,
+            python_queries: None,
+            python_queries_complete: None,
         })
     }
 }
@@ -922,6 +942,8 @@ fn python_output(r: crate::engine::analytics::pyexec::PyResult) -> ToolOutput {
         row_count: None,
         output: Some(combined),
         chart: None,
+        python_queries: Some(r.queries),
+        python_queries_complete: Some(r.query_trace_complete),
     }
 }
 
@@ -1034,6 +1056,8 @@ to a coarser time period or narrow the date range first",
             row_count: Some(q.row_count),
             output: None,
             chart: Some(data),
+            python_queries: None,
+            python_queries_complete: None,
         })
     }
 }

@@ -101,6 +101,13 @@ async fn python_sql_bridge_returns_workspace_rows() {
     assert_eq!(r.exit_code, Some(0), "stderr: {}", r.stderr);
     assert!(r.stdout.contains("alpha"), "stdout: {}", r.stdout);
     assert!(r.stdout.contains("30"), "stdout: {}", r.stdout);
+    assert_eq!(r.queries.len(), 1);
+    assert!(r.query_trace_complete);
+    assert_eq!(
+        r.queries[0].sql,
+        "SELECT name, amount FROM sales ORDER BY amount"
+    );
+    assert_eq!(r.queries[0].row_count, 2);
 
     let _ = fs::remove_dir_all(&data);
     let _ = fs::remove_dir_all(&workspace);

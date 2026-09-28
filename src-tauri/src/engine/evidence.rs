@@ -37,6 +37,13 @@ pub struct EvidenceItem {
     /// boundary here the way an HTML/SVG string would need.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub chart: Option<crate::engine::analytics::chart::ChartData>,
+    /// Internal SQL trace for a Python-backed computation. It is used by the
+    /// verifier to replay the guest's read-only inputs, but is intentionally
+    /// not serialized as a second evidence panel.
+    #[serde(skip_serializing)]
+    pub python_queries: Option<Vec<crate::engine::analytics::pyexec::PythonQueryTrace>>,
+    #[serde(skip_serializing)]
+    pub python_queries_complete: Option<bool>,
     pub ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,

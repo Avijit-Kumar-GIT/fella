@@ -95,6 +95,7 @@ export interface AnalysisContract {
 	filters: {
 		concept: string;
 		field?: string;
+		exclude?: boolean;
 		candidate_values: string[];
 		resolved_values: string[];
 		resolution?: string;
@@ -105,7 +106,7 @@ export interface AnalysisContract {
 	limit?: number;
 	derived_metrics?: {
 		concept: string;
-		kind: 'ratio';
+		kind: 'ratio' | 'difference';
 		numerator: string;
 		denominator: string;
 		unit?: string;

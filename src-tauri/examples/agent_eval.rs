@@ -3152,6 +3152,8 @@ mod tests {
             row_count: None,
             output: None,
             chart: None,
+            python_queries: None,
+            python_queries_complete: None,
             ms: 1,
             error: err.map(str::to_string),
         }
