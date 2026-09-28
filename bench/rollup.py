@@ -63,6 +63,7 @@ def main():
                 "prompt_tok": r["prompt_tok"],
                 "completion_tok": r["completion_tok"],
                 "total_s": r["total_s"],
+                "verification_status": r.get("verification_status"),
                 "err": r.get("err"),
             })
 

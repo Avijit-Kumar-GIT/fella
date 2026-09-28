@@ -133,6 +133,7 @@ struct RunResult {
     text: String,
     evidence: Vec<EvidenceItem>,
     verification: Vec<fella_lib::engine::evidence::VerificationCheck>,
+    verification_status: Option<VerificationStatus>,
     hard_fail: bool,
     prompt_tok: u32,
     completion_tok: u32,
@@ -195,6 +196,7 @@ async fn run_case(
                 text: a.text,
                 evidence: a.evidence,
                 verification: a.verification,
+                verification_status: Some(a.status),
                 prompt_tok: p,
                 completion_tok: c,
                 total,
@@ -207,6 +209,7 @@ async fn run_case(
             text: String::new(),
             evidence: Vec::new(),
             verification: Vec::new(),
+            verification_status: None,
             hard_fail: false,
             prompt_tok: 0,
             completion_tok: 0,
@@ -947,6 +950,10 @@ struct CaseScore {
     iters: usize,
     closeness_det: f32,
     closeness_judge: Option<f32>,
+    /// Worst typed runtime acceptance status observed across the iterations.
+    /// Baseline runners have `None` because they do not produce Fella's
+    /// evidence/verification envelope.
+    verification_status: Option<VerificationStatus>,
     waste: Waste,
     prompt_tok: u32,
     completion_tok: u32,
@@ -955,6 +962,21 @@ struct CaseScore {
     steps: usize,
     hard_fail: bool,
     err: Option<String>,
+}
+
+fn worst_verification_status(statuses: &[VerificationStatus]) -> Option<VerificationStatus> {
+    if statuses.is_empty() {
+        return None;
+    }
+    if statuses.contains(&VerificationStatus::Failed) {
+        Some(VerificationStatus::Failed)
+    } else if statuses.contains(&VerificationStatus::NeedsReview) {
+        Some(VerificationStatus::NeedsReview)
+    } else if statuses.contains(&VerificationStatus::InsufficientData) {
+        Some(VerificationStatus::InsufficientData)
+    } else {
+        Some(VerificationStatus::Verified)
+    }
 }
 
 // --- comparison harness: OpenAI code_interpreter -------------------------
@@ -1024,6 +1046,7 @@ async fn run_bare(engine: &EngineState, dir: &Path, question: &str, files: &[Str
                 text: String::new(),
                 evidence: Vec::new(),
                 verification: Vec::new(),
+                verification_status: None,
                 hard_fail: false,
                 prompt_tok: 0,
                 completion_tok: 0,
@@ -1054,6 +1077,7 @@ number or short phrase, no explanation. If the files can't answer it, say so pla
                 text,
                 evidence: Vec::new(),
                 verification: Vec::new(),
+                verification_status: None,
                 hard_fail: false,
                 prompt_tok: p,
                 completion_tok: c,
@@ -1067,6 +1091,7 @@ number or short phrase, no explanation. If the files can't answer it, say so pla
             text: String::new(),
             evidence: Vec::new(),
             verification: Vec::new(),
+            verification_status: None,
             hard_fail: false,
             prompt_tok: 0,
             completion_tok: 0,
@@ -1126,6 +1151,7 @@ async fn run_openai_ci(h: &CiHarness, dir: &Path, question: &str, files: &[Strin
         text: String::new(),
         evidence: Vec::new(),
         verification: Vec::new(),
+        verification_status: None,
         hard_fail: false,
         prompt_tok: 0,
         completion_tok: 0,
@@ -1181,6 +1207,7 @@ async fn run_openai_ci(h: &CiHarness, dir: &Path, question: &str, files: &[Strin
         text: ci_text(&v),
         evidence: Vec::new(),
         verification: Vec::new(),
+        verification_status: None,
         hard_fail: false,
         prompt_tok: v["usage"]["input_tokens"].as_u64().unwrap_or(0) as u32,
         completion_tok: v["usage"]["output_tokens"].as_u64().unwrap_or(0) as u32,
@@ -1211,6 +1238,7 @@ async fn score_case(
     let (mut ptok, mut ctok, mut secs, mut steps) = (0u64, 0u64, 0f64, 0usize);
     let mut first_toks: Vec<f64> = Vec::new();
     let mut wastes: Vec<Waste> = Vec::new();
+    let mut verification_statuses: Vec<VerificationStatus> = Vec::new();
     let mut any_hard = false;
     let mut last_err = None;
 
@@ -1300,6 +1328,9 @@ async fn score_case(
             first_toks.push(ft.as_secs_f64());
         }
         wastes.push(classify_waste(&r));
+        if let Some(status) = r.verification_status {
+            verification_statuses.push(status);
+        }
         any_hard |= r.hard_fail;
         last_err = r.err;
     }
@@ -1314,6 +1345,7 @@ async fn score_case(
         iters,
         closeness_det: cd / n,
         closeness_judge: (cj_n > 0).then(|| cj_sum / cj_n as f32),
+        verification_status: worst_verification_status(&verification_statuses),
         waste: fold_waste(&wastes),
         prompt_tok: (ptok / iters as u64) as u32,
         completion_tok: (ctok / iters as u64) as u32,
@@ -2086,6 +2118,7 @@ async fn cmd_session_memory(
             iters,
             closeness_det: cd / n,
             closeness_judge: None,
+            verification_status: None,
             waste: Waste::default(),
             prompt_tok: (ptok / iters as u64) as u32,
             completion_tok: (ctok / iters as u64) as u32,
@@ -2269,6 +2302,7 @@ async fn cmd_memory(
             iters,
             closeness_det: cd / n,
             closeness_judge: None,
+            verification_status: None,
             waste: Waste::default(),
             prompt_tok: (ptok / iters as u64) as u32,
             completion_tok: (ctok / iters as u64) as u32,
@@ -2328,6 +2362,7 @@ async fn cmd_memory_axes(
             iters,
             closeness_det: if correct { 1.0 } else { 0.0 },
             closeness_judge: None,
+            verification_status: None,
             waste: Waste::default(),
             prompt_tok: 0,
             completion_tok: 0,
@@ -2655,6 +2690,7 @@ fn write_json(path: &str, scores: &[CaseScore]) {
                 "correct": s.correct, "correct_rate": s.correct_rate, "iters": s.iters,
                 "closeness_det": s.closeness_det,
                 "closeness_judge": s.closeness_judge,
+                "verification_status": s.verification_status,
                 "waste": s.waste.total(), "prompt_tok": s.prompt_tok,
                 "completion_tok": s.completion_tok, "total_s": s.total_s,
                 "steps": s.steps, "hard_fail": s.hard_fail, "err": s.err,
@@ -2862,6 +2898,7 @@ mod tests {
             text: text.into(),
             evidence: ev,
             verification: Vec::new(),
+            verification_status: None,
             hard_fail: false,
             prompt_tok: 0,
             completion_tok: 0,
@@ -2907,6 +2944,29 @@ mod tests {
             }),
             ..ev("make_chart", "chart made", None)
         }
+    }
+
+    #[test]
+    fn worst_verification_status_is_conservative() {
+        assert_eq!(worst_verification_status(&[]), None);
+        assert_eq!(
+            worst_verification_status(&[VerificationStatus::Verified]),
+            Some(VerificationStatus::Verified)
+        );
+        assert_eq!(
+            worst_verification_status(&[
+                VerificationStatus::Verified,
+                VerificationStatus::InsufficientData,
+            ]),
+            Some(VerificationStatus::InsufficientData)
+        );
+        assert_eq!(
+            worst_verification_status(&[
+                VerificationStatus::NeedsReview,
+                VerificationStatus::Failed,
+            ]),
+            Some(VerificationStatus::Failed)
+        );
     }
 
     #[test]

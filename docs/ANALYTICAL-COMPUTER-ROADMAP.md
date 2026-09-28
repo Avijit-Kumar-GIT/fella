@@ -95,8 +95,10 @@ This is the implementation form of Fella's core loop:
 - **M7 — evaluation, replay, and optimization:** first context-assembly slice
   implemented; the shared Rust runtime now applies deterministic, question-aware
   budgets to schema, user definitions, folder memory, and conversation history
-  before either desktop shell sends a prompt. Scored interpretation/replay
-  matrices and cost/quality dashboards remain ahead.
+  before either desktop shell sends a prompt. The evaluator now preserves the
+  runtime's typed acceptance status in JSON/CSV output, so correctness and
+  trust can be measured separately. Scored interpretation/replay matrices and
+  cost/quality dashboards remain ahead.
 
 ## Where the current code starts
 
