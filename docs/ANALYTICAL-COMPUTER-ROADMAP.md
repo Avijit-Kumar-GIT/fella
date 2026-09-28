@@ -54,7 +54,10 @@ This is the implementation form of Fella's core loop:
 - **M3 — grounding:** first slice implemented alongside contract routing;
   exact field bindings and bounded filter-value probes now run against the
   current workspace revision. Logical-plan compilation is still ahead.
-- **M4–M7:** planned; each stage should build on the same turn, revision, and
+- **M4 — semantic verification:** first slice implemented; grounded bindings
+  must be present in executed SQL, and ambiguous/unsupported contracts remain
+  review states even when a query is numerically reproducible.
+- **M5–M7:** planned; each stage should build on the same turn, revision, and
   trace identifiers.
 
 ## Where the current code starts

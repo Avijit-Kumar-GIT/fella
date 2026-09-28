@@ -24,6 +24,8 @@ use serde_json::Value as Json;
 
 use crate::engine::analytics::AnalyticsSource;
 use crate::engine::evidence::{EvidenceItem, VerificationCheck, VerificationStatus};
+use crate::engine::grounding::{GroundingReport, ProbeOutcome};
+use crate::engine::runtime::{AnalysisContract, InterpretationStatus};
 
 fn is_sql_evidence(evidence: &EvidenceItem) -> bool {
     matches!(evidence.tool.as_str(), "run_sql" | "make_chart")
@@ -112,6 +114,98 @@ pub fn status(checks: &[VerificationCheck], evidence: &[EvidenceItem]) -> Verifi
         VerificationStatus::Verified
     } else {
         VerificationStatus::NeedsReview
+    }
+}
+
+/// Verify that a semantic contract survived the transition into physical
+/// evidence. This is intentionally a lexical/structural gate, not a second
+/// interpretation model: the grounding layer resolves names, and this layer
+/// checks that the executed query actually used those bindings.
+pub fn contract_checks(
+    contract: &AnalysisContract,
+    grounding: Option<&GroundingReport>,
+    evidence: &[EvidenceItem],
+) -> Vec<VerificationCheck> {
+    let mut checks = Vec::new();
+    match contract.interpretation {
+        InterpretationStatus::Grounded => checks.push(ok("the semantic contract was grounded")),
+        InterpretationStatus::Ambiguous => checks.push(warn(
+            "the semantic contract remains ambiguous",
+            Some(contract.unresolved.join("; ")),
+        )),
+        InterpretationStatus::Unsupported => checks.push(warn(
+            "the semantic contract is unsupported",
+            Some("the runtime could not map this request to a supported analysis path".into()),
+        )),
+        InterpretationStatus::Assumed | InterpretationStatus::Unresolved => checks.push(warn(
+            "the semantic contract was not grounded",
+            Some("the runtime has not established a data-backed interpretation".into()),
+        )),
+    }
+
+    if let Some(report) = grounding {
+        for probe in &report.probes {
+            match probe.outcome {
+                ProbeOutcome::Ambiguous | ProbeOutcome::Unavailable => checks.push(warn(
+                    format!("grounding probe needs review: {}", probe.target),
+                    Some(probe.detail.clone()),
+                )),
+                ProbeOutcome::Resolved | ProbeOutcome::NotObserved => {}
+            }
+        }
+    } else {
+        checks.push(warn(
+            "the semantic contract has no grounding report",
+            Some("a contract cannot be accepted without a revision-bound grounding step".into()),
+        ));
+    }
+
+    let sql: Vec<String> = evidence
+        .iter()
+        .filter(|item| is_sql_evidence(item) && item.error.is_none())
+        .filter_map(|item| item.sql.clone())
+        .map(|query| query.to_ascii_lowercase())
+        .collect();
+
+    for measure in &contract.measures {
+        if let Some(field) = measure.field.as_deref() {
+            check_binding_usage(&mut checks, "measure", field, &sql);
+        }
+    }
+    for filter in &contract.filters {
+        if let Some(field) = filter.field.as_deref() {
+            check_binding_usage(&mut checks, "filter", field, &sql);
+        }
+    }
+    if let Some(time) = &contract.time {
+        if let Some(field) = time.field.as_deref() {
+            check_binding_usage(&mut checks, "time field", field, &sql);
+        }
+    }
+    for field in &contract.group_by {
+        check_binding_usage(&mut checks, "grouping field", field, &sql);
+    }
+    checks
+}
+
+fn check_binding_usage(
+    checks: &mut Vec<VerificationCheck>,
+    kind: &str,
+    field: &str,
+    sql: &[String],
+) {
+    let used = sql
+        .iter()
+        .any(|query| contains_word(query, &field.to_ascii_lowercase()));
+    if used {
+        checks.push(ok(format!(
+            "grounded {kind} `{field}` was used by the query"
+        )));
+    } else {
+        checks.push(warn(
+            format!("grounded {kind} `{field}` was not used by the query"),
+            Some("the executed evidence did not carry the contract binding".into()),
+        ));
     }
 }
 
@@ -2076,5 +2170,53 @@ mod tests {
             out.is_empty(),
             "an ambiguous value is left alone, not guessed at: {out:?}"
         );
+    }
+
+    #[test]
+    fn contract_checks_require_grounded_bindings_to_reach_sql() {
+        let contract = AnalysisContract {
+            interpretation: InterpretationStatus::Grounded,
+            subject: Some("spend".into()),
+            measures: vec![crate::engine::runtime::ContractMeasure {
+                concept: "amount".into(),
+                field: Some("amount".into()),
+                operation: "sum".into(),
+                unit: None,
+            }],
+            filters: vec![crate::engine::runtime::ContractFilter {
+                concept: "category".into(),
+                field: Some("category".into()),
+                candidate_values: vec!["dining".into()],
+                resolved_values: vec!["dining".into()],
+                resolution: Some("observed".into()),
+            }],
+            group_by: vec!["category".into()],
+            ..Default::default()
+        };
+        let evidence = vec![run_sql_ev(
+            "SELECT category, SUM(amount) AS total FROM spend WHERE category = 'dining' GROUP BY category",
+            &["category", "total"],
+            vec![vec![Json::from("dining"), Json::from(12)]],
+        )];
+        let report = GroundingReport {
+            source: Some("spend".into()),
+            probes: vec![],
+            unresolved: vec![],
+        };
+        let checks = contract_checks(&contract, Some(&report), &evidence);
+        assert!(checks.iter().all(|check| check.ok), "{checks:?}");
+    }
+
+    #[test]
+    fn contract_checks_do_not_accept_unresolved_meaning() {
+        let contract = AnalysisContract {
+            interpretation: InterpretationStatus::Ambiguous,
+            unresolved: vec!["which revenue field?".into()],
+            ..Default::default()
+        };
+        let checks = contract_checks(&contract, None, &[]);
+        assert!(checks.iter().any(|check| {
+            !check.ok && check.label.contains("semantic contract remains ambiguous")
+        }));
     }
 }

@@ -622,6 +622,13 @@ fn finish_with(
             ),
         });
     }
+    if let Some(contract) = ids.contract.as_ref() {
+        verification.extend(verify::contract_checks(
+            contract,
+            ids.grounding.as_ref(),
+            &evidence,
+        ));
+    }
     log::info!(
         "agent done: {} char answer, {} evidence item(s)",
         text.len(),
