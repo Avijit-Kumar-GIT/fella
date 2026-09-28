@@ -203,6 +203,7 @@ export interface AnalysisTurn {
 	id: string;
 	conversation_id: string;
 	question: string;
+	context_refs?: ContextReference[];
 	workspace?: string;
 	workspace_revision?: string;
 	workspace_snapshot?: WorkspaceRevisionSnapshot;

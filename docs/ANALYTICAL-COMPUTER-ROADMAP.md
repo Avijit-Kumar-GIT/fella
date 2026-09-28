@@ -95,7 +95,9 @@ This is the implementation form of Fella's core loop:
   reruns are mount-checked and linked to their source turn. A compact catalog
   snapshot and shared replay-status command now explain revision drift and
   source-level changes before a rerun; user-facing inspect/rerun controls remain
-  ahead.
+  ahead. The context picker now travels as structured, persisted starting-point
+  references instead of being flattened into the user's question, so reruns
+  preserve the same analytical hints without changing the canonical question.
 - **M7 — evaluation, replay, and optimization:** first context-assembly slice
   implemented; the shared Rust runtime now applies deterministic, question-aware
   budgets to schema, user definitions, folder memory, and conversation history

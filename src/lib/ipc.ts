@@ -12,6 +12,7 @@ import type {
 	AskMode,
 	AskEvent,
 	Catalog,
+	ContextReference,
 	ConversationSummary,
 	ProviderHealth,
 	ProviderInfo,
@@ -209,7 +210,8 @@ export const ipc = {
 		question: string,
 		onEvent: (e: AskEvent) => void,
 		model?: string,
-		mode?: AskMode
+		mode?: AskMode,
+		contextRefs?: ContextReference[]
 	): Promise<Answer> {
 		if (isElectron()) {
 			if (!window.fella) throw new Error('Electron preload bridge is unavailable');
@@ -218,7 +220,8 @@ export const ipc = {
 					conversationId,
 					question,
 					model: model || null,
-					mode: mode || null
+					mode: mode || null,
+					contextRefs: contextRefs ?? []
 				},
 				onEvent
 			);
@@ -231,6 +234,7 @@ export const ipc = {
 			question,
 			model: model || null,
 			mode: mode || null,
+			contextRefs: contextRefs ?? [],
 			channel
 		});
 	}

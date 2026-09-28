@@ -4,7 +4,6 @@ import { ipc, isDesktop, isElectron, pickFolder } from './ipc';
 import { Conversation, isActualQuestion, session } from './session.svelte';
 import type {
 	AskEvent,
-	ContextReference,
 	ConversationSummary,
 	Message,
 	ProviderHealth,
@@ -273,7 +272,7 @@ export async function steerRun(conv: Conversation, extra: string): Promise<void>
 	// Let the cancelled run unwind (its `ask` resolves "Stopped." and clears busy).
 	for (let i = 0; i < 60 && conv.busy; i++) await new Promise((r) => setTimeout(r, 50));
 	conv.addUser(extra);
-	await ask(buildQuestion(`${prior.text}\n\nAlso: ${extra}`, conv), conv);
+	await ask(`${prior.text}\n\nAlso: ${extra}`, conv);
 }
 
 /** Entry point: called with the raw composer text. */
@@ -307,7 +306,7 @@ export async function dispatch(raw: string): Promise<void> {
 
 	const conv = session.ensureChat();
 	conv.addUser(text);
-	await ask(buildQuestion(text, conv), conv);
+	await ask(text, conv);
 }
 
 /** Change the active conversation's model from a UI picker without writing a
@@ -330,28 +329,6 @@ export async function selectModel(model: string): Promise<boolean> {
 		session.addSystem(`Couldn't choose ${next}: ${errMsg(e)}`);
 		return false;
 	}
-}
-
-/** Turn the small UI context selection into explicit model guidance. The
- * catalog and engine still decide what can be read; this only makes the
- * user's chosen starting points visible in the prompt. */
-function buildQuestion(question: string, conv: Conversation): string {
-	const instructions =
-		conv.mode === 'inspect'
-			? 'Start by inspecting the relevant workspace sources and schema. Briefly explain what you used and any caveats before giving the answer.'
-			: '';
-	const refs = conv.contextRefs;
-	if (!instructions && refs.length === 0) return question;
-	const context = refs.length
-		? `Use these references as the starting point for this question. Treat saved results as hypotheses and verify them against the current workspace:\n${refs
-				.map((ref) => `- ${contextReferenceText(ref)}`)
-				.join('\n')}`
-		: '';
-	return [instructions, context, question].filter(Boolean).join('\n\n');
-}
-
-function contextReferenceText(ref: ContextReference): string {
-	return `${ref.label}${ref.detail ? ` (${ref.detail})` : ''}`;
 }
 
 /** Fetch the provider list and cache it on the session so the composer hint
@@ -447,7 +424,7 @@ async function runCommand(text: string): Promise<void> {
 				return;
 			}
 			const retryChat = session.ensureChat();
-			await ask(buildQuestion(q, retryChat), retryChat);
+			await ask(q, retryChat);
 			return;
 		}
 
@@ -928,7 +905,14 @@ async function ask(question: string, conv: Conversation): Promise<void> {
 	};
 
 	try {
-		const answer = await ipc.ask(conv.id, question, onEvent, conv.model || undefined, conv.mode);
+		const answer = await ipc.ask(
+			conv.id,
+			question,
+			onEvent,
+			conv.model || undefined,
+			conv.mode,
+			conv.contextRefs
+		);
 		msg.answer = answer;
 		msg.text = answer.text;
 	} catch (e) {

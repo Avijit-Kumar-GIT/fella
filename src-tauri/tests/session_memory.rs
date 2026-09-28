@@ -233,17 +233,32 @@ async fn canonical_turn_rerun_requires_the_same_workspace_and_records_lineage() 
     fs::write(ws.join("ledger.csv"), "amount\n12\n").unwrap();
     fs::write(other_ws.join("other.csv"), "amount\n99\n").unwrap();
 
-    let (url, _seen, server) = fake_openai(vec![
+    let (url, seen, server) = fake_openai(vec![
         answer_turn("The total is 12."),
         answer_turn("The total is still 12."),
     ]);
     let engine = engine_on(&ws, &data, &url);
+    let context_refs = vec![fella_lib::engine::runtime::ContextReference {
+        kind: "source".into(),
+        key: "ledger.csv".into(),
+        label: "ledger.csv".into(),
+        detail: Some("2 columns".into()),
+    }];
     let first = engine
-        .ask("rerun-conversation", "what is the total?", None, |_| {})
+        .ask_with_mode_and_context(
+            "rerun-conversation",
+            "what is the total?",
+            None,
+            false,
+            &context_refs,
+            |_| {},
+        )
         .await
         .unwrap();
     let stored = engine.analysis_turn_load(&first.turn_id).unwrap();
     assert_eq!(stored.workspace.as_deref(), ws.to_str());
+    assert_eq!(stored.question, "what is the total?");
+    assert_eq!(stored.context_refs, context_refs);
     assert_eq!(stored.rerun_of, None);
 
     engine.open_workspace(&other_ws).unwrap();
@@ -264,8 +279,14 @@ async fn canonical_turn_rerun_requires_the_same_workspace_and_records_lineage() 
     );
     assert_eq!(rerun_record.workspace.as_deref(), ws.to_str());
     assert_eq!(rerun_record.workspace_revision, stored.workspace_revision);
+    assert_eq!(rerun_record.context_refs, context_refs);
 
     server.join().unwrap();
+    let requests = seen.lock().unwrap();
+    assert!(requests.iter().all(|request| {
+        let system = system_of(request);
+        system.contains("User-selected starting points") && system.contains("ledger.csv")
+    }));
     let _ = fs::remove_dir_all(&ws);
     let _ = fs::remove_dir_all(&other_ws);
     let _ = fs::remove_dir_all(&data);

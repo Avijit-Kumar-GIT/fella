@@ -13,6 +13,7 @@ declare global {
 					question: string;
 					model: string | null;
 					mode: string | null;
+					contextRefs: import('./lib/types').ContextReference[];
 				},
 				onEvent: (event: AskEvent) => void
 			): Promise<import('./lib/types').Answer>;

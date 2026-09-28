@@ -27,6 +27,18 @@ pub type TraceId = String;
 /// and is omitted from user-facing evidence.
 pub const CONTRACT_TOOL_NAME: &str = "__analysis_contract";
 
+/// A user-selected workspace starting point. References are hints for
+/// interpretation, never evidence or permission grants; the engine still
+/// resolves them against the current catalog and verifies all results.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContextReference {
+    pub kind: String,
+    pub key: String,
+    pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
 /// Explicit lifecycle states for the analytical runtime.  The fast path may
 /// move through several states without an extra model call, but it still
 /// reports the same protocol as the future structured path.
@@ -511,6 +523,10 @@ pub struct AnalysisTurn {
     pub id: TurnId,
     pub conversation_id: String,
     pub question: String,
+    /// Structured context-picker references used as starting points for this
+    /// turn. Optional in serialized records so older turns remain readable.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub context_refs: Vec<ContextReference>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workspace: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

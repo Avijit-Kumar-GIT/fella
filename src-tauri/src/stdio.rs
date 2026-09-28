@@ -14,7 +14,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::engine::{EngineError, EngineResult, EngineState};
+use crate::engine::{ContextReference, EngineError, EngineResult, EngineState};
 
 type Output = Arc<Mutex<BufWriter<io::Stdout>>>;
 
@@ -252,13 +252,21 @@ async fn dispatch(
                 .and_then(Value::as_str)
                 .map(str::to_owned);
             let inspect = request.params.get("mode").and_then(Value::as_str) == Some("inspect");
+            let context_refs = request
+                .params
+                .get("contextRefs")
+                .cloned()
+                .map(serde_json::from_value::<Vec<ContextReference>>)
+                .transpose()?
+                .unwrap_or_default();
             let events = output.clone();
             let answer = engine
-                .ask_with_mode(
+                .ask_with_mode_and_context(
                     &conversation_id,
                     &question,
                     model.as_deref(),
                     inspect,
+                    &context_refs,
                     move |item| event(&events, id, item),
                 )
                 .await;

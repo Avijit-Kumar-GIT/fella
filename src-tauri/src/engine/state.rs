@@ -21,8 +21,8 @@ use crate::engine::llm::{LlmClient, ProviderHealth};
 use crate::engine::memory::{self, FolderMemory};
 use crate::engine::provider::{self, AuthKind, PROVIDERS};
 use crate::engine::runtime::{
-    AnalysisResult, AnalysisTurn, AnalysisTurnReplayStatus, InterpretationStatus, LogicalPlan,
-    PlanStrategy, TurnState, VerificationReport, WorkspaceColumnSnapshot,
+    AnalysisResult, AnalysisTurn, AnalysisTurnReplayStatus, ContextReference, InterpretationStatus,
+    LogicalPlan, PlanStrategy, TurnState, VerificationReport, WorkspaceColumnSnapshot,
     WorkspaceRevisionSnapshot, WorkspaceSourceSnapshot,
 };
 use crate::engine::secrets::Secrets;
@@ -922,11 +922,12 @@ impl EngineState {
         }
 
         let answer = self
-            .ask_with_mode(
+            .ask_with_mode_and_context(
                 &original.conversation_id,
                 &original.question,
                 model,
                 inspect,
+                &original.context_refs,
                 emit,
             )
             .await?;
@@ -991,6 +992,7 @@ impl EngineState {
         &self,
         conversation_id: &str,
         question: &str,
+        context_refs: &[ContextReference],
         catalog: &Catalog,
         answer: &Answer,
     ) {
@@ -1024,6 +1026,7 @@ impl EngineState {
             id: answer.turn_id.clone(),
             conversation_id: conversation_id.to_string(),
             question: question.to_string(),
+            context_refs: context_refs.to_vec(),
             workspace: answer
                 .workspace
                 .as_ref()
@@ -2151,7 +2154,7 @@ exactly, character for character, from the list below.";
         model: Option<&str>,
         emit: impl Fn(AskEvent) + Send + Sync,
     ) -> EngineResult<Answer> {
-        self.ask_with_mode(conversation_id, question, model, false, emit)
+        self.ask_with_mode_and_context(conversation_id, question, model, false, &[], emit)
             .await
     }
 
@@ -2164,6 +2167,22 @@ exactly, character for character, from the list below.";
         question: &str,
         model: Option<&str>,
         inspect: bool,
+        emit: impl Fn(AskEvent) + Send + Sync,
+    ) -> EngineResult<Answer> {
+        self.ask_with_mode_and_context(conversation_id, question, model, inspect, &[], emit)
+            .await
+    }
+
+    /// Run the agent loop with structured context-picker references. The raw
+    /// question remains the canonical turn question; references are added to
+    /// the bounded model prompt and persisted for faithful replay.
+    pub async fn ask_with_mode_and_context(
+        &self,
+        conversation_id: &str,
+        question: &str,
+        model: Option<&str>,
+        inspect: bool,
+        context_refs: &[ContextReference],
         emit: impl Fn(AskEvent) + Send + Sync,
     ) -> EngineResult<Answer> {
         let settings = self.settings();
@@ -2235,6 +2254,8 @@ exactly, character for character, from the list below.";
             conversation_id,
             &turn_id,
             question,
+            inspect,
+            context_refs,
             cancel.clone(),
             &emit,
         )
@@ -2251,7 +2272,13 @@ exactly, character for character, from the list below.";
             }
         }
         let answer = answer?;
-        self.persist_analysis_turn(conversation_id, question, &turn_catalog, &answer);
+        self.persist_analysis_turn(
+            conversation_id,
+            question,
+            context_refs,
+            &turn_catalog,
+            &answer,
+        );
 
         // Fold this turn into the folder's learned notes (a correction becomes
         // a vocabulary note; an ordinary question teaches nothing). Needs the
