@@ -623,7 +623,14 @@ async fn keeps_partial_evidence_when_the_model_fails_after_a_tool_call() {
     engine.set_api_key("custom", "sk-test").unwrap();
     engine.open_workspace(&ws).unwrap();
 
-    let answer = engine.ask("c1", "total?", None, |_| {}).await.unwrap();
+    let events: Arc<Mutex<Vec<AskEvent>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink = events.clone();
+    let answer = engine
+        .ask("c1", "total?", None, move |event| {
+            sink.lock().unwrap().push(event)
+        })
+        .await
+        .unwrap();
 
     assert_eq!(answer.evidence.len(), 1, "evidence was kept");
     assert_eq!(answer.evidence[0].tool, "run_sql");
@@ -632,6 +639,13 @@ async fn keeps_partial_evidence_when_the_model_fails_after_a_tool_call() {
         "text: {}",
         answer.text
     );
+    assert!(events.lock().unwrap().iter().any(|event| matches!(
+        event,
+        AskEvent::TurnState {
+            state: fella_lib::engine::runtime::TurnState::Retry,
+            ..
+        }
+    )));
 
     let _ = fs::remove_dir_all(&ws);
     let _ = fs::remove_dir_all(&data);

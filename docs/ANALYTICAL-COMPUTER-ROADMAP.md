@@ -43,7 +43,9 @@ This is the implementation form of Fella's core loop:
 ## Delivery status
 
 - **M0 — runtime spine:** implemented in the typed `runtime` module and the
-  shared Tauri/Electron answer protocol.
+  shared Tauri/Electron answer protocol. Recoverable provider/tool failures and
+  deterministic verification re-asks now emit the explicit `retry` lifecycle
+  state instead of leaving the shells to infer recovery from raw errors.
 - **M1 — WorkspaceModel:** first slice implemented; the mounted catalog now
   has a revision-bound semantic projection with cautious field-role hints and
   an inspectable cross-shell command. A compact profile now also feeds the

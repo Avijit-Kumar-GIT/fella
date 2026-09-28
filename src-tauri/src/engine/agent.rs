@@ -234,6 +234,10 @@ ambiguous, put the ambiguity in `unresolved`.",
                 // evidence and a note rather than losing the whole question.
                 Err(e) if !evidence.is_empty() => {
                     log::warn!("agent: model call failed mid-run: {e}");
+                    emit(AskEvent::TurnState {
+                        turn_id: ids.turn_id.clone(),
+                        state: TurnState::Retry,
+                    });
                     return Ok(finish(
                         engine,
                         workspace.as_ref(),
@@ -294,6 +298,10 @@ ambiguous, put the ambiguity in `unresolved`.",
             // `FELLA_VERIFY_REASK=0` opts out.
             if reask_enabled() && !evidence.is_empty() && !cancel.load(Ordering::Relaxed) {
                 if let Some(detail) = verify::rerun_regression(&checks) {
+                    emit(AskEvent::TurnState {
+                        turn_id: ids.turn_id.clone(),
+                        state: TurnState::Retry,
+                    });
                     messages.push(ChatMessage::User(format!(
                         "Self-check: {detail}. Re-running the query behind your answer gives a \
 different result now. Using only what you've already gathered no new tools give the \
@@ -456,6 +464,7 @@ filter word in the question exactly, and state just the number(s) don't round or
         // Only execute an automatic deterministic plan after every contract
         // in the response has passed the gate. Otherwise even a grounded
         // contract appearing before an ambiguous sibling could touch data.
+        let mut had_tool_error = false;
         if !contract_gate_blocked {
             for (index, compiled) in compiled_contracts {
                 ids.plan = Some(LogicalPlan {
@@ -493,6 +502,7 @@ filter word in the question exactly, and state just the number(s) don't round or
                 }
                 evidence.push(item);
                 tool_calls_total += 1;
+                had_tool_error |= evidence.last().is_some_and(|item| item.error.is_some());
                 if evidence.last().is_some_and(|item| item.error.is_none()) {
                     compiled_plan_executed = true;
                 }
@@ -615,6 +625,7 @@ not run again. Its result is repeated below - use it, refine the call, or give y
             let (mut item, llm_text) = outcome.ok_or_else(|| {
                 EngineError::msg("internal error: a tool call produced no outcome")
             })?;
+            had_tool_error |= item.error.is_some();
             item.id = evidence_id(evidence.len());
             emit(AskEvent::ToolEnd {
                 item: Box::new(item.clone()),
@@ -633,6 +644,13 @@ not run again. Its result is repeated below - use it, refine the call, or give y
                 call_id: call.id.clone(),
                 name: call.name.clone(),
                 content: llm_text,
+            });
+        }
+
+        if had_tool_error && !cancel.load(Ordering::Relaxed) {
+            emit(AskEvent::TurnState {
+                turn_id: ids.turn_id.clone(),
+                state: TurnState::Retry,
             });
         }
 
