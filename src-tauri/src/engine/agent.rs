@@ -12,10 +12,10 @@ use crate::engine::evidence::{
     Answer, AskEvent, EvidenceItem, Usage, VerificationCheck, WorkspaceSnapshot,
 };
 use crate::engine::llm::{ChatMessage, LlmClient, ToolCall};
-use crate::engine::runtime::{self, ExecutionTrace, TraceStep, TurnState};
+use crate::engine::runtime::{self, AnalysisContract, ExecutionTrace, TraceStep, TurnState};
 use crate::engine::state::EngineState;
 use crate::engine::tools::Registry;
-use crate::engine::{friction, Catalog};
+use crate::engine::{friction, risk, Catalog};
 
 /// Hard cap on tool-calling iterations per question, before the loop forces
 /// a final answer. `FELLA_MAX_STEPS` overrides it a slower or less
@@ -36,6 +36,7 @@ const SOFT_STOP_ROUND_TRIPS: usize = 3;
 struct RunIds {
     turn_id: String,
     trace_id: String,
+    contract: Option<AnalysisContract>,
 }
 
 fn soft_stop_round_trips() -> usize {
@@ -88,14 +89,16 @@ pub async fn run(
     cancel: Arc<AtomicBool>,
     emit: &(dyn Fn(AskEvent) + Send + Sync),
 ) -> EngineResult<Answer> {
-    let ids = RunIds {
+    let mut ids = RunIds {
         turn_id: turn_id.to_string(),
         trace_id: runtime::new_trace_id(),
+        contract: None,
     };
     emit(AskEvent::TurnState {
         turn_id: ids.turn_id.clone(),
         state: TurnState::Interpreting,
     });
+    let risk = risk::assess(question);
     let catalog = engine.catalog();
     let workspace = match (&catalog.workspace, &catalog.revision) {
         (Some(path), Some(revision)) => Some(WorkspaceSnapshot {
@@ -123,6 +126,17 @@ pub async fn run(
             " Use only the enabled analysis paths and explain when the requested analysis is unavailable.",
         );
     }
+    if risk.requires_contract() && catalog.workspace.is_some() {
+        sys.push_str(&format!(
+            "\n\nRuntime interpretation gate: this question is routed through the {:?} path \
+({}). Before using a data tool, call `{}` with the compact analytical \
+interpretation. Do not invent observed values; if the wording is materially \
+ambiguous, put the ambiguity in `unresolved`.",
+            risk.tier,
+            risk.signals.join(", "),
+            runtime::CONTRACT_TOOL_NAME,
+        ));
+    }
     let mut messages = vec![
         ChatMessage::System(sys),
         ChatMessage::User(question.to_string()),
@@ -132,7 +146,11 @@ pub async fn run(
     // you do?") to a single fast turn instead of a many-step loop of
     // NoWorkspace errors, which can take minutes on a slow provider.
     let schemas = if catalog.workspace.is_some() {
-        registry.schemas()
+        if risk.requires_contract() {
+            registry.schemas_with_contract()
+        } else {
+            registry.schemas()
+        }
     } else {
         Vec::new()
     };
@@ -290,11 +308,21 @@ filter word in the question exactly, and state just the number(s) don't round or
                 emit,
             ));
         }
-        tool_calls_total += resp.tool_calls.len();
-        emit(AskEvent::TurnState {
-            turn_id: ids.turn_id.clone(),
-            state: TurnState::Executing,
-        });
+        let has_data_tools = resp
+            .tool_calls
+            .iter()
+            .any(|call| call.name != runtime::CONTRACT_TOOL_NAME);
+        tool_calls_total += resp
+            .tool_calls
+            .iter()
+            .filter(|call| call.name != runtime::CONTRACT_TOOL_NAME)
+            .count();
+        if has_data_tools {
+            emit(AskEvent::TurnState {
+                turn_id: ids.turn_id.clone(),
+                state: TurnState::Executing,
+            });
+        }
 
         // `resp.content` (any "let me check…" preamble before the tool calls)
         // was already streamed through `on_delta`; just keep it in the history.
@@ -304,10 +332,12 @@ filter word in the question exactly, and state just the number(s) don't round or
         });
 
         for call in &resp.tool_calls {
-            emit(AskEvent::ToolStart {
-                tool: call.name.clone(),
-                args: call.arguments.clone(),
-            });
+            if call.name != runtime::CONTRACT_TOOL_NAME {
+                emit(AskEvent::ToolStart {
+                    tool: call.name.clone(),
+                    args: call.arguments.clone(),
+                });
+            }
         }
 
         // Resolve exact-repeat calls from the memo synchronously (it needs
@@ -315,8 +345,29 @@ filter word in the question exactly, and state just the number(s) don't round or
         // concurrently and stitch the results back in call order.
         let mut outcomes: Vec<Option<(EvidenceItem, String)>> =
             (0..resp.tool_calls.len()).map(|_| None).collect();
+        let mut internal_results: HashMap<usize, String> = HashMap::new();
         let mut pending: Vec<usize> = Vec::new();
         for (i, call) in resp.tool_calls.iter().enumerate() {
+            if call.name == runtime::CONTRACT_TOOL_NAME {
+                let contract_text = match AnalysisContract::from_tool_args(&call.arguments) {
+                    Ok(contract) => {
+                        let serialized = serde_json::to_string(&contract).unwrap_or_default();
+                        ids.contract = Some(contract);
+                        emit(AskEvent::TurnState {
+                            turn_id: ids.turn_id.clone(),
+                            state: TurnState::Planning,
+                        });
+                        format!(
+                            "Interpretation recorded, but not yet grounded in observed data:\n{serialized}"
+                        )
+                    }
+                    Err(error) => format!(
+                        "The interpretation was not accepted: {error}. State a smaller, explicit contract or continue only if the question is unambiguous."
+                    ),
+                };
+                internal_results.insert(i, contract_text);
+                continue;
+            }
             let key = (call.name.clone(), call.arguments.to_string());
             let dup = (!call.name.contains("__"))
                 .then(|| seen_calls.get(&key))
@@ -367,7 +418,18 @@ not run again. Its result is repeated below - use it, refine the call, or give y
             outcomes[i] = Some(res);
         }
 
-        for (call, outcome) in resp.tool_calls.iter().zip(outcomes) {
+        for (index, (call, outcome)) in resp.tool_calls.iter().zip(outcomes).enumerate() {
+            if call.name == runtime::CONTRACT_TOOL_NAME {
+                let content = internal_results.remove(&index).ok_or_else(|| {
+                    EngineError::msg("internal error: contract negotiation produced no outcome")
+                })?;
+                messages.push(ChatMessage::Tool {
+                    call_id: call.id.clone(),
+                    name: call.name.clone(),
+                    content,
+                });
+                continue;
+            }
             // Every slot is filled above (dup branch or the `pending`/`ran` zip);
             // treat a gap as a broken invariant that ends the run cleanly.
             let (mut item, llm_text) = outcome.ok_or_else(|| {
@@ -588,6 +650,7 @@ fn finish_with(
     let answer = Answer {
         turn_id: ids.turn_id.clone(),
         trace,
+        contract: ids.contract.clone(),
         text,
         evidence,
         verification,

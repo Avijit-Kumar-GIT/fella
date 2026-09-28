@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value as Json;
 
 use crate::engine::evidence::{VerificationCheck, VerificationStatus};
 
@@ -19,6 +20,11 @@ pub type TurnId = String;
 
 /// A stable identifier for the execution trace produced by one turn.
 pub type TraceId = String;
+
+/// Internal function name used when the runtime asks the model to state its
+/// interpretation before using data tools. It never reaches the data engine
+/// and is omitted from user-facing evidence.
+pub const CONTRACT_TOOL_NAME: &str = "__analysis_contract";
 
 /// Explicit lifecycle states for the analytical runtime.  The fast path may
 /// move through several states without an extra model call, but it still
@@ -115,6 +121,32 @@ pub struct AnalysisContract {
     pub assumptions: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unresolved: Vec<String>,
+}
+
+impl AnalysisContract {
+    /// Parse and normalize a model-proposed contract. The model cannot grant
+    /// itself `grounded` status: only later data probes and verification may
+    /// promote an interpretation beyond `assumed`.
+    pub fn from_tool_args(value: &Json) -> Result<Self, String> {
+        let mut contract: Self = serde_json::from_value(value.clone())
+            .map_err(|error| format!("invalid analysis contract: {error}"))?;
+        if matches!(contract.interpretation, InterpretationStatus::Grounded) {
+            contract.interpretation = InterpretationStatus::Assumed;
+        }
+        if contract.interpretation != InterpretationStatus::Unsupported {
+            if !contract.unresolved.is_empty() {
+                contract.interpretation = InterpretationStatus::Ambiguous;
+            }
+            if contract.subject.is_none()
+                && contract.measures.is_empty()
+                && contract.filters.is_empty()
+                && contract.group_by.is_empty()
+            {
+                return Err("the contract did not identify an analytical subject".into());
+            }
+        }
+        Ok(contract)
+    }
 }
 
 /// The strategy used to reach the execution layer.  `DirectTools` is the
@@ -242,5 +274,36 @@ mod tests {
             serde_json::to_value(TurnState::NeedsReview).unwrap(),
             "needs_review"
         );
+    }
+
+    #[test]
+    fn model_cannot_claim_that_a_contract_is_already_grounded() {
+        let contract = AnalysisContract::from_tool_args(&serde_json::json!({
+            "interpretation": "grounded",
+            "subject": "sales",
+            "measures": [{"concept": "revenue", "operation": "sum"}],
+            "filters": [],
+            "group_by": [],
+            "assumptions": [],
+            "unresolved": []
+        }))
+        .unwrap();
+        assert_eq!(contract.interpretation, InterpretationStatus::Assumed);
+    }
+
+    #[test]
+    fn ambiguous_contracts_are_preserved_for_the_runtime() {
+        let contract = AnalysisContract::from_tool_args(&serde_json::json!({
+            "interpretation": "assumed",
+            "subject": "sales",
+            "measures": [{"concept": "revenue", "operation": "sum"}],
+            "filters": [],
+            "group_by": [],
+            "assumptions": [],
+            "unresolved": ["which revenue field?" ]
+        }))
+        .unwrap();
+        assert_eq!(contract.interpretation, InterpretationStatus::Ambiguous);
+        assert_eq!(contract.unresolved, vec!["which revenue field?"]);
     }
 }

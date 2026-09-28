@@ -103,6 +103,11 @@ pub struct Answer {
     /// Stable runtime trace for this answer. Raw rows and SQL remain in
     /// `evidence`; this is the shell-independent execution summary.
     pub trace: crate::engine::runtime::ExecutionTrace,
+    /// The model's proposed semantic interpretation, when the risk router
+    /// requested one. It is not evidence and may still be only assumed or
+    /// ambiguous.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contract: Option<crate::engine::runtime::AnalysisContract>,
     pub text: String,
     pub evidence: Vec<EvidenceItem>,
     pub verification: Vec<VerificationCheck>,

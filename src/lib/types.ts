@@ -66,6 +66,8 @@ export interface Answer {
 	turn_id?: string;
 	/** Compact execution summary; raw SQL/rows remain in evidence. */
 	trace?: ExecutionTrace;
+	/** Model-proposed semantic interpretation, when contract-first routing ran. */
+	contract?: AnalysisContract;
 	text: string;
 	evidence: EvidenceItem[];
 	verification: VerificationCheck[];
@@ -74,6 +76,28 @@ export interface Answer {
 	workspace?: { path: string; revision: string };
 	/** Token counts for the whole run, when the provider reported them. */
 	usage?: { prompt_tokens: number; completion_tokens: number };
+}
+
+export type InterpretationStatus = 'unresolved' | 'grounded' | 'assumed' | 'ambiguous' | 'unsupported';
+
+export interface AnalysisContract {
+	interpretation: InterpretationStatus;
+	subject?: string;
+	grain?: string;
+	measures: { concept: string; operation: string; unit?: string }[];
+	filters: {
+		concept: string;
+		field?: string;
+		candidate_values: string[];
+		resolved_values: string[];
+		resolution?: string;
+	}[];
+	time?: { field?: string; range?: string; timezone?: string };
+	group_by: string[];
+	comparison?: string;
+	presentation?: string;
+	assumptions: string[];
+	unresolved: string[];
 }
 
 export type RuntimeTurnState =

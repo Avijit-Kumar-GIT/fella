@@ -12,6 +12,7 @@ use crate::engine::analytics::verify::truncate as truncate_chars;
 use crate::engine::capabilities::AnalysisCapabilities;
 use crate::engine::error::{EngineError, EngineResult};
 use crate::engine::llm::ToolSchema;
+use crate::engine::runtime::CONTRACT_TOOL_NAME;
 use crate::engine::state::{EngineState, GrepHit, QueryResult};
 
 /// Keep the model's context bounded for large result sets, while allowing it
@@ -164,9 +165,81 @@ impl Registry {
             .collect()
     }
 
+    /// Add the non-executing contract negotiation function for questions the
+    /// risk router marks as elevated. It is intentionally opt-in so the common
+    /// lookup path keeps the smallest possible tool surface.
+    pub fn schemas_with_contract(&self) -> Vec<ToolSchema> {
+        let mut schemas = vec![ToolSchema {
+            name: CONTRACT_TOOL_NAME.to_string(),
+            description: "State the compact analytical interpretation before using data tools. Do not invent observed values. Put unresolved ambiguity in `unresolved`; this function does not access the workspace and does not count as evidence."
+                .to_string(),
+            parameters: contract_schema(),
+        }];
+        schemas.extend(self.schemas());
+        schemas
+    }
+
     pub fn capability_notice(&self) -> Option<String> {
         self.capabilities.prompt_notice()
     }
+}
+
+fn contract_schema() -> Json {
+    json!({
+        "type": "object",
+        "properties": {
+            "interpretation": {
+                "type": "string",
+                "enum": ["assumed", "ambiguous", "unsupported"]
+            },
+            "subject": { "type": "string" },
+            "grain": { "type": "string" },
+            "measures": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "concept": { "type": "string" },
+                        "operation": { "type": "string" },
+                        "unit": { "type": "string" }
+                    },
+                    "required": ["concept", "operation"],
+                    "additionalProperties": false
+                }
+            },
+            "filters": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "concept": { "type": "string" },
+                        "field": { "type": "string" },
+                        "candidate_values": { "type": "array", "items": { "type": "string" } },
+                        "resolved_values": { "type": "array", "items": { "type": "string" } },
+                        "resolution": { "type": "string" }
+                    },
+                    "required": ["concept"],
+                    "additionalProperties": false
+                }
+            },
+            "time": {
+                "type": "object",
+                "properties": {
+                    "field": { "type": "string" },
+                    "range": { "type": "string" },
+                    "timezone": { "type": "string" }
+                },
+                "additionalProperties": false
+            },
+            "group_by": { "type": "array", "items": { "type": "string" } },
+            "comparison": { "type": "string" },
+            "presentation": { "type": "string" },
+            "assumptions": { "type": "array", "items": { "type": "string" } },
+            "unresolved": { "type": "array", "items": { "type": "string" } }
+        },
+        "required": ["interpretation", "measures", "filters", "group_by", "assumptions", "unresolved"],
+        "additionalProperties": false
+    })
 }
 
 /// Add a shared optional `note` string to a tool's parameter schema. The model
@@ -981,5 +1054,21 @@ mod tests {
             .collect();
 
         assert_eq!(names, vec!["list_files"]);
+    }
+
+    #[test]
+    fn contract_function_is_opt_in_and_not_a_data_tool() {
+        let standard_names: Vec<String> = Registry::standard()
+            .schemas()
+            .into_iter()
+            .map(|schema| schema.name)
+            .collect();
+        assert!(!standard_names.iter().any(|name| name == CONTRACT_TOOL_NAME));
+
+        let contract_schemas = Registry::standard().schemas_with_contract();
+        assert_eq!(contract_schemas[0].name, CONTRACT_TOOL_NAME);
+        assert!(contract_schemas[0]
+            .description
+            .contains("does not access the workspace"));
     }
 }

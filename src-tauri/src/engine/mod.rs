@@ -13,6 +13,7 @@ pub mod ingest;
 pub mod llm;
 pub mod memory;
 pub mod provider;
+pub mod risk;
 pub mod runtime;
 pub mod secrets;
 pub mod sqlite;
