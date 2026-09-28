@@ -6,8 +6,8 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use fella_lib::engine::{
-    grounding, AnalysisContract, ContractFilter, ContractJoin, ContractMeasure, EngineState,
-    FieldRole, InterpretationStatus, JoinKind,
+    grounding, planner, AnalysisContract, ContractFilter, ContractJoin, ContractMeasure,
+    EngineState, FieldRole, InterpretationStatus, JoinKind,
 };
 
 fn scratch(tag: &str) -> PathBuf {
@@ -967,6 +967,11 @@ fn grounds_a_declared_join_and_probes_its_cardinality() {
             && probe.outcome == grounding::ProbeOutcome::Resolved
             && probe.detail.contains("matched rows=3")));
     assert!(grounded.report.unresolved.is_empty());
+
+    let plan = planner::compile(&engine.catalog(), &grounded.contract, Some("orders")).unwrap();
+    assert!(plan.sql.contains("LEFT JOIN"));
+    let result = engine.run_sql(&plan.sql).unwrap();
+    assert_eq!(result.row_count, 2);
 
     let _ = fs::remove_dir_all(&ws);
     let _ = fs::remove_dir_all(&data);

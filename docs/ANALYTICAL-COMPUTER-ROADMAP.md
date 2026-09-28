@@ -58,8 +58,9 @@ This is the implementation form of Fella's core loop:
   compiles grounded single-source aggregates, filters, time ranges, typed
   year/month/week/day buckets, groupings, grounded top-N/ranking, and guarded
   ratios over declared measures into read-only SQL. Explicit join edges are
-  now revision-grounded and cardinality-probed; physical join compilation and
-  richer comparison semantics still use the direct fallback.
+  now revision-grounded, cardinality-probed, and compilable when the join graph
+  is connected and every reference is unambiguous; disconnected/ambiguous joins
+  and richer comparison semantics still use the direct fallback.
 - **M4 — semantic verification:** first slice implemented; grounded bindings
   must be present in executed SQL, requested aggregate operations and observed
   filter values, time buckets, ranking limits, and derived ratios must also
@@ -226,7 +227,10 @@ The first implementation slice is intentionally narrower than the destination:
 it only compiles a grounded single queryable source with aggregate measures,
 observed filter values, ISO-like year/month/date ranges, group-by fields,
 ratios whose operands are declared measures, and explicit join edges whose
-sources and keys are grounded against the current snapshot.
+sources and keys are grounded against the current snapshot. Connected joins
+with qualified, unambiguous references now compile into read-only SQL; the
+fallback remains the safety valve for disconnected graphs and unsupported
+comparison semantics.
 When any of those conditions is not provably satisfied, Fella keeps the
 contract for verification but returns to the existing model-driven path.
 
