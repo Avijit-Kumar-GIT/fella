@@ -102,7 +102,8 @@ This is the implementation form of Fella's core loop:
   from the final prose answer. It now also reports accepted-answer and
   unsafe-guess rates for Fella runs. Cost/quality dashboards and broader replay
   matrices remain ahead; the lift rollup now carries weighted accepted and
-  unsafe rates alongside accuracy and token cost.
+  unsafe rates alongside accuracy and token cost. Fella benchmark records also
+  retain canonical analysis-turn references for inspection and rerun.
 
 ## Where the current code starts
 
@@ -377,6 +378,9 @@ fraction of runs the runtime accepted as verified and the fraction that still
 emitted a non-empty answer without verification, making the correctness-first
 tradeoff visible before a dashboard exists. The aggregate CLI keeps those rates
 weighted by iteration count and leaves non-Fella baselines as not applicable.
+Each Fella result also carries the persisted turn id and workspace revision,
+connecting evaluation output to the existing `analysis_turn_load` and
+`analysis_turn_rerun` protocol instead of inventing a second trace format.
 
 ## Research-informed design choices
 

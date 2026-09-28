@@ -170,6 +170,7 @@ def write_csv(out_path, bare_path, fella_path):
                 "plan_correct_rate": r.get("plan_correct_rate"),
                 "accepted_rate": r.get("accepted_rate"),
                 "unsafe_guess_rate": r.get("unsafe_guess_rate"),
+                "replay_refs": json.dumps(r.get("replays", []), separators=(",", ":")),
                 "total_s": round(r.get("total_s", 0), 3),
                 "err": r.get("err") or "",
             })
@@ -179,6 +180,7 @@ def write_csv(out_path, bare_path, fella_path):
             "hard_fail", "verification_status", "interpretation_status",
             "plan_strategy", "interpretation_correct_rate", "plan_correct_rate",
             "accepted_rate", "unsafe_guess_rate",
+            "replay_refs",
             "total_s", "err"]
     with open(out_path, "w", newline="") as f:
         w = csv.DictWriter(f, cols)

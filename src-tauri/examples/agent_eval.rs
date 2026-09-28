@@ -136,6 +136,14 @@ struct EvalCase {
 
 // --- one run of one case -------------------------------------------------
 
+#[derive(Clone, serde::Serialize)]
+struct ReplayRef {
+    /// Backend-owned turn record that can be loaded or rerun through the
+    /// analysis-turn bridge while the benchmark data directory is available.
+    turn_id: String,
+    workspace_revision: Option<String>,
+}
+
 struct RunResult {
     text: String,
     evidence: Vec<EvidenceItem>,
@@ -143,6 +151,7 @@ struct RunResult {
     verification_status: Option<VerificationStatus>,
     interpretation_status: Option<InterpretationStatus>,
     plan_strategy: Option<PlanStrategy>,
+    replay: Option<ReplayRef>,
     hard_fail: bool,
     prompt_tok: u32,
     completion_tok: u32,
@@ -200,6 +209,13 @@ async fn run_case(
                 .usage
                 .map(|u| (u.prompt_tokens, u.completion_tokens))
                 .unwrap_or((0, 0));
+            let replay = Some(ReplayRef {
+                turn_id: a.turn_id.clone(),
+                workspace_revision: a
+                    .workspace
+                    .as_ref()
+                    .map(|workspace| workspace.revision.clone()),
+            });
             RunResult {
                 hard_fail: matches!(a.status, VerificationStatus::Failed),
                 text: a.text,
@@ -208,6 +224,7 @@ async fn run_case(
                 verification_status: Some(a.status),
                 interpretation_status: a.contract.map(|contract| contract.interpretation),
                 plan_strategy: a.plan.map(|plan| plan.strategy),
+                replay,
                 prompt_tok: p,
                 completion_tok: c,
                 total,
@@ -223,6 +240,7 @@ async fn run_case(
             verification_status: None,
             interpretation_status: None,
             plan_strategy: None,
+            replay: None,
             hard_fail: false,
             prompt_tok: 0,
             completion_tok: 0,
@@ -983,6 +1001,9 @@ struct CaseScore {
     /// Fraction of all Fella runtime observations that emitted a non-error,
     /// non-empty answer without a verified runtime status.
     unsafe_guess_rate: Option<f32>,
+    /// Canonical backend turn records produced by the Fella iterations. These
+    /// references make a benchmark result inspectable and rerunnable.
+    replays: Vec<ReplayRef>,
     waste: Waste,
     prompt_tok: u32,
     completion_tok: u32,
@@ -1114,6 +1135,7 @@ async fn run_bare(engine: &EngineState, dir: &Path, question: &str, files: &[Str
                 verification_status: None,
                 interpretation_status: None,
                 plan_strategy: None,
+                replay: None,
                 hard_fail: false,
                 prompt_tok: 0,
                 completion_tok: 0,
@@ -1147,6 +1169,7 @@ number or short phrase, no explanation. If the files can't answer it, say so pla
                 verification_status: None,
                 interpretation_status: None,
                 plan_strategy: None,
+                replay: None,
                 hard_fail: false,
                 prompt_tok: p,
                 completion_tok: c,
@@ -1163,6 +1186,7 @@ number or short phrase, no explanation. If the files can't answer it, say so pla
             verification_status: None,
             interpretation_status: None,
             plan_strategy: None,
+            replay: None,
             hard_fail: false,
             prompt_tok: 0,
             completion_tok: 0,
@@ -1225,6 +1249,7 @@ async fn run_openai_ci(h: &CiHarness, dir: &Path, question: &str, files: &[Strin
         verification_status: None,
         interpretation_status: None,
         plan_strategy: None,
+        replay: None,
         hard_fail: false,
         prompt_tok: 0,
         completion_tok: 0,
@@ -1283,6 +1308,7 @@ async fn run_openai_ci(h: &CiHarness, dir: &Path, question: &str, files: &[Strin
         verification_status: None,
         interpretation_status: None,
         plan_strategy: None,
+        replay: None,
         hard_fail: false,
         prompt_tok: v["usage"]["input_tokens"].as_u64().unwrap_or(0) as u32,
         completion_tok: v["usage"]["output_tokens"].as_u64().unwrap_or(0) as u32,
@@ -1318,6 +1344,7 @@ async fn score_case(
     let mut acceptance_observations: Vec<(VerificationStatus, bool)> = Vec::new();
     let mut interpretation_statuses: Vec<InterpretationStatus> = Vec::new();
     let mut plan_strategies: Vec<PlanStrategy> = Vec::new();
+    let mut replays: Vec<ReplayRef> = Vec::new();
     let (mut interpretation_matches, mut interpretation_observations) = (0usize, 0usize);
     let (mut plan_matches, mut plan_observations) = (0usize, 0usize);
     let mut any_hard = false;
@@ -1413,6 +1440,9 @@ async fn score_case(
             verification_statuses.push(status);
             acceptance_observations.push((status, r.err.is_none() && !r.text.trim().is_empty()));
         }
+        if let Some(replay) = r.replay {
+            replays.push(replay);
+        }
         if let Some(status) = r.interpretation_status {
             interpretation_statuses.push(status);
             if let Some(expected) = case.expected_interpretation {
@@ -1473,6 +1503,7 @@ async fn score_case(
             }),
         accepted_rate,
         unsafe_guess_rate,
+        replays,
         waste: fold_waste(&wastes),
         prompt_tok: (ptok / iters as u64) as u32,
         completion_tok: (ctok / iters as u64) as u32,
@@ -2263,6 +2294,7 @@ async fn cmd_session_memory(
             plan_correct_rate: None,
             accepted_rate: None,
             unsafe_guess_rate: None,
+            replays: Vec::new(),
             waste: Waste::default(),
             prompt_tok: (ptok / iters as u64) as u32,
             completion_tok: (ctok / iters as u64) as u32,
@@ -2455,6 +2487,7 @@ async fn cmd_memory(
             plan_correct_rate: None,
             accepted_rate: None,
             unsafe_guess_rate: None,
+            replays: Vec::new(),
             waste: Waste::default(),
             prompt_tok: (ptok / iters as u64) as u32,
             completion_tok: (ctok / iters as u64) as u32,
@@ -2521,6 +2554,7 @@ async fn cmd_memory_axes(
             plan_correct_rate: None,
             accepted_rate: None,
             unsafe_guess_rate: None,
+            replays: Vec::new(),
             waste: Waste::default(),
             prompt_tok: 0,
             completion_tok: 0,
@@ -2855,6 +2889,7 @@ fn write_json(path: &str, scores: &[CaseScore]) {
                 "plan_correct_rate": s.plan_correct_rate,
                 "accepted_rate": s.accepted_rate,
                 "unsafe_guess_rate": s.unsafe_guess_rate,
+                "replays": s.replays,
                 "waste": s.waste.total(), "prompt_tok": s.prompt_tok,
                 "completion_tok": s.completion_tok, "total_s": s.total_s,
                 "steps": s.steps, "hard_fail": s.hard_fail, "err": s.err,
@@ -3065,6 +3100,7 @@ mod tests {
             verification_status: None,
             interpretation_status: None,
             plan_strategy: None,
+            replay: None,
             hard_fail: false,
             prompt_tok: 0,
             completion_tok: 0,
@@ -3174,6 +3210,22 @@ mod tests {
         assert_eq!(
             acceptance_rates(&[(VerificationStatus::Failed, false)]),
             Some((0.0, 0.0))
+        );
+    }
+
+    #[test]
+    fn replay_refs_keep_the_canonical_turn_and_revision() {
+        let value = serde_json::to_value(ReplayRef {
+            turn_id: "turn-123".into(),
+            workspace_revision: Some("rev-456".into()),
+        })
+        .unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "turn_id": "turn-123",
+                "workspace_revision": "rev-456"
+            })
         );
     }
 
