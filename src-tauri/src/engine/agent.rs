@@ -382,7 +382,11 @@ filter word in the question exactly, and state just the number(s) don't round or
                         turn_id: ids.turn_id.clone(),
                         state: TurnState::Grounding,
                     });
-                    let grounded = crate::engine::grounding::ground(engine, contract);
+                    let grounded = crate::engine::grounding::ground_with_context(
+                        engine,
+                        contract,
+                        context_refs,
+                    );
                     let serialized = serde_json::to_string(&grounded.contract).unwrap_or_default();
                     let grounding = serde_json::to_string(&grounded.report).unwrap_or_default();
                     let source_hint = grounded.report.source.clone();

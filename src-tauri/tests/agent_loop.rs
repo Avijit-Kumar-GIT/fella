@@ -195,7 +195,6 @@ async fn unresolved_contract_blocks_data_tools_in_the_same_response() {
                     "name": "__analysis_contract",
                     "arguments": serde_json::json!({
                         "interpretation": "assumed",
-                        "subject": "sales",
                         "measures": [{ "concept": "amount", "field": "amount", "operation": "sum" }],
                         "unresolved": ["which period field should be used"]
                     }).to_string()
@@ -303,13 +302,21 @@ async fn compiled_plan_replaces_redundant_model_data_calls() {
     engine.set_api_key("custom", "sk-test").unwrap();
     engine.open_workspace(&ws).unwrap();
 
+    let context_refs = vec![fella_lib::engine::ContextReference {
+        kind: "source".into(),
+        key: ws.join("sales.csv").to_string_lossy().into_owned(),
+        label: "sales.csv".into(),
+        detail: None,
+    }];
     let events: Arc<Mutex<Vec<AskEvent>>> = Arc::new(Mutex::new(Vec::new()));
     let sink = events.clone();
     let answer = engine
-        .ask(
+        .ask_with_mode_and_context(
             "compiled-plan-gate",
             "show sales by month",
             None,
+            false,
+            &context_refs,
             move |event| sink.lock().unwrap().push(event),
         )
         .await
@@ -323,6 +330,10 @@ async fn compiled_plan_replaces_redundant_model_data_calls() {
         .as_deref()
         .unwrap()
         .contains("strftime('%Y-%m'"));
+    assert_eq!(
+        answer.grounding.as_ref().unwrap().probes[0].kind,
+        "context_source"
+    );
     let sql_starts = events
         .lock()
         .unwrap()

@@ -11,7 +11,9 @@ use serde_json::Value as Json;
 
 use crate::engine::analytics::data::{quote_ident, quote_str};
 use crate::engine::catalog::{Catalog, ColumnInfo, SourceInfo};
-use crate::engine::runtime::{AnalysisContract, ContractJoin, InterpretationStatus, JoinKind};
+use crate::engine::runtime::{
+    AnalysisContract, ContextReference, ContractJoin, InterpretationStatus, JoinKind,
+};
 use crate::engine::state::EngineState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -49,7 +51,41 @@ pub struct GroundingResult {
     pub report: GroundingReport,
 }
 
-pub fn ground(engine: &EngineState, mut contract: AnalysisContract) -> GroundingResult {
+pub fn ground(engine: &EngineState, contract: AnalysisContract) -> GroundingResult {
+    ground_with_context(engine, contract, &[])
+}
+
+/// Ground a model-proposed contract with the user's selected Context starting
+/// points. A single selected source is a deterministic scope hint only when
+/// the contract did not name a source; it never grants access, overrides an
+/// explicit subject, or turns a column label into evidence.
+pub fn ground_with_context(
+    engine: &EngineState,
+    mut contract: AnalysisContract,
+    context_refs: &[ContextReference],
+) -> GroundingResult {
+    let context_source = context_source_hint(engine, context_refs);
+    if contract.subject.is_none() {
+        if let Some(source) = context_source.as_deref() {
+            contract.subject = Some(source.to_string());
+        }
+    }
+    let mut result = ground_unhinted(engine, contract);
+    if let Some(source) = context_source {
+        result.report.probes.insert(
+            0,
+            GroundingProbe {
+                kind: "context_source".into(),
+                target: source.clone(),
+                outcome: ProbeOutcome::Resolved,
+                detail: "selected Context source used as the starting scope".into(),
+            },
+        );
+    }
+    result
+}
+
+fn ground_unhinted(engine: &EngineState, mut contract: AnalysisContract) -> GroundingResult {
     let catalog = engine.catalog();
     let mut report = GroundingReport {
         source: None,
@@ -747,6 +783,37 @@ fn find_source<'a>(sources: &[&'a SourceInfo], requested: &str) -> Option<&'a So
                 .as_deref()
                 .is_some_and(|view| view.eq_ignore_ascii_case(requested))
     })
+}
+
+fn context_source_hint(engine: &EngineState, refs: &[ContextReference]) -> Option<String> {
+    let catalog = engine.catalog();
+    let mut matches = Vec::<String>::new();
+    for source in catalog
+        .sources
+        .iter()
+        .filter(|source| source.view.is_some())
+    {
+        let view = source.view.as_deref().unwrap_or(&source.name);
+        let matched = refs.iter().any(|reference| {
+            let key = reference.key.as_str();
+            let label = reference.label.as_str();
+            match reference.kind.as_str() {
+                "source" => {
+                    key.eq_ignore_ascii_case(&source.path)
+                        || key.eq_ignore_ascii_case(&source.name)
+                        || key.eq_ignore_ascii_case(view)
+                        || label.eq_ignore_ascii_case(&source.name)
+                        || label.eq_ignore_ascii_case(view)
+                }
+                "column" => key.starts_with(&format!("{}:", source.path)),
+                _ => false,
+            }
+        });
+        if matched && !matches.iter().any(|candidate| candidate == view) {
+            matches.push(view.to_string());
+        }
+    }
+    (matches.len() == 1).then(|| matches.remove(0))
 }
 
 fn ground_join_edge(
