@@ -329,7 +329,6 @@ async fn compiled_plan_replaces_redundant_model_data_calls() {
                     "name": "__analysis_contract",
                     "arguments": serde_json::json!({
                         "interpretation": "assumed",
-                        "subject": "sales",
                         "measures": [{ "concept": "amount", "field": "amount", "operation": "sum" }],
                         "time": { "field": "month", "bucket": "month" }
                     }).to_string()

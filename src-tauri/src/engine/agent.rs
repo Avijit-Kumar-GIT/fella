@@ -482,6 +482,7 @@ filter word in the question exactly, and state just the number(s) don't round or
         // in the response has passed the gate. Otherwise even a grounded
         // contract appearing before an ambiguous sibling could touch data.
         let mut had_tool_error = false;
+        let mut workspace_changed = false;
         if !contract_gate_blocked {
             for (index, compiled) in compiled_contracts {
                 ids.plan = Some(LogicalPlan {
@@ -520,6 +521,9 @@ filter word in the question exactly, and state just the number(s) don't round or
                 evidence.push(item);
                 tool_calls_total += 1;
                 had_tool_error |= evidence.last().is_some_and(|item| item.error.is_some());
+                workspace_changed |= evidence
+                    .last()
+                    .is_some_and(|item| is_workspace_change_error(item.error.as_deref()));
                 if evidence.last().is_some_and(|item| item.error.is_none()) {
                     compiled_plan_executed = true;
                 }
@@ -643,6 +647,7 @@ not run again. Its result is repeated below - use it, refine the call, or give y
                 EngineError::msg("internal error: a tool call produced no outcome")
             })?;
             had_tool_error |= item.error.is_some();
+            workspace_changed |= is_workspace_change_error(item.error.as_deref());
             item.id = evidence_id(evidence.len());
             emit(AskEvent::ToolEnd {
                 item: Box::new(item.clone()),
@@ -662,6 +667,23 @@ not run again. Its result is repeated below - use it, refine the call, or give y
                 name: call.name.clone(),
                 content: llm_text,
             });
+        }
+
+        if workspace_changed {
+            emit(AskEvent::TurnState {
+                turn_id: ids.turn_id.clone(),
+                state: TurnState::Retry,
+            });
+            return Ok(finish(
+                engine,
+                workspace.as_ref(),
+                &ids,
+                question,
+                "The workspace changed while this question was running. I kept the partial trace, but the result needs to be run again against the current files.".into(),
+                evidence,
+                usage,
+                emit,
+            ));
         }
 
         if had_tool_error && !cancel.load(Ordering::Relaxed) {
@@ -770,6 +792,10 @@ fn stopped(
 fn catalog_matches(engine: &EngineState, expected: &Catalog) -> bool {
     let current = engine.catalog();
     current.workspace == expected.workspace && current.revision == expected.revision
+}
+
+fn is_workspace_change_error(error: Option<&str>) -> bool {
+    error.is_some_and(|error| error.contains("workspace changed while this question was running"))
 }
 
 fn workspace_matches(engine: &EngineState, expected: Option<&WorkspaceSnapshot>) -> bool {
@@ -1635,6 +1661,15 @@ Workspace: /tmp/ws\n{}\n{}",
         assert!(is_schema_error("no such column: amount"));
         assert!(is_schema_error("Query error: no such table: ledgr"));
         assert!(!is_schema_error("query stopped after 15 s"));
+    }
+
+    #[test]
+    fn workspace_change_errors_are_recognised() {
+        assert!(is_workspace_change_error(Some(
+            "the workspace changed while this question was running; ask again"
+        )));
+        assert!(!is_workspace_change_error(Some("no such table: sales")));
+        assert!(!is_workspace_change_error(None));
     }
 
     #[test]
