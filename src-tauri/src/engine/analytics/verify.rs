@@ -26,7 +26,9 @@ use crate::engine::analytics::data::quote_str;
 use crate::engine::analytics::AnalyticsSource;
 use crate::engine::evidence::{EvidenceItem, VerificationCheck, VerificationStatus};
 use crate::engine::grounding::{GroundingReport, ProbeOutcome};
-use crate::engine::runtime::{AnalysisContract, InterpretationStatus, TimeBucket};
+use crate::engine::runtime::{
+    AnalysisContract, ContractOrder, InterpretationStatus, SortDirection, TimeBucket,
+};
 
 fn is_sql_evidence(evidence: &EvidenceItem) -> bool {
     matches!(evidence.tool.as_str(), "run_sql" | "make_chart")
@@ -193,7 +195,94 @@ pub fn contract_checks(
     for field in &contract.group_by {
         check_binding_usage(&mut checks, "grouping field", field, &sql);
     }
+    if let Some(order) = &contract.order_by {
+        check_order_usage(&mut checks, contract, order, &sql);
+    }
+    if let Some(limit) = contract.limit {
+        check_limit_usage(&mut checks, limit, &sql);
+    }
     checks
+}
+
+fn check_order_usage(
+    checks: &mut Vec<VerificationCheck>,
+    contract: &AnalysisContract,
+    order: &ContractOrder,
+    sql: &[String],
+) {
+    let direction = match order.direction {
+        SortDirection::Asc => "asc",
+        SortDirection::Desc => "desc",
+    };
+    let mut targets = vec![order.by.to_ascii_lowercase()];
+    for (index, measure) in contract.measures.iter().enumerate() {
+        if measure.concept.eq_ignore_ascii_case(&order.by)
+            || measure
+                .field
+                .as_deref()
+                .is_some_and(|field| field.eq_ignore_ascii_case(&order.by))
+        {
+            targets.push(format!("measure_{index}"));
+            if let Some(field) = &measure.field {
+                targets.push(field.to_ascii_lowercase());
+            }
+        }
+    }
+    if let Some(time) = &contract.time {
+        if let Some(bucket) = time.bucket {
+            let alias = format!("time_{}", format_time_bucket(bucket));
+            if order.by.eq_ignore_ascii_case(&alias)
+                || time
+                    .field
+                    .as_deref()
+                    .is_some_and(|field| field.eq_ignore_ascii_case(&order.by))
+            {
+                targets.push(alias);
+            }
+        }
+    }
+    let used = sql.iter().any(|query| {
+        let Some(order_start) = query.find("order by") else {
+            return false;
+        };
+        let ordered = &query[order_start..];
+        ordered.contains(direction) && targets.iter().any(|target| contains_word(ordered, target))
+    });
+    if used {
+        checks.push(ok(format!(
+            "requested order by `{}` was used by the query",
+            order.by
+        )));
+    } else {
+        checks.push(warn(
+            format!(
+                "requested order by `{}` was not used by the query",
+                order.by
+            ),
+            Some("the executed evidence did not carry the requested ranking".into()),
+        ));
+    }
+}
+
+fn check_limit_usage(checks: &mut Vec<VerificationCheck>, limit: u16, sql: &[String]) {
+    let expected = format!("limit {limit}");
+    let used = sql.iter().any(|query| {
+        query
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .contains(&expected)
+    });
+    if used {
+        checks.push(ok(format!(
+            "requested row limit `{limit}` was used by the query"
+        )));
+    } else {
+        checks.push(warn(
+            format!("requested row limit `{limit}` was not used by the query"),
+            Some("the executed evidence returned an unbounded ranking".into()),
+        ));
+    }
 }
 
 fn check_time_bucket_usage(
@@ -2370,6 +2459,55 @@ mod tests {
         let bad_checks = contract_checks(&contract, Some(&report), &bad);
         assert!(bad_checks.iter().any(|check| {
             !check.ok && check.label.contains("time bucket `month` was not used")
+        }));
+    }
+
+    #[test]
+    fn contract_checks_require_the_requested_ranking_and_limit() {
+        let contract = AnalysisContract {
+            interpretation: InterpretationStatus::Grounded,
+            subject: Some("spend".into()),
+            measures: vec![crate::engine::runtime::ContractMeasure {
+                concept: "revenue".into(),
+                field: Some("amount".into()),
+                operation: "sum".into(),
+                unit: None,
+            }],
+            group_by: vec!["category".into()],
+            order_by: Some(ContractOrder {
+                by: "revenue".into(),
+                direction: SortDirection::Desc,
+            }),
+            limit: Some(3),
+            ..Default::default()
+        };
+        let report = GroundingReport {
+            source: Some("spend".into()),
+            probes: vec![],
+            unresolved: vec![],
+        };
+        let good = vec![run_sql_ev(
+            "SELECT category, SUM(amount) AS measure_0 FROM spend GROUP BY category ORDER BY measure_0 DESC LIMIT 3",
+            &["category", "measure_0"],
+            vec![vec![Json::from("rent"), Json::from(12)]],
+        )];
+        let good_checks = contract_checks(&contract, Some(&report), &good);
+        assert!(good_checks.iter().all(|check| check.ok), "{good_checks:?}");
+
+        let bad = vec![run_sql_ev(
+            "SELECT category, SUM(amount) AS total FROM spend GROUP BY category",
+            &["category", "total"],
+            vec![vec![Json::from("rent"), Json::from(12)]],
+        )];
+        let bad_checks = contract_checks(&contract, Some(&report), &bad);
+        assert!(bad_checks.iter().any(|check| {
+            !check.ok
+                && check
+                    .label
+                    .contains("requested order by `revenue` was not used")
+        }));
+        assert!(bad_checks.iter().any(|check| {
+            !check.ok && check.label.contains("requested row limit `3` was not used")
         }));
     }
 

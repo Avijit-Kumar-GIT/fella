@@ -8,7 +8,7 @@
 
 use crate::engine::analytics::data::{quote_ident, quote_str};
 use crate::engine::catalog::{Catalog, ColumnInfo, SourceInfo};
-use crate::engine::runtime::{AnalysisContract, InterpretationStatus, TimeBucket};
+use crate::engine::runtime::{AnalysisContract, InterpretationStatus, SortDirection, TimeBucket};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompiledPlan {
@@ -128,6 +128,20 @@ pub fn compile(
         steps.push(format!("group by {}", column.name));
     }
 
+    let order_clause = contract
+        .order_by
+        .as_ref()
+        .map(|order| {
+            let expression = order_expression(source, contract, order)?;
+            let direction = match order.direction {
+                SortDirection::Asc => "ASC",
+                SortDirection::Desc => "DESC",
+            };
+            steps.push(format!("order by {} {direction}", order.by));
+            Ok::<String, String>(format!("ORDER BY {expression} {direction}"))
+        })
+        .transpose()?;
+
     let mut sql = format!("SELECT {} FROM {}", select.join(", "), quote_ident(view));
     if !predicates.is_empty() {
         sql.push_str(" WHERE ");
@@ -137,7 +151,11 @@ pub fn compile(
         sql.push_str(" GROUP BY ");
         sql.push_str(&group.join(", "));
     }
-    sql.push_str(" LIMIT 1000");
+    if let Some(order_clause) = order_clause {
+        sql.push(' ');
+        sql.push_str(&order_clause);
+    }
+    sql.push_str(&format!(" LIMIT {}", contract.limit.unwrap_or(1000)));
 
     Ok(CompiledPlan {
         sql,
@@ -225,6 +243,53 @@ fn resolve_column<'a>(source: &'a SourceInfo, field: &str) -> Result<&'a ColumnI
         [] => Err(format!("field {field:?} is not in {}", source.name)),
         _ => Err(format!("field {field:?} is ambiguous in {}", source.name)),
     }
+}
+
+fn order_expression(
+    source: &SourceInfo,
+    contract: &AnalysisContract,
+    order: &crate::engine::runtime::ContractOrder,
+) -> Result<String, String> {
+    let requested = normalize(&order.by);
+    let measure_matches: Vec<_> = contract
+        .measures
+        .iter()
+        .enumerate()
+        .filter(|(_, measure)| {
+            normalize(&measure.concept) == requested
+                || measure
+                    .field
+                    .as_deref()
+                    .is_some_and(|field| normalize(field) == requested)
+        })
+        .collect();
+    if let [(index, _)] = measure_matches.as_slice() {
+        return Ok(quote_ident(&format!("measure_{index}")));
+    }
+    if measure_matches.len() > 1 {
+        return Err(format!("order_by {:?} is ambiguous", order.by));
+    }
+
+    if let Some(bucket) = contract.time.as_ref().and_then(|time| time.bucket) {
+        let alias = format!("time_{}", bucket_name(bucket));
+        if normalize(&alias) == requested {
+            return Ok(quote_ident(&alias));
+        }
+    }
+
+    if contract
+        .group_by
+        .iter()
+        .any(|field| normalize(field) == requested)
+    {
+        let column = resolve_column(source, &order.by)?;
+        return Ok(quote_ident(&column.name));
+    }
+
+    Err(format!(
+        "order_by {:?} must reference a grounded measure, grouping field, or time bucket",
+        order.by
+    ))
 }
 
 fn value_expression(column: &ColumnInfo) -> String {
@@ -480,5 +545,25 @@ mod tests {
             .steps
             .iter()
             .any(|step| step == "bucket month by month"));
+    }
+
+    #[test]
+    fn compiles_a_grounded_top_n_ordered_by_measure() {
+        let mut contract = contract();
+        contract.group_by = vec!["category".into()];
+        contract.order_by = Some(crate::engine::runtime::ContractOrder {
+            by: "revenue".into(),
+            direction: SortDirection::Desc,
+        });
+        contract.limit = Some(3);
+
+        let plan = compile(&catalog(), &contract, Some("sales")).unwrap();
+
+        assert!(plan.sql.contains("ORDER BY \"measure_0\" DESC"));
+        assert!(plan.sql.ends_with("LIMIT 3"));
+        assert!(plan
+            .steps
+            .iter()
+            .any(|step| step == "order by revenue DESC"));
     }
 }

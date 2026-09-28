@@ -94,6 +94,19 @@ pub enum TimeBucket {
     Day,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SortDirection {
+    Asc,
+    Desc,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContractOrder {
+    pub by: String,
+    pub direction: SortDirection,
+}
+
 /// Time semantics kept separate so date-field and range mistakes can be
 /// checked without parsing the model's prose answer.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -127,6 +140,10 @@ pub struct AnalysisContract {
     #[serde(default)]
     pub group_by: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub order_by: Option<ContractOrder>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub comparison: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub presentation: Option<String>,
@@ -147,6 +164,19 @@ impl AnalysisContract {
             contract.interpretation = InterpretationStatus::Assumed;
         }
         if contract.interpretation != InterpretationStatus::Unsupported {
+            if contract
+                .order_by
+                .as_ref()
+                .is_some_and(|order| order.by.trim().is_empty())
+            {
+                return Err("the order_by clause did not identify a field or measure".into());
+            }
+            if contract
+                .limit
+                .is_some_and(|limit| !(1..=1000).contains(&limit))
+            {
+                return Err("the analytical limit must be between 1 and 1000".into());
+            }
             if !contract.unresolved.is_empty() {
                 contract.interpretation = InterpretationStatus::Ambiguous;
             }
@@ -339,5 +369,36 @@ mod tests {
         .unwrap();
         assert_eq!(contract.interpretation, InterpretationStatus::Ambiguous);
         assert_eq!(contract.unresolved, vec!["which revenue field?"]);
+    }
+
+    #[test]
+    fn ranking_contracts_validate_the_target_and_limit() {
+        let contract = AnalysisContract::from_tool_args(&serde_json::json!({
+            "interpretation": "assumed",
+            "subject": "sales",
+            "measures": [{"concept": "revenue", "operation": "sum"}],
+            "filters": [],
+            "group_by": ["category"],
+            "order_by": {"by": "revenue", "direction": "desc"},
+            "limit": 10,
+            "assumptions": [],
+            "unresolved": []
+        }))
+        .unwrap();
+        assert_eq!(contract.order_by.unwrap().direction, SortDirection::Desc);
+        assert_eq!(contract.limit, Some(10));
+
+        let invalid = AnalysisContract::from_tool_args(&serde_json::json!({
+            "interpretation": "assumed",
+            "subject": "sales",
+            "measures": [{"concept": "revenue", "operation": "sum"}],
+            "filters": [],
+            "group_by": [],
+            "order_by": {"by": "revenue", "direction": "desc"},
+            "limit": 0,
+            "assumptions": [],
+            "unresolved": []
+        }));
+        assert!(invalid.is_err());
     }
 }

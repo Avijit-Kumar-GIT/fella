@@ -204,6 +204,49 @@ pub fn ground(engine: &EngineState, mut contract: AnalysisContract) -> Grounding
         }
     }
 
+    if let Some(order) = &mut contract.order_by {
+        let requested = order.by.clone();
+        let measure_matches: Vec<_> = contract
+            .measures
+            .iter()
+            .filter(|measure| {
+                normalize(&measure.concept) == normalize(&requested)
+                    || measure
+                        .field
+                        .as_deref()
+                        .is_some_and(|field| normalize(field) == normalize(&requested))
+            })
+            .collect();
+        match measure_matches.as_slice() {
+            [measure] => {
+                let target = measure
+                    .field
+                    .clone()
+                    .unwrap_or_else(|| measure.concept.clone());
+                order.by = target.clone();
+                report.probes.push(GroundingProbe {
+                    kind: "order_by".into(),
+                    target: requested,
+                    outcome: ProbeOutcome::Resolved,
+                    detail: format!("resolved to measure {target}"),
+                });
+            }
+            [_first, ..] => add_unresolved(
+                &mut report,
+                format!("order_by {requested:?} matched more than one measure"),
+            ),
+            [] => match resolve_field(&source, &requested) {
+                Ok(column) => {
+                    order.by = column.name.clone();
+                    report
+                        .probes
+                        .push(binding_probe("order_by", &requested, column));
+                }
+                Err(reason) => add_unresolved(&mut report, reason),
+            },
+        }
+    }
+
     finish(contract, report)
 }
 
@@ -250,7 +293,7 @@ fn select_source(
         };
     }
 
-    let requested: Vec<String> = contract
+    let mut requested: Vec<String> = contract
         .measures
         .iter()
         .map(|measure| {
@@ -270,6 +313,18 @@ fn select_source(
         .chain(contract.time.iter().filter_map(|time| time.field.clone()))
         .chain(contract.group_by.iter().cloned())
         .collect();
+    if let Some(order) = &contract.order_by {
+        let is_measure_reference = contract.measures.iter().any(|measure| {
+            normalize(&measure.concept) == normalize(&order.by)
+                || measure
+                    .field
+                    .as_deref()
+                    .is_some_and(|field| normalize(field) == normalize(&order.by))
+        });
+        if !is_measure_reference {
+            requested.push(order.by.clone());
+        }
+    }
     let matches: Vec<SourceInfo> = queryable
         .into_iter()
         .filter(|source| {

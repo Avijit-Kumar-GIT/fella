@@ -101,6 +101,8 @@ export interface AnalysisContract {
 	}[];
 	time?: { field?: string; range?: string; bucket?: 'year' | 'month' | 'week' | 'day'; timezone?: string };
 	group_by: string[];
+	order_by?: { by: string; direction: 'asc' | 'desc' };
+	limit?: number;
 	comparison?: string;
 	presentation?: string;
 	assumptions: string[];

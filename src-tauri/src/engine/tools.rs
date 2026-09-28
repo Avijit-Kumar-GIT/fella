@@ -244,6 +244,22 @@ fn contract_schema() -> Json {
                 "additionalProperties": false
             },
             "group_by": { "type": "array", "items": { "type": "string" } },
+            "order_by": {
+                "type": "object",
+                "properties": {
+                    "by": { "type": "string" },
+                    "direction": { "type": "string", "enum": ["asc", "desc"] }
+                },
+                "required": ["by", "direction"],
+                "additionalProperties": false,
+                "description": "Optional deterministic ordering by a grounded measure concept or field."
+            },
+            "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1000,
+                "description": "Optional maximum number of grouped rows to return."
+            },
             "comparison": { "type": "string" },
             "presentation": { "type": "string" },
             "assumptions": { "type": "array", "items": { "type": "string" } },
