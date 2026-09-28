@@ -6,6 +6,7 @@
 
 import type {
 	Answer,
+	AnalysisTurn,
 	AppInfo,
 	AskMode,
 	AskEvent,
@@ -162,6 +163,8 @@ export const ipc = {
 	/** Raw JSON of one archived conversation `{id, workspace, messages}`,
 	 * matching what `archiveConversation` originally wrote. */
 	conversationLoad: (id: string) => invoke<string>('conversation_load', { id }),
+	/** Load the canonical backend record for one analytical turn. */
+	analysisTurnLoad: (turnId: string) => invoke<AnalysisTurn>('analysis_turn_load', { turnId }),
 	/** Remove one archived conversation from the sidebar's history. */
 	deleteConversation: (id: string) => invoke<void>('delete_conversation', { id }),
 	/** Set (empty string clears) a custom title, for a conversation not

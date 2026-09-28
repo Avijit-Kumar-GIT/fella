@@ -148,6 +148,25 @@ export interface ExecutionTrace {
 	steps: ExecutionTraceStep[];
 }
 
+/** Backend-owned record persisted for one analytical turn. */
+export interface AnalysisTurn {
+	id: string;
+	conversation_id: string;
+	question: string;
+	workspace_revision?: string;
+	state: RuntimeTurnState;
+	contract?: AnalysisContract;
+	plan: { strategy: 'direct_tools' | 'compiled_sql' | 'python_fallback' | 'document_fallback'; steps: string[] };
+	trace: ExecutionTrace;
+	verification?: { status: VerificationStatus; checks: VerificationCheck[] };
+	result: {
+		text: string;
+		status: VerificationStatus;
+		verification: VerificationCheck[];
+		evidence: unknown[];
+	};
+}
+
 /** The two user-facing ways to work with a mounted workspace. Ask is the
  * default conversational surface; Inspect is the stricter source-first path
  * with a read-only tool registry. */

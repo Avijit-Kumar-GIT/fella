@@ -62,7 +62,11 @@ This is the implementation form of Fella's core loop:
   turn, evidence IDs, and explicit supersession/conflict state. The typed
   ledger projects into readable `memory.md` without making model suggestions
   prompt authority.
-- **M6–M7:** planned; each stage should build on the same turn, revision, and
+- **M6 — canonical persistence:** first slice implemented; every completed ask
+  persists a typed backend-owned turn record with its contract, direct-tool
+  plan, execution trace, verification report, and bounded result/evidence. The
+  same record can be loaded through Tauri or the Electron bridge.
+- **M7:** planned; each stage should build on the same turn, revision, and
   trace identifiers.
 
 ## Where the current code starts
@@ -77,6 +81,7 @@ Fella already has a strong analytical data plane:
 | Fixed read-only surface | `tools.rs`, seven built-in tools, no write tool |
 | Conversation loop | `agent.rs`, bounded steps, cancellation, parallel calls |
 | Provenance and evidence | `evidence.rs`, `analytics/provenance.rs`, `EvidenceItem` |
+| Canonical turn record | `runtime.rs`, `analysis_store.rs`, `analysis/turns/*.json` |
 | Deterministic verification | `analytics/verify.rs`, query reruns and answer checks |
 | Workspace context | root `fella.md`, loaded into the prompt |
 | Learned context | `memory.rs`, `semantic_memory.rs`, local `memory.md`, typed fact ledger, and episode log |
@@ -268,6 +273,10 @@ AnalysisTurn
   result
   memory events
 ```
+
+The first slice persists and loads this record after every completed turn.
+Conversation transcript integration and rerunning a stored question against a
+newer revision remain follow-up work in this milestone.
 
 The UI then becomes a projection:
 

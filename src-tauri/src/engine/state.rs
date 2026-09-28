@@ -9,6 +9,7 @@ use std::time::Instant;
 use serde::Serialize;
 
 use crate::engine::agent;
+use crate::engine::analysis_store;
 use crate::engine::analytics::data::{self, DataEngine, DEFAULT_ROW_CAP};
 use crate::engine::analytics::pyexec;
 use crate::engine::catalog::{self, Catalog, SourceInfo, SourceKind};
@@ -18,7 +19,10 @@ use crate::engine::ingest::docs;
 use crate::engine::llm::{LlmClient, ProviderHealth};
 use crate::engine::memory::{self, FolderMemory};
 use crate::engine::provider::{self, AuthKind, PROVIDERS};
-use crate::engine::runtime::InterpretationStatus;
+use crate::engine::runtime::{
+    AnalysisResult, AnalysisTurn, InterpretationStatus, LogicalPlan, PlanStrategy, TurnState,
+    VerificationReport,
+};
 use crate::engine::secrets::Secrets;
 use crate::engine::semantic_memory::{self, FactAuthority, FactKind, SemanticFact, SemanticMemory};
 use crate::engine::sqlite::{self, Settings};
@@ -676,6 +680,13 @@ impl EngineState {
         ))
     }
 
+    /// Load one backend-owned analytical turn. The UI transcript remains the
+    /// compact conversational projection; this record is the inspectable
+    /// contract/plan/trace/result used by future replay and rerun features.
+    pub fn analysis_turn_load(&self, turn_id: &str) -> EngineResult<AnalysisTurn> {
+        analysis_store::load(&self.data_dir, turn_id)
+    }
+
     pub fn catalog(&self) -> Catalog {
         let workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
         Catalog {
@@ -708,6 +719,71 @@ impl EngineState {
                     && workspace.revision.as_deref() == Some(snapshot.revision.as_str())
             }
             None => workspace.workspace.is_none() && workspace.revision.is_none(),
+        }
+    }
+
+    /// Persist the canonical runtime projection after every completed ask.
+    /// This is best-effort so a local disk problem never turns a valid answer
+    /// into a failed question; the conversation archive remains an independent
+    /// fallback projection.
+    fn persist_analysis_turn(&self, conversation_id: &str, question: &str, answer: &Answer) {
+        let state = match answer
+            .contract
+            .as_ref()
+            .map(|contract| contract.interpretation)
+        {
+            Some(InterpretationStatus::Ambiguous) => TurnState::Clarify,
+            Some(InterpretationStatus::Unsupported) => TurnState::Unsupported,
+            _ => match answer.status {
+                crate::engine::evidence::VerificationStatus::Verified => TurnState::Accepted,
+                crate::engine::evidence::VerificationStatus::Failed => TurnState::Failed,
+                crate::engine::evidence::VerificationStatus::NeedsReview
+                | crate::engine::evidence::VerificationStatus::InsufficientData => {
+                    TurnState::NeedsReview
+                }
+            },
+        };
+        let evidence = answer
+            .evidence
+            .iter()
+            .filter_map(|item| serde_json::to_value(item).ok())
+            .collect();
+        let record = AnalysisTurn {
+            id: answer.turn_id.clone(),
+            conversation_id: conversation_id.to_string(),
+            question: question.to_string(),
+            workspace_revision: answer
+                .workspace
+                .as_ref()
+                .map(|workspace| workspace.revision.clone()),
+            state,
+            contract: answer.contract.clone(),
+            plan: LogicalPlan {
+                strategy: PlanStrategy::DirectTools,
+                steps: answer
+                    .trace
+                    .steps
+                    .iter()
+                    .map(|step| step.operation.clone())
+                    .collect(),
+            },
+            trace: answer.trace.clone(),
+            verification: Some(VerificationReport {
+                status: answer.status,
+                checks: answer.verification.clone(),
+            }),
+            result: AnalysisResult {
+                text: answer.text.clone(),
+                status: answer.status,
+                verification: answer.verification.clone(),
+                evidence,
+            },
+        };
+        if let Err(error) = analysis_store::save(&self.data_dir, &record) {
+            log::warn!(
+                "analysis turn {} was not persisted: {error}",
+                answer.turn_id
+            );
         }
     }
 
@@ -1876,6 +1952,7 @@ exactly, character for character, from the list below.";
             }
         }
         let answer = answer?;
+        self.persist_analysis_turn(conversation_id, question, &answer);
 
         // Fold this turn into the folder's learned notes (a correction becomes
         // a vocabulary note; an ordinary question teaches nothing). Needs the

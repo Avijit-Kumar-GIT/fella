@@ -203,8 +203,22 @@ pub struct VerificationReport {
     pub checks: Vec<VerificationCheck>,
 }
 
+/// The result projection kept in the backend-owned turn record. Raw evidence
+/// stays JSON because the evidence envelope is intentionally allowed to grow
+/// with new read-only tools without changing the runtime record schema.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnalysisResult {
+    pub text: String,
+    pub status: VerificationStatus,
+    #[serde(default)]
+    pub verification: Vec<VerificationCheck>,
+    #[serde(default)]
+    pub evidence: Vec<Json>,
+}
+
 /// Canonical shape for one question.  Persistence and richer state transitions
-/// will be added after the initial protocol is in place.
+/// attach to this object so the UI can remain a projection of the backend
+/// record instead of becoming another source of truth.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AnalysisTurn {
     pub id: TurnId,
@@ -213,11 +227,13 @@ pub struct AnalysisTurn {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workspace_revision: Option<String>,
     pub state: TurnState,
-    pub contract: AnalysisContract,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contract: Option<AnalysisContract>,
     pub plan: LogicalPlan,
     pub trace: ExecutionTrace,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub verification: Option<VerificationReport>,
+    pub result: AnalysisResult,
 }
 
 fn new_id(prefix: &str) -> String {

@@ -8,9 +8,9 @@ use tauri::ipc::Channel;
 use tauri::{State, Window};
 
 use crate::engine::{
-    Answer, AskEvent, Catalog, ConversationSummary, ConversationsInfo, EngineError, EngineResult,
-    EngineState, ProviderHealth, ProviderInfo, QueryResult, Settings, SourceInfo, UpdateStatus,
-    WorkspaceModel,
+    AnalysisTurn, Answer, AskEvent, Catalog, ConversationSummary, ConversationsInfo, EngineError,
+    EngineResult, EngineState, ProviderHealth, ProviderInfo, QueryResult, Settings, SourceInfo,
+    UpdateStatus, WorkspaceModel,
 };
 use crate::AppState;
 
@@ -282,6 +282,15 @@ pub fn conversation_load(
     engine: State<'_, EngineState>,
 ) -> Result<String, EngineError> {
     engine.conversation_load(&id)
+}
+
+/// Load the backend-owned analytical record for one completed turn.
+#[tauri::command]
+pub fn analysis_turn_load(
+    turn_id: String,
+    engine: State<'_, EngineState>,
+) -> Result<AnalysisTurn, EngineError> {
+    engine.analysis_turn_load(&turn_id)
 }
 
 /// Remove one archived conversation. Used by the sidebar's per-row delete.

@@ -258,10 +258,10 @@ Imported:  loaded from a future dbt/OSI/Wren/Cube-style definition
 Automatic facts should be marked as inferred or observed. They must not be
 silently promoted to user rules.
 
-The first implementation can keep the source of truth in the existing catalog,
-SQLite state, fella.md, and memory.md. A separate generated artifact is
-optional; the important part is the contract and authority model, not the file
-format.
+The current implementation keeps the source of truth in the catalog, SQLite
+state, `fella.md`, `memory.md`, and the adjacent typed fact ledger. Completed
+turns are also persisted as backend-owned JSON records; the important part is
+the contract and authority model, not the file format.
 
 ## The per-question Analysis Contract
 
@@ -481,7 +481,8 @@ The target can fit the existing architecture without replacing the harness:
 |---|---|
 | state.rs | Workspace model lifecycle, revisions, sessions, memory scope |
 | catalog.rs | Source discovery and base profiling |
-| memory.rs | Versioned semantic facts and correction history |
+| memory.rs / semantic_memory.rs | Human-readable memory projection plus versioned semantic facts and correction history |
+| analysis_store.rs | Backend-owned persisted turn records for inspection and future replay |
 | agent.rs | Risk gating, interpretation calls, execution orchestration |
 | analytics/ | Profiles, logical plans, compilation, probes, invariants |
 | tools.rs | Fixed read-only execution boundary |

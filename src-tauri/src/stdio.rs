@@ -209,6 +209,10 @@ async fn dispatch(
             let id: String = required(&request.params, "id")?;
             value_result(engine.conversation_load(&id))
         }
+        "analysis_turn_load" => {
+            let turn_id: String = required(&request.params, "turnId")?;
+            value_result(engine.analysis_turn_load(&turn_id))
+        }
         "delete_conversation" => {
             let id: String = required(&request.params, "id")?;
             value_result(engine.delete_conversation(&id))

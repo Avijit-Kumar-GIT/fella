@@ -2,6 +2,7 @@
 //! default, DuckDB behind a feature), the tool registry, and the agent loop.
 
 pub mod agent;
+pub mod analysis_store;
 pub mod analytics;
 pub mod capabilities;
 pub mod catalog;
@@ -34,7 +35,9 @@ pub use error::{EngineError, EngineResult};
 pub use evidence::{Answer, AskEvent};
 pub use llm::ProviderHealth;
 pub use provider::{AuthKind, Provider, PROVIDERS};
-pub use runtime::{AnalysisContract, ContractFilter, ContractMeasure, InterpretationStatus};
+pub use runtime::{
+    AnalysisContract, AnalysisTurn, ContractFilter, ContractMeasure, InterpretationStatus,
+};
 pub use sqlite::Settings;
 pub use state::{ConversationSummary, ConversationsInfo, EngineState, ProviderInfo, QueryResult};
 pub use update::UpdateStatus;
