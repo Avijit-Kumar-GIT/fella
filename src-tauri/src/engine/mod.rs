@@ -39,6 +39,7 @@ pub use llm::ProviderHealth;
 pub use provider::{AuthKind, Provider, PROVIDERS};
 pub use runtime::{
     AnalysisContract, AnalysisTurn, ContractFilter, ContractMeasure, InterpretationStatus,
+    TimeBucket,
 };
 pub use sqlite::Settings;
 pub use state::{ConversationSummary, ConversationsInfo, EngineState, ProviderInfo, QueryResult};

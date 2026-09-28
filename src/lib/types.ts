@@ -99,7 +99,7 @@ export interface AnalysisContract {
 		resolved_values: string[];
 		resolution?: string;
 	}[];
-	time?: { field?: string; range?: string; timezone?: string };
+	time?: { field?: string; range?: string; bucket?: 'year' | 'month' | 'week' | 'day'; timezone?: string };
 	group_by: string[];
 	comparison?: string;
 	presentation?: string;

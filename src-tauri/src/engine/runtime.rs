@@ -85,6 +85,15 @@ pub struct ContractFilter {
     pub resolution: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TimeBucket {
+    Year,
+    Month,
+    Week,
+    Day,
+}
+
 /// Time semantics kept separate so date-field and range mistakes can be
 /// checked without parsing the model's prose answer.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -93,6 +102,8 @@ pub struct ContractTime {
     pub field: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub range: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bucket: Option<TimeBucket>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timezone: Option<String>,
 }

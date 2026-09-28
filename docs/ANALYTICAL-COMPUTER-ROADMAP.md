@@ -55,9 +55,9 @@ This is the implementation form of Fella's core loop:
 - **M3 — grounding:** first slice implemented alongside contract routing;
   exact field bindings and bounded filter-value probes now run against the
   current workspace revision. The first deterministic planner slice now
-  compiles grounded single-source aggregates, filters, time ranges, and
-  groupings into read-only SQL; joins, ratios, ranking, and richer date
-  buckets still use the direct fallback.
+  compiles grounded single-source aggregates, filters, time ranges, typed
+  year/month/week/day buckets, and groupings into read-only SQL; joins, ratios,
+  ranking, and richer comparison semantics still use the direct fallback.
 - **M4 — semantic verification:** first slice implemented; grounded bindings
   must be present in executed SQL, requested aggregate operations and observed
   filter values must also survive into that evidence, and

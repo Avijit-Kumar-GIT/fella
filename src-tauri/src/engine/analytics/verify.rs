@@ -26,7 +26,7 @@ use crate::engine::analytics::data::quote_str;
 use crate::engine::analytics::AnalyticsSource;
 use crate::engine::evidence::{EvidenceItem, VerificationCheck, VerificationStatus};
 use crate::engine::grounding::{GroundingReport, ProbeOutcome};
-use crate::engine::runtime::{AnalysisContract, InterpretationStatus};
+use crate::engine::runtime::{AnalysisContract, InterpretationStatus, TimeBucket};
 
 fn is_sql_evidence(evidence: &EvidenceItem) -> bool {
     matches!(evidence.tool.as_str(), "run_sql" | "make_chart")
@@ -186,11 +186,53 @@ pub fn contract_checks(
         if let Some(field) = time.field.as_deref() {
             check_binding_usage(&mut checks, "time field", field, &sql);
         }
+        if let Some(bucket) = time.bucket {
+            check_time_bucket_usage(&mut checks, bucket, &sql);
+        }
     }
     for field in &contract.group_by {
         check_binding_usage(&mut checks, "grouping field", field, &sql);
     }
     checks
+}
+
+fn check_time_bucket_usage(
+    checks: &mut Vec<VerificationCheck>,
+    bucket: TimeBucket,
+    sql: &[String],
+) {
+    let format = match bucket {
+        TimeBucket::Year => "%y",
+        TimeBucket::Month => "%y-%m",
+        TimeBucket::Week => "%y-%w",
+        TimeBucket::Day => "%y-%m-%d",
+    };
+    if sql
+        .iter()
+        .any(|query| query.contains("strftime") && query.contains(format))
+    {
+        checks.push(ok(format!(
+            "time bucket `{}` was used by the query",
+            format_time_bucket(bucket)
+        )));
+    } else {
+        checks.push(warn(
+            format!(
+                "time bucket `{}` was not used by the query",
+                format_time_bucket(bucket)
+            ),
+            Some("the executed evidence did not carry the requested time grouping".into()),
+        ));
+    }
+}
+
+fn format_time_bucket(bucket: TimeBucket) -> &'static str {
+    match bucket {
+        TimeBucket::Year => "year",
+        TimeBucket::Month => "month",
+        TimeBucket::Week => "week",
+        TimeBucket::Day => "day",
+    }
 }
 
 fn check_measure_operation(checks: &mut Vec<VerificationCheck>, operation: &str, sql: &[String]) {
@@ -2286,6 +2328,49 @@ mod tests {
         };
         let checks = contract_checks(&contract, Some(&report), &evidence);
         assert!(checks.iter().all(|check| check.ok), "{checks:?}");
+    }
+
+    #[test]
+    fn contract_checks_require_the_requested_time_bucket() {
+        let contract = AnalysisContract {
+            interpretation: InterpretationStatus::Grounded,
+            subject: Some("spend".into()),
+            measures: vec![crate::engine::runtime::ContractMeasure {
+                concept: "amount".into(),
+                field: Some("amount".into()),
+                operation: "sum".into(),
+                unit: None,
+            }],
+            time: Some(crate::engine::runtime::ContractTime {
+                field: Some("date".into()),
+                range: None,
+                bucket: Some(TimeBucket::Month),
+                timezone: None,
+            }),
+            ..Default::default()
+        };
+        let report = GroundingReport {
+            source: Some("spend".into()),
+            probes: vec![],
+            unresolved: vec![],
+        };
+        let good = vec![run_sql_ev(
+            "SELECT strftime('%Y-%m', date), SUM(amount) FROM spend GROUP BY strftime('%Y-%m', date)",
+            &["month", "total"],
+            vec![vec![Json::from("2024-01"), Json::from(12)]],
+        )];
+        let good_checks = contract_checks(&contract, Some(&report), &good);
+        assert!(good_checks.iter().all(|check| check.ok), "{good_checks:?}");
+
+        let bad = vec![run_sql_ev(
+            "SELECT date, SUM(amount) FROM spend GROUP BY date",
+            &["date", "total"],
+            vec![vec![Json::from("2024-01-01"), Json::from(12)]],
+        )];
+        let bad_checks = contract_checks(&contract, Some(&report), &bad);
+        assert!(bad_checks.iter().any(|check| {
+            !check.ok && check.label.contains("time bucket `month` was not used")
+        }));
     }
 
     #[test]

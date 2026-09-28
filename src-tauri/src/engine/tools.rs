@@ -234,6 +234,11 @@ fn contract_schema() -> Json {
                 "properties": {
                     "field": { "type": "string" },
                     "range": { "type": "string" },
+                    "bucket": {
+                        "type": "string",
+                        "enum": ["year", "month", "week", "day"],
+                        "description": "Optional deterministic grouping bucket for the time field."
+                    },
                     "timezone": { "type": "string" }
                 },
                 "additionalProperties": false

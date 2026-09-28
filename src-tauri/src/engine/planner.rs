@@ -1,13 +1,14 @@
 //! Deterministic compilation for the small, common analytical core.
 //!
 //! This compiler is deliberately conservative. It handles one grounded table,
-//! read-only aggregates, filters, date ranges, and grouping. Ratios, joins,
-//! and unsupported date expressions remain on the model-driven fallback until
-//! their semantics have a typed representation and dedicated checks.
+//! read-only aggregates, filters, date ranges, typed time buckets, and
+//! grouping. Ratios, joins, and unsupported comparison semantics remain on the
+//! model-driven fallback until they have a typed representation and dedicated
+//! checks.
 
 use crate::engine::analytics::data::{quote_ident, quote_str};
 use crate::engine::catalog::{Catalog, ColumnInfo, SourceInfo};
-use crate::engine::runtime::{AnalysisContract, InterpretationStatus};
+use crate::engine::runtime::{AnalysisContract, InterpretationStatus, TimeBucket};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompiledPlan {
@@ -96,7 +97,31 @@ pub fn compile(
     }
 
     let mut group = Vec::new();
+    let bucket_field = contract
+        .time
+        .as_ref()
+        .and_then(|time| time.bucket.map(|_| time.field.clone()))
+        .flatten();
+    if let Some(bucket) = contract.time.as_ref().and_then(|time| time.bucket) {
+        let field = contract
+            .time
+            .as_ref()
+            .and_then(|time| time.field.as_deref())
+            .ok_or_else(|| "time bucket has no grounded field".to_string())?;
+        let column = resolve_column(source, field)?;
+        let expression = time_bucket_expression(&column.name, bucket);
+        let alias = format!("time_{}", bucket_name(bucket));
+        select.insert(0, format!("{expression} AS {}", quote_ident(&alias)));
+        group.push(expression);
+        steps.push(format!("bucket {} by {}", bucket_name(bucket), column.name));
+    }
     for field in &contract.group_by {
+        if bucket_field
+            .as_deref()
+            .is_some_and(|bucket_field| normalize(bucket_field) == normalize(field))
+        {
+            continue;
+        }
         let column = resolve_column(source, field)?;
         group.push(quote_ident(&column.name));
         select.insert(0, quote_ident(&column.name));
@@ -291,6 +316,29 @@ fn time_predicate(field: &str, range: &str) -> Result<String, String> {
     ))
 }
 
+fn bucket_name(bucket: TimeBucket) -> &'static str {
+    match bucket {
+        TimeBucket::Year => "year",
+        TimeBucket::Month => "month",
+        TimeBucket::Week => "week",
+        TimeBucket::Day => "day",
+    }
+}
+
+fn time_bucket_expression(field: &str, bucket: TimeBucket) -> String {
+    let format = match bucket {
+        TimeBucket::Year => "%Y",
+        TimeBucket::Month => "%Y-%m",
+        TimeBucket::Week => "%Y-%W",
+        TimeBucket::Day => "%Y-%m-%d",
+    };
+    if cfg!(feature = "duckdb") {
+        format!("strftime({}, {})", quote_ident(field), quote_str(format))
+    } else {
+        format!("strftime({}, {})", quote_str(format), quote_ident(field))
+    }
+}
+
 fn is_iso_date(value: &str) -> bool {
     value.len() == 10
         && value.as_bytes()[4] == b'-'
@@ -389,6 +437,7 @@ mod tests {
             time: Some(crate::engine::runtime::ContractTime {
                 field: Some("month".into()),
                 range: Some("2024".into()),
+                bucket: None,
                 timezone: None,
             }),
             group_by: vec!["month".into()],
@@ -414,5 +463,22 @@ mod tests {
         let mut comparison = contract();
         comparison.comparison = Some("year over year".into());
         assert!(compile(&catalog(), &comparison, Some("sales")).is_err());
+    }
+
+    #[test]
+    fn compiles_a_typed_month_bucket_without_grouping_by_raw_dates() {
+        let mut contract = contract();
+        contract.time.as_mut().unwrap().bucket = Some(TimeBucket::Month);
+        let plan = compile(&catalog(), &contract, Some("sales")).unwrap();
+
+        assert!(plan
+            .sql
+            .contains("strftime('%Y-%m', \"month\") AS \"time_month\""));
+        assert!(plan.sql.contains("GROUP BY strftime('%Y-%m', \"month\")"));
+        assert!(!plan.sql.contains("GROUP BY \"month\""));
+        assert!(plan
+            .steps
+            .iter()
+            .any(|step| step == "bucket month by month"));
     }
 }
