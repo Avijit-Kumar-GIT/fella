@@ -87,6 +87,7 @@ pub fn hard_fail(checks: &[VerificationCheck]) -> Option<String> {
             "actually came from",
             "period comparison arithmetic",
             "derived metric arithmetic",
+            "grouped totals did not reconcile",
         ],
     )
 }
@@ -216,6 +217,178 @@ pub fn contract_checks(
         check_comparison_arithmetic(&mut checks, contract, evidence);
     }
     checks
+}
+
+/// Run contract checks that need the read-only execution seam as well as the
+/// returned evidence. These checks deliberately keep their own verification
+/// query out of `EvidenceItem`: it is an internal acceptance check, not a
+/// second piece of user-facing evidence.
+pub fn execution_checks(
+    engine: &dyn AnalyticsSource,
+    contract: &AnalysisContract,
+    grounding: Option<&GroundingReport>,
+    evidence: &[EvidenceItem],
+) -> Vec<VerificationCheck> {
+    let mut checks = contract_checks(contract, grounding, evidence);
+    check_grouped_totals(&mut checks, engine, contract, grounding, evidence);
+    checks
+}
+
+/// Reconcile an unbounded grouped result with an independently compiled total
+/// for additive measures. This catches a class of plausible-looking answers
+/// where a grouping expression silently drops rows or partitions the result
+/// incorrectly. Limited rankings, non-additive measures, and incomplete result
+/// sets are intentionally left for a later invariant rather than guessed at.
+fn check_grouped_totals(
+    checks: &mut Vec<VerificationCheck>,
+    engine: &dyn AnalyticsSource,
+    contract: &AnalysisContract,
+    grounding: Option<&GroundingReport>,
+    evidence: &[EvidenceItem],
+) {
+    if contract.interpretation != InterpretationStatus::Grounded
+        || contract.group_by.is_empty()
+        || contract.limit.is_some()
+        || contract.measures.is_empty()
+        || contract
+            .measures
+            .iter()
+            .any(|measure| !is_additive_operation(&measure.operation))
+    {
+        return;
+    }
+
+    let aliases = grouped_measure_aliases(contract);
+    let Some(grouped) = evidence.iter().find(|item| {
+        is_sql_evidence(item)
+            && item.error.is_none()
+            && item
+                .row_count
+                .is_some_and(|count| item.rows.as_ref().is_some_and(|rows| count == rows.len()))
+            && item.columns.as_ref().is_some_and(|columns| {
+                aliases.iter().all(|measure_aliases| {
+                    measure_aliases.iter().all(|alias| {
+                        columns
+                            .iter()
+                            .any(|column| column.eq_ignore_ascii_case(alias))
+                    })
+                })
+            })
+    }) else {
+        return;
+    };
+
+    let mut total_contract = contract.clone();
+    total_contract.group_by.clear();
+    total_contract.order_by = None;
+    total_contract.limit = None;
+    if let Some(time) = total_contract.time.as_mut() {
+        time.bucket = None;
+    }
+    let source_hint = grounding.and_then(|report| report.source.as_deref());
+    let total_plan =
+        match crate::engine::planner::compile(&engine.catalog(), &total_contract, source_hint) {
+            Ok(plan) => plan,
+            Err(_) => return,
+        };
+    let total = match engine.run_sql(&total_plan.sql) {
+        Ok(result) => result,
+        Err(error) => {
+            checks.push(warn(
+                "grouped totals could not be independently checked",
+                Some(error.to_string()),
+            ));
+            return;
+        }
+    };
+    let Some(total_row) = total.rows.first() else {
+        checks.push(warn(
+            "grouped totals could not be independently checked",
+            Some("the independent total query returned no row".into()),
+        ));
+        return;
+    };
+
+    let columns = grouped.columns.as_deref().unwrap_or_default();
+    let total_columns = total.columns.as_slice();
+    let rows = grouped.rows.as_deref().unwrap_or_default();
+    let mut mismatches = Vec::new();
+    let mut incomplete = false;
+    for measure_aliases in aliases {
+        for alias in measure_aliases {
+            let Some(grouped_index) = columns
+                .iter()
+                .position(|column| column.eq_ignore_ascii_case(&alias))
+            else {
+                incomplete = true;
+                continue;
+            };
+            let Some(total_index) = total_columns
+                .iter()
+                .position(|column| column.eq_ignore_ascii_case(&alias))
+            else {
+                incomplete = true;
+                continue;
+            };
+            let Some(grouped_sum) = rows
+                .iter()
+                .map(|row| row.get(grouped_index).and_then(num_of))
+                .collect::<Option<Vec<_>>>()
+                .map(|values| values.into_iter().sum::<f64>())
+            else {
+                incomplete = true;
+                continue;
+            };
+            let Some(total_value) = total_row.get(total_index).and_then(num_of) else {
+                incomplete = true;
+                continue;
+            };
+            if !invariant_close(grouped_sum, total_value) {
+                mismatches.push(format!(
+                    "{alias}: grouped sum {grouped_sum} != independent total {total_value}"
+                ));
+            }
+        }
+    }
+
+    if !mismatches.is_empty() {
+        checks.push(warn(
+            "grouped totals did not reconcile",
+            Some(mismatches.join("; ")),
+        ));
+    } else if incomplete {
+        checks.push(warn(
+            "grouped totals could not be independently checked",
+            Some("one or more grouped or total cells were not numeric".into()),
+        ));
+    } else {
+        checks.push(ok("grouped totals reconciled with an independent total"));
+    }
+}
+
+fn is_additive_operation(operation: &str) -> bool {
+    matches!(
+        operation.trim().to_ascii_lowercase().as_str(),
+        "sum" | "total" | "count" | "number"
+    )
+}
+
+fn grouped_measure_aliases(contract: &AnalysisContract) -> Vec<Vec<String>> {
+    contract
+        .measures
+        .iter()
+        .enumerate()
+        .map(|(index, _)| {
+            if contract.comparison_spec.is_some() {
+                vec![
+                    format!("measure_{index}_current"),
+                    format!("measure_{index}_previous"),
+                ]
+            } else {
+                vec![format!("measure_{index}")]
+            }
+        })
+        .collect()
 }
 
 fn check_comparison_usage(

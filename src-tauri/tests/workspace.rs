@@ -1043,6 +1043,51 @@ fn grounds_and_executes_a_typed_period_comparison() {
     assert!(result.columns.contains(&"measure_0_previous".into()));
     assert!(result.columns.contains(&"measure_0_change_pct".into()));
 
+    let evidence = fella_lib::engine::evidence::EvidenceItem {
+        id: "comparison-grouped".into(),
+        tool: "run_sql".into(),
+        sources: vec![],
+        args: serde_json::json!({ "sql": plan.sql }),
+        note: None,
+        sql: Some(plan.sql.clone()),
+        result_summary: format!("{} row(s)", result.row_count),
+        columns: Some(result.columns.clone()),
+        rows: Some(result.rows.clone()),
+        row_count: Some(result.row_count),
+        output: None,
+        chart: None,
+        ms: result.ms,
+        error: None,
+    };
+    let checks = fella_lib::engine::analytics::verify::execution_checks(
+        &engine,
+        &grounded.contract,
+        Some(&grounded.report),
+        std::slice::from_ref(&evidence),
+    );
+    assert!(
+        checks.iter().any(|check| {
+            check.ok && check.label == "grouped totals reconciled with an independent total"
+        }),
+        "{checks:?}"
+    );
+
+    let mut bad_evidence = evidence.clone();
+    bad_evidence.rows.as_mut().unwrap()[0][1] = serde_json::json!(999);
+    let bad_checks = fella_lib::engine::analytics::verify::execution_checks(
+        &engine,
+        &grounded.contract,
+        Some(&grounded.report),
+        std::slice::from_ref(&bad_evidence),
+    );
+    assert!(
+        bad_checks
+            .iter()
+            .any(|check| { !check.ok && check.label == "grouped totals did not reconcile" }),
+        "{bad_checks:?}"
+    );
+    assert!(fella_lib::engine::analytics::verify::hard_fail(&bad_checks).is_some());
+
     let _ = fs::remove_dir_all(&ws);
     let _ = fs::remove_dir_all(&data);
 }

@@ -71,7 +71,9 @@ This is the implementation form of Fella's core loop:
   change and percent-change columns are now reconciled against returned rows;
   declared ratio outputs are now reconciled against their returned numerator
   and denominator values, including zero-denominator null behavior;
-  broader grouped-total, ratio-population, average-bound, and chart-shape
+  additive grouped results are now reconciled against an independent
+  ungrouped deterministic plan (limited rankings and non-additive measures
+  remain excluded); broader ratio-population, average-bound, and chart-shape
   invariants remain ahead, and
   ambiguous/unsupported contracts remain review states even when a query is
   numerically reproducible.

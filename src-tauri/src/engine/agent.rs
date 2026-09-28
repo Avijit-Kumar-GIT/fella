@@ -685,7 +685,8 @@ fn finish_with(
         });
     }
     if let Some(contract) = ids.contract.as_ref() {
-        verification.extend(verify::contract_checks(
+        verification.extend(verify::execution_checks(
+            engine,
             contract,
             ids.grounding.as_ref(),
             &evidence,
