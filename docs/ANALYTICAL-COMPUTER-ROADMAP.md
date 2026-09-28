@@ -87,8 +87,9 @@ This is the implementation form of Fella's core loop:
   chart payloads are now re-projected from their stored source rows during
   verification so mutated labels or values become hard failures; richer
   chart-shape semantics remain ahead, and
-  ambiguous/unsupported contracts remain review states even when a query is
-  numerically reproducible.
+  unresolved, ambiguous, and unsupported contracts remain explicit review
+  states—even when a query is numerically reproducible or when the model
+  skips the contract entirely.
 - **M5 — versioned semantic memory:** first slice implemented; corrections and
   verified field bindings can carry authority, workspace revision, supporting
   turn, evidence IDs, and explicit supersession/conflict state. The typed

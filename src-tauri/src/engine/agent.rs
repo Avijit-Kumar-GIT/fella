@@ -437,6 +437,13 @@ filter word in the question exactly, and state just the number(s) don't round or
                 }
                 Err(error) => {
                     contract_gate_blocked = true;
+                    if ids.contract.is_none() {
+                        ids.contract = Some(AnalysisContract {
+                            interpretation: runtime::InterpretationStatus::Unresolved,
+                            unresolved: vec![format!("invalid analytical contract: {error}")],
+                            ..Default::default()
+                        });
+                    }
                     emit(AskEvent::TurnState {
                         turn_id: ids.turn_id.clone(),
                         state: TurnState::Clarify,
@@ -456,6 +463,16 @@ filter word in the question exactly, and state just the number(s) don't round or
             .count();
         if risk.requires_contract() && data_call_count > 0 && contract_calls_seen == 0 {
             contract_gate_blocked = !contract_established;
+            if contract_gate_blocked && ids.contract.is_none() {
+                ids.contract = Some(AnalysisContract {
+                    interpretation: runtime::InterpretationStatus::Unresolved,
+                    unresolved: vec![
+                        "the model attempted data access without stating an analytical contract"
+                            .into(),
+                    ],
+                    ..Default::default()
+                });
+            }
         }
         if contract_calls_seen > 0 {
             contract_established = !contract_gate_blocked;
@@ -833,7 +850,11 @@ fn finish_with(
         .map(|contract| contract.interpretation);
     if matches!(
         interpretation,
-        Some(runtime::InterpretationStatus::Ambiguous | runtime::InterpretationStatus::Unsupported)
+        Some(
+            runtime::InterpretationStatus::Ambiguous
+                | runtime::InterpretationStatus::Unsupported
+                | runtime::InterpretationStatus::Unresolved,
+        )
     ) && status != crate::engine::evidence::VerificationStatus::Failed
     {
         // A query can be numerically reproducible while still answering the

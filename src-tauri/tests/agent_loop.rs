@@ -256,6 +256,57 @@ async fn unresolved_contract_blocks_data_tools_in_the_same_response() {
 }
 
 #[tokio::test]
+async fn missing_contract_is_persisted_as_unresolved_review() {
+    let ws = scratch("missing-contract-ws");
+    let data = scratch("missing-contract-data");
+    fs::write(ws.join("sales.csv"), "amount\n10\n20\n").unwrap();
+
+    let (url, server) = fake_openai(vec![
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "I will check that.",
+            "tool_calls": [{ "id": "sql", "type": "function", "function": {
+                "name": "run_sql",
+                "arguments": "{\"sql\":\"SELECT sum(amount) AS total FROM sales\"}"
+            } }]
+        })),
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "I need to state the analytical interpretation before checking the data."
+        })),
+    ]);
+
+    let engine = EngineState::new(&data).unwrap();
+    engine
+        .save_settings(
+            serde_json::json!({ "provider": "custom", "base_url": url, "model": "test" })
+                .as_object()
+                .unwrap(),
+        )
+        .unwrap();
+    engine.set_api_key("custom", "sk-test").unwrap();
+    engine.open_workspace(&ws).unwrap();
+
+    let answer = engine
+        .ask("missing-contract", "compare sales over time", None, |_| {})
+        .await
+        .unwrap();
+    server.join().unwrap();
+
+    assert!(answer.evidence.is_empty());
+    assert_eq!(answer.status, VerificationStatus::NeedsReview);
+    let contract = answer.contract.as_ref().unwrap();
+    assert_eq!(
+        contract.interpretation,
+        fella_lib::engine::runtime::InterpretationStatus::Unresolved
+    );
+    assert!(contract.unresolved[0].contains("without stating"));
+
+    let _ = fs::remove_dir_all(&ws);
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[tokio::test]
 async fn compiled_plan_replaces_redundant_model_data_calls() {
     let ws = scratch("compiled-plan-gate-ws");
     let data = scratch("compiled-plan-gate-data");
