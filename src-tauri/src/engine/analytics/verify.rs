@@ -2248,7 +2248,7 @@ fn warn(label: impl Into<String>, detail: Option<String>) -> VerificationCheck {
 // --- 6. question implies an aggregate no cited query used ------------------
 
 const AGGREGATE_VERBS: &[(&[&str], &str)] = &[
-    (&["how many", "count of", "number of"], "COUNT("),
+    (&["count of", "number of"], "COUNT("),
     (&["how much", "total ", " sum of"], "SUM("),
     (&["average", "avg "], "AVG("),
 ];
@@ -2271,13 +2271,12 @@ fn missing_aggregate_verbs<'a>(question: &str, sql_texts: &[String]) -> Vec<&'a 
         .collect()
 }
 
-/// A question that says "how many" / "how much" / "average" implies a
-/// specific SQL aggregate. If none of the answer's successful queries used
-/// it, the model may have answered from a precomputed column or a different
-/// computation than the question actually asked for (#67's "valid query,
-/// wrong question" class — this catches only the crudest, lexical case of
-/// it; #77 is the deeper fix). Soft warning: the aggregate can legitimately
-/// be absent (e.g. the raw rows already answer it, or a subquery hides it).
+/// Explicit aggregate terminology can reveal a query that selected a different
+/// operation. Colloquial quantity questions such as "how many" are deliberately
+/// left to the model: they can ask for a row count or the sum of a measured
+/// quantity ("how many total trip-nights/minutes/miles"). Soft warning: the
+/// aggregate can legitimately be absent (e.g. raw rows already answer it, or a
+/// subquery hides it).
 fn check_aggregate_verb(
     question: &str,
     evidence: &[EvidenceItem],
@@ -3467,18 +3466,30 @@ mod tests {
     fn spots_missing_aggregate_verb() {
         let sql = |s: &str| vec![s.to_uppercase()];
 
-        // wording implies COUNT, query doesn't have it -> flagged
+        // Explicit count wording implies COUNT, query doesn't have it -> flagged
         assert_eq!(
             missing_aggregate_verbs(
-                "how many books have I finished?",
+                "what is the count of books I finished?",
                 &sql("SELECT * FROM books")
             ),
             vec!["COUNT"]
         );
         // query does have it -> not flagged
         assert!(missing_aggregate_verbs(
-            "how many books have I finished?",
+            "what is the count of books I finished?",
             &sql("SELECT COUNT(*) FROM books WHERE finished = 'yes'")
+        )
+        .is_empty());
+        // "How many" can request a summed measure, not just row cardinality.
+        // Leave that interpretation to the model instead of forcing COUNT.
+        assert!(missing_aggregate_verbs(
+            "how many total trip-nights did I spend?",
+            &sql("SELECT SUM(nights) FROM trips")
+        )
+        .is_empty());
+        assert!(missing_aggregate_verbs(
+            "how many books have I finished?",
+            &sql("SELECT * FROM books")
         )
         .is_empty());
         // "total" implies SUM
@@ -3495,7 +3506,7 @@ mod tests {
             vec!["AVG"]
         );
         // no run_sql evidence at all -> nothing to flag (e.g. answered from schema/no-tool)
-        assert!(missing_aggregate_verbs("how many books have I finished?", &[]).is_empty());
+        assert!(missing_aggregate_verbs("what is the count of books I finished?", &[]).is_empty());
         // wording doesn't imply any of these verbs -> nothing flagged
         assert!(missing_aggregate_verbs(
             "which genre did I read most?",
