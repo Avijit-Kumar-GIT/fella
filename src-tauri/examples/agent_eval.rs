@@ -1707,7 +1707,7 @@ fn legend() {
     println!(
         "_units — **correct**: majority over iters · **rate**: % of iters correct · \
 **close(det/judge)**: 0.00–1.00 · **waste**: # tool calls that did no useful work \
-(`d`up `r`edundant-peek `s`peculative `e`rrored) · **tok**: tokens (prompt+completion) · \
+(`d`uplicate `o`bservation `s`peculative `e`rror) · **tok**: tokens (prompt+completion) · \
 **$/100**: USD per 100 answers, list price · **wall s / first-tok s**: seconds · **steps**: tool-call rounds_\n"
     );
 }
