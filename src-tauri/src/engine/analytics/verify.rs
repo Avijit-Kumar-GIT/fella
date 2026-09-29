@@ -27,6 +27,7 @@ use serde_json::Value as Json;
 use crate::engine::analytics::chart;
 use crate::engine::analytics::data::quote_str;
 use crate::engine::analytics::AnalyticsSource;
+use crate::engine::catalog::{source_scope, SourceScope};
 use crate::engine::evidence::{EvidenceItem, VerificationCheck, VerificationStatus};
 use crate::engine::grounding::{GroundingReport, ProbeOutcome};
 use crate::engine::runtime::{
@@ -47,6 +48,7 @@ pub fn run(
     let mut checks = Vec::new();
 
     check_tables(engine, evidence, &mut checks);
+    check_source_scope(engine, question, evidence, &mut checks);
     rerun_queries(engine, evidence, &mut checks);
     rerun_python_inputs(engine, evidence, &mut checks);
     check_numbers(answer, evidence, &mut checks);
@@ -60,6 +62,7 @@ pub fn run(
     check_incomplete_quality_audit(question, evidence, &mut checks);
     check_row_value_labels(answer, evidence, &mut checks);
     check_chart_values(evidence, &mut checks);
+    check_empty_aggregate(engine, evidence, &mut checks);
 
     checks
 }
@@ -99,8 +102,118 @@ pub fn hard_fail(checks: &[VerificationCheck]) -> Option<String> {
             "chart values did not match source query",
             "signed values were discarded",
             "excluding filter `",
+            "requested current scope was not preserved",
+            "requested historical scope was not preserved",
+            "aggregate query matched no rows",
         ],
     )
+}
+
+/// The one bounded, tool-backed repair pass handles semantic mistakes that
+/// cannot safely be fixed by asking for prose alone. Any unbacked numeric
+/// claim needs another look: it may be an omitted derived computation or an
+/// unsupported claim, regardless of whether earlier evidence was scalar or
+/// grouped. The model can compute the requested value or retract it; the
+/// runtime does not guess which correction is right.
+pub fn semantic_repair_hint(
+    _question: &str,
+    _evidence: &[EvidenceItem],
+    checks: &[VerificationCheck],
+) -> Option<String> {
+    let ordinary = first_bad(
+        checks,
+        &[
+            "requested current scope was not preserved",
+            "requested historical scope was not preserved",
+            "aggregate query matched no rows",
+            "question names `",
+            "question looked like it needed a join",
+            "question implies ",
+            "groups by a date expression that returned no value",
+            "signed values were discarded",
+        ],
+    );
+    if ordinary.is_some() {
+        return ordinary;
+    }
+    first_bad(checks, &["not found in any result"])
+}
+
+/// Identify the evidence item that made a semantic check fail. Keeping this
+/// beside the checks lets the agent retain useful inspection evidence while
+/// superseding only the bad query during its one repair pass.
+pub fn semantic_evidence_matches(
+    engine: &dyn AnalyticsSource,
+    question: &str,
+    item: &EvidenceItem,
+    hint: &str,
+) -> bool {
+    if item.error.is_some() || !is_sql_evidence(item) {
+        return false;
+    }
+    if hint.contains("scope was not preserved") {
+        let Some(requested) = requested_scope(question) else {
+            return false;
+        };
+        let catalog = engine.catalog();
+        return item.sources.iter().any(|source| {
+            catalog
+                .sources
+                .iter()
+                .find(|candidate| {
+                    candidate.name == source.source
+                        || candidate.view.as_deref() == Some(source.table.as_str())
+                })
+                .is_some_and(|info| {
+                    matches!(
+                        (
+                            requested,
+                            source_scope(&info.name, &info.path, info.view.as_deref())
+                        ),
+                        (SourceScope::Current, SourceScope::Historical)
+                            | (SourceScope::Historical, SourceScope::Current)
+                    )
+                })
+        });
+    }
+    if hint.contains("aggregate query matched no rows") {
+        let Some(sql) = item.sql.as_deref() else {
+            return false;
+        };
+        let lower = sql.to_ascii_lowercase();
+        let filtered = lower.contains(" where ")
+            || lower.contains(" where\n")
+            || lower.contains(" having ")
+            || lower.contains("case when ");
+        let non_empty_source = engine.catalog().sources.iter().any(|source| {
+            item.sources.iter().any(|used| {
+                (source.name == used.source || source.view.as_deref() == Some(used.table.as_str()))
+                    && source.row_count.is_some_and(|row_count| row_count > 0)
+            })
+        });
+        return filtered
+            && is_aggregate_sql(sql)
+            && item.rows.as_deref().is_some_and(null_result)
+            && non_empty_source;
+    }
+    if hint.contains("signed values were discarded") {
+        return item
+            .sql
+            .as_deref()
+            .is_some_and(signed_value_abs_is_discarding);
+    }
+    if hint.contains("not found in any result") {
+        // Keep source inspection and document evidence available. Supersede
+        // only quantitative executions that failed to produce a scalar result
+        // for a scalar question; the next model turn can choose a corrected
+        // aggregate, a different tool, or a clarification.
+        return matches!(item.tool.as_str(), "run_sql" | "make_chart" | "run_python")
+            && !item
+                .sql
+                .as_deref()
+                .is_some_and(|sql| is_aggregate_sql(sql) && item.row_count == Some(1));
+    }
+    true
 }
 
 /// True when a query behind the answer was actually re-executed and matched,
@@ -134,6 +247,176 @@ pub fn status(checks: &[VerificationCheck], evidence: &[EvidenceItem]) -> Verifi
         VerificationStatus::Verified
     } else {
         VerificationStatus::NeedsReview
+    }
+}
+
+fn scope_word(question: &str, words: &[&str]) -> bool {
+    let question = question.to_ascii_lowercase();
+    words.iter().any(|word| contains_word(&question, word))
+}
+
+fn requested_scope(question: &str) -> Option<SourceScope> {
+    let current = scope_word(
+        question,
+        &["current", "latest", "active", "live", "present", "primary"],
+    );
+    let historical = scope_word(
+        question,
+        &[
+            "archive",
+            "archived",
+            "old",
+            "legacy",
+            "historical",
+            "backup",
+            "snapshot",
+            "prior",
+            "previous",
+        ],
+    );
+    if current && historical {
+        let lower = question.to_ascii_lowercase();
+        let compares = [
+            "compare",
+            "versus",
+            " vs ",
+            "both",
+            "each",
+            "difference",
+            "between",
+            "all files",
+            "all exports",
+        ]
+        .iter()
+        .any(|marker| lower.contains(marker));
+        if compares {
+            return None;
+        }
+    }
+    if current {
+        Some(SourceScope::Current)
+    } else if historical {
+        Some(SourceScope::Historical)
+    } else {
+        None
+    }
+}
+
+fn check_source_scope(
+    engine: &dyn AnalyticsSource,
+    question: &str,
+    evidence: &[EvidenceItem],
+    out: &mut Vec<VerificationCheck>,
+) {
+    let Some(requested) = requested_scope(question) else {
+        return;
+    };
+    let catalog = engine.catalog();
+    let mut mismatched = Vec::new();
+    for item in evidence
+        .iter()
+        .filter(|item| is_sql_evidence(item) && item.error.is_none())
+    {
+        for source in &item.sources {
+            let Some(info) = catalog.sources.iter().find(|candidate| {
+                candidate.name == source.source
+                    || candidate.view.as_deref() == Some(source.table.as_str())
+            }) else {
+                continue;
+            };
+            let scope = source_scope(&info.name, &info.path, info.view.as_deref());
+            let mismatch = matches!(
+                (requested, scope),
+                (SourceScope::Current, SourceScope::Historical)
+                    | (SourceScope::Historical, SourceScope::Current)
+            );
+            if mismatch {
+                mismatched.push(info.name.clone());
+            }
+        }
+    }
+    mismatched.sort();
+    mismatched.dedup();
+    if mismatched.is_empty() {
+        return;
+    }
+    let requested_label = match requested {
+        SourceScope::Current => "current",
+        SourceScope::Historical => "historical",
+        SourceScope::Unknown => return,
+    };
+    out.push(warn(
+        format!("requested {requested_label} scope was not preserved by the query"),
+        Some(format!(
+            "the evidence also used {} source file(s): {}",
+            mismatched.len(),
+            mismatched.join(", ")
+        )),
+    ));
+}
+
+pub(crate) fn is_aggregate_sql(sql: &str) -> bool {
+    let lower = sql.to_ascii_lowercase();
+    [
+        "sum(", "avg(", "total(", "count(", "min(", "max(", "median(",
+    ]
+    .iter()
+    .any(|function| lower.contains(function))
+}
+
+fn null_result(rows: &[Vec<Json>]) -> bool {
+    rows.is_empty() || (rows.len() == 1 && rows[0].iter().all(Json::is_null))
+}
+
+/// A non-empty source plus a null aggregate result is usually a bad semantic
+/// filter, not a measured zero. Restrict this to filtered aggregate queries so
+/// an intentionally empty/all-null measure remains a reviewable result rather
+/// than causing a repair loop on every dataset.
+fn check_empty_aggregate(
+    engine: &dyn AnalyticsSource,
+    evidence: &[EvidenceItem],
+    out: &mut Vec<VerificationCheck>,
+) {
+    let catalog = engine.catalog();
+    for item in evidence
+        .iter()
+        .filter(|item| is_sql_evidence(item) && item.error.is_none())
+    {
+        let Some(sql) = item.sql.as_deref() else {
+            continue;
+        };
+        let lower = sql.to_ascii_lowercase();
+        let filtered = lower.contains(" where ")
+            || lower.contains(" where\n")
+            || lower.contains(" having ")
+            || lower.contains("case when ");
+        let Some(rows) = item.rows.as_deref() else {
+            continue;
+        };
+        if !filtered || !is_aggregate_sql(sql) || !null_result(rows) {
+            continue;
+        }
+        let non_empty_source = item.sources.iter().any(|source| {
+            catalog
+                .sources
+                .iter()
+                .find(|candidate| {
+                    candidate.name == source.source
+                        || candidate.view.as_deref() == Some(source.table.as_str())
+                })
+                .and_then(|source| source.row_count)
+                .is_some_and(|row_count| row_count > 0)
+        });
+        if non_empty_source {
+            out.push(warn(
+                "aggregate query matched no rows in a non-empty source",
+                Some(
+                    "the query returned NULL for a filtered aggregate; inspect the filter and source values before treating this as zero"
+                        .into(),
+                ),
+            ));
+            return;
+        }
     }
 }
 
@@ -203,8 +486,13 @@ pub fn contract_checks(
         check_filter_polarity(&mut checks, filter, &sql);
     }
     if let Some(time) = &contract.time {
-        if let Some(field) = time.field.as_deref() {
-            check_binding_usage(&mut checks, "time field", field, &sql);
+        // A bare time field can describe the source's temporal grain without
+        // being a predicate in the query. Require SQL usage only when the
+        // contract actually asks for a range, bucket, or typed comparison.
+        if time.range.is_some() || time.bucket.is_some() || contract.comparison_spec.is_some() {
+            if let Some(field) = time.field.as_deref() {
+                check_binding_usage(&mut checks, "time field", field, &sql);
+            }
         }
         if let Some(bucket) = time.bucket {
             check_time_bucket_usage(
@@ -2044,8 +2332,9 @@ fn check_tables(
     }
 }
 
-/// Tokens that follow FROM / JOIN, lowercased and de-punctuated. Crude only
-/// used to flag obviously-wrong table names and to check a multi-table join.
+/// Physical relation names following FROM / JOIN, lowercased and
+/// de-punctuated. This lightweight recognizer is used to flag obviously-wrong
+/// names and check multi-table joins; parenthesized subqueries are not tables.
 pub(crate) fn referenced_relations(sql: &str) -> HashSet<String> {
     let lower = sql.to_lowercase();
     let ctes = cte_names(&lower);
@@ -2056,7 +2345,26 @@ pub(crate) fn referenced_relations(sql: &str) -> HashSet<String> {
     let mut out = HashSet::new();
     for (i, t) in toks.iter().enumerate() {
         if (*t == "from" || *t == "join") && i + 1 < toks.len() {
-            let name = toks[i + 1].trim_matches(|c: char| !c.is_alphanumeric() && c != '_');
+            let mut relation_index = i + 1;
+            while relation_index < toks.len()
+                && toks[relation_index]
+                    .chars()
+                    .all(|character| matches!(character, '(' | ')'))
+            {
+                relation_index += 1;
+            }
+            let Some(raw_name) = toks.get(relation_index) else {
+                continue;
+            };
+            // `FROM (SELECT ...` and `FROM (( SELECT ...` begin a derived
+            // relation, not a physical table named `select`.
+            if raw_name.trim_start_matches('(').eq("select")
+                || raw_name.trim_start_matches('(').eq("with")
+                || raw_name.contains('(')
+            {
+                continue;
+            }
+            let name = raw_name.trim_matches(|c: char| !c.is_alphanumeric() && c != '_');
             if !name.is_empty() && !ctes.contains(name) {
                 out.insert(name.to_string());
             }
@@ -2454,7 +2762,12 @@ fn check_numbers(answer: &str, evidence: &[EvidenceItem], out: &mut Vec<Verifica
 
     let mut supported: Vec<f64> = Vec::new();
     for e in evidence {
-        collect_numbers(&e.result_summary, &mut supported);
+        // SQL summaries contain execution metadata such as `2 rows in 50ms`.
+        // Those numbers describe the tool run, not the analyzed population;
+        // only returned cells may support a numerical data claim.
+        if !is_sql_evidence(e) {
+            collect_numbers(&e.result_summary, &mut supported);
+        }
         // `output` is where read_file / run_python put their text - an answer
         // that quotes a figure from a note or a Python print is still backed.
         if let Some(output) = &e.output {
@@ -2920,6 +3233,17 @@ mod tests {
         );
         assert!(r.contains("mood") && r.contains("costs"));
         assert!(!r.contains("sorted") && !r.contains("scored"));
+    }
+
+    #[test]
+    fn derived_subqueries_are_not_reported_as_physical_tables() {
+        let r = referenced_relations(
+            "SELECT ranked.name FROM ((SELECT name, total FROM sales)) ranked \
+             JOIN regions ON ranked.name = regions.name",
+        );
+        assert!(r.contains("sales"));
+        assert!(r.contains("regions"));
+        assert!(!r.contains("select"));
     }
 
     #[test]
@@ -3490,6 +3814,70 @@ mod tests {
     }
 
     #[test]
+    fn unbacked_figures_request_a_tool_backed_repair_when_only_groups_exist() {
+        let evidence = vec![run_sql_ev(
+            "SELECT area, SUM(amount) AS total FROM transactions GROUP BY area",
+            &["area", "total"],
+            vec![
+                vec![Json::from("north"), Json::from(100)],
+                vec![Json::from("south"), Json::from(200)],
+            ],
+        )];
+        let checks = vec![warn(
+            "the answer mentions 93914.13 not found in any result",
+            Some("check these against the evidence below".into()),
+        )];
+        let hint = semantic_repair_hint("Break spending down by area", &evidence, &checks);
+        assert!(
+            hint.is_some(),
+            "an unbacked number may need a derived computation or retraction"
+        );
+    }
+
+    #[test]
+    fn unbacked_claims_request_repair_without_changing_the_requested_shape() {
+        let evidence = vec![run_sql_ev(
+            "SELECT area, SUM(amount) AS total FROM transactions GROUP BY area",
+            &["area", "total"],
+            vec![
+                vec![Json::from("north"), Json::from(100)],
+                vec![Json::from("south"), Json::from(200)],
+            ],
+        )];
+        let checks = vec![warn(
+            "the answer mentions 93914.13 not found in any result",
+            None,
+        )];
+        assert!(semantic_repair_hint("Break down by area", &evidence, &checks).is_some());
+        assert!(semantic_repair_hint("Show the total as a chart", &evidence, &checks).is_some());
+    }
+
+    #[test]
+    fn an_unbacked_figure_is_rechecked_even_when_a_scalar_aggregate_exists() {
+        let evidence = vec![run_sql_ev(
+            "SELECT SUM(amount) AS total FROM transactions",
+            &["total"],
+            vec![vec![Json::from(300)]],
+        )];
+        let checks = vec![warn(
+            "the answer mentions 93914.13 not found in any result",
+            None,
+        )];
+        assert!(semantic_repair_hint("What is the total spending?", &evidence, &checks).is_some());
+    }
+
+    #[test]
+    fn a_fully_backed_scalar_answer_does_not_trigger_a_duplicate_repair() {
+        let evidence = vec![run_sql_ev(
+            "SELECT SUM(amount) AS total FROM transactions",
+            &["total"],
+            vec![vec![Json::from(300)]],
+        )];
+        let checks = vec![ok("every number in the answer came from the data above")];
+        assert!(semantic_repair_hint("What is the total spending?", &evidence, &checks).is_none());
+    }
+
+    #[test]
     fn status_uses_one_typed_answer_classification() {
         let evidence = vec![run_sql_ev(
             "SELECT 1 AS total",
@@ -3547,24 +3935,13 @@ mod tests {
 
     #[test]
     fn background_line_numbers_are_not_flagged() {
-        let ev = vec![EvidenceItem {
-            id: "evidence-test".into(),
-            tool: "run_sql".into(),
-            sources: Vec::new(),
-            args: Json::Object(Default::default()),
-            note: None,
-            sql: None,
-            result_summary: "1 row: total 450".into(),
-            columns: None,
-            rows: None,
-            row_count: Some(1),
-            output: None,
-            chart: None,
-            python_queries: None,
-            python_queries_complete: None,
-            ms: 1,
-            error: None,
-        }];
+        let mut evidence = run_sql_ev(
+            "SELECT 450 AS total",
+            &["total"],
+            vec![vec![Json::from(450)]],
+        );
+        evidence.result_summary = "1 row in 50ms".into();
+        let ev = vec![evidence];
 
         let answer = "Background: RPE is a 1-10 scale.\nYour total was 450, peaking at 999.";
         let mut out = Vec::new();
@@ -3577,6 +3954,34 @@ mod tests {
             "only the body's stray 999 should warn: {out:?}"
         );
         assert!(warns[0].label.contains("999"), "{}", warns[0].label);
+    }
+
+    #[test]
+    fn sql_runtime_metadata_cannot_back_a_data_claim() {
+        let mut evidence = run_sql_ev(
+            "SELECT period, total FROM periods",
+            &["period", "total"],
+            vec![
+                vec![Json::from("first"), Json::from(200)],
+                vec![Json::from("second"), Json::from(250)],
+            ],
+        );
+        evidence.result_summary = "2 rows in 50ms".into();
+
+        let mut checks = Vec::new();
+        check_numbers(
+            "The difference was $50; totals were $200 and $250.",
+            &[evidence],
+            &mut checks,
+        );
+
+        assert_eq!(
+            checks.len(),
+            1,
+            "only latency-matching $50 should be unsupported: {checks:?}"
+        );
+        assert!(!checks[0].ok);
+        assert!(checks[0].label.contains("50"));
     }
 
     #[test]

@@ -28,6 +28,54 @@ pub enum SourceKind {
     Text,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceScope {
+    Current,
+    Historical,
+    Unknown,
+}
+
+/// A naming hint for source selection. It is intentionally only a prompt and
+/// verification hint: the model still decides whether a source belongs in the
+/// analysis, and the query remains the evidence.
+pub fn source_scope(name: &str, path: &str, view: Option<&str>) -> SourceScope {
+    let labels = format!("{} {} {}", name, view.unwrap_or_default(), path).to_ascii_lowercase();
+    let tokens: Vec<&str> = labels
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .collect();
+    let historical = [
+        "archive",
+        "archived",
+        "old",
+        "legacy",
+        "historical",
+        "history",
+        "backup",
+        "snapshot",
+        "prior",
+        "previous",
+    ];
+    let current = ["current", "latest", "active", "live", "present", "primary"];
+    if tokens.iter().any(|token| historical.contains(token)) {
+        SourceScope::Historical
+    } else if tokens.iter().any(|token| current.contains(token)) {
+        SourceScope::Current
+    } else {
+        SourceScope::Unknown
+    }
+}
+
+impl SourceScope {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Current => "current/primary",
+            Self::Historical => "historical/archive",
+            Self::Unknown => "unspecified",
+        }
+    }
+}
+
 impl SourceKind {
     pub fn from_ext(ext: &str) -> Option<Self> {
         Some(match ext.to_ascii_lowercase().as_str() {
@@ -143,6 +191,20 @@ pub(crate) fn source_name_exact_matches(name: &str, view: Option<&str>, requeste
         .into_iter()
         .flatten()
         .any(|candidate| normalize_field_name(candidate) == requested_normalized)
+}
+
+/// Whether a source contains at least one field matching any model-proposed
+/// request. A subject is often a human concept ("reading list", "rent")
+/// rather than a physical filename; fields are the safer source binding.
+pub(crate) fn source_has_any_field(source: &SourceInfo, requested: &[String]) -> bool {
+    requested.iter().any(|name| {
+        source
+            .columns
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .any(|column| field_name_matches(&column.name, name))
+    })
 }
 
 fn normalize_field_name(value: &str) -> String {
@@ -555,6 +617,22 @@ mod tests {
             "current bank export"
         ));
         assert!(!source_name_matches("sales.csv", Some("sales"), "health"));
+    }
+
+    #[test]
+    fn source_scope_distinguishes_current_archive_and_unknown_files() {
+        assert_eq!(
+            source_scope("current.csv", "/tmp/workspace/current.csv", Some("current")),
+            SourceScope::Current
+        );
+        assert_eq!(
+            source_scope("old.csv", "/tmp/workspace/archive/old.csv", Some("old")),
+            SourceScope::Historical
+        );
+        assert_eq!(
+            source_scope("sales.csv", "/tmp/workspace/sales.csv", Some("sales")),
+            SourceScope::Unknown
+        );
     }
 
     #[test]

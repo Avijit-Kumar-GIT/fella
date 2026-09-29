@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use calamine::{open_workbook_auto, Data, Reader};
 use serde_json::Value as Json;
 
-use crate::engine::analytics::data::{ColType, DataEngine};
+use crate::engine::analytics::data::{parse_date_value, ColType, DataEngine};
 use crate::engine::catalog::{self, ColumnInfo};
 use crate::engine::error::{EngineError, EngineResult};
 
@@ -241,18 +241,17 @@ struct ColInfer {
 /// a column that isn't natively numeric but whose remaining cells are all
 /// written numbers (`$1,200`, `1,150`) becomes `Float` with a note.
 fn infer_columns(data: &[&[Data]], width: usize) -> Vec<ColInfer> {
-    use crate::engine::analytics::data::{is_blankish, parse_named_month_date, parse_numeric};
+    use crate::engine::analytics::data::{is_blankish, parse_date_value, parse_numeric};
 
     (0..width)
         .map(|i| {
             let (mut nonblank, mut numeric, mut booleans, mut others) =
                 (0usize, 0usize, 0usize, 0usize);
             let (mut all_integral, mut saw_coerced) = (true, false);
-            // Only every non-blank cell being a date-parseable *string* counts
-            // a column with a genuine Excel date type already round-trips via
-            // `cell_to_string`'s `DateTime`/`DateTimeIso` arms, so this is only
-            // for dates a spreadsheet exported as plain text (`"Aug 1, 2026"`).
-            let (mut date_ok, mut date_used, mut date_example) = (true, false, None);
+            // Count date-shaped cells independently of the all-valid flag so a
+            // malformed cell near the top cannot hide the valid dates below it.
+            let (mut date_ok, mut date_used, mut date_count, mut date_example) =
+                (true, false, 0usize, None);
 
             for row in data {
                 match row.get(i) {
@@ -276,15 +275,35 @@ fn infer_columns(data: &[&[Data]], width: usize) -> Vec<ColInfer> {
                         booleans += 1;
                         date_ok = false;
                     }
+                    Some(Data::DateTimeIso(s)) => {
+                        nonblank += 1;
+                        if let Some(iso) = parse_date_value(s) {
+                            date_used = true;
+                            date_count += 1;
+                            date_example.get_or_insert_with(|| (s.clone(), iso));
+                        } else {
+                            date_ok = false;
+                        }
+                    }
+                    Some(Data::DateTime(dt)) => {
+                        nonblank += 1;
+                        let raw = cell_to_string(&Data::DateTime(*dt));
+                        if let Some(iso) = parse_date_value(&raw) {
+                            date_used = true;
+                            date_count += 1;
+                            date_example.get_or_insert_with(|| (raw, iso));
+                        } else {
+                            date_ok = false;
+                        }
+                    }
                     Some(Data::String(s)) => {
                         nonblank += 1;
-                        if date_ok {
-                            if let Some(iso) = parse_named_month_date(s) {
-                                date_used = true;
-                                date_example.get_or_insert_with(|| (s.clone(), iso));
-                            } else {
-                                date_ok = false;
-                            }
+                        if let Some(iso) = parse_date_value(s) {
+                            date_used = true;
+                            date_count += 1;
+                            date_example.get_or_insert_with(|| (s.clone(), iso));
+                        } else {
+                            date_ok = false;
                         }
                         match parse_numeric(s) {
                             Some(v) => {
@@ -338,8 +357,9 @@ fn infer_columns(data: &[&[Data]], width: usize) -> Vec<ColInfer> {
                 };
                 return ColInfer { ty, note: None };
             }
-            // Only when every non-blank cell parses -- a wrong guess on an
-            // ambiguous one would silently write the wrong date (see
+            // Only when every non-blank cell parses, or when a clear majority
+            // is date-shaped and the remaining cells can be safely represented
+            // as missing. Numeric locale-specific dates remain text (see
             // `parse_named_month_date`'s own doc).
             if date_ok && date_used {
                 let (raw, iso) = date_example.unwrap_or_default();
@@ -348,6 +368,24 @@ fn infer_columns(data: &[&[Data]], width: usize) -> Vec<ColInfer> {
                     note: Some(format!(
                         "dates were stored as text (e.g. \"{raw}\") and normalized to ISO-8601 \
                          (e.g. {iso}) for querying with strftime()/date()"
+                    )),
+                };
+            }
+            if nonblank >= 3 && numeric >= 3 && numeric * 100 > nonblank * 80 {
+                return ColInfer {
+                    ty: ColType::Float,
+                    note: Some(format!(
+                        "{numeric} of {nonblank} values were normalized as numbers; unparseable values were left blank"
+                    )),
+                };
+            }
+            if nonblank >= 3 && date_count >= 3 && date_count * 100 >= nonblank * 80 {
+                let (raw, iso) = date_example.clone().unwrap_or_default();
+                return ColInfer {
+                    ty: ColType::Date,
+                    note: Some(format!(
+                        "{date_count} of {nonblank} values were normalized as dates (e.g. \"{raw}\" -> {iso}); \
+                             unparseable values were left blank"
                     )),
                 };
             }
@@ -410,10 +448,14 @@ fn cell_to_json(cell: &Data, ty: ColType) -> Json {
             .map(|v| Json::from(v as i64))
             .unwrap_or(Json::Null),
         (Data::String(s), ColType::Date) => {
-            crate::engine::analytics::data::parse_named_month_date(s)
-                .map(Json::from)
-                .unwrap_or(Json::Null)
+            parse_date_value(s).map(Json::from).unwrap_or(Json::Null)
         }
+        (Data::DateTimeIso(s), ColType::Date) => {
+            parse_date_value(s).map(Json::from).unwrap_or(Json::Null)
+        }
+        (Data::DateTime(dt), ColType::Date) => parse_date_value(&cell_to_string(cell))
+            .map(Json::from)
+            .unwrap_or_else(|| Json::from(excel_serial_to_iso(dt.as_f64()))),
         (_, ColType::Text) => Json::from(cell_to_string(cell)),
         _ => Json::Null,
     }
@@ -538,6 +580,53 @@ mod tests {
         let rows: Vec<&[Data]> = vec![&r1, &r2];
         let c = infer_columns(&rows, 1);
         assert_eq!(c[0].ty, ColType::Text);
+    }
+
+    #[test]
+    fn normalizes_mostly_date_column_when_bad_cell_precedes_valid_cells() {
+        let rows_data = [
+            [Data::String("unknown".into())],
+            [Data::String("31-May-2024".into())],
+            [Data::String("Jun 1, 2024".into())],
+            [Data::String("2024-07-01".into())],
+            [Data::String("Aug 1, 2024".into())],
+        ];
+        let rows: Vec<&[Data]> = rows_data.iter().map(|row| row.as_slice()).collect();
+        let inferred = infer_columns(&rows, 1);
+        assert_eq!(inferred[0].ty, ColType::Date);
+        assert!(inferred[0].note.as_deref().unwrap().contains("4 of 5"));
+        assert_eq!(
+            cell_to_json(&Data::String("31-May-2024".into()), ColType::Date),
+            Json::from("2024-05-31")
+        );
+        assert_eq!(
+            cell_to_json(&Data::String("unknown".into()), ColType::Date),
+            Json::Null
+        );
+    }
+
+    #[test]
+    fn normalizes_mostly_numeric_column_and_nulls_bad_cells() {
+        let rows_data = [
+            [Data::String("$1,200".into())],
+            [Data::String("1,300".into())],
+            [Data::String("950".into())],
+            [Data::String("bad".into())],
+            [Data::String("800".into())],
+            [Data::String("725".into())],
+        ];
+        let rows: Vec<&[Data]> = rows_data.iter().map(|row| row.as_slice()).collect();
+        let inferred = infer_columns(&rows, 1);
+        assert_eq!(inferred[0].ty, ColType::Float);
+        assert!(inferred[0].note.as_deref().unwrap().contains("5 of 6"));
+        assert_eq!(
+            cell_to_json(&Data::String("$1,200".into()), ColType::Float),
+            Json::from(1200.0)
+        );
+        assert_eq!(
+            cell_to_json(&Data::String("bad".into()), ColType::Float),
+            Json::Null
+        );
     }
 
     #[test]

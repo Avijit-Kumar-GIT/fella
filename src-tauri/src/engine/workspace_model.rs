@@ -8,7 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::engine::catalog::{Catalog, ColumnInfo, SkippedFile, SourceKind};
+use crate::engine::catalog::{source_scope, Catalog, ColumnInfo, SkippedFile, SourceKind};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -121,7 +121,11 @@ impl WorkspaceModel {
         );
         for source in &self.sources {
             let name = source.view.as_deref().unwrap_or(&source.name);
-            block.push_str(&format!("  {name}:\n"));
+            block.push_str(&format!(
+                "  {name} (file={}, scope={}):\n",
+                source.name,
+                source_scope(&source.name, &source.path, source.view.as_deref()).label()
+            ));
             if let Some(note) = &source.note {
                 block.push_str(&format!("    source note: {}\n", prompt_value(note, 160)));
             }

@@ -27,10 +27,23 @@ fn scratch(tag: &str) -> PathBuf {
 /// A fake `/chat/completions` endpoint that returns `responses[i]` for the
 /// i-th request.
 fn fake_openai(responses: Vec<serde_json::Value>) -> (String, std::thread::JoinHandle<()>) {
+    let (url, _, handle) = fake_openai_with_requests(responses);
+    (url, handle)
+}
+
+fn fake_openai_with_requests(
+    responses: Vec<serde_json::Value>,
+) -> (
+    String,
+    Arc<Mutex<Vec<serde_json::Value>>>,
+    std::thread::JoinHandle<()>,
+) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     let url = format!("http://{addr}");
     let calls = Arc::new(AtomicUsize::new(0));
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let seen = requests.clone();
 
     let handle = std::thread::spawn(move || {
         for stream in listener.incoming().take(responses.len()) {
@@ -51,6 +64,9 @@ fn fake_openai(responses: Vec<serde_json::Value>) -> (String, std::thread::JoinH
             }
             let mut body = vec![0u8; len];
             reader.read_exact(&mut body).unwrap();
+            seen.lock()
+                .unwrap()
+                .push(serde_json::from_slice(&body).unwrap());
 
             let i = calls.fetch_add(1, Ordering::SeqCst);
             let payload = serde_json::to_vec(&responses[i]).unwrap();
@@ -65,11 +81,26 @@ fn fake_openai(responses: Vec<serde_json::Value>) -> (String, std::thread::JoinH
         }
     });
 
-    (url, handle)
+    (url, requests, handle)
 }
 
 fn openai_response(message: serde_json::Value) -> serde_json::Value {
     serde_json::json!({ "choices": [{ "message": message }] })
+}
+
+fn contract_turn(contract: serde_json::Value) -> serde_json::Value {
+    openai_response(serde_json::json!({
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [{
+            "id": "contract",
+            "type": "function",
+            "function": {
+                "name": "__analysis_contract",
+                "arguments": contract.to_string()
+            }
+        }]
+    }))
 }
 
 #[tokio::test]
@@ -178,15 +209,397 @@ async fn agent_calls_a_tool_then_answers() {
 }
 
 #[tokio::test]
-async fn unresolved_contract_blocks_data_tools_in_the_same_response() {
+async fn semantic_verification_repairs_archive_scope_before_accepting_an_answer() {
+    let ws = scratch("scope-repair-ws");
+    let data = scratch("scope-repair-data");
+    fs::create_dir_all(ws.join("archive")).unwrap();
+    fs::write(ws.join("current.csv"), "amount\n100\n").unwrap();
+    fs::write(ws.join("archive").join("old.csv"), "amount\n200\n").unwrap();
+
+    let (url, server) = fake_openai(vec![
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "I checked both files.",
+            "tool_calls": [{
+                "id": "wrong-scope",
+                "type": "function",
+                "function": {
+                    "name": "run_sql",
+                    "arguments": "{\"sql\":\"SELECT SUM(amount) AS total FROM current UNION ALL SELECT SUM(amount) AS total FROM old\"}"
+                }
+            }]
+        })),
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "The current export totals $300.",
+        })),
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "I corrected the source scope.",
+            "tool_calls": [{
+                "id": "correct-scope",
+                "type": "function",
+                "function": {
+                    "name": "run_sql",
+                    "arguments": "{\"sql\":\"SELECT SUM(amount) AS total FROM current\"}"
+                }
+            }]
+        })),
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "The current export totals $100."
+        })),
+    ]);
+
+    let engine = EngineState::new(&data).unwrap();
+    engine
+        .save_settings(
+            serde_json::json!({ "provider": "custom", "base_url": url, "model": "test" })
+                .as_object()
+                .unwrap(),
+        )
+        .unwrap();
+    engine.set_api_key("custom", "sk-test").unwrap();
+    engine.open_workspace(&ws).unwrap();
+
+    let answer = engine
+        .ask(
+            "scope-repair",
+            "What is the total in the current export?",
+            None,
+            |_| {},
+        )
+        .await
+        .unwrap();
+    server.join().unwrap();
+
+    assert!(answer.text.contains("100"), "answer: {}", answer.text);
+    assert_eq!(answer.status, VerificationStatus::Verified);
+    assert!(answer.evidence.iter().any(|item| {
+        item.error
+            .as_deref()
+            .is_some_and(|error| error.contains("superseded"))
+    }));
+    assert!(answer.evidence.iter().any(|item| {
+        item.error.is_none()
+            && item
+                .sql
+                .as_deref()
+                .is_some_and(|sql| sql.contains("FROM current"))
+    }));
+
+    let _ = fs::remove_dir_all(&ws);
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[tokio::test]
+async fn semantic_verification_repairs_a_zero_row_filter_instead_of_accepting_zero() {
+    let ws = scratch("empty-filter-repair-ws");
+    let data = scratch("empty-filter-repair-data");
+    fs::write(
+        ws.join("transactions.csv"),
+        "description,amount\nlandlord transfer,1200\n",
+    )
+    .unwrap();
+
+    let (url, server) = fake_openai(vec![
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "I found no matching rows, so the total is $0.",
+            "tool_calls": [{
+                "id": "empty-filter",
+                "type": "function",
+                "function": {
+                    "name": "run_sql",
+                    "arguments": "{\"sql\":\"SELECT SUM(amount) AS total FROM transactions WHERE description LIKE '%current export%'\"}"
+                }
+            }]
+        })),
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "The transaction total is $0.",
+        })),
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "I corrected the filter.",
+            "tool_calls": [{
+                "id": "fixed-filter",
+                "type": "function",
+                "function": {
+                    "name": "run_sql",
+                    "arguments": "{\"sql\":\"SELECT SUM(amount) AS total FROM transactions\"}"
+                }
+            }]
+        })),
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "The transaction total is $1,200."
+        })),
+    ]);
+
+    let engine = EngineState::new(&data).unwrap();
+    engine
+        .save_settings(
+            serde_json::json!({ "provider": "custom", "base_url": url, "model": "test" })
+                .as_object()
+                .unwrap(),
+        )
+        .unwrap();
+    engine.set_api_key("custom", "sk-test").unwrap();
+    engine.open_workspace(&ws).unwrap();
+
+    let answer = engine
+        .ask(
+            "empty-filter-repair",
+            "What is the transaction total?",
+            None,
+            |_| {},
+        )
+        .await
+        .unwrap();
+    server.join().unwrap();
+
+    assert!(answer.text.contains("1,200"), "answer: {}", answer.text);
+    assert_eq!(answer.status, VerificationStatus::Verified);
+    assert!(answer.evidence.iter().any(|item| {
+        item.error
+            .as_deref()
+            .is_some_and(|error| error.contains("superseded"))
+    }));
+
+    let _ = fs::remove_dir_all(&ws);
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[tokio::test]
+async fn semantic_verification_repairs_a_derived_value_missing_from_query_results() {
+    let ws = scratch("derived-value-repair-ws");
+    let data = scratch("derived-value-repair-data");
+    fs::write(
+        ws.join("rent.csv"),
+        "period,rent\nfirst,100\nfirst,100\nsecond,125\nsecond,125\n",
+    )
+    .unwrap();
+
+    let (url, requests, server) = fake_openai_with_requests(vec![
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "I will compare the two periods.",
+            "tool_calls": [{
+                "id": "period-totals",
+                "type": "function",
+                "function": {
+                    "name": "run_sql",
+                    "arguments": "{\"sql\":\"SELECT period, SUM(rent) AS total FROM rent GROUP BY period ORDER BY period\"}"
+                }
+            }]
+        })),
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "The first period totaled $200 and the second period $250, so the second period was $50 higher."
+        })),
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "I need the requested difference in the computed result.",
+            "tool_calls": [{
+                "id": "period-difference",
+                "type": "function",
+                "function": {
+                    "name": "run_sql",
+                    "arguments": "{\"sql\":\"SELECT SUM(CASE WHEN period = 'first' THEN rent ELSE 0 END) AS first_period, SUM(CASE WHEN period = 'second' THEN rent ELSE 0 END) AS second_period, SUM(CASE WHEN period = 'second' THEN rent ELSE 0 END) - SUM(CASE WHEN period = 'first' THEN rent ELSE 0 END) AS difference FROM rent\"}"
+                }
+            }]
+        })),
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "The difference was $50 (second period $250 minus first period $200)."
+        })),
+    ]);
+
+    let engine = EngineState::new(&data).unwrap();
+    engine
+        .save_settings(
+            serde_json::json!({ "provider": "custom", "base_url": url, "model": "test" })
+                .as_object()
+                .unwrap(),
+        )
+        .unwrap();
+    engine.set_api_key("custom", "sk-test").unwrap();
+    engine.open_workspace(&ws).unwrap();
+
+    let answer = engine
+        .ask(
+            "derived-value-repair",
+            "Did I pay more in the second period or first period, and by how much?",
+            None,
+            |_| {},
+        )
+        .await
+        .unwrap();
+    let captured = requests.lock().unwrap();
+    assert_eq!(
+        captured.len(),
+        4,
+        "expected a bounded repair round trip; answer={}; status={:?}; checks={:?}; evidence={:?}",
+        answer.text,
+        answer.status,
+        answer.verification,
+        answer.evidence
+    );
+    assert!(captured[2]
+        .to_string()
+        .contains("Semantic verification failed"));
+    drop(captured);
+    server.join().unwrap();
+
+    assert!(answer.text.contains("$50"), "answer: {}", answer.text);
+    assert_eq!(answer.status, VerificationStatus::Verified);
+    assert!(answer.evidence.iter().any(|item| {
+        item.error
+            .as_deref()
+            .is_some_and(|error| error.contains("superseded"))
+    }));
+    assert!(answer.evidence.iter().any(|item| {
+        item.error.is_none()
+            && item
+                .sql
+                .as_deref()
+                .is_some_and(|sql| sql.contains("AS difference"))
+    }));
+
+    let _ = fs::remove_dir_all(&ws);
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[tokio::test]
+async fn sequential_questions_keep_the_workspace_and_resolve_each_subject() {
+    let ws = scratch("sequential-baselines-ws");
+    let data = scratch("sequential-baselines-data");
+    fs::write(
+        ws.join("spend.csv"),
+        "month,category,amount\n2024-01-01,rent,1200\n2024-02-01,rent,1300\n",
+    )
+    .unwrap();
+    fs::write(
+        ws.join("rent_ledger.csv"),
+        "date,rent\nJan 1, 2024,1400\nFeb 1, 2024,1400\n",
+    )
+    .unwrap();
+    fs::write(
+        ws.join("books.csv"),
+        "title,rating\nThe Dispossessed,5\nInvisible Cities,4\n",
+    )
+    .unwrap();
+
+    let (url, seen, server) = fake_openai_with_requests(vec![
+        contract_turn(serde_json::json!({
+            "interpretation": "assumed",
+            "subject": "rent",
+            "measures": [{ "concept": "total spending", "field": "amount", "operation": "sum" }],
+            "filters": [{ "concept": "rent category", "field": "category", "candidate_values": ["rent"] }],
+            "time": { "field": "month", "range": "2024" },
+            "group_by": [],
+            "assumptions": [],
+            "unresolved": []
+        })),
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "Total spending on rent in 2024 was $2,500.00."
+        })),
+        contract_turn(serde_json::json!({
+            "interpretation": "assumed",
+            "subject": "reading list",
+            "measures": [{ "concept": "average rating", "field": "rating", "operation": "average" }],
+            "filters": [],
+            "group_by": [],
+            "assumptions": [],
+            "unresolved": []
+        })),
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "The average rating across the reading list is 4.5."
+        })),
+    ]);
+
+    let engine = EngineState::new(&data).unwrap();
+    engine
+        .save_settings(
+            serde_json::json!({ "provider": "custom", "base_url": url, "model": "test" })
+                .as_object()
+                .unwrap(),
+        )
+        .unwrap();
+    engine.set_api_key("custom", "sk-test").unwrap();
+    engine.open_workspace(&ws).unwrap();
+
+    let first = engine
+        .ask(
+            "same-conversation",
+            "What was my total spending on rent in 2024?",
+            None,
+            |_| {},
+        )
+        .await
+        .unwrap();
+    let second = engine
+        .ask(
+            "same-conversation",
+            "What's the average rating across all the books in my reading list?",
+            None,
+            |_| {},
+        )
+        .await
+        .unwrap();
+    server.join().unwrap();
+
+    assert!(
+        first.text.contains("2,500.00"),
+        "first answer: {}",
+        first.text
+    );
+    assert_eq!(first.status, VerificationStatus::Verified);
+    assert_eq!(
+        first.grounding.as_ref().unwrap().source.as_deref(),
+        Some("spend")
+    );
+    assert!(
+        second.text.contains("4.5"),
+        "second answer: {}",
+        second.text
+    );
+    assert_eq!(second.status, VerificationStatus::Verified);
+    assert_eq!(
+        second.grounding.as_ref().unwrap().source.as_deref(),
+        Some("books")
+    );
+
+    let requests = seen.lock().unwrap();
+    let second_system = requests[2]["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|message| message["role"] == "system")
+        .and_then(|message| message["content"].as_str())
+        .unwrap_or("");
+    assert!(
+        second_system.contains("Earlier in this conversation")
+            && second_system.contains("total spending on rent"),
+        "the second question must retain same-conversation context: {second_system}"
+    );
+
+    let _ = fs::remove_dir_all(&ws);
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[tokio::test]
+async fn unresolved_contract_defers_direct_data_tools_until_revised() {
     let ws = scratch("contract-gate-ws");
     let data = scratch("contract-gate-data");
     fs::write(ws.join("sales.csv"), "amount\n10\n20\n").unwrap();
 
     // Deliberately put an unresolved contract and a runnable SQL call in the
-    // same model response. The contract must be handled first and the SQL
-    // call must be returned to the model as blocked, without evidence or a
-    // ToolStart event.
+    // same model response. The SQL is deferred until the model has seen the
+    // grounded interpretation, so a semantic correction can influence it.
     let (url, server) = fake_openai(vec![
         openai_response(serde_json::json!({
             "role": "assistant",
@@ -208,7 +621,15 @@ async fn unresolved_contract_blocks_data_tools_in_the_same_response() {
         })),
         openai_response(serde_json::json!({
             "role": "assistant",
-            "content": "Which period field should I use?"
+            "content": "I will use the available sales table and compute the total.",
+            "tool_calls": [{ "id": "sql-2", "type": "function", "function": {
+                "name": "run_sql",
+                "arguments": "{\"sql\":\"SELECT sum(amount) AS total FROM sales\"}"
+            } }]
+        })),
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "The sales total is 30."
         })),
     ]);
 
@@ -236,32 +657,162 @@ async fn unresolved_contract_blocks_data_tools_in_the_same_response() {
         .unwrap();
     server.join().unwrap();
 
-    assert!(answer.text.contains("Which period field"));
-    assert_eq!(
-        answer.evidence.len(),
-        0,
-        "blocked SQL must not become evidence"
-    );
-    assert_eq!(answer.status, VerificationStatus::NeedsReview);
+    assert!(answer.text.contains("30"), "answer: {}", answer.text);
+    assert_eq!(answer.evidence.len(), 1);
+    assert!(answer.evidence[0]
+        .sql
+        .as_deref()
+        .is_some_and(|sql| sql.contains("sum(amount)")));
+    assert_eq!(answer.status, VerificationStatus::Verified);
     assert_eq!(
         answer.contract.as_ref().unwrap().interpretation,
         fella_lib::engine::runtime::InterpretationStatus::Ambiguous
     );
     let events = events.lock().unwrap();
-    assert!(
-        !events.iter().any(|event| matches!(
-            event,
-            AskEvent::ToolStart { tool, .. } if tool == "run_sql"
-        )),
-        "blocked SQL must not emit a start event"
-    );
+    assert!(events.iter().any(|event| matches!(
+        event,
+        AskEvent::ToolStart { tool, .. } if tool == "run_sql"
+    )));
 
     let _ = fs::remove_dir_all(&ws);
     let _ = fs::remove_dir_all(&data);
 }
 
 #[tokio::test]
-async fn missing_contract_is_persisted_as_unresolved_review() {
+async fn ambiguous_semantics_can_inspect_before_clarifying_and_never_query() {
+    let ws = scratch("clarification-ws");
+    let data = scratch("clarification-data");
+    fs::write(
+        ws.join("transactions.csv"),
+        "description,area,amount\nsalary,income,5000\nrent,housing,1500\n",
+    )
+    .unwrap();
+
+    let (url, seen, server) = fake_openai_with_requests(vec![
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "I should inspect the transaction labels before deciding whether to ask.",
+            "tool_calls": [
+                { "id": "contract", "type": "function", "function": {
+                    "name": "__analysis_contract",
+                    "arguments": serde_json::json!({
+                        "interpretation": "assumed",
+                        "subject": "transactions",
+                        "measures": [{ "concept": "amount", "field": "amount", "operation": "sum" }],
+                        "filters": [],
+                        "group_by": [],
+                        "assumptions": [],
+                        "unresolved": [],
+                        "clarification": {
+                            "question": "Should this total include income, or only spending?",
+                            "options": ["Include income", "Spending only"],
+                            "reason": "The mounted data contains both income and spending rows."
+                        }
+                    }).to_string()
+                } },
+                { "id": "inspect", "type": "function", "function": {
+                    "name": "inspect_table",
+                    "arguments": "{\"name\":\"transactions\",\"rows\":5}"
+                } }
+            ]
+        })),
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "The inspection shows income and housing rows. Should the total include income, or should it count spending only?"
+        })),
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "I will calculate the spending-only population.",
+            "tool_calls": [{ "id": "spending", "type": "function", "function": {
+                "name": "run_sql",
+                "arguments": "{\"sql\":\"SELECT SUM(amount) AS spending_total FROM transactions WHERE lower(area) <> 'income'\"}"
+            } }]
+        })),
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "Spending only totals $1,500."
+        })),
+    ]);
+
+    let engine = EngineState::new(&data).unwrap();
+    engine
+        .save_settings(
+            serde_json::json!({ "provider": "custom", "base_url": url, "model": "test" })
+                .as_object()
+                .unwrap(),
+        )
+        .unwrap();
+    engine.set_api_key("custom", "sk-test").unwrap();
+    engine.open_workspace(&ws).unwrap();
+
+    let events: Arc<Mutex<Vec<AskEvent>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink = events.clone();
+    let answer = engine
+        .ask(
+            "clarification",
+            "What is the amount in the current export?",
+            None,
+            move |event| sink.lock().unwrap().push(event),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(answer.status, VerificationStatus::InsufficientData);
+    assert_eq!(answer.evidence.len(), 1);
+    assert_eq!(answer.evidence[0].tool, "inspect_table");
+    assert!(answer.evidence[0]
+        .output
+        .as_deref()
+        .is_some_and(|output| output.contains("common values") && output.contains("income")));
+    let clarification = answer.clarification.as_ref().unwrap();
+    assert_eq!(clarification.options, ["Include income", "Spending only"]);
+    assert!(answer.text.contains("include income"));
+    assert!(!events.lock().unwrap().iter().any(|event| matches!(
+        event,
+        AskEvent::ToolStart { tool, .. } if tool == "run_sql"
+    )));
+
+    let continued = engine
+        .ask("clarification", "Spending only", None, |_| {})
+        .await
+        .unwrap();
+    assert!(
+        continued.text.contains("1,500"),
+        "answer: {}",
+        continued.text
+    );
+    assert_eq!(continued.evidence.len(), 1);
+    assert_eq!(continued.evidence[0].tool, "run_sql");
+    server.join().unwrap();
+
+    let requests = seen.lock().unwrap();
+    assert_eq!(requests.len(), 4);
+    let investigation_tools = requests[1]["tools"].as_array().unwrap();
+    let investigation_names = investigation_tools
+        .iter()
+        .filter_map(|tool| tool["function"]["name"].as_str())
+        .collect::<Vec<_>>();
+    assert!(investigation_names.contains(&"inspect_table"));
+    assert!(investigation_names.contains(&"read_file"));
+    assert!(!investigation_names.contains(&"run_sql"));
+    assert!(!investigation_names.contains(&"run_python"));
+    assert!(!investigation_names.contains(&"make_chart"));
+    let continuation_prompt = requests[2].to_string();
+    assert!(continuation_prompt.contains("What is the amount in the current export?"));
+    assert!(continuation_prompt.contains("include income"));
+    assert!(continuation_prompt.contains("Spending only"));
+    assert!(requests[2]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|tool| tool["function"]["name"] == "run_sql"));
+
+    let _ = fs::remove_dir_all(&ws);
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[tokio::test]
+async fn direct_data_calls_do_not_require_a_contract() {
     let ws = scratch("missing-contract-ws");
     let data = scratch("missing-contract-data");
     fs::write(ws.join("sales.csv"), "amount\n10\n20\n").unwrap();
@@ -298,21 +849,98 @@ async fn missing_contract_is_persisted_as_unresolved_review() {
         .unwrap();
     server.join().unwrap();
 
-    assert!(answer.evidence.is_empty());
-    assert_eq!(answer.status, VerificationStatus::NeedsReview);
-    let contract = answer.contract.as_ref().unwrap();
-    assert_eq!(
-        contract.interpretation,
-        fella_lib::engine::runtime::InterpretationStatus::Unresolved
-    );
-    assert!(contract.unresolved[0].contains("without stating"));
+    assert_eq!(answer.evidence.len(), 1);
+    assert!(answer.evidence[0]
+        .sql
+        .as_deref()
+        .is_some_and(|sql| sql.contains("sum(amount)")));
+    assert_eq!(answer.status, VerificationStatus::Verified);
+    assert!(answer.contract.is_none());
 
     let _ = fs::remove_dir_all(&ws);
     let _ = fs::remove_dir_all(&data);
 }
 
 #[tokio::test]
-async fn compiled_plan_replaces_redundant_model_data_calls() {
+async fn analyst_can_inspect_labels_before_selecting_a_computation() {
+    let ws = scratch("analyst-inspection-ws");
+    let data = scratch("analyst-inspection-data");
+    fs::write(
+        ws.join("bank.csv"),
+        "date,flow,details,amount\n2024-01-02,out,Monthly lease,1200\n2024-02-02,out,Monthly lease,1200\n2024-03-02,out,Utilities,100\n2024-03-15,in,Payroll,5000\n",
+    )
+    .unwrap();
+
+    let (url, seen, server) = fake_openai_with_requests(vec![
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "I will inspect the transaction labels first.",
+            "tool_calls": [{ "id": "inspect", "type": "function", "function": {
+                "name": "inspect_table",
+                "arguments": "{\"name\":\"bank\",\"rows\":5}"
+            } }]
+        })),
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "The lease rows represent rent. I will total those in Q1.",
+            "tool_calls": [{ "id": "sql", "type": "function", "function": {
+                "name": "run_sql",
+                "arguments": "{\"sql\":\"SELECT SUM(amount) AS rent_total FROM bank WHERE date >= '2024-01-01' AND date < '2024-04-01' AND lower(details) LIKE '%lease%'\"}"
+            } }]
+        })),
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "Rent paid in Q1 2024 was $2,400."
+        })),
+    ]);
+
+    let engine = EngineState::new(&data).unwrap();
+    engine
+        .save_settings(
+            serde_json::json!({ "provider": "custom", "base_url": url, "model": "test" })
+                .as_object()
+                .unwrap(),
+        )
+        .unwrap();
+    engine.set_api_key("custom", "sk-test").unwrap();
+    engine.open_workspace(&ws).unwrap();
+
+    let answer = engine
+        .ask(
+            "analyst-inspection",
+            "How much did I pay for rent in the first quarter of 2024?",
+            None,
+            |_| {},
+        )
+        .await
+        .unwrap();
+    server.join().unwrap();
+
+    assert!(answer.text.contains("2,400"), "answer: {}", answer.text);
+    assert_eq!(
+        answer
+            .evidence
+            .iter()
+            .map(|item| item.tool.as_str())
+            .collect::<Vec<_>>(),
+        ["inspect_table", "run_sql"]
+    );
+    assert!(answer.evidence[0]
+        .output
+        .as_deref()
+        .is_some_and(|output| output.contains("Monthly lease")));
+    let requests = seen.lock().unwrap();
+    let first_system = requests[0]["messages"][0]["content"].as_str().unwrap_or("");
+    assert!(first_system.contains("Analyst loop"));
+    assert!(first_system.contains("optional, not a prerequisite"));
+    assert!(requests[1].to_string().contains("Monthly lease"));
+
+    let _ = fs::remove_dir_all(&ws);
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[tokio::test]
+async fn model_selected_data_call_waits_for_the_contract_before_execution() {
     let ws = scratch("compiled-plan-gate-ws");
     let data = scratch("compiled-plan-gate-data");
     fs::write(
@@ -339,6 +967,14 @@ async fn compiled_plan_replaces_redundant_model_data_calls() {
                     }).to_string()
                 } }
             ]
+        })),
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "I will use the grounded monthly interpretation.",
+            "tool_calls": [{ "id": "model-sql-2", "type": "function", "function": {
+                "name": "run_sql",
+                "arguments": "{\"sql\":\"SELECT month, SUM(amount) AS total FROM sales GROUP BY month\"}"
+            } }]
         })),
         openai_response(serde_json::json!({
             "role": "assistant",
@@ -384,7 +1020,7 @@ async fn compiled_plan_replaces_redundant_model_data_calls() {
         .sql
         .as_deref()
         .unwrap()
-        .contains("strftime('%Y-%m'"));
+        .contains("GROUP BY month"));
     assert_eq!(
         answer.grounding.as_ref().unwrap().probes[0].kind,
         "context_source"
@@ -395,7 +1031,7 @@ async fn compiled_plan_replaces_redundant_model_data_calls() {
         .iter()
         .filter(|event| matches!(event, AskEvent::ToolStart { tool, .. } if tool == "run_sql"))
         .count();
-    assert_eq!(sql_starts, 1, "only the compiled plan should execute SQL");
+    assert_eq!(sql_starts, 1, "one model-selected computation is executed");
 
     let _ = fs::remove_dir_all(&ws);
     let _ = fs::remove_dir_all(&data);

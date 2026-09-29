@@ -1,10 +1,8 @@
 //! The typed runtime spine for an analytical turn.
 //!
-//! The current agent loop predates these objects and still owns most of the
-//! orchestration.  These types make the lifecycle explicit without forcing a
-//! rewrite: the direct path can populate a minimal contract and trace today,
-//! while semantic interpretation, planning, and acceptance gates attach to
-//! the same objects in later slices.
+//! These types make the model-directed lifecycle explicit: an optional semantic
+//! hypothesis, model-selected tool calls, deterministic plans when useful, and
+//! the same trace and verification objects for every route.
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -22,9 +20,9 @@ pub type TurnId = String;
 /// A stable identifier for the execution trace produced by one turn.
 pub type TraceId = String;
 
-/// Internal function name used when the runtime asks the model to state its
-/// interpretation before using data tools. It never reaches the data engine
-/// and is omitted from user-facing evidence.
+/// Internal function name used when the model wants to state a semantic
+/// hypothesis. It never reaches the data engine and is omitted from user-facing
+/// evidence.
 pub const CONTRACT_TOOL_NAME: &str = "__analysis_contract";
 
 /// A user-selected workspace starting point. References are hints for
@@ -39,9 +37,9 @@ pub struct ContextReference {
     pub detail: Option<String>,
 }
 
-/// Explicit lifecycle states for the analytical runtime.  The fast path may
-/// move through several states without an extra model call, but it still
-/// reports the same protocol as the future structured path.
+/// Explicit lifecycle states for the analytical runtime. A model-directed turn
+/// may move through several states in one model response, but it still reports
+/// the same protocol for every execution route.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TurnState {
@@ -70,6 +68,20 @@ pub enum InterpretationStatus {
     Assumed,
     Ambiguous,
     Unsupported,
+}
+
+/// A user-facing decision request emitted when the available evidence supports
+/// more than one materially different interpretation. This is deliberately
+/// separate from `unresolved`: unresolved describes what the runtime still
+/// needs to investigate, while a clarification is the model's conclusion that
+/// the user is the right authority to choose.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClarificationRequest {
+    pub question: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 /// A measure in the semantic question representation.  These are semantic
@@ -180,13 +192,15 @@ pub struct ContractTime {
 /// The first typed comparison primitive. Explicit windows keep date alignment
 /// in the contract instead of asking the executor or answer prose to infer it
 /// from a label such as "year over year".
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ComparisonKind {
+    #[default]
     PeriodOverPeriod,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ContractComparison {
     pub kind: ComparisonKind,
     pub current_range: String,
@@ -201,8 +215,23 @@ pub struct AnalysisContract {
     pub interpretation: InterpretationStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subject: Option<String>,
+    /// Human-language population selected by the model before physical filters
+    /// are resolved. Keeping this beside `filters` lets verification distinguish
+    /// "the rows that mean spending" from merely "a valid WHERE clause".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub population: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub grain: Option<String>,
+    /// Domain meaning for a measure whose sign or label is not self-evident,
+    /// for example a positive expense export or a category-based income flow.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value_semantics: Option<String>,
+    /// Explicit missing-value policy for averages, rates, and counts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub missing_policy: Option<String>,
+    /// What the denominator means for a ratio or percentage.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub denominator: Option<String>,
     #[serde(default)]
     pub measures: Vec<ContractMeasure>,
     #[serde(default)]
@@ -232,12 +261,18 @@ pub struct AnalysisContract {
     pub assumptions: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unresolved: Vec<String>,
+    /// A blocking semantic choice for the user. The model may propose this
+    /// after grounding reveals two plausible populations, fields, or scopes;
+    /// the runtime never silently turns it into a data query.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clarification: Option<ClarificationRequest>,
 }
 
 impl AnalysisContract {
     /// Parse and normalize a model-proposed contract. The model cannot grant
     /// itself `grounded` status: only later data probes and verification may
-    /// promote an interpretation beyond `assumed`.
+    /// promote an interpretation beyond `assumed`. The result remains advisory
+    /// and does not grant or remove tool access.
     pub fn from_tool_args(value: &Json) -> Result<Self, String> {
         let mut contract: Self = serde_json::from_value(value.clone())
             .map_err(|error| format!("invalid analysis contract: {error}"))?;
@@ -282,26 +317,76 @@ impl AnalysisContract {
                     return Err("a join cannot join a field to itself".into());
                 }
             }
-            if contract.comparison.is_some() && contract.comparison_spec.is_some() {
-                return Err("use either comparison_spec or legacy comparison, not both".into());
+            // Older providers may still echo the archived free-form field
+            // alongside the typed comparison. The typed IR is authoritative;
+            // rejecting the entire contract would turn a harmless migration
+            // artifact into a failed analytical turn.
+            if contract.comparison_spec.is_some() {
+                contract.comparison = None;
             }
             if let Some(comparison) = &contract.comparison_spec {
                 if comparison.current_range.trim().is_empty()
                     || comparison.previous_range.trim().is_empty()
                 {
-                    return Err("a comparison needs current and previous observed ranges".into());
-                }
-                if comparison.current_range.trim() == comparison.previous_range.trim() {
+                    // Optional model metadata should not invalidate the rest of a
+                    // usable contract. An explicit comparison with two equal
+                    // windows is still rejected below because it changes the
+                    // requested computation rather than merely being incomplete.
+                    contract.comparison_spec = None;
+                } else if comparison.current_range.trim() == comparison.previous_range.trim() {
                     return Err("a comparison needs two different ranges".into());
                 }
             }
             if !contract.unresolved.is_empty() {
                 contract.interpretation = InterpretationStatus::Ambiguous;
             }
+            if let Some(clarification) = contract.clarification.as_mut() {
+                clarification.question = clarification.question.trim().to_string();
+                if clarification.question.is_empty() {
+                    return Err("a clarification needs a user-facing question".into());
+                }
+                if clarification.question.chars().count() > 800 {
+                    return Err("a clarification question is too long".into());
+                }
+                clarification.options = clarification
+                    .options
+                    .iter()
+                    .map(|option| option.trim().to_string())
+                    .filter(|option| !option.is_empty())
+                    .collect();
+                if clarification.options.len() > 6 {
+                    return Err("a clarification may offer at most six options".into());
+                }
+                if clarification
+                    .options
+                    .iter()
+                    .any(|option| option.chars().count() > 240)
+                {
+                    return Err("a clarification option is too long".into());
+                }
+                if clarification
+                    .reason
+                    .as_ref()
+                    .is_some_and(|reason| reason.trim().is_empty() || reason.chars().count() > 500)
+                {
+                    return Err("a clarification reason must be short and non-empty".into());
+                }
+                if !clarification.options.is_empty() {
+                    let mut unique = clarification.options.clone();
+                    unique.sort_by_key(|option| option.to_ascii_lowercase());
+                    unique.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+                    clarification.options = unique;
+                }
+                // Asking the user is a semantic decision, not a weakly stated
+                // assumption. Keep the state explicit even if a provider
+                // accidentally sent `assumed` beside the request.
+                contract.interpretation = InterpretationStatus::Ambiguous;
+            }
             if contract.subject.is_none()
                 && contract.measures.is_empty()
                 && contract.filters.is_empty()
                 && contract.group_by.is_empty()
+                && contract.clarification.is_none()
             {
                 return Err("the contract did not identify an analytical subject".into());
             }
@@ -649,6 +734,42 @@ mod tests {
     }
 
     #[test]
+    fn clarification_requests_are_typed_and_force_ambiguous_state() {
+        let contract = AnalysisContract::from_tool_args(&serde_json::json!({
+            "interpretation": "assumed",
+            "measures": [{ "concept": "amount", "operation": "sum" }],
+            "clarification": {
+                "question": "Should income rows be included in this total? ",
+                "options": ["Include income", "Expenses only", "include income"]
+            },
+            "assumptions": [],
+            "unresolved": []
+        }))
+        .unwrap();
+        assert_eq!(contract.interpretation, InterpretationStatus::Ambiguous);
+        let clarification = contract.clarification.unwrap();
+        assert_eq!(
+            clarification.question,
+            "Should income rows be included in this total?"
+        );
+        assert_eq!(
+            clarification.options,
+            vec!["Expenses only", "Include income"]
+        );
+    }
+
+    #[test]
+    fn clarification_without_a_question_is_rejected() {
+        let result = AnalysisContract::from_tool_args(&serde_json::json!({
+            "interpretation": "ambiguous",
+            "clarification": { "question": "  " },
+            "assumptions": [],
+            "unresolved": []
+        }));
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn ranking_contracts_validate_the_target_and_limit() {
         let contract = AnalysisContract::from_tool_args(&serde_json::json!({
             "interpretation": "assumed",
@@ -799,6 +920,38 @@ mod tests {
             "unresolved": []
         }));
         assert!(invalid.is_err());
+
+        let incomplete = AnalysisContract::from_tool_args(&serde_json::json!({
+            "interpretation": "assumed",
+            "subject": "books",
+            "measures": [{"concept": "rating", "operation": "average"}],
+            "filters": [],
+            "group_by": [],
+            "comparison_spec": {},
+            "assumptions": [],
+            "unresolved": []
+        }))
+        .unwrap();
+        assert!(incomplete.comparison_spec.is_none());
+
+        let migrated = AnalysisContract::from_tool_args(&serde_json::json!({
+            "interpretation": "assumed",
+            "subject": "sales",
+            "measures": [{"concept": "revenue", "operation": "sum"}],
+            "filters": [],
+            "group_by": [],
+            "comparison": "year over year",
+            "comparison_spec": {
+                "kind": "period_over_period",
+                "current_range": "2024",
+                "previous_range": "2023"
+            },
+            "assumptions": [],
+            "unresolved": []
+        }))
+        .unwrap();
+        assert!(migrated.comparison.is_none());
+        assert!(migrated.comparison_spec.is_some());
     }
 
     #[test]

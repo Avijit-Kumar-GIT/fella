@@ -12,7 +12,7 @@ use crate::engine::agent;
 use crate::engine::analysis_store;
 use crate::engine::analytics::data::{self, DataEngine, DEFAULT_ROW_CAP};
 use crate::engine::analytics::pyexec;
-use crate::engine::catalog::{self, Catalog, SourceInfo, SourceKind};
+use crate::engine::catalog::{self, Catalog, ColumnInfo, SourceInfo, SourceKind};
 use crate::engine::context::{ContextAssembler, ContextPacket};
 use crate::engine::error::{EngineError, EngineResult};
 use crate::engine::evidence::{Answer, AskEvent};
@@ -21,9 +21,9 @@ use crate::engine::llm::{LlmClient, ProviderHealth};
 use crate::engine::memory::{self, FolderMemory};
 use crate::engine::provider::{self, AuthKind, PROVIDERS};
 use crate::engine::runtime::{
-    AnalysisResult, AnalysisTurn, AnalysisTurnReplayStatus, ContextReference, InterpretationStatus,
-    LogicalPlan, PlanStrategy, TurnState, VerificationReport, WorkspaceColumnSnapshot,
-    WorkspaceRevisionSnapshot, WorkspaceSourceSnapshot,
+    AnalysisContract, AnalysisResult, AnalysisTurn, AnalysisTurnReplayStatus, ContextReference,
+    InterpretationStatus, LogicalPlan, PlanStrategy, TurnState, VerificationReport,
+    WorkspaceColumnSnapshot, WorkspaceRevisionSnapshot, WorkspaceSourceSnapshot,
 };
 use crate::engine::secrets::Secrets;
 use crate::engine::semantic_memory::{
@@ -91,6 +91,31 @@ fn revision_snapshot(catalog: &Catalog) -> Option<WorkspaceRevisionSnapshot> {
             .map(|file| format!("{}: {}", file.name, file.reason))
             .collect(),
     })
+}
+
+/// Add bounded mount-time stats to an already normalized table. This keeps
+/// the raw file untouched while exposing useful low-cardinality populations
+/// (status, type, region, etc.) before the model writes a filter. Samples are
+/// still JIT-only; `describe` provides schema stats and common values without
+/// putting rows into the initial prompt for large workspaces.
+fn profile_loaded_columns(
+    data: &dyn DataEngine,
+    view: &str,
+    ingest_columns: Vec<ColumnInfo>,
+) -> Vec<ColumnInfo> {
+    let mut profiled = match data.describe(view) {
+        Ok(columns) => columns,
+        Err(_) => return ingest_columns,
+    };
+    for column in &mut profiled {
+        if column.note.is_none() {
+            column.note = ingest_columns
+                .iter()
+                .find(|ingested| ingested.name == column.name)
+                .and_then(|ingested| ingested.note.clone());
+        }
+    }
+    profiled
 }
 
 #[derive(Debug, Serialize)]
@@ -388,7 +413,59 @@ struct SessionMemory {
 struct TurnDigest {
     question: String,
     headline: String,
+    frame: Option<String>,
     queries: Vec<String>,
+}
+
+fn contract_frame(contract: &AnalysisContract) -> Option<String> {
+    let mut parts = Vec::new();
+    if let Some(subject) = contract.subject.as_deref() {
+        parts.push(format!("subject={subject}"));
+    }
+    if let Some(population) = contract.population.as_deref() {
+        parts.push(format!("population={population}"));
+    }
+    if let Some(time) = &contract.time {
+        if let Some(field) = time.field.as_deref() {
+            parts.push(format!("time={field}"));
+        }
+        if let Some(range) = time.range.as_deref() {
+            parts.push(format!("range={range}"));
+        }
+        if let Some(bucket) = time.bucket {
+            parts.push(format!("bucket={bucket:?}"));
+        }
+    }
+    for filter in &contract.filters {
+        let values = if filter.resolved_values.is_empty() {
+            &filter.candidate_values
+        } else {
+            &filter.resolved_values
+        };
+        let value = if values.is_empty() {
+            filter.concept.clone()
+        } else {
+            format!("{}={}", filter.concept, values.join("|"))
+        };
+        parts.push(if filter.exclude {
+            format!("exclude {value}")
+        } else {
+            value
+        });
+    }
+    if !contract.group_by.is_empty() {
+        parts.push(format!("group={}", contract.group_by.join(",")));
+    }
+    if let Some(value_semantics) = contract.value_semantics.as_deref() {
+        parts.push(format!("values={value_semantics}"));
+    }
+    if let Some(missing_policy) = contract.missing_policy.as_deref() {
+        parts.push(format!("missing={missing_policy}"));
+    }
+    if let Some(denominator) = contract.denominator.as_deref() {
+        parts.push(format!("denominator={denominator}"));
+    }
+    (!parts.is_empty()).then(|| cap_chars(&parts.join("; "), 600))
 }
 
 /// Recover the small backend session projection from a transcript archive.
@@ -463,6 +540,10 @@ fn archived_turns(value: &serde_json::Value, workspace: Option<&str>) -> Vec<Tur
             })
             .take(3)
             .collect();
+        let frame = answer
+            .and_then(|answer| answer.get("contract"))
+            .and_then(|contract| serde_json::from_value::<AnalysisContract>(contract.clone()).ok())
+            .and_then(|contract| contract_frame(&contract));
         turns.push(TurnDigest {
             question: message
                 .get("text")
@@ -470,6 +551,7 @@ fn archived_turns(value: &serde_json::Value, workspace: Option<&str>) -> Vec<Tur
                 .map(|text| cap_chars(text, 200))
                 .unwrap_or_default(),
             headline,
+            frame,
             queries,
         });
     }
@@ -998,21 +1080,17 @@ impl EngineState {
         catalog: &Catalog,
         answer: &Answer,
     ) {
-        let state = match answer
-            .contract
-            .as_ref()
-            .map(|contract| contract.interpretation)
-        {
-            Some(InterpretationStatus::Ambiguous) => TurnState::Clarify,
-            Some(InterpretationStatus::Unsupported) => TurnState::Unsupported,
-            _ => match answer.status {
+        let state = if answer.clarification.is_some() {
+            TurnState::Clarify
+        } else {
+            match answer.status {
                 crate::engine::evidence::VerificationStatus::Verified => TurnState::Accepted,
                 crate::engine::evidence::VerificationStatus::Failed => TurnState::Failed,
                 crate::engine::evidence::VerificationStatus::NeedsReview
                 | crate::engine::evidence::VerificationStatus::InsufficientData => {
                     TurnState::NeedsReview
                 }
-            },
+            }
         };
         let evidence = answer
             .evidence
@@ -1141,24 +1219,30 @@ impl EngineState {
                     .row_count
                     .map(|n| n.to_string())
                     .unwrap_or_else(|| "?".into());
-                p.push_str(&format!("  {view}  ({rows} rows)\n"));
+                p.push_str(&format!(
+                    "  {view}  (file={}, scope={} ; {rows} rows)\n",
+                    s.name,
+                    crate::engine::catalog::source_scope(&s.name, &s.path, s.view.as_deref(),)
+                        .label()
+                ));
                 if let Some(note) = &s.note {
                     p.push_str(&format!("    note: {note}\n"));
                 }
                 if let Some(cols) = &s.columns {
                     for c in cols {
-                        let common = c
-                            .common_values
-                            .as_ref()
-                            .map(|values| {
-                                let shown = values
-                                    .iter()
-                                    .take(4)
-                                    .map(|value| cap_chars(value, 40))
-                                    .collect::<Vec<_>>()
-                                    .join(" | ");
-                                format!("  common: {shown}")
+                        let common = (small || inspected.contains(&view.to_lowercase()))
+                            .then(|| {
+                                c.common_values.as_ref().map(|values| {
+                                    let shown = values
+                                        .iter()
+                                        .take(4)
+                                        .map(|value| cap_chars(value, 40))
+                                        .collect::<Vec<_>>()
+                                        .join(" | ");
+                                    format!("  common: {shown}")
+                                })
                             })
+                            .flatten()
                             .unwrap_or_default();
                         match &c.note {
                             Some(n) => p.push_str(&format!(
@@ -1188,12 +1272,35 @@ impl EngineState {
             for s in &tables {
                 let ncols = s.columns.as_ref().map(|c| c.len()).unwrap_or(0);
                 p.push_str(&format!(
-                    "  {}  {} rows, {ncols} columns\n",
+                    "  {}  (file={}, scope={}; {} rows, {ncols} columns)\n",
                     s.view.as_deref().unwrap_or(""),
+                    s.name,
+                    crate::engine::catalog::source_scope(&s.name, &s.path, s.view.as_deref(),)
+                        .label(),
                     s.row_count
                         .map(|n| n.to_string())
                         .unwrap_or_else(|| "?".into()),
                 ));
+                let observed = s
+                    .columns
+                    .as_deref()
+                    .unwrap_or_default()
+                    .iter()
+                    .filter_map(|column| {
+                        let values = column.common_values.as_ref()?;
+                        let shown = values
+                            .iter()
+                            .take(4)
+                            .map(|value| cap_chars(value, 32))
+                            .collect::<Vec<_>>()
+                            .join(" | ");
+                        Some(format!("{}=[{}]", column.name, shown))
+                    })
+                    .take(6)
+                    .collect::<Vec<_>>();
+                if !observed.is_empty() {
+                    p.push_str(&format!("    observed values: {}\n", observed.join("; ")));
+                }
             }
         }
 
@@ -1255,6 +1362,9 @@ impl EngineState {
         let mut p = String::from("Earlier in this conversation (reuse what still applies):\n");
         for t in turns {
             p.push_str(&format!("- Q: \"{}\"  A: \"{}\"\n", t.question, t.headline));
+            if let Some(frame) = &t.frame {
+                p.push_str(&format!("  frame: {frame}\n"));
+            }
             for q in &t.queries {
                 p.push_str(&format!("  used: {q}\n"));
             }
@@ -1794,13 +1904,15 @@ exactly, character for character, from the list below.";
                         ) {
                             Ok((sheets, _)) if !sheets.is_empty() => {
                                 for sh in sheets {
+                                    let columns =
+                                        profile_loaded_columns(&*data, &sh.view, sh.columns);
                                     sources.push(SourceInfo {
                                         name: format!("{} \u{b7} {}", info.name, sh.sheet),
                                         path: path_str.clone(),
                                         kind: f.kind,
                                         view: Some(sh.view),
                                         row_count: Some(sh.row_count),
-                                        columns: Some(sh.columns),
+                                        columns: Some(columns),
                                         size_bytes: f.size_bytes,
                                         mtime: f.mtime,
                                         synopsis: None,
@@ -1837,7 +1949,8 @@ exactly, character for character, from the list below.";
                         match data.add_source(&view, f.kind, &path_str) {
                             Ok(load) => {
                                 info.row_count = Some(load.row_count);
-                                info.columns = Some(load.columns);
+                                info.columns =
+                                    Some(profile_loaded_columns(&*data, &view, load.columns));
                                 info.note = load.note;
                                 info.view = Some(view);
                             }
@@ -2351,6 +2464,7 @@ exactly, character for character, from the list below.";
                     entry.turns.push(TurnDigest {
                         question: question.chars().take(200).collect(),
                         headline,
+                        frame: answer.contract.as_ref().and_then(contract_frame),
                         queries,
                     });
                     let n = entry.turns.len();

@@ -179,8 +179,8 @@ pub fn open_engine(data_dir: &std::path::Path) -> EngineResult<Box<dyn DataEngin
 /// a second statement. A guard rail, not a hard security boundary (the SQLite
 /// backend also opens its query connection read-only for real enforcement).
 pub fn ensure_read_only(sql: &str) -> EngineResult<()> {
-    let cleaned = strip_comments(sql);
-    let lower = cleaned.to_lowercase();
+    let scan = scan_sql(sql);
+    let lower = scan.code.to_lowercase();
     let trimmed = lower.trim().trim_start_matches('(').trim();
 
     let body = trimmed.trim_end_matches(';').trim();
@@ -274,13 +274,93 @@ pub fn ensure_read_only(sql: &str) -> EngineResult<()> {
         "iceberg_scan",
         "delta_scan",
     ];
-    let banned_hit = body
-        .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
-        .find(|tok| BANNED.contains(tok));
+    let banned_hit = scan.words.iter().find(|tok| BANNED.contains(&tok.as_str()));
     if let Some(tok) = banned_hit {
         return Err(EngineError::Forbidden(format!("`{tok}` is not allowed")));
     }
     Ok(())
+}
+
+struct SqlScan {
+    code: String,
+    words: Vec<String>,
+}
+
+/// Keep SQL guard checks out of quoted data. A raw substring scan turns an
+/// ordinary label such as "current export" into a false security failure, and
+/// also mistakes semicolons inside a string for a second statement.
+fn scan_sql(sql: &str) -> SqlScan {
+    let mut code = String::with_capacity(sql.len());
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut chars = sql.chars().peekable();
+
+    let flush = |word: &mut String, words: &mut Vec<String>| {
+        if !word.is_empty() {
+            words.push(std::mem::take(word));
+        }
+    };
+
+    while let Some(c) = chars.next() {
+        if c == '-' && chars.peek() == Some(&'-') {
+            chars.next();
+            flush(&mut word, &mut words);
+            for comment in chars.by_ref() {
+                if comment == '\n' {
+                    code.push('\n');
+                    break;
+                }
+            }
+            continue;
+        }
+        if c == '/' && chars.peek() == Some(&'*') {
+            chars.next();
+            flush(&mut word, &mut words);
+            let mut previous = '\0';
+            for comment in chars.by_ref() {
+                if previous == '*' && comment == '/' {
+                    break;
+                }
+                previous = comment;
+            }
+            code.push(' ');
+            continue;
+        }
+
+        let quote_end = match c {
+            '\'' | '"' | '`' => Some(c),
+            '[' => Some(']'),
+            _ => None,
+        };
+        if let Some(end) = quote_end {
+            flush(&mut word, &mut words);
+            code.push(' ');
+            while let Some(quoted) = chars.next() {
+                if quoted == end {
+                    if chars.peek() == Some(&end) {
+                        chars.next();
+                        continue;
+                    }
+                    break;
+                }
+            }
+            continue;
+        }
+
+        if c == ';' {
+            flush(&mut word, &mut words);
+            code.push(';');
+        } else if c.is_ascii_alphanumeric() || c == '_' {
+            word.push(c.to_ascii_lowercase());
+            code.push(c);
+        } else {
+            flush(&mut word, &mut words);
+            code.push(c);
+        }
+    }
+    flush(&mut word, &mut words);
+
+    SqlScan { code, words }
 }
 
 /// Blank out `-- line` and `/* block */` comments so the guard sees only code.
@@ -387,11 +467,37 @@ pub fn parse_numeric(s: &str) -> Option<f64> {
     } else if let Some(rest) = body.strip_prefix('+') {
         body = rest.trim_start();
     }
+
+    // Exports also commonly spell the currency as an ISO-style code
+    // (`USD 1,200.00`) instead of using a symbol. Strip only known currency
+    // codes so arbitrary prose such as `approx 1200` remains unresolved.
+    const CURRENCY_CODES: [&str; 20] = [
+        "AUD", "CAD", "CHF", "CNY", "DKK", "EUR", "GBP", "HKD", "INR", "JPY", "KRW", "MXN", "NOK",
+        "NZD", "PLN", "SEK", "SGD", "THB", "USD", "ZAR",
+    ];
+    if body.len() >= 4
+        && body.as_bytes()[3].is_ascii_whitespace()
+        && body[..3].chars().all(|c| c.is_ascii_alphabetic())
+        && CURRENCY_CODES
+            .iter()
+            .any(|code| body[..3].eq_ignore_ascii_case(code))
+    {
+        body = body[4..].trim_start();
+    }
+
     for sym in ['$', '\u{00A3}', '\u{20AC}', '\u{00A5}', '\u{20B9}'] {
         if let Some(rest) = body.strip_prefix(sym) {
             body = rest.trim_start();
             break;
         }
+    }
+    // Some exports put the sign after the currency marker (`USD -42` or
+    // `$-42`). Handle it here as well as before the marker.
+    if let Some(rest) = body.strip_prefix('-') {
+        negative = !negative;
+        body = rest.trim_start();
+    } else if let Some(rest) = body.strip_prefix('+') {
+        body = rest.trim_start();
     }
     let mut percent = false;
     if let Some(rest) = body.strip_suffix('%') {
@@ -453,10 +559,9 @@ pub fn parse_numeric(s: &str) -> Option<f64> {
     Some(v)
 }
 
-/// Parses a handful of unambiguous "month spelled out" date formats into
-/// ISO-8601 (`YYYY-MM-DD`): "Aug 1, 2026", "August 1, 2026", "1 Aug 2026",
-/// "01 August 2026", an optional ordinal suffix ("1st", "2nd", "3rd", "21st"),
-/// comma optional, case-insensitive. Deliberately does not attempt pure
+/// Parses unambiguous month-name date formats into ISO-8601 (`YYYY-MM-DD`):
+/// "Aug 1, 2026", "1 Aug 2026", "31-May-2024", and year-first variants.
+/// An optional ordinal suffix is accepted. Deliberately does not attempt pure
 /// numeric formats (`08/01/2026`): whether that means MM/DD or DD/MM is
 /// genuinely ambiguous per-file, and a wrong guess would silently swap month
 /// and day instead of visibly failing the way an unparsed string does. Used
@@ -488,15 +593,30 @@ pub fn parse_named_month_date(s: &str) -> Option<String> {
         ("dec", 12),
         ("december", 12),
     ];
-    let cleaned: String = s.chars().filter(|&c| c != ',').collect();
+    let cleaned: String = s
+        .chars()
+        .map(|c| match c {
+            ',' | '-' | '/' => ' ',
+            other => other,
+        })
+        .collect();
     let parts: Vec<&str> = cleaned.split_whitespace().collect();
-    let [a, b, year_str] = parts[..] else {
+    let [a, b, c] = parts[..] else {
         return None;
     };
-    let (month_str, day_str) = if a.chars().next()?.is_ascii_alphabetic() {
-        (a, b)
+    // At least one of the first two components must be a month name. This
+    // keeps numeric locale-specific dates deliberately unresolved.
+    let (year_str, month_str, day_str) = if a.len() == 4
+        && a.bytes().all(|byte| byte.is_ascii_digit())
+        && b.chars().next().is_some_and(|ch| ch.is_ascii_alphabetic())
+    {
+        (a, b, c)
+    } else if a.chars().next().is_some_and(|ch| ch.is_ascii_alphabetic()) {
+        (c, a, b)
+    } else if b.chars().next().is_some_and(|ch| ch.is_ascii_alphabetic()) {
+        (c, b, a)
     } else {
-        (b, a)
+        return None;
     };
     let month = MONTHS
         .iter()
@@ -507,10 +627,68 @@ pub fn parse_named_month_date(s: &str) -> Option<String> {
         .parse()
         .ok()?;
     let year: i32 = year_str.parse().ok()?;
-    if !(1..=31).contains(&day) || !(1900..=2100).contains(&year) {
+    if !(1900..=2100).contains(&year) || !valid_day(year, month, day) {
         return None;
     }
     Some(format!("{year:04}-{month:02}-{day:02}"))
+}
+
+/// Normalize unambiguous date text without guessing at locale-specific
+/// numeric dates. Year-first ISO/slash forms and named-month forms are safe;
+/// `MM/DD/YYYY` and `DD/MM/YYYY` remain text because choosing one silently can
+/// move observations to the wrong day.
+pub fn parse_date_value(s: &str) -> Option<String> {
+    let trimmed = s.trim();
+    let bytes = trimmed.as_bytes();
+    let date_text = if bytes.len() > 10
+        && bytes
+            .get(..4)
+            .is_some_and(|part| part.iter().all(|b| b.is_ascii_digit()))
+        && bytes.get(4).is_some_and(|b| *b == b'-' || *b == b'/')
+        && bytes
+            .get(5..7)
+            .is_some_and(|part| part.iter().all(|b| b.is_ascii_digit()))
+        && bytes.get(7).is_some_and(|b| *b == b'-' || *b == b'/')
+        && bytes
+            .get(8..10)
+            .is_some_and(|part| part.iter().all(|b| b.is_ascii_digit()))
+        && trimmed
+            .as_bytes()
+            .get(10)
+            .is_some_and(|b| *b == b'T' || *b == b't' || *b == b' ')
+    {
+        &trimmed[..10]
+    } else {
+        trimmed
+    };
+    let parts: Vec<&str> = date_text.split(['-', '/']).collect();
+    if parts.len() == 2 && parts[0].len() == 4 && parts[0].bytes().all(|b| b.is_ascii_digit()) {
+        let year = parts[0].parse::<i32>().ok()?;
+        let month = parts[1].parse::<u32>().ok()?;
+        if (1900..=2100).contains(&year) && (1..=12).contains(&month) {
+            return Some(format!("{year:04}-{month:02}"));
+        }
+    }
+    if parts.len() == 3 && parts[0].len() == 4 && parts[0].bytes().all(|b| b.is_ascii_digit()) {
+        let year = parts[0].parse::<i32>().ok()?;
+        let month = parts[1].parse::<u32>().ok()?;
+        let day = parts[2].parse::<u32>().ok()?;
+        if (1900..=2100).contains(&year) && valid_day(year, month, day) {
+            return Some(format!("{year:04}-{month:02}-{day:02}"));
+        }
+    }
+    parse_named_month_date(date_text)
+}
+
+fn valid_day(year: i32, month: u32, day: u32) -> bool {
+    let days = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if year % 400 == 0 || (year % 4 == 0 && year % 100 != 0) => 29,
+        2 => 28,
+        _ => 0,
+    };
+    days > 0 && (1..=days).contains(&day)
 }
 
 /// Whether a trimmed, case-folded cell reads as a totals/summary-row label
@@ -547,6 +725,10 @@ mod tests {
         assert_eq!(parse_numeric("1200"), Some(1200.0));
         assert_eq!(parse_numeric("1200.50"), Some(1200.5));
         assert_eq!(parse_numeric("$1,200.00"), Some(1200.0));
+        assert_eq!(parse_numeric("USD 1,200.00"), Some(1200.0));
+        assert_eq!(parse_numeric("USD -129.18"), Some(-129.18));
+        assert_eq!(parse_numeric("$-1,531.97"), Some(-1531.97));
+        assert_eq!(parse_numeric("eur 42.50"), Some(42.5));
         assert_eq!(parse_numeric("  1,150 "), Some(1150.0));
         assert_eq!(parse_numeric("\u{00A3}2,000"), Some(2000.0));
         assert_eq!(parse_numeric("(45)"), Some(-45.0));
@@ -563,12 +745,26 @@ mod tests {
         assert_eq!(parse_numeric(""), None);
         assert_eq!(parse_numeric("-"), None);
         assert_eq!(parse_numeric("1,2,3 apples"), None);
+        assert_eq!(parse_numeric("approx 1200"), None);
         // Non-finite and malformed grouping must not sneak through as numbers.
         assert_eq!(parse_numeric("inf"), None);
         assert_eq!(parse_numeric("nan"), None);
         assert_eq!(parse_numeric("1 2 3"), None);
         assert_eq!(parse_numeric("1,23,456"), None);
         assert_eq!(parse_numeric("."), None);
+    }
+
+    #[test]
+    fn parses_hyphenated_named_month_dates_without_guessing_numeric_dates() {
+        assert_eq!(
+            parse_named_month_date("31-May-2024").as_deref(),
+            Some("2024-05-31")
+        );
+        assert_eq!(
+            parse_named_month_date("2024-May-31").as_deref(),
+            Some("2024-05-31")
+        );
+        assert_eq!(parse_named_month_date("08/01/2026"), None);
     }
 
     #[test]
@@ -624,5 +820,17 @@ mod tests {
         // The mutating `REPLACE INTO ...` statement is still rejected because
         // it fails the "must start with SELECT/WITH" check, not the token ban.
         assert!(ensure_read_only("REPLACE INTO t VALUES (1)").is_err());
+    }
+
+    #[test]
+    fn read_only_guard_treats_quoted_human_labels_as_data() {
+        assert!(ensure_read_only(
+            "SELECT SUM(amount) FROM transactions WHERE description LIKE '%current export%'"
+        )
+        .is_ok());
+        assert!(ensure_read_only(
+            "SELECT * FROM transactions WHERE note = 'drop table later; keep this row'"
+        )
+        .is_ok());
     }
 }

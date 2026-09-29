@@ -177,18 +177,36 @@ impl Registry {
             .collect()
     }
 
-    /// Add the non-executing contract negotiation function for questions the
-    /// risk router marks as elevated. It is intentionally opt-in so the common
-    /// lookup path keeps the smallest possible tool surface.
+    /// Add the non-executing semantic-hypothesis function. It is available to
+    /// the model alongside the fixed read-only tools and never grants access
+    /// to them. A contract may also request one user clarification when
+    /// grounding leaves materially different interpretations alive.
     pub fn schemas_with_contract(&self) -> Vec<ToolSchema> {
         let mut schemas = vec![ToolSchema {
             name: CONTRACT_TOOL_NAME.to_string(),
-            description: "State the compact analytical interpretation before using data tools. Do not invent observed values. Put unresolved ambiguity in `unresolved`; this function does not access the workspace and does not count as evidence."
+            description: "Optionally state or revise a compact analytical hypothesis after considering the question and workspace evidence. This is not required before inspecting or directly analyzing data. Do not invent observed values. If a material ambiguity remains after reasonable inspection, include one focused `clarification`; otherwise record a supported assumption. This function does not access the workspace and does not count as evidence."
                 .to_string(),
             parameters: contract_schema(),
         }];
         schemas.extend(self.schemas());
         schemas
+    }
+
+    /// While a user choice is pending, let the model continue investigating
+    /// local evidence but withhold tools that compute or present an answer.
+    /// A later contract call can resolve the ambiguity from observations, or
+    /// the model can return the clarification to the user.
+    pub fn schemas_for_investigation(&self) -> Vec<ToolSchema> {
+        self.schemas_with_contract()
+            .into_iter()
+            .filter(|schema| {
+                schema.name == CONTRACT_TOOL_NAME
+                    || matches!(
+                        schema.name.as_str(),
+                        "list_files" | "inspect_table" | "grep_files" | "read_file"
+                    )
+            })
+            .collect()
     }
 
     pub fn capability_notice(&self) -> Option<String> {
@@ -205,7 +223,23 @@ fn contract_schema() -> Json {
                 "enum": ["assumed", "ambiguous", "unsupported"]
             },
             "subject": { "type": "string" },
+            "population": {
+                "type": "string",
+                "description": "Plain-language description of which rows count, before physical filters are resolved."
+            },
             "grain": { "type": "string" },
+            "value_semantics": {
+                "type": "string",
+                "description": "How the measure's values should be interpreted, including sign/category meaning when relevant."
+            },
+            "missing_policy": {
+                "type": "string",
+                "description": "How missing or unparseable values should be handled."
+            },
+            "denominator": {
+                "type": "string",
+                "description": "What population the percentage or ratio is relative to."
+            },
             "measures": {
                 "type": "array",
                 "items": {
@@ -231,9 +265,20 @@ fn contract_schema() -> Json {
                             "type": "boolean",
                             "description": "Exclude the observed candidate values instead of including them."
                         },
-                        "candidate_values": { "type": "array", "items": { "type": "string" } },
-                        "resolved_values": { "type": "array", "items": { "type": "string" } },
-                        "resolution": { "type": "string" }
+                        "candidate_values": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Model-proposed values for the runtime to probe against the mounted workspace. These are hypotheses, not evidence."
+                        },
+                        "resolved_values": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Runtime output only: values observed by a workspace probe. If revising a contract, values here are re-probed and are not trusted."
+                        },
+                        "resolution": {
+                            "type": "string",
+                            "description": "Runtime output only. Do not claim a value is observed; the grounding step determines this."
+                        }
                     },
                     "required": ["concept"],
                     "additionalProperties": false
@@ -323,10 +368,31 @@ fn contract_schema() -> Json {
                 "additionalProperties": false,
                 "description": "Use this typed object for a period comparison. Keep the time field in `time.field`; do not encode comparison meaning in prose."
             },
-            "comparison": { "type": "string" },
             "presentation": { "type": "string" },
             "assumptions": { "type": "array", "items": { "type": "string" } },
-            "unresolved": { "type": "array", "items": { "type": "string" } }
+            "unresolved": { "type": "array", "items": { "type": "string" } },
+            "clarification": {
+                "type": "object",
+                "properties": {
+                    "question": {
+                        "type": "string",
+                        "description": "One concise question the user can answer to choose between materially different interpretations."
+                    },
+                    "options": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "maxItems": 6,
+                        "description": "Optional short, mutually exclusive choices."
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "Optional short explanation of why the choice changes the analysis."
+                    }
+                },
+                "required": ["question"],
+                "additionalProperties": false,
+                "description": "Use only when the data and wording do not safely determine one interpretation. Asking is better than silently reporting a number from the wrong population."
+            }
         },
         "required": ["interpretation", "measures", "filters", "group_by", "assumptions", "unresolved"],
         "additionalProperties": false
@@ -497,9 +563,7 @@ impl Tool for InspectTable {
         "inspect_table"
     }
     fn description(&self) -> &'static str {
-        "Per-column stats for a table (type, null fraction, distinct count, min, max) \
-and its first few rows. One call to see everything about a table. `rows` sets how \
-many sample rows to return (default 5, max 50)."
+        "Inspect a table's columns, types, missingness, distinct counts, ranges, common values for low-cardinality fields, and a small row sample. Use this to discover how the source is labeled before choosing filters or measures. rows sets how many sample rows to return (default 5, max 50)."
     }
     fn parameters(&self) -> Json {
         json!({
@@ -534,8 +598,22 @@ many sample rows to return (default 5, max 50)."
             lines.push(format!("  note: {note}"));
         }
         for c in &cols {
+            let common_values = c
+                .common_values
+                .as_ref()
+                .filter(|values| !values.is_empty())
+                .map(|values| {
+                    let shown = values
+                        .iter()
+                        .take(6)
+                        .map(|value| truncate_chars(value, 48))
+                        .collect::<Vec<_>>()
+                        .join(" | ");
+                    format!("  common values=[{shown}]")
+                })
+                .unwrap_or_default();
             lines.push(format!(
-                "  {}  {}  null={}  distinct={}  min={}  max={}{}",
+                "  {}  {}  null={}  distinct={}  min={}  max={}{}{}",
                 c.name,
                 c.type_,
                 c.null_fraction
@@ -550,6 +628,7 @@ many sample rows to return (default 5, max 50)."
                     .as_deref()
                     .map(|n| format!("  [{n}]"))
                     .unwrap_or_default(),
+                common_values,
             ));
         }
 
@@ -625,10 +704,31 @@ impl Tool for RunSql {
 
 fn sql_output(engine: &EngineState, sql: &str, q: QueryResult) -> ToolOutput {
     let table = table_text(&q, model_table_limit(&q));
-    let warning = text_agg_warning(engine, sql).or_else(|| case_filter_warning(engine, sql));
-    let llm_text = match warning {
-        Some(w) => format!("{w}\n{table}"),
-        None => table,
+    let mut warnings = Vec::new();
+    if let Some(warning) = text_agg_warning(engine, sql) {
+        warnings.push(warning);
+    }
+    if let Some(warning) = case_filter_warning(engine, sql) {
+        warnings.push(warning);
+    }
+    let lower = sql.to_ascii_lowercase();
+    let filtered = lower.contains(" where ")
+        || lower.contains(" where\n")
+        || lower.contains(" having ")
+        || lower.contains("case when ");
+    if filtered
+        && crate::engine::analytics::verify::is_aggregate_sql(sql)
+        && (q.rows.is_empty()
+            || (q.rows.len() == 1 && q.rows[0].iter().all(|value| value.is_null())))
+    {
+        warnings.push(
+            "NOTE: this filtered aggregate found no usable result. Check the requested concept, source scope, observed filter values, and missing-value policy before reporting zero.".into(),
+        );
+    }
+    let llm_text = if warnings.is_empty() {
+        table
+    } else {
+        format!("{}\n{table}", warnings.join("\n"))
     };
     ToolOutput {
         summary: format!(

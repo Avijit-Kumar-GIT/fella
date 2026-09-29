@@ -78,6 +78,8 @@ export interface Answer {
 	text: string;
 	evidence: EvidenceItem[];
 	verification: VerificationCheck[];
+	/** One user-facing semantic choice that must be answered before computing. */
+	clarification?: ClarificationRequest;
 	/** Optional for archived answers written before typed verification status. */
 	status?: VerificationStatus;
 	workspace?: { path: string; revision: string };
@@ -86,6 +88,12 @@ export interface Answer {
 }
 
 export type InterpretationStatus = 'unresolved' | 'grounded' | 'assumed' | 'ambiguous' | 'unsupported';
+
+export interface ClarificationRequest {
+	question: string;
+	options: string[];
+	reason?: string;
+}
 
 export interface AnalysisContract {
 	interpretation: InterpretationStatus;
@@ -128,6 +136,7 @@ export interface AnalysisContract {
 	presentation?: string;
 	assumptions: string[];
 	unresolved: string[];
+	clarification?: ClarificationRequest;
 }
 
 export type ProbeOutcome = 'resolved' | 'not_observed' | 'ambiguous' | 'unavailable';

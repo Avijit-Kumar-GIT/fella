@@ -11,11 +11,12 @@ use serde_json::Value as Json;
 
 use crate::engine::analytics::data::{quote_ident, quote_str};
 use crate::engine::catalog::{
-    field_name_matches, source_name_exact_matches, source_name_matches, Catalog, ColumnInfo,
-    SourceInfo,
+    field_name_matches, source_has_any_field, source_name_exact_matches, source_name_matches,
+    source_scope, Catalog, ColumnInfo, SourceInfo, SourceScope,
 };
 use crate::engine::runtime::{
-    AnalysisContract, ContextReference, ContractJoin, InterpretationStatus, JoinKind,
+    AnalysisContract, ContextReference, ContractFilter, ContractJoin, InterpretationStatus,
+    JoinKind,
 };
 use crate::engine::state::EngineState;
 
@@ -163,21 +164,7 @@ fn ground_unhinted(engine: &EngineState, mut contract: AnalysisContract) -> Grou
     }
 
     for filter in &mut contract.filters {
-        // `resolved_values` is an output of grounding, not an authority the
-        // model can grant itself. A provider may return it in the contract
-        // payload, but only a bounded probe against this workspace revision
-        // can promote a candidate into an observed value.
-        let proposed_resolved_values = std::mem::take(&mut filter.resolved_values);
-        filter.resolution = None;
-        if filter.candidate_values.is_empty() && !proposed_resolved_values.is_empty() {
-            add_unresolved(
-                &mut report,
-                format!(
-                    "filter {:?} supplied a resolved value without a candidate to verify",
-                    filter.concept
-                ),
-            );
-        }
+        prepare_filter_candidates(filter);
         let requested = filter
             .field
             .as_deref()
@@ -236,7 +223,25 @@ fn ground_unhinted(engine: &EngineState, mut contract: AnalysisContract) -> Grou
                     None
                 };
             }
-            Err(reason) => add_unresolved(&mut report, reason),
+            Err(reason) => {
+                let requested_scope = source_scope(&requested, "", None);
+                let selected_scope =
+                    source_scope(&source.name, &source.path, source.view.as_deref());
+                if requested_scope != SourceScope::Unknown && requested_scope == selected_scope {
+                    filter.resolution = Some("source_scope".into());
+                    report.probes.push(GroundingProbe {
+                        kind: "source_scope".into(),
+                        target: requested,
+                        outcome: ProbeOutcome::Resolved,
+                        detail: format!(
+                            "resolved against the mounted source scope ({}) rather than a row field",
+                            selected_scope.label()
+                        ),
+                    });
+                } else {
+                    add_unresolved(&mut report, reason);
+                }
+            }
         }
     }
 
@@ -391,7 +396,13 @@ fn ground_unhinted(engine: &EngineState, mut contract: AnalysisContract) -> Grou
 fn finish(mut contract: AnalysisContract, mut report: GroundingReport) -> GroundingResult {
     contract.unresolved = report.unresolved.clone();
     if contract.interpretation != InterpretationStatus::Unsupported {
-        contract.interpretation = if contract.unresolved.is_empty() {
+        contract.interpretation = if contract.clarification.is_some() {
+            // A clarification is an explicit user-authority decision. Even if
+            // the physical source and fields are already known, grounding must
+            // not promote the contract to executable while that choice is
+            // pending.
+            InterpretationStatus::Ambiguous
+        } else if contract.unresolved.is_empty() {
             InterpretationStatus::Grounded
         } else {
             InterpretationStatus::Ambiguous
@@ -479,6 +490,7 @@ fn ground_join(
     if contract.subject.is_none() {
         contract.subject = primary.view.clone();
     }
+    let declared_joins = contract.joins.clone();
 
     for measure in &mut contract.measures {
         if measure.field.is_none()
@@ -500,7 +512,7 @@ fn ground_join(
             .as_deref()
             .unwrap_or(&measure.concept)
             .to_string();
-        match resolve_join_field(&scope, &requested) {
+        match resolve_join_field_with_keys(&scope, &declared_joins, &requested) {
             Ok((source, column)) => {
                 measure.field = Some(qualified_field(source, column));
                 report
@@ -512,23 +524,13 @@ fn ground_join(
     }
 
     for filter in &mut contract.filters {
-        let proposed_resolved_values = std::mem::take(&mut filter.resolved_values);
-        filter.resolution = None;
-        if filter.candidate_values.is_empty() && !proposed_resolved_values.is_empty() {
-            add_unresolved(
-                &mut report,
-                format!(
-                    "filter {:?} supplied a resolved value without a candidate to verify",
-                    filter.concept
-                ),
-            );
-        }
+        prepare_filter_candidates(filter);
         let requested = filter
             .field
             .as_deref()
             .unwrap_or(&filter.concept)
             .to_string();
-        match resolve_join_field(&scope, &requested) {
+        match resolve_join_field_with_keys(&scope, &declared_joins, &requested) {
             Ok((source, column)) => {
                 filter.field = Some(qualified_field(source, column));
                 report
@@ -588,7 +590,7 @@ fn ground_join(
 
     if let Some(time) = &mut contract.time {
         if let Some(requested) = time.field.clone() {
-            match resolve_join_field(&scope, &requested) {
+            match resolve_join_field_with_keys(&scope, &declared_joins, &requested) {
                 Ok((source, column)) => {
                     time.field = Some(qualified_field(source, column));
                     report
@@ -602,7 +604,7 @@ fn ground_join(
 
     for group in &mut contract.group_by {
         let requested = group.clone();
-        match resolve_join_field(&scope, &requested) {
+        match resolve_join_field_with_keys(&scope, &declared_joins, &requested) {
             Ok((source, column)) => {
                 *group = qualified_field(source, column);
                 report
@@ -682,14 +684,38 @@ fn ground_join(
                 detail: "resolved to a declared measure".into(),
             });
         } else if measure_matches.is_empty() {
-            match resolve_join_field(&scope, &requested) {
-                Ok((source, column)) => {
-                    order.by = qualified_field(source, column);
-                    report
-                        .probes
-                        .push(join_binding_probe("order_by", &requested, source, column));
+            let derived_matches: Vec<_> = contract
+                .derived_metrics
+                .iter()
+                .enumerate()
+                .filter(|(index, derived)| {
+                    normalize(&derived.concept) == normalize(&requested)
+                        || normalize(&format!("derived_{index}")) == normalize(&requested)
+                })
+                .collect();
+            match derived_matches.as_slice() {
+                [(index, _)] => {
+                    order.by = format!("derived_{index}");
+                    report.probes.push(GroundingProbe {
+                        kind: "order_by".into(),
+                        target: requested,
+                        outcome: ProbeOutcome::Resolved,
+                        detail: "resolved to a derived metric".into(),
+                    });
                 }
-                Err(reason) => add_unresolved(&mut report, reason),
+                [_first, ..] => add_unresolved(
+                    &mut report,
+                    format!("order_by {requested:?} matched more than one derived metric"),
+                ),
+                [] => match resolve_join_field_with_keys(&scope, &declared_joins, &requested) {
+                    Ok((source, column)) => {
+                        order.by = qualified_field(source, column);
+                        report
+                            .probes
+                            .push(join_binding_probe("order_by", &requested, source, column));
+                    }
+                    Err(reason) => add_unresolved(&mut report, reason),
+                },
             }
         } else {
             add_unresolved(
@@ -953,7 +979,7 @@ fn resolve_join_field<'a>(
     let (source_hint, field) = requested
         .rsplit_once('.')
         .map_or((None, requested), |(source, field)| (Some(source), field));
-    let candidates: Vec<(&SourceInfo, &ColumnInfo)> = sources
+    let scoped_sources: Vec<&SourceInfo> = sources
         .iter()
         .copied()
         .filter(|source| {
@@ -965,20 +991,74 @@ fn resolve_join_field<'a>(
                         .is_some_and(|view| view.eq_ignore_ascii_case(hint))
             })
         })
+        .collect();
+    let normalized_field = normalize(field);
+    let exact_candidates: Vec<(&SourceInfo, &ColumnInfo)> = scoped_sources
+        .iter()
+        .copied()
         .flat_map(|source| {
             source
                 .columns
                 .as_deref()
                 .unwrap_or_default()
                 .iter()
-                .filter(move |column| field_name_matches(&column.name, field))
+                .filter(|column| normalize(&column.name) == normalized_field)
                 .map(move |column| (source, column))
         })
         .collect();
+    let candidates: Vec<(&SourceInfo, &ColumnInfo)> = if exact_candidates.is_empty() {
+        scoped_sources
+            .into_iter()
+            .flat_map(|source| {
+                source
+                    .columns
+                    .as_deref()
+                    .unwrap_or_default()
+                    .iter()
+                    .filter(move |column| field_name_matches(&column.name, field))
+                    .map(move |column| (source, column))
+            })
+            .collect()
+    } else {
+        exact_candidates
+    };
     match candidates.as_slice() {
         [(source, column)] => Ok((*source, *column)),
         [] => Err(format!("could not resolve joined field {requested:?}")),
         _ => Err(format!("joined field {requested:?} is ambiguous")),
+    }
+}
+
+fn resolve_join_field_with_keys<'a>(
+    sources: &[&'a SourceInfo],
+    joins: &[ContractJoin],
+    requested: &str,
+) -> Result<(&'a SourceInfo, &'a ColumnInfo), String> {
+    match resolve_join_field(sources, requested) {
+        Ok(resolved) => Ok(resolved),
+        Err(reason) if reason.contains("ambiguous") && !requested.contains('.') => {
+            let wanted = normalize(requested);
+            for join in joins {
+                for (source_name, field) in [
+                    (&join.left_source, &join.left_field),
+                    (&join.right_source, &join.right_field),
+                ] {
+                    if normalize(field) != wanted {
+                        continue;
+                    }
+                    let Some(source) = find_source(sources, source_name) else {
+                        continue;
+                    };
+                    if let Ok(column) = resolve_field(source, field) {
+                        // A bare shared key is safe to bind only because this
+                        // contract declared the relationship explicitly.
+                        return Ok((source, column));
+                    }
+                }
+            }
+            Err(reason)
+        }
+        Err(reason) => Err(reason),
     }
 }
 
@@ -1026,6 +1106,8 @@ fn select_source(
         .cloned()
         .collect();
 
+    let requested = requested_fields(contract);
+
     if let Some(subject) = contract.subject.as_deref() {
         let subject = subject.trim();
         let exact_matches: Vec<SourceInfo> = queryable
@@ -1035,21 +1117,54 @@ fn select_source(
             })
             .cloned()
             .collect();
-        let matches = if exact_matches.is_empty() {
-            queryable
-                .into_iter()
-                .filter(|source| source_name_matches(&source.name, source.view.as_deref(), subject))
-                .collect()
-        } else {
-            exact_matches
-        };
-        return match matches.len() {
+        if !exact_matches.is_empty() {
+            return match exact_matches.len() {
+                1 => Ok(exact_matches.into_iter().next()),
+                _ => Err(format!("source {subject:?} matched more than one table")),
+            };
+        }
+
+        // A descriptive subject is not a source authority. Prefer the source
+        // whose physical fields support the contract; this handles phrases
+        // such as "reading list" -> books.rating and prevents "rent" from
+        // winning merely because a table happens to be named rent_ledger.
+        let field_matches: Vec<SourceInfo> = queryable
+            .iter()
+            .filter(|source| source_has_any_field(source, &requested))
+            .cloned()
+            .collect();
+        if !field_matches.is_empty() {
+            return match field_matches.len() {
+                1 => Ok(field_matches.into_iter().next()),
+                _ => Err(
+                    "the requested fields occur in more than one table; specify the source".into(),
+                ),
+            };
+        }
+
+        let fuzzy_matches: Vec<SourceInfo> = queryable
+            .into_iter()
+            .filter(|source| source_name_matches(&source.name, source.view.as_deref(), subject))
+            .collect();
+        return match fuzzy_matches.len() {
             0 => Err(format!("could not find queryable source {subject:?}")),
-            1 => Ok(matches.into_iter().next()),
+            1 => Ok(fuzzy_matches.into_iter().next()),
             _ => Err(format!("source {subject:?} matched more than one table")),
         };
     }
 
+    let matches: Vec<SourceInfo> = queryable
+        .into_iter()
+        .filter(|source| source_has_any_field(source, &requested))
+        .collect();
+    match matches.len() {
+        1 => Ok(matches.into_iter().next()),
+        0 => Ok(None),
+        _ => Err("the requested fields occur in more than one table; specify the source".into()),
+    }
+}
+
+fn requested_fields(contract: &AnalysisContract) -> Vec<String> {
     let mut requested: Vec<String> = contract
         .measures
         .iter()
@@ -1107,32 +1222,24 @@ fn select_source(
             }
         }
     }
-    let matches: Vec<SourceInfo> = queryable
-        .into_iter()
-        .filter(|source| {
-            requested.iter().any(|name| {
-                source
-                    .columns
-                    .as_deref()
-                    .unwrap_or_default()
-                    .iter()
-                    .any(|column| field_name_matches(&column.name, name))
-            })
-        })
-        .collect();
-    match matches.len() {
-        1 => Ok(matches.into_iter().next()),
-        0 => Ok(None),
-        _ => Err("the requested fields occur in more than one table; specify the source".into()),
-    }
+    requested
 }
 
 fn resolve_field<'a>(source: &'a SourceInfo, requested: &str) -> Result<&'a ColumnInfo, String> {
     let columns = source.columns.as_deref().unwrap_or_default();
-    let matches: Vec<&ColumnInfo> = columns
+    let normalized_requested = normalize(requested);
+    let exact_matches: Vec<&ColumnInfo> = columns
         .iter()
-        .filter(|column| field_name_matches(&column.name, requested))
+        .filter(|column| normalize(&column.name) == normalized_requested)
         .collect();
+    let matches: Vec<&ColumnInfo> = if exact_matches.is_empty() {
+        columns
+            .iter()
+            .filter(|column| field_name_matches(&column.name, requested))
+            .collect()
+    } else {
+        exact_matches
+    };
     match matches.len() {
         1 => Ok(matches[0]),
         0 => Err(format!(
@@ -1143,6 +1250,21 @@ fn resolve_field<'a>(source: &'a SourceInfo, requested: &str) -> Result<&'a Colu
             "field {requested:?} is ambiguous in {}",
             source.name
         )),
+    }
+}
+
+/// Values emitted in `resolved_values` are still model input until a bounded
+/// probe observes them. Treating them as candidate values lets a provider
+/// repair a contract without repeating every hypothesis, while preserving the
+/// trust boundary: only `probe_value` can put a value back into the resolved
+/// output.
+fn prepare_filter_candidates(filter: &mut ContractFilter) {
+    let proposed = std::mem::take(&mut filter.resolved_values);
+    filter.resolution = None;
+    for value in proposed {
+        if !filter.candidate_values.contains(&value) {
+            filter.candidate_values.push(value);
+        }
     }
 }
 

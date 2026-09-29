@@ -1,8 +1,8 @@
-//! Deterministic routing signals for an analytical question.
+//! Deterministic attention signals for an analytical question.
 //!
-//! This is deliberately a risk gate, not a semantic interpreter. The model
-//! still proposes the meaning of a question; the runtime only decides when a
-//! compact contract should be requested before data tools are used.
+//! This is deliberately not a permission gate or semantic interpreter. The
+//! model drives the analysis; these signals only tell the prompt and verifier
+//! where extra care may be useful.
 
 use serde::{Deserialize, Serialize};
 
@@ -17,8 +17,7 @@ pub enum RiskTier {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AnalysisRoute {
-    FastPath,
-    ContractFirst,
+    ModelGuided,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -27,12 +26,6 @@ pub struct RiskAssessment {
     pub route: AnalysisRoute,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub signals: Vec<String>,
-}
-
-impl RiskAssessment {
-    pub fn requires_contract(&self) -> bool {
-        matches!(self.route, AnalysisRoute::ContractFirst)
-    }
 }
 
 pub fn assess(question: &str) -> RiskAssessment {
@@ -127,14 +120,9 @@ pub fn assess(question: &str) -> RiskAssessment {
     } else {
         RiskTier::Low
     };
-    let route = if matches!(tier, RiskTier::Low) {
-        AnalysisRoute::FastPath
-    } else {
-        AnalysisRoute::ContractFirst
-    };
     RiskAssessment {
         tier,
-        route,
+        route: AnalysisRoute::ModelGuided,
         signals,
     }
 }
@@ -156,17 +144,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn obvious_lookups_stay_on_the_fast_path() {
+    fn obvious_lookups_stay_model_guided() {
         let assessment = assess("How many rows are in sales?");
         assert_eq!(assessment.tier, RiskTier::Low);
-        assert!(!assessment.requires_contract());
+        assert_eq!(assessment.route, AnalysisRoute::ModelGuided);
     }
 
     #[test]
-    fn comparisons_and_time_series_get_a_contract() {
+    fn comparisons_and_time_series_raise_attention_signals() {
         let assessment = assess("Compare monthly sales by region over time");
         assert_eq!(assessment.tier, RiskTier::Elevated);
-        assert!(assessment.requires_contract());
+        assert_eq!(assessment.route, AnalysisRoute::ModelGuided);
         assert!(assessment.signals.contains(&"comparison".into()));
         assert!(assessment.signals.contains(&"time_series".into()));
     }
@@ -175,16 +163,16 @@ mod tests {
     fn causal_and_predictive_questions_are_high_risk() {
         let assessment = assess("Why did sales decline and can we forecast next month?");
         assert_eq!(assessment.tier, RiskTier::High);
-        assert!(assessment.requires_contract());
+        assert_eq!(assessment.route, AnalysisRoute::ModelGuided);
         assert!(assessment.signals.contains(&"explanation".into()));
         assert!(assessment.signals.contains(&"forecast".into()));
     }
 
     #[test]
-    fn signed_financial_questions_use_the_contract_path() {
+    fn signed_financial_questions_raise_attention_signals() {
         let assessment = assess("What was net spending, excluding income and including refunds?");
         assert_eq!(assessment.tier, RiskTier::Elevated);
-        assert!(assessment.requires_contract());
+        assert_eq!(assessment.route, AnalysisRoute::ModelGuided);
         assert!(assessment.signals.contains(&"signed_values".into()));
     }
 }

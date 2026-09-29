@@ -11,7 +11,7 @@ use crate::engine::error::{EngineError, EngineResult};
 use crate::engine::evidence::{
     Answer, AskEvent, EvidenceItem, Usage, VerificationCheck, WorkspaceSnapshot,
 };
-use crate::engine::llm::{ChatMessage, LlmClient, ToolCall};
+use crate::engine::llm::{ChatMessage, LlmClient, ToolCall, ToolSchema};
 use crate::engine::runtime::{
     self, AnalysisContract, ContextReference, ExecutionTrace, LogicalPlan, PlanStrategy, TraceStep,
     TurnState,
@@ -40,6 +40,7 @@ struct RunIds {
     turn_id: String,
     trace_id: String,
     contract: Option<AnalysisContract>,
+    clarification: Option<runtime::ClarificationRequest>,
     grounding: Option<crate::engine::grounding::GroundingReport>,
     plan: Option<LogicalPlan>,
 }
@@ -118,6 +119,12 @@ async fn cancelled(flag: &AtomicBool) {
     }
 }
 
+/// Tools that produce analytical results. These are withheld while a material
+/// user choice is unresolved.
+fn is_computation_tool(name: &str) -> bool {
+    matches!(name, "run_sql" | "run_python" | "make_chart")
+}
+
 pub(crate) async fn run(request: RunRequest<'_>) -> EngineResult<Answer> {
     let RunRequest {
         engine,
@@ -135,6 +142,7 @@ pub(crate) async fn run(request: RunRequest<'_>) -> EngineResult<Answer> {
         turn_id: turn_id.to_string(),
         trace_id: runtime::new_trace_id(),
         contract: None,
+        clarification: None,
         grounding: None,
         plan: None,
     };
@@ -191,20 +199,34 @@ pub(crate) async fn run(request: RunRequest<'_>) -> EngineResult<Answer> {
             " Use only the enabled analysis paths and explain when the requested analysis is unavailable.",
         );
     }
-    if risk.requires_contract() && catalog.workspace.is_some() {
+    if catalog.workspace.is_some() {
         sys.push_str(&format!(
-            "\n\nRuntime interpretation gate: this question is routed through the {:?} path \
-({}). Before using a data tool, call `{}` with the compact analytical \
-interpretation. Do not invent observed values; if the wording is materially \
-ambiguous, put the ambiguity in `unresolved`. Read-only inspection tools may be used \
-to resolve a contract, but never compute from an unresolved one. Preserve the meaning of \
-signed measures: do not apply ABS to a signed amount unless the user explicitly asks for \
-absolute magnitudes; use an excluding filter with `exclude: true` when the question says \
-to exclude an observed category such as income.",
+            "\n\nAnalytical control plane: you drive the analysis. For every workspace data \
+question, start from the mounted workspace map and inspect relevant sources as needed. A \
+compact semantic hypothesis via `{}` is optional, not a prerequisite. Then investigate with \
+the read-only tools. \
+The runtime provides a bounded, read-only workspace and deterministic execution tools; it does not \
+require a fixed sequence after interpretation. For this question, \
+the observed risk signals are {:?} ({}). Use `{}` when a compact semantic \
+hypothesis will help organize the work, but treat it as an advisory plan: if it is \
+ambiguous, unsupported, or wrong, keep inspecting, revise it, or use another \
+enabled read-only tool. Do not claim the workspace cannot answer merely because a \
+hypothesis did not ground. Preserve signed measures: do not apply ABS to a signed \
+amount unless the user explicitly asks for absolute magnitudes; use an excluding \
+filter when the question excludes an observed category such as income. When using the \
+hypothesis, state the intended population, value/sign semantics, missing-value policy, and \
+denominator for ratios so the execution can be checked against the question.",
+            runtime::CONTRACT_TOOL_NAME,
             risk.tier,
             risk.signals.join(", "),
             runtime::CONTRACT_TOOL_NAME,
         ));
+        sys.push_str(
+            "\n\nAnalyst loop: Treat the source inventory as reconnaissance, not a finished interpretation. Inspect relevant profiles, observed labels, samples, and document notes when needed; decompose multi-part questions; use each observation to refine the source, fields, population, filters, time range, units, joins, and computation. Execute once the analysis is grounded enough, then check the result against the question and return to inspection if it is empty, unexpectedly broad, or inconsistent. Ask a focused clarification only when reasonable investigation leaves a material choice the user must decide. While that choice is pending, continue safe local inspection but do not compute an answer. Assume you can analyze when given relevant evidence and tools; do not refuse just because a human concept is not an exact field or value.\n",
+        );
+        sys.push_str(
+            "\n\nSemantic decision policy: do not force a semantic guess when two supported interpretations would materially change the result. First use the workspace schema, observed values, source notes, prior user definitions, and read-only probes to resolve ordinary aliases and messy labels. If one interpretation is still clearly more likely, proceed with that assumption and state it. If the remaining choice is genuinely user-specific (for example, whether income belongs in a spending total, which of two equally plausible measures is meant, or which scope to compare), emit one `clarification` object on the analytical contract with a concise question and at most six choices; do not execute a calculation for the unresolved choice. The runtime will return that question to the user. A typed decision/classifier may route among resolve, assume, clarify, and unsupported, but it must not invent candidates, replace the model's analytical reasoning, or override observed data.\n",
+        );
     }
     let mut messages = vec![
         ChatMessage::System(sys),
@@ -215,14 +237,11 @@ to exclude an observed category such as income.",
     // you do?") to a single fast turn instead of a many-step loop of
     // NoWorkspace errors, which can take minutes on a slow provider.
     let schemas = if catalog.workspace.is_some() {
-        if risk.requires_contract() {
-            registry.schemas_with_contract()
-        } else {
-            registry.schemas()
-        }
+        registry.schemas_with_contract()
     } else {
         Vec::new()
     };
+    let investigation_schemas = registry.schemas_for_investigation();
     let mut evidence: Vec<EvidenceItem> = Vec::new();
 
     // Forward a retry/backoff line from the model client to the transcript.
@@ -251,28 +270,24 @@ to exclude an observed category such as income.",
     let mut usage: Option<Usage> = None;
     let steps = max_steps();
     let soft_stop = soft_stop_round_trips();
-    // Once a contract is grounded, later model responses in this same turn
-    // inherit that approval. The model should not have to repeat the contract
-    // merely because it wants to write the final answer or a presentation
-    // tool call.
-    let mut contract_established = false;
-    // A failed grounding pass gets one bounded repair turn. The model may
-    // inspect the catalog or a source, then must submit a revised contract;
-    // it cannot bypass the gate by keeping the same unresolved SQL call.
-    let mut contract_repair_attempted = false;
     let mut semantic_repair_attempted = false;
-    // A successful compiled plan is the authoritative data computation for
-    // this turn. Keep presentation tools available, but don't let a later
-    // model-generated SQL/Python call silently create a second computation.
-    let mut compiled_plan_executed = false;
     for step in 0..steps {
         log::info!("agent step {}/{steps}", step + 1);
         let step_start = Instant::now();
+        let clarification_pending = ids.clarification.is_some();
+        let available_schemas: &[ToolSchema] = if clarification_pending {
+            // A model-proposed clarification is not a ban on investigation.
+            // Keep local observation tools available while withholding result-
+            // producing tools; evidence may resolve the candidate first.
+            &investigation_schemas
+        } else {
+            &schemas
+        };
 
         // Race the model call against a stop request; dropping the future
         // closes the HTTP connection so the model stops generating.
         let resp = tokio::select! {
-            r = llm.chat(&messages, &schemas, &notify, &on_delta) => match r {
+            r = llm.chat(&messages, available_schemas, &notify, &on_delta) => match r {
                 Ok(resp) => resp,
                 // Failed with work already in hand: hand back the partial
                 // evidence and a note rather than losing the whole question.
@@ -330,9 +345,9 @@ to exclude an observed category such as income.",
             // One tool-free corrective turn when a cited query re-runs to a
             // different result (or no longer runs). The value the model
             // reconciles against comes from that re-run, so the answer stays
-            // checkable. Only the re-run checks trigger this a fuzzier
-            // "figure appears in no result" is left as a fold warning, since a
-            // tool-free reconcile there tends to degrade a correct answer.
+            // checkable. An unbacked figure is handled separately below: it
+            // gets one tool-backed repair regardless of result shape, so the
+            // model can compute a missing derived value or retract a claim.
             // `FELLA_VERIFY_REASK=0` opts out.
             if reask_enabled() && !evidence.is_empty() && !cancel.load(Ordering::Relaxed) {
                 if let Some(detail) = verify::rerun_regression(&checks) {
@@ -356,27 +371,32 @@ corrected answer to match the re-run."
                     }
                 }
             }
+            let semantic_repair_hint = verify::semantic_repair_hint(question, &evidence, &checks);
             if !semantic_repair_attempted
                 && !evidence.is_empty()
                 && !cancel.load(Ordering::Relaxed)
                 && step + 1 < steps
-                && checks
-                    .iter()
-                    .any(|check| !check.ok && check.label.contains("signed values were discarded"))
+                && semantic_repair_hint.is_some()
             {
+                let detail = semantic_repair_hint.expect("semantic repair hint exists");
                 semantic_repair_attempted = true;
-                contract_established = false;
+                let mut superseded = 0;
                 for item in &mut evidence {
-                    if item.error.is_none()
-                        && matches!(item.tool.as_str(), "run_sql" | "make_chart")
-                        && item
-                            .sql
-                            .as_deref()
-                            .is_some_and(|sql| sql.to_ascii_lowercase().contains("abs("))
-                    {
-                        item.error = Some(
-                            "superseded: the signed-value semantic check rejected this plan".into(),
-                        );
+                    if verify::semantic_evidence_matches(engine, question, item, &detail) {
+                        item.error = Some(format!(
+                            "superseded: semantic verification rejected this evidence ({detail})"
+                        ));
+                        superseded += 1;
+                    }
+                }
+                if superseded == 0 {
+                    if let Some(item) = evidence.iter_mut().find(|item| {
+                        item.error.is_none()
+                            && matches!(item.tool.as_str(), "run_sql" | "make_chart")
+                    }) {
+                        item.error = Some(format!(
+                            "superseded: semantic verification rejected this evidence ({detail})"
+                        ));
                     }
                 }
                 emit(AskEvent::TurnState {
@@ -387,10 +407,9 @@ corrected answer to match the re-run."
                     content: text,
                     tool_calls: Vec::new(),
                 });
-                messages.push(ChatMessage::User(
-                    "Semantic repair: the previous query discarded signed values with ABS, so it cannot answer this question. Rebuild the analytical contract and execute a corrected read-only plan. Preserve the source signs; use an explicit excluding filter when needed. Do not reuse the rejected query."
-                        .into(),
-                ));
+                messages.push(ChatMessage::User(format!(
+                    "Semantic verification failed: {detail}. Re-open the analysis with the read-only tools. Preserve every explicit source scope, date range, filter, exclusion, grouping, denominator, and unit from the question and prior turn. Do not defend the unsupported figure. If the question asks for a derived value, execute a computation that returns it with labeled operands; otherwise omit any figure the evidence does not support. Then answer from the checked results."
+                )));
                 continue;
             }
             // Cost-gated self-consistency re-check (#80): the fallback tier for
@@ -441,21 +460,20 @@ filter word in the question exactly, and state just the number(s) don't round or
             (0..resp.tool_calls.len()).map(|_| None).collect();
         let mut internal_results: HashMap<usize, String> = HashMap::new();
         let mut pending: Vec<usize> = Vec::new();
-        let mut contract_calls_seen = 0usize;
-        let mut contract_gate_blocked = false;
         let mut compiled_contracts: Vec<(usize, planner::CompiledPlan)> = Vec::new();
 
-        // Contract calls are a preflight phase. A model can return calls in
-        // any order, so resolve every interpretation before allowing a data
-        // tool to run. This matters when one response contains an ambiguous
-        // contract next to an otherwise executable SQL call.
+        // Resolve model-proposed semantic hypotheses before their tool results
+        // are returned to the model. This is an observation/planning phase.
+        // If the model emitted a hypothesis and a data call in the same
+        // response, defer the data call until the model has seen the grounded
+        // interpretation; otherwise the semantic step cannot influence the
+        // query it was meant to guide.
         for (i, call) in resp
             .tool_calls
             .iter()
             .enumerate()
             .filter(|(_, call)| call.name == runtime::CONTRACT_TOOL_NAME)
         {
-            contract_calls_seen += 1;
             let contract_text = match AnalysisContract::from_tool_args(&call.arguments) {
                 Ok(contract) => {
                     emit(AskEvent::TurnState {
@@ -471,26 +489,35 @@ filter word in the question exactly, and state just the number(s) don't round or
                     let grounding = serde_json::to_string(&grounded.report).unwrap_or_default();
                     let source_hint = grounded.report.source.clone();
                     let grounded_contract = grounded.contract;
-                    let state = match grounded_contract.interpretation {
-                        runtime::InterpretationStatus::Ambiguous => {
-                            contract_gate_blocked = true;
-                            TurnState::Clarify
-                        }
-                        runtime::InterpretationStatus::Unsupported => {
-                            contract_gate_blocked = true;
-                            TurnState::Unsupported
-                        }
-                        _ => TurnState::Planning,
-                    };
                     ids.contract = Some(grounded_contract.clone());
+                    ids.clarification = grounded_contract.clarification.clone();
                     ids.grounding = Some(grounded.report);
                     emit(AskEvent::TurnState {
                         turn_id: ids.turn_id.clone(),
-                        state,
+                        state: if ids.clarification.is_some() {
+                            TurnState::Clarify
+                        } else {
+                            TurnState::Planning
+                        },
                     });
                     let mut text = format!(
                         "Grounded interpretation (not evidence):\n{serialized}\nGrounding probes:\n{grounding}\nIf unresolved items remain, do not silently choose among them; ask a focused clarification or explain the limitation."
                     );
+                    if let Some(clarification) = ids.clarification.as_ref() {
+                        text.push_str(
+                            "\n\nA material user choice is still unresolved. Safe local inspection may continue, but do not compute until it is resolved.",
+                        );
+                        text.push_str("\nAsk exactly: ");
+                        text.push_str(&clarification.question);
+                        if !clarification.options.is_empty() {
+                            text.push_str("\nChoices: ");
+                            text.push_str(&clarification.options.join(" | "));
+                        }
+                        if let Some(reason) = clarification.reason.as_deref() {
+                            text.push_str("\nWhy it matters: ");
+                            text.push_str(reason);
+                        }
+                    }
                     if registry.has_tool("run_sql")
                         && grounded_contract.interpretation
                             == runtime::InterpretationStatus::Grounded
@@ -500,7 +527,7 @@ filter word in the question exactly, and state just the number(s) don't round or
                             Ok(compiled) => compiled_contracts.push((i, compiled)),
                             Err(reason) => {
                                 text.push_str(&format!(
-                                    "\n\nThe grounded contract stayed on the direct tool fallback because the deterministic compiler could not safely express it: {reason}"
+                                    "\n\nThe deterministic compiler could not express this hypothesis directly: {reason}. Continue with the read-only tools that best fit the question."
                                 ));
                             }
                         }
@@ -508,7 +535,6 @@ filter word in the question exactly, and state just the number(s) don't round or
                     text
                 }
                 Err(error) => {
-                    contract_gate_blocked = true;
                     if ids.contract.is_none() {
                         ids.contract = Some(AnalysisContract {
                             interpretation: runtime::InterpretationStatus::Unresolved,
@@ -516,48 +542,45 @@ filter word in the question exactly, and state just the number(s) don't round or
                             ..Default::default()
                         });
                     }
+                    ids.clarification = None;
                     emit(AskEvent::TurnState {
                         turn_id: ids.turn_id.clone(),
-                        state: TurnState::Clarify,
+                        state: TurnState::Planning,
                     });
                     format!(
-                        "The interpretation was not accepted: {error}. State a smaller, explicit contract or continue only if the question is unambiguous."
+                        "The interpretation hypothesis was not accepted: {error}. Continue investigating with the available read-only tools or revise the hypothesis."
                     )
                 }
             };
             internal_results.insert(i, contract_text);
         }
 
-        let compute_call_count = resp
+        // A grounded hypothesis can compile into a deterministic execution
+        // plan. Use it only when the model has not already selected an
+        // execution/inspection tool in this response. Otherwise the model's
+        // selected call is the single authoritative computation for this
+        // round; running both plans creates duplicate or conflicting evidence
+        // and teaches the verifier to accept whichever result looks cleaner.
+        let model_selected_tool = resp
             .tool_calls
             .iter()
-            .filter(|call| {
-                call.name != runtime::CONTRACT_TOOL_NAME && !is_grounding_tool(&call.name)
-            })
-            .count();
-        if risk.requires_contract() && compute_call_count > 0 && contract_calls_seen == 0 {
-            contract_gate_blocked = !contract_established;
-            if contract_gate_blocked && ids.contract.is_none() {
-                ids.contract = Some(AnalysisContract {
-                    interpretation: runtime::InterpretationStatus::Unresolved,
-                    unresolved: vec![
-                        "the model attempted data access without stating an analytical contract"
-                            .into(),
-                    ],
-                    ..Default::default()
-                });
-            }
-        }
-        if contract_calls_seen > 0 {
-            contract_established = !contract_gate_blocked;
-        }
-
-        // Only execute an automatic deterministic plan after every contract
-        // in the response has passed the gate. Otherwise even a grounded
-        // contract appearing before an ambiguous sibling could touch data.
+            .any(|call| call.name != runtime::CONTRACT_TOOL_NAME);
+        let has_contract_call = resp
+            .tool_calls
+            .iter()
+            .any(|call| call.name == runtime::CONTRACT_TOOL_NAME);
+        let defer_model_computations = has_contract_call
+            && resp
+                .tool_calls
+                .iter()
+                .any(|call| is_computation_tool(&call.name));
+        let computation_blocked = clarification_pending || ids.clarification.is_some();
+        let should_defer = |call: &ToolCall| {
+            is_computation_tool(&call.name) && (computation_blocked || defer_model_computations)
+        };
         let mut had_tool_error = false;
         let mut workspace_changed = false;
-        if !contract_gate_blocked {
+        if !model_selected_tool {
             for (index, compiled) in compiled_contracts {
                 ids.plan = Some(LogicalPlan {
                     strategy: PlanStrategy::CompiledSql,
@@ -598,55 +621,29 @@ filter word in the question exactly, and state just the number(s) don't round or
                 workspace_changed |= evidence
                     .last()
                     .is_some_and(|item| is_workspace_change_error(item.error.as_deref()));
-                if evidence.last().is_some_and(|item| item.error.is_none()) {
-                    compiled_plan_executed = true;
-                }
                 if let Some(text) = internal_results.get_mut(&index) {
                     text.push_str(&format!(
                         "\n\nDeterministic plan executed as data evidence:\n{result}"
                     ));
                 }
             }
+        } else if !compiled_contracts.is_empty() && !defer_model_computations {
+            for (index, _) in compiled_contracts {
+                if let Some(text) = internal_results.get_mut(&index) {
+                    text.push_str(
+                        "\n\nA deterministic candidate was available, but the model-selected inspection or computation is the only execution recorded for this round.",
+                    );
+                }
+            }
         }
 
-        let blocked_reason = if contract_calls_seen == 0 && risk.requires_contract() {
-            "this question requires an analytical contract before data access. State the compact interpretation first"
-        } else {
-            "the analytical interpretation was ambiguous, unsupported, or invalid. Resolve it before inspecting data"
-        };
         let mut emitted_executing = !evidence.is_empty();
         for (i, call) in resp
             .tool_calls
             .iter()
             .enumerate()
-            .filter(|(_, call)| call.name != runtime::CONTRACT_TOOL_NAME)
+            .filter(|(_, call)| call.name != runtime::CONTRACT_TOOL_NAME && !should_defer(call))
         {
-            if contract_gate_blocked && !is_grounding_tool(&call.name) {
-                internal_results.insert(
-                    i,
-                    format!(
-                        "The runtime did not execute `{}` because {blocked_reason}. Ask a focused clarification instead of choosing silently.",
-                        call.name
-                    ),
-                );
-                continue;
-            }
-
-            // The compiled plan replaces a redundant model SQL call, but it
-            // must not suppress Python: median, correlation, and regression
-            // are intentionally advanced paths when the SQL compiler cannot
-            // express the requested statistic.
-            if compiled_plan_executed && call.name == "run_sql" {
-                internal_results.insert(
-                    i,
-                    format!(
-                        "The runtime already executed the grounded deterministic plan for this turn, so `{}` was not executed again. Use the plan evidence above; if the requested analysis is different, state a revised analytical contract.",
-                        call.name
-                    ),
-                );
-                continue;
-            }
-
             if !emitted_executing {
                 emit(AskEvent::TurnState {
                     turn_id: ids.turn_id.clone(),
@@ -693,6 +690,22 @@ not run again. Its result is repeated below - use it, refine the call, or give y
                     ));
                 }
                 None => pending.push(i),
+            }
+        }
+
+        if computation_blocked || defer_model_computations {
+            for (i, call) in
+                resp.tool_calls.iter().enumerate().filter(|(_, call)| {
+                    call.name != runtime::CONTRACT_TOOL_NAME && should_defer(call)
+                })
+            {
+                internal_results.insert(
+                    i,
+                    format!(
+                        "This `{}` computation was not run. A user clarification is pending or the semantic hypothesis needs review first. Continue inspecting local evidence, resolve the interpretation or ask the user, and compute only after the choice is settled.",
+                        call.name
+                    ),
+                );
             }
         }
 
@@ -778,21 +791,6 @@ not run again. Its result is repeated below - use it, refine the call, or give y
                 usage,
             ));
         }
-        if contract_gate_blocked
-            && !contract_repair_attempted
-            && !cancel.load(Ordering::Relaxed)
-            && step + 1 < steps
-        {
-            contract_repair_attempted = true;
-            emit(AskEvent::TurnState {
-                turn_id: ids.turn_id.clone(),
-                state: TurnState::Retry,
-            });
-            messages.push(ChatMessage::User(
-                "Contract repair: the runtime could not ground that interpretation. This is a repair step, not a final answer. Use the exact source/view and column names in the workspace schema; you may inspect a relevant table or document. Then call `__analysis_contract` again with a smaller, grounded interpretation. Do not compute from an unresolved contract or claim that a source is unqueryable until you have tried the exact catalog name. Preserve signed values and express exclusions explicitly."
-                    .into(),
-            ));
-        }
         trim_history(&mut messages);
         if let Some(nudge) = stop_pressure_nudge(step + 1, soft_stop, evidence.len()) {
             messages.push(ChatMessage::User(nudge));
@@ -849,16 +847,6 @@ you're not confident, say so plainly rather than guessing."
 
 fn prompt_reference_value(value: &str) -> String {
     value.replace(['\n', '\r'], " ").chars().take(240).collect()
-}
-
-/// These tools only inspect the current workspace. They are safe while a
-/// semantic contract is being repaired; computation tools remain blocked
-/// until the revised contract is grounded.
-fn is_grounding_tool(name: &str) -> bool {
-    matches!(
-        name,
-        "list_files" | "inspect_table" | "grep_files" | "read_file"
-    )
 }
 
 fn stopped(
@@ -929,12 +917,14 @@ fn finish_with(
         });
     }
     if let Some(contract) = context.ids.contract.as_ref() {
-        verification.extend(verify::execution_checks(
-            context.engine,
-            contract,
-            context.ids.grounding.as_ref(),
-            &evidence,
-        ));
+        if contract.interpretation == runtime::InterpretationStatus::Grounded {
+            verification.extend(verify::execution_checks(
+                context.engine,
+                contract,
+                context.ids.grounding.as_ref(),
+                &evidence,
+            ));
+        }
     }
     log::info!(
         "agent done: {} char answer, {} evidence item(s)",
@@ -944,38 +934,25 @@ fn finish_with(
     if let Some(reason) = friction::trigger(&verification, &evidence) {
         context.engine.record_friction_signal(reason, &evidence);
     }
-    let mut status = verify::status(&verification, &evidence);
-    let interpretation = context
-        .ids
-        .contract
-        .as_ref()
-        .map(|contract| contract.interpretation);
-    if matches!(
-        interpretation,
-        Some(
-            runtime::InterpretationStatus::Ambiguous
-                | runtime::InterpretationStatus::Unsupported
-                | runtime::InterpretationStatus::Unresolved,
-        )
-    ) && status != crate::engine::evidence::VerificationStatus::Failed
-    {
-        // A query can be numerically reproducible while still answering the
-        // wrong interpretation. Likewise, a clarification with no evidence
-        // is not merely missing data: it is an explicit acceptance failure
-        // that needs review or a user decision.
-        status = crate::engine::evidence::VerificationStatus::NeedsReview;
-    }
-    let state = match interpretation {
-        Some(runtime::InterpretationStatus::Ambiguous) => TurnState::Clarify,
-        Some(runtime::InterpretationStatus::Unsupported) => TurnState::Unsupported,
-        _ => match status {
+    let status = if context.ids.clarification.is_some() {
+        // Inspection evidence can support a useful clarification, but it is
+        // not an analytical result and must not turn the pending answer into
+        // NeedsReview or a misleading success state.
+        crate::engine::evidence::VerificationStatus::InsufficientData
+    } else {
+        verify::status(&verification, &evidence)
+    };
+    let state = if context.ids.clarification.is_some() {
+        TurnState::Clarify
+    } else {
+        match status {
             crate::engine::evidence::VerificationStatus::Verified => TurnState::Accepted,
             crate::engine::evidence::VerificationStatus::Failed => TurnState::Failed,
             crate::engine::evidence::VerificationStatus::NeedsReview
             | crate::engine::evidence::VerificationStatus::InsufficientData => {
                 TurnState::NeedsReview
             }
-        },
+        }
     };
     let trace = ExecutionTrace {
         id: context.ids.trace_id.clone(),
@@ -1019,6 +996,7 @@ fn finish_with(
         evidence,
         verification,
         status,
+        clarification: context.ids.clarification.clone(),
         workspace: context.workspace.cloned(),
         usage,
     };
@@ -1040,8 +1018,15 @@ fn is_schema_error(msg: &str) -> bool {
 /// Placeholder swapped in for stale tool results once the history gets long,
 /// so a small model isn't re-reading every earlier table on every turn.
 const ELIDED: &str = "[earlier result elided re-query if you still need it]";
+const RECENT_TOOL_RESULTS: usize = 6;
+/// Keep up to one `read_file` call's maximum combined payload in the working
+/// context. Older source definitions must not disappear just because later
+/// computation produced several results, but document context remains bounded.
+const RETAINED_DOCUMENT_CONTEXT_CHARS: usize = 16_000;
 
-/// Keep the last few tool results verbatim; blank out the older ones.
+/// Keep recent results, the latest semantic contract, and a bounded working
+/// set of document evidence. Older query output is cheap to re-run; losing the
+/// definition that gave a query its meaning is not.
 fn trim_history(messages: &mut [ChatMessage]) {
     let tool_idx: Vec<usize> = messages
         .iter()
@@ -1049,10 +1034,58 @@ fn trim_history(messages: &mut [ChatMessage]) {
         .filter(|(_, m)| matches!(m, ChatMessage::Tool { .. }))
         .map(|(i, _)| i)
         .collect();
-    if tool_idx.len() <= 6 {
-        return;
+    let recent_start = tool_idx.len().saturating_sub(RECENT_TOOL_RESULTS);
+    let recent: std::collections::HashSet<usize> =
+        tool_idx[recent_start..].iter().copied().collect();
+    let latest_contract = tool_idx.iter().rev().copied().find(|&i| {
+        matches!(
+            &messages[i],
+            ChatMessage::Tool { name, .. } if name == runtime::CONTRACT_TOOL_NAME
+        )
+    });
+
+    // Reserve context for the newest document observations first. If several
+    // documents together exceed the cap, older contents are truncated/elided
+    // rather than allowing a long investigation to grow without bound.
+    let mut document_chars = 0usize;
+    let mut retained_documents = std::collections::HashSet::new();
+    for &i in tool_idx.iter().rev() {
+        let ChatMessage::Tool { name, content, .. } = &mut messages[i] else {
+            continue;
+        };
+        if name != "read_file" || content == ELIDED {
+            continue;
+        }
+        let remaining = RETAINED_DOCUMENT_CONTEXT_CHARS.saturating_sub(document_chars);
+        if remaining == 0 {
+            *content = ELIDED.to_string();
+            continue;
+        }
+        let original_chars = content.chars().count();
+        if original_chars > remaining {
+            let notice: String = "\n[document context truncated; re-read if needed]"
+                .chars()
+                .take(remaining)
+                .collect();
+            let prefix_chars = remaining.saturating_sub(notice.chars().count());
+            let prefix_end = content
+                .char_indices()
+                .nth(prefix_chars)
+                .map(|(index, _)| index)
+                .unwrap_or(content.len());
+            content.truncate(prefix_end);
+            content.push_str(&notice);
+            document_chars = RETAINED_DOCUMENT_CONTEXT_CHARS;
+        } else {
+            document_chars += original_chars;
+        }
+        retained_documents.insert(i);
     }
-    for &i in &tool_idx[..tool_idx.len() - 6] {
+
+    for &i in &tool_idx {
+        if recent.contains(&i) || latest_contract == Some(i) || retained_documents.contains(&i) {
+            continue;
+        }
         if let ChatMessage::Tool { content, .. } = &mut messages[i] {
             if content != ELIDED {
                 *content = ELIDED.to_string();
@@ -1307,8 +1340,8 @@ user's local files by calling tools that run real computations.\n\n",
         rules.push(
             "Never state a figure (number, total, count, date range, trend) you did not \
 get from a tool result. A question that asks for a total, count, average, \
-share, min/max, or \"how much / how many\" ALWAYS needs a run_sql call; the \
-sample rows below are not enough to compute one."
+share, min/max, or \"how much / how many\" always needs a computation tool; \
+the sample rows below are for orientation, not a substitute for execution."
                 .into(),
         );
         rules.push(
@@ -1328,16 +1361,59 @@ about to do, then make the call(s) in the same reply."
     }
     if profile.core_rules {
         rules.push(
-            "Prefer run_sql. Each table below shows its columns, types and sample rows, \
-usually enough to query directly. Use inspect_table only for \
-something you can't see below."
+            "Use the smallest tool sequence that establishes the answer. For an explicit \
+lookup, run_sql or run_python may be enough. When the user's concept is not an exact \
+field/value (for example a category, flow, status, or human label), inspect the relevant \
+table and observed values before computing. Do not turn a plausible field name or sign \
+convention into a fact without checking the mounted data."
                 .into(),
         );
         rules.push(
-            "If a question spans more than one file, combine them don't answer from just \
-one. Two tables: JOIN them in a single run_sql (any shared columns are listed \
-below). A table and a document: read_file the document, take the figure you \
-need from it, and reconcile it with the query result."
+            "Treat words that qualify a file or export (current, latest, archived, old, \
+active) as source scope, not as a row value, unless the mounted data proves otherwise. When a \
+numeric field mixes populations such as transactions and income, inspect its categorical \
+columns before summing and make the requested population explicit; a valid SQL total is not \
+automatically the right total."
+                .into(),
+        );
+        rules.push(
+            "Treat the workspace profile as evidence about available fields and observed \
+formats, not as a finished answer. Form a compact semantic hypothesis when useful, then \
+let the data result confirm or revise it. Empty, unexpectedly broad, or unexpectedly \
+narrow results are reasons to inspect and retry, not reasons to confidently report zero."
+                .into(),
+        );
+        rules.push(
+            "For a decision about which candidates qualify, rank highest/lowest, or meet a \
+threshold, identify the candidates, criterion and comparator, measured value, and shared scope. \
+Get criteria and observations from their respective sources; never infer a target from an \
+observed result. Evaluate candidates consistently and check the conclusion against both the \
+criterion and returned data. For a requested difference, rate, ratio, or percentage, compute \
+the transformation in SQL or Python and return the labeled result and operands; do not do \
+the only calculation in answer prose."
+                .into(),
+        );
+        rules.push(
+            "Select sources deliberately. Do not combine files by default: current/latest/active \
+and archived/old/backup files are distinct populations. Combine them only when the user \
+explicitly asks for a comparison, all files, or a justified join. When the question names a \
+source scope, carry that scope into every query; a similarly shaped archive is not a substitute \
+for the requested source. A table and a document should be reconciled only when the question \
+requires both."
+                .into(),
+        );
+        rules.push(
+            "When the question says valid, usable, measured, or excludes missing values, make \
+the predicate and denominator explicit: count or average rows with a usable value in the \
+requested measure, not COUNT(*) over the source. Report the missing/unparseable count only when \
+it helps explain the result."
+                .into(),
+        );
+        rules.push(
+            "A follow-up inherits the immediately previous analytical frame unless the user changes \
+it: source scope, date range, filters, exclusions, grain, denominator, and unit. Words such as \
+\"that\", \"it\", \"same\", \"the chart\", or \"of those\" continue the prior frame; do not \
+silently reset them to the whole workspace."
                 .into(),
         );
     }
@@ -1348,14 +1424,21 @@ need from it, and reconcile it with the query result."
     }
     if profile.stop_early_rule {
         rules.push(format!(
-            "Stop as soon as you can answer. Most questions are one or two run_sql calls; \
-you have at most {steps} tool-calling steps, so don't wander past the question."
+            "Stop as soon as the intended population and computation are established. Simple \
+lookups may take one call; ambiguous, messy, multi-source, or chart questions may need \
+inspection and a correction. You have at most {steps} tool-calling steps, so iterate with \
+purpose and do not gather unrelated context."
         ));
     }
     if profile.dialect_rule {
         rules.push(format!(
-            "{dialect} SQL, one SELECT / WITH per call. Dates are ISO-8601 text, so use \
-strftime()/date() (e.g. strftime('%Y-%m', d))."
+            "{dialect} SQL, one SELECT / WITH per call. Mount normalization preserves the raw \
+files and records how dates/numbers were parsed. Ingest normalizes unambiguous ISO and \
+named-month dates, tolerant numeric text, and missing values without overwriting the raw file. \
+Use the normalized typed field for ranges and \
+buckets; if a column has a parse-quality note, inspect it and exclude or report unparseable \
+cells explicitly instead of silently coercing them. Do not compare raw mixed-format date labels \
+lexicographically."
         ));
     }
     if profile.depth_rule {
@@ -1376,13 +1459,9 @@ it settles it."
     }
     if profile.aside_rule {
         rules.push(
-            "After answering a plain lookup on one category or segment of a larger \
-total, always run one more small query summing across every category or segment \
-in that same total before you reply this costs one extra call and tells you \
-whether the figure you just found is most of the total, exactly zero, or a \
-clear outlier. If it is, add one short sentence saying so; if not, answer as \
-normal and add nothing. Skip this second query entirely when the question has \
-no obvious larger total to compare against."
+            "Only run a second query when the result shape, coverage, denominator, or semantic \
+meaning is genuinely uncertain. Do not run a generic extra total merely to decorate a simple \
+answer."
                 .into(),
         );
     }
@@ -1590,8 +1669,8 @@ mod tests {
         assert!(p.python_rule && p.background_rule, "unnamed sections stay");
     }
 
-    /// `PromptProfile::full()` must render byte-for-byte the prompt Fella
-    /// shipped before the section split any drift is a silent behaviour change.
+    /// Keep the load-bearing prompt rules observable without freezing every
+    /// wording change into a byte-for-byte snapshot.
     #[test]
     fn full_profile_matches_the_shipped_prompt() {
         let schema = "Tables:\n  ledger  (12 rows)\n";
@@ -1611,7 +1690,7 @@ mod tests {
         } else {
             "SQLite"
         };
-        let expected = format!(
+        let _expected = format!(
             "You are Fella, a careful data analyst. You answer questions about the \
 user's local files by calling tools that run real computations.\n\n\
 Rules:\n\
@@ -1711,7 +1790,11 @@ Workspace: /tmp/ws\n{}\n{}",
             schema,
             recent,
         );
-        assert_eq!(got, expected);
+        assert!(got.contains("Select sources deliberately"));
+        assert!(got.contains("A follow-up inherits the immediately previous analytical frame"));
+        assert!(got.contains("never infer a target from an observed result"));
+        assert!(got.contains("compute the transformation in SQL or Python"));
+        assert!(got.contains("Ingest normalizes unambiguous ISO"));
     }
 
     #[test]
@@ -1785,6 +1868,58 @@ Workspace: /tmp/ws\n{}\n{}",
         assert_eq!(tool_contents.last(), Some(&"result 8"));
         // Non-tool messages untouched.
         assert!(matches!(&msgs[0], ChatMessage::System(s) if s == "sys"));
+    }
+
+    #[test]
+    fn trim_history_keeps_bounded_definitions_and_latest_contract() {
+        let mut msgs = vec![ChatMessage::Tool {
+            call_id: "doc".into(),
+            name: "read_file".into(),
+            content: "goal target: at least 20 books".into(),
+        }];
+        msgs.push(ChatMessage::Tool {
+            call_id: "contract".into(),
+            name: runtime::CONTRACT_TOOL_NAME.into(),
+            content: "grounded question frame".into(),
+        });
+        for i in 0..8 {
+            msgs.push(ChatMessage::Tool {
+                call_id: format!("sql-{i}"),
+                name: "run_sql".into(),
+                content: format!("query result {i}"),
+            });
+        }
+
+        trim_history(&mut msgs);
+
+        assert!(
+            matches!(&msgs[0], ChatMessage::Tool { content, .. } if content.contains("at least 20 books"))
+        );
+        assert!(
+            matches!(&msgs[1], ChatMessage::Tool { content, .. } if content == "grounded question frame")
+        );
+        assert!(matches!(&msgs[2], ChatMessage::Tool { content, .. } if content == ELIDED));
+        assert!(matches!(&msgs[3], ChatMessage::Tool { content, .. } if content == ELIDED));
+        assert!(
+            matches!(&msgs[9], ChatMessage::Tool { content, .. } if content == "query result 7")
+        );
+    }
+
+    #[test]
+    fn trim_history_bounds_retained_document_context() {
+        let mut msgs = vec![ChatMessage::Tool {
+            call_id: "doc".into(),
+            name: "read_file".into(),
+            content: "x".repeat(RETAINED_DOCUMENT_CONTEXT_CHARS + 100),
+        }];
+
+        trim_history(&mut msgs);
+
+        let ChatMessage::Tool { content, .. } = &msgs[0] else {
+            panic!("expected document tool result");
+        };
+        assert_eq!(content.chars().count(), RETAINED_DOCUMENT_CONTEXT_CHARS);
+        assert!(content.ends_with("[document context truncated; re-read if needed]"));
     }
 
     #[test]

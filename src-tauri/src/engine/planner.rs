@@ -8,8 +8,8 @@
 
 use crate::engine::analytics::data::{quote_ident, quote_str};
 use crate::engine::catalog::{
-    field_name_matches, source_name_exact_matches, source_name_matches, Catalog, ColumnInfo,
-    SourceInfo,
+    field_name_matches, source_has_any_field, source_name_exact_matches, source_name_matches,
+    Catalog, ColumnInfo, SourceInfo,
 };
 use crate::engine::runtime::{
     AnalysisContract, ComparisonKind, ContractMeasure, DerivedMetricKind, InterpretationStatus,
@@ -975,52 +975,78 @@ fn select_source<'a>(
                 source_name_exact_matches(&source.name, source.view.as_deref(), requested)
             })
             .collect();
-        let matches = if exact_matches.is_empty() {
-            queryable
-                .into_iter()
-                .filter(|source| {
-                    source_name_matches(&source.name, source.view.as_deref(), requested)
-                })
-                .collect()
-        } else {
-            exact_matches
-        };
-        return match matches.as_slice() {
+        if exact_matches.len() == 1 {
+            return Ok(exact_matches[0]);
+        }
+        if exact_matches.len() > 1 {
+            return Err(format!("source {requested:?} is ambiguous"));
+        }
+
+        let requested_fields: Vec<String> = contract
+            .measures
+            .iter()
+            .map(|measure| {
+                measure
+                    .field
+                    .as_deref()
+                    .unwrap_or(&measure.concept)
+                    .to_string()
+            })
+            .chain(contract.filters.iter().map(|filter| {
+                filter
+                    .field
+                    .as_deref()
+                    .unwrap_or(&filter.concept)
+                    .to_string()
+            }))
+            .chain(contract.time.iter().filter_map(|time| time.field.clone()))
+            .chain(contract.group_by.iter().cloned())
+            .collect();
+        let field_matches: Vec<&SourceInfo> = queryable
+            .iter()
+            .copied()
+            .filter(|source| source_has_any_field(source, &requested_fields))
+            .collect();
+        if !field_matches.is_empty() {
+            return match field_matches.as_slice() {
+                [source] => Ok(source),
+                _ => Err("grounded fields occur in more than one source".into()),
+            };
+        }
+
+        let fuzzy_matches: Vec<&SourceInfo> = queryable
+            .into_iter()
+            .filter(|source| source_name_matches(&source.name, source.view.as_deref(), requested))
+            .collect();
+        return match fuzzy_matches.as_slice() {
             [source] => Ok(source),
             [] => Err(format!("could not find source {requested:?}")),
             _ => Err(format!("source {requested:?} is ambiguous")),
         };
     }
-    let requested_fields: Vec<&str> = contract
+    let requested_fields: Vec<String> = contract
         .measures
         .iter()
-        .filter_map(|measure| measure.field.as_deref())
-        .chain(
-            contract
-                .filters
-                .iter()
-                .filter_map(|filter| filter.field.as_deref()),
-        )
-        .chain(
-            contract
-                .time
-                .iter()
-                .filter_map(|time| time.field.as_deref()),
-        )
-        .chain(contract.group_by.iter().map(String::as_str))
+        .map(|measure| {
+            measure
+                .field
+                .as_deref()
+                .unwrap_or(&measure.concept)
+                .to_string()
+        })
+        .chain(contract.filters.iter().map(|filter| {
+            filter
+                .field
+                .as_deref()
+                .unwrap_or(&filter.concept)
+                .to_string()
+        }))
+        .chain(contract.time.iter().filter_map(|time| time.field.clone()))
+        .chain(contract.group_by.iter().cloned())
         .collect();
     let matches: Vec<&SourceInfo> = queryable
         .into_iter()
-        .filter(|source| {
-            requested_fields.iter().any(|field| {
-                source
-                    .columns
-                    .as_deref()
-                    .unwrap_or_default()
-                    .iter()
-                    .any(|column| field_name_matches(&column.name, field))
-            })
-        })
+        .filter(|source| source_has_any_field(source, &requested_fields))
         .collect();
     match matches.as_slice() {
         [source] => Ok(source),
@@ -1030,13 +1056,20 @@ fn select_source<'a>(
 }
 
 fn resolve_column<'a>(source: &'a SourceInfo, field: &str) -> Result<&'a ColumnInfo, String> {
-    let matches: Vec<&ColumnInfo> = source
-        .columns
-        .as_deref()
-        .unwrap_or_default()
+    let columns = source.columns.as_deref().unwrap_or_default();
+    let requested = normalize(field);
+    let exact: Vec<&ColumnInfo> = columns
         .iter()
-        .filter(|column| field_name_matches(&column.name, field))
+        .filter(|column| normalize(&column.name) == requested)
         .collect();
+    let matches: Vec<&ColumnInfo> = if exact.is_empty() {
+        columns
+            .iter()
+            .filter(|column| field_name_matches(&column.name, field))
+            .collect()
+    } else {
+        exact
+    };
     match matches.as_slice() {
         [column] => Ok(column),
         [] => Err(format!("field {field:?} is not in {}", source.name)),

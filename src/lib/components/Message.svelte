@@ -165,6 +165,16 @@
 	{:else}
 		<div class="text">{message.text}</div>
 	{/if}
+	{#if message.answer?.clarification && showFollowups && onfollowup && message.answer.clarification.options.length}
+		<div class="clarification" aria-label="Choose an interpretation">
+			<span class="clarification-label">Choose one to continue</span>
+			<div class="clarification-options">
+				{#each message.answer.clarification.options as option (option)}
+					<button type="button" onclick={() => onfollowup?.(option)}>{option}</button>
+				{/each}
+			</div>
+		</div>
+	{/if}
 	{#if message.answer}
 		{#if message.answer.evidence.length}
 			<EvidenceBlock
@@ -174,7 +184,7 @@
 				onrerun={message.answer.turn_id ? onrerun : undefined}
 			/>
 		{/if}
-		{#if showFollowups && onfollowup && followups.length}
+		{#if showFollowups && onfollowup && followups.length && !message.answer.clarification}
 			<div class="followups" aria-label="Suggested follow-up questions">
 				<span class="followup-label">Continue with</span>
 				{#each followups as next (next)}
@@ -317,6 +327,35 @@
 	.followups button:hover {
 		color: var(--text);
 		text-decoration: underline;
+	}
+	.clarification {
+		margin-top: var(--space-3);
+		padding-top: var(--space-2);
+		border-top: 1px solid var(--border);
+	}
+	.clarification-label {
+		display: block;
+		margin-bottom: var(--space-1);
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+	}
+	.clarification-options {
+		display: flex;
+		flex-wrap: wrap;
+		gap: var(--space-1);
+	}
+	.clarification-options button {
+		padding: 5px 9px;
+		border: 1px solid var(--border);
+		border-radius: var(--radius-chip);
+		color: var(--text-dim);
+		font-size: var(--fs-sm);
+		text-align: left;
+	}
+	.clarification-options button:hover {
+		border-color: var(--accent);
+		color: var(--text);
+		background: var(--bg-inset);
 	}
 
 	/* The assistant's answer is rendered from markdown (see markdown.ts). Code,

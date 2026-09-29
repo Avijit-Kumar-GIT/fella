@@ -126,6 +126,45 @@ fn scans_queries_and_guards_a_workspace() {
         Some("observed")
     );
 
+    // Exact physical names win before descriptive token matching. Otherwise
+    // `finished` can be rejected as ambiguous when the table also has
+    // `finished_date`.
+    fs::write(
+        ws.join("books.csv"),
+        "title,rating,finished,finished_date\nA,5,yes,2024-01-01\nB,3,no,2024-02-01\n",
+    )
+    .unwrap();
+    let books_engine = EngineState::new(&data).unwrap();
+    books_engine.open_workspace(&ws).unwrap();
+    let books = grounding::ground(
+        &books_engine,
+        AnalysisContract {
+            interpretation: InterpretationStatus::Assumed,
+            subject: Some("books".into()),
+            measures: vec![ContractMeasure {
+                concept: "average rating".into(),
+                field: Some("rating".into()),
+                operation: "average".into(),
+                unit: None,
+            }],
+            filters: vec![ContractFilter {
+                concept: "finished status".into(),
+                field: Some("finished".into()),
+                candidate_values: vec![],
+                resolved_values: vec!["yes".into()],
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        books.contract.interpretation,
+        InterpretationStatus::Grounded
+    );
+    assert_eq!(books.contract.filters[0].field.as_deref(), Some("finished"));
+    assert_eq!(books.contract.filters[0].resolved_values, vec!["yes"]);
+    assert!(books.report.unresolved.is_empty());
+
     let sales = catalog
         .sources
         .iter()
@@ -141,6 +180,16 @@ fn scans_queries_and_guards_a_workspace() {
         .map(|c| c.name.as_str())
         .collect();
     assert_eq!(cols, vec!["month", "amount"]);
+    assert_eq!(
+        sales
+            .columns
+            .as_ref()
+            .unwrap()
+            .iter()
+            .find(|column| column.name == "month")
+            .and_then(|column| column.common_values.clone()),
+        Some(vec!["2024-01".into(), "2024-02".into(), "2024-03".into()])
+    );
 
     // The nested sales.csv gets a de-duplicated view name.
     assert!(catalog
@@ -638,6 +687,45 @@ fn a_trailing_total_row_is_left_out_of_the_csv() {
         .run_sql(r#"SELECT sum("Amount") AS s FROM spend"#)
         .unwrap();
     assert_eq!(out.rows[0][0], serde_json::json!(450));
+
+    let _ = fs::remove_dir_all(&ws);
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[test]
+fn mixed_year_first_dates_are_normalized_for_ranges_and_month_buckets() {
+    let ws = scratch("mixed-date-ws");
+    let data = scratch("mixed-date-data");
+    fs::write(
+        ws.join("events.csv"),
+        "posted,amount\n2024-01-02,10\n2024/01/19,20\n2024-02-01,30\n",
+    )
+    .unwrap();
+
+    let engine = EngineState::new(&data).unwrap();
+    engine.open_workspace(&ws).unwrap();
+
+    let range = engine
+        .run_sql("SELECT MIN(posted), MAX(posted) FROM events")
+        .unwrap();
+    assert_eq!(
+        range.rows[0],
+        vec![
+            serde_json::json!("2024-01-02"),
+            serde_json::json!("2024-02-01")
+        ]
+    );
+
+    let months = engine
+        .run_sql("SELECT substr(posted, 1, 7), SUM(amount) FROM events GROUP BY substr(posted, 1, 7) ORDER BY 1")
+        .unwrap();
+    assert_eq!(
+        months.rows,
+        vec![
+            vec![serde_json::json!("2024-01"), serde_json::json!(30)],
+            vec![serde_json::json!("2024-02"), serde_json::json!(30)],
+        ]
+    );
 
     let _ = fs::remove_dir_all(&ws);
     let _ = fs::remove_dir_all(&data);
@@ -1177,6 +1265,84 @@ fn grounds_and_verifies_an_average_against_observed_bounds() {
         "{bad_checks:?}"
     );
     assert!(fella_lib::engine::analytics::verify::hard_fail(&bad_checks).is_some());
+
+    let _ = fs::remove_dir_all(&ws);
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[test]
+fn descriptive_subjects_bind_to_fields_before_fuzzy_source_names() {
+    let ws = scratch("descriptive-subjects-ws");
+    let data = scratch("descriptive-subjects-data");
+    fs::write(
+        ws.join("books.csv"),
+        "title,rating\nThe Dispossessed,5\nInvisible Cities,4\n",
+    )
+    .unwrap();
+    fs::write(
+        ws.join("spend.csv"),
+        "month,category,amount\n2024-01-01,rent,1200\n2024-02-01,rent,1300\n",
+    )
+    .unwrap();
+    fs::write(
+        ws.join("rent_ledger.csv"),
+        "date,rent\nJan 1, 2024,1400\nFeb 1, 2024,1400\n",
+    )
+    .unwrap();
+
+    let engine = EngineState::new(&data).unwrap();
+    engine.open_workspace(&ws).unwrap();
+
+    let books = grounding::ground(
+        &engine,
+        AnalysisContract {
+            interpretation: InterpretationStatus::Assumed,
+            subject: Some("reading list".into()),
+            measures: vec![ContractMeasure {
+                concept: "average rating".into(),
+                field: Some("rating".into()),
+                operation: "average".into(),
+                unit: None,
+            }],
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        books.contract.interpretation,
+        InterpretationStatus::Grounded
+    );
+    assert_eq!(books.report.source.as_deref(), Some("books"));
+    assert_eq!(books.contract.measures[0].field.as_deref(), Some("rating"));
+
+    let rent = grounding::ground(
+        &engine,
+        AnalysisContract {
+            interpretation: InterpretationStatus::Assumed,
+            subject: Some("rent".into()),
+            measures: vec![ContractMeasure {
+                concept: "total spending".into(),
+                field: Some("amount".into()),
+                operation: "sum".into(),
+                unit: None,
+            }],
+            filters: vec![ContractFilter {
+                concept: "rent category".into(),
+                field: Some("category".into()),
+                candidate_values: vec!["rent".into()],
+                ..Default::default()
+            }],
+            time: Some(fella_lib::engine::runtime::ContractTime {
+                field: Some("month".into()),
+                range: Some("2024".into()),
+                bucket: None,
+                timezone: None,
+            }),
+            ..Default::default()
+        },
+    );
+    assert_eq!(rent.contract.interpretation, InterpretationStatus::Grounded);
+    assert_eq!(rent.report.source.as_deref(), Some("spend"));
+    assert_eq!(rent.contract.measures[0].field.as_deref(), Some("amount"));
 
     let _ = fs::remove_dir_all(&ws);
     let _ = fs::remove_dir_all(&data);

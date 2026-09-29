@@ -114,19 +114,23 @@ pub struct Answer {
     /// when one was available. Older archived answers may not have one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub plan: Option<crate::engine::runtime::LogicalPlan>,
-    /// The model's proposed semantic interpretation, when the risk router
-    /// requested one. It is not evidence and may still be only assumed or
-    /// ambiguous.
+    /// The model's proposed semantic interpretation, when it chose to provide
+    /// one. It is not evidence and may still be only assumed or ambiguous.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub contract: Option<crate::engine::runtime::AnalysisContract>,
     /// Deterministic field/value grounding performed against the current
-    /// workspace revision, when contract-first routing ran.
+    /// workspace revision, when the model supplied a semantic hypothesis.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub grounding: Option<crate::engine::grounding::GroundingReport>,
     pub text: String,
     pub evidence: Vec<EvidenceItem>,
     pub verification: Vec<VerificationCheck>,
     pub status: VerificationStatus,
+    /// A semantic choice that must come from the user before Fella can safely
+    /// compute the requested result. It is separate from verification status:
+    /// no calculation has failed; the runtime is waiting for meaning.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clarification: Option<crate::engine::runtime::ClarificationRequest>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workspace: Option<WorkspaceSnapshot>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -184,6 +188,11 @@ mod tests {
             evidence: Vec::new(),
             verification: Vec::new(),
             status: VerificationStatus::InsufficientData,
+            clarification: Some(crate::engine::runtime::ClarificationRequest {
+                question: "Include income or spending only?".into(),
+                options: vec!["Include income".into(), "Spending only".into()],
+                reason: Some("The selected population changes the total.".into()),
+            }),
             workspace: None,
             usage: None,
         };
@@ -194,6 +203,10 @@ mod tests {
 
         assert_eq!(wire["kind"], "answer_done");
         assert_eq!(wire["answer"]["turn_id"], "turn-1");
+        assert_eq!(
+            wire["answer"]["clarification"]["options"][1],
+            "Spending only"
+        );
         assert!(wire["answer"].is_object());
     }
 }
