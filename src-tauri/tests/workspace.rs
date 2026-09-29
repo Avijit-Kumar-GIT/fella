@@ -732,6 +732,54 @@ fn mixed_year_first_dates_are_normalized_for_ranges_and_month_buckets() {
 }
 
 #[test]
+fn infers_numeric_date_order_from_unambiguous_values_in_the_same_column() {
+    let ws = scratch("inferred-date-order-ws");
+    let data = scratch("inferred-date-order-data");
+    fs::write(
+        ws.join("events.csv"),
+        "posted,amount\n\
+         03/04/2024,1200\n\
+         4 Mar 2024,1200\n\
+         2024-03-11,12\n\
+         06/03/2024,5\n\
+         07/25/2024,22\n",
+    )
+    .unwrap();
+
+    let engine = EngineState::new(&data).unwrap();
+    let catalog = engine.open_workspace(&ws).unwrap();
+    let posted = catalog
+        .sources
+        .iter()
+        .find(|source| source.name == "events.csv")
+        .unwrap()
+        .columns
+        .as_ref()
+        .unwrap()
+        .iter()
+        .find(|column| column.name == "posted")
+        .unwrap();
+    let note = posted.note.as_deref().unwrap_or_default();
+    assert!(note.contains("month-first"), "{note}");
+    assert!(note.contains("unambiguous dates in this column"), "{note}");
+
+    let months = engine
+        .run_sql("SELECT substr(posted, 1, 7), SUM(amount) FROM events GROUP BY 1 ORDER BY 1")
+        .unwrap();
+    assert_eq!(
+        months.rows,
+        vec![
+            vec![serde_json::json!("2024-03"), serde_json::json!(2412)],
+            vec![serde_json::json!("2024-06"), serde_json::json!(5)],
+            vec![serde_json::json!("2024-07"), serde_json::json!(22)],
+        ]
+    );
+
+    let _ = fs::remove_dir_all(&ws);
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[test]
 fn csv_preamble_above_the_header_is_skipped() {
     let ws = scratch("preamble-ws");
     let data = scratch("preamble-data");

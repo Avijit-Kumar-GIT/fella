@@ -196,6 +196,13 @@ All generated calculations have explicit bounds: 64 KiB source and output,
 also has a 256 MiB source retention cap. The release memory probe exercises
 these allocation and teardown paths repeatedly in an optimized build.
 
+When tabular ingestion encounters ambiguous slash dates, it can infer the
+column's month/day order from unambiguous numeric dates in that same column.
+Consistent evidence lets CSV, JSON, and Excel ingestion normalize ambiguous
+rows to ISO dates; conflicting or absent evidence leaves ambiguous values
+unresolved instead of guessing from the machine locale. The column note records
+when this inference was used.
+
 ## AI layer
 
 `LlmClient` (`llm.rs`) one struct, branching on the provider's `wire`:

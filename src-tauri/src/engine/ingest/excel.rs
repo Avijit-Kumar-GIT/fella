@@ -7,7 +7,9 @@ use std::collections::HashSet;
 use calamine::{open_workbook_auto, Data, Reader};
 use serde_json::Value as Json;
 
-use crate::engine::analytics::data::{parse_date_value, ColType, DataEngine};
+use crate::engine::analytics::data::{
+    infer_numeric_date_order, parse_date_value_with_order, ColType, DataEngine, NumericDateOrder,
+};
 use crate::engine::catalog::{self, ColumnInfo};
 use crate::engine::error::{EngineError, EngineResult};
 
@@ -88,7 +90,13 @@ pub fn ingest_workbook(
             .iter()
             .map(|row| {
                 (0..headers.len())
-                    .map(|i| cell_to_json(row.get(i).unwrap_or(&Data::Empty), types[i]))
+                    .map(|i| {
+                        cell_to_json_with_order(
+                            row.get(i).unwrap_or(&Data::Empty),
+                            types[i],
+                            inferred[i].date_order,
+                        )
+                    })
                     .collect()
             })
             .collect();
@@ -235,16 +243,21 @@ fn looks_like_total_row(row: &[Data], width: usize) -> bool {
 struct ColInfer {
     ty: ColType,
     note: Option<String>,
+    date_order: Option<NumericDateOrder>,
 }
 
 /// Per-column type inference over the data rows. Blank-ish cells are ignored;
 /// a column that isn't natively numeric but whose remaining cells are all
 /// written numbers (`$1,200`, `1,150`) becomes `Float` with a note.
 fn infer_columns(data: &[&[Data]], width: usize) -> Vec<ColInfer> {
-    use crate::engine::analytics::data::{is_blankish, parse_date_value, parse_numeric};
+    use crate::engine::analytics::data::{is_blankish, parse_numeric};
 
     (0..width)
         .map(|i| {
+            let date_order = infer_numeric_date_order(data.iter().filter_map(|row| match row.get(i) {
+                Some(Data::String(value)) => Some(value.as_str()),
+                _ => None,
+            }));
             let (mut nonblank, mut numeric, mut booleans, mut others) =
                 (0usize, 0usize, 0usize, 0usize);
             let (mut all_integral, mut saw_coerced) = (true, false);
@@ -277,7 +290,7 @@ fn infer_columns(data: &[&[Data]], width: usize) -> Vec<ColInfer> {
                     }
                     Some(Data::DateTimeIso(s)) => {
                         nonblank += 1;
-                        if let Some(iso) = parse_date_value(s) {
+                        if let Some(iso) = parse_date_value_with_order(s, date_order) {
                             date_used = true;
                             date_count += 1;
                             date_example.get_or_insert_with(|| (s.clone(), iso));
@@ -288,7 +301,7 @@ fn infer_columns(data: &[&[Data]], width: usize) -> Vec<ColInfer> {
                     Some(Data::DateTime(dt)) => {
                         nonblank += 1;
                         let raw = cell_to_string(&Data::DateTime(*dt));
-                        if let Some(iso) = parse_date_value(&raw) {
+                        if let Some(iso) = parse_date_value_with_order(&raw, date_order) {
                             date_used = true;
                             date_count += 1;
                             date_example.get_or_insert_with(|| (raw, iso));
@@ -298,7 +311,7 @@ fn infer_columns(data: &[&[Data]], width: usize) -> Vec<ColInfer> {
                     }
                     Some(Data::String(s)) => {
                         nonblank += 1;
-                        if let Some(iso) = parse_date_value(s) {
+                        if let Some(iso) = parse_date_value_with_order(s, date_order) {
                             date_used = true;
                             date_count += 1;
                             date_example.get_or_insert_with(|| (s.clone(), iso));
@@ -335,12 +348,14 @@ fn infer_columns(data: &[&[Data]], width: usize) -> Vec<ColInfer> {
                 return ColInfer {
                     ty: ColType::Text,
                     note: None,
+                    date_order,
                 };
             }
             if booleans == nonblank {
                 return ColInfer {
                     ty: ColType::Bool,
                     note: None,
+                    date_order,
                 };
             }
             if numeric > 0 && numeric == nonblank {
@@ -348,6 +363,7 @@ fn infer_columns(data: &[&[Data]], width: usize) -> Vec<ColInfer> {
                     return ColInfer {
                         ty: ColType::Float,
                         note: coerce_note(),
+                        date_order,
                     };
                 }
                 let ty = if all_integral {
@@ -355,20 +371,26 @@ fn infer_columns(data: &[&[Data]], width: usize) -> Vec<ColInfer> {
                 } else {
                     ColType::Float
                 };
-                return ColInfer { ty, note: None };
+                return ColInfer {
+                    ty,
+                    note: None,
+                    date_order,
+                };
             }
             // Only when every non-blank cell parses, or when a clear majority
             // is date-shaped and the remaining cells can be safely represented
-            // as missing. Numeric locale-specific dates remain text (see
-            // `parse_named_month_date`'s own doc).
+            // as missing. Ambiguous numeric dates require a consistent order
+            // established by unambiguous dates in this same column.
             if date_ok && date_used {
                 let (raw, iso) = date_example.unwrap_or_default();
                 return ColInfer {
                     ty: ColType::Date,
                     note: Some(format!(
                         "dates were stored as text (e.g. \"{raw}\") and normalized to ISO-8601 \
-                         (e.g. {iso}) for querying with strftime()/date()"
+                         (e.g. {iso}) for querying with strftime()/date(){}",
+                        numeric_date_order_note(date_order)
                     )),
+                    date_order,
                 };
             }
             if nonblank >= 3 && numeric >= 3 && numeric * 100 > nonblank * 80 {
@@ -377,6 +399,7 @@ fn infer_columns(data: &[&[Data]], width: usize) -> Vec<ColInfer> {
                     note: Some(format!(
                         "{numeric} of {nonblank} values were normalized as numbers; unparseable values were left blank"
                     )),
+                    date_order,
                 };
             }
             if nonblank >= 3 && date_count >= 3 && date_count * 100 >= nonblank * 80 {
@@ -385,8 +408,10 @@ fn infer_columns(data: &[&[Data]], width: usize) -> Vec<ColInfer> {
                     ty: ColType::Date,
                     note: Some(format!(
                         "{date_count} of {nonblank} values were normalized as dates (e.g. \"{raw}\" -> {iso}); \
-                             unparseable values were left blank"
+                             unparseable values were left blank{}",
+                        numeric_date_order_note(date_order)
                     )),
+                    date_order,
                 };
             }
             // A few unparseable stragglers in an otherwise-numeric column: coerce
@@ -397,6 +422,7 @@ fn infer_columns(data: &[&[Data]], width: usize) -> Vec<ColInfer> {
                     note: Some(format!(
                         "{others} value(s) could not be read as a number and were left blank"
                     )),
+                    date_order,
                 };
             }
             if numeric * 2 > nonblank {
@@ -408,17 +434,24 @@ fn infer_columns(data: &[&[Data]], width: usize) -> Vec<ColInfer> {
                          \"1,200\" instead of erroring); COUNT(*) - COUNT(parse_num(col)) shows \
                          how many rows didn't parse"
                     )),
+                    date_order,
                 };
             }
             ColInfer {
                 ty: ColType::Text,
                 note: None,
+                date_order,
             }
         })
         .collect()
 }
 
+#[cfg(test)]
 fn cell_to_json(cell: &Data, ty: ColType) -> Json {
+    cell_to_json_with_order(cell, ty, None)
+}
+
+fn cell_to_json_with_order(cell: &Data, ty: ColType, date_order: Option<NumericDateOrder>) -> Json {
     use crate::engine::analytics::data::{is_blankish, parse_numeric};
 
     if let Data::Empty = cell {
@@ -447,17 +480,31 @@ fn cell_to_json(cell: &Data, ty: ColType) -> Json {
         (Data::String(s), ColType::Int) => parse_numeric(s)
             .map(|v| Json::from(v as i64))
             .unwrap_or(Json::Null),
-        (Data::String(s), ColType::Date) => {
-            parse_date_value(s).map(Json::from).unwrap_or(Json::Null)
-        }
-        (Data::DateTimeIso(s), ColType::Date) => {
-            parse_date_value(s).map(Json::from).unwrap_or(Json::Null)
-        }
-        (Data::DateTime(dt), ColType::Date) => parse_date_value(&cell_to_string(cell))
+        (Data::String(s), ColType::Date) => parse_date_value_with_order(s, date_order)
             .map(Json::from)
-            .unwrap_or_else(|| Json::from(excel_serial_to_iso(dt.as_f64()))),
+            .unwrap_or(Json::Null),
+        (Data::DateTimeIso(s), ColType::Date) => parse_date_value_with_order(s, date_order)
+            .map(Json::from)
+            .unwrap_or(Json::Null),
+        (Data::DateTime(dt), ColType::Date) => {
+            parse_date_value_with_order(&cell_to_string(cell), date_order)
+                .map(Json::from)
+                .unwrap_or_else(|| Json::from(excel_serial_to_iso(dt.as_f64())))
+        }
         (_, ColType::Text) => Json::from(cell_to_string(cell)),
         _ => Json::Null,
+    }
+}
+
+fn numeric_date_order_note(order: Option<NumericDateOrder>) -> String {
+    match order {
+        Some(NumericDateOrder::MonthFirst) => {
+            "; ambiguous numeric dates were interpreted month-first from unambiguous dates in this column".into()
+        }
+        Some(NumericDateOrder::DayFirst) => {
+            "; ambiguous numeric dates were interpreted day-first from unambiguous dates in this column".into()
+        }
+        None => String::new(),
     }
 }
 
@@ -570,6 +617,25 @@ mod tests {
         assert_eq!(
             cell_to_json(&Data::String("1 Mar 2024".into()), ColType::Date),
             Json::from("2024-03-01")
+        );
+    }
+
+    #[test]
+    fn infers_ambiguous_numeric_dates_from_same_column_evidence() {
+        let rows_data = [
+            [Data::String("03/04/2024".into())],
+            [Data::String("4 Mar 2024".into())],
+            [Data::String("07/25/2024".into())],
+            [Data::String("06/03/2024".into())],
+        ];
+        let rows: Vec<&[Data]> = rows_data.iter().map(|row| row.as_slice()).collect();
+        let inferred = infer_columns(&rows, 1);
+        assert_eq!(inferred[0].ty, ColType::Date);
+        assert_eq!(inferred[0].date_order, Some(NumericDateOrder::MonthFirst));
+        assert!(inferred[0].note.as_deref().unwrap().contains("month-first"));
+        assert_eq!(
+            cell_to_json_with_order(&rows_data[3][0], ColType::Date, inferred[0].date_order),
+            Json::from("2024-06-03")
         );
     }
 

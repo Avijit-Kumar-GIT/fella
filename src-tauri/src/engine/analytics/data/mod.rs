@@ -562,10 +562,10 @@ pub fn parse_numeric(s: &str) -> Option<f64> {
 /// Parses unambiguous month-name date formats into ISO-8601 (`YYYY-MM-DD`):
 /// "Aug 1, 2026", "1 Aug 2026", "31-May-2024", and year-first variants.
 /// An optional ordinal suffix is accepted. Deliberately does not attempt pure
-/// numeric formats (`08/01/2026`): whether that means MM/DD or DD/MM is
-/// genuinely ambiguous per-file, and a wrong guess would silently swap month
-/// and day instead of visibly failing the way an unparsed string does. Used
-/// by both the CSV/JSON sniffer (`sqlite.rs`) and the Excel ingest.
+/// numeric formats (`08/01/2026`): this parser has no column context, so it
+/// cannot distinguish MM/DD from DD/MM. The ingestion layer can separately
+/// resolve those values through `parse_date_value_with_order` when unambiguous
+/// dates in the same column establish one consistent convention.
 pub fn parse_named_month_date(s: &str) -> Option<String> {
     const MONTHS: &[(&str, u32)] = &[
         ("jan", 1),
@@ -605,7 +605,7 @@ pub fn parse_named_month_date(s: &str) -> Option<String> {
         return None;
     };
     // At least one of the first two components must be a month name. This
-    // keeps numeric locale-specific dates deliberately unresolved.
+    // keeps numeric locale-specific dates unresolved at this parser layer.
     let (year_str, month_str, day_str) = if a.len() == 4
         && a.bytes().all(|byte| byte.is_ascii_digit())
         && b.chars().next().is_some_and(|ch| ch.is_ascii_alphabetic())
@@ -633,34 +633,54 @@ pub fn parse_named_month_date(s: &str) -> Option<String> {
     Some(format!("{year:04}-{month:02}-{day:02}"))
 }
 
-/// Normalize unambiguous date text without guessing at locale-specific
-/// numeric dates. Year-first ISO/slash forms and named-month forms are safe;
-/// `MM/DD/YYYY` and `DD/MM/YYYY` remain text because choosing one silently can
-/// move observations to the wrong day.
+/// Locale order for numeric dates whose month and day are both at most 12.
+/// This is inferred from unambiguous values in the same column, never from the
+/// machine locale or a fixed regional default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NumericDateOrder {
+    MonthFirst,
+    DayFirst,
+}
+
+/// Infer one consistent order from unambiguous year-last numeric dates. A
+/// conflict deliberately returns `None`, leaving ambiguous values unresolved.
+pub fn infer_numeric_date_order<'a>(
+    values: impl IntoIterator<Item = &'a str>,
+) -> Option<NumericDateOrder> {
+    let mut inferred = None;
+    for value in values {
+        let Some(order) = numeric_date_order_hint(value) else {
+            continue;
+        };
+        if inferred.is_some_and(|existing| existing != order) {
+            return None;
+        }
+        inferred = Some(order);
+    }
+    inferred
+}
+
+/// Normalize a date using safe global formats first, then a same-column
+/// numeric order when the input itself is ambiguous. Unambiguous slash dates
+/// (for example, `07/25/2024`) are parsed without a column hint.
+pub fn parse_date_value_with_order(
+    s: &str,
+    column_order: Option<NumericDateOrder>,
+) -> Option<String> {
+    parse_date_value(s).or_else(|| {
+        let date_text = date_part(s.trim());
+        let order = numeric_date_order_hint(date_text).or(column_order)?;
+        parse_numeric_date(date_text, order)
+    })
+}
+
+/// Normalize year-first ISO/slash forms, named-month forms, and numeric dates
+/// whose order is unambiguous from the date itself. Ambiguous `MM/DD/YYYY` /
+/// `DD/MM/YYYY` values remain unresolved here; ingestion can call
+/// `parse_date_value_with_order` after examining the whole column.
 pub fn parse_date_value(s: &str) -> Option<String> {
     let trimmed = s.trim();
-    let bytes = trimmed.as_bytes();
-    let date_text = if bytes.len() > 10
-        && bytes
-            .get(..4)
-            .is_some_and(|part| part.iter().all(|b| b.is_ascii_digit()))
-        && bytes.get(4).is_some_and(|b| *b == b'-' || *b == b'/')
-        && bytes
-            .get(5..7)
-            .is_some_and(|part| part.iter().all(|b| b.is_ascii_digit()))
-        && bytes.get(7).is_some_and(|b| *b == b'-' || *b == b'/')
-        && bytes
-            .get(8..10)
-            .is_some_and(|part| part.iter().all(|b| b.is_ascii_digit()))
-        && trimmed
-            .as_bytes()
-            .get(10)
-            .is_some_and(|b| *b == b'T' || *b == b't' || *b == b' ')
-    {
-        &trimmed[..10]
-    } else {
-        trimmed
-    };
+    let date_text = date_part(trimmed);
     let parts: Vec<&str> = date_text.split(['-', '/']).collect();
     if parts.len() == 2 && parts[0].len() == 4 && parts[0].bytes().all(|b| b.is_ascii_digit()) {
         let year = parts[0].parse::<i32>().ok()?;
@@ -677,7 +697,66 @@ pub fn parse_date_value(s: &str) -> Option<String> {
             return Some(format!("{year:04}-{month:02}-{day:02}"));
         }
     }
-    parse_named_month_date(date_text)
+    parse_named_month_date(date_text).or_else(|| {
+        let order = numeric_date_order_hint(date_text)?;
+        parse_numeric_date(date_text, order)
+    })
+}
+
+fn date_part(value: &str) -> &str {
+    let bytes = value.as_bytes();
+    if bytes.len() > 10
+        && bytes.get(..10).is_some_and(|part| {
+            part.iter()
+                .all(|b| b.is_ascii_digit() || *b == b'/' || *b == b'-')
+        })
+        && bytes
+            .get(10)
+            .is_some_and(|b| *b == b'T' || *b == b't' || *b == b' ')
+    {
+        &value[..10]
+    } else {
+        value
+    }
+}
+
+fn numeric_date_parts(value: &str) -> Option<(u32, u32, i32)> {
+    let parts: Vec<&str> = date_part(value.trim()).split('/').collect();
+    let [first, second, year] = parts.as_slice() else {
+        return None;
+    };
+    if year.len() != 4 || !year.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let first = first.parse::<u32>().ok()?;
+    let second = second.parse::<u32>().ok()?;
+    let year = year.parse::<i32>().ok()?;
+    (1900..=2100)
+        .contains(&year)
+        .then_some((first, second, year))
+}
+
+fn numeric_date_order_hint(value: &str) -> Option<NumericDateOrder> {
+    let (first, second, year) = numeric_date_parts(value)?;
+    if first <= 12 && second > 12 {
+        valid_day(year, first, second).then_some(NumericDateOrder::MonthFirst)
+    } else if first > 12 && second <= 12 {
+        valid_day(year, second, first).then_some(NumericDateOrder::DayFirst)
+    } else {
+        None
+    }
+}
+
+fn parse_numeric_date(value: &str, order: NumericDateOrder) -> Option<String> {
+    let (first, second, year) = numeric_date_parts(value)?;
+    let (month, day) = match order {
+        NumericDateOrder::MonthFirst => (first, second),
+        NumericDateOrder::DayFirst => (second, first),
+    };
+    if !valid_day(year, month, day) {
+        return None;
+    }
+    Some(format!("{year:04}-{month:02}-{day:02}"))
 }
 
 fn valid_day(year: i32, month: u32, day: u32) -> bool {
@@ -765,6 +844,38 @@ mod tests {
             Some("2024-05-31")
         );
         assert_eq!(parse_named_month_date("08/01/2026"), None);
+    }
+
+    #[test]
+    fn infers_ambiguous_numeric_date_order_from_unambiguous_column_values() {
+        let values = ["03/04/2024", "4 Mar 2024", "07/25/2024", "06/03/2024"];
+        let order = infer_numeric_date_order(values).expect("07/25 establishes month-first");
+        assert_eq!(order, NumericDateOrder::MonthFirst);
+        assert_eq!(
+            parse_date_value_with_order("03/04/2024", Some(order)).as_deref(),
+            Some("2024-03-04")
+        );
+        assert_eq!(
+            parse_date_value_with_order("06/03/2024", Some(order)).as_deref(),
+            Some("2024-06-03")
+        );
+        assert_eq!(
+            parse_date_value("07/25/2024").as_deref(),
+            Some("2024-07-25"),
+            "an unambiguous slash date needs no inferred convention"
+        );
+    }
+
+    #[test]
+    fn conflicting_numeric_date_orders_leave_ambiguous_values_unresolved() {
+        let values = ["13/04/2024", "04/13/2024", "03/04/2024"];
+        assert_eq!(infer_numeric_date_order(values), None);
+        assert_eq!(
+            parse_date_value_with_order("13/04/2024", None).as_deref(),
+            Some("2024-04-13"),
+            "individually unambiguous values remain usable"
+        );
+        assert_eq!(parse_date_value_with_order("03/04/2024", None), None);
     }
 
     #[test]

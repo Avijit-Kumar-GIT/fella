@@ -14,14 +14,14 @@ use rusqlite::{Connection, OpenFlags};
 use serde_json::Value as Json;
 
 use crate::engine::analytics::data::{
-    parse_date_value, parse_numeric, quote_ident, Cell, ColType, DataEngine, PythonBridge,
-    QueryOutcome, SourceLoad,
+    infer_numeric_date_order, parse_date_value_with_order, parse_numeric, quote_ident, Cell,
+    ColType, DataEngine, NumericDateOrder, PythonBridge, QueryOutcome, SourceLoad,
 };
 use crate::engine::catalog::{ColumnInfo, SourceKind};
 use crate::engine::error::{EngineError, EngineResult};
 
 #[cfg(test)]
-use crate::engine::analytics::data::parse_named_month_date;
+use crate::engine::analytics::data::{parse_date_value, parse_named_month_date};
 
 pub struct SqliteEngine {
     conn: Connection,
@@ -567,13 +567,16 @@ fn read_delimited(path: &str, default_delim: u8) -> EngineResult<Parsed> {
     // sniff types per column over the data rows only
     let mut types = vec![ColType::Text; width];
     let mut notes = vec![None; width];
+    let mut date_orders = vec![None; width];
     for i in 0..width {
-        let cells = || data.iter().map(move |r| r.get(i).unwrap_or(""));
-        let (ty, cnote) = sniff_strings(cells());
+        let cells: Vec<&str> = data.iter().map(|r| r.get(i).unwrap_or("")).collect();
+        let date_order = infer_numeric_date_order(cells.iter().copied());
+        let (ty, cnote) = sniff_strings_with_order(cells.iter().copied(), date_order);
         types[i] = ty;
+        date_orders[i] = date_order;
         // A label column whose values collapse under case-folding (Rent / rent):
         // tell the model to match case-insensitively.
-        notes[i] = match (ty, case_collision(cells())) {
+        notes[i] = match (ty, case_collision(cells.iter().copied())) {
             (ColType::Text, Some(cc)) => Some(merge_note(cnote, cc).unwrap_or_default()),
             _ => cnote,
         };
@@ -583,7 +586,7 @@ fn read_delimited(path: &str, default_delim: u8) -> EngineResult<Parsed> {
         .iter()
         .map(|r| {
             (0..width)
-                .map(|i| string_cell(r.get(i).unwrap_or(""), types[i]))
+                .map(|i| string_cell_with_order(r.get(i).unwrap_or(""), types[i], date_orders[i]))
                 .collect()
         })
         .collect();
@@ -711,10 +714,17 @@ fn read_json(path: &str, ndjson: bool) -> EngineResult<Parsed> {
 
     let mut types = Vec::with_capacity(headers.len());
     let mut notes = Vec::with_capacity(headers.len());
+    let mut date_orders = Vec::with_capacity(headers.len());
     for h in &headers {
-        let (ty, note) = sniff_json(objs.iter().map(|o| o.get(h).unwrap_or(&Json::Null)));
+        let values: Vec<&Json> = objs
+            .iter()
+            .map(|o| o.get(h).unwrap_or(&Json::Null))
+            .collect();
+        let date_order = infer_numeric_date_order(values.iter().filter_map(|v| v.as_str()));
+        let (ty, note) = sniff_json_with_order(values.iter().copied(), date_order);
         types.push(ty);
         notes.push(note);
+        date_orders.push(date_order);
     }
 
     let rows: Vec<Vec<Cell>> = objs
@@ -722,8 +732,10 @@ fn read_json(path: &str, ndjson: bool) -> EngineResult<Parsed> {
         .map(|o| {
             headers
                 .iter()
-                .zip(&types)
-                .map(|(h, t)| json_cell(o.get(h).unwrap_or(&Json::Null), *t))
+                .zip(types.iter().zip(&date_orders))
+                .map(|(h, (t, order))| {
+                    json_cell_with_order(o.get(h).unwrap_or(&Json::Null), *t, *order)
+                })
                 .collect()
         })
         .collect();
@@ -765,7 +777,17 @@ fn dedupe_headers(raw: &[String]) -> Vec<String> {
 /// the small number of malformed cells become NULL and are called out in the
 /// column note. This keeps one bad export cell from making an entire measure or
 /// time series unreadable without pretending the bad cell was valid.
+#[cfg(test)]
 fn sniff_strings<'a>(cells: impl Iterator<Item = &'a str>) -> (ColType, Option<String>) {
+    let cells: Vec<&str> = cells.collect();
+    let date_order = infer_numeric_date_order(cells.iter().copied());
+    sniff_strings_with_order(cells.into_iter(), date_order)
+}
+
+fn sniff_strings_with_order<'a>(
+    cells: impl Iterator<Item = &'a str>,
+    date_order: Option<NumericDateOrder>,
+) -> (ColType, Option<String>) {
     use crate::engine::analytics::data::{is_blankish, parse_numeric};
 
     let (mut any, mut int, mut float, mut boolean) = (false, true, true, true);
@@ -800,7 +822,7 @@ fn sniff_strings<'a>(cells: impl Iterator<Item = &'a str>) -> (ColType, Option<S
         } else {
             loose_ok = false;
         }
-        match parse_date_value(c) {
+        match parse_date_value_with_order(c, date_order) {
             Some(iso) => {
                 date_used = true;
                 n_dates += 1;
@@ -831,17 +853,16 @@ fn sniff_strings<'a>(cells: impl Iterator<Item = &'a str>) -> (ColType, Option<S
             ),
         );
     }
-    // Only when every non-blank cell parses -- a wrong guess on an ambiguous
-    // one would silently write the wrong date, worse than leaving it as text
-    // (see parse_named_month_date's own doc for why numeric MM/DD-vs-DD/MM
-    // formats are deliberately not attempted here).
+    // Only when every non-blank cell parses. Ambiguous numeric dates reach
+    // here only when same-column evidence established a consistent order.
     if date_ok && date_used {
         let (raw, iso) = date_example.unwrap_or_default();
+        let order_note = numeric_date_order_note(date_order);
         return (
             ColType::Date,
             Some(format!(
                 "dates were stored as text (e.g. \"{raw}\") and normalized to ISO-8601 \
-                 (e.g. {iso}) for querying with strftime()/date()"
+                 (e.g. {iso}) for querying with strftime()/date(){order_note}"
             )),
         );
     }
@@ -855,11 +876,12 @@ fn sniff_strings<'a>(cells: impl Iterator<Item = &'a str>) -> (ColType, Option<S
     }
     if n_nonblank >= 3 && n_dates >= 3 && n_dates * 100 >= n_nonblank * 80 {
         let (raw, iso) = date_example.unwrap_or_default();
+        let order_note = numeric_date_order_note(date_order);
         return (
             ColType::Date,
             Some(format!(
                 "{n_dates} of {n_nonblank} values were normalized as dates (e.g. \"{raw}\" -> {iso}); \
-                 unparseable values were left NULL"
+                 unparseable values were left NULL{order_note}"
             )),
         );
     }
@@ -920,7 +942,17 @@ fn case_collision<'a>(cells: impl Iterator<Item = &'a str>) -> Option<String> {
     }
 }
 
+#[cfg(test)]
 fn sniff_json<'a>(vals: impl Iterator<Item = &'a Json>) -> (ColType, Option<String>) {
+    let vals: Vec<&Json> = vals.collect();
+    let date_order = infer_numeric_date_order(vals.iter().filter_map(|v| v.as_str()));
+    sniff_json_with_order(vals.into_iter(), date_order)
+}
+
+fn sniff_json_with_order<'a>(
+    vals: impl Iterator<Item = &'a Json>,
+    date_order: Option<NumericDateOrder>,
+) -> (ColType, Option<String>) {
     use crate::engine::analytics::data::{is_blankish, parse_numeric};
 
     let (mut any, mut int, mut float, mut boolean) = (false, true, true, true);
@@ -960,7 +992,7 @@ fn sniff_json<'a>(vals: impl Iterator<Item = &'a Json>) -> (ColType, Option<Stri
                 } else {
                     all_str_numeric = false;
                 }
-                match parse_date_value(s) {
+                match parse_date_value_with_order(s, date_order) {
                     Some(iso) => {
                         dates += 1;
                         date_example.get_or_insert_with(|| (s.clone(), iso));
@@ -999,11 +1031,12 @@ fn sniff_json<'a>(vals: impl Iterator<Item = &'a Json>) -> (ColType, Option<Stri
     // Same reasoning as sniff_strings: only when every string value parses.
     if saw_str && all_str_date {
         let (raw, iso) = date_example.unwrap_or_default();
+        let order_note = numeric_date_order_note(date_order);
         return (
             ColType::Date,
             Some(format!(
                 "dates were stored as text (e.g. \"{raw}\") and normalized to ISO-8601 \
-                 (e.g. {iso}) for querying with strftime()/date()"
+                 (e.g. {iso}) for querying with strftime()/date(){order_note}"
             )),
         );
     }
@@ -1017,18 +1050,24 @@ fn sniff_json<'a>(vals: impl Iterator<Item = &'a Json>) -> (ColType, Option<Stri
     }
     if nonblank >= 3 && dates >= 3 && dates * 100 >= nonblank * 80 {
         let (raw, iso) = date_example.unwrap_or_default();
+        let order_note = numeric_date_order_note(date_order);
         return (
             ColType::Date,
             Some(format!(
                 "{dates} of {nonblank} values were normalized as dates (e.g. \"{raw}\" -> {iso}); \
-                 unparseable values were left NULL"
+                 unparseable values were left NULL{order_note}"
             )),
         );
     }
     (ColType::Text, None)
 }
 
+#[cfg(test)]
 fn string_cell(s: &str, ty: ColType) -> Cell {
+    string_cell_with_order(s, ty, None)
+}
+
+fn string_cell_with_order(s: &str, ty: ColType, date_order: Option<NumericDateOrder>) -> Cell {
     let s = s.trim();
     match ty {
         // In a genuine text column a placeholder like "none" / "-" / "N/A" is a
@@ -1058,11 +1097,18 @@ fn string_cell(s: &str, ty: ColType) -> Cell {
             "false" => Json::from(0),
             _ => Json::Null,
         },
-        ColType::Date => parse_date_value(s).map(Json::from).unwrap_or(Json::Null),
+        ColType::Date => parse_date_value_with_order(s, date_order)
+            .map(Json::from)
+            .unwrap_or(Json::Null),
     }
 }
 
+#[cfg(test)]
 fn json_cell(v: &Json, ty: ColType) -> Cell {
+    json_cell_with_order(v, ty, None)
+}
+
+fn json_cell_with_order(v: &Json, ty: ColType, date_order: Option<NumericDateOrder>) -> Cell {
     use crate::engine::analytics::data::{is_blankish, parse_numeric};
     match (v, ty) {
         (Json::Null, _) => Json::Null,
@@ -1086,12 +1132,24 @@ fn json_cell(v: &Json, ty: ColType) -> Cell {
         (Json::String(s), ColType::Int) => parse_numeric(s)
             .map(|f| Json::from(f as i64))
             .unwrap_or(Json::Null),
-        (Json::String(s), ColType::Date) => {
-            parse_date_value(s).map(Json::from).unwrap_or(Json::Null)
-        }
+        (Json::String(s), ColType::Date) => parse_date_value_with_order(s, date_order)
+            .map(Json::from)
+            .unwrap_or(Json::Null),
         (Json::String(s), _) => Json::from(s.clone()),
         (other, ColType::Text) => Json::from(other.to_string()),
         _ => Json::Null,
+    }
+}
+
+fn numeric_date_order_note(order: Option<NumericDateOrder>) -> String {
+    match order {
+        Some(NumericDateOrder::MonthFirst) => {
+            "; ambiguous numeric dates were interpreted month-first from unambiguous dates in this column".into()
+        }
+        Some(NumericDateOrder::DayFirst) => {
+            "; ambiguous numeric dates were interpreted day-first from unambiguous dates in this column".into()
+        }
+        None => String::new(),
     }
 }
 
@@ -1306,6 +1364,27 @@ mod tests {
         assert_eq!(
             json_cell(&Json::from("Aug 1, 2026"), ColType::Date),
             Json::from("2026-08-01")
+        );
+    }
+
+    #[test]
+    fn infers_numeric_date_order_for_json_columns_too() {
+        let vals = [
+            Json::from("03/04/2024"),
+            Json::from("4 Mar 2024"),
+            Json::from("07/25/2024"),
+            Json::from("06/03/2024"),
+        ];
+        let (ty, note) = sniff_json(vals.iter());
+        assert_eq!(ty, ColType::Date);
+        assert!(note.unwrap().contains("month-first"));
+        assert_eq!(
+            json_cell_with_order(
+                &Json::from("06/03/2024"),
+                ColType::Date,
+                Some(NumericDateOrder::MonthFirst)
+            ),
+            Json::from("2024-06-03")
         );
     }
 
