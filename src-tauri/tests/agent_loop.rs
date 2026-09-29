@@ -933,6 +933,7 @@ async fn analyst_can_inspect_labels_before_selecting_a_computation() {
     let first_system = requests[0]["messages"][0]["content"].as_str().unwrap_or("");
     assert!(first_system.contains("Analyst loop"));
     assert!(first_system.contains("optional, not a prerequisite"));
+    assert!(first_system.contains("quoted category or value as an exact label request"));
     assert!(requests[1].to_string().contains("Monthly lease"));
 
     let _ = fs::remove_dir_all(&ws);
