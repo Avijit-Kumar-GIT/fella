@@ -17,11 +17,11 @@ in `DECISIONS.md` instead, not here.
 The actual analytics engine, in four sentences, the bar every subsystem
 gets held to before it counts as documented:
 
-> Point fella at a folder. It turns your files into a small local
-> database. When you ask a question, the model writes SQL against it and
-> fella re-runs that exact query itself before you see the answer, if the
-> number doesn't match, it says so instead of guessing. If the question is
-> a comparison, it can draw a plain chart instead of a wall of numbers.
+> Point fella at a folder. It turns your files into a small local database. When
+> you ask a question, the model drives a bounded read-only analysis and fella's
+> engine re-runs and checks the computations before you see the answer. If the
+> data cannot support the claim, it says so instead of guessing; if a visual
+> helps, it draws a plain chart instead of a wall of numbers.
 
 ## Analytics engine, v1 scope
 

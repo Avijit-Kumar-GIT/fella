@@ -14,10 +14,10 @@ refuses to. Referenced from [`WHY.md`](WHY.md); the refusals are in
   safety guarantee and it's structural: there is no write tool to disable.
   The user may explicitly edit the root `fella.md` context file; the model
   cannot write it.
-- **Deterministic, auditable answers.** Every number comes from a real
-  computation SQL, or Python when SQL can't express it never from the model
-  guessing. Every answer carries the exact steps, queries, and rows behind it,
-  open for inspection.
+- **Model-driven, deterministic answers.** The model chooses and revises the
+  analytical route, but every number comes from a real computation SQL, Python,
+  or a bounded document/chart operation never from model guessing. Every answer
+  carries the actual steps, queries, and rows behind it, open for inspection.
 - **Local-first.** The base makes one model network call to the provider the
   user chose. Nothing else leaves the machine during ordinary analysis; `/mcp`
   is inert and `/update` runs only when explicitly invoked.

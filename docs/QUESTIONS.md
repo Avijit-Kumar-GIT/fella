@@ -225,10 +225,13 @@ a memory failure).
 
 **Actionable — issues #44–47**
 
-- **Merge the inspect tools (#46).** `describe_schema` + `sample_rows` (and maybe
-  `list_files`) → one `inspect_table(name)`. `prompt-ablation` already shows
-  those calls are mostly `redundant_schema` waste; fewer inspect options = fewer
-  wrong picks. Measure waste/accuracy in `agent_eval`.
+- **Keep source inspection purposeful, not artificially scarce.** The merged
+  `inspect_table(name)` gives the model one path to discover labels, missingness,
+  and samples. The evaluator previously counted every inspection as waste on
+  small workspaces because schema columns were already in the prompt; that
+  cannot tell whether the inspection added question-relevant evidence. Track
+  successful observations separately and score waste from duplicates, errors,
+  and unsupported/speculative computations instead.
 - **Mid-run steer (#45).** fx: "Enter now steers active turns instead of queuing." In
   Fella `submit()` bails while `session.busy` — the only mid-run option is
   Stop → wait → retype. A message sent while busy should cancel + re-ask with

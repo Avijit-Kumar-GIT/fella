@@ -13,9 +13,10 @@ commit as any change that alters a design decision here.
 A local-first desktop app for **enterprise-grade personal analytics** a regular person points it at
 their own folder of files (statements, health exports, notes, logs) and asks questions
 about their own life in plain language. Not a tool for analysts; the audience is people
-who don't write SQL or Python. Answers are grounded in **deterministic computation**
-(SQL, or Python when SQL isn't enough) and are **fully auditable** every answer
-carries the steps, queries and rows behind it.
+who don't write SQL or Python. The model drives interpretation and tool choice
+inside a bounded read-only harness; answers are grounded in **deterministic
+computation** (SQL, or Python when SQL isn't enough) and are **fully auditable**
+every answer carries the actual steps, queries and rows behind it.
 
 **Read-only agent.** The agent reads the folder; it never writes, moves or deletes
 anything, and it produces answers, not files. The read-only boundary is the safety
@@ -121,21 +122,29 @@ src-tauri/src/
     provider.rs              PROVIDERS registry (one row per provider)
     secrets.rs               Secrets → auth.json (0600); provider API keys
     sqlite.rs                fella.db: settings, sources cache, recent_workspaces
-    agent.rs                 the interactive harness: reasoning loop + system prompt
-                              (`PromptProfile`); owns no compute of its own and calls
-                              into `analytics::*`
+    agent.rs                 the interactive harness: model-directed reasoning loop + system prompt
+                             (`PromptProfile`); owns no compute of its own and calls
+                             into `analytics::*`; hypotheses remain advisory, while an explicit
+                             clarification prevents computation for a pending user choice
     evidence.rs              EvidenceItem / Answer / AskEvent types
     tools.rs                 Tool trait, Registry, JSON-Schema export; the 7 built-ins
     memory.rs                per-folder learned notes (memory.md); FELLA_MEMORY
 ```
 
 **Harness vs. engine, explicitly:** `agent.rs` is the interactive harness — it
-owns the reasoning loop, the system prompt, and the model turns for a product
-answer, and has no compute of its own. `engine/analytics/` is the engine — deterministic SQL/
-stats/chart/verification logic with no knowledge that a model or a loop
-exists. The engine supplies the harness, never the reverse; `AnalyticsSource`
-is the one seam between them. See `docs/GOALS.md` and `docs/LIGHTWEIGHT.md`
-for the philosophy and scope behind that split.
+owns the model-directed reasoning loop, system prompt, tool orchestration, and
+turn trace for a product answer, and has no compute of its own. The model may
+choose inspection, a semantic hypothesis, direct SQL/Python/document/chart
+tools, a revision of its plan, or a typed clarification. A hypothesis remains
+advisory; a clarification is the one deliberate exception: the runtime will
+not execute a calculation until the user resolves it. `engine/analytics/` is the engine —
+deterministic SQL/stats/chart/verification logic with no knowledge that a model
+or a loop exists. The engine supplies safe consequences for the harness, never
+the reverse; `AnalyticsSource` is the one seam between them. See
+`docs/GOALS.md` and `docs/LIGHTWEIGHT.md` for the philosophy and scope behind
+that split.
+
+![Fella analytical turn architecture](fella-harness-architecture.svg)
 
 ## Data layer
 

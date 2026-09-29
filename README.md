@@ -30,10 +30,10 @@ explore. Ask in plain language, compare periods, follow a thread, and find the
 pattern hiding in the mess.
 
 Fella combines a Rust analytics engine with an opinionated AI harness. The
-harness breaks broad questions into smaller analytical steps, keeps context
-deliberate, and uses the fewest tools needed. The engine catalogs files, queries
-local data, searches documents, makes charts, and checks the result before it
-reaches you.
+model drives interpretation, decomposition, tool choice, and explanation inside
+a deliberately small read-only boundary. The engine catalogs files, queries
+local data, searches documents, makes charts, compiles supported analytical
+plans, and checks the result before it reaches you.
 
 For analytics, a plausible answer is not good enough. The goal is to reach the
 right answer the first time, with as little unnecessary reasoning between the
@@ -66,18 +66,19 @@ your folder, as it is
         ↓
 bounded workspace + typed local tables
         ↓
-question → read-only SQL · document search · bounded Python · charts
+model → observations · SQL · document search · bounded Python · charts
         ↓
 patterns · comparisons · charts · caveats
         ↓
 a clear answer you can use
 ```
 
-The model is the conversational front door, not the source of truth for the
-numbers. It can suggest a route through the data; it cannot decide what the
-data says. Fella's Rust analytics engine performs the computation, and a
-separate verification pass checks the result against real data. If the folder
-cannot support the claim, Fella should say so.
+The model is the analytical driver, not the source of truth for the numbers. It
+can choose and revise a route through the data, but it reaches the workspace
+only through bounded read-only tools. Fella's Rust analytics engine performs
+the computation, optionally compiles a semantic plan, and a separate
+verification pass checks the result against real data. If the folder cannot
+support the claim, Fella should say so.
 
 When you want to go deeper, the result opens up: source files, calculations,
 and verification are there to inspect. Evidence supports the analysis without

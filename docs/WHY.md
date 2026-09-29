@@ -61,9 +61,10 @@ wrapper, not the weights.
 
 So the model is the part you swap, not the thing you build around. Fella will
 run whatever model you point it at, local or frontier. The design work is in the
-harness, and Fella's is *powerfully tiny* on purpose: one linear loop, a small
-fixed tool set, no ability to write or reach or act. Small enough that one
-person can read all of it and see the ceiling for themselves.
+harness, and Fella's is *powerfully opinionated*: one model-directed loop, a
+small fixed read-only tool set, and no ability to write, reach outside the
+mounted workspace, or act. Small enough that one person can read all of it and
+see the boundary for themselves.
 
 ## What that looks like in Fella
 

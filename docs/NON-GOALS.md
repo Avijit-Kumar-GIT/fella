@@ -28,8 +28,9 @@ decided is [`DECISIONS.md`](DECISIONS.md).*
   file.
 - **No terminal roleplay.** It's a REPL, but sans-serif and plain-language;
   monospace only where data lines up.
-- **The model never touches data directly.** It can only call deterministic
-  tools; all numbers in an answer must come from a tool result.
+- **The model never touches the workspace directly.** It drives the fixed
+  read-only tools, while all numbers in an answer must come from a bounded tool
+  result or a computation replayable by the engine.
 - **SQL first.** Python is the escape hatch, not the default.
 
 See also [`ARCHITECTURE.md`](ARCHITECTURE.md#what-fella-is) for what Fella

@@ -8,9 +8,8 @@ product surface is intentionally smaller than the historical extension plans.
 The next release should ship as a focused local personal analytics application.
 Its core promise is:
 
-> Fella mounts a folder, reads supported files, computes answers through
-> deterministic tools, uses a BYOK model for reasoning, and shows the evidence
-> behind each answer.
+> Fella mounts a folder, gives a BYOK model a small read-only analytical
+> computer, and checks the computations and evidence behind each answer.
 
 The default release should have a small fixed capability set. It should not
 ship a plugin marketplace, a user-installed extension system, official MCP
@@ -26,8 +25,9 @@ The primary experience is:
 
 1. Mount a folder.
 2. Ask a question in plain language.
-3. Fella chooses a deterministic tool.
-4. SQL or sandboxed Python computes the result.
+3. The model chooses observations, SQL, sandboxed Python, document search, or a
+   chart as the question requires.
+4. The Rust engine computes, compiles supported plans, and bounds the result.
 5. Fella can render a chart.
 6. The answer shows its evidence and verification state.
 7. The conversation can be revisited later.
@@ -52,8 +52,9 @@ default and enforced by the engine. This is a small user control surface, not
 enterprise policy or a new extension runtime. The future enterprise direction
 is recorded in [`CAPABILITY-POLICY.md`](CAPABILITY-POLICY.md).
 
-The normal composer remains the primary way to ask follow-up questions. This
-release does not add a general model-driven clarification workflow. Result
+The normal composer remains the primary way to ask follow-up questions. The
+model-driven loop may also ask one focused clarification when the available
+observations cannot resolve an ambiguity that would change the answer. Result
 presentation controls, such as paging or showing a different time range, can be
 added later without turning every large result into a new agent lifecycle.
 
@@ -73,9 +74,9 @@ The following are part of the personal analytics product:
 - Conversation history and local workspace context.
 - Light and dark appearance modes.
 
-The model can reason about the data, but it never gets direct filesystem access
-and never writes, moves, or deletes workspace files. The deterministic tools
-remain the only data path.
+The model can drive every enabled read-only capability, but it never gets
+direct filesystem access and never writes, moves, or deletes workspace files.
+The fixed tools remain the only path from the model to the workspace.
 
 The fixed built-in tool set is:
 
@@ -199,9 +200,9 @@ The intended request path is:
 ```text
 User
   -> Ask UI
-  -> one linear agent loop
-  -> fixed read-only tools
-  -> analytics engine
+  -> model-directed analytical loop
+  -> fixed read-only tools and optional semantic compiler
+  -> analytics engine and verifier
   -> evidence and verification
   -> answer and structured visual
 ```

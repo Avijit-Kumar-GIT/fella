@@ -135,14 +135,14 @@ it was never a weight or performance decision, it's a decision about what
 Fella is *for*. Nothing in this doc, or in the "enterprise-grade" framing
 generally, is a reason to revisit it.
 
-## The linear-loop question
+## The model-directed loop question
 
-`agent.rs` is "one linear loop, purpose-built, ~one file"
-(`docs/NON-GOALS.md`): no branching, no sub-agents, no speculative
-parallel exploration of different approaches. Concretely, "linear" means
-one shared conversation thread advancing step by step — it does **not**
-mean one tool call at a time; multiple independent tool calls inside a
-single step already run concurrently (`parallel_rule`).
+`agent.rs` is one model-directed loop, purpose-built, and intentionally free of
+speculative sub-agents. Concretely, "linear" means one shared conversation
+thread advancing step by step — it does **not** mean one tool call at a time;
+multiple independent tool calls inside a single step already run concurrently
+(`parallel_rule`). The model can revise its interpretation and choose a new
+route after each observation; the loop is linear in state, not rigid in policy.
 
 **Real limitations of this shape:**
 - No cheap way to explore two different approaches to an ambiguous

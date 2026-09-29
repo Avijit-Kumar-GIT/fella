@@ -6,8 +6,8 @@ roadmap for the shared Rust runtime, not a UI redesign or a replacement for
 the Tauri/Electron shell.
 
 The destination is ambitious. The delivery should remain incremental: every
-stage must improve the existing direct path, preserve the read-only boundary,
-and remain useful if the structured path is not yet able to answer a question.
+stage must improve the model-directed loop, preserve the read-only boundary,
+and keep the model free to use the route that best fits the question.
 
 ## The target
 
@@ -18,27 +18,52 @@ analytical result:
 workspace files
   -> WorkspaceModel (sources, profiles, definitions, revision)
   -> ConversationSession
-  -> question risk gate
-  -> semantic interpretation
-  -> AnalysisContract
-  -> grounding and targeted probes
-  -> LogicalPlan
-  -> bounded read-only execution
+  -> model control plane: interpret, decompose, observe, choose
+  -> optional AnalysisContract / semantic hypothesis
+  -> grounding and targeted probes when useful
+  -> compiled or model-authored read-only execution
   -> ExecutionTrace
   -> semantic + deterministic verification
   -> accepted result, clarification, retry, or review
   -> scoped memory and evaluation trace
 ```
 
-The model is allowed to propose meaning, plans, and explanations. The runtime
-owns scope, permissions, execution, verification, and memory promotion. The
-data is authoritative for observed values. The user resolves ambiguity that
-the data cannot resolve by itself.
+The model drives meaning, plans, tool calls, and explanations. The runtime owns
+scope, permissions, budgets, read-only execution, verification, and memory
+promotion. The data is authoritative for observed values. The user resolves
+ambiguity that observations cannot resolve by themselves.
 
 This is the implementation form of Fella's core loop:
 
-> The model proposes. The runtime grounds. The data computes. The verifier
-> judges. The user confirms. Memory compounds.
+> The model drives. The runtime constrains. The data computes. The verifier
+> checks. The user confirms. Memory compounds.
+
+## The analyst workflow
+
+The harness should reproduce how an analyst works through an unfamiliar
+question and folder:
+
+1. **Reconnaissance:** mount locally, map the files and their structure, and
+   surface useful profiles and caveats without requiring clean inputs or
+   silently deciding what every field means.
+2. **Frame the question:** interpret the request and decompose it into smaller
+   questions when that helps identify the required evidence.
+3. **Investigate:** inspect the relevant sources, labels, samples, notes, date
+   conventions, and candidate relationships. Use observations to refine the
+   interpretation; repeat inspection when evidence is incomplete or surprising.
+4. **Clarify when it matters:** ask only after reasonable investigation leaves
+   a user-owned ambiguity that could change the result. Pending clarification
+   allows local observation, not computation under an unresolved choice.
+5. **Analyze and validate:** execute the grounded plan read-only, check the
+   result against its source rows and stated assumptions, then either revise
+   the investigation or answer with traceable evidence.
+
+This is model-directed, not a mandatory sequence of tool calls. A direct
+computation is appropriate when the source and meaning are already clear. A
+multi-source or semantically messy question should be allowed the extra
+inspection it needs. The model is assumed capable of analysis when Fella gives
+it relevant context, useful tools, and feedback; failures are presumed to be
+harness-side until controlled comparison shows otherwise.
 
 ## Delivery status
 
@@ -54,25 +79,28 @@ This is the implementation form of Fella's core loop:
   shared bounded context packet. It now includes cautious identifier-based
   relationship candidates as prompt-visible join hints; richer user-defined
   definitions and value semantics are still ahead.
-- **M2 — semantic routing:** first slice implemented; elevated questions can
-  negotiate a compact contract, and Rust preserves ambiguity instead of
-  treating a model proposal as verified meaning. The runtime now enforces the
-  contract-first route at dispatch: an elevated question cannot execute a data
-  tool without a contract, and an ambiguous, unsupported, or invalid contract
-  blocks sibling data calls in the same model response.
-- **M3 — grounding:** first slice implemented alongside contract routing;
+- **M2 — model-driven interpretation:** first slice implemented; the model has
+  the complete fixed read-only tool surface plus an optional compact contract
+  function. Rust normalizes and grounds a proposed hypothesis, but an
+  ambiguous, unsupported, invalid, or absent hypothesis never blocks direct
+  investigation. The prompt now describes the analyst workflow without
+  requiring a contract before source inspection or direct tools. A proposed
+  clarification keeps local observation tools available while withholding
+  computation, so findings can resolve the ambiguity before Fella interrupts
+  the user. Risk signals tune attention and verification rather than selecting
+  a mandatory route.
+- **M3 — grounding:** first slice implemented alongside model-directed routing;
   exact field bindings and bounded filter-value probes now run against the
   current workspace revision. The first deterministic planner slice now
   compiles grounded single-source aggregates, filters, time ranges, typed
   year/month/week/day buckets, groupings, grounded top-N/ranking, and guarded
   ratios over declared measures into read-only SQL. Explicit join edges are
   now revision-grounded, cardinality-probed, and compilable when the join graph
-  is connected and every reference is unambiguous; disconnected/ambiguous joins
-  still use the direct fallback. Typed single-source period comparisons now
+  is connected and every reference is unambiguous. Typed single-source period comparisons now
   ground both explicit windows and compile current, previous, absolute-change,
   and guarded percent-change columns, including guarded single-source derived
   metrics; aligned month/week/day buckets are also supported, while joins and
-  non-alignable year buckets remain fallback cases.
+  non-alignable year buckets remain model-selected direct-tool cases.
 - **M4 — semantic verification:** first slice implemented; grounded bindings
   must be present in executed SQL, requested aggregate operations and observed
   filter values, time buckets, ranking limits, derived ratios, and typed
@@ -89,17 +117,19 @@ This is the implementation form of Fella's core loop:
   chart payloads are now re-projected from their stored source rows during
   verification so mutated labels or values become hard failures; richer
   chart-shape semantics remain ahead, and
-  unresolved, ambiguous, and unsupported contracts remain explicit review
-  states—even when a query is numerically reproducible or when the model
-  skips the contract entirely.
+  unresolved, ambiguous, and unsupported hypotheses remain visible in the
+  trace, but they do not veto a separately grounded direct computation. Numeric
+  claim support now uses returned cells rather than SQL execution metadata, and
+  any unbacked number can trigger one bounded tool-backed revise-or-retract pass.
 - **M5 — versioned semantic memory:** first slice implemented; corrections and
   verified field bindings can carry authority, workspace revision, supporting
   turn, evidence IDs, and explicit supersession/conflict state. The typed
   ledger projects into readable `memory.md` without making model suggestions
   prompt authority.
 - **M6 — canonical persistence:** first slice implemented; every completed ask
-  persists a typed backend-owned turn record with its contract, direct-tool
-  plan, execution trace, verification report, and bounded result/evidence. The
+  persists a typed backend-owned turn record with its optional hypothesis,
+  model-directed plan, execution trace, verification report, and bounded
+  result/evidence. The
   same record can be loaded or rerun through the Tauri and Electron bridges;
   reruns are mount-checked and linked to their source turn. A compact catalog
   snapshot and shared replay-status command now explain revision drift and
@@ -121,7 +151,13 @@ This is the implementation form of Fella's core loop:
   unsafe-guess rates for Fella runs. Cost/quality dashboards and broader replay
   matrices remain ahead; the lift rollup now carries weighted accepted and
   unsafe rates alongside accuracy and token cost. Fella benchmark records also
-  retain canonical analysis-turn references for inspection and rerun.
+  retain canonical analysis-turn references for inspection and rerun. The
+  analyst loop now retains a bounded working set of source-document evidence
+  and the latest semantic frame across tool rounds, instead of evicting them
+  solely by age; derived arithmetic and candidate-threshold decisions also
+  have explicit model instructions and are exercised through focused agent
+  regressions plus selected mixed-file model replays. Evaluation reports useful
+  reconnaissance separately from duplicate, failed, and speculative work.
 
 ## Where the current code starts
 
@@ -160,15 +196,17 @@ these capabilities:
 
 1. **Build the runtime spine before the semantic features.** Every future
    feature should attach to the same turn, trace, and revision objects.
-2. **Keep two lanes.** Obvious questions use the existing fast path. Ambiguous
-   or high-risk questions pay for structured interpretation and stronger checks.
+2. **Keep one model-directed loop.** The model decides whether the next move is
+   inspection, a hypothesis, SQL, Python, document search, a chart, or a
+   clarification. The runtime does not force a pre-tool ceremony.
 3. **Use AI where it provides leverage; constrain consequences in Rust.** The
-   model can suggest a contract, but cannot bypass catalog scope, read-only
-   execution, budgets, or verification.
+   model can choose any enabled read-only route, but cannot bypass catalog
+   scope, execution budgets, or verification.
 4. **Treat ambiguity as a state.** Do not turn an unresolved interpretation
    into a confident SQL query merely because the query runs.
-5. **Keep advanced paths.** SQL, Python, documents, and charts remain available
-   as fallbacks, with their actual verification level made explicit.
+5. **Keep every analytical path first-class.** SQL, Python, documents, and
+   charts remain available as model-selected capabilities, with their actual
+   verification level made explicit.
 6. **Make the backend canonical.** Tauri and Electron should consume the same
    runtime protocol; the Svelte UI should project runtime state rather than
    assemble its own interpretation of a turn.
@@ -216,7 +254,7 @@ definition surface and keep inferred facts visibly separate from user facts.
 **Exit criteria:** a workspace can expose a compact, inspectable model without
 asking the model to rediscover basic data shape on every question.
 
-### M2 — Semantic interpretation and risk gating
+### M2 — Model-directed semantic interpretation
 
 Introduce a compact `AnalysisContract` for the common analytical core:
 
@@ -228,25 +266,26 @@ Introduce a compact `AnalysisContract` for the common analytical core:
 - requested presentation;
 - assumptions and unresolved ambiguity.
 
-Add a risk router:
+Add attention signals:
 
 ```text
-single obvious lookup       -> current fast path
-trend / ratio / join        -> contract + stronger checks
-ambiguous value or field    -> contract + grounding probes
-material disagreement      -> clarification
-unsupported request        -> explicit refusal
+simple lookup               -> one direct observation
+trend / ratio / join        -> whatever decomposition the model needs
+ambiguous value or field    -> inspect, probe, or propose a hypothesis
+material disagreement      -> retry, revise, or clarify
+unsupported request        -> explain the observed limitation
 ```
 
-The structured call must have a provider-neutral fallback. Providers that
-support structured output can use it; others receive a strict compact schema
-prompt and are validated before the contract is accepted.
+The contract function is optional and provider-neutral. Providers that support
+structured output can use it; others can emit the compact schema through the
+ordinary tool loop. A malformed or unresolved contract is a repair signal, not
+a reason to deny the model access to the other read-only tools.
 
 **Exit criteria:** the system can distinguish “the model wrote valid SQL” from
 “the model understood the question,” and it does not silently choose between
 materially different interpretations.
 
-### M3 — Grounding, probes, and logical planning
+### M3 — Grounding, probes, and logical compilation
 
 Add internal bounded probes for candidate values, date coverage, units, nulls,
 zero-result filters, and join cardinality. Then compile grounded contracts
@@ -259,30 +298,28 @@ into a typed `LogicalPlan` and deterministic SQL for the common core:
 - declared joins;
 - chart result shapes.
 
-Model-generated SQL and Python remain the advanced fallback. The compiler owns
-physical table names, quoted identifiers, date functions, null behavior, and
-denominator definitions.
+Model-generated SQL and Python remain first-class model-directed routes. The
+compiler owns physical table names, quoted identifiers, date functions, null
+behavior, and denominator definitions when the model selects the typed plan.
 
 The first implementation slice is intentionally narrower than the destination:
 it only compiles a grounded single queryable source with aggregate measures,
 observed filter values, ISO-like year/month/date ranges, group-by fields,
 ratios whose operands are declared measures, and explicit join edges whose
 sources and keys are grounded against the current snapshot. Connected joins
-with qualified, unambiguous references now compile into read-only SQL; the
-fallback remains the safety valve for disconnected graphs and unsupported
-comparison semantics. A first typed comparison slice also supports one-source
+with qualified, unambiguous references now compile into read-only SQL; direct
+model tools remain available for disconnected graphs and unsupported
+  comparison semantics. A first typed comparison slice also supports one-source
 period-over-period contracts with explicit current and previous ranges, bounded
 range probes, and deterministic change columns. It now also supports guarded
 single-source derived metrics inside the comparison, plus aligned
 month/week/day buckets; joins and non-alignable year buckets remain on the
-fallback path. Contract preflight completes before any compiled plan or
-sibling model data call is dispatched, so a partially valid response cannot
-touch data after a material interpretation failure.
-When any of those conditions is not provably satisfied, Fella keeps the
-contract for verification but returns to the existing model-driven path.
+direct-tool route. A semantic hypothesis is recorded alongside execution,
+  and the model can continue with direct tools when compilation is not useful.
 
-**Exit criteria:** common questions execute from a validated semantic plan;
-advanced questions still work through the existing direct path.
+**Exit criteria:** common questions can use a validated semantic plan, while
+the model can still investigate and answer questions the compiler does not
+cover.
 
 ### M4 — Semantic verification and acceptance gates
 
@@ -390,8 +427,8 @@ The first implementation slice is the shared `ContextAssembler`. It keeps
 ordinary context unchanged, but prevents unusually large user guides, schemas,
 memory ledgers, or transcripts from consuming the entire model budget. It
 selects relevant lines for definitions and schemas, keeps the newest session
-turns, and makes omissions explicit so the model can fall back to the read-only
-tools. This applies the minimal-relevant-context principle described by
+turns, and makes omissions explicit so the model can continue with the
+read-only tools. This applies the minimal-relevant-context principle described by
 [CHESS: Contextual Harnessing for Efficient SQL](https://arxiv.org/abs/2405.16755)
 without introducing a vector store into the local-first base product. The
 evaluation harness now carries the runtime's acceptance status plus optional
@@ -418,8 +455,8 @@ justify importing their full systems.
   The semantic-layer-mediated NL-to-SQL work separates semantic intent from
   physical SQL with a compact intermediate representation and a deterministic
   dialect compiler. Fella adopts that shape as `AnalysisContract` →
-  `LogicalPlan` → SQL for its common analytical core, while retaining a direct
-  fallback for advanced questions. See [Kim, Khoeurn, and Yoon, *A
+  `LogicalPlan` → SQL for its common analytical core, while retaining direct
+  model-selected tools for questions outside that core. See [Kim, Khoeurn, and Yoon, *A
   Semantic-Layer-Mediated Agent for Natural Language to SQL over Heterogeneous
   Enterprise Databases*](https://arxiv.org/abs/2606.31041).
 

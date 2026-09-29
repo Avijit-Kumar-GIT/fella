@@ -13,11 +13,13 @@ The central quality problem is not whether a model can produce valid SQL. It is
 whether the answer reflects what the user meant, what the files actually
 contain, and what the calculation can support.
 
-The target is an **adaptive semantic runtime**:
+The target is a **model-driven analytical computer**:
 
-> The model proposes meaning. Fella grounds that meaning in the current data,
-> compiles supported analysis into safe execution, checks the result, and asks
-> for clarification when the remaining ambiguity can change the answer.
+> The model interprets the question, chooses the next useful observation or
+> computation, and explains the result. Fella supplies bounded context and
+> read-only tools, compiles safe analytical work where useful, checks the
+> resulting claims, and asks for clarification when ambiguity still changes the
+> answer.
 
 This is broader than a prompt, a memory file, or a SQL agent. It is also
 narrower than a general-purpose autonomous agent: Fella remains read-only,
@@ -34,10 +36,9 @@ The runtime owns the complete lifecycle:
 ~~~text
 workspace scope
   -> conversation session
-  -> semantic interpretation
-  -> analysis contract
-  -> grounding and logical planning
-  -> read-only execution
+  -> model-directed interpretation and tool use
+  -> semantic hypotheses and observations
+  -> compiled or direct read-only execution
   -> semantic verification
   -> analytical result
   -> memory, history, and evaluation
@@ -48,6 +49,65 @@ one lifecycle and one set of shared runtime objects, not from a monolith.
 The UI, model adapter, persistence layer, deterministic analytics engine, and
 verification code can remain separate while participating in the same turn
 protocol.
+
+### The analyst loop
+
+Fella follows the working loop of a careful analyst, not a fixed ETL ceremony
+followed by a one-shot answer:
+
+~~~text
+mount -> local reconnaissance
+question -> inspect -> frame/decompose -> investigate
+                         ^                   |
+                         |                   v
+                    revise meaning <- observations
+                                             |
+                          unresolved material choice?
+                              yes -> clarify
+                               no -> plan and execute
+                                         |
+                                         v
+                               validate against evidence
+                                         |
+                             revise, or answer with trace
+~~~
+
+Mounting establishes a read-only map of available sources, schemas, profiles,
+and caveats. It should not force every file into a supposedly canonical
+meaning. For each question, the model uses that map to decide what to inspect
+more closely: relevant columns and observed labels, samples, notes, candidate
+relationships, date coverage, or a small query. It decomposes a multi-part
+question when that helps locate and check the needed evidence. Each
+observation can revise the interpretation or lead to another targeted
+inspection before the model commits to a computation.
+
+The loop must preserve the evidence that gives later computations meaning.
+As tool history grows, Fella keeps a bounded working set of source definitions
+and the latest semantic frame while eliding stale, reproducible query output.
+If a definition no longer fits that budget, the model must be able to re-read
+it before relying on it; an observed count is never a substitute for a target
+or rule stated in a document.
+
+For decisions across candidates, the model keeps the criterion, comparator,
+measured quantity, and scope explicit, then applies them consistently to the
+candidate set. For requested differences, rates, ratios, and percentages, the
+transformation belongs in the executed computation with labeled operands, not
+only in answer prose. These are analytical invariants, not domain-specific
+fallbacks.
+
+Clarification comes after reasonable investigation, and only when the
+remaining choice belongs to the user and could materially change the answer.
+While waiting, Fella may continue safe local inspection but must not calculate
+under the unresolved choice. If both interpretations produce the same answer,
+or one is supported by the workspace, do not interrupt the user unnecessarily.
+
+The model is presumed capable of useful analysis when given relevant evidence,
+effective read-only tools, and execution feedback. A failure should initially
+be investigated as a possible harness, context, ingestion, tool, or execution
+problem; attribute it to model reasoning only when a controlled replay
+isolates that cause. Fella's job is to enable and check the model's work, not
+to replace its interpretation with an expanding list of deterministic
+language rules.
 
 ### The first-class runtime objects
 
@@ -92,15 +152,15 @@ or transcript from crowding out the actual analytical question.
 
 ### Authority boundaries
 
-The model proposes meaning and explains results. The runtime owns workspace
-scope, permissions, planning, execution, verification, and memory promotion.
-The user resolves ambiguity and confirms definitions. The data is the authority
-for observed values.
+The model owns interpretation, decomposition, tool choice, and explanation.
+The runtime owns workspace scope, permissions, budgets, read-only execution,
+verification, and memory promotion. The user resolves ambiguity and confirms
+definitions. The data is the authority for observed values.
 
 ~~~text
-model        -> hypotheses and narration
+model        -> interpretation, decomposition, tool choice, and narration
 user data    -> observed facts
-runtime      -> constrained computation and verification
+runtime      -> bounded tools, compilation, and verification
 user         -> clarification and confirmed definitions
 memory       -> scoped, evidence-backed continuity
 ~~~
@@ -110,24 +170,63 @@ turn uncertainty into authority.
 
 ### The analytical turn
 
-Every question passes through the same conceptual state machine, even when the
-fast path skips expensive stages:
+Every question passes through the same conceptual state machine. The model can
+move through it in whatever order the question needs:
 
 ~~~text
-received -> interpreted -> grounded -> planned -> executing -> verifying -> accepted
-                         |                         |             |
-                         v                         v             v
-                      clarify                  retry         needs review
-                         |
-                         v
-                      unsupported
+received -> model interprets -> observes -> plans/compiles -> executes -> verifies -> accepted
+                 ^                 |              |               |
+                 |                 v              v               v
+                 +----------- revise         retry/repair     needs review
+                                                                    |
+                                                                    v
+                                                               clarify/unsupported
 ~~~
 
-Low-risk questions may create a minimal contract and go directly to execution.
-High-risk questions can produce candidate contracts, run bounded probes, ask a
-focused clarification, or use a stronger verification path. The user should
-not pay the cost of the full ceremony when the answer is obvious, but every
-answer should still have a place for interpretation and verification.
+The model may answer a simple question with one direct tool call, or use a
+semantic hypothesis, targeted probe, compiled plan, Python calculation,
+document search, chart, or clarification when the question needs it. Risk
+signals tune attention and verification; they never remove a read-only tool or
+force a ceremony before the model can investigate.
+
+### The semantic decision edge
+
+`AnalysisContract` is an intermediate representation, not a forced planner
+step. It gives the model a compact place to state its current meaning for the
+question, while the runtime grounds names, values, sources, and relationships
+against the mounted revision. The contract has four practical outcomes:
+
+1. **Resolve:** the wording and workspace evidence identify one interpretation;
+   the model can execute it.
+2. **Assume:** one interpretation is reasonable but not mathematically forced;
+   the model proceeds and states the assumption in the answer.
+3. **Clarify:** two or more supported interpretations would materially change
+   the result, and the choice belongs to the user. The model emits one typed
+   `clarification` request with a concise question and optional choices. Fella
+   does not execute a calculation for the unresolved choice; the user's reply
+   starts the next turn with the decision in conversation context.
+4. **Unsupported:** the workspace cannot answer the requested analysis through
+   the available read-only paths.
+
+This is the right place for a Jev-like decision model if Fella ever adopts
+one: it could cheaply route a grounded question among `resolve`, `assume`,
+`clarify`, and `unsupported`, or rank explicit candidate interpretations. It
+must not generate the candidates from nothing, replace the analytical model,
+or overrule observed data. Fella's current implementation keeps this decision
+inside the existing model-directed loop and typed contract, so it does not add
+a second model, network dependency, or hidden source of truth before an eval
+shows that one is worthwhile. This follows the same division TypeSafe
+describes for Jev: typed decisions route work, while code performs exact
+operations and a general model handles open-ended reasoning. See
+[TypeSafe's Jev overview](https://www.typesafeai.org/jev).
+
+The threshold is intentionally semantic rather than a fixed confidence score:
+ordinary aliases and messy labels should be resolved through schema, observed
+values, notes, and probes; a clarification is reserved for an unresolved
+user-specific choice such as whether income belongs in a spending total. A
+classifier confidence score can inform this edge later, but confidence alone
+cannot decide whether two interpretations have materially different
+consequences.
 
 ### Current product concepts as runtime projections
 
@@ -155,8 +254,8 @@ Fella is not primarily a workspace with an AI assistant inside it, and it is
 not a SQL agent with an evidence panel bolted on. It is a read-only analytical
 runtime in which:
 
-> The model proposes. The runtime grounds. The data computes. The verifier
-> judges. The user confirms. Memory compounds.
+> The model drives. The runtime constrains. The data computes. The verifier
+> checks. The user confirms. Memory compounds.
 
 That closed loop is the harness. It is where Fella's three principles become
 technical behavior:
@@ -164,15 +263,16 @@ technical behavior:
 - **Consistency:** contracts and semantic memory preserve meaning across turns.
 - **Correctness:** execution and verification are tied to the current workspace
   revision.
-- **Efficiency:** risk gating, bounded probes, fixed tools, parallel execution,
-  and cached profiles keep simple questions fast.
+- **Efficiency:** model-chosen tool calls, bounded observations, fixed tools,
+  parallel execution, and cached profiles keep simple questions fast without
+  limiting the model on harder questions.
 
 ## Design principles
 
-1. **Interpretation may be probabilistic; execution must be constrained.**
+1. **Interpretation may be probabilistic; consequences must be constrained.**
    Natural language cannot be deterministically interpreted in all cases. The
-   model can propose an interpretation, but Fella must validate its references,
-   assumptions, and consequences before trusting the result.
+   model must be free to form and revise interpretations, while Fella keeps
+   every consequence inside the bounded, read-only execution boundary.
 2. **Meaning comes before physical SQL.** The model should reason about
    measures, populations, dimensions, time, and definitions before choosing
    physical column expressions.
@@ -183,14 +283,16 @@ technical behavior:
    reveal which values, dates, units, and relationships actually exist.
 5. **Verification checks analytical meaning as well as reproducibility.** A
    query that runs consistently can still answer the wrong question.
-6. **Simple questions stay simple.** The full pipeline is risk-gated. A basic
-   lookup should not pay for a full interpretation ceremony.
+6. **The model chooses the route.** A basic lookup should stay one call, while
+   a harder question may spend additional calls when that materially improves
+   correctness.
 7. **Every inferred fact has authority and provenance.** User definitions,
    observed data properties, model suggestions, and confirmed corrections must
    not be treated as equivalent.
-8. **Unsupported analysis remains possible.** The structured semantic path
-   handles the common analytical core; advanced SQL, Python, and document
-   analysis retain a clearly marked fallback path.
+8. **No capability is hidden behind a semantic gate.** The structured contract,
+   direct SQL, bounded Python, document search, and charts are all legitimate
+   model-selected routes. Each carries the verification level it actually
+   earned.
 
 ## Target architecture
 
@@ -211,31 +313,31 @@ Files, databases, and documents
           User question
               |
               v
-      Interpretation engine
-      - candidate meanings
-      - schema/value grounding
-      - ambiguity and risk detection
-      - targeted probes
-      - clarification when necessary
+        Model control plane
+      - interpret and decompose
+      - choose observations and tools
+      - optionally emit a semantic hypothesis
+      - revise from tool results
+              |
+        +-----+-----+------------------+
+        |           |                  |
+        v           v                  v
+   inspect/probe  Analysis        direct tool calls
+                  Contract        SQL · Python · docs · chart
+        |           |
+        +-----+-----+
+              v
+       Grounding + compiler
+       - resolve names and values
+       - compile supported plans
+       - preserve model-selected alternatives
               |
               v
-         Analysis Contract
-      - population and grain
-      - measures and operations
-      - filters and resolved values
-      - time range and timezone
-      - grouping and comparison
-      - assumptions and unresolved items
-              |
-              v
-       Semantic planner/compiler
-              |
-              v
-      Existing Fella execution loop
-      - read-only SQL
+        Read-only execution
+      - compiled SQL
+      - model-authored SQL
       - bounded Python
-      - document search
-      - charts
+      - document search and charts
               |
               v
        Semantic verification
@@ -293,9 +395,11 @@ the contract and authority model, not the file format.
 
 ## The per-question Analysis Contract
 
-The contract is an intermediate representation of the question. It is not
-intended to replace natural-language conversation or expose raw planner output
-to ordinary users.
+The contract is an optional semantic intermediate representation of the
+question. It is not a permission token, a required preflight, or a replacement
+for natural-language conversation. The model can use it to make a hypothesis
+legible to the compiler and verifier, then continue with direct tools when the
+hypothesis is incomplete or when a different route fits better.
 
 ~~~json
 {
@@ -322,7 +426,8 @@ to ordinary users.
   "comparison": null,
   "presentation": "single_value",
   "assumptions": [],
-  "unresolved": []
+  "unresolved": [],
+  "clarification": null
 }
 ~~~
 
@@ -332,11 +437,14 @@ Important properties:
 - It records the population and grain, preventing many denominator errors.
 - It distinguishes a user-confirmed value map from a model suggestion.
 - It can contain unresolved ambiguity rather than forcing a guess.
+- It can carry one typed clarification request when the remaining choice
+  belongs to the user; that request is not executable evidence.
 - It describes the requested result shape, which helps answer completeness.
 - It remains small enough to fit into the existing model loop.
 
-The model can propose a contract, but the backend owns its validation and
-status. Possible interpretation statuses are:
+The model can propose a contract, but the backend owns its normalization and
+records its status. A non-grounded contract describes uncertainty; it does not
+block an otherwise safe tool call. Possible statuses are:
 
 ~~~text
 grounded       references current data and known definitions
@@ -347,18 +455,19 @@ unsupported    the data cannot represent the request
 
 ## Interpretation strategies
 
-Fella should support several strategies behind one interface.
+Fella should support several model-selected strategies behind one interface.
 
 ### Direct interpretation
 
-The model goes directly from question to tools. This remains the fast path for
-low-risk questions and the fallback for capabilities not covered by the
-structured planner.
+The model goes directly from question to tools. This is the normal route when
+the model already understands the workspace well enough, and it remains valid
+even when a semantic hypothesis cannot be grounded.
 
 ### Structured interpretation
 
 The model emits an Analysis Contract through structured output or an internal
-planning call. Rust validates it before execution.
+planning call. Rust normalizes it, grounds what can be grounded, and may compile
+it into deterministic execution. Direct model-selected calls remain available.
 
 ### Candidate interpretation
 
@@ -377,10 +486,9 @@ The clarification should be concrete:
 
 It should not ask the user to restate the entire question.
 
-## Risk gating
+## Attention and verification signals
 
-The full interpretation path should activate when the question or workspace
-has signals such as:
+The runtime can detect signals such as:
 
 - multiple plausible measure or date fields;
 - low-cardinality labels with aliases or near-duplicates;
@@ -393,13 +501,15 @@ has signals such as:
 - a question spanning multiple source types;
 - an advanced Python/statistical calculation without replayable backend support.
 
-Low-risk questions can continue through the current one- or two-call path. A
-high-risk question can pay for a contract, probe, or clarification because a
-wrong answer is more expensive than one extra round trip.
+These signals tune the model prompt, observation budget, and verification
+strength. They do not decide that a question must call a contract tool first,
+and they do not remove direct SQL, Python, document, or chart access. A simple
+question can stay at one call; a difficult question can spend more calls when
+that buys a better answer.
 
 ## Semantic planning and compilation
 
-The structured path should cover a common analytical core:
+The deterministic compiler should cover a common analytical core:
 
 - selection and filtering;
 - aggregates and distinct counts;
@@ -413,10 +523,11 @@ The structured path should cover a common analytical core:
 The compiler owns physical details such as table names, column expressions,
 join predicates, date functions, null behavior, and unit conversion.
 
-Advanced SQL, Python statistics, document analysis, and unusual queries remain
-available through the fallback path. Those answers should carry a capability or
-verification note rather than pretending to have the same guarantee as a
-compiled plan.
+Model-authored SQL, Python statistics, document analysis, and unusual queries
+are first-class execution paths, not fallbacks. They should carry the
+capability and verification notes they actually earned. The compiler is the
+deterministic engine for the subset it can express; it is not the product's
+interpretation authority.
 
 ## Probing and clarification
 
@@ -434,21 +545,24 @@ The probe planner should be internal rather than adding many model-visible
 tools. Existing catalog inspection and run_sql capabilities can provide much
 of the execution surface.
 
-The decision policy is:
+The model/runtime decision policy is:
 
 ~~~text
-one candidate is unsupported       -> discard it
-all candidates produce same result  -> proceed, record the assumption
-one candidate is clearly grounded   -> proceed
-supported candidates differ         -> clarify or surface the assumption
-no candidate is supported            -> say the data cannot answer
+an observation resolves a question  -> use it and continue
+a hypothesis is partly grounded     -> keep supported bindings, revise the rest
+multiple routes are plausible       -> let the model compare their observations
+results materially disagree         -> retry, revise, or clarify
+no route can support the claim      -> say the data cannot answer
 ~~~
 
 ## Semantic verification
 
-The existing verifier reruns cited SQL and checks that answer figures are
-grounded. The semantic runtime adds checks against the contract and result
-shape.
+The existing verifier reruns cited SQL and checks answer figures against
+returned data cells, not execution metadata such as elapsed milliseconds or
+tool-reported row counts. A numeric claim that is not in evidence triggers one
+bounded tool-backed revise-or-retract pass, whatever the result shape; the
+model may compute a missing derived value or remove an unsupported claim. The
+semantic runtime also checks the contract against the result shape.
 
 Examples:
 
@@ -469,9 +583,10 @@ as a direct aggregate and a sum of grouped subtotals. Agreement is supporting
 evidence; disagreement is a reason to retry, clarify, or mark the answer for
 review.
 
-Verification should be a backend quality gate. The default UI should expose
-only the relevant assumption or caveat, with the full contract and checks
-available through progressive disclosure.
+Verification is a backend quality gate for claims and computed outputs, not a
+gate on which tool the model was allowed to try. The default UI should expose
+only the relevant assumption or caveat, with the full hypothesis, trace, and
+checks available through progressive disclosure.
 
 ## Memory and authority
 
@@ -511,7 +626,7 @@ The target can fit the existing architecture without replacing the harness:
 | catalog.rs | Source discovery and base profiling |
 | memory.rs / semantic_memory.rs | Human-readable memory projection plus versioned semantic facts and correction history |
 | analysis_store.rs | Backend-owned persisted turn records, workspace-safe reruns, and lineage |
-| agent.rs | Risk gating, interpretation calls, execution orchestration |
+| agent.rs | Model-directed interpretation, tool orchestration, and execution |
 | planner.rs / analytics/ | Deterministic logical-plan compilation, profiles, probes, and invariants |
 | tools.rs | Fixed read-only execution boundary |
 | verify.rs | Evidence, contract, and semantic verification |
@@ -520,7 +635,9 @@ The target can fit the existing architecture without replacing the harness:
 | AnalysisContract | Per-question interpretation IR |
 | WorkspaceModel | Durable semantic model for a workspace revision |
 
-The model still cannot write files or bypass the read-only data boundary.
+The model can drive every enabled read-only capability, but it still cannot
+write files, access the filesystem directly, or bypass the read-only data
+boundary.
 
 ## External patterns to borrow
 
@@ -571,7 +688,8 @@ slices:
    VerificationReport types.
 2. Expand the workspace profile with common values, date coverage, units,
    candidate identifiers, and data caveats.
-3. Add structured interpretation with a reliable fallback to the existing loop.
+3. Make optional model-generated semantic hypotheses available inside the
+   existing loop without restricting direct tool use.
 4. Add catalog and value grounding.
 5. Add ambiguity risk scoring and targeted probes.
 6. Add clarification for materially different interpretations.
@@ -582,8 +700,9 @@ slices:
 
 Each phase should be benchmarked against correctness, semantic correctness,
 clarification quality, useful tool calls, time-to-correct-answer, and memory
-carryover. The direct agent path should remain available until the structured
-path proves it is better for a given question family.
+carryover. The model-directed loop remains the product path; contracts and
+compiled plans earn authority by improving measured answers, not by replacing
+working routes through policy.
 
 ## Quality bar
 

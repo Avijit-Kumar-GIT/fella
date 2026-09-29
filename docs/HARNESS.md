@@ -9,18 +9,20 @@ tried.
 
 ## Stance
 
-Fella's harness is deliberately at the small end of every axis in the
-[literature](#reference). The choices, and why each one holds across a smaller
-BYOK model and a frontier one:
+Fella's harness is deliberately opinionated rather than artificially narrow.
+The model drives the analytical route inside a small, read-only tool boundary.
+The choices, and why each one holds across a smaller BYOK model and a frontier
+one:
 
 | Choice | Why it's model-agnostic |
 |---|---|
-| **One linear loop**, no planner/critic/sub-agents (`agent.rs`, ~one file) | Coordination overhead and context-sharing bugs scale with orchestration complexity, not model strength. A weak model derails in a multi-agent graph; a strong one doesn't need it. |
-| **Deterministic tools are the only data path**; the model never emits a figure | The correctness floor is the same whatever the model. A better model writes better SQL; it can't make the numbers less checked. |
+| **One model-directed loop**, no speculative planner/critic/sub-agents (`agent.rs`) | The model can inspect, decompose, choose tools, revise, clarify, and explain in one shared context. Coordination overhead and context-sharing bugs are not added unless the analytical problem proves they are needed. |
+| **A fixed read-only tool boundary**; the model drives the calls | The model has room to solve the problem, while the runtime still owns workspace scope, budgets, and the only path to data. It cannot write, shell out, browse, or act. |
 | **Deterministic verification, no LLM critic** (`verify.rs`) | A self-grading model is generous to its own output, and that bias is worse on weaker models. Re-running the cited SQL is exact for everyone. |
 | **Minimal prompt**, split into toggleable sections (`PromptProfile`) | Every added instruction is a token tax on the strong model and a distraction risk for both. Measured: the shipped prompt is already at the Pareto point for the 31B benchmark model (see log). |
 | **Schema-in-prompt instead of RAG** | The folder *is* the scope. A retrieval config to tune is a second system that fails independently of the model. |
 | **`num_ctx` is a growing floor, not a fixed size** (`fit_num_ctx`) | Small models have small default context; large folders need more. Growing only when the prompt demands it keeps a weak model from paging its whole context every turn. |
+| **Typed semantic decision edge** (`AnalysisContract`) | A model may resolve, state an assumption, ask one focused clarification, or report unsupported. The runtime never executes a calculation while a typed user choice is pending. A second classifier remains optional until it proves a generalized accuracy/latency gain. |
 
 ## Method
 
@@ -30,12 +32,11 @@ The rule that makes an optimisation *general* rather than model-specific:
 
 Removing ambiguity (a tool result that reads as "query broke" when it means
 "zero"; a verification check that false-positives) helps whichever model was
-tripping on it and is neutral for the rest. Adding scaffolding (few-shot
-examples, forced planning turns, verbose step-by-step rules, aggressive history
-trimming) props up the weak model *at the strong model's expense* — more tokens,
-more distraction, more over-constraint. The first kind compounds upward: a
-better model can only do better once the trap is gone. The second kind has a
-ceiling and a cost.
+tripping on it and is neutral for the rest. Adding rigid scaffolding (forced
+planning turns, hard phase gates, verbose step-by-step rules) can stop a strong
+model from using the route that fits the question. The harness should provide
+useful context and deterministic consequences without taking the driver's seat
+away from the model.
 
 This is roughly the maintainer's "optimise the worst case" intuition, made
 precise. Two caveats:
@@ -56,8 +57,9 @@ precise. Two caveats:
   (`DECISIONS.md` 2026-09-07). Two guards remain: it must not *regress* the
   questions that don't need it (a distraction cost), and prompts stay
   **permissive** — no rigid step lock-step, no forbidding the model from
-  exploring or reasoning its own way to a correct answer. Added context is
-  reference the model *may* use, not a rule it *must* follow.
+  exploring or reasoning its own way to a correct answer. Added context and
+  semantic hypotheses are references the model *may* use, not permissions it
+  *must* earn before touching a read-only tool.
 
 Mechanics: `docs/PERFORMANCE-LOG.md` §`agent_eval`. Frozen 18-case battery,
 `--compare` two JSON runs, `--iters 5` (fewer is noisy — a single case flipping
@@ -231,7 +233,7 @@ are worth revisiting.
 | **Code-as-orchestration (CodeAct)** | Model writes one Python program that calls several tools, runs once, returns a consolidated result — fewer round-trips, fewer places to derail | Fella *has* the pieces: `run_python` with a `sql()` helper. It isn't the encouraged default. Making it the pattern for multi-step questions is a model-agnostic round-trip cut. Candidate. |
 | **Progressive context compaction** | LLM-summarise the transcript at token thresholds; structured handoffs; full context resets | `trim_history` only elides old tool results by count. `folder-scale` says Fella doesn't need more yet; this is the standard next tier if long multi-step runs start failing. |
 | **Generator–evaluator separation** | A distinct critic model grades the worker's output against a rubric | Against "powerfully tiny". The deterministic `verify` pass plus the one narrow re-ask is the most Fella will do here. |
-| **Plan-Execute-Verify with hard phase gates** | Pre-tool-call gates (known tool? valid args?); execution bounded to an approved plan | Fella now has contract preflight, compiled-plan authority, and revision-change circuit breaking for the common analytical core. Advanced direct-tool paths still need general plan-bounds and argument-validation telemetry. |
+| **Model–Observe–Compile–Verify** | The model chooses observations and route; deterministic execution and claim checks constrain consequences | Fella records semantic hypotheses, can compile supported work, and verifies the actual trace. A hypothesis does not block direct read-only investigation; an explicit user clarification pauses only the unresolved calculation. |
 | **Retrieval config (chunking, top-k, rerankers)** | Tuned with Bayesian search over 6–10 params | N/A — no RAG. The schema block is the "retrieval" and it's deterministic. |
 | **Multi-agent / orchestrator-worker** | Declared agents with handoff edges | Explicit non-goal (`ARCHITECTURE.md`). |
 | **Tool-description optimisation (span-level scoring)** | Score tool-*selection* accuracy separately from answer quality; rewrite overlapping descriptions | Fella's six tool descriptions (`ARCHITECTURE.md`) are already terse and non-overlapping; low value here, but the eval *could* score tool choice separately. |
