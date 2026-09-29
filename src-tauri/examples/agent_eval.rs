@@ -37,7 +37,8 @@
 //!   all              accuracy + robustness + session-memory + memory
 //!
 //! Opts: --models "a,b,c"  --judge <model>  --iters N (default 1)
-//!       --only <id-substr>  --json <path>  --compare <old.json>  --dir <path>
+//!       --only <id-substr[,id-substr...]>  --tier <tier-name>  --json <path>
+//!       --compare <old.json>  --dir <path>
 //!
 //! `bench` dir layout: `<d>/cases.jsonl` (one JSON object per line) + the data
 //! files it names (paths relative to `<d>`). Each line:
@@ -205,6 +206,14 @@ async fn run_case(
 
     match res {
         Ok(a) => {
+            if std::env::var_os("EVAL_SHOW_CONTRACT").is_some() {
+                eprintln!(
+                    "\n[contract {conv}]\n  contract={}\n  grounding={}\n  plan={}",
+                    serde_json::to_string(&a.contract).unwrap_or_default(),
+                    serde_json::to_string(&a.grounding).unwrap_or_default(),
+                    serde_json::to_string(&a.plan).unwrap_or_default(),
+                );
+            }
             let (p, c) = a
                 .usage
                 .map(|u| (u.prompt_tokens, u.completion_tokens))
@@ -610,15 +619,14 @@ fn closeness_det(r: &RunResult, case: &EvalCase) -> f32 {
         .clamp(0.0, 1.0)
 }
 
-/// A count, in **tool calls**, of the ones that did no useful work. Four kinds,
-/// each call counted once.
+/// Call-efficiency summary. Observations are tracked separately because
+/// inspecting a source can be necessary reconnaissance, not waste.
 #[derive(Default, Clone, Copy)]
 struct Waste {
     /// an exact `(tool, args)` repeat, or the engine's "skipped (duplicate call)"
     duplicate: usize,
-    /// an `inspect_table` / `list_files` peek that wasn't the
-    /// one free orientation call it came 2nd, or after a query already worked
-    redundant_schema: usize,
+    /// successful source reconnaissance, reported separately from waste
+    observations: usize,
     /// one of 3+ `run_sql` calls whose result the answer never uses
     speculative: usize,
     /// a call that returned an error (a well-oriented run rarely hits one)
@@ -626,13 +634,13 @@ struct Waste {
 }
 impl Waste {
     fn total(&self) -> usize {
-        self.duplicate + self.redundant_schema + self.speculative + self.errored
+        self.duplicate + self.speculative + self.errored
     }
-    /// compact per-kind, e.g. `d0 r1 s0 e0`
+    /// compact per-kind: duplicate, observations, speculative SQL, errors
     fn breakdown(&self) -> String {
         format!(
-            "d{} r{} s{} e{}",
-            self.duplicate, self.redundant_schema, self.speculative, self.errored
+            "d{} o{} s{} e{}",
+            self.duplicate, self.observations, self.speculative, self.errored
         )
     }
 }
@@ -641,13 +649,9 @@ impl Waste {
 ///
 /// Confidence per kind:
 /// - `duplicate` / `errored` — always accurate.
-/// - `redundant_schema` — every `inspect_table` / `list_files`
-///   call. Accurate on the default and other small workspaces, where the system
-///   prompt's schema block already lists the tables, their columns and sample
-///   rows so any such call is the model re-discovering what it was told.
-///   Over-counts on a large `folder-scale` workspace (schema block is names
-///   only there, so a peek can be legitimate); read that column with the table
-///   count in mind.
+/// - source inspection is counted as `observations`, not waste. The prompt's
+///   schema/sample may not expose the labels, quality, or notes relevant to a
+///   particular question, so tool type alone cannot establish redundancy.
 /// - `speculative` — a `run_sql` whose numbers the answer never uses, and only
 ///   once the run has made 3+ successful queries. Below that we can't tell an
 ///   intermediate step from a dead end, so we don't guess.
@@ -671,9 +675,21 @@ fn classify_waste(r: &RunResult) -> Waste {
         } else if e.error.is_some() {
             w.errored += 1;
         } else if matches!(e.tool.as_str(), "inspect_table" | "list_files") {
-            w.redundant_schema += 1;
+            w.observations += 1;
         } else if e.tool == "run_sql" && n_ok_sql >= 3 {
-            let produced = numbers_in(&e.result_summary);
+            // SQL result summaries contain row counts and execution time;
+            // only returned cells tell us whether a query contributed data.
+            let produced: Vec<f64> = e
+                .rows
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .flatten()
+                .filter_map(|cell| {
+                    cell.as_f64()
+                        .or_else(|| cell.as_str().and_then(|s| s.trim().parse().ok()))
+                })
+                .collect();
             let feeds_answer = produced.iter().any(|p| ans.iter().any(|a| close(*a, *p)));
             if !produced.is_empty() && !feeds_answer {
                 w.speculative += 1;
@@ -692,7 +708,7 @@ fn fold_waste(ws: &[Waste]) -> Waste {
     let m = |f: &dyn Fn(&Waste) -> usize| (ws.iter().map(f).sum::<usize>() + n / 2) / n;
     Waste {
         duplicate: m(&|w| w.duplicate),
-        redundant_schema: m(&|w| w.redundant_schema),
+        observations: m(&|w| w.observations),
         speculative: m(&|w| w.speculative),
         errored: m(&|w| w.errored),
     }
@@ -1398,6 +1414,9 @@ async fn score_case(
                 case.question,
                 r.text.replace('\n', "\n     ")
             );
+            if let Some(error) = r.err.as_deref() {
+                eprintln!("  ERR: {}", eval_error_class(error));
+            }
             for e in &r.evidence {
                 eprintln!(
                     "     · {} {}ms{}{}",
@@ -1536,6 +1555,31 @@ async fn score_case(
         steps: steps / iters,
         hard_fail: any_hard,
         err: last_err,
+    }
+}
+
+/// Keep live-eval diagnostics actionable without echoing provider response
+/// bodies, which may contain account details or credential fragments.
+fn eval_error_class(error: &str) -> &'static str {
+    let error = error.to_ascii_lowercase();
+    if error.contains("couldn't reach") || error.contains("connection") || error.contains("dns") {
+        "transport/connectivity failure (provider details withheld)"
+    } else if error.contains("didn't respond within") || error.contains("timed out") {
+        "provider request timed out"
+    } else if error.contains("rejected the api key") || error.contains("unauthorized") {
+        "provider rejected credentials"
+    } else if error.contains("(403)") || error.contains("forbidden") {
+        "provider access/account policy rejected the request"
+    } else if error.contains("limiting how many requests") || error.contains("429") {
+        "provider rate limit"
+    } else if error.contains("plan doesn't cover") || error.contains("payment required") {
+        "model is unavailable under the provider plan"
+    } else if error.contains("returned an error") || error.contains("400") {
+        "provider rejected the request (response body withheld)"
+    } else if error.contains("isn't available from") || error.contains("not found") {
+        "model unavailable at the selected provider"
+    } else {
+        "request failed (sensitive details withheld)"
     }
 }
 
@@ -2035,13 +2079,12 @@ async fn cmd_bench(
     judge: Option<&str>,
     iters: usize,
     only: Option<&str>,
+    tier: Option<&str>,
     harness: &str,
     json_out: Option<&str>,
 ) -> Vec<CaseScore> {
     let mut cases = load_bench_dir(dir);
-    if let Some(sub) = only {
-        cases.retain(|(_, _, c)| c.id.contains(sub));
-    }
+    cases.retain(|(_, _, case)| bench_case_selected(case.id, case.category, only, tier));
 
     // Comparison harness setup (once).
     let ci = if harness == "openai-ci" {
@@ -2191,6 +2234,16 @@ async fn cmd_bench(
         }
     }
     all
+}
+
+fn bench_case_selected(id: &str, category: &str, only: Option<&str>, tier: Option<&str>) -> bool {
+    only.is_none_or(|selectors| {
+        selectors
+            .split(',')
+            .map(str::trim)
+            .filter(|selector| !selector.is_empty())
+            .any(|selector| id.contains(selector))
+    }) && tier.is_none_or(|requested| category == requested)
 }
 
 async fn cmd_robustness(
@@ -2992,6 +3045,7 @@ async fn main() {
     let json_out = opt("--json");
     let compare_to = opt("--compare");
     let only = opt("--only");
+    let tier = opt("--tier");
     let bench_dir = opt("--dir");
     let harness = opt("--harness").unwrap_or_else(|| "fella".into());
     let requested_models: Vec<String> = opt("--models")
@@ -3088,6 +3142,7 @@ async fn main() {
                 judge,
                 iters,
                 only.as_deref(),
+                tier.as_deref(),
                 &harness,
                 json_out.as_deref(),
             )
@@ -3118,6 +3173,70 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bench_selection_filters_id_and_tier_independently() {
+        assert!(bench_case_selected(
+            "381-chart-monthly",
+            "06-charts",
+            None,
+            Some("06-charts")
+        ));
+        assert!(!bench_case_selected(
+            "381-chart-monthly",
+            "06-charts",
+            None,
+            Some("05-joins")
+        ));
+        assert!(bench_case_selected(
+            "381-chart-monthly",
+            "06-charts",
+            Some("monthly"),
+            None
+        ));
+        assert!(!bench_case_selected(
+            "381-chart-monthly",
+            "06-charts",
+            Some("trip"),
+            None
+        ));
+        assert!(bench_case_selected(
+            "381-chart-monthly",
+            "06-charts",
+            Some("chart"),
+            Some("06-charts")
+        ));
+        assert!(!bench_case_selected(
+            "381-chart-monthly",
+            "06-charts",
+            Some("trip"),
+            Some("06-charts")
+        ));
+        assert!(bench_case_selected(
+            "fqah-rent-half-diff",
+            "dates",
+            Some("fqah-rent-half-diff, fqah-goal-ontrack"),
+            None
+        ));
+        assert!(!bench_case_selected(
+            "fqah-contacts-work-only",
+            "joins",
+            Some("fqah-rent-half-diff, fqah-goal-ontrack"),
+            None
+        ));
+    }
+
+    #[test]
+    fn live_eval_error_summary_does_not_echo_provider_details() {
+        let summary = eval_error_class(
+            "Fella couldn't reach the model at https://api.example.test: Incorrect key sk-secret",
+        );
+        assert_eq!(
+            summary,
+            "transport/connectivity failure (provider details withheld)"
+        );
+        assert!(!summary.contains("sk-secret"));
+    }
 
     fn rr(text: &str, ev: Vec<EvidenceItem>) -> RunResult {
         RunResult {
@@ -3157,6 +3276,18 @@ mod tests {
             ms: 1,
             error: err.map(str::to_string),
         }
+    }
+    fn ev_sql(summary: &str, values: &[f64]) -> EvidenceItem {
+        let mut evidence = ev("run_sql", summary, None);
+        evidence.columns = Some(vec!["value".into()]);
+        evidence.rows = Some(
+            values
+                .iter()
+                .map(|value| vec![serde_json::json!(value)])
+                .collect(),
+        );
+        evidence.row_count = Some(values.len());
+        evidence
     }
     fn ev_chart(labels: &[&str], series: Vec<(&str, Vec<f64>)>) -> EvidenceItem {
         EvidenceItem {
@@ -3613,28 +3744,25 @@ mod tests {
 
     #[test]
     fn waste_classification() {
-        // one run_sql that feeds the answer -> nothing wasted
-        let clean = rr(
-            "The total is 450.",
-            vec![ev("run_sql", "1 row: total 450", None)],
-        );
+        // One SQL computation feeds the answer -> nothing wasted.
+        let clean = rr("The total is 450.", vec![ev_sql("1 row in 50ms", &[450.0])]);
         assert_eq!(classify_waste(&clean).total(), 0);
 
-        // any schema/sample/list peek is redundant on a small workspace (the
-        // schema block already had it); errored + exact-repeat count once each
+        // A useful observation is counted separately; errors and exact repeats
+        // are waste, but source inspection is not assumed waste from its name.
         let messy = rr(
             "The total is 450.",
             vec![
-                ev("inspect_table", "ledger: 3 cols", None), // redundant
-                ev("run_sql", "1 row: total 450", None),     // legit
+                ev("inspect_table", "ledger labels", None),
+                ev_sql("1 row in 50ms", &[450.0]),
                 ev("run_sql", "err", Some("no such column: x")), // errored
-                ev("run_sql", "1 row: total 450", None),     // repeat of #2
+                ev("run_sql", "1 row in 50ms", None),            // repeat of #2
             ],
         );
         let w = classify_waste(&messy);
         assert_eq!(
-            (w.redundant_schema, w.errored, w.duplicate, w.total()),
-            (1, 1, 1, 3),
+            (w.observations, w.errored, w.duplicate, w.total()),
+            (1, 1, 1, 2),
             "{}",
             w.breakdown()
         );
@@ -3643,9 +3771,9 @@ mod tests {
         let spec = rr(
             "The answer is 450.",
             vec![
-                ev("run_sql", "1 row: total 450", None),
-                ev("run_sql", "12 rows: avg 37", None), // feeds nothing
-                ev("run_sql", "3 rows: max 99", None),  // feeds nothing
+                ev_sql("1 row in 50ms", &[450.0]),
+                ev_sql("12 rows in 37ms", &[37.0]), // feeds nothing
+                ev_sql("3 rows in 99ms", &[99.0]),  // feeds nothing
             ],
         );
         assert_eq!(classify_waste(&spec).speculative, 2);
@@ -3654,8 +3782,8 @@ mod tests {
         let two = rr(
             "The answer is 450.",
             vec![
-                ev("run_sql", "12 rows: subtotal 37", None),
-                ev("run_sql", "1 row: total 450", None),
+                ev_sql("12 rows in 37ms", &[37.0]),
+                ev_sql("1 row in 50ms", &[450.0]),
             ],
         );
         assert_eq!(classify_waste(&two).total(), 0);
