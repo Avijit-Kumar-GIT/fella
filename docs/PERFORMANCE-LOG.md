@@ -484,7 +484,9 @@ Current redundancy counts include only exact duplicate calls. Tool errors,
 source observations, and SQL outputs not repeated in the final answer are
 reported as separate diagnostics; those results may have guided corrections or
 supported comparisons and eliminations. Historical waste figures below used a
-looser heuristic and should not be compared directly with current runs.
+looser heuristic and should not be compared directly with current runs. Each
+evaluator process also gets a fresh conversation namespace so archived
+transcripts from an earlier run cannot leak into a rerun's score.
 
 ```
 cd src-tauri

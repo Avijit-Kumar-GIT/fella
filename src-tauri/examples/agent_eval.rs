@@ -69,8 +69,8 @@
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use fella_lib::engine::analytics::chart::Series as ChartSeries;
 use fella_lib::engine::evidence::{EvidenceItem, VerificationStatus};
@@ -176,8 +176,9 @@ async fn run_case(
     let evs: Arc<Mutex<Vec<Ev>>> = Arc::new(Mutex::new(Vec::new()));
     let sink = evs.clone();
     let t0 = Instant::now();
+    let scoped_conv = invocation_conversation_id(conv);
     let res = engine
-        .ask(conv, question, model, move |e: AskEvent| {
+        .ask(&scoped_conv, question, model, move |e: AskEvent| {
             let kind = match &e {
                 AskEvent::TurnState { .. } => "turn_state",
                 AskEvent::AssistantDelta { .. } => "delta",
@@ -259,6 +260,25 @@ async fn run_case(
             err: Some(e.to_string()),
         },
     }
+}
+
+/// Give every evaluator process its own transcript namespace. The prefix is
+/// intentionally placed before the case id because conversation archives use
+/// only the first 32 alphanumeric characters as their filename key.
+fn scope_conversation_id(run_id: &str, conversation_id: &str) -> String {
+    format!("fellaeval{run_id}_{conversation_id}")
+}
+
+fn invocation_conversation_id(conversation_id: &str) -> String {
+    static RUN_ID: OnceLock<String> = OnceLock::new();
+    let run_id = RUN_ID.get_or_init(|| {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or_default();
+        format!("{:x}p{:x}", timestamp, std::process::id())
+    });
+    scope_conversation_id(run_id, conversation_id)
 }
 
 // --- metrics -----------------------------------------------------------
@@ -3820,6 +3840,22 @@ mod tests {
         let signal = classify_calls(&candidates);
         assert_eq!(signal.unreferenced_results, 4);
         assert_eq!(signal.redundant_calls(), 0);
+    }
+
+    #[test]
+    fn evaluation_run_namespace_prevents_archived_conversation_reuse() {
+        let archive_key = |id: &str| {
+            id.chars()
+                .filter(|character| character.is_ascii_alphanumeric())
+                .take(32)
+                .collect::<String>()
+        };
+        let first = archive_key(&scope_conversation_id("run-one", "same-case"));
+        let second = archive_key(&scope_conversation_id("run-two", "same-case"));
+        assert_ne!(
+            first, second,
+            "run identity must precede the 32-char slug cap"
+        );
     }
 
     #[test]
