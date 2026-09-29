@@ -476,9 +476,15 @@ leak-free; Windows and macOS still need native RSS/profiler coverage.
 ### `agent_eval` the scored harness
 
 `agent_bench` times the loop; **`agent_eval` scores it** correctness,
-answer-closeness, wasted tool calls, tokens per correct answer and sweeps
+answer-closeness, repeated tool calls, tokens per correct answer and sweeps
 that across prompt ablations, folder sizes and models. Dev-only, behind the
 `eval` Cargo feature, never run in CI.
+
+Current redundancy counts include only exact duplicate calls. Tool errors,
+source observations, and SQL outputs not repeated in the final answer are
+reported as separate diagnostics; those results may have guided corrections or
+supported comparisons and eliminations. Historical waste figures below used a
+looser heuristic and should not be compared directly with current runs.
 
 ```
 cd src-tauri

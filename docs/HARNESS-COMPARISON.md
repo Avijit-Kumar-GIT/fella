@@ -28,14 +28,20 @@ Always shown, and what rolls up to a chart:
 | **Δacc 95% CI** (paired bootstrap over cases) | does the lift survive resampling — excludes 0 = real, straddles 0 = noise |
 | **tok / correct** (in + out) | efficiency |
 | **$ / 100-correct** | the money version (list price) |
-| **wasted calls / case** | the loop's own overhead; small models flail here |
+| **redundant calls / case** | exact duplicate calls; small models can repeat work |
 | **round trips / answer** | provider-independent latency proxy (Fella targets ≤ 2) |
 | **wall s** | reported, caveated (network + provider load) |
 | **self-catch rate** | of the wrong answers, how many `verify` flagged — *Fella-only*, and the trust story |
 | **policy adherence** | correctly declines the forecast case vs fabricates a number |
 
-`bare` has no evidence trail, so self-catch / grounding / waste are 0 for it by
-construction — that contrast is the point.
+`bare` has no evidence trail, so self-catch / grounding / redundancy are 0 for
+it by construction — that contrast is the point.
+
+The evaluator also reports observations, tool errors, and SQL results whose
+numeric cells do not appear in the final answer. Those are diagnostic signals,
+not confirmed redundancy: an intermediate result may support a comparison,
+exclusion, or ranking. Historical waste figures below used the earlier, looser
+heuristic and are not directly comparable to current evaluator output.
 
 ### Reading Δacc and its 95% CI
 

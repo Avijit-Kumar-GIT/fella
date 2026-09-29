@@ -157,7 +157,8 @@ harness-side until controlled comparison shows otherwise.
   solely by age; derived arithmetic and candidate-threshold decisions also
   have explicit model instructions and are exercised through focused agent
   regressions plus selected mixed-file model replays. Evaluation reports useful
-  reconnaissance separately from duplicate, failed, and speculative work.
+  reconnaissance, tool errors, and unreferenced SQL-result signals separately;
+  only exact duplicate calls count as confirmed redundancy.
 
 ## Where the current code starts
 

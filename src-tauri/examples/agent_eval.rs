@@ -1,7 +1,7 @@
 //! Scored evaluation harness for Fella's agent loop.
 //!
 //! Where `agent_bench` times the loop, `agent_eval` scores it: is the number
-//! right, how close is the whole answer, how many tool calls were *wasted*, how
+//! right, how close is the whole answer, how many tool calls were repeated, how
 //! many tokens per correct answer and it sweeps that across prompt
 //! ablations, folder sizes, and models.
 //!
@@ -121,9 +121,9 @@ struct EvalCase {
     category: &'static str,
     question: String,
     gold: Gold,
-    /// How many tool calls a clean run needs. Documented per case; the waste
-    /// classifier is currently structural (it doesn't subtract this), kept for
-    /// a future per-case "extra calls" metric.
+    /// How many tool calls a clean run needs. Documented per case; the
+    /// redundancy classifier is currently structural (it doesn't subtract
+    /// this), kept for a future per-case "extra calls" metric.
     #[allow(dead_code)]
     min_tools: usize,
     /// the ideal answer, for closeness scoring
@@ -619,50 +619,56 @@ fn closeness_det(r: &RunResult, case: &EvalCase) -> f32 {
         .clamp(0.0, 1.0)
 }
 
-/// Call-efficiency summary. Observations are tracked separately because
-/// inspecting a source can be necessary reconnaissance, not waste.
+/// Call-efficiency summary. Only an exact duplicate is confirmed redundancy;
+/// observations, failed calls, and unreferenced SQL outputs are separate
+/// signals because each may still provide useful information.
 #[derive(Default, Clone, Copy)]
-struct Waste {
+struct CallSignals {
     /// an exact `(tool, args)` repeat, or the engine's "skipped (duplicate call)"
     duplicate: usize,
-    /// successful source reconnaissance, reported separately from waste
+    /// successful source reconnaissance, reported separately from redundancy
     observations: usize,
-    /// one of 3+ `run_sql` calls whose result the answer never uses
-    speculative: usize,
-    /// a call that returned an error (a well-oriented run rarely hits one)
-    errored: usize,
+    /// one of 3+ `run_sql` calls whose numeric cells do not appear in the final
+    /// answer. This is a diagnostic signal, not proven redundancy: comparisons and
+    /// elimination reasoning often depend on intermediate figures.
+    unreferenced_results: usize,
+    /// a call that returned an error; it may still have guided a correction
+    failed: usize,
 }
-impl Waste {
-    fn total(&self) -> usize {
-        self.duplicate + self.speculative + self.errored
+impl CallSignals {
+    fn redundant_calls(&self) -> usize {
+        self.duplicate
     }
-    /// compact per-kind: duplicate, observations, speculative SQL, errors
+    /// compact per-kind: duplicate, observations, unreferenced SQL figures, errors
     fn breakdown(&self) -> String {
         format!(
-            "d{} o{} s{} e{}",
-            self.duplicate, self.observations, self.speculative, self.errored
+            "d{} o{} u{} e{}",
+            self.duplicate, self.observations, self.unreferenced_results, self.failed
         )
     }
 }
 
-/// Count the tool calls that did no useful work.
+/// Classify tool-call signals without assuming an unreferenced/failed call was
+/// useless to the model's intermediate reasoning.
 ///
 /// Confidence per kind:
-/// - `duplicate` / `errored` — always accurate.
-/// - source inspection is counted as `observations`, not waste. The prompt's
+/// - `duplicate` — an exact repeat and therefore confirmed redundant.
+/// - source inspection is counted as `observations`, not redundancy. The prompt's
 ///   schema/sample may not expose the labels, quality, or notes relevant to a
 ///   particular question, so tool type alone cannot establish redundancy.
-/// - `speculative` — a `run_sql` whose numbers the answer never uses, and only
-///   once the run has made 3+ successful queries. Below that we can't tell an
-///   intermediate step from a dead end, so we don't guess.
-fn classify_waste(r: &RunResult) -> Waste {
+/// - `failed` — tool returned an error, but that response may help revise a plan.
+/// - unreferenced result signal — a `run_sql` whose numeric cells do not appear
+///   in the final answer, and only once the run has made 3+ successful queries.
+///   This is not included in redundancy: the result may support a comparison,
+///   exclusion, or other intermediate reasoning the final prose does not repeat.
+fn classify_calls(r: &RunResult) -> CallSignals {
     let ans = numbers_in(&r.text);
     let n_ok_sql = r
         .evidence
         .iter()
         .filter(|e| e.tool == "run_sql" && e.error.is_none())
         .count();
-    let mut w = Waste::default();
+    let mut w = CallSignals::default();
     let mut seen: Vec<(String, String)> = Vec::new();
 
     for e in &r.evidence {
@@ -673,7 +679,7 @@ fn classify_waste(r: &RunResult) -> Waste {
         if e.result_summary == "skipped (duplicate call)" || repeat {
             w.duplicate += 1;
         } else if e.error.is_some() {
-            w.errored += 1;
+            w.failed += 1;
         } else if matches!(e.tool.as_str(), "inspect_table" | "list_files") {
             w.observations += 1;
         } else if e.tool == "run_sql" && n_ok_sql >= 3 {
@@ -692,25 +698,25 @@ fn classify_waste(r: &RunResult) -> Waste {
                 .collect();
             let feeds_answer = produced.iter().any(|p| ans.iter().any(|a| close(*a, *p)));
             if !produced.is_empty() && !feeds_answer {
-                w.speculative += 1;
+                w.unreferenced_results += 1;
             }
         }
     }
     w
 }
 
-/// Element-wise mean of several runs' waste, rounded.
-fn fold_waste(ws: &[Waste]) -> Waste {
+/// Element-wise mean of several runs' call signals, rounded.
+fn fold_call_signals(ws: &[CallSignals]) -> CallSignals {
     if ws.is_empty() {
-        return Waste::default();
+        return CallSignals::default();
     }
     let n = ws.len();
-    let m = |f: &dyn Fn(&Waste) -> usize| (ws.iter().map(f).sum::<usize>() + n / 2) / n;
-    Waste {
+    let m = |f: &dyn Fn(&CallSignals) -> usize| (ws.iter().map(f).sum::<usize>() + n / 2) / n;
+    CallSignals {
         duplicate: m(&|w| w.duplicate),
         observations: m(&|w| w.observations),
-        speculative: m(&|w| w.speculative),
-        errored: m(&|w| w.errored),
+        unreferenced_results: m(&|w| w.unreferenced_results),
+        failed: m(&|w| w.failed),
     }
 }
 
@@ -1025,7 +1031,7 @@ struct CaseScore {
     /// Canonical backend turn records produced by the Fella iterations. These
     /// references make a benchmark result inspectable and rerunnable.
     replays: Vec<ReplayRef>,
-    waste: Waste,
+    calls: CallSignals,
     prompt_tok: u32,
     completion_tok: u32,
     total_s: f64,
@@ -1375,7 +1381,7 @@ async fn score_case(
     let (mut cd, mut cj_sum, mut cj_n) = (0f32, 0f32, 0usize);
     let (mut ptok, mut ctok, mut secs, mut steps) = (0u64, 0u64, 0f64, 0usize);
     let mut first_toks: Vec<f64> = Vec::new();
-    let mut wastes: Vec<Waste> = Vec::new();
+    let mut call_signals: Vec<CallSignals> = Vec::new();
     let mut verification_statuses: Vec<VerificationStatus> = Vec::new();
     let mut acceptance_observations: Vec<(VerificationStatus, bool)> = Vec::new();
     let mut verification_observations: Vec<(bool, VerificationStatus)> = Vec::new();
@@ -1475,7 +1481,7 @@ async fn score_case(
         if let Some(ft) = r.first_token {
             first_toks.push(ft.as_secs_f64());
         }
-        wastes.push(classify_waste(&r));
+        call_signals.push(classify_calls(&r));
         if let Some(status) = r.verification_status {
             verification_statuses.push(status);
             acceptance_observations.push((status, r.err.is_none() && !r.text.trim().is_empty()));
@@ -1546,7 +1552,7 @@ async fn score_case(
         unsafe_guess_rate,
         verification_catch_rate: verification_catch_rate(&verification_observations),
         replays,
-        waste: fold_waste(&wastes),
+        calls: fold_call_signals(&call_signals),
         prompt_tok: (ptok / iters as u64) as u32,
         completion_tok: (ctok / iters as u64) as u32,
         total_s: secs / n as f64,
@@ -1596,8 +1602,8 @@ fn mean_closeness(scores: &[CaseScore]) -> f32 {
         v.iter().sum::<f32>() / v.len() as f32
     }
 }
-fn total_waste(scores: &[CaseScore]) -> usize {
-    scores.iter().map(|s| s.waste.total()).sum()
+fn total_redundant_calls(scores: &[CaseScore]) -> usize {
+    scores.iter().map(|s| s.calls.redundant_calls()).sum()
 }
 fn mean_steps(scores: &[CaseScore]) -> f64 {
     if scores.is_empty() {
@@ -1657,7 +1663,7 @@ async fn cmd_accuracy(
 ) -> Vec<CaseScore> {
     println!("\n# Accuracy   ({iters} iter(s)/case)\n");
     legend();
-    println!("| model | case | correct | rate | close(det) | close(judge) | waste (calls) | steps | in tok | out tok | wall s |");
+    println!("| model | case | correct | rate | close(det) | close(judge) | redundant calls | steps | in tok | out tok | wall s |");
     println!("|---|---|:-:|--:|--:|--:|--:|--:|--:|--:|--:|");
     let mut all = Vec::new();
     for m in models {
@@ -1681,8 +1687,8 @@ async fn cmd_accuracy(
                 s.closeness_judge
                     .map(|c| format!("{c:.2}"))
                     .unwrap_or_else(|| "-".into()),
-                s.waste.total(),
-                s.waste.breakdown(),
+                s.calls.redundant_calls(),
+                s.calls.breakdown(),
                 s.steps,
                 s.prompt_tok,
                 s.completion_tok,
@@ -1691,9 +1697,9 @@ async fn cmd_accuracy(
         }
         let (ok, n) = acc(&scores);
         println!(
-            "| **{m}** | **summary** | **{ok}/{n} correct** | | **{:.2}** | | **{} calls** | **{:.1}** | | | **{:.0} tok/correct-ans** |",
+            "| **{m}** | **summary** | **{ok}/{n} correct** | | **{:.2}** | | **{} duplicate calls** | **{:.1}** | | | **{:.0} tok/correct-ans** |",
             mean_closeness(&scores),
-            total_waste(&scores),
+            total_redundant_calls(&scores),
             mean_steps(&scores),
             tokens_per_correct(&scores),
         );
@@ -1706,8 +1712,9 @@ async fn cmd_accuracy(
 fn legend() {
     println!(
         "_units — **correct**: majority over iters · **rate**: % of iters correct · \
-**close(det/judge)**: 0.00–1.00 · **waste**: # tool calls that did no useful work \
-(`d`uplicate `o`bservation `s`peculative `e`rror) · **tok**: tokens (prompt+completion) · \
+**close(det/judge)**: 0.00–1.00 · **redundant**: exact duplicate calls (`d`); \
+`o`bservations, `u`nreferenced SQL results, and `e`rrors are separate signals · \
+**tok**: tokens (prompt+completion) · \
 **$/100**: USD per 100 answers, list price · **wall s / first-tok s**: seconds · **steps**: tool-call rounds_\n"
     );
 }
@@ -1759,7 +1766,7 @@ async fn cmd_prompt_ablation(
     ];
     set_model(engine, model);
     println!("\n# Prompt ablation  ·  model `{model}`\n");
-    println!("| profile | acc | close(det) | waste | in tok (mean) |");
+    println!("| profile | acc | close(det) | redundant calls | in tok (mean) |");
     println!("|---|:-:|--:|--:|--:|");
     let mut all = Vec::new();
     for (name, drop) in ladder {
@@ -1772,7 +1779,7 @@ async fn cmd_prompt_ablation(
         println!(
             "| {name} | {ok}/{n} | {:.2} | {} | {mean_in:.0} |",
             mean_closeness(&scores),
-            total_waste(&scores),
+            total_redundant_calls(&scores),
         );
         all.extend(scores);
     }
@@ -1788,7 +1795,7 @@ async fn cmd_folder_scale(
 ) -> Vec<CaseScore> {
     set_model(engine, model);
     println!("\n# Folder scale  ·  model `{model}`\n");
-    println!("| tables | rows/table | num_ctx | acc | first tok s | hit cap | waste |");
+    println!("| tables | rows/table | num_ctx | acc | first tok s | hit cap | redundant calls |");
     println!("|--:|--:|---|:-:|--:|:-:|--:|");
     let mut all = Vec::new();
     let sizes: &[(usize, usize)] = &[(1, 2_000), (5, 2_000), (13, 1_000), (40, 500), (120, 200)];
@@ -1828,7 +1835,7 @@ async fn cmd_folder_scale(
                 .count();
             println!(
                 "| {n_tables} | {rows} | {label} | {ok}/{n} | {ft_mean:.1} | {cap} | {} |",
-                total_waste(&scores),
+                total_redundant_calls(&scores),
             );
             all.extend(scores);
         }
@@ -1846,9 +1853,9 @@ async fn cmd_model_ladder(
     println!("\n# Model ladder   ({iters} iter(s)/case)\n");
     legend();
     let n_cases = cases.len();
-    // "clears the bar" thresholds: >=80% accuracy, <= ~0.5 wasted calls/case
-    let waste_bar = (n_cases as f64 * 0.5).ceil() as usize;
-    println!("| model | acc | close(det) | waste/case | tok/correct-ans | $/100 | mean wall s |");
+    // "clears the bar" thresholds: >=80% accuracy, <= ~0.5 duplicate calls/case
+    let redundant_call_bar = (n_cases as f64 * 0.5).ceil() as usize;
+    println!("| model | acc | close(det) | redundant calls/case | tok/correct-ans | $/100 | mean wall s |");
     println!("|---|:-:|--:|--:|--:|--:|--:|");
     let mut all = Vec::new();
     let mut best_priced: Option<(String, f64)> = None; // (model, $/100)
@@ -1868,14 +1875,14 @@ async fn cmd_model_ladder(
         let cost = price
             .map(|c| format!("${c:.2}"))
             .unwrap_or_else(|| "n/a".into());
-        let waste_per_case = total_waste(&scores) as f64 / scores.len().max(1) as f64;
+        let redundant_per_case = total_redundant_calls(&scores) as f64 / scores.len().max(1) as f64;
         println!(
             "| {m} | {ok}/{n} | {:.2} | {:.2} | {:.0} | {cost} | {mean_s:.1} |",
             mean_closeness(&scores),
-            waste_per_case,
+            redundant_per_case,
             tokens_per_correct(&scores),
         );
-        if a >= 0.8 && total_waste(&scores) <= waste_bar {
+        if a >= 0.8 && total_redundant_calls(&scores) <= redundant_call_bar {
             match price {
                 Some(c) if best_priced.as_ref().map(|(_, bc)| c < *bc).unwrap_or(true) => {
                     best_priced = Some((m.clone(), c));
@@ -1886,13 +1893,13 @@ async fn cmd_model_ladder(
         }
         all.extend(scores);
     }
-    let per_case_bar = waste_bar as f64 / n_cases.max(1) as f64;
+    let per_case_bar = redundant_call_bar as f64 / n_cases.max(1) as f64;
     match &best_priced {
         Some((m, c)) => println!(
-            "\n**Cheapest priced model at acc ≥ 0.8 and ≤ {per_case_bar:.1} wasted calls/case: `{m}` (${c:.2}/100).**"
+            "\n**Cheapest priced model at acc ≥ 0.8 and ≤ {per_case_bar:.1} duplicate calls/case: `{m}` (${c:.2}/100).**"
         ),
         None if cleared_unpriced.is_empty() => {
-            println!("\n_No model cleared the bar (acc ≥ 0.8, ≤ {per_case_bar:.1} wasted calls/case)._")
+            println!("\n_No model cleared the bar (acc ≥ 0.8, ≤ {per_case_bar:.1} duplicate calls/case)._")
         }
         None => {}
     }
@@ -2113,7 +2120,7 @@ async fn cmd_bench(
         cases.len()
     );
     legend();
-    println!("| model | case | correct | rate | close(det) | waste | steps | in tok | out tok | $/100 | wall s |");
+    println!("| model | case | correct | rate | close(det) | redundant calls | steps | in tok | out tok | $/100 | wall s |");
     println!("|---|---|:-:|--:|--:|--:|--:|--:|--:|--:|--:|");
 
     let staging = std::env::temp_dir().join("fella-bench-ext");
@@ -2197,8 +2204,8 @@ async fn cmd_bench(
                 },
                 s.correct_rate * 100.0,
                 s.closeness_det,
-                s.waste.total(),
-                s.waste.breakdown(),
+                s.calls.redundant_calls(),
+                s.calls.breakdown(),
                 s.steps,
                 s.prompt_tok,
                 s.completion_tok,
@@ -2219,9 +2226,9 @@ async fn cmd_bench(
         let pout: f64 = scores.iter().map(|s| s.completion_tok as f64).sum();
         let avg_price = price_per_100(m, pin / n.max(1) as f64, pout / n.max(1) as f64);
         println!(
-            "| **{m}** | **summary** | **{ok}/{n} correct** | | **{:.2}** | **{} waste** | **{:.1}** | | | **{}** | **{:.0} tok/correct** |",
+            "| **{m}** | **summary** | **{ok}/{n} correct** | | **{:.2}** | **{} duplicate calls** | **{:.1}** | | | **{}** | **{:.0} tok/correct** |",
             mean_closeness(&scores),
-            total_waste(&scores),
+            total_redundant_calls(&scores),
             mean_steps(&scores),
             avg_price.map(|c| format!("${c:.2}/100 avg")).unwrap_or_else(|| "n/a".into()),
             tokens_per_correct(&scores),
@@ -2372,7 +2379,7 @@ async fn cmd_session_memory(
             unsafe_guess_rate: None,
             verification_catch_rate: None,
             replays: Vec::new(),
-            waste: Waste::default(),
+            calls: CallSignals::default(),
             prompt_tok: (ptok / iters as u64) as u32,
             completion_tok: (ctok / iters as u64) as u32,
             total_s: 0.0,
@@ -2566,7 +2573,7 @@ async fn cmd_memory(
             unsafe_guess_rate: None,
             verification_catch_rate: None,
             replays: Vec::new(),
-            waste: Waste::default(),
+            calls: CallSignals::default(),
             prompt_tok: (ptok / iters as u64) as u32,
             completion_tok: (ctok / iters as u64) as u32,
             total_s: 0.0,
@@ -2634,7 +2641,7 @@ async fn cmd_memory_axes(
             unsafe_guess_rate: None,
             verification_catch_rate: None,
             replays: Vec::new(),
-            waste: Waste::default(),
+            calls: CallSignals::default(),
             prompt_tok: 0,
             completion_tok: 0,
             total_s: 0.0,
@@ -2970,7 +2977,11 @@ fn write_json(path: &str, scores: &[CaseScore]) {
                 "unsafe_guess_rate": s.unsafe_guess_rate,
                 "verification_catch_rate": s.verification_catch_rate,
                 "replays": s.replays,
-                "waste": s.waste.total(), "prompt_tok": s.prompt_tok,
+                "redundant_calls": s.calls.redundant_calls(),
+                "failed_tool_calls": s.calls.failed,
+                "observations": s.calls.observations,
+                "unreferenced_sql_results": s.calls.unreferenced_results,
+                "prompt_tok": s.prompt_tok,
                 "completion_tok": s.completion_tok, "total_s": s.total_s,
                 "steps": s.steps, "hard_fail": s.hard_fail, "err": s.err,
             })
@@ -3743,13 +3754,13 @@ mod tests {
     }
 
     #[test]
-    fn waste_classification() {
-        // One SQL computation feeds the answer -> nothing wasted.
+    fn call_signal_classification() {
+        // One SQL computation feeds the answer -> no duplicate calls.
         let clean = rr("The total is 450.", vec![ev_sql("1 row in 50ms", &[450.0])]);
-        assert_eq!(classify_waste(&clean).total(), 0);
+        assert_eq!(classify_calls(&clean).redundant_calls(), 0);
 
-        // A useful observation is counted separately; errors and exact repeats
-        // are waste, but source inspection is not assumed waste from its name.
+        // A useful observation is separate; a failed query is recorded but may
+        // guide correction; only the repeated call is confirmed redundant.
         let messy = rr(
             "The total is 450.",
             vec![
@@ -3759,15 +3770,16 @@ mod tests {
                 ev("run_sql", "1 row in 50ms", None),            // repeat of #2
             ],
         );
-        let w = classify_waste(&messy);
+        let w = classify_calls(&messy);
         assert_eq!(
-            (w.observations, w.errored, w.duplicate, w.total()),
-            (1, 1, 1, 2),
+            (w.observations, w.failed, w.duplicate, w.redundant_calls()),
+            (1, 1, 1, 1),
             "{}",
             w.breakdown()
         );
 
-        // speculative only fires once a run has 3+ successful queries
+        // This signal identifies unreferenced outputs only after 3+ successful
+        // queries; it is deliberately not counted as proven redundancy.
         let spec = rr(
             "The answer is 450.",
             vec![
@@ -3776,9 +3788,11 @@ mod tests {
                 ev_sql("3 rows in 99ms", &[99.0]),  // feeds nothing
             ],
         );
-        assert_eq!(classify_waste(&spec).speculative, 2);
+        let signal = classify_calls(&spec);
+        assert_eq!(signal.unreferenced_results, 2);
+        assert_eq!(signal.redundant_calls(), 0);
 
-        // two queries, one intermediate -> NOT speculative (can't tell)
+        // Two queries are too few to classify unreferenced-result signals.
         let two = rr(
             "The answer is 450.",
             vec![
@@ -3786,7 +3800,26 @@ mod tests {
                 ev_sql("1 row in 50ms", &[450.0]),
             ],
         );
-        assert_eq!(classify_waste(&two).total(), 0);
+        let signal = classify_calls(&two);
+        assert_eq!(signal.unreferenced_results, 0);
+        assert_eq!(signal.redundant_calls(), 0);
+
+        // In a uniqueness/ranking problem, intermediate figures may be
+        // necessary to eliminate candidates even when only one appears in the
+        // final answer. Report the signal without calling that work redundant.
+        let candidates = rr(
+            "Travel is the only goal met, with 4 leisure trips.",
+            vec![
+                ev_sql("candidate a", &[6.0]),
+                ev_sql("candidate b", &[8.0]),
+                ev_sql("candidate c", &[11.0]),
+                ev_sql("candidate d", &[17.0]),
+                ev_sql("candidate e", &[4.0]),
+            ],
+        );
+        let signal = classify_calls(&candidates);
+        assert_eq!(signal.unreferenced_results, 4);
+        assert_eq!(signal.redundant_calls(), 0);
     }
 
     #[test]
