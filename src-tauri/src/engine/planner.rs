@@ -1379,6 +1379,7 @@ mod tests {
                         max: None,
                         example: None,
                         common_values: None,
+                        common_value_counts: None,
                         note: None,
                     },
                     ColumnInfo {
@@ -1390,6 +1391,7 @@ mod tests {
                         max: None,
                         example: None,
                         common_values: None,
+                        common_value_counts: None,
                         note: None,
                     },
                     ColumnInfo {
@@ -1401,6 +1403,7 @@ mod tests {
                         max: None,
                         example: None,
                         common_values: None,
+                        common_value_counts: None,
                         note: None,
                     },
                 ]),

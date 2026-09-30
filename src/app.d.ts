@@ -14,6 +14,7 @@ declare global {
 					model: string | null;
 					mode: string | null;
 					contextRefs: import('./lib/types').ContextReference[];
+					clarificationReply?: import('./lib/types').ClarificationReply | null;
 				},
 				onEvent: (event: AskEvent) => void
 			): Promise<import('./lib/types').Answer>;

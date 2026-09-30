@@ -19,7 +19,7 @@ workspace files
   -> WorkspaceModel (sources, profiles, definitions, revision)
   -> ConversationSession
   -> model control plane: interpret, decompose, observe, choose
-  -> optional AnalysisContract / semantic hypothesis
+  -> AnalysisContract when interpretation requires a non-literal mapping or material scope choice
   -> grounding and targeted probes when useful
   -> compiled or model-authored read-only execution
   -> ExecutionTrace
@@ -53,17 +53,23 @@ question and folder:
    interpretation; repeat inspection when evidence is incomplete or surprising.
 4. **Clarify when it matters:** ask only after reasonable investigation leaves
    a user-owned ambiguity that could change the result. Pending clarification
-   allows local observation, not computation under an unresolved choice.
+   does not disable safe analysis: when useful, compute and label candidate or
+   partial results so the user can see what the choice changes, without
+   presenting one unresolved scenario as settled.
 5. **Analyze and validate:** execute the grounded plan read-only, check the
    result against its source rows and stated assumptions, then either revise
    the investigation or answer with traceable evidence.
 
-This is model-directed, not a mandatory sequence of tool calls. A direct
-computation is appropriate when the source and meaning are already clear. A
-multi-source or semantically messy question should be allowed the extra
-inspection it needs. The model is assumed capable of analysis when Fella gives
-it relevant context, useful tools, and feedback; failures are presumed to be
-harness-side until controlled comparison shows otherwise.
+This is model-directed, not a fixed sequence of tool calls. The loop does,
+however, preserve a real observation boundary: if a model response requests
+inspection and computation together, Fella returns the inspection first and
+defers computation until the model has seen it. Otherwise concurrent tool
+execution lets a plan run before the evidence it requested can influence that
+plan. A direct computation remains appropriate when the source and meaning are
+already clear and no new observation is requested. The model is assumed
+capable of analysis when Fella gives it relevant context, useful tools, and
+feedback; failures are presumed to be harness-side until controlled
+comparison shows otherwise.
 
 ## Delivery status
 
@@ -80,14 +86,16 @@ harness-side until controlled comparison shows otherwise.
   relationship candidates as prompt-visible join hints; richer user-defined
   definitions and value semantics are still ahead.
 - **M2 — model-driven interpretation:** first slice implemented; the model has
-  the complete fixed read-only tool surface plus an optional compact contract
-  function. Rust normalizes and grounds a proposed hypothesis, but an
+  the complete fixed read-only tool surface plus a compact contract function
+  for non-literal semantic mappings and material scope choices (simple exact
+  lookups can use direct tools). Rust normalizes and grounds a proposed hypothesis, but an
   ambiguous, unsupported, invalid, or absent hypothesis never blocks direct
-  investigation. The prompt now describes the analyst workflow without
+  investigation. Semantic roll-ups record their selected observed labels and
+  assumption before calculation, then disclose that mapping in the answer. The prompt now describes the analyst workflow without
   requiring a contract before source inspection or direct tools. A proposed
-  clarification keeps local observation tools available while withholding
-  computation, so findings can resolve the ambiguity before Fella interrupts
-  the user. Risk signals tune attention and verification rather than selecting
+  clarification leaves the read-only tool surface available: the model may
+  inspect or compute labeled candidate/partial results before asking the user,
+  while the unresolved choice remains visibly pending. Risk signals tune attention and verification rather than selecting
   a mandatory route.
 - **M3 — grounding:** first slice implemented alongside model-directed routing;
   exact field bindings and bounded filter-value probes now run against the
@@ -277,10 +285,11 @@ material disagreement      -> retry, revise, or clarify
 unsupported request        -> explain the observed limitation
 ```
 
-The contract function is optional and provider-neutral. Providers that support
-structured output can use it; others can emit the compact schema through the
-ordinary tool loop. A malformed or unresolved contract is a repair signal, not
-a reason to deny the model access to the other read-only tools.
+The contract function is optional overall and provider-neutral, but the model
+should use it for non-literal mappings and material scope choices. Providers
+that support structured output can use it; others can emit the compact schema
+through the ordinary tool loop. A malformed or unresolved contract is a repair
+signal, not a reason to deny the model access to the other read-only tools.
 
 **Exit criteria:** the system can distinguish “the model wrote valid SQL” from
 “the model understood the question,” and it does not silently choose between

@@ -124,8 +124,8 @@ src-tauri/src/
     sqlite.rs                fella.db: settings, sources cache, recent_workspaces
     agent.rs                 the interactive harness: model-directed reasoning loop + system prompt
                              (`PromptProfile`); owns no compute of its own and calls
-                             into `analytics::*`; hypotheses remain advisory, while an explicit
-                             clarification prevents computation for a pending user choice
+                             into `analytics::*`; hypotheses remain advisory, and a pending
+                             clarification keeps candidate read-only computations available
     evidence.rs              EvidenceItem / Answer / AskEvent types
     tools.rs                 Tool trait, Registry, JSON-Schema export; the 7 built-ins
     memory.rs                per-folder learned notes (memory.md); FELLA_MEMORY
@@ -135,9 +135,15 @@ src-tauri/src/
 owns the model-directed reasoning loop, system prompt, tool orchestration, and
 turn trace for a product answer, and has no compute of its own. The model may
 choose inspection, a semantic hypothesis, direct SQL/Python/document/chart
-tools, a revision of its plan, or a typed clarification. A hypothesis remains
-advisory; a clarification is the one deliberate exception: the runtime will
-not execute a calculation until the user resolves it. `engine/analytics/` is the engine —
+tools, a revision of its plan, or a typed clarification. It records non-literal
+semantic mappings and material scope choices in the hypothesis contract, while
+simple exact lookups can use direct tools. A hypothesis remains advisory; a
+pending clarification does not disable safe read-only candidate or partial
+calculations, but the unresolved choice is not presented as settled. When one model response
+requests both workspace inspection and a calculation, the controller runs the
+inspection first and returns the calculation as deferred; the model must see
+the observation before submitting a fresh calculation. This is a phase
+boundary, not a domain-specific interpretation rule. `engine/analytics/` is the engine —
 deterministic SQL/stats/chart/verification logic with no knowledge that a model
 or a loop exists. The engine supplies safe consequences for the harness, never
 the reverse; `AnalyticsSource` is the one seam between them. See
@@ -231,7 +237,12 @@ run(question):
   loop up to max_steps() (MAX_STEPS = 20, FELLA_MAX_STEPS overrides):
     resp = llm.chat(msgs, tool_schemas)            # raced against a cancel flag
     if not resp.tool_calls:
-     return finish(resp.content)                  # verify + AnswerDone
+      checks = verify(resp.content, evidence)
+      if actionable(checks) and repair_budget_left:
+        supersede(checks' invalidated evidence)
+        msgs.push(assistant answer, verification feedback)
+        continue                                  # same analytical turn
+      return finish(resp.content, checks)          # AnswerDone (may need review)
     for call:
       out = registry.run_with_cancel(call.name, args, cancel)
                                                    # fixed built-in; only data access
@@ -263,8 +274,7 @@ of a larger total, and one added short sentence only if that comparison
 turns up something genuinely notable. A "Your context" block from the
 workspace's `fella.md` is prepended.
 
-**Verification pass** (`analytics::verify`, deterministic; one bounded
-corrective re-ask only when a cited SQL rerun changes or fails — `FELLA_VERIFY_REASK`): re-execute any SQL cited in
+**Verification pass** (`analytics::verify`, deterministic): re-execute any SQL cited in
 the answer and confirm the headline value is unchanged; confirm every table
 named in cited SQL exists in the catalog; flag numerals in the answer that
 appear in no tool result; flag a `SUM`/`AVG` over a text column, and an
@@ -275,7 +285,15 @@ shared join column answered from one table alone; flag a date/time
 `GROUP BY` that collapsed to a NULL key; flag a value in the answer sitting
 next to a different column's name than the one it actually came from (a
 query that packs several aggregates into one row). Rendered as a ✓/⚠
-checklist in the evidence block.
+checklist in the evidence block. Actionable failures can return the same turn
+to the model for a tool-backed repair, up to three attempts; invalidated
+evidence is marked superseded. If checks remain unresolved when the budget is
+exhausted, the answer stays in review. `FELLA_VERIFY_REASK` separately controls
+the single tool-free reconciliation when re-executing a cited query produces a
+different result. When the model requests observation and computation in the
+same response, the controller also defers computation until the model has
+received the requested inspection output, preserving the analyst's
+observe-interpret-compute loop instead of running both calls concurrently.
 
 ## Tools
 

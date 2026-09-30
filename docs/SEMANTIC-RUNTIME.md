@@ -16,14 +16,22 @@ contain, and what the calculation can support.
 The target is a **model-driven analytical computer**:
 
 > The model interprets the question, chooses the next useful observation or
-> computation, and explains the result. Fella supplies bounded context and
-> read-only tools, compiles safe analytical work where useful, checks the
-> resulting claims, and asks for clarification when ambiguity still changes the
-> answer.
+> computation, writes or selects SQL/Python when useful, and explains the
+> result. Fella supplies bounded context, a safe read-only analytics engine,
+> execution feedback, and checks that help the model revise its work. It asks
+> for clarification when a material user-owned choice remains unresolved.
 
 This is broader than a prompt, a memory file, or a SQL agent. It is also
 narrower than a general-purpose autonomous agent: Fella remains read-only,
 local-first, model-agnostic, and optimized for analytical answers.
+
+The orchestration pattern is deliberately familiar from modern coding
+harnesses: inspect the mounted files, reason about the task, generate SQL or
+Python, run it, examine the output, and iterate. Fella's specialization is the
+analytics substrate around that loop: filesystem reconnaissance, data-aware
+execution, persistent analytical state, and evidence tied to each result. The
+compiler is an optimization for work it can express, not a gate that decides
+whether the model is allowed to analyze the data.
 
 ## Fella Analytics Runtime / Harness
 
@@ -57,19 +65,18 @@ followed by a one-shot answer:
 
 ~~~text
 mount -> local reconnaissance
-question -> inspect -> frame/decompose -> investigate
-                         ^                   |
-                         |                   v
-                    revise meaning <- observations
-                                             |
-                          unresolved material choice?
-                              yes -> clarify
-                               no -> plan and execute
-                                         |
-                                         v
-                               validate against evidence
-                                         |
-                             revise, or answer with trace
+question -> inspect -> frame/decompose as useful -> investigate
+               ^                 |                    |
+               |                 v                    v
+               +---------- observations/errors <- generate SQL/Python
+                                                        |
+                                             read-only analytics engine
+                                                        |
+                                                   result / error
+                                                        |
+                                        inspect, revise, or compute again
+                                                        |
+                          answer / qualified answer / partial / clarify
 ~~~
 
 Mounting establishes a read-only map of available sources, schemas, profiles,
@@ -80,6 +87,16 @@ relationships, date coverage, or a small query. It decomposes a multi-part
 question when that helps locate and check the needed evidence. Each
 observation can revise the interpretation or lead to another targeted
 inspection before the model commits to a computation.
+
+In analyst terms: first learn what data exists, where it lives, how it is
+labeled, and which labels may matter; the files need not be clean first. Then
+break the question into smaller questions when useful and try to answer them
+against the inspected sources. Repeat inspection and investigation as results
+or errors reveal what is still unknown. Once the model has enough context, it
+generates or selects SQL/Python, runs it through Fella's bounded analytics
+engine, inspects the output, and continues or revises until it can give the
+strongest useful answer the evidence supports. This is an adaptive loop, not a
+mandatory checklist: a clear, simple question can go directly to execution.
 
 The loop must preserve the evidence that gives later computations meaning.
 As tool history grows, Fella keeps a bounded working set of source definitions
@@ -95,16 +112,62 @@ transformation belongs in the executed computation with labeled operands, not
 only in answer prose. These are analytical invariants, not domain-specific
 fallbacks.
 
-Quoted category or value labels are treated as exact-match requests by default.
-A semantically nearby label is not an established mapping: use one only when
-workspace documentation or a prior user definition supports it. If that choice
-materially changes the answer, preserve the exact match or clarify.
+Observed labels are evidence for interpretation, not a universal rule that
+quoted language must match a stored value byte-for-byte. The model should use
+the question, profiles, examples, notes, and prior definitions to decide
+whether a label is an exact value, an alias, or a broader concept. It should
+not silently substitute a nearby label based only on word similarity; when it
+does make a non-literal mapping, it should check the relevant values and state
+the mapping. If useful, compute exact-match and plausible mapped results side
+by side instead of blocking the analysis.
 
-Clarification comes after reasonable investigation, and only when the
-remaining choice belongs to the user and could materially change the answer.
-While waiting, Fella may continue safe local inspection but must not calculate
-under the unresolved choice. If both interpretations produce the same answer,
-or one is supported by the workspace, do not interrupt the user unnecessarily.
+Clarification comes after reasonable investigation, when the remaining choice
+belongs to the user and could materially change the answer. Uncertainty alone
+does not require a clarification or stop. Fella may state a reasonable
+assumption, present a qualified or partial answer, or calculate candidate
+interpretations for comparison. If it asks the user, only the definitive
+choice that depends on that reply is pending; safe, useful analysis and
+candidate results need not be discarded or delayed. If both interpretations
+produce the same answer, or evidence favors one, do not interrupt the user
+unnecessarily.
+
+### Useful answers over defensive abstention
+
+Trust is not maximized by abstaining whenever the runtime cannot prove every
+semantic choice in advance. A restriction can create a false negative: it can
+prevent the model from reaching a correct, evidence-backed answer. Fella should
+optimize for useful, well-grounded answers while making uncertainty visible,
+not for the highest possible accuracy among only the answers it permits itself
+to give.
+
+Keep hard limits for what the system may do: workspace permissions, read-only
+access, sandbox boundaries, resource budgets, and invalid execution. Treat
+uncertainty about what the user means as a model-facing signal to inspect,
+compare, compute, revise, or clarify—not as an automatic denial. A compiler
+not supporting a query shape, an ungrounded first hypothesis, or an imperfect
+profile does not mean the data is unanalyzable; SQL, Python, document reading,
+and other safe routes remain available.
+
+When confidence is incomplete, prefer the strongest useful response the
+evidence supports:
+
+1. Answer directly when the evidence is clear.
+2. Answer with an explicit assumption or caveat when one interpretation is
+   reasonable but not certain.
+3. Give a partial answer or compare plausible interpretations when that helps.
+4. Ask one focused question when a material, user-owned choice remains.
+5. Say the data cannot answer only when investigation finds no usable evidence
+   path; describe an execution limitation as a limitation, not as proof that
+   the data itself is insufficient.
+
+Verification should trigger targeted revision, improve the answer's stated
+confidence, or mark a specific claim for review. It should not erase an
+otherwise useful answer merely because a semantic check is inconclusive. Tests
+and evaluations must track answer coverage and unnecessary abstention alongside
+correctness, calibration, clarification burden, and cost. For blocked cases,
+shadow evaluations can relax semantic gates while keeping the same read-only
+sandbox; a correct result in shadow mode identifies lost answer coverage caused
+by the harness.
 
 The model is presumed capable of useful analysis when given relevant evidence,
 effective read-only tools, and execution feedback. A failure should initially
@@ -155,6 +218,21 @@ for Efficient SQL](https://arxiv.org/abs/2405.16755). The goal is not to make
 the model memorize less by default; it is to stop an accidental oversized file
 or transcript from crowding out the actual analytical question.
 
+The canonical turn record keeps a length-only `context_audit` for these
+assembled sections (source size, retained size, and whether that section was
+truncated), plus provider-reported token usage when available. It does not
+persist the context text or claim to snapshot every later tool result in the
+model's working history; those are represented by the execution trace and
+evidence instead.
+
+When a user answers a clarification card, the reply carries the id of the turn
+that asked it. The engine verifies that the turn is still awaiting a choice and
+belongs to the same conversation and mounted workspace, then resumes the
+original analytical question with the user's choice as structured context. The
+new turn records its parent and response, and runs against the current data
+revision. A one-turn choice is not silently promoted into folder-wide semantic
+memory.
+
 ### Authority boundaries
 
 The model owns interpretation, decomposition, tool choice, and explanation.
@@ -175,23 +253,24 @@ turn uncertainty into authority.
 
 ### The analytical turn
 
-Every question passes through the same conceptual state machine. The model can
-move through it in whatever order the question needs:
+Every question uses the same model-driven execution loop, without requiring a
+fixed sequence of steps:
 
 ~~~text
-received -> model interprets -> observes -> plans/compiles -> executes -> verifies -> accepted
-                 ^                 |              |               |
-                 |                 v              v               v
-                 +----------- revise         retry/repair     needs review
-                                                                    |
-                                                                    v
-                                                               clarify/unsupported
+question -> inspect / interpret -> choose tools or generate SQL/Python
+                 ^                                      |
+                 |                                      v
+                 +--------- observe result <- read-only execution engine
+                                    |
+                      revise / compute again / finish
+                                    |
+          answer / qualified or partial answer / clarify / no evidence path
 ~~~
 
-The model may answer a simple question with one direct tool call, or use a
-semantic hypothesis, targeted probe, compiled plan, Python calculation,
-document search, chart, or clarification when the question needs it. Risk
-signals tune attention and verification; they never remove a read-only tool or
+The model may answer a simple question with one direct tool call, or inspect,
+decompose, generate SQL/Python, use a semantic hypothesis, compile a supported
+plan, search documents, make a chart, and iterate when the question needs it.
+Risk signals tune attention and verification; they never remove a safe route or
 force a ceremony before the model can investigate.
 
 ### The semantic decision edge
@@ -206,12 +285,15 @@ against the mounted revision. The contract has four practical outcomes:
 2. **Assume:** one interpretation is reasonable but not mathematically forced;
    the model proceeds and states the assumption in the answer.
 3. **Clarify:** two or more supported interpretations would materially change
-   the result, and the choice belongs to the user. The model emits one typed
+   the result, and the choice belongs to the user. The model may emit one typed
    `clarification` request with a concise question and optional choices. Fella
-   does not execute a calculation for the unresolved choice; the user's reply
-   starts the next turn with the decision in conversation context.
+   should retain useful candidate calculations or partial results where
+   possible; only a definitive conclusion that requires the user's choice is
+   pending. The user's reply resumes the analysis with that decision in
+   conversation context.
 4. **Unsupported:** the workspace cannot answer the requested analysis through
-   the available read-only paths.
+   any reasonable available read-only path. A limitation in one compiler or
+   execution route alone is not enough to call the analysis unsupported.
 
 This is the right place for a Jev-like decision model if Fella ever adopts
 one: it could cheaply route a grounded question among `resolve`, `assume`,
@@ -226,12 +308,13 @@ operations and a general model handles open-ended reasoning. See
 [TypeSafe's Jev overview](https://www.typesafeai.org/jev).
 
 The threshold is intentionally semantic rather than a fixed confidence score:
-ordinary aliases and messy labels should be resolved through schema, observed
-values, notes, and probes; a clarification is reserved for an unresolved
-user-specific choice such as whether income belongs in a spending total. A
-classifier confidence score can inform this edge later, but confidence alone
-cannot decide whether two interpretations have materially different
-consequences.
+ordinary aliases and messy labels should be investigated using schema,
+observed values, notes, examples, and probes; a clarification is reserved for a
+material user-specific choice such as whether income belongs in a spending
+total. Low confidence can motivate more inspection or a caveat, but is not by
+itself a reason to withhold an answer. A classifier confidence score can inform
+this edge later, but confidence alone cannot decide whether two interpretations
+have materially different consequences.
 
 ### Current product concepts as runtime projections
 
@@ -255,19 +338,22 @@ what an answer means.
 
 ### The product distinction
 
-Fella is not primarily a workspace with an AI assistant inside it, and it is
-not a SQL agent with an evidence panel bolted on. It is a read-only analytical
-runtime in which:
+Fella is an analytics harness: it uses the familiar model-driven
+inspect–generate–execute–observe loop of other agent harnesses, specialized by
+local data reconnaissance and a read-only analytical engine. It is not a
+separate orchestration paradigm or a SQL agent with an evidence panel bolted
+on. Its runtime coordinates:
 
-> The model drives. The runtime constrains. The data computes. The verifier
-> checks. The user confirms. Memory compounds.
+> The model drives. SQL and Python express the analysis. Fella's engine runs it
+> safely against the data. Evidence and checks inform the next step. The user
+> clarifies genuine choices. Memory compounds.
 
 That closed loop is the harness. It is where Fella's three principles become
 technical behavior:
 
 - **Consistency:** contracts and semantic memory preserve meaning across turns.
 - **Correctness:** execution and verification are tied to the current workspace
-  revision.
+  revision, without turning uncertainty into an automatic refusal.
 - **Efficiency:** model-chosen tool calls, bounded observations, fixed tools,
   parallel execution, and cached profiles keep simple questions fast without
   limiting the model on harder questions.

@@ -66,6 +66,115 @@ fn grep_files_is_case_insensitive_and_caps_hits() {
     let _ = fs::remove_dir_all(&data);
 }
 
+#[tokio::test]
+async fn ranked_search_combines_terms_across_nearby_lines_and_prefers_coverage() {
+    let ws = scratch("ranked-search-ws");
+    let data = scratch("ranked-search-data");
+    fs::write(ws.join("partial.txt"), "The cohort appears in this note.\n").unwrap();
+    fs::write(
+        ws.join("complete.txt"),
+        "The cohort was reviewed after the release.\nThe denominator showed an imbalance.\n",
+    )
+    .unwrap();
+
+    let engine = open(&ws, &data);
+    let results = engine
+        .search_files("cohort denominator imbalance", 10)
+        .unwrap();
+
+    assert!(!results.incomplete);
+    assert!(!results.hits.is_empty());
+    assert_eq!(results.hits[0].source, "complete.txt");
+    assert!(results.hits[0].text.contains("[line 1] The cohort"));
+    assert!(results.hits[0].text.contains("[line 2] The denominator"));
+
+    let tool_output = fella_lib::engine::tools::Registry::standard()
+        .run(
+            &engine,
+            "grep_files",
+            &serde_json::json!({ "pattern": "cohort denominator imbalance" }),
+        )
+        .await
+        .unwrap()
+        .expect("grep_files exists");
+    assert!(tool_output.llm_text.contains("complete.txt"));
+    assert_eq!(
+        tool_output.rows.as_ref().unwrap()[0][1].as_str(),
+        Some("complete.txt")
+    );
+
+    let _ = fs::remove_dir_all(&ws);
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[test]
+fn ranked_search_uses_workspace_term_rarity_to_order_passages() {
+    let ws = scratch("rarity-search-ws");
+    let data = scratch("rarity-search-data");
+    let frequent_mentions = std::iter::repeat("review\n").take(60).collect::<String>();
+    fs::write(ws.join("frequent.txt"), frequent_mentions).unwrap();
+    fs::write(ws.join("rare.txt"), "A cohort arrived.\n").unwrap();
+
+    let engine = open(&ws, &data);
+    let results = engine.search_files("review cohort", 10).unwrap();
+
+    assert!(!results.hits.is_empty());
+    assert_eq!(results.hits[0].source, "rare.txt");
+
+    let _ = fs::remove_dir_all(&ws);
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[test]
+fn ranked_search_prefers_exact_phrase_matches_over_common_partial_terms() {
+    let ws = scratch("phrase-search-ws");
+    let data = scratch("phrase-search-data");
+    fs::write(ws.join("phrase.txt"), "Annual leave was approved.\n").unwrap();
+    fs::write(ws.join("annual.txt"), "Annual enrollment opens today.\n").unwrap();
+    fs::write(ws.join("leave.txt"), "Please leave the folder here.\n").unwrap();
+
+    let engine = open(&ws, &data);
+    let results = engine.search_files("annual leave", 50).unwrap();
+
+    assert!(!results.incomplete);
+    assert_eq!(results.hits.len(), 1);
+    assert_eq!(results.hits[0].source, "phrase.txt");
+    assert!(results.hits[0].text.contains("Annual leave was approved"));
+
+    let _ = fs::remove_dir_all(&ws);
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[tokio::test]
+async fn inspect_table_reports_counts_for_frequent_values() {
+    use fella_lib::engine::tools::Registry;
+
+    let ws = scratch("profile-values-ws");
+    let data = scratch("profile-values-data");
+    fs::write(
+        ws.join("observations.csv"),
+        "group,label\nA,North\nB,South\nC,South\nD,South\nE,North\n",
+    )
+    .unwrap();
+
+    let engine = open(&ws, &data);
+    let out = Registry::standard()
+        .run(
+            &engine,
+            "inspect_table",
+            &serde_json::json!({ "name": "observations.csv", "rows": 0 }),
+        )
+        .await
+        .unwrap()
+        .expect("inspect_table exists");
+
+    assert!(out.llm_text.contains("North (2)"), "{}", out.llm_text);
+    assert!(out.llm_text.contains("South (3)"), "{}", out.llm_text);
+
+    let _ = fs::remove_dir_all(&ws);
+    let _ = fs::remove_dir_all(&data);
+}
+
 #[test]
 fn read_file_returns_extracted_text() {
     let ws = scratch("read-ws");

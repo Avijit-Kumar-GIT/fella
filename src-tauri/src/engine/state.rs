@@ -1,6 +1,6 @@
 //! `EngineState` the shared runtime object every command handler borrows.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -13,7 +13,7 @@ use crate::engine::analysis_store;
 use crate::engine::analytics::data::{self, DataEngine, DEFAULT_ROW_CAP};
 use crate::engine::analytics::pyexec;
 use crate::engine::catalog::{self, Catalog, ColumnInfo, SourceInfo, SourceKind};
-use crate::engine::context::{ContextAssembler, ContextPacket};
+use crate::engine::context::{ContextAssembler, ContextAssemblyAudit, ContextPacket};
 use crate::engine::error::{EngineError, EngineResult};
 use crate::engine::evidence::{Answer, AskEvent};
 use crate::engine::ingest::docs;
@@ -21,9 +21,10 @@ use crate::engine::llm::{LlmClient, ProviderHealth};
 use crate::engine::memory::{self, FolderMemory};
 use crate::engine::provider::{self, AuthKind, PROVIDERS};
 use crate::engine::runtime::{
-    AnalysisContract, AnalysisResult, AnalysisTurn, AnalysisTurnReplayStatus, ContextReference,
-    InterpretationStatus, LogicalPlan, PlanStrategy, TurnState, VerificationReport,
-    WorkspaceColumnSnapshot, WorkspaceRevisionSnapshot, WorkspaceSourceSnapshot,
+    AnalysisContract, AnalysisResult, AnalysisTurn, AnalysisTurnReplayStatus, ClarificationReply,
+    ContextReference, InterpretationStatus, LogicalPlan, PlanStrategy, ResolvedClarification,
+    TurnState, VerificationReport, WorkspaceColumnSnapshot, WorkspaceRevisionSnapshot,
+    WorkspaceSourceSnapshot,
 };
 use crate::engine::secrets::Secrets;
 use crate::engine::semantic_memory::{
@@ -570,7 +571,7 @@ pub struct QueryResult {
     pub truncated: bool,
 }
 
-/// One `grep_files` match.
+/// One document-search passage with its source and anchor line.
 #[derive(Debug, Serialize)]
 pub struct GrepHit {
     pub source: String,
@@ -578,10 +579,243 @@ pub struct GrepHit {
     pub text: String,
 }
 
+#[derive(Debug)]
+pub struct GrepResults {
+    pub hits: Vec<GrepHit>,
+    /// True when a source could not be read or the bounded scan ended before
+    /// all documents were searched. A partial scan is not proof of absence.
+    pub incomplete: bool,
+}
+
+struct SearchLine {
+    number: usize,
+    excerpt: String,
+    term_frequencies: Vec<u32>,
+    token_count: usize,
+    regex_match: bool,
+}
+
+struct RankedGrepHit {
+    hit: GrepHit,
+    first_line: usize,
+    last_line: usize,
+    score: f64,
+    phrase_match: bool,
+}
+
 /// `read_file` truncates a document past this many characters so one huge
 /// PDF can't blow the context window `grep_files` can find a spot in a
 /// bigger file first.
 const READ_FILE_CHAR_CAP: usize = 12_000;
+const DOCUMENT_SEARCH_BYTE_CAP: usize = 64 * 1024 * 1024;
+const DOCUMENT_SEARCH_WINDOW_LINES: usize = 5;
+const DOCUMENT_SEARCH_LINE_CHARS: usize = 420;
+
+fn document_search_tokens(text: &str) -> Vec<String> {
+    text.split(|ch: char| !ch.is_alphanumeric())
+        .filter(|token| token.chars().count() >= 2)
+        .map(str::to_lowercase)
+        .collect()
+}
+
+fn document_search_terms(query: &str) -> Vec<String> {
+    const STOP_WORDS: &[&str] = &[
+        "a", "an", "and", "are", "as", "at", "be", "been", "being", "but", "by", "can", "could",
+        "did", "do", "does", "for", "from", "has", "have", "how", "i", "in", "into", "is", "it",
+        "its", "me", "of", "on", "or", "please", "that", "the", "their", "them", "there", "these",
+        "they", "this", "those", "to", "was", "we", "were", "what", "when", "where", "which",
+        "who", "why", "will", "with", "would", "you", "your",
+    ];
+    let mut seen = HashSet::new();
+    document_search_tokens(query)
+        .into_iter()
+        .filter(|term| !STOP_WORDS.contains(&term.as_str()) && seen.insert(term.clone()))
+        .collect()
+}
+
+fn has_search_operators(query: &str) -> bool {
+    query.chars().any(|ch| {
+        matches!(
+            ch,
+            '\\' | '.' | '^' | '$' | '*' | '+' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '|'
+        )
+    })
+}
+
+fn excerpt_document_line(line: &str, match_at: Option<usize>) -> String {
+    let trimmed = line.trim();
+    if trimmed.chars().count() <= DOCUMENT_SEARCH_LINE_CHARS {
+        return trimmed.to_string();
+    }
+
+    let target = match_at
+        .unwrap_or(0)
+        .saturating_sub(DOCUMENT_SEARCH_LINE_CHARS / 3);
+    let start = trimmed
+        .char_indices()
+        .find(|(index, _)| *index >= target)
+        .map(|(index, _)| index)
+        .unwrap_or(0);
+    let end = trimmed[start..]
+        .char_indices()
+        .nth(DOCUMENT_SEARCH_LINE_CHARS)
+        .map(|(offset, _)| start + offset)
+        .unwrap_or(trimmed.len());
+    let mut excerpt = String::new();
+    if start > 0 {
+        excerpt.push('…');
+    }
+    excerpt.push_str(&trimmed[start..end]);
+    if end < trimmed.len() {
+        excerpt.push('…');
+    }
+    excerpt
+}
+
+fn prepare_search_line(
+    number: usize,
+    line: &str,
+    terms: &[String],
+    regex: &regex::Regex,
+) -> SearchLine {
+    let tokens = document_search_tokens(line);
+    let term_frequencies = terms
+        .iter()
+        .map(|term| tokens.iter().filter(|token| *token == term).count() as u32)
+        .collect();
+    let regex_match = regex.is_match(line);
+    let lower = line.to_ascii_lowercase();
+    let match_at = terms
+        .iter()
+        .filter_map(|term| lower.find(term))
+        .min()
+        .or_else(|| regex.find(line).map(|matched| matched.start()));
+    SearchLine {
+        number,
+        excerpt: excerpt_document_line(line, match_at),
+        term_frequencies,
+        token_count: tokens.len(),
+        regex_match,
+    }
+}
+
+fn document_window_frequencies(
+    window: &VecDeque<SearchLine>,
+    term_count: usize,
+) -> (Vec<u32>, usize) {
+    let mut frequencies = vec![0; term_count];
+    let mut token_count = 0;
+    for line in window {
+        token_count += line.token_count;
+        for (index, count) in line.term_frequencies.iter().enumerate() {
+            frequencies[index] += count;
+        }
+    }
+    (frequencies, token_count)
+}
+
+fn rank_document_window(
+    source: &str,
+    window: &VecDeque<SearchLine>,
+    idf: &[f64],
+    average_length: f64,
+    phrase: &str,
+) -> Option<RankedGrepHit> {
+    const BM25_K1: f64 = 1.2;
+    const BM25_B: f64 = 0.75;
+    let (term_frequencies, token_count) = document_window_frequencies(window, idf.len());
+    let regex_match = window.iter().any(|line| line.regex_match);
+    let covered_count = term_frequencies.iter().filter(|count| **count > 0).count();
+    if covered_count == 0 && !regex_match {
+        return None;
+    }
+
+    let combined = window
+        .iter()
+        .map(|line| line.excerpt.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let phrase_match =
+        !phrase.is_empty() && document_search_tokens(&combined).join(" ").contains(phrase);
+    let length_norm = if average_length > 0.0 {
+        1.0 - BM25_B + BM25_B * token_count as f64 / average_length
+    } else {
+        1.0
+    };
+    let score = term_frequencies
+        .iter()
+        .zip(idf)
+        .filter(|(frequency, _)| **frequency > 0)
+        .map(|(frequency, idf)| {
+            let frequency = *frequency as f64;
+            idf * frequency * (BM25_K1 + 1.0) / (frequency + BM25_K1 * length_norm)
+        })
+        .sum::<f64>()
+        + if phrase_match { 2.0 } else { 0.0 }
+        + if regex_match { 0.25 } else { 0.0 };
+    let anchor = window
+        .iter()
+        .find(|line| line.term_frequencies.iter().any(|frequency| *frequency > 0))
+        .or_else(|| window.iter().find(|line| line.regex_match))?;
+    let text = window
+        .iter()
+        .map(|line| format!("[line {}] {}", line.number, line.excerpt))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    Some(RankedGrepHit {
+        hit: GrepHit {
+            source: source.to_string(),
+            line: anchor.number,
+            text,
+        },
+        first_line: window.front()?.number,
+        last_line: window.back()?.number,
+        score,
+        phrase_match,
+    })
+}
+
+fn sort_ranked_hits(hits: &mut [RankedGrepHit]) {
+    hits.sort_by(|a, b| {
+        b.score
+            .total_cmp(&a.score)
+            .then_with(|| a.hit.source.cmp(&b.hit.source))
+            .then_with(|| a.hit.line.cmp(&b.hit.line))
+    });
+}
+
+fn scan_document_lines(
+    engine: &EngineState,
+    path: &str,
+    kind: SourceKind,
+    scanned_bytes: &mut usize,
+    mut visit: impl FnMut(usize, &str),
+) -> EngineResult<bool> {
+    if kind == SourceKind::Pdf {
+        let text = engine.pdf_text(path)?;
+        for (index, line) in text.lines().enumerate() {
+            if scanned_bytes.saturating_add(line.len()) > DOCUMENT_SEARCH_BYTE_CAP {
+                return Ok(true);
+            }
+            *scanned_bytes += line.len();
+            visit(index + 1, line);
+        }
+        return Ok(false);
+    }
+
+    let mut hit_cap = false;
+    docs::grep_lines(path, |number, line| {
+        if scanned_bytes.saturating_add(line.len()) > DOCUMENT_SEARCH_BYTE_CAP {
+            hit_cap = true;
+            return false;
+        }
+        *scanned_bytes += line.len();
+        visit(number, line);
+        true
+    })?;
+    Ok(hit_cap)
+}
 
 impl EngineState {
     pub fn new(data_dir: &Path) -> EngineResult<Self> {
@@ -1005,13 +1239,19 @@ impl EngineState {
             }
         }
 
+        let clarification_reply = original
+            .clarification_of
+            .clone()
+            .zip(original.clarification_response.clone())
+            .map(|(turn_id, response)| ClarificationReply { turn_id, response });
         let answer = self
-            .ask_with_mode_and_context(
+            .ask_with_mode_and_context_and_clarification(
                 &original.conversation_id,
                 &original.question,
                 model,
                 inspect,
                 &original.context_refs,
+                clarification_reply,
                 emit,
             )
             .await?;
@@ -1077,6 +1317,8 @@ impl EngineState {
         conversation_id: &str,
         question: &str,
         context_refs: &[ContextReference],
+        clarification: Option<&ResolvedClarification>,
+        context_audit: &ContextAssemblyAudit,
         catalog: &Catalog,
         answer: &Answer,
     ) {
@@ -1107,6 +1349,8 @@ impl EngineState {
             conversation_id: conversation_id.to_string(),
             question: question.to_string(),
             context_refs: context_refs.to_vec(),
+            clarification_of: clarification.map(|reply| reply.turn_id.clone()),
+            clarification_response: clarification.map(|reply| reply.response.clone()),
             workspace: answer
                 .workspace
                 .as_ref()
@@ -1116,6 +1360,7 @@ impl EngineState {
                 .as_ref()
                 .map(|workspace| workspace.revision.clone()),
             workspace_snapshot,
+            context_audit: Some(context_audit.clone()),
             rerun_of: None,
             state,
             contract: answer.contract.clone(),
@@ -1136,6 +1381,7 @@ impl EngineState {
             result: AnalysisResult {
                 text: answer.text.clone(),
                 status: answer.status,
+                usage: answer.usage,
                 verification: answer.verification.clone(),
                 evidence,
             },
@@ -2300,6 +2546,30 @@ exactly, character for character, from the list below.";
         context_refs: &[ContextReference],
         emit: impl Fn(AskEvent) + Send + Sync,
     ) -> EngineResult<Answer> {
+        self.ask_with_mode_and_context_and_clarification(
+            conversation_id,
+            question,
+            model,
+            inspect,
+            context_refs,
+            None,
+            emit,
+        )
+        .await
+    }
+
+    /// Continue one pending clarification. `reply.turn_id` is resolved against
+    /// the canonical turn store and must belong to this conversation and mount.
+    pub async fn ask_with_mode_and_context_and_clarification(
+        &self,
+        conversation_id: &str,
+        question: &str,
+        model: Option<&str>,
+        inspect: bool,
+        context_refs: &[ContextReference],
+        reply: Option<ClarificationReply>,
+        emit: impl Fn(AskEvent) + Send + Sync,
+    ) -> EngineResult<Answer> {
         let settings = self.settings();
         if !settings.has_credential {
             return Err(EngineError::msg(
@@ -2317,6 +2587,16 @@ exactly, character for character, from the list below.";
             ));
         }
         self.hydrate_session_from_archive(conversation_id);
+        let turn_catalog = self.catalog();
+        let clarification = reply
+            .as_ref()
+            .map(|reply| self.resolve_clarification_reply(conversation_id, reply, &turn_catalog))
+            .transpose()?;
+        let analysis_question = clarification
+            .as_ref()
+            .map(|reply| reply.original_question.as_str())
+            .unwrap_or(question);
+        let context = self.context_packet(analysis_question, conversation_id);
         // Touch this conversation's memory slot (create it, mark it most-recently
         // used) and evict the least-recently-used one if we're over the cap.
         {
@@ -2361,14 +2641,14 @@ exactly, character for character, from the list below.";
         } else {
             Registry::standard_with(settings.capabilities)
         };
-        let turn_catalog = self.catalog();
         let answer = agent::run(agent::RunRequest {
             engine: self,
             llm: &llm,
             registry: &registry,
-            conversation_id,
             turn_id: &turn_id,
-            question,
+            question: analysis_question,
+            context: &context,
+            clarification: clarification.as_ref(),
             inspect,
             context_refs,
             cancel: cancel.clone(),
@@ -2389,8 +2669,10 @@ exactly, character for character, from the list below.";
         let answer = answer?;
         self.persist_analysis_turn(
             conversation_id,
-            question,
+            analysis_question,
             context_refs,
+            clarification.as_ref(),
+            &context.audit,
             &turn_catalog,
             &answer,
         );
@@ -2399,7 +2681,10 @@ exactly, character for character, from the list below.";
         // a vocabulary note; an ordinary question teaches nothing). Needs the
         // previous question in this conversation for the correction check, so
         // read it before the distil step below pushes this one.
-        if !cancel.load(Ordering::Relaxed) && self.answer_workspace_is_current(&answer) {
+        if clarification.is_none()
+            && !cancel.load(Ordering::Relaxed)
+            && self.answer_workspace_is_current(&answer)
+        {
             let prior_q = {
                 let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
                 inner
@@ -2408,7 +2693,7 @@ exactly, character for character, from the list below.";
                     .and_then(|s| s.turns.last())
                     .map(|t| t.question.clone())
             };
-            self.record_turn_memory(prior_q.as_deref(), question, &answer)
+            self.record_turn_memory(prior_q.as_deref(), analysis_question, &answer)
                 .await;
         }
 
@@ -2461,10 +2746,21 @@ exactly, character for character, from the list below.";
                         .sessions
                         .entry(conversation_id.to_string())
                         .or_default();
+                    let mut frame = answer.contract.as_ref().and_then(contract_frame);
+                    if let Some(reply) = clarification.as_ref() {
+                        let resolution = format!(
+                            "clarification {} -> {}",
+                            reply.request.question, reply.response
+                        );
+                        frame = Some(match frame {
+                            Some(existing) => format!("{existing}; {resolution}"),
+                            None => resolution,
+                        });
+                    }
                     entry.turns.push(TurnDigest {
-                        question: question.chars().take(200).collect(),
+                        question: analysis_question.chars().take(200).collect(),
                         headline,
-                        frame: answer.contract.as_ref().and_then(contract_frame),
+                        frame: frame.map(|frame| cap_chars(&frame, 600)),
                         queries,
                     });
                     let n = entry.turns.len();
@@ -2475,6 +2771,50 @@ exactly, character for character, from the list below.";
             }
         }
         Ok(answer)
+    }
+
+    fn resolve_clarification_reply(
+        &self,
+        conversation_id: &str,
+        reply: &ClarificationReply,
+        catalog: &Catalog,
+    ) -> EngineResult<ResolvedClarification> {
+        let response = reply.response.trim();
+        if response.is_empty() || response.chars().count() > 500 {
+            return Err(EngineError::msg(
+                "the clarification response must be between 1 and 500 characters",
+            ));
+        }
+        let parent = self.analysis_turn_load(&reply.turn_id)?;
+        if parent.conversation_id != conversation_id {
+            return Err(EngineError::msg(
+                "that clarification belongs to a different conversation",
+            ));
+        }
+        if parent.state != TurnState::Clarify {
+            return Err(EngineError::msg(
+                "that analysis no longer has a pending clarification",
+            ));
+        }
+        if parent.workspace.as_deref() != catalog.workspace.as_deref() {
+            return Err(EngineError::msg(
+                "reopen the workspace that asked this clarification before continuing",
+            ));
+        }
+        let request = parent
+            .contract
+            .as_ref()
+            .and_then(|contract| contract.clarification.as_ref())
+            .ok_or_else(|| EngineError::msg("the referenced turn has no pending clarification"))?
+            .clone();
+
+        Ok(ResolvedClarification {
+            turn_id: parent.id,
+            original_question: parent.question,
+            request,
+            response: response.to_string(),
+            source_revision_changed: parent.workspace_revision != catalog.revision,
+        })
     }
 
     /// Is the configured model provider reachable?
@@ -2580,9 +2920,147 @@ exactly, character for character, from the list below.";
             .collect()
     }
 
-    /// Regex (case-insensitive) search over the extracted text of every
-    /// catalogued document. No index to build or keep in sync just reads
-    /// the files that are there right now.
+    /// Search extracted document text with workspace-wide BM25 passage
+    /// ranking, retaining regex matching for precise lookups. Results carry
+    /// nearby line context. The two-pass scan is bounded;
+    /// callers must preserve the `incomplete` signal when reporting no hits.
+    pub fn search_files(&self, query: &str, max_hits: usize) -> EngineResult<GrepResults> {
+        require_capability(
+            self.settings().capabilities.document_analysis,
+            "Document analysis",
+        )?;
+        let re = regex::RegexBuilder::new(query)
+            .case_insensitive(true)
+            .build()
+            .map_err(|e| EngineError::msg(format!("bad pattern: {e}")))?;
+        let terms = document_search_terms(query);
+        let phrase = document_search_tokens(query).join(" ");
+        let prefer_exact_phrase =
+            !has_search_operators(query) && document_search_tokens(query).len() > 1;
+        let max_hits = max_hits.clamp(1, 50);
+        let candidate_cap = max_hits.saturating_mul(16).clamp(48, 800);
+        let documents = self.documents();
+
+        // First pass computes workspace-wide document frequency and average
+        // passage length for BM25. Text stays streamed and is never persisted.
+        let mut document_frequencies = vec![0usize; terms.len()];
+        let mut passage_count = 0usize;
+        let mut total_tokens = 0usize;
+        let mut scanned_bytes = 0usize;
+        let mut incomplete = false;
+        for (name, path, kind) in &documents {
+            let mut window = VecDeque::new();
+            let scan =
+                scan_document_lines(self, path, *kind, &mut scanned_bytes, |number, line| {
+                    window.push_back(prepare_search_line(number, line, &terms, &re));
+                    if window.len() > DOCUMENT_SEARCH_WINDOW_LINES {
+                        window.pop_front();
+                    }
+                    let (frequencies, length) = document_window_frequencies(&window, terms.len());
+                    passage_count += 1;
+                    total_tokens += length;
+                    for (index, frequency) in frequencies.iter().enumerate() {
+                        if *frequency > 0 {
+                            document_frequencies[index] += 1;
+                        }
+                    }
+                });
+            match scan {
+                Ok(true) => {
+                    incomplete = true;
+                    break;
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    log::warn!("search_files: could not scan {}: {error}", name);
+                    incomplete = true;
+                }
+            }
+        }
+
+        let average_length = if passage_count == 0 {
+            0.0
+        } else {
+            total_tokens as f64 / passage_count as f64
+        };
+        let idf: Vec<f64> = document_frequencies
+            .iter()
+            .map(|frequency| {
+                let n = passage_count as f64;
+                let df = *frequency as f64;
+                (1.0 + (n - df + 0.5) / (df + 0.5)).ln()
+            })
+            .collect();
+
+        // Second pass applies BM25 with those workspace-wide frequencies,
+        // keeping only a bounded pool of the best passages.
+        let mut candidates = Vec::new();
+        let mut scanned_bytes = 0usize;
+        for (name, path, kind) in &documents {
+            let mut window = VecDeque::new();
+            let scan =
+                scan_document_lines(self, path, *kind, &mut scanned_bytes, |number, line| {
+                    window.push_back(prepare_search_line(number, line, &terms, &re));
+                    if window.len() > DOCUMENT_SEARCH_WINDOW_LINES {
+                        window.pop_front();
+                    }
+                    if let Some(candidate) =
+                        rank_document_window(name, &window, &idf, average_length, &phrase)
+                    {
+                        candidates.push(candidate);
+                        if candidates.len() > candidate_cap * 2 {
+                            sort_ranked_hits(&mut candidates);
+                            candidates.truncate(candidate_cap);
+                        }
+                    }
+                });
+            match scan {
+                Ok(true) => {
+                    incomplete = true;
+                    break;
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    log::warn!("search_files: could not scan {}: {error}", name);
+                    incomplete = true;
+                }
+            }
+        }
+
+        sort_ranked_hits(&mut candidates);
+        // A plain multiword query is most often an intentional phrase search.
+        // If that phrase exists, don't flood the model with passages that only
+        // match a common individual word; if it doesn't, retain BM25's broad
+        // multi-term fallback for labels/wording that don't occur together.
+        if prefer_exact_phrase && candidates.iter().any(|candidate| candidate.phrase_match) {
+            candidates.retain(|candidate| candidate.phrase_match);
+        }
+        let mut selected: Vec<RankedGrepHit> = Vec::new();
+        for candidate in candidates {
+            let overlaps = selected.iter().any(|prior| {
+                prior.hit.source == candidate.hit.source
+                    && candidate.first_line <= prior.last_line.saturating_add(1)
+                    && prior.first_line <= candidate.last_line.saturating_add(1)
+            });
+            if !overlaps {
+                selected.push(candidate);
+                if selected.len() >= max_hits {
+                    break;
+                }
+            }
+        }
+
+        Ok(GrepResults {
+            hits: selected
+                .into_iter()
+                .map(|candidate| candidate.hit)
+                .collect(),
+            incomplete,
+        })
+    }
+
+    /// Exact case-insensitive regex lookup retained for callers that need
+    /// grep-like line semantics. The agent-facing tool uses `search_files`.
     pub fn grep_files(&self, pattern: &str, max_hits: usize) -> EngineResult<Vec<GrepHit>> {
         require_capability(
             self.settings().capabilities.document_analysis,
@@ -2595,7 +3073,6 @@ exactly, character for character, from the list below.";
         let mut hits = Vec::new();
         for (name, path, kind) in self.documents() {
             if kind == SourceKind::Pdf {
-                // PDF text isn't streamable parse (cached) and scan in memory.
                 let Ok(text) = self.pdf_text(&path) else {
                     continue;
                 };
@@ -2612,7 +3089,6 @@ exactly, character for character, from the list below.";
                     }
                 }
             } else {
-                // Text files stream a multi-GB `.log` never lands in memory.
                 let mut stop = false;
                 let _ = docs::grep_lines(&path, |i, line| {
                     if re.is_match(line) {

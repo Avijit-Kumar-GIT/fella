@@ -119,11 +119,21 @@ pub struct ColumnInfo {
     /// person spot spelling/capitalisation differences before asking a query.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub common_values: Option<Vec<String>>,
+    /// Frequencies for the common values above. These are descriptive hints,
+    /// not substitutes for a query when an exact result is needed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub common_value_counts: Option<Vec<ValueFrequency>>,
     /// Ingest-time caveat about this column, e.g. amounts that were stored as
     /// text and coerced to numbers, or a column that looks numeric but was
     /// left as text. Surfaced in the schema digest and `inspect_table`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ValueFrequency {
+    pub value: String,
+    pub count: i64,
 }
 
 impl ColumnInfo {
@@ -138,6 +148,7 @@ impl ColumnInfo {
             max: None,
             example: None,
             common_values: None,
+            common_value_counts: None,
             note: None,
         }
     }

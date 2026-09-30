@@ -276,7 +276,7 @@ export async function steerRun(conv: Conversation, extra: string): Promise<void>
 }
 
 /** Entry point: called with the raw composer text. */
-export async function dispatch(raw: string): Promise<void> {
+export async function dispatch(raw: string, clarificationTurnId?: string): Promise<void> {
 	const text = raw.trim();
 	if (!text) return;
 
@@ -306,7 +306,7 @@ export async function dispatch(raw: string): Promise<void> {
 
 	const conv = session.ensureChat();
 	conv.addUser(text);
-	await ask(text, conv);
+	await ask(text, conv, clarificationTurnId);
 }
 
 /** Change the active conversation's model from a UI picker without writing a
@@ -844,7 +844,11 @@ async function runCommand(text: string): Promise<void> {
 
 /** Run one question in `conv` (its own tab). Bound to the tab, not "the active
  *  tab", so it keeps streaming there after the user switches away. */
-async function ask(question: string, conv: Conversation): Promise<void> {
+async function ask(
+	question: string,
+	conv: Conversation,
+	clarificationTurnId?: string
+): Promise<void> {
 	if (!requireEngine()) return;
 
 	const msg = conv.addAssistant('');
@@ -911,7 +915,10 @@ async function ask(question: string, conv: Conversation): Promise<void> {
 			onEvent,
 			conv.model || undefined,
 			conv.mode,
-			conv.contextRefs
+			conv.contextRefs,
+		clarificationTurnId
+			? { turn_id: clarificationTurnId, response: question }
+			: undefined
 		);
 		msg.answer = answer;
 		msg.text = answer.text;

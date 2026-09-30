@@ -271,7 +271,8 @@
 							ontoggle={() => toggle(m.id)}
 							question={questionFor(i)}
 							showFollowups={i === session.messages.length - 1 && !m.pending}
-							onfollowup={(next) => void dispatch(next)}
+							onfollowup={(next, clarificationTurnId) =>
+								void dispatch(next, clarificationTurnId)}
 							onrerun={() => rerun(m)}
 						/>
 					{/each}

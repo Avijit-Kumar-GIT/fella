@@ -23,7 +23,7 @@
 		ontoggle?: () => void;
 		question?: string;
 		showFollowups?: boolean;
-		onfollowup?: (question: string) => void;
+		onfollowup?: (question: string, clarificationTurnId?: string) => void;
 		onrerun?: () => Promise<void>;
 	} = $props();
 
@@ -114,6 +114,15 @@
 	let followups = $derived(
 		message.answer && question ? followupQuestions(question, message.answer) : []
 	);
+	let clarificationResponse = $state('');
+
+	function submitClarification(event: SubmitEvent) {
+		event.preventDefault();
+		const response = clarificationResponse.trim();
+		if (!response) return;
+		onfollowup?.(response, message.answer?.turn_id);
+		clarificationResponse = '';
+	}
 </script>
 
 <div class="msg {message.role}" transition:enterUp>
@@ -165,14 +174,28 @@
 	{:else}
 		<div class="text">{message.text}</div>
 	{/if}
-	{#if message.answer?.clarification && showFollowups && onfollowup && message.answer.clarification.options.length}
+	{#if message.answer?.clarification && showFollowups && onfollowup}
 		<div class="clarification" aria-label="Choose an interpretation">
 			<span class="clarification-label">Choose one to continue</span>
-			<div class="clarification-options">
-				{#each message.answer.clarification.options as option (option)}
-					<button type="button" onclick={() => onfollowup?.(option)}>{option}</button>
-				{/each}
-			</div>
+			{#if message.answer.clarification.options.length}
+				<div class="clarification-options">
+					{#each message.answer.clarification.options as option (option)}
+						<button
+							type="button"
+							onclick={() => onfollowup?.(option, message.answer?.turn_id)}>{option}</button
+						>
+					{/each}
+				</div>
+			{/if}
+			<form class="clarification-reply" onsubmit={submitClarification}>
+				<input
+					bind:value={clarificationResponse}
+					aria-label="Answer the clarification in your own words"
+					placeholder="Or answer in your own words…"
+					maxlength="500"
+				/>
+				<button type="submit" disabled={!clarificationResponse.trim()}>Continue</button>
+			</form>
 		</div>
 	{/if}
 	{#if message.answer}
@@ -356,6 +379,42 @@
 		border-color: var(--accent);
 		color: var(--text);
 		background: var(--bg-inset);
+	}
+	.clarification-reply {
+		display: flex;
+		gap: var(--space-1);
+		margin-top: var(--space-2);
+	}
+	.clarification-reply input {
+		flex: 1;
+		min-width: 0;
+		padding: 7px 9px;
+		border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
+		color: var(--text);
+		background: var(--bg-inset);
+		font: inherit;
+		font-size: var(--fs-sm);
+	}
+	.clarification-reply input:focus-visible {
+		border-color: var(--accent);
+		outline: 2px solid color-mix(in srgb, var(--accent) 24%, transparent);
+		outline-offset: 1px;
+	}
+	.clarification-reply button {
+		padding: 6px 10px;
+		border: 1px solid var(--border);
+		border-radius: var(--radius-chip);
+		color: var(--text);
+		background: var(--bg-inset);
+		font-size: var(--fs-sm);
+	}
+	.clarification-reply button:not(:disabled):hover {
+		border-color: var(--accent);
+	}
+	.clarification-reply button:disabled {
+		color: var(--text-faint);
+		cursor: default;
 	}
 
 	/* The assistant's answer is rendered from markdown (see markdown.ts). Code,

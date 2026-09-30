@@ -11,7 +11,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 
-use crate::engine::evidence::{VerificationCheck, VerificationStatus};
+use crate::engine::context::ContextAssemblyAudit;
+use crate::engine::evidence::{Usage, VerificationCheck, VerificationStatus};
 
 /// A stable identifier for one analytical question, distinct from the
 /// conversation/tab that contains it.
@@ -82,6 +83,24 @@ pub struct ClarificationRequest {
     pub options: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+}
+
+/// Transport metadata for a response (choice or free text) to one persisted
+/// clarification. The backend resolves and validates the referenced turn.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClarificationReply {
+    pub turn_id: TurnId,
+    pub response: String,
+}
+
+/// Validated clarification context passed to the model for a resumed analysis.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedClarification {
+    pub turn_id: TurnId,
+    pub original_question: String,
+    pub request: ClarificationRequest,
+    pub response: String,
+    pub source_revision_changed: bool,
 }
 
 /// A measure in the semantic question representation.  These are semantic
@@ -605,6 +624,9 @@ pub struct VerificationReport {
 pub struct AnalysisResult {
     pub text: String,
     pub status: VerificationStatus,
+    /// Provider-reported token use summed across this model-driven turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<Usage>,
     #[serde(default)]
     pub verification: Vec<VerificationCheck>,
     #[serde(default)]
@@ -623,6 +645,12 @@ pub struct AnalysisTurn {
     /// turn. Optional in serialized records so older turns remain readable.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub context_refs: Vec<ContextReference>,
+    /// Parent turn when this analysis continues after a clarification.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clarification_of: Option<TurnId>,
+    /// The user's resolution of the parent's pending semantic choice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clarification_response: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workspace: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -631,6 +659,9 @@ pub struct AnalysisTurn {
     /// Optional so records written before revision-aware replay remain valid.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_snapshot: Option<WorkspaceRevisionSnapshot>,
+    /// Length-only audit of bounded model context; text is never copied here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_audit: Option<ContextAssemblyAudit>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rerun_of: Option<TurnId>,
     pub state: TurnState,

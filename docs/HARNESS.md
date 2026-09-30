@@ -22,7 +22,7 @@ one:
 | **Minimal prompt**, split into toggleable sections (`PromptProfile`) | Every added instruction is a token tax on the strong model and a distraction risk for both. Measured: the shipped prompt is already at the Pareto point for the 31B benchmark model (see log). |
 | **Schema-in-prompt instead of RAG** | The folder *is* the scope. A retrieval config to tune is a second system that fails independently of the model. |
 | **`num_ctx` is a growing floor, not a fixed size** (`fit_num_ctx`) | Small models have small default context; large folders need more. Growing only when the prompt demands it keeps a weak model from paging its whole context every turn. |
-| **Typed semantic decision edge** (`AnalysisContract`) | A model may resolve, state an assumption, ask one focused clarification, or report unsupported. The runtime never executes a calculation while a typed user choice is pending. A second classifier remains optional until it proves a generalized accuracy/latency gain. |
+| **Typed semantic decision edge** (`AnalysisContract`) | A model may resolve, state an assumption, ask one focused clarification, or report unsupported. A pending choice does not disable safe read-only analysis: the model may compare labeled candidate results, while the runtime prevents one unresolved scenario from being treated as settled. A second classifier remains optional until it proves a generalized accuracy/latency gain. |
 
 ## Method
 
@@ -94,7 +94,8 @@ The running list of open design questions from shaping this work is in
   distinct values collapse under case-folding (`Rent` / `rent` / `RENT`) gets a
   note; a bare `= '…'` / `IN (…)` filter on it that isn't `lower()`-wrapped
   gets an inline warning. *Remove-ambiguity* — surfaces a real property of the
-  data, forces no rewrite. It's what let the `gemma4` floor turn a carried
+  data; the bounded model repair loop can use the warning to revisit a filter
+  without hardcoding a domain mapping. It's what let the `gemma4` floor turn a carried
   memory correction into a correct query (below): ✗ 4 850 → ✓ 7 350.
 
 - **2026-09-08 · Per-folder memory v1** (`engine::memory`, branch
@@ -232,8 +233,8 @@ are worth revisiting.
 | **Cross-session memory / learned playbook** | ChatGPT "memory"; persistent strategy memory keyed to a project | Only a per-conversation `recent` block. A *per-folder* learned playbook (this user's vocabulary, which tables mean what) is the [next planned change](#next) local, per-folder, bounded to a small prompt block. |
 | **Code-as-orchestration (CodeAct)** | Model writes one Python program that calls several tools, runs once, returns a consolidated result — fewer round-trips, fewer places to derail | Fella *has* the pieces: `run_python` with a `sql()` helper. It isn't the encouraged default. Making it the pattern for multi-step questions is a model-agnostic round-trip cut. Candidate. |
 | **Progressive context compaction** | LLM-summarise the transcript at token thresholds; structured handoffs; full context resets | `trim_history` only elides old tool results by count. `folder-scale` says Fella doesn't need more yet; this is the standard next tier if long multi-step runs start failing. |
-| **Generator–evaluator separation** | A distinct critic model grades the worker's output against a rubric | Against "powerfully tiny". The deterministic `verify` pass plus the one narrow re-ask is the most Fella will do here. |
-| **Model–Observe–Compile–Verify** | The model chooses observations and route; deterministic execution and claim checks constrain consequences | Fella records semantic hypotheses, can compile supported work, and verifies the actual trace. A hypothesis does not block direct read-only investigation; an explicit user clarification pauses only the unresolved calculation. |
+| **Generator–evaluator separation** | A distinct critic model grades the worker's output against a rubric | Against "powerfully tiny". Deterministic checks feed a bounded, same-turn model repair loop (up to three attempts); Fella does not add a separate critic model. |
+| **Model–Observe–Compile–Verify** | The model chooses observations and route; deterministic execution and claim checks constrain consequences | Fella records semantic hypotheses, can compile supported work, and verifies the actual trace. When the model requests observation and computation together, the controller returns the observation first so the model can incorporate it before computing; an explicit user clarification pauses only the unresolved calculation. |
 | **Retrieval config (chunking, top-k, rerankers)** | Tuned with Bayesian search over 6–10 params | N/A — no RAG. The schema block is the "retrieval" and it's deterministic. |
 | **Multi-agent / orchestrator-worker** | Declared agents with handoff edges | Explicit non-goal (`ARCHITECTURE.md`). |
 | **Tool-description optimisation (span-level scoring)** | Score tool-*selection* accuracy separately from answer quality; rewrite overlapping descriptions | Fella's six tool descriptions (`ARCHITECTURE.md`) are already terse and non-overlapping; low value here, but the eval *could* score tool choice separately. |

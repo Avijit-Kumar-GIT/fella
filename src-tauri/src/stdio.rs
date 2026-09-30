@@ -14,7 +14,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::engine::{ContextReference, EngineError, EngineResult, EngineState};
+use crate::engine::{ClarificationReply, ContextReference, EngineError, EngineResult, EngineState};
 
 type Output = Arc<Mutex<BufWriter<io::Stdout>>>;
 
@@ -259,14 +259,22 @@ async fn dispatch(
                 .map(serde_json::from_value::<Vec<ContextReference>>)
                 .transpose()?
                 .unwrap_or_default();
+            let clarification_reply = request
+                .params
+                .get("clarificationReply")
+                .cloned()
+                .filter(|value| !value.is_null())
+                .map(serde_json::from_value::<ClarificationReply>)
+                .transpose()?;
             let events = output.clone();
             let answer = engine
-                .ask_with_mode_and_context(
+                .ask_with_mode_and_context_and_clarification(
                     &conversation_id,
                     &question,
                     model.as_deref(),
                     inspect,
                     &context_refs,
+                    clarification_reply,
                     move |item| event(&events, id, item),
                 )
                 .await;

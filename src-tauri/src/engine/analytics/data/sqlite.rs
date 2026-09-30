@@ -209,6 +209,7 @@ impl DataEngine for SqliteEngine {
                     |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
                 )
                 .unwrap_or((0, 0, None, None));
+            let common_value_counts = common_value_counts(&ro, &t, &q, distinct);
             out.push(ColumnInfo {
                 name: col,
                 type_: if ty.is_empty() { "TEXT".into() } else { ty },
@@ -221,7 +222,10 @@ impl DataEngine for SqliteEngine {
                 min,
                 max,
                 example: None,
-                common_values: common_values(&ro, &t, &q, distinct),
+                common_values: common_value_counts
+                    .as_ref()
+                    .map(|values| values.iter().map(|entry| entry.value.clone()).collect()),
+                common_value_counts,
                 note: None,
             });
         }
@@ -251,7 +255,12 @@ impl DataEngine for SqliteEngine {
 /// Return a compact, bounded list of frequent values for low-cardinality text
 /// columns. The query is only useful as a human/model hint, so high-cardinality
 /// columns skip the extra work and long values are clipped before serialization.
-fn common_values(ro: &Connection, table: &str, column: &str, distinct: i64) -> Option<Vec<String>> {
+fn common_value_counts(
+    ro: &Connection,
+    table: &str,
+    column: &str,
+    distinct: i64,
+) -> Option<Vec<crate::engine::catalog::ValueFrequency>> {
     const DISTINCT_CAP: i64 = 32;
     const VALUE_CAP: usize = 80;
     if !(1..=DISTINCT_CAP).contains(&distinct) {
@@ -259,17 +268,22 @@ fn common_values(ro: &Connection, table: &str, column: &str, distinct: i64) -> O
     }
     let mut stmt = ro
         .prepare(&format!(
-            "SELECT CAST({column} AS TEXT) FROM {table} \
+            "SELECT CAST({column} AS TEXT), count(*) FROM {table} \
              WHERE {column} IS NOT NULL GROUP BY {column} \
              ORDER BY count(*) DESC, CAST({column} AS TEXT) LIMIT 8"
         ))
         .ok()?;
     let values = stmt
-        .query_map([], |row| row.get::<_, String>(0))
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })
         .ok()?
         .filter_map(Result::ok)
-        .map(|value| value.chars().take(VALUE_CAP).collect::<String>())
-        .filter(|value| !value.is_empty())
+        .map(|(value, count)| crate::engine::catalog::ValueFrequency {
+            value: value.chars().take(VALUE_CAP).collect(),
+            count,
+        })
+        .filter(|entry| !entry.value.is_empty())
         .collect::<Vec<_>>();
     (!values.is_empty()).then_some(values)
 }

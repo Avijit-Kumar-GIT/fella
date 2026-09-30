@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use fella_lib::engine::evidence::VerificationStatus;
-use fella_lib::engine::{AskEvent, EngineState};
+use fella_lib::engine::{AskEvent, ClarificationReply, EngineState};
 
 fn scratch(tag: &str) -> PathBuf {
     // Point-at-a-mock tests: the warm-up ping would steal a scripted response.
@@ -287,6 +287,209 @@ async fn semantic_verification_repairs_archive_scope_before_accepting_an_answer(
                 .as_deref()
                 .is_some_and(|sql| sql.contains("FROM current"))
     }));
+
+    let _ = fs::remove_dir_all(&ws);
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[tokio::test]
+async fn semantic_verification_repeats_for_multiple_independent_findings() {
+    let ws = scratch("case-rollup-repair-ws");
+    let data = scratch("case-rollup-repair-data");
+    fs::write(
+        ws.join("spending.csv"),
+        "category,amount\nRent,100\nrent,200\nHOUSING,300\nhousing,400\nMortgage,500\ngroceries,50\n",
+    )
+    .unwrap();
+
+    let (url, requests, server) = fake_openai_with_requests(vec![
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "I will total the observed housing categories.",
+            "tool_calls": [{
+                "id": "case-sensitive-rollup",
+                "type": "function",
+                "function": {
+                    "name": "run_sql",
+                    "arguments": "{\"sql\":\"SELECT SUM(amount) AS total FROM spending WHERE category IN ('Rent', 'HOUSING', 'Mortgage')\"}"
+                }
+            }]
+        })),
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "Housing costs total $900 across Rent, HOUSING, and Mortgage."
+        })),
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "I will check whether capitalization variants were excluded.",
+            "tool_calls": [{
+                "id": "case-folded-rollup",
+                "type": "function",
+                "function": {
+                    "name": "run_sql",
+                    "arguments": "{\"sql\":\"SELECT lower(category) AS housing_category, SUM(amount) AS category_total FROM spending WHERE lower(category) IN ('rent', 'housing', 'mortgage') GROUP BY lower(category)\"}"
+                }
+            }]
+        })),
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "Housing costs total $1,500 across the observed labels Rent/rent, HOUSING/housing, and Mortgage."
+        })),
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "I will compute the requested total directly from the checked category scope.",
+            "tool_calls": [{
+                "id": "direct-rollup-total",
+                "type": "function",
+                "function": {
+                    "name": "run_sql",
+                    "arguments": "{\"sql\":\"SELECT SUM(amount) AS total FROM spending WHERE lower(category) IN ('rent', 'housing', 'mortgage')\"}"
+                }
+            }]
+        })),
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "Housing costs total $1,500 across the observed labels Rent/rent, HOUSING/housing, and Mortgage."
+        })),
+    ]);
+
+    let engine = EngineState::new(&data).unwrap();
+    engine
+        .save_settings(
+            serde_json::json!({ "provider": "custom", "base_url": url, "model": "test" })
+                .as_object()
+                .unwrap(),
+        )
+        .unwrap();
+    engine.set_api_key("custom", "sk-test").unwrap();
+    engine.open_workspace(&ws).unwrap();
+
+    let answer = engine
+        .ask(
+            "case-rollup-repair",
+            "How much did I spend on housing costs?",
+            None,
+            |_| {},
+        )
+        .await
+        .unwrap();
+    server.join().unwrap();
+
+    assert!(answer.text.contains("1,500"), "answer: {}", answer.text);
+    assert_eq!(answer.status, VerificationStatus::Verified);
+    let sql_evidence: Vec<_> = answer
+        .evidence
+        .iter()
+        .filter(|item| item.tool == "run_sql")
+        .collect();
+    assert_eq!(sql_evidence.len(), 3, "evidence: {:?}", answer.evidence);
+    assert!(sql_evidence[0]
+        .error
+        .as_deref()
+        .is_some_and(|error| error.contains("matches exact case")));
+    assert!(sql_evidence[1]
+        .error
+        .as_deref()
+        .is_some_and(|error| error.contains("not found in any result")));
+    assert!(sql_evidence[2].error.is_none());
+    assert!(sql_evidence[2]
+        .sql
+        .as_deref()
+        .is_some_and(|sql| sql.contains("lower(category)") && sql.contains("'mortgage'")));
+    assert!(answer.evidence.iter().any(|item| {
+        item.error.as_deref().is_some_and(|error| {
+            error.contains("superseded") && error.contains("matches exact case")
+        })
+    }));
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 6);
+    assert!(requests[2].to_string().contains("matches exact case"));
+    assert!(requests[4].to_string().contains("not found in any result"));
+    assert!(requests[4]
+        .to_string()
+        .contains("Housing costs total $1,500"));
+
+    let _ = fs::remove_dir_all(&ws);
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[tokio::test]
+async fn analysis_waits_for_observation_before_running_a_same_turn_computation() {
+    let ws = scratch("observe-before-compute-ws");
+    let data = scratch("observe-before-compute-data");
+    fs::write(
+        ws.join("spending.csv"),
+        "category,amount\nRent,100\nrent,200\nHOUSING,300\nhousing,400\nMortgage,500\ngroceries,50\n",
+    )
+    .unwrap();
+
+    let (url, requests, server) = fake_openai_with_requests(vec![
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "I will inspect the categories and calculate housing costs.",
+            "tool_calls": [
+                { "id": "inspect", "type": "function", "function": {
+                    "name": "inspect_table",
+                    "arguments": "{\"name\":\"spending\",\"rows\":10}"
+                } },
+                { "id": "premature-total", "type": "function", "function": {
+                    "name": "run_sql",
+                    "arguments": "{\"sql\":\"SELECT SUM(amount) AS total FROM spending WHERE lower(category) = 'rent'\"}"
+                } }
+            ]
+        })),
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "The observed labels indicate that housing costs include several labels.",
+            "tool_calls": [{ "id": "grounded-total", "type": "function", "function": {
+                "name": "run_sql",
+                "arguments": "{\"sql\":\"SELECT SUM(amount) AS total FROM spending WHERE lower(category) IN ('rent', 'housing', 'mortgage')\"}"
+            } }]
+        })),
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "Housing costs total $1,500 across Rent/rent, HOUSING/housing, and Mortgage."
+        })),
+    ]);
+
+    let engine = EngineState::new(&data).unwrap();
+    engine
+        .save_settings(
+            serde_json::json!({ "provider": "custom", "base_url": url, "model": "test" })
+                .as_object()
+                .unwrap(),
+        )
+        .unwrap();
+    engine.set_api_key("custom", "sk-test").unwrap();
+    engine.open_workspace(&ws).unwrap();
+
+    let answer = engine
+        .ask(
+            "observe-before-compute",
+            "How much did I spend on housing costs?",
+            None,
+            |_| {},
+        )
+        .await
+        .unwrap();
+    server.join().unwrap();
+
+    assert!(answer.text.contains("1,500"), "answer: {}", answer.text);
+    assert_eq!(answer.status, VerificationStatus::Verified);
+    assert_eq!(answer.evidence.len(), 2, "evidence: {:?}", answer.evidence);
+    assert_eq!(answer.evidence[0].tool, "inspect_table");
+    assert_eq!(answer.evidence[1].tool, "run_sql");
+    assert!(answer.evidence[1]
+        .sql
+        .as_deref()
+        .is_some_and(|sql| sql.contains("'housing'") && sql.contains("'mortgage'")));
+
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 3);
+    let second_request = requests[1].to_string();
+    assert!(second_request.contains("HOUSING"), "{second_request}");
+    assert!(second_request.contains("Mortgage"), "{second_request}");
+    assert!(second_request.contains("this model turn also requested workspace inspection"));
 
     let _ = fs::remove_dir_all(&ws);
     let _ = fs::remove_dir_all(&data);
@@ -679,58 +882,83 @@ async fn unresolved_contract_defers_direct_data_tools_until_revised() {
 }
 
 #[tokio::test]
-async fn ambiguous_semantics_can_inspect_before_clarifying_and_never_query() {
+async fn clarification_keeps_safe_candidate_analysis_available() {
     let ws = scratch("clarification-ws");
     let data = scratch("clarification-data");
     fs::write(
-        ws.join("transactions.csv"),
-        "description,area,amount\nsalary,income,5000\nrent,housing,1500\n",
+        ws.join("measurements.csv"),
+        "segment,amount\nalpha,5000\nbeta,1500\n",
     )
     .unwrap();
 
+    let mut selected_answer = openai_response(serde_json::json!({
+        "role": "assistant",
+        "content": "Alpha totals $5,000."
+    }));
+    selected_answer["usage"] = serde_json::json!({
+        "prompt_tokens": 31,
+        "completion_tokens": 4
+    });
     let (url, seen, server) = fake_openai_with_requests(vec![
         openai_response(serde_json::json!({
             "role": "assistant",
-            "content": "I should inspect the transaction labels before deciding whether to ask.",
+            "content": "I should inspect the segment labels before deciding whether to ask.",
             "tool_calls": [
                 { "id": "contract", "type": "function", "function": {
                     "name": "__analysis_contract",
                     "arguments": serde_json::json!({
                         "interpretation": "assumed",
-                        "subject": "transactions",
+                        "subject": "measurements",
                         "measures": [{ "concept": "amount", "field": "amount", "operation": "sum" }],
                         "filters": [],
                         "group_by": [],
                         "assumptions": [],
                         "unresolved": [],
                         "clarification": {
-                            "question": "Should this total include income, or only spending?",
-                            "options": ["Include income", "Spending only"],
-                            "reason": "The mounted data contains both income and spending rows."
+                            "question": "Which segment should the total cover?",
+                            "options": ["Alpha", "Beta"],
+                            "reason": "The workspace contains separate segment values."
                         }
                     }).to_string()
                 } },
                 { "id": "inspect", "type": "function", "function": {
                     "name": "inspect_table",
-                    "arguments": "{\"name\":\"transactions\",\"rows\":5}"
+                    "arguments": "{\"name\":\"measurements\",\"rows\":5}"
                 } }
             ]
         })),
         openai_response(serde_json::json!({
             "role": "assistant",
-            "content": "The inspection shows income and housing rows. Should the total include income, or should it count spending only?"
-        })),
-        openai_response(serde_json::json!({
-            "role": "assistant",
-            "content": "I will calculate the spending-only population.",
-            "tool_calls": [{ "id": "spending", "type": "function", "function": {
+            "content": "I'll compare the observed segment totals before leaving the population choice to the user.",
+            "tool_calls": [{ "id": "candidates", "type": "function", "function": {
                 "name": "run_sql",
-                "arguments": "{\"sql\":\"SELECT SUM(amount) AS spending_total FROM transactions WHERE lower(area) <> 'income'\"}"
+                "arguments": "{\"sql\":\"SELECT segment, SUM(amount) AS total FROM measurements GROUP BY segment ORDER BY segment\"}"
             } }]
         })),
         openai_response(serde_json::json!({
             "role": "assistant",
-            "content": "Spending only totals $1,500."
+            "content": "The observed alternatives total $5,000 for Alpha and $1,500 for Beta. Which segment should I use?"
+        })),
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "I will calculate the selected Alpha population.",
+            "tool_calls": [{ "id": "spending", "type": "function", "function": {
+                "name": "run_sql",
+                "arguments": "{\"sql\":\"SELECT SUM(amount) AS alpha_total FROM measurements WHERE lower(segment) = 'alpha'\"}"
+            } }]
+        })),
+        selected_answer,
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "I will rerun the Alpha calculation against the current workspace.",
+            "tool_calls": [{ "id": "rerun-alpha", "type": "function", "function": {
+                "name": "run_sql",
+                "arguments": "{\"sql\":\"SELECT SUM(amount) AS alpha_total FROM measurements WHERE lower(segment) = 'alpha'\"}"
+            } }]
+        })),
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "Alpha totals $5,000."
         })),
     ]);
 
@@ -750,7 +978,7 @@ async fn ambiguous_semantics_can_inspect_before_clarifying_and_never_query() {
     let answer = engine
         .ask(
             "clarification",
-            "What is the amount in the current export?",
+            "What is the total for the relevant segment?",
             None,
             move |event| sink.lock().unwrap().push(event),
         )
@@ -758,54 +986,169 @@ async fn ambiguous_semantics_can_inspect_before_clarifying_and_never_query() {
         .unwrap();
 
     assert_eq!(answer.status, VerificationStatus::InsufficientData);
-    assert_eq!(answer.evidence.len(), 1);
+    assert_eq!(answer.evidence.len(), 2);
     assert_eq!(answer.evidence[0].tool, "inspect_table");
     assert!(answer.evidence[0]
         .output
         .as_deref()
-        .is_some_and(|output| output.contains("common values") && output.contains("income")));
+        .is_some_and(|output| output.contains("common values") && output.contains("alpha")));
+    assert_eq!(answer.evidence[1].tool, "run_sql");
+    assert!(format!("{:?}", answer.evidence[1].rows).contains("5000"));
+    assert!(format!("{:?}", answer.evidence[1].rows).contains("1500"));
     let clarification = answer.clarification.as_ref().unwrap();
-    assert_eq!(clarification.options, ["Include income", "Spending only"]);
-    assert!(answer.text.contains("include income"));
-    assert!(!events.lock().unwrap().iter().any(|event| matches!(
+    assert_eq!(clarification.options, ["Alpha", "Beta"]);
+    assert!(answer.text.contains("Which segment"));
+    assert!(events.lock().unwrap().iter().any(|event| matches!(
         event,
         AskEvent::ToolStart { tool, .. } if tool == "run_sql"
     )));
+    let parent_turn = engine.analysis_turn_load(&answer.turn_id).unwrap();
+    assert_eq!(
+        parent_turn.state,
+        fella_lib::engine::runtime::TurnState::Clarify
+    );
+    assert!(parent_turn
+        .context_audit
+        .as_ref()
+        .is_some_and(|audit| !audit.sections.is_empty()));
+
+    let wrong_conversation = engine
+        .ask_with_mode_and_context_and_clarification(
+            "another-conversation",
+            "Alpha",
+            None,
+            false,
+            &[],
+            Some(ClarificationReply {
+                turn_id: answer.turn_id.clone(),
+                response: "Alpha".into(),
+            }),
+            |_| {},
+        )
+        .await
+        .unwrap_err();
+    assert!(wrong_conversation
+        .to_string()
+        .contains("different conversation"));
+
+    let empty_response = engine
+        .ask_with_mode_and_context_and_clarification(
+            "clarification",
+            "",
+            None,
+            false,
+            &[],
+            Some(ClarificationReply {
+                turn_id: answer.turn_id.clone(),
+                response: "  ".into(),
+            }),
+            |_| {},
+        )
+        .await
+        .unwrap_err();
+    assert!(empty_response
+        .to_string()
+        .contains("between 1 and 500 characters"));
 
     let continued = engine
-        .ask("clarification", "Spending only", None, |_| {})
+        .ask_with_mode_and_context_and_clarification(
+            "clarification",
+            "Use the Alpha segment only.",
+            None,
+            false,
+            &[],
+            Some(ClarificationReply {
+                turn_id: answer.turn_id.clone(),
+                response: "Use the Alpha segment only.".into(),
+            }),
+            |_| {},
+        )
         .await
         .unwrap();
     assert!(
-        continued.text.contains("1,500"),
+        continued.text.contains("5,000"),
         "answer: {}",
         continued.text
     );
     assert_eq!(continued.evidence.len(), 1);
     assert_eq!(continued.evidence[0].tool, "run_sql");
+    assert_eq!(
+        continued.usage,
+        Some(fella_lib::engine::evidence::Usage {
+            prompt_tokens: 31,
+            completion_tokens: 4
+        })
+    );
+    let continued_turn = engine.analysis_turn_load(&continued.turn_id).unwrap();
+    assert_eq!(
+        continued_turn.question,
+        "What is the total for the relevant segment?"
+    );
+    assert_eq!(
+        continued_turn.clarification_of.as_deref(),
+        Some(answer.turn_id.as_str())
+    );
+    assert_eq!(
+        continued_turn.clarification_response.as_deref(),
+        Some("Use the Alpha segment only.")
+    );
+    assert_eq!(continued_turn.result.usage, continued.usage);
+    assert!(continued_turn
+        .context_audit
+        .as_ref()
+        .is_some_and(|audit| audit.sections.iter().any(|section| {
+            section.section == fella_lib::engine::context::ContextSection::WorkspaceSchema
+                && section.included_chars > 0
+        })));
+    let rerun = engine
+        .analysis_turn_rerun(&continued.turn_id, None, false, |_| {})
+        .await
+        .unwrap();
+    assert!(rerun.text.contains("5,000"));
+    let rerun_turn = engine.analysis_turn_load(&rerun.turn_id).unwrap();
+    assert_eq!(
+        rerun_turn.rerun_of.as_deref(),
+        Some(continued.turn_id.as_str())
+    );
+    assert_eq!(
+        rerun_turn.clarification_of.as_deref(),
+        Some(answer.turn_id.as_str())
+    );
+    assert_eq!(
+        rerun_turn.clarification_response.as_deref(),
+        Some("Use the Alpha segment only.")
+    );
     server.join().unwrap();
 
     let requests = seen.lock().unwrap();
-    assert_eq!(requests.len(), 4);
-    let investigation_tools = requests[1]["tools"].as_array().unwrap();
-    let investigation_names = investigation_tools
+    assert_eq!(requests.len(), 7);
+    let available_tools = requests[1]["tools"].as_array().unwrap();
+    let available_names = available_tools
         .iter()
         .filter_map(|tool| tool["function"]["name"].as_str())
         .collect::<Vec<_>>();
-    assert!(investigation_names.contains(&"inspect_table"));
-    assert!(investigation_names.contains(&"read_file"));
-    assert!(!investigation_names.contains(&"run_sql"));
-    assert!(!investigation_names.contains(&"run_python"));
-    assert!(!investigation_names.contains(&"make_chart"));
-    let continuation_prompt = requests[2].to_string();
-    assert!(continuation_prompt.contains("What is the amount in the current export?"));
-    assert!(continuation_prompt.contains("include income"));
-    assert!(continuation_prompt.contains("Spending only"));
-    assert!(requests[2]["tools"]
+    assert!(available_names.contains(&"inspect_table"));
+    assert!(available_names.contains(&"read_file"));
+    assert!(available_names.contains(&"run_sql"));
+    assert!(available_names.contains(&"run_python"));
+    assert!(available_names.contains(&"make_chart"));
+    let candidate_prompt = requests[2].to_string();
+    assert!(candidate_prompt.contains("5000") && candidate_prompt.contains("1500"));
+    let continuation_prompt = requests[3].to_string();
+    assert!(continuation_prompt.contains("What is the total for the relevant segment?"));
+    assert!(continuation_prompt.contains("Pending clarification"));
+    assert!(continuation_prompt.contains("Which segment should the total cover?"));
+    assert!(continuation_prompt.contains("User's response"));
+    assert!(continuation_prompt.contains("Alpha"));
+    assert!(requests[3]["tools"]
         .as_array()
         .unwrap()
         .iter()
         .any(|tool| tool["function"]["name"] == "run_sql"));
+    let rerun_prompt = requests[5].to_string();
+    assert!(rerun_prompt.contains("Original analytical question"));
+    assert!(rerun_prompt.contains("User's response"));
+    assert!(rerun_prompt.contains("Use the Alpha segment only."));
 
     let _ = fs::remove_dir_all(&ws);
     let _ = fs::remove_dir_all(&data);
@@ -932,8 +1275,11 @@ async fn analyst_can_inspect_labels_before_selecting_a_computation() {
     let requests = seen.lock().unwrap();
     let first_system = requests[0]["messages"][0]["content"].as_str().unwrap_or("");
     assert!(first_system.contains("Analyst loop"));
-    assert!(first_system.contains("optional, not a prerequisite"));
+    assert!(first_system.contains("non-literal semantic interpretation"));
+    assert!(first_system.contains("simple exact lookups need no contract"));
     assert!(first_system.contains("quoted category or value as an exact label request"));
+    assert!(first_system
+        .contains("record the selected mapping and exact labels in the contract's `assumptions`"));
     assert!(requests[1].to_string().contains("Monthly lease"));
 
     let _ = fs::remove_dir_all(&ws);

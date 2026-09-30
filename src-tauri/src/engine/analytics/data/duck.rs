@@ -169,6 +169,7 @@ fn columns(conn: &Connection, view: &str) -> EngineResult<Vec<ColumnInfo>> {
             max: None,
             example: None,
             common_values: None,
+            common_value_counts: None,
             note: None,
         })
         .collect())
@@ -185,19 +186,55 @@ fn describe(conn: &Connection, view: &str) -> EngineResult<Vec<ColumnInfo>> {
     for row in &out.rows {
         let null_pct = str_at(row, ix.get("null_percentage"))
             .and_then(|s| s.trim_end_matches('%').trim().parse::<f64>().ok());
+        let name = str_at(row, ix.get("column_name")).unwrap_or_default();
+        let type_ = str_at(row, ix.get("column_type")).unwrap_or_default();
+        let distinct = str_at(row, ix.get("approx_unique")).and_then(|s| s.parse::<i64>().ok());
+        let common_value_counts = distinct
+            .filter(|count| (1..=32).contains(count))
+            .and_then(|_| common_value_counts(conn, view, &name));
         cols.push(ColumnInfo {
-            name: str_at(row, ix.get("column_name")).unwrap_or_default(),
-            type_: str_at(row, ix.get("column_type")).unwrap_or_default(),
+            name,
+            type_,
             null_fraction: null_pct.map(|p| (p / 100.0 * 1e6).round() / 1e6),
-            distinct: str_at(row, ix.get("approx_unique")).and_then(|s| s.parse::<i64>().ok()),
+            distinct,
             min: str_at(row, ix.get("min")),
             max: str_at(row, ix.get("max")),
             example: None,
-            common_values: None,
+            common_values: common_value_counts
+                .as_ref()
+                .map(|values| values.iter().map(|entry| entry.value.clone()).collect()),
+            common_value_counts,
             note: None,
         });
     }
     Ok(cols)
+}
+
+fn common_value_counts(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+) -> Option<Vec<crate::engine::catalog::ValueFrequency>> {
+    let column = quote_ident(column);
+    let sql = format!(
+        "SELECT CAST({column} AS VARCHAR), count(*) FROM {} \
+         WHERE {column} IS NOT NULL GROUP BY {column} \
+         ORDER BY count(*) DESC, CAST({column} AS VARCHAR) LIMIT 8",
+        quote_ident(table),
+    );
+    let result = query(conn, &sql, 8).ok()?;
+    let values = result
+        .rows
+        .into_iter()
+        .filter_map(|row| {
+            Some(crate::engine::catalog::ValueFrequency {
+                value: row.first()?.as_str()?.chars().take(80).collect(),
+                count: row.get(1)?.as_i64()?,
+            })
+        })
+        .filter(|entry| !entry.value.is_empty())
+        .collect::<Vec<_>>();
+    (!values.is_empty()).then_some(values)
 }
 
 fn query(conn: &Connection, sql: &str, max_rows: usize) -> EngineResult<QueryOutcome> {

@@ -109,8 +109,8 @@ pub fn hard_fail(checks: &[VerificationCheck]) -> Option<String> {
     )
 }
 
-/// The one bounded, tool-backed repair pass handles semantic mistakes that
-/// cannot safely be fixed by asking for prose alone. Any unbacked numeric
+/// A bounded, tool-backed repair pass handles semantic mistakes that cannot
+/// safely be fixed by asking for prose alone. Any unbacked numeric
 /// claim needs another look: it may be an omitted derived computation or an
 /// unsupported claim, regardless of whether earlier evidence was scalar or
 /// grouped. The model can compute the requested value or retract it; the
@@ -131,6 +131,7 @@ pub fn semantic_repair_hint(
             "question implies ",
             "groups by a date expression that returned no value",
             "signed values were discarded",
+            "matches exact case",
         ],
     );
     if ordinary.is_some() {
@@ -3842,6 +3843,24 @@ mod tests {
         assert!(
             hint.is_some(),
             "an unbacked number may need a derived computation or retraction"
+        );
+    }
+
+    #[test]
+    fn case_sensitive_label_warning_requests_a_tool_backed_repair() {
+        let evidence = vec![run_sql_ev(
+            "SELECT SUM(amount) FROM spending WHERE category IN ('Rent', 'housing')",
+            &["sum"],
+            vec![vec![Json::from(100)]],
+        )];
+        let checks = vec![warn(
+            "a filter on `category` matches exact case",
+            Some("values differ only in capitalisation".into()),
+        )];
+
+        assert!(
+            semantic_repair_hint("What are housing costs?", &evidence, &checks)
+                .is_some_and(|hint| hint.contains("matches exact case"))
         );
     }
 

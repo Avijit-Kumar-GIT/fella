@@ -8,10 +8,13 @@
 
 use std::collections::HashSet;
 
+use serde::{Deserialize, Serialize};
+
 const TRUNCATION_NOTICE: &str =
     "\n[Additional context omitted; use the available tools to inspect it.]\n";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ContextSection {
     UserContext,
     WorkspaceSchema,
@@ -27,6 +30,22 @@ pub struct ContextOmission {
     pub retained_chars: usize,
 }
 
+/// Compact, privacy-preserving record of what the assembler retained for a
+/// model turn. It records lengths and truncation only, never the context text.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContextAssemblyAudit {
+    #[serde(default)]
+    pub sections: Vec<ContextSectionAudit>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContextSectionAudit {
+    pub section: ContextSection,
+    pub source_chars: usize,
+    pub included_chars: usize,
+    pub truncated: bool,
+}
+
 /// The prompt-ready context packet for one question. The packet is deliberately
 /// a projection rather than a second source of truth: it contains bounded
 /// views of the workspace model, user definitions, memory, and conversation.
@@ -38,6 +57,7 @@ pub struct ContextPacket {
     pub recent: Option<String>,
     pub learned: Option<String>,
     pub omissions: Vec<ContextOmission>,
+    pub audit: ContextAssemblyAudit,
 }
 
 impl ContextPacket {
@@ -169,6 +189,59 @@ impl ContextAssembler {
             }
             packet.learned = (!bounded.is_empty()).then_some(bounded);
         }
+
+        let included_user_chars = packet.user_context.iter().map(|text| char_len(text)).sum();
+        packet.audit.sections = vec![
+            ContextSectionAudit {
+                section: ContextSection::UserContext,
+                source_chars: user_context.iter().map(|text| char_len(text)).sum(),
+                included_chars: included_user_chars,
+                truncated: packet
+                    .omissions
+                    .iter()
+                    .any(|item| item.section == ContextSection::UserContext),
+            },
+            ContextSectionAudit {
+                section: ContextSection::WorkspaceSchema,
+                source_chars: original_schema_chars,
+                included_chars: char_len(&packet.schema),
+                truncated: packet
+                    .omissions
+                    .iter()
+                    .any(|item| item.section == ContextSection::WorkspaceSchema),
+            },
+            ContextSectionAudit {
+                section: ContextSection::WorkspaceModel,
+                source_chars: semantic_model.map(char_len).unwrap_or_default(),
+                included_chars: packet
+                    .semantic_model
+                    .as_deref()
+                    .map(char_len)
+                    .unwrap_or_default(),
+                truncated: packet
+                    .omissions
+                    .iter()
+                    .any(|item| item.section == ContextSection::WorkspaceModel),
+            },
+            ContextSectionAudit {
+                section: ContextSection::Conversation,
+                source_chars: recent.map(char_len).unwrap_or_default(),
+                included_chars: packet.recent.as_deref().map(char_len).unwrap_or_default(),
+                truncated: packet
+                    .omissions
+                    .iter()
+                    .any(|item| item.section == ContextSection::Conversation),
+            },
+            ContextSectionAudit {
+                section: ContextSection::FolderMemory,
+                source_chars: learned.map(char_len).unwrap_or_default(),
+                included_chars: packet.learned.as_deref().map(char_len).unwrap_or_default(),
+                truncated: packet
+                    .omissions
+                    .iter()
+                    .any(|item| item.section == ContextSection::FolderMemory),
+            },
+        ];
 
         packet
     }
@@ -356,6 +429,15 @@ mod tests {
         assert_eq!(packet.recent.as_deref(), Some(recent));
         assert_eq!(packet.learned.as_deref(), Some(learned));
         assert!(!packet.was_truncated());
+        let schema_audit = packet
+            .audit
+            .sections
+            .iter()
+            .find(|section| section.section == ContextSection::WorkspaceSchema)
+            .unwrap();
+        assert_eq!(schema_audit.source_chars, schema.chars().count());
+        assert_eq!(schema_audit.included_chars, schema.chars().count());
+        assert!(!schema_audit.truncated);
     }
 
     #[test]
@@ -380,6 +462,14 @@ mod tests {
             .omissions
             .iter()
             .any(|item| item.section == ContextSection::UserContext));
+        let audit = packet
+            .audit
+            .sections
+            .iter()
+            .find(|section| section.section == ContextSection::UserContext)
+            .unwrap();
+        assert!(audit.truncated);
+        assert!(audit.source_chars > audit.included_chars);
         assert!(context.chars().count() <= assembler.user_context_chars);
     }
 

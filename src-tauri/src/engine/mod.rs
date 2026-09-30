@@ -38,9 +38,10 @@ pub use evidence::{Answer, AskEvent};
 pub use llm::ProviderHealth;
 pub use provider::{AuthKind, Provider, PROVIDERS};
 pub use runtime::{
-    AnalysisContract, AnalysisTurn, AnalysisTurnReplayStatus, ComparisonKind, ContextReference,
-    ContractComparison, ContractDerivedMetric, ContractFilter, ContractJoin, ContractMeasure,
-    ContractOrder, DerivedMetricKind, InterpretationStatus, JoinKind, SortDirection, TimeBucket,
+    AnalysisContract, AnalysisTurn, AnalysisTurnReplayStatus, ClarificationReply, ComparisonKind,
+    ContextReference, ContractComparison, ContractDerivedMetric, ContractFilter, ContractJoin,
+    ContractMeasure, ContractOrder, DerivedMetricKind, InterpretationStatus, JoinKind,
+    SortDirection, TimeBucket,
 };
 pub use sqlite::Settings;
 pub use state::{ConversationSummary, ConversationsInfo, EngineState, ProviderInfo, QueryResult};

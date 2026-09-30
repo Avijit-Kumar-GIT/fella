@@ -14,10 +14,18 @@ refuses to. Referenced from [`WHY.md`](WHY.md); the refusals are in
   safety guarantee and it's structural: there is no write tool to disable.
   The user may explicitly edit the root `fella.md` context file; the model
   cannot write it.
-- **Model-driven, deterministic answers.** The model chooses and revises the
-  analytical route, but every number comes from a real computation SQL, Python,
-  or a bounded document/chart operation never from model guessing. Every answer
-  carries the actual steps, queries, and rows behind it, open for inspection.
+- **Model-driven analysis, deterministic execution.** The model inspects,
+  interprets, decomposes, and may generate SQL or Python as in a coding
+  harness. Fella's read-only analytics engine executes that work and returns
+  evidence the model can use to revise or explain its answer. Analytical
+  figures come from computation or source evidence, not unsupported guessing.
+  The execution trace remains available for inspection.
+- **Useful answer coverage, without bluffing.** Reliability is not achieved by
+  refusing whenever meaning is uncertain. Hard limits protect access and
+  execution; semantic uncertainty should prompt further inspection, a
+  disclosed assumption, a partial or comparative answer, or a focused
+  clarification—not an automatic block. Say the data cannot answer only when
+  no usable evidence path remains.
 - **Local-first.** The base makes one model network call to the provider the
   user chose. Nothing else leaves the machine during ordinary analysis; `/mcp`
   is inert and `/update` runs only when explicitly invoked.

@@ -95,6 +95,31 @@ export interface ClarificationRequest {
 	reason?: string;
 }
 
+/** A selection from a pending clarification card, linked to its source turn. */
+export interface ClarificationReply {
+	turn_id: string;
+	response: string;
+}
+
+export type ContextSection =
+	| 'user_context'
+	| 'workspace_schema'
+	| 'workspace_model'
+	| 'conversation'
+	| 'folder_memory';
+
+/** Length-only account of bounded context; never includes the source text. */
+export interface ContextSectionAudit {
+	section: ContextSection;
+	source_chars: number;
+	included_chars: number;
+	truncated: boolean;
+}
+
+export interface ContextAssemblyAudit {
+	sections: ContextSectionAudit[];
+}
+
 export interface AnalysisContract {
 	interpretation: InterpretationStatus;
 	subject?: string;
@@ -214,9 +239,12 @@ export interface AnalysisTurn {
 	conversation_id: string;
 	question: string;
 	context_refs?: ContextReference[];
+	clarification_of?: string;
+	clarification_response?: string;
 	workspace?: string;
 	workspace_revision?: string;
 	workspace_snapshot?: WorkspaceRevisionSnapshot;
+	context_audit?: ContextAssemblyAudit;
 	rerun_of?: string;
 	state: RuntimeTurnState;
 	contract?: AnalysisContract;
@@ -226,6 +254,7 @@ export interface AnalysisTurn {
 	result: {
 		text: string;
 		status: VerificationStatus;
+		usage?: { prompt_tokens: number; completion_tokens: number };
 		verification: VerificationCheck[];
 		evidence: unknown[];
 	};

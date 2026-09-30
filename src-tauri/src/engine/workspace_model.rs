@@ -8,7 +8,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::engine::catalog::{source_scope, Catalog, ColumnInfo, SkippedFile, SourceKind};
+use crate::engine::catalog::{
+    source_scope, Catalog, ColumnInfo, SkippedFile, SourceKind, ValueFrequency,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -38,6 +40,8 @@ pub struct FieldProfile {
     pub example: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub common_values: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub common_value_counts: Option<Vec<ValueFrequency>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
 }
@@ -148,16 +152,32 @@ impl WorkspaceModel {
                 if let Some(max) = &field.max {
                     block.push_str(&format!(" max={}", prompt_value(max, 60)));
                 }
-                if let Some(values) = &field.common_values {
-                    let values = values
-                        .iter()
-                        .take(4)
-                        .map(|value| prompt_value(value, 50))
-                        .collect::<Vec<_>>()
-                        .join(" | ");
-                    if !values.is_empty() {
-                        block.push_str(&format!(" common={values}"));
-                    }
+                let values = field
+                    .common_value_counts
+                    .as_ref()
+                    .map(|frequencies| {
+                        frequencies
+                            .iter()
+                            .take(4)
+                            .map(|entry| {
+                                format!("{} ({})", prompt_value(&entry.value, 50), entry.count)
+                            })
+                            .collect::<Vec<_>>()
+                            .join(" | ")
+                    })
+                    .or_else(|| {
+                        field.common_values.as_ref().map(|values| {
+                            values
+                                .iter()
+                                .take(4)
+                                .map(|value| prompt_value(value, 50))
+                                .collect::<Vec<_>>()
+                                .join(" | ")
+                        })
+                    })
+                    .unwrap_or_default();
+                if !values.is_empty() {
+                    block.push_str(&format!(" common={values}"));
                 }
                 if let Some(note) = &field.note {
                     block.push_str(&format!(" note={}", prompt_value(note, 120)));
@@ -243,6 +263,7 @@ impl FieldProfile {
             max: column.max.clone(),
             example: column.example.clone(),
             common_values: column.common_values.clone(),
+            common_value_counts: column.common_value_counts.clone(),
             note: column.note.clone(),
         }
     }
@@ -401,7 +422,7 @@ fn is_dimension_name(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::catalog::{Catalog, ColumnInfo, SourceInfo};
+    use crate::engine::catalog::{Catalog, ColumnInfo, SourceInfo, ValueFrequency};
 
     fn catalog() -> Catalog {
         Catalog {
@@ -424,6 +445,7 @@ mod tests {
                         max: None,
                         example: Some("2026-01-01".into()),
                         common_values: None,
+                        common_value_counts: None,
                         note: None,
                     },
                     ColumnInfo {
@@ -435,6 +457,7 @@ mod tests {
                         max: Some("20".into()),
                         example: Some("10".into()),
                         common_values: None,
+                        common_value_counts: None,
                         note: None,
                     },
                     ColumnInfo {
@@ -446,6 +469,7 @@ mod tests {
                         max: None,
                         example: Some("East".into()),
                         common_values: Some(vec!["East".into(), "West".into()]),
+                        common_value_counts: None,
                         note: None,
                     },
                 ]),
@@ -500,6 +524,27 @@ mod tests {
     }
 
     #[test]
+    fn prompt_block_carries_observed_value_frequencies_as_metadata() {
+        let mut catalog = catalog();
+        catalog.sources[0].columns.as_mut().unwrap()[2].common_value_counts = Some(vec![
+            ValueFrequency {
+                value: "North".into(),
+                count: 8,
+            },
+            ValueFrequency {
+                value: "South".into(),
+                count: 4,
+            },
+        ]);
+
+        let block = WorkspaceModel::from_catalog(&catalog)
+            .unwrap()
+            .prompt_block();
+        assert!(block.contains("common=North (8) | South (4)"));
+        assert!(block.contains("not answer evidence"));
+    }
+
+    #[test]
     fn infers_cautious_identifier_relationship_candidates() {
         let field = |name: &str, type_: &str| FieldProfile {
             name: name.into(),
@@ -511,6 +556,7 @@ mod tests {
             max: None,
             example: None,
             common_values: None,
+            common_value_counts: None,
             note: None,
         };
         let sources = vec![

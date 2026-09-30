@@ -110,9 +110,10 @@ choose the cheapest reliable strategy for the question:
 
 ~~~text
 low risk       -> direct interpretation and execution
-moderate risk  -> contract plus targeted grounding
-high risk      -> candidate contracts, probes, clarification, strong checks
-unsupported    -> explain what the data cannot establish
+moderate risk  -> inspect likely fields, then execute with stated assumptions
+high risk      -> compare candidates, probe, execute, and strengthen checks
+material choice -> clarify when investigation cannot resolve a user preference
+no evidence path -> explain what the data cannot establish
 ~~~
 
 AI should be used broadly where it provides leverage:
@@ -150,10 +151,20 @@ such as:
 - charts match their underlying results;
 - the workspace did not change during the run.
 
-When Fella cannot establish correctness, the result should degrade gracefully:
-clarify, retry, mark for review, or say that the data cannot answer the
-question. A confident unsupported answer is a runtime failure, not a successful
-conversation.
+Correctness must not become a reason to suppress useful work. A harness can
+lose trust by refusing an answer the model could have supported with another
+inspection or a reasonable, disclosed assumption. Keep hard stops for genuine
+execution and access boundaries; semantic uncertainty should usually lead to
+more investigation, a qualified or partial answer, or a comparison of plausible
+interpretations. Ask for clarification when a material user-owned choice
+remains, and say the data cannot answer only when no usable evidence path
+remains. Verification should guide revision and communicate support, not act as
+a blanket answer gate.
+
+Measure answer coverage and unnecessary abstention alongside correctness,
+calibration, clarification burden, and cost. A shadow evaluation can relax
+semantic gates for blocked cases while preserving the same read-only sandbox,
+revealing when harness policy—not missing evidence—prevented a correct answer.
 
 ## 5. Intelligence that compounds without becoming surveillance
 
@@ -258,7 +269,7 @@ history.
 That is the grand Fella harness:
 
 > **A private analytical computer that learns what your data means, computes
-> what you ask, proves what it can, and refuses to pretend about the rest.**
+> what you ask, and shows what its answer rests on.**
 
 ## Success criteria
 

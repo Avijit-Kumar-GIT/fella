@@ -184,29 +184,12 @@ impl Registry {
     pub fn schemas_with_contract(&self) -> Vec<ToolSchema> {
         let mut schemas = vec![ToolSchema {
             name: CONTRACT_TOOL_NAME.to_string(),
-            description: "Optionally state or revise a compact analytical hypothesis after considering the question and workspace evidence. This is not required before inspecting or directly analyzing data. Do not invent observed values. If a material ambiguity remains after reasonable inspection, include one focused `clarification`; otherwise record a supported assumption. This function does not access the workspace and does not count as evidence."
+            description: "State or revise a compact analytical interpretation after considering the question and relevant workspace observations. Use it when a question requires non-literal semantic mapping (including a roll-up across observed labels) or a material population, measure, or scope choice; simple exact lookups may use direct tools. Record semantic mappings and their observed labels in `assumptions`. Do not invent observed values. If materially different interpretations remain after reasonable inspection, include one focused `clarification`; otherwise record the supported assumption. This function does not access the workspace and does not count as evidence."
                 .to_string(),
             parameters: contract_schema(),
         }];
         schemas.extend(self.schemas());
         schemas
-    }
-
-    /// While a user choice is pending, let the model continue investigating
-    /// local evidence but withhold tools that compute or present an answer.
-    /// A later contract call can resolve the ambiguity from observations, or
-    /// the model can return the clarification to the user.
-    pub fn schemas_for_investigation(&self) -> Vec<ToolSchema> {
-        self.schemas_with_contract()
-            .into_iter()
-            .filter(|schema| {
-                schema.name == CONTRACT_TOOL_NAME
-                    || matches!(
-                        schema.name.as_str(),
-                        "list_files" | "inspect_table" | "grep_files" | "read_file"
-                    )
-            })
-            .collect()
     }
 
     pub fn capability_notice(&self) -> Option<String> {
@@ -369,7 +352,11 @@ fn contract_schema() -> Json {
                 "description": "Use this typed object for a period comparison. Keep the time field in `time.field`; do not encode comparison meaning in prose."
             },
             "presentation": { "type": "string" },
-            "assumptions": { "type": "array", "items": { "type": "string" } },
+            "assumptions": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Interpretive choices that affect the result, including semantic mappings and the exact observed labels combined. Disclose material assumptions in the final answer."
+            },
             "unresolved": { "type": "array", "items": { "type": "string" } },
             "clarification": {
                 "type": "object",
@@ -563,7 +550,7 @@ impl Tool for InspectTable {
         "inspect_table"
     }
     fn description(&self) -> &'static str {
-        "Inspect a table's columns, types, missingness, distinct counts, ranges, common values for low-cardinality fields, and a small row sample. Use this to discover how the source is labeled before choosing filters or measures. rows sets how many sample rows to return (default 5, max 50)."
+        "Inspect a table's columns, types, missingness, distinct counts, ranges, frequent low-cardinality values with row counts, and a small row sample. Use this to discover how the source is labeled and how its values are distributed before choosing filters or measures. rows sets how many sample rows to return (default 5, max 50)."
     }
     fn parameters(&self) -> Json {
         json!({
@@ -599,17 +586,33 @@ impl Tool for InspectTable {
         }
         for c in &cols {
             let common_values = c
-                .common_values
+                .common_value_counts
                 .as_ref()
                 .filter(|values| !values.is_empty())
                 .map(|values| {
                     let shown = values
                         .iter()
                         .take(6)
-                        .map(|value| truncate_chars(value, 48))
+                        .map(|entry| {
+                            format!("{} ({})", truncate_chars(&entry.value, 48), entry.count)
+                        })
                         .collect::<Vec<_>>()
                         .join(" | ");
-                    format!("  common values=[{shown}]")
+                    format!("  common values (frequency counts)=[{shown}]")
+                })
+                .or_else(|| {
+                    c.common_values
+                        .as_ref()
+                        .filter(|values| !values.is_empty())
+                        .map(|values| {
+                            let shown = values
+                                .iter()
+                                .take(6)
+                                .map(|value| truncate_chars(value, 48))
+                                .collect::<Vec<_>>()
+                                .join(" | ");
+                            format!("  common values=[{shown}]")
+                        })
                 })
                 .unwrap_or_default();
             lines.push(format!(
@@ -808,16 +811,14 @@ impl Tool for GrepFiles {
         "grep_files"
     }
     fn description(&self) -> &'static str {
-        "Search the text of your documents (not tables SQL already covers those) \
-for a word or regular expression. Returns matching lines with their file and \
-line number good for a targeted lookup (a name, an amount, a specific word)."
+        "Search text documents (not tables SQL already covers those) by one or more terms, an exact phrase, or a regular expression. Returns relevance-ranked passages with nearby line context and file/line provenance. Use alternate wording or likely source labels in separate searches when terminology may differ; a single no-match is not proof the information is absent."
     }
     fn parameters(&self) -> Json {
         json!({
             "type": "object",
             "properties": {
-                "pattern": { "type": "string", "description": "a word, phrase, or regular expression" },
-                "max_hits": { "type": "integer", "minimum": 1, "maximum": 100 }
+                "pattern": { "type": "string", "description": "one or more search terms, a phrase, or a regular expression" },
+                "max_hits": { "type": "integer", "minimum": 1, "maximum": 50 }
             },
             "required": ["pattern"],
             "additionalProperties": false
@@ -828,33 +829,56 @@ line number good for a targeted lookup (a name, an amount, a specific word)."
         let max_hits = args
             .get("max_hits")
             .and_then(|v| v.as_u64())
-            .unwrap_or(30)
-            .clamp(1, 100) as usize;
-        let hits = engine.grep_files(pattern, max_hits)?;
+            .unwrap_or(15)
+            .clamp(1, 50) as usize;
+        let results = engine.search_files(pattern, max_hits)?;
 
-        if hits.is_empty() {
-            return Ok(ToolOutput::text(
-                "no matches",
-                "No document contains that text. Try list_files to see what's there, or a \
-different word.",
-            ));
+        if results.hits.is_empty() {
+            let no_matches = if results.incomplete {
+                "No matching passage was found in the available scan. The workspace search is incomplete because it reached its scan limit or could not read a source; try a narrower query or inspect likely files."
+            } else {
+                "No document passage contains those terms or matches that pattern. Try alternate wording or likely labels; this search is lexical, so a no-match does not establish that the information is absent."
+            };
+            return Ok(ToolOutput::text("no matches", no_matches));
         }
 
-        let llm_text = hits
+        let mut llm_text = results
+            .hits
             .iter()
-            .map(|h| format!("{}:{}: {}", h.source, h.line, h.text))
+            .enumerate()
+            .map(|(rank, h)| format!("{}. {}:{}:\n{}", rank + 1, h.source, h.line, h.text))
             .collect::<Vec<_>>()
             .join("\n");
+        if results.incomplete {
+            llm_text.push_str("\n\nWorkspace search was incomplete (scan limit reached or a source could not be read); these are the best matches in the scanned portion, not guaranteed workspace-wide top results.");
+        }
 
         Ok(ToolOutput {
-            summary: format!("{} match(es)", hits.len()),
+            summary: format!(
+                "{} ranked passage(s){}",
+                results.hits.len(),
+                if results.incomplete {
+                    " · partial scan"
+                } else {
+                    ""
+                }
+            ),
             llm_text,
             sql: None,
-            columns: Some(vec!["source".into(), "line".into(), "text".into()]),
+            columns: Some(vec![
+                "rank".into(),
+                "source".into(),
+                "line".into(),
+                "passage".into(),
+            ]),
             rows: Some(
-                hits.iter()
-                    .map(|h: &GrepHit| {
+                results
+                    .hits
+                    .iter()
+                    .enumerate()
+                    .map(|(rank, h): (usize, &GrepHit)| {
                         vec![
+                            Json::from(rank + 1),
                             Json::from(h.source.clone()),
                             Json::from(h.line),
                             Json::from(h.text.clone()),
@@ -862,7 +886,7 @@ different word.",
                     })
                     .collect(),
             ),
-            row_count: Some(hits.len()),
+            row_count: Some(results.hits.len()),
             output: None,
             chart: None,
             python_queries: None,
@@ -1275,5 +1299,8 @@ mod tests {
         assert!(contract_schemas[0]
             .description
             .contains("does not access the workspace"));
+        assert!(contract_schemas[0]
+            .description
+            .contains("Record semantic mappings and their observed labels"));
     }
 }

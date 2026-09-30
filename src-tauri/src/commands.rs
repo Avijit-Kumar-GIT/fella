@@ -8,9 +8,10 @@ use tauri::ipc::Channel;
 use tauri::{State, Window};
 
 use crate::engine::{
-    AnalysisTurn, AnalysisTurnReplayStatus, Answer, AskEvent, Catalog, ContextReference,
-    ConversationSummary, ConversationsInfo, EngineError, EngineResult, EngineState, ProviderHealth,
-    ProviderInfo, QueryResult, Settings, SourceInfo, UpdateStatus, WorkspaceModel,
+    AnalysisTurn, AnalysisTurnReplayStatus, Answer, AskEvent, Catalog, ClarificationReply,
+    ContextReference, ConversationSummary, ConversationsInfo, EngineError, EngineResult,
+    EngineState, ProviderHealth, ProviderInfo, QueryResult, Settings, SourceInfo, UpdateStatus,
+    WorkspaceModel,
 };
 use crate::AppState;
 
@@ -210,18 +211,20 @@ pub async fn ask(
     model: Option<String>,
     mode: Option<String>,
     context_refs: Option<Vec<ContextReference>>,
+    clarification_reply: Option<ClarificationReply>,
     channel: Channel<AskEvent>,
     engine: State<'_, EngineState>,
 ) -> Result<Answer, EngineError> {
     let inspect = mode.as_deref() == Some("inspect");
     let context_refs = context_refs.unwrap_or_default();
     engine
-        .ask_with_mode_and_context(
+        .ask_with_mode_and_context_and_clarification(
             &conversation_id,
             &question,
             model.as_deref(),
             inspect,
             &context_refs,
+            clarification_reply,
             move |ev| {
                 let _ = channel.send(ev);
             },

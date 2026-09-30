@@ -7,14 +7,15 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::engine::analytics::{provenance, verify};
+use crate::engine::context::ContextPacket;
 use crate::engine::error::{EngineError, EngineResult};
 use crate::engine::evidence::{
     Answer, AskEvent, EvidenceItem, Usage, VerificationCheck, WorkspaceSnapshot,
 };
-use crate::engine::llm::{ChatMessage, LlmClient, ToolCall, ToolSchema};
+use crate::engine::llm::{ChatMessage, LlmClient, ToolCall};
 use crate::engine::runtime::{
-    self, AnalysisContract, ContextReference, ExecutionTrace, LogicalPlan, PlanStrategy, TraceStep,
-    TurnState,
+    self, AnalysisContract, ContextReference, ExecutionTrace, LogicalPlan, PlanStrategy,
+    ResolvedClarification, TraceStep, TurnState,
 };
 use crate::engine::state::EngineState;
 use crate::engine::tools::Registry;
@@ -25,6 +26,10 @@ use crate::engine::{friction, planner, risk, Catalog};
 /// tool-efficient model may need more room than the default before it's
 /// confident enough to stop calling tools.
 const MAX_STEPS: usize = 20;
+/// A single analytical turn may uncover multiple independent interpretation,
+/// execution, or answer-shape problems. Let the model repair them iteratively,
+/// while bounding extra model/tool cost.
+const MAX_SEMANTIC_REPAIRS: usize = 3;
 
 fn max_steps() -> usize {
     super::env::positive("FELLA_MAX_STEPS", MAX_STEPS)
@@ -49,9 +54,10 @@ pub(crate) struct RunRequest<'a> {
     pub(crate) engine: &'a EngineState,
     pub(crate) llm: &'a LlmClient,
     pub(crate) registry: &'a Registry,
-    pub(crate) conversation_id: &'a str,
     pub(crate) turn_id: &'a str,
     pub(crate) question: &'a str,
+    pub(crate) context: &'a ContextPacket,
+    pub(crate) clarification: Option<&'a ResolvedClarification>,
     pub(crate) inspect: bool,
     pub(crate) context_refs: &'a [ContextReference],
     pub(crate) cancel: Arc<AtomicBool>,
@@ -119,10 +125,21 @@ async fn cancelled(flag: &AtomicBool) {
     }
 }
 
-/// Tools that produce analytical results. These are withheld while a material
-/// user choice is unresolved.
+/// Tools that produce analytical results. They remain read-only and may be
+/// used to compare supported scenarios while a user choice is unresolved.
 fn is_computation_tool(name: &str) -> bool {
     matches!(name, "run_sql" | "run_python" | "make_chart")
+}
+
+/// Read-only calls that gather workspace observations for the model. If a
+/// response requests one of these and a computation together, let the
+/// observation land first: tool calls in one response are otherwise executed
+/// concurrently, before the model has had a chance to use what it inspected.
+fn is_observation_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "list_files" | "inspect_table" | "grep_files" | "read_file"
+    )
 }
 
 pub(crate) async fn run(request: RunRequest<'_>) -> EngineResult<Answer> {
@@ -130,9 +147,10 @@ pub(crate) async fn run(request: RunRequest<'_>) -> EngineResult<Answer> {
         engine,
         llm,
         registry,
-        conversation_id,
         turn_id,
         question,
+        context,
+        clarification,
         inspect,
         context_refs,
         cancel,
@@ -150,7 +168,10 @@ pub(crate) async fn run(request: RunRequest<'_>) -> EngineResult<Answer> {
         turn_id: ids.turn_id.clone(),
         state: TurnState::Interpreting,
     });
-    let risk = risk::assess(question);
+    let analysis_question = clarification
+        .map(|reply| reply.original_question.as_str())
+        .unwrap_or(question);
+    let risk = risk::assess(analysis_question);
     let catalog = engine.catalog();
     let workspace = match (&catalog.workspace, &catalog.revision) {
         (Some(path), Some(revision)) => Some(WorkspaceSnapshot {
@@ -159,7 +180,6 @@ pub(crate) async fn run(request: RunRequest<'_>) -> EngineResult<Answer> {
         }),
         _ => None,
     };
-    let context = engine.context_packet(question, conversation_id);
     let mut sys = system_prompt(
         &PromptProfile::from_env(),
         &catalog,
@@ -172,6 +192,11 @@ pub(crate) async fn run(request: RunRequest<'_>) -> EngineResult<Answer> {
     if inspect {
         sys.push_str(
             "\n\nInteraction mode: Inspect. Start with the relevant read-only workspace sources and schema, then explain the checks briefly before answering.\n",
+        );
+    }
+    if clarification.is_some() {
+        sys.push_str(
+            "\n\nClarification continuation: the user explicitly resolved one pending choice. Treat their response as authoritative for that choice only; preserve the original analytical request, then continue the analysis with the current workspace tools. Any earlier candidate figures are provisional; ground the final result in evidence from this turn. If the workspace revision changed since the clarification, inspect the relevant sources again before relying on prior findings.\n",
         );
     }
     if !context_refs.is_empty() {
@@ -202,9 +227,12 @@ pub(crate) async fn run(request: RunRequest<'_>) -> EngineResult<Answer> {
     if catalog.workspace.is_some() {
         sys.push_str(&format!(
             "\n\nAnalytical control plane: you drive the analysis. For every workspace data \
-question, start from the mounted workspace map and inspect relevant sources as needed. A \
-compact semantic hypothesis via `{}` is optional, not a prerequisite. Then investigate with \
-the read-only tools. \
+question, start from the mounted workspace map and inspect relevant sources as needed. Then \
+investigate with the read-only tools. Use `{}` when the question requires a non-literal semantic \
+interpretation (including a roll-up across multiple observed labels), or when a population, \
+measure, or scope choice needs to be explicit; simple exact lookups need no contract. The \
+contract records your interpretation, but does not replace observation or limit which tools \
+you may use. \
 The runtime provides a bounded, read-only workspace and deterministic execution tools; it does not \
 require a fixed sequence after interpretation. For this question, \
 the observed risk signals are {:?} ({}). Use `{}` when a compact semantic \
@@ -222,15 +250,22 @@ denominator for ratios so the execution can be checked against the question.",
             runtime::CONTRACT_TOOL_NAME,
         ));
         sys.push_str(
-            "\n\nAnalyst loop: Treat the source inventory as reconnaissance, not a finished interpretation. Inspect relevant profiles, observed labels, samples, and document notes when needed; decompose multi-part questions; use each observation to refine the source, fields, population, filters, time range, units, joins, and computation. Execute once the analysis is grounded enough, then check the result against the question and return to inspection if it is empty, unexpectedly broad, or inconsistent. Ask a focused clarification only when reasonable investigation leaves a material choice the user must decide. While that choice is pending, continue safe local inspection but do not compute an answer. Assume you can analyze when given relevant evidence and tools; do not refuse just because a human concept is not an exact field or value.\n",
+            "\n\nAnalyst loop: Treat the source inventory as reconnaissance, not a finished interpretation. Inspect relevant profiles, observed labels, samples, and document notes when needed; decompose multi-part questions; use each observation to refine the source, fields, population, filters, time range, units, joins, and computation. Do not request inspection and computation in the same tool-call batch: wait for the observation result, incorporate it, then compute. Execute once the analysis is grounded enough, then check the result against the question and return to inspection if it is empty, unexpectedly broad, or inconsistent. Ask a focused clarification only when reasonable investigation leaves a material choice the user must decide. A pending choice does not disable safe read-only analysis: when useful, compute supported alternatives or partial results, label each interpretation, and leave the user-owned choice open rather than presenting one scenario as settled. Assume you can analyze when given relevant evidence and tools; do not refuse just because a human concept is not an exact field or value.\n",
         );
         sys.push_str(
-            "\n\nSemantic decision policy: do not force a semantic guess when two supported interpretations would materially change the result. First use the workspace schema, observed values, source notes, prior user definitions, and read-only probes to resolve ordinary aliases and messy labels. Treat a quoted category or value as an exact label request by default; do not silently substitute a nearby observed label based only on semantic similarity. Map it only when workspace evidence or a prior user definition supports the mapping; otherwise preserve the exact match or clarify if the intended meaning would change the answer. If one interpretation is still clearly more likely, proceed with that assumption and state it. If the remaining choice is genuinely user-specific (for example, whether income belongs in a spending total, which of two equally plausible measures is meant, or which scope to compare), emit one `clarification` object on the analytical contract with a concise question and at most six choices; do not execute a calculation for the unresolved choice. The runtime will return that question to the user. A typed decision/classifier may route among resolve, assume, clarify, and unsupported, but it must not invent candidates, replace the model's analytical reasoning, or override observed data.\n",
+            "\n\nSemantic decision policy: do not force a semantic guess when two supported interpretations would materially change the result. First use the workspace schema, observed values, source notes, prior user definitions, and read-only probes to resolve ordinary aliases and messy labels. Treat a quoted category or value as an exact label request by default; do not silently substitute a nearby observed label based only on semantic similarity. Map it only when workspace evidence or a prior user definition supports the mapping; otherwise preserve the exact match or clarify if the intended meaning would change the answer. For a non-literal mapping or a roll-up across distinct observed labels, inspect the relevant values, record the selected mapping and exact labels in the contract's `assumptions` before computing, and name those labels in the final answer. If one interpretation is still clearly more likely, proceed with that assumption and state it. If materially different interpretations remain, emit one `clarification` object on the analytical contract with a concise question and at most six choices; where useful, continue safe read-only analysis by computing labeled candidate results or partial results. Do not present one unresolved scenario as the definitive answer, but do not withhold useful computed alternatives merely because clarification is pending. The runtime will return the question with any supported findings. A typed decision/classifier may route among resolve, assume, clarify, and unsupported, but it must not invent candidates, replace the model's analytical reasoning, or override observed data.\n",
         );
     }
     let mut messages = vec![
         ChatMessage::System(sys),
-        ChatMessage::User(question.to_string()),
+        ChatMessage::User(if let Some(reply) = clarification {
+            format!(
+                "Original analytical question:\n{}\n\nPending clarification:\n{}\n\nUser's response:\n{}",
+                reply.original_question, reply.request.question, reply.response
+            )
+        } else {
+            question.to_string()
+        }),
     ];
     // With no folder open there is nothing to compute don't hand the model
     // tools it can only fail to call. This keeps a plain "hello" (or "what can
@@ -241,7 +276,6 @@ denominator for ratios so the execution can be checked against the question.",
     } else {
         Vec::new()
     };
-    let investigation_schemas = registry.schemas_for_investigation();
     let mut evidence: Vec<EvidenceItem> = Vec::new();
 
     // Forward a retry/backoff line from the model client to the transcript.
@@ -270,24 +304,14 @@ denominator for ratios so the execution can be checked against the question.",
     let mut usage: Option<Usage> = None;
     let steps = max_steps();
     let soft_stop = soft_stop_round_trips();
-    let mut semantic_repair_attempted = false;
+    let mut semantic_repair_attempts = 0usize;
     for step in 0..steps {
         log::info!("agent step {}/{steps}", step + 1);
         let step_start = Instant::now();
-        let clarification_pending = ids.clarification.is_some();
-        let available_schemas: &[ToolSchema] = if clarification_pending {
-            // A model-proposed clarification is not a ban on investigation.
-            // Keep local observation tools available while withholding result-
-            // producing tools; evidence may resolve the candidate first.
-            &investigation_schemas
-        } else {
-            &schemas
-        };
-
         // Race the model call against a stop request; dropping the future
         // closes the HTTP connection so the model stops generating.
         let resp = tokio::select! {
-            r = llm.chat(&messages, available_schemas, &notify, &on_delta) => match r {
+            r = llm.chat(&messages, &schemas, &notify, &on_delta) => match r {
                 Ok(resp) => resp,
                 // Failed with work already in hand: hand back the partial
                 // evidence and a note rather than losing the whole question.
@@ -372,14 +396,14 @@ corrected answer to match the re-run."
                 }
             }
             let semantic_repair_hint = verify::semantic_repair_hint(question, &evidence, &checks);
-            if !semantic_repair_attempted
+            if semantic_repair_attempts < MAX_SEMANTIC_REPAIRS
                 && !evidence.is_empty()
                 && !cancel.load(Ordering::Relaxed)
                 && step + 1 < steps
                 && semantic_repair_hint.is_some()
             {
                 let detail = semantic_repair_hint.expect("semantic repair hint exists");
-                semantic_repair_attempted = true;
+                semantic_repair_attempts += 1;
                 let mut superseded = 0;
                 for item in &mut evidence {
                     if verify::semantic_evidence_matches(engine, question, item, &detail) {
@@ -408,7 +432,7 @@ corrected answer to match the re-run."
                     tool_calls: Vec::new(),
                 });
                 messages.push(ChatMessage::User(format!(
-                    "Semantic verification failed: {detail}. Re-open the analysis with the read-only tools. Preserve every explicit source scope, date range, filter, exclusion, grouping, denominator, and unit from the question and prior turn. Do not defend the unsupported figure. If the question asks for a derived value, execute a computation that returns it with labeled operands; otherwise omit any figure the evidence does not support. Then answer from the checked results."
+                    "Semantic verification failed: {detail}. Re-open the analysis with the read-only tools. Use the failed check as new evidence: retain supported parts of the prior analysis and revise only what the check calls into question. Preserve every explicit source scope, date range, filter, exclusion, grouping, denominator, and unit from the question and prior turn. Carry forward the established interpretation unless evidence disproves it; if a material scope choice remains unresolved, ask one focused clarification instead of silently changing it. Do not defend an unsupported figure. If the question asks for a derived value, execute a computation that returns it with labeled operands; otherwise omit any figure the evidence does not support. Then answer from the checked results."
                 )));
                 continue;
             }
@@ -505,7 +529,7 @@ filter word in the question exactly, and state just the number(s) don't round or
                     );
                     if let Some(clarification) = ids.clarification.as_ref() {
                         text.push_str(
-                            "\n\nA material user choice is still unresolved. Safe local inspection may continue, but do not compute until it is resolved.",
+                            "\n\nA material user choice is still unresolved. Safe read-only tools remain available. If useful, compute and label candidate or partial results so the user can see what the choice changes; do not present one candidate as settled.",
                         );
                         text.push_str("\nAsk exactly: ");
                         text.push_str(&clarification.question);
@@ -574,9 +598,16 @@ filter word in the question exactly, and state just the number(s) don't round or
                 .tool_calls
                 .iter()
                 .any(|call| is_computation_tool(&call.name));
-        let computation_blocked = clarification_pending || ids.clarification.is_some();
+        let defer_for_observation = resp
+            .tool_calls
+            .iter()
+            .any(|call| is_observation_tool(&call.name))
+            && resp
+                .tool_calls
+                .iter()
+                .any(|call| is_computation_tool(&call.name));
         let should_defer = |call: &ToolCall| {
-            is_computation_tool(&call.name) && (computation_blocked || defer_model_computations)
+            is_computation_tool(&call.name) && (defer_model_computations || defer_for_observation)
         };
         let mut had_tool_error = false;
         let mut workspace_changed = false;
@@ -693,17 +724,22 @@ not run again. Its result is repeated below - use it, refine the call, or give y
             }
         }
 
-        if computation_blocked || defer_model_computations {
+        if defer_model_computations || defer_for_observation {
             for (i, call) in
                 resp.tool_calls.iter().enumerate().filter(|(_, call)| {
                     call.name != runtime::CONTRACT_TOOL_NAME && should_defer(call)
                 })
             {
+                let why_not_run = if defer_model_computations {
+                    "the semantic hypothesis needs review first"
+                } else {
+                    "this model turn also requested workspace inspection; review those observations first"
+                };
                 internal_results.insert(
                     i,
                     format!(
-                        "This `{}` computation was not run. A user clarification is pending or the semantic hypothesis needs review first. Continue inspecting local evidence, resolve the interpretation or ask the user, and compute only after the choice is settled.",
-                        call.name
+                        "This `{}` computation was not run because {why_not_run}. Continue with the observed result, refine the interpretation if needed, then issue a fresh computation. Record any material semantic mapping in the analysis contract.",
+                        call.name,
                     ),
                 );
             }
@@ -1495,10 +1531,11 @@ RustPython sandbox with no filesystem, network, environment, or subprocess acces
     if profile.docs_rule {
         rules.push(
             "Documents (notes, PDFs) are already listed below by name; plain-text notes \
-also show a first line, PDFs don't, so don't call list_files for them. For a \
-question about their content, call read_file directly (pass `names: [...]` to \
-read several at once); they are short. Use grep_files only to locate one \
-specific term across many documents. When a document question has multiple parts, \
+also show a first line, PDFs don't, so don't call list_files for them. Use read_file \
+for a known short source; use grep_files to search one or more terms across sources \
+or to find passages in a long document. Search is lexical and ranked, not semantic: \
+try alternate wording or likely source labels when terminology may differ, and do not \
+treat one no-match as proof the information is absent. When a document question has multiple parts, \
 answer each requested part explicitly. If it asks for a policy or rule, state the \
 action, scope, and reason in the document's own terms; do not replace an explicit \
 instruction with only a general summary."
@@ -1755,10 +1792,11 @@ support up to 12 labels; time-series/line charts support up to 1000 points. For 
 aggregate to a coarser time period or narrow the date range, and say so instead of silently \
 omitting rows. Use two series maximum.\n\
 - Documents (notes, PDFs) are already listed below by name; plain-text notes \
-also show a first line, PDFs don't, so don't call list_files for them. For a \
-question about their content, call read_file directly (pass `names: [...]` to \
-read several at once); they are short. Use grep_files only to locate one \
-specific term across many documents. When a document question has multiple parts, \
+also show a first line, PDFs don't, so don't call list_files for them. Use read_file \
+for a known short source; use grep_files to search one or more terms across sources \
+or to find passages in a long document. Search is lexical and ranked, not semantic: \
+try alternate wording or likely source labels when terminology may differ, and do not \
+treat one no-match as proof the information is absent. When a document question has multiple parts, \
 answer each requested part explicitly. If it asks for a policy or rule, state the \
 action, scope, and reason in the document's own terms; do not replace an explicit \
 instruction with only a general summary.\n\
