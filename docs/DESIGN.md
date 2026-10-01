@@ -40,8 +40,8 @@ settings screen, or provider mechanics.
 Deeper information is progressive disclosure, hidden by default and opened
 deliberately when the user wants it. The data catalog, ingestion notes, source
 mapping, samples, calculation details, raw SQL, and verification work belong in
-secondary views or disclosures. The release-level plan is in
-[`ANALYTICS-RELEASE.md`](ANALYTICS-RELEASE.md).
+secondary views or disclosures. The runtime direction and implementation status
+are in [`ANALYTICAL-COMPUTER-ROADMAP.md`](ANALYTICAL-COMPUTER-ROADMAP.md).
 
 ## Tokens (`src/app.css` `:root`)
 

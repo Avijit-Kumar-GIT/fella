@@ -649,7 +649,7 @@ timeouts). Read the *shape*, not the absolute rates:
 An ongoing track (`DECISIONS.md` 2026-09-08, vertical-not-horizontal): make the
 base build **truthfully faster** *and* **feel faster and smaller**, and keep the
 number of steps to do anything low. Prompted by `fx` v0.0.8 publishing p95 TUI
-latency and binary-size deltas as headline metrics (`QUESTIONS.md`).
+latency and binary-size deltas as headline metrics.
 
 ### Interactions per flow (2026-09-08, from a code trace of `src/lib/`)
 

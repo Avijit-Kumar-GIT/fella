@@ -6,7 +6,7 @@
 decided is [`DECISIONS.md`](DECISIONS.md).*
 
 - **Not a task agent.** The agent has no write/move/delete tools and emits no
-  artifacts; no permission dialogs see [`AUDIT.md`](AUDIT.md). Fella answers
+  artifacts; no permission dialogs. Fella answers
   questions; it doesn't do chores. The user may explicitly edit `fella.md`,
   which is context for the agent rather than an agent-generated artifact.
 - **Not horizontal.** The zero-config base build stays small in feature count
@@ -34,6 +34,6 @@ decided is [`DECISIONS.md`](DECISIONS.md).*
 - **SQL first.** Python is the escape hatch, not the default.
 
 See also [`ARCHITECTURE.md`](ARCHITECTURE.md#what-fella-is) for what Fella
-*is*, and the "Would need a positioning decision" section of
-[`ROADMAP.md`](ROADMAP.md) for ideas that touch one of these and haven't been
-decided either way yet.
+*is*. Reopening a non-goal requires a concrete use case and an explicit entry
+in [`DECISIONS.md`](DECISIONS.md); the current runtime direction is in
+[`ANALYTICAL-COMPUTER-ROADMAP.md`](ANALYTICAL-COMPUTER-ROADMAP.md).

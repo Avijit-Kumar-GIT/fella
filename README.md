@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="logo.svg" width="88" alt="Fella logo">
+  <img src="docs/site/logo.svg" width="88" alt="Fella logo">
   <h1>Fella</h1>
   <p><strong>An opinionated analytics engine and harness for personal data.</strong></p>
   <p>Turn messy files into consistent, correctness-first analysis&mdash;with no tool sprawl and no write access.</p>
@@ -197,7 +197,7 @@ documented separately in [`docs/ELECTRON.md`](docs/ELECTRON.md).
 - [Principles](docs/PRINCIPLES.md) — the commitments behind the design
 - [Non-goals](docs/NON-GOALS.md) — what Fella deliberately does not become
 - [Developer setup](docs/DEV_SETUP.md) — dependencies, providers, tests, and evaluation
-- [Roadmap](docs/ROADMAP.md) — planned in-scope work
+- [Analytical computer roadmap](docs/ANALYTICAL-COMPUTER-ROADMAP.md) — runtime design, implementation status, and quality gates
 - [Decisions](docs/DECISIONS.md) — the engineering decision log
 - [Contributing](CONTRIBUTING.md) — contribution guidelines
 

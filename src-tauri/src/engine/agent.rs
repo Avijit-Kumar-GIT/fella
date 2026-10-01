@@ -35,10 +35,9 @@ fn max_steps() -> usize {
     super::env::positive("FELLA_MAX_STEPS", MAX_STEPS)
 }
 
-/// Round trips above which a run gets a live nudge to wrap up.
-/// docs/HARNESS-COMPARISON.md targets <= 2 round trips/answer; this sits one
-/// step above that so a normal two-round answer is never touched, only a run
-/// that's already run past it. `FELLA_SOFT_STOP` overrides it for eval sweeps.
+/// Sequential model turns above which a run gets a live nudge to wrap up.
+/// This is soft guidance, not an analytical task limit; evaluate it against
+/// multi-step episodes as FQA-Bench coverage grows.
 const SOFT_STOP_ROUND_TRIPS: usize = 3;
 
 struct RunIds {

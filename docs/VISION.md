@@ -286,8 +286,7 @@ The vision is working when:
 
 ## Related documents
 
-- [`SEMANTIC-RUNTIME.md`](SEMANTIC-RUNTIME.md) — concrete runtime and harness architecture
+- [`SEMANTIC-RUNTIME.md`](SEMANTIC-RUNTIME.md) — detailed target runtime architecture
 - [`PRINCIPLES.md`](PRINCIPLES.md) — product commitments
 - [`WHY.md`](WHY.md) — the case for structural restraint and personal software
-- [`GOALS.md`](GOALS.md) — current release scope
-- [`ROADMAP.md`](ROADMAP.md) — candidate work beyond the current release
+- [`ANALYTICAL-COMPUTER-ROADMAP.md`](ANALYTICAL-COMPUTER-ROADMAP.md) — implementation status, next slices, and quality gates

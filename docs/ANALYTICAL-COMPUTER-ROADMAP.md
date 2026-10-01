@@ -168,38 +168,19 @@ comparison shows otherwise.
   reconnaissance, tool errors, and unreferenced SQL-result signals separately;
   only exact duplicate calls count as confirmed redundancy.
 
-## Where the current code starts
+## Current implementation baseline
 
-Fella already has a strong analytical data plane:
+M0–M7 now have implemented first slices. The status above is the current
+implementation snapshot; the remaining work is incremental:
 
-| Existing capability | Current implementation |
-|---|---|
-| Workspace boundary and revision | `catalog.rs`, `EngineState::open_workspace`, `workspace_revision` |
-| Local ingestion and computation | `analytics/data`, SQLite by default, DuckDB opt-in |
-| Bounded non-SQL statistics | `analytics/pyexec.rs`, RustPython/WASM limits |
-| Fixed read-only surface | `tools.rs`, seven built-in tools, no write tool |
-| Conversation loop | `agent.rs`, bounded steps, cancellation, parallel calls |
-| Provenance and evidence | `evidence.rs`, `analytics/provenance.rs`, `EvidenceItem` |
-| Canonical turn record | `runtime.rs`, `analysis_store.rs`, `analysis/turns/*.json` |
-| Deterministic verification | `analytics/verify.rs`, query reruns and answer checks |
-| Workspace context | root `fella.md`, loaded into the prompt |
-| Learned context | `memory.rs`, `semantic_memory.rs`, local `memory.md`, typed fact ledger, and episode log |
-| Evaluation | `bench/`, `examples/agent_eval`, Rust integration tests |
+- M1: richer user-authored definitions and value semantics.
+- M4: broader chart-shape and analytical-invariant coverage.
+- M6: a richer trace inspector over the canonical persisted turn.
+- M7: cost/quality dashboards and broader replay matrices.
 
-The missing layer is not “more tools.” It is a typed control plane around
-these capabilities:
-
-| Target object | Current analogue | Gap |
-|---|---|---|
-| `WorkspaceModel` | `Catalog` + schema prompt + context/memory files | No first-class semantic profile, authority, or definition registry |
-| `ConversationSession` | frontend tabs + bounded server session memory | No backend-owned analytical session record |
-| `AnalysisTurn` | `agent::run` + `AskEvent` | Lifecycle exists implicitly, not as a typed state machine |
-| `AnalysisContract` | prompt rules such as `depth_rule` | No structured representation of population, grain, filters, measures, or assumptions |
-| `LogicalPlan` | model-generated SQL/Python calls | No validated semantic plan before physical execution |
-| `ExecutionTrace` | `EvidenceItem` + frontend `RunStep` | Evidence is a result projection, not the canonical runtime trace |
-| `VerificationReport` | `Vec<VerificationCheck>` | Strong deterministic checks, but limited contract-aware invariants |
-| `SemanticMemory` | `FolderMemory` | Facts lack explicit authority, evidence, revision, and conflict state |
-| `AnalysisResult` | `Answer` | No unified contract/trace/assumption result envelope |
+The per-milestone notes above are the source of truth for what exists and what
+is still partial. New gaps should be added there only when they represent a
+general capability or quality boundary, not an individual fixture.
 
 ## Delivery principles
 

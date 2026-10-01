@@ -102,8 +102,8 @@ Partly. Rows don't matter — memory never looks at row data. What scales is
 **schema notes** (∝ columns) and **recipes** (∝ question variety). A folder with
 40 tables and a year of use could plausibly reach ~800 column-notes and ~50
 recipes — low tens of KB. Too much to prepend in full every turn (and doing so
-is the *add-scaffolding* anti-pattern from `HARNESS.md` — it taxes the strong
-model on questions that don't need it).
+is the *add-scaffolding* anti-pattern discussed in the 2026-09-07 entry of
+`DECISIONS.md` — it taxes the strong model on questions that don't need it).
 
 But it is **not** a vector-DB problem:
 

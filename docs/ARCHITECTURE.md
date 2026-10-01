@@ -24,16 +24,11 @@ story, and it is structural: there is no write tool to disable. The user may
 edit the explicit `fella.md` context file from the Workspace surface; that is a
 user action and never an agent write.
 
-The full set of positive commitments this implies is
-[`PRINCIPLES.md`](PRINCIPLES.md); what Fella deliberately doesn't do is
-[`NON-GOALS.md`](NON-GOALS.md). Both are referenced from [`WHY.md`](WHY.md),
-the reasoning behind them.
-
-The microharness principles in `AUDIT.md` (thin UI, local-first, token efficiency,
-smallest useful tool set, interchangeable models, reviewed boundaries, testable
-headless, anti-bloat) are the standing design constraints. `HARNESS.md` is the
-engineering log for the reasoning loop what's been measured and changed, and why
-each choice holds across weak and strong models.
+The product commitments are in [`PRINCIPLES.md`](PRINCIPLES.md) and
+[`NON-GOALS.md`](NON-GOALS.md). The model-directed runtime, implementation
+status, and remaining quality gates are tracked in
+[`ANALYTICAL-COMPUTER-ROADMAP.md`](ANALYTICAL-COMPUTER-ROADMAP.md); measured
+performance history is in [`PERFORMANCE-LOG.md`](PERFORMANCE-LOG.md).
 
 ## Stack
 
@@ -41,7 +36,7 @@ each choice holds across weak and strong models.
 |-------|--------|-----|
 | Shell | Tauri 2 | Small binary, Rust backend, system webview (no bundled Chromium) |
 | UI | SvelteKit + Svelte 5 + TS, `adapter-static`, SSR off | Static SPA, no server; compiles small |
-| Data engine | **SQLite** (`rusqlite`, `bundled` + `window`) behind the `DataEngine` trait | Already bundled (+0 crates); covers personal-analytics SQL. DuckDB was ~2/3 of the binary and ~all the build time (`docs/AUDIT.md` / `PERFORMANCE.md`). |
+| Data engine | **SQLite** (`rusqlite`, `bundled` + `window`) behind the `DataEngine` trait | Already bundled (+0 crates); covers personal-analytics SQL. DuckDB's size and build-time trade-offs are recorded in `PERFORMANCE.md` and `PERFORMANCE-LOG.md`. |
 | Data engine (opt-in) | DuckDB (`--features duckdb`) | Parquet, faster on large files, `SUMMARIZE`. Adds ~30 MB. |
 | App state | SQLite (`rusqlite`) | Settings, source cache, recent workspaces, and conversation metadata |
 | CSV/JSON import | `csv` crate + `serde_json`, own type sniffer (`data/sqlite.rs`) | DuckDB's `read_csv_auto` replacement; reuses the Excel type-inference idea |
@@ -147,8 +142,8 @@ boundary, not a domain-specific interpretation rule. `engine/analytics/` is the 
 deterministic SQL/stats/chart/verification logic with no knowledge that a model
 or a loop exists. The engine supplies safe consequences for the harness, never
 the reverse; `AnalyticsSource` is the one seam between them. See
-`docs/GOALS.md` and `docs/LIGHTWEIGHT.md` for the philosophy and scope behind
-that split.
+`docs/PRINCIPLES.md` and `docs/NON-GOALS.md` for the philosophy and scope
+behind that split.
 
 ![Fella analytical turn architecture](fella-harness-architecture.svg)
 
@@ -387,6 +382,7 @@ the **analytics module** (`engine/analytics/` — SQL, stats, charts, and
 verification pulled behind one `AnalyticsSource` seam, `depth_rule` /
 `aside_rule`, and the value-attribution verification check). The lean personal
 release removes the extension surfaces and keeps `fella.md` as the one explicit
-user-authored context file. Notable choices
-are logged in `docs/DECISIONS.md`; the harness's own dated engineering log is
-`docs/HARNESS.md`.
+user-authored context file. Notable choices are logged in
+`docs/DECISIONS.md`. The runtime design and delivery status are in
+`docs/ANALYTICAL-COMPUTER-ROADMAP.md`; measured harness results are in
+`docs/PERFORMANCE-LOG.md`.

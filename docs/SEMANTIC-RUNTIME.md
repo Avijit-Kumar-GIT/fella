@@ -1,7 +1,9 @@
 # Fella Semantic Runtime
 
 > Proposal for the long-term analytics harness. This describes the target
-> architecture, not a claim about what is already implemented.
+> architecture, not a claim about what is already implemented. The current
+> delivery status and remaining work are tracked in
+> [`ANALYTICAL-COMPUTER-ROADMAP.md`](ANALYTICAL-COMPUTER-ROADMAP.md).
 
 ## Purpose
 

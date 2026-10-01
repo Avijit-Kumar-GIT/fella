@@ -86,9 +86,9 @@ the pack layer cannot make the capability set "free" to grow. What it buys
 instead: a fresh install stays at zero augment commands until you opt in, and
 many packs can remix one capability for free (a `journal` pack and a `todo`
 pack can both be `capability: buffer`, just a different command/file). So a new
-`CAPABILITIES` entry is held to the same bar as a new built-in tool or the MCP
-transport (`ROADMAP.md`): a GitHub issue, real demand, and a `DECISIONS.md`
-entry first (2026-09-10) never added just because a pack idea wants one.
+`CAPABILITIES` entry is held to the same bar as a new built-in tool or an MCP
+transport: a GitHub issue, real demand, and a `DECISIONS.md` entry first
+(2026-09-10), never added just because a pack idea wants one.
 `buffer` and `grid` are expected to cover nearly everything a "quick capture"
 idea reduces to free text or a table; most new augment ideas should be new
 *packs*, not new capabilities.

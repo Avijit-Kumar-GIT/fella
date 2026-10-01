@@ -25,7 +25,7 @@ edition. The release gate is:
       production build.
 - [x] Run the hostile embedded-Python checks, including blocked host-file
       access, fuel exhaustion, bounded output, and the SQL bridge, then record
-      the result in `docs/SECURITY-REVIEW-v0.1.md` or a versioned successor —
+      the result in `docs/MEMORY-SECURITY-REVIEW.md` or a versioned successor —
       2026-09-20: 9 `python_tool` tests passed, including user cancellation.
 - [x] Run `scripts/check-memory.sh` in the optimized profile and record guest
       memory plus host RSS results in the security review. 2026-09-17: the
@@ -135,7 +135,7 @@ review.
       re-confirmed against the tree, the egress map, CSP active, and the
       embedded Python boundary plus its Wasmi/RustPython trusted-base caveat
       captured in the release notes.
-      — `docs/SECURITY-REVIEW-v0.1.md` exists (from the fresh-repo cut).
+      — the v0.1 security review was completed as part of the fresh-repo cut.
 
 ## 2. Cut the `fella` repo
 
@@ -198,8 +198,6 @@ review.
 - `gh repo edit Avijit-Kumar-GIT/fella --visibility public` (and
   `fella-extensions`). This is the point of no return.
 - Smoke `curl -fsSL https://lilfella.app/install.sh | sh` once both are live.
-- File the "Hosted pack marketplace" issue on `fella` from the `docs/ROADMAP.md`
-  bullet (labels `enhancement`, `help wanted`).
 
 ## Needs a decision / an owner action
 

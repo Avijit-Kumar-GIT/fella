@@ -1833,7 +1833,8 @@ impl EngineState {
 
     /// Decide whether a new correction updates an existing vocabulary note,
     /// is genuinely new, or just restates one already there -- "supersede,
-    /// don't append" (`docs/FOLDER-MEMORY.md`), done the way ChatGPT's `bio`
+    /// don't append" (`docs/ANALYTICAL-COMPUTER-ROADMAP.md`, milestone M5),
+    /// done the way ChatGPT's `bio`
     /// tool and Mem0/Zep do it: the model judges against the small existing
     /// list, not a keyword/position heuristic (which can't tell two
     /// rewordings of the same correction apart see `docs/DECISIONS.md`

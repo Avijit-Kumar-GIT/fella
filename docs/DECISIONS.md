@@ -50,9 +50,9 @@ and any `CODE_OF_CONDUCT.md` mention as folded into `CONTRIBUTING.md` (§Conduct
   harness rather than the reverse.
 - **2026-09-14** **`aside_rule` shipped: one bounded comparison query allowed
   on a plain category/segment lookup, not zero-cost as first designed.**
-  GOALS.md's bar was explicit -- ships only behind an eval case that proves it
-  helps, not on faith -- so it was built against a new tier (`bench/
-  aside-rule/`, 2 cases) and measured against `gemma4:31b`, not assumed. Two
+  The evaluation bar was explicit -- ship only behind an eval case that proves
+  it helps, not on faith -- so it was built against a new tier
+  (`bench/aside-rule/`, 2 cases) and measured against `gemma4:31b`, not assumed. Two
   different zero-extra-query wordings both scored 0/3: the example this rule
   needs most (a category being most of a larger total) is mathematically
   unreachable from the single scalar query a plain lookup runs -- "don't
@@ -68,9 +68,10 @@ and any `CODE_OF_CONDUCT.md` mention as folded into `CONTRIBUTING.md` (§Conduct
   sibling category to compare against) correctly skipping the follow-up
   entirely -- the cost is real but targeted, not paid on every plain lookup.
 - **2026-09-14** **"Lightweight" named as four separable axes (binary/dependency
-  weight, runtime performance, codebase simplicity, feature scope), each with its
-  own real evidence, in `docs/LIGHTWEIGHT.md`.** Prompted by the "enterprise-grade"
-  identity work raising a real question: does that push require DuckDB as the
+  weight, runtime performance, codebase simplicity, feature scope).** The former
+  note that formalized those axes was superseded; current measurements live in
+  `docs/PERFORMANCE.md` and `docs/PERFORMANCE-LOG.md`. Prompted by the
+  "enterprise-grade" identity work raising a real question: does that push require DuckDB as the
   default data engine? Answer: no. The retrieval-at-scale gap (fella#125) it would
   address has SQLite-compatible candidate fixes already on the roadmap
   (streaming/lazy ingestion, parallelism); DuckDB-as-default would reverse a
@@ -152,8 +153,8 @@ and any `CODE_OF_CONDUCT.md` mention as folded into `CONTRIBUTING.md` (§Conduct
   implemented. Rather than build that for a mechanism with no demonstrated
   win and a demonstrated failure, it's removed: `mark_stale()` /
   `record_recipe()` deleted, `## Recipes` in an existing memory file is
-  silently dropped on next load. See `FOLDER-MEMORY.md`'s "Recipes cut" note
-  and `HARNESS.md`'s Log.
+  silently dropped on next load. The implementation history and measured
+  memory results remain in `FOLDER-MEMORY.md` and `PERFORMANCE-LOG.md`.
 - **2026-09-10** **A new augment capability is gated like a new built-in
   tool: an issue, real demand, a `DECISIONS.md` entry first.** Packs vs.
   built-in commands make *no difference* to base binary size a capability
@@ -166,9 +167,9 @@ and any `CODE_OF_CONDUCT.md` mention as folded into `CONTRIBUTING.md` (§Conduct
   `capability: buffer` with a different command/file). Neither benefit needs
   or justifies a growing capability count. So `CAPABILITIES`
   (`engine/augment.rs`) is held to the same bar as the tool set (6 tools,
-  "smallest useful set") and the MCP transport (`ROADMAP.md` "would need a
-  positioning decision"): adding an entry needs a GitHub issue, demonstrated
-  demand, and a dated amendment here first not a pack author's idea. Working
+  "smallest useful set") and any external transport: adding an entry needs a
+  GitHub issue, demonstrated demand, and a dated amendment here first, not a
+  pack author's idea. Working
   assumption: `buffer` (free text) and `grid` (a table) already cover nearly
   everything a "quick capture" idea reduces to: new augment ideas should
   almost always be new *packs*, not new *capabilities*.
@@ -185,7 +186,7 @@ and any `CODE_OF_CONDUCT.md` mention as folded into `CONTRIBUTING.md` (§Conduct
   answer quality never depends on one.
   **This amends two locked lines** (like the 2026-08-29 MCP amendment):
   (1) "no generated artifacts / produces answers, not files" (2026-08-27,
-  `AUDIT.md`, `ARCHITECTURE.md`) — the **app** now writes a file into the
+  `PRINCIPLES.md`, `ARCHITECTURE.md`) — the **app** now writes a file into the
   workspace, but **only on an explicit user keystroke in an augment view**; the
   **agent's** tool set is unchanged and still has no write tool
   (`Registry::standard()`), so the model never writes. (2) `EXTENSIBILITY.md`
@@ -239,8 +240,8 @@ and any `CODE_OF_CONDUCT.md` mention as folded into `CONTRIBUTING.md` (§Conduct
   almost entirely *subtractive* release (12→3 shell actions, removed its memory
   tool, simpler compaction, smaller binary) and land better for it.
 - **2026-09-07** **Performance over prompt minimalism, within reason.** The
-  `agent_eval` "don't add scaffolding, remove ambiguity" rule (`HARNESS.md`)
-  applies to *correctness-neutral* changes. When added context measurably buys
+  `agent_eval` "don't add scaffolding, remove ambiguity" finding applies to
+  *correctness-neutral* changes. When added context measurably buys
   correctness — the motivating case is per-folder memory — the tokens are
   accepted. Guards: it must not regress the questions that don't need it, and
   the prompt stays permissive (no lock-step, no banning exploration; added
@@ -318,8 +319,8 @@ and any `CODE_OF_CONDUCT.md` mention as folded into `CONTRIBUTING.md` (§Conduct
   cost is hosting ops, human review of submitted packs, and support, none of
   which pay off before there's an audience. This does **not** amend a locked
   constraint (unlike the 2026-08-29 MCP entry): the design is unchanged, only the
-  rollout is held. Tracked in [`ROADMAP.md`](ROADMAP.md); becomes a GitHub issue
-  when the repo is public.
+  rollout was held. The later lean personal release closed the marketplace
+  surface; see [`LEAN-PERSONAL-RELEASE.md`](LEAN-PERSONAL-RELEASE.md).
 
 - **2026-09-02** **`catalog.json` is generated; first-party pack URLs track
   `main`; install counts will come from a Fella endpoint, not the app.** In
@@ -354,17 +355,15 @@ and any `CODE_OF_CONDUCT.md` mention as folded into `CONTRIBUTING.md` (§Conduct
   saved conversations. Earlier dated entries were rewritten to "Fella" in the
   same pass they describe the same decisions.
 
-- **2026-08-31** **First-party web tools deferred to the roadmap.** Considered
+- **2026-08-31** **First-party web tools deferred.** Considered
   `web_search` / `web_fetch` built-in tools (off by default, key-gated) so the
   model can answer what the folder cannot. Deferred: it needs a deliberate
   reversal of "the base makes one network call, to the model the user chose" and
-  grows the base's fixed tool set. Recorded in [`ROADMAP.md`](ROADMAP.md) under
-  "Would need a positioning decision"; a future pickup ships with its own entry
-  here, like the 2026-08-29 MCP amendment. General-knowledge answers when the
-  files genuinely cannot help (marked "not from your data", no measured figures)
-  are a smaller, separate change that does not need this reversal. Also started
-  [`ROADMAP.md`](ROADMAP.md): a themed wish-list of improvements that each reuse
-  an existing dependency or are frontend-only, so the base does not grow.
+  grows the base's fixed tool set. Reopening this requires a product and
+  security decision recorded here, like the 2026-08-29 MCP amendment.
+  General-knowledge answers when the files genuinely cannot help (marked
+  "not from your data", no measured figures)
+  are a smaller, separate change that does not need this reversal.
 
 - **2026-08-29** **`mcp` connector packs: `rmcp`, Streamable HTTP only, a
   `mcp` build feature.** The `mcp` pack kind connects to a **remote** MCP
@@ -501,7 +500,7 @@ and any `CODE_OF_CONDUCT.md` mention as folded into `CONTRIBUTING.md` (§Conduct
   returns the partial answer + evidence instead of dropping the question.
 - **2026-08-27** **SQLite is the default data engine; DuckDB moved behind
   `--features duckdb`.** `cargo bloat` showed DuckDB was likely >half the binary and
-  ~all the cold-build time (`AUDIT.md`, `PERFORMANCE.md`). SQLite (already bundled)
+  ~all the cold-build time (`PERFORMANCE.md`, `PERFORMANCE-LOG.md`). SQLite (already bundled)
   covers personal-analytics SQL. **pandas was rejected** as the replacement it would
   make the app depend on the user having Python + pandas + numpy + pyarrow + openpyxl
   installed, which the non-technical audience does not.
@@ -518,7 +517,7 @@ and any `CODE_OF_CONDUCT.md` mention as folded into `CONTRIBUTING.md` (§Conduct
 
 - **2026-08-27** Positioning locked as **personal analytics for non-developers**,
   read-only. The general-purpose task-agent spec is a *principles* reference, not a
-  feature target (`AUDIT.md`). No write tools, no permission dialogs, no artifacts.
+  feature target. No agent write tools, no permission dialogs, no generated artifacts.
 - **2026-08-27** Tool set trimmed 7 → 6: `inspect_source` dropped (`list_files` +
   `describe_schema` already cover path / kind / columns). "Smallest useful set."
 - **2026-08-27** System prompt sends table **names + row/column counts only**;

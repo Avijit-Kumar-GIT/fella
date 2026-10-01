@@ -29,7 +29,7 @@ used automatically: `time`, `du`, `strip`, `size` (binutils), `cargo tree`,
 | **`size` text/data/bss** | machine code / initialised data / zeroed data sections | text dominates; watch its trend |
 | **unique crates in the graph** | every third-party crate compiled into the build (`-e normal`, so runtime deps only) code to compile, audit and trust | fewer is better; adding a dependency adds to this |
 | **duplicate versions** | the same crate pulled in at two versions wasted compile time and binary bytes | 0, or a small known list (a Tauri app always has a handful) |
-| **cargo-bloat, by crate** (`--bloat`) | how many **bytes of the binary** each crate's code occupies. `libduckdb_sys` sits at the top that's the "does DuckDB earn its weight" question from `AUDIT.md`, now with a number | |
+| **cargo-bloat, by crate** (`--bloat`) | how many **bytes of the binary** each crate's code occupies. `libduckdb_sys` sits at the top; compare its measured cost with the historical trade-offs in `PERFORMANCE-LOG.md` | |
 | **incremental rebuild** | change one file, `cargo build` again your dev feedback loop | seconds |
 | **cold rebuild** | from `cargo clean`; dominated by DuckDB's C++ (~15 min). Only changes when dependencies change | one-time pain |
 | **`cargo-timing.html`** | a Gantt chart of which crate took how long to compile. Open it in a browser | |

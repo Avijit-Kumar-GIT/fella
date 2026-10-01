@@ -5,7 +5,7 @@
 //!
 //! Manual only there is no background/startup check. Fella makes this one
 //! extra network call (`api.github.com`) only when the user types `/update`;
-//! see `docs/SECURITY-REVIEW-v0.1.md`'s egress map.
+//! see the update-check boundary in the repository's `SECURITY.md`.
 //!
 //! Applying an update means replacing the binary that's currently running,
 //! which every OS restricts differently (Windows won't let anything

@@ -289,7 +289,7 @@ and workspace experience substantially more capable.
   downloads + checksum-verifies the right installer for your OS and
   installs it (Fella closes; reopen it once the installer finishes). Manual
   only there's still no automatic or background check. See `SECURITY.md`
-  and `docs/SECURITY-REVIEW-v0.1.md` for the egress entry this adds.
+  for the manually invoked update-check boundary.
 
 ### Fixed
 

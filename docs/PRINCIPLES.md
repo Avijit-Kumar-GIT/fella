@@ -32,13 +32,12 @@ refuses to. Referenced from [`WHY.md`](WHY.md); the refusals are in
 - **Credentials stay local and scoped.** An API key lives in `auth.json`
   (mode `0600`), never the settings database, `localStorage`, or the
   transcript.
-- **Anti-bloat in the base.** A new dependency needs a real justification.
-  No settings modal. Minimal dependencies, small binary, fast startup. The
-  codebase stays understandable by one person. "Lightweight" here is
-  actually four separable things (binary/dependency weight, runtime
-  performance, codebase simplicity, feature scope) — see
-  [`LIGHTWEIGHT.md`](LIGHTWEIGHT.md) for which parts of the engine are
-  allowed to spend weight on which axis, and which must not.
+- **Efficient, maintainable software.** Keep startup, memory, build size, and
+  code complexity visible through measurement. A new dependency needs a real
+  justification, but no arbitrary size or tool-count cap should prevent a
+  meaningful improvement to analytical quality. Current measurements and
+  profiling steps are in [`PERFORMANCE.md`](PERFORMANCE.md) and
+  [`PERFORMANCE-LOG.md`](PERFORMANCE-LOG.md).
 - **A fixed, small tool set.** The personal release keeps customization to
   provider/model settings, appearance, and the user-authored `fella.md` file.
   Pack, augment, and connector designs remain archived rather than becoming

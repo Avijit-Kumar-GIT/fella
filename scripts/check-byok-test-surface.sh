@@ -10,7 +10,7 @@ cd "$ROOT"
 # Keep local loopback fake-provider servers allowed; block the well-known
 # Ollama server, local setup commands, and legacy env/config spellings.
 PATTERN="(?i)localhost:11434|127\\.0\\.0\\.1:11434|fake_ollama|probe_ollama|OLLAMA_|ollama[[:space:]]+(pull|serve)|ollama[[:space:]]*\\(local\\)|local[[:space:]]+ollama|[\"']ollama[\"']"
-TARGETS=(src-tauri/tests src-tauri/examples bench other-resources/benchmarks.mdx other-resources/evaluation.mdx)
+TARGETS=(src-tauri/tests src-tauri/examples bench docs/site/other-resources/benchmarks.mdx docs/site/other-resources/evaluation.mdx)
 
 if matches=$(rg -n -e "$PATTERN" "${TARGETS[@]}" 2>/dev/null); then
 	printf '%s\n' "Local Ollama assumptions found in the test/benchmark surface:" >&2

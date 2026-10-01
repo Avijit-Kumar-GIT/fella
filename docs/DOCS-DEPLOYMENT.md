@@ -12,7 +12,7 @@ the guide.
 | Marketing, install scripts, and project thesis | `https://lilfella.app` | `fella-web` Worker |
 | Product and contributor documentation | `https://docs.lilfella.app` | Mintlify, sourced from `fella` |
 | Legacy static guide | Removed | `fella-web/marketing/docs.html` is deleted |
-| Documentation source | Root MDX files and `docs.json` | `fella` `main` branch |
+| Documentation source | `docs/site/` (Mintlify project root) | `fella` `main` branch |
 
 This is a subdomain, not a subpath. Mintlify owns `docs.lilfella.app`
 directly via its own custom-domain flow (standard TXT + CNAME verification,
@@ -35,14 +35,18 @@ Anthropic's) actually use.
    `Avijit-Kumar-GIT/fella` repository.
 2. Create or select the Fella documentation project and set its production
    branch to `main`.
-3. Set the documentation root to the repository root. The project must see
-   `docs.json`, `index.mdx`, the page directories, `logo.svg`, and
-   `favicon.svg`.
-4. Keep the repository's `.mintignore` active. It excludes application source,
-   fixtures, benchmarks, and internal engineering notes from the published
-   site.
+3. Set the documentation root to `docs/site` (relative to the repository
+   root). That directory contains `docs.json`, `index.mdx`, the page
+   directories, `custom.css`, the logo and favicon, and the stylesheet fonts.
+   The internal engineering notes remain in the sibling `docs/` directory.
+4. The Mintlify root is isolated to public documentation and its assets, so
+   application source, benchmark fixtures, and internal engineering notes
+   are outside the published content tree.
 5. Use the Mintlify preview or a branch deployment to review documentation
    changes before merging them into `main`.
+
+For a local preview, install the Mintlify CLI and run `mint dev` from
+`docs/site`—the directory containing `docs.json`.
 
 Mintlify deploys changes from the connected branch. No generated documentation
 output is committed to this repository.

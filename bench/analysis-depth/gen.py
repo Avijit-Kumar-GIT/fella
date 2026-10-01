@@ -26,8 +26,8 @@ Every gold value is computed from the copied files, not hand-typed.
 Explicit non-goal: `depth_rule` also says to *lead* with the plain-language
 finding before the numbers. This tier does not grade prose order --
 substring matching can't tell "led with" from "mentioned somewhere", and
-GOALS.md names decomposition/correlation correctness as the hole, not
-phrasing order.
+The benchmark targets decomposition/correlation correctness, not phrasing
+order.
 
     python3 gen.py
     agent_eval bench --dir bench/analysis-depth \
