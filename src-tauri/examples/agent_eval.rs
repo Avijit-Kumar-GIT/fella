@@ -262,6 +262,13 @@ async fn run_case(
     }
 }
 
+fn require_successful_run(result: RunResult, context: &str) -> Result<RunResult, String> {
+    match result.err.as_deref() {
+        Some(error) => Err(format!("{context}: {}", eval_error_class(error))),
+        None => Ok(result),
+    }
+}
+
 /// Give every evaluator process its own transcript namespace. The prefix is
 /// intentionally placed before the case id because conversation archives use
 /// only the first 32 alphanumeric characters as their filename key.
@@ -2321,8 +2328,12 @@ async fn cmd_session_memory(
     model: &str,
     g: &Goldens,
     iters: usize,
-) -> Vec<CaseScore> {
-    set_model(engine, model);
+) -> Result<Vec<CaseScore>, String> {
+    if !set_model(engine, model) {
+        return Err(format!(
+            "session-memory could not configure model {model:?}"
+        ));
+    }
     let tg = &g.tables["txns_00"];
     let by_cat = tg.by_category.clone();
     let (c1, a1) = by_cat
@@ -2359,11 +2370,18 @@ async fn cmd_session_memory(
         let (mut cd, mut steps, mut ptok, mut ctok) = (0f32, 0usize, 0u64, 0u64);
         for it in 0..iters {
             let conv = format!("sm-{label}-{it}");
-            run_case(engine, &conv, &q1, None).await; // turn 1 primes memory
+            require_successful_run(
+                run_case(engine, &conv, &q1, None).await,
+                &format!("session-memory {label}, iteration {}, turn 1", it + 1),
+            )?;
+            // Turn 1 primes memory; only turn 2 is scored.
             if !keep {
                 engine.forget_conversation(&conv);
             }
-            let r2 = run_case(engine, &conv, &q2, None).await;
+            let r2 = require_successful_run(
+                run_case(engine, &conv, &q2, None).await,
+                &format!("session-memory {label}, iteration {}, turn 2", it + 1),
+            )?;
             if grade(&r2, &c2case.gold) {
                 oks += 1;
             }
@@ -2410,7 +2428,12 @@ async fn cmd_session_memory(
         });
     }
     let _ = (a1, &q1, tg);
-    all
+    Ok(all)
+}
+
+fn report_eval_error(error: String) -> ! {
+    eprintln!("eval failed: {error}");
+    std::process::exit(1)
 }
 
 fn yn(b: bool) -> String {
@@ -3151,7 +3174,10 @@ async fn main() {
         "folder-scale" => cmd_folder_scale(&engine, &models[0], &ws, iters).await,
         "model-ladder" => cmd_model_ladder(&engine, &cases, &models, judge, iters).await,
         "robustness" => cmd_robustness(&engine, &models[0], &ws, iters).await,
-        "session-memory" => cmd_session_memory(&engine, &models[0], &g, iters).await,
+        "session-memory" => match cmd_session_memory(&engine, &models[0], &g, iters).await {
+            Ok(scores) => scores,
+            Err(error) => report_eval_error(error),
+        },
         "memory" => cmd_memory(&engine, &models[0], &data_dir, iters).await,
         "memory-axes" => cmd_memory_axes(&engine, &models[0], &data_dir, iters).await,
         "memory-sandbox" => {
@@ -3182,7 +3208,10 @@ async fn main() {
         "all" => {
             let mut v = cmd_accuracy(&engine, &cases, &models, judge, iters).await;
             v.extend(cmd_robustness(&engine, &models[0], &ws, iters).await);
-            v.extend(cmd_session_memory(&engine, &models[0], &g, iters).await);
+            match cmd_session_memory(&engine, &models[0], &g, iters).await {
+                Ok(scores) => v.extend(scores),
+                Err(error) => report_eval_error(error),
+            }
             v.extend(cmd_memory(&engine, &models[0], &data_dir, iters).await);
             v
         }
@@ -3267,6 +3296,27 @@ mod tests {
             "transport/connectivity failure (provider details withheld)"
         );
         assert!(!summary.contains("sk-secret"));
+    }
+
+    #[test]
+    fn session_memory_propagates_failed_turns_without_provider_details() {
+        let mut result = rr("", Vec::new());
+        result.err = Some("Fella couldn't reach the model: Incorrect key sk-secret".into());
+
+        let error =
+            match require_successful_run(result, "session-memory memory on, iteration 2, turn 1") {
+                Ok(_) => panic!("failed turn must not be scored"),
+                Err(error) => error,
+            };
+
+        assert!(error.contains("memory on, iteration 2, turn 1"));
+        assert!(error.contains("transport/connectivity failure"));
+        assert!(!error.contains("sk-secret"));
+    }
+
+    #[test]
+    fn session_memory_accepts_successful_turns() {
+        assert!(require_successful_run(rr("answer", Vec::new()), "turn 2").is_ok());
     }
 
     fn rr(text: &str, ev: Vec<EvidenceItem>) -> RunResult {
