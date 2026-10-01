@@ -1,0 +1,100 @@
+schema_version: 1
+
+# Capabilities are the primary reporting slices. Keep these broad and stable;
+# use data_conditions for specific operations and file irregularities.
+capabilities:
+  - id: inspect_and_select
+    definition: Find relevant files, understand their contents and limits, and avoid distractors.
+  - id: interpret_and_normalize
+    definition: Map user language to fields and records; resolve labels, dates, units, signs, and missingness.
+  - id: plan_and_decompose
+    definition: Turn a broad or compound request into the required subquestions and analysis steps.
+  - id: maintain_conversation_context
+    definition: Carry relevant facts, measures, filters, and references across turns without confusing them with new workspace evidence.
+  - id: compute_and_compare
+    definition: Correctly filter, aggregate, rank, derive, compare, and summarize data.
+  - id: combine_sources
+    definition: Relate multiple tables and documents with appropriate keys, grain, and scope.
+  - id: verify_and_explain
+    definition: Check calculations and assumptions, ground claims in sources, and communicate limits clearly.
+  - id: visualize
+    definition: Choose and produce a chart whose values, grouping, labels, units, and time axis are correct.
+  - id: clarify_and_continue
+    definition: Ask for material missing information, incorporate the answer, and continue the analysis.
+  - id: handle_unanswerable
+    definition: Distinguish absent evidence or unsupported prediction from an answerable analysis.
+  - id: tool_proportionality
+    definition: Use the available inspection and computation tools appropriately without unnecessary work.
+
+# Topic tags describe the data's subject, not the analytical operation.
+domains:
+  - personal_finance
+  - health_wellness
+  - reading_media
+  - travel
+  - housing_household
+  - subscriptions
+  - contacts_relationships
+  - goals_planning
+  - public_open_data
+  - cross_domain
+  - general
+
+file_formats:
+  - csv
+  - tsv
+  - json
+  - jsonl
+  - xlsx
+  - xls
+  - parquet
+  - pdf
+  - txt
+  - md
+  - log
+
+data_conditions:
+  - missing_values
+  - malformed_values
+  - mixed_date_formats
+  - nonstandard_dates
+  - inconsistent_units
+  - inconsistent_signs
+  - category_aliases
+  - near_duplicate_labels
+  - duplicate_records
+  - summary_rows
+  - sparse_or_short_series
+  - conflicting_sources
+  - cross_file_keys
+  - repeated_or_overlapping_files
+  - distractor_files
+  - unstructured_notes
+  - mixed_formats
+  - large_workspace
+  - ambiguous_scope
+  - unsupported_prediction
+
+interaction_modes:
+  - single_turn
+  - follow_up
+  - clarification_episode
+  - multi_step_episode
+
+answerability:
+  - answerable
+  - clarification_needed
+  - unsupported
+  - no_analysis_needed
+
+source_types:
+  - controlled_synthetic
+  - public_dataset
+  - consented_user_example
+  - mixed
+
+# Workspace exposure must say what the agent actually receives. The legacy
+# agent_eval bench runner stages only the files listed for each case.
+workspace_scopes:
+  - listed_files
+  - entire_workspace

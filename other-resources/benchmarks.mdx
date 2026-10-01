@@ -26,10 +26,23 @@ Fella compares the same model under two conditions: `bare`, where fixture files 
 
 | Battery | Current shape | Coverage |
 | --- | --- | --- |
-| `bench/folder-qa/` | 66 cases today; published lift result used its earlier 64-case version | Everyday lookup, aggregate, text search, small joins, distractors, and refusal cases across personal-data domains |
-| `bench/folder-qa-hard/` | 16 cases | Rank-2 queries, conversion, compound filters, non-standard dates, five-file synthesis, and chart grading |
+| `bench/folder-qa/` | 79 task records in the current checkout; the published lift result used an earlier 64-case version | One controlled synthetic personal profile; everyday lookup, aggregate, text search, small joins, selected distractors, and refusal cases |
+| `bench/folder-qa-hard/` | 16 cases | Rank-2 queries, conversion, compound filters, non-standard dates, five-file synthesis, and chart grading over copied data from the same profile |
+| `bench/fqa-bench/suites/uci-bike-sharing/` | 11 draft episodes | Public UCI mobility data; complete small workspace, year/month aggregation, follow-up, reconciliation, chart, and unsupported requests; clean and single-domain |
 
-The easy battery covers CSV, TSV, JSON, NDJSON/JSONL, Markdown, XLSX, PDF, and plain text. Gold values are generated from fixtures rather than manually copied into the grader. The hard battery reuses tabular/text fixtures and does not add XLSX or PDF cases.
+The core battery covers CSV, TSV, JSON, NDJSON/JSONL, Markdown, XLSX, PDF, and plain text. Gold values are generated from fixtures rather than manually copied into the grader. Each `agent_eval bench` case stages only the files named by that case, so this is mostly a selected-file analysis battery—not a full-folder discovery benchmark. The hard battery reuses the same synthetic profile and does not add independent source diversity.
+
+The evolving [Fella FolderQA Benchmark (FQA-Bench)](/other-resources/fqa-bench) methodology documents what these batteries do and do not establish. The current `folder-qa` battery is a development baseline, not yet a representative, release-grade FQA-Bench. The UCI suite is a first independently sourced anchor, not a score or proof of generalization; its answer keys are still drafts pending independent review.
+
+Before running the UCI anchor, validate its pinned data and task adapter:
+
+```bash
+python3 bench/fqa-bench/suites/uci-bike-sharing/prepare_workspace.py --check
+python3 bench/fqa-bench/build_runner_cases.py --suite-dir bench/fqa-bench/suites/uci-bike-sharing --check
+python3 bench/fqa-bench/suites/uci-bike-sharing/validate_suite.py
+```
+
+Then use the same paired-run protocol above, replacing `--dir ../bench/folder-qa` with `--dir ../bench/fqa-bench/suites/uci-bike-sharing`. Keep run outputs outside the checked-in fixtures.
 
 ## Run the paired comparison
 
@@ -84,7 +97,7 @@ Nine of the ten measured per-model confidence intervals excluded zero. `muse-gli
 3. Separate model/endpoint failures from graded wrong answers.
 4. Inspect per-case evidence; a headline score can hide repeated minority failures.
 5. Regenerate gold data after fixture changes and commit fixture, generator, and grading changes together.
-6. Do not compare a new 66-case run directly with the published 64-case result without accounting for the added cases.
+6. Do not compare a new 79-case run directly with the published 64-case result without accounting for the changed task set. The checked-in `out/taxonomy.md` is also a 64-case report, not a rollup of today's 79 task records.
 
 These results are dated measurements, not guarantees for another model, endpoint, folder, prompt, or Fella revision. See the maintained [harness comparison](https://github.com/Avijit-Kumar-GIT/fella/blob/main/docs/HARNESS-COMPARISON.md) for the full model table, failure analysis, and current commands.
 

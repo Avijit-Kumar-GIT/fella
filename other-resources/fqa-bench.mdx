@@ -1,0 +1,54 @@
+---
+title: "Fella FolderQA Benchmark"
+description: "How Fella evaluates analytics over mounted folders."
+icon: "flask-conical"
+---
+
+# Fella FolderQA Benchmark
+
+FQA-Bench is Fella's internal standard for measuring whether its model-driven harness can analyze files in a mounted folder. It evaluates the **complete Fella loop**—not just whether a model can produce a plausible number in one prompt.
+
+## What it measures
+
+The benchmark follows an analyst's work: inspect the available data, interpret and decompose the request, analyze and verify the result, then explain it or ask a focused clarification if an important detail is missing.
+
+Tasks are organized by capability. Topics, formats, and data conditions are cross-cutting tags.
+
+| Capability family | What a task tests |
+| --- | --- |
+| Inspect and select | Find relevant files, understand their contents, and avoid distractors |
+| Interpret and normalize | Map natural language to fields, dates, units, labels, and missing values |
+| Plan and decompose | Identify the analyses needed for a compound request |
+| Maintain conversation context | Carry the relevant prior measure, filters, or reference into a follow-up |
+| Compute and compare | Apply filters, aggregations, rankings, and derived calculations correctly |
+| Combine sources | Relate multiple files with the right keys, grain, and scope |
+| Verify and explain | Ground conclusions, communicate assumptions, and state limits |
+| Visualize | Match chart values, grouping, labels, units, and time buckets to the data |
+| Clarify and continue | Ask about material ambiguity and use the answer in the next turn |
+| Handle unanswerable requests | Avoid inventing results when the folder cannot support them |
+
+One episode can test several capabilities, but gets one primary capability for diagnosis. FQA-Bench reports results by capability and topical domain with task counts through a tag-aware post-run utility. A single overall percentage can hide important weaknesses.
+
+For existing `agent_eval --json` results, a small report utility joins case IDs to the canonical tags and prints separate slices:
+
+```bash
+python3 bench/fqa-bench/report_slices.py \
+  --tasks bench/fqa-bench/suites/uci-bike-sharing/tasks.jsonl \
+  --results /path/to/run.json
+```
+
+## How tasks are built and scored
+
+An episode pairs a frozen workspace with a natural-language request or conversation. Its grading contract specifies the intended analytical result and acceptable behavior, rather than requiring exact prose or one internal query plan. Numeric results, table dimensions, and chart series are checked against independently verified values where possible. Ambiguity and response usefulness receive human review; any automated judge must be checked against those labels.
+
+Development tasks and blind evaluation tasks are split by workspace and data source, not by question. The benchmark records the model, harness configuration, code revision, fixture hash, grader, run validity, traces, cost, and latency so comparisons can be reproduced.
+
+## Current scope and limitations
+
+The methodology is under development. The existing `folder-qa` battery contains **79 task records** over one controlled synthetic personal profile and eight file extensions. It is useful for development, but the current runner stages only each task's listed files. Most tasks are single-turn, and the battery does not yet test explicit clarification episodes or broad full-folder discovery. The harder battery reuses the same underlying profile, so it is not an independent sample.
+
+An initial 11-task UCI Bike Sharing suite now provides an independently sourced public-data anchor. Its tasks see the complete three-file workspace, including a daily table, a reproducible monthly rollup from the hourly source, and a field guide. It tests aggregation, a prior-turn follow-up, cross-grain reconciliation, chart values, and unsupported requests. It is clean data from one mobility domain, not a stand-in for messy personal folders; all task tags are still provisional and the answer keys need independent review.
+
+FQA-Bench is not yet evidence that Fella has been validated on production customer workflows or every kind of personal data. New independent workspaces, whole-folder discovery tasks, messy conditions across domains, and clarification episodes are needed before making broader capability claims. Because real personal analytics data is sensitive, the benchmark can begin with controlled synthetic workspaces and licensed public datasets; it should label those sources honestly rather than imply access to real customer workflows.
+
+See the [benchmark run guide](/other-resources/benchmarks) and the [methodology and data audit on GitHub](https://github.com/Avijit-Kumar-GIT/fella/tree/main/bench/fqa-bench).

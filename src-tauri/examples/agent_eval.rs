@@ -45,7 +45,7 @@
 //!   {"id": "...", "question": "...", "files": ["payments.csv"],
 //!    "gold": {"figures": [123.45]} | {"approx": [0.18, 0.005]}
 //!          | {"contains": ["Rent"]} | {"must_not_contain": ["deleted", "1000000"]}
-//!          | {"chart": {"kind": "line", "labels": ["Jan","Feb"], "series": [{"name": "Rent", "values": [1200.0, 1200.0]}], "contains": ["trend"]}}
+//!          | {"chart": {"kind": "line", "labels": ["Jan","Feb"], "series": [{"name": "Rent", "values": [1200.0, 1200.0]}], "require_label_order": true, "contains": ["trend"]}}
 //!          | {"no_chart": true, "contains": ["1200"]}
 //!          | "refusal" | "notool",
 //!    "tier": "easy", "reference": "...",
@@ -55,10 +55,10 @@
 //! on the same conversation before `question` -- for cases that only make
 //! sense with context already established (a fact stated earlier, pressure
 //! built up across turns). Only `question`'s answer is graded.
-//! `chart` grades the `make_chart` tool call itself (labels + numeric series,
-//! order-agnostic, substring-matched labels) -- not just a figure mentioned
-//! in the prose, so a model that computes the right numbers but never charts
-//! them still fails a chart case.
+//! `chart` grades the `make_chart` tool call itself (labels + numeric series;
+//! order-agnostic by default, or strict when `require_label_order` is set) --
+//! not just a figure mentioned in the prose, so a model that computes the right
+//! numbers but never charts them still fails a chart case.
 //! Env:  EVAL_SHOW_ANSWERS=1  print every answer + its evidence to stderr
 //!
 //! A --models entry is `provider/model` (`xai/grok-4.3`,
@@ -108,6 +108,7 @@ enum Gold {
         labels: Vec<&'static str>,
         series: Vec<ChartSeries>,
         contains: Vec<&'static str>,
+        require_label_order: bool,
     },
     /// The answer must stay in prose and must not emit a chart evidence item.
     /// This catches cases where a chart would add noise: one figure, flat data,
@@ -408,6 +409,7 @@ fn grade(r: &RunResult, gold: &Gold) -> bool {
             labels,
             series,
             contains,
+            require_label_order,
         } => {
             let Some(chart) = r.evidence.iter().rev().find_map(|e| e.chart.as_ref()) else {
                 return false;
@@ -434,14 +436,21 @@ fn grade(r: &RunResult, gold: &Gold) -> bool {
             // reasonably label a month either way and both are correct.
             let label_eq =
                 |got: &str, want: &str| want.split('|').any(|alt| fuzzy_eq(got, alt.trim()));
-            // Order-agnostic: a model may chart the same categories/months in a
-            // different sequence (by rank instead of chronological, say) and
-            // still be right. Each gold label just needs to appear somewhere.
-            let Some(label_at): Option<Vec<usize>> = labels
-                .iter()
-                .map(|w| chart.labels.iter().position(|g| label_eq(g, w)))
-                .collect()
-            else {
+            // Most category comparisons are order-agnostic. Time-series tasks
+            // can opt into calendar/order semantics explicitly.
+            let label_at: Option<Vec<usize>> = if *require_label_order {
+                labels
+                    .iter()
+                    .zip(&chart.labels)
+                    .all(|(want, got)| label_eq(got, want))
+                    .then(|| (0..labels.len()).collect())
+            } else {
+                labels
+                    .iter()
+                    .map(|want| chart.labels.iter().position(|got| label_eq(got, want)))
+                    .collect()
+            };
+            let Some(label_at) = label_at else {
                 return false;
             };
             let right_series = series.iter().all(|want| {
@@ -503,10 +512,16 @@ fn gold_reference(gold: &Gold) -> String {
             labels,
             series,
             contains,
+            require_label_order,
         } => format!(
-            "the answer must include a{} chart with labels [{}] and series {}{}",
+            "the answer must include a{} chart with labels [{}]{} and series {}{}",
             kind.map(|k| format!(" {k}")).unwrap_or_default(),
             labels.join(", "),
+            if *require_label_order {
+                " in the specified order"
+            } else {
+                ""
+            },
             series
                 .iter()
                 .map(|s| format!(
@@ -1981,6 +1996,8 @@ struct BenchChartGold {
     labels: Vec<String>,
     series: Vec<ChartSeries>,
     #[serde(default)]
+    require_label_order: bool,
+    #[serde(default)]
     contains: Vec<String>,
 }
 
@@ -2031,6 +2048,7 @@ impl BenchGold {
                 labels: chart.labels.iter().map(|s| leak(s)).collect(),
                 series: chart.series,
                 contains: chart.contains.iter().map(|s| leak(s)).collect(),
+                require_label_order: chart.require_label_order,
             },
             BenchGold::NoChart { no_chart, contains } => {
                 if !no_chart {
@@ -3693,6 +3711,7 @@ mod tests {
                 values: vec![1200.0, 1200.0],
             }],
             contains: Vec::new(),
+            require_label_order: false,
         };
         let charted = rr(
             "Here's your rent by month.",
@@ -3724,6 +3743,36 @@ mod tests {
             )],
         );
         assert!(grade(&reordered, &chart_gold));
+        let ordered_chart_gold = Gold::Chart {
+            kind: None,
+            labels: vec!["Jan", "Feb"],
+            series: vec![ChartSeries {
+                name: "Rent".into(),
+                values: vec![1200.0, 900.0],
+            }],
+            contains: Vec::new(),
+            require_label_order: true,
+        };
+        assert!(grade(
+            &rr(
+                "Chronological chart.",
+                vec![ev_chart(
+                    &["Jan", "Feb"],
+                    vec![("Rent", vec![1200.0, 900.0])]
+                )]
+            ),
+            &ordered_chart_gold
+        ));
+        assert!(!grade(
+            &rr(
+                "The same points in reverse order.",
+                vec![ev_chart(
+                    &["Feb", "Jan"],
+                    vec![("Rent", vec![900.0, 1200.0])]
+                )]
+            ),
+            &ordered_chart_gold
+        ));
         // wrong category on a two-series chart isn't rescued by fuzzy label match
         let two_series_gold = Gold::Chart {
             kind: None,
@@ -3739,6 +3788,7 @@ mod tests {
                 },
             ],
             contains: Vec::new(),
+            require_label_order: false,
         };
         let swapped_series = rr(
             "chart",
@@ -3765,6 +3815,7 @@ mod tests {
                 },
             ],
             contains: Vec::new(),
+            require_label_order: false,
         };
         let aliased = rr(
             "chart",
@@ -3786,6 +3837,7 @@ mod tests {
                 values: vec![2234.58, 2119.09],
             }],
             contains: Vec::new(),
+            require_label_order: false,
         };
         let iso_labeled = rr(
             "chart",
@@ -3814,6 +3866,7 @@ mod tests {
                 values: vec![1200.0, 1200.0],
             }],
             contains: vec!["rent", "steady"],
+            require_label_order: false,
         };
         assert!(grade(
             &rr(
@@ -4038,7 +4091,16 @@ mod tests {
         ));
         assert!(matches!(
             g(r#"{"chart":{"labels":["Jan","Feb"],"series":[{"name":"Rent","values":[1200.0,1200.0]}]}}"#),
-            Gold::Chart { kind: None, labels, series, contains } if labels == vec!["Jan", "Feb"] && series.len() == 1 && contains.is_empty()
+            Gold::Chart { kind: None, labels, series, contains, require_label_order: false } if labels == vec!["Jan", "Feb"] && series.len() == 1 && contains.is_empty()
+        ));
+        assert!(matches!(
+            g(
+                r#"{"chart":{"labels":["Jan","Feb"],"series":[{"name":"Rent","values":[1200.0,900.0]}],"require_label_order":true}}"#
+            ),
+            Gold::Chart {
+                require_label_order: true,
+                ..
+            }
         ));
         assert!(matches!(
             g(r#"{"chart":{"kind":"line","labels":["Jan","Feb"],"series":[{"name":"Rent","values":[1200.0,1200.0]}],"contains":["steady"]}}"#),
@@ -4071,6 +4133,35 @@ mod tests {
             Some(InterpretationStatus::Grounded)
         );
         assert_eq!(spec.expected_plan, Some(PlanStrategy::CompiledSql));
+    }
+
+    #[test]
+    fn uci_bike_fqa_adapter_loads_complete_episodes() {
+        let suite = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../bench/fqa-bench/suites/uci-bike-sharing");
+        let cases = load_bench_dir(&suite);
+        assert_eq!(cases.len(), 11);
+        assert!(cases.iter().all(|(files, _, _)| files.len() == 3));
+        assert!(cases
+            .iter()
+            .any(|(_, setup, case)| { case.id == "bike-followup-next-year" && setup.len() == 1 }));
+        assert!(cases.iter().any(|(_, _, case)| {
+            case.id == "bike-monthly-chart-2012"
+                && matches!(
+                    case.gold,
+                    Gold::Chart {
+                        require_label_order: true,
+                        ..
+                    }
+                )
+        }));
+        assert_eq!(
+            cases
+                .iter()
+                .filter(|(_, _, case)| matches!(case.gold, Gold::Refusal))
+                .count(),
+            2
+        );
     }
 
     #[test]

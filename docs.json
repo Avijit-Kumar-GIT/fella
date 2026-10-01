@@ -142,6 +142,7 @@
             "group": "Testing and evaluation",
             "icon": "test-tube",
             "pages": [
+              "other-resources/fqa-bench",
               "other-resources/benchmarks",
               "other-resources/evaluation"
             ]
