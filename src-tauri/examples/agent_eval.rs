@@ -2480,6 +2480,56 @@ fn write_messy_spend(dir: &Path) -> (f64, f64) {
     (rent_all, rent_literal)
 }
 
+struct EvalScratchWorkspace {
+    path: PathBuf,
+    memory_path: PathBuf,
+}
+
+impl EvalScratchWorkspace {
+    fn create(prefix: &str, data_dir: &Path) -> Result<Self, String> {
+        for attempt in 0..32 {
+            let nonce = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos();
+            let path = std::env::temp_dir()
+                .join(format!("{prefix}-{}-{nonce}-{attempt}", std::process::id()));
+            match std::fs::create_dir(&path) {
+                Ok(()) => {
+                    let memory_path = memory::path_for(data_dir, &path);
+                    return Ok(Self { path, memory_path });
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => {
+                    return Err(format!(
+                        "could not create scratch workspace for {prefix}: {}",
+                        error.kind()
+                    ));
+                }
+            }
+        }
+        Err(format!(
+            "could not allocate a unique scratch workspace for {prefix}"
+        ))
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+
+    fn memory_path(&self) -> &Path {
+        &self.memory_path
+    }
+}
+
+impl Drop for EvalScratchWorkspace {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+        let _ = std::fs::remove_file(&self.memory_path);
+        let _ = std::fs::remove_file(self.memory_path.with_extension("episodes.jsonl"));
+    }
+}
+
 /// Per-folder memory, cross-session: in session 1 the user asks about rent and
 /// then *corrects* Fella ("housing and mortgage count as rent too"). Session 2
 /// is a **cold conversation** (memory is the only carry) that asks for total
@@ -2490,39 +2540,44 @@ async fn cmd_memory(
     model: &str,
     data_dir: &Path,
     iters: usize,
-) -> Vec<CaseScore> {
-    set_model(engine, model);
+) -> Result<Vec<CaseScore>, String> {
+    if !set_model(engine, model) {
+        return Err(format!("memory eval could not configure model {model:?}"));
+    }
     let iters = iters.max(1);
 
-    let ws = std::env::temp_dir().join("fella-mem-bench");
-    let _ = std::fs::remove_dir_all(&ws);
-    let (rent_all, rent_literal) = write_messy_spend(&ws);
+    let scratch = EvalScratchWorkspace::create("fella-mem-bench", data_dir)?;
+    let ws = scratch.path();
+    let (rent_all, rent_literal) = write_messy_spend(ws);
     std::env::set_var("FELLA_MEMORY", "1");
-    let mem = memory::path_for(data_dir, &ws);
-    let _ = std::fs::remove_file(&mem);
-    let _ = std::fs::remove_file(mem.with_extension("episodes.jsonl"));
-    if engine.open_workspace(&ws).is_err() {
-        println!("(memory) could not open workspace");
-        return Vec::new();
-    }
+    let mem = scratch.memory_path();
+    engine
+        .open_workspace(ws)
+        .map_err(|error| format!("memory eval could not open scratch workspace: {error}"))?;
 
     // Session 1: look at the categories, then correct Fella's model of "rent".
     let prime = "xs-prime";
     engine.forget_conversation(prime);
-    let p1 = run_case(
-        engine,
-        prime,
-        "what spending categories are in spend.csv?",
-        None,
-    )
-    .await;
-    let p2 = run_case(
-        engine,
-        prime,
-        "actually, for rent totals count HOUSING and mortgage as rent too",
-        None,
-    )
-    .await;
+    let p1 = require_successful_run(
+        run_case(
+            engine,
+            prime,
+            "what spending categories are in spend.csv?",
+            None,
+        )
+        .await,
+        "memory eval primer, turn 1",
+    )?;
+    let p2 = require_successful_run(
+        run_case(
+            engine,
+            prime,
+            "actually, for rent totals count HOUSING and mortgage as rent too",
+            None,
+        )
+        .await,
+        "memory eval primer, turn 2",
+    )?;
     println!("\n# Per-folder memory (cross-session)  \u{b7}  `{model}`   ({iters} iter(s))\n");
     println!("_session 1, turn 1_: {}", first_line(&p1.text));
     println!("_session 1, turn 2 (correction)_: {}", first_line(&p2.text));
@@ -2560,7 +2615,10 @@ async fn cmd_memory(
         for it in 0..iters {
             let conv = format!("xs-cold-{}-{it}", if on { "on" } else { "off" });
             engine.forget_conversation(&conv);
-            let r = run_case(engine, &conv, q, None).await;
+            let r = require_successful_run(
+                run_case(engine, &conv, q, None).await,
+                &format!("memory eval {label}, iteration {}, cold turn", it + 1),
+            )?;
             if grade(&r, &gold) {
                 oks += 1;
             }
@@ -2626,7 +2684,7 @@ async fn cmd_memory(
             err: None,
         });
     }
-    all
+    Ok(all)
 }
 
 /// A vocabulary-note snapshot after a scripted multi-session run, for
@@ -3178,7 +3236,10 @@ async fn main() {
             Ok(scores) => scores,
             Err(error) => report_eval_error(error),
         },
-        "memory" => cmd_memory(&engine, &models[0], &data_dir, iters).await,
+        "memory" => match cmd_memory(&engine, &models[0], &data_dir, iters).await {
+            Ok(scores) => scores,
+            Err(error) => report_eval_error(error),
+        },
         "memory-axes" => cmd_memory_axes(&engine, &models[0], &data_dir, iters).await,
         "memory-sandbox" => {
             cmd_memory_sandbox(&engine, &models[0], &data_dir).await;
@@ -3212,7 +3273,10 @@ async fn main() {
                 Ok(scores) => v.extend(scores),
                 Err(error) => report_eval_error(error),
             }
-            v.extend(cmd_memory(&engine, &models[0], &data_dir, iters).await);
+            match cmd_memory(&engine, &models[0], &data_dir, iters).await {
+                Ok(scores) => v.extend(scores),
+                Err(error) => report_eval_error(error),
+            }
             v
         }
         other => {
@@ -3296,6 +3360,27 @@ mod tests {
             "transport/connectivity failure (provider details withheld)"
         );
         assert!(!summary.contains("sk-secret"));
+    }
+
+    #[test]
+    fn scratch_workspaces_are_unique_and_clean_up_only_their_own_path() {
+        let first =
+            EvalScratchWorkspace::create("fella-agent-eval-test", &std::env::temp_dir()).unwrap();
+        let first_path = first.path().to_path_buf();
+        let marker = first_path.join("owned-by-test.txt");
+        std::fs::write(&marker, "temporary").unwrap();
+
+        let second =
+            EvalScratchWorkspace::create("fella-agent-eval-test", &std::env::temp_dir()).unwrap();
+        let second_path = second.path().to_path_buf();
+        assert_ne!(first_path, second_path);
+
+        drop(first);
+        assert!(!first_path.exists());
+        assert!(second_path.is_dir());
+
+        drop(second);
+        assert!(!second_path.exists());
     }
 
     #[test]
