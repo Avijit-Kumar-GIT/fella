@@ -1,7 +1,7 @@
 # The more an AI can do for you, the more it can do to you
 
-*The reasoning behind Fella. Capability and exposure are one axis, and for your
-own data the sane direction is down it. What Fella can't do is the point.*
+*The reasoning behind Fella. Capability should expand the answers it can
+produce without expanding its power to alter or act on your data.*
 
 This is the *why* behind Fella. It covers the reasoning behind the project. The
 commitments themselves live in `docs/PRINCIPLES.md`, the things Fella
@@ -60,49 +60,53 @@ and near 99% inside a full harness, thirty-odd points that came from the
 wrapper, not the weights.
 
 So the model is the part you swap, not the thing you build around. Fella will
-run whatever model you point it at, local or frontier. The design work is in the
-harness, and Fella's is *powerfully opinionated*: one model-directed loop, a
-small fixed read-only tool set, and no ability to write, reach outside the
-mounted workspace, or act. Small enough that one person can read all of it and
-see the boundary for themselves.
+run whichever supported model you choose, local or hosted. The design work is
+in the harness, and Fella's is *powerfully opinionated*: one model-directed
+conversation loop; useful answers from model knowledge, public sources, or
+local analysis; and no ability to write files, run shell commands, control the
+desktop, or act. Its read-only tools should stay small enough to audit, but
+their count is not a product goal.
 
 ## What that looks like in Fella
 
-Each of these is a power removed on purpose. The job, answering questions about
-your folder, survives every cut.
+The product is analytical answers, not unrestricted agency. The boundary is
+about what Fella can do to your files and computer—not about preventing the
+model from answering a general question or consulting a public source.
 
 ### It can't state a figure
 
-Every number in an answer is a computation the model asked for and a database
-produced. A separate pass, run by code and not by the model, re-executes the
-cited queries and flags any figure in the answer that traces back to nothing.
-The model can reason about your data all it likes. It cannot put a number into a
-decision you are about to make unless that number is real. If the folder can't
-answer the question, Fella says so and leaves it there.
+Every figure about the mounted data should come from relevant source evidence
+or a computation the model requested and the local engine performed. A separate
+pass can replay cited queries and flag unsupported values. This rule is about
+claims concerning the user's data; it does not force a general explanation
+through SQL or forbid a cited public statistic. When the folder cannot support
+a requested claim, Fella should explain the gap, offer a useful partial result,
+or ask a targeted question rather than reflexively ending the conversation.
 
-### It can't look past the folder
+### It can't roam through your computer
 
-You point Fella at one folder, and that folder is the whole world the agent
-can see. That one line does three jobs at once: it's the data, it's the
-boundary, and it's a mental model the person already has ("everything in this
-folder"). Nothing outside it is read. The agent has no tool to write, move, or
-delete anything in it, and that's structural: there is no write tool to
-disable. The user may explicitly edit the root `fella.md` context file, but
-the agent cannot write it. There is no permission dialog for the agent because
-there is nothing it can do that needs permitting.
+When a question concerns local data, the user chooses the folder and that is
+the only local workspace the harness can inspect. It cannot roam into other
+folders, write, move, or delete workspace files. The user may explicitly edit
+the root `fella.md` context file, but the model cannot write it. That boundary
+is structural; there is no write tool to disable.
 
-### It can't reach the network on its own
+### It won't reach outward invisibly
 
-The base makes one outbound call, to the BYOK model provider you chose. With a
-hosted provider, the question, context, tool results, and answer leave the
-machine under that provider's policy; with a provider running locally, they can
-stay on the machine. `/mcp` is an inert experimental command and creates no
-additional network path. `/update` runs only when explicitly invoked.
+The selected model provider receives the question and context needed for its
+answer; with a hosted provider those leave the machine under that provider's
+policy, while a local provider can keep them on-device. When external sources
+matter, Fella's product direction allows visible, read-only web research. That
+route must use only a minimal, generalized query and must never pass mounted
+file contents, rows, snippets, hidden workspace memory, or credentials to the
+search service. Sources appear with the answer. `/mcp` remains an inert
+experimental command; there is no arbitrary connector or action path. The web
+route is planned, not yet shipped in the current runtime.
 
 ### It can't grow without your hand on it
 
-No dynamic capability arrives on its own. The base ships with a fixed tool
-registry and no plugin, pack, augment, or connector runtime. The user's
+No arbitrary dynamic capability arrives on its own. The base uses a reviewed
+tool registry and no plugin, pack, augment, or connector runtime. The user's
 explicit `fella.md` context, provider/model settings, and appearance are the
 supported customization points; the former extension designs are archived.
 
@@ -215,10 +219,10 @@ underneath the folder and the SQL and the read-only boundary.
 - An agent that can act makes you trust a longer chain: the model, the harness,
   the dialog, the provider.
 - The harness is where the power ceiling is set. The model is the part you swap.
-- Fella removes powers on purpose: read-only, one folder, never states a figure,
-  local by default.
-- The job survives every cut. Answering questions about your folder needs none
-  of what was removed.
+- Fella removes risky powers on purpose: no file writes, shell, desktop
+  control, or actions on your behalf.
+- The model may use general knowledge, visible public research, or one mounted
+  folder. Claims about local data remain tied to local evidence.
 - Restraint only counts if it's structural. A safe setting is not the same as a
   tool that cannot.
 - The biggest labs can't follow here without giving up the thing their

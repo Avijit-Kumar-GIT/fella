@@ -7,6 +7,38 @@ this app repo (now **`fella`**; `fella-ai` is a private pre-v0.1 archive),
 `fella-marketplace` to mean the browse-site half of the **`fella-web`** repo,
 and any `CODE_OF_CONDUCT.md` mention as folded into `CONTRIBUTING.md` (§Conduct).
 
+- **2026-10-02** **Forecasting is an allowed analysis, not a refusal category.**
+  The model may inspect a time series, choose an appropriate read-only method,
+  and estimate a future value or scenario. Distinguish observed data from the
+  estimate, state material method/assumptions/uncertainty, and use clarification
+  when missing inputs or ambiguity materially affect the result. A short,
+  irregular, or incomplete history should lower confidence or narrow the claim;
+  lack of relevant time fields can make a particular forecast unsupported, but
+  “future-facing” alone is not a reason to refuse. The runtime remains
+  responsible for scoped execution and checks, not for prescribing SQL versus
+  Python or a fixed tool sequence. Legacy refusal golds are retired from active
+  evaluation; their historical scores remain labeled as pre-release task-policy
+  mismatches, not results on the first target-state FQA-Bench v0.1.
+
+- **2026-10-01** **Ask supports four knowledge routes; use web research when
+  useful and make it visible.** Fella's product is analytics over conversation,
+  not a workspace/file browser. A folder is optional context for local-data
+  questions, not a prerequisite for every Ask. Stable general questions can be
+  answered from the configured model; use read-only web research when the user
+  asks for sources/current information or freshness materially matters; use
+  local tools for mounted data; combine them when the question needs both.
+  Web use must be visible in the turn and claims must carry source links.
+  Search requests must not contain mounted-file contents, rows, snippets,
+  hidden workspace memory, or credentials. For a hybrid answer, search only a
+  generalized external question and combine the returned public material with
+  local analysis inside Fella. Keep local file access read-only; no shell,
+  desktop control, file writes, or autonomous actions follow from this broader
+  answer scope. This supersedes the 2026-09-08 decision to keep web search only
+  in opt-in packs and the 2026-09-08 "vertical, not horizontal" wording where
+  it excluded general knowledge/research. Web research and the no-folder Ask
+  path are product direction, not yet shipped in the current runtime; delivery
+  and evaluation are tracked in `PRODUCT-ROADMAP.md`.
+
 - **2026-09-17** **`run_python` uses one embedded RustPython/WASM guest under
   Wasmi.** The guest is compiled for `wasm32-unknown-unknown`, so it carries no
   WASI filesystem, network, environment, clock, or process imports. A tiny

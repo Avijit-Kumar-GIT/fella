@@ -9,7 +9,7 @@ import sys
 from collections import defaultdict
 
 
-AXES = ("domain", "primary_capability", "interaction", "answerability", "workspace_scope", "file_format", "data_condition")
+AXES = ("domain", "primary_capability", "analysis_family", "interaction", "answerability", "workspace_scope", "file_format", "data_condition")
 
 
 def read_jsonl(path: Path) -> list[dict]:
@@ -30,7 +30,11 @@ def slice_labels(task: dict, axis: str) -> list[str]:
     if axis in {"domain", "primary_capability", "interaction", "answerability", "workspace_scope"}:
         value = labels.get(axis)
         return [str(value)] if value else ["untagged"]
-    field = {"file_format": "formats", "data_condition": "data_conditions"}[axis]
+    field = {
+        "analysis_family": "analysis_families",
+        "file_format": "formats",
+        "data_condition": "data_conditions",
+    }[axis]
     values = labels.get(field) or []
     return sorted({str(value) for value in values}) or ["untagged"]
 
@@ -38,8 +42,18 @@ def slice_labels(task: dict, axis: str) -> list[str]:
 def summarize(rows: list[dict]) -> dict:
     valid = [row for row in rows if row.get("err") is None and isinstance(row.get("correct"), bool)]
     invalid = len(rows) - len(valid)
+    intermediate_turn_rates = [
+        float(rate)
+        for row in valid
+        for rate in row.get("graded_setup_turn_rates", [])
+    ]
     if not valid:
-        return {"cases": len(rows), "valid": 0, "invalid": invalid, "correct": None, "rate": None, "tokens": None}
+        return {
+            "cases": len(rows), "valid": 0, "invalid": invalid,
+            "correct": None, "rate": None, "tokens": None,
+            "intermediate_turns": len(intermediate_turn_rates),
+            "intermediate_turn_rate": None,
+        }
     correct = sum(row["correct"] for row in valid)
     rate = sum(float(row.get("correct_rate", row["correct"])) for row in valid) / len(valid)
     tokens = sum(int(row.get("prompt_tok", 0)) + int(row.get("completion_tok", 0)) for row in valid) / len(valid)
@@ -50,6 +64,11 @@ def summarize(rows: list[dict]) -> dict:
         "correct": correct,
         "rate": rate,
         "tokens": tokens,
+        "intermediate_turns": len(intermediate_turn_rates),
+        "intermediate_turn_rate": (
+            sum(intermediate_turn_rates) / len(intermediate_turn_rates)
+            if intermediate_turn_rates else None
+        ),
     }
 
 
@@ -64,7 +83,7 @@ def render(tasks: list[dict], results: list[dict], axes: list[str]) -> str:
     models = sorted({str(row.get("model", "unknown")) for row in results})
     lines = ["# FQA-Bench slice report", "", "Invalid/error rows are reported separately and excluded from correctness rates. Each case row represents the evaluator's result for one episode (which may itself aggregate repeated iterations). Format and data-condition slices are multi-label, so their counts overlap; treat small slices as descriptive, not as stable rankings.", ""]
     for axis in axes:
-        lines.extend([f"## By {axis.replace('_', ' ')}", "", "| Model | Slice | Cases | Valid | Invalid | Majority correct | Mean iteration correctness | Mean tokens |", "|---|---|---:|---:|---:|---:|---:|---:|"])
+        lines.extend([f"## By {axis.replace('_', ' ')}", "", "| Model | Slice | Cases | Valid | Invalid | Majority correct | Mean iteration correctness | Graded turns | Intermediate-turn pass rate | Mean tokens |", "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|"])
         for model in models:
             selected = [row for row in results if str(row.get("model", "unknown")) == model]
             groups: dict[str, list[dict]] = defaultdict(list)
@@ -75,9 +94,10 @@ def render(tasks: list[dict], results: list[dict], axes: list[str]) -> str:
                 metric = summarize(groups[label])
                 majority = "—" if metric["correct"] is None else f"{metric['correct']}/{metric['valid']} ({metric['correct'] / metric['valid']:.0%})"
                 mean_rate = "—" if metric["rate"] is None else f"{metric['rate']:.0%}"
+                intermediate_rate = "—" if metric["intermediate_turn_rate"] is None else f"{metric['intermediate_turn_rate']:.0%}"
                 tokens = "—" if metric["tokens"] is None else f"{metric['tokens']:.0f}"
                 lines.append(
-                    f"| {model} | {label} | {metric['cases']} | {metric['valid']} | {metric['invalid']} | {majority} | {mean_rate} | {tokens} |"
+                    f"| {model} | {label} | {metric['cases']} | {metric['valid']} | {metric['invalid']} | {majority} | {mean_rate} | {metric['intermediate_turns']} | {intermediate_rate} | {tokens} |"
                 )
         lines.append("")
     represented = len({row.get("id") for row in results})

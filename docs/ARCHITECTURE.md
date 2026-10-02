@@ -7,16 +7,26 @@ commit as any change that alters a design decision here.
 > a Workspace surface for sources and `fella.md`, Ask, History, Search, and
 > Settings. The extension, pack, MCP client, augment, and standalone analysis
 > sections below are historical design notes unless explicitly marked current.
+> The broader Ask contract—general answers without a mounted folder and
+> visible web research when useful—is product direction tracked in
+> [`PRODUCT-ROADMAP.md`](PRODUCT-ROADMAP.md), not shipped behavior yet.
 
 ## What Fella is
 
-A local-first desktop app for **enterprise-grade personal analytics** a regular person points it at
-their own folder of files (statements, health exports, notes, logs) and asks questions
-about their own life in plain language. Not a tool for analysts; the audience is people
-who don't write SQL or Python. The model drives interpretation and tool choice
-inside a bounded read-only harness; answers are grounded in **deterministic
-computation** (SQL, or Python when SQL isn't enough) and are **fully auditable**
-every answer carries the actual steps, queries and rows behind it.
+A local-first desktop application with an opinionated analytical harness.
+Fella's product is the conversation around a question: model knowledge for
+stable general explanations, visible web research when freshness or sources
+matter, and local analysis when an answer depends on mounted files. The folder
+organizes and grounds local-data work; it is not a prerequisite for every
+question. The current release is primarily workspace-based; the no-folder
+general-answer path and web-research route are not implemented yet.
+
+For mounted-data questions, the model drives interpretation and tool choice
+inside a bounded read-only harness. SQL/Python perform computations against
+local data; source passages support document claims; execution and provenance
+are retained for inspection. A deterministic replay supports a computation,
+but it does not by itself prove that the interpretation matched the user's
+intent.
 
 **Read-only agent.** The agent reads the folder; it never writes, moves or deletes
 anything, and it produces answers, not files. The read-only boundary is the safety
@@ -29,6 +39,8 @@ The product commitments are in [`PRINCIPLES.md`](PRINCIPLES.md) and
 status, and remaining quality gates are tracked in
 [`ANALYTICAL-COMPUTER-ROADMAP.md`](ANALYTICAL-COMPUTER-ROADMAP.md); measured
 performance history is in [`PERFORMANCE-LOG.md`](PERFORMANCE-LOG.md).
+The user-facing capability backlog and routing/privacy decision are tracked in
+[`PRODUCT-ROADMAP.md`](PRODUCT-ROADMAP.md) and [`DECISIONS.md`](DECISIONS.md).
 
 ## Stack
 
@@ -223,6 +235,12 @@ model failures retry with backoff; a partial answer is kept. If
 the provider is unreachable, `ask` returns a clear message and the status bar
 shows a red dot.
 
+**Research route status:** the current `LlmClient` connects to the selected
+model provider; the shipped tool registry has no web search or page-fetch
+tool. The product direction adds a bounded, visible, read-only research route
+without granting local file access to that route. The privacy contract and
+implementation plan are in [`PRODUCT-ROADMAP.md`](PRODUCT-ROADMAP.md).
+
 ## Agent loop (`agent.rs`)
 
 ```
@@ -255,19 +273,17 @@ tools, workspace context, evidence fold, or product UI path; they are not an
 alternative interactive harness.
 
 **System prompt** (`agent.rs`, sections gated by `PromptProfile` — droppable
-via `FELLA_PROMPT_DROP` for eval ablation): never state a figure not returned
-by a tool; prefer `run_sql`; look before you leap; for documents use
-`grep_files` / `read_file`; if the data cannot answer, say so; one optional
-`Background:` line of general knowledge is allowed (no figures); lead with the
-headline and pick whatever shape fits. **`depth_rule`**: for a change/trend/
-correlation/comparison question, check the data's shape before answering —
-decompose a change, verify a correlation actually holds, state how many
-points it's based on and hedge under ~8. **`aside_rule`**: `depth_rule`'s
-complement, for the plain single-figure lookup it explicitly skips — one
-bounded follow-up query (not a blanket cost) when the question is a segment
-of a larger total, and one added short sentence only if that comparison
-turns up something genuinely notable. A "Your context" block from the
-workspace's `fella.md` is prepended.
+via `FELLA_PROMPT_DROP` for eval ablation): the model treats the request as an
+analysis problem, inspects relevant evidence, maps user language to available
+fields and records, and chooses among read-only tools. It can revise its
+approach when output does not answer the request, clarify material ambiguity,
+or proceed with a stated minor assumption. It should verify the result and
+explain method, scope, uncertainty, and evidence as relevant. SQL, Python,
+document tools, and charts are options, not a prescribed route. Forecasts and
+scenarios are allowed; missing evidence should prompt a specific explanation,
+useful partial result, or focused question—not a blanket refusal. Work should
+be proportional to the request. Conversation and user context help interpret
+references and vocabulary but are not evidence for new data claims.
 
 **Verification pass** (`analytics::verify`, deterministic): re-execute any SQL cited in
 the answer and confirm the headline value is unchanged; confirm every table

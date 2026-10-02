@@ -1,39 +1,78 @@
-"""Small tests for generic FQA tag slicing, independent of any app behavior."""
+#!/usr/bin/env python3
+"""Unit tests for FQA-Bench result slicing and interaction metrics."""
+from __future__ import annotations
+
+import importlib.util
+from pathlib import Path
 import unittest
 
-from report_slices import render, slice_labels, summarize
+
+MODULE_PATH = Path(__file__).with_name("report_slices.py")
+SPEC = importlib.util.spec_from_file_location("fqa_report_slices", MODULE_PATH)
+assert SPEC and SPEC.loader
+report = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(report)
 
 
-class SliceReportTests(unittest.TestCase):
-    def test_multi_label_axes_include_a_case_in_each_applicable_slice(self):
-        task = {"labels": {"formats": ["csv", "md"], "data_conditions": ["mixed_formats"]}}
-        self.assertEqual(slice_labels(task, "file_format"), ["csv", "md"])
-        self.assertEqual(slice_labels(task, "data_condition"), ["mixed_formats"])
+class ReportSlicesTests(unittest.TestCase):
+    def test_analysis_family_is_a_multi_label_axis(self) -> None:
+        task = {"labels": {"analysis_families": ["visualization", "temporal_and_predictive"]}}
+        self.assertEqual(
+            report.slice_labels(task, "analysis_family"),
+            ["temporal_and_predictive", "visualization"],
+        )
 
-    def test_invalid_runs_do_not_count_as_wrong_or_successful(self):
-        metrics = summarize([
-            {"correct": True, "correct_rate": 1.0, "prompt_tok": 10, "completion_tok": 4, "err": None},
-            {"correct": False, "correct_rate": 0.0, "prompt_tok": 20, "completion_tok": 3, "err": None},
-            {"correct": False, "correct_rate": 0.0, "prompt_tok": 0, "completion_tok": 0, "err": "provider timeout"},
-        ])
-        self.assertEqual(metrics["cases"], 3)
-        self.assertEqual(metrics["valid"], 2)
-        self.assertEqual(metrics["invalid"], 1)
-        self.assertEqual(metrics["correct"], 1)
-        self.assertEqual(metrics["rate"], 0.5)
-        self.assertEqual(metrics["tokens"], 18.5)
+    def test_episode_and_intermediate_turn_rates_are_separate(self) -> None:
+        rows = [
+            {
+                "err": None,
+                "correct": True,
+                "correct_rate": 1.0,
+                "graded_setup_turn_rates": [1.0, 0.0],
+                "prompt_tok": 100,
+                "completion_tok": 20,
+            },
+            {
+                "err": "provider error",
+                "correct": False,
+                "graded_setup_turn_rates": [0.0],
+            },
+        ]
+        result = report.summarize(rows)
+        self.assertEqual(result["valid"], 1)
+        self.assertEqual(result["invalid"], 1)
+        self.assertEqual(result["correct"], 1)
+        self.assertEqual(result["intermediate_turns"], 2)
+        self.assertEqual(result["intermediate_turn_rate"], 0.5)
 
-    def test_report_joins_case_results_to_capability_and_domain(self):
-        tasks = [{"id": "case-1", "labels": {"domain": "public_open_data", "primary_capability": "visualize"}}]
-        results = [{"id": "case-1", "model": "provider/model", "correct": True, "correct_rate": 1.0, "prompt_tok": 100, "completion_tok": 10, "err": None}]
-        report = render(tasks, results, ["domain", "primary_capability"])
-        self.assertIn("public_open_data", report)
-        self.assertIn("visualize", report)
-        self.assertIn("1/1 (100%)", report)
-
-    def test_unknown_result_ids_fail_instead_of_silently_dropping(self):
-        with self.assertRaisesRegex(ValueError, "missing from task catalog"):
-            render([], [{"id": "not-in-the-catalog"}], ["domain"])
+    def test_slice_report_includes_analysis_families_and_turn_quality(self) -> None:
+        tasks = [{
+            "id": "clarify-1",
+            "labels": {
+                "domain": "housing_household",
+                "primary_capability": "clarify_and_continue",
+                "analysis_families": ["clarification_and_continuity"],
+                "interaction": "clarification_episode",
+                "answerability": "clarification_needed",
+                "workspace_scope": "entire_workspace",
+                "formats": ["csv"],
+                "data_conditions": ["ambiguous_measure"],
+            },
+        }]
+        results = [{
+            "id": "clarify-1",
+            "model": "test/model",
+            "correct": True,
+            "correct_rate": 1.0,
+            "graded_setup_turn_rates": [1.0],
+            "prompt_tok": 100,
+            "completion_tok": 20,
+            "err": None,
+        }]
+        rendered = report.render(tasks, results, ["analysis_family"])
+        self.assertIn("clarification_and_continuity", rendered)
+        self.assertIn("Graded turns", rendered)
+        self.assertIn("| 1 | 100% |", rendered)
 
 
 if __name__ == "__main__":

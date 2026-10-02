@@ -1,7 +1,7 @@
 schema_version: 1
 
-# Capabilities are the primary reporting slices. Keep these broad and stable;
-# use data_conditions for specific operations and file irregularities.
+# Capabilities describe the user-facing harness work. Analysis families are
+# separate analytical intents; neither taxonomy names a tool or fixes a plan.
 capabilities:
   - id: inspect_and_select
     definition: Find relevant files, understand their contents and limits, and avoid distractors.
@@ -21,10 +21,26 @@ capabilities:
     definition: Choose and produce a chart whose values, grouping, labels, units, and time axis are correct.
   - id: clarify_and_continue
     definition: Ask for material missing information, incorporate the answer, and continue the analysis.
-  - id: handle_unanswerable
-    definition: Distinguish absent evidence or unsupported prediction from an answerable analysis.
+  - id: explain_evidence_limits
+    definition: Explain a specific source or evidence gap, preserve useful partial results, and offer a useful next step.
+  - id: forecast_and_scenario
+    definition: Estimate future values or evaluate scenarios from relevant history while separating observations, assumptions, and uncertainty.
   - id: tool_proportionality
     definition: Use the available inspection and computation tools appropriately without unnecessary work.
+
+analysis_families:
+  - workspace_discovery
+  - semantic_interpretation
+  - data_normalization
+  - descriptive_analysis
+  - relational_analysis
+  - statistical_analysis
+  - temporal_and_predictive
+  - data_quality_and_anomaly
+  - visualization
+  - evidence_and_communication
+  - clarification_and_continuity
+  - proportionality_and_boundaries
 
 # Topic tags describe the data's subject, not the analytical operation.
 domains:
@@ -36,7 +52,11 @@ domains:
   - subscriptions
   - contacts_relationships
   - goals_planning
+  - work_and_projects
+  - education_and_research
+  - science_and_environment
   - public_open_data
+  - cross_domain_personal_analytics
   - cross_domain
   - general
 
@@ -65,6 +85,8 @@ data_conditions:
   - duplicate_records
   - summary_rows
   - sparse_or_short_series
+  - missing_time_dimension
+  - forecast_holdout
   - conflicting_sources
   - cross_file_keys
   - repeated_or_overlapping_files
@@ -73,7 +95,13 @@ data_conditions:
   - mixed_formats
   - large_workspace
   - ambiguous_scope
-  - unsupported_prediction
+  - nested_directories
+  - wide_tables
+  - outliers
+  - encoding_variation
+  - privacy_sensitive
+  - untrusted_instructions
+  - ambiguous_measure
 
 interaction_modes:
   - single_turn
@@ -83,9 +111,22 @@ interaction_modes:
 
 answerability:
   - answerable
+  - answerable_with_assumptions
   - clarification_needed
   - unsupported
   - no_analysis_needed
+
+# Expected user-visible chart families. A valid task may accept more than one
+# visualization when the task intent and underlying values are preserved.
+chart_families:
+  - bar_and_grouped_bar
+  - line_and_area
+  - stacked_composition
+  - scatter_and_bubble
+  - histogram_and_density
+  - box_and_quantile
+  - heatmap
+  - observed_vs_forecast_with_uncertainty
 
 source_types:
   - controlled_synthetic

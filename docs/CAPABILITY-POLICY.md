@@ -12,16 +12,23 @@ capability policy gives those paths stable names and lets Settings control them
 with simple on/off switches.
 
 This is deliberately smaller than a plugin system and narrower than a general
-security policy. The policy controls which analysis paths are available to the
-agent. Fella's read-only boundary, workspace discovery, evidence capture,
-verification, cancellation, and query limits remain core behavior and cannot be
-turned off here.
+security policy. These switches are user-controlled availability controls;
+they do not prescribe how the model interprets a question, which available
+analysis method it must choose, or when it may answer. Fella's read-only
+boundary, workspace discovery, evidence capture, verification, cancellation,
+and query limits remain core behavior and cannot be turned off here.
 
 ## Current personal implementation
 
 Settings exposes four experimental switches. They are stored locally with the
 other Fella settings. Existing installations default every switch to `on`, so
 adding the policy does not change the normal product surface.
+
+This policy describes the current local-analysis controls only. The accepted
+product direction also includes general answers without a folder and visible
+web research when useful; neither route is implemented by these switches or
+shipped by the current runtime. See the
+[Product Roadmap](PRODUCT-ROADMAP.md).
 
 | Capability id | Includes | Current enforcement |
 |---|---|---|
@@ -34,7 +41,11 @@ adding the policy does not change the normal product surface.
 performing an analysis. Evidence and verification remain available so every
 answer continues to explain what happened. The model receives a short notice
 when one or more paths are disabled and is told to explain when a requested
-analysis is unavailable.
+analysis is unavailable. When enabled, the model may combine inspection,
+document search, SQL, Python, charts, and other reviewed capabilities as the
+question requires. Forecasts and scenarios are allowed; they must be presented
+as estimates with an appropriate basis and uncertainty, not blocked solely
+because they concern the future.
 
 The policy is intentionally local and user controlled in this release. There
 is no account, organization profile, license check, administrator role, or
@@ -145,8 +156,10 @@ material for that later work.
 Advanced analysis can eventually be enabled for either personal or enterprise
 users when it is safe and understandable. It should not be called enterprise
 only just because an organization may benefit from it. Possible future
-capabilities include forecasting, cohort analysis, anomaly detection, richer
-statistical tests, semantic joins, and approved external data sources. Each
+capabilities include calibrated forecasting and backtesting, cohort analysis,
+anomaly detection, richer statistical tests, semantic joins, and approved
+external data sources. Basic forecasts and scenarios are already allowed when
+the available evidence supports a useful estimate. Each
 should have a bounded implementation, a stable id, deterministic evidence, and
 an understandable failure mode before it becomes a switch.
 

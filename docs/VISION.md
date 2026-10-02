@@ -10,20 +10,26 @@ the first version we can ship.
 
 ## The vision in one sentence
 
-Fella becomes a **personal analytical computer**: point it at a folder and it
-builds a living, inspectable understanding of the data, accepts questions in
-ordinary language, performs bounded analysis, explains uncertainty, verifies
-the result, and becomes more consistent with that workspace over time.
+Fella becomes a **personal analytical computer**: ask in ordinary language,
+then let one model-driven runtime use general knowledge, visible web research,
+and/or a mounted folder to investigate, analyze, explain uncertainty, and
+show where its answer came from.
 
-The folder is the boundary. The analytical runtime is the product.
+The analytical conversation is the product. A mounted folder is an optional,
+inspectable context for local-data questions—not a prerequisite for asking and
+not the product's primary surface. Local data stays behind its workspace
+boundary; external research is a separate, visible, read-only route.
 
 ## What Fella should feel like
 
-The ideal Fella experience is not opening a blank chatbot and hoping the model
-understands a spreadsheet. It is closer to opening a capable analytical
-instrument that already knows how to work with the data in front of it.
+The ideal Fella experience is not a folder browser with a chat box attached.
+It is opening Ask and being able to pursue a question: get a direct explanation
+when that is enough, research public information when freshness or sources
+matter, or bring a mounted workspace into the investigation when the answer
+depends on the user's data.
 
-After mounting a folder, Fella should be able to say, in effect:
+When a folder is mounted, Fella should progressively learn enough to say, in
+effect:
 
 - these are the sources I found;
 - these are the kinds of records and measures they appear to contain;
@@ -34,6 +40,9 @@ After mounting a folder, Fella should be able to say, in effect:
 The user should be able to ask a simple question and receive a fast answer,
 ask an ambiguous question and receive a useful clarification, or ask a complex
 question and watch Fella decompose it into an understandable analytical path.
+The user should also be able to ask a general question with no folder open and
+continue naturally from that answer into file analysis or sourced research in
+the same conversation.
 
 The product should feel opinionated because it has a clear view of what a good
 analytical answer is: relevant, correctly scoped, computed from the data,
@@ -125,6 +134,15 @@ AI should be used broadly where it provides leverage:
 - choosing between SQL, Python, document analysis, and charts;
 - explaining results in plain language;
 - suggesting definitions for user confirmation.
+- answering stable general questions directly;
+- deciding when external sources are needed and incorporating them with
+  visible citations.
+
+These are routes through one Ask experience, not separate agents. A simple
+question should not be forced through workspace inspection; a current or
+source-sensitive question should not be trapped inside the model's training
+knowledge; and a workspace question should not be answered from unrelated web
+results instead of its local evidence.
 
 The runtime should remain authoritative over scope, permissions, execution,
 verification, and durable memory. The best solution is not one giant

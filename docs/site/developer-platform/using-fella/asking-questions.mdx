@@ -30,13 +30,16 @@ Is my spending increase seasonal, or was it a few large purchases?
 
 | Question shape | Usual path |
 | --- | --- |
-| Total, average, count, filter, trend, or join | `run_sql` |
-| Targeted word, phrase, or regular-expression search in documents | `grep_files` |
-| Broad summary or comparison across documents | `read_file` |
-| Median, standard deviation, correlation, or regression | `run_python` |
-| A breakdown or time series worth seeing | `make_chart` after a query |
+The model chooses among table inspection, document search/reading, SQL,
+sandboxed Python, and charts based on the question and what it learns from the
+files. It may inspect first, revise its interpretation, and use more than one
+tool. The runtime enforces read-only scope and checks execution; it does not
+require a particular analysis language or fixed tool sequence.
 
-SQL is preferred because its result is compact and can often be re-run during verification. Python is an analysis escape hatch, not a file-management shell, and requires Python 3 on the computer.
+Forecasts and scenarios are supported. Ask for a horizon or assumptions when
+they matter. Fella should distinguish observed history from an estimate and
+explain material uncertainty; a missing time field or insufficient history is
+a specific evidence limitation, not a blanket forecast prohibition.
 
 ## Ask for the shape, not just the headline
 
@@ -64,9 +67,14 @@ You included transfers. Exclude them and group the remaining spending by month.
 
 If a correction represents a durable vocabulary rule, Fella can record it in folder memory. See [context and memory](/developer-platform/using-fella/context-and-memory).
 
-## When Fella refuses
+## Forecasts and evidence limits
 
-Past files cannot establish a future value. Questions such as "How many books will I finish next year?" should be declined rather than turned into a forecast. If the folder does not contain enough information, Fella says so.
+Past files do not prove a future outcome, but they can support an estimate or
+scenario. For example, Fella can project a value from a stated historical
+baseline and label it as an estimate. If a time-series request lacks dates,
+history, or another material input, Fella should identify the missing evidence,
+provide any useful partial result, and ask for the information needed to
+continue rather than inventing a forecast or stopping with a generic refusal.
 
 Definitions and general explanations can be answered without a tool. A leading `Background:` line marks general knowledge, not workspace evidence, and the prompt bars it from supplying specific figures.
 

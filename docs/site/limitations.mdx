@@ -15,7 +15,7 @@ Fella is an early, pre-1.0 personal analytics app. Its narrow scope makes the no
 | Not every response uses a tool | General answers can have no working fold or workspace evidence |
 | Verification is deterministic, not omniscient | It catches replay, grounding, and known query-shape problems, not every wrong interpretation |
 | Grounded can still be wrong | A valid query may use the wrong filter, join, unit, date boundary, or denominator |
-| Refusal is model-dependent | A model may forecast or infer when files do not support the answer |
+| Forecast quality is not guaranteed | Fella may estimate from history, but a forecast is not an observed fact or a guarantee; sparse, irregular, or missing time data can limit what is defensible |
 | Evidence is sampled/capped | Inspect the query and row counts, not only visible sample rows |
 
 For consequential decisions, validate the source and query independently. Fella is not a substitute for professional financial, medical, legal, or safety advice.

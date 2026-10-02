@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Adapt canonical FQA-Bench tasks/answer keys to agent_eval's legacy cases.jsonl."""
+"""Adapt canonical FQA-Bench v0.1 tasks/keys to the current agent_eval runner."""
 from __future__ import annotations
 
 import argparse
@@ -51,6 +51,10 @@ def render(suite: Path) -> bytes:
     keys = read_jsonl(suite / "answer-keys.jsonl")
     task_ids = [task.get("id") for task in tasks]
     key_ids = [key.get("task_id") for key in keys]
+    if any(task.get("schema_version") != 1 for task in tasks):
+        raise ValueError("FQA-Bench v0.1 tasks must use task schema version 1")
+    if any(key.get("schema_version") != 1 for key in keys):
+        raise ValueError("FQA-Bench v0.1 answer keys must use answer-key schema version 1")
     if len(task_ids) != len(set(task_ids)):
         raise ValueError("duplicate task IDs in tasks.jsonl")
     if len(key_ids) != len(set(key_ids)):
@@ -84,25 +88,48 @@ def render(suite: Path) -> bytes:
                     f"undeclared={sorted(actual - set(files))}, missing={sorted(set(files) - actual)}"
                 )
 
+        request = task["request"]
         key = keys_by_id[task_id]
         expected = task["labels"]["answerability"]
         behavior = key["expected_behavior"]
-        if (expected == "unsupported") != (behavior == "unsupported"):
+        expected_behavior = {
+            "answerable": "answer",
+            "answerable_with_assumptions": "estimate",
+            "clarification_needed": "clarify",
+            "unsupported": "unsupported",
+            "no_analysis_needed": "no_analysis_needed",
+        }.get(expected)
+        if expected_behavior != behavior:
             raise ValueError(f"{task_id}: task answerability disagrees with answer key")
         if "runner_gold" not in key:
             raise ValueError(f"{task_id}: answer key lacks runner_gold compatibility data")
+        clarification_reply = request.get("clarification_reply")
+        clarification_gold = key.get("clarification_turn_gold")
+        if behavior == "clarify":
+            if not clarification_reply or not clarification_gold:
+                raise ValueError(
+                    f"{task_id}: clarification episodes need a user reply and an intermediate-turn gold"
+                )
+        elif clarification_reply or clarification_gold:
+            raise ValueError(
+                f"{task_id}: clarification reply/turn gold requires clarification_needed behavior"
+            )
 
         suite_files = [f"{rel_workspace.as_posix()}/{safe_path(rel, 'workspace file').as_posix()}" for rel in files]
-        request = task["request"]
-        generated.append({
+        case = {
             "id": task_id,
-            "question": request["prompt"],
+            "question": clarification_reply or request["prompt"],
             "files": suite_files,
             "gold": key["runner_gold"],
             "category": task["labels"]["domain"],
             "tier": task["labels"]["primary_capability"],
             "setup_turns": request.get("prior_turns", []),
-        })
+        }
+        if clarification_gold is not None:
+            case["graded_setup_turns"] = [
+                {"question": request["prompt"], "gold": clarification_gold}
+            ]
+        generated.append(case)
 
     return ("".join(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n" for row in generated)).encode("utf-8")
 

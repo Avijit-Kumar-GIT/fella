@@ -36,8 +36,8 @@ def main() -> int:
         print(f"UCI suite validation: {exc}", file=sys.stderr)
         return 1
 
-    if not (len(tasks) == len(keys) == len(cases) == 11):
-        print("UCI suite validation: expected 11 aligned tasks, keys, and runner cases", file=sys.stderr)
+    if not (len(tasks) == len(keys) == len(cases) == 13):
+        print("UCI suite validation: expected 13 aligned tasks, keys, and runner cases", file=sys.stderr)
         return 1
     if set(tasks) != set(keys) or set(tasks) != set(cases):
         print("UCI suite validation: task IDs differ across manifests", file=sys.stderr)
@@ -76,6 +76,8 @@ def main() -> int:
     max_month_gap = max(abs(daily_months[key] - hourly_months[key]) for key in daily_months)
 
     monthly_2012 = [daily_months[(1, month)] for month in range(1, 13)]
+    june_2011_mean_baseline = sum(daily_months[(0, month)] for month in range(1, 7)) / 6
+    lower_2012_scenario = by_year[1] * 0.9
     all_year_months = {
         month: sum(daily_months[(year, month)] for year in (0, 1))
         for month in range(1, 13)
@@ -97,6 +99,8 @@ def main() -> int:
         "bike-highest-month-overall": [busiest_month, all_year_months[busiest_month]],
         "bike-daily-coverage": [coverage[0]],
         "bike-followup-next-year": [by_year[1], by_year[1] - by_year[0]],
+        "bike-forecast-july-2011-mean-baseline": [june_2011_mean_baseline],
+        "bike-scenario-2012-ten-percent-lower": [lower_2012_scenario],
     }
     actual_text = {
         "bike-highest-month-overall": f"{('January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December')[busiest_month - 1]} {all_year_months[busiest_month]}",
@@ -118,6 +122,10 @@ def main() -> int:
         if "approx" in gold and abs(float(actual[0]) - gold["approx"][0]) > gold["approx"][1]:
             print(f"UCI suite validation: {task_id} runner approximation mismatch", file=sys.stderr)
             return 1
+        for assertion in gold.get("all_of", []):
+            if "approx" in assertion and abs(float(actual[0]) - assertion["approx"][0]) > assertion["approx"][1]:
+                print(f"UCI suite validation: {task_id} nested runner approximation mismatch", file=sys.stderr)
+                return 1
         if "chart" in gold and not close_list(actual, gold["chart"]["series"][0]["values"], 0.01):
             print(f"UCI suite validation: {task_id} chart values mismatch", file=sys.stderr)
             return 1
@@ -156,8 +164,20 @@ def main() -> int:
         print(f"UCI suite validation: workspace is {workspace_bytes} bytes, over the current 100 KiB comparison limit", file=sys.stderr)
         return 1
     unsupported = [task_id for task_id, key in keys.items() if key["expected_behavior"] == "unsupported"]
-    if len(unsupported) != 2 or any(keys[task_id]["runner_gold"] != "refusal" for task_id in unsupported):
-        print("UCI suite validation: unsupported task contracts are inconsistent", file=sys.stderr)
+    if len(unsupported) != 2 or any(
+        not isinstance(keys[task_id]["runner_gold"], dict)
+        or "all_of" not in keys[task_id]["runner_gold"]
+        or not keys[task_id].get("unsupported_reason")
+        or not keys[task_id].get("must_not_claim")
+        for task_id in unsupported
+    ):
+        print("UCI suite validation: source-limit cases need explanatory, non-refusal contracts", file=sys.stderr)
+        return 1
+    if any(
+        tasks[task_id]["labels"]["primary_capability"] != "explain_evidence_limits"
+        for task_id in unsupported
+    ):
+        print("UCI suite validation: source-limit capability labels are stale", file=sys.stderr)
         return 1
 
     print(

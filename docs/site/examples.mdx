@@ -91,15 +91,15 @@ recorded with the same evidence as the calculation behind it.
 
 Direct SQL remains read-only and prints a system result; unlike an agent tool call, it does not create an evidence fold or run post-answer verification. The shipped backend is SQLite, so use SQLite syntax. A DuckDB-only function will not work in a normal release build.
 
-## Ask an unanswerable question safely
+## Ask for a forecast responsibly
 
-**Outcome:** separate recorded facts from a forecast.
+**Outcome:** estimate from the chosen history, and make the method and uncertainty visible.
 
 ```text filename="prompt"
-Do these files contain a stated 2026 budget? If yes, quote the source and amount. If not, say the files cannot answer; do not estimate from prior spending.
+Using the last 12 complete months of grocery spending, estimate next month's total with a simple baseline. State the method and assumptions, distinguish the estimate from an observed amount, and note any important uncertainty.
 ```
 
-The prompt improves the chance of a proper refusal, but policy adherence remains model-dependent. Review the evidence whenever Fella supplies a number.
+Forecasts are valid analytical requests. When relevant history or assumptions are missing, Fella should explain the specific evidence gap, give any useful partial result, and ask for the missing input instead of inventing certainty or refusing solely because the question concerns the future.
 
 ## Next steps
 

@@ -185,9 +185,10 @@ pub struct ProviderInfo {
 #[derive(Default)]
 struct Inner {
     /// Distilled context from earlier questions, one entry per conversation
-    /// (tab). Bounded by `SESSION_CAP`, LRU by `last_used`. Cleared on workspace
-    /// (re)open; an entry is dropped when its tab is closed
-    /// (`forget_conversation`).
+    /// (tab). Bounded by `SESSION_CAP`, LRU by `last_used`. Each turn carries
+    /// its workspace snapshot so conversational context can survive a mount
+    /// change without reusing stale analytical hints. An entry is dropped when
+    /// its tab is closed (`forget_conversation`).
     sessions: HashMap<String, SessionMemory>,
     /// Monotonic counter stamped onto `SessionMemory::last_used` so the least
     /// recently asked conversation can be evicted when `sessions` is full.
@@ -403,19 +404,78 @@ fn workspace_scratch_dir(data_dir: &Path) -> EngineResult<PathBuf> {
     }
 }
 
-/// A few earlier turns of one conversation, distilled so a follow-up question
-/// doesn't have to rediscover the schema. In-memory only.
+/// A few earlier turns of one conversation, distilled for follow-ups. The
+/// conversational text remains useful across workspace switches; analytical
+/// hints are only surfaced when their exact source snapshot is mounted.
 #[derive(Default)]
 struct SessionMemory {
     turns: Vec<TurnDigest>,
     last_used: u64,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum TurnWorkspace {
+    NoWorkspace,
+    Snapshot { path: String, revision: String },
+    Unknown,
+}
+
 struct TurnDigest {
     question: String,
     headline: String,
+    workspace: TurnWorkspace,
     frame: Option<String>,
     queries: Vec<String>,
+}
+
+fn turn_workspace_matches(workspace: &TurnWorkspace, catalog: &Catalog) -> bool {
+    match workspace {
+        TurnWorkspace::NoWorkspace => catalog.workspace.is_none(),
+        TurnWorkspace::Snapshot { path, revision } => {
+            catalog.workspace.as_deref() == Some(path.as_str())
+                && catalog.revision.as_deref() == Some(revision.as_str())
+        }
+        TurnWorkspace::Unknown => false,
+    }
+}
+
+fn archived_turn_workspace(answer: Option<&serde_json::Value>) -> TurnWorkspace {
+    let Some(answer) = answer else {
+        return TurnWorkspace::Unknown;
+    };
+    if let Some(workspace) = answer.get("workspace") {
+        if workspace.is_null() {
+            return if answer.get("trace").is_some() {
+                TurnWorkspace::NoWorkspace
+            } else {
+                TurnWorkspace::Unknown
+            };
+        }
+        if let (Some(path), Some(revision)) = (
+            workspace.get("path").and_then(|value| value.as_str()),
+            workspace.get("revision").and_then(|value| value.as_str()),
+        ) {
+            return TurnWorkspace::Snapshot {
+                path: path.to_string(),
+                revision: revision.to_string(),
+            };
+        }
+        return TurnWorkspace::Unknown;
+    }
+
+    // Current wire answers omit `workspace` when it is absent, while older
+    // archived assistant messages may have no typed answer at all. A trace
+    // without a workspace revision identifies the former general/no-mount
+    // answer; don't infer a source for legacy prose from archive-level metadata.
+    if answer.get("trace").is_some()
+        && answer
+            .pointer("/trace/workspace_revision")
+            .is_none_or(serde_json::Value::is_null)
+    {
+        TurnWorkspace::NoWorkspace
+    } else {
+        TurnWorkspace::Unknown
+    }
 }
 
 fn contract_frame(contract: &AnalysisContract) -> Option<String> {
@@ -473,11 +533,7 @@ fn contract_frame(contract: &AnalysisContract) -> Option<String> {
 /// The transcript remains the UI source of truth; this deliberately extracts
 /// only the question, answer headline, and successful analytical queries that
 /// the prompt has always carried for an in-memory follow-up.
-fn archived_turns(value: &serde_json::Value, workspace: Option<&str>) -> Vec<TurnDigest> {
-    let archived_workspace = value.get("workspace").and_then(|value| value.as_str());
-    if archived_workspace != workspace {
-        return Vec::new();
-    }
+fn archived_turns(value: &serde_json::Value) -> Vec<TurnDigest> {
     let Some(messages) = value.get("messages").and_then(|value| value.as_array()) else {
         return Vec::new();
     };
@@ -552,6 +608,7 @@ fn archived_turns(value: &serde_json::Value, workspace: Option<&str>) -> Vec<Tur
                 .map(|text| cap_chars(text, 200))
                 .unwrap_or_default(),
             headline,
+            workspace: archived_turn_workspace(answer),
             frame,
             queries,
         });
@@ -560,6 +617,180 @@ fn archived_turns(value: &serde_json::Value, workspace: Option<&str>) -> Vec<Tur
         turns.drain(0..turns.len() - 3);
     }
     turns
+}
+
+#[cfg(test)]
+mod conversation_context_tests {
+    use super::*;
+
+    fn scratch(tag: &str) -> PathBuf {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("fella-conversation-{tag}-{nonce}"));
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    #[test]
+    fn mount_switch_preserves_thread_and_hides_old_workspace_hints() {
+        let data_dir = scratch("mount-data");
+        let first_workspace = scratch("mount-first");
+        let second_workspace = scratch("mount-second");
+        std::fs::write(first_workspace.join("values.csv"), "value\n10\n").unwrap();
+        std::fs::write(second_workspace.join("values.csv"), "value\n20\n").unwrap();
+
+        let engine = EngineState::new(&data_dir).unwrap();
+        engine.inner.lock().unwrap().sessions.insert(
+            "same-conversation".into(),
+            SessionMemory {
+                turns: vec![TurnDigest {
+                    question: "What does variance mean?".into(),
+                    headline: "Variance measures spread around a mean.".into(),
+                    workspace: TurnWorkspace::NoWorkspace,
+                    frame: None,
+                    queries: Vec::new(),
+                }],
+                last_used: 1,
+            },
+        );
+
+        let first_catalog = engine.open_workspace(&first_workspace).unwrap();
+        let first_revision = first_catalog.revision.unwrap();
+        engine
+            .inner
+            .lock()
+            .unwrap()
+            .sessions
+            .get_mut("same-conversation")
+            .unwrap()
+            .turns
+            .push(TurnDigest {
+                question: "What was the total in this folder?".into(),
+                headline: "The total was 10.".into(),
+                workspace: TurnWorkspace::Snapshot {
+                    path: first_workspace.display().to_string(),
+                    revision: first_revision,
+                },
+                frame: Some("measure=value; population=all rows".into()),
+                queries: vec!["SELECT SUM(value) FROM values".into()],
+            });
+
+        let in_first_mount = engine
+            .session_block("same-conversation")
+            .expect("conversation survives the first mount");
+        assert!(in_first_mount.contains("What does variance mean?"));
+        assert!(in_first_mount.contains("prior query hint (re-run before use)"));
+
+        // A changed revision at the same path is stale too; path equality by
+        // itself must not keep old analytical hints eligible.
+        std::fs::write(first_workspace.join("values.csv"), "value\n11\n").unwrap();
+        engine.open_workspace(&first_workspace).unwrap();
+        let after_reindex = engine
+            .session_block("same-conversation")
+            .expect("conversation survives a reindex");
+        assert!(after_reindex.contains("other or older workspace; not current evidence"));
+        assert!(!after_reindex.contains("SELECT SUM(value) FROM values"));
+
+        engine.open_workspace(&second_workspace).unwrap();
+        let in_second_mount = engine
+            .session_block("same-conversation")
+            .expect("conversation survives another mount");
+        assert!(in_second_mount.contains("What does variance mean?"));
+        assert!(in_second_mount.contains("What was the total in this folder?"));
+        assert!(in_second_mount.contains("The total was 10."));
+        assert!(in_second_mount.contains("other or older workspace; not current evidence"));
+        assert!(!in_second_mount.contains("SELECT SUM(value) FROM values"));
+        assert!(!in_second_mount.contains("measure=value"));
+
+        drop(engine);
+        let _ = std::fs::remove_dir_all(data_dir);
+        let _ = std::fs::remove_dir_all(first_workspace);
+        let _ = std::fs::remove_dir_all(second_workspace);
+    }
+
+    #[test]
+    fn archive_hydration_keeps_cross_mount_context_but_only_current_snapshot_hints() {
+        let data_dir = scratch("archive-data");
+        let current_workspace = scratch("archive-current");
+        std::fs::write(current_workspace.join("values.csv"), "value\n20\n").unwrap();
+        let engine = EngineState::new(&data_dir).unwrap();
+        let catalog = engine.open_workspace(&current_workspace).unwrap();
+        let revision = catalog.revision.unwrap();
+        let current_path = current_workspace.display().to_string();
+        let transcript = serde_json::json!({
+            "id": "cross-mount-thread",
+            "workspace": current_path,
+            "messages": [
+                {"role":"user", "text":"What does variance mean?"},
+                {"role":"assistant", "text":"Variance measures spread.", "answer": {
+                    "text":"Variance measures spread.", "trace":{"workspace_revision":null}, "evidence":[]
+                }},
+                {"role":"user", "text":"What was the old folder's total?"},
+                {"role":"assistant", "text":"The old total was 10.", "answer": {
+                    "text":"The old total was 10.",
+                    "workspace":{"path":"/workspace/old", "revision":"old-revision"},
+                    "contract":{"subject":"old values"},
+                    "evidence":[{"tool":"run_sql", "sql":"SELECT SUM(value) FROM old_values", "error":null}]
+                }},
+                {"role":"user", "text":"What was the total in this folder?"},
+                {"role":"assistant", "text":"The current total was 20.", "answer": {
+                    "text":"The current total was 20.",
+                    "workspace":{"path":current_path, "revision":revision},
+                    "evidence":[{"tool":"run_sql", "sql":"SELECT SUM(value) FROM values", "error":null}]
+                }}
+            ]
+        });
+        engine
+            .archive_conversation("cross-mount-thread", &transcript.to_string())
+            .unwrap();
+        engine.hydrate_session_from_archive("cross-mount-thread");
+
+        let prompt_context = engine
+            .session_block("cross-mount-thread")
+            .expect("archive should hydrate the conversation");
+        assert!(prompt_context.contains("What does variance mean?"));
+        assert!(prompt_context.contains("Variance measures spread."));
+        assert!(prompt_context.contains("The old total was 10."));
+        assert!(prompt_context.contains("other or older workspace; not current evidence"));
+        assert!(!prompt_context.contains("SELECT SUM(value) FROM old_values"));
+        assert!(prompt_context.contains("SELECT SUM(value) FROM values"));
+
+        drop(engine);
+        let _ = std::fs::remove_dir_all(data_dir);
+        let _ = std::fs::remove_dir_all(current_workspace);
+    }
+
+    #[test]
+    fn general_conversation_can_hydrate_without_a_mounted_workspace() {
+        let data_dir = scratch("general-data");
+        let engine = EngineState::new(&data_dir).unwrap();
+        let transcript = serde_json::json!({
+            "id": "general-thread",
+            "workspace": null,
+            "messages": [
+                {"role":"user", "text":"What is a median?"},
+                {"role":"assistant", "text":"The median is the middle value.", "answer": {
+                    "text":"The median is the middle value.", "trace":{"workspace_revision":null}, "evidence":[]
+                }}
+            ]
+        });
+        engine
+            .archive_conversation("general-thread", &transcript.to_string())
+            .unwrap();
+        engine.hydrate_session_from_archive("general-thread");
+
+        let prompt_context = engine
+            .session_block("general-thread")
+            .expect("general thread should hydrate with no folder open");
+        assert!(prompt_context.contains("What is a median?"));
+        assert!(prompt_context.contains("The median is the middle value."));
+        assert!(prompt_context.contains("general turn; no local evidence"));
+
+        drop(engine);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -885,9 +1116,8 @@ impl EngineState {
     }
 
     /// Rebuild a conversation's bounded prompt projection after a restart.
-    /// Only archives for the currently mounted workspace are eligible; a
-    /// transcript from another folder must never leak into this workspace's
-    /// analytical context.
+    /// Keep prior conversation text for follow-up resolution across mounts;
+    /// `session_block` scopes analytical hints to the exact current snapshot.
     fn hydrate_session_from_archive(&self, conversation_id: &str) {
         let already_hydrated = self
             .inner
@@ -898,16 +1128,13 @@ impl EngineState {
         if already_hydrated {
             return;
         }
-        let Some(workspace) = self.catalog().workspace else {
-            return;
-        };
         let Ok(body) = self.conversation_load(conversation_id) else {
             return;
         };
         let Ok(value) = serde_json::from_str::<serde_json::Value>(&body) else {
             return;
         };
-        let turns = archived_turns(&value, Some(workspace.as_str()));
+        let turns = archived_turns(&value);
         if turns.is_empty() {
             return;
         }
@@ -1600,19 +1827,38 @@ impl EngineState {
     /// The "Earlier in this conversation" block for `conversation_id`, or `None`
     /// on that conversation's first turn.
     pub(crate) fn session_block(&self, conversation_id: &str) -> Option<String> {
+        let catalog = self.catalog();
         let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let turns = match inner.sessions.get(conversation_id) {
             Some(s) if !s.turns.is_empty() => &s.turns,
             _ => return None,
         };
-        let mut p = String::from("Earlier in this conversation (reuse what still applies):\n");
+        let mut p = String::from(
+            "Earlier conversation for reference resolution only; assistant wording and result values are not evidence:\n",
+        );
         for t in turns {
-            p.push_str(&format!("- Q: \"{}\"  A: \"{}\"\n", t.question, t.headline));
-            if let Some(frame) = &t.frame {
-                p.push_str(&format!("  frame: {frame}\n"));
-            }
-            for q in &t.queries {
-                p.push_str(&format!("  used: {q}\n"));
+            let current_snapshot = turn_workspace_matches(&t.workspace, &catalog);
+            let scope = match (&t.workspace, current_snapshot) {
+                (TurnWorkspace::NoWorkspace, _) => "general turn; no local evidence",
+                (TurnWorkspace::Snapshot { .. }, true) => {
+                    "same workspace revision; prior query is only a hint"
+                }
+                (TurnWorkspace::Snapshot { .. }, false) => {
+                    "other or older workspace; not current evidence"
+                }
+                (TurnWorkspace::Unknown, _) => "unknown source scope; not evidence",
+            };
+            p.push_str(&format!(
+                "- [{scope}] Q: \"{}\"  A: \"{}\"\n",
+                t.question, t.headline
+            ));
+            if current_snapshot {
+                if let Some(frame) = &t.frame {
+                    p.push_str(&format!("  prior interpretation (re-check): {frame}\n"));
+                }
+                for q in &t.queries {
+                    p.push_str(&format!("  prior query hint (re-run before use): {q}\n"));
+                }
             }
         }
         Some(p)
@@ -2273,12 +2519,9 @@ exactly, character for character, from the list below.";
             old_scratch
         };
 
-        // The sources changed, so every conversation's distilled memory
-        // (schema hints, prior queries) is now stale.
-        {
-            let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-            inner.sessions.clear();
-        }
+        // Keep per-conversation turns across a mount change. `session_block`
+        // retains their conversational text while suppressing query/contract
+        // hints unless their exact workspace revision is still mounted.
         drop(old_scratch);
         // The user is about to ask something: warm the model now so the first
         // question doesn't wait on a cold load.
@@ -2761,6 +3004,14 @@ exactly, character for character, from the list below.";
                     entry.turns.push(TurnDigest {
                         question: analysis_question.chars().take(200).collect(),
                         headline,
+                        workspace: answer
+                            .workspace
+                            .as_ref()
+                            .map(|snapshot| TurnWorkspace::Snapshot {
+                                path: snapshot.path.clone(),
+                                revision: snapshot.revision.clone(),
+                            })
+                            .unwrap_or(TurnWorkspace::NoWorkspace),
                         frame: frame.map(|frame| cap_chars(&frame, 600)),
                         queries,
                     });

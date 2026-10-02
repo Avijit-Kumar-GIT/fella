@@ -38,6 +38,7 @@
       "properties": {
         "prompt": {"type": "string", "minLength": 1},
         "prior_turns": {"type": "array", "items": {"type": "string"}},
+        "clarification_reply": {"type": "string", "minLength": 1},
         "episode_id": {"type": "string"}
       }
     },
@@ -46,16 +47,27 @@
       "additionalProperties": false,
       "required": ["domain", "primary_capability", "supporting_capabilities", "formats", "data_conditions", "interaction", "answerability"],
       "properties": {
-        "domain": {"enum": ["personal_finance", "health_wellness", "reading_media", "travel", "housing_household", "subscriptions", "contacts_relationships", "goals_planning", "public_open_data", "cross_domain", "general"]},
-        "primary_capability": {"enum": ["inspect_and_select", "interpret_and_normalize", "plan_and_decompose", "maintain_conversation_context", "compute_and_compare", "combine_sources", "verify_and_explain", "visualize", "clarify_and_continue", "handle_unanswerable", "tool_proportionality"]},
-        "supporting_capabilities": {"type": "array", "uniqueItems": true, "items": {"enum": ["inspect_and_select", "interpret_and_normalize", "plan_and_decompose", "maintain_conversation_context", "compute_and_compare", "combine_sources", "verify_and_explain", "visualize", "clarify_and_continue", "handle_unanswerable", "tool_proportionality"]}},
+        "domain": {"enum": ["personal_finance", "health_wellness", "reading_media", "travel", "housing_household", "subscriptions", "contacts_relationships", "goals_planning", "work_and_projects", "education_and_research", "science_and_environment", "public_open_data", "cross_domain_personal_analytics", "cross_domain", "general"]},
+        "primary_capability": {"enum": ["inspect_and_select", "interpret_and_normalize", "plan_and_decompose", "maintain_conversation_context", "compute_and_compare", "combine_sources", "verify_and_explain", "visualize", "clarify_and_continue", "explain_evidence_limits", "forecast_and_scenario", "tool_proportionality"]},
+        "supporting_capabilities": {"type": "array", "uniqueItems": true, "items": {"enum": ["inspect_and_select", "interpret_and_normalize", "plan_and_decompose", "maintain_conversation_context", "compute_and_compare", "combine_sources", "verify_and_explain", "visualize", "clarify_and_continue", "explain_evidence_limits", "forecast_and_scenario", "tool_proportionality"]}},
+        "analysis_families": {"type": "array", "uniqueItems": true, "items": {"enum": ["workspace_discovery", "semantic_interpretation", "data_normalization", "descriptive_analysis", "relational_analysis", "statistical_analysis", "temporal_and_predictive", "data_quality_and_anomaly", "visualization", "evidence_and_communication", "clarification_and_continuity", "proportionality_and_boundaries"]}},
         "formats": {"type": "array", "uniqueItems": true, "items": {"enum": ["csv", "tsv", "json", "jsonl", "xlsx", "xls", "parquet", "pdf", "txt", "md", "log"]}},
-        "data_conditions": {"type": "array", "uniqueItems": true, "items": {"enum": ["missing_values", "malformed_values", "mixed_date_formats", "nonstandard_dates", "inconsistent_units", "inconsistent_signs", "category_aliases", "near_duplicate_labels", "duplicate_records", "summary_rows", "sparse_or_short_series", "conflicting_sources", "cross_file_keys", "repeated_or_overlapping_files", "distractor_files", "unstructured_notes", "mixed_formats", "large_workspace", "ambiguous_scope", "unsupported_prediction"]}},
+        "data_conditions": {"type": "array", "uniqueItems": true, "items": {"enum": ["missing_values", "malformed_values", "mixed_date_formats", "nonstandard_dates", "inconsistent_units", "inconsistent_signs", "category_aliases", "near_duplicate_labels", "duplicate_records", "summary_rows", "sparse_or_short_series", "missing_time_dimension", "forecast_holdout", "conflicting_sources", "cross_file_keys", "repeated_or_overlapping_files", "distractor_files", "unstructured_notes", "mixed_formats", "large_workspace", "ambiguous_scope", "nested_directories", "wide_tables", "outliers", "encoding_variation", "privacy_sensitive", "untrusted_instructions", "ambiguous_measure"]}},
         "interaction": {"enum": ["single_turn", "follow_up", "clarification_episode", "multi_step_episode"]},
-        "answerability": {"enum": ["answerable", "clarification_needed", "unsupported", "no_analysis_needed"]},
+        "answerability": {"enum": ["answerable", "answerable_with_assumptions", "clarification_needed", "unsupported", "no_analysis_needed"]},
         "workspace_scope": {"enum": ["listed_files", "entire_workspace"]}
       }
     },
     "answer_key_ref": {"type": "string", "minLength": 1}
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "labels": {"properties": {"answerability": {"const": "clarification_needed"}}}
+        }
+      },
+      "then": {"properties": {"request": {"required": ["clarification_reply"]}}}
+    }
+  ]
 }

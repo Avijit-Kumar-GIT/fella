@@ -77,8 +77,11 @@ Python installation or third-party packages.
 Python runs without a confirmation prompt inside an embedded RustPython/WASM
 guest. The guest has no filesystem, network, environment, or subprocess access;
 the host provides only captured output and bounded read-only SQL. Fuel, memory,
-stack, source, output, row, and response limits apply. If a calculation can be
-written clearly in SQL, prefer SQL because its evidence is easier to inspect.
+stack, source, output, row, and response limits apply. The model should choose
+the read-only route that best preserves the question's meaning: SQL for
+relational queries, Python for statistical calculations, and file search or
+reading for narrative sources. Clear evidence matters, but do not force every
+analysis through one language or tool sequence.
 
 ## A PDF cannot be searched
 

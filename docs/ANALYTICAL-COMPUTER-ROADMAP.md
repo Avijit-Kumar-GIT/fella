@@ -5,6 +5,11 @@ harness into a revision-aware analytical computer. It is intentionally a
 roadmap for the shared Rust runtime, not a UI redesign or a replacement for
 the Tauri/Electron shell.
 
+The broader user-facing backlog—including general questions, web research,
+forecasting, and expanded visual analysis—is tracked in the
+[Product Roadmap](PRODUCT-ROADMAP.md). This document remains the detailed
+runtime and workspace-model implementation plan.
+
 The destination is ambitious. The delivery should remain incremental: every
 stage must improve the model-directed loop, preserve the read-only boundary,
 and keep the model free to use the route that best fits the question.

@@ -6,7 +6,9 @@ icon: "flask-conical"
 
 # Fella FolderQA Benchmark
 
-FQA-Bench is Fella's internal standard for measuring whether its model-driven harness can analyze files in a mounted folder. It evaluates the **complete Fella loop**—not just whether a model can produce a plausible number in one prompt.
+FQA-Bench is Fella's benchmark for model-driven analytics over mounted folders. It evaluates the **complete product loop**—inspection, interpretation, analysis, clarification, verification, and communication—not just whether a model can produce a plausible number in one prompt.
+
+**FQA-Bench v0.1 is the first unreleased target-state specification.** Its tasks assume the full product roadmap is implemented. They can measure roadmap capabilities even while today's app is still building them; a current-build run is a diagnostic, not proof that the benchmark is wrong or that the target capability is already shipped.
 
 ## What it measures
 
@@ -25,9 +27,13 @@ Tasks are organized by capability. Topics, formats, and data conditions are cros
 | Verify and explain | Ground conclusions, communicate assumptions, and state limits |
 | Visualize | Match chart values, grouping, labels, units, and time buckets to the data |
 | Clarify and continue | Ask about material ambiguity and use the answer in the next turn |
-| Handle unanswerable requests | Avoid inventing results when the folder cannot support them |
+| Explain evidence limits | Identify the missing evidence, preserve useful partial results, and offer a next step |
+| Forecast and scenario | Estimate future outcomes from history or explicit assumptions, with method and uncertainty |
+| Tool proportionality | Choose suitable read-only work without needless calls or analysis |
 
-One episode can test several capabilities, but gets one primary capability for diagnosis. FQA-Bench reports results by capability and topical domain with task counts through a tag-aware post-run utility. A single overall percentage can hide important weaknesses.
+Analysis-family tags separately cover workspace discovery, semantic interpretation, normalization, descriptive, relational, statistical, temporal/predictive, data-quality, visualization, evidence, clarification/continuity, and proportionality/boundary tasks. Topics, formats, data conditions, and interaction shape are cross-cutting labels. Forecasts and scenarios are valid analyses, not an automatic refusal category. A missing source should be explained specifically; a material ambiguity should be clarified and then resolved in the same scored episode.
+
+One episode can test several capabilities, but gets one primary capability for diagnosis. FQA-Bench reports results by capability, analytical family, and topic with task counts. A single overall percentage can hide important weaknesses.
 
 For existing `agent_eval --json` results, a small report utility joins case IDs to the canonical tags and prints separate slices:
 
@@ -43,12 +49,14 @@ An episode pairs a frozen workspace with a natural-language request or conversat
 
 Development tasks and blind evaluation tasks are split by workspace and data source, not by question. The benchmark records the model, harness configuration, code revision, fixture hash, grader, run validity, traces, cost, and latency so comparisons can be reproduced.
 
-## Current scope and limitations
+## v0.1 scope and current coverage
 
-The methodology is under development. The existing `folder-qa` battery contains **79 task records** over one controlled synthetic personal profile and eight file extensions. It is useful for development, but the current runner stages only each task's listed files. Most tasks are single-turn, and the battery does not yet test explicit clarification episodes or broad full-folder discovery. The harder battery reuses the same underlying profile, so it is not an independent sample.
+The v0.1 target spans whole-folder discovery, messy multi-format ingestion, semantic normalization, direct and compound analytics, statistics, forecasts and scenarios, richer chart types, provenance, clarification/resume, follow-ups, and safe read-only operation. Its product claim is filesystem analytics; model-only general knowledge and web research are measured separately, with hybrid local-plus-web tasks tracked as a distinct route.
 
-An initial 11-task UCI Bike Sharing suite now provides an independently sourced public-data anchor. Its tasks see the complete three-file workspace, including a daily table, a reproducible monthly rollup from the hourly source, and a field guide. It tests aggregation, a prior-turn follow-up, cross-grain reconciliation, chart values, and unsupported requests. It is clean data from one mobility domain, not a stand-in for messy personal folders; all task tags are still provisional and the answer keys need independent review.
+Current draft fixtures include a 13-episode UCI Bike Sharing public-data anchor, a controlled housing clarification-and-resume episode, and the older generated personal-data batteries as development diagnostics. The UCI anchor now includes one explicit held-out mean-baseline forecast and one what-if scenario; these are policy/contract coverage, not enough to claim forecast calibration. The clarification runner grades the assistant's clarification turn and resolved answer in one conversation. The existing generated profile still covers only one persona; UCI is one clean mobility domain; the clarification fixture is one protocol example. None alone—or all together—establishes broad representativeness or production readiness.
 
-FQA-Bench is not yet evidence that Fella has been validated on production customer workflows or every kind of personal data. New independent workspaces, whole-folder discovery tasks, messy conditions across domains, and clarification episodes are needed before making broader capability claims. Because real personal analytics data is sensitive, the benchmark can begin with controlled synthetic workspaces and licensed public datasets; it should label those sources honestly rather than imply access to real customer workflows.
+Prior runs against retired forecast-refusal or implementation-route golds remain historical and are not rescored as v0.1 results. Gold criteria are frozen before candidate runs; suspected grader problems remain visible for review rather than silently being changed.
+
+FQA-Bench is not evidence that Fella has been validated on production customer workflows or every kind of personal data. Independent workspaces across topics, naturalistic messy-data coverage, richer chart contracts, independent review, and a blind holdout are still needed before representative claims. Because real personal analytics data is sensitive, the benchmark uses controlled synthetic workspaces and licensed public datasets and labels them honestly.
 
 See the [benchmark run guide](/other-resources/benchmarks) and the [methodology and data audit on GitHub](https://github.com/Avijit-Kumar-GIT/fella/tree/main/bench/fqa-bench).

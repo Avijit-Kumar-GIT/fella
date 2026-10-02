@@ -33,7 +33,9 @@ Every task exposes all three workspace files. That makes source discovery part o
 ```bash
 python3 bench/fqa-bench/suites/uci-bike-sharing/prepare_workspace.py --check
 python3 bench/fqa-bench/build_runner_cases.py --suite-dir bench/fqa-bench/suites/uci-bike-sharing --check
+python3 bench/fqa-bench/build_runner_cases.py --suite-dir bench/fqa-bench/suites/clarification-housing --check
 python3 bench/fqa-bench/suites/uci-bike-sharing/validate_suite.py
+python3 bench/fqa-bench/suites/clarification-housing/validate_suite.py
 ```
 
 To regenerate a case file after intentionally editing task or answer-key metadata, replace `--check` with `--write`. `--check` must pass before a benchmark run is valid.
@@ -42,4 +44,4 @@ To regenerate a case file after intentionally editing task or answer-key metadat
 
 ## Coverage and limits
 
-This suite currently exercises file inspection, year-code interpretation, filtering and aggregation, a follow-up, cross-grain reconciliation, an exact monthly chart, and two unsupported requests (missing price and missing hour-level detail). It is deliberately not a “messy data” test: the source has no missing values and the curated workspace is small. FQA-Bench still needs independently designed personal-data workspaces with naturalistic messiness, ambiguity/clarification episodes, and additional unrelated public-data domains before any broad claim is justified.
+This suite currently exercises file inspection, year-code interpretation, filtering and aggregation, a follow-up, cross-grain reconciliation, an exact monthly chart, two evidence-limit requests (missing price and missing hour-level detail), a held-out mean-baseline forecast, and an explicit what-if scenario. Evidence-limit answers should name the missing information and a useful next step, not stop at a cold refusal. The forecast prompt fixes the data cutoff and baseline method; the scenario specifies its assumption. These examples test basic outcome handling, not forecast calibration or general predictive quality. The suite is deliberately not a “messy data” test: the source has no missing values and the curated workspace is small. FQA-Bench still needs independently designed personal-data workspaces with naturalistic messiness and additional unrelated public-data domains before any broad claim is justified. A separate housing fixture exercises clarification and resolution.

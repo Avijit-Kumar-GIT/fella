@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Build a canonical, tagged catalog for the legacy folder-qa battery.
+"""Build a provisional tagged crosswalk for the legacy personal-data battery.
 
 The catalog is metadata only: cases.jsonl remains the runner input and the
-workspace fixtures remain in bench/folder-qa. Tags are provisional because
-this adapter crosswalks legacy task tiers to broad capability families; it
-does not replace independent human task review.
+workspace fixtures remain in bench/folder-qa. These records are development
+diagnostics, not the representative FQA-Bench v0.1 corpus. Tags are
+provisional because they are inferred from old task tiers.
 
     python3 bench/fqa-bench/catalog_folder_qa.py --write
     python3 bench/fqa-bench/catalog_folder_qa.py --check
@@ -73,8 +73,12 @@ def content_hash(case: dict) -> str:
 def primary_capability(case: dict) -> str:
     tier = (case.get("tier") or case.get("category") or "").lower()
     gold = case.get("gold")
-    if gold == "refusal":
-        return "handle_unanswerable"
+    if tier.startswith("clarification-episode"):
+        return "clarify_and_continue"
+    if tier.startswith("forecast-estimate"):
+        return "forecast_and_scenario"
+    if tier.startswith("forecast-source-limit"):
+        return "explain_evidence_limits"
     if gold in ("notool", "no_tool"):
         return "tool_proportionality"
     if isinstance(gold, dict) and "chart" in gold:
@@ -101,6 +105,10 @@ def supporting_capabilities(case: dict, primary: str) -> list[str]:
         support.add("compute_and_compare")
     if case.get("setup_turns"):
         support.add("plan_and_decompose")
+    if primary == "forecast_and_scenario":
+        support.update(("inspect_and_select", "compute_and_compare"))
+    if primary == "clarify_and_continue":
+        support.update(("inspect_and_select", "interpret_and_normalize", "compute_and_compare"))
     support.discard(primary)
     return sorted(support)
 
@@ -119,6 +127,8 @@ def data_conditions(case: dict) -> list[str]:
         conditions.add("nonstandard_dates")
     if "empty-filter" in tier:
         conditions.add("sparse_or_short_series")
+    if tier.startswith("forecast-source-limit"):
+        conditions.add("missing_time_dimension")
     if formats & {"md", "txt", "pdf"}:
         conditions.add("unstructured_notes")
     return sorted(conditions)
@@ -126,7 +136,12 @@ def data_conditions(case: dict) -> list[str]:
 
 def answerability(case: dict) -> str:
     gold = case.get("gold")
-    if gold == "refusal":
+    tier = (case.get("tier") or "").lower()
+    if tier.startswith("clarification-episode"):
+        return "clarification_needed"
+    if tier.startswith("forecast-estimate"):
+        return "answerable_with_assumptions"
+    if tier.startswith("forecast-source-limit"):
         return "unsupported"
     if gold in ("notool", "no_tool"):
         return "no_analysis_needed"
@@ -140,13 +155,18 @@ def catalog_entry(case: dict) -> dict:
     except KeyError as exc:
         raise ValueError(f"{case.get('id')}: unmapped legacy domain {domain!r}") from exc
     setup = case.get("setup_turns", [])
-    interaction = "follow_up" if setup else "single_turn"
+    graded_setup = case.get("graded_setup_turns", [])
+    interaction = (
+        "clarification_episode" if graded_setup
+        else "follow_up" if setup
+        else "single_turn"
+    )
     files = case.get("files", [])
     primary = primary_capability(case)
     return {
         "schema_version": 1,
         "id": case["id"],
-        "suite": "legacy-folder-qa",
+        "suite": "folder-qa-development",
         "tagging_status": "provisional",
         "workspace": {
             "id": "synthetic-person-profile-v1",
@@ -158,8 +178,9 @@ def catalog_entry(case: dict) -> dict:
             "provenance_ref": "bench/folder-qa/gen.py",
         },
         "request": {
-            "prompt": case["question"],
+            "prompt": graded_setup[0]["question"] if graded_setup else case["question"],
             "prior_turns": setup,
+            **({"clarification_reply": case["question"]} if graded_setup else {}),
         },
         "labels": {
             "domain": normalized_domain,

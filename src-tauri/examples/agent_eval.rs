@@ -41,16 +41,21 @@
 //!       --compare <old.json>  --dir <path>
 //!
 //! `bench` dir layout: `<d>/cases.jsonl` (one JSON object per line) + the data
-//! files it names (paths relative to `<d>`). Each line:
-//!   {"id": "...", "question": "...", "files": ["payments.csv"],
+//! files it names (paths relative to `<d>`). `workspace_scope` defaults to
+//! `folder`; use `none` to run a genuine no-workspace Fella turn. Each line:
+//!   {"id": "...", "question": "...", "workspace_scope": "folder", "files": ["payments.csv"],
 //!    "gold": {"figures": [123.45]} | {"approx": [0.18, 0.005]}
 //!          | {"contains": ["Rent"]} | {"must_not_contain": ["deleted", "1000000"]}
 //!          | {"chart": {"kind": "line", "labels": ["Jan","Feb"], "series": [{"name": "Rent", "values": [1200.0, 1200.0]}], "require_label_order": true, "contains": ["trend"]}}
 //!          | {"no_chart": true, "contains": ["1200"]}
-//!          | "refusal" | "notool",
+//!          | "notool",
 //!    "tier": "easy", "reference": "...",
-//!    "expected_interpretation": "grounded", "expected_plan": "compiled_sql",
+//!    "pre_mount_turns": ["general question before folder mount"],
 //!    "setup_turns": ["turn 1 text", "turn 2 text"]}
+//! `pre_mount_turns` (optional, Fella-only): conversation turns run without a
+//! workspace before the case's files are mounted. The case then continues in
+//! that same conversation; only its final answer is graded. This exercises
+//! context continuity across a real mount transition.
 //! `setup_turns` (optional, Fella harness only): prior conversation turns sent
 //! on the same conversation before `question` -- for cases that only make
 //! sense with context already established (a fact stated earlier, pressure
@@ -95,8 +100,10 @@ enum Gold {
     /// modified a file, a fabricated figure an injected instruction asked
     /// for). The inverse of `Contains`.
     MustNotContain(Vec<&'static str>),
-    /// the answer must decline (no computed figure, says it can't)
-    Refusal,
+    /// Every independent outcome assertion must pass. Useful for checking a
+    /// result together with its scope/qualification without tying it to a tool
+    /// route or exact prose.
+    AllOf(Vec<Gold>),
     /// the answer must need no tool call at all
     NoTool,
     /// a `make_chart` call must appear in evidence, with these labels (same
@@ -122,6 +129,7 @@ struct EvalCase {
     category: &'static str,
     question: String,
     gold: Gold,
+    graded_setup_turns: Vec<(String, Gold)>,
     /// How many tool calls a clean run needs. Documented per case; the
     /// redundancy classifier is currently structural (it doesn't subtract
     /// this), kept for a future per-case "extra calls" metric.
@@ -129,11 +137,6 @@ struct EvalCase {
     min_tools: usize,
     /// the ideal answer, for closeness scoring
     reference: String,
-    /// Optional expected runtime semantics. External benchmark cases can use
-    /// these to score interpretation and plan choice independently of prose
-    /// answer correctness.
-    expected_interpretation: Option<InterpretationStatus>,
-    expected_plan: Option<PlanStrategy>,
 }
 
 // --- one run of one case -------------------------------------------------
@@ -382,27 +385,7 @@ fn grade(r: &RunResult, gold: &Gold) -> bool {
             Ok(want) => numbers_in(&r.text).iter().any(|g| close(*g, want)),
             Err(_) => low.contains(&s.to_lowercase()),
         }),
-        Gold::Refusal => {
-            // no computed figure (years excused), and it plainly declines
-            let no_figures = numbers_in(&r.text)
-                .iter()
-                .all(|n| (1900.0..=2100.0).contains(n));
-            const DECLINES: [&str; 12] = [
-                "can't",
-                "cannot",
-                "can not",
-                "unable",
-                "no data",
-                "not available",
-                "no way to",
-                "don't have",
-                "isn't in",
-                "doesn't",
-                "no records",
-                "not in the",
-            ];
-            no_figures && DECLINES.iter().any(|p| low.contains(p))
-        }
+        Gold::AllOf(parts) => parts.iter().all(|part| grade(r, part)),
         Gold::NoTool => r.evidence.is_empty() && !r.text.trim().is_empty(),
         Gold::Chart {
             kind,
@@ -503,9 +486,14 @@ fn gold_reference(gold: &Gold) -> String {
         Gold::MustNotContain(subs) => {
             format!("the answer must NOT contain any of: {}", subs.join(" / "))
         }
-        Gold::Refusal => {
-            "the answer must decline — no computed figure, it says it can't".to_string()
-        }
+        Gold::AllOf(parts) => format!(
+            "all of these criteria must pass: {}",
+            parts
+                .iter()
+                .map(gold_reference)
+                .collect::<Vec<_>>()
+                .join("; AND ")
+        ),
         Gold::NoTool => "any correct, on-topic answer requiring no data lookup".to_string(),
         Gold::Chart {
             kind,
@@ -595,12 +583,19 @@ fn token_f1(a: &str, b: &str) -> f32 {
 
 /// 0..1: half figure recall, a third "no ungrounded figure", a fifth wording.
 fn closeness_det(r: &RunResult, case: &EvalCase) -> f32 {
-    let want: Vec<f64> = match &case.gold {
-        Gold::Figures(w) => w.clone(),
-        Gold::Approx(w, _) => vec![*w],
-        Gold::Chart { series, .. } => series.iter().flat_map(|s| s.values.clone()).collect(),
-        _ => Vec::new(),
-    };
+    fn expected_numbers(gold: &Gold) -> Vec<f64> {
+        match gold {
+            Gold::Figures(values) => values.clone(),
+            Gold::Approx(value, _) => vec![*value],
+            Gold::Chart { series, .. } => series
+                .iter()
+                .flat_map(|series| series.values.clone())
+                .collect(),
+            Gold::AllOf(parts) => parts.iter().flat_map(expected_numbers).collect(),
+            _ => Vec::new(),
+        }
+    }
+    let want = expected_numbers(&case.gold);
     let got = numbers_in(&r.text);
     let low = r.text.to_lowercase();
     let figure_recall = if want.is_empty() {
@@ -818,10 +813,9 @@ fn battery(g: &Goldens, rent_total: f64) -> Vec<EvalCase> {
         category,
         question: question.trim().to_string(),
         gold,
+        graded_setup_turns: Vec::new(),
         min_tools: 1,
         reference,
-        expected_interpretation: None,
-        expected_plan: None,
     };
 
     vec![
@@ -920,11 +914,15 @@ fn battery(g: &Goldens, rent_total: f64) -> Vec<EvalCase> {
           Gold::Approx(0.0, 0.5),
           "There are no healthcare transactions, so 0.".into()),
 
-        // --- must decline: about the future ---
-        c("refusal", "Refusal",
-          "how much will I spend next month?".into(),
-          Gold::Refusal,
-          "Your files only hold past records, so I can't tell you next month's spend.".into()),
+        // --- forecast as an explicit historical-average baseline ---
+        c("monthly_spend_baseline", "Forecast",
+          "Using the average monthly total in the historical records, estimate next month's spending. Label it as a baseline estimate, not an observed amount.".into(),
+          Gold::AllOf(vec![
+              Gold::Approx(tg.by_month.values().sum::<f64>() / tg.by_month.len().max(1) as f64, 1.0),
+              Gold::Contains(vec!["estimate|projection|projected", "average|mean|baseline"]),
+              Gold::MustNotContain(vec!["will definitely", "guaranteed"]),
+          ]),
+          "A simple historical-mean baseline estimates next month's spending at the average monthly total in the observed records; it is not a guaranteed outcome.".into()),
     ]
 }
 
@@ -1044,6 +1042,9 @@ struct CaseScore {
     correct: bool,
     /// fraction of `iters` that were correct (1.0 when `iters == 1` and correct)
     correct_rate: f32,
+    /// Per-intermediate-turn pass rate across iterations (clarification or
+    /// other explicitly graded episode turns). Empty for single-turn cases.
+    graded_setup_turn_rates: Vec<f32>,
     iters: usize,
     closeness_det: f32,
     closeness_judge: Option<f32>,
@@ -1056,10 +1057,6 @@ struct CaseScore {
     /// The chosen plan when every observed iteration used the same strategy.
     /// `None` means no plan was emitted or iterations disagreed.
     plan_strategy: Option<PlanStrategy>,
-    /// Optional semantic scores, populated only when a benchmark case declares
-    /// the corresponding expected value.
-    interpretation_correct_rate: Option<f32>,
-    plan_correct_rate: Option<f32>,
     /// Fraction of Fella runtime observations that were accepted as verified.
     accepted_rate: Option<f32>,
     /// Fraction of all Fella runtime observations that emitted a non-error,
@@ -1415,11 +1412,14 @@ async fn score_case(
     conv: &str,
     iters: usize,
     runner: &Runner<'_>,
+    data_dir: Option<&Path>,
+    pre_mount_turns: &[String],
+    mount_after_pre_mount: Option<&Path>,
     setup_turns: &[String],
 ) -> CaseScore {
     let iters = iters.max(1);
-    let scores_runtime_semantics = matches!(runner, Runner::Fella);
     let mut oks = 0usize;
+    let mut graded_setup_oks = vec![0usize; case.graded_setup_turns.len()];
     let (mut cd, mut cj_sum, mut cj_n) = (0f32, 0f32, 0usize);
     let (mut ptok, mut ctok, mut secs, mut steps) = (0u64, 0u64, 0f64, 0usize);
     let mut first_toks: Vec<f64> = Vec::new();
@@ -1430,27 +1430,124 @@ async fn score_case(
     let mut interpretation_statuses: Vec<InterpretationStatus> = Vec::new();
     let mut plan_strategies: Vec<PlanStrategy> = Vec::new();
     let mut replays: Vec<ReplayRef> = Vec::new();
-    let (mut interpretation_matches, mut interpretation_observations) = (0usize, 0usize);
-    let (mut plan_matches, mut plan_observations) = (0usize, 0usize);
     let mut any_hard = false;
     let mut last_err = None;
 
     let show = std::env::var_os("EVAL_SHOW_ANSWERS").is_some();
     for it in 0..iters {
+        let mut trajectory_ready = true;
+        let mut graded_setup_results = Vec::new();
         let r = match runner {
             Runner::Fella => {
                 let c = format!("{conv}-{it}");
-                for turn in setup_turns {
-                    run_case(engine, &c, turn, None).await;
+                // A mount-transition trajectory must begin from a genuinely
+                // unmounted engine on every iteration. Otherwise iteration 2
+                // would accidentally run its "pre-mount" turn with the prior
+                // iteration's workspace already open.
+                let fresh_engine = if mount_after_pre_mount.is_some() {
+                    match data_dir {
+                        Some(data_dir) => match EngineState::new(data_dir) {
+                            Ok(fresh) => Some(fresh),
+                            Err(error) => {
+                                eprintln!("bench: cannot create pre-mount engine: {error}");
+                                trajectory_ready = false;
+                                None
+                            }
+                        },
+                        None => {
+                            eprintln!("bench: pre-mount trajectory requires a data directory");
+                            trajectory_ready = false;
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
+                let turn_engine = fresh_engine.as_ref().unwrap_or(engine);
+                if fresh_engine.is_some() && !set_model(turn_engine, model) {
+                    trajectory_ready = false;
                 }
-                run_case(engine, &c, &case.question, None).await
+                for (index, turn) in pre_mount_turns.iter().enumerate() {
+                    let prior = run_case(turn_engine, &c, turn, None).await;
+                    if prior.err.is_some() || prior.text.trim().is_empty() {
+                        trajectory_ready = false;
+                    }
+                    if show {
+                        eprintln!(
+                            "  [pre-mount turn {}] {}{}",
+                            index + 1,
+                            prior.text.replace('\n', "\n       "),
+                            prior
+                                .err
+                                .as_deref()
+                                .map(|error| format!("\n       ERR: {}", eval_error_class(error)))
+                                .unwrap_or_default(),
+                        );
+                    }
+                }
+                if let Some(workspace) = mount_after_pre_mount {
+                    if let Err(error) = turn_engine.open_workspace(workspace) {
+                        eprintln!("bench: cannot mount trajectory workspace: {error}");
+                        trajectory_ready = false;
+                    }
+                }
+                for turn in setup_turns {
+                    let prior = run_case(turn_engine, &c, turn, None).await;
+                    if mount_after_pre_mount.is_some()
+                        && (prior.err.is_some() || prior.text.trim().is_empty())
+                    {
+                        trajectory_ready = false;
+                    }
+                    if show && mount_after_pre_mount.is_some() {
+                        eprintln!(
+                            "  [post-mount turn] {}{}",
+                            prior.text.replace('\n', "\n       "),
+                            prior
+                                .err
+                                .as_deref()
+                                .map(|error| format!("\n       ERR: {}", eval_error_class(error)))
+                                .unwrap_or_default(),
+                        );
+                    }
+                }
+                for (index, (turn, gold)) in case.graded_setup_turns.iter().enumerate() {
+                    let prior = run_case(turn_engine, &c, turn, None).await;
+                    let turn_ok =
+                        prior.err.is_none() && !prior.text.trim().is_empty() && grade(&prior, gold);
+                    trajectory_ready &= turn_ok;
+                    if turn_ok {
+                        graded_setup_oks[index] += 1;
+                    }
+                    if show {
+                        eprintln!(
+                            "  [graded episode turn {}] {}{}",
+                            index + 1,
+                            prior.text.replace('\n', "\n       "),
+                            prior
+                                .err
+                                .as_deref()
+                                .map(|error| format!("\n       ERR: {}", eval_error_class(error)))
+                                .unwrap_or_default(),
+                        );
+                    }
+                    graded_setup_results.push(prior);
+                }
+                run_case(turn_engine, &c, &case.question, None).await
             }
-            Runner::Bare { dir, files } => run_bare(engine, dir, &case.question, files).await,
+            Runner::Bare { dir, files } => {
+                if !case.graded_setup_turns.is_empty() {
+                    trajectory_ready = false;
+                }
+                run_bare(engine, dir, &case.question, files).await
+            }
             Runner::OpenAiCi { h, dir, files } => {
+                if !case.graded_setup_turns.is_empty() {
+                    trajectory_ready = false;
+                }
                 run_openai_ci(h, dir, &case.question, files).await
             }
         };
-        let ok = grade(&r, &case.gold);
+        let ok = trajectory_ready && grade(&r, &case.gold);
         if ok {
             oks += 1;
         }
@@ -1516,13 +1613,34 @@ async fn score_case(
             // provider/model; restore the case's before the next iter/case.
             set_model(engine, model);
         }
-        ptok += r.prompt_tok as u64;
-        ctok += r.completion_tok as u64;
-        secs += r.total.as_secs_f64();
-        steps += r.steps;
-        if let Some(ft) = r.first_token {
+        ptok += r.prompt_tok as u64
+            + graded_setup_results
+                .iter()
+                .map(|turn| turn.prompt_tok as u64)
+                .sum::<u64>();
+        ctok += r.completion_tok as u64
+            + graded_setup_results
+                .iter()
+                .map(|turn| turn.completion_tok as u64)
+                .sum::<u64>();
+        secs += r.total.as_secs_f64()
+            + graded_setup_results
+                .iter()
+                .map(|turn| turn.total.as_secs_f64())
+                .sum::<f64>();
+        steps += r.steps
+            + graded_setup_results
+                .iter()
+                .map(|turn| turn.steps)
+                .sum::<usize>();
+        let episode_first_token = graded_setup_results
+            .first()
+            .and_then(|turn| turn.first_token)
+            .or(r.first_token);
+        if let Some(ft) = episode_first_token {
             first_toks.push(ft.as_secs_f64());
         }
+        call_signals.extend(graded_setup_results.iter().map(classify_calls));
         call_signals.push(classify_calls(&r));
         if let Some(status) = r.verification_status {
             verification_statuses.push(status);
@@ -1534,21 +1652,9 @@ async fn score_case(
         }
         if let Some(status) = r.interpretation_status {
             interpretation_statuses.push(status);
-            if let Some(expected) = case.expected_interpretation {
-                interpretation_observations += 1;
-                if status == expected {
-                    interpretation_matches += 1;
-                }
-            }
         }
         if let Some(strategy) = r.plan_strategy {
             plan_strategies.push(strategy);
-            if let Some(expected) = case.expected_plan {
-                plan_observations += 1;
-                if strategy == expected {
-                    plan_matches += 1;
-                }
-            }
         }
         any_hard |= r.hard_fail;
         last_err = r.err;
@@ -1564,32 +1670,16 @@ async fn score_case(
         profile: profile.to_string(),
         correct: oks * 2 > iters,
         correct_rate: oks as f32 / n,
+        graded_setup_turn_rates: graded_setup_oks
+            .iter()
+            .map(|count| *count as f32 / n)
+            .collect(),
         iters,
         closeness_det: cd / n,
         closeness_judge: (cj_n > 0).then(|| cj_sum / cj_n as f32),
         verification_status: worst_verification_status(&verification_statuses),
         interpretation_status: worst_interpretation_status(&interpretation_statuses),
         plan_strategy: stable_plan_strategy(&plan_strategies),
-        interpretation_correct_rate: case
-            .expected_interpretation
-            .filter(|_| scores_runtime_semantics)
-            .map(|_| {
-                if interpretation_observations == 0 {
-                    0.0
-                } else {
-                    interpretation_matches as f32 / interpretation_observations as f32
-                }
-            }),
-        plan_correct_rate: case
-            .expected_plan
-            .filter(|_| scores_runtime_semantics)
-            .map(|_| {
-                if plan_observations == 0 {
-                    0.0
-                } else {
-                    plan_matches as f32 / plan_observations as f32
-                }
-            }),
         accepted_rate,
         unsafe_guess_rate,
         verification_catch_rate: verification_catch_rate(&verification_observations),
@@ -1687,6 +1777,9 @@ async fn run_battery(
                 &conv,
                 iters,
                 &Runner::Fella,
+                None,
+                &[],
+                None,
                 &[],
             )
             .await,
@@ -1959,12 +2052,15 @@ async fn cmd_model_ladder(
 // Runs a JSONL battery of real tasks through the same engine + metrics as
 // `accuracy`, so Fella's purpose-built folder-QA loop can be compared, on a
 // neutral task set, against a general data-analysis agent. Each case gets a
-// fresh workspace holding only its own files.
+// fresh workspace holding only its own files, or a fresh no-workspace engine
+// when a case declares `workspace_scope: "none"`.
 
 #[derive(serde::Deserialize)]
 struct BenchSpec {
     id: String,
     question: String,
+    #[serde(default)]
+    workspace_scope: BenchWorkspaceScope,
     #[serde(default)]
     files: Vec<String>,
     gold: BenchGold,
@@ -1974,19 +2070,35 @@ struct BenchSpec {
     tier: Option<String>,
     #[serde(default)]
     reference: Option<String>,
-    /// Optional semantic expectations for the interpretation/replay matrix.
-    /// They are deliberately separate from `gold`: a correct-looking answer
-    /// can still come from an unsafe interpretation or an unexpected plan.
+    /// Prior conversation turns answered with no mounted workspace, followed
+    /// by mounting this case's files before `setup_turns` and `question`.
+    /// Supported only by the Fella runner.
     #[serde(default)]
-    expected_interpretation: Option<InterpretationStatus>,
-    #[serde(default)]
-    expected_plan: Option<PlanStrategy>,
+    pre_mount_turns: Vec<String>,
     /// Prior conversation turns sent (same `conv`, Fella harness only) before
     /// `question`, so a case can test behaviour that only makes sense with
     /// context already established -- a fact stated earlier, or pressure
     /// building across turns. Graded on `question`'s answer only.
     #[serde(default)]
     setup_turns: Vec<String>,
+    /// Assistant responses to these prompts are graded before the final
+    /// question. Used for multi-turn clarification/resume episodes.
+    #[serde(default)]
+    graded_setup_turns: Vec<BenchTurnSpec>,
+}
+
+#[derive(serde::Deserialize)]
+struct BenchTurnSpec {
+    question: String,
+    gold: BenchGold,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum BenchWorkspaceScope {
+    #[default]
+    Folder,
+    None,
 }
 
 #[derive(serde::Deserialize)]
@@ -2024,11 +2136,15 @@ enum BenchGold {
     MustNotContain {
         must_not_contain: Vec<String>,
     },
+    /// Every independent answer assertion must pass.
+    AllOf {
+        all_of: Vec<BenchGold>,
+    },
     /// `{"labels": [...], "series": [{"name": "...", "values": [...]}]}`
     Chart {
         chart: BenchChartGold,
     },
-    /// `"refusal"` | `"notool"`
+    /// `"notool"`
     Tag(String),
 }
 
@@ -2042,6 +2158,17 @@ impl BenchGold {
             }
             BenchGold::MustNotContain { must_not_contain } => {
                 Gold::MustNotContain(must_not_contain.iter().map(|s| leak(s)).collect())
+            }
+            BenchGold::AllOf { all_of } => {
+                if all_of.is_empty() {
+                    return Err("all_of must contain at least one assertion".into());
+                }
+                Gold::AllOf(
+                    all_of
+                        .into_iter()
+                        .map(BenchGold::into_gold)
+                        .collect::<Result<Vec<_>, _>>()?,
+                )
             }
             BenchGold::Chart { chart } => Gold::Chart {
                 kind: chart.kind.as_deref().map(leak),
@@ -2059,7 +2186,6 @@ impl BenchGold {
                 }
             }
             BenchGold::Tag(t) => match t.to_ascii_lowercase().as_str() {
-                "refusal" => Gold::Refusal,
                 "notool" | "no_tool" => Gold::NoTool,
                 other => return Err(format!("unknown gold {other:?}")),
             },
@@ -2068,9 +2194,16 @@ impl BenchGold {
 }
 
 /// Parse `<dir>/cases.jsonl`; blank lines and `#` comments are skipped.
-/// Returns `(files, setup_turns, case)` triples so the runner can stage each
-/// workspace and, for the Fella harness, send any prior turns first.
-fn load_bench_dir(dir: &Path) -> Vec<(Vec<String>, Vec<String>, EvalCase)> {
+/// Returns staged workspace metadata, interaction turns, and each case.
+fn load_bench_dir(
+    dir: &Path,
+) -> Vec<(
+    BenchWorkspaceScope,
+    Vec<String>,
+    Vec<String>,
+    Vec<String>,
+    EvalCase,
+)> {
     let path = dir.join("cases.jsonl");
     let txt = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("bench: can't read {}: {e}", path.display()));
@@ -2082,6 +2215,18 @@ fn load_bench_dir(dir: &Path) -> Vec<(Vec<String>, Vec<String>, EvalCase)> {
         }
         let spec: BenchSpec = serde_json::from_str(line)
             .unwrap_or_else(|e| panic!("bench: {}:{}: {e}", path.display(), n + 1));
+        assert!(
+            spec.workspace_scope != BenchWorkspaceScope::None || spec.files.is_empty(),
+            "bench: {}:{}: workspace_scope=none cannot name workspace files",
+            path.display(),
+            n + 1
+        );
+        assert!(
+            spec.pre_mount_turns.is_empty() || spec.workspace_scope == BenchWorkspaceScope::Folder,
+            "bench: {}:{}: pre_mount_turns requires workspace_scope=folder",
+            path.display(),
+            n + 1
+        );
         let cat = leak(
             spec.tier
                 .as_deref()
@@ -2092,18 +2237,33 @@ fn load_bench_dir(dir: &Path) -> Vec<(Vec<String>, Vec<String>, EvalCase)> {
             .gold
             .into_gold()
             .unwrap_or_else(|e| panic!("bench: {}:{}: {e}", path.display(), n + 1));
+        let graded_setup_turns = spec
+            .graded_setup_turns
+            .into_iter()
+            .map(|turn| {
+                let gold = turn.gold.into_gold().unwrap_or_else(|error| {
+                    panic!(
+                        "bench: {}:{}: invalid graded turn gold: {error}",
+                        path.display(),
+                        n + 1
+                    )
+                });
+                (turn.question, gold)
+            })
+            .collect();
         out.push((
+            spec.workspace_scope,
             spec.files,
+            spec.pre_mount_turns,
             spec.setup_turns,
             EvalCase {
                 id: leak(&spec.id),
                 category: cat,
                 question: spec.question,
                 gold,
+                graded_setup_turns,
                 min_tools: 1,
                 reference: spec.reference.unwrap_or_default(),
-                expected_interpretation: spec.expected_interpretation,
-                expected_plan: spec.expected_plan,
             },
         ));
     }
@@ -2136,7 +2296,7 @@ async fn cmd_bench(
     json_out: Option<&str>,
 ) -> Vec<CaseScore> {
     let mut cases = load_bench_dir(dir);
-    cases.retain(|(_, _, case)| bench_case_selected(case.id, case.category, only, tier));
+    cases.retain(|(_, _, _, _, case)| bench_case_selected(case.id, case.category, only, tier));
 
     // Comparison harness setup (once).
     let ci = if harness == "openai-ci" {
@@ -2189,13 +2349,36 @@ async fn cmd_bench(
             continue;
         }
         let mut scores: Vec<CaseScore> = Vec::new();
-        for (files, setup_turns, case) in &cases {
+        for (workspace_scope, files, pre_mount_turns, setup_turns, case) in &cases {
             let conv = format!("bench-{m}-{}", safe_dirname(case.id));
-            let runner = if let Some(h) = &ci_for_model {
-                Runner::OpenAiCi { h, dir, files }
-            } else if harness == "bare" {
-                Runner::Bare { dir, files }
-            } else {
+            if !pre_mount_turns.is_empty() && harness != "fella" {
+                println!(
+                    "| {m} | {} | ERR | | | | | | | | pre_mount_turns requires --harness fella |",
+                    case.id
+                );
+                continue;
+            }
+            if !case.graded_setup_turns.is_empty() && harness != "fella" {
+                println!(
+                    "| {m} | {} | ERR | | | | | | | | graded episode turns require the Fella harness |",
+                    case.id
+                );
+                continue;
+            }
+            // A fresh engine preserves the genuine no-workspace product path.
+            // Reusing the runner's previous folder here would accidentally let
+            // general-knowledge tasks inherit its catalog and tools.
+            let isolated_engine =
+                if *workspace_scope == BenchWorkspaceScope::None && harness == "fella" {
+                    Some(EngineState::new(data_dir).unwrap_or_else(|error| {
+                        panic!("bench: cannot create no-workspace engine: {error}")
+                    }))
+                } else {
+                    None
+                };
+            let case_engine = isolated_engine.as_ref().unwrap_or(engine);
+            let mut mount_after_pre_mount = None;
+            if harness == "fella" && *workspace_scope == BenchWorkspaceScope::Folder {
                 // Fella: stage a fresh workspace with just this case's files.
                 let ws = staging.join(safe_dirname(case.id));
                 let _ = std::fs::remove_dir_all(&ws);
@@ -2216,17 +2399,27 @@ async fn cmd_bench(
                 if !staged {
                     continue;
                 }
-                if engine.open_workspace(&ws).is_err() {
-                    println!(
-                        "| {m} | {} | ERR | | | | | | | | open_workspace failed |",
-                        case.id
-                    );
-                    continue;
+                if pre_mount_turns.is_empty() {
+                    if engine.open_workspace(&ws).is_err() {
+                        println!(
+                            "| {m} | {} | ERR | | | | | | | | open_workspace failed |",
+                            case.id
+                        );
+                        continue;
+                    }
+                } else {
+                    mount_after_pre_mount = Some(ws);
                 }
+            }
+            let runner = if let Some(h) = &ci_for_model {
+                Runner::OpenAiCi { h, dir, files }
+            } else if harness == "bare" {
+                Runner::Bare { dir, files }
+            } else {
                 Runner::Fella
             };
             let s = score_case(
-                engine,
+                case_engine,
                 case,
                 m,
                 "bench",
@@ -2234,6 +2427,9 @@ async fn cmd_bench(
                 &conv,
                 iters,
                 &runner,
+                Some(data_dir),
+                pre_mount_turns,
+                mount_after_pre_mount.as_deref(),
                 setup_turns,
             )
             .await;
@@ -2376,10 +2572,9 @@ async fn cmd_session_memory(
         category: "Aggregate",
         question: q2.clone(),
         gold: Gold::Figures(vec![a]),
+        graded_setup_turns: Vec::new(),
         min_tools: 1,
         reference: format!("You spent {a:.2} on {c}."),
-        expected_interpretation: None,
-        expected_plan: None,
     };
     let mut all = Vec::new();
     for (label, keep) in [("memory on", true), ("memory off", false)] {
@@ -2423,14 +2618,13 @@ async fn cmd_session_memory(
             profile: label.into(),
             correct,
             correct_rate: oks as f32 / n,
+            graded_setup_turn_rates: Vec::new(),
             iters,
             closeness_det: cd / n,
             closeness_judge: None,
             verification_status: None,
             interpretation_status: None,
             plan_strategy: None,
-            interpretation_correct_rate: None,
-            plan_correct_rate: None,
             accepted_rate: None,
             unsafe_guess_rate: None,
             verification_catch_rate: None,
@@ -2610,10 +2804,9 @@ async fn cmd_memory(
         category: "Aggregate",
         question: q.to_string(),
         gold: gold.clone(),
+        graded_setup_turns: Vec::new(),
         min_tools: 1,
         reference: format!("You spent {rent_all:.2} on rent (rent + housing + mortgage)."),
-        expected_interpretation: None,
-        expected_plan: None,
     };
     println!(
         "session 2 gold: {rent_all:.0} (rent+housing+mortgage); literal `rent` only = {rent_literal:.0}\n"
@@ -2680,14 +2873,13 @@ async fn cmd_memory(
             profile: label.into(),
             correct,
             correct_rate: oks as f32 / n,
+            graded_setup_turn_rates: Vec::new(),
             iters,
             closeness_det: cd / n,
             closeness_judge: None,
             verification_status: None,
             interpretation_status: None,
             plan_strategy: None,
-            interpretation_correct_rate: None,
-            plan_correct_rate: None,
             accepted_rate: None,
             unsafe_guess_rate: None,
             verification_catch_rate: None,
@@ -2748,14 +2940,13 @@ async fn cmd_memory_axes(
             profile: "memory-axes".into(),
             correct,
             correct_rate: oks as f32 / iters as f32,
+            graded_setup_turn_rates: Vec::new(),
             iters,
             closeness_det: if correct { 1.0 } else { 0.0 },
             closeness_judge: None,
             verification_status: None,
             interpretation_status: None,
             plan_strategy: None,
-            interpretation_correct_rate: None,
-            plan_correct_rate: None,
             accepted_rate: None,
             unsafe_guess_rate: None,
             verification_catch_rate: None,
@@ -3085,13 +3276,12 @@ fn write_json(path: &str, scores: &[CaseScore]) {
             serde_json::json!({
                 "id": s.id, "model": s.model, "profile": s.profile,
                 "correct": s.correct, "correct_rate": s.correct_rate, "iters": s.iters,
+                "graded_setup_turn_rates": s.graded_setup_turn_rates,
                 "closeness_det": s.closeness_det,
                 "closeness_judge": s.closeness_judge,
                 "verification_status": s.verification_status,
                 "interpretation_status": s.interpretation_status,
                 "plan_strategy": s.plan_strategy,
-                "interpretation_correct_rate": s.interpretation_correct_rate,
-                "plan_correct_rate": s.plan_correct_rate,
                 "accepted_rate": s.accepted_rate,
                 "unsafe_guess_rate": s.unsafe_guess_rate,
                 "verification_catch_rate": s.verification_catch_rate,
@@ -3629,33 +3819,28 @@ mod tests {
         assert!(grade(&rr("Highest was November 2021.", vec![]), &month));
         assert!(grade(&rr("Highest was 2021-11.", vec![]), &month));
         assert!(!grade(&rr("Highest was 2021-09.", vec![]), &month));
-        assert!(grade(
-            &rr("Your files can't tell the future.", vec![]),
-            &Gold::Refusal
-        ));
-        // a curly apostrophe (what many models emit) still counts as "can't"
+        let estimate_gold = Gold::AllOf(vec![
+            Gold::Approx(4_200.0, 5.0),
+            Gold::Contains(vec!["estimate|projection", "average|baseline"]),
+            Gold::MustNotContain(vec!["will definitely", "guaranteed"]),
+        ]);
         assert!(grade(
             &rr(
-                "I can\u{2019}t determine future spending from past records.",
+                "A simple average baseline estimates about 4,200 next month.",
                 vec![]
             ),
-            &Gold::Refusal
-        ));
-        assert!(grade(
-            &rr("No data on future spending is available.", vec![]),
-            &Gold::Refusal
+            &estimate_gold
         ));
         assert!(!grade(
-            &rr("You'll spend 4200 next month.", vec![]),
-            &Gold::Refusal
+            &rr("The average is 4,200 and it is guaranteed.", vec![]),
+            &estimate_gold
         ));
-        // declines but cites a computed figure -> not a clean refusal
         assert!(!grade(
             &rr(
-                "I can't project it, but your monthly average is 3900.",
+                "I can't estimate a future value from these records.",
                 vec![]
             ),
-            &Gold::Refusal
+            &estimate_gold
         ));
         assert!(grade(
             &rr("I answer questions about your files.", vec![]),
@@ -3950,10 +4135,14 @@ mod tests {
             "Ratio",
             "DocSummary",
             "EmptyResult",
-            "Refusal",
+            "Forecast",
         ] {
             assert!(cats.contains(want), "missing a {want} case");
         }
+        assert!(
+            !cats.contains("Refusal"),
+            "forecast coverage must not encode a categorical refusal policy"
+        );
         // ids unique
         let mut ids: Vec<_> = cases.iter().map(|c| c.id).collect();
         ids.sort_unstable();
@@ -4053,10 +4242,9 @@ mod tests {
             category: "Aggregate",
             question: "q".into(),
             gold: Gold::Figures(vec![450.0]),
+            graded_setup_turns: Vec::new(),
             min_tools: 1,
             reference: "Your total spending was 450.".into(),
-            expected_interpretation: None,
-            expected_plan: None,
         };
         let good = rr(
             "Your total spending was 450.",
@@ -4114,25 +4302,39 @@ mod tests {
             .unwrap()
             .into_gold()
             .is_err());
-        assert!(matches!(g(r#""refusal""#), Gold::Refusal));
         assert!(matches!(g(r#""notool""#), Gold::NoTool));
+        assert!(serde_json::from_str::<BenchGold>(r#""refusal""#)
+            .unwrap()
+            .into_gold()
+            .is_err());
         assert!(serde_json::from_str::<BenchGold>(r#""bogus""#)
+            .unwrap()
+            .into_gold()
+            .is_err());
+        assert!(matches!(
+            g(r#"{"all_of":[{"approx":[4200,5]},{"contains":["estimate"]}]}"#),
+            Gold::AllOf(parts) if parts.len() == 2
+        ));
+        assert!(serde_json::from_str::<BenchGold>(r#"{"all_of":[]}"#)
             .unwrap()
             .into_gold()
             .is_err());
 
         let spec: BenchSpec = serde_json::from_str(
-            r#"{"id":"a","question":"q?","files":["x.csv"],"gold":{"figures":[1]},"tier":"easy","expected_interpretation":"grounded","expected_plan":"compiled_sql"}"#,
+            r#"{"id":"a","question":"q?","files":["x.csv"],"gold":{"figures":[1]},"tier":"easy","pre_mount_turns":["What is a median?"]}"#,
         )
         .unwrap();
         assert_eq!(spec.id, "a");
+        assert_eq!(spec.workspace_scope, BenchWorkspaceScope::Folder);
         assert_eq!(spec.files, vec!["x.csv"]);
+        assert_eq!(spec.pre_mount_turns, vec!["What is a median?"]);
         assert_eq!(spec.tier.as_deref(), Some("easy"));
-        assert_eq!(
-            spec.expected_interpretation,
-            Some(InterpretationStatus::Grounded)
-        );
-        assert_eq!(spec.expected_plan, Some(PlanStrategy::CompiledSql));
+        let no_workspace: BenchSpec = serde_json::from_str(
+            r#"{"id":"general","question":"What is Rust?","workspace_scope":"none","gold":{"contains":["programming language"]}}"#,
+        )
+        .unwrap();
+        assert_eq!(no_workspace.workspace_scope, BenchWorkspaceScope::None);
+        assert!(no_workspace.files.is_empty());
     }
 
     #[test]
@@ -4140,12 +4342,14 @@ mod tests {
         let suite = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../bench/fqa-bench/suites/uci-bike-sharing");
         let cases = load_bench_dir(&suite);
-        assert_eq!(cases.len(), 11);
-        assert!(cases.iter().all(|(files, _, _)| files.len() == 3));
-        assert!(cases
-            .iter()
-            .any(|(_, setup, case)| { case.id == "bike-followup-next-year" && setup.len() == 1 }));
-        assert!(cases.iter().any(|(_, _, case)| {
+        assert_eq!(cases.len(), 13);
+        assert!(cases.iter().all(
+            |(scope, files, _, _, _)| *scope == BenchWorkspaceScope::Folder && files.len() == 3
+        ));
+        assert!(cases.iter().any(|(_, _, _, setup, case)| {
+            case.id == "bike-followup-next-year" && setup.len() == 1
+        }));
+        assert!(cases.iter().any(|(_, _, _, _, case)| {
             case.id == "bike-monthly-chart-2012"
                 && matches!(
                     case.gold,
@@ -4155,13 +4359,101 @@ mod tests {
                     }
                 )
         }));
+        let composed_gold_ids: std::collections::HashSet<_> = cases
+            .iter()
+            .filter(|(_, _, _, _, case)| matches!(case.gold, Gold::AllOf(_)))
+            .map(|(_, _, _, _, case)| case.id)
+            .collect();
+        for id in [
+            "bike-revenue-unavailable",
+            "bike-hour-of-day-unavailable",
+            "bike-forecast-july-2011-mean-baseline",
+            "bike-scenario-2012-ten-percent-lower",
+        ] {
+            assert!(
+                composed_gold_ids.contains(id),
+                "missing expected composite outcome contract for {id}"
+            );
+        }
+        assert_eq!(composed_gold_ids.len(), 4);
+    }
+
+    #[test]
+    fn fqa_clarification_episode_grades_the_question_before_the_resolution() {
+        let suite = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../bench/fqa-bench/suites/clarification-housing");
+        let cases = load_bench_dir(&suite);
+        assert_eq!(cases.len(), 1);
+        let (_, files, _, setup_turns, case) = &cases[0];
+        assert_eq!(files.len(), 2);
+        assert!(setup_turns.is_empty());
+        assert_eq!(
+            case.graded_setup_turns.len(),
+            1,
+            "the clarification response must be graded before the user's reply"
+        );
+        assert_eq!(
+            case.graded_setup_turns[0].0,
+            "What was my housing spending in Q1 2024?"
+        );
+        assert!(matches!(case.graded_setup_turns[0].1, Gold::AllOf(_)));
+        assert_eq!(
+            case.question,
+            "Count rent and utilities, but leave out repairs and maintenance."
+        );
+        assert!(matches!(case.gold, Gold::AllOf(_)));
+    }
+
+    #[test]
+    fn general_knowledge_bench_declares_no_workspace() {
+        let dir =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../bench/product-eval/general-knowledge");
+        let cases = load_bench_dir(&dir);
+        assert_eq!(cases.len(), 3);
+        assert!(cases.iter().all(|(scope, files, _, _, _)| {
+            *scope == BenchWorkspaceScope::None && files.is_empty()
+        }));
+    }
+
+    #[test]
+    fn ask_routing_bench_covers_missing_folder_mixed_intent_and_followup() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../bench/product-eval/ask-routing");
+        let cases = load_bench_dir(&dir);
+        assert_eq!(cases.len(), 3);
+        assert!(cases.iter().all(|(scope, files, _, _, _)| {
+            *scope == BenchWorkspaceScope::None && files.is_empty()
+        }));
         assert_eq!(
             cases
                 .iter()
-                .filter(|(_, _, case)| matches!(case.gold, Gold::Refusal))
+                .filter(|(_, _, _, setup, _)| !setup.is_empty())
                 .count(),
-            2
+            1
         );
+        assert!(cases
+            .iter()
+            .any(|(_, _, _, _, case)| { case.id == "ask-routing-local-data-needs-folder" }));
+        assert!(cases
+            .iter()
+            .any(|(_, _, _, _, case)| { case.id == "ask-routing-mixed-general-and-local" }));
+        assert!(cases
+            .iter()
+            .any(|(_, _, _, _, case)| { case.id == "ask-routing-followup-context" }));
+    }
+
+    #[test]
+    fn conversation_lifecycle_bench_declares_real_mount_transition() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../bench/product-eval/conversation-lifecycle");
+        let cases = load_bench_dir(&dir);
+        assert_eq!(cases.len(), 1);
+        let (scope, files, pre_mount, post_mount, case) = &cases[0];
+        assert_eq!(*scope, BenchWorkspaceScope::Folder);
+        assert_eq!(files, &["readings.csv"]);
+        assert_eq!(pre_mount.len(), 1);
+        assert_eq!(post_mount.len(), 1);
+        assert!(dir.join(&files[0]).is_file());
+        assert_eq!(case.id, "lifecycle-general-mount-analysis-followup");
     }
 
     #[test]
@@ -4175,7 +4467,7 @@ mod tests {
         let mut chart_cases = 0;
         let mut no_chart_cases = 0;
         let mut kinds = std::collections::HashSet::new();
-        for (files, _, case) in &cases {
+        for (_, files, _, _, case) in &cases {
             assert!(
                 ids.insert(case.id),
                 "duplicate visualization case id: {}",
@@ -4218,23 +4510,35 @@ mod tests {
     }
 
     #[test]
-    fn folder_qa_has_a_representative_semantic_matrix() {
+    fn folder_qa_grades_outcomes_without_prescribing_internal_routes() {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../bench/folder-qa");
+        let raw = std::fs::read_to_string(dir.join("cases.jsonl")).unwrap();
+        for (line, record) in raw
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .enumerate()
+        {
+            if record.trim_start().starts_with('#') {
+                continue;
+            }
+            let value: serde_json::Value = serde_json::from_str(record)
+                .unwrap_or_else(|error| panic!("folder-qa case line {}: {error}", line + 1));
+            assert!(value.get("expected_plan").is_none());
+            assert!(value.get("expected_interpretation").is_none());
+        }
         let cases = load_bench_dir(&dir);
-        let semantic: Vec<_> = cases
-            .iter()
-            .filter(|(_, _, case)| case.expected_interpretation.is_some())
-            .collect();
-        assert!(
-            semantic.len() >= 10,
-            "semantic fixture matrix got too small"
-        );
-        assert!(semantic
-            .iter()
-            .any(|(_, _, case)| { case.expected_plan == Some(PlanStrategy::CompiledSql) }));
-        assert!(semantic.iter().any(|(_, _, case)| {
-            case.expected_interpretation == Some(InterpretationStatus::Unsupported)
-                && case.expected_plan.is_none()
+        for id in [
+            "fqa-forecast-book-pace",
+            "fqa-forecast-grocery-baseline",
+            "fqa-forecast-trips-source-limit",
+        ] {
+            assert!(
+                cases.iter().any(|(_, _, _, _, case)| case.id == id),
+                "missing {id}"
+            );
+        }
+        assert!(cases.iter().any(|(_, _, _, _, case)| {
+            case.id == "fqa-forecast-trips-source-limit" && matches!(case.gold, Gold::Contains(_))
         }));
     }
 }

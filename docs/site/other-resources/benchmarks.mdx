@@ -20,15 +20,16 @@ Fella compares the same model under two conditions: `bare`, where fixture files 
 | Wasted calls | Tool calls that did not contribute | Heuristic classification |
 | Round trips | Model-call proxy for latency | Not wall-clock performance |
 | Self-catch rate | Wrong answers flagged by verification | Only tests failures represented in the run |
-| Policy adherence | Whether unsupported forecasts are declined | Remains model-dependent |
+| Forecast/evidence handling | Whether estimates are grounded and qualified, and whether missing evidence gets a useful next step | Method quality and calibration need broader forecast fixtures |
 
 ## Current batteries
 
 | Battery | Current shape | Coverage |
 | --- | --- | --- |
-| `bench/folder-qa/` | 79 task records in the current checkout; the published lift result used an earlier 64-case version | One controlled synthetic personal profile; everyday lookup, aggregate, text search, small joins, selected distractors, and refusal cases |
+| `bench/folder-qa/` | Generated development battery; historical run artifacts retain their original task-set versions | One controlled synthetic personal profile; everyday lookup, aggregate, text search, small joins, selected distractors, estimates, and a source-limit case |
 | `bench/folder-qa-hard/` | 16 cases | Rank-2 queries, conversion, compound filters, non-standard dates, five-file synthesis, and chart grading over copied data from the same profile |
-| `bench/fqa-bench/suites/uci-bike-sharing/` | 11 draft episodes | Public UCI mobility data; complete small workspace, year/month aggregation, follow-up, reconciliation, chart, and unsupported requests; clean and single-domain |
+| `bench/fqa-bench/suites/uci-bike-sharing/` | 13 draft episodes | Public UCI mobility data; complete small workspace, year/month aggregation, follow-up, reconciliation, chart, evidence limits, a held-out baseline forecast, and a what-if scenario; clean and single-domain |
+| `bench/fqa-bench/suites/clarification-housing/` | 1 protocol episode | Controlled synthetic ambiguity, graded clarification question, user resolution, and scoped calculation |
 
 The core battery covers CSV, TSV, JSON, NDJSON/JSONL, Markdown, XLSX, PDF, and plain text. Gold values are generated from fixtures rather than manually copied into the grader. Each `agent_eval bench` case stages only the files named by that case, so this is mostly a selected-file analysis battery—not a full-folder discovery benchmark. The hard battery reuses the same synthetic profile and does not add independent source diversity.
 

@@ -88,7 +88,7 @@ verification.
 
 ## Behavior
 
-The prompt tells the model to prefer SQL for tables, search or read documents directly, reserve Python for analysis SQL cannot express, avoid unsupported figures, and stop once it has enough evidence. These are behavior instructions, not enforcement boundaries.
+The prompt guides the model to inspect, interpret, decompose, and choose among the available read-only tools. It may use SQL, sandboxed Python, document search, or charts, and can revise its plan as new observations arrive. Forecasts and scenarios are allowed, with observed data kept distinct from estimates and assumptions. These are behavior instructions, not enforcement boundaries.
 
 Deterministic verification always runs when the harness finishes an answer. A changed or failed SQL rerun can trigger one tool-free corrective turn. If checks still contain a warning, a separate default-on self-consistency path can request one stricter tool-free second opinion; `FELLA_SELF_CHECK=0` disables it.
 
@@ -96,7 +96,7 @@ Deterministic verification always runs when the harness finishes an answer. A ch
 
 | Layer | Example | Enforced by |
 | --- | --- | --- |
-| Prompt guidance | Prefer `run_sql`, stop early, refuse unsupported forecasts, use a chart only for useful structured data | `PromptProfile` text in `agent.rs`; a model can still misunderstand it |
+| Prompt guidance | Inspect and choose a suitable route; qualify forecasts; explain actual evidence limits | `PromptProfile` text in `agent.rs`; a model can still misunderstand it |
 | Tool boundary | The model can call only schemas in the registry; built-in SQL and document tools resolve through the engine | `Registry`, tool implementations, and catalog lookup |
 | SQL boundary | One guarded, read-only statement with blocked mutation/file-reading operations | `analytics::data::ensure_read_only` plus the backend connection |
 | Python boundary | Embedded `wasm32-unknown-unknown` RustPython guest; no OS imports; fuel, memory, stack, source, output, SQL-row, and SQL-response caps | `analytics::pyexec` + `python-sandbox`; stronger capability isolation with Wasmi/RustPython in the trusted base |

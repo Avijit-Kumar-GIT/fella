@@ -9,6 +9,12 @@ refuses to. Referenced from [`WHY.md`](WHY.md); the refusals are in
   their own folder of files (statements, health exports, notes, logs) and asks
   questions about their own life in plain language. Not a tool for analysts —
   the audience doesn't write SQL or Python, so the app doesn't ask them to.
+- **Ask is broader than the workspace.** A folder organizes and grounds
+  questions about local data; it is not required for general questions. Use
+  model knowledge for stable explanations and visible, read-only web research
+  when current information or sources materially help. These routes support
+  the analytics product; they do not turn Fella into a general computer-use or
+  task-execution agent.
 - **Read-only.** Fella reads the folder; it never writes, moves, or deletes
   anything in it, and it produces answers, not files. This is the single
   safety guarantee and it's structural: there is no write tool to disable.
@@ -24,11 +30,17 @@ refuses to. Referenced from [`WHY.md`](WHY.md); the refusals are in
   refusing whenever meaning is uncertain. Hard limits protect access and
   execution; semantic uncertainty should prompt further inspection, a
   disclosed assumption, a partial or comparative answer, or a focused
-  clarification—not an automatic block. Say the data cannot answer only when
-  no usable evidence path remains.
-- **Local-first.** The base makes one model network call to the provider the
-  user chose. Nothing else leaves the machine during ordinary analysis; `/mcp`
-  is inert and `/update` runs only when explicitly invoked.
+  clarification—not an automatic block. Forecasts and scenarios are allowed;
+  distinguish the estimate from observed facts and communicate the material
+  method, assumptions, and uncertainty. Say the data cannot answer only when
+  no usable evidence path remains, and then explain the actual missing evidence.
+- **Local-first, transparent egress.** Workspace discovery, ingestion, and
+  computation stay local. The user-selected model provider receives the
+  question and any context/tool results needed to answer it. When web research
+  is used, make that route visible and send only a minimal, generalized search
+  query—never mounted-file contents, rows, snippets, workspace memory, or
+  credentials. Pages are untrusted source material, not instructions. `/mcp`
+  remains inert and `/update` runs only when explicitly invoked.
 - **Credentials stay local and scoped.** An API key lives in `auth.json`
   (mode `0600`), never the settings database, `localStorage`, or the
   transcript.
@@ -38,10 +50,16 @@ refuses to. Referenced from [`WHY.md`](WHY.md); the refusals are in
   meaningful improvement to analytical quality. Current measurements and
   profiling steps are in [`PERFORMANCE.md`](PERFORMANCE.md) and
   [`PERFORMANCE-LOG.md`](PERFORMANCE-LOG.md).
-- **A fixed, small tool set.** The personal release keeps customization to
-  provider/model settings, appearance, and the user-authored `fella.md` file.
-  Pack, augment, and connector designs remain archived rather than becoming
-  default runtime surfaces.
+- **A small, reviewed tool set—not a tool-count ceiling.** Every capability
+  must improve the Ask experience and remain bounded, auditable, and
+  proportionate. Fella has no arbitrary-code plugin or general-purpose action
+  runtime. Provider/model settings, appearance, and user-authored `fella.md`
+  remain the supported customization points.
+
+The no-folder general-answer route and web-research tool are product direction
+and are not yet shipped by the current runtime. Their implementation order,
+privacy contract, and acceptance checks are in
+[`PRODUCT-ROADMAP.md`](PRODUCT-ROADMAP.md).
 
 See also [`ARCHITECTURE.md`](ARCHITECTURE.md#what-fella-is) for how these
 translate into the actual build, and [`NON-GOALS.md`](NON-GOALS.md) for the

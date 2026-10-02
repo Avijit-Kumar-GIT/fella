@@ -1,83 +1,91 @@
 # Fella FolderQA Benchmark (FQA-Bench)
 
-FQA-Bench is Fella's internal, versioned evaluation standard for analytics over mounted folders. It measures whether the **product harness** helps a model inspect files, interpret a request, analyze data, and communicate a grounded result—not whether it can match a particular sentence or reproduce one SQL plan.
+FQA-Bench is the versioned benchmark for Fella's filesystem analytics harness. Its target is the complete product described by the product roadmap, not only the features currently shipped. It asks whether the model, tools, ingestion, conversation state, and presentation work together to inspect a folder, understand an analytical request, resolve uncertainty, compute and verify results, and communicate useful evidence.
 
-**Status: v0.1 curation in progress.** The existing `folder-qa` battery remains a useful development baseline. A first independent public-data workspace is now curated, but the benchmark is not yet representative or release-grade. See [the data audit](audit-v0.1.md) before interpreting scores.
+**Version:** FQA-Bench v0.1 (first unreleased target-state specification). The active task contract assumes the roadmap is complete. A task can therefore exercise clarification/resume, whole-folder discovery, forecasting, scenarios, richer charts, or persistent workspace context even while its implementation remains in progress. A current-build run must be labeled as a capability diagnostic, not treated as the benchmark definition.
 
-## Where benchmark assets live
+FQA-Bench covers questions whose answer depends on a mounted local workspace. General knowledge and web research are separate product routes; hybrid tasks that join local evidence with research are reported separately and must never send local file contents to the web. See the product evaluation map.
 
-```text
-bench/fqa-bench/
-  README.md
-  methodology.md
-  taxonomy.yml
-  task.schema.json
-  answer-key.schema.json
-  audit-v0.1.md
-  suites/<suite-id>/
-    README.md                       # provenance, coverage, limits
-    tasks.jsonl                     # canonical prompts and tags
-    answer-keys.jsonl               # evaluator-only; never mounted
-    cases.jsonl                     # generated compatibility adapter
-    workspaces/<workspace-id>/...   # the only files exposed to Fella
-  runs/                             # local/CI outputs, not fixture data
-```
+## Benchmark model
 
-The existing runner consumes `<suite>/cases.jsonl`; the canonical task and evaluator answer key are separate, then adapted by [`build_runner_cases.py`](build_runner_cases.py). Answer keys and source archives stay outside every mounted workspace. Blind holdouts must live outside this public repository (for example, in a private repository or controlled CI storage).
+The unit is an **episode**, not a single prompt: a frozen workspace plus one or more user and assistant turns. Episodes include direct analysis, broad inspection, multi-source reasoning, clarification followed by a resolved answer, follow-ups, forecasts/scenarios, chart requests, and evidence-limited questions. Each episode has one primary capability and may carry multiple analytical-family, topic, format, quality, and interaction tags.
 
-The current legacy core is indexed at [`catalog/folder-qa.jsonl`](catalog/folder-qa.jsonl). Its broad capability labels are a **provisional crosswalk from legacy task tiers**, not independently reviewed annotations. Regenerate/check that sidecar with:
+Golds describe intended user-visible outcomes: values and dimensions, acceptable methods/ranges, needed assumptions, useful clarification, source limits, provenance, and chart semantics. They do not prescribe SQL, Python, tool order, internal plans, or a particular wording. An efficient alternative method is correct when it answers the same question from the declared evidence.
 
-```bash
-python3 bench/fqa-bench/catalog_folder_qa.py --write
-python3 bench/fqa-bench/catalog_folder_qa.py --check
-```
+Forecasts and scenarios are valid analysis tasks, not an automatic refusal category. Unsupported evidence is also not a cold-refusal category: grade whether Fella identifies the actual missing evidence, gives any useful supported partial result, and offers a concrete way forward. Clarification is a successful intermediate action when the ambiguity is material; the episode must then test whether Fella uses the user's answer.
 
-The first independently sourced suite, [`suites/uci-bike-sharing/`](suites/uci-bike-sharing/), provides 11 draft episodes over a complete, compact workspace. Rebuild/check its pinned public-data fixture and runner adapter with:
+## Files and ownership
 
-```bash
-python3 bench/fqa-bench/suites/uci-bike-sharing/prepare_workspace.py --check
-python3 bench/fqa-bench/build_runner_cases.py --suite-dir bench/fqa-bench/suites/uci-bike-sharing --check
-```
+    bench/fqa-bench/
+      README.md
+      methodology.md
+      taxonomy.yml
+      coverage-v0.1.yml             # target capability/family coverage and gaps
+      task.schema.json
+      answer-key.schema.json
+      audit-v0.1.md                 # first-version scope, coverage, and limitations
+      suites/<suite-id>/
+        README.md                   # source, license, transformations, limits
+        tasks.jsonl                 # prompts and labels; safe to expose to the model
+        answer-keys.jsonl           # evaluator-only; never mounted
+        cases.jsonl                 # generated adapter for the current runner
+        workspaces/<workspace-id>/  # exact files visible to the model
+      runs/                         # run metadata and outputs; never fixture data
 
-All 11 episodes expose every workspace file. The suite fits the current runner's 100 KB text-comparison limit. It covers clean public mobility data only; it does not close the personal-data messiness or clarification gaps.
+The answer key and source archives stay outside every mounted workspace. Public development tasks may be visible, but a public task set is not a blind evaluation set. Holdouts must be drawn from different workspace/source/generator families and stored outside routine development access.
 
-## Evaluation axes
+Current runner compatibility:
 
-Each task gets one primary analyst capability and may have several supporting capabilities. Domain, format, messiness, interaction shape, and answerability are cross-cutting tags—not substitutes for the capability being measured. See [taxonomy.yml](taxonomy.yml) and [methodology.md](methodology.md).
+    python3 bench/fqa-bench/build_runner_cases.py \
+      --suite-dir bench/fqa-bench/suites/uci-bike-sharing --check
+    python3 bench/fqa-bench/build_runner_cases.py \
+      --suite-dir bench/fqa-bench/suites/clarification-housing --check
+    python3 bench/fqa-bench/suites/clarification-housing/validate_suite.py
+    python3 bench/fqa-bench/test_report_slices.py
 
-The intended scorecard keeps answer correctness, appropriate clarification, unsupported confident claims, unnecessary deferrals, chart correctness, and operating cost separate. The task metadata supports capability/domain slices; the current runner does not yet produce the complete tagged scorecard automatically. Do not collapse these into a single headline that can hide a serious weakness.
+To run a suite against Fella, first make an isolated copy of the app data
+directory (including `fella.db` and `auth.json`) and point the evaluator at
+that copy. Set the provider/model explicitly; each suite is a separate run:
 
-For completed `agent_eval --json` runs, join results to task tags and print capability/domain/interaction/format slices with:
+    AGENT_EVAL_DATA_DIR=/path/to/isolated-fella-data \
+    cargo run --release --manifest-path src-tauri/Cargo.toml \
+      --features eval --example agent_eval -- bench \
+      --dir bench/fqa-bench/suites/uci-bike-sharing \
+      --models provider/model --iters 3 --json /tmp/fqa-uci.json
 
-```bash
-python3 bench/fqa-bench/report_slices.py \
-  --tasks bench/fqa-bench/suites/uci-bike-sharing/tasks.jsonl \
-  --results /path/to/fella-run.json
-```
+    AGENT_EVAL_DATA_DIR=/path/to/isolated-fella-data \
+    cargo run --release --manifest-path src-tauri/Cargo.toml \
+      --features eval --example agent_eval -- bench \
+      --dir bench/fqa-bench/suites/clarification-housing \
+      --models provider/model --iters 3 --json /tmp/fqa-housing.json
 
-Use `--tasks bench/fqa-bench/catalog/folder-qa.jsonl` for the provisional legacy crosswalk. Invalid runs are counted separately and excluded from correctness rates; missing task IDs remain visible as a coverage gap.
+The clarification episode is Fella-only because baseline adapters do not
+replay and grade the intermediate clarification turn. Preserve all task
+failures in the report. Never edit a gold after seeing candidate output; a
+corrected task needs an approved rationale, a new benchmark version, and a
+comparable rerun.
 
-## Existing batteries and their role
+The UCI Bike Sharing suite is an independently sourced, clean public-data anchor with 13 episodes, including descriptive comparisons, a chart, a held-out mean-baseline forecast, a what-if scenario, follow-up context, and specific evidence-limit cases. It is one small domain anchor, not a representative v0.1 benchmark by itself. The generated personal-data batteries and older component suites remain useful development diagnostics; they do not become authoritative simply by being numerous. Their earlier run artifacts are preserved as historical records and are not silently rescored under v0.1.
 
-| Existing path | Role in the eventual benchmark | Limitation |
-| --- | --- | --- |
-| `bench/folder-qa/` | Broad personal-data development baseline | One generated synthetic profile; per-case file staging; no clarification or multi-turn tasks |
-| `bench/folder-qa-hard/` | Harder calculation/combination diagnostic | Reuses the same underlying generated profile; not an independent domain sample |
-| `bench/fqa-bench/suites/uci-bike-sharing/` | First independent public-data anchor; inspection, aggregation, follow-up, reconciliation, chart, and unsupported-measure/detail tasks | One clean urban-mobility source; 11 draft episodes; no messy-data or clarification coverage |
-| `bench/messiness/` | Data-quality diagnostic | Nine cases, overwhelmingly spending data; not a broad messy-data sample |
-| `bench/step-judgment/`, `bench/policy-pressure/` | Follow-up and pressure diagnostics | Separate small batteries; not yet a consistent task schema |
-| `bench/visualization/` | Chart behavior diagnostic | Separate battery; current cases lack standard domain/format tags |
-| `bench/tool-selection/`, `bench/self-verification/`, `bench/injection/`, `bench/scale/`, memory suites | Component/robustness diagnostics | Keep separate from end-to-end FQA task accuracy unless their protocol and graders are normalized |
+## Evaluation and reporting
 
-This inventory is intentionally conservative: a test suite does not become representative merely because it has many cases. FQA-Bench v0.1 needs additional independently designed workspaces, full-folder discovery tasks, and explicit clarification episodes before it can support broad capability claims.
+Follow the methodology and target coverage matrix in coverage-v0.1.yml. Report correctness, clarification quality, false deferral, unsupported-claim rate, evidence/provenance, chart correctness, forecast error/calibration, conversation consistency, operational validity, and efficiency separately. Show counts and denominators for every slice. Do not collapse a serious weakness into a composite score.
 
-## Adding a task
+For completed agent_eval JSON runs, join results to task tags:
 
-1. Write the user goal and task episode before consulting the implementation.
-2. Build or select the workspace fixture independently of the harness code.
-3. Have a second reviewer solve it from the visible files and verify the analytical contract.
-4. Tag its capability, topic, formats, data conditions, interaction type, and expected behavior using the controlled vocabulary.
-5. Put the answer contract outside the mounted workspace and validate the fixture, paths, and grader.
-6. Keep development and blind evaluation splits grouped by workspace/source, not by individual question.
+    python3 bench/fqa-bench/report_slices.py \
+      --tasks bench/fqa-bench/suites/uci-bike-sharing/tasks.jsonl \
+      --results /path/to/fella-run.json
 
-Do not add a task solely to encode a discovered code path. A failure may become a development regression case, but it should enter the held-out benchmark only if it represents a reusable analyst capability and passes independent task review.
+The slice report supports topic, product capability, analysis family,
+interaction, answerability, workspace scope, file format, and data condition.
+It reports task correctness and efficiency; qualitative dimensions such as
+clarification necessity, evidence quality, unsupported claims, and chart
+semantics still require the separate rubric/review process described in the
+methodology.
+
+Invalid setup/provider/evaluator runs are reported separately, never counted as model failures or quietly excluded. A task or grading change requires user-visible rationale, a new benchmark version, and same-version comparisons; candidate output is never a reason to revise a gold.
+
+## What v0.1 can and cannot claim
+
+The v0.1 specification is designed around the complete product backlog, but the corpus is still being curated. The current independently sourced anchor is narrow, and the legacy synthetic profile is not independent real-world evidence. coverage-v0.1.yml distinguishes target coverage from fixtures that exist today. Until the required topic/workspace breadth, episode grading, independent review, and blind holdout exist, publish task-level results and gaps—not a claim that FQA-Bench is representative or that Fella is best-in-class.

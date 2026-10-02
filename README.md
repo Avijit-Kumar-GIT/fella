@@ -1,8 +1,8 @@
 <div align="center">
   <img src="docs/site/logo.svg" width="88" alt="Fella logo">
   <h1>Fella</h1>
-  <p><strong>An opinionated analytics engine and harness for personal data.</strong></p>
-  <p>Turn messy files into consistent, correctness-first analysis&mdash;with no tool sprawl and no write access.</p>
+  <p><strong>An opinionated analytics harness for the questions behind your data.</strong></p>
+  <p>Make sense of messy files with a model-driven loop and a read-only local engine.</p>
 
   <p>
     <a href="https://lilfella.app">Website</a> ·
@@ -20,30 +20,35 @@
 
 > *The more an AI can do for you, the more it can do to you.*
 
-General-purpose agents are built to do more. Fella is built to get one class of
-work right: analytics over the data you already have.
+General-purpose agents are built to take actions. Fella is built to help you
+understand: ask a question, investigate the relevant context, and get an answer
+whose basis you can inspect.
 
 Your computer is full of data that never became insight: a year of expenses, a
 workout log, project exports, PDFs, notes, and files with names you no longer
-remember. Fella gives those fragments a bounded workspace you can actually
-explore. Ask in plain language, compare periods, follow a thread, and find the
-pattern hiding in the mess.
+remember. Fella lets you ask about those files without first building a data
+warehouse or learning SQL. A workspace organizes local evidence; it is context
+for the conversation, not the product itself.
 
 Fella combines a Rust analytics engine with an opinionated AI harness. The
 model drives interpretation, decomposition, tool choice, and explanation inside
-a deliberately small read-only boundary. The engine catalogs files, queries
-local data, searches documents, makes charts, compiles supported analytical
-plans, and checks the result before it reaches you.
+a reviewed, read-only boundary. The local engine catalogs files, queries data,
+searches documents, makes charts, compiles supported analytical plans, and
+checks computational claims. The broader product direction also includes
+general answers without a folder and visible web research when external
+sources matter. Those no-folder and web routes are not yet shipped in the
+current release.
 
 For analytics, a plausible answer is not good enough. The goal is to reach the
 right answer the first time, with as little unnecessary reasoning between the
-question and result as possible. That is why Fella does not ship as a general-
-purpose agent with a large tool belt. Analytics rarely needs to write files,
-run shell commands, browse the web, or act on your behalf.
+question and result as possible. Fella does not need file writes, shell
+commands, desktop control, or the ability to act on your behalf. When a
+question benefits from outside information, the intended route is bounded,
+read-only, and visible—not an unrestricted browser agent.
 
-The result is an opinionated system: small enough for the model to reason about,
-powerful enough to cover the major families of personal analysis, and bounded
-enough to trust with the files you already have.
+The result is an opinionated system: a model-led analysis loop with reviewed,
+read-only tools, deterministic execution where exact computation matters, and
+clear limits when the available evidence cannot support a claim.
 
 ## Three things Fella optimizes for
 
@@ -52,11 +57,11 @@ computer understandable without making the reasoning needlessly complicated.
 
 | | |
 | --- | --- |
-| **Consistency** | A small fixed tool set and structured decomposition keep the route from question to analysis predictable across questions. |
+| **Consistency** | A coherent model-led loop and reviewed tools keep the route from question to answer understandable. |
 | **Correctness** | The engine computes the numbers, the harness checks the work, and the result should be right the first time whenever the data can support it. |
-| **Efficiency** | Deliberate context, bounded steps, duplicate-call avoidance, and only the tools analytics needs keep wasted reasoning and tokens down. |
+| **Efficiency** | Deliberate context and proportionate tool use keep wasted reasoning down without an arbitrary tool-count limit. |
 | **Read-only by design** | Fella can analyze the workspace, but it cannot write, move, delete, send, or act. The boundary is part of the architecture, not a setting. |
-| **Useful on real files** | Mount the folder you already have, ask in plain language, and get a concise analysis or chart without building a warehouse or learning SQL first. |
+| **Useful on real files** | Mount the folder when a question depends on it; ask in plain language and get an analysis or chart without building a warehouse or learning SQL first. |
 | **Bring your own model** | Connect OpenAI, Vercel AI Gateway, xAI, Ollama Cloud, OpenRouter, or a custom OpenAI-compatible endpoint. |
 
 ## From a question to an answer
@@ -156,8 +161,10 @@ Useful commands:
 ## Privacy and safety
 
 - Fella reads the mounted workspace but never modifies its files.
-- The base release has a fixed, small tool set with no write, shell, browser,
-  or connector runtime.
+- The current release has no write, shell, desktop-control, or web-research
+  tools. The roadmap adds visible web research as a bounded read-only route;
+  it must not send mounted-file contents, rows, snippets, workspace memory, or
+  credentials to a search service.
 - Provider API keys stay in local `auth.json` with restrictive permissions where
   supported; they are not stored in the settings database or browser storage.
 - With a hosted provider, the question and the relevant tool results are sent
@@ -197,6 +204,7 @@ documented separately in [`docs/ELECTRON.md`](docs/ELECTRON.md).
 - [Principles](docs/PRINCIPLES.md) — the commitments behind the design
 - [Non-goals](docs/NON-GOALS.md) — what Fella deliberately does not become
 - [Developer setup](docs/DEV_SETUP.md) — dependencies, providers, tests, and evaluation
+- [Product roadmap](docs/PRODUCT-ROADMAP.md) — detailed backlog for general Ask, web research, forecasts, visual analysis, provenance, and evaluation
 - [Analytical computer roadmap](docs/ANALYTICAL-COMPUTER-ROADMAP.md) — runtime design, implementation status, and quality gates
 - [Decisions](docs/DECISIONS.md) — the engineering decision log
 - [Contributing](CONTRIBUTING.md) — contribution guidelines
