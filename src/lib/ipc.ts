@@ -217,13 +217,23 @@ export const ipc = {
 	): Promise<Answer> {
 		if (isElectron()) {
 			if (!window.fella) throw new Error('Electron preload bridge is unavailable');
+			// Conversation.contextRefs is a Svelte $state proxy. Electron's
+			// contextBridge uses structured cloning for arguments, which rejects
+			// those proxies even though the same objects work through Tauri's
+			// invoke path. Project each reference into plain data at this boundary.
+			const wireContextRefs = (contextRefs ?? []).map((reference) => ({
+				kind: reference.kind,
+				key: reference.key,
+				label: reference.label,
+				...(reference.detail === undefined ? {} : { detail: reference.detail })
+			}));
 			return window.fella.ask(
 				{
 					conversationId,
 					question,
 					model: model || null,
 					mode: mode || null,
-					contextRefs: contextRefs ?? [],
+					contextRefs: wireContextRefs,
 					clarificationReply: clarificationReply ?? null
 				},
 				onEvent

@@ -122,12 +122,12 @@
 		<div class="onboard" class:center={!hasFolder && !showSetup}>
 			<div class="onboard-mark"><Logo size={40} active={session.busy} /></div>
 			<div class="wordmark" aria-label="Fella">Fella</div>
-			<h1 class="hero">Ask about your own files</h1>
+			<h1 class="hero">{hasFolder ? 'Ask about your own files' : 'Ask Fella a question'}</h1>
 
 			{#if !hasFolder}
 				<p class="lead">
-					Spreadsheets, PDFs, notes anything you keep in one folder. Answered on
-					your computer, from your files, never changed.
+					General questions work without a folder. Mount one when you want Fella to analyze local files;
+					Fella reads them for analysis and never changes them.
 				</p>
 				<div class="cta">
 					{#if session.lastFolder}
@@ -138,18 +138,14 @@
 						>
 							<Icon name="folder" size={16} /> Reopen {lastFolderName}
 						</button>
-						<button class="pill" onclick={() => void openFolder()}>Choose another</button>
+						<button class="pill" onclick={() => void openFolder()}>Mount another</button>
 					{:else}
 						<button class="pill primary" onclick={() => void openFolder()}>
-							<Icon name="folder" size={16} /> Choose a folder
+							<Icon name="folder" size={16} /> Mount a folder
 						</button>
 					{/if}
 				</div>
-				{#if isDesktop()}<p class="drophint">or drag a folder onto this window</p>{/if}
-				<p class="egs">
-					e.g. <em>“how did my spending change this year?”</em> ·
-					<em>“what stands out in my workout log?”</em>
-				</p>
+				{#if isDesktop()}<p class="drophint">or drag a folder here to mount it</p>{/if}
 			{:else if fileCount === 0}
 				<p class="lead"><strong>{folderName}</strong> is open, but nothing in it is readable yet.</p>
 				<p>
@@ -386,10 +382,6 @@
 	}
 	.egs {
 		color: var(--text-faint);
-	}
-	.egs em {
-		font-style: italic;
-		color: var(--text-dim);
 	}
 	.personalize {
 		margin-top: 22px;

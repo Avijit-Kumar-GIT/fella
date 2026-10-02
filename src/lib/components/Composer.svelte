@@ -34,7 +34,7 @@
 			? `Paste your ${session.pendingKey.display} API key…`
 			: folderName
 				? 'Ask a question…'
-				: 'Choose a folder to ask about…'
+				: 'Ask a question, or mount a folder to analyze…'
 	);
 
 	// --- completion menu -------------------------------------------------
@@ -162,15 +162,9 @@
 		value = '';
 		menuSel = -1;
 		queueMicrotask(grow);
-		// A real question with no folder open otherwise goes to the model with
-		// no tools at all, and a small model fills the gap by guessing or
-		// referencing the conversation as if a folder were still open, instead
-		// of saying so. If we know the last folder, reopen it first rather
-		// than making the user type /open themselves; a slash command still
-		// goes straight through (e.g. /open <a different folder>).
-		if (!session.catalog.workspace && !text.startsWith('/') && session.lastFolder) {
-			await resumeLastFolder();
-		}
+		// A typed question is never a request to reopen a previous repository.
+		// The empty-composer Enter shortcut and explicit Reopen button remain
+		// the deliberate ways to restore the last folder.
 		await dispatch(text);
 		onafterrun?.();
 	}
