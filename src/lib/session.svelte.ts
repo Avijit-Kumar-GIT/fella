@@ -55,6 +55,43 @@ function humanToolName(tool: string): string {
 	return labels[tool] ?? tool.replace(/[_-]+/g, ' ').replace(/^./, (c) => c.toUpperCase());
 }
 
+/** The first completed answer is authoritative for a conversation's origin.
+ * Older session snapshots were repeatedly stamped with the currently mounted
+ * repository, so recover their initial scope from that answer when possible. */
+function archivedWorkspace(messages: unknown, fallback: string | null | undefined): string | null {
+	if (Array.isArray(messages)) {
+		const isQuestion = (message: unknown): message is Message =>
+			message !== null && typeof message === 'object' && isActualQuestion(message as Message);
+		for (let questionIndex = 0; questionIndex < messages.length; questionIndex++) {
+			if (!isQuestion(messages[questionIndex])) continue;
+			for (let i = questionIndex + 1; i < messages.length; i++) {
+				const message = messages[i];
+				if (isQuestion(message)) break;
+				if (!message || typeof message !== 'object') continue;
+				const candidate = message as Record<string, unknown>;
+				if (candidate.role !== 'assistant' || !candidate.answer || typeof candidate.answer !== 'object') continue;
+				const answer = candidate.answer as Record<string, unknown>;
+				const answerWorkspace = answer.workspace;
+				if (Object.hasOwn(answer, 'workspace') && answerWorkspace === null) return null;
+				if (answerWorkspace && typeof answerWorkspace === 'object') {
+					const path = (answerWorkspace as Record<string, unknown>).path;
+					if (typeof path === 'string' && path.length > 0) return path;
+				}
+				const trace = answer.trace;
+				if (trace && typeof trace === 'object') {
+					const traceRecord = trace as Record<string, unknown>;
+					const revision = traceRecord.workspace_revision;
+					if (revision === null || (revision === undefined && (traceRecord.id || traceRecord.turn_id))) {
+						return null;
+					}
+				}
+				break;
+			}
+		}
+	}
+	return fallback ?? null;
+}
+
 const PREFIX = 'fella:conversation:'; // one key per tab: fella:conversation:<id>
 const LEGACY_KEY = 'fella:conversation'; // the single pre-tabs blob
 const INDEX_KEY = 'fella:tabs'; // JSON array of open tab ids
@@ -121,6 +158,9 @@ export class Conversation {
 	/** The model this tab answers with. Empty = use the saved default. All tabs
 	 *  share one provider / login; only the model is per-tab. */
 	model = $state<string>('');
+	/** Origin repository, pinned when the first real question is asked. Null
+	 *  means the conversation began without a mounted repository. */
+	workspaceScope = $state<string | null | undefined>(undefined);
 	/** A user-given name. null = derive one from the folder + first actual
 	 *  question, the same as an un-renamed conversation always has. */
 	title = $state<string | null>(null);
@@ -161,6 +201,10 @@ export class Conversation {
 
 	setMode(mode: AskMode): void {
 		this.mode = mode;
+	}
+
+	bindWorkspaceScope(workspace: string | null): void {
+		if (this.workspaceScope === undefined) this.workspaceScope = workspace;
 	}
 
 	addContext(ref: ContextReference): void {
@@ -235,16 +279,16 @@ export class Conversation {
 	}
 
 	/** Coalesce writes while a run streams; flush immediately once it settles. */
-	persist(workspace: string | null): void {
+	persist(): void {
 		if (!hasActualQuestion(this.messages)) {
 			this.dropSnapshot();
 			return;
 		}
 		clearTimeout(this.#persistTimer);
 		if (this.busy) {
-			this.#persistTimer = setTimeout(() => this.#writeSnapshot(workspace), 250);
+			this.#persistTimer = setTimeout(() => this.#writeSnapshot(this.workspaceScope ?? null), 250);
 		} else {
-			this.#writeSnapshot(workspace);
+			this.#writeSnapshot(this.workspaceScope ?? null);
 		}
 	}
 	#writeSnapshot(workspace: string | null): void {
@@ -540,12 +584,19 @@ class Session {
 	 *  open right now, the caller is responsible for warning that new
 	 *  questions here will run against the current folder, not the
 	 *  original one there's only ever one open folder for every tab. */
-	loadArchivedTab(id: string, messages: Message[], title: string | null = null): void {
+	loadArchivedTab(
+		id: string,
+		messages: Message[],
+		title: string | null = null,
+		workspace: string | null = null
+	): void {
 		// Already open (e.g. the very conversation you're re-clicking in the
 		// sidebar) -- focus it instead of forking a second live copy under
 		// the same id, which would collide as a duplicate tab key.
 		const existing = this.tabs.findIndex((t) => t.kind === 'chat' && t.id === id);
 		if (existing >= 0) {
+			const tab = this.tabs[existing];
+			if (tab.workspaceScope === undefined) tab.workspaceScope = workspace;
 			this.active = existing;
 			return;
 		}
@@ -553,6 +604,7 @@ class Session {
 		const c = new Conversation(id);
 		c.model = inherit;
 		c.title = title;
+		c.workspaceScope = workspace;
 		// A reloaded transcript never has a run in flight.
 		c.messages = messages.map((m) => (m.pending ? { ...m, pending: false } : m));
 		this.tabs.push(c);
@@ -671,9 +723,8 @@ class Session {
 	 *  file) on every later settle too, so the sidebar's title/preview
 	 *  reflects the real conversation even if you never close the tab. */
 	persist(): void {
-		const ws = this.catalog.workspace ?? null;
 		for (const t of this.tabs) {
-			t.persist(ws);
+			t.persist();
 			if (!t.busy && t.messages.length > 0) void this.#archive(t);
 		}
 		this.#writeIndex();
@@ -692,7 +743,7 @@ class Session {
 		const body = JSON.stringify({
 			id: tab.id,
 			saved_at_ms: Date.now(),
-			workspace: this.catalog.workspace ?? null,
+			workspace: tab.workspaceScope ?? null,
 			messages: tab.messages,
 			title: tab.title ?? undefined
 		});
@@ -722,7 +773,7 @@ class Session {
 		const body = JSON.stringify({
 			id: saved.id ?? '',
 			saved_at_ms: last?.ts ?? Date.now(),
-			workspace: saved.workspace ?? this.catalog.workspace ?? null,
+			workspace: archivedWorkspace(saved.messages, saved.workspace),
 			messages: saved.messages
 		});
 		try {

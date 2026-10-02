@@ -494,6 +494,8 @@
 		flex: 1;
 		min-height: 0;
 		display: grid;
+		align-content: start;
+		grid-auto-rows: max-content;
 		gap: 1px;
 		overflow-y: auto;
 	}

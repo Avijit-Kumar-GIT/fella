@@ -227,9 +227,9 @@ export async function openConversation(summary: ConversationSummary): Promise<vo
 		const saved: { workspace?: string | null; messages?: unknown; title?: string | null } =
 			JSON.parse(raw);
 		const messages = Array.isArray(saved.messages) ? (saved.messages as Message[]) : [];
-		session.loadArchivedTab(summary.id, messages, saved.title ?? null);
-		if (saved.workspace && saved.workspace !== session.catalog.workspace) {
-			await openFolder(saved.workspace);
+		session.loadArchivedTab(summary.id, messages, saved.title ?? null, summary.workspace);
+		if (summary.workspace && summary.workspace !== session.catalog.workspace) {
+			await openFolder(summary.workspace);
 		}
 	} catch (e) {
 		session.addSystem(`error: ${errMsg(e)}`);
@@ -305,6 +305,7 @@ export async function dispatch(raw: string, clarificationTurnId?: string): Promi
 	}
 
 	const conv = session.ensureChat();
+	conv.bindWorkspaceScope(session.catalog.workspace ?? null);
 	conv.addUser(text);
 	await ask(text, conv, clarificationTurnId);
 }
@@ -450,15 +451,15 @@ async function runCommand(text: string): Promise<void> {
 					const saved: { workspace?: string | null; messages?: unknown; title?: string | null } =
 						JSON.parse(raw);
 					const messages = Array.isArray(saved.messages) ? (saved.messages as Message[]) : [];
-					session.loadArchivedTab(chosen.id, messages, saved.title ?? null);
+					session.loadArchivedTab(chosen.id, messages, saved.title ?? null, chosen.workspace);
 					session.addSystem(
 						`Reopened: "${chosen.title ?? chosen.preview}" (${dateLabel(chosen.saved_at_ms)}).`
 					);
 					// Auto-mount the folder this conversation was about (openFolder
 					// reports a failure -- moved/deleted folder -- as a system
 					// message on its own, nothing extra needed here for that).
-					if (saved.workspace && saved.workspace !== session.catalog.workspace) {
-						await openFolder(saved.workspace);
+					if (chosen.workspace && chosen.workspace !== session.catalog.workspace) {
+						await openFolder(chosen.workspace);
 					}
 					return;
 				}

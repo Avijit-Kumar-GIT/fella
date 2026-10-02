@@ -156,6 +156,61 @@ fn has_actual_question(value: &serde_json::Value) -> bool {
         .unwrap_or(false)
 }
 
+/// Recover the conversation's original repository from the first completed
+/// answer. Older UI archives were rewritten with the currently mounted folder,
+/// so their top-level `workspace` can describe a later repository instead of
+/// where the conversation began. `None` means the transcript has no usable
+/// answer metadata; `Some(None)` is a known no-repository origin.
+fn archived_conversation_workspace(value: &serde_json::Value) -> Option<Option<String>> {
+    let messages = value.get("messages")?.as_array()?;
+    for (index, message) in messages.iter().enumerate() {
+        if !is_actual_question_message(message) {
+            continue;
+        }
+        let assistant = messages[index + 1..]
+            .iter()
+            .take_while(|candidate| !is_actual_question_message(candidate))
+            .find(|candidate| {
+                candidate.get("role").and_then(|role| role.as_str()) == Some("assistant")
+                    && candidate
+                        .get("answer")
+                        .is_some_and(serde_json::Value::is_object)
+            });
+        let Some(answer) = assistant.and_then(|message| message.get("answer")) else {
+            continue;
+        };
+        if let Some(workspace) = answer.get("workspace") {
+            if workspace.is_null() {
+                return Some(None);
+            }
+            if let Some(path) = workspace.get("path").and_then(|path| path.as_str()) {
+                return Some(Some(path.to_string()));
+            }
+        }
+        if let Some(trace) = answer.get("trace").filter(|trace| trace.is_object()) {
+            if trace
+                .get("workspace_revision")
+                .is_some_and(serde_json::Value::is_null)
+            {
+                return Some(None);
+            }
+            if trace
+                .get("workspace_revision")
+                .and_then(|revision| revision.as_str())
+                .is_some()
+            {
+                // A mounted answer from an older schema may not carry its path;
+                // leave the archive's existing value as the best available hint.
+                return None;
+            }
+            if trace.get("turn_id").is_some() || trace.get("id").is_some() {
+                return Some(None);
+            }
+        }
+    }
+    None
+}
+
 fn conversational_message_count(messages: &[serde_json::Value]) -> usize {
     messages
         .iter()
@@ -791,6 +846,69 @@ mod conversation_context_tests {
         drop(engine);
         let _ = std::fs::remove_dir_all(data_dir);
     }
+
+    #[test]
+    fn conversation_history_recovers_origin_scope_from_first_answer() {
+        let data_dir = scratch("conversation-origin");
+        let engine = EngineState::new(&data_dir).unwrap();
+        let no_repo = serde_json::json!({
+            "id": "general-origin",
+            "saved_at_ms": 1,
+            "workspace": "/later/repository",
+            "messages": [
+                {"role":"user", "text":"What is Rust?"},
+                {"role":"assistant", "text":"Rust is a programming language.", "answer": {
+                    "text":"Rust is a programming language.",
+                    "trace":{"id":"trace-general", "turn_id":"turn-general", "steps":[]},
+                    "evidence":[]
+                }}
+            ]
+        });
+        let repo_origin = serde_json::json!({
+            "id": "repo-origin",
+            "saved_at_ms": 2,
+            "workspace": "/later/repository",
+            "messages": [
+                {"role":"user", "text":"What is the total?"},
+                {"role":"assistant", "text":"The total is 12.", "answer": {
+                    "text":"The total is 12.",
+                    "workspace":{"path":"/original/repository", "revision":"revision-1"},
+                    "trace":{"id":"trace-repo", "turn_id":"turn-repo", "workspace_revision":"revision-1", "steps":[]},
+                    "evidence":[]
+                }}
+            ]
+        });
+        engine
+            .archive_conversation("general-origin", &no_repo.to_string())
+            .unwrap();
+        engine
+            .archive_conversation("repo-origin", &repo_origin.to_string())
+            .unwrap();
+
+        let conversations = engine.conversations_list();
+        assert_eq!(
+            conversations
+                .iter()
+                .find(|item| item.id == "general-origin")
+                .unwrap()
+                .workspace,
+            None,
+            "a later mount must not claim a general conversation"
+        );
+        assert_eq!(
+            conversations
+                .iter()
+                .find(|item| item.id == "repo-origin")
+                .unwrap()
+                .workspace
+                .as_deref(),
+            Some("/original/repository"),
+            "the first answer's repository is more reliable than a later archive snapshot"
+        );
+
+        drop(engine);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -1311,10 +1429,11 @@ impl EngineState {
                 continue;
             };
             let saved_at_ms = v.get("saved_at_ms").and_then(|x| x.as_i64()).unwrap_or(0);
-            let workspace = v
+            let archived_workspace = v
                 .get("workspace")
                 .and_then(|x| x.as_str())
                 .map(str::to_string);
+            let workspace = archived_conversation_workspace(&v).unwrap_or(archived_workspace);
             let Some(messages) = v.get("messages").and_then(|value| value.as_array()) else {
                 continue;
             };
