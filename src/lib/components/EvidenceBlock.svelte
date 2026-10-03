@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { Answer, EvidenceItem } from '$lib/types';
+	import type { Answer, ContextSection, EvidenceItem } from '$lib/types';
 	import Icon from './Icon.svelte';
 	import ReplayStatus from './ReplayStatus.svelte';
 
@@ -11,6 +11,21 @@
 	}: { answer: Answer; expanded?: boolean; bodyId: string; onrerun?: () => Promise<void> } = $props();
 
 	const COMPLETE_TABLE_ROWS = 100;
+	const CONTEXT_LABEL: Record<ContextSection, string> = {
+		user_context: 'user-provided context',
+		workspace_schema: 'workspace schema',
+		workspace_model: 'workspace definitions',
+		conversation: 'conversation history',
+		folder_memory: 'workspace memory'
+	};
+	let hasToolEvidence = $derived(
+		answer.provenance
+			? answer.provenance.evidence_ids.length > 0
+			: answer.evidence.some((item) => !item.error)
+	);
+	let providedContext = $derived(
+		(answer.provenance?.context_sections ?? []).map((section) => CONTEXT_LABEL[section])
+	);
 
 	// Which steps have their raw detail (SQL, table, output) revealed.
 	let openDetail = $state<Record<number, boolean>>({});
@@ -49,12 +64,30 @@
 
 	{#if expanded}
 		<div class="evidence-body" id={bodyId}>
+			<div class="basis">
+				<div class="checks-heading">Basis</div>
+				{#if hasToolEvidence}
+					<div class="basis-copy">Workspace tool results are linked to the steps below.</div>
+				{:else if answer.provenance}
+					<div class="basis-copy">No workspace tool result is attached; this is a model response informed by general knowledge and any context listed here.</div>
+				{:else}
+					<div class="basis-copy">Source details were not recorded for this archived answer.</div>
+				{/if}
+				{#if providedContext.length}
+					<div class="basis-copy">Context supplied to the model: {providedContext.join(', ')}.</div>
+				{/if}
+				{#if answer.provenance?.clarification_of}
+					<div class="basis-copy">This analysis continues from your clarification.</div>
+				{/if}
+			</div>
+			{#if answer.evidence.length}
 			<ol class="steps">
 				{#each answer.evidence as e, i (e.id ?? `evidence-${i}`)}
 					{@const shownArgs = argsWithoutNote(e.args)}
 					{@const hasDetail =
 						!!e.sql ||
 						!!e.sources?.length ||
+						!!e.python_input_trace ||
 						Object.keys(shownArgs).length > 0 ||
 						!!e.output ||
 						!!(e.columns && e.rows)}
@@ -94,6 +127,23 @@
 										{/each}
 									</dl>
 								{/if}
+								{#if e.python_input_trace}
+									<div class="python-inputs">
+										<div class="input-heading">Data read by this calculation</div>
+						{#if !e.python_input_trace.complete}
+							<div class="input-warning">Input trace is incomplete; not all reads may be inspectable or replayable.</div>
+						{/if}
+						{#if !e.python_input_trace.queries.length}
+							<div class="input-warning">No SQL input was recorded for this calculation.</div>
+						{/if}
+										{#each e.python_input_trace.queries as query, qi (qi)}
+											<pre class="sql">{query.sql}</pre>
+											<div class="input-meta">
+												{query.row_count} rows · {query.columns.join(', ') || 'no columns'}{query.truncated ? ' · result capped' : ''}
+											</div>
+										{/each}
+									</div>
+								{/if}
 								{#if !e.error}
 									<div class="result">{e.result_summary}</div>
 									{#if e.output}
@@ -112,22 +162,30 @@
 												</tbody>
 											</table>
 										</div>
-											{#if e.row_count != null && visibleRows && visibleRows.length < e.row_count}
-												<p class="table-note">Showing {visibleRows.length} of {e.row_count} rows.</p>
-											{/if}
+										{#if e.row_count != null && visibleRows && visibleRows.length < e.row_count}
+											<p class="table-note">Showing {visibleRows.length} of {e.row_count} rows.</p>
 										{/if}
+									{/if}
 								{/if}
 							</div>
 						{/if}
 					</li>
 				{/each}
 			</ol>
+			{/if}
 
 			{#if answer.verification.length}
+				<div class="checks-heading">Checks</div>
 				<div class="verify">
 					{#each answer.verification as v (v.label)}
 						<div class="check">
-							<span class="mark" class:ok={v.ok} class:bad={!v.ok} aria-hidden="true">
+							<span
+								class="mark"
+								class:ok={v.ok}
+								class:bad={!v.ok}
+								role="img"
+								aria-label={v.ok ? 'Passed' : 'Issue'}
+							>
 								<Icon name={v.ok ? 'check' : 'alert'} size={12} />
 							</span>
 							<span>{v.label}</span>
@@ -137,7 +195,7 @@
 				</div>
 			{/if}
 
-			{#if answer.turn_id}
+			{#if answer.turn_id && answer.evidence.length}
 				<ReplayStatus turnId={answer.turn_id} {onrerun} />
 			{/if}
 		</div>
@@ -153,6 +211,15 @@
 		flex-direction: column;
 		font-size: var(--fs-sm);
 		gap: 10px;
+	}
+	.basis {
+		display: flex;
+		flex-direction: column;
+		gap: 3px;
+	}
+	.basis-copy {
+		color: var(--text-dim);
+		font-size: var(--fs-xs);
 	}
 	.steps {
 		margin: 0;
@@ -195,6 +262,26 @@
 	}
 	.detail {
 		margin-top: 4px;
+	}
+	.python-inputs {
+		margin: 8px 0;
+		padding-top: 7px;
+		border-top: 1px solid var(--border);
+	}
+	.input-heading {
+		margin-bottom: 4px;
+		color: var(--text-dim);
+		font-size: var(--fs-xs);
+		font-weight: 600;
+	}
+	.input-meta,
+	.input-warning {
+		margin: 3px 0 8px;
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+	}
+	.input-warning {
+		color: var(--warn);
 	}
 	.args {
 		display: grid;
@@ -239,6 +326,12 @@
 	}
 	.detail :global(td) {
 		white-space: nowrap;
+	}
+	.checks-heading {
+		margin-top: var(--space-1);
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+		font-weight: 600;
 	}
 	.verify {
 		margin-top: 4px;

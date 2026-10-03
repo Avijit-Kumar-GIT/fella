@@ -55,7 +55,8 @@ pub fn load(data_dir: &Path, turn_id: &str) -> EngineResult<AnalysisTurn> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::evidence::{VerificationCheck, VerificationStatus};
+    use crate::engine::context::ContextSection;
+    use crate::engine::evidence::{AnswerProvenance, VerificationCheck, VerificationStatus};
     use crate::engine::runtime::{
         AnalysisResult, ExecutionTrace, LogicalPlan, PlanStrategy, TraceStep, TurnState,
         VerificationReport,
@@ -73,6 +74,11 @@ mod tests {
             workspace_revision: Some("revision-1".into()),
             workspace_snapshot: None,
             context_audit: None,
+            provenance: Some(AnswerProvenance {
+                evidence_ids: vec!["evidence-1".into()],
+                context_sections: vec![ContextSection::WorkspaceSchema],
+                clarification_of: None,
+            }),
             rerun_of: None,
             state: TurnState::Accepted,
             contract: None,
@@ -121,7 +127,19 @@ mod tests {
         assert_eq!(loaded.question, "total sales?");
         assert_eq!(loaded.trace.steps[0].operation, "run_sql");
         assert_eq!(loaded.result.status, VerificationStatus::Verified);
+        assert_eq!(
+            loaded.provenance.as_ref().unwrap().evidence_ids,
+            vec!["evidence-1"]
+        );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn old_turn_without_provenance_still_deserializes() {
+        let mut json = serde_json::to_value(turn()).unwrap();
+        json.as_object_mut().unwrap().remove("provenance");
+        let loaded: AnalysisTurn = serde_json::from_value(json).unwrap();
+        assert!(loaded.provenance.is_none());
     }
 
     #[test]

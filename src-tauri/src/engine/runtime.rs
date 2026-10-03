@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 
 use crate::engine::context::ContextAssemblyAudit;
-use crate::engine::evidence::{Usage, VerificationCheck, VerificationStatus};
+use crate::engine::evidence::{AnswerProvenance, Usage, VerificationCheck, VerificationStatus};
 
 /// A stable identifier for one analytical question, distinct from the
 /// conversation/tab that contains it.
@@ -662,6 +662,11 @@ pub struct AnalysisTurn {
     /// Length-only audit of bounded model context; text is never copied here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_audit: Option<ContextAssemblyAudit>,
+    /// Explicit links from this turn to evidence, included context, and any
+    /// clarification that resolved an interpretation. Optional for older
+    /// persisted turns.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<AnswerProvenance>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rerun_of: Option<TurnId>,
     pub state: TurnState,

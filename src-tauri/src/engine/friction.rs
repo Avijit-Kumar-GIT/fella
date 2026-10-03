@@ -80,6 +80,7 @@ mod tests {
             row_count: None,
             output: None,
             chart: None,
+            python_input_trace: None,
             python_queries: None,
             python_queries_complete: None,
             ms: 0,

@@ -18,7 +18,8 @@
 //! Plus one cost-gated check that *does* spend an extra LLM round-trip, used
 //! sparingly (agent.rs only calls it once a cheap check above already left a
 //! warning standing) and isn't part of `run()`'s list above:
-//!   13. a stricter, independent second opinion agrees with the first answer
+//!   13. a same-model consistency pass agrees with the first answer; this is a
+//!       soft signal, not an independent judge or proof of correctness
 
 use std::collections::HashSet;
 
@@ -92,7 +93,6 @@ pub fn hard_fail(checks: &[VerificationCheck]) -> Option<String> {
             "different result now",
             "no longer runs",
             "not found in any result",
-            "disagrees with this one",
             "returned no value for at least one row",
             "actually came from",
             "period comparison arithmetic",
@@ -232,9 +232,16 @@ pub fn reran_clean(checks: &[VerificationCheck]) -> bool {
         })
 }
 
-/// Classify the complete answer result once. The serialized code is the
-/// contract consumed by the UI, memory recorder, and evaluation harness.
-pub fn status(checks: &[VerificationCheck], evidence: &[EvidenceItem]) -> VerificationStatus {
+/// Classify the complete answer result once. A clean replay proves that the
+/// computation is reproducible, not that the model selected the right meaning
+/// or scope. Reserve `Verified` for a replayed result whose interpretation was
+/// separately grounded against the current workspace (or resolved by the
+/// user and then grounded by the runtime).
+pub fn status(
+    checks: &[VerificationCheck],
+    evidence: &[EvidenceItem],
+    semantics_grounded: bool,
+) -> VerificationStatus {
     if evidence.is_empty() || !evidence.iter().any(|item| item.error.is_none()) {
         return VerificationStatus::InsufficientData;
     }
@@ -244,7 +251,7 @@ pub fn status(checks: &[VerificationCheck], evidence: &[EvidenceItem]) -> Verifi
     if checks.iter().any(|check| !check.ok) {
         return VerificationStatus::NeedsReview;
     }
-    if reran_clean(checks) {
+    if semantics_grounded && reran_clean(checks) {
         VerificationStatus::Verified
     } else {
         VerificationStatus::NeedsReview
@@ -3034,20 +3041,16 @@ fn answers_disagree(a: &str, b: &str) -> bool {
     uncovered(&na, &nb) || uncovered(&nb, &na)
 }
 
-/// The check pushed when a stricter, independent second opinion (the agent
-/// loop's cost-gated self-consistency re-check, #80 fired only when a cheap
-/// check above already left a warning standing) disagrees with the first
-/// answer's figures. A residual "still might be wrong" signal for cases the
-/// deterministic checks above can't fully resolve on their own (joins,
-/// multi-step, anything outside the simple single-table shape). Its label
-/// participates in `hard_fail` the point is to surface it, not bury it.
-/// `None` when the two agree, or neither has a comparable figure.
+/// The check pushed when a second pass from the same model, still conditioned
+/// on the conversation, disagrees with the first answer's figures. It is a
+/// soft signal rather than independent evidence or proof of error. `None` when
+/// the two agree, one pass has no comparable figures, or the second pass failed.
 pub fn self_consistency_check(first: &str, second: &str) -> Option<VerificationCheck> {
     if !answers_disagree(first, second) {
         return None;
     }
     Some(warn(
-        "a second, independent answer disagrees with this one",
+        "a second model pass disagrees with this answer",
         Some(format!(
             "asked again with stricter instructions, the model answered: \"{}\"",
             truncate(second.trim(), 200)
@@ -3820,9 +3823,22 @@ mod tests {
             "a changed re-run does trigger it"
         );
 
-        // A self-consistency disagreement is a hard fail too.
+        // A same-model disagreement is a quality warning, not proof that the
+        // answer is wrong; a tool replay mismatch remains a hard failure.
         let disagreed = vec![self_consistency_check("Total: $450", "Total: $600").unwrap()];
-        assert!(hard_fail(&disagreed).is_some());
+        assert_eq!(hard_fail(&disagreed), None);
+        assert_eq!(
+            status(
+                &disagreed,
+                &[run_sql_ev(
+                    "SELECT 450",
+                    &["total"],
+                    vec![vec![Json::from(450)]]
+                )],
+                true
+            ),
+            VerificationStatus::NeedsReview
+        );
     }
 
     #[test]
@@ -3918,11 +3934,20 @@ mod tests {
             ok("re-checked the queries behind this answer  same results"),
             ok("every number in the answer came from the data above"),
         ];
-        assert_eq!(status(&clean, &evidence), VerificationStatus::Verified);
+        assert_eq!(
+            status(&clean, &evidence, true),
+            VerificationStatus::Verified
+        );
+        assert_eq!(
+            status(&clean, &evidence, false),
+            VerificationStatus::NeedsReview,
+            "a matching replay alone does not verify the user's semantic interpretation"
+        );
         assert_eq!(
             status(
                 &[warn("a total here is computed over a text column", None)],
-                &evidence
+                &evidence,
+                true
             ),
             VerificationStatus::NeedsReview
         );
@@ -3932,16 +3957,20 @@ mod tests {
                     "the answer mentions 999 not found in any result",
                     None
                 )],
-                &evidence
+                &evidence,
+                true
             ),
             VerificationStatus::Failed
         );
-        assert_eq!(status(&[], &[]), VerificationStatus::InsufficientData);
+        assert_eq!(
+            status(&[], &[], false),
+            VerificationStatus::InsufficientData
+        );
 
         let mut failed_tool = evidence[0].clone();
         failed_tool.error = Some("query failed".into());
         assert_eq!(
-            status(&[], &[failed_tool]),
+            status(&[], &[failed_tool], false),
             VerificationStatus::InsufficientData
         );
     }
@@ -3955,12 +3984,15 @@ mod tests {
         // A genuinely different figure -> flagged, with the second answer quoted.
         let check = self_consistency_check("Total: $450", "Total: $600").unwrap();
         assert!(!check.ok);
-        assert!(check.label.contains("disagrees with this one"));
+        assert!(check.label.contains("disagrees with this answer"));
         assert!(check.detail.unwrap().contains("$600"));
         // A year in one and not the other doesn't count as a figure mismatch.
         assert!(self_consistency_check("In 2024, you spent $450.", "$450").is_none());
         // Neither answer has a comparable figure (e.g. both prose) -> nothing to compare.
         assert!(self_consistency_check("The files can't answer this.", "I'm not sure.").is_none());
+        // A checker that returns no usable response is not treated as a
+        // disagreement and cannot downgrade the original answer.
+        assert!(self_consistency_check("Total: $450", "").is_none());
     }
 
     #[test]
@@ -4029,6 +4061,7 @@ mod tests {
             row_count: Some(1),
             output: None,
             chart: None,
+            python_input_trace: None,
             python_queries: None,
             python_queries_complete: None,
             ms: 1,
@@ -4078,6 +4111,7 @@ mod tests {
                 "table ledger  (from ledger.csv, 30 rows)\ndocument notes.md  (Notes, 1 KB)".into(),
             ),
             chart: None,
+            python_input_trace: None,
             python_queries: None,
             python_queries_complete: None,
             ms: 1,
@@ -4109,6 +4143,7 @@ mod tests {
             rows: Some(rows),
             output: None,
             chart: None,
+            python_input_trace: None,
             python_queries: None,
             python_queries_complete: None,
             ms: 1,
@@ -4718,7 +4753,10 @@ mod tests {
             "{checks:?}"
         );
         assert!(hard_fail(&checks).is_none());
-        assert_eq!(status(&checks, &evidence), VerificationStatus::NeedsReview);
+        assert_eq!(
+            status(&checks, &evidence, true),
+            VerificationStatus::NeedsReview
+        );
     }
 
     #[test]

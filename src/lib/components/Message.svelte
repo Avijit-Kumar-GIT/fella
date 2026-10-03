@@ -7,7 +7,6 @@
 	import Logo from './Logo.svelte';
 	import { renderMarkdown } from '$lib/markdown';
 	import { enterUp } from '$lib/motion';
-	import { answerStatus } from '$lib/verify';
 
 	let {
 		message,
@@ -87,8 +86,6 @@
 		if (answerSources.length > 1) return `Based on ${answerSources.length} sources`;
 		return message.answer?.workspace ? 'Based on this workspace' : 'Based on the available evidence';
 	});
-	let status = $derived(message.answer ? answerStatus(message.answer) : null);
-
 	function followupQuestions(text: string, answer: Answer): string[] {
 		const q = text.toLowerCase();
 		const suggestions: string[] = [];
@@ -139,9 +136,8 @@
 				<strong>Fella</strong>
 				{#if message.pending}<span class="status">Working through the workspace</span>{/if}
 			</div>
-			{#if message.answer?.evidence.length}
+			{#if message.answer}
 				<EvidenceSummary
-					answer={message.answer}
 					bodyId={`evidence-${message.id}`}
 					{expanded}
 					{ontoggle}
@@ -159,7 +155,7 @@
 			<div class="answer-visuals" aria-label="Visual answer">
 				{#each chartItems as e, i (e.id ?? `chart-${i}`)}
 					{#if e.chart}
-						<Chart spec={e.chart} source={scopeLabel} verified={status === 'verified'} />
+						<Chart spec={e.chart} source={scopeLabel} />
 					{/if}
 				{/each}
 			</div>
@@ -199,14 +195,12 @@
 		</div>
 	{/if}
 	{#if message.answer}
-		{#if message.answer.evidence.length}
-			<EvidenceBlock
-				answer={message.answer}
-				bodyId={`evidence-${message.id}`}
-				{expanded}
-				onrerun={message.answer.turn_id ? onrerun : undefined}
-			/>
-		{/if}
+		<EvidenceBlock
+			answer={message.answer}
+			bodyId={`evidence-${message.id}`}
+			{expanded}
+			onrerun={message.answer.turn_id ? onrerun : undefined}
+		/>
 		{#if showFollowups && onfollowup && followups.length && !message.answer.clarification}
 			<div class="followups" aria-label="Suggested follow-up questions">
 				<span class="followup-label">Continue with</span>

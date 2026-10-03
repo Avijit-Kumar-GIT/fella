@@ -5,9 +5,8 @@
 
 	let {
 		spec,
-		source = '',
-		verified = false
-	}: { spec: VisualizationSpec; source?: string; verified?: boolean } = $props();
+		source = ''
+	}: { spec: VisualizationSpec; source?: string } = $props();
 
 	// Keep chart series distinct from semantic status colors. A label and legend
 	// always accompany color, so color never carries the only meaning.
@@ -87,9 +86,6 @@
 			<div class="chart-title">{chartTitle}</div>
 			{#if spec.unit}<div class="chart-unit">Values in {spec.unit}</div>{/if}
 		</div>
-		{#if verified}
-			<span class="chart-status"><span class="status-dot" aria-hidden="true"></span>Checked</span>
-		{/if}
 	</figcaption>
 	{#if source}<div class="chart-context">{source}</div>{/if}
 
@@ -248,21 +244,6 @@
 	}
 	.chart-context {
 		margin-bottom: var(--space-2);
-	}
-	.chart-status {
-		display: inline-flex;
-		align-items: center;
-		gap: 5px;
-		flex: none;
-		color: var(--ok);
-		font-size: var(--fs-xs);
-		white-space: nowrap;
-	}
-	.status-dot {
-		width: 5px;
-		height: 5px;
-		border-radius: 50%;
-		background: currentColor;
 	}
 	.chart {
 		max-width: 100%;

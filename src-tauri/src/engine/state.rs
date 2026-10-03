@@ -1707,6 +1707,7 @@ impl EngineState {
                 .map(|workspace| workspace.revision.clone()),
             workspace_snapshot,
             context_audit: Some(context_audit.clone()),
+            provenance: Some(answer.provenance.clone()),
             rerun_of: None,
             state,
             contract: answer.contract.clone(),

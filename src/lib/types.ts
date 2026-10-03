@@ -43,8 +43,28 @@ export interface EvidenceItem {
 	output?: string;
 	/** Structured visualization data, when the tool was `make_chart`. */
 	chart?: VisualizationSpec;
+	/** Bounded SQL/schema references for data read by a Python computation. */
+	python_input_trace?: PythonInputTrace;
 	ms: number;
 	error?: string;
+}
+
+export interface PythonInputTrace {
+	complete: boolean;
+	queries: {
+		sql: string;
+		columns: string[];
+		row_count: number;
+		truncated: boolean;
+	}[];
+}
+
+/** Observable answer inputs. Context means supplied to the model, not proof of
+ *  private reasoning; evidence IDs refer to the answer's evidence list. */
+export interface AnswerProvenance {
+	evidence_ids: string[];
+	context_sections: ContextSection[];
+	clarification_of?: string;
 }
 
 export interface EvidenceSource {
@@ -75,6 +95,8 @@ export interface Answer {
 	contract?: AnalysisContract;
 	/** Deterministic field/value probes used to ground that interpretation. */
 	grounding?: GroundingReport;
+	/** Typed links to evidence, included context, and clarification lineage. */
+	provenance?: AnswerProvenance;
 	text: string;
 	evidence: EvidenceItem[];
 	verification: VerificationCheck[];
@@ -245,6 +267,7 @@ export interface AnalysisTurn {
 	workspace_revision?: string;
 	workspace_snapshot?: WorkspaceRevisionSnapshot;
 	context_audit?: ContextAssemblyAudit;
+	provenance?: AnswerProvenance;
 	rerun_of?: string;
 	state: RuntimeTurnState;
 	contract?: AnalysisContract;

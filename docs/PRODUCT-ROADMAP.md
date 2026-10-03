@@ -217,40 +217,77 @@ gracefully.
 
 ### 3. Replace one binary “Verified” label with honest provenance
 
-- [ ] **Inventory every producer and consumer of verification status.** Map
+- [x] **Inventory every producer and consumer of verification status.** Map
   status generation, persistence, APIs, chat rendering, evidence/detail
-  surfaces, and tests across the supported Tauri/Electron paths before
-  changing semantics.
-- [ ] **Represent the basis of an answer directly.** Introduce a typed
-  provenance/report model that can describe, as applicable: model knowledge;
-  web sources and retrieval time; workspace documents and passages; executed
-  SQL/Python with inputs and result references; user-confirmed definitions or
-  assumptions; and estimates/forecasts with method and uncertainty. These
-  are evidence facets, not competing labels on one scale.
-- [ ] **Reserve computation replay for computational claims.** A result
-  derived from local data should record the source revision, selected data,
-  transformation or query, and execution result sufficiently to inspect or
-  replay it. A cited explanation should not be forced through SQL merely to
-  earn a status badge.
-- [ ] **Use language that matches the evidence.** Distinguish “calculated
-  from…”, “the document says…”, “web sources report…”, “general explanation,”
-  “estimate,” and “forecast.” Do not imply that citations prove truth or that
-  a replay proves the user's interpretation was correct.
-- [ ] **Make uncertainty informative, not suppressive.** If uncertainty is
+  surfaces, and tests. Current producers converge in `agent::finish_with`;
+  status is persisted to the analysis-turn record and memory episode; the UI
+  no longer renders the status as routine answer chrome.
+- [x] **Represent current answer inputs directly.** `AnswerProvenance` links
+  successful tool evidence IDs, the context sections supplied to the model,
+  and clarification lineage. Evidence retains document operations, SQL,
+  result rows, and workspace revision links. Python computations now expose
+  the exact SQL inputs, columns, row counts, and trace completeness in the
+  detail disclosure; fetched row values remain internal to verification.
+  Provenance records observable inputs, not claims about private model
+  reasoning. Web citations/retrieval time and forecast method/uncertainty are
+  added with backlog #2 and #4 respectively; they are not claimed as supported
+  by this slice.
+- [x] **Reserve computation replay for computational claims.** SQL and
+  Python execution are replayed against the mounted revision when feasible;
+  cost-skipped or incomplete traces remain ineligible for “Verified.” The
+  answer details keep the selected sources, query/input references, and
+  execution result together. Document and general-knowledge answers do not
+  need to pass through SQL.
+- [x] **Use language that matches the evidence in current routes.** The
+  Analysis details disclosure separates model responses with no workspace
+  tool result from workspace-backed tool evidence, lists context supplied,
+  and records clarification lineage. SQL/Python evidence shows the operation
+  and result; a replay is not described as proof of the user's interpretation
+  or of source-data truth. External citations and forecast-specific wording
+  remain dependent on #2 and #4.
+- [x] **Define a meaningful bar for “Verified.”** Reserve the positive label
+  for claims whose relevant meaning and scope are grounded in the data or
+  confirmed by the user, whose computation completed, whose reported values
+  match the returned evidence, and whose applicable checks passed. A replay
+  establishes reproducibility, not semantic correctness or source-data truth.
+  Forecasts may have their method checked, but a future outcome is not
+  “Verified.” When the bar is not met, do not downgrade every useful answer to
+  a negative status; state a material assumption or limitation, or ask when
+  ambiguity changes the result.
+- [x] **Make uncertainty informative, not suppressive.** If uncertainty is
   material, state what is known, what is assumed, and what would change the
   result. Ask a focused clarification when the ambiguity materially changes
   the answer. Otherwise give a qualified answer rather than refusing solely
-  because a secondary checker disagreed.
-- [ ] **Audit hard gates and brittle checks.** Review numeric-token comparison,
-  second-opinion disagreement, and checker failure behavior. A hard stop is
-  justified for a safety, execution, or irrecoverable data-integrity problem;
-  a soft quality signal should trigger a better explanation/review, not
-  automatically discard a likely useful answer.
+  because a secondary checker disagreed. The model policy already continues
+  safe partial/candidate analysis, uses a stated assumption when one
+  interpretation is reasonably likely, and asks only when investigation leaves
+  a material user-owned choice. A same-model disagreement remains advisory and
+  cannot replace or stream over the answer.
+- [x] **Keep verification out of routine chat chrome.** Do not repeat
+  “Verified,” “Not verified,” or “Needs review” on every answer. Keep
+  answer-specific sources, method, and checks together behind one clearly
+  named, collapsible **Analysis details** disclosure. Put only consequential,
+  user-actionable caveats in the answer itself; do not add a conversation-wide
+  verification score or duplicate checks elsewhere in the UI.
+- [x] **Audit hard gates and brittle checks.** Numeric-token matching remains
+  a heuristic for spotting unsupported figures, not proof that a figure is
+  attached to the correct semantic measure; the grounded contract and
+  operation-specific checks are also required before “Verified.” A second
+  pass from the same model is not independent evidence, so disagreement is a
+  soft review signal rather than a hard failure. Checker errors or empty
+  responses fail open and cannot erase the answer; checker text is not
+  streamed into the user's response. Re-run mismatches, execution errors, and
+  unsupported numeric claims still trigger the existing repair/issue paths.
 
-**Acceptance checks:** general knowledge, cited research, document
-interpretation, replayed calculations, and forecasts each display an
-appropriate basis; no category is mislabeled “Verified” merely because of its
-tool route; low-confidence output remains useful and appropriately qualified.
+**Acceptance checks:** currently supported general-knowledge responses,
+workspace context, document operations, SQL/Python calculations, and
+clarification continuations expose their observable basis without copying raw
+context or Python input rows. “Verified” requires grounded semantics, clean
+computation replay, and passing applicable checks—not merely a tool-route
+condition. Ordinary answers do not carry repeated verification badges;
+answer-specific checks remain discoverable in Analysis details. Web-sourced
+answers and forecast-specific provenance are explicitly gated on completion
+of #2 and #4 rather than represented by placeholder claims.
 
 ### 4. Support forecasts and forward-looking analysis responsibly
 

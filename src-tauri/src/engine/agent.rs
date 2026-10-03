@@ -10,7 +10,8 @@ use crate::engine::analytics::{provenance, verify};
 use crate::engine::context::ContextPacket;
 use crate::engine::error::{EngineError, EngineResult};
 use crate::engine::evidence::{
-    Answer, AskEvent, EvidenceItem, Usage, VerificationCheck, WorkspaceSnapshot,
+    Answer, AnswerProvenance, AskEvent, EvidenceItem, PythonInputTrace, PythonQueryReference,
+    Usage, VerificationCheck, WorkspaceSnapshot,
 };
 use crate::engine::llm::{ChatMessage, LlmClient, ToolCall};
 use crate::engine::runtime::{
@@ -47,6 +48,8 @@ struct RunIds {
     clarification: Option<runtime::ClarificationRequest>,
     grounding: Option<crate::engine::grounding::GroundingReport>,
     plan: Option<LogicalPlan>,
+    context_sections: Vec<crate::engine::context::ContextSection>,
+    clarification_of: Option<String>,
 }
 
 pub(crate) struct RunRequest<'a> {
@@ -162,6 +165,14 @@ pub(crate) async fn run(request: RunRequest<'_>) -> EngineResult<Answer> {
         clarification: None,
         grounding: None,
         plan: None,
+        context_sections: context
+            .audit
+            .sections
+            .iter()
+            .filter(|section| section.included_chars > 0)
+            .map(|section| section.section)
+            .collect(),
+        clarification_of: clarification.map(|reply| reply.turn_id.clone()),
     };
     emit(AskEvent::TurnState {
         turn_id: ids.turn_id.clone(),
@@ -441,9 +452,11 @@ corrected answer to match the re-run."
                 )));
                 continue;
             }
-            // Cost-gated self-consistency re-check (#80): the fallback tier for
-            // whatever's left once the cheap checks above have already run and
-            // fixed what they can. Only pays for a second, independent, no-tool
+            // Cost-gated same-model consistency check (#80): the fallback tier
+            // for whatever's left once the cheap checks above have run. It is
+            // not an independent judge and its disagreement is only a soft
+            // signal. Suppress its stream so checker text never leaks into the
+            // user's answer. Only pays for a second, no-tool
             // opinion when the checks above already left a warning standing -
             // never on a clean answer, so this can't touch the "<=2 round trips"
             // cost target on the common path. `FELLA_SELF_CHECK=0` opts out.
@@ -453,13 +466,21 @@ corrected answer to match the re-run."
                 && checks.iter().any(|c| !c.ok)
             {
                 messages.push(ChatMessage::User(
-                    "Second opinion: answer this question again from scratch, using only the \
-tool results already gathered. Be strict and literal use only run_sql figures, honour every \
-filter word in the question exactly, and state just the number(s) don't round or estimate."
+                    "Consistency check: re-evaluate the answer using only the tool results already gathered. \
+Do not rely on the previous answer if the evidence points elsewhere. Check that each number matches \
+the requested measure, filters, and scope. State just the number(s); don't round or estimate."
                         .to_string(),
                 ));
+                let suppress_checker_stream = |_text: &str| {};
+                // A checker failure is deliberately fail-open: this pass is
+                // supplemental, so it cannot erase or delay the answer.
                 let r = tokio::select! {
-                    r = llm.chat(&messages, &[], &notify, &on_delta) => r.unwrap_or_default(),
+                    r = llm.chat(
+                        &messages,
+                        &[],
+                        &suppress_checker_stream,
+                        &suppress_checker_stream
+                    ) => r.unwrap_or_default(),
                     _ = cancelled(cancel.as_ref()) => Default::default(),
                 };
                 usage = Usage::merge(usage, r.usage);
@@ -717,6 +738,7 @@ not run again. Its result is repeated below - use it, refine the call, or give y
                             row_count: None,
                             output: None,
                             chart: None,
+                            python_input_trace: None,
                             python_queries: None,
                             python_queries_complete: None,
                             ms: 0,
@@ -924,7 +946,7 @@ fn reask_enabled() -> bool {
     !matches!(std::env::var("FELLA_VERIFY_REASK").as_deref(), Ok("0"))
 }
 
-/// The self-consistency second opinion (#80) fires unless `FELLA_SELF_CHECK=0`.
+/// The same-model consistency pass (#80) fires unless `FELLA_SELF_CHECK=0`.
 fn self_check_enabled() -> bool {
     !matches!(std::env::var("FELLA_SELF_CHECK").as_deref(), Ok("0"))
 }
@@ -981,7 +1003,14 @@ fn finish_with(
         // NeedsReview or a misleading success state.
         crate::engine::evidence::VerificationStatus::InsufficientData
     } else {
-        verify::status(&verification, &evidence)
+        let semantics_grounded = context.ids.contract.as_ref().is_some_and(|contract| {
+            contract.interpretation == runtime::InterpretationStatus::Grounded
+        }) && context
+            .ids
+            .grounding
+            .as_ref()
+            .is_some_and(|grounding| grounding.unresolved.is_empty());
+        verify::status(&verification, &evidence, semantics_grounded)
     };
     let state = if context.ids.clarification.is_some() {
         TurnState::Clarify
@@ -1034,6 +1063,15 @@ fn finish_with(
         contract: context.ids.contract.clone(),
         grounding: context.ids.grounding.clone(),
         text,
+        provenance: AnswerProvenance {
+            evidence_ids: evidence
+                .iter()
+                .filter(|item| item.error.is_none())
+                .map(|item| item.id.clone())
+                .collect(),
+            context_sections: context.ids.context_sections.clone(),
+            clarification_of: context.ids.clarification_of.clone(),
+        },
         evidence,
         verification,
         status,
@@ -1176,11 +1214,33 @@ async fn run_tool_call(
     }
     match result {
         Some(Ok(out)) => {
-            let sources = out
+            let mut sources = out
                 .sql
                 .as_deref()
                 .map(|sql| provenance::for_sql(catalog, sql))
                 .unwrap_or_default();
+            if let Some(queries) = out.python_queries.as_deref() {
+                for source in queries
+                    .iter()
+                    .flat_map(|query| provenance::for_sql(catalog, &query.sql))
+                {
+                    if !sources.contains(&source) {
+                        sources.push(source);
+                    }
+                }
+            }
+            let python_input_trace = out.python_queries.as_ref().map(|queries| PythonInputTrace {
+                complete: out.python_queries_complete.unwrap_or(false),
+                queries: queries
+                    .iter()
+                    .map(|query| PythonQueryReference {
+                        sql: query.sql.clone(),
+                        columns: query.columns.clone(),
+                        row_count: query.row_count,
+                        truncated: query.truncated,
+                    })
+                    .collect(),
+            });
             let item = EvidenceItem {
                 id: String::new(),
                 tool: call.name.clone(),
@@ -1194,6 +1254,7 @@ async fn run_tool_call(
                 row_count: out.row_count,
                 output: out.output,
                 chart: out.chart,
+                python_input_trace,
                 python_queries: out.python_queries,
                 python_queries_complete: out.python_queries_complete,
                 ms: started.elapsed().as_millis() as u64,
@@ -1240,6 +1301,7 @@ fn tool_error(
             row_count: None,
             output: None,
             chart: None,
+            python_input_trace: None,
             python_queries: None,
             python_queries_complete: None,
             ms: started.elapsed().as_millis() as u64,

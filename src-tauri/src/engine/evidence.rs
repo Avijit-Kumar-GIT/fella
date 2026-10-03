@@ -10,7 +10,7 @@ pub struct EvidenceItem {
     /// to the user. This is also the UI key for evidence and chart items.
     pub id: String,
     pub tool: String,
-    /// Catalogued files/sheets behind a SQL-backed result.
+    /// Catalogued files/sheets behind a SQL-backed result or traced Python input.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub sources: Vec<EvidenceSource>,
     pub args: Json,
@@ -37,6 +37,12 @@ pub struct EvidenceItem {
     /// boundary here the way an HTML/SVG string would need.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub chart: Option<crate::engine::analytics::chart::ChartData>,
+    /// Compact references to the SQL inputs read by a Python computation.
+    /// Row values stay private to the verifier; SQL, schema, and row counts
+    /// are enough to inspect the input and rerun it against the recorded
+    /// workspace revision without duplicating raw data in the transcript.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub python_input_trace: Option<PythonInputTrace>,
     /// Internal SQL trace for a Python-backed computation. It is used by the
     /// verifier to replay the guest's read-only inputs, but is intentionally
     /// not serialized as a second evidence panel.
@@ -47,6 +53,35 @@ pub struct EvidenceItem {
     pub ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PythonInputTrace {
+    pub complete: bool,
+    pub queries: Vec<PythonQueryReference>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PythonQueryReference {
+    pub sql: String,
+    pub columns: Vec<String>,
+    pub row_count: usize,
+    pub truncated: bool,
+}
+
+/// Observable inputs to one model-generated answer. Evidence IDs point into
+/// `Answer.evidence`; context sections say what was supplied to the model, not
+/// what its private reasoning relied on. Clarification lineage records the
+/// user's authority over an interpretation without copying their response.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AnswerProvenance {
+    #[serde(default)]
+    pub evidence_ids: Vec<String>,
+    #[serde(default)]
+    pub context_sections: Vec<crate::engine::context::ContextSection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clarification_of: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -123,6 +158,8 @@ pub struct Answer {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub grounding: Option<crate::engine::grounding::GroundingReport>,
     pub text: String,
+    /// Typed links to the observed inputs behind this model-generated answer.
+    pub provenance: AnswerProvenance,
     pub evidence: Vec<EvidenceItem>,
     pub verification: Vec<VerificationCheck>,
     pub status: VerificationStatus,
@@ -185,6 +222,11 @@ mod tests {
             contract: None,
             grounding: None,
             text: "done".into(),
+            provenance: AnswerProvenance {
+                evidence_ids: vec!["evidence-1".into()],
+                context_sections: vec![crate::engine::context::ContextSection::Conversation],
+                clarification_of: Some("turn-parent".into()),
+            },
             evidence: Vec::new(),
             verification: Vec::new(),
             status: VerificationStatus::InsufficientData,
@@ -204,10 +246,68 @@ mod tests {
         assert_eq!(wire["kind"], "answer_done");
         assert_eq!(wire["answer"]["turn_id"], "turn-1");
         assert_eq!(
+            wire["answer"]["provenance"]["evidence_ids"],
+            serde_json::json!(["evidence-1"])
+        );
+        assert_eq!(
+            wire["answer"]["provenance"]["context_sections"],
+            serde_json::json!(["conversation"])
+        );
+        assert_eq!(
+            wire["answer"]["provenance"]["clarification_of"],
+            "turn-parent"
+        );
+        assert_eq!(
             wire["answer"]["clarification"]["options"][1],
             "Spending only"
         );
         assert!(wire["answer"].is_object());
+    }
+
+    #[test]
+    fn serialized_python_provenance_keeps_queries_but_not_input_rows() {
+        let evidence = EvidenceItem {
+            id: "evidence-python".into(),
+            tool: "run_python".into(),
+            sources: Vec::new(),
+            args: serde_json::json!({"code": "print('summary')"}),
+            note: None,
+            sql: None,
+            result_summary: "python finished".into(),
+            columns: None,
+            rows: None,
+            row_count: None,
+            output: Some("summary".into()),
+            chart: None,
+            python_input_trace: Some(PythonInputTrace {
+                complete: true,
+                queries: vec![PythonQueryReference {
+                    sql: "SELECT amount FROM ledger".into(),
+                    columns: vec!["amount".into()],
+                    row_count: 1,
+                    truncated: false,
+                }],
+            }),
+            python_queries: Some(vec![crate::engine::analytics::pyexec::PythonQueryTrace {
+                sql: "SELECT amount FROM ledger".into(),
+                columns: vec!["amount".into()],
+                rows: vec![vec![serde_json::json!("private-row-value")]],
+                row_count: 1,
+                truncated: false,
+            }]),
+            python_queries_complete: Some(true),
+            ms: 1,
+            error: None,
+        };
+
+        let wire = serde_json::to_value(evidence).unwrap();
+        assert_eq!(wire["python_input_trace"]["complete"], true);
+        assert_eq!(
+            wire["python_input_trace"]["queries"][0]["sql"],
+            "SELECT amount FROM ledger"
+        );
+        assert!(wire.get("python_queries").is_none());
+        assert!(!wire.to_string().contains("private-row-value"));
     }
 }
 
