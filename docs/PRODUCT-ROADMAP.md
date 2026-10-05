@@ -371,17 +371,18 @@ baseline before comparing candidate implementations.
 removed and skipped files now retain workspace-relative paths, so duplicate
 basenames remain distinct. The 5,000-file inventory test observed 17 ms before
 and 16–17 ms after this change in local single runs; these are metadata-only
-datapoints, not a general speed claim or the 10-GB acceptance test. CSV/TSV
-ingestion now profiles in one streaming pass and loads in a second pass into
-SQLite, preserving full-file type inference without retaining all records or
-silently truncating by the former 2-million-row / 256-MiB defaults. The
-focused cap-completeness test and streaming-vs-reference type inference tests
-pass. JSON/NDJSON still materialize input and retain the old byte limit;
-`open_workspace` still prepares sources synchronously before publishing the
-catalog; document search streams text but makes two workspace-wide passes per
-query. These are facts to measure and address, not acceptance criteria to
-preserve. No 5,000-file / 10-GB mixed-folder throughput or peak-memory result
-has been collected yet.
+datapoints, not a general speed claim or the 10-GB acceptance test. CSV/TSV,
+JSON arrays/objects, and NDJSON now profile in one streaming pass and load in a
+second pass into SQLite, preserving full-file type inference without retaining
+all records or silently truncating by the former 2-million-row / 256-MiB
+defaults. Malformed NDJSON and non-object records are explicitly noted. The
+focused completeness tests and streaming-vs-reference type inference tests
+pass. Remaining constraints: XLSX currently materializes sheets; `open_workspace`
+still prepares sources synchronously before publishing the catalog; document
+search streams text but makes two workspace-wide passes per query. These are
+facts to measure and address, not acceptance criteria to preserve. No
+5,000-file / 10-GB mixed-folder throughput or peak-memory result has been
+collected yet.
 
 **Research informing the design:** Rust's [`ignore::WalkBuilder`](https://docs.rs/ignore/latest/ignore/struct.WalkBuilder.html)
 offers a parallel recursive walker and filtering, but its file-size and ignore

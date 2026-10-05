@@ -33,26 +33,6 @@ pub fn query_timeout_secs() -> u64 {
     crate::engine::env::positive("FELLA_QUERY_TIMEOUT_SECS", QUERY_TIMEOUT_SECS)
 }
 
-/// Most rows we'll pull into memory from one delimited file at ingest. Generous
-/// enough for any real personal export; a guard so a multi-GB log or a runaway
-/// dump can't spike RAM into the GBs and freeze every query. The file still
-/// loads its first `n` rows are usable, with a note that it was truncated.
-/// `FELLA_INGEST_ROW_CAP` overrides it (and lets tests hit the path cheaply).
-pub const INGEST_ROW_CAP: usize = 2_000_000;
-
-/// Approximate amount of delimited input we retain while ingesting one source.
-/// Row count alone is not a useful memory guard when a single export contains
-/// very wide text fields.
-pub const INGEST_BYTE_CAP: usize = 256 * 1024 * 1024;
-
-pub fn ingest_byte_cap() -> usize {
-    crate::engine::env::positive("FELLA_INGEST_BYTE_CAP", INGEST_BYTE_CAP)
-}
-
-pub fn ingest_row_cap() -> usize {
-    crate::engine::env::positive("FELLA_INGEST_ROW_CAP", INGEST_ROW_CAP)
-}
-
 /// A neutral cell value used for bulk inserts and query results.
 pub type Cell = Json;
 

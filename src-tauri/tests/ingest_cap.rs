@@ -51,6 +51,28 @@ fn a_source_is_complete_even_when_legacy_ingest_caps_are_set() {
     }
     fs::write(ws.path().join("big.csv"), csv).unwrap();
 
+    let mut json = String::from("[null,\n");
+    let mut ndjson = String::new();
+    for i in 0..500 {
+        let row = format!(r#"{{"n":{i},"label":"row-{i}"}}"#);
+        if i > 0 {
+            json.push_str(",\n");
+        }
+        json.push_str(&row);
+        writeln!(ndjson, "{row}").unwrap();
+        if i == 249 {
+            ndjson.push_str("{ malformed record }\n");
+        }
+    }
+    json.push_str(",\n17\n]\n");
+    fs::write(ws.path().join("array-data.json"), json).unwrap();
+    fs::write(ws.path().join("line-data.ndjson"), ndjson).unwrap();
+    fs::write(
+        ws.path().join("object-data.json"),
+        r#"{"label":"one row","n":1}"#,
+    )
+    .unwrap();
+
     let engine = EngineState::new(data.path()).unwrap();
     let catalog = engine.open_workspace(ws.path()).unwrap();
 
@@ -71,4 +93,44 @@ fn a_source_is_complete_even_when_legacy_ingest_caps_are_set() {
         .run_sql("SELECT label FROM big ORDER BY n DESC LIMIT 1")
         .unwrap();
     assert_eq!(last.rows[0][0], serde_json::json!("row-499"));
+
+    for source_name in ["array-data.json", "line-data.ndjson"] {
+        let source = catalog
+            .sources
+            .iter()
+            .find(|source| source.name == source_name)
+            .unwrap_or_else(|| panic!("{source_name} should be queryable"));
+        assert_eq!(source.row_count, Some(500), "{source_name}");
+        let table = source.view.as_deref().expect("table view name");
+        let count = engine
+            .run_sql(&format!("SELECT count(*) FROM \"{table}\""))
+            .unwrap();
+        assert_eq!(count.rows[0][0], serde_json::json!(500), "{source_name}");
+    }
+    let array = catalog
+        .sources
+        .iter()
+        .find(|source| source.name == "array-data.json")
+        .unwrap();
+    assert!(array
+        .note
+        .as_deref()
+        .unwrap_or_default()
+        .contains("2 non-object JSON record(s) were skipped"));
+    let lines = catalog
+        .sources
+        .iter()
+        .find(|source| source.name == "line-data.ndjson")
+        .unwrap();
+    assert!(lines
+        .note
+        .as_deref()
+        .unwrap_or_default()
+        .contains("1 malformed JSON line(s) were skipped"));
+    let object = catalog
+        .sources
+        .iter()
+        .find(|source| source.name == "object-data.json")
+        .unwrap();
+    assert_eq!(object.row_count, Some(1));
 }

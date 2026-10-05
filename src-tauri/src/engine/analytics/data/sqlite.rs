@@ -11,6 +11,7 @@ use std::sync::{
 use rusqlite::functions::FunctionFlags;
 use rusqlite::types::ValueRef;
 use rusqlite::{Connection, OpenFlags};
+use serde::de::{Deserializer as _, MapAccess, SeqAccess, Visitor};
 use serde_json::Value as Json;
 
 use crate::engine::analytics::data::{
@@ -168,6 +169,96 @@ impl SqliteEngine {
                 .collect(),
         })
     }
+
+    /// Profile JSON records without retaining the file, then stream a second
+    /// pass into SQLite. A single JSON object is one row; arrays and NDJSON
+    /// contribute one row per object record.
+    fn add_json_source(
+        &mut self,
+        name: &str,
+        path: &str,
+        ndjson: bool,
+    ) -> EngineResult<SourceLoad> {
+        let stamp = file_stamp(path)?;
+        let mut profile = JsonSourceProfile::default();
+        let first_pass = visit_json_objects(path, ndjson, |object| {
+            profile.observe(&object);
+            Ok(())
+        })?;
+        if file_stamp(path)? != stamp {
+            return Err(EngineError::msg(format!(
+                "{path}: the file changed while Fella was inspecting it; retry the mount"
+            )));
+        }
+        if profile.rows == 0 {
+            return Err(EngineError::msg(format!("{path}: no JSON objects found")));
+        }
+
+        let profiled_rows = profile.rows;
+        let (headers, types, date_orders, notes) = profile.finish();
+        let columns: Vec<(String, ColType)> =
+            headers.iter().cloned().zip(types.iter().copied()).collect();
+        let ident = quote_ident(name);
+        let cols_sql = columns
+            .iter()
+            .map(|(column, ty)| format!("{} {}", quote_ident(column), ty.sqlite()))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let placeholders = vec!["?"; columns.len()].join(", ");
+        let insert_sql = format!("INSERT INTO {ident} VALUES ({placeholders})");
+        let tx = self.conn.transaction()?;
+        tx.execute_batch(&format!(
+            "DROP TABLE IF EXISTS {ident}; CREATE TABLE {ident} ({cols_sql});"
+        ))?;
+        let mut loaded = 0usize;
+        {
+            let mut statement = tx.prepare(&insert_sql)?;
+            let second_pass = visit_json_objects(path, ndjson, |object| {
+                let values: Vec<Json> = headers
+                    .iter()
+                    .zip(types.iter().zip(&date_orders))
+                    .map(|(header, (ty, order))| {
+                        json_cell_with_order(object.get(header).unwrap_or(&Json::Null), *ty, *order)
+                    })
+                    .collect();
+                let sqlite_values: Vec<rusqlite::types::Value> = values
+                    .iter()
+                    .map(|value| cell_to_sqlite(value, ColType::Text))
+                    .collect();
+                statement
+                    .execute(rusqlite::params_from_iter(sqlite_values.iter()))
+                    .map_err(|error| EngineError::msg(error.to_string()))?;
+                loaded += 1;
+                Ok(())
+            })?;
+            if second_pass != first_pass {
+                return Err(EngineError::msg(format!(
+                    "{path}: the file changed while Fella was loading it; retry the mount"
+                )));
+            }
+        }
+        if loaded != profiled_rows || file_stamp(path)? != stamp {
+            return Err(EngineError::msg(format!(
+                "{path}: the file changed while Fella was loading it; retry the mount"
+            )));
+        }
+        tx.commit()?;
+
+        let note = json_read_note(&first_pass);
+        Ok(SourceLoad {
+            row_count: loaded as i64,
+            note,
+            columns: columns
+                .iter()
+                .zip(notes)
+                .map(|((column, ty), note)| {
+                    let mut info = ColumnInfo::bare(column.clone(), ty.sqlite());
+                    info.note = note;
+                    info
+                })
+                .collect(),
+        })
+    }
 }
 
 /// `parse_num(x)`: read-only SQL escape hatch for a column ingest left as
@@ -208,37 +299,14 @@ impl DataEngine for SqliteEngine {
             SourceKind::Tsv => return self.add_delimited_source(name, path, b'\t'),
             _ => {}
         }
-        let parsed =
-            match kind {
-                SourceKind::Json => read_json(path, false)?,
-                SourceKind::Ndjson => read_json(path, true)?,
-                SourceKind::Parquet => return Err(EngineError::msg(
-                    "Parquet needs the DuckDB build rebuild with `cargo build --features duckdb`",
-                )),
-                _ => return Err(EngineError::msg("not a path-readable tabular source")),
-            };
-        let Parsed {
-            headers,
-            types,
-            notes,
-            rows,
-            note,
-        } = parsed;
-        let cols: Vec<(String, ColType)> = headers.into_iter().zip(types).collect();
-        let n = self.add_rows(name, &cols, &rows)?;
-        Ok(SourceLoad {
-            row_count: n,
-            note,
-            columns: cols
-                .iter()
-                .zip(notes)
-                .map(|((nm, t), cnote)| {
-                    let mut c = ColumnInfo::bare(nm.clone(), t.sqlite());
-                    c.note = cnote;
-                    c
-                })
-                .collect(),
-        })
+        match kind {
+            SourceKind::Json => self.add_json_source(name, path, false),
+            SourceKind::Ndjson => self.add_json_source(name, path, true),
+            SourceKind::Parquet => Err(EngineError::msg(
+                "Parquet needs the DuckDB build rebuild with `cargo build --features duckdb`",
+            )),
+            _ => Err(EngineError::msg("not a path-readable tabular source")),
+        }
     }
 
     fn add_rows(
@@ -536,17 +604,6 @@ fn query_connection_cancellable(
 
 // --- file readers ---------------------------------------------------------
 
-/// A parsed tabular file: column headers, sniffed types, an optional per-column
-/// ingest note (e.g. "amounts stored as text and read as numbers"), and rows.
-struct Parsed {
-    headers: Vec<String>,
-    types: Vec<ColType>,
-    notes: Vec<Option<String>>,
-    rows: Vec<Vec<Cell>>,
-    /// Whole-file caveat (delimiter guessed, rows dropped for a decode error).
-    note: Option<String>,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct FileStamp {
     size: u64,
@@ -560,6 +617,347 @@ fn file_stamp(path: &str) -> EngineResult<FileStamp> {
         size: metadata.len(),
         modified: metadata.modified().ok(),
     })
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct JsonReadSummary {
+    objects: usize,
+    non_object_records: usize,
+    malformed_records: usize,
+}
+
+fn json_read_note(summary: &JsonReadSummary) -> Option<String> {
+    let mut notes = Vec::new();
+    if summary.non_object_records > 0 {
+        notes.push(format!(
+            "{} non-object JSON record(s) were skipped",
+            summary.non_object_records
+        ));
+    }
+    if summary.malformed_records > 0 {
+        notes.push(format!(
+            "{} malformed JSON line(s) were skipped",
+            summary.malformed_records
+        ));
+    }
+    (!notes.is_empty()).then(|| notes.join("; "))
+}
+
+/// Visit object records using bounded memory: at most one JSON record (or one
+/// NDJSON line) is materialized at a time. Invalid NDJSON lines and non-object
+/// records retain the previous skip behavior but are now reported explicitly.
+fn visit_json_objects<F>(path: &str, ndjson: bool, mut visit: F) -> EngineResult<JsonReadSummary>
+where
+    F: FnMut(serde_json::Map<String, Json>) -> EngineResult<()>,
+{
+    use std::io::BufRead;
+
+    let mut summary = JsonReadSummary::default();
+    if ndjson {
+        let file = std::fs::File::open(path)
+            .map_err(|error| EngineError::io(format!("read {path}"), error))?;
+        let mut reader = std::io::BufReader::new(file);
+        let mut line = Vec::new();
+        loop {
+            line.clear();
+            if reader
+                .read_until(b'\n', &mut line)
+                .map_err(|error| EngineError::io(format!("read {path}"), error))?
+                == 0
+            {
+                break;
+            }
+            if line.iter().all(|byte| byte.is_ascii_whitespace()) {
+                continue;
+            }
+            match serde_json::from_slice::<Json>(&line) {
+                Ok(Json::Object(object)) => {
+                    visit(object)?;
+                    summary.objects += 1;
+                }
+                Ok(_) => summary.non_object_records += 1,
+                Err(_) => summary.malformed_records += 1,
+            }
+        }
+        return Ok(summary);
+    }
+
+    let file = std::fs::File::open(path)
+        .map_err(|error| EngineError::io(format!("read {path}"), error))?;
+    let mut deserializer = serde_json::Deserializer::from_reader(std::io::BufReader::new(file));
+    let visitor = JsonObjectRowsVisitor {
+        visit: &mut visit,
+        summary: &mut summary,
+    };
+    deserializer
+        .deserialize_any(visitor)
+        .map_err(|error| EngineError::msg(format!("{path}: {error}")))?;
+    deserializer
+        .end()
+        .map_err(|error| EngineError::msg(format!("{path}: {error}")))?;
+    Ok(summary)
+}
+
+struct JsonObjectRowsVisitor<'a, F> {
+    visit: &'a mut F,
+    summary: &'a mut JsonReadSummary,
+}
+
+impl<'de, F> Visitor<'de> for JsonObjectRowsVisitor<'_, F>
+where
+    F: FnMut(serde_json::Map<String, Json>) -> EngineResult<()>,
+{
+    type Value = ();
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a JSON object or an array of JSON records")
+    }
+
+    fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        while let Some(value) = sequence.next_element::<Json>()? {
+            match value {
+                Json::Object(object) => {
+                    (self.visit)(object).map_err(serde::de::Error::custom)?;
+                    self.summary.objects += 1;
+                }
+                _ => self.summary.non_object_records += 1,
+            }
+        }
+        Ok(())
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let mut object = serde_json::Map::new();
+        while let Some((key, value)) = map.next_entry::<String, Json>()? {
+            object.insert(key, value);
+        }
+        (self.visit)(object).map_err(serde::de::Error::custom)?;
+        self.summary.objects += 1;
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct JsonSourceProfile {
+    headers: Vec<String>,
+    positions: std::collections::HashMap<String, usize>,
+    columns: Vec<JsonColumnProfile>,
+    rows: usize,
+}
+
+impl JsonSourceProfile {
+    fn observe(&mut self, object: &serde_json::Map<String, Json>) {
+        for (name, value) in object {
+            let index = match self.positions.get(name) {
+                Some(index) => *index,
+                None => {
+                    let index = self.headers.len();
+                    self.headers.push(name.clone());
+                    self.positions.insert(name.clone(), index);
+                    self.columns.push(JsonColumnProfile::default());
+                    index
+                }
+            };
+            self.columns[index].observe(value);
+        }
+        self.rows += 1;
+    }
+
+    fn finish(
+        self,
+    ) -> (
+        Vec<String>,
+        Vec<ColType>,
+        Vec<Option<NumericDateOrder>>,
+        Vec<Option<String>>,
+    ) {
+        let mut types = Vec::with_capacity(self.columns.len());
+        let mut date_orders = Vec::with_capacity(self.columns.len());
+        let mut notes = Vec::with_capacity(self.columns.len());
+        for column in self.columns {
+            let (ty, note, date_order) = column.finish();
+            types.push(ty);
+            notes.push(note);
+            date_orders.push(date_order);
+        }
+        (self.headers, types, date_orders, notes)
+    }
+}
+
+#[derive(Default)]
+struct JsonColumnProfile {
+    nonblank: usize,
+    numbers: usize,
+    integers: usize,
+    booleans: usize,
+    numeric: usize,
+    dates_without_order: usize,
+    dates_month_first: usize,
+    dates_day_first: usize,
+    date_order_hint: Option<NumericDateOrder>,
+    date_order_conflict: bool,
+    saw_string: bool,
+    non_numeric_string: bool,
+    direct_date_example: Option<String>,
+    month_first_date_example: Option<String>,
+    day_first_date_example: Option<String>,
+}
+
+impl JsonColumnProfile {
+    fn observe(&mut self, value: &Json) {
+        match value {
+            Json::Null => return,
+            Json::String(value) if is_blankish(value) => return,
+            _ => self.nonblank += 1,
+        }
+
+        match value {
+            Json::Bool(_) => self.booleans += 1,
+            Json::Number(number) => {
+                self.numbers += 1;
+                self.numeric += 1;
+                if number.is_i64() || number.is_u64() {
+                    self.integers += 1;
+                }
+            }
+            Json::String(value) => {
+                self.saw_string = true;
+                if parse_numeric(value).is_some() {
+                    self.numeric += 1;
+                } else {
+                    self.non_numeric_string = true;
+                }
+
+                match infer_numeric_date_order(std::iter::once(value.as_str())) {
+                    Some(order) if self.date_order_hint.is_some_and(|hint| hint != order) => {
+                        self.date_order_conflict = true;
+                    }
+                    Some(order) => self.date_order_hint = Some(order),
+                    None => {}
+                }
+
+                let direct = parse_date_value(value);
+                let month_first = direct.clone().or_else(|| {
+                    value.contains('/').then(|| {
+                        parse_date_value_with_order(value, Some(NumericDateOrder::MonthFirst))
+                    })?
+                });
+                let day_first = direct.clone().or_else(|| {
+                    value.contains('/').then(|| {
+                        parse_date_value_with_order(value, Some(NumericDateOrder::DayFirst))
+                    })?
+                });
+                if direct.is_some() {
+                    self.dates_without_order += 1;
+                    self.direct_date_example
+                        .get_or_insert_with(|| value.clone());
+                }
+                if month_first.is_some() {
+                    self.dates_month_first += 1;
+                    self.month_first_date_example
+                        .get_or_insert_with(|| value.clone());
+                }
+                if day_first.is_some() {
+                    self.dates_day_first += 1;
+                    self.day_first_date_example
+                        .get_or_insert_with(|| value.clone());
+                }
+            }
+            _ => self.non_numeric_string = true,
+        }
+    }
+
+    fn finish(self) -> (ColType, Option<String>, Option<NumericDateOrder>) {
+        let date_order = (!self.date_order_conflict)
+            .then_some(self.date_order_hint)
+            .flatten();
+        let dates = match date_order {
+            Some(NumericDateOrder::MonthFirst) => self.dates_month_first,
+            Some(NumericDateOrder::DayFirst) => self.dates_day_first,
+            None => self.dates_without_order,
+        };
+        let date_example = match date_order {
+            Some(NumericDateOrder::MonthFirst) => self
+                .direct_date_example
+                .as_ref()
+                .or(self.month_first_date_example.as_ref()),
+            Some(NumericDateOrder::DayFirst) => self
+                .direct_date_example
+                .as_ref()
+                .or(self.day_first_date_example.as_ref()),
+            None => self.direct_date_example.as_ref(),
+        }
+        .and_then(|raw| {
+            parse_date_value_with_order(raw, date_order)
+                .map(|normalized| (raw.as_str(), normalized))
+        });
+
+        if self.nonblank == 0 {
+            return (ColType::Text, None, date_order);
+        }
+        if self.booleans == self.nonblank {
+            return (ColType::Bool, None, date_order);
+        }
+        if self.integers == self.nonblank {
+            return (ColType::Int, None, date_order);
+        }
+        if self.numbers == self.nonblank {
+            return (ColType::Float, None, date_order);
+        }
+        if self.saw_string && !self.non_numeric_string {
+            return (
+                ColType::Float,
+                Some("amounts were stored as text and read as numbers".into()),
+                date_order,
+            );
+        }
+        if dates == self.nonblank && dates > 0 {
+            let (raw, normalized) = date_example.unwrap_or(("", String::new()));
+            let order_note = numeric_date_order_note(date_order);
+            return (
+                ColType::Date,
+                Some(format!(
+                    "dates were stored as text (e.g. \"{raw}\") and normalized to ISO-8601 \
+                     (e.g. {normalized}) for querying with strftime()/date(){order_note}"
+                )),
+                date_order,
+            );
+        }
+        if self.nonblank >= 3
+            && self.numeric >= 3
+            && (self.numeric as u128) * 100 >= (self.nonblank as u128) * 80
+        {
+            return (
+                ColType::Float,
+                Some(format!(
+                    "{} of {} values were normalized as numbers; unparseable values were left NULL",
+                    self.numeric, self.nonblank
+                )),
+                date_order,
+            );
+        }
+        if self.nonblank >= 3 && dates >= 3 && (dates as u128) * 100 >= (self.nonblank as u128) * 80
+        {
+            let (raw, normalized) = date_example.unwrap_or(("", String::new()));
+            let order_note = numeric_date_order_note(date_order);
+            return (
+                ColType::Date,
+                Some(format!(
+                    "{dates} of {} values were normalized as dates (e.g. \"{raw}\" -> {normalized}); \
+                     unparseable values were left NULL{order_note}",
+                    self.nonblank
+                )),
+                date_order,
+            );
+        }
+        (ColType::Text, None, date_order)
+    }
 }
 
 struct DelimitedProfile {
@@ -1034,93 +1432,6 @@ fn looks_like_total_row(row: &[&str], width: usize) -> bool {
     has_label && filled * 3 <= width * 2 + 2
 }
 
-fn read_json(path: &str, ndjson: bool) -> EngineResult<Parsed> {
-    let byte_cap = crate::engine::analytics::data::ingest_byte_cap();
-    if std::fs::metadata(path)
-        .map(|metadata| metadata.len() > byte_cap as u64)
-        .unwrap_or(false)
-    {
-        return Err(EngineError::msg(format!(
-            "{path}: JSON input is larger than the {byte_cap} byte ingest limit"
-        )));
-    }
-    let text =
-        std::fs::read_to_string(path).map_err(|e| EngineError::io(format!("read {path}"), e))?;
-
-    let objs: Vec<serde_json::Map<String, Json>> = if ndjson {
-        text.lines()
-            .filter(|l| !l.trim().is_empty())
-            .filter_map(|l| serde_json::from_str::<Json>(l).ok())
-            .filter_map(|v| v.as_object().cloned())
-            .collect()
-    } else {
-        match serde_json::from_str::<Json>(&text)
-            .map_err(|e| EngineError::msg(format!("{path}: {e}")))?
-        {
-            Json::Array(a) => a
-                .into_iter()
-                .filter_map(|v| v.as_object().cloned())
-                .collect(),
-            Json::Object(o) => vec![o],
-            _ => {
-                return Err(EngineError::msg(format!(
-                    "{path}: expected a JSON array of objects"
-                )))
-            }
-        }
-    };
-    if objs.is_empty() {
-        return Err(EngineError::msg(format!("{path}: no JSON objects found")));
-    }
-
-    // column order = first-seen across all objects
-    let mut headers: Vec<String> = Vec::new();
-    for o in &objs {
-        for k in o.keys() {
-            if !headers.contains(k) {
-                headers.push(k.clone());
-            }
-        }
-    }
-    let headers = dedupe_headers(&headers);
-
-    let mut types = Vec::with_capacity(headers.len());
-    let mut notes = Vec::with_capacity(headers.len());
-    let mut date_orders = Vec::with_capacity(headers.len());
-    for h in &headers {
-        let values: Vec<&Json> = objs
-            .iter()
-            .map(|o| o.get(h).unwrap_or(&Json::Null))
-            .collect();
-        let date_order = infer_numeric_date_order(values.iter().filter_map(|v| v.as_str()));
-        let (ty, note) = sniff_json_with_order(values.iter().copied(), date_order);
-        types.push(ty);
-        notes.push(note);
-        date_orders.push(date_order);
-    }
-
-    let rows: Vec<Vec<Cell>> = objs
-        .iter()
-        .map(|o| {
-            headers
-                .iter()
-                .zip(types.iter().zip(&date_orders))
-                .map(|(h, (t, order))| {
-                    json_cell_with_order(o.get(h).unwrap_or(&Json::Null), *t, *order)
-                })
-                .collect()
-        })
-        .collect();
-
-    Ok(Parsed {
-        headers,
-        types,
-        notes,
-        rows,
-        note: None,
-    })
-}
-
 fn dedupe_headers(raw: &[String]) -> Vec<String> {
     let mut seen = std::collections::HashSet::new();
     raw.iter()
@@ -1339,6 +1650,7 @@ fn sniff_json<'a>(vals: impl Iterator<Item = &'a Json>) -> (ColType, Option<Stri
     sniff_json_with_order(vals.into_iter(), date_order)
 }
 
+#[cfg(test)]
 fn sniff_json_with_order<'a>(
     vals: impl Iterator<Item = &'a Json>,
     date_order: Option<NumericDateOrder>,
@@ -1619,6 +1931,73 @@ mod tests {
                 profile.observe(value, index);
             }
             let actual = profile.finish(0, values.len());
+            assert_eq!(actual.0, expected.0, "column values: {values:?}");
+            assert_eq!(actual.1, expected.1, "column values: {values:?}");
+            assert_eq!(actual.2, date_order, "column values: {values:?}");
+        }
+    }
+
+    #[test]
+    fn streaming_json_profile_matches_full_column_type_inference() {
+        let cases: &[&[Json]] = &[
+            &[
+                serde_json::json!(1),
+                serde_json::json!(2),
+                serde_json::json!(3),
+            ],
+            &[
+                serde_json::json!(1),
+                serde_json::json!(2.5),
+                serde_json::json!(3),
+            ],
+            &[serde_json::json!(true), serde_json::json!(false)],
+            &[
+                serde_json::json!("$1,200.00"),
+                serde_json::json!("1,150"),
+                serde_json::json!("N/A"),
+            ],
+            &[
+                serde_json::json!("03/04/2024"),
+                serde_json::json!("13/04/2024"),
+                serde_json::json!("07/25/2024"),
+            ],
+            &[
+                serde_json::json!("$1,200"),
+                serde_json::json!("bad"),
+                serde_json::json!(800),
+                serde_json::json!(725),
+            ],
+            &[
+                serde_json::json!("2024-01-02"),
+                serde_json::json!("Feb 3, 2024"),
+                serde_json::json!("2024/03/04"),
+            ],
+            &[
+                serde_json::json!("10"),
+                serde_json::json!(true),
+                serde_json::json!(20),
+            ],
+            &[
+                serde_json::json!(""),
+                Json::Null,
+                serde_json::json!("none"),
+                serde_json::json!("-"),
+            ],
+            &[
+                serde_json::json!({"nested": 1}),
+                serde_json::json!([1, 2]),
+                serde_json::json!("text"),
+            ],
+        ];
+
+        for values in cases {
+            let date_order = infer_numeric_date_order(values.iter().filter_map(Json::as_str));
+            let expected = sniff_json_with_order(values.iter(), date_order);
+            let mut profile = JsonColumnProfile::default();
+            for value in *values {
+                profile.observe(value);
+            }
+            let actual = profile.finish();
             assert_eq!(actual.0, expected.0, "column values: {values:?}");
             assert_eq!(actual.1, expected.1, "column values: {values:?}");
             assert_eq!(actual.2, date_order, "column values: {values:?}");
