@@ -1,7 +1,8 @@
 //! Manual mount-scale probe: `cargo test --test mount_scale -- --ignored
 //! --nocapture` (optionally set `FELLA_MOUNT_SCALE_FILES` to change the 5,000
 //! default for local iteration; optionally set `FELLA_MOUNT_SCALE_LARGE_MIB`
-//! to add one large CSV or `FELLA_INGEST_TIMING=1` for per-pass timings). It
+//! to add one large CSV, `FELLA_MOUNT_SCALE_LARGE_JSON_MIB` for one large JSON
+//! array, or `FELLA_INGEST_TIMING=1` for per-pass timings). It
 //! deliberately has no latency threshold; its purpose is to report end-to-end
 //! mount cost and prove complete coverage across nested
 //! CSV/TSV/JSON/NDJSON tables, text documents, varied sizes, missing values,
@@ -54,6 +55,32 @@ fn tree_size(path: &Path) -> u64 {
             }
         })
         .sum()
+}
+
+fn assert_byte_progress(observations: &[(&'static str, u64, u64)], expected_bytes: u64) {
+    for stage in ["profiling", "loading"] {
+        let progress: Vec<u64> = observations
+            .iter()
+            .filter(|(observed_stage, _, _)| *observed_stage == stage)
+            .map(|(_, bytes_read, _)| *bytes_read)
+            .collect();
+        assert!(progress.len() > 2, "{stage} reports in-file byte progress");
+        assert_eq!(progress.first(), Some(&0), "{stage} reports its start");
+        assert_eq!(
+            progress.last(),
+            Some(&expected_bytes),
+            "{stage} reports full source completion"
+        );
+        assert!(
+            progress.windows(2).all(|window| window[0] <= window[1]),
+            "{stage} byte progress is monotonic"
+        );
+        assert!(progress.iter().all(|bytes| *bytes <= expected_bytes));
+        assert!(observations
+            .iter()
+            .filter(|(observed_stage, _, _)| *observed_stage == stage)
+            .all(|(_, _, total)| *total == expected_bytes));
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -166,6 +193,29 @@ fn write_large_table(path: &Path, target_bytes: u64) -> (usize, u64) {
     (rows, bytes_written)
 }
 
+fn write_large_json_table(path: &Path, target_bytes: u64) -> (usize, u64) {
+    let mut writer = BufWriter::new(File::create(path).unwrap());
+    writer.write_all(b"[").unwrap();
+    let mut bytes_written = 1u64;
+    let mut rows = 0usize;
+    while bytes_written < target_bytes {
+        if rows > 0 {
+            writer.write_all(b",").unwrap();
+            bytes_written += 1;
+        }
+        let record = format!(
+            r#"{{"record_id":"{rows:010}","amount":123456.78,"category":"Retail","day":"2025-01-01"}}"#
+        );
+        writer.write_all(record.as_bytes()).unwrap();
+        bytes_written += record.len() as u64;
+        rows += 1;
+    }
+    writer.write_all(b"]").unwrap();
+    bytes_written += 1;
+    writer.flush().unwrap();
+    (rows, bytes_written)
+}
+
 #[tokio::test]
 #[ignore = "manual 5,000-file performance/coverage probe"]
 async fn mounts_five_thousand_nested_sources_without_omissions() {
@@ -177,6 +227,10 @@ async fn mounts_five_thousand_nested_sources_without_omissions() {
         .filter(|value| *value > 0)
         .unwrap_or(DEFAULT_SOURCE_COUNT);
     let large_file_mib = std::env::var("FELLA_MOUNT_SCALE_LARGE_MIB")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(0);
+    let large_json_mib = std::env::var("FELLA_MOUNT_SCALE_LARGE_JSON_MIB")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(0);
@@ -217,6 +271,16 @@ async fn mounts_five_thousand_nested_sources_without_omissions() {
     } else {
         (0, 0)
     };
+    let (large_json_rows, large_json_file_bytes) = if large_json_mib > 0 {
+        let large_dir = workspace.path().join("large");
+        fs::create_dir_all(&large_dir).unwrap();
+        write_large_json_table(
+            &large_dir.join("large_records.json"),
+            large_json_mib.saturating_mul(1024 * 1024),
+        )
+    } else {
+        (0, 0)
+    };
 
     // Human-expected office formats outside Fella's tabular allowlist should
     // remain visible as skipped rather than being opened and parsed.
@@ -238,6 +302,7 @@ async fn mounts_five_thousand_nested_sources_without_omissions() {
     let engine = EngineState::new(data.path()).unwrap();
     let mut inventory_ready_ms = None;
     let mut large_source_progress = Vec::new();
+    let mut large_json_source_progress = Vec::new();
     let catalog = engine
         .open_workspace_with_progress(workspace.path(), |progress| {
             if inventory_ready_ms.is_none()
@@ -246,11 +311,13 @@ async fn mounts_five_thousand_nested_sources_without_omissions() {
             {
                 inventory_ready_ms = Some(started.elapsed().as_millis());
             }
-            if let Some(ingest) = progress
-                .ingest
-                .filter(|ingest| ingest.path == "large/large_records.csv")
-            {
-                large_source_progress.push((ingest.stage, ingest.bytes_read, ingest.total_bytes));
+            if let Some(ingest) = progress.ingest {
+                let observation = (ingest.stage, ingest.bytes_read, ingest.total_bytes);
+                match ingest.path.as_str() {
+                    "large/large_records.csv" => large_source_progress.push(observation),
+                    "large/large_records.json" => large_json_source_progress.push(observation),
+                    _ => {}
+                }
             }
         })
         .unwrap();
@@ -263,7 +330,8 @@ async fn mounts_five_thousand_nested_sources_without_omissions() {
         .expect("list_files is registered")
         .expect("default inventory page succeeds");
     let listing_elapsed = listing_started.elapsed();
-    let expected_tables = source_count + usize::from(large_rows > 0);
+    let expected_tables =
+        source_count + usize::from(large_rows > 0) + usize::from(large_json_rows > 0);
     let expected_inventory = expected_tables + 202;
     let expected_page_size = expected_inventory.min(40);
     assert!(listing.llm_text.contains(&format!(
@@ -310,8 +378,10 @@ async fn mounts_five_thousand_nested_sources_without_omissions() {
         .map(|source| source.row_count.unwrap_or_default())
         .sum();
     let large_source_count = source_count.div_ceil(100);
-    let expected_rows =
-        (large_source_count * 1_000 + (source_count - large_source_count) * 2 + large_rows) as i64;
+    let expected_rows = (large_source_count * 1_000
+        + (source_count - large_source_count) * 2
+        + large_rows
+        + large_json_rows) as i64;
     let first_view = catalog
         .sources
         .iter()
@@ -424,25 +494,18 @@ async fn mounts_five_thousand_nested_sources_without_omissions() {
             .expect("the optional large CSV is present in the catalog");
         assert_eq!(source.row_count, Some(large_rows as i64));
         if !cfg!(feature = "duckdb") && large_file_bytes >= 64 * 1024 * 1024 {
-            for stage in ["profiling", "loading"] {
-                let progress: Vec<u64> = large_source_progress
-                    .iter()
-                    .filter(|(observed_stage, _, _)| *observed_stage == stage)
-                    .map(|(_, bytes_read, _)| *bytes_read)
-                    .collect();
-                assert!(progress.len() > 2, "{stage} reports in-file byte progress");
-                assert_eq!(progress.first(), Some(&0), "{stage} reports its start");
-                assert_eq!(
-                    progress.last(),
-                    Some(&large_file_bytes),
-                    "{stage} reports full source completion"
-                );
-                assert!(
-                    progress.windows(2).all(|window| window[0] <= window[1]),
-                    "{stage} byte progress is monotonic"
-                );
-                assert!(progress.iter().all(|bytes| *bytes <= large_file_bytes));
-            }
+            assert_byte_progress(&large_source_progress, large_file_bytes);
+        }
+    }
+    if large_json_rows > 0 {
+        let source = catalog
+            .sources
+            .iter()
+            .find(|source| source.path.ends_with("large/large_records.json"))
+            .expect("the optional large JSON array is present in the catalog");
+        assert_eq!(source.row_count, Some(large_json_rows as i64));
+        if !cfg!(feature = "duckdb") && large_json_file_bytes >= 64 * 1024 * 1024 {
+            assert_byte_progress(&large_json_source_progress, large_json_file_bytes);
         }
     }
 
@@ -454,12 +517,14 @@ async fn mounts_five_thousand_nested_sources_without_omissions() {
         .all(|column| column.distinct.is_some()));
 
     eprintln!(
-        "mount scale sample: tables={} documents={} rows={} large_file_bytes={} large_file_rows={} skipped={} inventory_ready_ms={} mount_ready_ms={} first_sample_ms={} catalog_serialize_ms={} catalog_payload_bytes={} inventory_page_ms={} path_search_ms={} scratch_bytes={} process_peak_rss_bytes={}",
+        "mount scale sample: tables={} documents={} rows={} large_file_bytes={} large_file_rows={} large_json_file_bytes={} large_json_rows={} skipped={} inventory_ready_ms={} mount_ready_ms={} first_sample_ms={} catalog_serialize_ms={} catalog_payload_bytes={} inventory_page_ms={} path_search_ms={} scratch_bytes={} process_peak_rss_bytes={}",
         expected_tables,
         catalog.sources.len() - expected_tables,
         loaded_rows,
         large_file_bytes,
         large_rows,
+        large_json_file_bytes,
+        large_json_rows,
         catalog.skipped.len(),
         inventory_ready_ms.unwrap_or_default(),
         elapsed.as_millis(),

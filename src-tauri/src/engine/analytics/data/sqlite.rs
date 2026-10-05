@@ -323,6 +323,7 @@ impl SqliteEngine {
         let mut loaded = 0usize;
         {
             let mut statement = tx.prepare(&insert_sql)?;
+            let mut sqlite_values = Vec::with_capacity(headers.len());
             if report_progress {
                 on_progress(SourceIngestProgress {
                     stage: "loading",
@@ -345,21 +346,16 @@ impl SqliteEngine {
                 progress_interval_bytes,
                 load_callback,
                 |object| {
-                    let values: Vec<Json> = headers
-                        .iter()
-                        .zip(types.iter().zip(&date_orders))
-                        .map(|(header, (ty, order))| {
-                            json_cell_with_order(
+                    sqlite_values.clear();
+                    sqlite_values.extend(headers.iter().zip(types.iter().zip(&date_orders)).map(
+                        |(header, (ty, order))| {
+                            json_cell_to_sqlite(
                                 object.get(header).unwrap_or(&Json::Null),
                                 *ty,
                                 *order,
                             )
-                        })
-                        .collect();
-                    let sqlite_values: Vec<rusqlite::types::Value> = values
-                        .iter()
-                        .map(|value| cell_to_sqlite(value, ColType::Text))
-                        .collect();
+                        },
+                    ));
                     statement
                         .execute(rusqlite::params_from_iter(sqlite_values.iter()))
                         .map_err(|error| EngineError::msg(error.to_string()))?;
@@ -2156,6 +2152,7 @@ fn json_cell(v: &Json, ty: ColType) -> Cell {
     json_cell_with_order(v, ty, None)
 }
 
+#[cfg(test)]
 fn json_cell_with_order(v: &Json, ty: ColType, date_order: Option<NumericDateOrder>) -> Cell {
     use crate::engine::analytics::data::{is_blankish, parse_numeric};
     match (v, ty) {
@@ -2215,6 +2212,50 @@ fn cell_to_sqlite(v: &Json, _ty: ColType) -> rusqlite::types::Value {
         }
         Json::String(s) => V::Text(s.clone()),
         other => V::Text(other.to_string()),
+    }
+}
+
+/// Convert parsed JSON directly to SQLite storage so each cell doesn't need a
+/// temporary normalized `Json` value before binding. Keep behavior in lockstep
+/// with `json_cell_with_order` plus `cell_to_sqlite`.
+fn json_cell_to_sqlite(
+    value: &Json,
+    ty: ColType,
+    date_order: Option<NumericDateOrder>,
+) -> rusqlite::types::Value {
+    use crate::engine::analytics::data::{is_blankish, parse_numeric};
+    use rusqlite::types::Value as SqlValue;
+
+    match (value, ty) {
+        (Json::Null, _) => SqlValue::Null,
+        (Json::String(s), ColType::Text) => {
+            if s.trim().is_empty() {
+                SqlValue::Null
+            } else {
+                SqlValue::Text(s.clone())
+            }
+        }
+        (Json::String(s), _) if is_blankish(s) => SqlValue::Null,
+        (Json::Bool(value), ColType::Bool) => SqlValue::Integer(*value as i64),
+        (Json::Number(_), ColType::Int | ColType::Float) => cell_to_sqlite(value, ty),
+        (Json::String(s), ColType::Float) => parse_numeric(s)
+            .and_then(serde_json::Number::from_f64)
+            .map(|number| {
+                number
+                    .as_i64()
+                    .map(SqlValue::Integer)
+                    .unwrap_or_else(|| SqlValue::Real(number.as_f64().unwrap_or(0.0)))
+            })
+            .unwrap_or(SqlValue::Null),
+        (Json::String(s), ColType::Int) => parse_numeric(s)
+            .map(|number| SqlValue::Integer(number as i64))
+            .unwrap_or(SqlValue::Null),
+        (Json::String(s), ColType::Date) => parse_date_value_with_order(s, date_order)
+            .map(SqlValue::Text)
+            .unwrap_or(SqlValue::Null),
+        (Json::String(s), _) => SqlValue::Text(s.clone()),
+        (value, ColType::Text) => SqlValue::Text(value.to_string()),
+        _ => SqlValue::Null,
     }
 }
 
@@ -2339,6 +2380,37 @@ mod tests {
                 ColType::Text,
             );
             let direct = string_cell_to_sqlite(value, kind, date_order);
+            assert_eq!(direct, reference, "cell: {value:?}, type: {kind:?}");
+        }
+    }
+
+    #[test]
+    fn direct_json_sqlite_cells_match_the_reference_conversion() {
+        let cases = [
+            (Json::Null, ColType::Text),
+            (serde_json::json!(""), ColType::Text),
+            (serde_json::json!("none"), ColType::Text),
+            (serde_json::json!("  label  "), ColType::Text),
+            (serde_json::json!("$1,200.00"), ColType::Float),
+            (serde_json::json!("N/A"), ColType::Float),
+            (serde_json::json!("1,200"), ColType::Int),
+            (serde_json::json!("bad"), ColType::Int),
+            (serde_json::json!("13/04/2024"), ColType::Date),
+            (serde_json::json!("03/04/2024"), ColType::Date),
+            (serde_json::json!(true), ColType::Bool),
+            (serde_json::json!(false), ColType::Text),
+            (serde_json::json!(true), ColType::Float),
+            (serde_json::json!(123), ColType::Int),
+            (serde_json::json!(12.5), ColType::Float),
+            (serde_json::json!(12), ColType::Text),
+            (serde_json::json!({"nested": 1}), ColType::Text),
+            (serde_json::json!([1, 2]), ColType::Text),
+        ];
+
+        for (value, kind) in cases {
+            let date_order = (kind == ColType::Date).then_some(NumericDateOrder::DayFirst);
+            let reference = cell_to_sqlite(&json_cell_with_order(&value, kind, date_order), kind);
+            let direct = json_cell_to_sqlite(&value, kind, date_order);
             assert_eq!(direct, reference, "cell: {value:?}, type: {kind:?}");
         }
     }

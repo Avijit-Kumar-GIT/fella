@@ -517,6 +517,15 @@ JSON arrays/objects, and NDJSON; focused tests verify both JSON reader stages.
 XLSX and optional DuckDB ingestion still report mount-level counts without
 within-file progress. Publication also remains atomic at whole-workspace
 completion, so the user cannot query an early-ready source during a long mount.
+The scale probe can now add a streamed 64-MiB JSON array: the 5,000-source
+fixture plus that source loaded all 5,001 tables, 849,417 rows, 100 documents,
+and 102 expected skips in 6,056 ms; the large file contributed 789,517 rows.
+Scratch was 53,547,008 bytes and process high-water RSS was 48,365,568 bytes.
+This is a single functional release run, not a controlled timing comparison.
+JSON insertion also binds directly into a reused SQLite parameter buffer
+instead of allocating two intermediate vectors per row; a reference-parity
+test checks its conversions across missing, numeric, date, boolean, and text
+values. No speedup claim is made without an A/B run on the same fixture.
 
 The current implementation also avoids mount-time exact distinct/null/range
 profiles on larger workspaces and computes them when a table is inspected;
