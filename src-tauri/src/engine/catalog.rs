@@ -9,12 +9,6 @@ use walkdir::WalkDir;
 
 use crate::engine::error::{EngineError, EngineResult};
 
-/// How deep below the workspace root we look for files. `FELLA_SCAN_DEPTH`
-/// overrides. People nest a year or two of subfolders; 3 was too shallow.
-fn max_depth() -> usize {
-    super::env::positive("FELLA_SCAN_DEPTH", 8)
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SourceKind {
@@ -398,16 +392,17 @@ fn worth_mentioning(ext: &str) -> bool {
     )
 }
 
-fn file_name(p: &Path) -> String {
-    p.file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("?")
-        .to_string()
+fn workspace_relative_path(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/")
 }
 
 /// Walk `root`, returning recognised files sorted by path, plus a list of files
 /// that were noticed but not loaded. Hidden entries and anything matched by a
-/// `.fellaignore` in the root are skipped silently.
+/// `.fellaignore` in the root are skipped silently. Traversal is recursive with
+/// no implicit depth limit and never follows symlinks.
 pub fn scan(root: &Path) -> EngineResult<(Vec<ScannedFile>, Vec<SkippedFile>)> {
     if !root.is_dir() {
         return Err(EngineError::msg(format!(
@@ -421,7 +416,6 @@ pub fn scan(root: &Path) -> EngineResult<(Vec<ScannedFile>, Vec<SkippedFile>)> {
     let mut skipped: Vec<SkippedFile> = Vec::new();
 
     for entry in WalkDir::new(root)
-        .max_depth(max_depth())
         .follow_links(false)
         .into_iter()
         .filter_entry(|e| !is_hidden(e.file_name().to_str()))
@@ -431,7 +425,7 @@ pub fn scan(root: &Path) -> EngineResult<(Vec<ScannedFile>, Vec<SkippedFile>)> {
             Err(err) => {
                 if let Some(p) = err.path() {
                     skipped.push(SkippedFile {
-                        name: file_name(p),
+                        name: workspace_relative_path(root, p),
                         reason: "couldn't be read (permission, or open in another app)".into(),
                     });
                 }
@@ -455,7 +449,7 @@ pub fn scan(root: &Path) -> EngineResult<(Vec<ScannedFile>, Vec<SkippedFile>)> {
         let Some(kind) = ext.and_then(SourceKind::from_ext) else {
             if ext.is_some_and(worth_mentioning) {
                 skipped.push(SkippedFile {
-                    name: file_name(path),
+                    name: workspace_relative_path(root, path),
                     reason: "Fella can't read this file type yet".into(),
                 });
             }
@@ -465,7 +459,7 @@ pub fn scan(root: &Path) -> EngineResult<(Vec<ScannedFile>, Vec<SkippedFile>)> {
             Ok(m) => m,
             Err(_) => {
                 skipped.push(SkippedFile {
-                    name: file_name(path),
+                    name: workspace_relative_path(root, path),
                     reason: "couldn't be read (permission, or open in another app)".into(),
                 });
                 continue;
@@ -572,6 +566,32 @@ pub fn unique_view_name(stem: &str, used: &mut HashSet<String>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    struct TempTree(PathBuf);
+
+    impl TempTree {
+        fn new(label: &str) -> Self {
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let path = std::env::temp_dir().join(format!(
+                "fella-catalog-{label}-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            std::fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempTree {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
 
     #[test]
     fn slugify_basics() {
@@ -598,6 +618,61 @@ mod tests {
         assert_eq!(SourceKind::from_ext("db"), None);
         assert!(SourceKind::Parquet.is_tabular());
         assert!(!SourceKind::Pdf.is_tabular());
+    }
+
+    #[test]
+    fn scan_finds_supported_data_beyond_eight_nested_directories() {
+        let tree = TempTree::new("deep");
+        let mut deep = tree.path().to_path_buf();
+        for level in 0..12 {
+            deep.push(format!("level-{level}"));
+        }
+        std::fs::create_dir_all(&deep).unwrap();
+        std::fs::write(deep.join("observations.csv"), "value\n7\n").unwrap();
+
+        let (sources, _) = scan(tree.path()).unwrap();
+        assert_eq!(sources.len(), 1);
+        assert!(sources[0].path.ends_with("observations.csv"));
+    }
+
+    #[test]
+    fn scan_keeps_same_named_skips_in_distinct_folders() {
+        let tree = TempTree::new("duplicate-skips");
+        for folder in ["alpha", "beta"] {
+            let dir = tree.path().join(folder);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("report.docx"), "not parsed").unwrap();
+        }
+
+        let (_, skipped) = scan(tree.path()).unwrap();
+        let names: HashSet<&str> = skipped.iter().map(|file| file.name.as_str()).collect();
+        assert_eq!(names.len(), 2);
+        assert!(names.contains("alpha/report.docx"));
+        assert!(names.contains("beta/report.docx"));
+    }
+
+    #[test]
+    fn scan_inventories_five_thousand_files_and_reports_elapsed_time() {
+        let tree = TempTree::new("scale");
+        for directory in 0..100 {
+            let dir = tree.path().join(format!("batch-{directory:03}"));
+            std::fs::create_dir_all(&dir).unwrap();
+            for file in 0..50 {
+                std::fs::write(dir.join(format!("row-{file:02}.csv")), "v\n1\n").unwrap();
+            }
+        }
+
+        let started = std::time::Instant::now();
+        let (sources, skipped) = scan(tree.path()).unwrap();
+        let elapsed = started.elapsed();
+        eprintln!(
+            "catalog inventory baseline: files={} skipped={} elapsed_ms={}",
+            sources.len(),
+            skipped.len(),
+            elapsed.as_millis()
+        );
+        assert_eq!(sources.len(), 5_000);
+        assert!(skipped.is_empty());
     }
 
     #[test]

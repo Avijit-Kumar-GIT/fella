@@ -367,13 +367,17 @@ source lineage; and a clarification can resume the same analysis against the
 same workspace revision. Set numeric latency/resource budgets from the recorded
 baseline before comparing candidate implementations.
 
-**Current implementation evidence (2026-10-05):** `catalog::scan` uses a
-default maximum depth of 8. `open_workspace` then ingests all discovered
-tabular sources synchronously into an isolated backend before publishing the
-catalog. The delimited reader currently retains parsed records in memory and
-has configurable per-source limits of 2 million rows / 256 MiB. Document
-search streams text but makes two workspace-wide passes for each query. These
-are baseline facts to measure and address, not acceptance criteria to preserve.
+**Implementation progress (2026-10-05):** the default depth cutoff has been
+removed and skipped files now retain workspace-relative paths, so duplicate
+basenames remain distinct. The 5,000-file inventory test observed 17 ms before
+and 16 ms after this change in one local run; this is a single-run datapoint
+for metadata inventory only, not a general speed claim or the 10-GB acceptance
+test. Remaining baseline constraints: `open_workspace` still ingests all
+discovered tabular sources synchronously before publishing the catalog; the
+delimited reader retains parsed records in memory and has configurable
+per-source limits of 2 million rows / 256 MiB; document search streams text
+but makes two workspace-wide passes per query. These are facts to measure and
+address, not acceptance criteria to preserve.
 
 **Research informing the design:** Rust's [`ignore::WalkBuilder`](https://docs.rs/ignore/latest/ignore/struct.WalkBuilder.html)
 offers a parallel recursive walker and filtering, but its file-size and ignore
