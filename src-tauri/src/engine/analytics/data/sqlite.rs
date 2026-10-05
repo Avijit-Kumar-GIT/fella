@@ -5,7 +5,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc,
+    Arc, OnceLock,
 };
 
 use rusqlite::functions::FunctionFlags;
@@ -28,6 +28,11 @@ use crate::engine::analytics::data::parse_named_month_date;
 pub struct SqliteEngine {
     conn: Connection,
     path: PathBuf,
+}
+
+fn ingest_timing_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("FELLA_INGEST_TIMING").is_some())
 }
 
 impl SqliteEngine {
@@ -63,7 +68,10 @@ impl SqliteEngine {
         default_delim: u8,
     ) -> EngineResult<SourceLoad> {
         let stamp = file_stamp(path)?;
+        let timing = ingest_timing_enabled();
+        let profile_started = timing.then(std::time::Instant::now);
         let profile = inspect_delimited(path, default_delim)?;
+        let profile_elapsed = profile_started.map(|started| started.elapsed());
         if file_stamp(path)? != stamp {
             return Err(EngineError::msg(format!(
                 "{path}: the file changed while Fella was inspecting it; retry the mount"
@@ -88,6 +96,7 @@ impl SqliteEngine {
         let placeholders = vec!["?"; columns.len()].join(", ");
         let insert_sql = format!("INSERT INTO {ident} VALUES ({placeholders})");
         let tx = self.conn.transaction()?;
+        let load_started = timing.then(std::time::Instant::now);
         tx.execute_batch(&format!(
             "DROP TABLE IF EXISTS {ident}; CREATE TABLE {ident} ({cols_sql});"
         ))?;
@@ -100,14 +109,18 @@ impl SqliteEngine {
         {
             let mut statement = tx.prepare(&insert_sql)?;
             let mut reader = delimited_reader(path, profile.delimiter)?;
-            for result in reader.records() {
-                let mut record = match result {
-                    Ok(record) => record,
+            let mut sqlite_values = Vec::with_capacity(columns.len());
+            let mut record = csv::StringRecord::new();
+            loop {
+                match reader.read_record(&mut record) {
+                    Ok(true) => {}
+                    Ok(false) => break,
                     Err(_) => {
                         dropped_records += 1;
+                        record.clear();
                         continue;
                     }
-                };
+                }
                 if valid_records == 0 {
                     strip_leading_bom(&mut record);
                 }
@@ -119,16 +132,12 @@ impl SqliteEngine {
                     continue;
                 }
 
-                let mut values = Vec::with_capacity(columns.len());
+                sqlite_values.clear();
                 for (index, (_, ty)) in columns.iter().enumerate() {
                     let raw = record.get(index).unwrap_or("");
                     case_collisions[index].observe(raw);
-                    values.push(string_cell_with_order(raw, *ty, profile.date_orders[index]));
+                    sqlite_values.push(string_cell_to_sqlite(raw, *ty, profile.date_orders[index]));
                 }
-                let sqlite_values: Vec<rusqlite::types::Value> = values
-                    .iter()
-                    .map(|value| cell_to_sqlite(value, ColType::Text))
-                    .collect();
                 statement.execute(rusqlite::params_from_iter(sqlite_values.iter()))?;
                 loaded += 1;
             }
@@ -145,6 +154,17 @@ impl SqliteEngine {
             )));
         }
         tx.commit()?;
+        let load_elapsed = load_started.map(|started| started.elapsed());
+
+        if let (Some(profile_elapsed), Some(load_elapsed)) = (profile_elapsed, load_elapsed) {
+            eprintln!(
+                "Fella ingest timing: format=delimited path={path} bytes={} rows={} profile_ms={} load_ms={}",
+                stamp.size,
+                loaded,
+                profile_elapsed.as_millis(),
+                load_elapsed.as_millis()
+            );
+        }
 
         let mut notes = profile.notes;
         for (index, ((_, ty), collision)) in columns.iter().zip(case_collisions).enumerate() {
@@ -828,7 +848,11 @@ impl JsonColumnProfile {
             }
             Json::String(value) => {
                 self.saw_string = true;
-                if parse_numeric(value).is_some() {
+                let is_clean_number = value.parse::<f64>().ok().is_some_and(f64::is_finite);
+                let is_loose_number = !is_clean_number
+                    && value.bytes().any(|byte| byte.is_ascii_digit())
+                    && parse_numeric(value).is_some();
+                if is_clean_number || is_loose_number {
                     self.numeric += 1;
                 } else {
                     self.non_numeric_string = true;
@@ -1010,7 +1034,9 @@ impl StringColumnProfile {
 
         let is_integer = value.parse::<i64>().is_ok();
         let is_float = is_integer || value.parse::<f64>().is_ok();
-        let parsed_number = (!is_float).then(|| parse_numeric(value)).flatten();
+        let parsed_number = (!is_float && value.bytes().any(|byte| byte.is_ascii_digit()))
+            .then(|| parse_numeric(value))
+            .flatten();
         let is_boolean = value.eq_ignore_ascii_case("true") || value.eq_ignore_ascii_case("false");
         bump(&mut self.nonblank, adding);
         if is_integer {
@@ -1272,14 +1298,15 @@ fn inspect_delimited(path: &str, default_delim: u8) -> EngineResult<DelimitedPro
 
     let mut reader = delimited_reader(path, delimiter)?;
     let mut prefix: Vec<csv::StringRecord> = Vec::with_capacity(16);
-    let mut last: Option<csv::StringRecord> = None;
+    let mut record = csv::StringRecord::new();
+    let mut last = csv::StringRecord::new();
     let mut profiles: Vec<StringColumnProfile> = Vec::new();
     let mut width = 0usize;
     let mut total_records = 0usize;
     let mut dropped_records = 0usize;
-    for result in reader.records() {
-        match result {
-            Ok(mut record) => {
+    loop {
+        match reader.read_record(&mut record) {
+            Ok(true) => {
                 if total_records == 0 {
                     strip_leading_bom(&mut record);
                 }
@@ -1291,10 +1318,14 @@ fn inspect_delimited(path: &str, default_delim: u8) -> EngineResult<DelimitedPro
                 for (column, value) in record.iter().enumerate() {
                     profiles[column].observe(value, total_records);
                 }
-                last = Some(record);
+                std::mem::swap(&mut record, &mut last);
                 total_records += 1;
             }
-            Err(_) => dropped_records += 1,
+            Ok(false) => break,
+            Err(_) => {
+                dropped_records += 1;
+                record.clear();
+            }
         }
     }
 
@@ -1336,10 +1367,8 @@ fn inspect_delimited(path: &str, default_delim: u8) -> EngineResult<DelimitedPro
         );
     }
 
-    let trailing_total = last.as_ref().is_some_and(|record| {
-        total_records.saturating_sub(1) >= data_start
-            && looks_like_total_row(&record.iter().collect::<Vec<_>>(), width)
-    });
+    let trailing_total = total_records.saturating_sub(1) >= data_start
+        && looks_like_total_row(&last.iter().collect::<Vec<_>>(), width);
     if trailing_total {
         note = merge_note(
             note,
@@ -1356,10 +1385,8 @@ fn inspect_delimited(path: &str, default_delim: u8) -> EngineResult<DelimitedPro
         debug_assert!(row_index < data_start);
     }
     if trailing_total {
-        if let Some(record) = &last {
-            for (column, profile) in profiles.iter_mut().enumerate() {
-                profile.unobserve(record.get(column).unwrap_or(""));
-            }
+        for (column, profile) in profiles.iter_mut().enumerate() {
+            profile.unobserve(last.get(column).unwrap_or(""));
         }
     }
 
@@ -1790,6 +1817,7 @@ fn string_cell(s: &str, ty: ColType) -> Cell {
     string_cell_with_order(s, ty, None)
 }
 
+#[cfg(test)]
 fn string_cell_with_order(s: &str, ty: ColType, date_order: Option<NumericDateOrder>) -> Cell {
     let s = s.trim();
     match ty {
@@ -1823,6 +1851,53 @@ fn string_cell_with_order(s: &str, ty: ColType, date_order: Option<NumericDateOr
         ColType::Date => parse_date_value_with_order(s, date_order)
             .map(Json::from)
             .unwrap_or(Json::Null),
+    }
+}
+
+fn string_cell_to_sqlite(
+    s: &str,
+    ty: ColType,
+    date_order: Option<NumericDateOrder>,
+) -> rusqlite::types::Value {
+    use rusqlite::types::Value as SqlValue;
+    let s = s.trim();
+    match ty {
+        ColType::Text => {
+            if s.is_empty() {
+                SqlValue::Null
+            } else {
+                SqlValue::Text(s.to_string())
+            }
+        }
+        _ if crate::engine::analytics::data::is_blankish(s) => SqlValue::Null,
+        ColType::Int => s
+            .parse::<i64>()
+            .map(SqlValue::Integer)
+            .unwrap_or(SqlValue::Null),
+        ColType::Float => s
+            .parse::<f64>()
+            .ok()
+            .or_else(|| crate::engine::analytics::data::parse_numeric(s))
+            .and_then(serde_json::Number::from_f64)
+            .map(|number| {
+                number
+                    .as_i64()
+                    .map(SqlValue::Integer)
+                    .unwrap_or_else(|| SqlValue::Real(number.as_f64().unwrap_or(0.0)))
+            })
+            .unwrap_or(SqlValue::Null),
+        ColType::Bool => {
+            if s.eq_ignore_ascii_case("true") {
+                SqlValue::Integer(1)
+            } else if s.eq_ignore_ascii_case("false") {
+                SqlValue::Integer(0)
+            } else {
+                SqlValue::Null
+            }
+        }
+        ColType::Date => parse_date_value_with_order(s, date_order)
+            .map(SqlValue::Text)
+            .unwrap_or(SqlValue::Null),
     }
 }
 
@@ -1955,6 +2030,34 @@ mod tests {
             assert_eq!(actual.0, expected.0, "column values: {values:?}");
             assert_eq!(actual.1, expected.1, "column values: {values:?}");
             assert_eq!(actual.2, date_order, "column values: {values:?}");
+        }
+    }
+
+    #[test]
+    fn direct_delimited_sqlite_cells_match_the_reference_conversion() {
+        let cases = [
+            ("", ColType::Text),
+            ("N/A", ColType::Text),
+            ("  label  ", ColType::Text),
+            ("12", ColType::Int),
+            ("bad", ColType::Int),
+            ("$1,200.00", ColType::Float),
+            ("NaN", ColType::Float),
+            ("TRUE", ColType::Bool),
+            ("unknown", ColType::Bool),
+            ("Feb 3, 2024", ColType::Date),
+            ("13/04/2024", ColType::Date),
+            ("03/04/2024", ColType::Date),
+            ("not a date", ColType::Date),
+        ];
+        for (value, kind) in cases {
+            let date_order = (kind == ColType::Date).then_some(NumericDateOrder::DayFirst);
+            let reference = cell_to_sqlite(
+                &string_cell_with_order(value, kind, date_order),
+                ColType::Text,
+            );
+            let direct = string_cell_to_sqlite(value, kind, date_order);
+            assert_eq!(direct, reference, "cell: {value:?}, type: {kind:?}");
         }
     }
 

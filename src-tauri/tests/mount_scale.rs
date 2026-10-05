@@ -1,8 +1,9 @@
 //! Manual mount-scale probe: `cargo test --test mount_scale -- --ignored
 //! --nocapture` (optionally set `FELLA_MOUNT_SCALE_FILES` to change the 5,000
 //! default for local iteration; optionally set `FELLA_MOUNT_SCALE_LARGE_MIB`
-//! to add one large CSV). It deliberately has no latency threshold; its purpose
-//! is to report end-to-end mount cost and prove complete coverage across nested
+//! to add one large CSV or `FELLA_INGEST_TIMING=1` for per-pass timings). It
+//! deliberately has no latency threshold; its purpose is to report end-to-end
+//! mount cost and prove complete coverage across nested
 //! CSV/TSV/JSON/NDJSON tables, text documents, varied sizes, missing values,
 //! malformed supported inputs, and visible unsupported files.
 

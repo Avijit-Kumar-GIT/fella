@@ -425,13 +425,30 @@ plus one complete large CSV measured 32 MiB / 860,369 rows at 23,024 ms before
 and 17,661 ms after, and 64 MiB / 1,720,739 rows at 38,691 ms before and 27,407
 ms after. The post-change Linux process high-water marks were 59,584,512 and
 59,326,464 bytes; SQLite scratch used 89,885,624 and 156,180,336 bytes. These
-are single-run comparisons, not controlled or release-build claims. The later
-The coverage fixture has since added two malformed supported files; the probe
+are single-run comparisons, not controlled or release-build claims. The
+coverage fixture has since added two malformed supported files; the probe
 asserts all 102 skipped paths are visible and each malformed input has a reason.
-A separate mount-wide SQLite
-transaction prototype had no observed speed improvement (7,805 ms vs. 7,804 ms
-on one 5,000-source run) and increased live scratch usage from 27,340,352 to
-46,781,744 bytes, so that experiment was discarded.
+A separate mount-wide SQLite transaction prototype had no observed speed
+improvement (7,805 ms vs. 7,804 ms on one 5,000-source run) and increased live
+scratch usage from 27,340,352 to 46,781,744 bytes, so that experiment was
+discarded.
+
+The probe can add one complete large CSV through `FELLA_MOUNT_SCALE_LARGE_MIB`
+and opt-in per-pass instrumentation through `FELLA_INGEST_TIMING=1`. A
+256-MiB (268,435,431-byte), 6,882,959-row file mounted alongside the 5,000
+small sources in 90,168 ms in a debug run; test-process peak RSS was 59,883,520
+bytes and SQLite scratch was 564,719,688 bytes. It passed exact source/row
+coverage; it is one debug-build datapoint, not a latency budget or a basis for
+linear extrapolation to 10 GB or release builds. Splitting a 64-MiB,
+1,720,739-row one-file run showed
+11,412 ms profiling / 9,475 ms loading before the per-cell conversion and
+reader-buffer changes. Two runs with the current changes measured 9,901–10,366
+ms profiling, 8,002–8,038 ms loading, and 17,991–18,419 ms for the full mount;
+the Linux process high-water mark was 23,592,960–24,117,248 bytes and scratch
+was 132,601,792 bytes. This one-source measurement is not directly comparable
+to the 5,000-source fixture. A current no-large-file 5,000-source run completed
+in 7,329 ms with 59,731,968-byte peak RSS and 27,340,352-byte scratch. All
+large-file runs removed their generated source tree and database automatically.
 
 The current implementation also avoids mount-time exact distinct/null/range
 profiles on larger workspaces and computes them when a table is inspected;
