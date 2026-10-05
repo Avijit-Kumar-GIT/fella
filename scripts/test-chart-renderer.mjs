@@ -38,6 +38,7 @@ try {
 	const { default: Chart } = await server.ssrLoadModule('/src/lib/components/Chart.svelte');
 	const { default: Message } = await server.ssrLoadModule('/src/lib/components/Message.svelte');
 	const { default: EvidenceBlock } = await server.ssrLoadModule('/src/lib/components/EvidenceBlock.svelte');
+	const { default: PythonCalculationDetails } = await server.ssrLoadModule('/src/lib/components/PythonCalculationDetails.svelte');
 	const renderChart = (spec) => render(Chart, { props: { spec } }).body;
 	const metadata = {
 		source_label: 'fixture.csv',
@@ -137,6 +138,68 @@ try {
 	}).body;
 	assert.equal(count(detailsWithDuplicateChecks, /grounded raw observations were selected without aggregation/g), 2);
 
+	// Python must be visible as the execution language, with generated code
+	// separated from its read-only SQL inputs and printed result.
+	const pythonSnippet = [
+		"rows = sql('SELECT rating FROM books')",
+		"values = [row['rating'] for row in rows]",
+		"print(median(values))"
+	].join('\n');
+	const pythonAnswer = {
+		text: 'The median rating is 4.',
+		evidence: [
+			{
+				id: 'python-statistic',
+				tool: 'run_python',
+				args: { note: 'Calculate median rating', code: pythonSnippet },
+				note: 'Calculate median rating',
+				result_summary: 'python finished in 8ms · local sandbox',
+				output: '4',
+				python_input_trace: {
+					complete: true,
+					queries: [{ sql: 'SELECT rating FROM books', columns: ['rating'], row_count: 5, truncated: false }]
+				}
+			}
+		],
+		verification: []
+	};
+	const pythonDetails = render(EvidenceBlock, {
+		props: { answer: pythonAnswer, expanded: true, bodyId: 'python-details' }
+	}).body;
+	assert.match(pythonDetails, /Python/);
+	assert.match(pythonDetails, /show calculation/);
+	const pythonCodeDetails = render(PythonCalculationDetails, {
+		props: { evidence: pythonAnswer.evidence[0] }
+	}).body;
+	assert.match(pythonCodeDetails, /Generated code · local sandbox/);
+	assert.match(pythonCodeDetails, /Calculation code/);
+	assert.match(pythonCodeDetails, /print\(median\(values\)\)/);
+	assert.equal(count(pythonCodeDetails, /print\(median\(values\)\)/g), 1, 'code is not duplicated as a generic argument');
+
+	// The built-in forecast tool performs its calculation in Python too. Show
+	// the actual selected method and evaluation helpers without dumping an
+	// opaque internal wrapper script.
+	const forecastSql = 'SELECT period, value FROM metrics ORDER BY period';
+	const forecastEvidence = {
+					id: 'forecast-python',
+					tool: 'forecast_analysis',
+					args: { sql: forecastSql, method: 'linear_trend', horizon: 3, baseline_method: 'naive' },
+					sql: forecastSql,
+					result_summary: '24 observations; linear_trend method, 3-period horizon; rolling-origin comparison attempted',
+					output: 'forecast_values=[31, 32, 33]',
+					python_input_trace: {
+						complete: true,
+						queries: [{ sql: forecastSql, columns: ['period', 'value'], row_count: 24, truncated: false }]
+					}
+				};
+	const forecastDetails = render(PythonCalculationDetails, {
+		props: { evidence: forecastEvidence }
+	}).body;
+	assert.match(forecastDetails, /Fella forecast helpers · local sandbox/);
+	assert.match(forecastDetails, /forecast_series\(method="linear_trend", horizon=3\)/);
+	assert.match(forecastDetails, /rolling_origin_backtest\(baseline_method="naive"\)/);
+	assert.match(forecastDetails, /forecast_error_bands/);
+
 	const line = renderChart(generic('line', ['Jan', 'Feb'], [{ name: 'Observed', values: [2, 4] }], {
 		x_label: 'Month',
 		y_label: 'Count'
@@ -144,6 +207,27 @@ try {
 	assert.match(line, /<svg[^>]+role="img" aria-label="line validation"/);
 	assert.match(line, /Month/);
 	assert.match(line, /Observed/);
+
+	// A full-archive daily series keeps every point in its paths and exact-value
+	// table, while the visible axis labels are thinned and dense point markers
+	// are omitted to keep the chart legible and the SVG light.
+	const archiveDates = Array.from({ length: 731 }, (_, index) =>
+		new Date(Date.UTC(2024, 0, 1 + index)).toISOString().slice(0, 10)
+	);
+	const archiveSeries = ['Direct', 'Partner', 'Retail', 'Search'].map((name, seriesIndex) => ({
+		name,
+		values: archiveDates.map((_, dayIndex) => 100 + dayIndex * 10 + seriesIndex)
+	}));
+	const archive = renderChart(
+		generic('line', archiveDates, archiveSeries, { x_label: 'Date', y_label: 'Visits' })
+	);
+	assert.equal(count(archive, /<path\b/g), 4, 'one complete line path is rendered per series');
+	assert.equal(count(archive, /class="line-dot"/g), 0);
+	assert.ok(count(archive, /class="axis-label"/g) <= 10, 'daily x-axis labels are thinned');
+	assert.match(archive, /2024-01-01/);
+	assert.match(archive, /2025-12-31/);
+	assert.equal(count(archive, /<th[^>]*scope="row"/g), 731, 'all dates remain in exact values');
+	assert.match(archive, /7,403/, 'the last exact data point is retained');
 
 	for (const kind of ['pie', 'donut']) {
 		const html = renderChart(generic(kind, ['A', 'B'], [{ name: 'Share', values: [3, 1] }], {

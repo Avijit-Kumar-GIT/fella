@@ -183,6 +183,28 @@ async fn python_has_built_in_stats_helpers() {
 }
 
 #[tokio::test]
+async fn correlation_and_regression_helpers_have_explicit_scalar_and_tuple_contracts() {
+    let data = scratch("py-stats-contract");
+    let engine = EngineState::new(&data).unwrap();
+
+    let result = engine
+        .run_python(
+            "r = pearsonr([1, 2, 3], [2, 4, 6])\n\
+             print(round(r, 2))\n\
+             slope, intercept, regression_r = linregress([1, 2, 3], [2, 4, 6])\n\
+             print(round(slope, 2), round(intercept, 2), round(regression_r, 2))",
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(result.exit_code, Some(0), "stderr: {}", result.stderr);
+    let lines = result.stdout.lines().collect::<Vec<_>>();
+    assert_eq!(lines, vec!["1.0", "2.0 0.0 1.0"]);
+
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[tokio::test]
 async fn forecast_helpers_offer_reusable_methods_without_hiding_the_formula() {
     let data = scratch("py-forecast-methods");
     let engine = EngineState::new(&data).unwrap();

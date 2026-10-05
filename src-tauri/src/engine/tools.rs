@@ -796,7 +796,7 @@ impl Tool for RunSql {
         "run_sql"
     }
     fn description(&self) -> &'static str {
-        "Run a read-only SQL query (SELECT / WITH only) and return the rows. Complete results up to 100 rows are shown; larger results receive a bounded preview. Text comparisons are case-sensitive; for category or status values whose case may vary, use lower(column) = lower(value). For workspace forecasts, use `forecast_analysis` rather than stopping at a point-only aggregate when historical evaluation is possible."
+        "Run a read-only SQL query (SELECT / WITH only) and return the rows. Use SQL for relational data work—source selection, filters, joins, grouping, and simple aggregates. SQL and Python are peer analysis tools: do not force a statistical method into SQL just because the dialect can technically express it; use `run_python` when it is clearer or better suited to the statistic. Complete results up to 100 rows are shown; larger results receive a bounded preview. Text comparisons are case-sensitive; for category or status values whose case may vary, use lower(column) = lower(value). For workspace forecasts, use `forecast_analysis` when its regular-series method and evaluation fit the request."
     }
     fn parameters(&self) -> Json {
         json!({
@@ -1110,9 +1110,7 @@ impl Tool for RunPython {
         "run_python"
     }
     fn description(&self) -> &'static str {
-        "Run a short Python 3 snippet for analysis that SQL can't express: `median(values)`, \
-`stdev(values)`, correlation (`pearsonr(x, y)`), or a simple linear regression \
-(`linregress(x, y)` -> slope, intercept, r). These helpers are built in. `sql(query)` \
+        "Run a short Python 3 analysis whenever Python is the clearer or better-suited tool; Python is a first-class peer to SQL, not a fallback for what SQL cannot express. Prefer it for statistical or multi-stage numerical work such as `median(values)`, `stdev(values)`, quantiles, correlation (`pearsonr(x, y)` -> one scalar r, not a SciPy `(r, p)` pair and no p-value), regression (`linregress(x, y)` -> `(slope, intercept, r)`), and distribution checks. Use SQL for relational data access and shaping, and combine SQL inputs with Python calculations when useful. For workspace calculations, use `sql(query)` inside the Python snippet instead of copying prior tool-result rows into code; use a separate `run_sql` call first only when inspection is needed or its result answers the question. The guest has Python built-ins and these injected helpers, but no pandas, NumPy, SciPy, package installer, or system Python; do not import those packages. `sql(query)` \
 returns a list of dictionaries from the workspace tables. For equally spaced numeric series, \
 optional `forecast_series(values, horizon, method, seasonal_period)` supports naive, mean, drift, \
 linear_trend, and seasonal_naive candidates (up to 1000 future points). `rolling_origin_backtest` compares \
@@ -1125,12 +1123,14 @@ not inspect dates or infer the time grain for you. The snippet runs in Fella's l
 sandbox: it has no filesystem, network, environment, or subprocess access, and can only print or request \
 bounded read-only workspace SQL. When a computed result needs a chart, publish it using \
 `fella_table([column_names], rows)`; `make_chart` can reuse this typed table without repeating \
-the computation. Use Python for local analysis, not for fetching anything."
+the computation. Publish a table only when a chart/table was requested or materially helps the \
+answer. If execution fails, use the traceback to fix the cause and do not repeat unchanged code. \
+Use Python for local analysis, not for fetching anything."
     }
     fn parameters(&self) -> Json {
         json!({
             "type": "object",
-            "properties": { "code": { "type": "string", "description": "Python 3 source using the core language, Fella's built-in analytics helpers, and sql(query)" } },
+            "properties": { "code": { "type": "string", "description": "Python 3 analysis using the core language, Fella's built-in statistical helpers, and sql(query) to read bounded workspace data" } },
             "required": ["code"],
             "additionalProperties": false
         })
@@ -1604,7 +1604,7 @@ impl Tool for MakeChart {
         "make_chart"
     }
     fn description(&self) -> &'static str {
-        "Render a chart from a successful prior analytical result by passing its `source_evidence_id`; this reuses the exact computed rows and does not rerun SQL. A one-shot read-only SQL query is also accepted when no prior result exists. Supports bar, line, area, stacked_area, pie, donut, scatter, histogram, box_plot, heatmap, and forecast. Select fields by their exact result column names; if a field is rejected, use the available result fields in the tool error. For a raw histogram, set `x_field` to the numeric observations and `bin_count`; for an already binned frequency table, set `x_field` to the bin labels and `y_field` or `value_field` to the counts so the bins are preserved. For a box plot, set `group_field` to the category that separates distributions and `y_field` or `value_field` to the numeric observations; `x_field` is not the box-plot grouping field. For scatter, set `x_field` and `y_field` to the two numeric variables. For a heatmap, use `x_field` and `group_field` as the two category dimensions and `value_field` as the numeric cell value. For a forecast chart, use `x_field` for the period and pass `series_fields` in this order: observed, forecast, and any supplied lower and upper bounds. Preserve existing bounds; do not recompute them. For pie/donut, set `x_field` to the category column, `value_field` to its numeric measure, `part_to_whole` to true, and name the exact shared population in `denominator`. Use pie/donut only for a small, non-negative part-to-whole breakdown. For missing values, choose an explicit treatment; gaps are never silently converted to zero. Chart definitions and source lineage are inspectable."
+        "Render a chart from a complete prior result only when it already has the exact requested grain, grouping, filters, and measures; copy its `source_evidence_id` exactly from the reusable-result reference. Otherwise pass a direct read-only SQL query that produces the requested chart shape. Grouped-series, histogram, and box-plot queries can materialize up to 10,000 source rows; other chart queries keep the standard 1,000-row cap. Supports bar, line, area, stacked_area, pie, donut, scatter, histogram, box_plot, heatmap, and forecast. Select fields by their exact result column names; if a field is rejected, use the available result fields in the tool error. For long-form series data, set `x_field` to the period/category, `group_field` to the series category, and `value_field` to the measure; each distinct group becomes one series and each x/group pair must be unique. If pairs repeat, aggregate them explicitly in SQL rather than silently summing. For a raw histogram, set `x_field` to the numeric observations and `bin_count`; for an already binned frequency table, set `x_field` to the bin labels and `y_field` or `value_field` to the counts so the bins are preserved. For a box plot, set `group_field` to the category that separates distributions and `y_field` or `value_field` to the numeric observations; `x_field` is not the box-plot grouping field. For scatter, set `x_field` and `y_field` to the two numeric variables. For a heatmap, use `x_field` and `group_field` as the two category dimensions and `value_field` as the numeric cell value. For a forecast chart, use `x_field` for the period and pass `series_fields` in this order: observed, forecast, and any supplied lower and upper bounds. Preserve existing bounds; do not recompute them. For pie/donut, set `x_field` to the category column, `value_field` to its numeric measure, `part_to_whole` to true, and name the exact shared population in `denominator`. Use pie/donut only for a small, non-negative part-to-whole breakdown. For missing values, choose an explicit treatment; absent group-period pairs remain gaps unless evidence establishes that they mean zero. Chart definitions and source lineage are inspectable."
     }
     fn parameters(&self) -> Json {
         json!({
@@ -1618,14 +1618,14 @@ impl Tool for MakeChart {
                 "title": { "type": "string", "description": "short chart title, e.g. \"Spending by category\"" },
                 "sql": {
                     "type": "string",
-                    "description": "Optional one-shot read-only SELECT/WITH query. Prefer source_evidence_id to chart the exact result already computed."
+                    "description": "Optional one-shot read-only SELECT/WITH query. Use it whenever a prior result does not exactly match the requested grain, grouping, filters, or measures. Grouped-series, histogram, and box-plot queries can materialize up to 10,000 source rows; other chart queries use the 1,000-row cap. For long-form data, use x_field, group_field, and value_field to make one series per group without pivoting in SQL."
                 },
-                "source_evidence_id": { "type": "string", "description": "ID of a successful prior run_sql, run_python (with fella_table), or forecast_analysis result in this same turn." },
+                "source_evidence_id": { "type": "string", "description": "Exact ID copied from a complete, successful reusable result in this turn. Reuse it only if its grain, grouping, filters, and measures already match the requested chart; otherwise use direct SQL." },
                 "unit": { "type": "string", "description": "Unit suffix/prefix for displayed values, e.g. \"$\" or \"%\"." },
                 "x_field": { "type": "string", "description": "Exact result column for the category or horizontal dimension. For raw histograms this is the numeric observation; for pre-binned histograms it is the bin label. For box plots use group_field for cohort/category instead." },
                 "y_field": { "type": "string", "description": "Exact result column for the vertical dimension or numeric value. For box plots, this is the measured value; for a pre-binned histogram, this can be the frequency count." },
-                "value_field": { "type": "string", "description": "Exact numeric result column to plot; use for pie/donut measures, heatmap cell values, box-plot observations, or pre-binned histogram frequencies." },
-                "group_field": { "type": "string", "description": "Optional exact result column for grouping. For box_plot, this separates the distributions (for example, cohort); for heatmaps it is the y-axis category." },
+                "value_field": { "type": "string", "description": "Exact numeric result column to plot; use for long-form series, pie/donut measures, heatmap cell values, box-plot observations, or pre-binned histogram frequencies." },
+                "group_field": { "type": "string", "description": "Optional exact result column for grouping. For line/area/stacked_area or grouped bar charts, combine with x_field and value_field on long-form data (one row per x/group observation) to create one series per group. Duplicate x/group pairs must be aggregated explicitly in SQL. For box_plot, this separates distributions; for heatmaps it is the y-axis category." },
                 "label_field": { "type": "string", "description": "Optional point label for scatter plots." },
                 "series_fields": { "type": "array", "items": { "type": "string" }, "maxItems": 5, "description": "For forecast charts, order fields as observed, forecast, then any supplied lower and upper bounds. Include bounds already present in the data." },
                 "bin_count": { "type": "integer", "minimum": 1, "maximum": 40, "description": "Number of equal-width bins for raw numeric observations. Omit when the source already contains one row per labeled bin and frequency." },
@@ -1743,9 +1743,16 @@ async fn create_chart(
         if sql.is_empty() {
             return Err(EngineError::msg("make_chart needs a non-empty SQL query"));
         }
-        let query = engine.run_sql_cancellable(sql, cancel)?;
+        let source_row_limit = if parsed.group_field.is_some()
+            || matches!(parsed.kind, ChartKind::Histogram | ChartKind::BoxPlot)
+        {
+            chart::MAX_SOURCE_ROWS
+        } else {
+            DEFAULT_ROW_CAP
+        };
+        let query = engine.run_chart_sql_cancellable(sql, cancel, source_row_limit)?;
         if query.truncated {
-            return Err(EngineError::msg(format!("the chart query returned {} rows, beyond the {}-row raw result limit; aggregate to a coarser time period or narrow the date range first", query.row_count, DEFAULT_ROW_CAP)));
+            return Err(EngineError::msg(format!("the chart query returned {} source rows, beyond the {}-row raw result limit; keep the requested date range and grain, and reduce rows by aggregating each x/group combination in SQL. Do not narrow the period unless the user asked for that", query.row_count, source_row_limit)));
         }
         (
             chart::TabularResult {
@@ -1840,6 +1847,21 @@ mod tests {
             ms: 0,
             truncated: false,
         }
+    }
+
+    #[test]
+    fn sql_and_python_tool_descriptions_present_them_as_peer_routes() {
+        let sql = RunSql.description();
+        let python = RunPython.description();
+
+        assert!(sql.contains("SQL and Python are peer analysis tools"));
+        assert!(python.contains("Python is a first-class peer to SQL, not a fallback"));
+        assert!(python.contains("statistical or multi-stage numerical work"));
+        assert!(python.contains("one scalar r, not a SciPy `(r, p)` pair"));
+        assert!(python.contains("instead of copying prior tool-result rows into code"));
+        assert!(python.contains("no pandas, NumPy, SciPy"));
+        assert!(python.contains("do not repeat unchanged code"));
+        assert!(!python.contains("analysis that SQL can't express"));
     }
 
     #[test]

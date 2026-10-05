@@ -1735,24 +1735,52 @@ answer."
     }
     if has_workspace && profile.python_rule {
         rules.push(
-            "run_python for stats SQL can't do: `median(values)`, `stdev(values)`, or \
-correlation/regression via the always-available `pearsonr(x, y)` / `linregress(x, y)` \
-helpers. Its `sql(query)` helper returns a list of dictionaries. It runs in a local WASM + \
-RustPython sandbox with no filesystem, network, environment, or subprocess access."
+            "Choose SQL and Python by analytical fit; neither is the default language and Python is \
+not a fallback. Use SQL for relational access and shaping—filters, joins, grouping, and simple \
+aggregates. Prefer `run_python` when it makes statistical or multi-stage numerical analysis \
+clearer: median/quantiles, dispersion, correlation, regression, distribution checks, or custom \
+transformations. Do not contort SQL into a method just because the SQL dialect can technically \
+express it. Combine SQL data selection with Python computation when useful, using `sql(query)` \
+to read the relevant bounded rows. For Python calculations over workspace data, retrieve the rows \
+inside the Python snippet with `sql(query)`; do not copy or hard-code rows from a previous tool \
+result into the code. Use a separate `run_sql` call first only when inspection is needed or its \
+relational result itself answers the question. The local guest has Python built-ins and Fella's injected \
+helpers, but no pandas, NumPy, SciPy, package installer, or system Python; do not import those \
+packages. Helper contracts: `median(values)` returns a scalar; `stdev(values)` returns sample \
+standard deviation; `pearsonr(x, y)` returns one scalar correlation coefficient (not SciPy's \
+`(r, p)` pair, and it does not calculate a p-value); `linregress(x, y)` returns \
+`(slope, intercept, r)`. Preserve missingness and paired-row alignment, report the method and \
+usable sample size. Treat a correlation coefficient as direction and strength only; do not claim \
+statistical significance or report a p-value unless you actually perform and support an inferential \
+test. Publish a labeled `fella_table` only when the user requests a chart/table or the table \
+materially helps answer the question. If Python fails, use its exact traceback to \
+correct the cause; do not repeat unchanged failing code. Python runs in a local WASM + RustPython \
+sandbox with no filesystem, network, environment, or subprocess access."
                 .into(),
         );
     }
     if has_workspace && profile.chart_rule {
         rules.push(
             "Use make_chart when the user asks for a visualization or a chart materially helps explain \
-the analysis. Prefer `source_evidence_id` to reuse a successful result already computed in this turn; \
-this preserves the exact data and avoids rerunning analysis. Choose a chart family that fits the data: \
+the analysis. When a chart is explicitly requested, preserve it as the primary deliverable and avoid \
+incidental aggregates that do not answer the request. Reuse `source_evidence_id` only when the prior \
+complete result already has the exact requested grain, grouping, filters, and measures; otherwise use \
+`make_chart` with direct read-only SQL for the needed result shape. Do not use a total-by-category result \
+in place of a requested time series, or vice versa. Choose a chart family that fits the data: \
 bar for categorical comparisons, line/area for ordered time series, scatter for paired numeric measures, \
 histogram for one-variable distributions, box_plot for grouped distributions, heatmap for two categorical \
 dimensions, and forecast for explicitly separated observed/projected values. Pie/donut are only for a small, \
 non-negative part-to-whole result with a stated common denominator. For pie/donut, set `x_field` to the \
 category result column, `value_field` to its numeric measure, `part_to_whole` to true, and `denominator` to \
 the exact shared population. If a field name is rejected, use the available field names returned by the tool. \
+For long-form data with one row per period/category/measure observation, use `x_field`, `group_field`, and \
+`value_field` so the chart creates a series per group; do not try to plot every fact row as a separate \
+category. `make_chart` can materialize up to 10,000 source rows for grouped-series, histogram, and box-plot \
+queries, then pivots selected dimensions while keeping the requested time grain. If group-period pairs \
+repeat, aggregate them explicitly in SQL; if pairs are absent, \
+preserve gaps unless evidence establishes zero. The final time axis supports up to 1,000 points. If a chart \
+query exceeds its source-row limit, preserve the user's requested dates and grain while reshaping or \
+aggregating; never narrow the range just to fit a limit without asking. \
 An explicitly requested visualization is a required deliverable: if its source result is revised or \
 superseded, recreate the chart from the revised accepted evidence before finalizing rather than dropping \
 it. Select exact result fields, preserve the requested scope and units, and explicitly handle missing values; \
@@ -2138,6 +2166,35 @@ mod tests {
     }
 
     #[test]
+    fn workspace_prompt_treats_python_as_a_first_class_analysis_tool() {
+        let p = system_prompt(
+            &PromptProfile::full(),
+            &open_catalog(),
+            &[],
+            "Tables:\n  measurements  (100 rows)\n",
+            None,
+            None,
+            None,
+        );
+
+        assert!(p.contains("neither is the default language and Python is not a fallback"));
+        assert!(p.contains(
+            "Prefer `run_python` when it makes statistical or multi-stage numerical analysis"
+        ));
+        assert!(p.contains(
+            "Do not contort SQL into a method just because the SQL dialect can technically"
+        ));
+        assert!(p.contains("report the method and usable sample size"));
+        assert!(p.contains("no pandas, NumPy, SciPy"));
+        assert!(p.contains("do not copy or hard-code rows from a previous tool"));
+        assert!(p.contains("returns one scalar correlation coefficient"));
+        assert!(p.contains("not SciPy's `(r, p)` pair"));
+        assert!(p.contains("do not claim statistical significance"));
+        assert!(p.contains("do not repeat unchanged failing code"));
+        assert!(!p.contains("run_python for stats SQL can't do"));
+    }
+
+    #[test]
     fn forecast_prompt_requires_temporal_recon_and_distinguishes_estimates_from_scenarios() {
         let p = system_prompt(
             &PromptProfile::full(),
@@ -2190,6 +2247,26 @@ mod tests {
         let p0 = system_prompt(&full, &open_catalog(), &[], schema, None, None, None);
         assert!(!p0.contains("Earlier in this conversation"));
         assert!(!p0.contains("Learned notes for this folder"));
+    }
+
+    #[test]
+    fn chart_prompt_preserves_requested_shape_and_uses_direct_sql_when_needed() {
+        let prompt = system_prompt(
+            &PromptProfile::full(),
+            &open_catalog(),
+            &[],
+            "Tables:\n  observations  (2,924 rows)\n",
+            None,
+            None,
+            None,
+        );
+
+        assert!(prompt.contains("exact requested grain, grouping, filters, and measures"));
+        assert!(prompt.contains("otherwise use `make_chart` with direct read-only SQL"));
+        assert!(prompt
+            .contains("Do not use a total-by-category result in place of a requested time series"));
+        assert!(prompt.contains("one row per period/category/measure observation"));
+        assert!(prompt.contains("preserve gaps unless evidence establishes zero"));
     }
 
     #[test]

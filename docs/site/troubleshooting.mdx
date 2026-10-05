@@ -14,7 +14,7 @@ Start with the smallest direct check. A source problem, provider problem, and in
 | A total looks wrong | `/schema <table>` | Check type inference, units, casing, nulls, and totals rows |
 | The model cannot answer | `/login`, then `/model` | Sign in again or choose a tool-capable model |
 | A query times out | Inspect working or use `/sql` | Add a date filter, narrower columns, grouping, or `LIMIT` |
-| Python fails | Inspect stderr in working | Simplify the calculation or use SQL |
+| Python fails | Inspect stderr in working | Fix the snippet, reduce its input, or use SQL only if SQL is the better fit for that analysis |
 | A PDF has no useful text | Open the PDF outside Fella | OCR it and reopen or `/reindex` the folder |
 | You typed `/mcp` | `/mcp` | It is an inert experimental command in this release |
 | Changes do not appear | `/reindex`, then `/files` | Refresh the catalog after external edits |

@@ -32,4 +32,8 @@ use crate::engine::state::QueryResult;
 pub trait AnalyticsSource {
     fn catalog(&self) -> Catalog;
     fn run_sql(&self, sql: &str) -> EngineResult<QueryResult>;
+    /// Replay SQL evidence with an explicit bounded row limit. This is used
+    /// for chart inputs, whose source table can be wider than the normal
+    /// model-facing SQL result cap while remaining small after chart shaping.
+    fn run_sql_with_limit(&self, sql: &str, max_rows: usize) -> EngineResult<QueryResult>;
 }

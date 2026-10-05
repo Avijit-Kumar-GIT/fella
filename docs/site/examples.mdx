@@ -77,7 +77,7 @@ Fella uses direct regex search and document reads. Ask for file names or quoted 
 Create a line chart of monthly sleep hours for January through June 2025 from sleep.jsonl. Use one series and include the monthly average in the answer.
 ```
 
-Charts support bar and line data with at most 12 categories and 2 series. Aggregate first instead of requesting thousands of points.
+Charts support bar, line, area, stacked area, pie/donut, scatter, histogram, box plot, heatmap, and forecast data. Long-form series can be plotted by selecting a time/category field, a group field, and a numeric value field; aggregate repeated x/group pairs explicitly. Line charts retain up to 1,000 points, with axis labels thinned for dense periods.
 The chart is derived from a read-only query result, so its labels and values are
 recorded with the same evidence as the calculation behind it.
 

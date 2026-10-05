@@ -659,6 +659,79 @@ async fn make_chart_rejects_a_truncated_long_time_series() {
 }
 
 #[tokio::test]
+async fn make_chart_pivots_a_complete_long_form_daily_series_over_the_sql_preview_cap() {
+    let ws = scratch("chart-long-form-daily-ws");
+    let data = scratch("chart-long-form-daily-data");
+    let mut csv = String::from("date,channel,visits\n");
+    let channels = ["Direct", "Partner", "Retail", "Search"];
+    let month_days_2024 = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let month_days_2025 = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    for day_index in 0..731 {
+        let (year, mut day_of_year, month_days) = if day_index < 366 {
+            (2024, day_index, &month_days_2024)
+        } else {
+            (2025, day_index - 366, &month_days_2025)
+        };
+        let mut month = 0;
+        while day_of_year >= month_days[month] {
+            day_of_year -= month_days[month];
+            month += 1;
+        }
+        let date = format!("{year}-{:02}-{:02}", month + 1, day_of_year + 1);
+        for (channel_index, channel) in channels.iter().enumerate() {
+            let visits = 100 + day_index * 10 + channel_index;
+            csv.push_str(&format!("{date},{channel},{visits}\n"));
+        }
+    }
+    fs::write(ws.join("daily.csv"), csv).unwrap();
+    let engine = EngineState::new(&data).unwrap();
+    engine.open_workspace(&ws).unwrap();
+
+    let out = Registry::standard()
+        .run(
+            &engine,
+            "make_chart",
+            &serde_json::json!({
+                "kind": "line",
+                "sql": "SELECT date, channel, visits FROM daily ORDER BY date, channel",
+                "x_field": "date",
+                "group_field": "channel",
+                "value_field": "visits",
+                "missing_treatment": "gap"
+            }),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let chart = out.chart.expect("full-period daily chart");
+
+    assert_eq!(out.row_count, Some(2_924));
+    assert_eq!(chart.labels.len(), 731);
+    assert_eq!(chart.labels.first().map(String::as_str), Some("2024-01-01"));
+    assert_eq!(chart.labels.last().map(String::as_str), Some("2025-12-31"));
+    assert_eq!(chart.series.len(), 4);
+    for (channel_index, channel) in channels.iter().enumerate() {
+        let series = chart
+            .series
+            .iter()
+            .find(|series| series.name == *channel)
+            .unwrap();
+        assert_eq!(series.values.len(), 731, "all daily values for {channel}");
+        assert_eq!(
+            series.values.first(),
+            Some(&Some((100 + channel_index) as f64))
+        );
+        assert_eq!(
+            series.values.last(),
+            Some(&Some((100 + 730 * 10 + channel_index) as f64))
+        );
+    }
+
+    let _ = fs::remove_dir_all(&ws);
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[tokio::test]
 async fn make_chart_rejects_model_supplied_values() {
     let data = scratch("chart-data2");
     let engine = EngineState::new(&data).unwrap();

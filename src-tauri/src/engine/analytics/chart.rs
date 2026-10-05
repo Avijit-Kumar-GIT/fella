@@ -20,10 +20,12 @@ use serde_json::Value as Json;
 /// labels in one bar chart before it stops being readable; past this, tell the
 /// model to aggregate first.
 pub const MAX_CATEGORIES: usize = 12;
+/// Maximum source rows materialized by a chart query. A long-form chart may
+/// contain several group rows per x-axis point before it is pivoted.
+pub const MAX_SOURCE_ROWS: usize = 10_000;
 /// Line charts can carry a much longer time axis than a categorical bar chart.
-/// The query layer already caps materialised results at 1,000 rows, so keep the
-/// visualization limit aligned with that safety boundary. Longer periods
-/// should be rolled up to weeks/months or narrowed to a date range.
+/// The source may be long-form (multiple rows per date), but the final plotted
+/// time axis remains bounded to keep rendering and exact-value tables usable.
 pub const MAX_TIME_POINTS: usize = 1_000;
 /// Keep simultaneous series limited to a legible, color-safe palette.
 pub const MAX_SERIES: usize = 5;
@@ -299,9 +301,9 @@ fn validate_table(table: &TabularResult) -> Result<(), String> {
     if table.columns.is_empty() {
         return Err("the chart source has no columns".into());
     }
-    if table.rows.len() > 10_000 {
+    if table.rows.len() > MAX_SOURCE_ROWS {
         return Err(
-            "the chart source is too large (maximum 10,000 rows); aggregate before charting".into(),
+            format!("the chart source is too large (maximum {MAX_SOURCE_ROWS} rows); aggregate before charting"),
         );
     }
     for (index, row) in table.rows.iter().enumerate() {
@@ -410,6 +412,9 @@ fn build_series_chart(
     table: &TabularResult,
     mut request: ChartRequest,
 ) -> Result<ChartData, String> {
+    if request.group_field.is_some() {
+        return build_grouped_series_chart(table, request);
+    }
     let x_index = column_index(table, request.x_field.as_deref(), 0)?;
     let labels = table
         .rows
@@ -486,6 +491,148 @@ fn build_series_chart(
     apply_missing_treatment(request.missing_treatment, &mut request.metadata, excluded)?;
     let mut data = base_spec(kind, request, labels, series);
     data.x_label = Some(table.columns[x_index].clone());
+    validate(&data)?;
+    Ok(data)
+}
+
+/// Convert tidy/long-form observations (`x`, `group`, `value`) into a wide
+/// chart. Each observed group becomes a series and absent x/group combinations
+/// stay gaps; the chart layer never guesses that an absent row means zero.
+fn build_grouped_series_chart(
+    table: &TabularResult,
+    mut request: ChartRequest,
+) -> Result<ChartData, String> {
+    let x_index = column_index(table, request.x_field.as_deref(), 0)?;
+    let group_name = request.group_field.as_deref().unwrap_or_default();
+    let group_index = column_index(table, Some(group_name), 1)?;
+    let value_name = request
+        .value_field
+        .as_deref()
+        .or(request.y_field.as_deref());
+    let value_index = if let Some(name) = value_name {
+        column_index(table, Some(name), 0)?
+    } else {
+        (0..table.columns.len())
+            .find(|index| *index != x_index && *index != group_index)
+            .ok_or_else(|| {
+                "a grouped chart needs a numeric `value_field` (or `y_field`) in addition to its x and group fields".to_string()
+            })?
+    };
+    if x_index == group_index || x_index == value_index || group_index == value_index {
+        return Err(
+            "grouped charts need distinct x_field, group_field, and numeric value_field columns"
+                .into(),
+        );
+    }
+
+    let mut labels = Vec::<String>::new();
+    let mut groups = Vec::<String>::new();
+    let mut seen_labels = HashSet::<String>::new();
+    let mut seen_groups = HashSet::<String>::new();
+    let mut values = HashMap::<(String, String), Option<f64>>::new();
+    let mut excluded = 0usize;
+    for (row_index, row) in table.rows.iter().enumerate() {
+        let label = label_value(&row[x_index], row_index)?;
+        let group = label_value(&row[group_index], row_index)?;
+        let value =
+            optional_number_value(&row[value_index], &table.columns[value_index], row_index)?;
+        let value = match value {
+            Some(value) => Some(value),
+            None if request.missing_treatment == MissingTreatment::Exclude => {
+                excluded += 1;
+                continue;
+            }
+            None if request.missing_treatment == MissingTreatment::Gap => None,
+            None => {
+                return Err(format!(
+                    "grouped chart row {} has a missing measurement; choose `gap` or `exclude` explicitly",
+                    row_index + 1
+                ));
+            }
+        };
+        if values
+            .insert((label.clone(), group.clone()), value)
+            .is_some()
+        {
+            return Err(format!(
+                "grouped chart has multiple rows for ({label}, {group}); aggregate to one value per x/group pair in SQL before charting"
+            ));
+        }
+        if seen_labels.insert(label.clone()) {
+            labels.push(label.clone());
+        }
+        if seen_groups.insert(group.clone()) {
+            groups.push(group);
+        }
+    }
+    if labels.is_empty() || groups.is_empty() {
+        return Err(
+            "no grouped chart observations remain after the selected missing-value treatment"
+                .into(),
+        );
+    }
+    ensure_unique_labels(&labels)?;
+    ensure_unique_labels(&groups)?;
+    if groups.len() > MAX_SERIES {
+        return Err(format!(
+            "grouped chart has {} series, above the readable limit of {MAX_SERIES}; filter or aggregate groups explicitly rather than silently dropping them",
+            groups.len()
+        ));
+    }
+
+    let kind = resolve_kind(request.kind, &table.columns[x_index], &labels);
+    let max_points = max_points(kind);
+    if labels.len() > max_points {
+        return Err(size_error(kind, labels.len()));
+    }
+    if looks_temporal(&table.columns[x_index], &labels) {
+        if let Some(order) = chronological_order(&labels) {
+            labels = order
+                .into_iter()
+                .map(|index| labels[index].clone())
+                .collect();
+        }
+    }
+
+    let absent_pairs = labels.len() * groups.len() - values.len();
+    if absent_pairs > 0 && request.missing_treatment == MissingTreatment::Reject {
+        return Err(format!(
+            "grouped chart has {absent_pairs} unobserved x/group combinations; choose `gap` to preserve them as gaps, or resolve whether they mean zero before charting"
+        ));
+    }
+    let series = groups
+        .iter()
+        .map(|group| Series {
+            name: group.clone(),
+            values: labels
+                .iter()
+                .map(|label| {
+                    values
+                        .get(&(label.clone(), group.clone()))
+                        .copied()
+                        .flatten()
+                })
+                .collect(),
+        })
+        .collect();
+    request.metadata.fields = vec![
+        table.columns[x_index].clone(),
+        table.columns[group_index].clone(),
+        table.columns[value_index].clone(),
+    ];
+    apply_missing_treatment(request.missing_treatment, &mut request.metadata, excluded)?;
+    if absent_pairs > 0 {
+        let note =
+            format!("{absent_pairs} unobserved x/group combination(s) remain gaps, not zero");
+        request.metadata.missing_treatment =
+            Some(match request.metadata.missing_treatment.take() {
+                Some(existing) => format!("{existing}; {note}"),
+                None => note,
+            });
+    }
+    let mut data = base_spec(kind, request, labels, series);
+    data.x_label = Some(table.columns[x_index].clone());
+    data.y_label = Some(table.columns[value_index].clone());
     validate(&data)?;
     Ok(data)
 }
@@ -1173,7 +1320,7 @@ fn max_points(kind: ChartKind) -> usize {
 fn size_error(kind: ChartKind, rows: usize) -> String {
     match kind {
         ChartKind::Line | ChartKind::Area | ChartKind::StackedArea | ChartKind::Forecast => format!(
-            "the chart query returned {rows} time-series points (max {MAX_TIME_POINTS}) -- aggregate to a coarser time period or narrow the date range"
+            "the chart query returned {rows} time-series points (max {MAX_TIME_POINTS}) -- aggregate to a coarser time period or narrow the date range only if that change matches the user's requested scope; otherwise keep the requested period and grain and explain the point limit"
         ),
         ChartKind::Pie | ChartKind::Donut => format!(
             "pie/donut chart has {rows} slices (max {MAX_PIE_SLICES}); use a bar chart or aggregate explicitly"
@@ -1750,6 +1897,69 @@ mod tests {
 
         assert!(error.contains("max 1000"), "{error}");
         assert!(error.contains("coarser time period"), "{error}");
+    }
+
+    #[test]
+    fn from_table_pivots_long_form_series_and_keeps_absent_pairs_as_gaps() {
+        let chart = from_table(
+            &TabularResult {
+                columns: vec!["month".into(), "channel".into(), "visits".into()],
+                rows: vec![
+                    vec![Json::from("2025-01"), Json::from("Direct"), Json::from(10)],
+                    vec![Json::from("2025-01"), Json::from("Search"), Json::from(5)],
+                    vec![Json::from("2025-02"), Json::from("Direct"), Json::from(12)],
+                ],
+            },
+            ChartRequest {
+                kind: ChartKind::Line,
+                x_field: Some("month".into()),
+                group_field: Some("channel".into()),
+                value_field: Some("visits".into()),
+                missing_treatment: MissingTreatment::Gap,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(chart.labels, vec!["2025-01", "2025-02"]);
+        assert_eq!(chart.series.len(), 2);
+        assert_eq!(chart.series[0].name, "Direct");
+        assert_eq!(chart.series[0].values, vec![Some(10.0), Some(12.0)]);
+        assert_eq!(chart.series[1].name, "Search");
+        assert_eq!(chart.series[1].values, vec![Some(5.0), None]);
+        assert!(chart
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.missing_treatment.as_deref())
+            .is_some_and(|note| note.contains("gaps, not zero")));
+    }
+
+    #[test]
+    fn from_table_rejects_duplicate_long_form_pairs_instead_of_summing_silently() {
+        let error = from_table(
+            &TabularResult {
+                columns: vec!["date".into(), "group".into(), "value".into()],
+                rows: vec![
+                    vec![Json::from("2025-01-01"), Json::from("A"), Json::from(10)],
+                    vec![Json::from("2025-01-01"), Json::from("A"), Json::from(12)],
+                ],
+            },
+            ChartRequest {
+                kind: ChartKind::Line,
+                x_field: Some("date".into()),
+                group_field: Some("group".into()),
+                value_field: Some("value".into()),
+                missing_treatment: MissingTreatment::Gap,
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(error.contains("multiple rows"), "{error}");
+        assert!(
+            error.contains("aggregate to one value per x/group pair"),
+            "{error}"
+        );
     }
 
     #[test]

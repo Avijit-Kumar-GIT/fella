@@ -90,7 +90,7 @@ By the end of this guide, Fella will have scanned a folder, answered a question 
 | Documents | `.pdf`, `.txt`, `.text`, `.md`, `.markdown`, `.log` | PDFs need an extractable text layer; there is no OCR |
 | Parquet | `.parquet`, `.pq` | Requires a custom `--features duckdb` build; not in release builds or CI |
 | Built-in tools | File listing, table inspection, read-only SQL, text search/read, Python, charts | The model chooses tools; general answers can use none |
-| Charts | Bar and line | Maximum 12 categories and 2 series |
+| Charts | Bar, line, area, stacked area, pie/donut, scatter, histogram, box plot, heatmap, forecast | Category and point counts are bounded; line charts support up to 1,000 time points and 5 series |
 
 SQL result materialization is capped at 1,000 rows by default and a query is interrupted after 15 seconds. These are guardrails, not target dataset sizes.
 

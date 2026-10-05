@@ -122,7 +122,14 @@
 			.range([HEIGHT - PLOT.bottom, PLOT.top])
 	);
 	let yTicks = $derived(yScale.ticks(4));
-	let labelStep = $derived(Math.max(1, Math.ceil((spec.labels.length * 52) / WIDTH)));
+	let labelStep = $derived.by(() => {
+		const longestLabel = spec.labels.reduce((length, label) => Math.max(length, label.length), 0);
+		const labelWidth = Math.max(52, Math.min(120, longestLabel * 6 + 14));
+		return Math.max(1, Math.ceil((spec.labels.length * labelWidth) / WIDTH));
+	});
+	// Markers help short series; on dense series they overlap into visual noise
+	// and thousands of extra SVG nodes. The line retains every value either way.
+	let showLineMarkers = $derived(spec.labels.length <= 80);
 
 	function pointsLine(series: (number | null)[]) {
 		return line<number | null>()
@@ -481,17 +488,19 @@
 					{#each spec.series as series, seriesIndex (series.name)}
 						{#if spec.kind === 'area'}<path d={pointsArea(series.values) ?? ''} class="area-fill" style={`fill:${color(seriesIndex)}`} />{/if}
 						<path d={pointsLine(series.values) ?? ''} class="line" class:dashed={seriesIndex > 0} style={`stroke:${color(seriesIndex)}`} />
-						{#each series.values as value, index (`${series.name}-${index}`)}
-							{#if isNumber(value)}
-								<circle cx={xScale(spec.labels[index] ?? '') ?? 0} cy={yScale(value)} r="3.2" class="line-dot" style={`fill:${color(seriesIndex)}`}>
-									<title>{series.name}, {spec.labels[index]}: {formatValue(value, spec.unit)}</title>
-								</circle>
-							{/if}
-						{/each}
+						{#if showLineMarkers}
+							{#each series.values as value, index (`${series.name}-${index}`)}
+								{#if isNumber(value)}
+									<circle cx={xScale(spec.labels[index] ?? '') ?? 0} cy={yScale(value)} r="3.2" class="line-dot" style={`fill:${color(seriesIndex)}`}>
+										<title>{series.name}, {spec.labels[index]}: {formatValue(value, spec.unit)}</title>
+									</circle>
+								{/if}
+							{/each}
+						{/if}
 					{/each}
 				{/if}
 				{#each spec.labels as label, index (label + index)}
-					{#if index % labelStep === 0}<text x={xScale(label) ?? 0} y={HEIGHT - 12} class="axis-label" text-anchor="middle">{label}</text>{/if}
+					{#if index % labelStep === 0 || index === spec.labels.length - 1}<text x={xScale(label) ?? 0} y={HEIGHT - 12} class="axis-label" text-anchor="middle">{label}</text>{/if}
 				{/each}
 				{#if spec.x_label}<text x={(PLOT.left + WIDTH - PLOT.right) / 2} y={HEIGHT - 1} class="axis-title" text-anchor="middle">{spec.x_label}</text>{/if}
 			</svg>

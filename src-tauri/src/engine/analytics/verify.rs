@@ -2899,7 +2899,12 @@ fn rerun_queries(
             skipped_cost += 1;
             continue;
         }
-        match engine.run_sql(sql) {
+        let row_limit = if e.tool == "make_chart" {
+            chart::MAX_SOURCE_ROWS
+        } else {
+            crate::engine::analytics::data::DEFAULT_ROW_CAP
+        };
+        match engine.run_sql_with_limit(sql, row_limit) {
             Ok(fresh) => {
                 let same = e.row_count == Some(fresh.row_count)
                     && e.rows
@@ -3904,6 +3909,14 @@ mod tests {
                     truncated: false,
                 })
             }
+
+            fn run_sql_with_limit(
+                &self,
+                sql: &str,
+                _max_rows: usize,
+            ) -> crate::engine::error::EngineResult<crate::engine::state::QueryResult> {
+                self.run_sql(sql)
+            }
         }
 
         let mut evidence = run_sql_ev(
@@ -3932,6 +3945,64 @@ mod tests {
                     .contains("re-checked the SQL inputs to this Python computation")
         }));
         assert!(reran_clean(&checks));
+    }
+
+    #[test]
+    fn chart_source_replay_uses_the_chart_row_limit() {
+        struct ReplaySource;
+
+        impl AnalyticsSource for ReplaySource {
+            fn catalog(&self) -> crate::engine::catalog::Catalog {
+                crate::engine::catalog::Catalog::default()
+            }
+
+            fn run_sql(
+                &self,
+                _sql: &str,
+            ) -> crate::engine::error::EngineResult<crate::engine::state::QueryResult> {
+                panic!("chart replay should use the explicit row limit")
+            }
+
+            fn run_sql_with_limit(
+                &self,
+                sql: &str,
+                max_rows: usize,
+            ) -> crate::engine::error::EngineResult<crate::engine::state::QueryResult> {
+                assert_eq!(sql, "SELECT day FROM daily");
+                assert_eq!(max_rows, chart::MAX_SOURCE_ROWS);
+                let rows = (0..1_001)
+                    .map(|day| vec![Json::from(day)])
+                    .collect::<Vec<_>>();
+                Ok(crate::engine::state::QueryResult {
+                    columns: vec!["day".into()],
+                    row_count: rows.len(),
+                    rows,
+                    ms: 1,
+                    truncated: false,
+                })
+            }
+        }
+
+        let sql = "SELECT day FROM daily";
+        let rows = (0..1_001)
+            .map(|day| vec![Json::from(day)])
+            .collect::<Vec<_>>();
+        let mut evidence = run_sql_ev(sql, &["day"], rows);
+        evidence.tool = "make_chart".into();
+
+        let mut checks = Vec::new();
+        rerun_queries(&ReplaySource, &[evidence], &mut checks);
+
+        assert!(
+            checks.iter().any(|check| {
+                check.ok
+                    && check
+                        .label
+                        .contains("re-checked the queries behind this answer")
+            }),
+            "the full chart result should replay without a false changed-result warning: {checks:?}"
+        );
+        assert!(hard_fail(&checks).is_none(), "{checks:?}");
     }
 
     #[test]

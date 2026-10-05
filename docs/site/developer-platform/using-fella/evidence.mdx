@@ -10,7 +10,7 @@ Every assistant answer has a collapsed **Evidence** row. Tool-backed answers sho
 
 | Layer | What it records | What it means |
 | --- | --- | --- |
-| Evidence | Tool name and arguments, a plain-language note when supplied, result summary, SQL, rows or text output, chart data, duration, and errors | What a tool was asked to do and what it returned |
+| Evidence | Tool name and arguments, a plain-language note when supplied, result summary, SQL or generated Python, input references, rows or text output, chart data, duration, and errors | What a tool was asked to do and what it returned |
 | Verification | Passes and warnings produced after the draft answer | Whether specific consistency checks found a problem |
 
 Evidence is not proof that the model chose the right source or interpreted the question correctly. Verification is not new source material; it checks the answer against existing evidence.
@@ -22,7 +22,7 @@ Evidence is not proof that the model chose the right source or interpreted the q
     The summary shows the number of steps, total tool time, and how many findings need review.
   </Step>
   <Step title="Open step details">
-    Expand each step to see its SQL or arguments, result summary, output, and up to 20 displayed table rows. Charts render below the answer rather than inside the fold.
+    Expand each step to see its SQL or arguments, result summary, output, and up to 20 displayed table rows. Python steps are labeled; generated snippets and the built-in forecast method are available under **show calculation**. Charts render below the answer rather than inside the fold.
   </Step>
   <Step title="Read verification findings">
     A check mark is a passed check. A warning means the check found something to review; it does not automatically invalidate the entire answer.

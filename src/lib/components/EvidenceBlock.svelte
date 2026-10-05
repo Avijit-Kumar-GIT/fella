@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { Answer, ContextSection, EvidenceItem } from '$lib/types';
 	import Icon from './Icon.svelte';
+	import PythonCalculationDetails from './PythonCalculationDetails.svelte';
 	import ReplayStatus from './ReplayStatus.svelte';
 
 	let {
@@ -50,11 +51,17 @@
 		if (FALLBACK[e.tool]) return FALLBACK[e.tool];
 		return e.tool;
 	}
+	function isPythonExecution(e: EvidenceItem): boolean {
+		return e.tool === 'run_python' || e.tool === 'forecast_analysis';
+	}
 
 	// The model's `note` is already the step's headline drop it from the raw
-	// args dump so it isn't shown twice.
-	function argsWithoutNote(args: Record<string, unknown>): Record<string, unknown> {
+	// args dump so it isn't shown twice. Python source is shown in its own code
+	// block rather than as an ordinary argument.
+	function argsForDisplay(e: EvidenceItem): Record<string, unknown> {
+		const args = e.args ?? {};
 		const { note: _note, ...rest } = args;
+		if (e.tool === 'run_python') delete rest.code;
 		return rest;
 	}
 	function sourceLabel(e: EvidenceItem): string {
@@ -84,17 +91,19 @@
 			{#if answer.evidence.length}
 			<ol class="steps">
 				{#each answer.evidence as e, i (e.id ?? `evidence-${i}`)}
-					{@const shownArgs = argsWithoutNote(e.args)}
+					{@const shownArgs = argsForDisplay(e)}
 					{@const sqlIsAlreadyInInputTrace = e.python_input_trace?.queries.some((query) => query.sql === e.sql) ?? false}
 					{@const hasDetail =
 						!!e.sql ||
 						!!e.sources?.length ||
 						!!e.python_input_trace ||
+						isPythonExecution(e) ||
 						Object.keys(shownArgs).length > 0 ||
 						!!e.output ||
 						!!(e.columns && e.rows)}
 					<li class="step" class:failed={!!e.error}>
 						<span class="line">{stepLabel(e)}</span>
+						{#if isPythonExecution(e)}<span class="language-badge">Python</span>{/if}
 						{#if e.sources?.length}
 							<div class="source-line">from {sourceLabel(e)}</div>
 						{/if}
@@ -109,7 +118,7 @@
 								onclick={() => toggleDetail(i)}
 								aria-expanded={!!openDetail[i]}
 							>
-								{openDetail[i] ? 'hide' : e.sql ? 'show the query' : 'show details'}
+								{openDetail[i] ? 'hide' : isPythonExecution(e) ? 'show calculation' : e.sql ? 'show the query' : 'show details'}
 							</button>
 						{/if}
 
@@ -119,6 +128,9 @@
 									? e.rows
 									: e.rows?.slice(0, 20)}
 							<div class="detail rich">
+								{#if isPythonExecution(e)}
+									<PythonCalculationDetails evidence={e} />
+								{/if}
 								{#if e.sql}
 									{#if !sqlIsAlreadyInInputTrace}<pre class="sql">{e.sql}</pre>{/if}
 								{:else if Object.keys(shownArgs).length > 0}
@@ -232,6 +244,18 @@
 	}
 	.step {
 		color: var(--text-dim);
+	}
+	.language-badge {
+		display: inline-block;
+		margin-left: 6px;
+		padding: 1px 5px;
+		border: 1px solid var(--border);
+		border-radius: 4px;
+		color: var(--text-faint);
+		font-family: var(--mono);
+		font-size: 10px;
+		line-height: 1.35;
+		vertical-align: 1px;
 	}
 	.step::marker {
 		color: var(--text-faint);

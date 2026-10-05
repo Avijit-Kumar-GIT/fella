@@ -2859,6 +2859,22 @@ exactly, character for character, from the list below.";
         query_workspace(&*workspace.data, sql, DEFAULT_ROW_CAP)
     }
 
+    /// Replay a bounded analytical query with a caller-selected result cap.
+    /// The limit is clamped to the chart engine's maximum so verification can
+    /// reproduce complete chart inputs without unbounded materialization.
+    pub fn run_sql_with_limit(&self, sql: &str, max_rows: usize) -> EngineResult<QueryResult> {
+        require_capability(
+            self.settings().capabilities.table_analysis,
+            "Table analysis",
+        )?;
+        let workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
+        query_workspace(
+            &*workspace.data,
+            sql,
+            max_rows.clamp(1, crate::engine::analytics::chart::MAX_SOURCE_ROWS),
+        )
+    }
+
     /// Run SQL while preserving the stop flag all the way into an interruptible
     /// backend query. This is separate from `run_sql` so command-style callers
     /// keep their small synchronous API.
@@ -2873,6 +2889,31 @@ exactly, character for character, from the list below.";
         )?;
         let workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
         query_workspace_cancellable(&*workspace.data, sql, DEFAULT_ROW_CAP, cancel)
+    }
+
+    /// Chart queries have a larger bounded source allowance than model-facing
+    /// SQL results: tidy data can contain several category rows per plotted
+    /// time point before the chart converter pivots it into series.
+    pub fn run_chart_sql_cancellable(
+        &self,
+        sql: &str,
+        cancel: Arc<AtomicBool>,
+        max_rows: usize,
+    ) -> EngineResult<QueryResult> {
+        require_capability(
+            self.settings().capabilities.table_analysis,
+            "Table analysis",
+        )?;
+        let workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
+        query_workspace_cancellable(
+            &*workspace.data,
+            sql,
+            max_rows.clamp(
+                DEFAULT_ROW_CAP,
+                crate::engine::analytics::chart::MAX_SOURCE_ROWS,
+            ),
+            cancel,
+        )
     }
 
     /// First `n` rows of a source (used by the `inspect_table` tool).
@@ -4041,6 +4082,9 @@ impl crate::engine::analytics::AnalyticsSource for EngineState {
     }
     fn run_sql(&self, sql: &str) -> EngineResult<QueryResult> {
         EngineState::run_sql(self, sql)
+    }
+    fn run_sql_with_limit(&self, sql: &str, max_rows: usize) -> EngineResult<QueryResult> {
+        EngineState::run_sql_with_limit(self, sql, max_rows)
     }
 }
 
