@@ -4506,24 +4506,43 @@ mod vocab_reconcile_tests {
 
 #[cfg(test)]
 mod jit_schema_tests {
+    use std::ops::Deref;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;
 
-    fn scratch(tag: &str) -> std::path::PathBuf {
-        let n = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let p = std::env::temp_dir().join(format!("fella-jit-{tag}-{n}"));
-        std::fs::create_dir_all(&p).unwrap();
-        p
+    struct ScratchDir(PathBuf);
+
+    impl ScratchDir {
+        fn new(tag: &str) -> Self {
+            let n = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!("fella-jit-{tag}-{n}"));
+            std::fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Deref for ScratchDir {
+        type Target = Path;
+
+        fn deref(&self) -> &Self::Target {
+            &self.0
+        }
+    }
+
+    impl Drop for ScratchDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
     }
 
     #[test]
     fn samples_only_a_large_folders_inspected_tables() {
-        let ws = scratch("ws");
-        let data = scratch("data");
+        let ws = ScratchDir::new("ws");
+        let data = ScratchDir::new("data");
         // 6 tables: past the <=4 small-folder cutoff (samples always shown),
         // still under the <=12 tables / <=60 columns "full" ceiling (columns
         // are shown eagerly either way).
@@ -4563,8 +4582,8 @@ mod jit_schema_tests {
 
     #[test]
     fn small_folders_always_show_samples() {
-        let ws = scratch("ws-small");
-        let data = scratch("data-small");
+        let ws = ScratchDir::new("ws-small");
+        let data = ScratchDir::new("data-small");
         // Only 2 tables: at or under the <=4 cutoff, samples show up-front.
         for i in 0..2 {
             std::fs::write(
