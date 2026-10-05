@@ -13,6 +13,7 @@ use crate::engine::analytics::chart::{self, ChartData, ChartKind};
 use crate::engine::analytics::data::DEFAULT_ROW_CAP;
 use crate::engine::analytics::verify::truncate as truncate_chars;
 use crate::engine::capabilities::AnalysisCapabilities;
+use crate::engine::catalog;
 use crate::engine::error::{EngineError, EngineResult};
 use crate::engine::llm::ToolSchema;
 use crate::engine::runtime::CONTRACT_TOOL_NAME;
@@ -593,6 +594,9 @@ fn cell_str(v: &Json) -> String {
 
 // --- list_files ----------------------------------------------------------
 
+const DEFAULT_FILE_PAGE_SIZE: usize = 40;
+const MAX_FILE_PAGE_SIZE: usize = 50;
+
 pub struct ListFiles;
 
 #[async_trait]
@@ -601,41 +605,68 @@ impl Tool for ListFiles {
         "list_files"
     }
     fn description(&self) -> &'static str {
-        "List the files in the workspace and the tables detected in them."
+        "Browse the mounted workspace inventory. Results are paginated and use workspace-relative paths. Use search to find a file or table by path/name, kind to select all/tables/documents/skipped, and offset to continue to the next page."
     }
     fn parameters(&self) -> Json {
-        json!({ "type": "object", "properties": {}, "additionalProperties": false })
+        json!({
+            "type": "object",
+            "properties": {
+                "search": { "type": "string", "description": "Case-insensitive substring of a relative path, filename, or table name." },
+                "kind": { "type": "string", "enum": ["all", "tables", "documents", "skipped"], "default": "all" },
+                "offset": { "type": "integer", "minimum": 0, "default": 0 },
+                "limit": { "type": "integer", "minimum": 1, "maximum": 50, "default": 40 }
+            },
+            "additionalProperties": false
+        })
     }
-    async fn run(&self, engine: &EngineState, _args: &Json) -> EngineResult<ToolOutput> {
-        let catalog = engine.catalog();
-        if catalog.workspace.is_none() {
-            return Err(EngineError::NoWorkspace);
-        }
-        let mut lines = Vec::new();
-        for s in &catalog.sources {
-            match &s.view {
-                Some(v) => lines.push(format!(
-                    "table {v}  (from {}, {} rows)",
-                    s.name,
-                    s.row_count
-                        .map(|n| n.to_string())
-                        .unwrap_or_else(|| "?".into())
-                )),
-                None => lines.push(format!(
-                    "document {}  ({:?}, {} KB)",
-                    s.name,
-                    s.kind,
-                    s.size_bytes / 1024
-                )),
+    async fn run(&self, engine: &EngineState, args: &Json) -> EngineResult<ToolOutput> {
+        let filter = match args.get("kind").and_then(Json::as_str).unwrap_or("all") {
+            "all" => catalog::FileListFilter::All,
+            "tables" => catalog::FileListFilter::Tables,
+            "documents" => catalog::FileListFilter::Documents,
+            "skipped" => catalog::FileListFilter::Skipped,
+            value => {
+                return Err(EngineError::msg(format!(
+                    "unknown inventory kind `{value}`; use all, tables, documents, or skipped"
+                )))
             }
-        }
-        let text = if lines.is_empty() {
-            "workspace is empty".to_string()
-        } else {
-            lines.join("\n")
         };
+        let query = args.get("search").and_then(Json::as_str);
+        let offset = args
+            .get("offset")
+            .and_then(Json::as_u64)
+            .unwrap_or_default()
+            .min(usize::MAX as u64) as usize;
+        let limit = args
+            .get("limit")
+            .and_then(Json::as_u64)
+            .map(|limit| limit.min(usize::MAX as u64) as usize)
+            .unwrap_or(DEFAULT_FILE_PAGE_SIZE)
+            .clamp(1, MAX_FILE_PAGE_SIZE);
+        let page = engine.list_files_page(filter, query, offset, limit)?;
+        let first = page.offset.min(page.matching);
+        let last = first + page.lines.len();
+        let shown = page.lines.len();
+        let mut lines = vec![format!(
+            "Workspace inventory at offset {}: {} entries shown of {} matching ({} tables, {} documents, {} skipped in the workspace).",
+            first,
+            page.lines.len(),
+            page.matching,
+            page.tables,
+            page.documents,
+            page.skipped,
+        )];
+        lines.extend(page.lines);
+        if last < page.matching {
+            lines.push(format!(
+                "More matches remain; call list_files with offset={last} and the same search/kind."
+            ));
+        } else if page.matching == 0 {
+            lines.push("No inventory entries matched.".into());
+        }
+        let text = lines.join("\n");
         Ok(ToolOutput {
-            summary: format!("{} files", catalog.sources.len()),
+            summary: format!("{} of {} matching inventory entries", shown, page.matching),
             llm_text: text.clone(),
             sql: None,
             columns: None,
@@ -1025,9 +1056,7 @@ impl Tool for ReadFile {
         "read_file"
     }
     fn description(&self) -> &'static str {
-        "Read the full text of one or more documents by name (as listed above). Pass \
-`names` (an array) to read several at once in one call. Use this when a broad or \
-summarization question needs the documents' actual content."
+        "Read the full text of one or more documents by their workspace-relative paths (as shown by list_files or grep_files). Pass `names` (an array) to read several at once in one call. Use this when a broad or summarization question needs the documents' actual content."
     }
     fn parameters(&self) -> Json {
         json!({

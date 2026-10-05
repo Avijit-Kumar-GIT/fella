@@ -392,19 +392,29 @@ runs were cumulative, so they do not isolate each optimization's effect or
 establish an acceptable-performance claim. A separate 250,000-row, 5,027,795
 byte CSV loaded completely in about 2.5 seconds in a local debug run. Neither
 probe measures peak memory. The probes have no timing pass/fail threshold and
-clean their generated fixtures and temporary databases automatically.
+clean their generated fixtures and temporary databases automatically. A
+subsequent inventory-tool probe on the same 5,000-table / 10,000-row /
+100-skipped fixture measured 7,133 ms end-to-end mount time, a 4 ms first
+inventory page, and a 4 ms exact path lookup, with 24,927,832 bytes in the
+temporary SQLite build directory. This is another single debug-build run, not
+a controlled comparison; it does not measure peak memory or first-query
+readiness, and the path lookup scans the in-memory catalog rather than a
+persistent path index.
 
 The current implementation also avoids mount-time exact distinct/null/range
 profiles on larger workspaces and computes them when a table is inspected;
 relationship-hint discovery uses an inverted field-name index and retains at
-most 128 candidates, explicitly disclosing truncation. This reduces the
-measured mount path but does not yet provide bounded prompt/catalog output,
-incremental refresh, or asynchronous readiness: the initial catalog and
-workspace model still represent every discovered source, and `open_workspace`
-still finishes preparation before publishing the new workspace. XLSX sheet
-loading still materializes sheet data, and document search still makes two
-workspace-wide passes per query. These remain open work, as do a repeatable
-10-GB mixed-format benchmark and peak-memory measurements.
+most 128 candidates, explicitly disclosing truncation. The model's `list_files`
+inventory is now bounded to 50 entries / 12,000 characters per call, supports
+path search and kind filters (including skipped files), and the Sources page
+renders 100 rows at a time. This bounds tool output and DOM row count, but not
+the full catalog sent over desktop IPC or retained in memory: the UI still
+receives every source record. Incremental refresh and asynchronous readiness
+are also still open; `open_workspace` finishes preparation before publishing
+the new workspace. XLSX sheet loading still materializes sheet data, and
+document search still makes two workspace-wide passes per query. These remain
+open work, as do a repeatable 10-GB mixed-format benchmark and peak-memory
+measurements.
 
 **Research informing the design:** Rust's [`ignore::WalkBuilder`](https://docs.rs/ignore/latest/ignore/struct.WalkBuilder.html)
 offers a parallel recursive walker and filtering, but its file-size and ignore

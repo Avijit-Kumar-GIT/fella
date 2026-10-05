@@ -274,6 +274,184 @@ pub struct Catalog {
     pub skipped: Vec<SkippedFile>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileListFilter {
+    All,
+    Tables,
+    Documents,
+    Skipped,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileListPage {
+    /// Rendered only for the requested page; never contains the full catalog.
+    pub lines: Vec<String>,
+    pub matching: usize,
+    pub tables: usize,
+    pub documents: usize,
+    pub skipped: usize,
+    pub offset: usize,
+}
+
+enum ListedItem<'a> {
+    Source(&'a SourceInfo),
+    Skipped(&'a SkippedFile),
+}
+
+struct OrderedListedItem<'a> {
+    path: String,
+    tie_breaker: String,
+    category: u8,
+    item: ListedItem<'a>,
+}
+
+/// Build a bounded inventory page directly from the mounted snapshot. Entries
+/// use workspace-relative paths so duplicate basenames stay distinguishable.
+pub(crate) fn list_files_page(
+    root: &Path,
+    sources: &[SourceInfo],
+    skipped: &[SkippedFile],
+    filter: FileListFilter,
+    query: Option<&str>,
+    offset: usize,
+    limit: usize,
+) -> FileListPage {
+    const PAGE_CHAR_CAP: usize = 12_000;
+    let tables = sources
+        .iter()
+        .filter(|source| source.view.is_some())
+        .count();
+    let documents = sources
+        .iter()
+        .filter(|source| source.view.is_none())
+        .count();
+    let skipped_count = skipped.len();
+    let query = query.map(str::trim).filter(|query| !query.is_empty());
+    let query_lower = query.map(str::to_lowercase);
+    let mut entries = Vec::new();
+
+    for source in sources {
+        let category = if source.view.is_some() { 0 } else { 1 };
+        if (category == 0 && matches!(filter, FileListFilter::Documents | FileListFilter::Skipped))
+            || (category == 1 && matches!(filter, FileListFilter::Tables | FileListFilter::Skipped))
+        {
+            continue;
+        }
+        let path = workspace_relative_path(root, Path::new(&source.path));
+        let tie_breaker = source.view.as_deref().unwrap_or(&source.name).to_string();
+        if query_lower.as_ref().is_some_and(|needle| {
+            !path.to_lowercase().contains(needle)
+                && !source.name.to_lowercase().contains(needle)
+                && !source
+                    .view
+                    .as_deref()
+                    .is_some_and(|view| view.to_lowercase().contains(needle))
+        }) {
+            continue;
+        }
+        entries.push(OrderedListedItem {
+            path,
+            tie_breaker,
+            category,
+            item: ListedItem::Source(source),
+        });
+    }
+
+    if !matches!(filter, FileListFilter::Tables | FileListFilter::Documents) {
+        for file in skipped {
+            if query_lower.as_ref().is_some_and(|needle| {
+                !file.name.to_lowercase().contains(needle)
+                    && !file.reason.to_lowercase().contains(needle)
+            }) {
+                continue;
+            }
+            entries.push(OrderedListedItem {
+                path: file.name.clone(),
+                tie_breaker: file.reason.clone(),
+                category: 2,
+                item: ListedItem::Skipped(file),
+            });
+        }
+    }
+
+    entries.sort_by(|left, right| {
+        (&left.path, left.category, &left.tie_breaker).cmp(&(
+            &right.path,
+            right.category,
+            &right.tie_breaker,
+        ))
+    });
+    let matching = entries.len();
+    let mut lines = Vec::with_capacity(limit);
+    let mut rendered_chars = 0usize;
+    for entry in entries.into_iter().skip(offset) {
+        if lines.len() >= limit {
+            break;
+        }
+        let line = match entry.item {
+            ListedItem::Source(source) => match source.view.as_deref() {
+                Some(view) => format!(
+                    "table {view} (file={}, {} rows)",
+                    entry.path,
+                    source
+                        .row_count
+                        .map(|count| count.to_string())
+                        .unwrap_or_else(|| "?".into())
+                ),
+                None => format!(
+                    "document {} ({}, {} KB)",
+                    entry.path,
+                    source_kind_name(source.kind),
+                    source.size_bytes / 1024
+                ),
+            },
+            ListedItem::Skipped(file) => {
+                format!(
+                    "skipped {} ({})",
+                    entry.path,
+                    prompt_safe_text(&file.reason, 160)
+                )
+            }
+        };
+        let line_chars = line.chars().count() + usize::from(!lines.is_empty());
+        if !lines.is_empty() && rendered_chars.saturating_add(line_chars) > PAGE_CHAR_CAP {
+            break;
+        }
+        rendered_chars = rendered_chars.saturating_add(line_chars);
+        lines.push(line);
+    }
+
+    FileListPage {
+        lines,
+        matching,
+        tables,
+        documents,
+        skipped: skipped_count,
+        offset,
+    }
+}
+
+fn source_kind_name(kind: SourceKind) -> &'static str {
+    match kind {
+        SourceKind::Csv => "CSV",
+        SourceKind::Tsv => "TSV",
+        SourceKind::Parquet => "Parquet",
+        SourceKind::Json => "JSON",
+        SourceKind::Ndjson => "NDJSON",
+        SourceKind::Xlsx => "Excel",
+        SourceKind::Pdf => "PDF",
+        SourceKind::Text => "text",
+    }
+}
+
+fn prompt_safe_text(value: &str, limit: usize) -> String {
+    value
+        .replace(['\n', '\r'], " ")
+        .chars()
+        .take(limit)
+        .collect()
+}
+
 /// Derive a stable identity for the catalog that was actually loaded. This is
 /// a freshness marker, not a cryptographic integrity hash: it changes when the
 /// workspace path, source metadata, schema, ingest notes, or skipped files do.
@@ -392,7 +570,7 @@ fn worth_mentioning(ext: &str) -> bool {
     )
 }
 
-fn workspace_relative_path(root: &Path, path: &Path) -> String {
+pub(crate) fn workspace_relative_path(root: &Path, path: &Path) -> String {
     path.strip_prefix(root)
         .unwrap_or(path)
         .to_string_lossy()

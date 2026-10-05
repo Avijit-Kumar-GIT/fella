@@ -7,6 +7,10 @@
 
 	let query = $state('');
 	let selectedPath = $state<string | null>(null);
+	let page = $state(0);
+	let skippedQuery = $state('');
+	let skippedPage = $state(0);
+	const PAGE_SIZE = 100;
 
 	let sources = $derived(session.catalog.sources);
 	let workspace = $derived(session.catalog.workspace);
@@ -23,6 +27,31 @@
 			const haystack = `${source.name} ${source.path} ${source.kind} ${source.synopsis ?? ''}`;
 			return haystack.toLowerCase().includes(q);
 		});
+	});
+	let visibleSources = $derived(filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE));
+	let pageCount = $derived(Math.ceil(filtered.length / PAGE_SIZE));
+	let pageStart = $derived(filtered.length ? page * PAGE_SIZE + 1 : 0);
+	let pageEnd = $derived(Math.min((page + 1) * PAGE_SIZE, filtered.length));
+	let filteredSkipped = $derived.by(() => {
+		const q = skippedQuery.trim().toLowerCase();
+		return q
+			? skipped.filter((item) => `${item.name} ${item.reason}`.toLowerCase().includes(q))
+			: skipped;
+	});
+	let visibleSkipped = $derived(
+		filteredSkipped.slice(skippedPage * PAGE_SIZE, (skippedPage + 1) * PAGE_SIZE)
+	);
+	let skippedPageCount = $derived(Math.ceil(filteredSkipped.length / PAGE_SIZE));
+	let skippedPageStart = $derived(filteredSkipped.length ? skippedPage * PAGE_SIZE + 1 : 0);
+	let skippedPageEnd = $derived(Math.min((skippedPage + 1) * PAGE_SIZE, filteredSkipped.length));
+
+	$effect(() => {
+		query;
+		page = 0;
+	});
+	$effect(() => {
+		skippedQuery;
+		skippedPage = 0;
 	});
 
 	let selected = $derived.by(() => sources.find((source) => source.path === selectedPath) ?? null);
@@ -112,7 +141,7 @@
 		<div class="toolbar">
 			<div class="toolbar-title">
 				<strong>Files</strong>
-				<span>{filtered.length} shown</span>
+				<span>{filtered.length ? `${pageStart}–${pageEnd} of ` : ''}{filtered.length} files</span>
 			</div>
 			<label class="searchbox">
 				<Icon name="search" size={16} />
@@ -124,7 +153,7 @@
 		{#if sources.length}
 		<div class="source-layout">
 			<div class="source-list" role="listbox" aria-label="Workspace sources">
-				{#each filtered as source (source.path)}
+				{#each visibleSources as source (source.path)}
 					<button
 						class="source-row"
 						class:selected={selectedPath === source.path}
@@ -201,6 +230,15 @@
 				{/if}
 			</aside>
 		</div>
+		{#if pageCount > 1}
+			<nav class="pagination" aria-label="Source pages">
+				<span>{pageStart}–{pageEnd} of {filtered.length}</span>
+				<div>
+					<button class="pill ghost" type="button" disabled={page === 0} onclick={() => page--}>Previous</button>
+					<button class="pill ghost" type="button" disabled={page + 1 >= pageCount} onclick={() => page++}>Next</button>
+				</div>
+			</nav>
+		{/if}
 		{:else}
 			<div class="no-sources">
 				<div class="empty-icon"><Icon name="folder" size={20} /></div>
@@ -213,9 +251,24 @@
 		{#if skipped.length}
 			<details class="skipped">
 				<summary><span>{skipped.length} skipped file{skipped.length === 1 ? '' : 's'}</span><span>Why?</span></summary>
-				{#each skipped as item (item.name)}
+				<label class="skipped-search">
+					<Icon name="search" size={16} />
+					<span class="sr-only">Filter skipped files</span>
+					<input bind:value={skippedQuery} placeholder="Filter skipped files…" spellcheck="false" />
+				</label>
+				<p class="skipped-count">{filteredSkipped.length ? `${skippedPageStart}–${skippedPageEnd} of ` : ''}{filteredSkipped.length} files</p>
+				{#each visibleSkipped as item (item.name)}
 					<div><code>{item.name}</code><span>{item.reason}</span></div>
 				{/each}
+				{#if skippedPageCount > 1}
+					<nav class="pagination" aria-label="Skipped file pages">
+						<span>{skippedPageStart}–{skippedPageEnd} of {filteredSkipped.length}</span>
+						<div>
+							<button class="pill ghost" type="button" disabled={skippedPage === 0} onclick={() => skippedPage--}>Previous</button>
+							<button class="pill ghost" type="button" disabled={skippedPage + 1 >= skippedPageCount} onclick={() => skippedPage++}>Next</button>
+						</div>
+					</nav>
+				{/if}
 			</details>
 		{/if}
 	{/if}
@@ -310,6 +363,19 @@
 	.toolbar-title span {
 		color: var(--text-faint);
 		font-size: var(--fs-xs);
+	}
+	.pagination {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: var(--space-3);
+		padding: var(--space-2) 0;
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+	}
+	.pagination > div {
+		display: flex;
+		gap: var(--space-2);
 	}
 	.searchbox {
 		flex: 0 1 360px;
@@ -578,6 +644,32 @@
 	}
 	.skipped summary span:last-child {
 		color: var(--text-faint);
+	}
+	.skipped-search {
+		display: flex;
+		align-items: center;
+		gap: var(--space-2);
+		padding: var(--space-2) var(--space-3);
+		color: var(--text-faint);
+		background: var(--bg-inset);
+		border-radius: var(--radius-sm);
+	}
+	.skipped-search:focus-within {
+		box-shadow: var(--focus-ring);
+	}
+	.skipped-search input {
+		width: 100%;
+		border: 0;
+		outline: 0;
+		background: transparent;
+		color: var(--text);
+		font: inherit;
+		font-size: var(--fs-sm);
+	}
+	.skipped-count {
+		margin: var(--space-2) 0;
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
 	}
 	.skipped div {
 		display: flex;

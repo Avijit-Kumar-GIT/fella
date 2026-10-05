@@ -7,9 +7,11 @@
 //! that can override the data or an explicit user definition.
 
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 use crate::engine::catalog::{
-    source_scope, Catalog, ColumnInfo, SkippedFile, SourceKind, ValueFrequency,
+    source_scope, workspace_relative_path, Catalog, ColumnInfo, SkippedFile, SourceKind,
+    ValueFrequency,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -95,21 +97,33 @@ pub struct WorkspaceModel {
 
 impl WorkspaceModel {
     pub fn from_catalog(catalog: &Catalog) -> Option<Self> {
-        let sources: Vec<SourceModel> = catalog
-            .sources
-            .iter()
-            .map(SourceModel::from_catalog)
-            .collect();
+        Some(Self::from_sources(
+            catalog.workspace.as_deref()?,
+            catalog.revision.as_deref()?,
+            catalog.indexed_at_ms,
+            &catalog.sources,
+            &catalog.skipped,
+        ))
+    }
+
+    pub(crate) fn from_sources(
+        workspace: &str,
+        revision: &str,
+        indexed_at_ms: Option<i64>,
+        source_info: &[crate::engine::catalog::SourceInfo],
+        skipped: &[SkippedFile],
+    ) -> Self {
+        let sources: Vec<SourceModel> = source_info.iter().map(SourceModel::from_catalog).collect();
         let (relationships, relationships_truncated) = infer_relationships(&sources);
-        Some(Self {
-            workspace: catalog.workspace.clone()?,
-            revision: catalog.revision.clone()?,
-            indexed_at_ms: catalog.indexed_at_ms,
+        Self {
+            workspace: workspace.to_string(),
+            revision: revision.to_string(),
+            indexed_at_ms,
             relationships,
             relationships_truncated,
             sources,
-            skipped: catalog.skipped.clone(),
-        })
+            skipped: skipped.to_vec(),
+        }
     }
 
     pub fn source(&self, name: &str) -> Option<&SourceModel> {
@@ -129,9 +143,10 @@ impl WorkspaceModel {
         );
         for source in &self.sources {
             let name = source.view.as_deref().unwrap_or(&source.name);
+            let path = workspace_relative_path(Path::new(&self.workspace), Path::new(&source.path));
             block.push_str(&format!(
                 "  {name} (file={}, scope={}):\n",
-                source.name,
+                path,
                 source_scope(&source.name, &source.path, source.view.as_deref()).label()
             ));
             if let Some(note) = &source.note {
@@ -642,6 +657,17 @@ mod tests {
         assert!(block.contains("\"amount\" role=measure type=REAL"));
         assert!(block.contains("\"sale_date\" role=date"));
         assert!(block.contains("not answer evidence"));
+    }
+
+    #[test]
+    fn prompt_block_uses_relative_paths_for_source_identity() {
+        let mut catalog = catalog();
+        catalog.sources[0].path = "/tmp/analytics/quarterly/sales.csv".into();
+        let block = WorkspaceModel::from_catalog(&catalog)
+            .unwrap()
+            .prompt_block();
+        assert!(block.contains("file=quarterly/sales.csv"));
+        assert!(!block.contains("/tmp/analytics/quarterly/sales.csv"));
     }
 
     #[test]

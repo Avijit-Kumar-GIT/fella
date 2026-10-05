@@ -1698,6 +1698,32 @@ impl EngineState {
         }
     }
 
+    /// Return a small page of the mounted inventory without cloning the
+    /// workspace's full source catalog. The caller controls filtering and
+    /// pagination; rows are rendered from this revision while the lock is held.
+    pub fn list_files_page(
+        &self,
+        filter: catalog::FileListFilter,
+        query: Option<&str>,
+        offset: usize,
+        limit: usize,
+    ) -> EngineResult<catalog::FileListPage> {
+        let workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
+        let root = workspace
+            .workspace
+            .as_deref()
+            .ok_or(EngineError::NoWorkspace)?;
+        Ok(catalog::list_files_page(
+            root,
+            &workspace.sources,
+            &workspace.skipped,
+            filter,
+            query,
+            offset,
+            limit,
+        ))
+    }
+
     /// Return the semantic projection for the current workspace. `None` means
     /// there is no mounted workspace or no valid revision yet.
     pub fn workspace_model(&self) -> Option<WorkspaceModel> {
@@ -1706,6 +1732,11 @@ impl EngineState {
             .unwrap_or_else(|e| e.into_inner())
             .model
             .clone()
+    }
+
+    fn workspace_model_prompt_block(&self) -> Option<String> {
+        let workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
+        workspace.model.as_ref().map(WorkspaceModel::prompt_block)
     }
 
     fn answer_workspace_is_current(&self, answer: &Answer) -> bool {
@@ -1844,7 +1875,8 @@ impl EngineState {
         if let Some(cached) = &workspace.schema_cache {
             return cached.clone();
         }
-        let sources = workspace.sources.clone();
+        let sources = &workspace.sources;
+        let workspace_root = workspace.workspace.clone();
         let inspected = workspace.inspected_tables.clone();
         let tables: Vec<&SourceInfo> = if capabilities.table_analysis {
             sources.iter().filter(|s| s.view.is_some()).collect()
@@ -1877,9 +1909,13 @@ impl EngineState {
                     .row_count
                     .map(|n| n.to_string())
                     .unwrap_or_else(|| "?".into());
+                let relative_path = workspace_root
+                    .as_deref()
+                    .map(|root| catalog::workspace_relative_path(root, Path::new(&s.path)))
+                    .unwrap_or_else(|| s.name.clone());
                 p.push_str(&format!(
                     "  {view}  (file={}, scope={} ; {rows} rows)\n",
-                    s.name,
+                    relative_path,
                     crate::engine::catalog::source_scope(&s.name, &s.path, s.view.as_deref(),)
                         .label()
                 ));
@@ -1929,10 +1965,14 @@ impl EngineState {
             p.push_str("Tables (use inspect_table for their columns):\n");
             for s in &tables {
                 let ncols = s.columns.as_ref().map(|c| c.len()).unwrap_or(0);
+                let relative_path = workspace_root
+                    .as_deref()
+                    .map(|root| catalog::workspace_relative_path(root, Path::new(&s.path)))
+                    .unwrap_or_else(|| s.name.clone());
                 p.push_str(&format!(
                     "  {}  (file={}, scope={}; {} rows, {ncols} columns)\n",
                     s.view.as_deref().unwrap_or(""),
-                    s.name,
+                    relative_path,
                     crate::engine::catalog::source_scope(&s.name, &s.path, s.view.as_deref(),)
                         .label(),
                     s.row_count
@@ -1982,9 +2022,13 @@ impl EngineState {
         } else if !docs.is_empty() {
             p.push_str("Documents (list_files/grep_files/read_file):\n");
             for d in docs {
+                let relative_path = workspace_root
+                    .as_deref()
+                    .map(|root| catalog::workspace_relative_path(root, Path::new(&d.path)))
+                    .unwrap_or_else(|| d.name.clone());
                 match &d.synopsis {
-                    Some(syn) => p.push_str(&format!("  {}  {}\n", d.name, syn)),
-                    None => p.push_str(&format!("  {}\n", d.name)),
+                    Some(syn) => p.push_str(&format!("  {}  {}\n", relative_path, syn)),
+                    None => p.push_str(&format!("  {}\n", relative_path)),
                 }
             }
         }
@@ -2000,7 +2044,7 @@ impl EngineState {
         let schema = self.schema_block();
         let recent = self.session_block(conversation_id);
         let learned = self.folder_memory_block();
-        let semantic_model = self.workspace_model().map(|model| model.prompt_block());
+        let semantic_model = self.workspace_model_prompt_block();
         ContextAssembler::default().assemble(
             question,
             &user_context,
@@ -2576,6 +2620,7 @@ exactly, character for character, from the list below.";
                     .file_stem()
                     .and_then(|s| s.to_str())
                     .unwrap_or("source");
+                let relative_path = catalog::workspace_relative_path(path, &f.path);
                 let path_str = f.path.display().to_string();
 
                 let synopsis = if f.kind == SourceKind::Text && synopsis_budget > 0 {
@@ -2636,7 +2681,7 @@ exactly, character for character, from the list below.";
                                     format!("no readable sheets ({})", reasons.join("; "))
                                 };
                                 skipped.push(catalog::SkippedFile {
-                                    name: info.name.clone(),
+                                    name: relative_path.clone(),
                                     reason,
                                 });
                                 continue;
@@ -2644,7 +2689,7 @@ exactly, character for character, from the list below.";
                             Err(e) => {
                                 log::warn!("skipping {path_str}: {e}");
                                 skipped.push(catalog::SkippedFile {
-                                    name: info.name.clone(),
+                                    name: relative_path.clone(),
                                     reason: format!("couldn't be opened as a spreadsheet: {e}"),
                                 });
                                 continue;
@@ -2671,7 +2716,7 @@ exactly, character for character, from the list below.";
                             Err(e) => {
                                 log::warn!("skipping {path_str}: {e}");
                                 skipped.push(catalog::SkippedFile {
-                                    name: info.name.clone(),
+                                    name: relative_path.clone(),
                                     reason: "couldn't be read as a table".into(),
                                 });
                                 continue;
@@ -2727,15 +2772,19 @@ exactly, character for character, from the list below.";
             workspace.schema_cache = None;
             workspace.inspected_tables.clear();
             self.persist_sources(path, &workspace.sources);
-            workspace.model = WorkspaceModel::from_catalog(&Catalog {
-                workspace: workspace
-                    .workspace
-                    .as_ref()
-                    .map(|p| p.display().to_string()),
-                revision: workspace.revision.clone(),
-                indexed_at_ms: workspace.indexed_at_ms,
-                sources: workspace.sources.clone(),
-                skipped: workspace.skipped.clone(),
+            let model_workspace = workspace
+                .workspace
+                .as_ref()
+                .map(|path| path.display().to_string());
+            let model_revision = workspace.revision.clone();
+            workspace.model = model_workspace.zip(model_revision).map(|(root, revision)| {
+                WorkspaceModel::from_sources(
+                    &root,
+                    &revision,
+                    workspace.indexed_at_ms,
+                    &workspace.sources,
+                    &workspace.skipped,
+                )
             });
             old_scratch
         };
@@ -3427,13 +3476,21 @@ exactly, character for character, from the list below.";
     /// Catalogued documents (text/PDF, not tables SQL already covers those),
     /// as (name, path, kind), for the `grep_files`/`read_file` tools.
     fn documents(&self) -> Vec<(String, String, SourceKind)> {
-        self.workspace
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+        let workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(root) = workspace.workspace.as_deref() else {
+            return Vec::new();
+        };
+        workspace
             .sources
             .iter()
             .filter(|s| s.view.is_none())
-            .map(|s| (s.name.clone(), s.path.clone(), s.kind))
+            .map(|s| {
+                (
+                    catalog::workspace_relative_path(root, Path::new(&s.path)),
+                    s.path.clone(),
+                    s.kind,
+                )
+            })
             .collect()
     }
 
@@ -3626,8 +3683,8 @@ exactly, character for character, from the list below.";
         Ok(hits)
     }
 
-    /// Full extracted text of one catalogued document, by the name shown by
-    /// `list_files`/`grep_files` (not a filesystem path). Capped so one huge
+    /// Full extracted text of one catalogued document, by the workspace-relative
+    /// path shown by `list_files`/`grep_files` (not an arbitrary filesystem path). Capped so one huge
     /// document can't blow the context window `grep_files` can find a spot
     /// in a bigger file first.
     pub fn read_file(&self, name: &str) -> EngineResult<(String, bool)> {

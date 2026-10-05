@@ -9,7 +9,8 @@ use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use fella_lib::engine::EngineState;
+use fella_lib::engine::{tools::Registry, EngineState};
+use serde_json::json;
 
 struct Scratch(PathBuf);
 
@@ -52,9 +53,9 @@ fn tree_size(path: &Path) -> u64 {
         .sum()
 }
 
-#[test]
+#[tokio::test]
 #[ignore = "manual 5,000-file performance/coverage probe"]
-fn mounts_five_thousand_nested_sources_without_omissions() {
+async fn mounts_five_thousand_nested_sources_without_omissions() {
     const DEFAULT_SOURCE_COUNT: usize = 5_000;
     const ROWS_PER_SOURCE: usize = 2;
     std::env::set_var("FELLA_SKIP_MODEL_WARMUP", "1");
@@ -94,6 +95,34 @@ fn mounts_five_thousand_nested_sources_without_omissions() {
     let engine = EngineState::new(data.path()).unwrap();
     let catalog = engine.open_workspace(workspace.path()).unwrap();
     let elapsed = started.elapsed();
+    let tools = Registry::standard();
+    let listing_started = std::time::Instant::now();
+    let listing = tools
+        .run(&engine, "list_files", &json!({}))
+        .await
+        .expect("list_files is registered")
+        .expect("default inventory page succeeds");
+    let listing_elapsed = listing_started.elapsed();
+    assert!(listing
+        .llm_text
+        .contains("40 entries shown of 5100 matching"));
+    assert!(listing.llm_text.contains("offset=40"));
+
+    let search_started = std::time::Instant::now();
+    let last_file = tools
+        .run(
+            &engine,
+            "list_files",
+            &json!({ "search": "group-49/source-99/records.csv", "kind": "tables" }),
+        )
+        .await
+        .expect("list_files is registered")
+        .expect("searching the last nested file succeeds");
+    let search_elapsed = search_started.elapsed();
+    assert!(last_file
+        .llm_text
+        .contains("group-49/source-99/records.csv"));
+    assert!(last_file.llm_text.contains("1 entries shown of 1 matching"));
     let loaded_rows: i64 = catalog
         .sources
         .iter()
@@ -134,11 +163,13 @@ fn mounts_five_thousand_nested_sources_without_omissions() {
         .all(|column| column.distinct.is_some()));
 
     eprintln!(
-        "mount scale sample: files={} rows={} skipped={} elapsed_ms={} scratch_bytes={}",
+        "mount scale sample: files={} rows={} skipped={} mount_ms={} inventory_page_ms={} path_search_ms={} scratch_bytes={}",
         catalog.sources.len(),
         loaded_rows,
         catalog.skipped.len(),
         elapsed.as_millis(),
+        listing_elapsed.as_millis(),
+        search_elapsed.as_millis(),
         scratch_bytes
     );
 

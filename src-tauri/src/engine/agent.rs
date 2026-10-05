@@ -1832,9 +1832,11 @@ doesn't support the requested chart or is too large to read, say so rather than 
     }
     if has_workspace && profile.docs_rule {
         rules.push(
-            "Documents (notes, PDFs) are already listed below by name; plain-text notes \
-also show a first line, PDFs don't, so don't call list_files for them. Use read_file \
-for a known short source; use grep_files to search one or more terms across sources \
+            "Documents (notes, PDFs) may be listed below with a short first-line preview. The \
+workspace inventory is paginated: use `list_files` with `search`, `kind`, and the returned \
+`offset` to find other sources or inspect skipped files. Use the exact workspace-relative path \
+shown by the inventory with `read_file`; this distinguishes nested files with duplicate basenames. \
+Use `read_file` for a known short source; use `grep_files` to search one or more terms across sources \
 or to find passages in a long document. Search is lexical and ranked, not semantic: \
 try alternate wording or likely source labels when terminology may differ, and do not \
 treat one no-match as proof the information is absent. When a document question has multiple parts, \
