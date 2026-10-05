@@ -179,7 +179,7 @@
 			{#if answer.verification.length}
 				<div class="checks-heading">Checks</div>
 				<div class="verify">
-					{#each answer.verification as v (v.label)}
+					{#each answer.verification as v, i (`${v.label}-${i}`)}
 						<div class="check">
 							<span
 								class="mark"

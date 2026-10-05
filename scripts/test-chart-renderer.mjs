@@ -37,6 +37,7 @@ try {
 	const { render } = await server.ssrLoadModule('svelte/server');
 	const { default: Chart } = await server.ssrLoadModule('/src/lib/components/Chart.svelte');
 	const { default: Message } = await server.ssrLoadModule('/src/lib/components/Message.svelte');
+	const { default: EvidenceBlock } = await server.ssrLoadModule('/src/lib/components/EvidenceBlock.svelte');
 	const renderChart = (spec) => render(Chart, { props: { spec } }).body;
 	const metadata = {
 		source_label: 'fixture.csv',
@@ -96,6 +97,45 @@ try {
 		}
 	}).body;
 	assert.equal(count(renderedMessage, /class="[^"]*\bchart-card\b[^"]*"/g), 1);
+
+	// Real runs can emit multiple independent checks with identical labels.
+	// Opening Analysis Details must not crash, and the answer's line chart must
+	// still render alongside both checks.
+	const repeatedCheck = 'grounded raw observations were selected without aggregation';
+	const lineAnswer = {
+		text: 'Values rose from January to February.',
+		evidence: [
+			{
+				id: 'line-evidence',
+				tool: 'make_chart',
+				args: {},
+				result_summary: 'line chart',
+				chart: generic('line', ['Jan', 'Feb'], [{ name: 'Observed', values: [2, 4] }])
+			}
+		],
+		verification: [
+			{ label: repeatedCheck, ok: true },
+			{ label: 'grouped totals reconciled', ok: true },
+			{ label: repeatedCheck, ok: true }
+		]
+	};
+	const lineMessage = render(Message, {
+		props: {
+			message: {
+				id: 'line-chart-with-duplicate-checks',
+				role: 'assistant',
+				text: lineAnswer.text,
+				ts: 2,
+				answer: lineAnswer
+			}
+		}
+	}).body;
+	assert.equal(count(lineMessage, /class="[^"]*\bchart-card\b[^"]*"/g), 1);
+	assert.match(lineMessage, /aria-label="line validation"/);
+	const detailsWithDuplicateChecks = render(EvidenceBlock, {
+		props: { answer: lineAnswer, expanded: true, bodyId: 'duplicate-checks' }
+	}).body;
+	assert.equal(count(detailsWithDuplicateChecks, /grounded raw observations were selected without aggregation/g), 2);
 
 	const line = renderChart(generic('line', ['Jan', 'Feb'], [{ name: 'Observed', values: [2, 4] }], {
 		x_label: 'Month',
