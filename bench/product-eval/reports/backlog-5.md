@@ -99,3 +99,33 @@ quartile convention, interval-boundary wording, and missing-gap expectation
 are reviewed, version any approved benchmark correction and run the same
 suite under that new version. A full post-fix 25-case run and desktop light/dark
 review are still needed before claiming backlog #5 fully accepted.
+
+## Follow-up: transcript crash and repeated tool calls
+
+After the Windows visual pass, a chart response crashed the transcript with
+`Cannot read properties of undefined (reading 'length')`, while the same
+request appeared to repeat many tool steps. Both problems were reproduced
+without changing the benchmark or its golds:
+
+- The renderer failed when chart metadata omitted empty `fields` and `filters`.
+  Rust had been configured to omit those empty vectors, while the Svelte chart
+  renderer assumed they were always present. The backend now serializes both
+  arrays consistently, and the UI also tolerates older stored chart objects
+  where either array is absent.
+- Repeated tool calls in one model response were not deduplicated; cached calls
+  on later responses still created evidence/UI steps and the loop kept
+  advertising tools. Calls are now coalesced by operation arguments (excluding
+  the descriptive `note`), cached-only retries are answered once with tools
+  disabled, and duplicate results are not represented as new evidence. A
+  semantic repair clears the memo so an invalidated query can genuinely rerun.
+
+The new renderer and scripted agent-loop regression tests failed against the
+old behavior, then passed after the fixes. Follow-up checks: 302 Rust library
+tests passed; 16 chart-tool tests passed; the agent-loop target had 17 passed,
+2 failed, and 1 ignored. The unchanged failures are
+`direct_data_calls_do_not_require_a_contract` and
+`unresolved_contract_defers_direct_data_tools_until_revised` (both expect
+`Verified`, but runtime returns `NeedsReview`). `pnpm build`, `pnpm check`, and
+the chart-renderer SSR checks passed. The SSR runner prints a non-fatal Vite
+HMR socket `EPERM` in this sandbox. No post-fix live-model rerun or manual
+Windows light/dark review has been performed yet.

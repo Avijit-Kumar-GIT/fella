@@ -290,12 +290,14 @@
 	});
 
 	function metadataEntries(metadata: ChartMetadata) {
+		const fields = metadata.fields ?? [];
+		const filters = metadata.filters ?? [];
 		return [
 			metadata.source_label ? ['Source', metadata.source_label] : null,
 			metadata.source_evidence_id ? ['Result', metadata.source_evidence_id] : null,
-			metadata.fields.length ? ['Fields', metadata.fields.join(', ')] : null,
+			fields.length ? ['Fields', fields.join(', ')] : null,
 			metadata.aggregation ? ['Aggregation', metadata.aggregation] : null,
-			metadata.filters.length ? ['Filters', metadata.filters.join('; ')] : null,
+			filters.length ? ['Filters', filters.join('; ')] : null,
 			metadata.time_range ? ['Period', metadata.time_range] : null,
 			metadata.denominator ? ['Whole', metadata.denominator] : null,
 			metadata.missing_treatment ? ['Missing values', metadata.missing_treatment] : null

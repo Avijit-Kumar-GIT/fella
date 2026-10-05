@@ -209,6 +209,155 @@ async fn agent_calls_a_tool_then_answers() {
 }
 
 #[tokio::test]
+async fn identical_tool_calls_in_one_model_turn_execute_once() {
+    let ws = scratch("duplicate-batch-ws");
+    let data = scratch("duplicate-batch-data");
+    fs::write(ws.join("sales.csv"), "amount\n10\n").unwrap();
+
+    let (url, requests, server) = fake_openai_with_requests(vec![
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                { "id": "list-a", "type": "function", "function": { "name": "list_files", "arguments": "{}" } },
+                { "id": "list-b", "type": "function", "function": { "name": "list_files", "arguments": "{}" } }
+            ]
+        })),
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "The workspace contains sales.csv."
+        })),
+    ]);
+
+    let engine = EngineState::new(&data).unwrap();
+    engine
+        .save_settings(
+            serde_json::json!({ "provider": "custom", "base_url": url, "model": "test" })
+                .as_object()
+                .unwrap(),
+        )
+        .unwrap();
+    engine.set_api_key("custom", "sk-test").unwrap();
+    engine.open_workspace(&ws).unwrap();
+
+    let events = Arc::new(Mutex::new(Vec::<AskEvent>::new()));
+    let sink = events.clone();
+    let answer = engine
+        .ask(
+            "duplicate-batch",
+            "Which files are in this workspace?",
+            None,
+            move |event| sink.lock().unwrap().push(event),
+        )
+        .await
+        .unwrap();
+    server.join().unwrap();
+
+    assert_eq!(
+        answer.evidence.len(),
+        1,
+        "duplicate call must not duplicate evidence"
+    );
+    assert_eq!(answer.evidence[0].tool, "list_files");
+    let starts = events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|event| matches!(event, AskEvent::ToolStart { tool, .. } if tool == "list_files"))
+        .count();
+    assert_eq!(starts, 1, "only one actual tool execution should be shown");
+
+    let requests = requests.lock().unwrap();
+    let tool_replies: Vec<_> = requests[1]["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|message| message["role"] == "tool")
+        .filter_map(|message| message["tool_call_id"].as_str())
+        .collect();
+    assert_eq!(tool_replies, vec!["list-a", "list-b"]);
+
+    let _ = fs::remove_dir_all(&ws);
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[tokio::test]
+async fn repeated_cached_tool_call_forces_a_tool_free_final_answer() {
+    let ws = scratch("duplicate-round-ws");
+    let data = scratch("duplicate-round-data");
+    fs::write(ws.join("sales.csv"), "amount\n10\n").unwrap();
+
+    let list_files = |id: &str| {
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{
+                "id": id,
+                "type": "function",
+                "function": { "name": "list_files", "arguments": "{}" }
+            }]
+        }))
+    };
+    let (url, requests, server) = fake_openai_with_requests(vec![
+        list_files("first-list"),
+        list_files("repeated-list"),
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "The workspace contains sales.csv."
+        })),
+    ]);
+
+    let engine = EngineState::new(&data).unwrap();
+    engine
+        .save_settings(
+            serde_json::json!({ "provider": "custom", "base_url": url, "model": "test" })
+                .as_object()
+                .unwrap(),
+        )
+        .unwrap();
+    engine.set_api_key("custom", "sk-test").unwrap();
+    engine.open_workspace(&ws).unwrap();
+
+    let events = Arc::new(Mutex::new(Vec::<AskEvent>::new()));
+    let sink = events.clone();
+    let answer = engine
+        .ask(
+            "duplicate-round",
+            "Which files are in this workspace?",
+            None,
+            move |event| sink.lock().unwrap().push(event),
+        )
+        .await
+        .unwrap();
+    server.join().unwrap();
+
+    assert_eq!(
+        answer.evidence.len(),
+        1,
+        "cached repeats are not new evidence"
+    );
+    let starts = events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|event| matches!(event, AskEvent::ToolStart { tool, .. } if tool == "list_files"))
+        .count();
+    assert_eq!(
+        starts, 1,
+        "a cached repeat must not appear as another execution"
+    );
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 3);
+    assert!(
+        requests[2].get("tools").is_none(),
+        "the final request must disable tools"
+    );
+
+    let _ = fs::remove_dir_all(&ws);
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[tokio::test]
 async fn semantic_verification_repairs_archive_scope_before_accepting_an_answer() {
     let ws = scratch("scope-repair-ws");
     let data = scratch("scope-repair-data");

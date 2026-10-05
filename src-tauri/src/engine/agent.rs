@@ -361,12 +361,15 @@ pretend workspace field.",
         })
     };
 
-    // Exact `(tool, args)` pairs already run this question, mapped to the result
-    // text we fed back. A small model re-issuing the same call is a common way
-    // to burn the budget; we answer it from here instead of re-running the tool,
-    // and re-supply the result inline (it may have since been elided from the
-    // history by `trim_history`).
+    // Per-question operation memo. Descriptive notes are excluded from the key;
+    // completed results and deterministic errors are cached so a repeat can be
+    // answered without re-running work, including after `trim_history` elides
+    // the original tool result from the model conversation.
     let mut seen_calls: HashMap<(String, String), String> = HashMap::new();
+    // An identical cached-only tool response has made no new progress. Give
+    // the model one final answer turn without tools instead of letting it
+    // request that same result until the global step ceiling.
+    let mut force_final_answer = false;
 
     let run_start = Instant::now();
     let mut model_calls = 0usize;
@@ -380,8 +383,13 @@ pretend workspace field.",
         let step_start = Instant::now();
         // Race the model call against a stop request; dropping the future
         // closes the HTTP connection so the model stops generating.
+        let available_tools = if force_final_answer {
+            &[]
+        } else {
+            schemas.as_slice()
+        };
         let resp = tokio::select! {
-            r = llm.chat(&messages, &schemas, &notify, &on_delta) => match r {
+            r = llm.chat(&messages, available_tools, &notify, &on_delta) => match r {
                 Ok(resp) => resp,
                 // Failed with work already in hand: hand back the partial
                 // evidence and a note rather than losing the whole question.
@@ -415,6 +423,17 @@ pretend workspace field.",
         };
         model_calls += 1;
         usage = Usage::merge(usage, resp.usage);
+
+        if force_final_answer && !resp.tool_calls.is_empty() {
+            log::warn!("agent: model requested tools after the repeat guard disabled them");
+            return Ok(finish(
+                finish_context(engine, workspace.as_ref(), &ids, emit),
+                question,
+                "I already gathered the repeated result and stopped the loop, but the model did not return a final answer. Please try the question again or rephrase it.".into(),
+                evidence,
+                usage,
+            ));
+        }
 
         if resp.tool_calls.is_empty() {
             emit(AskEvent::TurnState {
@@ -475,6 +494,10 @@ corrected answer to match the re-run."
             {
                 let detail = semantic_repair_hint.expect("semantic repair hint exists");
                 semantic_repair_attempts += 1;
+                // A repair may legitimately need to rerun a query that the
+                // verifier just invalidated; do not let the loop memo block it.
+                seen_calls.clear();
+                force_final_answer = false;
                 let mut superseded = 0;
                 let mut superseded_refs = Vec::new();
                 for item in &mut evidence {
@@ -573,6 +596,9 @@ the requested measure, filters, and scope. State just the number(s); don't round
             (0..resp.tool_calls.len()).map(|_| None).collect();
         let mut internal_results: HashMap<usize, String> = HashMap::new();
         let mut pending: Vec<usize> = Vec::new();
+        let mut reused_calls = vec![false; resp.tool_calls.len()];
+        let mut in_batch_calls: HashMap<(String, String), usize> = HashMap::new();
+        let mut in_batch_duplicates: Vec<(usize, usize)> = Vec::new();
         let mut compiled_contracts: Vec<(usize, planner::CompiledPlan)> = Vec::new();
 
         // Resolve model-proposed semantic hypotheses before their tool results
@@ -587,6 +613,17 @@ the requested measure, filters, and scope. State just the number(s); don't round
             .enumerate()
             .filter(|(_, call)| call.name == runtime::CONTRACT_TOOL_NAME)
         {
+            let key = tool_call_key(call);
+            if let Some(previous) = seen_calls.get(&key) {
+                reused_calls[i] = true;
+                internal_results.insert(
+                    i,
+                    format!(
+                        "This interpretation hypothesis was already processed for this question. Use the prior grounding result rather than repeating it.\n\n{previous}"
+                    ),
+                );
+                continue;
+            }
             let contract_text = match AnalysisContract::from_tool_args(&call.arguments) {
                 Ok(contract) => {
                     emit(AskEvent::TurnState {
@@ -665,6 +702,7 @@ the requested measure, filters, and scope. State just the number(s); don't round
                     )
                 }
             };
+            seen_calls.insert(key, contract_text.clone());
             internal_results.insert(i, contract_text);
         }
 
@@ -736,11 +774,8 @@ the requested measure, filters, and scope. State just the number(s); don't round
                 emit(AskEvent::ToolEnd {
                     item: Box::new(item.clone()),
                 });
-                if item.error.is_none() {
-                    seen_calls.insert(
-                        (planned_call.name.clone(), args.to_string()),
-                        result.clone(),
-                    );
+                if !is_workspace_change_error(item.error.as_deref()) {
+                    seen_calls.insert(tool_call_key(&planned_call), result.clone());
                 }
                 evidence.push(item);
                 tool_calls_total += 1;
@@ -771,54 +806,42 @@ the requested measure, filters, and scope. State just the number(s); don't round
             .enumerate()
             .filter(|(_, call)| call.name != runtime::CONTRACT_TOOL_NAME && !should_defer(call))
         {
-            if !emitted_executing {
-                emit(AskEvent::TurnState {
-                    turn_id: ids.turn_id.clone(),
-                    state: TurnState::Executing,
-                });
-                emitted_executing = true;
-            }
-            emit(AskEvent::ToolStart {
-                tool: call.name.clone(),
-                args: call.arguments.clone(),
-            });
-            let key = (call.name.clone(), call.arguments.to_string());
+            let key = tool_call_key(call);
             let dup = (!call.name.contains("__"))
                 .then(|| seen_calls.get(&key))
                 .flatten()
                 .cloned();
             match dup {
                 Some(prev) => {
+                    reused_calls[i] = true;
                     let msg = format!(
-                        "NOTE: this exact `{}` call was already made for this question, so it was \
-not run again. Its result is repeated below - use it, refine the call, or give your answer now.\n\n{prev}",
+                        "NOTE: this `{}` call was already made for this question, so it was not \
+run again. Use the previous result, refine the call, or answer now.\n\n{prev}",
                         call.name
                     );
-                    outcomes[i] = Some((
-                        EvidenceItem {
-                            id: String::new(),
-                            tool: call.name.clone(),
-                            sources: Vec::new(),
-                            args: call.arguments.clone(),
-                            note: note_of(&call.arguments),
-                            sql: None,
-                            result_summary: "skipped (duplicate call)".to_string(),
-                            columns: None,
-                            rows: None,
-                            row_count: None,
-                            output: None,
-                            chart: None,
-                            result_table: None,
-                            python_input_trace: None,
-                            python_queries: None,
-                            python_queries_complete: None,
-                            ms: 0,
-                            error: None,
-                        },
-                        msg,
-                    ));
+                    outcomes[i] = Some(duplicate_tool_outcome(call, msg));
                 }
-                None => pending.push(i),
+                None if !call.name.contains("__") && in_batch_calls.contains_key(&key) => {
+                    reused_calls[i] = true;
+                    in_batch_duplicates.push((i, in_batch_calls[&key]));
+                }
+                None => {
+                    if !emitted_executing {
+                        emit(AskEvent::TurnState {
+                            turn_id: ids.turn_id.clone(),
+                            state: TurnState::Executing,
+                        });
+                        emitted_executing = true;
+                    }
+                    emit(AskEvent::ToolStart {
+                        tool: call.name.clone(),
+                        args: call.arguments.clone(),
+                    });
+                    if !call.name.contains("__") {
+                        in_batch_calls.insert(key, i);
+                    }
+                    pending.push(i);
+                }
             }
         }
 
@@ -860,6 +883,18 @@ not run again. Its result is repeated below - use it, refine the call, or give y
             outcomes[i] = Some(res);
         }
 
+        for (duplicate_index, original_index) in in_batch_duplicates {
+            let original_call = &resp.tool_calls[original_index];
+            let result_reference = format!(
+                "This call duplicates `{}` in the same response. Use that call's result; the operation was run only once.",
+                original_call.id
+            );
+            outcomes[duplicate_index] = Some(duplicate_tool_outcome(
+                &resp.tool_calls[duplicate_index],
+                result_reference,
+            ));
+        }
+
         for (index, (call, outcome)) in resp.tool_calls.iter().zip(outcomes).enumerate() {
             if let Some(content) = internal_results.remove(&index) {
                 messages.push(ChatMessage::Tool {
@@ -874,6 +909,17 @@ not run again. Its result is repeated below - use it, refine the call, or give y
             let (mut item, mut llm_text) = outcome.ok_or_else(|| {
                 EngineError::msg("internal error: a tool call produced no outcome")
             })?;
+            if item.result_summary == "skipped (duplicate call)" {
+                // OpenAI-compatible tool protocols require a result for every
+                // requested call id, but replays are not new evidence or UI
+                // steps. Keep only the compact protocol reply.
+                messages.push(ChatMessage::Tool {
+                    call_id: call.id.clone(),
+                    name: call.name.clone(),
+                    content: llm_text,
+                });
+                continue;
+            }
             had_tool_error |= item.error.is_some();
             workspace_changed |= is_workspace_change_error(item.error.as_deref());
             item.id = evidence_id(evidence.len());
@@ -886,14 +932,11 @@ not run again. Its result is repeated below - use it, refine the call, or give y
             emit(AskEvent::ToolEnd {
                 item: Box::new(item.clone()),
             });
-            // Remember a fresh, successful built-in result so a later exact
-            // repeat is answered from the memo rather than re-run.
-            if !call.name.contains("__")
-                && item.error.is_none()
-                && item.result_summary != "skipped (duplicate call)"
-            {
-                let key = (call.name.clone(), call.arguments.to_string());
-                seen_calls.insert(key, llm_text.clone());
+            // Remember deterministic results and failures alike. An identical
+            // failing request cannot improve without changing its arguments;
+            // workspace-revision failures are excluded because they end the run.
+            if !call.name.contains("__") && !is_workspace_change_error(item.error.as_deref()) {
+                seen_calls.insert(tool_call_key(call), llm_text.clone());
             }
             evidence.push(item);
             messages.push(ChatMessage::Tool {
@@ -933,7 +976,18 @@ not run again. Its result is repeated below - use it, refine the call, or give y
             ));
         }
         trim_history(&mut messages);
-        if let Some(nudge) = stop_pressure_nudge(step + 1, soft_stop, evidence.len()) {
+        let repeated_only_round =
+            !resp.tool_calls.is_empty() && reused_calls.iter().all(|was_reused| *was_reused);
+        if repeated_only_round {
+            log::warn!(
+                "agent: stopping repeated cached-only tool calls after {} model round(s)",
+                step + 1
+            );
+            force_final_answer = true;
+            messages.push(ChatMessage::User(
+                "This response repeated only tool results already gathered. No more tools are available for this answer. Use the accepted evidence already in the conversation and answer now; if it is insufficient, state exactly what remains unresolved.".into(),
+            ));
+        } else if let Some(nudge) = stop_pressure_nudge(step + 1, soft_stop, evidence.len()) {
             messages.push(ChatMessage::User(nudge));
         }
         log::info!(
@@ -1282,6 +1336,43 @@ fn note_of(args: &serde_json::Value) -> Option<String> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(String::from)
+}
+
+/// Arguments that only describe a tool call are not part of its operation.
+/// Ignoring `note` lets the loop recognize the same work even if the model
+/// rewrites its activity label on a retry.
+fn tool_call_key(call: &ToolCall) -> (String, String) {
+    let mut arguments = call.arguments.clone();
+    if let Some(object) = arguments.as_object_mut() {
+        object.remove("note");
+    }
+    (call.name.clone(), arguments.to_string())
+}
+
+fn duplicate_tool_outcome(call: &ToolCall, content: String) -> (EvidenceItem, String) {
+    (
+        EvidenceItem {
+            id: String::new(),
+            tool: call.name.clone(),
+            sources: Vec::new(),
+            args: call.arguments.clone(),
+            note: note_of(&call.arguments),
+            sql: None,
+            result_summary: "skipped (duplicate call)".to_string(),
+            columns: None,
+            rows: None,
+            row_count: None,
+            output: None,
+            chart: None,
+            result_table: None,
+            python_input_trace: None,
+            python_queries: None,
+            python_queries_complete: None,
+            ms: 0,
+            error: None,
+        },
+        content,
+    )
 }
 
 /// Run one tool call to completion, producing its evidence item and the text
@@ -1845,6 +1936,37 @@ mod tests {
             ms: 0,
             error: None,
         }
+    }
+
+    #[test]
+    fn tool_call_identity_ignores_activity_notes_but_preserves_operational_arguments() {
+        let first = ToolCall {
+            id: "first".into(),
+            name: "run_sql".into(),
+            arguments: serde_json::json!({
+                "sql": "SELECT SUM(amount) FROM sales",
+                "note": "Calculate the total"
+            }),
+        };
+        let same_operation = ToolCall {
+            id: "second".into(),
+            name: "run_sql".into(),
+            arguments: serde_json::json!({
+                "sql": "SELECT SUM(amount) FROM sales",
+                "note": "Check sales total"
+            }),
+        };
+        let different_operation = ToolCall {
+            id: "third".into(),
+            name: "run_sql".into(),
+            arguments: serde_json::json!({
+                "sql": "SELECT AVG(amount) FROM sales",
+                "note": "Average sales"
+            }),
+        };
+
+        assert_eq!(tool_call_key(&first), tool_call_key(&same_operation));
+        assert_ne!(tool_call_key(&first), tool_call_key(&different_operation));
     }
 
     #[test]

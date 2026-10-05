@@ -113,11 +113,11 @@ pub struct ChartMetadata {
     pub source_evidence_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_label: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub fields: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aggregation: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub filters: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub time_range: Option<String>,
@@ -1648,6 +1648,14 @@ fn meaningfully_varies(data: &ChartData) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_metadata_lists_serialize_as_empty_arrays_for_the_ui_contract() {
+        let value = serde_json::to_value(ChartMetadata::default()).unwrap();
+
+        assert_eq!(value["fields"], Json::Array(Vec::new()));
+        assert_eq!(value["filters"], Json::Array(Vec::new()));
+    }
 
     #[test]
     fn missing_chart_field_error_names_the_available_result_fields() {

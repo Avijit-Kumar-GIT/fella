@@ -62,6 +62,16 @@ try {
 	assert.match(bar, /year = 2025/);
 	assert.match(bar, /120/);
 
+	// Older serialized chart metadata may omit empty `fields`/`filters` arrays
+	// (the Rust wire shape historically skipped empty vectors). It must remain
+	// renderable instead of crashing the entire transcript on `.length`.
+	const sparseMetadataBar = renderChart(
+		generic('bar', ['Rent'], [{ name: 'Spend', values: [120] }], {
+			metadata: { part_to_whole: false }
+		})
+	);
+	assert.match(sparseMetadataBar, /role="img" aria-label="bar validation"/);
+
 	const line = renderChart(generic('line', ['Jan', 'Feb'], [{ name: 'Observed', values: [2, 4] }], {
 		x_label: 'Month',
 		y_label: 'Count'
