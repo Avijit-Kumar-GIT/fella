@@ -1,5 +1,17 @@
 # Repository guidance for coding agents
 
+## Branch delivery
+
+- When requested work is complete and proportionate validation has run, commit
+  the task's changes and push the commit to the current branch by default.
+- Do not switch branches, push to a different branch, or open a pull request
+  unless the user asks. Respect an explicit request to keep changes local or
+  not push.
+- Stage only files belonging to the current task. Preserve unrelated or
+  pre-existing work; if task changes cannot be safely isolated, ask before
+  committing.
+- Report the commit and push result, including the commit hash and branch.
+
 ## Evaluation and test integrity
 
 - Define expected behavior and grading criteria before running the candidate

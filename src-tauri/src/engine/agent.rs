@@ -121,7 +121,11 @@ stop and answer now; don't keep exploring."
     })
 }
 
-fn semantic_repair_prompt(detail: &str, superseded: &[String]) -> String {
+fn semantic_repair_prompt(
+    detail: &str,
+    superseded: &[String],
+    preserve_successful_chart: bool,
+) -> String {
     let invalidated = if superseded.is_empty() {
         String::new()
     } else {
@@ -131,18 +135,25 @@ accepted evidence: {}. Do not rely on them as successful results.",
             superseded.join(", ")
         )
     };
+    let chart_guidance = if preserve_successful_chart {
+        " The number check found a claim that is not a direct value in the results; it did not reject the checked source data or chart. Recheck any derived arithmetic against the retained result, then correct or omit the unsupported figure. Keep the successful chart and its source evidence; do not rerun the same query or create another chart unless a required input is genuinely missing."
+    } else {
+        " If a result supporting a requested chart or other visualization is superseded, recreate that deliverable from the revised accepted evidence before finalizing; do so once, and do not silently replace it with prose alone or produce interim alternatives."
+    };
+    let derivation_guidance = if preserve_successful_chart {
+        " Check a derived figure against the retained rows; don't rerun a query or recreate the chart for arithmetic those rows already support. If the figure cannot be supported from them, omit that figure while still answering the supported parts."
+    } else {
+        " If the question asks for a derived value, execute a computation that returns it with labeled operands; otherwise omit any figure the evidence does not support."
+    };
     format!(
         "Semantic verification failed: {detail}.{invalidated} Use the existing non-superseded evidence \
 and revise only what the failed check calls into question. Do not repeat a successful inspection, \
 query, or chart unless the check makes that result unusable or a specific missing input is needed. \
 Preserve every explicit source scope, date range, filter, \
 exclusion, grouping, denominator, unit, and requested output deliverable from the question and prior \
-turn. If a result supporting a requested chart or other visualization is superseded, recreate that \
-deliverable from the revised accepted evidence before finalizing; do so once, and do not silently replace it with \
-prose alone or produce interim alternatives. Carry forward the established interpretation unless evidence disproves it; if a material \
+turn.{chart_guidance} Carry forward the established interpretation unless evidence disproves it; if a material \
 scope choice remains unresolved, ask one focused clarification instead of silently changing it. Do not \
-defend an unsupported figure. If the question asks for a derived value, execute a computation that \
-returns it with labeled operands; otherwise omit any figure the evidence does not support. Then answer \
+defend an unsupported figure.{derivation_guidance} Then answer \
 from the checked results."
     )
 }
@@ -495,22 +506,50 @@ corrected answer to match the re-run."
             {
                 let detail = semantic_repair_hint.expect("semantic repair hint exists");
                 semantic_repair_attempts += 1;
+                // A missing direct numeric match is a claim-level issue, not
+                // grounds to discard otherwise valid data. When the requested
+                // visualization and its source projection both passed checks,
+                // preserve them while the model corrects or derives its prose.
+                let has_checked_chart = detail.contains("not found in any result")
+                    && evidence.iter().any(|item| {
+                        item.tool == "make_chart" && item.error.is_none() && item.chart.is_some()
+                    })
+                    && checks.iter().any(|check| {
+                        check.ok && check.label == "chart values matched the source query"
+                    })
+                    && !checks.iter().any(|check| {
+                        !check.ok
+                            && matches!(
+                                check.label.as_str(),
+                                "chart values did not match source query"
+                                    | "chart source result could not be checked"
+                            )
+                    });
                 // A repair may legitimately need to rerun a query that the
-                // verifier just invalidated; do not let the loop memo block it.
-                seen_calls.clear();
+                // verifier invalidated; do not let the loop memo block it.
+                // Retain the memo when a checked chart already satisfies the
+                // requested deliverable, preventing duplicate work.
+                if !has_checked_chart {
+                    seen_calls.clear();
+                }
                 force_final_answer = false;
                 let mut superseded = 0;
                 let mut superseded_refs = Vec::new();
-                for item in &mut evidence {
-                    if verify::semantic_evidence_matches(engine, question, item, &detail) {
-                        superseded_refs.push(format!("{} ({})", item.id, item.tool));
-                        item.error = Some(format!(
-                            "superseded: semantic verification rejected this evidence ({detail})"
-                        ));
-                        superseded += 1;
+                if !has_checked_chart {
+                    for item in &mut evidence {
+                        if verify::semantic_evidence_matches(engine, question, item, &detail) {
+                            superseded_refs.push(format!("{} ({})", item.id, item.tool));
+                            item.error = Some(format!(
+                                "superseded: semantic verification rejected this evidence ({detail})"
+                            ));
+                            superseded += 1;
+                        }
                     }
                 }
-                if superseded == 0 && !detail.contains("forecast lacks chronological evaluation") {
+                if superseded == 0
+                    && !has_checked_chart
+                    && !detail.contains("forecast lacks chronological evaluation")
+                {
                     if let Some(item) = evidence.iter_mut().find(|item| {
                         item.error.is_none()
                             && matches!(
@@ -535,6 +574,7 @@ corrected answer to match the re-run."
                 messages.push(ChatMessage::User(semantic_repair_prompt(
                     &detail,
                     &superseded_refs,
+                    has_checked_chart,
                 )));
                 continue;
             }
@@ -2471,6 +2511,7 @@ mod tests {
         let prompt = semantic_repair_prompt(
             "a figure was not supported by the query result",
             &["evidence-5 (make_chart)".into()],
+            false,
         );
         assert!(prompt.contains("requested output deliverable"));
         assert!(prompt.contains("recreate that deliverable from the revised accepted evidence"));
@@ -2478,5 +2519,11 @@ mod tests {
         assert!(prompt.contains("do not silently replace it with prose alone"));
         assert!(prompt.contains("evidence-5 (make_chart)"));
         assert!(prompt.contains("not accepted evidence"));
+
+        let chart_prompt =
+            semantic_repair_prompt("the answer mentions 40 not found in any result", &[], true);
+        assert!(chart_prompt.contains("did not reject the checked source data or chart"));
+        assert!(chart_prompt.contains("do not rerun the same query or create another chart"));
+        assert!(chart_prompt.contains("don't rerun a query or recreate the chart for arithmetic"));
     }
 }

@@ -331,6 +331,110 @@ async fn shared_dimension_does_not_force_a_join_or_duplicate_the_final_chart() {
 }
 
 #[tokio::test]
+async fn unsupported_derived_claim_does_not_invalidate_a_valid_regional_chart() {
+    // The arithmetic claim needs correction, but that does not make the
+    // successfully queried regional totals or their chart invalid evidence.
+    // Expected: one bounded prose repair, retaining both evidence items and
+    // the requested chart without re-running or duplicating it.
+    let ws = scratch("regional-chart-repair-ws");
+    let data = scratch("regional-chart-repair-data");
+    fs::write(
+        ws.join("revenue.csv"),
+        "region,net_revenue\nNorth,130\nSouth,100\n",
+    )
+    .unwrap();
+
+    let (url, requests, server) = fake_openai_with_requests(vec![
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{
+                "id": "regional-totals",
+                "type": "function",
+                "function": {
+                    "name": "run_sql",
+                    "arguments": "{\"sql\":\"SELECT region, SUM(net_revenue) AS total FROM revenue GROUP BY region ORDER BY region\"}"
+                }
+            }]
+        })),
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{
+                "id": "regional-chart",
+                "type": "function",
+                "function": {
+                    "name": "make_chart",
+                    "arguments": "{\"kind\":\"bar\",\"source_evidence_id\":\"evidence-1\",\"x_field\":\"region\",\"y_field\":\"total\",\"title\":\"Net revenue by region\"}"
+                }
+            }]
+        })),
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "North contributed $130 and South $100, so North led by $40. The chart compares both regions."
+        })),
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "North contributed the most net revenue at $130, compared with South at $100. The chart shows the regional comparison."
+        })),
+    ]);
+
+    let engine = EngineState::new(&data).unwrap();
+    engine
+        .save_settings(
+            serde_json::json!({ "provider": "custom", "base_url": url, "model": "test" })
+                .as_object()
+                .unwrap(),
+        )
+        .unwrap();
+    engine.set_api_key("custom", "sk-test").unwrap();
+    engine.open_workspace(&ws).unwrap();
+
+    let answer = engine
+        .ask(
+            "regional-chart-repair",
+            "Which region contributed the most net revenue overall? Show the regional comparison.",
+            None,
+            |_| {},
+        )
+        .await
+        .unwrap();
+    server.join().unwrap();
+
+    assert!(
+        answer.text.to_lowercase().contains("north"),
+        "{}",
+        answer.text
+    );
+    assert!(answer.text.contains("130") && answer.text.contains("100"));
+    assert_eq!(answer.evidence.len(), 2, "evidence: {:?}", answer.evidence);
+    assert!(answer.evidence.iter().all(|item| item.error.is_none()));
+    let chart_items: Vec<_> = answer
+        .evidence
+        .iter()
+        .filter(|item| item.tool == "make_chart")
+        .collect();
+    assert_eq!(chart_items.len(), 1, "evidence: {:?}", answer.evidence);
+    assert_eq!(
+        chart_items[0]
+            .chart
+            .as_ref()
+            .expect("regional comparison chart")
+            .series[0]
+            .values,
+        vec![Some(130.0), Some(100.0)]
+    );
+    assert!(answer
+        .verification
+        .iter()
+        .any(|check| { check.ok && check.label == "chart values matched the source query" }));
+    assert_eq!(requests.lock().unwrap().len(), 4, "one answer repair only");
+
+    let _ = fs::remove_dir_all(&ws);
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[tokio::test]
 async fn identical_tool_calls_in_one_model_turn_execute_once() {
     let ws = scratch("duplicate-batch-ws");
     let data = scratch("duplicate-batch-data");
