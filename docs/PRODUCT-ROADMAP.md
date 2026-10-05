@@ -286,48 +286,109 @@ failures until they are adjudicated.
 
 ### 6. Make mounted folders easier to understand and analyze
 
-- [ ] **Make source discovery progressive and folder-wide.** On mount, create
-  a useful inventory of supported files, formats, sizes, likely tabular
-  sheets/tables, date/number patterns, and parse errors. Let the model inspect
-  summaries first and request targeted samples instead of stuffing entire
-  folders into prompt context.
-- [ ] **Preserve raw data and its lineage.** Record which source, sheet/table,
-  row or page, parser, and normalization produced each analytical field.
-  Normalization must not erase the original value or make a corrected value
-  appear source-authored.
-- [ ] **Improve general normalization.** Support common date/time and numeric
-  conventions, units, missing-value markers, headers, repeated headers,
-  duplicate records, and inconsistent categorical values using inspectable
-  evidence. Treat guesses as hypotheses with confidence and provenance, not
-  silent universal conversions.
-- [ ] **Expose semantic candidates to the model.** Provide compact source
-  profiles and candidate field meanings/relationships, including evidence
-  and counterevidence. Let the model select or ask rather than relying only
-  on lexical matches or a rigid precomputed contract.
-- [ ] **Make clarification a real loop transition.** When two plausible
-  meanings, populations, units, or time scopes materially change a result,
-  ask one focused question in the conversation, preserve completed inspection,
-  then resume after the user answers. Do not restart the entire analysis or
-  create an empty/duplicate conversation.
-- [ ] **Learn user corrections within the right scope.** Persist user-authored
-  definitions and corrections at the intended workspace/project scope, show
-  where they apply, let users edit/remove them, and avoid treating an
-  accidental one-off answer as a global fact.
-- [ ] **Publish the actual format/scale support boundary.** Test CSV/TSV,
-  spreadsheets, JSON/JSONL, text/Markdown, PDFs, and nested/mixed folders as
-  supported by the current stack. Show unsupported or partially parsed files
-  clearly rather than silently omitting them. Avoid adding a parser until its
-  cost and maintenance case are understood.
+- [ ] **Establish a fair mount-scale baseline.** Add a reproducible, mixed
+  folder fixture with nested directories, varied file sizes, duplicate
+  basenames, messy supported files, unsupported files, and realistic parse
+  errors. Use 5,000 files / 10 GB as a performance target—not a product limit—and
+  include larger runs where practical. Before changing the implementation,
+  record time to first inventory, first query-ready source, and full readiness;
+  peak memory, temporary-disk use, files/rows actually available, and any
+  omissions. Keep quality expectations independent of candidate output.
+- [ ] **Make the inventory complete, fast, and addressable.** Recursively
+  discover the mounted tree without a silent default depth cutoff. Classify
+  against Fella's supported-format allowlist before opening file contents;
+  do not follow symlinks by default. Give every source and skip a stable
+  workspace-relative path so same-named files cannot collide. Record size,
+  modification state, format, and explicit readable / unsupported / ignored /
+  failed status; summarize large skip lists without hiding their details.
+- [ ] **Pipeline preparation behind the inventory.** Publish useful file
+  discovery promptly, then profile and prepare supported files as they are
+  found, overlapping traversal with a bounded number of workers. Tune traversal
+  and parsing concurrency independently; use bounded queues and backpressure
+  (including limits on in-flight bytes), stream large inputs into the
+  disk-backed analytical store, and cancel stale work when a mount is replaced.
+  Publish source readiness atomically and pin each analysis to a stable
+  workspace/source snapshot, never a half-mutated index. A folder boundary is
+  not a semantic boundary: avoid one model call per directory or file, and
+  allow cross-folder relationships to emerge from the complete catalog. Do not
+  impose arbitrary aggregate file/byte/row caps or silently truncate a source
+  and label it complete. If actual memory, disk, or parser constraints prevent
+  completion, show the exact partial source and reason so the user can narrow
+  scope or retry.
+- [ ] **Build source profiles with traceable normalization.** For each file,
+  expose compact schema/sheet/table information, row counts, representative
+  values, distributions and anomalies (including missingness, date/number
+  patterns, units, repeated headers, and inconsistent categories). Preserve
+  source values and record the parser, normalization, and row/page lineage
+  behind derived fields. Treat uncertain interpretations as candidates with
+  supporting and conflicting evidence, not silent corrections.
+- [ ] **Let the model investigate through the existing analytics loop.** Give
+  it targeted tools to navigate the catalog, search text, inspect profiles and
+  bounded samples, read relevant passages, and run SQL or Python over prepared
+  data. Keep the prompt compact; generate richer explanations lazily for
+  relevant sources rather than summarizing every file on mount. Make pending,
+  complete, partial, and failed preparation visible to the model and user, so
+  it can inspect more, work from available sources, or ask one focused
+  clarification when an ambiguity materially changes the answer. Resume with
+  the user's clarification without discarding completed inspection. Persist
+  user-authored definitions only at their chosen workspace scope and make them
+  editable/removable.
+- [ ] **Refresh incrementally without trusting notifications as truth.** Reuse
+  prepared results for unchanged files; invalidate and reprocess changed,
+  added, or removed sources, and bind each answer to the exact catalog/data
+  revision it used. Filesystem watchers may accelerate refresh, but reconcile
+  against the mounted tree because platform watchers can lose events or be
+  unavailable on some filesystems. Surface stale or incomplete state instead
+  of silently mixing revisions.
+- [ ] **Choose traversal, search, and storage components by measured fit.**
+  Benchmark a parallel, filterable walker against the current traversal, with
+  walker and parser concurrency measured independently;
+  evaluate FFF only for repeated path/text discovery (not parsing or analytics),
+  accounting for its resident index and eligibility rules. Compare streaming
+  ingestion/query paths with the current SQLite default and optional DuckDB
+  path on the same messy fixtures, including schema/normalization parity,
+  binary/dependency cost, peak memory, and large-file behavior. Adopt a
+  component only when it improves end-to-end mount or analysis quality without
+  narrowing Fella's supported-file coverage.
 
 This work should be coordinated with `WorkspaceModel`, revision tracking,
 definitions/value semantics, and broader chart invariants in the
 [Analytical Computer Roadmap](ANALYTICAL-COMPUTER-ROADMAP.md), rather than
 duplicated as a second ingestion architecture.
 
-**Acceptance checks:** a user can see what was and was not ingested; the
-model can discover relevant data from an unfamiliar folder; normalized values
-are traceable to source values; material ambiguity can be resolved and the
-same analysis resumed.
+**Acceptance checks:** a 5,000-file / 10-GB mixed-folder run is a measured
+performance target, not a mount rejection threshold. The benchmark reports
+time-to-inventory, time-to-first-queryable-data, time-to-complete-preparation,
+peak memory, temporary storage, and exact source/row coverage against the
+predeclared fixture. The user can see what is ready, partial, unsupported, or
+failed; large supported files are not silently dropped or truncated; the model
+can find relevant material across nested folders; normalized values retain
+source lineage; and a clarification can resume the same analysis against the
+same workspace revision. Set numeric latency/resource budgets from the recorded
+baseline before comparing candidate implementations.
+
+**Current implementation evidence (2026-10-05):** `catalog::scan` uses a
+default maximum depth of 8. `open_workspace` then ingests all discovered
+tabular sources synchronously into an isolated backend before publishing the
+catalog. The delimited reader currently retains parsed records in memory and
+has configurable per-source limits of 2 million rows / 256 MiB. Document
+search streams text but makes two workspace-wide passes for each query. These
+are baseline facts to measure and address, not acceptance criteria to preserve.
+
+**Research informing the design:** Rust's [`ignore::WalkBuilder`](https://docs.rs/ignore/latest/ignore/struct.WalkBuilder.html)
+offers a parallel recursive walker and filtering, but its file-size and ignore
+policies must not silently narrow Fella's supported data. DuckDB's
+[CSV reader](https://duckdb.org/docs/current/data/csv/overview) supports
+parallel reads, sampling/sniffing, and explicit rejected-row reporting; its
+[multi-file reader](https://duckdb.org/docs/current/data/multiple_files/overview)
+can query file lists directly, while repeated sniffing can add overhead for
+many small files ([performance notes](https://www.duckdb.org/docs/current/guides/performance/file_formats)).
+The [`notify` crate documents](https://docs.rs/notify/latest/notify/) dropped
+events for very large directories and missing events on some network filesystems,
+so watching is an optimization, not the source of truth. [FFF](https://github.com/dmtrKovalenko/fff)
+is a candidate for long-lived, repeated path/text search; its in-memory index
+and file-eligibility behavior mean it should be benchmarked separately from
+Fella's analytical ingestion and must not define which supported data is read.
 
 ### 7. Make the agent loop cohesive across routes
 
