@@ -269,6 +269,11 @@ async fn mounts_five_thousand_nested_sources_without_omissions() {
     let first_sample = engine.sample(first_view, 5).unwrap();
     let first_sample_elapsed = sample_started.elapsed();
     assert!(!first_sample.rows.is_empty());
+    let serialize_started = std::time::Instant::now();
+    let response_payload = serde_json::to_vec(&catalog).unwrap();
+    let response_serialize_elapsed = serialize_started.elapsed();
+    let response_payload_bytes = response_payload.len();
+    drop(response_payload);
     let scratch_bytes = fs::read_dir(data.path())
         .unwrap()
         .filter_map(Result::ok)
@@ -323,7 +328,7 @@ async fn mounts_five_thousand_nested_sources_without_omissions() {
         .all(|column| column.distinct.is_some()));
 
     eprintln!(
-        "mount scale sample: tables={} documents={} rows={} skipped={} inventory_ready_ms={} mount_ready_ms={} first_sample_ms={} inventory_page_ms={} path_search_ms={} scratch_bytes={} process_peak_rss_bytes={}",
+        "mount scale sample: tables={} documents={} rows={} skipped={} inventory_ready_ms={} mount_ready_ms={} first_sample_ms={} catalog_serialize_ms={} catalog_payload_bytes={} inventory_page_ms={} path_search_ms={} scratch_bytes={} process_peak_rss_bytes={}",
         source_count,
         catalog.sources.len() - source_count,
         loaded_rows,
@@ -331,6 +336,8 @@ async fn mounts_five_thousand_nested_sources_without_omissions() {
         inventory_ready_ms.unwrap_or_default(),
         elapsed.as_millis(),
         first_sample_elapsed.as_millis(),
+        response_serialize_elapsed.as_millis(),
+        response_payload_bytes,
         listing_elapsed.as_millis(),
         search_elapsed.as_millis(),
         scratch_bytes

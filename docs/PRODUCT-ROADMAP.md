@@ -408,6 +408,13 @@ mount timings (46,983 / 20,566 / 6,961 ms) were from a simpler all-CSV fixture
 and are not directly comparable. A separate 250,000-row, 5,027,795-byte CSV
 loaded completely in about 2.5 seconds in a local debug run.
 
+A one-run serialization diagnostic measured the full `Catalog` response at
+2,865,584 JSON bytes and 90 ms of `serde_json` serialization for the same
+fixture. This is the serialized payload size—not measured Tauri/Electron
+transport latency or WebView parse/render time. Its test-process peak RSS was
+59,068,416 bytes while the response buffer was live, so it is not directly
+comparable to the earlier mount-only RSS readings.
+
 The current implementation also avoids mount-time exact distinct/null/range
 profiles on larger workspaces and computes them when a table is inspected;
 relationship-hint discovery uses an inverted field-name index and retains at
@@ -426,8 +433,8 @@ mixing data from two mounts. Incremental refresh and progressively queryable
 sources remain open.
 XLSX sheet loading still materializes sheet data, and document search still
 makes two workspace-wide passes per query. These remain open work, as do
-repeated controlled mount runs, a 10-GB mixed-format benchmark, and peak-memory
-measurements.
+repeated controlled mount runs, a 10-GB mixed-format benchmark, and packaged
+process-tree peak-memory measurements.
 
 **Research informing the design:** Rust's [`ignore::WalkBuilder`](https://docs.rs/ignore/latest/ignore/struct.WalkBuilder.html)
 offers a parallel recursive walker and filtering, but its file-size and ignore
