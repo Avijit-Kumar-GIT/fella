@@ -385,12 +385,12 @@ a partially queryable inventory. Document search streams text but makes two
 workspace-wide passes per query. These are facts to measure and address, not
 acceptance criteria to preserve.
 
-The latest reproducible probe fixture contains 5,000 nested table sources
-(CSV, TSV, JSON arrays, and NDJSON), 59,900 rows, 100 readable Markdown notes,
-and 100 visible unsupported DOCX-shaped files. Its expected inventory is
-explicit: all 5,000 tables and 100 notes load, every table's row count is
-accounted for, and all 100 unsupported files are reported. Two back-to-back
-exploratory debug runs measured scan completion at 85/90 ms, complete-catalog
+The baseline probe fixture contains 5,000 nested table sources (CSV, TSV, JSON
+arrays, and NDJSON), 59,900 rows, 100 readable Markdown notes, and 100 visible
+unsupported DOCX-shaped files. Its expected inventory is explicit: all 5,000
+tables and 100 notes load, every table's row count is accounted for, and all
+100 unsupported files are reported. Two back-to-back exploratory debug runs
+measured scan completion at 85/90 ms, complete-catalog
 readiness at 7,815/7,681 ms, first sample-query execution at 53/52 ms, first
 inventory page at 4/4 ms, exact path lookup at 3/4 ms, temporary SQLite size at
 27,340,352 bytes in both runs, and Linux process peak RSS (`VmHWM`) at
@@ -414,6 +414,24 @@ fixture. This is the serialized payload size—not measured Tauri/Electron
 transport latency or WebView parse/render time. Its test-process peak RSS was
 59,068,416 bytes while the response buffer was live, so it is not directly
 comparable to the earlier mount-only RSS readings.
+
+Code review found avoidable per-cell work in the streaming delimited profiler:
+ordinary labels and numeric values were sent through date parsing, and already
+numeric values were reparsed by the tolerant-number parser. The profiler now
+uses date-shape and numeric fast paths while retaining the same complete-file
+inference behavior; the existing full-reference parity tests for numeric/date
+types still pass. Exploratory debug runs of the same 5,000-small-source fixture
+plus one complete large CSV measured 32 MiB / 860,369 rows at 23,024 ms before
+and 17,661 ms after, and 64 MiB / 1,720,739 rows at 38,691 ms before and 27,407
+ms after. The post-change Linux process high-water marks were 59,584,512 and
+59,326,464 bytes; SQLite scratch used 89,885,624 and 156,180,336 bytes. These
+are single-run comparisons, not controlled or release-build claims. The later
+The coverage fixture has since added two malformed supported files; the probe
+asserts all 102 skipped paths are visible and each malformed input has a reason.
+A separate mount-wide SQLite
+transaction prototype had no observed speed improvement (7,805 ms vs. 7,804 ms
+on one 5,000-source run) and increased live scratch usage from 27,340,352 to
+46,781,744 bytes, so that experiment was discarded.
 
 The current implementation also avoids mount-time exact distinct/null/range
 profiles on larger workspaces and computes them when a table is inspected;

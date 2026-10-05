@@ -1,9 +1,10 @@
 //! Manual mount-scale probe: `cargo test --test mount_scale -- --ignored
 //! --nocapture` (optionally set `FELLA_MOUNT_SCALE_FILES` to change the 5,000
-//! default for local iteration). It deliberately has no latency threshold; its
-//! purpose is to report real end-to-end mount cost and prove complete coverage
-//! across nested CSV/TSV/JSON/NDJSON tables, text documents, varied sizes,
-//! missing values, and visible unsupported files.
+//! default for local iteration; optionally set `FELLA_MOUNT_SCALE_LARGE_MIB`
+//! to add one large CSV). It deliberately has no latency threshold; its purpose
+//! is to report end-to-end mount cost and prove complete coverage across nested
+//! CSV/TSV/JSON/NDJSON tables, text documents, varied sizes, missing values,
+//! malformed supported inputs, and visible unsupported files.
 
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
@@ -145,6 +146,25 @@ fn write_mixed_table(path: &Path, index: usize, rows: usize) {
     writer.flush().unwrap();
 }
 
+fn write_large_table(path: &Path, target_bytes: u64) -> (usize, u64) {
+    let mut writer = BufWriter::new(File::create(path).unwrap());
+    let header = b"record_id,amount,category,day\n";
+    writer.write_all(header).unwrap();
+    let mut bytes_written = header.len() as u64;
+    let mut rows = 0usize;
+    loop {
+        let record = format!("{rows:010},123456.78,Retail,2025-01-01\n");
+        if bytes_written + record.len() as u64 > target_bytes {
+            break;
+        }
+        writer.write_all(record.as_bytes()).unwrap();
+        bytes_written += record.len() as u64;
+        rows += 1;
+    }
+    writer.flush().unwrap();
+    (rows, bytes_written)
+}
+
 #[tokio::test]
 #[ignore = "manual 5,000-file performance/coverage probe"]
 async fn mounts_five_thousand_nested_sources_without_omissions() {
@@ -155,6 +175,10 @@ async fn mounts_five_thousand_nested_sources_without_omissions() {
         .and_then(|value| value.parse::<usize>().ok())
         .filter(|value| *value > 0)
         .unwrap_or(DEFAULT_SOURCE_COUNT);
+    let large_file_mib = std::env::var("FELLA_MOUNT_SCALE_LARGE_MIB")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(0);
 
     let workspace = Scratch::new("mount-scale-workspace");
     let data = Scratch::new("mount-scale-data");
@@ -182,6 +206,17 @@ async fn mounts_five_thousand_nested_sources_without_omissions() {
         .unwrap();
     }
 
+    let (large_rows, large_file_bytes) = if large_file_mib > 0 {
+        let large_dir = workspace.path().join("large");
+        fs::create_dir_all(&large_dir).unwrap();
+        write_large_table(
+            &large_dir.join("large_records.csv"),
+            large_file_mib.saturating_mul(1024 * 1024),
+        )
+    } else {
+        (0, 0)
+    };
+
     // Human-expected office formats outside Fella's tabular allowlist should
     // remain visible as skipped rather than being opened and parsed.
     let unsupported = workspace.path().join("documents");
@@ -189,6 +224,14 @@ async fn mounts_five_thousand_nested_sources_without_omissions() {
     for index in 0..100 {
         fs::write(unsupported.join(format!("memo-{index:03}.docx")), []).unwrap();
     }
+    let malformed = workspace.path().join("malformed");
+    fs::create_dir_all(&malformed).unwrap();
+    fs::write(malformed.join("broken.csv"), b"\xff\xff\n").unwrap();
+    fs::write(
+        malformed.join("broken.json"),
+        b"{ this is not a JSON object }\n",
+    )
+    .unwrap();
 
     let started = std::time::Instant::now();
     let engine = EngineState::new(data.path()).unwrap();
@@ -212,13 +255,14 @@ async fn mounts_five_thousand_nested_sources_without_omissions() {
         .expect("list_files is registered")
         .expect("default inventory page succeeds");
     let listing_elapsed = listing_started.elapsed();
-    let expected_inventory = source_count + 200;
+    let expected_tables = source_count + usize::from(large_rows > 0);
+    let expected_inventory = expected_tables + 202;
     let expected_page_size = expected_inventory.min(40);
     assert!(listing.llm_text.contains(&format!(
         "{expected_page_size} entries shown of {expected_inventory} matching"
     )));
     assert!(listing.llm_text.contains(&format!(
-        "{source_count} tables, 100 documents, 100 skipped"
+        "{expected_tables} tables, 100 documents, 102 skipped"
     )));
     if expected_inventory > expected_page_size {
         assert!(listing
@@ -259,7 +303,7 @@ async fn mounts_five_thousand_nested_sources_without_omissions() {
         .sum();
     let large_source_count = source_count.div_ceil(100);
     let expected_rows =
-        (large_source_count * 1_000 + (source_count - large_source_count) * 2) as i64;
+        (large_source_count * 1_000 + (source_count - large_source_count) * 2 + large_rows) as i64;
     let first_view = catalog
         .sources
         .iter()
@@ -289,21 +333,66 @@ async fn mounts_five_thousand_nested_sources_without_omissions() {
         .map(|bytes| bytes.to_string())
         .unwrap_or_else(|| "unavailable".into());
 
-    assert_eq!(catalog.sources.len(), source_count + 100);
+    assert_eq!(catalog.sources.len(), expected_tables + 100);
     assert_eq!(loaded_rows, expected_rows);
+    let loaded_table_paths: std::collections::HashMap<PathBuf, i64> = catalog
+        .sources
+        .iter()
+        .filter(|source| source.view.is_some())
+        .map(|source| {
+            (
+                PathBuf::from(&source.path),
+                source.row_count.expect("loaded table has a row count"),
+            )
+        })
+        .collect();
+    assert_eq!(loaded_table_paths.len(), expected_tables);
+    for index in 0..source_count {
+        let expected_path = workspace
+            .path()
+            .join(format!("group-{:02}", index / 100))
+            .join(format!("source-{:02}", index % 100))
+            .join(format!(
+                "records.{}",
+                ["csv", "tsv", "json", "ndjson"][index % 4]
+            ));
+        let expected_source_rows = if index % 100 == 0 { 1_000 } else { 2 };
+        assert_eq!(
+            loaded_table_paths.get(&expected_path),
+            Some(&(expected_source_rows as i64)),
+            "source {expected_path:?} should be fully queryable"
+        );
+    }
     assert_eq!(
         catalog
             .sources
             .iter()
             .filter(|source| source.view.is_some())
             .count(),
-        source_count
+        expected_tables
     );
     assert!(catalog
         .sources
         .iter()
         .any(|source| source.path.ends_with("notes/left/note-000.md")));
-    assert_eq!(catalog.skipped.len(), 100);
+    assert_eq!(catalog.skipped.len(), 102);
+    let skipped_paths: std::collections::HashSet<&str> = catalog
+        .skipped
+        .iter()
+        .map(|entry| entry.name.as_str())
+        .collect();
+    assert_eq!(skipped_paths.len(), 102);
+    for index in 0..100 {
+        assert!(skipped_paths.contains(format!("documents/memo-{index:03}.docx").as_str()));
+    }
+    for malformed_path in ["malformed/broken.csv", "malformed/broken.json"] {
+        let entry = catalog
+            .skipped
+            .iter()
+            .find(|entry| entry.name == malformed_path)
+            .expect("malformed supported input remains visible in the skip list");
+        assert!(!entry.reason.trim().is_empty());
+    }
     assert!(catalog
         .sources
         .iter()
@@ -319,6 +408,14 @@ async fn mounts_five_thousand_nested_sources_without_omissions() {
             .unwrap()
             .iter()
             .all(|column| column.distinct.is_none())));
+    if large_rows > 0 {
+        let source = catalog
+            .sources
+            .iter()
+            .find(|source| source.path.ends_with("large/large_records.csv"))
+            .expect("the optional large CSV is present in the catalog");
+        assert_eq!(source.row_count, Some(large_rows as i64));
+    }
 
     let inspected = engine.describe_source(first_view).unwrap();
     assert!(inspected
@@ -328,10 +425,12 @@ async fn mounts_five_thousand_nested_sources_without_omissions() {
         .all(|column| column.distinct.is_some()));
 
     eprintln!(
-        "mount scale sample: tables={} documents={} rows={} skipped={} inventory_ready_ms={} mount_ready_ms={} first_sample_ms={} catalog_serialize_ms={} catalog_payload_bytes={} inventory_page_ms={} path_search_ms={} scratch_bytes={} process_peak_rss_bytes={}",
-        source_count,
-        catalog.sources.len() - source_count,
+        "mount scale sample: tables={} documents={} rows={} large_file_bytes={} large_file_rows={} skipped={} inventory_ready_ms={} mount_ready_ms={} first_sample_ms={} catalog_serialize_ms={} catalog_payload_bytes={} inventory_page_ms={} path_search_ms={} scratch_bytes={} process_peak_rss_bytes={}",
+        expected_tables,
+        catalog.sources.len() - expected_tables,
         loaded_rows,
+        large_file_bytes,
+        large_rows,
         catalog.skipped.len(),
         inventory_ready_ms.unwrap_or_default(),
         elapsed.as_millis(),
@@ -340,8 +439,8 @@ async fn mounts_five_thousand_nested_sources_without_omissions() {
         response_payload_bytes,
         listing_elapsed.as_millis(),
         search_elapsed.as_millis(),
-        scratch_bytes
-        ,peak_rss
+        scratch_bytes,
+        peak_rss
     );
 
     drop(engine);

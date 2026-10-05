@@ -1009,9 +1009,9 @@ impl StringColumnProfile {
         }
 
         let is_integer = value.parse::<i64>().is_ok();
-        let is_float = value.parse::<f64>().is_ok();
-        let parsed_number = parse_numeric(value);
-        let is_boolean = matches!(value.to_ascii_lowercase().as_str(), "true" | "false");
+        let is_float = is_integer || value.parse::<f64>().is_ok();
+        let parsed_number = (!is_float).then(|| parse_numeric(value)).flatten();
+        let is_boolean = value.eq_ignore_ascii_case("true") || value.eq_ignore_ascii_case("false");
         bump(&mut self.nonblank, adding);
         if is_integer {
             bump(&mut self.integers, adding);
@@ -1032,17 +1032,25 @@ impl StringColumnProfile {
             bump(&mut self.numeric, adding);
         }
 
-        let direct_date = parse_date_value(value);
-        let month_first_date = direct_date.clone().or_else(|| {
-            value
-                .contains('/')
-                .then(|| parse_date_value_with_order(value, Some(NumericDateOrder::MonthFirst)))?
-        });
-        let day_first_date = direct_date.clone().or_else(|| {
-            value
-                .contains('/')
-                .then(|| parse_date_value_with_order(value, Some(NumericDateOrder::DayFirst)))?
-        });
+        // Date parsing is intentionally avoided for ordinary numeric and label
+        // cells. The supported date forms all contain a separator or a
+        // whitespace-delimited month name plus digits.
+        let date_candidate = may_be_date(value);
+        let direct_date = date_candidate.then(|| parse_date_value(value)).flatten();
+        let month_first_date = if direct_date.is_some() {
+            direct_date.clone()
+        } else if date_candidate && value.contains('/') {
+            parse_date_value_with_order(value, Some(NumericDateOrder::MonthFirst))
+        } else {
+            None
+        };
+        let day_first_date = if direct_date.is_some() {
+            direct_date.clone()
+        } else if date_candidate && value.contains('/') {
+            parse_date_value_with_order(value, Some(NumericDateOrder::DayFirst))
+        } else {
+            None
+        };
         if direct_date.is_some() {
             bump(&mut self.dates_without_order, adding);
         }
@@ -1052,7 +1060,11 @@ impl StringColumnProfile {
         if day_first_date.is_some() {
             bump(&mut self.dates_day_first, adding);
         }
-        match infer_numeric_date_order(std::iter::once(value)) {
+        let order_hint = value
+            .contains('/')
+            .then(|| infer_numeric_date_order(std::iter::once(value)))
+            .flatten();
+        match order_hint {
             Some(NumericDateOrder::MonthFirst) => bump(&mut self.month_first_hints, adding),
             Some(NumericDateOrder::DayFirst) => bump(&mut self.day_first_hints, adding),
             None => {}
@@ -1172,6 +1184,15 @@ impl StringColumnProfile {
         }
         (ColType::Text, None, date_order)
     }
+}
+
+fn may_be_date(value: &str) -> bool {
+    let has_digit = value.bytes().any(|byte| byte.is_ascii_digit());
+    if !has_digit {
+        return false;
+    }
+    value.bytes().any(|byte| matches!(byte, b'-' | b'/'))
+        || (value.chars().any(char::is_whitespace) && value.chars().any(char::is_alphabetic))
 }
 
 fn bump(counter: &mut usize, adding: bool) {
