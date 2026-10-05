@@ -84,7 +84,21 @@ async fn large_inventory_is_paged_searchable_and_includes_skipped_files() {
     fs::write(workspace.path().join("archive/unsupported.docx"), []).unwrap();
 
     let engine = EngineState::new(data.path()).unwrap();
-    engine.open_workspace(workspace.path()).unwrap();
+    let mut progress = Vec::new();
+    engine
+        .open_workspace_with_progress(workspace.path(), |update| progress.push(update))
+        .unwrap();
+    assert_eq!(
+        progress.first().map(|update| update.phase),
+        Some("scanning")
+    );
+    let ready = progress.last().expect("mount reports completion");
+    assert_eq!(ready.phase, "ready");
+    assert_eq!(ready.visited_files, TABLES + 4);
+    assert_eq!(ready.supported_files, TABLES + 3);
+    assert_eq!(ready.prepared_files, TABLES + 3);
+    assert_eq!(ready.total_supported_files, Some(TABLES + 3));
+    assert_eq!(ready.skipped_files, 1);
 
     let first = tool(&engine, "list_files", json!({})).await;
     assert!(first.contains("40 entries shown of 69 matching"), "{first}");

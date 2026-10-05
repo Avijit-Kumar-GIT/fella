@@ -21,7 +21,8 @@ import type {
 	Settings,
 	SourceInfo,
 	WorkspaceModel,
-	UpdateStatus
+	UpdateStatus,
+	WorkspaceProgress
 } from './types';
 
 function isTauriRuntime(): boolean {
@@ -119,7 +120,16 @@ export const ipc = {
 	/** Signals the app is interactive; returns cold-start ms. */
 	appReady: () => invoke<number>('app_ready'),
 	appInfo: () => invoke<AppInfo>('app_info'),
-	openWorkspace: (path: string) => invoke<Catalog>('open_workspace', { path }),
+	async openWorkspace(path: string, onProgress: (progress: WorkspaceProgress) => void) {
+		if (isElectron()) {
+			if (!window.fella) throw new Error('Electron preload bridge is unavailable');
+			return window.fella.openWorkspace(path, onProgress);
+		}
+		const { Channel } = await import('@tauri-apps/api/core');
+		const channel = new Channel<WorkspaceProgress>();
+		channel.onmessage = onProgress;
+		return invoke<Catalog>('open_workspace', { path, progress: channel });
+	},
 	getCatalog: () => invoke<Catalog>('get_catalog'),
 	getWorkspaceModel: () => invoke<WorkspaceModel | null>('get_workspace_model'),
 	lastWorkspacePath: () => invoke<string | null>('last_workspace_path'),

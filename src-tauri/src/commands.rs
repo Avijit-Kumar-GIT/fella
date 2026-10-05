@@ -4,6 +4,7 @@
 //! `engine::*`, map errors to strings. No business logic here.
 
 use serde::Serialize;
+use std::sync::Arc;
 use tauri::ipc::Channel;
 use tauri::{State, Window};
 
@@ -11,7 +12,7 @@ use crate::engine::{
     AnalysisTurn, AnalysisTurnReplayStatus, Answer, AskEvent, Catalog, ClarificationReply,
     ContextReference, ConversationSummary, ConversationsInfo, EngineError, EngineResult,
     EngineState, ProviderHealth, ProviderInfo, QueryResult, Settings, SourceInfo, UpdateStatus,
-    WorkspaceModel,
+    WorkspaceModel, WorkspaceProgress,
 };
 use crate::AppState;
 
@@ -68,18 +69,27 @@ pub fn app_ready(state: State<'_, AppState>) -> u128 {
 #[tauri::command]
 pub async fn open_workspace(
     path: String,
-    engine: State<'_, EngineState>,
+    progress: Channel<WorkspaceProgress>,
+    engine: State<'_, Arc<EngineState>>,
 ) -> Result<Catalog, EngineError> {
-    engine.open_workspace(&expand_tilde(&path))
+    let engine = Arc::clone(&*engine);
+    let path = expand_tilde(&path);
+    tauri::async_runtime::spawn_blocking(move || {
+        engine.open_workspace_with_progress(&path, |item| {
+            let _ = progress.send(item);
+        })
+    })
+    .await
+    .map_err(|error| EngineError::msg(format!("workspace mount task failed: {error}")))?
 }
 
 #[tauri::command]
-pub fn get_catalog(engine: State<'_, EngineState>) -> Catalog {
+pub fn get_catalog(engine: State<'_, Arc<EngineState>>) -> Catalog {
     engine.catalog()
 }
 
 #[tauri::command]
-pub fn get_workspace_model(engine: State<'_, EngineState>) -> Option<WorkspaceModel> {
+pub fn get_workspace_model(engine: State<'_, Arc<EngineState>>) -> Option<WorkspaceModel> {
     engine.workspace_model()
 }
 
@@ -87,12 +97,12 @@ pub fn get_workspace_model(engine: State<'_, EngineState>) -> Option<WorkspaceMo
 /// screen uses it for a one-click "reopen" button; Fella no longer opens it
 /// automatically on launch. `null` if there's no history or it's gone.
 #[tauri::command]
-pub fn last_workspace_path(engine: State<'_, EngineState>) -> Option<String> {
+pub fn last_workspace_path(engine: State<'_, Arc<EngineState>>) -> Option<String> {
     engine.last_workspace_path()
 }
 
 #[tauri::command]
-pub fn describe(name: String, engine: State<'_, EngineState>) -> EngineResult<SourceInfo> {
+pub fn describe(name: String, engine: State<'_, Arc<EngineState>>) -> EngineResult<SourceInfo> {
     engine.describe_source(&name)
 }
 
@@ -100,45 +110,48 @@ pub fn describe(name: String, engine: State<'_, EngineState>) -> EngineResult<So
 pub fn sample_source(
     name: String,
     rows: Option<usize>,
-    engine: State<'_, EngineState>,
+    engine: State<'_, Arc<EngineState>>,
 ) -> EngineResult<QueryResult> {
     engine.sample(&name, rows.unwrap_or(5).clamp(1, 50))
 }
 
 #[tauri::command]
-pub fn run_sql_direct(sql: String, engine: State<'_, EngineState>) -> EngineResult<QueryResult> {
+pub fn run_sql_direct(
+    sql: String,
+    engine: State<'_, Arc<EngineState>>,
+) -> EngineResult<QueryResult> {
     engine.run_sql(&sql)
 }
 
 #[tauri::command]
-pub async fn reindex(engine: State<'_, EngineState>) -> Result<Catalog, EngineError> {
+pub async fn reindex(engine: State<'_, Arc<EngineState>>) -> Result<Catalog, EngineError> {
     engine.reindex()
 }
 
 /// `[path, contents_or_null]` for the current folder's `memory.md` (`/memory`).
 /// `null` when no folder is open.
 #[tauri::command]
-pub fn memory_file(engine: State<'_, EngineState>) -> Option<(String, Option<String>)> {
+pub fn memory_file(engine: State<'_, Arc<EngineState>>) -> Option<(String, Option<String>)> {
     engine.folder_memory_file()
 }
 
 /// Delete the current folder's learned notes. `true` if a file was removed.
 #[tauri::command]
-pub fn forget_memory(engine: State<'_, EngineState>) -> EngineResult<bool> {
+pub fn forget_memory(engine: State<'_, Arc<EngineState>>) -> EngineResult<bool> {
     engine.forget_folder_memory()
 }
 
 // --- settings --------------------------------------------------------------
 
 #[tauri::command]
-pub fn get_settings(engine: State<'_, EngineState>) -> Settings {
+pub fn get_settings(engine: State<'_, Arc<EngineState>>) -> Settings {
     engine.settings()
 }
 
 #[tauri::command]
 pub fn set_settings(
     settings: serde_json::Value,
-    engine: State<'_, EngineState>,
+    engine: State<'_, Arc<EngineState>>,
 ) -> EngineResult<Settings> {
     let obj = settings
         .as_object()
@@ -150,7 +163,7 @@ pub fn set_settings(
 
 /// The built-in providers and whether each is signed in.
 #[tauri::command]
-pub fn list_providers(engine: State<'_, EngineState>) -> Vec<ProviderInfo> {
+pub fn list_providers(engine: State<'_, Arc<EngineState>>) -> Vec<ProviderInfo> {
     engine.list_providers()
 }
 
@@ -159,7 +172,7 @@ pub fn list_providers(engine: State<'_, EngineState>) -> Vec<ProviderInfo> {
 pub fn set_api_key(
     provider: String,
     key: String,
-    engine: State<'_, EngineState>,
+    engine: State<'_, Arc<EngineState>>,
 ) -> Result<Settings, EngineError> {
     engine.set_api_key(&provider, &key)
 }
@@ -169,7 +182,7 @@ pub fn set_api_key(
 pub fn logout(
     provider: String,
     forget: bool,
-    engine: State<'_, EngineState>,
+    engine: State<'_, Arc<EngineState>>,
 ) -> Result<Settings, EngineError> {
     engine.logout(&provider, forget)
 }
@@ -181,7 +194,7 @@ pub fn logout(
 #[tauri::command]
 pub async fn update(
     app: tauri::AppHandle,
-    engine: State<'_, EngineState>,
+    engine: State<'_, Arc<EngineState>>,
 ) -> Result<UpdateStatus, EngineError> {
     engine.update(app).await
 }
@@ -190,13 +203,16 @@ pub async fn update(
 
 /// `[path, contents_or_null]` for the current workspace's `fella.md`.
 #[tauri::command]
-pub fn context_file(engine: State<'_, EngineState>) -> Option<(String, Option<String>)> {
+pub fn context_file(engine: State<'_, Arc<EngineState>>) -> Option<(String, Option<String>)> {
     engine.context_file()
 }
 
 /// Save the explicitly user-authored `fella.md` context file.
 #[tauri::command]
-pub fn save_context(contents: String, engine: State<'_, EngineState>) -> Result<(), EngineError> {
+pub fn save_context(
+    contents: String,
+    engine: State<'_, Arc<EngineState>>,
+) -> Result<(), EngineError> {
     engine.save_context(&contents)
 }
 
@@ -213,7 +229,7 @@ pub async fn ask(
     context_refs: Option<Vec<ContextReference>>,
     clarification_reply: Option<ClarificationReply>,
     channel: Channel<AskEvent>,
-    engine: State<'_, EngineState>,
+    engine: State<'_, Arc<EngineState>>,
 ) -> Result<Answer, EngineError> {
     let inspect = mode.as_deref() == Some("inspect");
     let context_refs = context_refs.unwrap_or_default();
@@ -234,7 +250,7 @@ pub async fn ask(
 
 #[tauri::command]
 pub async fn provider_health(
-    engine: State<'_, EngineState>,
+    engine: State<'_, Arc<EngineState>>,
 ) -> Result<ProviderHealth, EngineError> {
     Ok(engine.provider_health().await)
 }
@@ -263,21 +279,21 @@ pub fn set_window_appearance(window: Window, dark: bool) -> Result<(), String> {
 pub fn archive_conversation(
     id: String,
     body: String,
-    engine: State<'_, EngineState>,
+    engine: State<'_, Arc<EngineState>>,
 ) -> Result<String, EngineError> {
     engine.archive_conversation(&id, &body)
 }
 
 /// Where archived conversations live, and how many there are (for `/history`).
 #[tauri::command]
-pub fn conversations_info(engine: State<'_, EngineState>) -> ConversationsInfo {
+pub fn conversations_info(engine: State<'_, Arc<EngineState>>) -> ConversationsInfo {
     engine.conversations_info()
 }
 
 /// Every archived conversation, newest first, enough to pick one from
 /// without knowing its id.
 #[tauri::command]
-pub fn conversations_list(engine: State<'_, EngineState>) -> Vec<ConversationSummary> {
+pub fn conversations_list(engine: State<'_, Arc<EngineState>>) -> Vec<ConversationSummary> {
     engine.conversations_list()
 }
 
@@ -285,7 +301,7 @@ pub fn conversations_list(engine: State<'_, EngineState>) -> Vec<ConversationSum
 #[tauri::command]
 pub fn conversation_load(
     id: String,
-    engine: State<'_, EngineState>,
+    engine: State<'_, Arc<EngineState>>,
 ) -> Result<String, EngineError> {
     engine.conversation_load(&id)
 }
@@ -294,7 +310,7 @@ pub fn conversation_load(
 #[tauri::command]
 pub fn analysis_turn_load(
     turn_id: String,
-    engine: State<'_, EngineState>,
+    engine: State<'_, Arc<EngineState>>,
 ) -> Result<AnalysisTurn, EngineError> {
     engine.analysis_turn_load(&turn_id)
 }
@@ -302,7 +318,7 @@ pub fn analysis_turn_load(
 #[tauri::command]
 pub fn analysis_turn_replay_status(
     turn_id: String,
-    engine: State<'_, EngineState>,
+    engine: State<'_, Arc<EngineState>>,
 ) -> Result<AnalysisTurnReplayStatus, EngineError> {
     engine.analysis_turn_replay_status(&turn_id)
 }
@@ -314,7 +330,7 @@ pub async fn analysis_turn_rerun(
     model: Option<String>,
     mode: Option<String>,
     channel: Channel<AskEvent>,
-    engine: State<'_, EngineState>,
+    engine: State<'_, Arc<EngineState>>,
 ) -> Result<Answer, EngineError> {
     let inspect = mode.as_deref() == Some("inspect");
     engine
@@ -326,7 +342,10 @@ pub async fn analysis_turn_rerun(
 
 /// Remove one archived conversation. Used by the sidebar's per-row delete.
 #[tauri::command]
-pub fn delete_conversation(id: String, engine: State<'_, EngineState>) -> Result<(), EngineError> {
+pub fn delete_conversation(
+    id: String,
+    engine: State<'_, Arc<EngineState>>,
+) -> Result<(), EngineError> {
     engine.delete_conversation(&id)
 }
 
@@ -337,20 +356,20 @@ pub fn delete_conversation(id: String, engine: State<'_, EngineState>) -> Result
 pub fn rename_conversation(
     id: String,
     title: String,
-    engine: State<'_, EngineState>,
+    engine: State<'_, Arc<EngineState>>,
 ) -> Result<(), EngineError> {
     engine.rename_conversation(&id, &title)
 }
 
 /// Stop the in-progress `ask` for one conversation (tab).
 #[tauri::command]
-pub fn cancel(conversation_id: String, engine: State<'_, EngineState>) {
+pub fn cancel(conversation_id: String, engine: State<'_, Arc<EngineState>>) {
     engine.cancel_run(&conversation_id);
 }
 
 /// Drop a closed tab's distilled memory and stop-flag from the engine.
 #[tauri::command]
-pub fn forget_conversation(conversation_id: String, engine: State<'_, EngineState>) {
+pub fn forget_conversation(conversation_id: String, engine: State<'_, Arc<EngineState>>) {
     engine.forget_conversation(&conversation_id);
 }
 

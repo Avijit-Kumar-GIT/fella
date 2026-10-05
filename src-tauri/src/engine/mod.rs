@@ -32,7 +32,7 @@ pub mod update;
 pub mod workspace_model;
 
 pub use capabilities::AnalysisCapabilities;
-pub use catalog::{Catalog, SourceInfo};
+pub use catalog::{Catalog, SourceInfo, WorkspaceProgress};
 pub use error::{EngineError, EngineResult};
 pub use evidence::{Answer, AskEvent};
 pub use llm::ProviderHealth;

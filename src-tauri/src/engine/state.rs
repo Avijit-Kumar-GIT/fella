@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::Instant;
 
 use serde::Serialize;
@@ -42,8 +42,109 @@ use crate::engine::workspace_model::WorkspaceModel;
 const EAGER_PROFILE_TOTAL_SOURCE_BYTES: u64 = 1 * 1024 * 1024;
 const EAGER_PROFILE_MAX_ROWS: i64 = 10_000;
 
+#[derive(Default)]
+struct WorkspaceGateState {
+    readers: usize,
+    writer: bool,
+    waiting_writers: usize,
+}
+
+/// Keep each analysis pinned to one workspace revision while allowing a new
+/// mount to prepare privately. Publication waits for active analyses to finish,
+/// then briefly prevents a new turn from starting during the atomic swap.
+#[derive(Default)]
+struct WorkspaceGate {
+    state: Mutex<WorkspaceGateState>,
+    changed: Condvar,
+}
+
+struct WorkspaceReadPermit(Arc<WorkspaceGate>);
+struct WorkspaceWritePermit(Arc<WorkspaceGate>);
+
+impl WorkspaceGate {
+    fn read(self: &Arc<Self>) -> WorkspaceReadPermit {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        while state.writer || state.waiting_writers > 0 {
+            state = self.changed.wait(state).unwrap_or_else(|e| e.into_inner());
+        }
+        state.readers += 1;
+        WorkspaceReadPermit(Arc::clone(self))
+    }
+
+    fn write(self: &Arc<Self>) -> WorkspaceWritePermit {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.waiting_writers += 1;
+        while state.writer || state.readers > 0 {
+            state = self.changed.wait(state).unwrap_or_else(|e| e.into_inner());
+        }
+        state.waiting_writers -= 1;
+        state.writer = true;
+        WorkspaceWritePermit(Arc::clone(self))
+    }
+}
+
+impl Drop for WorkspaceReadPermit {
+    fn drop(&mut self) {
+        let mut state = self.0.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.readers = state.readers.saturating_sub(1);
+        self.0.changed.notify_all();
+    }
+}
+
+impl Drop for WorkspaceWritePermit {
+    fn drop(&mut self) {
+        let mut state = self.0.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.writer = false;
+        self.0.changed.notify_all();
+    }
+}
+
+#[cfg(test)]
+mod workspace_gate_tests {
+    use super::WorkspaceGate;
+    use std::sync::{mpsc, Arc};
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn mount_publication_waits_for_active_analysis_permits() {
+        let gate = Arc::new(WorkspaceGate::default());
+        let analysis = gate.read();
+        let writer_gate = Arc::clone(&gate);
+        let (published, published_rx) = mpsc::channel();
+        let writer = thread::spawn(move || {
+            let _publication = writer_gate.write();
+            published.send(()).unwrap();
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            let waiting = gate
+                .state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .waiting_writers
+                > 0;
+            if waiting {
+                break;
+            }
+            assert!(Instant::now() < deadline, "mount writer never queued");
+            thread::yield_now();
+        }
+        assert!(published_rx.try_recv().is_err());
+
+        drop(analysis);
+        published_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("mount publishes after the running analysis releases its snapshot");
+        writer.join().unwrap();
+    }
+}
+
 pub struct EngineState {
     workspace: Mutex<WorkspaceState>,
+    workspace_gate: Arc<WorkspaceGate>,
+    mount_serial: Mutex<()>,
     sqlite: Mutex<rusqlite::Connection>,
     inner: Mutex<Inner>,
     http: reqwest::Client,
@@ -1263,6 +1364,8 @@ impl EngineState {
             .expect("build HTTP client");
         Ok(Self {
             workspace: Mutex::new(WorkspaceState::new(data, None)),
+            workspace_gate: Arc::new(WorkspaceGate::default()),
+            mount_serial: Mutex::new(()),
             sqlite: Mutex::new(sqlite),
             inner: Mutex::new(Inner::default()),
             http,
@@ -2570,15 +2673,49 @@ exactly, character for character, from the list below.";
     }
 
     /// Point the engine at a folder: scan it, load every tabular file as a
-    /// table, and replace the catalog.
+    /// table, and replace the catalog. The old catalog remains active until
+    /// the replacement is fully prepared.
     pub fn open_workspace(&self, path: &Path) -> EngineResult<Catalog> {
+        self.open_workspace_with_progress(path, |_| {})
+    }
+
+    /// Mount a folder while reporting bounded progress updates. Traversal and
+    /// parsing remain local and read-only; the callback is only a status
+    /// channel, and no partial catalog is published.
+    pub fn open_workspace_with_progress(
+        &self,
+        path: &Path,
+        mut on_progress: impl FnMut(catalog::WorkspaceProgress),
+    ) -> EngineResult<Catalog> {
         if !path.is_dir() {
             return Err(EngineError::msg(format!(
                 "That doesn't look like a folder: {}",
                 path.display()
             )));
         }
-        let (scanned, mut skipped) = catalog::scan(path)?;
+        let _mount_serial = self.mount_serial.lock().unwrap_or_else(|e| e.into_inner());
+        on_progress(catalog::WorkspaceProgress {
+            phase: "scanning",
+            visited_files: 0,
+            supported_files: 0,
+            prepared_files: 0,
+            total_supported_files: None,
+            skipped_files: 0,
+        });
+        let mut visited_files = 0usize;
+        let (scanned, mut skipped) = catalog::scan_with_progress(path, |progress| {
+            visited_files = progress.visited_files;
+            on_progress(progress);
+        })?;
+        let total_supported_files = scanned.len();
+        on_progress(catalog::WorkspaceProgress {
+            phase: "preparing",
+            visited_files,
+            supported_files: total_supported_files,
+            prepared_files: 0,
+            total_supported_files: Some(total_supported_files),
+            skipped_files: skipped.len(),
+        });
         let tabular_files: Vec<_> = scanned
             .iter()
             .filter(|file| file.kind.is_tabular())
@@ -2608,7 +2745,17 @@ exactly, character for character, from the list below.";
             // do so a folder with thousands of notes doesn't pay thousands of
             // extra reads on every open. Beyond the cap, docs list without one.
             let mut synopsis_budget: usize = 250;
-            for f in scanned {
+            for (prepared_files, f) in scanned.into_iter().enumerate() {
+                if prepared_files % 128 == 0 {
+                    on_progress(catalog::WorkspaceProgress {
+                        phase: "preparing",
+                        visited_files,
+                        supported_files: total_supported_files,
+                        prepared_files,
+                        total_supported_files: Some(total_supported_files),
+                        skipped_files: skipped.len(),
+                    });
+                }
                 let name = f
                     .path
                     .file_name()
@@ -2729,6 +2876,15 @@ exactly, character for character, from the list below.";
             }
         }
 
+        on_progress(catalog::WorkspaceProgress {
+            phase: "preparing",
+            visited_files,
+            supported_files: total_supported_files,
+            prepared_files: total_supported_files,
+            total_supported_files: Some(total_supported_files),
+            skipped_files: skipped.len(),
+        });
+
         // `fella.md` at the root is optional user context, not a data file.
         let user_md = std::fs::read_to_string(path.join("fella.md"))
             .ok()
@@ -2737,11 +2893,36 @@ exactly, character for character, from the list below.";
 
         skipped.sort_by(|a, b| a.name.cmp(&b.name));
         skipped.dedup_by(|a, b| a.name == b.name);
+        let total_skipped_files = skipped.len();
         let revision = Some(catalog::workspace_revision(path, &sources, &skipped));
         let mem_path = memory::path_for(&self.data_dir, path);
+        let indexed_at_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis().min(i64::MAX as u128) as i64)
+            .unwrap_or(0);
+        let model = revision.as_ref().map(|revision| {
+            WorkspaceModel::from_sources(
+                &path.display().to_string(),
+                revision,
+                Some(indexed_at_ms),
+                &sources,
+                &skipped,
+            )
+        });
+        self.persist_sources(path, &sources);
 
         #[cfg(test)]
         pause_open_workspace_for_test(self);
+
+        on_progress(catalog::WorkspaceProgress {
+            phase: "waiting",
+            visited_files,
+            supported_files: total_supported_files,
+            prepared_files: total_supported_files,
+            total_supported_files: Some(total_supported_files),
+            skipped_files: total_skipped_files,
+        });
+        let publish_permit = self.workspace_gate.write();
 
         // PDF text belongs to the old folder. Clear the cache when publishing
         // the new snapshot so repeatedly switching folders cannot retain every
@@ -2759,35 +2940,17 @@ exactly, character for character, from the list below.";
             workspace.data = data;
             workspace.workspace = Some(path.to_path_buf());
             workspace.revision = revision;
-            workspace.indexed_at_ms = Some(
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_millis().min(i64::MAX as u128) as i64)
-                    .unwrap_or(0),
-            );
+            workspace.indexed_at_ms = Some(indexed_at_ms);
             workspace.sources = sources;
             workspace.skipped = skipped;
             workspace.user_md = user_md;
             workspace.memory_path = Some(mem_path);
             workspace.schema_cache = None;
             workspace.inspected_tables.clear();
-            self.persist_sources(path, &workspace.sources);
-            let model_workspace = workspace
-                .workspace
-                .as_ref()
-                .map(|path| path.display().to_string());
-            let model_revision = workspace.revision.clone();
-            workspace.model = model_workspace.zip(model_revision).map(|(root, revision)| {
-                WorkspaceModel::from_sources(
-                    &root,
-                    &revision,
-                    workspace.indexed_at_ms,
-                    &workspace.sources,
-                    &workspace.skipped,
-                )
-            });
+            workspace.model = model;
             old_scratch
         };
+        drop(publish_permit);
 
         // Keep per-conversation turns across a mount change. `session_block`
         // retains their conversational text while suppressing query/contract
@@ -2796,6 +2959,14 @@ exactly, character for character, from the list below.";
         // The user is about to ask something: warm the model now so the first
         // question doesn't wait on a cold load.
         self.warm_model();
+        on_progress(catalog::WorkspaceProgress {
+            phase: "ready",
+            visited_files,
+            supported_files: total_supported_files,
+            prepared_files: total_supported_files,
+            total_supported_files: Some(total_supported_files),
+            skipped_files: total_skipped_files,
+        });
         Ok(self.catalog())
     }
 
@@ -3125,6 +3296,7 @@ exactly, character for character, from the list below.";
         reply: Option<ClarificationReply>,
         emit: impl Fn(AskEvent) + Send + Sync,
     ) -> EngineResult<Answer> {
+        let _workspace_read_permit = self.workspace_gate.read();
         let settings = self.settings();
         if !settings.has_credential {
             return Err(EngineError::msg(

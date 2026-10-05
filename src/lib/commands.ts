@@ -155,6 +155,7 @@ export function completionsFor(input: string): string[] {
 
 /** Open a folder as the workspace. With no path, shows the native picker. */
 export async function openFolder(path?: string): Promise<void> {
+	if (session.mountProgress) return;
 	if (!isDesktop()) {
 		session.setWorkspaceView('ask');
 		session.addSystem('Fella needs the desktop app to do that.');
@@ -178,16 +179,22 @@ export async function openFolder(path?: string): Promise<void> {
 	}
 	if (!chosen) return;
 	try {
-		session.busy = true;
-		session.activity = 'reading the folder…';
-		session.catalog = await ipc.openWorkspace(chosen);
+		session.mountProgress = {
+			phase: 'scanning',
+			visited_files: 0,
+			supported_files: 0,
+			prepared_files: 0,
+			skipped_files: 0
+		};
+		session.catalog = await ipc.openWorkspace(chosen, (progress) => {
+			session.mountProgress = progress;
+		});
 		session.rememberRepository(session.catalog.workspace ?? chosen);
 		session.addSystem(summarizeCatalog());
 	} catch (e) {
 		session.addSystem(`Couldn't open that folder: ${errMsg(e)}`);
 	} finally {
-		session.busy = false;
-		session.activity = '';
+		session.mountProgress = null;
 	}
 }
 

@@ -456,6 +456,16 @@ export interface Catalog {
 	skipped?: SkippedFile[];
 }
 
+/** Mount status only; the active workspace is replaced atomically on success. */
+export interface WorkspaceProgress {
+	phase: 'scanning' | 'preparing' | 'waiting' | 'ready';
+	visited_files: number;
+	supported_files: number;
+	prepared_files: number;
+	total_supported_files?: number;
+	skipped_files: number;
+}
+
 export type FieldRole = 'date' | 'measure' | 'dimension' | 'identifier' | 'text';
 
 export interface FieldProfile extends ColumnInfo {

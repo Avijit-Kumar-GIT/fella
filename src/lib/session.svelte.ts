@@ -19,7 +19,8 @@ import type {
 	ProviderInfo,
 	Project,
 	RunStep,
-	Settings
+	Settings,
+	WorkspaceProgress
 } from './types';
 
 
@@ -318,6 +319,7 @@ export type WorkspacePane = 'sources' | 'context';
 
 class Session {
 	catalog = $state<Catalog>({ workspace: null, sources: [] });
+	mountProgress = $state<WorkspaceProgress | null>(null);
 	/** The lightweight workspace surface currently shown beside the tab state. */
 	workspaceView = $state<WorkspaceView>('ask');
 	/** The active pane inside Workspace. */

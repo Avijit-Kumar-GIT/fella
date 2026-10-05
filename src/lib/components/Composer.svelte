@@ -11,9 +11,10 @@
 	} from '$lib/commands';
 	import { session } from '$lib/session.svelte';
 	import { enterUp } from '$lib/motion';
-	import type { ContextReference, SourceInfo } from '$lib/types';
-	import Icon from './Icon.svelte';
-	import ProviderIcon from './ProviderIcon.svelte';
+import type { ContextReference, SourceInfo } from '$lib/types';
+import Icon from './Icon.svelte';
+import Logo from './Logo.svelte';
+import ProviderIcon from './ProviderIcon.svelte';
 
 	let { onafterrun }: { onafterrun?: () => void } = $props();
 
@@ -82,11 +83,8 @@
 	});
 
 	let pendingInput = $derived(!!session.pendingKey);
-	// `session.busy` alone isn't specific enough to mean "an answer is
-	// streaming, steering it makes sense" -- it's also true while a folder
-	// is still loading (openFolder reuses it for progress feedback), which
-	// has no answer in flight to steer. Only ask()'s pending assistant
-	// placeholder means there's actually something to steer.
+	// Mount progress is separate from conversation activity. Only ask()'s
+	// pending assistant placeholder means there is an answer to steer.
 	let answering = $derived(session.activeChat?.messages.at(-1)?.pending === true);
 	let items = $derived(menuOff || pendingInput ? [] : completionsFor(value));
 	let shown = $derived(items.slice(0, MAX_ITEMS));
@@ -134,17 +132,15 @@
 	async function submit() {
 		const text = value.trim();
 		if (!text) return;
+		// Do not start or steer an analysis across a workspace snapshot change.
+		if (session.mountProgress) return;
 		contextOpen = false;
 		modeOpen = false;
 		// Mid-run: a plain line (not a command, not a key paste) steers the live
 		// answer — cancel and re-ask with it appended. A command or key still
 		// waits for the run to end.
 		if (session.busy) {
-			// Busy but nothing is actually answering (e.g. a folder is still
-			// being read after auto-mounting a reopened conversation) -- there's
-			// no run to steer and no workspace ready yet either; ignore the
-			// send rather than firing early against a folder that hasn't
-			// finished opening.
+			// Busy but nothing is actually answering -- ignore the send.
 			if (!answering) return;
 			if (pendingInput || text.startsWith('/')) return;
 			if (!carriesSecret(text)) history.unshift(text);
@@ -523,7 +519,7 @@
 					</div>
 				{/if}
 			{/if}
-			{#if answering && value.trim() && !pendingInput && !value.startsWith('/')}
+			{#if answering && value.trim() && !pendingInput && !value.startsWith('/') && !session.mountProgress}
 				<button
 					class="act send"
 					title="Cancel and re-ask with this (Enter)"
@@ -535,6 +531,10 @@
 			{:else if session.busy}
 				<button class="act stop" title="Stop (Esc)" aria-label="Stop" onclick={() => stop()}>
 					<Icon name="stop" fill size={16} />
+				</button>
+			{:else if session.mountProgress}
+				<button class="act mount-wait" disabled title="Preparing workspace" aria-label="Preparing workspace">
+					<Logo size={18} active />
 				</button>
 			{:else if value.trim()}
 				<button class="act send" aria-label="Send" onclick={() => void submit()}>

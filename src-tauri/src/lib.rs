@@ -54,7 +54,7 @@ pub fn run() {
             migrate_from_woody(&data_dir);
             let engine = engine::EngineState::new(&data_dir)
                 .map_err(|e| format!("engine init failed: {e}"))?;
-            app.manage(engine);
+            app.manage(std::sync::Arc::new(engine));
 
             Ok(())
         })

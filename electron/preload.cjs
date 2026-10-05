@@ -6,10 +6,21 @@ let nextAskId = 1;
 ipcRenderer.on('fella:ask-event', (_event, message) => {
 	listeners.get(message.requestId)?.(message.event);
 });
+ipcRenderer.on('fella:workspace-progress', (_event, message) => {
+	listeners.get(message.requestId)?.(message.event);
+});
 
 contextBridge.exposeInMainWorld('fella', {
 	invoke(command, args) {
 		return ipcRenderer.invoke('fella:invoke', { command, args });
+	},
+
+	openWorkspace(path, onProgress) {
+		const requestId = `mount-${nextAskId++}`;
+		listeners.set(requestId, onProgress);
+		return ipcRenderer
+			.invoke('fella:open-workspace', { requestId, path })
+			.finally(() => listeners.delete(requestId));
 	},
 
 	ask(params, onEvent) {

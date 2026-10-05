@@ -378,28 +378,35 @@ all records or silently truncating by the former 2-million-row / 256-MiB
 defaults. Malformed NDJSON and non-object records are explicitly noted. The
 focused completeness tests and streaming-vs-reference type inference tests
 pass. Remaining constraints: XLSX currently materializes sheets; `open_workspace`
-still prepares sources synchronously before publishing the catalog; document
-search streams text but makes two workspace-wide passes per query. These are
-facts to measure and address, not acceptance criteria to preserve. No
-10-GB mixed-folder or peak-memory result has been collected yet. The local
-5,000-file probe uses 5,000 nested two-row CSVs plus 100 skipped DOCX-shaped
-files; its expected result is 10,000 queryable rows and 100 visible skips.
-Observed end-to-end debug-build mount times across implementation iterations
-were 46,983 ms, 20,566 ms, then 6,961 ms; the latest run still used
-24,927,832 bytes in the temporary SQLite build directory. These are single
-machine observations, not repeated controlled samples, and the changes between
-runs were cumulative, so they do not isolate each optimization's effect or
-establish an acceptable-performance claim. A separate 250,000-row, 5,027,795
-byte CSV loaded completely in about 2.5 seconds in a local debug run. Neither
-probe measures peak memory. The probes have no timing pass/fail threshold and
-clean their generated fixtures and temporary databases automatically. A
-subsequent inventory-tool probe on the same 5,000-table / 10,000-row /
-100-skipped fixture measured 7,133 ms end-to-end mount time, a 4 ms first
-inventory page, and a 4 ms exact path lookup, with 24,927,832 bytes in the
-temporary SQLite build directory. This is another single debug-build run, not
-a controlled comparison; it does not measure peak memory or first-query
-readiness, and the path lookup scans the in-memory catalog rather than a
-persistent path index.
+publishes the replacement catalog atomically after full preparation, although
+both desktop shells now run the mount on a blocking worker and stream
+scan/preparation phase and count updates to the UI. The user sees progress, not
+a partially queryable inventory. Document search streams text but makes two
+workspace-wide passes per query. These are facts to measure and address, not
+acceptance criteria to preserve.
+
+The latest reproducible probe fixture contains 5,000 nested table sources
+(CSV, TSV, JSON arrays, and NDJSON), 59,900 rows, 100 readable Markdown notes,
+and 100 visible unsupported DOCX-shaped files. Its expected inventory is
+explicit: all 5,000 tables and 100 notes load, every table's row count is
+accounted for, and all 100 unsupported files are reported. Two back-to-back
+exploratory debug runs measured scan completion at 85/90 ms, complete-catalog
+readiness at 7,815/7,681 ms, first sample-query execution at 53/52 ms, first
+inventory page at 4/4 ms, exact path lookup at 3/4 ms, temporary SQLite size at
+27,340,352 bytes in both runs, and Linux process peak RSS (`VmHWM`) at
+56,438,784/56,324,096 bytes. These are not controlled cold/warm comparisons or
+a product latency claim. Scan completion is not when users can browse the
+Sources page; metadata walking is a small part of this fixture's 7.7-second
+mount, so overlapping the walk with preparation alone is unlikely to
+materially improve this 5,000-file case. The path lookup still scans the
+in-memory catalog rather than using a persistent index. The RSS figure is the
+test process high-water mark, not a packaged-app or Windows process-tree
+measurement. The ignored probe cleans its generated workspace and temporary
+database automatically and has no timing pass/fail threshold. No 10-GB
+mixed-folder run or controlled benchmark series has been collected. Earlier
+mount timings (46,983 / 20,566 / 6,961 ms) were from a simpler all-CSV fixture
+and are not directly comparable. A separate 250,000-row, 5,027,795-byte CSV
+loaded completely in about 2.5 seconds in a local debug run.
 
 The current implementation also avoids mount-time exact distinct/null/range
 profiles on larger workspaces and computes them when a table is inspected;
@@ -409,11 +416,17 @@ inventory is now bounded to 50 entries / 12,000 characters per call, supports
 path search and kind filters (including skipped files), and the Sources page
 renders 100 rows at a time. This bounds tool output and DOM row count, but not
 the full catalog sent over desktop IPC or retained in memory: the UI still
-receives every source record. Incremental refresh and asynchronous readiness
-are also still open; `open_workspace` finishes preparation before publishing
-the new workspace. XLSX sheet loading still materializes sheet data, and
-document search still makes two workspace-wide passes per query. These remain
-open work, as do a repeatable 10-GB mixed-format benchmark and peak-memory
+receives every source record. Mounts now run away from the Tauri/Electron
+command executor, and both shells show scan/preparation phase and count
+updates; the existing workspace remains available until the full new snapshot
+is ready. Existing analysis runs hold a workspace read permit through
+finalization, and publication waits for them before swapping revisions; new
+analyses queue behind a pending publication, preventing one answer from
+mixing data from two mounts. Incremental refresh and progressively queryable
+sources remain open.
+XLSX sheet loading still materializes sheet data, and document search still
+makes two workspace-wide passes per query. These remain open work, as do
+repeated controlled mount runs, a 10-GB mixed-format benchmark, and peak-memory
 measurements.
 
 **Research informing the design:** Rust's [`ignore::WalkBuilder`](https://docs.rs/ignore/latest/ignore/struct.WalkBuilder.html)

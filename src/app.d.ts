@@ -1,12 +1,16 @@
 // See https://svelte.dev/docs/kit/types#app.d.ts
 // for information about these interfaces
-import type { AskEvent } from './lib/types';
+import type { AskEvent, Catalog, WorkspaceProgress } from './lib/types';
 
 declare global {
 	interface Window {
 		/** Secure Electron preload bridge. It is absent in a normal browser. */
 		fella?: {
 			invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
+			openWorkspace(
+				path: string,
+				onProgress: (progress: WorkspaceProgress) => void
+			): Promise<Catalog>;
 			ask(
 				params: {
 					conversationId: string;

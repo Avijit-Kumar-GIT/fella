@@ -130,7 +130,17 @@ async fn dispatch(
         }
         "open_workspace" => {
             let path: String = required(&request.params, "path")?;
-            value_result(engine.open_workspace(&expand_tilde(&path)))
+            let engine = Arc::clone(&engine);
+            let progress_output = Arc::clone(&output);
+            let path = expand_tilde(&path);
+            let mounted = tokio::task::spawn_blocking(move || {
+                engine.open_workspace_with_progress(&path, |item| {
+                    event(&progress_output, id, item);
+                })
+            })
+            .await
+            .map_err(|error| EngineError::msg(format!("workspace mount task failed: {error}")))?;
+            value_result(mounted)
         }
         "get_catalog" => serialized(engine.catalog()),
         "get_workspace_model" => serialized(engine.workspace_model()),

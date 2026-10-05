@@ -3,6 +3,7 @@
 	import CommandPalette from '$lib/components/CommandPalette.svelte';
 	import Composer from '$lib/components/Composer.svelte';
 	import Icon from '$lib/components/Icon.svelte';
+	import Logo from '$lib/components/Logo.svelte';
 	import ProjectDialog from '$lib/components/ProjectDialog.svelte';
 	import ProjectView from '$lib/components/ProjectView.svelte';
 	import Sidebar from '$lib/components/Sidebar.svelte';
@@ -23,6 +24,17 @@
 	let dragging = $state(false);
 
 	let activeView = $derived(session.workspaceView);
+
+	function mountStatusLabel(progress: NonNullable<typeof session.mountProgress>): string {
+		const count = (value: number) => new Intl.NumberFormat().format(value);
+		if (progress.phase === 'scanning') {
+			return progress.visited_files
+				? `Scanning folder · ${count(progress.visited_files)} files checked`
+				: 'Scanning folder…';
+		}
+		if (progress.phase === 'waiting') return 'Finishing the current analysis…';
+		return `Preparing data · ${count(progress.prepared_files)} of ${count(progress.total_supported_files ?? progress.supported_files)} sources`;
+	}
 
 	async function refreshHealth() {
 		if (!isDesktop()) return;
@@ -249,6 +261,10 @@
 	// into a div it isn't watching). Announce what Fella is doing, and that the
 	// answer has landed.
 	let live = $derived.by(() => {
+		if (session.mountProgress?.phase === 'scanning') return 'Scanning the mounted folder';
+		if (session.mountProgress?.phase === 'preparing') return 'Preparing workspace data';
+		if (session.mountProgress?.phase === 'waiting') return 'Waiting for the current analysis to finish';
+		if (session.mountProgress?.phase === 'ready') return 'Workspace ready';
 		if (session.busy) return session.activity || 'working…';
 		const last = session.messages.at(-1);
 		return last?.role === 'assistant' && last.text.trim() ? 'answer ready' : '';
@@ -264,6 +280,20 @@
 	<div class="app" class:focus={session.focus}>
 		<Titlebar onpalette={() => (paletteOpen = true)} />
 		<main>
+			{#if session.mountProgress && session.mountProgress.phase !== 'ready'}
+				<div class="mount-status" aria-hidden="true">
+					<span class="mount-orb"><Logo size={17} active /></span>
+					<span class="mount-label">{mountStatusLabel(session.mountProgress)}</span>
+					{#if session.mountProgress.phase === 'preparing' && session.mountProgress.total_supported_files}
+						<progress
+							value={session.mountProgress.prepared_files}
+							max={session.mountProgress.total_supported_files}
+						></progress>
+					{:else}
+						<progress></progress>
+					{/if}
+				</div>
+			{/if}
 			<div class="main-row">
 				{#if activeView === 'workspace'}
 					<WorkspaceView />
@@ -316,6 +346,46 @@
 		/* Same fill as the titlebar/sidebar/panel so the whole shell reads as
 		   one open canvas, not stacked boxes -- no seam, no colour change. */
 		background: var(--bg);
+	}
+	.mount-status {
+		flex: none;
+		display: flex;
+		align-items: center;
+		gap: var(--space-2);
+		min-height: 32px;
+		padding: 0 var(--pad);
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+	}
+	.mount-orb {
+		flex: none;
+		display: grid;
+		place-items: center;
+		width: 18px;
+		height: 18px;
+	}
+	.mount-label {
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.mount-status progress {
+		flex: none;
+		width: clamp(64px, 12vw, 140px);
+		height: 3px;
+		border: 0;
+		border-radius: 99px;
+		background: var(--bg-raised);
+		accent-color: var(--accent);
+	}
+	.mount-status progress::-webkit-progress-bar {
+		border-radius: 99px;
+		background: var(--bg-raised);
+	}
+	.mount-status progress::-webkit-progress-value {
+		border-radius: 99px;
+		background: var(--accent);
 	}
 	.main-row {
 		position: relative;

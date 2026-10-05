@@ -274,6 +274,21 @@ pub struct Catalog {
     pub skipped: Vec<SkippedFile>,
 }
 
+/// Lightweight progress for a workspace mount. `visited_files` counts
+/// non-hidden, non-ignored files encountered; `supported_files` counts files
+/// Fella will attempt to read. During preparation, `prepared_files` advances
+/// against `total_supported_files`. Progress is advisory; the catalog is still
+/// published atomically only after the full mount succeeds.
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkspaceProgress {
+    pub phase: &'static str,
+    pub visited_files: usize,
+    pub supported_files: usize,
+    pub prepared_files: usize,
+    pub total_supported_files: Option<usize>,
+    pub skipped_files: usize,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileListFilter {
     All,
@@ -582,6 +597,15 @@ pub(crate) fn workspace_relative_path(root: &Path, path: &Path) -> String {
 /// `.fellaignore` in the root are skipped silently. Traversal is recursive with
 /// no implicit depth limit and never follows symlinks.
 pub fn scan(root: &Path) -> EngineResult<(Vec<ScannedFile>, Vec<SkippedFile>)> {
+    scan_with_progress(root, |_| {})
+}
+
+/// Inventory the tree and periodically report counts without opening file
+/// contents. Callers that only need a complete vector can use `scan`.
+pub(crate) fn scan_with_progress(
+    root: &Path,
+    mut on_progress: impl FnMut(WorkspaceProgress),
+) -> EngineResult<(Vec<ScannedFile>, Vec<SkippedFile>)> {
     if !root.is_dir() {
         return Err(EngineError::msg(format!(
             "That doesn't look like a folder: {}",
@@ -592,6 +616,8 @@ pub fn scan(root: &Path) -> EngineResult<(Vec<ScannedFile>, Vec<SkippedFile>)> {
     let ignore = Ignore::load(root);
     let mut out = Vec::new();
     let mut skipped: Vec<SkippedFile> = Vec::new();
+    let mut visited_files = 0usize;
+    let mut skipped_files = 0usize;
 
     for entry in WalkDir::new(root)
         .follow_links(false)
@@ -623,6 +649,7 @@ pub fn scan(root: &Path) -> EngineResult<(Vec<ScannedFile>, Vec<SkippedFile>)> {
         {
             continue;
         }
+        visited_files += 1;
         let ext = path.extension().and_then(|e| e.to_str());
         let Some(kind) = ext.and_then(SourceKind::from_ext) else {
             if ext.is_some_and(worth_mentioning) {
@@ -630,7 +657,9 @@ pub fn scan(root: &Path) -> EngineResult<(Vec<ScannedFile>, Vec<SkippedFile>)> {
                     name: workspace_relative_path(root, path),
                     reason: "Fella can't read this file type yet".into(),
                 });
+                skipped_files += 1;
             }
+            report_scan_progress(&mut on_progress, visited_files, out.len(), skipped_files);
             continue;
         };
         let meta = match entry.metadata() {
@@ -640,6 +669,8 @@ pub fn scan(root: &Path) -> EngineResult<(Vec<ScannedFile>, Vec<SkippedFile>)> {
                     name: workspace_relative_path(root, path),
                     reason: "couldn't be read (permission, or open in another app)".into(),
                 });
+                skipped_files += 1;
+                report_scan_progress(&mut on_progress, visited_files, out.len(), skipped_files);
                 continue;
             }
         };
@@ -655,12 +686,39 @@ pub fn scan(root: &Path) -> EngineResult<(Vec<ScannedFile>, Vec<SkippedFile>)> {
             size_bytes: meta.len(),
             mtime,
         });
+        report_scan_progress(&mut on_progress, visited_files, out.len(), skipped_files);
     }
 
     out.sort_by(|a, b| a.path.cmp(&b.path));
     skipped.sort_by(|a, b| a.name.cmp(&b.name));
     skipped.dedup_by(|a, b| a.name == b.name);
+    on_progress(WorkspaceProgress {
+        phase: "scanning",
+        visited_files,
+        supported_files: out.len(),
+        prepared_files: 0,
+        total_supported_files: Some(out.len()),
+        skipped_files: skipped.len(),
+    });
     Ok((out, skipped))
+}
+
+fn report_scan_progress(
+    on_progress: &mut impl FnMut(WorkspaceProgress),
+    visited_files: usize,
+    supported_files: usize,
+    skipped_files: usize,
+) {
+    if visited_files % 128 == 0 {
+        on_progress(WorkspaceProgress {
+            phase: "scanning",
+            visited_files,
+            supported_files,
+            prepared_files: 0,
+            total_supported_files: None,
+            skipped_files,
+        });
+    }
 }
 
 fn is_hidden(name: Option<&str>) -> bool {

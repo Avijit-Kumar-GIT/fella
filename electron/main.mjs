@@ -196,6 +196,16 @@ app.whenReady().then(() => {
 			if (request.command === 'update') return checkAndApply(app);
 			return engine.request(request.command, request.args ?? {});
 		});
+		ipcMain.handle('fella:open-workspace', (event, request) =>
+			engine.request('open_workspace', { path: request.path }, (item) => {
+				if (!event.sender.isDestroyed()) {
+					event.sender.send('fella:workspace-progress', {
+						requestId: request.requestId,
+						event: item
+					});
+				}
+			})
+		);
 		ipcMain.handle('fella:set-window-appearance', (event, dark) => {
 			const owner = BrowserWindow.fromWebContents(event.sender);
 			if (owner) setWindowAppearance(owner, Boolean(dark));
