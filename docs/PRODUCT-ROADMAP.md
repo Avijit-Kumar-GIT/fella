@@ -370,14 +370,18 @@ baseline before comparing candidate implementations.
 **Implementation progress (2026-10-05):** the default depth cutoff has been
 removed and skipped files now retain workspace-relative paths, so duplicate
 basenames remain distinct. The 5,000-file inventory test observed 17 ms before
-and 16 ms after this change in one local run; this is a single-run datapoint
-for metadata inventory only, not a general speed claim or the 10-GB acceptance
-test. Remaining baseline constraints: `open_workspace` still ingests all
-discovered tabular sources synchronously before publishing the catalog; the
-delimited reader retains parsed records in memory and has configurable
-per-source limits of 2 million rows / 256 MiB; document search streams text
-but makes two workspace-wide passes per query. These are facts to measure and
-address, not acceptance criteria to preserve.
+and 16–17 ms after this change in local single runs; these are metadata-only
+datapoints, not a general speed claim or the 10-GB acceptance test. CSV/TSV
+ingestion now profiles in one streaming pass and loads in a second pass into
+SQLite, preserving full-file type inference without retaining all records or
+silently truncating by the former 2-million-row / 256-MiB defaults. The
+focused cap-completeness test and streaming-vs-reference type inference tests
+pass. JSON/NDJSON still materialize input and retain the old byte limit;
+`open_workspace` still prepares sources synchronously before publishing the
+catalog; document search streams text but makes two workspace-wide passes per
+query. These are facts to measure and address, not acceptance criteria to
+preserve. No 5,000-file / 10-GB mixed-folder throughput or peak-memory result
+has been collected yet.
 
 **Research informing the design:** Rust's [`ignore::WalkBuilder`](https://docs.rs/ignore/latest/ignore/struct.WalkBuilder.html)
 offers a parallel recursive walker and filtering, but its file-size and ignore

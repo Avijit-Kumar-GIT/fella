@@ -1,7 +1,6 @@
-//! Big-file guard: a delimited file past `FELLA_INGEST_ROW_CAP` still loads, but
-//! only its first N rows, with a note saying so. Its own test binary so the
-//! process-global override can't leak into a sibling test (same reasoning as
-//! `tests/sql_timeout.rs`).
+//! Ingestion completeness: legacy row/byte cap environment variables must not
+//! silently make a supported source appear complete with only a prefix loaded.
+//! Its own test binary isolates the process environment from sibling tests.
 
 use std::fmt::Write as _;
 use std::fs;
@@ -10,32 +9,50 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use fella_lib::engine::EngineState;
 
-fn scratch(tag: &str) -> PathBuf {
-    let n = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let p = std::env::temp_dir().join(format!("fella-{tag}-{n}"));
-    fs::create_dir_all(&p).unwrap();
-    p
+struct Scratch(PathBuf);
+
+impl Scratch {
+    fn new(tag: &str) -> Self {
+        let n = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let p = std::env::temp_dir().join(format!("fella-{tag}-{n}"));
+        fs::create_dir_all(&p).unwrap();
+        Self(p)
+    }
+
+    fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
 }
 
 #[test]
-fn a_huge_csv_loads_its_first_rows_and_says_it_was_truncated() {
+fn a_source_is_complete_even_when_legacy_ingest_caps_are_set() {
     std::env::set_var("FELLA_INGEST_ROW_CAP", "10");
+    std::env::set_var("FELLA_INGEST_BYTE_CAP", "64");
     std::env::set_var("FELLA_SKIP_MODEL_WARMUP", "1");
 
-    let ws = scratch("cap-ws");
-    let data = scratch("cap-data");
+    // This changes the intended contract from the old capped-ingest behavior:
+    // every generated row is part of the dataset, not a tuning target for the
+    // candidate. The low legacy values make the old implementation fail here.
+    let ws = Scratch::new("complete-ws");
+    let data = Scratch::new("complete-data");
 
     let mut csv = String::from("n,label\n");
     for i in 0..500 {
         writeln!(csv, "{i},row-{i}").unwrap();
     }
-    fs::write(ws.join("big.csv"), csv).unwrap();
+    fs::write(ws.path().join("big.csv"), csv).unwrap();
 
-    let engine = EngineState::new(&data).unwrap();
-    let catalog = engine.open_workspace(&ws).unwrap();
+    let engine = EngineState::new(data.path()).unwrap();
+    let catalog = engine.open_workspace(ws.path()).unwrap();
 
     let big = catalog
         .sources
@@ -44,24 +61,14 @@ fn a_huge_csv_loads_its_first_rows_and_says_it_was_truncated() {
         .unwrap();
     let loaded = big.row_count.expect("row_count is set");
 
-    // Truncated: far fewer than the 500 rows in the file, and around the cap.
-    assert!(
-        (1..=20).contains(&loaded),
-        "should have stopped near the 10-row cap, loaded {loaded}"
-    );
-    assert!(
-        big.note
-            .as_deref()
-            .unwrap_or("")
-            .contains("rows were loaded"),
-        "truncation is noted: {:?}",
-        big.note
-    );
+    assert_eq!(loaded, 500, "all source rows must be queryable");
+    assert!(big.note.is_none(), "complete input has no truncation note");
 
-    // What did load is real and consistent with row_count.
+    // The SQL table must agree with the catalog and include the final input row.
     let out = engine.run_sql("SELECT count(*) AS c FROM big").unwrap();
-    assert_eq!(out.rows[0][0], serde_json::json!(loaded));
-
-    let _ = fs::remove_dir_all(&ws);
-    let _ = fs::remove_dir_all(&data);
+    assert_eq!(out.rows[0][0], serde_json::json!(500));
+    let last = engine
+        .run_sql("SELECT label FROM big ORDER BY n DESC LIMIT 1")
+        .unwrap();
+    assert_eq!(last.rows[0][0], serde_json::json!("row-499"));
 }

@@ -14,14 +14,15 @@ use rusqlite::{Connection, OpenFlags};
 use serde_json::Value as Json;
 
 use crate::engine::analytics::data::{
-    infer_numeric_date_order, parse_date_value_with_order, parse_numeric, quote_ident, Cell,
-    ColType, DataEngine, NumericDateOrder, PythonBridge, QueryOutcome, SourceLoad,
+    infer_numeric_date_order, is_blankish, parse_date_value, parse_date_value_with_order,
+    parse_numeric, quote_ident, Cell, ColType, DataEngine, NumericDateOrder, PythonBridge,
+    QueryOutcome, SourceLoad,
 };
 use crate::engine::catalog::{ColumnInfo, SourceKind};
 use crate::engine::error::{EngineError, EngineResult};
 
 #[cfg(test)]
-use crate::engine::analytics::data::{parse_date_value, parse_named_month_date};
+use crate::engine::analytics::data::parse_named_month_date;
 
 pub struct SqliteEngine {
     conn: Connection,
@@ -49,6 +50,123 @@ impl SqliteEngine {
         .map_err(|e| EngineError::msg(format!("open read-only: {e}")))?;
         register_parse_num(&conn)?;
         Ok(conn)
+    }
+
+    /// Profile a delimited source with constant row memory, then stream it into
+    /// SQLite in a second pass. The two-pass design keeps full-file type/date
+    /// inference (including late outliers) without retaining the whole file.
+    fn add_delimited_source(
+        &mut self,
+        name: &str,
+        path: &str,
+        default_delim: u8,
+    ) -> EngineResult<SourceLoad> {
+        let stamp = file_stamp(path)?;
+        let profile = inspect_delimited(path, default_delim)?;
+        if file_stamp(path)? != stamp {
+            return Err(EngineError::msg(format!(
+                "{path}: the file changed while Fella was inspecting it; retry the mount"
+            )));
+        }
+
+        if profile.headers.is_empty() {
+            return Err(EngineError::msg(format!("{path}: no tabular rows found")));
+        }
+        let columns: Vec<(String, ColType)> = profile
+            .headers
+            .iter()
+            .cloned()
+            .zip(profile.types.iter().copied())
+            .collect();
+        let ident = quote_ident(name);
+        let cols_sql = columns
+            .iter()
+            .map(|(column, ty)| format!("{} {}", quote_ident(column), ty.sqlite()))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let placeholders = vec!["?"; columns.len()].join(", ");
+        let insert_sql = format!("INSERT INTO {ident} VALUES ({placeholders})");
+        let tx = self.conn.transaction()?;
+        tx.execute_batch(&format!(
+            "DROP TABLE IF EXISTS {ident}; CREATE TABLE {ident} ({cols_sql});"
+        ))?;
+        let mut loaded = 0usize;
+        let mut valid_records = 0usize;
+        let mut dropped_records = 0usize;
+        let mut case_collisions: Vec<CaseCollisionAccumulator> = (0..columns.len())
+            .map(|_| CaseCollisionAccumulator::default())
+            .collect();
+        {
+            let mut statement = tx.prepare(&insert_sql)?;
+            let mut reader = delimited_reader(path, profile.delimiter)?;
+            for result in reader.records() {
+                let mut record = match result {
+                    Ok(record) => record,
+                    Err(_) => {
+                        dropped_records += 1;
+                        continue;
+                    }
+                };
+                if valid_records == 0 {
+                    strip_leading_bom(&mut record);
+                }
+                let row_index = valid_records;
+                valid_records += 1;
+                if row_index < profile.data_start
+                    || (profile.trailing_total && row_index + 1 == profile.total_records)
+                {
+                    continue;
+                }
+
+                let mut values = Vec::with_capacity(columns.len());
+                for (index, (_, ty)) in columns.iter().enumerate() {
+                    let raw = record.get(index).unwrap_or("");
+                    case_collisions[index].observe(raw);
+                    values.push(string_cell_with_order(raw, *ty, profile.date_orders[index]));
+                }
+                let sqlite_values: Vec<rusqlite::types::Value> = values
+                    .iter()
+                    .map(|value| cell_to_sqlite(value, ColType::Text))
+                    .collect();
+                statement.execute(rusqlite::params_from_iter(sqlite_values.iter()))?;
+                loaded += 1;
+            }
+        }
+
+        if valid_records != profile.total_records || dropped_records != profile.dropped_records {
+            return Err(EngineError::msg(format!(
+                "{path}: the file changed while Fella was loading it; retry the mount"
+            )));
+        }
+        if file_stamp(path)? != stamp {
+            return Err(EngineError::msg(format!(
+                "{path}: the file changed while Fella was loading it; retry the mount"
+            )));
+        }
+        tx.commit()?;
+
+        let mut notes = profile.notes;
+        for (index, ((_, ty), collision)) in columns.iter().zip(case_collisions).enumerate() {
+            if *ty == ColType::Text {
+                if let Some(collision_note) = collision.finish() {
+                    notes[index] = merge_note(notes[index].take(), collision_note);
+                }
+            }
+        }
+
+        Ok(SourceLoad {
+            row_count: loaded as i64,
+            note: profile.note,
+            columns: columns
+                .iter()
+                .zip(notes)
+                .map(|((column, ty), note)| {
+                    let mut info = ColumnInfo::bare(column.clone(), ty.sqlite());
+                    info.note = note;
+                    info
+                })
+                .collect(),
+        })
     }
 }
 
@@ -85,10 +203,13 @@ fn register_parse_num(conn: &Connection) -> EngineResult<()> {
 
 impl DataEngine for SqliteEngine {
     fn add_source(&mut self, name: &str, kind: SourceKind, path: &str) -> EngineResult<SourceLoad> {
+        match kind {
+            SourceKind::Csv => return self.add_delimited_source(name, path, b','),
+            SourceKind::Tsv => return self.add_delimited_source(name, path, b'\t'),
+            _ => {}
+        }
         let parsed =
             match kind {
-                SourceKind::Csv => read_delimited(path, b',')?,
-                SourceKind::Tsv => read_delimited(path, b'\t')?,
                 SourceKind::Json => read_json(path, false)?,
                 SourceKind::Ndjson => read_json(path, true)?,
                 SourceKind::Parquet => return Err(EngineError::msg(
@@ -426,6 +547,264 @@ struct Parsed {
     note: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FileStamp {
+    size: u64,
+    modified: Option<std::time::SystemTime>,
+}
+
+fn file_stamp(path: &str) -> EngineResult<FileStamp> {
+    let metadata = std::fs::metadata(path)
+        .map_err(|error| EngineError::io(format!("inspect {path}"), error))?;
+    Ok(FileStamp {
+        size: metadata.len(),
+        modified: metadata.modified().ok(),
+    })
+}
+
+struct DelimitedProfile {
+    delimiter: u8,
+    headers: Vec<String>,
+    types: Vec<ColType>,
+    date_orders: Vec<Option<NumericDateOrder>>,
+    notes: Vec<Option<String>>,
+    note: Option<String>,
+    data_start: usize,
+    total_records: usize,
+    dropped_records: usize,
+    trailing_total: bool,
+}
+
+/// Reversible full-file type statistics. A small prefix and the last record
+/// are removed after the full pass once header and trailing-total detection
+/// are known, keeping classification identical to a complete in-memory scan.
+#[derive(Default)]
+struct StringColumnProfile {
+    nonblank: usize,
+    integers: usize,
+    floats: usize,
+    booleans: usize,
+    loose_ok: usize,
+    loose_used: usize,
+    numeric: usize,
+    dates_without_order: usize,
+    dates_month_first: usize,
+    dates_day_first: usize,
+    month_first_hints: usize,
+    day_first_hints: usize,
+    date_examples: Vec<(usize, String)>,
+}
+
+impl StringColumnProfile {
+    fn observe(&mut self, value: &str, row_index: usize) {
+        self.update(value, true, row_index);
+    }
+
+    fn unobserve(&mut self, value: &str) {
+        self.update(value, false, 0);
+    }
+
+    fn update(&mut self, value: &str, adding: bool, row_index: usize) {
+        let value = value.trim();
+        if is_blankish(value) {
+            return;
+        }
+
+        let is_integer = value.parse::<i64>().is_ok();
+        let is_float = value.parse::<f64>().is_ok();
+        let parsed_number = parse_numeric(value);
+        let is_boolean = matches!(value.to_ascii_lowercase().as_str(), "true" | "false");
+        bump(&mut self.nonblank, adding);
+        if is_integer {
+            bump(&mut self.integers, adding);
+        }
+        if is_float {
+            bump(&mut self.floats, adding);
+        }
+        if is_boolean {
+            bump(&mut self.booleans, adding);
+        }
+        if is_float || parsed_number.is_some() {
+            bump(&mut self.loose_ok, adding);
+        }
+        if !is_float && parsed_number.is_some() {
+            bump(&mut self.loose_used, adding);
+        }
+        if is_float || parsed_number.is_some() {
+            bump(&mut self.numeric, adding);
+        }
+
+        let direct_date = parse_date_value(value);
+        let month_first_date = direct_date.clone().or_else(|| {
+            value
+                .contains('/')
+                .then(|| parse_date_value_with_order(value, Some(NumericDateOrder::MonthFirst)))?
+        });
+        let day_first_date = direct_date.clone().or_else(|| {
+            value
+                .contains('/')
+                .then(|| parse_date_value_with_order(value, Some(NumericDateOrder::DayFirst)))?
+        });
+        if direct_date.is_some() {
+            bump(&mut self.dates_without_order, adding);
+        }
+        if month_first_date.is_some() {
+            bump(&mut self.dates_month_first, adding);
+        }
+        if day_first_date.is_some() {
+            bump(&mut self.dates_day_first, adding);
+        }
+        match infer_numeric_date_order(std::iter::once(value)) {
+            Some(NumericDateOrder::MonthFirst) => bump(&mut self.month_first_hints, adding),
+            Some(NumericDateOrder::DayFirst) => bump(&mut self.day_first_hints, adding),
+            None => {}
+        }
+
+        if adding
+            && (direct_date.is_some() || month_first_date.is_some() || day_first_date.is_some())
+            && self.date_examples.len() < 32
+        {
+            self.date_examples
+                .push((row_index, value.chars().take(128).collect::<String>()));
+        }
+    }
+
+    fn infer_date_order(&self) -> Option<NumericDateOrder> {
+        match (self.month_first_hints > 0, self.day_first_hints > 0) {
+            (true, false) => Some(NumericDateOrder::MonthFirst),
+            (false, true) => Some(NumericDateOrder::DayFirst),
+            _ => None,
+        }
+    }
+
+    fn finish(
+        &self,
+        data_start: usize,
+        data_end: usize,
+    ) -> (ColType, Option<String>, Option<NumericDateOrder>) {
+        let date_order = self.infer_date_order();
+        let dates = match date_order {
+            Some(NumericDateOrder::MonthFirst) => self.dates_month_first,
+            Some(NumericDateOrder::DayFirst) => self.dates_day_first,
+            None => self.dates_without_order,
+        };
+        let date_example = self.date_examples.iter().find_map(|(row, raw)| {
+            (*row >= data_start && *row < data_end)
+                .then(|| parse_date_value_with_order(raw, date_order))
+                .flatten()
+                .map(|normalized| (raw.clone(), normalized))
+        });
+
+        if self.nonblank == 0 {
+            return (ColType::Text, None, date_order);
+        }
+        if self.booleans == self.nonblank {
+            return (ColType::Bool, None, date_order);
+        }
+        if self.integers == self.nonblank {
+            return (ColType::Int, None, date_order);
+        }
+        if self.floats == self.nonblank {
+            return (ColType::Float, None, date_order);
+        }
+        if self.loose_ok == self.nonblank && self.loose_used > 0 {
+            return (
+                ColType::Float,
+                Some(
+                    "amounts were stored as text (currency, commas, percent) and read as numbers"
+                        .into(),
+                ),
+                date_order,
+            );
+        }
+        if dates == self.nonblank && dates > 0 {
+            let (raw, normalized) = date_example.unwrap_or_default();
+            let order_note = numeric_date_order_note(date_order);
+            return (
+                ColType::Date,
+                Some(format!(
+                    "dates were stored as text (e.g. \"{raw}\") and normalized to ISO-8601 \
+                     (e.g. {normalized}) for querying with strftime()/date(){order_note}"
+                )),
+                date_order,
+            );
+        }
+        if self.nonblank >= 3
+            && self.numeric >= 3
+            && (self.numeric as u128) * 100 > (self.nonblank as u128) * 80
+        {
+            return (
+                ColType::Float,
+                Some(format!(
+                    "{} of {} values were normalized as numbers; unparseable values were left NULL",
+                    self.numeric, self.nonblank
+                )),
+                date_order,
+            );
+        }
+        if self.nonblank >= 3 && dates >= 3 && (dates as u128) * 100 >= (self.nonblank as u128) * 80
+        {
+            let (raw, normalized) = date_example.unwrap_or_default();
+            let order_note = numeric_date_order_note(date_order);
+            return (
+                ColType::Date,
+                Some(format!(
+                    "{dates} of {} values were normalized as dates (e.g. \"{raw}\" -> {normalized}); \
+                     unparseable values were left NULL{order_note}",
+                    self.nonblank
+                )),
+                date_order,
+            );
+        }
+        if self.nonblank >= 3
+            && self.numeric >= 3
+            && (self.numeric as u128) * 100 >= (self.nonblank as u128) * 60
+        {
+            return (
+                ColType::Text,
+                Some(format!(
+                    "{} of {} values parse as numbers; kept as text. Use \
+                     parse_num(col) for a reliable total (CAST silently truncates text like \
+                     \"1,200\" instead of erroring); COUNT(*) - COUNT(parse_num(col)) shows how \
+                     many rows didn't parse",
+                    self.numeric, self.nonblank
+                )),
+                date_order,
+            );
+        }
+        (ColType::Text, None, date_order)
+    }
+}
+
+fn bump(counter: &mut usize, adding: bool) {
+    if adding {
+        *counter += 1;
+    } else {
+        debug_assert!(*counter > 0, "profile counter underflow");
+        *counter = counter.saturating_sub(1);
+    }
+}
+
+fn delimited_reader(path: &str, delimiter: u8) -> EngineResult<csv::Reader<std::fs::File>> {
+    csv::ReaderBuilder::new()
+        .delimiter(delimiter)
+        .flexible(true)
+        .has_headers(false)
+        .from_path(path)
+        .map_err(|error| EngineError::msg(format!("read {path}: {error}")))
+}
+
+fn strip_leading_bom(record: &mut csv::StringRecord) {
+    if record
+        .get(0)
+        .is_some_and(|cell| cell.starts_with('\u{feff}'))
+    {
+        let mut fixed: Vec<String> = record.iter().map(str::to_string).collect();
+        fixed[0] = fixed[0].trim_start_matches('\u{feff}').to_string();
+        *record = csv::StringRecord::from(fixed);
+    }
+}
+
 /// Pick the delimiter from the first line: the candidate that appears most,
 /// counting only outside double quotes. Falls back to `default_delim`.
 fn sniff_delimiter(path: &str, default_delim: u8) -> u8 {
@@ -458,99 +837,74 @@ fn sniff_delimiter(path: &str, default_delim: u8) -> u8 {
     }
 }
 
-fn read_delimited(path: &str, default_delim: u8) -> EngineResult<Parsed> {
+fn inspect_delimited(path: &str, default_delim: u8) -> EngineResult<DelimitedProfile> {
     let mut note: Option<String> = None;
-    let delim = sniff_delimiter(path, default_delim);
-    if delim != default_delim {
+    let delimiter = sniff_delimiter(path, default_delim);
+    if delimiter != default_delim {
         note = Some(format!(
             "columns are separated by '{}', not ','",
-            if delim == b'\t' {
+            if delimiter == b'\t' {
                 "tab".to_string()
             } else {
-                (delim as char).to_string()
+                (delimiter as char).to_string()
             }
         ));
     }
 
-    // Read every row (row 0 included) so we can decide whether it's really a
-    // header or just the first data row, and skip any report preamble above it.
-    let mut rdr = csv::ReaderBuilder::new()
-        .delimiter(delim)
-        .flexible(true)
-        .has_headers(false)
-        .from_path(path)
-        .map_err(|e| EngineError::msg(format!("read {path}: {e}")))?;
-
-    let cap = crate::engine::analytics::data::ingest_row_cap();
-    let byte_cap = crate::engine::analytics::data::ingest_byte_cap();
-    let mut dropped = 0usize;
-    let mut truncated = false;
-    let mut byte_truncated = false;
-    let mut retained_bytes = 0usize;
-    let mut records: Vec<csv::StringRecord> = Vec::new();
-    for r in rdr.records() {
-        match r {
-            Ok(rec) => {
-                let record_bytes = rec.iter().map(str::len).sum::<usize>();
-                if retained_bytes.saturating_add(record_bytes) > byte_cap {
-                    truncated = true;
-                    byte_truncated = true;
-                    break;
+    let mut reader = delimited_reader(path, delimiter)?;
+    let mut prefix: Vec<csv::StringRecord> = Vec::with_capacity(16);
+    let mut last: Option<csv::StringRecord> = None;
+    let mut profiles: Vec<StringColumnProfile> = Vec::new();
+    let mut width = 0usize;
+    let mut total_records = 0usize;
+    let mut dropped_records = 0usize;
+    for result in reader.records() {
+        match result {
+            Ok(mut record) => {
+                if total_records == 0 {
+                    strip_leading_bom(&mut record);
                 }
-                retained_bytes = retained_bytes.saturating_add(record_bytes);
-                records.push(rec);
+                if prefix.len() < 16 {
+                    prefix.push(record.clone());
+                }
+                width = width.max(record.len());
+                profiles.resize_with(width, StringColumnProfile::default);
+                for (column, value) in record.iter().enumerate() {
+                    profiles[column].observe(value, total_records);
+                }
+                last = Some(record);
+                total_records += 1;
             }
-            Err(_) => dropped += 1,
-        }
-        if records.len() >= cap {
-            truncated = true;
-            break;
+            Err(_) => dropped_records += 1,
         }
     }
-    if dropped > 0 {
+
+    if dropped_records > 0 {
         note = merge_note(
             note,
             format!(
-                "{dropped} row(s) had characters Fella couldn't read (not UTF-8) and were skipped"
+                "{dropped_records} row(s) had characters Fella couldn't read (not UTF-8) and were skipped"
             ),
         );
     }
-    if truncated {
-        note = merge_note(
-            note,
-            if byte_truncated {
-                format!(
-                    "only the first {retained_bytes} bytes of the file were loaded (input is larger)"
-                )
-            } else {
-                format!("only the first {cap} rows were loaded (the file is larger)")
-            },
-        );
-    }
-
-    // Strip a leading BOM from the very first cell (Excel "CSV UTF-8").
-    if let Some(first) = records.first_mut() {
-        if first.get(0).is_some_and(|c| c.starts_with('\u{feff}')) {
-            let mut fixed: Vec<String> = first.iter().map(|s| s.to_string()).collect();
-            fixed[0] = fixed[0].trim_start_matches('\u{feff}').to_string();
-            *first = csv::StringRecord::from(fixed);
-        }
-    }
-
-    if records.is_empty() {
-        return Ok(Parsed {
+    if total_records == 0 {
+        return Ok(DelimitedProfile {
+            delimiter,
             headers: vec![],
             types: vec![],
+            date_orders: vec![],
             notes: vec![],
-            rows: vec![],
             note,
+            data_start: 0,
+            total_records,
+            dropped_records,
+            trailing_total: false,
         });
     }
 
-    let width = records.iter().map(|r| r.len()).max().unwrap_or(0);
-
-    // Header detection: skip any preamble, then take the first header-shaped row.
-    let (headers, data_start) = find_header(&records, width);
+    // The old detector searched the first 15 records using the full-file width.
+    // Sixteen retained records preserve the look-ahead required at index 14.
+    let (headers, data_start) = find_header(&prefix, width);
     if data_start > 1 {
         note = merge_note(
             note,
@@ -563,54 +917,58 @@ fn read_delimited(path: &str, default_delim: u8) -> EngineResult<Parsed> {
         );
     }
 
-    let mut data: Vec<&csv::StringRecord> = records[data_start..].iter().collect();
+    let trailing_total = last.as_ref().is_some_and(|record| {
+        total_records.saturating_sub(1) >= data_start
+            && looks_like_total_row(&record.iter().collect::<Vec<_>>(), width)
+    });
+    if trailing_total {
+        note = merge_note(
+            note,
+            "a trailing total row was left out of the table".to_string(),
+        );
+    }
 
-    // Drop a trailing "Total" / "Subtotal" / "Grand total" summary line it
-    // isn't data and would double-count in a SUM.
-    if let Some(last) = data.last() {
-        let cells: Vec<&str> = last.iter().collect();
-        if looks_like_total_row(&cells, width) {
-            data.pop();
-            note = merge_note(
-                note,
-                "a trailing total row was left out of the table".to_string(),
-            );
+    // Exclude header/preamble and an optional trailing total from the full-file
+    // statistics without retaining the rest of the records.
+    for (row_index, record) in prefix.iter().enumerate().take(data_start) {
+        for (column, profile) in profiles.iter_mut().enumerate() {
+            profile.unobserve(record.get(column).unwrap_or(""));
+        }
+        debug_assert!(row_index < data_start);
+    }
+    if trailing_total {
+        if let Some(record) = &last {
+            for (column, profile) in profiles.iter_mut().enumerate() {
+                profile.unobserve(record.get(column).unwrap_or(""));
+            }
         }
     }
 
-    // sniff types per column over the data rows only
-    let mut types = vec![ColType::Text; width];
-    let mut notes = vec![None; width];
-    let mut date_orders = vec![None; width];
-    for i in 0..width {
-        let cells: Vec<&str> = data.iter().map(|r| r.get(i).unwrap_or("")).collect();
-        let date_order = infer_numeric_date_order(cells.iter().copied());
-        let (ty, cnote) = sniff_strings_with_order(cells.iter().copied(), date_order);
-        types[i] = ty;
-        date_orders[i] = date_order;
-        // A label column whose values collapse under case-folding (Rent / rent):
-        // tell the model to match case-insensitively.
-        notes[i] = match (ty, case_collision(cells.iter().copied())) {
-            (ColType::Text, Some(cc)) => Some(merge_note(cnote, cc).unwrap_or_default()),
-            _ => cnote,
-        };
+    let data_end = total_records - usize::from(trailing_total);
+    let finalized: Vec<(ColType, Option<String>, Option<NumericDateOrder>)> = profiles
+        .iter()
+        .map(|profile| profile.finish(data_start, data_end))
+        .collect();
+    let mut types = Vec::with_capacity(width);
+    let mut notes = Vec::with_capacity(width);
+    let mut date_orders = Vec::with_capacity(width);
+    for (ty, column_note, date_order) in finalized {
+        types.push(ty);
+        notes.push(column_note);
+        date_orders.push(date_order);
     }
 
-    let rows: Vec<Vec<Cell>> = data
-        .iter()
-        .map(|r| {
-            (0..width)
-                .map(|i| string_cell_with_order(r.get(i).unwrap_or(""), types[i], date_orders[i]))
-                .collect()
-        })
-        .collect();
-
-    Ok(Parsed {
+    Ok(DelimitedProfile {
+        delimiter,
         headers,
         types,
+        date_orders,
         notes,
-        rows,
         note,
+        data_start,
+        total_records,
+        dropped_records,
+        trailing_total,
     })
 }
 
@@ -798,6 +1156,7 @@ fn sniff_strings<'a>(cells: impl Iterator<Item = &'a str>) -> (ColType, Option<S
     sniff_strings_with_order(cells.into_iter(), date_order)
 }
 
+#[cfg(test)]
 fn sniff_strings_with_order<'a>(
     cells: impl Iterator<Item = &'a str>,
     date_order: Option<NumericDateOrder>,
@@ -916,43 +1275,60 @@ fn sniff_strings_with_order<'a>(
 /// If a text column's distinct values collapse under case-folding (`Rent` and
 /// `rent` both present), return a note. Bounded: gives up once a column has too
 /// many distinct values to be a label (free text, ids), and stops at 5000 rows.
+#[cfg(test)]
 fn case_collision<'a>(cells: impl Iterator<Item = &'a str>) -> Option<String> {
-    use crate::engine::analytics::data::is_blankish;
-    use std::collections::BTreeSet;
+    let mut profile = CaseCollisionAccumulator::default();
+    for cell in cells {
+        profile.observe(cell);
+    }
+    profile.finish()
+}
 
-    let mut raw: BTreeSet<String> = BTreeSet::new();
-    let mut folded: BTreeSet<String> = BTreeSet::new();
-    let mut example: Option<(String, String)> = None;
-    for (n, c) in cells.enumerate() {
-        if n >= 5000 {
-            break;
+#[derive(Default)]
+struct CaseCollisionAccumulator {
+    records_seen: usize,
+    raw: std::collections::BTreeSet<String>,
+    folded: std::collections::BTreeSet<String>,
+    example: Option<(String, String)>,
+    too_many_values: bool,
+}
+
+impl CaseCollisionAccumulator {
+    fn observe(&mut self, cell: &str) {
+        if self.records_seen >= 5000 || self.too_many_values {
+            return;
         }
-        let c = c.trim();
-        if is_blankish(c) {
-            continue;
+        self.records_seen += 1;
+        let cell = cell.trim();
+        if is_blankish(cell) {
+            return;
         }
-        if raw.len() > 60 {
-            return None; // not a label column
+        if self.raw.len() > 60 {
+            self.too_many_values = true;
+            return;
         }
-        let lc = c.to_lowercase();
-        if !raw.contains(c) && folded.contains(&lc) && example.is_none() {
-            if let Some(prev) = raw.iter().find(|v| v.to_lowercase() == lc) {
-                example = Some((prev.clone(), c.to_string()));
+        let folded = cell.to_lowercase();
+        if !self.raw.contains(cell) && self.folded.contains(&folded) && self.example.is_none() {
+            if let Some(previous) = self.raw.iter().find(|value| value.to_lowercase() == folded) {
+                self.example = Some((previous.clone(), cell.to_string()));
             }
         }
-        raw.insert(c.to_string());
-        folded.insert(lc);
+        self.raw.insert(cell.to_string());
+        self.folded.insert(folded);
     }
-    if raw.len() > folded.len() {
-        let eg = example
+
+    fn finish(self) -> Option<String> {
+        if self.too_many_values || self.raw.len() <= self.folded.len() {
+            return None;
+        }
+        let example = self
+            .example
             .map(|(a, b)| format!(" (e.g. {a} / {b})"))
             .unwrap_or_default();
         Some(format!(
-            "values differ only in capitalisation{eg}; when filtering by a value, fold case \
+            "values differ only in capitalisation{example}; when filtering by a value, fold case \
              (lower(col) = lower('value'), or col = 'value' COLLATE NOCASE)"
         ))
-    } else {
-        None
     }
 }
 
@@ -1217,6 +1593,36 @@ mod tests {
         );
         assert_eq!(sniff_strings(["a", "1", "b"].into_iter()).0, ColType::Text);
         assert_eq!(sniff_strings(["", ""].into_iter()).0, ColType::Text);
+    }
+
+    #[test]
+    fn streaming_column_profile_matches_full_column_type_inference() {
+        let cases: &[&[&str]] = &[
+            &["1", "2", "", "3"],
+            &["1", "2.5", "3"],
+            &["true", "false", "TRUE"],
+            &["$1,200.00", "1,150", "1200", "N/A"],
+            &["$1,200", "1,300", "bad", "800", "725"],
+            &["2024-01-02", "Feb 3, 2024", "2024/03/04"],
+            &["03/04/2024", "4 Mar 2024", "07/25/2024", "06/03/2024"],
+            &["03/04/2024", "13/04/2024", "07/25/2024"],
+            &["inf", "$2.00"],
+            &["Rent", "rent", "Food", "N/A"],
+            &["", "N/A", "-"],
+        ];
+
+        for values in cases {
+            let date_order = infer_numeric_date_order(values.iter().copied());
+            let expected = sniff_strings_with_order(values.iter().copied(), date_order);
+            let mut profile = StringColumnProfile::default();
+            for (index, value) in values.iter().enumerate() {
+                profile.observe(value, index);
+            }
+            let actual = profile.finish(0, values.len());
+            assert_eq!(actual.0, expected.0, "column values: {values:?}");
+            assert_eq!(actual.1, expected.1, "column values: {values:?}");
+            assert_eq!(actual.2, date_order, "column values: {values:?}");
+        }
     }
 
     #[test]
