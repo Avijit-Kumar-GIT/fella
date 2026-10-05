@@ -87,6 +87,8 @@ pub struct WorkspaceModel {
     pub sources: Vec<SourceModel>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub relationships: Vec<RelationshipCandidate>,
+    #[serde(default)]
+    pub relationships_truncated: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub skipped: Vec<SkippedFile>,
 }
@@ -98,11 +100,13 @@ impl WorkspaceModel {
             .iter()
             .map(SourceModel::from_catalog)
             .collect();
+        let (relationships, relationships_truncated) = infer_relationships(&sources);
         Some(Self {
             workspace: catalog.workspace.clone()?,
             revision: catalog.revision.clone()?,
             indexed_at_ms: catalog.indexed_at_ms,
-            relationships: infer_relationships(&sources),
+            relationships,
+            relationships_truncated,
             sources,
             skipped: catalog.skipped.clone(),
         })
@@ -199,7 +203,11 @@ impl WorkspaceModel {
                     relationship.evidence
                 ));
             }
-            if self.relationships.len() > 24 {
+            if self.relationships_truncated {
+                block.push_str(
+                    "  More candidate relationships exist than are listed here; inspect relevant tables to find others.\n",
+                );
+            } else if self.relationships.len() > 24 {
                 block.push_str(&format!(
                     "  +{} more candidate relationship(s) omitted\n",
                     self.relationships.len() - 24
@@ -269,31 +277,144 @@ impl FieldProfile {
     }
 }
 
-fn infer_relationships(sources: &[SourceModel]) -> Vec<RelationshipCandidate> {
+const RELATIONSHIP_HINT_CAP: usize = 128;
+
+#[derive(Clone, Copy)]
+struct FieldIndexEntry {
+    source: usize,
+    field: usize,
+}
+
+/// Find name-based join candidates from an inverted field index instead of
+/// comparing every field in every pair of sources. Candidates are hints only;
+/// keep a bounded, explicitly marked sample when a large folder creates a
+/// combinatorial number of matches.
+fn infer_relationships(sources: &[SourceModel]) -> (Vec<RelationshipCandidate>, bool) {
+    let mut by_name: std::collections::BTreeMap<String, Vec<FieldIndexEntry>> =
+        std::collections::BTreeMap::new();
+    let mut identifiers = Vec::new();
+    for (source_index, source) in sources.iter().enumerate() {
+        for (field_index, field) in source.fields.iter().enumerate() {
+            let name = normalize_name(&field.name);
+            if name.is_empty() {
+                continue;
+            }
+            let entry = FieldIndexEntry {
+                source: source_index,
+                field: field_index,
+            };
+            by_name.entry(name.clone()).or_default().push(entry);
+            if name == "id" && field.role == FieldRole::Identifier {
+                identifiers.push(entry);
+            }
+        }
+    }
+
     let mut relationships = Vec::new();
-    for (left_index, left) in sources.iter().enumerate() {
-        for right in sources.iter().skip(left_index + 1) {
-            let left_source = source_key(left);
-            let right_source = source_key(right);
-            for left_field in &left.fields {
-                for right_field in &right.fields {
-                    let Some(evidence) =
-                        relationship_evidence(left, left_field, right, right_field)
-                    else {
+    let mut truncated = false;
+
+    // Equal non-generic field names. Split by numeric compatibility first,
+    // then pair each identifier with the compatible fields only.
+    for (name, entries) in &by_name {
+        if name == "id"
+            || !entries.iter().any(|entry| {
+                sources[entry.source].fields[entry.field].role == FieldRole::Identifier
+            })
+        {
+            continue;
+        }
+        for numeric in [false, true] {
+            let compatible: Vec<FieldIndexEntry> = entries
+                .iter()
+                .copied()
+                .filter(|entry| {
+                    is_numeric_type(&sources[entry.source].fields[entry.field].type_) == numeric
+                })
+                .collect();
+            for identifier in compatible.iter().copied().filter(|entry| {
+                sources[entry.source].fields[entry.field].role == FieldRole::Identifier
+            }) {
+                for other in compatible.iter().copied() {
+                    if identifier.source == other.source
+                        || (sources[identifier.source].fields[identifier.field].role
+                            == FieldRole::Identifier
+                            && identifier.source > other.source)
+                    {
                         continue;
-                    };
-                    relationships.push(RelationshipCandidate {
-                        left_source: left_source.to_string(),
-                        left_field: left_field.name.clone(),
-                        right_source: right_source.to_string(),
-                        right_field: right_field.name.clone(),
-                        evidence: evidence.to_string(),
-                    });
+                    }
+                    if !push_relationship(sources, identifier, other, &mut relationships) {
+                        truncated = true;
+                        return (relationships, truncated);
+                    }
                 }
             }
         }
     }
-    relationships
+
+    // `id` ↔ `<entity>_id` / `<entity>_key` candidates are looked up directly
+    // by their normalized field name, avoiding an all-source scan per id.
+    for identifier in identifiers {
+        let source = &sources[identifier.source];
+        let source_name = normalize_name(source_key(source));
+        let stem = source_name.strip_suffix('s').unwrap_or(&source_name);
+        let mut expected = std::collections::BTreeSet::new();
+        for prefix in [stem, source_name.as_str()] {
+            if !prefix.is_empty() {
+                expected.insert(format!("{prefix}id"));
+                expected.insert(format!("{prefix}key"));
+            }
+        }
+        for field_name in expected {
+            let Some(references) = by_name.get(&field_name) else {
+                continue;
+            };
+            for reference in references {
+                if identifier.source == reference.source
+                    || is_numeric_type(&source.fields[identifier.field].type_)
+                        != is_numeric_type(&sources[reference.source].fields[reference.field].type_)
+                {
+                    continue;
+                }
+                if !push_relationship(sources, identifier, *reference, &mut relationships) {
+                    truncated = true;
+                    return (relationships, truncated);
+                }
+            }
+        }
+    }
+
+    (relationships, truncated)
+}
+
+fn push_relationship(
+    sources: &[SourceModel],
+    first: FieldIndexEntry,
+    second: FieldIndexEntry,
+    relationships: &mut Vec<RelationshipCandidate>,
+) -> bool {
+    let (left_ref, right_ref) = if first.source <= second.source {
+        (first, second)
+    } else {
+        (second, first)
+    };
+    let left = &sources[left_ref.source];
+    let right = &sources[right_ref.source];
+    let left_field = &left.fields[left_ref.field];
+    let right_field = &right.fields[right_ref.field];
+    let Some(evidence) = relationship_evidence(left, left_field, right, right_field) else {
+        return true;
+    };
+    if relationships.len() >= RELATIONSHIP_HINT_CAP {
+        return false;
+    }
+    relationships.push(RelationshipCandidate {
+        left_source: source_key(left).to_string(),
+        left_field: left_field.name.clone(),
+        right_source: source_key(right).to_string(),
+        right_field: right_field.name.clone(),
+        evidence: evidence.to_string(),
+    });
+    true
 }
 
 fn relationship_evidence<'a>(
@@ -585,11 +706,47 @@ mod tests {
                 note: None,
             },
         ];
-        let relationships = infer_relationships(&sources);
+        let (relationships, truncated) = infer_relationships(&sources);
+        assert!(!truncated);
         assert_eq!(relationships.len(), 1);
         assert_eq!(relationships[0].left_source, "customers");
         assert_eq!(relationships[0].right_field, "customer_id");
         assert!(relationships[0].evidence.contains("right key"));
+    }
+
+    #[test]
+    fn relationship_discovery_stays_bounded_for_many_repeated_keys() {
+        let identifier = FieldProfile {
+            name: "account_id".into(),
+            type_: "INTEGER".into(),
+            role: FieldRole::Identifier,
+            null_fraction: None,
+            distinct: None,
+            min: None,
+            max: None,
+            example: None,
+            common_values: None,
+            common_value_counts: None,
+            note: None,
+        };
+        let sources: Vec<SourceModel> = (0..5_000)
+            .map(|index| SourceModel {
+                name: format!("part-{index}.csv"),
+                path: format!("/workspace/part-{index}.csv"),
+                kind: SourceKind::Csv,
+                view: Some(format!("part_{index}")),
+                row_count: Some(2),
+                fields: vec![identifier.clone()],
+                size_bytes: 0,
+                mtime: 0,
+                synopsis: None,
+                note: None,
+            })
+            .collect();
+
+        let (relationships, truncated) = infer_relationships(&sources);
+        assert_eq!(relationships.len(), RELATIONSHIP_HINT_CAP);
+        assert!(truncated);
     }
 
     #[test]
@@ -606,5 +763,20 @@ mod tests {
         assert!(block.contains("Candidate relationships"));
         assert!(block.contains("customers.id ↔ orders.customer_id"));
         assert!(block.contains("verify keys before joining"));
+    }
+
+    #[test]
+    fn prompt_block_discloses_when_relationship_candidates_were_capped() {
+        let mut model = WorkspaceModel::from_catalog(&catalog()).unwrap();
+        model.relationships.push(RelationshipCandidate {
+            left_source: "customers".into(),
+            left_field: "id".into(),
+            right_source: "orders".into(),
+            right_field: "customer_id".into(),
+            evidence: "right key names the left entity".into(),
+        });
+        model.relationships_truncated = true;
+        let block = model.prompt_block();
+        assert!(block.contains("More candidate relationships exist"));
     }
 }

@@ -491,6 +491,7 @@ export interface WorkspaceModel {
 	indexed_at_ms?: number;
 	sources: SourceModel[];
 	relationships?: RelationshipCandidate[];
+	relationships_truncated?: boolean;
 	skipped?: SkippedFile[];
 }
 

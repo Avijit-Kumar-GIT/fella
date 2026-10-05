@@ -35,6 +35,13 @@ use crate::engine::tools::Registry;
 use crate::engine::update;
 use crate::engine::workspace_model::WorkspaceModel;
 
+// Full-table common-value/null/min/max statistics are useful on tiny mounts,
+// but not worth rescanning many or large tables before the first question.
+// Larger tables keep their full rows and inferred types; inspect_table calls
+// describe_source to produce exact statistics lazily when one matters.
+const EAGER_PROFILE_TOTAL_SOURCE_BYTES: u64 = 1 * 1024 * 1024;
+const EAGER_PROFILE_MAX_ROWS: i64 = 10_000;
+
 pub struct EngineState {
     workspace: Mutex<WorkspaceState>,
     sqlite: Mutex<rusqlite::Connection>,
@@ -94,11 +101,11 @@ fn revision_snapshot(catalog: &Catalog) -> Option<WorkspaceRevisionSnapshot> {
     })
 }
 
-/// Add bounded mount-time stats to an already normalized table. This keeps
-/// the raw file untouched while exposing useful low-cardinality populations
-/// (status, type, region, etc.) before the model writes a filter. Samples are
-/// still JIT-only; `describe` provides schema stats and common values without
-/// putting rows into the initial prompt for large workspaces.
+/// Add mount-time statistics only for small workspaces. On larger mounts the
+/// model gets the inferred schema immediately and can request these full-table
+/// distributions through `describe_source` when a table is relevant. This
+/// avoids repeatedly scanning every newly ingested table just to prepare a
+/// catalog the model will not fully consume.
 fn profile_loaded_columns(
     data: &dyn DataEngine,
     view: &str,
@@ -2528,6 +2535,16 @@ exactly, character for character, from the list below.";
             )));
         }
         let (scanned, mut skipped) = catalog::scan(path)?;
+        let tabular_files: Vec<_> = scanned
+            .iter()
+            .filter(|file| file.kind.is_tabular())
+            .collect();
+        let eager_table_profiles = tabular_files.len() <= 4
+            && tabular_files
+                .iter()
+                .map(|file| file.size_bytes)
+                .fold(0u64, |total, file_size| total.saturating_add(file_size))
+                <= EAGER_PROFILE_TOTAL_SOURCE_BYTES;
 
         // Build in an isolated backend. The active workspace remains fully
         // queryable until the new catalog and data engine are published below.
@@ -2587,9 +2604,15 @@ exactly, character for character, from the list below.";
                             &mut *data, &path_str, stem, &mut used,
                         ) {
                             Ok((sheets, _)) if !sheets.is_empty() => {
+                                let profile_sheet_stats = eager_table_profiles && sheets.len() <= 4;
                                 for sh in sheets {
-                                    let columns =
-                                        profile_loaded_columns(&*data, &sh.view, sh.columns);
+                                    let columns = if profile_sheet_stats
+                                        && sh.row_count <= EAGER_PROFILE_MAX_ROWS
+                                    {
+                                        profile_loaded_columns(&*data, &sh.view, sh.columns)
+                                    } else {
+                                        sh.columns
+                                    };
                                     sources.push(SourceInfo {
                                         name: format!("{} \u{b7} {}", info.name, sh.sheet),
                                         path: path_str.clone(),
@@ -2633,8 +2656,15 @@ exactly, character for character, from the list below.";
                         match data.add_source(&view, f.kind, &path_str) {
                             Ok(load) => {
                                 info.row_count = Some(load.row_count);
-                                info.columns =
-                                    Some(profile_loaded_columns(&*data, &view, load.columns));
+                                info.columns = Some(
+                                    if eager_table_profiles
+                                        && load.row_count <= EAGER_PROFILE_MAX_ROWS
+                                    {
+                                        profile_loaded_columns(&*data, &view, load.columns)
+                                    } else {
+                                        load.columns
+                                    },
+                                );
                                 info.note = load.note;
                                 info.view = Some(view);
                             }
@@ -3670,31 +3700,47 @@ exactly, character for character, from the list below.";
     }
 
     fn persist_sources(&self, workspace: &Path, sources: &[SourceInfo]) {
-        let conn = self.sqlite.lock().unwrap_or_else(|e| e.into_inner());
+        let mut conn = self.sqlite.lock().unwrap_or_else(|e| e.into_inner());
+        let Ok(tx) = conn.transaction() else {
+            log::warn!("couldn't start workspace source index transaction");
+            return;
+        };
         let ws = workspace.display().to_string();
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
-        let _ = conn.execute("DELETE FROM sources WHERE workspace = ?1", [&ws]);
-        for s in sources {
-            let _ = conn.execute(
-                "INSERT OR REPLACE INTO sources (workspace, name, path, kind, view, row_count)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                rusqlite::params![
-                    ws,
-                    s.name,
-                    s.path,
-                    format!("{:?}", s.kind).to_lowercase(),
-                    s.view,
-                    s.row_count,
-                ],
-            );
+        let indexed = (|| -> rusqlite::Result<()> {
+            tx.execute("DELETE FROM sources WHERE workspace = ?1", [&ws])?;
+            {
+                let mut insert = tx.prepare_cached(
+                    "INSERT OR REPLACE INTO sources (workspace, name, path, kind, view, row_count)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                )?;
+                for source in sources {
+                    insert.execute(rusqlite::params![
+                        ws,
+                        source.name,
+                        source.path,
+                        format!("{:?}", source.kind).to_lowercase(),
+                        source.view,
+                        source.row_count,
+                    ])?;
+                }
+            }
+            tx.execute(
+                "INSERT OR REPLACE INTO recent_workspaces (path, opened_at) VALUES (?1, ?2)",
+                rusqlite::params![ws, now],
+            )?;
+            Ok(())
+        })();
+        if let Err(error) = indexed {
+            log::warn!("couldn't persist workspace source index: {error}");
+            return;
         }
-        let _ = conn.execute(
-            "INSERT OR REPLACE INTO recent_workspaces (path, opened_at) VALUES (?1, ?2)",
-            rusqlite::params![ws, now],
-        );
+        if let Err(error) = tx.commit() {
+            log::warn!("couldn't commit workspace source index: {error}");
+        }
     }
 }
 

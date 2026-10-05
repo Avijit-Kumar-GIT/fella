@@ -3,7 +3,9 @@
 //! Its own test binary isolates the process environment from sibling tests.
 
 use std::fmt::Write as _;
-use std::fs;
+use std::fs::{self, File};
+use std::io::BufWriter;
+use std::io::Write as _;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -133,4 +135,61 @@ fn a_source_is_complete_even_when_legacy_ingest_caps_are_set() {
         .find(|source| source.name == "object-data.json")
         .unwrap();
     assert_eq!(object.row_count, Some(1));
+}
+
+#[test]
+fn a_large_delimited_source_is_streamed_completely() {
+    std::env::set_var("FELLA_INGEST_ROW_CAP", "10");
+    std::env::set_var("FELLA_INGEST_BYTE_CAP", "64");
+    std::env::set_var("FELLA_SKIP_MODEL_WARMUP", "1");
+
+    const ROWS: usize = 250_000;
+    let ws = Scratch::new("large-ingest-ws");
+    let data = Scratch::new("large-ingest-data");
+    let path = ws.path().join("large.csv");
+    let mut writer = BufWriter::new(File::create(&path).unwrap());
+    writeln!(writer, "sequence,label").unwrap();
+    for sequence in 0..ROWS {
+        writeln!(writer, "{sequence},record-{sequence}").unwrap();
+    }
+    drop(writer);
+
+    let started = std::time::Instant::now();
+    let engine = EngineState::new(data.path()).unwrap();
+    let catalog = engine.open_workspace(ws.path()).unwrap();
+    let elapsed = started.elapsed();
+    let source = catalog
+        .sources
+        .iter()
+        .find(|source| source.name == "large.csv")
+        .unwrap();
+
+    assert_eq!(source.row_count, Some(ROWS as i64));
+    assert!(source
+        .columns
+        .as_ref()
+        .unwrap()
+        .iter()
+        .all(|column| column.distinct.is_none()));
+    let count = engine.run_sql("SELECT count(*) FROM large").unwrap();
+    assert_eq!(count.rows[0][0], serde_json::json!(ROWS));
+    let last = engine
+        .run_sql("SELECT label FROM large ORDER BY rowid DESC LIMIT 1")
+        .unwrap();
+    assert_eq!(
+        last.rows[0][0],
+        serde_json::json!(format!("record-{}", ROWS - 1))
+    );
+    eprintln!(
+        "streaming ingest sample: rows={ROWS} bytes={} elapsed_ms={}",
+        fs::metadata(path).unwrap().len(),
+        elapsed.as_millis()
+    );
+
+    let described = engine.describe_source("large").unwrap();
+    assert!(described
+        .columns
+        .unwrap()
+        .iter()
+        .all(|column| column.distinct.is_some()));
 }

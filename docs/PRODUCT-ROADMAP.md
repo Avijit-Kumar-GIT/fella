@@ -381,8 +381,30 @@ pass. Remaining constraints: XLSX currently materializes sheets; `open_workspace
 still prepares sources synchronously before publishing the catalog; document
 search streams text but makes two workspace-wide passes per query. These are
 facts to measure and address, not acceptance criteria to preserve. No
-5,000-file / 10-GB mixed-folder throughput or peak-memory result has been
-collected yet.
+10-GB mixed-folder or peak-memory result has been collected yet. The local
+5,000-file probe uses 5,000 nested two-row CSVs plus 100 skipped DOCX-shaped
+files; its expected result is 10,000 queryable rows and 100 visible skips.
+Observed end-to-end debug-build mount times across implementation iterations
+were 46,983 ms, 20,566 ms, then 6,961 ms; the latest run still used
+24,927,832 bytes in the temporary SQLite build directory. These are single
+machine observations, not repeated controlled samples, and the changes between
+runs were cumulative, so they do not isolate each optimization's effect or
+establish an acceptable-performance claim. A separate 250,000-row, 5,027,795
+byte CSV loaded completely in about 2.5 seconds in a local debug run. Neither
+probe measures peak memory. The probes have no timing pass/fail threshold and
+clean their generated fixtures and temporary databases automatically.
+
+The current implementation also avoids mount-time exact distinct/null/range
+profiles on larger workspaces and computes them when a table is inspected;
+relationship-hint discovery uses an inverted field-name index and retains at
+most 128 candidates, explicitly disclosing truncation. This reduces the
+measured mount path but does not yet provide bounded prompt/catalog output,
+incremental refresh, or asynchronous readiness: the initial catalog and
+workspace model still represent every discovered source, and `open_workspace`
+still finishes preparation before publishing the new workspace. XLSX sheet
+loading still materializes sheet data, and document search still makes two
+workspace-wide passes per query. These remain open work, as do a repeatable
+10-GB mixed-format benchmark and peak-memory measurements.
 
 **Research informing the design:** Rust's [`ignore::WalkBuilder`](https://docs.rs/ignore/latest/ignore/struct.WalkBuilder.html)
 offers a parallel recursive walker and filtering, but its file-size and ignore
