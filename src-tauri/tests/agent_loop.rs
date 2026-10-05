@@ -209,6 +209,128 @@ async fn agent_calls_a_tool_then_answers() {
 }
 
 #[tokio::test]
+async fn shared_dimension_does_not_force_a_join_or_duplicate_the_final_chart() {
+    let ws = scratch("shared-dimension-chart-ws");
+    let data = scratch("shared-dimension-chart-data");
+    fs::write(
+        ws.join("metrics.csv"),
+        "segment,metric_value\nA,4\nA,6\nB,20\n",
+    )
+    .unwrap();
+    fs::write(ws.join("targets.csv"), "segment,target_value\nA,9\nB,25\n").unwrap();
+
+    let (url, requests, server) = fake_openai_with_requests(vec![
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{
+                "id": "metric-totals",
+                "type": "function",
+                "function": {
+                    "name": "run_sql",
+                    "arguments": "{\"sql\":\"SELECT segment, SUM(metric_value) AS total_metric FROM metrics GROUP BY segment ORDER BY segment\",\"note\":\"Total the observed metric by segment\"}"
+                }
+            }]
+        })),
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{
+                "id": "metric-chart",
+                "type": "function",
+                "function": {
+                    "name": "make_chart",
+                    "arguments": "{\"kind\":\"bar\",\"source_evidence_id\":\"evidence-1\",\"x_field\":\"segment\",\"y_field\":\"total_metric\",\"title\":\"Metric total by segment\"}"
+                }
+            }]
+        })),
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "Metric totals were 10 for segment A and 20 for segment B."
+        })),
+    ]);
+
+    let engine = EngineState::new(&data).unwrap();
+    engine
+        .save_settings(
+            serde_json::json!({ "provider": "custom", "base_url": url, "model": "test" })
+                .as_object()
+                .unwrap(),
+        )
+        .unwrap();
+    engine.set_api_key("custom", "sk-test").unwrap();
+    engine.open_workspace(&ws).unwrap();
+
+    let answer = engine
+        .ask(
+            "shared-dimension-chart",
+            "What are the total metric values by segment? Show a chart.",
+            None,
+            |_| {},
+        )
+        .await
+        .unwrap();
+    server.join().unwrap();
+
+    assert!(answer.text.contains("10") && answer.text.contains("20"));
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 3, "no semantic-repair round trip is needed");
+    let system_prompt = requests[0]["messages"][0]["content"]
+        .as_str()
+        .expect("system prompt");
+    assert!(system_prompt.contains("Potentially related fields"));
+    assert!(system_prompt.contains("a clue, not a join instruction"));
+    assert!(!system_prompt.contains("JOIN or align on these"));
+    assert_eq!(answer.evidence.len(), 2, "evidence: {:?}", answer.evidence);
+    assert!(answer.evidence.iter().all(|item| item.error.is_none()));
+    assert!(!answer
+        .verification
+        .iter()
+        .any(|check| check.label.contains("join")));
+    assert!(answer.verification.iter().any(|check| {
+        check.ok
+            && check
+                .label
+                .contains("chart values matched the source query")
+    }));
+    assert_eq!(
+        answer
+            .evidence
+            .iter()
+            .filter(|item| item.tool == "run_sql")
+            .count(),
+        1,
+        "the grouped measure should be computed once"
+    );
+    let charts: Vec<_> = answer
+        .evidence
+        .iter()
+        .filter(|item| item.tool == "make_chart")
+        .collect();
+    assert_eq!(charts.len(), 1, "evidence: {:?}", answer.evidence);
+    let chart_item = charts[0];
+    assert!(chart_item.error.is_none(), "chart: {chart_item:?}");
+    let chart = chart_item.chart.as_ref().expect("chart payload");
+    assert!(matches!(
+        chart.kind,
+        fella_lib::engine::analytics::chart::ChartKind::Bar
+    ));
+    assert_eq!(chart.labels, vec!["A", "B"]);
+    assert_eq!(chart.series.len(), 1);
+    assert_eq!(chart.series[0].values, vec![Some(10.0), Some(20.0)]);
+    assert_eq!(
+        chart
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.source_evidence_id.as_deref()),
+        Some("evidence-1")
+    );
+
+    let _ = fs::remove_dir_all(&ws);
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[tokio::test]
 async fn identical_tool_calls_in_one_model_turn_execute_once() {
     let ws = scratch("duplicate-batch-ws");
     let data = scratch("duplicate-batch-data");

@@ -1958,7 +1958,9 @@ impl EngineState {
         if !tables.is_empty() {
             let hints = shared_column_hints(&tables);
             if !hints.is_empty() {
-                p.push_str("Shared columns (JOIN or align on these):\n");
+                p.push_str(
+                    "Potentially related fields (same names only; a clue, not a join instruction):\n",
+                );
                 for h in hints {
                     p.push_str(&format!("  {h}\n"));
                 }
@@ -3890,10 +3892,9 @@ fn mini_table(q: &QueryResult) -> Vec<String> {
         .collect()
 }
 
-/// One-line hints for `schema_block`: any column name shared by 2+ tables is a
-/// likely join / align key, and the model can't always spot the relationship
-/// from per-table column lists (especially when the case differs). A short
-/// stoplist drops names that are almost never cross-table keys.
+/// One-line candidates for `schema_block`: same-named columns may be related,
+/// but name overlap alone does not establish a join key or a need to combine
+/// sources. A short stoplist drops names that are too generic to be useful.
 fn shared_column_hints(tables: &[&SourceInfo]) -> Vec<String> {
     const STOP: &[&str] = &[
         "id",

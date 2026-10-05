@@ -36,6 +36,7 @@ function contrast(a, b) {
 try {
 	const { render } = await server.ssrLoadModule('svelte/server');
 	const { default: Chart } = await server.ssrLoadModule('/src/lib/components/Chart.svelte');
+	const { default: Message } = await server.ssrLoadModule('/src/lib/components/Message.svelte');
 	const renderChart = (spec) => render(Chart, { props: { spec } }).body;
 	const metadata = {
 		source_label: 'fixture.csv',
@@ -71,6 +72,30 @@ try {
 		})
 	);
 	assert.match(sparseMetadataBar, /role="img" aria-label="bar validation"/);
+
+	// Superseded charts remain in evidence for auditability, but only the final
+	// accepted chart should appear in the visible answer.
+	const finalChart = generic('bar', ['A', 'B'], [{ name: 'Metric', values: [10, 20] }]);
+	const renderedMessage = render(Message, {
+		props: {
+			message: {
+				id: 'chart-lifecycle',
+				role: 'assistant',
+				text: 'Metric totals by segment.',
+				ts: 1,
+				answer: {
+					text: 'Metric totals by segment.',
+					verification: [],
+					evidence: [
+						{ id: 'old-chart-1', tool: 'make_chart', args: {}, result_summary: 'old', error: 'superseded', chart: finalChart },
+						{ id: 'old-chart-2', tool: 'make_chart', args: {}, result_summary: 'old', error: 'superseded', chart: finalChart },
+						{ id: 'accepted-chart', tool: 'make_chart', args: {}, result_summary: 'accepted', chart: finalChart }
+					]
+				}
+			}
+		}
+	}).body;
+	assert.equal(count(renderedMessage, /class="[^"]*\bchart-card\b[^"]*"/g), 1);
 
 	const line = renderChart(generic('line', ['Jan', 'Feb'], [{ name: 'Observed', values: [2, 4] }], {
 		x_label: 'Month',

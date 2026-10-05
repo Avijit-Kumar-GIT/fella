@@ -129,3 +129,74 @@ tests passed; 16 chart-tool tests passed; the agent-loop target had 17 passed,
 the chart-renderer SSR checks passed. The SSR runner prints a non-fatal Vite
 HMR socket `EPERM` in this sandbox. No post-fix live-model rerun or manual
 Windows light/dark review has been performed yet.
+
+## Follow-up: false join repair and superseded chart rendering
+
+A subsequent visual test exposed a verifier-induced loop: a query correctly
+aggregated one table by a dimension whose name also appeared in another table.
+The schema prompt called matching column names "JOIN or align" hints, and a
+separate lexical verifier treated a shared non-generic column mentioned in the
+question as proof that a join was required. That warning triggered semantic
+repairs, marked the valid query and its chart as superseded, and repeatedly
+asked the model to rebuild them. The transcript UI then rendered every chart
+record, including superseded chart evidence, so the user saw three charts.
+
+The runtime no longer treats a shared column name as join intent; that alone
+cannot prove a join is needed. Matching names are presented as candidate
+relationships, and explicit grounded contract joins continue to be checked
+against executed SQL. Repair guidance now reuses successful evidence and asks
+for only the work needed to address the failed check. The answer view renders
+charts and derives source labels only from successful evidence; superseded
+chart records remain available in analysis details for audit.
+The pre-existing lexical join-helper unit test was left unchanged, as required
+by the evaluation policy, but its helper is now test-only; it no longer defines
+runtime behavior and should be reviewed in the next test audit.
+
+Regression coverage was defined before the implementation change. A scripted
+two-table loop test requires one grouped query from the relevant table, one
+bar chart sourced from that query, correct labels and values, no failed or
+superseded evidence, and no extra semantic-repair round trip. An SSR UI test
+supplies two superseded charts and one accepted chart and asserts exactly one
+chart is visible. Both failed before the fix and pass afterward. Also passed:
+303 Rust library tests, `pnpm check`, `pnpm build`, and the chart renderer
+checks. The full agent-loop suite reports 18 passed, 2 failed, and 1 ignored;
+the unchanged failures are `direct_data_calls_do_not_require_a_contract` and
+`unresolved_contract_defers_direct_data_tools_until_revised` (both expect
+`Verified` but runtime returns `NeedsReview`). The Vite SSR test prints a
+non-fatal HMR socket `EPERM` in this sandbox. One BYOK diagnostic run of
+`viz-category-bar` with `openai/gpt-5.6-luna` passed with the expected single
+bar chart and values (Rent 3600, Groceries 350, Dining 180, Transport 60).
+It used four tool calls: inspection, grouped SQL, one failed chart-source
+reference (`evidence:latest` instead of `evidence-2`), and the corrected chart.
+That recovered in one step; it is a single explicit-chart smoke, not evidence
+of general model quality or multi-source behavior. Estimated usage cost was
+about one cent. No benchmark cases or golds were changed.
+
+A second BYOK diagnostic used the unchanged `viz-budget-join-two-series` case
+with `openai/gpt-5.6-luna`. It passed the fixed answer and chart gold. The final
+answer correctly reported Rent as $600 over budget and explicitly noted that
+the available expense rows cover January–March, not a full year. The single
+accepted two-series bar chart had labels Rent, Dining, Groceries, Transport;
+actual values 3600, 180, 350, 60; annual-budget values 3000, 100, 300, 50.
+The exact numeric chart payload and all 12 verification checks were inspected
+from the persisted analysis trace; the chart cited the final SQL evidence.
+
+This live run used 5 tool executions across 4 tool-call rounds: two table
+inspections, two SQL executions, and one chart. There were no failed calls,
+exact duplicate calls, or duplicate visible charts. However, the first compiled
+SQL summed annual budget after joining it to expense rows, inflating budget
+values (for example Rent 9000); the model then issued a second SQL query that
+correctly kept one budget per category, and the final answer/chart used that
+result. This is an incorrect intermediate result the current checks did not
+reject. The extra query is observed overhead, though not a confirmed useless
+call without trajectory-level attribution. The evaluator reports 4 rounds for
+this case. Across the two post-fix live samples we have 4 and 5 tool
+executions (mean 4.5, n=2); this small mixed-case mean is not a stable suite
+average, and the first run's round count was not retained. In the reported
+pre-fix user trace, the listed operations amount to 10 tool executions, of
+which 6 are explicitly superseded; the second inspection is also likely
+redundant. The reported 14+ UI steps are not interchangeable with tool-call
+rounds.
+
+A Windows manual rerun remains outstanding. No benchmark task or gold was
+changed in either diagnostic.

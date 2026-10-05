@@ -7,18 +7,17 @@
 //!   5. a cited query filters a mixed-case label column without folding case
 //!   6. the question's wording implies a SQL aggregate no cited query used
 //!   7. a column named in the question is never mentioned in any cited query
-//!   8. a question naming a shared join column was answered from one table
-//!   9. a date/time GROUP BY produced a NULL key instead of a real bucket
-//!  10. a positive missing/unparseable quality count makes a result partial
-//!  11. a query that packed several aggregates into one row has a value in
+//!   8. a date/time GROUP BY produced a NULL key instead of a real bucket
+//!   9. a positive missing/unparseable quality count makes a result partial
+//!  10. a query that packed several aggregates into one row has a value in
 //!      the answer sitting next to a different column's name than the one
 //!      it actually came from
-//!  12. a structured chart still matches the rows returned by its source query
+//!  11. a structured chart still matches the rows returned by its source query
 //!
 //! Plus one cost-gated check that *does* spend an extra LLM round-trip, used
 //! sparingly (agent.rs only calls it once a cheap check above already left a
 //! warning standing) and isn't part of `run()`'s list above:
-//!   13. a same-model consistency pass agrees with the first answer; this is a
+//!   12. a same-model consistency pass agrees with the first answer; this is a
 //!       soft signal, not an independent judge or proof of correctness
 
 use std::collections::HashSet;
@@ -63,7 +62,6 @@ pub fn run(
     check_case_filter(engine, evidence, &mut checks);
     check_aggregate_verb(question, evidence, &mut checks);
     check_dropped_column(engine, question, evidence, &mut checks);
-    check_multi_table_join(engine, question, evidence, &mut checks);
     check_null_group_key(evidence, &mut checks);
     check_incomplete_quality_audit(question, evidence, &mut checks);
     check_row_value_labels(answer, evidence, &mut checks);
@@ -136,7 +134,6 @@ pub fn semantic_repair_hint(
             "requested historical scope was not preserved",
             "aggregate query matched no rows",
             "question names `",
-            "question looked like it needed a join",
             "question implies ",
             "groups by a date expression that returned no value",
             "signed values were discarded",
@@ -2834,14 +2831,12 @@ fn check_dropped_column(
     }
 }
 
-// --- 8. a question that named a join key answered from one table only ------
+// --- Legacy candidate-signal helpers, not used for runtime acceptance ------
 
-/// Lowercased names of every non-generic column that appears, by name, in at
-/// least 2 of `tables` — the same "these tables share a join key" signal
-/// `shared_column_hints` (state.rs) surfaces in the prompt, computed
-/// independently here so this check stays a pure function of simple inputs.
-/// `tables` is `(table_name, column_names)` pairs; pure and testable without a
-/// real catalog, same pattern as `missing_aggregate_verbs`/`dropped_columns`.
+/// Test-only legacy heuristic. Shared field names can suggest a relationship,
+/// but cannot establish that a user's question requires a join. Production
+/// verification uses an explicitly grounded contract's declared joins instead.
+#[cfg(test)]
 fn multi_table_columns(tables: &[(&str, Vec<String>)]) -> HashSet<String> {
     let mut counts: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
     for (_, cols) in tables {
@@ -2860,10 +2855,9 @@ fn multi_table_columns(tables: &[(&str, Vec<String>)]) -> HashSet<String> {
         .collect()
 }
 
-/// True when the question's wording names a column shared across ≥2
-/// catalogued tables (implying a join), but the cited SQL only touched one of
-/// them. `all_tables` is every catalogued (name, columns) pair; `touched` the
-/// distinct table(s) the cited SQL actually referenced.
+/// Retained for tests of the old lexical signal; this must not gate an answer
+/// or trigger a repair because a shared column name is not user intent.
+#[cfg(test)]
 fn looks_like_a_missed_join(
     question: &str,
     all_tables: &[(&str, Vec<String>)],
@@ -2876,50 +2870,6 @@ fn looks_like_a_missed_join(
     multi_table_columns(all_tables)
         .iter()
         .any(|c| contains_word(&q, c))
-}
-
-/// Extends #58's prompt-side join hint with a check on the answer side: when
-/// the question's wording looked like it needed a join (it names a column
-/// that lives on more than one table) but the answer's evidence trail only
-/// touched one table, that's a sign the steering didn't take. Soft warning
-/// only — a real single-table answer to a question that merely echoes a
-/// shared column name (e.g. every table has a `date`) is common and fine;
-/// generic column names are filtered out for exactly that reason.
-fn check_multi_table_join(
-    engine: &dyn AnalyticsSource,
-    question: &str,
-    evidence: &[EvidenceItem],
-    out: &mut Vec<VerificationCheck>,
-) {
-    let sql: Vec<String> = evidence
-        .iter()
-        .filter(|e| is_sql_evidence(e) && e.error.is_none())
-        .filter_map(|e| e.sql.as_deref())
-        .map(str::to_string)
-        .collect();
-    if sql.is_empty() {
-        return;
-    }
-    let touched: HashSet<String> = sql
-        .iter()
-        .flat_map(|s| referenced_relations(&s.to_lowercase()))
-        .collect();
-    let catalog = engine.catalog();
-    let all_tables: Vec<(&str, Vec<String>)> = catalog
-        .sources
-        .iter()
-        .filter_map(|s| {
-            let view = s.view.as_deref()?;
-            let cols = s.columns.as_ref()?;
-            Some((view, cols.iter().map(|c| c.name.clone()).collect()))
-        })
-        .collect();
-    if looks_like_a_missed_join(question, &all_tables, &touched) {
-        out.push(warn(
-            "this question looked like it needed a join across tables; the answer only used one",
-            None,
-        ));
-    }
 }
 
 // --- 2. re-run cited queries ------------------------------------------
@@ -4487,6 +4437,15 @@ mod tests {
             &tables,
             &HashSet::new(),
         ));
+    }
+
+    #[test]
+    fn shared_column_name_signal_alone_does_not_trigger_semantic_repair() {
+        let checks = vec![warn(
+            "this question looked like it needed a join across tables; the answer only used one",
+            None,
+        )];
+        assert!(semantic_repair_hint("Show the total by category", &[], &checks).is_none());
     }
 
     #[test]

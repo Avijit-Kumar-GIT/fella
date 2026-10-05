@@ -64,7 +64,7 @@
 	// references it. Correctness shouldn't depend on a small model correctly
 	// placing a chart mention in freeform text.
 	let chartItems = $derived(
-		(message.answer?.evidence ?? []).filter((e) => e.tool === 'make_chart' && e.chart)
+		(message.answer?.evidence ?? []).filter((e) => e.tool === 'make_chart' && e.chart && !e.error)
 	);
 	let hasVisualAnswer = $derived(chartItems.length > 0 && !message.pending);
 
@@ -75,6 +75,7 @@
 	let answerSources = $derived.by(() => {
 		const names = new Set<string>();
 		for (const item of message.answer?.evidence ?? []) {
+			if (item.error) continue;
 			for (const source of item.sources ?? []) {
 				if (source.source.trim()) names.add(source.source.trim());
 			}
@@ -102,7 +103,7 @@
 			add('What else stands out?');
 			add('Show this over time');
 		}
-		if (!answer.evidence.some((item) => item.tool === 'make_chart' && item.chart)) {
+		if (!answer.evidence.some((item) => item.tool === 'make_chart' && item.chart && !item.error)) {
 			add('Show this as a chart');
 		}
 		return suggestions.slice(0, 3);

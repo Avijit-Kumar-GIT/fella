@@ -132,13 +132,14 @@ accepted evidence: {}. Do not rely on them as successful results.",
         )
     };
     format!(
-        "Semantic verification failed: {detail}.{invalidated} Re-open the analysis with the read-only tools. \
-Use the failed check as new evidence: retain supported parts of the prior analysis and revise only \
-what the check calls into question. Preserve every explicit source scope, date range, filter, \
+        "Semantic verification failed: {detail}.{invalidated} Use the existing non-superseded evidence \
+and revise only what the failed check calls into question. Do not repeat a successful inspection, \
+query, or chart unless the check makes that result unusable or a specific missing input is needed. \
+Preserve every explicit source scope, date range, filter, \
 exclusion, grouping, denominator, unit, and requested output deliverable from the question and prior \
 turn. If a result supporting a requested chart or other visualization is superseded, recreate that \
-deliverable from the revised accepted evidence before finalizing; do not silently replace it with \
-prose alone. Carry forward the established interpretation unless evidence disproves it; if a material \
+deliverable from the revised accepted evidence before finalizing; do so once, and do not silently replace it with \
+prose alone or produce interim alternatives. Carry forward the established interpretation unless evidence disproves it; if a material \
 scope choice remains unresolved, ask one focused clarification instead of silently changing it. Do not \
 defend an unsupported figure. If the question asks for a derived value, execute a computation that \
 returns it with labeled operands; otherwise omit any figure the evidence does not support. Then answer \
@@ -2396,6 +2397,7 @@ mod tests {
         );
         assert!(prompt.contains("requested output deliverable"));
         assert!(prompt.contains("recreate that deliverable from the revised accepted evidence"));
+        assert!(prompt.contains("Do not repeat a successful inspection, "));
         assert!(prompt.contains("do not silently replace it with prose alone"));
         assert!(prompt.contains("evidence-5 (make_chart)"));
         assert!(prompt.contains("not accepted evidence"));
