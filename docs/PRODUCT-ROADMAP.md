@@ -402,8 +402,9 @@ materially improve this 5,000-file case. The path lookup still scans the
 in-memory catalog rather than using a persistent index. The RSS figure is the
 test process high-water mark, not a packaged-app or Windows process-tree
 measurement. The ignored probe cleans its generated workspace and temporary
-database automatically and has no timing pass/fail threshold. No 10-GB
-mixed-folder run or controlled benchmark series has been collected. Earlier
+database automatically and has no timing pass/fail threshold. These debug
+runs did not include the later 10-GiB release diagnostic below, and no
+controlled benchmark series has been collected. Earlier
 mount timings (46,983 / 20,566 / 6,961 ms) were from a simpler all-CSV fixture
 and are not directly comparable. A separate 250,000-row, 5,027,795-byte CSV
 loaded completely in about 2.5 seconds in a local debug run.
@@ -450,6 +451,35 @@ to the 5,000-source fixture. A current no-large-file 5,000-source run completed
 in 7,329 ms with 59,731,968-byte peak RSS and 27,340,352-byte scratch. All
 large-file runs removed their generated source tree and database automatically.
 
+Two release-mode diagnostics provide an initial optimized-build comparison.
+A single 64-MiB CSV (1,720,739 rows) profiled in 720 ms and loaded in 1,372 ms;
+the complete mount took 2,104 ms, peak RSS was 13,238,272 bytes, and SQLite
+scratch was 132,601,792 bytes. The full nested fixture plus a 256-MiB CSV
+(268,435,431 bytes; 6,882,959 rows) completed in 11,920 ms: 5,001 tables,
+6,942,859 total rows, 100 documents, and all 102 expected skips were present;
+inventory was ready in 55 ms, first sample query in 52 ms, peak RSS was
+48,848,896 bytes, and scratch was 564,719,688 bytes. These are single-run
+Linux release-build observations with the fixture's 5,000 small sources, not
+controlled benchmarks or a 10-GiB result. The release probe removed its input
+tree and generated database automatically.
+
+The first 10-GiB-scale release diagnostic mounted a 10,737,418,215-byte CSV
+(275,318,415 rows) alongside the 5,000-source mixed-format fixture. It loaded
+all 5,001 tables and 275,378,315 total rows, retained the 100 documents, and
+reported all 102 expected skips. Mount readiness took 603,809 ms; inventory
+discovery completed in 100 ms (the catalog was not published until preparation
+finished), the first sample query took 53 ms, and catalog serialization took
+4 ms for 3,106,021 bytes. Test-process peak RSS was
+70,656,000 bytes and SQLite scratch peaked at 22,283,271,808 bytes (excluding
+the generated input tree). This is one Linux release-build run of one very
+large CSV plus the mixed small-source fixture—not a controlled benchmark,
+multi-large-format profile, packaged-app measurement, or Windows result. The
+complete generated input and scratch directory were removed after the test.
+The long readiness time is a concrete optimization target; it is not evidence
+that overlapping directory walking would help: inventory discovery completed
+in 100 ms, but the product still waits for the complete catalog before it can
+show those entries as ready.
+
 The current implementation also avoids mount-time exact distinct/null/range
 profiles on larger workspaces and computes them when a table is inspected;
 relationship-hint discovery uses an inverted field-name index and retains at
@@ -468,7 +498,8 @@ mixing data from two mounts. Incremental refresh and progressively queryable
 sources remain open.
 XLSX sheet loading still materializes sheet data, and document search still
 makes two workspace-wide passes per query. These remain open work, as do
-repeated controlled mount runs, a 10-GB mixed-format benchmark, and packaged
+incremental refresh, progressively queryable sources, controlled repeated
+large/mixed-format runs, multi-large-file coverage, and packaged
 process-tree peak-memory measurements.
 
 **Research informing the design:** Rust's [`ignore::WalkBuilder`](https://docs.rs/ignore/latest/ignore/struct.WalkBuilder.html)
