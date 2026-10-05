@@ -512,11 +512,11 @@ it found 5,001 tables, 6,942,859 rows, 100 documents, and all 102 expected
 skips. That run took 16,569 ms, used 292,741,120 bytes of scratch, and reached
 48,398,336 bytes process high-water RSS. This is one functional probe, not a
 controlled speed comparison, and its timing is not attributed to progress
-reporting. Per-file byte progress is currently implemented for SQLite-backed
-CSV/TSV only; JSON/NDJSON, XLSX, and optional DuckDB ingestion still report
-mount-level counts without within-file progress. Publication also remains
-atomic at whole-workspace completion, so the user cannot query an early-ready
-source during a long mount.
+reporting. Per-file byte progress is implemented for SQLite-backed CSV, TSV,
+JSON arrays/objects, and NDJSON; focused tests verify both JSON reader stages.
+XLSX and optional DuckDB ingestion still report mount-level counts without
+within-file progress. Publication also remains atomic at whole-workspace
+completion, so the user cannot query an early-ready source during a long mount.
 
 The current implementation also avoids mount-time exact distinct/null/range
 profiles on larger workspaces and computes them when a table is inspected;

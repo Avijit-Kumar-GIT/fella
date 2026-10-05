@@ -253,13 +253,48 @@ impl SqliteEngine {
         name: &str,
         path: &str,
         ndjson: bool,
+        allow_progress: bool,
+        progress_min_bytes: u64,
+        progress_interval_bytes: u64,
+        on_progress: &mut dyn FnMut(SourceIngestProgress),
     ) -> EngineResult<SourceLoad> {
         let stamp = file_stamp(path)?;
+        let report_progress = allow_progress && stamp.size >= progress_min_bytes;
         let mut profile = JsonSourceProfile::default();
-        let first_pass = visit_json_objects(path, ndjson, |object| {
-            profile.observe(&object);
-            Ok(())
-        })?;
+        if report_progress {
+            on_progress(SourceIngestProgress {
+                stage: "profiling",
+                bytes_read: 0,
+            });
+        }
+        let mut profile_bytes = 0;
+        let mut report_profile = |bytes_read| {
+            profile_bytes = bytes_read;
+            on_progress(SourceIngestProgress {
+                stage: "profiling",
+                bytes_read,
+            });
+        };
+        let profile_callback =
+            report_progress.then_some(&mut report_profile as &mut dyn FnMut(u64));
+        let first_pass = visit_json_objects(
+            path,
+            ndjson,
+            stamp.size,
+            progress_interval_bytes,
+            profile_callback,
+            |object| {
+                profile.observe(&object);
+                Ok(())
+            },
+        )?;
+        drop(report_profile);
+        if report_progress && profile_bytes < stamp.size {
+            on_progress(SourceIngestProgress {
+                stage: "profiling",
+                bytes_read: stamp.size,
+            });
+        }
         if file_stamp(path)? != stamp {
             return Err(EngineError::msg(format!(
                 "{path}: the file changed while Fella was inspecting it; retry the mount"
@@ -288,24 +323,57 @@ impl SqliteEngine {
         let mut loaded = 0usize;
         {
             let mut statement = tx.prepare(&insert_sql)?;
-            let second_pass = visit_json_objects(path, ndjson, |object| {
-                let values: Vec<Json> = headers
-                    .iter()
-                    .zip(types.iter().zip(&date_orders))
-                    .map(|(header, (ty, order))| {
-                        json_cell_with_order(object.get(header).unwrap_or(&Json::Null), *ty, *order)
-                    })
-                    .collect();
-                let sqlite_values: Vec<rusqlite::types::Value> = values
-                    .iter()
-                    .map(|value| cell_to_sqlite(value, ColType::Text))
-                    .collect();
-                statement
-                    .execute(rusqlite::params_from_iter(sqlite_values.iter()))
-                    .map_err(|error| EngineError::msg(error.to_string()))?;
-                loaded += 1;
-                Ok(())
-            })?;
+            if report_progress {
+                on_progress(SourceIngestProgress {
+                    stage: "loading",
+                    bytes_read: 0,
+                });
+            }
+            let mut load_bytes = 0;
+            let mut report_load = |bytes_read| {
+                load_bytes = bytes_read;
+                on_progress(SourceIngestProgress {
+                    stage: "loading",
+                    bytes_read,
+                });
+            };
+            let load_callback = report_progress.then_some(&mut report_load as &mut dyn FnMut(u64));
+            let second_pass = visit_json_objects(
+                path,
+                ndjson,
+                stamp.size,
+                progress_interval_bytes,
+                load_callback,
+                |object| {
+                    let values: Vec<Json> = headers
+                        .iter()
+                        .zip(types.iter().zip(&date_orders))
+                        .map(|(header, (ty, order))| {
+                            json_cell_with_order(
+                                object.get(header).unwrap_or(&Json::Null),
+                                *ty,
+                                *order,
+                            )
+                        })
+                        .collect();
+                    let sqlite_values: Vec<rusqlite::types::Value> = values
+                        .iter()
+                        .map(|value| cell_to_sqlite(value, ColType::Text))
+                        .collect();
+                    statement
+                        .execute(rusqlite::params_from_iter(sqlite_values.iter()))
+                        .map_err(|error| EngineError::msg(error.to_string()))?;
+                    loaded += 1;
+                    Ok(())
+                },
+            )?;
+            drop(report_load);
+            if report_progress && load_bytes < stamp.size {
+                on_progress(SourceIngestProgress {
+                    stage: "loading",
+                    bytes_read: stamp.size,
+                });
+            }
             if second_pass != first_pass {
                 return Err(EngineError::msg(format!(
                     "{path}: the file changed while Fella was loading it; retry the mount"
@@ -384,8 +452,18 @@ impl DataEngine for SqliteEngine {
             _ => {}
         }
         match kind {
-            SourceKind::Json => self.add_json_source(name, path, false),
-            SourceKind::Ndjson => self.add_json_source(name, path, true),
+            SourceKind::Json | SourceKind::Ndjson => {
+                let mut ignore_progress = |_| {};
+                return self.add_json_source(
+                    name,
+                    path,
+                    kind == SourceKind::Ndjson,
+                    false,
+                    INGEST_PROGRESS_MIN_BYTES,
+                    INGEST_PROGRESS_INTERVAL_BYTES,
+                    &mut ignore_progress,
+                );
+            }
             SourceKind::Parquet => Err(EngineError::msg(
                 "Parquet needs the DuckDB build rebuild with `cargo build --features duckdb`",
             )),
@@ -403,6 +481,15 @@ impl DataEngine for SqliteEngine {
         match kind {
             SourceKind::Csv => self.add_delimited_source(name, path, b',', true, on_progress),
             SourceKind::Tsv => self.add_delimited_source(name, path, b'\t', true, on_progress),
+            SourceKind::Json | SourceKind::Ndjson => self.add_json_source(
+                name,
+                path,
+                kind == SourceKind::Ndjson,
+                true,
+                INGEST_PROGRESS_MIN_BYTES,
+                INGEST_PROGRESS_INTERVAL_BYTES,
+                on_progress,
+            ),
             _ => self.add_source(name, kind, path),
         }
     }
@@ -744,7 +831,14 @@ fn json_read_note(summary: &JsonReadSummary) -> Option<String> {
 /// Visit object records using bounded memory: at most one JSON record (or one
 /// NDJSON line) is materialized at a time. Invalid NDJSON lines and non-object
 /// records retain the previous skip behavior but are now reported explicitly.
-fn visit_json_objects<F>(path: &str, ndjson: bool, mut visit: F) -> EngineResult<JsonReadSummary>
+fn visit_json_objects<F>(
+    path: &str,
+    ndjson: bool,
+    total_bytes: u64,
+    progress_interval_bytes: u64,
+    on_progress: Option<&mut dyn FnMut(u64)>,
+    mut visit: F,
+) -> EngineResult<JsonReadSummary>
 where
     F: FnMut(serde_json::Map<String, Json>) -> EngineResult<()>,
 {
@@ -754,7 +848,8 @@ where
     if ndjson {
         let file = std::fs::File::open(path)
             .map_err(|error| EngineError::io(format!("read {path}"), error))?;
-        let mut reader = std::io::BufReader::new(file);
+        let reader = ProgressReader::new(file, total_bytes, progress_interval_bytes, on_progress);
+        let mut reader = std::io::BufReader::new(reader);
         let mut line = Vec::new();
         loop {
             line.clear();
@@ -782,7 +877,8 @@ where
 
     let file = std::fs::File::open(path)
         .map_err(|error| EngineError::io(format!("read {path}"), error))?;
-    let mut deserializer = serde_json::Deserializer::from_reader(std::io::BufReader::new(file));
+    let reader = ProgressReader::new(file, total_bytes, progress_interval_bytes, on_progress);
+    let mut deserializer = serde_json::Deserializer::from_reader(std::io::BufReader::new(reader));
     let visitor = JsonObjectRowsVisitor {
         visit: &mut visit,
         summary: &mut summary,
@@ -794,6 +890,51 @@ where
         .end()
         .map_err(|error| EngineError::msg(format!("{path}: {error}")))?;
     Ok(summary)
+}
+
+/// Count bytes read by serde/NDJSON while emitting bounded progress. The
+/// reader is wrapped below `BufReader` so large individual JSON records also
+/// advance progress while they are being parsed, rather than only per record.
+struct ProgressReader<'a> {
+    file: std::fs::File,
+    bytes_read: u64,
+    total_bytes: u64,
+    interval_bytes: u64,
+    next_report_bytes: u64,
+    on_progress: Option<&'a mut dyn FnMut(u64)>,
+}
+
+impl<'a> ProgressReader<'a> {
+    fn new(
+        file: std::fs::File,
+        total_bytes: u64,
+        interval_bytes: u64,
+        on_progress: Option<&'a mut dyn FnMut(u64)>,
+    ) -> Self {
+        let interval_bytes = interval_bytes.max(1);
+        Self {
+            file,
+            bytes_read: 0,
+            total_bytes,
+            interval_bytes,
+            next_report_bytes: interval_bytes,
+            on_progress,
+        }
+    }
+}
+
+impl std::io::Read for ProgressReader<'_> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        let bytes = self.file.read(buffer)?;
+        self.bytes_read = self.bytes_read.saturating_add(bytes as u64);
+        if bytes > 0 && self.bytes_read >= self.next_report_bytes {
+            if let Some(on_progress) = self.on_progress.as_deref_mut() {
+                on_progress(self.bytes_read.min(self.total_bytes));
+            }
+            self.next_report_bytes = self.bytes_read.saturating_add(self.interval_bytes);
+        }
+        Ok(bytes)
+    }
 }
 
 struct JsonObjectRowsVisitor<'a, F> {
@@ -2266,6 +2407,112 @@ mod tests {
             assert_eq!(actual.0, expected.0, "column values: {values:?}");
             assert_eq!(actual.1, expected.1, "column values: {values:?}");
             assert_eq!(actual.2, date_order, "column values: {values:?}");
+        }
+    }
+
+    #[test]
+    fn json_and_ndjson_readers_report_bounded_byte_progress() {
+        let dir = ScratchDir::new();
+        let cases = [
+            ("records.json", false, r#"[{"x":1},{"x":2},{"x":3}]"#),
+            ("records.ndjson", true, "{\"x\":1}\n{\"x\":2}\n{\"x\":3}\n"),
+        ];
+
+        for (name, ndjson, contents) in cases {
+            let path = dir.0.join(name);
+            std::fs::write(&path, contents).unwrap();
+            let total_bytes = std::fs::metadata(&path).unwrap().len();
+            let mut progress = Vec::new();
+            let mut on_progress = |bytes_read| progress.push(bytes_read);
+            let summary = visit_json_objects(
+                path.to_str().unwrap(),
+                ndjson,
+                total_bytes,
+                8,
+                Some(&mut on_progress),
+                |_| Ok(()),
+            )
+            .unwrap();
+
+            assert_eq!(summary.objects, 3, "{name} retains all object rows");
+            assert!(!progress.is_empty(), "{name} reports bytes read");
+            assert!(
+                progress.windows(2).all(|pair| pair[0] <= pair[1]),
+                "{name} progress is monotonic"
+            );
+            assert!(progress.iter().all(|bytes| *bytes <= total_bytes));
+            assert_eq!(progress.last(), Some(&total_bytes));
+        }
+    }
+
+    #[test]
+    fn json_source_ingest_reports_profiling_and_loading_progress() {
+        let dir = ScratchDir::new();
+        let records: Vec<Json> = (0..1_500)
+            .map(|index| serde_json::json!({"index": index, "label": format!("sensor-{index}")}))
+            .collect();
+        let json = serde_json::to_vec(&records).unwrap();
+        let ndjson = format!(
+            "{}\n",
+            records
+                .iter()
+                .map(serde_json::to_string)
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+                .join("\n")
+        );
+
+        for (index, (ndjson, contents)) in
+            [(false, String::from_utf8(json).unwrap()), (true, ndjson)]
+                .into_iter()
+                .enumerate()
+        {
+            let path = dir.0.join(if ndjson {
+                "records.ndjson"
+            } else {
+                "records.json"
+            });
+            std::fs::write(&path, &contents).unwrap();
+            let total_bytes = contents.len() as u64;
+            let database = dir.0.join(format!("database-{index}"));
+            std::fs::create_dir_all(&database).unwrap();
+            let mut engine = SqliteEngine::open(&database).unwrap();
+            let mut progress = Vec::new();
+            let mut on_progress = |update: SourceIngestProgress| {
+                progress.push((update.stage, update.bytes_read));
+            };
+            let loaded = engine
+                .add_json_source(
+                    "records",
+                    path.to_str().unwrap(),
+                    ndjson,
+                    true,
+                    1,
+                    1_024,
+                    &mut on_progress,
+                )
+                .unwrap();
+
+            assert_eq!(loaded.row_count, records.len() as i64);
+            for stage in ["profiling", "loading"] {
+                let bytes: Vec<u64> = progress
+                    .iter()
+                    .filter(|(observed_stage, _)| *observed_stage == stage)
+                    .map(|(_, bytes_read)| *bytes_read)
+                    .collect();
+                assert!(bytes.len() > 2, "{stage} reports in-file progress");
+                assert_eq!(bytes.first(), Some(&0), "{stage} reports its start");
+                assert_eq!(
+                    bytes.last(),
+                    Some(&total_bytes),
+                    "{stage} reports completion"
+                );
+                assert!(
+                    bytes.windows(2).all(|window| window[0] <= window[1]),
+                    "{stage} progress is monotonic"
+                );
+                assert!(bytes.iter().all(|read| *read <= total_bytes));
+            }
         }
     }
 
