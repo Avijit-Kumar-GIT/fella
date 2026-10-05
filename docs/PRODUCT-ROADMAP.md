@@ -480,6 +480,27 @@ that overlapping directory walking would help: inventory discovery completed
 in 100 ms, but the product still waits for the complete catalog before it can
 show those entries as ready.
 
+The default SQLite WAL path adds a checkpoint to a large source commit; SQLite
+documents that its automatic checkpoint runs after a commit crosses the WAL
+page threshold ([WAL checkpoint behavior](https://www.sqlite.org/wal.html#automatic_checkpoint)). The staged workspace database has no concurrent readers while it is
+built, so the SQLite backend now uses `journal_mode=DELETE` rather than WAL.
+This retains rollback transactions while avoiding a large WAL/checkpoint copy
+before publication ([journal-mode guarantees](https://www.sqlite.org/pragma.html#pragma_journal_mode)).
+
+The exact 10-GiB fixture was rerun unchanged: mount readiness fell from
+603,809 to 577,731 ms, scratch from 22,283,271,808 to 11,109,777,408 bytes,
+and process high-water RSS from 70,656,000 to 49,025,024 bytes. All 5,001
+table paths, 275,378,315 rows, 100 documents, and 102 skip entries still
+matched expectations. The 1-GiB single-file run measured 40,286 ms /
+2,208,314,824 scratch bytes with WAL and 38,014 ms / 1,099,853,824 bytes with
+rollback journaling. The 5,000-source + 256-MiB run was 11,920 ms /
+564,719,688 bytes with WAL and 12,112 ms / 292,741,120 bytes with rollback
+journaling. These are single-run comparisons, not a controlled series or a
+performance guarantee; the mixed small-source case showed no mount-time gain,
+while large-file scratch use was about halved. Regression validation passed
+320 library tests, 22 workspace integration tests, and the full 10-GiB
+coverage probe. Windows and packaged-shell measurements remain open.
+
 The current implementation also avoids mount-time exact distinct/null/range
 profiles on larger workspaces and computes them when a table is inspected;
 relationship-hint discovery uses an inverted field-name index and retains at

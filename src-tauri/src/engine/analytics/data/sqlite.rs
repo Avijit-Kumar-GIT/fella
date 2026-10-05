@@ -44,7 +44,11 @@ impl SqliteEngine {
         let _ = std::fs::remove_file(path.with_extension("db-shm"));
         let conn = Connection::open(&path)
             .map_err(|e| EngineError::msg(format!("open analysis.db: {e}")))?;
-        conn.execute_batch("PRAGMA journal_mode = WAL;")?;
+        // The workspace database is built in isolation and only read after
+        // publication; its ingestion path has no concurrent readers. Rollback
+        // journaling avoids WAL checkpointing the completed bulk load before
+        // the catalog can be published, without disabling transaction safety.
+        conn.execute_batch("PRAGMA journal_mode = DELETE;")?;
         Ok(Self { conn, path })
     }
 
@@ -1984,6 +1988,38 @@ fn valueref_to_json(v: rusqlite::types::ValueRef<'_>) -> Json {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct ScratchDir(PathBuf);
+
+    impl ScratchDir {
+        fn new() -> Self {
+            let nonce = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!("fella-sqlite-test-{nonce}"));
+            std::fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for ScratchDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn rebuildable_workspace_database_uses_rollback_journal_mode() {
+        let dir = ScratchDir::new();
+        let engine = SqliteEngine::open(&dir.0).unwrap();
+        let journal_mode: String = engine
+            .conn
+            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+            .unwrap();
+
+        assert_eq!(journal_mode, "delete");
+    }
 
     #[test]
     fn sniffs_types() {
