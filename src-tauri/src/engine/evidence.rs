@@ -37,6 +37,11 @@ pub struct EvidenceItem {
     /// boundary here the way an HTML/SVG string would need.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub chart: Option<crate::engine::analytics::chart::ChartData>,
+    /// A typed derived table published by Python or a forecast. Raw SQL
+    /// evidence continues to use `columns`/`rows`; keeping this separate
+    /// preserves the original input rows used to replay a computation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_table: Option<crate::engine::analytics::chart::TabularResult>,
     /// Compact references to the SQL inputs read by a Python computation.
     /// Row values stay private to the verifier; SQL, schema, and row counts
     /// are enough to inspect the input and rerun it against the recorded
@@ -279,6 +284,7 @@ mod tests {
             row_count: None,
             output: Some("summary".into()),
             chart: None,
+            result_table: None,
             python_input_trace: Some(PythonInputTrace {
                 complete: true,
                 queries: vec![PythonQueryReference {

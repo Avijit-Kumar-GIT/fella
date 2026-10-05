@@ -77,6 +77,9 @@
 	--chart-cyan: #2e9da4;
 	--chart-slate: #78818a;
 	--chart-plum: #a26478;
+	--chart-orange: #c87936;
+	--chart-green: #3f805b;
+	--chart-gold: #a27b24;
 	--radius: 8px;
 	--pad: 28px;
 
@@ -144,6 +147,9 @@
 	--chart-cyan: #56d1cf;
 	--chart-slate: #b0b7bd;
 	--chart-plum: #df9aae;
+	--chart-orange: #efa763;
+	--chart-green: #70b58a;
+	--chart-gold: #e0ba5e;
 	--shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 12px rgba(0, 0, 0, 0.35);
 	--shadow-pop: 0 4px 12px rgba(0, 0, 0, 0.4), 0 20px 56px rgba(0, 0, 0, 0.55);
 }

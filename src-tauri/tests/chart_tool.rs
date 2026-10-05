@@ -4,7 +4,10 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use fella_lib::engine::tools::Registry;
+use std::sync::{atomic::AtomicBool, Arc};
+
+use fella_lib::engine::evidence::EvidenceItem;
+use fella_lib::engine::tools::{Registry, ToolContext};
 use fella_lib::engine::EngineState;
 
 fn scratch(tag: &str) -> PathBuf {
@@ -49,10 +52,180 @@ async fn make_chart_returns_structured_chart_data() {
     assert_eq!(chart.title.as_deref(), Some("Spending by category"));
     assert_eq!(chart.labels, vec!["Rent", "Groceries", "Transport"]);
     assert_eq!(chart.series[0].name, "amount");
-    assert_eq!(chart.series[0].values, vec![1250.0, 412.5, 88.0]);
+    assert_eq!(
+        chart.series[0].values,
+        vec![Some(1250.0), Some(412.5), Some(88.0)]
+    );
     assert_eq!(chart.unit.as_deref(), Some("$"));
 
     let _ = fs::remove_dir_all(&ws);
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[tokio::test]
+async fn make_chart_reuses_a_python_result_without_rerunning_or_copying_source_rows() {
+    let data = scratch("chart-python-result-data");
+    let engine = EngineState::new(&data).unwrap();
+    let registry = Registry::standard();
+    let code = "fella_table(['month', 'revenue'], [['Jan', 10], ['Feb', 30], ['Mar', 20]])\nprint('computed monthly revenue')";
+    let result = registry
+        .run(&engine, "run_python", &serde_json::json!({ "code": code }))
+        .await
+        .unwrap()
+        .unwrap();
+    let source = EvidenceItem {
+        id: "evidence-python-1".into(),
+        tool: "run_python".into(),
+        sources: Vec::new(),
+        args: serde_json::json!({ "code": code }),
+        note: None,
+        sql: None,
+        result_summary: result.summary,
+        columns: result.columns,
+        rows: result.rows,
+        row_count: result.row_count,
+        output: result.output,
+        chart: None,
+        result_table: result.result_table,
+        python_input_trace: None,
+        python_queries: result.python_queries,
+        python_queries_complete: result.python_queries_complete,
+        ms: 0,
+        error: None,
+    };
+    let prior = [source];
+    let context = ToolContext {
+        prior_evidence: &prior,
+    };
+    let chart = registry
+        .run_with_context_cancel(
+            &engine,
+            "make_chart",
+            &serde_json::json!({
+                "kind": "line",
+                "source_evidence_id": "evidence-python-1",
+                "x_field": "month",
+                "series_fields": ["revenue"],
+                "missing_treatment": "gap"
+            }),
+            &context,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert!(chart.sql.is_none(), "reused result should not rerun SQL");
+    assert!(
+        chart.rows.is_none(),
+        "chart evidence should not duplicate the result table"
+    );
+    let spec = chart.chart.unwrap();
+    assert_eq!(spec.labels, vec!["Jan", "Feb", "Mar"]);
+    assert_eq!(
+        spec.series[0].values,
+        vec![Some(10.0), Some(30.0), Some(20.0)]
+    );
+    assert_eq!(
+        spec.metadata.unwrap().source_evidence_id.as_deref(),
+        Some("evidence-python-1")
+    );
+
+    let mut preview = prior[0].clone();
+    preview.result_table = None;
+    preview.columns = Some(vec!["month".into(), "revenue".into()]);
+    preview.rows = Some(vec![
+        vec![serde_json::json!("Jan"), serde_json::json!(10)],
+        vec![serde_json::json!("Feb"), serde_json::json!(30)],
+    ]);
+    preview.row_count = Some(3);
+    let preview = [preview];
+    let preview_context = ToolContext {
+        prior_evidence: &preview,
+    };
+    let preview_result = registry
+        .run_with_context_cancel(
+            &engine,
+            "make_chart",
+            &serde_json::json!({
+                "kind": "line",
+                "source_evidence_id": "evidence-python-1",
+                "x_field": "month",
+                "series_fields": ["revenue"],
+                "missing_treatment": "gap"
+            }),
+            &preview_context,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .await
+        .unwrap();
+    let preview_result = match preview_result {
+        Ok(_) => panic!("bounded preview should not be accepted as a complete chart source"),
+        Err(error) => error,
+    };
+    assert!(preview_result.to_string().contains("bounded preview"));
+
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[tokio::test]
+async fn make_chart_rejects_inspection_samples_as_incomplete_chart_sources() {
+    let data = scratch("chart-inspection-sample-data");
+    let engine = EngineState::new(&data).unwrap();
+    let registry = Registry::standard();
+    let inspection = EvidenceItem {
+        id: "evidence-1".into(),
+        tool: "inspect_table".into(),
+        sources: Vec::new(),
+        args: serde_json::json!({ "name": "expenses" }),
+        note: None,
+        sql: None,
+        result_summary: "inspected expenses".into(),
+        columns: Some(vec!["category".into(), "amount".into()]),
+        rows: Some(vec![vec![
+            serde_json::json!("Rent"),
+            serde_json::json!(1200),
+        ]]),
+        row_count: Some(1),
+        output: Some("first sample row only".into()),
+        chart: None,
+        result_table: None,
+        python_input_trace: None,
+        python_queries: None,
+        python_queries_complete: None,
+        ms: 0,
+        error: None,
+    };
+    let prior = [inspection];
+    let context = ToolContext {
+        prior_evidence: &prior,
+    };
+
+    let result = registry
+        .run_with_context_cancel(
+            &engine,
+            "make_chart",
+            &serde_json::json!({
+                "kind": "pie",
+                "source_evidence_id": "evidence-1",
+                "x_field": "category",
+                "value_field": "amount",
+                "part_to_whole": true,
+                "denominator": "all spending"
+            }),
+            &context,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .await
+        .unwrap();
+
+    let error = match result {
+        Ok(_) => panic!("inspection samples must not become chart evidence"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("inspection returns a sample"));
+    assert!(error.to_string().contains("complete analytical result"));
+
     let _ = fs::remove_dir_all(&data);
 }
 
@@ -195,8 +368,14 @@ async fn make_chart_preserves_two_series_and_negative_values() {
         fella_lib::engine::analytics::chart::ChartKind::Line
     );
     assert_eq!(forecast.series.len(), 2);
-    assert_eq!(forecast.series[0].values, vec![100.0, 120.0, 140.0]);
-    assert_eq!(forecast.series[1].values, vec![80.0, 150.0, 130.0]);
+    assert_eq!(
+        forecast.series[0].values,
+        vec![Some(100.0), Some(120.0), Some(140.0)]
+    );
+    assert_eq!(
+        forecast.series[1].values,
+        vec![Some(80.0), Some(150.0), Some(130.0)]
+    );
 
     let net = registry
         .run(
@@ -212,7 +391,10 @@ async fn make_chart_preserves_two_series_and_negative_values() {
         .unwrap()
         .chart
         .expect("net chart");
-    assert_eq!(net.series[0].values, vec![-50.0, 120.0, -20.0]);
+    assert_eq!(
+        net.series[0].values,
+        vec![Some(-50.0), Some(120.0), Some(-20.0)]
+    );
 
     let _ = fs::remove_dir_all(&ws);
     let _ = fs::remove_dir_all(&data);
@@ -260,7 +442,7 @@ async fn make_chart_reads_json_tsv_and_currency_formatted_sources() {
         .chart
         .expect("json chart");
     assert_eq!(mood.labels, vec!["2024-01-01", "2024-01-02", "2024-01-03"]);
-    assert_eq!(mood.series[0].values, vec![2.0, 4.0, 3.0]);
+    assert_eq!(mood.series[0].values, vec![Some(2.0), Some(4.0), Some(3.0)]);
 
     let screen = registry
         .run(
@@ -277,7 +459,10 @@ async fn make_chart_reads_json_tsv_and_currency_formatted_sources() {
         .chart
         .expect("tsv chart");
     assert_eq!(screen.labels, vec!["browser", "social", "reading"]);
-    assert_eq!(screen.series[0].values, vec![95.0, 30.0, 15.0]);
+    assert_eq!(
+        screen.series[0].values,
+        vec![Some(95.0), Some(30.0), Some(15.0)]
+    );
 
     let costs = registry
         .run(
@@ -294,7 +479,10 @@ async fn make_chart_reads_json_tsv_and_currency_formatted_sources() {
         .chart
         .expect("currency chart");
     assert_eq!(costs.labels, vec!["Laptop repair", "Books", "Train ticket"]);
-    assert_eq!(costs.series[0].values, vec![1200.0, 80.0, 35.5]);
+    assert_eq!(
+        costs.series[0].values,
+        vec![Some(1200.0), Some(80.0), Some(35.5)]
+    );
 
     let _ = fs::remove_dir_all(&ws);
     let _ = fs::remove_dir_all(&data);
@@ -431,7 +619,7 @@ async fn make_chart_allows_more_than_twelve_daily_points() {
         fella_lib::engine::analytics::chart::ChartKind::Line
     );
     assert_eq!(chart.labels.len(), 13);
-    assert_eq!(chart.series[0].values.last(), Some(&130.0));
+    assert_eq!(chart.series[0].values.last(), Some(&Some(130.0)));
 
     let _ = fs::remove_dir_all(&ws);
     let _ = fs::remove_dir_all(&data);

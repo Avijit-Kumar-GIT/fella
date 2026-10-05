@@ -5,17 +5,72 @@ export type Role = 'user' | 'assistant' | 'system';
 
 export interface ChartSeries {
 	name: string;
-	values: number[];
+	values: (number | null)[];
 }
+
+export type ChartKind =
+	| 'auto'
+	| 'bar'
+	| 'line'
+	| 'pie'
+	| 'donut'
+	| 'scatter'
+	| 'histogram'
+	| 'box_plot'
+	| 'area'
+	| 'stacked_area'
+	| 'heatmap'
+	| 'forecast';
+
+export interface ChartMetadata {
+	source_evidence_id?: string;
+	source_label?: string;
+	fields: string[];
+	aggregation?: string;
+	filters: string[];
+	time_range?: string;
+	denominator?: string;
+	part_to_whole: boolean;
+	missing_treatment?: string;
+}
+
+export type ChartPayload =
+	| { type: 'scatter'; points: { x: number; y: number; label: string; group?: string }[] }
+	| {
+			type: 'box_plot';
+			groups: {
+				label: string;
+				low_whisker: number;
+				q1: number;
+				median: number;
+				q3: number;
+				high_whisker: number;
+				outliers: number[];
+				n: number;
+			}[];
+	  }
+	| { type: 'heatmap'; x_labels: string[]; y_labels: string[]; values: (number | null)[][] }
+	| {
+			type: 'forecast';
+			observed: (number | null)[];
+			forecast: (number | null)[];
+			lower: (number | null)[];
+			upper: (number | null)[];
+			uncertainty_note?: string;
+	  };
 
 /** Typed visualization data from a chart tool (e.g. `make_chart`) -- labels
  *  and numbers only, never markup. Rendered by `$lib/components/Chart.svelte`. */
 export interface VisualizationSpec {
-	kind: 'bar' | 'line';
+	kind: Exclude<ChartKind, 'auto'>;
 	title?: string;
 	labels: string[];
 	series: ChartSeries[];
 	unit?: string;
+	x_label?: string;
+	y_label?: string;
+	payload?: ChartPayload;
+	metadata?: ChartMetadata;
 }
 
 /** Compatibility name used by chart-facing components. */
@@ -43,6 +98,8 @@ export interface EvidenceItem {
 	output?: string;
 	/** Structured visualization data, when the tool was `make_chart`. */
 	chart?: VisualizationSpec;
+	/** Typed derived table published by Python or forecast analysis. */
+	result_table?: { columns: string[]; rows: unknown[][] };
 	/** Bounded SQL/schema references for data read by a Python computation. */
 	python_input_trace?: PythonInputTrace;
 	ms: number;

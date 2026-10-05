@@ -31,13 +31,17 @@ use crate::engine::analytics::AnalyticsSource;
 use crate::engine::catalog::{source_scope, SourceScope};
 use crate::engine::evidence::{EvidenceItem, VerificationCheck, VerificationStatus};
 use crate::engine::grounding::{GroundingReport, ProbeOutcome};
+use crate::engine::risk;
 use crate::engine::runtime::{
     AnalysisContract, ContractDerivedMetric, ContractJoin, ContractOrder, InterpretationStatus,
     SortDirection, TimeBucket,
 };
 
 fn is_sql_evidence(evidence: &EvidenceItem) -> bool {
-    matches!(evidence.tool.as_str(), "run_sql" | "make_chart")
+    matches!(
+        evidence.tool.as_str(),
+        "run_sql" | "make_chart" | "forecast_analysis"
+    )
 }
 
 pub fn run(
@@ -45,6 +49,7 @@ pub fn run(
     question: &str,
     answer: &str,
     evidence: &[EvidenceItem],
+    contract: Option<&AnalysisContract>,
 ) -> Vec<VerificationCheck> {
     let mut checks = Vec::new();
 
@@ -52,7 +57,7 @@ pub fn run(
     check_source_scope(engine, question, evidence, &mut checks);
     rerun_queries(engine, evidence, &mut checks);
     rerun_python_inputs(engine, evidence, &mut checks);
-    check_numbers(answer, evidence, &mut checks);
+    check_numbers(question, answer, evidence, contract, &mut checks);
     check_signed_semantics(question, evidence, &mut checks);
     check_text_agg(engine, evidence, &mut checks);
     check_case_filter(engine, evidence, &mut checks);
@@ -64,6 +69,7 @@ pub fn run(
     check_row_value_labels(answer, evidence, &mut checks);
     check_chart_values(evidence, &mut checks);
     check_empty_aggregate(engine, evidence, &mut checks);
+    check_forecast_evaluation(question, evidence, &mut checks);
 
     checks
 }
@@ -120,6 +126,9 @@ pub fn semantic_repair_hint(
     _evidence: &[EvidenceItem],
     checks: &[VerificationCheck],
 ) -> Option<String> {
+    if let Some(forecast) = first_bad(checks, &["forecast lacks chronological evaluation"]) {
+        return Some(forecast);
+    }
     let ordinary = first_bad(
         checks,
         &[
@@ -132,6 +141,7 @@ pub fn semantic_repair_hint(
             "groups by a date expression that returned no value",
             "signed values were discarded",
             "matches exact case",
+            "forecast lacks chronological evaluation",
         ],
     );
     if ordinary.is_some() {
@@ -149,6 +159,12 @@ pub fn semantic_evidence_matches(
     item: &EvidenceItem,
     hint: &str,
 ) -> bool {
+    // A point result can be valid evidence even when its forecast evaluation
+    // is incomplete. Keep it available while the model adds the missing
+    // holdout/backtest rather than forcing a needless re-query.
+    if hint.contains("forecast lacks chronological evaluation") {
+        return false;
+    }
     if item.error.is_some() || !is_sql_evidence(item) {
         return false;
     }
@@ -208,11 +224,13 @@ pub fn semantic_evidence_matches(
         // only quantitative executions that failed to produce a scalar result
         // for a scalar question; the next model turn can choose a corrected
         // aggregate, a different tool, or a clarification.
-        return matches!(item.tool.as_str(), "run_sql" | "make_chart" | "run_python")
-            && !item
-                .sql
-                .as_deref()
-                .is_some_and(|sql| is_aggregate_sql(sql) && item.row_count == Some(1));
+        return matches!(
+            item.tool.as_str(),
+            "run_sql" | "make_chart" | "run_python" | "forecast_analysis"
+        ) && !item
+            .sql
+            .as_deref()
+            .is_some_and(|sql| is_aggregate_sql(sql) && item.row_count == Some(1));
     }
     true
 }
@@ -428,6 +446,129 @@ fn check_empty_aggregate(
     }
 }
 
+/// A forecast built from workspace observations should compare against
+/// chronological holdouts when they can be formed. This is a soft nudge, not
+/// a reason to suppress the point estimate: the model can add the dedicated
+/// forecast tool or a replayable custom Python backtest, and short-history
+/// cases remain answerable with an explicit limitation.
+fn check_forecast_evaluation(
+    question: &str,
+    evidence: &[EvidenceItem],
+    out: &mut Vec<VerificationCheck>,
+) {
+    let predictive = risk::assess(question)
+        .signals
+        .iter()
+        .any(|signal| signal == "forecast");
+    if !predictive {
+        return;
+    }
+
+    // Showing a forecast already present in a mounted table is not a new
+    // forecast from Fella. Do not create a needless evaluation/backtest step
+    // after the requested chart has already reused those supplied values.
+    if charts_precomputed_forecast(evidence) {
+        return;
+    }
+
+    let has_workspace_computation = evidence.iter().any(|item| {
+        item.error.is_none()
+            && matches!(
+                item.tool.as_str(),
+                "run_sql" | "run_python" | "forecast_analysis"
+            )
+    });
+    if !has_workspace_computation {
+        return;
+    }
+
+    let has_evaluation = evidence.iter().any(|item| {
+        if item.error.is_some() {
+            return false;
+        }
+        if item.tool == "forecast_analysis" {
+            return item
+                .output
+                .as_deref()
+                .is_some_and(|output| output.contains("backtest="));
+        }
+        item.tool == "run_python"
+            && item
+                .args
+                .get("code")
+                .and_then(Json::as_str)
+                .is_some_and(|code| code.contains("rolling_origin_backtest"))
+            && item
+                .output
+                .as_deref()
+                .is_some_and(|output| output.contains("baseline_mae") && output.contains("mae"))
+            && item.python_queries_complete == Some(true)
+            && item
+                .python_queries
+                .as_ref()
+                .is_some_and(|queries| !queries.is_empty())
+    });
+    if !has_evaluation {
+        out.push(warn(
+            "forecast lacks chronological evaluation",
+            Some(
+                "the workspace-backed point estimate can remain, but add a chronological rolling-origin comparison against a baseline with an interpretable error metric when history permits; use forecast_analysis for a regular series, or a replayable run_python backtest for a custom series, and state when no holdout is available".into(),
+            ),
+        ));
+    }
+}
+
+fn charts_precomputed_forecast(evidence: &[EvidenceItem]) -> bool {
+    evidence.iter().any(|chart_item| {
+        if chart_item.tool != "make_chart" || chart_item.error.is_some() {
+            return false;
+        }
+        let Some(chart) = chart_item.chart.as_ref() else {
+            return false;
+        };
+        if chart.kind != chart::ChartKind::Forecast
+            || !matches!(
+                chart.payload.as_ref(),
+                Some(chart::ChartPayload::Forecast { .. })
+            )
+        {
+            return false;
+        }
+        let metadata = chart.metadata.as_ref();
+        let has_required_fields = metadata.is_some_and(|metadata| {
+            ["observed", "forecast"].iter().all(|field| {
+                metadata
+                    .fields
+                    .iter()
+                    .any(|candidate| candidate.eq_ignore_ascii_case(field))
+            })
+        });
+        if !has_required_fields {
+            return false;
+        }
+
+        let source = metadata
+            .and_then(|metadata| metadata.source_evidence_id.as_deref())
+            .and_then(|id| evidence.iter().find(|candidate| candidate.id == id))
+            .unwrap_or(chart_item);
+        let is_reused_tabular_source =
+            source.tool == "run_sql" || (source.tool == "make_chart" && source.id == chart_item.id);
+        is_reused_tabular_source
+            && source.error.is_none()
+            && source.sql.as_deref().is_some_and(|sql| {
+                !is_aggregate_sql(sql)
+                    && !sql
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .windows(2)
+                        .any(|words| {
+                            words[0].eq_ignore_ascii_case("group")
+                                && words[1].eq_ignore_ascii_case("by")
+                        })
+            })
+    })
+}
+
 /// Verify that a semantic contract survived the transition into physical
 /// evidence. This is intentionally a lexical/structural gate, not a second
 /// interpretation model: the grounding layer resolves names, and this layer
@@ -482,14 +623,20 @@ pub fn contract_checks(
         if let Some(field) = measure.field.as_deref() {
             check_binding_usage(&mut checks, "measure", field, &sql);
         }
-        check_measure_operation(&mut checks, &measure.operation, &sql);
+        check_measure_operation(&mut checks, &measure.operation, &sql, evidence);
     }
     for filter in &contract.filters {
         if let Some(field) = filter.field.as_deref() {
             check_binding_usage(&mut checks, "filter", field, &sql);
         }
         for value in &filter.resolved_values {
-            check_literal_usage(&mut checks, "filter value", value, &sql);
+            check_literal_usage(
+                &mut checks,
+                "filter value",
+                filter.field.as_deref(),
+                value,
+                &sql,
+            );
         }
         check_filter_polarity(&mut checks, filter, &sql);
     }
@@ -535,9 +682,9 @@ pub fn contract_checks(
     checks
 }
 
-/// The chart renderer receives structured data derived from the same SQL rows
-/// that are stored in evidence. Rebuild that projection here so a malformed
-/// bridge payload cannot make a chart disagree with its source table.
+/// Rebuild chart payloads from their source evidence so a malformed bridge
+/// payload cannot make a chart disagree with the result it represents. This
+/// also covers Python-published tables and forecast output, not only SQL.
 fn check_chart_values(evidence: &[EvidenceItem], checks: &mut Vec<VerificationCheck>) {
     for item in evidence
         .iter()
@@ -546,33 +693,89 @@ fn check_chart_values(evidence: &[EvidenceItem], checks: &mut Vec<VerificationCh
         let Some(chart_data) = item.chart.as_ref() else {
             continue;
         };
-        let Some(columns) = item.columns.as_deref() else {
+        let source = chart_data
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.source_evidence_id.as_deref())
+            .and_then(|id| evidence.iter().find(|candidate| candidate.id == id))
+            .unwrap_or(item);
+        if source.error.is_some() {
             checks.push(warn(
-                "chart source query could not be checked",
-                Some("the chart evidence did not include result columns".into()),
-            ));
-            continue;
-        };
-        let Some(rows) = item.rows.as_deref() else {
-            checks.push(warn(
-                "chart source query could not be checked",
-                Some("the chart evidence did not include result rows".into()),
-            ));
-            continue;
-        };
-        if item.row_count != Some(rows.len()) {
-            checks.push(warn(
-                "chart source query could not be checked",
-                Some("the chart evidence contained an incomplete result set".into()),
+                "chart source result could not be checked",
+                Some("the referenced analytical result failed".into()),
             ));
             continue;
         }
-        let expected = match chart::from_query(
-            chart_data.kind,
-            chart_data.title.clone(),
-            chart_data.unit.clone(),
-            columns,
-            rows,
+
+        let table = if let Some(table) = &source.result_table {
+            table.clone()
+        } else if let (Some(columns), Some(rows)) = (&source.columns, &source.rows) {
+            if source.row_count.is_some_and(|count| count != rows.len()) {
+                checks.push(warn(
+                    "chart source result could not be checked",
+                    Some("the referenced result contained an incomplete row set".into()),
+                ));
+                continue;
+            }
+            chart::TabularResult {
+                columns: columns.clone(),
+                rows: rows.clone(),
+            }
+        } else {
+            checks.push(warn(
+                "chart source result could not be checked",
+                Some("the referenced result did not include a reusable typed table".into()),
+            ));
+            continue;
+        };
+        let args = &item.args;
+        let arg_string = |name: &str| {
+            args.get(name)
+                .and_then(Json::as_str)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+        };
+        let arg_strings = |name: &str| {
+            args.get(name)
+                .and_then(Json::as_array)
+                .map(|values| {
+                    values
+                        .iter()
+                        .filter_map(Json::as_str)
+                        .map(str::to_owned)
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let requested_kind = args
+            .get("kind")
+            .cloned()
+            .and_then(|value| serde_json::from_value(value).ok())
+            .unwrap_or(chart_data.kind);
+        let missing_treatment = args
+            .get("missing_treatment")
+            .cloned()
+            .and_then(|value| serde_json::from_value(value).ok())
+            .unwrap_or_default();
+        let expected = match chart::from_table(
+            &table,
+            chart::ChartRequest {
+                kind: requested_kind,
+                title: arg_string("title").or_else(|| chart_data.title.clone()),
+                unit: arg_string("unit").or_else(|| chart_data.unit.clone()),
+                x_field: arg_string("x_field"),
+                y_field: arg_string("y_field"),
+                value_field: arg_string("value_field"),
+                group_field: arg_string("group_field"),
+                label_field: arg_string("label_field"),
+                series_fields: arg_strings("series_fields"),
+                bin_count: args
+                    .get("bin_count")
+                    .and_then(Json::as_u64)
+                    .map(|v| v as usize),
+                missing_treatment,
+                metadata: chart_data.metadata.clone().unwrap_or_default(),
+            },
         ) {
             Ok(expected) => expected,
             Err(error) => {
@@ -580,45 +783,15 @@ fn check_chart_values(evidence: &[EvidenceItem], checks: &mut Vec<VerificationCh
                 continue;
             }
         };
-        let mut mismatches = Vec::new();
-        if expected.kind != chart_data.kind {
-            mismatches.push(format!(
-                "kind: expected {:?}, got {:?}",
-                expected.kind, chart_data.kind
-            ));
-        }
-        if expected.labels != chart_data.labels {
-            mismatches.push("labels differ".into());
-        }
-        if expected.series.len() != chart_data.series.len() {
-            mismatches.push(format!(
-                "series count: expected {}, got {}",
-                expected.series.len(),
-                chart_data.series.len()
-            ));
-        } else {
-            for (expected_series, actual_series) in expected.series.iter().zip(&chart_data.series) {
-                if expected_series.name != actual_series.name
-                    || expected_series.values.len() != actual_series.values.len()
-                    || expected_series
-                        .values
-                        .iter()
-                        .zip(&actual_series.values)
-                        .any(|(expected, actual)| !invariant_close(*expected, *actual))
-                {
-                    mismatches.push(format!(
-                        "series `{}` differs from the source rows",
-                        actual_series.name
-                    ));
-                }
-            }
-        }
-        if mismatches.is_empty() {
+        if serde_json::to_value(expected).ok() == serde_json::to_value(chart_data).ok() {
             checks.push(ok("chart values matched the source query"));
         } else {
             checks.push(warn(
                 "chart values did not match source query",
-                Some(mismatches.join("; ")),
+                Some(
+                    "the chart specification differs from a fresh projection of its source result"
+                        .into(),
+                ),
             ));
         }
     }
@@ -1671,10 +1844,50 @@ fn format_time_bucket(bucket: TimeBucket) -> &'static str {
     }
 }
 
-fn check_measure_operation(checks: &mut Vec<VerificationCheck>, operation: &str, sql: &[String]) {
-    let functions = match operation.trim().to_ascii_lowercase().as_str() {
+fn check_measure_operation(
+    checks: &mut Vec<VerificationCheck>,
+    operation: &str,
+    sql: &[String],
+    evidence: &[EvidenceItem],
+) {
+    let normalized = operation.trim().to_ascii_lowercase();
+    if matches!(
+        normalized.as_str(),
+        "raw"
+            | "raw values"
+            | "raw distribution"
+            | "raw observation"
+            | "raw observations"
+            | "observations"
+            | "identity"
+    ) {
+        let projected_without_aggregation = sql.iter().any(|query| {
+            let query = query.trim_start();
+            !is_aggregate_sql(query)
+                && !query
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .windows(2)
+                    .any(|words| {
+                        words[0].eq_ignore_ascii_case("group")
+                            && words[1].eq_ignore_ascii_case("by")
+                    })
+        });
+        if projected_without_aggregation {
+            checks.push(ok(
+                "grounded raw observations were selected without aggregation",
+            ));
+        } else {
+            checks.push(warn(
+                "grounded raw observation operation was not used by the query",
+                Some("the executed evidence did not preserve row-level observations".into()),
+            ));
+        }
+        return;
+    }
+    let functions = match normalized.as_str() {
         "sum" | "total" => Some(&["sum", "total"][..]),
-        "avg" | "average" | "mean" => Some(&["avg"][..]),
+        "avg" | "average" | "mean" | "arithmetic mean" => Some(&["avg"][..]),
         "count" | "number" => Some(&["count"][..]),
         "min" | "minimum" => Some(&["min"][..]),
         "max" | "maximum" => Some(&["max"][..]),
@@ -1687,18 +1900,25 @@ fn check_measure_operation(checks: &mut Vec<VerificationCheck>, operation: &str,
         ));
         return;
     };
-    let count_case = matches!(
-        operation.trim().to_ascii_lowercase().as_str(),
-        "count" | "number"
-    );
-    if sql.iter().any(|query| {
-        functions
-            .iter()
-            .any(|function| contains_function_call(query, function))
-            || (count_case
-                && contains_function_call(query, "sum")
-                && query.to_ascii_lowercase().contains("then 1 else 0 end"))
-    }) {
+    let count_case = matches!(normalized.as_str(), "count" | "number");
+    let forecast_mean = matches!(
+        normalized.as_str(),
+        "avg" | "average" | "mean" | "arithmetic mean"
+    ) && evidence.iter().any(|item| {
+        item.tool == "forecast_analysis"
+            && item.error.is_none()
+            && item.args.get("method").and_then(Json::as_str) == Some("mean")
+    });
+    if forecast_mean
+        || sql.iter().any(|query| {
+            functions
+                .iter()
+                .any(|function| contains_function_call(query, function))
+                || (count_case
+                    && contains_function_call(query, "sum")
+                    && query.to_ascii_lowercase().contains("then 1 else 0 end"))
+        })
+    {
         checks.push(ok(format!(
             "grounded measure operation `{operation}` was used by the query"
         )));
@@ -1713,11 +1933,24 @@ fn check_measure_operation(checks: &mut Vec<VerificationCheck>, operation: &str,
 fn check_literal_usage(
     checks: &mut Vec<VerificationCheck>,
     kind: &str,
+    field: Option<&str>,
     value: &str,
     sql: &[String],
 ) {
     let literal = quote_str(value).to_ascii_lowercase();
-    if sql.iter().any(|query| query.contains(&literal)) {
+    let numeric = value.trim().parse::<f64>().ok();
+    if sql.iter().any(|query| {
+        if let Some(value) = numeric {
+            field.map_or_else(
+                || query.contains(&literal),
+                |field| numeric_filter_uses_value(query, field, value),
+            )
+        } else {
+            field.map_or(true, |field| {
+                contains_field_reference(query, &field.to_ascii_lowercase())
+            }) && query.contains(&literal)
+        }
+    }) {
         checks.push(ok(format!(
             "grounded {kind} `{value}` was used by the query"
         )));
@@ -1727,6 +1960,59 @@ fn check_literal_usage(
             Some("the executed evidence did not carry the observed filter value".into()),
         ));
     }
+}
+
+/// Match a numeric category filter to a comparison on that same column.
+/// Merely finding the number elsewhere in SQL is not enough (for example,
+/// date components must not satisfy a year filter).
+fn numeric_filter_uses_value(query: &str, field: &str, expected: f64) -> bool {
+    let column = field
+        .rsplit('.')
+        .next()
+        .unwrap_or(field)
+        .trim_matches(['"', '`', '[', ']']);
+    if column.is_empty() {
+        return false;
+    }
+    let pattern = format!(
+        r#"(?i)(?:^|[^a-z0-9_])(?:"{}"|\x60{}\x60|\[{}\]|{})\s*(between\s+|==|<>|!=|<=|>=|=|<|>|in\s*\()\s*"#,
+        regex::escape(column),
+        regex::escape(column),
+        regex::escape(column),
+        regex::escape(column)
+    );
+    let Ok(field_filter) = regex::Regex::new(&pattern) else {
+        return false;
+    };
+    let found = field_filter.captures_iter(query).any(|captures| {
+        let Some(matched) = captures.get(0) else {
+            return false;
+        };
+        let Some(operator) = captures.get(1) else {
+            return false;
+        };
+        let suffix = &query[matched.end()..];
+        if operator
+            .as_str()
+            .trim_start()
+            .to_ascii_lowercase()
+            .starts_with("between")
+        {
+            let bounds = number_tokens(suffix)
+                .take(2)
+                .map(|(_, value)| value)
+                .collect::<Vec<_>>();
+            bounds.len() == 2 && expected >= bounds[0] && expected <= bounds[1]
+        } else {
+            let candidates = if operator.as_str().trim_end().ends_with('(') {
+                suffix.split(')').next().unwrap_or(suffix)
+            } else {
+                suffix.split_whitespace().next().unwrap_or(suffix)
+            };
+            number_tokens(candidates).any(|(_, value)| (value - expected).abs() <= 1e-9)
+        }
+    });
+    found
 }
 
 fn check_filter_polarity(
@@ -2245,6 +2531,15 @@ fn ok(label: impl Into<String>) -> VerificationCheck {
         detail: None,
     }
 }
+
+fn ok_with_detail(label: impl Into<String>, detail: Option<String>) -> VerificationCheck {
+    VerificationCheck {
+        label: label.into(),
+        ok: true,
+        detail,
+    }
+}
+
 fn warn(label: impl Into<String>, detail: Option<String>) -> VerificationCheck {
     VerificationCheck {
         label: label.into(),
@@ -2296,7 +2591,15 @@ fn check_aggregate_verb(
         .filter_map(|e| e.sql.as_deref())
         .map(str::to_uppercase)
         .collect();
+    let mean_forecast = evidence.iter().any(|item| {
+        item.tool == "forecast_analysis"
+            && item.error.is_none()
+            && item.args.get("method").and_then(Json::as_str) == Some("mean")
+    });
     for name in missing_aggregate_verbs(question, &sql) {
+        if name == "AVG" && mean_forecast {
+            continue;
+        }
         out.push(warn(
             format!("question implies {name}() but no cited query used it"),
             Some(format!(
@@ -2631,7 +2934,7 @@ fn rerun_queries(
     let mut seen: HashSet<&str> = HashSet::new();
     for e in evidence
         .iter()
-        .filter(|e| is_sql_evidence(e) && e.error.is_none())
+        .filter(|e| is_sql_evidence(e) && e.tool != "forecast_analysis" && e.error.is_none())
     {
         let Some(sql) = &e.sql else { continue };
         // One re-run per distinct query - the model often cites the same SQL twice.
@@ -2692,10 +2995,9 @@ fn rerun_python_inputs(
 ) {
     let mut matched = 0usize;
     let mut saw_python = false;
-    for item in evidence
-        .iter()
-        .filter(|item| item.tool == "run_python" && item.error.is_none())
-    {
+    for item in evidence.iter().filter(|item| {
+        matches!(item.tool.as_str(), "run_python" | "forecast_analysis") && item.error.is_none()
+    }) {
         saw_python = true;
         if item.python_queries_complete != Some(true) {
             out.push(warn(
@@ -2758,7 +3060,13 @@ fn rerun_python_inputs(
 
 // --- 3. numbers in the answer are backed by evidence ------------------
 
-fn check_numbers(answer: &str, evidence: &[EvidenceItem], out: &mut Vec<VerificationCheck>) {
+fn check_numbers(
+    question: &str,
+    answer: &str,
+    evidence: &[EvidenceItem],
+    contract: Option<&AnalysisContract>,
+    out: &mut Vec<VerificationCheck>,
+) {
     // No tool ran at all -- a general-knowledge or conversational answer, not
     // a data claim. Every number in it would otherwise flag as "unsupported"
     // by definition (there's no evidence to check against), which reads as
@@ -2769,6 +3077,13 @@ fn check_numbers(answer: &str, evidence: &[EvidenceItem], out: &mut Vec<Verifica
 
     let mut supported: Vec<f64> = Vec::new();
     for e in evidence {
+        // Failed or superseded calls are execution history, not valid backing
+        // for the final answer. In particular, a rejected query must not
+        // suppress a repair merely because its retained rows happen to
+        // contain the answer's number.
+        if e.error.is_some() {
+            continue;
+        }
         // SQL summaries contain execution metadata such as `2 rows in 50ms`.
         // Those numbers describe the tool run, not the analyzed population;
         // only returned cells may support a numerical data claim.
@@ -2804,6 +3119,9 @@ fn check_numbers(answer: &str, evidence: &[EvidenceItem], out: &mut Vec<Verifica
                 }
             }
         }
+        if let Some(chart) = &e.chart {
+            collect_chart_numbers(chart, &mut supported);
+        }
     }
 
     // A `Background:` line is explicitly model context, not a computed claim
@@ -2817,19 +3135,48 @@ fn check_numbers(answer: &str, evidence: &[EvidenceItem], out: &mut Vec<Verifica
         .join("\n");
 
     let answer_numbers = answer_number_tokens(&checked);
+    let question_numbers = answer_number_tokens(question);
+    let assumption_numbers = contract
+        .into_iter()
+        .flat_map(|contract| contract.assumptions.iter())
+        .flat_map(|assumption| answer_number_tokens(assumption))
+        .map(|(_, value)| value)
+        .collect::<Vec<_>>();
     let mut unsupported: Vec<String> = Vec::new();
+    let mut user_inputs: Vec<String> = Vec::new();
     for (raw, val) in &answer_numbers {
         if is_probable_year(*val) {
             continue;
         }
-        if !supported.iter().any(|s| close(*s, *val)) {
+        if supported
+            .iter()
+            .any(|supported| matches_displayed_precision(raw, *supported, *val))
+        {
+            continue;
+        }
+        let input_is_declared = question_numbers
+            .iter()
+            .any(|(_, input)| close(*input, *val))
+            && assumption_numbers.iter().any(|input| close(*input, *val));
+        if input_is_declared {
+            user_inputs.push(raw.clone());
+        } else {
             unsupported.push(raw.clone());
         }
     }
     unsupported.dedup();
 
     if unsupported.is_empty() {
-        if !answer_numbers.is_empty() {
+        if !user_inputs.is_empty() {
+            user_inputs.dedup();
+            out.push(ok_with_detail(
+                "user-supplied assumption values are inputs, not workspace observations",
+                Some(format!(
+                    "{} is recorded in the question and analysis contract",
+                    user_inputs.join(", ")
+                )),
+            ));
+        } else if !answer_numbers.is_empty() {
             out.push(ok("every number in the answer came from the data above"));
         }
     } else {
@@ -2841,6 +3188,90 @@ fn check_numbers(answer: &str, evidence: &[EvidenceItem], out: &mut Vec<Verifica
             ),
             Some("check these against the evidence below".into()),
         ));
+    }
+}
+
+/// Typed chart evidence supports the values it actually plots. A validated
+/// pie/donut also has a deterministic common whole, so its slice percentages
+/// and 100% composition are checkable claims—not unsupported model arithmetic.
+fn collect_chart_numbers(data: &chart::ChartData, supported: &mut Vec<f64>) {
+    let part_to_whole = matches!(data.kind, chart::ChartKind::Pie | chart::ChartKind::Donut)
+        && data.metadata.as_ref().is_some_and(|metadata| {
+            metadata.part_to_whole
+                && metadata
+                    .denominator
+                    .as_deref()
+                    .is_some_and(|denominator| !denominator.trim().is_empty())
+        });
+
+    for series in &data.series {
+        let values: Vec<f64> = series
+            .values
+            .iter()
+            .flatten()
+            .copied()
+            .filter(|value| value.is_finite())
+            .collect();
+        supported.extend(values.iter().copied());
+
+        if !part_to_whole
+            || values.len() != series.values.len()
+            || values.iter().any(|value| *value < 0.0)
+        {
+            continue;
+        }
+        let whole: f64 = values.iter().sum();
+        if !whole.is_finite() || whole <= 0.0 {
+            continue;
+        }
+        supported.push(whole);
+        supported.push(100.0);
+        supported.extend(values.into_iter().map(|value| value * 100.0 / whole));
+    }
+
+    for label in &data.labels {
+        collect_numbers(label, supported);
+    }
+    match data.payload.as_ref() {
+        Some(chart::ChartPayload::Scatter { points }) => {
+            for point in points {
+                supported.extend([point.x, point.y]);
+            }
+        }
+        Some(chart::ChartPayload::BoxPlot { groups }) => {
+            for group in groups {
+                supported.extend([
+                    group.low_whisker,
+                    group.q1,
+                    group.median,
+                    group.q3,
+                    group.high_whisker,
+                    group.n as f64,
+                ]);
+                supported.extend(group.outliers.iter().copied());
+            }
+        }
+        Some(chart::ChartPayload::Heatmap { values, .. }) => {
+            supported.extend(values.iter().flatten().flatten().copied());
+        }
+        Some(chart::ChartPayload::Forecast {
+            observed,
+            forecast,
+            lower,
+            upper,
+            ..
+        }) => {
+            supported.extend(
+                observed
+                    .iter()
+                    .chain(forecast)
+                    .chain(lower)
+                    .chain(upper)
+                    .flatten()
+                    .copied(),
+            );
+        }
+        None => {}
     }
 }
 
@@ -3012,6 +3443,28 @@ fn close(a: f64, b: f64) -> bool {
     diff / scale < 0.005
 }
 
+/// A reported number is supported when it is the evidence value rounded to
+/// the precision actually shown. The general `close()` tolerance is useful
+/// for replaying floating-point computations, but a relative tolerance can
+/// accept a visibly incorrect whole-number result for a very large total.
+fn matches_displayed_precision(raw: &str, evidence_value: f64, reported: f64) -> bool {
+    if evidence_value == reported {
+        return true;
+    }
+    let numeric = raw
+        .trim_start_matches('$')
+        .trim_end_matches('%')
+        .replace([',', ' '], "");
+    let decimal_places = numeric
+        .split_once('.')
+        .map(|(_, fraction)| fraction.len())
+        .unwrap_or(0)
+        .min(15) as i32;
+    let rounding_tolerance = 0.5 * 10_f64.powi(-decimal_places);
+    let floating_tolerance = evidence_value.abs().max(reported.abs()).max(1.0) * f64::EPSILON * 4.0;
+    (evidence_value - reported).abs() <= rounding_tolerance + floating_tolerance
+}
+
 pub(crate) fn truncate(s: &str, n: usize) -> String {
     match s.char_indices().nth(n) {
         Some((idx, _)) => format!("{}…", &s[..idx]),
@@ -3129,9 +3582,120 @@ month/week/year check the raw column's values"
 fn alias_words(alias: &str) -> Vec<String> {
     alias
         .split(|c: char| !c.is_alphanumeric())
-        .filter(|w| w.len() > 1)
+        .filter(|word| word.len() > 1 && !word.chars().all(|character| character.is_ascii_digit()))
         .map(|w| w.to_lowercase())
         .collect()
+}
+
+/// Generic aggregation/shape words describe how a result was computed, not
+/// which result column a prose value refers to. They are too weak to establish
+/// a column identity on their own (for example, "annual total" may describe
+/// either an observed total or a hypothetical total).
+fn is_generic_result_word(word: &str) -> bool {
+    matches!(
+        word,
+        "amount"
+            | "avg"
+            | "average"
+            | "count"
+            | "maximum"
+            | "max"
+            | "measure"
+            | "mean"
+            | "metric"
+            | "minimum"
+            | "min"
+            | "result"
+            | "sum"
+            | "total"
+            | "value"
+    )
+}
+
+fn is_arithmetic_expression_line(line: &str) -> bool {
+    [" + ", " - ", " * ", " / ", " = ", " × ", " ÷ "]
+        .iter()
+        .any(|operator| line.contains(operator))
+}
+
+fn number_token_spans(text: &str) -> Vec<(String, f64, usize, usize)> {
+    let mut cursor = 0;
+    number_tokens(text)
+        .map(|(raw, value)| {
+            let start = cursor + text[cursor..].find(&raw).unwrap_or(0);
+            let end = start + raw.len();
+            cursor = end;
+            (raw, value, start, end)
+        })
+        .collect()
+}
+
+fn word_spans(text: &str) -> Vec<(String, usize, usize)> {
+    let mut words = Vec::new();
+    let mut start = None;
+    for (index, character) in text.char_indices() {
+        if character.is_alphanumeric() || character == '_' {
+            start.get_or_insert(index);
+        } else if let Some(word_start) = start.take() {
+            words.push((
+                text[word_start..index].to_ascii_lowercase(),
+                word_start,
+                index,
+            ));
+        }
+    }
+    if let Some(word_start) = start {
+        words.push((
+            text[word_start..].to_ascii_lowercase(),
+            word_start,
+            text.len(),
+        ));
+    }
+    words
+}
+
+/// Column words should be near the number they label, not merely elsewhere
+/// on a sentence that mentions another measure or sample size. If a word is
+/// equally close to adjacent figures, associate it with the following figure,
+/// matching common prose such as "rent $450, groceries $50".
+fn alias_word_is_local_to_number(
+    word: &str,
+    words: &[(String, usize, usize)],
+    numbers: &[(String, f64, usize, usize)],
+    target_number: usize,
+) -> bool {
+    const MAX_LABEL_DISTANCE: usize = 5;
+    words
+        .iter()
+        .filter(|(candidate, _, _)| candidate == word)
+        .any(|(_, word_start, word_end)| {
+            let distances: Vec<usize> = numbers
+                .iter()
+                .map(|(_, _, number_start, number_end)| {
+                    if word_end <= number_start {
+                        words
+                            .iter()
+                            .filter(|(_, start, end)| *start >= *word_end && *end <= *number_start)
+                            .count()
+                    } else if number_end <= word_start {
+                        words
+                            .iter()
+                            .filter(|(_, start, end)| *start >= *number_end && *end <= *word_start)
+                            .count()
+                    } else {
+                        0
+                    }
+                })
+                .collect();
+            let nearest_distance = distances.iter().copied().min().unwrap_or(usize::MAX);
+            let nearest_number = distances
+                .iter()
+                .enumerate()
+                .filter(|(_, distance)| **distance == nearest_distance)
+                .map(|(index, _)| index)
+                .max();
+            nearest_distance <= MAX_LABEL_DISTANCE && nearest_number == Some(target_number)
+        })
 }
 
 /// A query that combines several unrelated aggregates into one row (`SELECT
@@ -3174,33 +3738,92 @@ fn check_row_value_labels(
         if col_vals.len() < 2 {
             continue;
         }
+        // A shared token such as "rentals", or a generic aggregate word such
+        // as "total", is not enough to infer which result a nearby number
+        // describes. Only use column-specific semantic words.
+        let aliases: Vec<Vec<String>> = col_vals
+            .iter()
+            .map(|(column, _)| alias_words(column))
+            .collect();
+        let distinctive: Vec<Vec<&str>> = aliases
+            .iter()
+            .enumerate()
+            .map(|(index, words)| {
+                words
+                    .iter()
+                    .filter(|word| {
+                        !is_generic_result_word(word)
+                            && !aliases.iter().enumerate().any(|(other_index, other)| {
+                                other_index != index && other.contains(word)
+                            })
+                    })
+                    .map(String::as_str)
+                    .collect()
+            })
+            .collect();
 
         for line in answer.lines() {
-            for (raw, val) in number_tokens(line) {
+            // In a formula, a line-level label commonly describes the result
+            // at the right of the operator, not every input value on the line.
+            if is_arithmetic_expression_line(line) {
+                continue;
+            }
+            // A year is temporal context, not a competing result value. Do not
+            // let it steal a nearby label such as "annual total" from the
+            // figure that follows it.
+            let numbers: Vec<_> = number_token_spans(line)
+                .into_iter()
+                .filter(|(_, value, _, _)| !is_probable_year(*value))
+                .collect();
+            let words = word_spans(line);
+            for (number_index, (raw, val, _, _)) in numbers.iter().enumerate() {
                 let matches: Vec<&str> = col_vals
                     .iter()
-                    .filter(|(_, v)| close(*v, val))
+                    .filter(|(_, v)| close(*v, *val))
                     .map(|(c, _)| *c)
                     .collect();
                 if matches.len() != 1 {
                     continue; // unsupported or ambiguous -- not this check's business
                 }
-                let true_col = matches[0];
-                let without_value = line.replacen(&raw, "", 1).to_lowercase();
-                if alias_words(true_col)
+                let true_index = col_vals
                     .iter()
-                    .any(|w| without_value.contains(w.as_str()))
+                    .position(|(column, _)| *column == matches[0])
+                    .expect("matched column belongs to the result");
+                let repeated_representation =
+                    numbers
+                        .iter()
+                        .take(number_index)
+                        .any(|(_, previous_value, _, _)| {
+                            let previous_matches: Vec<usize> = col_vals
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, (_, value))| close(*value, *previous_value))
+                                .map(|(index, _)| index)
+                                .collect();
+                            previous_matches.len() == 1
+                                && previous_matches[0] == true_index
+                                && close(*previous_value, *val)
+                        });
+                if repeated_representation {
+                    // A rounded restatement of the same result is not a new
+                    // column claim; judge its label at the first mention.
+                    continue;
+                }
+                let true_col = matches[0];
+                if distinctive[true_index]
+                    .iter()
+                    .any(|word| alias_word_is_local_to_number(word, &words, &numbers, number_index))
                 {
                     continue; // correctly labeled, or at least not contradicted
                 }
-                let swap = col_vals.iter().find(|(c, v)| {
+                let swap = col_vals.iter().enumerate().find(|(index, (c, v))| {
                     *c != true_col
-                        && !close(*v, val)
-                        && alias_words(c)
-                            .iter()
-                            .any(|w| without_value.contains(w.as_str()))
+                        && !close(*v, *val)
+                        && distinctive[*index].iter().any(|word| {
+                            alias_word_is_local_to_number(word, &words, &numbers, number_index)
+                        })
                 });
-                if let Some((other_col, _)) = swap {
+                if let Some((_, (other_col, _))) = swap {
                     out.push(warn(
                         format!(
                             "\"{raw}\" is labeled like {other_col} but actually came from {true_col}"
@@ -3554,13 +4177,23 @@ mod tests {
             ],
         )];
         evidence[0].tool = "make_chart".into();
+        evidence[0].args = serde_json::json!({
+            "kind": "bar",
+            "title": "Spending",
+            "series_fields": ["amount"]
+        });
         evidence[0].chart = Some(
-            chart::from_query(
-                chart::ChartKind::Bar,
-                Some("Spending".into()),
-                None,
-                evidence[0].columns.as_ref().unwrap(),
-                evidence[0].rows.as_ref().unwrap(),
+            chart::from_table(
+                &chart::TabularResult {
+                    columns: evidence[0].columns.clone().unwrap(),
+                    rows: evidence[0].rows.clone().unwrap(),
+                },
+                chart::ChartRequest {
+                    kind: chart::ChartKind::Bar,
+                    title: Some("Spending".into()),
+                    series_fields: vec!["amount".into()],
+                    ..Default::default()
+                },
             )
             .unwrap(),
         );
@@ -3568,13 +4201,192 @@ mod tests {
         check_chart_values(&evidence, &mut good);
         assert_eq!(good, vec![ok("chart values matched the source query")]);
 
-        evidence[0].chart.as_mut().unwrap().series[0].values[0] = 99.0;
+        evidence[0].chart.as_mut().unwrap().series[0].values[0] = Some(99.0);
         let mut bad = Vec::new();
         check_chart_values(&evidence, &mut bad);
         assert!(bad.iter().any(|check| {
             !check.ok && check.label == "chart values did not match source query"
         }));
         assert!(hard_fail(&bad).is_some());
+    }
+
+    #[test]
+    fn specialized_chart_payloads_and_bin_labels_ground_numeric_claims() {
+        let charts = vec![
+            chart::ChartData {
+                kind: chart::ChartKind::Histogram,
+                title: None,
+                labels: vec!["10–25".into()],
+                series: vec![chart::Series {
+                    name: "Count".into(),
+                    values: vec![Some(4.0)],
+                }],
+                unit: None,
+                x_label: None,
+                y_label: None,
+                payload: None,
+                metadata: None,
+            },
+            chart::ChartData {
+                kind: chart::ChartKind::Scatter,
+                title: None,
+                labels: Vec::new(),
+                series: Vec::new(),
+                unit: None,
+                x_label: None,
+                y_label: None,
+                payload: Some(chart::ChartPayload::Scatter {
+                    points: vec![chart::ScatterPoint {
+                        x: 6.0,
+                        y: 7.0,
+                        label: "point".into(),
+                        group: None,
+                    }],
+                }),
+                metadata: None,
+            },
+            chart::ChartData {
+                kind: chart::ChartKind::BoxPlot,
+                title: None,
+                labels: Vec::new(),
+                series: Vec::new(),
+                unit: None,
+                x_label: None,
+                y_label: None,
+                payload: Some(chart::ChartPayload::BoxPlot {
+                    groups: vec![chart::BoxSummary {
+                        label: "A".into(),
+                        low_whisker: 1.0,
+                        q1: 2.0,
+                        median: 3.0,
+                        q3: 4.0,
+                        high_whisker: 5.0,
+                        outliers: vec![20.0],
+                        n: 5,
+                    }],
+                }),
+                metadata: None,
+            },
+            chart::ChartData {
+                kind: chart::ChartKind::Heatmap,
+                title: None,
+                labels: Vec::new(),
+                series: Vec::new(),
+                unit: None,
+                x_label: None,
+                y_label: None,
+                payload: Some(chart::ChartPayload::Heatmap {
+                    x_labels: vec!["Jan".into()],
+                    y_labels: vec!["East".into()],
+                    values: vec![vec![Some(8.0)]],
+                }),
+                metadata: None,
+            },
+            chart::ChartData {
+                kind: chart::ChartKind::Forecast,
+                title: None,
+                labels: Vec::new(),
+                series: Vec::new(),
+                unit: None,
+                x_label: None,
+                y_label: None,
+                payload: Some(chart::ChartPayload::Forecast {
+                    observed: vec![Some(9.0)],
+                    forecast: vec![None],
+                    lower: vec![Some(8.0)],
+                    upper: vec![Some(10.0)],
+                    uncertainty_note: None,
+                }),
+                metadata: None,
+            },
+        ];
+        let evidence = charts
+            .into_iter()
+            .enumerate()
+            .map(|(index, chart)| {
+                let mut item = run_sql_ev("", &[], Vec::new());
+                item.id = format!("chart-{index}");
+                item.tool = "make_chart".into();
+                item.chart = Some(chart);
+                item
+            })
+            .collect::<Vec<_>>();
+        let mut checks = Vec::new();
+        check_numbers(
+            "Summarize the chart values.",
+            "Histogram bin 10–25 has count 4. Scatter x is 6 and y is 7. Box quartiles are 2, 3, and 4 with outlier 20. Heatmap value is 8. Forecast is 9 with bounds 8 and 10.",
+            &evidence,
+            None,
+            &mut checks,
+        );
+
+        assert!(
+            checks.iter().all(|check| check.ok),
+            "typed chart data should support each plotted numerical claim: {checks:?}"
+        );
+    }
+
+    #[test]
+    fn chart_verification_rebuilds_a_specialized_view_from_referenced_python_output() {
+        let mut source = run_sql_ev("", &[], vec![]);
+        source.id = "evidence-1".into();
+        source.tool = "run_python".into();
+        source.sql = None;
+        source.columns = None;
+        source.rows = None;
+        source.row_count = None;
+        source.result_table = Some(chart::TabularResult {
+            columns: vec!["units".into(), "revenue".into(), "region".into()],
+            rows: vec![
+                vec![Json::from(2), Json::from(20), Json::from("East")],
+                vec![Json::from(3), Json::from(35), Json::from("West")],
+                vec![Json::from(5), Json::from(50), Json::from("East")],
+            ],
+        });
+        let source_table = source.result_table.as_ref().unwrap();
+        let request = chart::ChartRequest {
+            kind: chart::ChartKind::Scatter,
+            x_field: Some("units".into()),
+            y_field: Some("revenue".into()),
+            group_field: Some("region".into()),
+            metadata: chart::ChartMetadata {
+                source_evidence_id: Some("evidence-1".into()),
+                source_label: Some("run_python".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let chart_data = chart::from_table(source_table, request).unwrap();
+        let mut chart_item = run_sql_ev("", &[], vec![]);
+        chart_item.id = "evidence-2".into();
+        chart_item.tool = "make_chart".into();
+        chart_item.args = serde_json::json!({
+            "kind": "scatter",
+            "source_evidence_id": "evidence-1",
+            "x_field": "units",
+            "y_field": "revenue",
+            "group_field": "region"
+        });
+        chart_item.chart = Some(chart_data);
+        let evidence = vec![source, chart_item];
+
+        let mut good = Vec::new();
+        check_chart_values(&evidence, &mut good);
+        assert_eq!(good, vec![ok("chart values matched the source query")]);
+
+        let mut corrupted = evidence;
+        if let Some(chart::ChartPayload::Scatter { points }) = corrupted[1]
+            .chart
+            .as_mut()
+            .and_then(|spec| spec.payload.as_mut())
+        {
+            points[0].y = 999.0;
+        }
+        let mut bad = Vec::new();
+        check_chart_values(&corrupted, &mut bad);
+        assert!(bad.iter().any(|check| {
+            !check.ok && check.label == "chart values did not match source query"
+        }));
     }
 
     #[test]
@@ -3718,6 +4530,268 @@ mod tests {
             .map(|(_, v)| v)
             .collect();
         assert_eq!(got2, vec![738022.3]);
+
+        let grouped_with_spacing: Vec<_> =
+            number_tokens("The average used (38, 189 + 48, 215) / 2.")
+                .map(|(_, value)| value)
+                .collect();
+        assert_eq!(grouped_with_spacing, vec![38189.0, 48215.0, 2.0]);
+    }
+
+    #[test]
+    fn numeric_filter_values_must_be_used_on_the_grounded_field() {
+        assert_eq!(
+            number_tokens("1 AND 6")
+                .map(|(_, value)| value)
+                .collect::<Vec<_>>(),
+            vec![1.0, 6.0]
+        );
+        assert!(numeric_filter_uses_value(
+            "SELECT sum(cnt) FROM daily WHERE yr = 1",
+            "yr",
+            1.0
+        ));
+        assert!(numeric_filter_uses_value(
+            "SELECT sum(cnt) FROM daily WHERE yr IN ('1')",
+            "yr",
+            1.0
+        ));
+        assert!(numeric_filter_uses_value(
+            "SELECT sum(cnt) FROM daily WHERE month BETWEEN 1 AND 6",
+            "month",
+            4.0
+        ));
+        assert!(!numeric_filter_uses_value(
+            "SELECT sum(cnt) FROM daily WHERE month BETWEEN 1 AND 6",
+            "month",
+            7.0
+        ));
+        assert!(!numeric_filter_uses_value(
+            "SELECT sum(cnt) FROM daily WHERE dteday >= '2012-01-01'",
+            "yr",
+            1.0
+        ));
+        assert!(!numeric_filter_uses_value(
+            "SELECT yr FROM daily WHERE dteday >= '2012-01-01' AND cnt = 1",
+            "yr",
+            1.0
+        ));
+    }
+
+    #[test]
+    fn arithmetic_mean_is_a_supported_average_operation() {
+        let mut checks = Vec::new();
+        check_measure_operation(
+            &mut checks,
+            "arithmetic mean",
+            &["SELECT AVG(rides) FROM daily".to_string()],
+            &[],
+        );
+        assert_eq!(checks.len(), 1);
+        assert!(checks[0].ok, "{checks:?}");
+    }
+
+    #[test]
+    fn raw_observation_measure_requires_a_non_aggregate_projection() {
+        for operation in ["raw", "raw distribution", "raw observations"] {
+            let mut checks = Vec::new();
+            check_measure_operation(
+                &mut checks,
+                operation,
+                &["SELECT cohort, score FROM readings ORDER BY cohort, score".into()],
+                &[],
+            );
+            assert_eq!(checks.len(), 1);
+            assert!(checks[0].ok, "{operation}: {checks:?}");
+        }
+
+        let mut aggregated = Vec::new();
+        check_measure_operation(
+            &mut aggregated,
+            "raw",
+            &["SELECT AVG(score) FROM readings".into()],
+            &[],
+        );
+        assert_eq!(aggregated.len(), 1);
+        assert!(!aggregated[0].ok, "{aggregated:?}");
+    }
+
+    #[test]
+    fn forecast_without_evaluation_gets_a_soft_repair_hint_but_keeps_the_point_result() {
+        let point_only = run_sql_ev(
+            "SELECT AVG(value) AS estimate FROM monthly_values",
+            &["estimate"],
+            vec![vec![Json::from(35)]],
+        );
+        let mut checks = Vec::new();
+        check_forecast_evaluation(
+            "Forecast next month from the workspace series",
+            &[point_only.clone()],
+            &mut checks,
+        );
+        assert_eq!(checks.len(), 1);
+        assert!(!checks[0].ok);
+        assert!(checks[0]
+            .label
+            .contains("forecast lacks chronological evaluation"));
+        assert!(semantic_repair_hint(
+            "Forecast next month from the workspace series",
+            &[point_only],
+            &checks
+        )
+        .is_some());
+
+        let mut evaluated = run_sql_ev(
+            "SELECT period, value FROM monthly_values ORDER BY period",
+            &["period", "value"],
+            vec![vec![Json::String("2025-01".into()), Json::from(10)]],
+        );
+        evaluated.tool = "forecast_analysis".into();
+        evaluated.args = serde_json::json!({"method":"mean", "horizon":1});
+        evaluated.output = Some(
+            "forecast_values=[10.0]\nbacktest={'mae': 2.0, 'baseline_mae': 3.0}\nempirical_error_bands={'available': False}".into(),
+        );
+        let mut evaluated_checks = Vec::new();
+        check_forecast_evaluation(
+            "Forecast next month from the workspace series",
+            &[evaluated],
+            &mut evaluated_checks,
+        );
+        assert!(evaluated_checks.is_empty(), "{evaluated_checks:?}");
+
+        let mut unrelated_checks = Vec::new();
+        check_forecast_evaluation(
+            "What was the average value last month?",
+            &[],
+            &mut unrelated_checks,
+        );
+        assert!(unrelated_checks.is_empty());
+    }
+
+    #[test]
+    fn rendering_a_precomputed_forecast_does_not_require_a_second_backtest() {
+        let sql = "SELECT period, observed, forecast, lower, upper FROM forecast_values";
+        let rows = vec![
+            vec![
+                Json::from("Jan"),
+                Json::from(10),
+                Json::Null,
+                Json::Null,
+                Json::Null,
+            ],
+            vec![
+                Json::from("Feb"),
+                Json::Null,
+                Json::from(12),
+                Json::from(11),
+                Json::from(13),
+            ],
+        ];
+        let mut source = run_sql_ev(
+            sql,
+            &["period", "observed", "forecast", "lower", "upper"],
+            rows.clone(),
+        );
+        source.id = "evidence-source".into();
+        source.tool = "run_sql".into();
+        let chart_data = chart::from_table(
+            &chart::TabularResult {
+                columns: source.columns.clone().unwrap(),
+                rows,
+            },
+            chart::ChartRequest {
+                kind: chart::ChartKind::Forecast,
+                x_field: Some("period".into()),
+                series_fields: vec![
+                    "observed".into(),
+                    "forecast".into(),
+                    "lower".into(),
+                    "upper".into(),
+                ],
+                metadata: chart::ChartMetadata {
+                    source_evidence_id: Some(source.id.clone()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let mut chart_item = run_sql_ev("", &[], Vec::new());
+        chart_item.id = "evidence-chart".into();
+        chart_item.tool = "make_chart".into();
+        chart_item.chart = Some(chart_data);
+
+        let mut checks = Vec::new();
+        check_forecast_evaluation(
+            "Render the supplied forecast as a chart; do not recompute it",
+            &[source, chart_item],
+            &mut checks,
+        );
+
+        assert!(
+            checks.is_empty(),
+            "rendering provided forecast rows should not trigger a second analysis: {checks:?}"
+        );
+    }
+
+    #[test]
+    fn replayable_python_backtest_is_an_allowed_custom_forecast_path() {
+        let sql = "SELECT period, value FROM monthly_values ORDER BY period";
+        let rows = vec![
+            vec![Json::String("2025-01".into()), Json::from(10)],
+            vec![Json::String("2025-02".into()), Json::from(12)],
+        ];
+        let mut python = run_sql_ev(sql, &["period", "value"], rows.clone());
+        python.tool = "run_python".into();
+        python.args = serde_json::json!({
+            "code": "result = rolling_origin_backtest(values, 'linear_trend', baseline_method='naive')"
+        });
+        python.output = Some("{'mae': 2.0, 'baseline_mae': 3.0}".into());
+        python.python_queries_complete = Some(true);
+        python.python_queries = Some(vec![crate::engine::analytics::pyexec::PythonQueryTrace {
+            sql: sql.into(),
+            columns: vec!["period".into(), "value".into()],
+            rows,
+            row_count: 2,
+            truncated: false,
+        }]);
+
+        let mut checks = Vec::new();
+        check_forecast_evaluation(
+            "Predict next month using a custom method",
+            &[python],
+            &mut checks,
+        );
+        assert!(checks.is_empty(), "{checks:?}");
+    }
+
+    #[test]
+    fn a_typed_mean_forecast_satisfies_the_average_contract_without_sql_avg() {
+        let mut forecast = run_sql_ev(
+            "SELECT strftime('%Y-%m', day) AS period, SUM(rentals) AS value FROM daily GROUP BY period ORDER BY period",
+            &["period", "value"],
+            vec![vec![Json::String("2011-01".into()), Json::from(10)]],
+        );
+        forecast.tool = "forecast_analysis".into();
+        forecast.args = serde_json::json!({"method":"mean", "horizon":1});
+
+        let mut checks = Vec::new();
+        check_measure_operation(
+            &mut checks,
+            "arithmetic mean",
+            &[forecast.sql.clone().unwrap()],
+            &[forecast.clone()],
+        );
+        assert_eq!(checks.len(), 1);
+        assert!(checks[0].ok, "{checks:?}");
+
+        let mut aggregate_checks = Vec::new();
+        check_aggregate_verb(
+            "What is the average forecast?",
+            &[forecast],
+            &mut aggregate_checks,
+        );
+        assert!(aggregate_checks.is_empty(), "{aggregate_checks:?}");
     }
 
     #[test]
@@ -3771,6 +4845,48 @@ mod tests {
     }
 
     #[test]
+    fn answer_numbers_must_match_the_precision_the_answer_displays() {
+        let evidence = vec![run_sql_ev(
+            "SELECT 900000.4 AS total",
+            &["total"],
+            vec![vec![Json::from(900000.4)]],
+        )];
+
+        let mut rounded = Vec::new();
+        check_numbers(
+            "What is the total?",
+            "The total is 900,000.",
+            &evidence,
+            None,
+            &mut rounded,
+        );
+        assert!(rounded.iter().all(|check| check.ok), "{rounded:?}");
+
+        let mut exact = Vec::new();
+        check_numbers(
+            "What is the total?",
+            "The total is 900,000.4.",
+            &evidence,
+            None,
+            &mut exact,
+        );
+        assert!(exact.iter().all(|check| check.ok), "{exact:?}");
+
+        let mut incorrectly_rounded = Vec::new();
+        check_numbers(
+            "What is the total?",
+            "The total is 900,001.",
+            &evidence,
+            None,
+            &mut incorrectly_rounded,
+        );
+        assert!(
+            incorrectly_rounded.iter().any(|check| !check.ok),
+            "an incorrectly rounded figure must not be accepted: {incorrectly_rounded:?}"
+        );
+    }
+
+    #[test]
     fn year_is_ignored() {
         assert!(is_probable_year(2024.0));
         assert!(!is_probable_year(2024.5));
@@ -3799,7 +4915,9 @@ mod tests {
         ];
         assert_eq!(
             hard_fail(&hard).as_deref(),
-            Some("a query behind this answer gives a different result now (SELECT sum(amount) FROM t)")
+            Some(
+                "a query behind this answer gives a different result now (SELECT sum(amount) FROM t)"
+            )
         );
 
         // An unbacked figure is a hard fail; label used when there's no detail.
@@ -3913,6 +5031,78 @@ mod tests {
     }
 
     #[test]
+    fn pie_evidence_backs_plotted_values_and_its_deterministic_composition() {
+        let mut pie = run_sql_ev("SELECT category, total FROM totals", &[], Vec::new());
+        pie.tool = "make_chart".into();
+        pie.columns = None;
+        pie.rows = None;
+        pie.row_count = None;
+        pie.chart = Some(chart::ChartData {
+            kind: chart::ChartKind::Pie,
+            title: Some("Spending by category".into()),
+            labels: vec![
+                "Rent".into(),
+                "Groceries".into(),
+                "Dining".into(),
+                "Transport".into(),
+            ],
+            series: vec![chart::Series {
+                name: "spending".into(),
+                values: vec![Some(3600.0), Some(350.0), Some(180.0), Some(60.0)],
+            }],
+            unit: Some("$".into()),
+            x_label: None,
+            y_label: None,
+            payload: None,
+            metadata: Some(chart::ChartMetadata {
+                denominator: Some("all included category spending".into()),
+                part_to_whole: true,
+                ..Default::default()
+            }),
+        });
+
+        let answer = "Rent was $3,600, or 85.9% of $4,190 total; the slices sum to 100%.";
+        let mut pie_checks = Vec::new();
+        check_numbers(
+            "Show spending by category as a pie chart",
+            answer,
+            &[pie.clone()],
+            None,
+            &mut pie_checks,
+        );
+        assert!(pie_checks.iter().all(|check| check.ok), "{pie_checks:?}");
+
+        let mut bar = pie.clone();
+        let chart = bar.chart.as_mut().unwrap();
+        chart.kind = chart::ChartKind::Bar;
+        chart.metadata.as_mut().unwrap().part_to_whole = false;
+        let mut bar_checks = Vec::new();
+        check_numbers(
+            "Show spending by category as a bar chart",
+            answer,
+            &[bar],
+            None,
+            &mut bar_checks,
+        );
+        assert!(bar_checks
+            .iter()
+            .any(|check| !check.ok && check.label.contains("not found in any result")));
+
+        pie.error = Some("superseded chart evidence".into());
+        let mut failed_checks = Vec::new();
+        check_numbers(
+            "Show spending by category as a pie chart",
+            answer,
+            &[pie],
+            None,
+            &mut failed_checks,
+        );
+        assert!(failed_checks
+            .iter()
+            .any(|check| !check.ok && check.label.contains("not found in any result")));
+    }
+
+    #[test]
     fn a_fully_backed_scalar_answer_does_not_trigger_a_duplicate_repair() {
         let evidence = vec![run_sql_ev(
             "SELECT SUM(amount) AS total FROM transactions",
@@ -4007,7 +5197,7 @@ mod tests {
 
         let answer = "Background: RPE is a 1-10 scale.\nYour total was 450, peaking at 999.";
         let mut out = Vec::new();
-        check_numbers(answer, &ev, &mut out);
+        check_numbers("What is my total?", answer, &ev, None, &mut out);
 
         let warns: Vec<_> = out.iter().filter(|c| !c.ok).collect();
         assert_eq!(
@@ -4032,8 +5222,10 @@ mod tests {
 
         let mut checks = Vec::new();
         check_numbers(
+            "What is the difference between these totals?",
             "The difference was $50; totals were $200 and $250.",
             &[evidence],
+            None,
             &mut checks,
         );
 
@@ -4044,6 +5236,71 @@ mod tests {
         );
         assert!(!checks[0].ok);
         assert!(checks[0].label.contains("50"));
+    }
+
+    #[test]
+    fn failed_or_superseded_query_rows_cannot_back_answer_numbers() {
+        let mut evidence = run_sql_ev(
+            "SELECT 450 AS total",
+            &["total"],
+            vec![vec![Json::from(450)]],
+        );
+        evidence.error = Some("superseded after semantic verification".into());
+
+        let mut checks = Vec::new();
+        check_numbers(
+            "What is the total?",
+            "The total is 450.",
+            &[evidence],
+            None,
+            &mut checks,
+        );
+
+        assert!(checks
+            .iter()
+            .any(|check| { !check.ok && check.label.contains("450 not found in any result") }));
+    }
+
+    #[test]
+    fn declared_user_scenario_input_is_distinct_from_a_computed_result() {
+        let evidence = vec![run_sql_ev(
+            "SELECT 100 AS observed_total, 90 AS scenario_total",
+            &["observed_total", "scenario_total"],
+            vec![vec![Json::from(100), Json::from(90)]],
+        )];
+        let contract = AnalysisContract {
+            assumptions: vec!["Apply the user's 10% reduction assumption".into()],
+            ..Default::default()
+        };
+        let mut checks = Vec::new();
+        check_numbers(
+            "What if the total were 10% lower?",
+            "Applying the user-specified 10% reduction gives a scenario total of 90.",
+            &evidence,
+            Some(&contract),
+            &mut checks,
+        );
+
+        assert!(checks.iter().all(|check| check.ok), "{checks:?}");
+        assert!(checks.iter().any(|check| {
+            check.label.contains("user-supplied assumption values")
+                && check
+                    .detail
+                    .as_deref()
+                    .is_some_and(|detail| detail.contains("10%"))
+        }));
+
+        let mut unsupported_result = Vec::new();
+        check_numbers(
+            "What if the total were 10% lower?",
+            "Applying the user-specified 10% reduction gives a scenario total of 80.",
+            &evidence,
+            Some(&contract),
+            &mut unsupported_result,
+        );
+        assert!(unsupported_result
+            .iter()
+            .any(|check| !check.ok && check.label.contains("80")));
     }
 
     #[test]
@@ -4061,6 +5318,7 @@ mod tests {
             row_count: Some(1),
             output: None,
             chart: None,
+            result_table: None,
             python_input_trace: None,
             python_queries: None,
             python_queries_complete: None,
@@ -4068,7 +5326,13 @@ mod tests {
             error: None,
         }];
         let mut out = Vec::new();
-        check_numbers("You spent $0 on healthcare.", &ev, &mut out);
+        check_numbers(
+            "What did I spend on healthcare?",
+            "You spent $0 on healthcare.",
+            &ev,
+            None,
+            &mut out,
+        );
         assert!(
             out.iter().all(|c| c.ok),
             "0 is backed by the empty aggregate, not a stray figure: {out:?}"
@@ -4081,8 +5345,10 @@ mod tests {
         // numbers aren't a data claim, so there's nothing to check.
         let mut out = Vec::new();
         check_numbers(
+            "",
             "A common rule of thumb is saving 20% of income.",
             &[],
+            None,
             &mut out,
         );
         assert!(
@@ -4111,6 +5377,7 @@ mod tests {
                 "table ledger  (from ledger.csv, 30 rows)\ndocument notes.md  (Notes, 1 KB)".into(),
             ),
             chart: None,
+            result_table: None,
             python_input_trace: None,
             python_queries: None,
             python_queries_complete: None,
@@ -4119,8 +5386,10 @@ mod tests {
         }];
         let mut out = Vec::new();
         check_numbers(
+            "Which tables and files are present?",
             "This folder has a ledger table with 30 rows and one notes file.",
             &ev,
+            None,
             &mut out,
         );
         assert!(
@@ -4143,6 +5412,7 @@ mod tests {
             rows: Some(rows),
             output: None,
             chart: None,
+            result_table: None,
             python_input_trace: None,
             python_queries: None,
             python_queries_complete: None,
@@ -4284,6 +5554,140 @@ mod tests {
         assert!(
             out.is_empty(),
             "every value sits next to its own column's words: {out:?}"
+        );
+    }
+
+    #[test]
+    fn check_row_value_labels_ignores_words_shared_by_columns() {
+        let ev = vec![run_sql_ev(
+            "SELECT 100 AS observed_2024_units, 0.9 AS retained_rate, 90 AS scenario_2024_units",
+            &[
+                "observed_2024_units",
+                "retained_rate",
+                "scenario_2024_units",
+            ],
+            vec![vec![Json::from(100), Json::from(0.9), Json::from(90)]],
+        )];
+        let answer = "The adjusted total is 100 x 0.9 = 90 units.";
+        let mut out = Vec::new();
+        check_row_value_labels(answer, &ev, &mut out);
+        assert!(
+            out.is_empty(),
+            "shared unit/year words are not enough to identify a mislabeled result: {out:?}"
+        );
+    }
+
+    #[test]
+    fn check_row_value_labels_does_not_assign_a_formula_input_to_its_result_label() {
+        let ev = vec![run_sql_ev(
+            "SELECT 1200 AS period_total, 200 AS forecast",
+            &["period_total", "forecast"],
+            vec![vec![Json::from(1200), Json::from(200)]],
+        )];
+        let answer = "Forecast: 1,200 ÷ 6 = 200.";
+        let mut out = Vec::new();
+        check_row_value_labels(answer, &ev, &mut out);
+        assert!(
+            out.is_empty(),
+            "the expression input is not the forecast column: {out:?}"
+        );
+    }
+
+    #[test]
+    fn check_row_value_labels_does_not_assign_a_summary_size_mention_to_a_total() {
+        let ev = vec![run_sql_ev(
+            "SELECT 524652 AS total_value, 6 AS months_used, 87442 AS average_value",
+            &["total_value", "months_used", "average_value"],
+            vec![vec![Json::from(524652), Json::from(6), Json::from(87442)]],
+        )];
+        let answer = "The total was 524,652 rides across 6 months; the average was 87,442.";
+        let mut out = Vec::new();
+        check_row_value_labels(answer, &ev, &mut out);
+        assert!(
+            out.is_empty(),
+            "the later sample-size phrase must not relabel the total: {out:?}"
+        );
+    }
+
+    #[test]
+    fn check_row_value_labels_keeps_scenario_output_distinct_from_its_base_total() {
+        let ev = vec![run_sql_ev(
+            "SELECT 2049576 AS recorded_total, 1844618.4 AS scenario_total",
+            &["recorded_total", "scenario_total"],
+            vec![vec![Json::from(2049576), Json::from(1844618.4)]],
+        )];
+        let answer = "Scenario result: 1,844,618.4 rentals (approximately 1,844,618 rentals).\n\
+             The checked calculation uses the 2012 recorded total of 2,049,576 rentals and applies the requested 10% reduction.";
+        let mut out = Vec::new();
+        check_row_value_labels(answer, &ev, &mut out);
+        assert!(
+            out.is_empty(),
+            "the scenario figure and recorded base must retain their own labels: {out:?}"
+        );
+    }
+
+    #[test]
+    fn check_row_value_labels_does_not_confuse_a_scenario_total_with_its_recorded_input() {
+        let ev = vec![run_sql_ev(
+            "SELECT 2049576 AS recorded_2012_rentals, 1844618.4 AS scenario_total_10_percent_lower",
+            &["recorded_2012_rentals", "scenario_total_10_percent_lower"],
+            vec![vec![Json::from(2049576), Json::from(1844618.4)]],
+        )];
+        let answer = "**Scenario result:** **1,844,618.4 rentals** (approximately **1,844,618 rentals**).\n\
+             The checked calculation uses the 2012 recorded total of **2,049,576 rentals** and applies the requested 10% reduction.";
+        let mut out = Vec::new();
+        check_row_value_labels(answer, &ev, &mut out);
+        assert!(
+            out.is_empty(),
+            "the scenario estimate should not inherit the label of its separate base input: {out:?}"
+        );
+    }
+
+    #[test]
+    fn check_row_value_labels_does_not_use_a_generic_total_word_as_column_identity() {
+        let ev = vec![run_sql_ev(
+            "SELECT 1000 AS recorded_total_units, 900 AS units_after_adjustment",
+            &["recorded_total_units", "units_after_adjustment"],
+            vec![vec![Json::from(1000), Json::from(900)]],
+        )];
+        let answer = "The annual total would be 900 units.";
+        let mut out = Vec::new();
+        check_row_value_labels(answer, &ev, &mut out);
+        assert!(
+            out.is_empty(),
+            "a generic aggregation word alone cannot identify the recorded column: {out:?}"
+        );
+    }
+
+    #[test]
+    fn check_row_value_labels_does_not_treat_a_year_as_a_column_label() {
+        let ev = vec![run_sql_ev(
+            "SELECT 5000 AS recorded_2025_units, 4500 AS units_after_reduction",
+            &["recorded_2025_units", "units_after_reduction"],
+            vec![vec![Json::from(5000), Json::from(4500)]],
+        )];
+        let answer = "Scenario result: 4,500 units for 2025.";
+        let mut out = Vec::new();
+        check_row_value_labels(answer, &ev, &mut out);
+        assert!(
+            out.is_empty(),
+            "a date label and shared unit word should not imply a column swap: {out:?}"
+        );
+    }
+
+    #[test]
+    fn check_row_value_labels_does_not_let_a_year_steal_the_result_label() {
+        let evidence = vec![run_sql_ev(
+            "SELECT 1000 AS recorded_2025_widgets, 900 AS scenario_annual_total",
+            &["recorded_2025_widgets", "scenario_annual_total"],
+            vec![vec![Json::from(1000), Json::from(900)]],
+        )];
+        let answer = "The annual total for 2025: 900 widgets.";
+        let mut checks = Vec::new();
+        check_row_value_labels(answer, &evidence, &mut checks);
+        assert!(
+            checks.is_empty(),
+            "the year should not make the unit look like a column label: {checks:?}"
         );
     }
 
@@ -4454,8 +5858,18 @@ mod tests {
         };
         let good = vec![run_sql_ev(
             "SELECT SUM(CASE WHEN \"date\" >= '2024-01-01' AND \"date\" < '2025-01-01' THEN \"amount\" END) AS measure_0_current, SUM(CASE WHEN \"date\" >= '2023-01-01' AND \"date\" < '2024-01-01' THEN \"amount\" END) AS measure_0_previous, ((SUM(CASE WHEN \"date\" >= '2024-01-01' AND \"date\" < '2025-01-01' THEN \"amount\" END)) - (SUM(CASE WHEN \"date\" >= '2023-01-01' AND \"date\" < '2024-01-01' THEN \"amount\" END))) AS measure_0_change, (((SUM(CASE WHEN \"date\" >= '2024-01-01' AND \"date\" < '2025-01-01' THEN \"amount\" END)) - (SUM(CASE WHEN \"date\" >= '2023-01-01' AND \"date\" < '2024-01-01' THEN \"amount\" END))) / NULLIF(ABS(SUM(CASE WHEN \"date\" >= '2023-01-01' AND \"date\" < '2024-01-01' THEN \"amount\" END)), 0)) * 100 AS measure_0_change_pct FROM spend",
-            &["measure_0_current", "measure_0_previous", "measure_0_change", "measure_0_change_pct"],
-            vec![vec![Json::from(12), Json::from(10), Json::from(2), Json::from(20.0)]],
+            &[
+                "measure_0_current",
+                "measure_0_previous",
+                "measure_0_change",
+                "measure_0_change_pct",
+            ],
+            vec![vec![
+                Json::from(12),
+                Json::from(10),
+                Json::from(2),
+                Json::from(20.0),
+            ]],
         )];
         let checks = contract_checks(&contract, Some(&report), &good);
         assert!(checks.iter().all(|check| check.ok), "{checks:?}");
@@ -4468,7 +5882,12 @@ mod tests {
                 "measure_0_change",
                 "measure_0_change_pct",
             ],
-            vec![vec![Json::from(12), Json::from(10), Json::from(5), Json::from(30)]],
+            vec![vec![
+                Json::from(12),
+                Json::from(10),
+                Json::from(5),
+                Json::from(30),
+            ]],
         )];
         let arithmetic_checks = contract_checks(&contract, Some(&report), &arithmetic_bad);
         assert!(arithmetic_checks

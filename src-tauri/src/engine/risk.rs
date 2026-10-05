@@ -93,10 +93,9 @@ pub fn assess(question: &str) -> RiskAssessment {
         ),
         (
             "grouping",
-            has_any_word(
-                &words,
-                &["group", "breakdown", "per", "each", "across", "by"],
-            ),
+            has_any_word(&words, &["group", "breakdown", "per", "each", "across"])
+                || (has_word(&words, "by")
+                    && !contains_any(&lower, &["by how much", "by how many"])),
         ),
         ("join", has_any_word(&words, &["join", "combine", "match"])),
         (
@@ -174,5 +173,17 @@ mod tests {
         assert_eq!(assessment.tier, RiskTier::Elevated);
         assert_eq!(assessment.route, AnalysisRoute::ModelGuided);
         assert!(assessment.signals.contains(&"signed_values".into()));
+    }
+
+    #[test]
+    fn quantity_comparison_is_not_misclassified_as_grouping() {
+        let assessment =
+            assess("Did I pay more in the second period or first period, and by how much?");
+        assert_eq!(assessment.tier, RiskTier::Low);
+        assert!(!assessment.signals.contains(&"grouping".into()));
+
+        let grouped = assess("Break revenue down by region");
+        assert_eq!(grouped.tier, RiskTier::Elevated);
+        assert!(grouped.signals.contains(&"grouping".into()));
     }
 }

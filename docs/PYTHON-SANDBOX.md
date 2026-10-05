@@ -19,7 +19,42 @@ process, or make a network request. The host links three functions:
 The guest turns the SQL response into a Python `list[dict]`. It does not ship
 pandas, NumPy, SciPy, a package installer, or a Python installation. The host
 prepends the small pure-Python analytics helpers `median`, `stdev`, `pearsonr`,
-and `linregress` to each snippet.
+and `linregress` to each snippet. Forecast helpers are added only when the
+generated Python references their API; they provide `naive`,
+`mean`, `drift`, `linear_trend`, and `seasonal_naive` candidates through
+`forecast_series` (up to 1,000 future points); `rolling_origin_backtest`
+evaluates a method over expanding chronological origins against a selected
+baseline (last-value naive by default, MAE/RMSE), sampling at most 10 origins
+evenly and 1,000 origin/lead evaluation points when a series is longer and
+reporting both evaluated and available counts. The backtest's numerical loop
+runs in compiled Rust inside the same guest; its Python API and sandbox boundary
+are unchanged. `forecast_error_bands` summarizes empirical errors through the
+Python helper path. Python wrappers, result conversion, and interval work remain
+subject to the sandbox's global fuel and wall-time limits. These helpers reject
+missing/non-finite values rather than silently coercing them. The caller must
+first establish a meaningful, consistently spaced time grain. Error bands are
+not guaranteed prediction intervals and are withheld by default when a lead
+has fewer than eight holdout errors or no observed error spread; this is not a
+claim of calibration.
+
+### Publishing a reusable result for visualization
+
+Generated Python can explicitly publish a bounded scalar table with
+`fella_table(columns, rows)`. This does not add filesystem, network, package,
+or database-write access: Python still reads workspace data only through the
+existing checked `sql(query)` bridge. The table supports 1–64 non-empty column
+names, at most 10,000 rows, and scalar string, number, boolean, or `None`
+cells. Every row must match the column count; non-finite numbers are rejected.
+
+The host keeps the published table separate from the SQL input trace, removes
+the internal transport record from visible stdout, and attaches the typed
+result to the tool evidence. In the same analysis turn, `make_chart` can use
+that result by its evidence ID. Forecast analysis publishes its observed,
+forecast, and optional lower/upper-band columns the same way. Charts therefore
+reuse exact computed rows rather than rerunning a second query or asking the
+model to copy calculated values into a new SQL statement. Ordinary stdout
+remains available for the analyst's summary; publishing a table alone does not
+replace the need to explain the calculation or its assumptions.
 
 Wasmi applies a fresh Store per run with a 256 MiB linear-memory limit, a 2 MiB
 value-stack limit, 1 billion instructions of fuel, 64 KiB of source and output,

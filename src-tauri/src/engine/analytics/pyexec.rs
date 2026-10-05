@@ -22,6 +22,7 @@ use wasmi::{
     StoreLimitsBuilder, TypedResumableCall,
 };
 
+use crate::engine::analytics::chart::TabularResult;
 use crate::engine::analytics::data::{self, PythonBridge, QueryOutcome};
 use crate::engine::error::{EngineError, EngineResult};
 
@@ -95,6 +96,9 @@ pub struct PyResult {
     /// results so the runtime can replay Python-backed statistics.
     pub queries: Vec<PythonQueryTrace>,
     pub query_trace_complete: bool,
+    /// Optional bounded table explicitly published by generated Python with
+    /// `fella_table(columns, rows)` for reuse by charts.
+    pub result_table: Option<TabularResult>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -182,7 +186,22 @@ pub fn run(
     bridge: PythonBridge,
     cancel: Option<Arc<AtomicBool>>,
 ) -> EngineResult<PyResult> {
-    let script = format!("{STATS_HELPERS}\n# ---- user code ----\n{code}\n");
+    // Keep specialized statistical helpers out of ordinary Python snippets.
+    // This is based on the generated program's referenced API, not on the
+    // user's question or any properties of the mounted data.
+    let forecast_helpers = if references_forecast_helper(code) {
+        FORECAST_HELPERS
+    } else {
+        ""
+    };
+    let table_helpers = if code.contains("fella_table(") {
+        TABLE_HELPERS
+    } else {
+        ""
+    };
+    let script = format!(
+        "{STATS_HELPERS}\n{forecast_helpers}\n{table_helpers}\n# ---- user code ----\n{code}\n"
+    );
     if script.len() > CODE_CAP {
         return Err(EngineError::msg(format!(
             "Python code is too large for the local sandbox ({} KiB maximum)",
@@ -418,7 +437,9 @@ pub fn run(
     let host = store.into_data();
     let queries = host.queries;
     let query_trace_complete = !host.query_trace_truncated;
-    let (stdout, stderr) = (host.stdout.into_text(), host.stderr.into_text());
+    let (raw_stdout, stderr) = (host.stdout.into_text(), host.stderr.into_text());
+    let result_table = extract_published_table(&raw_stdout);
+    let stdout = visible_stdout(&raw_stdout);
 
     match (exit_code, cancelled, timed_out, host_error) {
         (Some(exit_code), false, false, None) => Ok(PyResult {
@@ -431,6 +452,7 @@ pub fn run(
             ms: elapsed_ms,
             queries,
             query_trace_complete,
+            result_table,
         }),
         (exit_code, cancelled, timed_out, host_error) => {
             let mut stderr = stderr;
@@ -457,8 +479,76 @@ pub fn run(
                 ms: elapsed_ms,
                 queries,
                 query_trace_complete,
+                result_table,
             })
         }
+    }
+}
+
+const TABLE_MARKER: &str = "__FELLA_TABLE__:";
+
+fn extract_published_table(stdout: &str) -> Option<TabularResult> {
+    let mut records = stdout
+        .lines()
+        .filter_map(|line| line.strip_prefix(TABLE_MARKER));
+    let encoded = records.next()?;
+    if records.next().is_some() {
+        return None;
+    }
+    let table: TabularResult = serde_json::from_str(encoded).ok()?;
+    if table.columns.is_empty()
+        || table.columns.len() > 64
+        || table.rows.len() > 10_000
+        || table
+            .rows
+            .iter()
+            .any(|row| row.len() != table.columns.len())
+    {
+        return None;
+    }
+    Some(table)
+}
+
+fn visible_stdout(stdout: &str) -> String {
+    stdout
+        .lines()
+        .filter(|line| !line.starts_with(TABLE_MARKER))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn references_forecast_helper(code: &str) -> bool {
+    code.split(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
+        .any(|identifier| {
+            matches!(
+                identifier,
+                "forecast_series" | "rolling_origin_backtest" | "forecast_error_bands"
+            )
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{references_forecast_helper, visible_stdout, TABLE_MARKER};
+
+    #[test]
+    fn forecast_helpers_are_selected_by_python_api_use() {
+        assert!(!references_forecast_helper("print(sum([1, 2, 3]))"));
+        assert!(references_forecast_helper(
+            "pred = forecast_series(values, 3)"
+        ));
+        assert!(references_forecast_helper(
+            "metrics = rolling_origin_backtest(values, 'mean')"
+        ));
+        assert!(references_forecast_helper(
+            "bands = forecast_error_bands(values, 'naive', 2)"
+        ));
+    }
+
+    #[test]
+    fn internal_published_table_record_is_not_user_facing_stdout() {
+        let output = format!("printed summary\n{TABLE_MARKER}{{\"columns\":[],\"rows\":[]}}\n");
+        assert_eq!(visible_stdout(&output), "printed summary");
     }
 }
 
@@ -554,4 +644,277 @@ def linregress(x, y):
     slope = sxy / sxx if sxx else 0.0
     intercept = my - slope * mx
     return slope, intercept, pearsonr(x, y)
+"#;
+
+/// Publish one machine-readable, scalar table without depending on a Python
+/// JSON/dataframe package. The host parses this one bounded record; ordinary
+/// stdout remains untouched and is still available for replay/debugging.
+const TABLE_HELPERS: &str = r#"
+def _fella_json_string(value):
+    pieces = ['"']
+    for character in value:
+        code = ord(character)
+        if character == '"': pieces.append('\\"')
+        elif character == '\\': pieces.append('\\\\')
+        elif character == '\n': pieces.append('\\n')
+        elif character == '\r': pieces.append('\\r')
+        elif character == '\t': pieces.append('\\t')
+        elif code < 32: pieces.append('\\u%04x' % code)
+        else: pieces.append(character)
+    pieces.append('"')
+    return ''.join(pieces)
+
+def _fella_json(value):
+    if value is None: return 'null'
+    if type(value) is bool: return 'true' if value else 'false'
+    if type(value) is int: return str(value)
+    if type(value) is float:
+        if value != value or value == float('inf') or value == float('-inf'):
+            raise ValueError('fella_table cannot publish non-finite numbers')
+        return repr(value)
+    if type(value) is str: return _fella_json_string(value)
+    if type(value) in (list, tuple):
+        return '[' + ','.join(_fella_json(item) for item in value) + ']'
+    raise TypeError('fella_table cells must be scalar strings, numbers, booleans, or None')
+
+def fella_table(columns, rows):
+    """Publish a bounded, typed table for a later chart in this analysis turn."""
+    columns = list(columns)
+    rows = [list(row) for row in rows]
+    if not columns or len(columns) > 64:
+        raise ValueError('fella_table needs 1-64 columns')
+    if len(rows) > 10000:
+        raise ValueError('fella_table supports at most 10000 rows')
+    if any(type(column) is not str or not column.strip() for column in columns):
+        raise ValueError('fella_table column names must be non-empty strings')
+    if any(len(row) != len(columns) for row in rows):
+        raise ValueError('fella_table rows must match the column count')
+    payload = '{"columns":' + _fella_json(columns) + ',"rows":' + _fella_json(rows) + '}'
+    print('__FELLA_TABLE__:' + payload)
+    return len(rows)
+"#;
+
+/// Small, dependency-free time-series methods for model-authored analysis.
+/// The model still chooses the source, time grain, filters, and method; these
+/// helpers provide reproducible candidates and chronological evaluation.
+pub const FORECAST_HELPERS: &str = r#"
+_MAX_FORECAST_HORIZON = 1000
+_MAX_BACKTEST_ORIGINS = 10
+_MAX_BACKTEST_FORECASTS = 1000
+
+def _forecast_values(values):
+    result = []
+    for value in values:
+        if value is None:
+            raise ValueError("forecast input contains a missing value; inspect and resolve missingness explicitly")
+        number = float(value)
+        if number != number or number == float("inf") or number == float("-inf"):
+            raise ValueError("forecast input contains a non-finite value")
+        result.append(number)
+    if len(result) < 2:
+        raise ValueError("forecast needs at least two observed values")
+    return result
+
+def _forecast_horizon(horizon):
+    if type(horizon) is not int or horizon < 1:
+        raise ValueError("forecast horizon must be a positive integer")
+    if horizon > _MAX_FORECAST_HORIZON:
+        raise ValueError("forecast horizon exceeds the helper limit of 1000; use a coarser time grain")
+    return horizon
+
+def forecast_series(values, horizon, method="naive", seasonal_period=None):
+    """Forecast equally spaced numeric observations with a named simple method.
+
+    Methods: naive (last value), mean, drift, linear_trend, seasonal_naive.
+    Time parsing and equal spacing are the caller's responsibility.
+    """
+    values = _forecast_values(values)
+    return _forecast_clean_series(values, horizon, method, seasonal_period)
+
+def _forecast_clean_series(values, horizon, method, seasonal_period):
+    horizon = _forecast_horizon(horizon)
+    if method == "naive":
+        return [values[-1] for _ in range(horizon)]
+    if method == "mean":
+        mean = sum(values) / len(values)
+        return [mean for _ in range(horizon)]
+    if method == "drift":
+        slope = (values[-1] - values[0]) / (len(values) - 1)
+        return [values[-1] + slope * step for step in range(1, horizon + 1)]
+    if method == "linear_trend":
+        slope, intercept, _ = linregress(list(range(len(values))), values)
+        return [slope * (len(values) - 1 + step) + intercept
+                for step in range(1, horizon + 1)]
+    if method == "seasonal_naive":
+        if type(seasonal_period) is not int or seasonal_period < 1:
+            raise ValueError("seasonal_naive requires a positive integer seasonal_period")
+        if len(values) < seasonal_period:
+            raise ValueError("seasonal_naive needs at least one complete observed season")
+        start = len(values) - seasonal_period
+        return [values[start + (step % seasonal_period)] for step in range(horizon)]
+    raise ValueError("unsupported method; use naive, mean, drift, linear_trend, or seasonal_naive")
+
+def _forecast_prefix(values, end, horizon, method, seasonal_period,
+                     prefix_sums, prefix_weighted_sums):
+    """Forecast one historical prefix using O(1) work per point method."""
+    horizon = _forecast_horizon(horizon)
+    count = end
+    if method == "naive":
+        return [values[end - 1] for _ in range(horizon)]
+    if method == "mean":
+        mean = prefix_sums[end] / count
+        return [mean for _ in range(horizon)]
+    if method == "drift":
+        slope = (values[end - 1] - values[0]) / (count - 1)
+        return [values[end - 1] + slope * step for step in range(1, horizon + 1)]
+    if method == "linear_trend":
+        sum_x = count * (count - 1) / 2
+        sum_x_squared = count * (count - 1) * (2 * count - 1) / 6
+        denominator = count * sum_x_squared - sum_x * sum_x
+        slope = ((count * prefix_weighted_sums[end] - sum_x * prefix_sums[end]) / denominator
+                 if denominator else 0.0)
+        intercept = (prefix_sums[end] - slope * sum_x) / count
+        return [slope * (count - 1 + step) + intercept
+                for step in range(1, horizon + 1)]
+    if method == "seasonal_naive":
+        if type(seasonal_period) is not int or seasonal_period < 1:
+            raise ValueError("seasonal_naive requires a positive integer seasonal_period")
+        if count < seasonal_period:
+            raise ValueError("seasonal_naive needs at least one complete observed season")
+        start = end - seasonal_period
+        return [values[start + (step % seasonal_period)] for step in range(horizon)]
+    raise ValueError("unsupported method; use naive, mean, drift, linear_trend, or seasonal_naive")
+
+def _rolling_forecast_errors(values, method, horizon, seasonal_period, min_train,
+                             baseline_method):
+    values = _forecast_values(values)
+    horizon = _forecast_horizon(horizon)
+    if min_train is None:
+        min_train = max(3, seasonal_period or 1)
+    if type(min_train) is not int or min_train < 2:
+        raise ValueError("min_train must be an integer of at least 2")
+    if (method == "seasonal_naive" or baseline_method == "seasonal_naive") and seasonal_period is not None:
+        min_train = max(min_train, seasonal_period)
+    available_origins = len(values) - min_train - horizon + 1
+    if available_origins < 1:
+        raise ValueError("not enough history for even one chronological holdout at this horizon")
+
+    first_origin = min_train
+    last_origin = len(values) - horizon
+    max_origins = min(_MAX_BACKTEST_ORIGINS, max(1, _MAX_BACKTEST_FORECASTS // horizon))
+    if available_origins <= max_origins:
+        selected_origins = list(range(first_origin, last_origin + 1))
+    elif max_origins == 1:
+        selected_origins = [last_origin]
+    else:
+        span = last_origin - first_origin
+        selected_origins = [
+            first_origin + (span * index // (max_origins - 1))
+            for index in range(max_origins)
+        ]
+
+    if method in ("mean", "linear_trend") or baseline_method in ("mean", "linear_trend"):
+        prefix_sums = [0.0]
+        prefix_weighted_sums = [0.0]
+        for index, value in enumerate(values):
+            prefix_sums.append(prefix_sums[-1] + value)
+            prefix_weighted_sums.append(prefix_weighted_sums[-1] + index * value)
+    else:
+        prefix_sums = None
+        prefix_weighted_sums = None
+
+    same_method = method == baseline_method
+    errors = [[] for _ in range(horizon)]
+    baseline_errors = errors if same_method else [[] for _ in range(horizon)]
+    for origin in selected_origins:
+        predictions = _forecast_prefix(
+            values, origin, horizon, method, seasonal_period,
+            prefix_sums, prefix_weighted_sums)
+        baseline = predictions if same_method else _forecast_prefix(
+            values, origin, horizon, baseline_method, seasonal_period,
+            prefix_sums, prefix_weighted_sums)
+        for lead in range(horizon):
+            actual = values[origin + lead]
+            error = actual - predictions[lead]
+            errors[lead].append(error)
+            if not same_method:
+                baseline_errors[lead].append(actual - baseline[lead])
+    return errors, baseline_errors, len(selected_origins), available_origins
+
+def _forecast_error_metrics(errors):
+    count = 0
+    absolute_total = 0.0
+    squared_total = 0.0
+    for lead_errors in errors:
+        for error in lead_errors:
+            count += 1
+            absolute_total += abs(error)
+            squared_total += error * error
+    if not count:
+        raise ValueError("no chronological holdout errors were produced")
+    return {
+        "n_forecasts": count,
+        "mae": absolute_total / count,
+        "rmse": (squared_total / count) ** 0.5,
+    }
+
+def rolling_origin_backtest(values, method, horizon=1, seasonal_period=None, min_train=None,
+                            baseline_method="naive"):
+    """Compare a method with a baseline using expanding chronological origins."""
+    values = _forecast_values(values)
+    horizon = _forecast_horizon(horizon)
+    if min_train is not None and (type(min_train) is not int or min_train < 2):
+        raise ValueError("min_train must be an integer of at least 2")
+    return _fella._rolling_origin_backtest(
+        values, method, horizon, seasonal_period, min_train, baseline_method)
+
+def _forecast_quantile(values, probability):
+    ordered = sorted(values)
+    position = (len(ordered) - 1) * probability
+    lower = int(position)
+    upper = min(lower + 1, len(ordered) - 1)
+    fraction = position - lower
+    return ordered[lower] * (1.0 - fraction) + ordered[upper] * fraction
+
+def forecast_error_bands(values, method, horizon, level=0.8, seasonal_period=None,
+                         min_train=None, min_errors=8):
+    """Return empirical rolling-origin error bands, not guaranteed intervals.
+
+    A band is omitted for any lead with too few calibration errors or no
+    observed error spread; zero-width bands would imply unjustified certainty.
+    """
+    if type(min_errors) is not int or min_errors < 2:
+        raise ValueError("min_errors must be an integer of at least 2")
+    level = float(level)
+    if level <= 0.5 or level >= 1.0:
+        raise ValueError("level must be greater than 0.5 and less than 1")
+    errors, _, origins, available_origins = _rolling_forecast_errors(
+        values, method, horizon, seasonal_period, min_train, "naive")
+    points = forecast_series(values, horizon, method, seasonal_period)
+    tail = (1.0 - level) / 2.0
+    steps = []
+    for lead, point in enumerate(points):
+        lead_errors = errors[lead]
+        step = {"step": lead + 1, "point": point, "n_errors": len(lead_errors)}
+        if len(lead_errors) < min_errors:
+            step["lower"] = None
+            step["upper"] = None
+            step["reason"] = "too few rolling-origin errors to estimate a useful band"
+        elif max(lead_errors) == min(lead_errors):
+            step["lower"] = None
+            step["upper"] = None
+            step["reason"] = "rolling-origin errors have no observed spread"
+        else:
+            step["lower"] = point + _forecast_quantile(lead_errors, tail)
+            step["upper"] = point + _forecast_quantile(lead_errors, 1.0 - tail)
+            step["reason"] = None
+        steps.append(step)
+    return {
+        "method": method,
+        "level": level,
+        "origins": origins,
+        "available_origins": available_origins,
+        "steps": steps,
+        "interpretation": "empirical rolling-origin error bands, not guaranteed prediction intervals",
+    }
 "#;

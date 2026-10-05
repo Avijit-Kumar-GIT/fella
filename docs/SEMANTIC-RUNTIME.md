@@ -186,7 +186,7 @@ language rules.
 | `WorkspaceModel` | The current data scope: sources, profiles, definitions, relationships, caveats, memory, and revision. |
 | `ConversationSession` | A sequence of analytical turns tied to a workspace and its revisions. |
 | `AnalysisTurn` | One question's complete lifecycle, including interpretation, plan, execution, and result. |
-| `AnalysisContract` | What the question means: population, grain, measures, filters, time, comparisons, output shape, and assumptions. |
+| `AnalysisContract` | What the question means: selected source, population, grain, measures, filters, time, comparisons, output shape, and assumptions. |
 | `ExecutionTrace` | What Fella actually ran: queries, probes, document reads, calculations, charts, provenance, timing, and failures. |
 | `VerificationReport` | Whether the computation and its interpretation are supported by the current workspace. |
 | `AnalysisResult` | The user-facing answer plus assumptions, status, evidence, scope, and usage. |

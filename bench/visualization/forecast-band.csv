@@ -1,0 +1,6 @@
+period,observed,forecast,lower,upper
+Jan,10,,,
+Feb,12,,,
+Mar,13,,,
+Apr,,15,13,17
+May,,16,13.5,18.5

@@ -4,7 +4,10 @@
 
 use async_trait::async_trait;
 use serde_json::{json, Value as Json};
-use std::sync::{atomic::AtomicBool, Arc};
+use std::{
+    collections::HashSet,
+    sync::{atomic::AtomicBool, Arc},
+};
 
 use crate::engine::analytics::chart::{self, ChartData, ChartKind};
 use crate::engine::analytics::data::DEFAULT_ROW_CAP;
@@ -35,10 +38,65 @@ pub struct ToolOutput {
     /// Structured chart data from a chart tool (e.g. `make_chart`) -- labels
     /// and numbers only, no markup. Rendered client-side.
     pub chart: Option<ChartData>,
+    /// Bounded typed output from a derived computation. SQL inputs remain in
+    /// columns/rows; this is the reusable result that a later chart can read.
+    pub result_table: Option<chart::TabularResult>,
     /// Internal replay trace for Python-backed analysis. It is copied into
     /// the runtime evidence but not shown as a second user-facing result.
     pub python_queries: Option<Vec<crate::engine::analytics::pyexec::PythonQueryTrace>>,
     pub python_queries_complete: Option<bool>,
+}
+
+pub struct ToolContext<'a> {
+    pub prior_evidence: &'a [crate::engine::evidence::EvidenceItem],
+}
+
+fn chart_source_ids(evidence: &[crate::engine::evidence::EvidenceItem]) -> Vec<String> {
+    evidence
+        .iter()
+        .filter(|item| {
+            if item.error.is_some()
+                || !matches!(
+                    item.tool.as_str(),
+                    "run_sql" | "run_python" | "forecast_analysis"
+                )
+            {
+                return false;
+            }
+            let (columns, rows) = if let Some(table) = &item.result_table {
+                (&table.columns, &table.rows)
+            } else if let (Some(columns), Some(rows)) = (&item.columns, &item.rows) {
+                if item
+                    .row_count
+                    .is_some_and(|row_count| row_count != rows.len())
+                {
+                    return false;
+                }
+                (columns, rows)
+            } else {
+                return false;
+            };
+            columns.len() >= 2 && !rows.is_empty()
+        })
+        .map(|item| item.id.clone())
+        .collect()
+}
+
+fn unavailable_chart_source_message(source_id: &str, available: &[String]) -> String {
+    if available.is_empty() {
+        format!(
+            "result `{source_id}` is not available in this analysis turn. No complete chartable result is available yet; run an analytical query or publish a complete Python table first."
+        )
+    } else {
+        format!(
+            "result `{source_id}` is not available in this analysis turn. Available complete chart-source IDs: {}. Use one of these exact IDs; inspection samples are not chart sources.",
+            available
+                .iter()
+                .map(|id| format!("`{id}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    }
 }
 
 impl ToolOutput {
@@ -52,6 +110,7 @@ impl ToolOutput {
             row_count: None,
             output: None,
             chart: None,
+            result_table: None,
             python_queries: None,
             python_queries_complete: None,
         }
@@ -75,6 +134,16 @@ pub trait Tool: Send + Sync {
         _cancel: Arc<AtomicBool>,
     ) -> EngineResult<ToolOutput> {
         self.run(engine, args).await
+    }
+
+    async fn run_with_context_cancel(
+        &self,
+        engine: &EngineState,
+        args: &Json,
+        _context: &ToolContext<'_>,
+        cancel: Arc<AtomicBool>,
+    ) -> EngineResult<ToolOutput> {
+        self.run_with_cancel(engine, args, cancel).await
     }
 }
 
@@ -117,6 +186,9 @@ impl Registry {
             // Python is available only in ordinary Ask mode; Inspect stays a
             // deterministic read-only surface even though Python is sandboxed.
             tools.push(Box::new(RunPython));
+            if capabilities.table_analysis {
+                tools.push(Box::new(ForecastAnalysis));
+            }
         }
         if capabilities.charts_enabled() {
             tools.push(Box::new(MakeChart));
@@ -160,8 +232,31 @@ impl Registry {
         args: &Json,
         cancel: Arc<AtomicBool>,
     ) -> Option<EngineResult<ToolOutput>> {
+        self.run_with_context_cancel(
+            engine,
+            name,
+            args,
+            &ToolContext {
+                prior_evidence: &[],
+            },
+            cancel,
+        )
+        .await
+    }
+
+    pub async fn run_with_context_cancel(
+        &self,
+        engine: &EngineState,
+        name: &str,
+        args: &Json,
+        context: &ToolContext<'_>,
+        cancel: Arc<AtomicBool>,
+    ) -> Option<EngineResult<ToolOutput>> {
         if let Some(tool) = self.get(name) {
-            return Some(tool.run_with_cancel(engine, args, cancel).await);
+            return Some(
+                tool.run_with_context_cancel(engine, args, context, cancel)
+                    .await,
+            );
         }
         None
     }
@@ -184,7 +279,7 @@ impl Registry {
     pub fn schemas_with_contract(&self) -> Vec<ToolSchema> {
         let mut schemas = vec![ToolSchema {
             name: CONTRACT_TOOL_NAME.to_string(),
-            description: "State or revise a compact analytical interpretation after considering the question and relevant workspace observations. Use it when a question requires non-literal semantic mapping (including a roll-up across observed labels) or a material population, measure, or scope choice; simple exact lookups may use direct tools. Record semantic mappings and their observed labels in `assumptions`. Do not invent observed values. If materially different interpretations remain after reasonable inspection, include one focused `clarification`; otherwise record the supported assumption. This function does not access the workspace and does not count as evidence."
+            description: "State or revise a compact analytical interpretation after considering the question and relevant workspace observations. Use it when a question requires non-literal semantic mapping (including a roll-up across observed labels) or a material population, measure, or scope choice; simple exact lookups may use direct tools. When shared field names or multiple tables make the source ambiguous, set `source` to the exact mounted source name or queryable table shown by inspection. Record semantic mappings and user-provided scenario assumptions separately from observed data. Do not invent observed values. If materially different interpretations remain after reasonable inspection, include one focused `clarification`; otherwise record the supported assumption. This function does not access the workspace and does not count as evidence."
                 .to_string(),
             parameters: contract_schema(),
         }];
@@ -204,6 +299,10 @@ fn contract_schema() -> Json {
             "interpretation": {
                 "type": "string",
                 "enum": ["assumed", "ambiguous", "unsupported"]
+            },
+            "source": {
+                "type": "string",
+                "description": "Optional exact mounted source name or queryable table selected for this analysis. Use after inspection to disambiguate shared columns; this is a source label, not a filesystem path or SQL expression."
             },
             "subject": { "type": "string" },
             "population": {
@@ -229,8 +328,14 @@ fn contract_schema() -> Json {
                     "type": "object",
                     "properties": {
                         "concept": { "type": "string" },
-                        "field": { "type": "string" },
-                        "operation": { "type": "string" },
+                        "field": {
+                            "type": "string",
+                            "description": "Physical column name as shown by inspection. Use the bare column name; identify the table separately with top-level `source`."
+                        },
+                        "operation": {
+                            "type": "string",
+                            "description": "Name the aggregation over this observed field, such as sum, avg, count, min, or max. Use avg for an arithmetic mean. Do not put a what-if transformation here; scenario changes belong in assumptions and the analysis."
+                        },
                         "unit": { "type": "string" }
                     },
                     "required": ["concept", "operation"],
@@ -239,11 +344,15 @@ fn contract_schema() -> Json {
             },
             "filters": {
                 "type": "array",
+                "description": "Use only for row restrictions: values the user wants included or excluded before analysis. When the user asks to compare or break down categories and wants each category shown, put the field in group_by instead; do not encode those categories as filters.",
                 "items": {
                     "type": "object",
                     "properties": {
                         "concept": { "type": "string" },
-                        "field": { "type": "string" },
+                        "field": {
+                            "type": "string",
+                            "description": "Physical filter column as shown by inspection. Use the bare column name; identify the table separately with top-level `source`."
+                        },
                         "exclude": {
                             "type": "boolean",
                             "description": "Exclude the observed candidate values instead of including them."
@@ -271,17 +380,24 @@ fn contract_schema() -> Json {
                 "type": "object",
                 "properties": {
                     "field": { "type": "string" },
-                    "range": { "type": "string" },
+                    "range": {
+                        "type": "string",
+                        "description": "Filter the source to a selected time interval, including a single year or month. For one selected period, use range and leave bucket unset."
+                    },
                     "bucket": {
                         "type": "string",
                         "enum": ["year", "month", "week", "day"],
-                        "description": "Optional deterministic grouping bucket for the time field."
+                        "description": "Optional deterministic output grouping for a breakdown across multiple time periods. This is not the source series grain; for one selected period, use range and leave bucket unset."
                     },
                     "timezone": { "type": "string" }
                 },
                 "additionalProperties": false
             },
-            "group_by": { "type": "array", "items": { "type": "string" } },
+            "group_by": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Fields whose distinct groups should remain visible in the result. Use for category comparisons and breakdowns (for example, compare cohorts A and B); do not represent those categories as row filters unless the user explicitly asks to subset the data."
+            },
             "order_by": {
                 "type": "object",
                 "properties": {
@@ -290,7 +406,7 @@ fn contract_schema() -> Json {
                 },
                 "required": ["by", "direction"],
                 "additionalProperties": false,
-                "description": "Optional deterministic ordering by a grounded measure concept or field."
+                "description": "Optional deterministic ordering by a grounded measure concept or field. Use only when the user asks for ranking or sorted output; omit for a scalar total or what-if result."
             },
             "limit": {
                 "type": "integer",
@@ -312,7 +428,7 @@ fn contract_schema() -> Json {
                     "required": ["concept", "kind", "numerator", "denominator"],
                     "additionalProperties": false
                 },
-                "description": "Optional derived metrics over declared measures. Use ratio for a guarded numerator/denominator calculation."
+                "description": "Optional derived metrics over declared measure concepts only. Use ratio/difference when both operands are declared measures. Do not model a fixed user-provided what-if factor (for example, multiplying a base total by 0.9) as a physical field or derived metric; keep it as a user assumption and compute it in the analysis."
             },
             "joins": {
                 "type": "array",
@@ -349,13 +465,13 @@ fn contract_schema() -> Json {
                 },
                 "required": ["kind", "current_range", "previous_range"],
                 "additionalProperties": false,
-                "description": "Use this typed object for a period comparison. Keep the time field in `time.field`; do not encode comparison meaning in prose."
+                "description": "Use this typed object only when the user asks to compare two observed time periods. Keep the time field in the time object; do not use it to represent a hypothetical scenario."
             },
             "presentation": { "type": "string" },
             "assumptions": {
                 "type": "array",
                 "items": { "type": "string" },
-                "description": "Interpretive choices that affect the result, including semantic mappings and the exact observed labels combined. Disclose material assumptions in the final answer."
+                "description": "Interpretive choices that affect the result, including semantic mappings and the exact observed labels combined. For a numeric what-if, preserve the user's original value, unit, and direction here (for example, '10% lower'), separately from any transformed multiplier used to calculate it. These are user inputs, not observed facts. Disclose material assumptions in the final answer."
             },
             "unresolved": { "type": "array", "items": { "type": "string" } },
             "clarification": {
@@ -530,6 +646,7 @@ impl Tool for ListFiles {
             // finds them as backed, not "not found in any result".
             output: Some(text),
             chart: None,
+            result_table: None,
             python_queries: None,
             python_queries_complete: None,
         })
@@ -662,6 +779,7 @@ impl Tool for InspectTable {
             // summary answer quoting the real total isn't flagged unbacked.
             output: Some(text),
             chart: None,
+            result_table: None,
             python_queries: None,
             python_queries_complete: None,
         })
@@ -678,7 +796,7 @@ impl Tool for RunSql {
         "run_sql"
     }
     fn description(&self) -> &'static str {
-        "Run a read-only SQL query (SELECT / WITH only) and return the rows. Complete results up to 100 rows are shown; larger results receive a bounded preview. Text comparisons are case-sensitive; for category or status values whose case may vary, use lower(column) = lower(value)."
+        "Run a read-only SQL query (SELECT / WITH only) and return the rows. Complete results up to 100 rows are shown; larger results receive a bounded preview. Text comparisons are case-sensitive; for category or status values whose case may vary, use lower(column) = lower(value). For workspace forecasts, use `forecast_analysis` rather than stopping at a point-only aggregate when historical evaluation is possible."
     }
     fn parameters(&self) -> Json {
         json!({
@@ -748,6 +866,7 @@ fn sql_output(engine: &EngineState, sql: &str, q: QueryResult) -> ToolOutput {
         row_count: Some(q.row_count),
         output: None,
         chart: None,
+        result_table: None,
         python_queries: None,
         python_queries_complete: None,
     }
@@ -889,6 +1008,7 @@ impl Tool for GrepFiles {
             row_count: Some(results.hits.len()),
             output: None,
             chart: None,
+            result_table: None,
             python_queries: None,
             python_queries_complete: None,
         })
@@ -973,6 +1093,7 @@ summarization question needs the documents' actual content."
             row_count: None,
             output: Some(combined),
             chart: None,
+            result_table: None,
             python_queries: None,
             python_queries_complete: None,
         })
@@ -992,10 +1113,19 @@ impl Tool for RunPython {
         "Run a short Python 3 snippet for analysis that SQL can't express: `median(values)`, \
 `stdev(values)`, correlation (`pearsonr(x, y)`), or a simple linear regression \
 (`linregress(x, y)` -> slope, intercept, r). These helpers are built in. `sql(query)` \
-returns a list of dictionaries from the workspace tables. The snippet runs in Fella's \
-local WASM + RustPython sandbox: it has no filesystem, network, environment, or subprocess \
-access, and can only print or request bounded read-only workspace SQL. Use it for computation \
-over the mounted data, not for fetching anything."
+returns a list of dictionaries from the workspace tables. For equally spaced numeric series, \
+optional `forecast_series(values, horizon, method, seasonal_period)` supports naive, mean, drift, \
+linear_trend, and seasonal_naive candidates (up to 1000 future points). `rolling_origin_backtest` compares \
+a chosen method against a selected baseline (last-value naive by default) using expanding chronological origins \
+(at most 10 evenly spaced origins and 1000 origin/lead evaluation points, subject to the sandbox execution budget; \
+reports evaluated/available counts, MAE, and RMSE); `forecast_error_bands` \
+returns empirical historical-error bands only when each lead has enough varied holdout errors. Those \
+bands are not guaranteed prediction intervals. Forecast helpers reject missing/non-finite values and do \
+not inspect dates or infer the time grain for you. The snippet runs in Fella's local WASM + RustPython \
+sandbox: it has no filesystem, network, environment, or subprocess access, and can only print or request \
+bounded read-only workspace SQL. When a computed result needs a chart, publish it using \
+`fella_table([column_names], rows)`; `make_chart` can reuse this typed table without repeating \
+the computation. Use Python for local analysis, not for fetching anything."
     }
     fn parameters(&self) -> Json {
         json!({
@@ -1023,6 +1153,13 @@ over the mounted data, not for fetching anything."
 }
 
 fn python_output(r: crate::engine::analytics::pyexec::PyResult) -> ToolOutput {
+    let published_table_note = r.result_table.as_ref().map(|table| {
+        format!(
+            "Published a reusable typed result with {} row(s) and these columns: {}.",
+            table.rows.len(),
+            table.columns.join(", ")
+        )
+    });
     let mut combined = String::new();
     if !r.stdout.is_empty() {
         combined.push_str(&r.stdout);
@@ -1055,7 +1192,14 @@ fn python_output(r: crate::engine::analytics::pyexec::PyResult) -> ToolOutput {
             ),
         }
     };
-    let llm_text = format!("{summary}\n\n{}", truncate_chars(&combined, 6000));
+    let mut llm_text = format!("{summary}\n\n{}", truncate_chars(&combined, 6000));
+    if let Some(note) = published_table_note {
+        llm_text.push_str("\n\n");
+        llm_text.push_str(&note);
+        llm_text.push_str(
+            " Use the reusable result reference from the tool response to chart these exact rows.",
+        );
+    }
 
     ToolOutput {
         summary,
@@ -1066,8 +1210,339 @@ fn python_output(r: crate::engine::analytics::pyexec::PyResult) -> ToolOutput {
         row_count: None,
         output: Some(combined),
         chart: None,
+        result_table: r.result_table,
         python_queries: Some(r.queries),
         python_queries_complete: Some(r.query_trace_complete),
+    }
+}
+
+#[derive(Debug, Clone, Copy, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ForecastMethod {
+    Naive,
+    Mean,
+    Drift,
+    LinearTrend,
+    SeasonalNaive,
+}
+
+impl ForecastMethod {
+    fn python_name(self) -> &'static str {
+        match self {
+            Self::Naive => "naive",
+            Self::Mean => "mean",
+            Self::Drift => "drift",
+            Self::LinearTrend => "linear_trend",
+            Self::SeasonalNaive => "seasonal_naive",
+        }
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ForecastArgs {
+    sql: String,
+    method: ForecastMethod,
+    horizon: usize,
+    #[serde(default)]
+    seasonal_period: Option<usize>,
+    #[serde(default)]
+    min_train: Option<usize>,
+    #[serde(default)]
+    baseline_method: Option<ForecastMethod>,
+    #[serde(default)]
+    future_periods: Option<Vec<String>>,
+    // All tool schemas get this optional model-written note for visible
+    // progress. Accept it even though this tool doesn't need the prose.
+    #[serde(default)]
+    note: Option<String>,
+}
+
+pub struct ForecastAnalysis;
+
+#[async_trait]
+impl Tool for ForecastAnalysis {
+    fn name(&self) -> &'static str {
+        "forecast_analysis"
+    }
+
+    fn description(&self) -> &'static str {
+        "Use this instead of a point-only `run_sql` result for workspace forecast requests when the series can be represented as one numeric value per equally spaced period. First inspect the data and choose a read-only SQL query that returns exactly two columns named `period` and `value`, ordered chronologically. Choose the measure, time grain, filters, forecast method, horizon, and (when justified) seasonal period. This tool computes the point forecast, compares it with a baseline (last-value naive by default, or mean when the forecast itself is naive), and reports MAE/RMSE and the number of holdouts whenever history permits. It also reports empirical error bands when enough varied holdout errors exist, or why no useful band is available. It does not infer or repair date cadence, missingness, duplicates, or outliers; inspect and resolve those before calling. The query is read-only and bounded. Use `run_python` for custom methods or a series that cannot be represented as this shape, and state any resulting evaluation limitation. A forecast is an estimate, not an observed value."
+    }
+
+    fn parameters(&self) -> Json {
+        json!({
+            "type": "object",
+            "properties": {
+                "sql": {
+                    "type": "string",
+                    "description": "Read-only query returning exactly `period` and `value` columns: one finite numeric value for each chronological, equally spaced period. Aggregate to the intended grain and filter to the training window before forecasting."
+                },
+                "method": {
+                    "type": "string",
+                    "enum": ["naive", "mean", "drift", "linear_trend", "seasonal_naive"],
+                    "description": "Forecast method selected for the observed series."
+                },
+                "horizon": { "type": "integer", "minimum": 1, "maximum": 1000 },
+                "future_periods": { "type": "array", "items": { "type": "string" }, "description": "Optional chronological labels for the projected periods, one per horizon step; used by forecast charts." },
+                "seasonal_period": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Observed periods per complete season; required for seasonal_naive."
+                },
+                "min_train": {
+                    "type": "integer",
+                    "minimum": 2,
+                    "description": "Optional minimum training observations per rolling origin; omit to use the helper default."
+                },
+                "baseline_method": {
+                    "type": "string",
+                    "enum": ["naive", "mean", "drift", "linear_trend", "seasonal_naive"],
+                    "description": "Comparison baseline; defaults to last-value naive. Choose a distinct baseline when the forecast method itself is naive."
+                }
+            },
+            "required": ["sql", "method", "horizon"],
+            "additionalProperties": false
+        })
+    }
+
+    async fn run(&self, engine: &EngineState, args: &Json) -> EngineResult<ToolOutput> {
+        run_forecast_analysis(engine, args, Arc::new(AtomicBool::new(false))).await
+    }
+
+    async fn run_with_cancel(
+        &self,
+        engine: &EngineState,
+        args: &Json,
+        cancel: Arc<AtomicBool>,
+    ) -> EngineResult<ToolOutput> {
+        run_forecast_analysis(engine, args, cancel).await
+    }
+}
+
+async fn run_forecast_analysis(
+    engine: &EngineState,
+    args: &Json,
+    cancel: Arc<AtomicBool>,
+) -> EngineResult<ToolOutput> {
+    let args: ForecastArgs = serde_json::from_value(args.clone())
+        .map_err(|error| EngineError::msg(format!("invalid forecast arguments: {error}")))?;
+    let _model_note = args.note;
+    let baseline_method =
+        args.baseline_method
+            .unwrap_or(if matches!(args.method, ForecastMethod::Naive) {
+                ForecastMethod::Mean
+            } else {
+                ForecastMethod::Naive
+            });
+    if !(1..=1000).contains(&args.horizon) {
+        return Err(EngineError::msg(
+            "forecast horizon must be between 1 and 1000 periods",
+        ));
+    }
+    let future_periods = args.future_periods.unwrap_or_else(|| {
+        (1..=args.horizon)
+            .map(|step| format!("Forecast +{step}"))
+            .collect()
+    });
+    if future_periods.len() != args.horizon
+        || future_periods.iter().any(|label| label.trim().is_empty())
+    {
+        return Err(EngineError::msg(
+            "future_periods, when supplied, must contain one non-empty label per forecast step",
+        ));
+    }
+    if args.seasonal_period == Some(0) {
+        return Err(EngineError::msg("seasonal_period must be positive"));
+    }
+    if args.min_train.is_some_and(|minimum| minimum < 2) {
+        return Err(EngineError::msg("min_train must be at least 2"));
+    }
+    if (matches!(args.method, ForecastMethod::SeasonalNaive)
+        || matches!(baseline_method, ForecastMethod::SeasonalNaive))
+        && args.seasonal_period.is_none()
+    {
+        return Err(EngineError::msg(
+            "seasonal_naive as the forecast or baseline requires an observed seasonal_period",
+        ));
+    }
+
+    let query = engine.run_sql_cancellable(&args.sql, cancel.clone())?;
+    if query.truncated {
+        return Err(EngineError::msg(
+            "forecast input query was capped; aggregate to a coarser time grain or narrow the training window",
+        ));
+    }
+    if query.columns.len() != 2
+        || !query.columns[0].eq_ignore_ascii_case("period")
+        || !query.columns[1].eq_ignore_ascii_case("value")
+    {
+        return Err(EngineError::msg(format!(
+            "forecast input must return exactly `period` and `value` columns; received: {}",
+            query.columns.join(", ")
+        )));
+    }
+    if query.rows.len() < 2 {
+        return Err(EngineError::msg(
+            "forecast input needs at least two observed periods",
+        ));
+    }
+
+    let mut seen_periods = HashSet::with_capacity(query.rows.len());
+    let mut periods = Vec::with_capacity(query.rows.len());
+    let mut values = Vec::with_capacity(query.rows.len());
+    for row in &query.rows {
+        let period = row
+            .first()
+            .and_then(period_label)
+            .ok_or_else(|| EngineError::msg("forecast input contains a missing period label"))?;
+        if !seen_periods.insert(period.clone()) {
+            return Err(EngineError::msg(format!(
+                "forecast input contains duplicate period `{period}`; aggregate to one value per period"
+            )));
+        }
+        let value = row
+            .get(1)
+            .and_then(Json::as_f64)
+            .filter(|value| value.is_finite())
+            .ok_or_else(|| {
+                EngineError::msg(
+                    "forecast input contains a missing or non-numeric value; inspect and resolve it explicitly",
+                )
+            })?;
+        periods.push(period);
+        values.push(value);
+    }
+
+    let values = serde_json::to_string(&values)
+        .map_err(|error| EngineError::msg(format!("encode forecast input: {error}")))?;
+    let future_periods = serde_json::to_string(&future_periods)
+        .map_err(|error| EngineError::msg(format!("encode forecast labels: {error}")))?;
+    let period_labels = serde_json::to_string(&periods)
+        .map_err(|error| EngineError::msg(format!("encode observed period labels: {error}")))?;
+    let method = args.method.python_name();
+    let baseline = baseline_method.python_name();
+    let seasonal_period = args
+        .seasonal_period
+        .map_or_else(|| "None".to_string(), |period| period.to_string());
+    let configured_min_train = args
+        .min_train
+        .map_or_else(|| "None".to_string(), |minimum| minimum.to_string());
+    let horizon = args.horizon;
+    let seasonal_training_floor = if matches!(args.method, ForecastMethod::SeasonalNaive)
+        || matches!(baseline_method, ForecastMethod::SeasonalNaive)
+    {
+        args.seasonal_period.unwrap_or(1)
+    } else {
+        2
+    };
+    let effective_min_train = args
+        .min_train
+        .unwrap_or_else(|| 3.max(args.seasonal_period.unwrap_or(1)))
+        .max(seasonal_training_floor);
+    let has_holdout = query.rows.len() >= effective_min_train.saturating_add(horizon);
+    let python_has_holdout = if has_holdout { "True" } else { "False" };
+    let code = format!(
+        r#"values = {values}
+method = {method:?}
+horizon = {horizon}
+seasonal_period = {seasonal_period}
+min_train = {configured_min_train}
+baseline_method = {baseline:?}
+forecast = forecast_series(values, horizon, method=method, seasonal_period=seasonal_period)
+if {python_has_holdout}:
+    backtest = rolling_origin_backtest(values, method, horizon=horizon, seasonal_period=seasonal_period, min_train=min_train, baseline_method=baseline_method)
+    error_bands = forecast_error_bands(values, method, horizon, seasonal_period=seasonal_period, min_train=min_train)
+else:
+    backtest = None
+    error_bands = {{'available': False, 'reason': 'not enough history for a chronological holdout at this horizon'}}
+future_periods = {future_periods}
+forecast_table = []
+for period, observed in zip({period_labels}, values):
+    forecast_table.append([period, observed, None, None, None])
+steps = error_bands.get('steps', [])
+for index, (period, estimate) in enumerate(zip(future_periods, forecast)):
+    step = steps[index] if index < len(steps) else {{}}
+    forecast_table.append([period, None, estimate, step.get('lower'), step.get('upper')])
+fella_table(['period', 'observed', 'forecast', 'lower', 'upper'], forecast_table)
+print('forecast_method=' + method)
+print('forecast_values=' + repr(forecast))
+print('backtest=' + repr(backtest))
+print('empirical_error_bands=' + repr(error_bands))
+"#
+    );
+    let result = engine.run_python_cancellable(&code, cancel).await?;
+    if result.cancelled {
+        return Err(EngineError::msg("forecast analysis was cancelled"));
+    }
+    if result.timed_out {
+        return Err(EngineError::msg(
+            "forecast analysis exceeded the local computation budget",
+        ));
+    }
+    if result.exit_code != Some(0) {
+        let detail = if result.stderr.trim().is_empty() {
+            result.stdout.trim()
+        } else {
+            result.stderr.trim()
+        };
+        return Err(EngineError::msg(format!(
+            "forecast computation did not complete successfully: {}",
+            truncate_chars(detail, 500)
+        )));
+    }
+    let python_text = if result.stdout.trim().is_empty() {
+        result.stderr.clone()
+    } else if result.stderr.trim().is_empty() {
+        result.stdout.clone()
+    } else {
+        format!("{}\nstderr:\n{}", result.stdout, result.stderr)
+    };
+    let first_period = periods.first().map(String::as_str).unwrap_or("");
+    let last_period = periods.last().map(String::as_str).unwrap_or("");
+    let summary = format!(
+        "{} observations from {first_period} through {last_period}; {} method, {}-period horizon{}",
+        query.row_count,
+        method,
+        horizon,
+        if has_holdout {
+            "; rolling-origin comparison attempted"
+        } else {
+            "; no chronological holdout available"
+        }
+    );
+    let llm_text = format!(
+        "Forecast analysis used {} ordered observations from {first_period} through {last_period}. The tool uses the query's row order and does not infer cadence; verify the labels represent equally spaced periods.\n{}",
+        query.row_count, python_text
+    );
+    let trace = crate::engine::analytics::pyexec::PythonQueryTrace {
+        sql: args.sql.clone(),
+        columns: query.columns.clone(),
+        rows: query.rows.clone(),
+        row_count: query.row_count,
+        truncated: query.truncated,
+    };
+
+    Ok(ToolOutput {
+        summary,
+        llm_text,
+        sql: Some(args.sql),
+        columns: Some(query.columns),
+        rows: Some(query.rows),
+        row_count: Some(query.row_count),
+        output: Some(python_text),
+        chart: None,
+        result_table: result.result_table,
+        python_queries: Some(vec![trace]),
+        python_queries_complete: Some(true),
+    })
+}
+
+fn period_label(value: &Json) -> Option<String> {
+    match value {
+        Json::String(label) if !label.trim().is_empty() => Some(label.clone()),
+        Json::Number(number) => Some(number.to_string()),
+        _ => None,
     }
 }
 
@@ -1081,12 +1556,42 @@ fn python_output(r: crate::engine::analytics::pyexec::PyResult) -> ToolOutput {
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ChartArgs {
+    #[serde(default)]
     kind: ChartKind,
     #[serde(default)]
     title: Option<String>,
-    sql: String,
+    #[serde(default)]
+    sql: Option<String>,
+    #[serde(default)]
+    source_evidence_id: Option<String>,
     #[serde(default)]
     unit: Option<String>,
+    #[serde(default)]
+    x_field: Option<String>,
+    #[serde(default)]
+    y_field: Option<String>,
+    #[serde(default)]
+    value_field: Option<String>,
+    #[serde(default)]
+    group_field: Option<String>,
+    #[serde(default)]
+    label_field: Option<String>,
+    #[serde(default)]
+    series_fields: Vec<String>,
+    #[serde(default)]
+    bin_count: Option<usize>,
+    #[serde(default)]
+    missing_treatment: chart::MissingTreatment,
+    #[serde(default)]
+    aggregation: Option<String>,
+    #[serde(default)]
+    filters: Vec<String>,
+    #[serde(default)]
+    time_range: Option<String>,
+    #[serde(default)]
+    denominator: Option<String>,
+    #[serde(default)]
+    part_to_whole: bool,
     #[serde(default, rename = "note")]
     _note: Option<String>,
 }
@@ -1099,11 +1604,7 @@ impl Tool for MakeChart {
         "make_chart"
     }
     fn description(&self) -> &'static str {
-        "Draw a chart from a read-only SQL query. Use auto unless the user clearly asks for \
-        a bar or line chart. The first query column must be the label or date and the remaining \
-        one or two columns must be numeric. Category charts support up to 12 labels; time-series \
-        line charts support up to 1000 points. For longer periods, aggregate to a coarser time \
-        period or narrow the date range. It renders itself in the answer."
+        "Render a chart from a successful prior analytical result by passing its `source_evidence_id`; this reuses the exact computed rows and does not rerun SQL. A one-shot read-only SQL query is also accepted when no prior result exists. Supports bar, line, area, stacked_area, pie, donut, scatter, histogram, box_plot, heatmap, and forecast. Select fields by their exact result column names; if a field is rejected, use the available result fields in the tool error. For a raw histogram, set `x_field` to the numeric observations and `bin_count`; for an already binned frequency table, set `x_field` to the bin labels and `y_field` or `value_field` to the counts so the bins are preserved. For a box plot, set `group_field` to the category that separates distributions and `y_field` or `value_field` to the numeric observations; `x_field` is not the box-plot grouping field. For scatter, set `x_field` and `y_field` to the two numeric variables. For a heatmap, use `x_field` and `group_field` as the two category dimensions and `value_field` as the numeric cell value. For a forecast chart, use `x_field` for the period and pass `series_fields` in this order: observed, forecast, and any supplied lower and upper bounds. Preserve existing bounds; do not recompute them. For pie/donut, set `x_field` to the category column, `value_field` to its numeric measure, `part_to_whole` to true, and name the exact shared population in `denominator`. Use pie/donut only for a small, non-negative part-to-whole breakdown. For missing values, choose an explicit treatment; gaps are never silently converted to zero. Chart definitions and source lineage are inspectable."
     }
     fn parameters(&self) -> Json {
         json!({
@@ -1111,84 +1612,225 @@ impl Tool for MakeChart {
             "properties": {
                 "kind": {
                     "type": "string",
-                    "enum": ["auto", "bar", "line"],
-                    "description": "auto chooses a line for time periods and a bar chart for categories"
+                    "enum": ["auto", "bar", "line", "pie", "donut", "scatter", "histogram", "box_plot", "area", "stacked_area", "heatmap", "forecast"],
+                    "description": "Choose a form that matches the question and result shape. auto chooses only bar or line. For box_plot, use group_field plus a numeric y_field/value_field. For a raw histogram, use x_field plus bin_count; for a pre-binned table, use x_field for labels and y_field/value_field for frequencies. For forecast, include every available observed, forecast, lower, and upper series."
                 },
                 "title": { "type": "string", "description": "short chart title, e.g. \"Spending by category\"" },
                 "sql": {
                     "type": "string",
-                    "description": "single read-only SELECT/WITH query; first column is the label/date and the next one or two columns are numeric"
+                    "description": "Optional one-shot read-only SELECT/WITH query. Prefer source_evidence_id to chart the exact result already computed."
                 },
-                "unit": { "type": "string", "description": "optional short suffix/prefix for values, e.g. \"$\" or \"%\"" }
+                "source_evidence_id": { "type": "string", "description": "ID of a successful prior run_sql, run_python (with fella_table), or forecast_analysis result in this same turn." },
+                "unit": { "type": "string", "description": "Unit suffix/prefix for displayed values, e.g. \"$\" or \"%\"." },
+                "x_field": { "type": "string", "description": "Exact result column for the category or horizontal dimension. For raw histograms this is the numeric observation; for pre-binned histograms it is the bin label. For box plots use group_field for cohort/category instead." },
+                "y_field": { "type": "string", "description": "Exact result column for the vertical dimension or numeric value. For box plots, this is the measured value; for a pre-binned histogram, this can be the frequency count." },
+                "value_field": { "type": "string", "description": "Exact numeric result column to plot; use for pie/donut measures, heatmap cell values, box-plot observations, or pre-binned histogram frequencies." },
+                "group_field": { "type": "string", "description": "Optional exact result column for grouping. For box_plot, this separates the distributions (for example, cohort); for heatmaps it is the y-axis category." },
+                "label_field": { "type": "string", "description": "Optional point label for scatter plots." },
+                "series_fields": { "type": "array", "items": { "type": "string" }, "maxItems": 5, "description": "For forecast charts, order fields as observed, forecast, then any supplied lower and upper bounds. Include bounds already present in the data." },
+                "bin_count": { "type": "integer", "minimum": 1, "maximum": 40, "description": "Number of equal-width bins for raw numeric observations. Omit when the source already contains one row per labeled bin and frequency." },
+                "missing_treatment": { "type": "string", "enum": ["reject", "exclude", "gap"], "description": "Must be explicit when source values are missing. Never treat missing as zero." },
+                "aggregation": { "type": "string" },
+                "filters": { "type": "array", "items": { "type": "string" } },
+                "time_range": { "type": "string" },
+                "part_to_whole": { "type": "boolean", "description": "For pie/donut, set true only when values are mutually exclusive parts of the same defined whole." },
+                "denominator": { "type": "string", "description": "For pie/donut, name the exact shared population/whole represented by the selected query, including its filters and time scope." }
             },
-            "required": ["kind", "sql"],
+            "required": ["kind"],
             "additionalProperties": false
         })
     }
     async fn run(&self, engine: &EngineState, args: &Json) -> EngineResult<ToolOutput> {
-        let capabilities = engine.settings().capabilities;
-        if !capabilities.visualizations {
-            return Err(EngineError::msg(
-                "Visualizations are disabled in Settings under Experimental analysis capabilities.",
-            ));
-        }
-        if !capabilities.table_analysis {
-            return Err(EngineError::msg(
+        create_chart(
+            engine,
+            args,
+            &ToolContext {
+                prior_evidence: &[],
+            },
+            Arc::new(AtomicBool::new(false)),
+        )
+        .await
+    }
+
+    async fn run_with_context_cancel(
+        &self,
+        engine: &EngineState,
+        args: &Json,
+        context: &ToolContext<'_>,
+        cancel: Arc<AtomicBool>,
+    ) -> EngineResult<ToolOutput> {
+        create_chart(engine, args, context, cancel).await
+    }
+}
+
+async fn create_chart(
+    engine: &EngineState,
+    args: &Json,
+    context: &ToolContext<'_>,
+    cancel: Arc<AtomicBool>,
+) -> EngineResult<ToolOutput> {
+    let capabilities = engine.settings().capabilities;
+    if !capabilities.visualizations {
+        return Err(EngineError::msg(
+            "Visualizations are disabled in Settings under Experimental analysis capabilities.",
+        ));
+    }
+    if !capabilities.table_analysis {
+        return Err(EngineError::msg(
                 "Visualizations require table analysis, which is disabled in Settings under Experimental analysis capabilities.",
             ));
+    }
+    let parsed: ChartArgs = serde_json::from_value(args.clone())
+        .map_err(|e| EngineError::msg(format!("invalid make_chart arguments: {e}")))?;
+    if parsed.sql.is_some() == parsed.source_evidence_id.is_some() {
+        return Err(EngineError::msg(
+            "provide exactly one of `source_evidence_id` or `sql`",
+        ));
+    }
+    let (table, source_id, source_label, sql, query_result) = if let Some(source_id) =
+        parsed.source_evidence_id.as_deref()
+    {
+        let evidence = context
+            .prior_evidence
+            .iter()
+            .find(|item| item.id == source_id)
+            .ok_or_else(|| {
+                EngineError::msg(unavailable_chart_source_message(
+                    source_id,
+                    &chart_source_ids(context.prior_evidence),
+                ))
+            })?;
+        if evidence.error.is_some() {
+            return Err(EngineError::msg(
+                "a failed analytical result cannot be charted",
+            ));
         }
-        let parsed: ChartArgs = serde_json::from_value(args.clone())
-            .map_err(|e| EngineError::msg(format!("invalid make_chart arguments: {e}")))?;
-        let sql = parsed.sql.trim();
+        if !matches!(
+            evidence.tool.as_str(),
+            "run_sql" | "run_python" | "forecast_analysis"
+        ) {
+            return Err(EngineError::msg(format!(
+                "result `{source_id}` came from `{}` and is not a complete analytical result; inspection returns a sample, not chart data. Run a query or publish a complete Python table, then chart that result's evidence ID",
+                evidence.tool
+            )));
+        }
+        let table = if let Some(table) = &evidence.result_table {
+            table.clone()
+        } else if let (Some(columns), Some(rows)) = (&evidence.columns, &evidence.rows) {
+            if evidence
+                .row_count
+                .is_some_and(|row_count| row_count != rows.len())
+            {
+                return Err(EngineError::msg(
+                    "the selected result is only a bounded preview; aggregate it in the original analysis or publish a complete bounded table before charting",
+                ));
+            }
+            chart::TabularResult {
+                columns: columns.clone(),
+                rows: rows.clone(),
+            }
+        } else {
+            return Err(EngineError::msg("the selected result does not contain a typed table; use fella_table in run_python to publish chartable data"));
+        };
+        let label = evidence
+            .sources
+            .first()
+            .map(|source| source.source.clone())
+            .unwrap_or_else(|| evidence.tool.clone());
+        (table, Some(source_id.to_string()), Some(label), None, None)
+    } else {
+        let sql = parsed.sql.as_deref().unwrap_or_default().trim();
         if sql.is_empty() {
             return Err(EngineError::msg("make_chart needs a non-empty SQL query"));
         }
-        let q = engine.run_sql(sql)?;
-        if q.truncated {
-            return Err(EngineError::msg(format!(
-                "the chart query returned {} rows, beyond the {}-row raw result limit; aggregate \
-to a coarser time period or narrow the date range first",
-                q.row_count, DEFAULT_ROW_CAP
-            )));
+        let query = engine.run_sql_cancellable(sql, cancel)?;
+        if query.truncated {
+            return Err(EngineError::msg(format!("the chart query returned {} rows, beyond the {}-row raw result limit; aggregate to a coarser time period or narrow the date range first", query.row_count, DEFAULT_ROW_CAP)));
         }
-        let data = chart::from_query(parsed.kind, parsed.title, parsed.unit, &q.columns, &q.rows)
-            .map_err(EngineError::msg)?;
-
-        let n_series = data.series.len();
-        let n_labels = data.labels.len();
-        let kind_word = match data.kind {
-            // `from_query` resolves auto before returning. Keep this arm for
-            // exhaustiveness if a future caller constructs the type directly.
-            ChartKind::Auto => "chart",
-            ChartKind::Bar => "bar",
-            ChartKind::Line => "line",
-        };
-        Ok(ToolOutput {
-            summary: format!(
-                "{kind_word} chart, {n_labels} categor{}, {n_series} series",
-                if n_labels == 1 { "y" } else { "ies" }
-            ),
-            llm_text: format!(
-                "Chart drawn from the query result below; it renders as a visual answer block. \
-                 Lead with one short sentence explaining the main pattern. Do not list every \
-                 value in prose.\n\n{}",
-                table_text(&q, chart::MAX_CATEGORIES)
-            ),
-            sql: Some(sql.to_string()),
-            columns: Some(q.columns),
-            rows: Some(q.rows),
-            row_count: Some(q.row_count),
-            output: None,
-            chart: Some(data),
-            python_queries: None,
-            python_queries_complete: None,
-        })
-    }
+        (
+            chart::TabularResult {
+                columns: query.columns.clone(),
+                rows: query.rows.clone(),
+            },
+            None,
+            None,
+            Some(sql.to_string()),
+            Some(query),
+        )
+    };
+    let mut metadata = chart::ChartMetadata {
+        source_evidence_id: source_id.clone(),
+        source_label,
+        aggregation: parsed.aggregation,
+        filters: parsed.filters,
+        time_range: parsed.time_range,
+        denominator: parsed.denominator,
+        part_to_whole: parsed.part_to_whole,
+        ..Default::default()
+    };
+    let request = chart::ChartRequest {
+        kind: parsed.kind,
+        title: parsed.title,
+        unit: parsed.unit,
+        x_field: parsed.x_field,
+        y_field: parsed.y_field,
+        value_field: parsed.value_field,
+        group_field: parsed.group_field,
+        label_field: parsed.label_field,
+        series_fields: parsed.series_fields,
+        bin_count: parsed.bin_count,
+        missing_treatment: parsed.missing_treatment,
+        metadata: std::mem::take(&mut metadata),
+    };
+    let data = chart::from_table(&table, request).map_err(EngineError::msg)?;
+    let point_count = chart::visualization_count(&data);
+    let kind = chart::chart_kind_label(data.kind);
+    let llm_text = if let Some(query) = &query_result {
+        format!("Chart rendered from the computed result below. State the main pattern briefly; do not restate every row.\n\n{}", table_text(query, chart::MAX_CATEGORIES))
+    } else {
+        format!("Chart rendered from prior result {}. The chart uses that exact computed table; it does not rerun or transform the source query. State the main pattern briefly.", source_id.as_deref().unwrap_or_default())
+    };
+    Ok(ToolOutput {
+        summary: format!("{kind} chart, {point_count} plotted item(s)"),
+        llm_text,
+        sql,
+        columns: query_result.as_ref().map(|query| query.columns.clone()),
+        rows: query_result.as_ref().map(|query| query.rows.clone()),
+        row_count: query_result.as_ref().map(|query| query.row_count),
+        output: None,
+        chart: Some(data),
+        result_table: None,
+        python_queries: None,
+        python_queries_complete: None,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn evidence_item(tool: &str, id: &str) -> crate::engine::evidence::EvidenceItem {
+        crate::engine::evidence::EvidenceItem {
+            id: id.into(),
+            tool: tool.into(),
+            sources: Vec::new(),
+            args: Json::Null,
+            note: None,
+            sql: None,
+            result_summary: String::new(),
+            columns: None,
+            rows: None,
+            row_count: None,
+            output: None,
+            chart: None,
+            result_table: None,
+            python_input_trace: None,
+            python_queries: None,
+            python_queries_complete: None,
+            ms: 0,
+            error: None,
+        }
+    }
 
     fn qr(columns: &[&str], rows: Vec<Vec<Json>>) -> QueryResult {
         QueryResult {
@@ -1198,6 +1840,44 @@ mod tests {
             ms: 0,
             truncated: false,
         }
+    }
+
+    #[test]
+    fn invalid_chart_reference_suggests_exact_complete_result_ids() {
+        let mut inspection = evidence_item("inspect_table", "evidence-1");
+        inspection.columns = Some(vec!["category".into(), "amount".into()]);
+        inspection.rows = Some(vec![vec!["Rent".into(), 1200.into()]]);
+        inspection.row_count = Some(1);
+
+        let mut complete = evidence_item("run_sql", "evidence-2");
+        complete.columns = Some(vec!["category".into(), "amount".into()]);
+        complete.rows = Some(vec![vec!["Rent".into(), 1200.into()]]);
+        complete.row_count = Some(1);
+
+        let mut preview = evidence_item("run_sql", "evidence-3");
+        preview.columns = complete.columns.clone();
+        preview.rows = complete.rows.clone();
+        preview.row_count = Some(10);
+
+        let mut python = evidence_item("run_python", "evidence-4");
+        python.result_table = Some(chart::TabularResult {
+            columns: vec!["category".into(), "amount".into()],
+            rows: vec![vec!["Rent".into(), 1200.into()]],
+        });
+
+        let mut failed = complete.clone();
+        failed.id = "evidence-5".into();
+        failed.error = Some("query failed".into());
+
+        let available = chart_source_ids(&[inspection, complete, preview, python, failed]);
+        assert_eq!(available, ["evidence-2", "evidence-4"]);
+        let message = unavailable_chart_source_message("evidence_1", &available);
+        assert!(message.contains("`evidence_1`"));
+        assert!(message.contains("`evidence-2`, `evidence-4`"));
+        assert!(message.contains("Use one of these exact IDs"));
+
+        let no_results = unavailable_chart_source_message("missing", &[]);
+        assert!(no_results.contains("No complete chartable result is available yet"));
     }
 
     #[test]
@@ -1266,6 +1946,10 @@ mod tests {
             .map(|schema| schema.name)
             .collect();
         assert!(standard_names.iter().any(|name| name == "run_python"));
+        assert!(standard_names
+            .iter()
+            .any(|name| name == "forecast_analysis"));
+        assert!(!inspect_names.iter().any(|name| name == "forecast_analysis"));
     }
 
     #[test]
@@ -1283,6 +1967,12 @@ mod tests {
             .collect();
 
         assert_eq!(names, vec!["list_files"]);
+
+        let python_disabled = AnalysisCapabilities {
+            python_analysis: false,
+            ..AnalysisCapabilities::default()
+        };
+        assert!(!Registry::standard_with(python_disabled).has_tool("forecast_analysis"));
     }
 
     #[test]
@@ -1301,6 +1991,50 @@ mod tests {
             .contains("does not access the workspace"));
         assert!(contract_schemas[0]
             .description
-            .contains("Record semantic mappings and their observed labels"));
+            .contains("Record semantic mappings and user-provided scenario assumptions separately from observed data"));
+        assert!(contract_schemas[0]
+            .description
+            .contains("set `source` to the exact mounted source name"));
+        assert!(
+            contract_schemas[0].parameters["properties"]["source"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("disambiguate shared columns")
+        );
+        assert!(
+            contract_schemas[0].parameters["properties"]["measures"]["items"]["properties"]
+                ["field"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("identify the table separately with top-level `source`")
+        );
+        assert!(
+            contract_schemas[0].parameters["properties"]["measures"]["items"]["properties"]
+                ["operation"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("Use avg for an arithmetic mean")
+        );
+        assert!(
+            contract_schemas[0].parameters["properties"]["order_by"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("omit for a scalar total or what-if result")
+        );
+        assert!(
+            contract_schemas[0].parameters["properties"]["assumptions"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("preserve the user's original value, unit, and direction")
+        );
+        let time_properties = &contract_schemas[0].parameters["properties"]["time"]["properties"];
+        assert!(time_properties["range"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("For one selected period, use range and leave bucket unset"));
+        assert!(time_properties["bucket"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("not the source series grain"));
     }
 }

@@ -41,6 +41,7 @@
 		grep_files: 'Searched your documents for a word or phrase',
 		read_file: 'Read one of your files',
 		run_python: 'Ran a calculation',
+		forecast_analysis: 'Forecasted and backtested a time series',
 		list_files: 'Listed your files',
 		make_chart: 'Drew a chart'
 	};
@@ -84,6 +85,7 @@
 			<ol class="steps">
 				{#each answer.evidence as e, i (e.id ?? `evidence-${i}`)}
 					{@const shownArgs = argsWithoutNote(e.args)}
+					{@const sqlIsAlreadyInInputTrace = e.python_input_trace?.queries.some((query) => query.sql === e.sql) ?? false}
 					{@const hasDetail =
 						!!e.sql ||
 						!!e.sources?.length ||
@@ -118,7 +120,7 @@
 									: e.rows?.slice(0, 20)}
 							<div class="detail rich">
 								{#if e.sql}
-									<pre class="sql">{e.sql}</pre>
+									{#if !sqlIsAlreadyInInputTrace}<pre class="sql">{e.sql}</pre>{/if}
 								{:else if Object.keys(shownArgs).length > 0}
 									<dl class="args">
 										{#each Object.entries(shownArgs) as [k, v] (k)}

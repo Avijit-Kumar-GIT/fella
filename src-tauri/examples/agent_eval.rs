@@ -77,13 +77,18 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use fella_lib::engine::analytics::chart::Series as ChartSeries;
 use fella_lib::engine::evidence::{EvidenceItem, VerificationStatus};
 use fella_lib::engine::runtime::{InterpretationStatus, PlanStrategy};
 use fella_lib::engine::testkit::{self, Goldens, Messiness, TableGold, WorkspaceSpec};
 use fella_lib::engine::{memory, AskEvent, EngineState};
 
 // --- what a correct answer looks like -------------------------------------
+
+#[derive(Clone, serde::Deserialize)]
+struct ChartSeries {
+    name: String,
+    values: Vec<f64>,
+}
 
 #[derive(Clone)]
 enum Gold {
@@ -114,6 +119,13 @@ enum Gold {
         kind: Option<&'static str>,
         labels: Vec<&'static str>,
         series: Vec<ChartSeries>,
+        /// Optional typed payload for chart families whose marks do not fit
+        /// the generic label/series representation (scatter, box, heatmap,
+        /// forecast). Compared structurally with numeric tolerance.
+        payload: Option<serde_json::Value>,
+        /// Optional source provenance requirement, e.g. ensure a derived
+        /// visualization is built from a published Python result.
+        source_tool: Option<&'static str>,
         contains: Vec<&'static str>,
         require_label_order: bool,
     },
@@ -346,6 +358,33 @@ fn contains_all(low: &str, text: &str, subs: &[&str]) -> bool {
     })
 }
 
+/// Compare a typed chart payload to a fixed expected shape. Objects may have
+/// additional runtime metadata, while arrays and expected keys remain exact;
+/// floating-point leaves use the benchmark's ordinary numeric tolerance.
+fn chart_payload_matches(actual: &serde_json::Value, expected: &serde_json::Value) -> bool {
+    use serde_json::Value;
+    match (actual, expected) {
+        (Value::Object(actual), Value::Object(expected)) => expected.iter().all(|(key, want)| {
+            actual
+                .get(key)
+                .is_some_and(|got| chart_payload_matches(got, want))
+        }),
+        (Value::Array(actual), Value::Array(expected)) => {
+            actual.len() == expected.len()
+                && actual
+                    .iter()
+                    .zip(expected)
+                    .all(|(got, want)| chart_payload_matches(got, want))
+        }
+        (Value::Number(actual), Value::Number(expected)) => actual
+            .as_f64()
+            .zip(expected.as_f64())
+            .is_some_and(|(got, want)| close(got, want)),
+        (Value::String(actual), Value::String(expected)) => actual.eq_ignore_ascii_case(expected),
+        _ => actual == expected,
+    }
+}
+
 /// Did the run land the right answer for its `Gold`?
 fn grade(r: &RunResult, gold: &Gold) -> bool {
     if r.err.is_some() {
@@ -391,19 +430,49 @@ fn grade(r: &RunResult, gold: &Gold) -> bool {
             kind,
             labels,
             series,
+            payload,
+            source_tool,
             contains,
             require_label_order,
         } => {
-            let Some(chart) = r.evidence.iter().rev().find_map(|e| e.chart.as_ref()) else {
+            // Grade the latest chart attempt, not any historical chart payload.
+            // Semantic verification can supersede an earlier result after a
+            // later query reveals that the accompanying answer was unsupported.
+            // Counting that stale payload as a pass would hide a real product
+            // failure: the final answer would have no accepted visualization.
+            let Some(chart_evidence) = r
+                .evidence
+                .iter()
+                .rev()
+                .find(|e| e.tool == "make_chart" || e.chart.is_some())
+            else {
                 return false;
             };
+            if chart_evidence.error.is_some() {
+                return false;
+            }
+            let Some(chart) = chart_evidence.chart.as_ref() else {
+                return false;
+            };
+            if source_tool.is_some_and(|want_tool| {
+                let source_id = chart
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.source_evidence_id.as_deref());
+                !source_id.is_some_and(|source_id| {
+                    r.evidence.iter().any(|source| {
+                        source.id == source_id && source.tool == want_tool && source.error.is_none()
+                    })
+                })
+            }) {
+                return false;
+            }
             if let Some(want_kind) = kind {
-                let got_kind = match chart.kind {
-                    fella_lib::engine::analytics::chart::ChartKind::Auto => "auto",
-                    fella_lib::engine::analytics::chart::ChartKind::Bar => "bar",
-                    fella_lib::engine::analytics::chart::ChartKind::Line => "line",
-                };
-                if got_kind != want_kind.to_ascii_lowercase() {
+                let got_kind = serde_json::to_value(chart.kind)
+                    .ok()
+                    .and_then(|value| value.as_str().map(str::to_owned));
+                let want_kind = want_kind.to_ascii_lowercase();
+                if got_kind.as_deref() != Some(want_kind.as_str()) {
                     return false;
                 }
             }
@@ -436,6 +505,14 @@ fn grade(r: &RunResult, gold: &Gold) -> bool {
             let Some(label_at) = label_at else {
                 return false;
             };
+            if let Some(want_payload) = payload {
+                let Ok(got_payload) = serde_json::to_value(&chart.payload) else {
+                    return false;
+                };
+                if !chart_payload_matches(&got_payload, want_payload) {
+                    return false;
+                }
+            }
             let right_series = series.iter().all(|want| {
                 // A single-series chart's series name is the model's free-text
                 // choice ("Spending", "Total", ...) -- don't fail a correct
@@ -455,7 +532,7 @@ fn grade(r: &RunResult, gold: &Gold) -> bool {
                         && label_at
                             .iter()
                             .zip(&want.values)
-                            .all(|(&i, w)| close(got.values[i], *w))
+                            .all(|(&i, w)| got.values[i].is_some_and(|value| close(value, *w)))
                 })
             });
             right_series && contains_all(&low, &r.text, contains)
@@ -499,10 +576,12 @@ fn gold_reference(gold: &Gold) -> String {
             kind,
             labels,
             series,
+            payload,
+            source_tool,
             contains,
             require_label_order,
         } => format!(
-            "the answer must include a{} chart with labels [{}]{} and series {}{}",
+            "the answer must include a{} chart with labels [{}]{} and series {}{}{}{}",
             kind.map(|k| format!(" {k}")).unwrap_or_default(),
             labels.join(", "),
             if *require_label_order {
@@ -527,7 +606,14 @@ fn gold_reference(gold: &Gold) -> String {
                 String::new()
             } else {
                 format!(" and mention {}", contains.join(" / "))
-            }
+            },
+            payload
+                .as_ref()
+                .map(|payload| format!(" with typed payload {payload}"))
+                .unwrap_or_default(),
+            source_tool
+                .map(|tool| format!(" sourced from a successful `{tool}` result"))
+                .unwrap_or_default()
         ),
         Gold::NoChart { contains } => format!(
             "the answer must not include a chart and must mention: {}",
@@ -1224,7 +1310,7 @@ async fn run_bare(engine: &EngineState, dir: &Path, question: &str, files: &[Str
                 first_token: None,
                 steps: 0,
                 err: Some(format!("bare: {e}")),
-            }
+            };
         }
     };
     let sys = "You are a careful analyst. Any files the user has are included in the message. \
@@ -1576,6 +1662,9 @@ async fn score_case(
                         .map(|s| format!("  ERR {s}"))
                         .unwrap_or_default(),
                 );
+                if e.tool == "make_chart" && std::env::var_os("EVAL_SHOW_TOOL_ARGS").is_some() {
+                    eprintln!("       args={}", e.args);
+                }
                 if let Some(c) = &e.chart {
                     eprintln!(
                         "       labels={:?} series={:?}",
@@ -1798,7 +1887,9 @@ async fn cmd_accuracy(
 ) -> Vec<CaseScore> {
     println!("\n# Accuracy   ({iters} iter(s)/case)\n");
     legend();
-    println!("| model | case | correct | rate | close(det) | close(judge) | redundant calls | steps | in tok | out tok | wall s |");
+    println!(
+        "| model | case | correct | rate | close(det) | close(judge) | redundant calls | steps | in tok | out tok | wall s |"
+    );
     println!("|---|---|:-:|--:|--:|--:|--:|--:|--:|--:|--:|");
     let mut all = Vec::new();
     for m in models {
@@ -1990,7 +2081,9 @@ async fn cmd_model_ladder(
     let n_cases = cases.len();
     // "clears the bar" thresholds: >=80% accuracy, <= ~0.5 duplicate calls/case
     let redundant_call_bar = (n_cases as f64 * 0.5).ceil() as usize;
-    println!("| model | acc | close(det) | redundant calls/case | tok/correct-ans | $/100 | mean wall s |");
+    println!(
+        "| model | acc | close(det) | redundant calls/case | tok/correct-ans | $/100 | mean wall s |"
+    );
     println!("|---|:-:|--:|--:|--:|--:|--:|");
     let mut all = Vec::new();
     let mut best_priced: Option<(String, f64)> = None; // (model, $/100)
@@ -2034,7 +2127,9 @@ async fn cmd_model_ladder(
             "\n**Cheapest priced model at acc ≥ 0.8 and ≤ {per_case_bar:.1} duplicate calls/case: `{m}` (${c:.2}/100).**"
         ),
         None if cleared_unpriced.is_empty() => {
-            println!("\n_No model cleared the bar (acc ≥ 0.8, ≤ {per_case_bar:.1} duplicate calls/case)._")
+            println!(
+                "\n_No model cleared the bar (acc ≥ 0.8, ≤ {per_case_bar:.1} duplicate calls/case)._"
+            )
         }
         None => {}
     }
@@ -2108,6 +2203,10 @@ struct BenchChartGold {
     labels: Vec<String>,
     series: Vec<ChartSeries>,
     #[serde(default)]
+    payload: Option<serde_json::Value>,
+    #[serde(default)]
+    source_tool: Option<String>,
+    #[serde(default)]
     require_label_order: bool,
     #[serde(default)]
     contains: Vec<String>,
@@ -2174,6 +2273,8 @@ impl BenchGold {
                 kind: chart.kind.as_deref().map(leak),
                 labels: chart.labels.iter().map(|s| leak(s)).collect(),
                 series: chart.series,
+                payload: chart.payload,
+                source_tool: chart.source_tool.as_deref().map(leak),
                 contains: chart.contains.iter().map(|s| leak(s)).collect(),
                 require_label_order: chart.require_label_order,
             },
@@ -2325,7 +2426,9 @@ async fn cmd_bench(
         cases.len()
     );
     legend();
-    println!("| model | case | correct | rate | close(det) | redundant calls | steps | in tok | out tok | $/100 | wall s |");
+    println!(
+        "| model | case | correct | rate | close(det) | redundant calls | steps | in tok | out tok | $/100 | wall s |"
+    );
     println!("|---|---|:-:|--:|--:|--:|--:|--:|--:|--:|--:|");
 
     let staging = std::env::temp_dir().join("fella-bench-ext");
@@ -2471,7 +2574,9 @@ async fn cmd_bench(
             mean_closeness(&scores),
             total_redundant_calls(&scores),
             mean_steps(&scores),
-            avg_price.map(|c| format!("${c:.2}/100 avg")).unwrap_or_else(|| "n/a".into()),
+            avg_price
+                .map(|c| format!("${c:.2}/100 avg"))
+                .unwrap_or_else(|| "n/a".into()),
             tokens_per_correct(&scores),
         );
         all.extend(scores);
@@ -2812,7 +2917,9 @@ async fn cmd_memory(
         "session 2 gold: {rent_all:.0} (rent+housing+mortgage); literal `rent` only = {rent_literal:.0}\n"
     );
     legend();
-    println!("| condition | cold correct | rate | close(det) | steps | in tok | out tok | sample answer |");
+    println!(
+        "| condition | cold correct | rate | close(det) | steps | in tok | out tok | sample answer |"
+    );
     println!("|---|:-:|--:|--:|--:|--:|--:|---|");
 
     let mut all = Vec::new();
@@ -3488,7 +3595,9 @@ async fn main() {
             v
         }
         other => {
-            eprintln!("unknown subcommand {other:?}. one of: accuracy prompt-ablation folder-scale model-ladder robustness session-memory memory memory-axes memory-sandbox bench all");
+            eprintln!(
+                "unknown subcommand {other:?}. one of: accuracy prompt-ablation folder-scale model-ladder robustness session-memory memory memory-axes memory-sandbox bench all"
+            );
             std::process::exit(2);
         }
     };
@@ -3645,8 +3754,10 @@ mod tests {
             row_count: None,
             output: None,
             chart: None,
+            result_table: None,
             python_queries: None,
             python_queries_complete: None,
+            python_input_trace: None,
             ms: 1,
             error: err.map(str::to_string),
         }
@@ -3671,15 +3782,104 @@ mod tests {
                 labels: labels.iter().map(|s| s.to_string()).collect(),
                 series: series
                     .into_iter()
-                    .map(|(name, values)| ChartSeries {
-                        name: name.into(),
-                        values,
-                    })
+                    .map(
+                        |(name, values)| fella_lib::engine::analytics::chart::Series {
+                            name: name.into(),
+                            values: values.into_iter().map(Some).collect(),
+                        },
+                    )
                     .collect(),
                 unit: None,
+                x_label: None,
+                y_label: None,
+                payload: None,
+                metadata: None,
             }),
             ..ev("make_chart", "chart made", None)
         }
+    }
+
+    fn ev_typed_chart(spec: serde_json::Value) -> EvidenceItem {
+        EvidenceItem {
+            chart: Some(serde_json::from_value(spec).expect("typed chart spec")),
+            ..ev("make_chart", "typed chart made", None)
+        }
+    }
+
+    #[test]
+    fn chart_gold_checks_specialized_payload_values_and_python_lineage() {
+        let expected_payload = serde_json::json!({
+            "type": "scatter",
+            "points": [
+                { "x": 1, "y": 55, "label": "P1", "group": "A" },
+                { "x": 2, "y": 60, "label": "P2", "group": "A" }
+            ]
+        });
+        let gold = Gold::Chart {
+            kind: Some("scatter"),
+            labels: Vec::new(),
+            series: Vec::new(),
+            payload: Some(expected_payload.clone()),
+            source_tool: Some("run_python"),
+            contains: vec!["increase"],
+            require_label_order: false,
+        };
+
+        let mut python = ev("run_python", "published transformed points", None);
+        python.id = "evidence-python-1".into();
+        let chart = ev_typed_chart(serde_json::json!({
+            "kind": "scatter",
+            "labels": [],
+            "series": [],
+            "x_label": "Study hours",
+            "y_label": "Exam score",
+            "payload": expected_payload,
+            "metadata": { "source_evidence_id": "evidence-python-1" }
+        }));
+        let result = rr(
+            "Scores increase with study hours.",
+            vec![python.clone(), chart],
+        );
+        assert!(grade(&result, &gold));
+
+        let wrong_payload = serde_json::json!({
+            "type": "scatter",
+            "points": [
+                { "x": 1, "y": 55, "label": "P1", "group": "A" },
+                { "x": 2, "y": 61, "label": "P2", "group": "A" }
+            ]
+        });
+        let wrong_chart = ev_typed_chart(serde_json::json!({
+            "kind": "scatter",
+            "labels": [],
+            "series": [],
+            "payload": wrong_payload,
+            "metadata": { "source_evidence_id": "evidence-python-1" }
+        }));
+        assert!(!grade(
+            &rr(
+                "Scores increase with study hours.",
+                vec![python.clone(), wrong_chart]
+            ),
+            &gold
+        ));
+
+        let mut wrong_source = python;
+        wrong_source.tool = "run_sql".into();
+        let chart = ev_typed_chart(serde_json::json!({
+            "kind": "scatter",
+            "labels": [],
+            "series": [],
+            "payload": expected_payload,
+            "metadata": { "source_evidence_id": "evidence-python-1" }
+        }));
+        assert!(!grade(
+            &rr(
+                "Scores increase with study hours.",
+                vec![wrong_source, chart]
+            ),
+            &gold
+        ));
     }
 
     #[test]
@@ -3895,6 +4095,8 @@ mod tests {
                 name: "Rent".into(),
                 values: vec![1200.0, 1200.0],
             }],
+            payload: None,
+            source_tool: None,
             contains: Vec::new(),
             require_label_order: false,
         };
@@ -3906,6 +4108,27 @@ mod tests {
             )],
         );
         assert!(grade(&charted, &chart_gold));
+        let mut superseded_chart = ev_chart(&["Jan", "Feb"], vec![("Rent", vec![1200.0, 1200.0])]);
+        superseded_chart.error = Some("superseded after semantic verification".into());
+        assert!(!grade(
+            &rr("Here's your rent by month.", vec![superseded_chart]),
+            &chart_gold
+        ));
+        let mut obsolete_chart = ev_chart(&["Jan", "Feb"], vec![("Rent", vec![1200.0, 1200.0])]);
+        let mut failed_latest_attempt = ev(
+            "make_chart",
+            "latest chart attempt failed",
+            Some("invalid field"),
+        );
+        failed_latest_attempt.chart = None;
+        obsolete_chart.error = Some("superseded after semantic verification".into());
+        assert!(!grade(
+            &rr(
+                "Here's your rent by month.",
+                vec![obsolete_chart, failed_latest_attempt]
+            ),
+            &chart_gold
+        ));
         assert!(!grade(
             &rr("Rent was 1200 in Jan and 1200 in Feb.", vec![]),
             &chart_gold
@@ -3935,6 +4158,8 @@ mod tests {
                 name: "Rent".into(),
                 values: vec![1200.0, 900.0],
             }],
+            payload: None,
+            source_tool: None,
             contains: Vec::new(),
             require_label_order: true,
         };
@@ -3972,6 +4197,8 @@ mod tests {
                     values: vec![1800.0, 1800.0],
                 },
             ],
+            payload: None,
+            source_tool: None,
             contains: Vec::new(),
             require_label_order: false,
         };
@@ -3999,6 +4226,8 @@ mod tests {
                     values: vec![1800.0, 1800.0],
                 },
             ],
+            payload: None,
+            source_tool: None,
             contains: Vec::new(),
             require_label_order: false,
         };
@@ -4021,6 +4250,8 @@ mod tests {
                 name: "spending".into(),
                 values: vec![2234.58, 2119.09],
             }],
+            payload: None,
+            source_tool: None,
             contains: Vec::new(),
             require_label_order: false,
         };
@@ -4050,6 +4281,8 @@ mod tests {
                 name: "Rent".into(),
                 values: vec![1200.0, 1200.0],
             }],
+            payload: None,
+            source_tool: None,
             contains: vec!["rent", "steady"],
             require_label_order: false,
         };
@@ -4279,7 +4512,7 @@ mod tests {
         ));
         assert!(matches!(
             g(r#"{"chart":{"labels":["Jan","Feb"],"series":[{"name":"Rent","values":[1200.0,1200.0]}]}}"#),
-            Gold::Chart { kind: None, labels, series, contains, require_label_order: false } if labels == vec!["Jan", "Feb"] && series.len() == 1 && contains.is_empty()
+            Gold::Chart { kind: None, labels, series, contains, require_label_order: false, .. } if labels == vec!["Jan", "Feb"] && series.len() == 1 && contains.is_empty()
         ));
         assert!(matches!(
             g(
@@ -4293,6 +4526,11 @@ mod tests {
         assert!(matches!(
             g(r#"{"chart":{"kind":"line","labels":["Jan","Feb"],"series":[{"name":"Rent","values":[1200.0,1200.0]}],"contains":["steady"]}}"#),
             Gold::Chart { kind: Some("line"), contains, .. } if contains == vec!["steady"]
+        ));
+        assert!(matches!(
+            g(r#"{"chart":{"kind":"heatmap","labels":[],"series":[],"payload":{"type":"heatmap","values":[[10,null]]},"source_tool":"run_python"}}"#),
+            Gold::Chart { kind: Some("heatmap"), payload: Some(payload), source_tool: Some("run_python"), .. }
+                if payload["values"][0][0] == 10 && payload["values"][0][1].is_null()
         ));
         assert!(matches!(
             g(r#"{"no_chart":true,"contains":["same","100"]}"#),
@@ -4376,6 +4614,69 @@ mod tests {
             );
         }
         assert_eq!(composed_gold_ids.len(), 4);
+    }
+
+    #[test]
+    fn visualization_bench_covers_prioritized_chart_families_and_sources() {
+        let suite = Path::new(env!("CARGO_MANIFEST_DIR")).join("../bench/visualization");
+        let cases = load_bench_dir(&suite);
+        let by_id: std::collections::HashMap<_, _> = cases
+            .iter()
+            .map(|(_, _, _, _, case)| (case.id, case))
+            .collect();
+
+        for (id, expected_kind) in [
+            ("viz-category-bar", "bar"),
+            ("viz-monthly-auto-line", "line"),
+            ("viz-category-pie", "pie"),
+            ("viz-category-donut", "donut"),
+            ("viz-scatter-relationship", "scatter"),
+            ("viz-histogram-distribution", "histogram"),
+            ("viz-boxplot-spread", "box_plot"),
+            ("viz-area-time-series", "area"),
+            ("viz-stacked-area-composition", "stacked_area"),
+            ("viz-heatmap-gaps", "heatmap"),
+            ("viz-forecast-band-render", "forecast"),
+            ("viz-forecast-analysis-source", "forecast"),
+        ] {
+            let case = by_id
+                .get(id)
+                .unwrap_or_else(|| panic!("missing chart task {id}"));
+            assert!(matches!(
+                &case.gold,
+                Gold::Chart { kind: Some(kind), .. } if *kind == expected_kind
+            ));
+        }
+
+        for id in [
+            "viz-scatter-relationship",
+            "viz-boxplot-spread",
+            "viz-heatmap-gaps",
+            "viz-forecast-band-render",
+            "viz-forecast-analysis-source",
+        ] {
+            assert!(matches!(
+                &by_id[id].gold,
+                Gold::Chart {
+                    payload: Some(_),
+                    ..
+                }
+            ));
+        }
+        assert!(matches!(
+            &by_id["viz-python-scenario-source"].gold,
+            Gold::Chart {
+                source_tool: Some("run_python"),
+                ..
+            }
+        ));
+        assert!(matches!(
+            &by_id["viz-forecast-analysis-source"].gold,
+            Gold::Chart {
+                source_tool: Some("forecast_analysis"),
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -4507,6 +4808,7 @@ mod tests {
         }
         assert!(kinds.contains("bar"));
         assert!(kinds.contains("line"));
+        assert!(kinds.contains("pie"), "missing part-to-whole chart case");
     }
 
     #[test]

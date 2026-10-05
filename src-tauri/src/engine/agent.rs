@@ -109,15 +109,41 @@ fn stop_pressure_nudge(
     Some(if overage == 1 {
         format!(
             "You've made {evidence_count} tool call(s) so far most questions need at most \
-2. If you already have enough to answer, do so now rather than gathering more."
+2. If you have enough evidence to answer every requested part and produce each explicitly \
+requested deliverable, answer now; otherwise take only the step(s) still needed."
         )
     } else {
         format!(
             "You've made {evidence_count} tool call(s) well past what this kind of question \
-usually needs. Unless something you truly need is still missing, stop and answer now with \
-what you have don't keep exploring."
+usually needs. Unless a requested part, deliverable, or necessary evidence is still missing, \
+stop and answer now; don't keep exploring."
         )
     })
+}
+
+fn semantic_repair_prompt(detail: &str, superseded: &[String]) -> String {
+    let invalidated = if superseded.is_empty() {
+        String::new()
+    } else {
+        format!(
+            " The runtime marked these prior evidence items as superseded and they are not \
+accepted evidence: {}. Do not rely on them as successful results.",
+            superseded.join(", ")
+        )
+    };
+    format!(
+        "Semantic verification failed: {detail}.{invalidated} Re-open the analysis with the read-only tools. \
+Use the failed check as new evidence: retain supported parts of the prior analysis and revise only \
+what the check calls into question. Preserve every explicit source scope, date range, filter, \
+exclusion, grouping, denominator, unit, and requested output deliverable from the question and prior \
+turn. If a result supporting a requested chart or other visualization is superseded, recreate that \
+deliverable from the revised accepted evidence before finalizing; do not silently replace it with \
+prose alone. Carry forward the established interpretation unless evidence disproves it; if a material \
+scope choice remains unresolved, ask one focused clarification instead of silently changing it. Do not \
+defend an unsupported figure. If the question asks for a derived value, execute a computation that \
+returns it with labeled operands; otherwise omit any figure the evidence does not support. Then answer \
+from the checked results."
+    )
 }
 
 /// Resolves once `flag` is set used to race against `llm.chat`.
@@ -130,7 +156,10 @@ async fn cancelled(flag: &AtomicBool) {
 /// Tools that produce analytical results. They remain read-only and may be
 /// used to compare supported scenarios while a user choice is unresolved.
 fn is_computation_tool(name: &str) -> bool {
-    matches!(name, "run_sql" | "run_python" | "make_chart")
+    matches!(
+        name,
+        "run_sql" | "run_python" | "forecast_analysis" | "make_chart"
+    )
 }
 
 /// Read-only calls that gather workspace observations for the model. If a
@@ -142,6 +171,24 @@ fn is_observation_tool(name: &str) -> bool {
         name,
         "list_files" | "inspect_table" | "grep_files" | "read_file"
     )
+}
+
+/// Whether this successful result is a complete table that `make_chart` can
+/// reuse. Inspection samples deliberately do not qualify even though they
+/// carry columns and rows; advertising them as chart sources sends the model
+/// into a predictable rejected tool call.
+fn is_reusable_chart_source(item: &EvidenceItem) -> bool {
+    if item.error.is_some() {
+        return false;
+    }
+    match item.tool.as_str() {
+        "run_sql" => matches!(
+            (&item.columns, &item.rows, item.row_count),
+            (Some(_), Some(rows), Some(row_count)) if rows.len() == row_count
+        ),
+        "run_python" | "forecast_analysis" => item.result_table.is_some(),
+        _ => false,
+    }
 }
 
 pub(crate) async fn run(request: RunRequest<'_>) -> EngineResult<Answer> {
@@ -259,12 +306,19 @@ hypothesis did not ground. Preserve signed measures: do not apply ABS to a signe
 amount unless the user explicitly asks for absolute magnitudes; use an excluding \
 filter when the question excludes an observed category such as income. When using the \
 hypothesis, state the intended population, value/sign semantics, missing-value policy, and \
-denominator for ratios so the execution can be checked against the question.",
+denominator for ratios so the execution can be checked against the question. If columns are shared by \
+multiple tables, use the contract's `source` field with the exact inspected source/table name; keep \
+measure, filter, and time fields as physical column names. Use `derived_metrics` only for operations \
+between declared measures; keep a fixed user-specified scenario factor in `assumptions`, not as a \
+pretend workspace field.",
             runtime::CONTRACT_TOOL_NAME,
             risk.tier,
             risk.signals.join(", "),
             runtime::CONTRACT_TOOL_NAME,
         ));
+        sys.push_str(
+            "\n\nScenario contract guidance: use comparison_spec only for a comparison of two observed periods. For a hypothetical scenario, preserve the user's original numeric input, unit, and direction in assumptions; do not record only the transformed multiplier or invent a physical measure for the scenario result. Use a canonical aggregation name such as avg for an arithmetic mean. Include order_by only when the user requests ranking or sorted output.\n",
+        );
         sys.push_str(
             "\n\nAnalyst loop: Treat the source inventory as reconnaissance, not a finished interpretation. Inspect relevant profiles, observed labels, samples, and document notes when needed; decompose multi-part questions; use each observation to refine the source, fields, population, filters, time range, units, joins, and computation. Do not request inspection and computation in the same tool-call batch: wait for the observation result, incorporate it, then compute. Execute once the analysis is grounded enough, then check the result against the question and return to inspection if it is empty, unexpectedly broad, or inconsistent. Ask a focused clarification only when reasonable investigation leaves a material choice the user must decide. A pending choice does not disable safe read-only analysis: when useful, compute supported alternatives or partial results, label each interpretation, and leave the user-owned choice open rather than presenting one scenario as settled. Assume you can analyze when given relevant evidence and tools; do not refuse just because a human concept is not an exact field or value.\n",
         );
@@ -381,7 +435,7 @@ denominator for ratios so the execution can be checked against the question.",
             } else {
                 resp.content
             };
-            let mut checks = verify::run(engine, question, &text, &evidence);
+            let mut checks = verify::run(engine, question, &text, &evidence, ids.contract.as_ref());
             // One tool-free corrective turn when a cited query re-runs to a
             // different result (or no longer runs). The value the model
             // reconciles against comes from that re-run, so the answer stays
@@ -407,7 +461,8 @@ corrected answer to match the re-run."
                     usage = Usage::merge(usage, r.usage);
                     if !r.content.trim().is_empty() {
                         text = r.content;
-                        checks = verify::run(engine, question, &text, &evidence);
+                        checks =
+                            verify::run(engine, question, &text, &evidence, ids.contract.as_ref());
                     }
                 }
             }
@@ -421,19 +476,25 @@ corrected answer to match the re-run."
                 let detail = semantic_repair_hint.expect("semantic repair hint exists");
                 semantic_repair_attempts += 1;
                 let mut superseded = 0;
+                let mut superseded_refs = Vec::new();
                 for item in &mut evidence {
                     if verify::semantic_evidence_matches(engine, question, item, &detail) {
+                        superseded_refs.push(format!("{} ({})", item.id, item.tool));
                         item.error = Some(format!(
                             "superseded: semantic verification rejected this evidence ({detail})"
                         ));
                         superseded += 1;
                     }
                 }
-                if superseded == 0 {
+                if superseded == 0 && !detail.contains("forecast lacks chronological evaluation") {
                     if let Some(item) = evidence.iter_mut().find(|item| {
                         item.error.is_none()
-                            && matches!(item.tool.as_str(), "run_sql" | "make_chart")
+                            && matches!(
+                                item.tool.as_str(),
+                                "run_sql" | "forecast_analysis" | "make_chart"
+                            )
                     }) {
+                        superseded_refs.push(format!("{} ({})", item.id, item.tool));
                         item.error = Some(format!(
                             "superseded: semantic verification rejected this evidence ({detail})"
                         ));
@@ -447,8 +508,9 @@ corrected answer to match the re-run."
                     content: text,
                     tool_calls: Vec::new(),
                 });
-                messages.push(ChatMessage::User(format!(
-                    "Semantic verification failed: {detail}. Re-open the analysis with the read-only tools. Use the failed check as new evidence: retain supported parts of the prior analysis and revise only what the check calls into question. Preserve every explicit source scope, date range, filter, exclusion, grouping, denominator, and unit from the question and prior turn. Carry forward the established interpretation unless evidence disproves it; if a material scope choice remains unresolved, ask one focused clarification instead of silently changing it. Do not defend an unsupported figure. If the question asks for a derived value, execute a computation that returns it with labeled operands; otherwise omit any figure the evidence does not support. Then answer from the checked results."
+                messages.push(ChatMessage::User(semantic_repair_prompt(
+                    &detail,
+                    &superseded_refs,
                 )));
                 continue;
             }
@@ -490,6 +552,7 @@ the requested measure, filters, and scope. State just the number(s); don't round
             }
             return Ok(finish_with(
                 finish_context(engine, workspace.as_ref(), &ids, emit),
+                question,
                 text,
                 evidence,
                 usage,
@@ -660,8 +723,15 @@ the requested measure, filters, and scope. State just the number(s); don't round
                     tool: planned_call.name.clone(),
                     args: args.clone(),
                 });
-                let (mut item, result) =
-                    run_tool_call(engine, &catalog, registry, &planned_call, cancel.clone()).await;
+                let (mut item, result) = run_tool_call(
+                    engine,
+                    &catalog,
+                    registry,
+                    &planned_call,
+                    &evidence,
+                    cancel.clone(),
+                )
+                .await;
                 item.id = evidence_id(evidence.len());
                 emit(AskEvent::ToolEnd {
                     item: Box::new(item.clone()),
@@ -738,6 +808,7 @@ not run again. Its result is repeated below - use it, refine the call, or give y
                             row_count: None,
                             output: None,
                             chart: None,
+                            result_table: None,
                             python_input_trace: None,
                             python_queries: None,
                             python_queries_complete: None,
@@ -780,6 +851,7 @@ not run again. Its result is repeated below - use it, refine the call, or give y
                 &catalog,
                 registry,
                 &resp.tool_calls[i],
+                &evidence,
                 cancel.clone(),
             )
         }))
@@ -799,12 +871,18 @@ not run again. Its result is repeated below - use it, refine the call, or give y
             }
             // Every slot is filled above (dup branch or the `pending`/`ran` zip);
             // treat a gap as a broken invariant that ends the run cleanly.
-            let (mut item, llm_text) = outcome.ok_or_else(|| {
+            let (mut item, mut llm_text) = outcome.ok_or_else(|| {
                 EngineError::msg("internal error: a tool call produced no outcome")
             })?;
             had_tool_error |= item.error.is_some();
             workspace_changed |= is_workspace_change_error(item.error.as_deref());
             item.id = evidence_id(evidence.len());
+            if is_reusable_chart_source(&item) {
+                llm_text = format!(
+                    "Reusable result reference: {}. If a chart is needed, call `make_chart` with this `source_evidence_id`; do not rerun or rewrite the computation.\n\n{llm_text}",
+                    item.id
+                );
+            }
             emit(AskEvent::ToolEnd {
                 item: Box::new(item.clone()),
             });
@@ -958,12 +1036,19 @@ fn finish(
     evidence: Vec<EvidenceItem>,
     usage: Option<Usage>,
 ) -> Answer {
-    let checks = verify::run(context.engine, question, &text, &evidence);
-    finish_with(context, text, evidence, usage, checks)
+    let checks = verify::run(
+        context.engine,
+        question,
+        &text,
+        &evidence,
+        context.ids.contract.as_ref(),
+    );
+    finish_with(context, question, text, evidence, usage, checks)
 }
 
 fn finish_with(
     context: FinishContext<'_>,
+    question: &str,
     text: String,
     evidence: Vec<EvidenceItem>,
     usage: Option<Usage>,
@@ -1003,13 +1088,11 @@ fn finish_with(
         // NeedsReview or a misleading success state.
         crate::engine::evidence::VerificationStatus::InsufficientData
     } else {
-        let semantics_grounded = context.ids.contract.as_ref().is_some_and(|contract| {
-            contract.interpretation == runtime::InterpretationStatus::Grounded
-        }) && context
-            .ids
-            .grounding
-            .as_ref()
-            .is_some_and(|grounding| grounding.unresolved.is_empty());
+        let semantics_grounded = interpretation_is_grounded(
+            question,
+            context.ids.contract.as_ref(),
+            context.ids.grounding.as_ref(),
+        );
         verify::status(&verification, &evidence, semantics_grounded)
     };
     let state = if context.ids.clarification.is_some() {
@@ -1083,6 +1166,25 @@ fn finish_with(
         answer: Box::new(answer.clone()),
     });
     answer
+}
+
+/// A typed contract is valuable when interpretation needs explicit grounding,
+/// but it is not a required ceremony for every model-selected computation.
+/// Contractless, low-risk requests can earn the same status when the ordinary
+/// verifier has clean evidence and a reproducible query. Higher-risk requests
+/// and explicit unresolved/assumed contracts still require semantic grounding.
+fn interpretation_is_grounded(
+    question: &str,
+    contract: Option<&AnalysisContract>,
+    grounding: Option<&crate::engine::grounding::GroundingReport>,
+) -> bool {
+    match contract {
+        Some(contract) => {
+            contract.interpretation == runtime::InterpretationStatus::Grounded
+                && grounding.is_some_and(|report| report.unresolved.is_empty())
+        }
+        None => risk::assess(question).tier == risk::RiskTier::Low,
+    }
 }
 
 /// A SQL failure the model can fix if we remind it of the real schema.
@@ -1190,6 +1292,7 @@ async fn run_tool_call(
     catalog: &Catalog,
     registry: &Registry,
     call: &ToolCall,
+    prior_evidence: &[EvidenceItem],
     cancel: Arc<AtomicBool>,
 ) -> (EvidenceItem, String) {
     let started = Instant::now();
@@ -1201,8 +1304,9 @@ async fn run_tool_call(
             started,
         );
     }
+    let tool_context = crate::engine::tools::ToolContext { prior_evidence };
     let result = registry
-        .run_with_cancel(engine, &call.name, &call.arguments, cancel)
+        .run_with_context_cancel(engine, &call.name, &call.arguments, &tool_context, cancel)
         .await;
     if !catalog_matches(engine, catalog) {
         return tool_error(
@@ -1226,6 +1330,20 @@ async fn run_tool_call(
                 {
                     if !sources.contains(&source) {
                         sources.push(source);
+                    }
+                }
+            }
+            if let Some(source_id) = out
+                .chart
+                .as_ref()
+                .and_then(|chart| chart.metadata.as_ref())
+                .and_then(|metadata| metadata.source_evidence_id.as_deref())
+            {
+                if let Some(source) = prior_evidence.iter().find(|item| item.id == source_id) {
+                    for source in &source.sources {
+                        if !sources.contains(source) {
+                            sources.push(source.clone());
+                        }
                     }
                 }
             }
@@ -1254,6 +1372,7 @@ async fn run_tool_call(
                 row_count: out.row_count,
                 output: out.output,
                 chart: out.chart,
+                result_table: out.result_table,
                 python_input_trace,
                 python_queries: out.python_queries,
                 python_queries_complete: out.python_queries_complete,
@@ -1301,6 +1420,7 @@ fn tool_error(
             row_count: None,
             output: None,
             chart: None,
+            result_table: None,
             python_input_trace: None,
             python_queries: None,
             python_queries_complete: None,
@@ -1533,10 +1653,20 @@ RustPython sandbox with no filesystem, network, environment, or subprocess acces
     if has_workspace && profile.chart_rule {
         rules.push(
             "Use make_chart when the user asks for a visualization or a chart materially helps explain \
-the analysis. It builds from a read-only SQL query: the first result column supplies labels and the \
-next one or two numeric columns supply series. Choose meaningful grouping, order, units, and grain; \
-check that the chart expresses the same scope and result as your explanation. Respect the tool's \
-supported chart kinds and size limits, and state any necessary aggregation or omitted detail."
+the analysis. Prefer `source_evidence_id` to reuse a successful result already computed in this turn; \
+this preserves the exact data and avoids rerunning analysis. Choose a chart family that fits the data: \
+bar for categorical comparisons, line/area for ordered time series, scatter for paired numeric measures, \
+histogram for one-variable distributions, box_plot for grouped distributions, heatmap for two categorical \
+dimensions, and forecast for explicitly separated observed/projected values. Pie/donut are only for a small, \
+non-negative part-to-whole result with a stated common denominator. For pie/donut, set `x_field` to the \
+category result column, `value_field` to its numeric measure, `part_to_whole` to true, and `denominator` to \
+the exact shared population. If a field name is rejected, use the available field names returned by the tool. \
+An explicitly requested visualization is a required deliverable: if its source result is revised or \
+superseded, recreate the chart from the revised accepted evidence before finalizing rather than dropping \
+it. Select exact result fields, preserve the requested scope and units, and explicitly handle missing values; \
+never turn missing into zero. Make the title, \
+axes, grouping, period grain, aggregation, filters, and denominator agree with the analysis. If the result \
+doesn't support the requested chart or is too large to read, say so rather than altering its meaning."
                 .into(),
         );
     }
@@ -1556,12 +1686,25 @@ instruction with only a general summary."
     }
     if has_workspace && profile.forecast_rule {
         rules.push(
-            "Forecasts and scenarios are valid analysis requests. Use available history, user-provided \
-assumptions, and read-only tools to produce a useful estimate when possible. State the method and \
-key assumptions, distinguish estimates from observed values, and communicate uncertainty in \
-proportion to the evidence. If an important input is missing, give any useful partial result and \
-ask a focused question or explain the specific limitation; do not reject a request merely because \
-it concerns the future."
+            "Forecasts and scenarios are valid analysis requests. Before forecasting, inspect the source to establish the \
+measure and unit, date field and cadence, aggregation, coverage, and material gaps or irregularities; never silently \
+drop or impute observations. Respect the user's forecast cutoff: no later observation may enter an earlier forecast or \
+holdout. Use `time.range` for a training window or single period and `time.bucket` only for output grouped across periods. \
+Do not finalize a point-only forecast when historical evaluation is possible, and honor an explicit request to backtest. \
+For a numeric series that can be represented as one value per equally spaced period, use `forecast_analysis` after choosing \
+a read-only query, method, horizon, and (when supported by the observed data) seasonal period. It returns the point \
+estimate, chronological rolling-origin comparison against a baseline, and empirical error bands, not guaranteed \
+prediction intervals, only when calibration evidence is sufficient. If the series is irregular or needs a custom method, use \
+`run_python` and the forecast helpers \
+instead; when a historical holdout is available, call `rolling_origin_backtest(values, method, horizon=..., min_train=...)` \
+in `run_python` and compare against a reasonable baseline. Use chronological rather than random holdouts and state any \
+evaluation limitation. Report the selected method and training window, the holdout count and error metric when available, \
+and whether an empirical band is or is not supported. Such bands are not guaranteed prediction intervals. Still provide a \
+supported point estimate when a holdout or useful band is unavailable. State the method, assumptions, and uncertainty in \
+proportion to the evidence. Forecasts are estimates, not observed results. A user-defined what-if is a scenario, not a \
+prediction: apply the exact stated input, show base and changed results where useful, and identify the input as \
+user-supplied rather than a measured workspace fact. Never confuse forecasts, scenarios, and observed values, or refuse \
+only because a request concerns the future."
                 .into(),
         );
     }
@@ -1681,6 +1824,121 @@ mod tests {
     use super::*;
     use crate::engine::llm::ToolCall;
 
+    fn evidence_item(tool: &str) -> EvidenceItem {
+        EvidenceItem {
+            id: "evidence-test".into(),
+            tool: tool.into(),
+            sources: Vec::new(),
+            args: serde_json::Value::Null,
+            note: None,
+            sql: None,
+            result_summary: String::new(),
+            columns: None,
+            rows: None,
+            row_count: None,
+            output: None,
+            chart: None,
+            result_table: None,
+            python_input_trace: None,
+            python_queries: None,
+            python_queries_complete: None,
+            ms: 0,
+            error: None,
+        }
+    }
+
+    #[test]
+    fn only_complete_analytical_tables_are_advertised_as_chart_sources() {
+        let mut inspection = evidence_item("inspect_table");
+        inspection.columns = Some(vec!["category".into(), "amount".into()]);
+        inspection.rows = Some(vec![vec!["Rent".into(), 1200.into()]]);
+        inspection.row_count = Some(1);
+        assert!(!is_reusable_chart_source(&inspection));
+
+        let mut complete_query = evidence_item("run_sql");
+        complete_query.columns = Some(vec!["category".into(), "amount".into()]);
+        complete_query.rows = Some(vec![vec!["Rent".into(), 1200.into()]]);
+        complete_query.row_count = Some(1);
+        assert!(is_reusable_chart_source(&complete_query));
+
+        complete_query.row_count = Some(2);
+        assert!(!is_reusable_chart_source(&complete_query));
+        complete_query.row_count = Some(1);
+        complete_query.error = Some("query failed".into());
+        assert!(!is_reusable_chart_source(&complete_query));
+
+        let mut published_python = evidence_item("run_python");
+        published_python.result_table = Some(crate::engine::analytics::chart::TabularResult {
+            columns: vec!["category".into(), "amount".into()],
+            rows: vec![vec!["Rent".into(), 1200.into()]],
+        });
+        assert!(is_reusable_chart_source(&published_python));
+        assert!(!is_reusable_chart_source(&evidence_item("read_file")));
+    }
+
+    #[test]
+    fn low_risk_direct_analysis_does_not_require_a_contract_to_be_grounded() {
+        assert!(interpretation_is_grounded(
+            "What is total revenue?",
+            None,
+            None
+        ));
+    }
+
+    #[test]
+    fn higher_risk_contractless_analysis_still_needs_semantic_grounding() {
+        assert!(!interpretation_is_grounded(
+            "Compare sales over time",
+            None,
+            None
+        ));
+    }
+
+    #[test]
+    fn explicit_unresolved_contract_cannot_use_the_contractless_path() {
+        let contract = AnalysisContract {
+            interpretation: runtime::InterpretationStatus::Ambiguous,
+            ..AnalysisContract::default()
+        };
+        let grounding = crate::engine::grounding::GroundingReport {
+            source: None,
+            sources: Vec::new(),
+            probes: Vec::new(),
+            unresolved: vec!["time field".into()],
+        };
+
+        assert!(!interpretation_is_grounded(
+            "What is total revenue?",
+            Some(&contract),
+            Some(&grounding)
+        ));
+    }
+
+    #[test]
+    fn explicitly_grounded_contract_requires_a_resolved_grounding_report() {
+        let contract = AnalysisContract {
+            interpretation: runtime::InterpretationStatus::Grounded,
+            ..AnalysisContract::default()
+        };
+        let grounding = crate::engine::grounding::GroundingReport {
+            source: Some("sales".into()),
+            sources: vec!["sales".into()],
+            probes: Vec::new(),
+            unresolved: Vec::new(),
+        };
+
+        assert!(interpretation_is_grounded(
+            "What is total revenue?",
+            Some(&contract),
+            Some(&grounding)
+        ));
+        assert!(!interpretation_is_grounded(
+            "What is total revenue?",
+            Some(&contract),
+            None
+        ));
+    }
+
     fn open_catalog() -> Catalog {
         Catalog {
             workspace: Some("/tmp/ws".into()),
@@ -1752,8 +2010,34 @@ mod tests {
         );
 
         assert!(p.contains("Forecasts are estimates, not observed results"));
-        assert!(p.contains("state the method, assumptions, and uncertainty"));
+        assert!(p.contains("the method, assumptions, and uncertainty in proportion"));
         assert!(!p.contains("decline it even though you have tools"));
+    }
+
+    #[test]
+    fn forecast_prompt_requires_temporal_recon_and_distinguishes_estimates_from_scenarios() {
+        let p = system_prompt(
+            &PromptProfile::full(),
+            &open_catalog(),
+            &[],
+            "Tables:\n  metrics  (24 rows)\n",
+            None,
+            None,
+            None,
+        );
+
+        assert!(p.contains(
+            "date field and cadence, aggregation, coverage, and material gaps or irregularities"
+        ));
+        assert!(p.contains("never silently drop or impute observations"));
+        assert!(p.contains("no later observation may enter an earlier forecast or holdout"));
+        assert!(p.contains("time.bucket` only for output grouped across periods"));
+        assert!(p.contains("rolling_origin_backtest"));
+        assert!(p.contains("in `run_python`"));
+        assert!(p.contains("chronological rather than random holdouts"));
+        assert!(p.contains("empirical error bands, not guaranteed prediction intervals"));
+        assert!(p.contains("A user-defined what-if is a scenario, not a prediction"));
+        assert!(p.contains("user-supplied rather than a measured workspace fact"));
     }
 
     #[test]
@@ -1820,10 +2104,11 @@ mod tests {
         assert!(got.contains("The model drives interpretation and tool choice"));
         assert!(got.contains("ask a focused clarification"));
         assert!(got.contains("Preserve relevant scope, filters, units, and definitions"));
+        assert!(got.contains("An explicitly requested visualization is a required deliverable"));
         assert!(got
             .contains("Distinguish association from causation and observed values from estimates"));
         assert!(got.contains("Forecasts and scenarios are valid analysis requests"));
-        assert!(got.contains("do not reject a request merely because it concerns the future"));
+        assert!(got.contains("or refuse only because a request concerns the future"));
         assert!(got.contains("Earlier in this conversation"));
         assert!(got.contains("amounts are GBP"));
         assert!(!got.contains("ALWAYS needs a run_sql call"));
@@ -1968,13 +2253,29 @@ mod tests {
         // At the threshold: first, milder nudge.
         let first = stop_pressure_nudge(3, 3, 3).unwrap();
         assert!(first.contains("3 tool call"));
+        assert!(first.contains("every requested part"));
+        assert!(first.contains("explicitly requested deliverable"));
         assert!(!first.contains("well past"));
         // One round further: stronger wording, distinct from the first.
         let second = stop_pressure_nudge(4, 3, 4).unwrap();
         assert!(second.contains("well past"));
+        assert!(second.contains("requested part, deliverable"));
         assert_ne!(first, second);
         // A custom soft threshold (env override) is honoured.
         assert_eq!(stop_pressure_nudge(2, 5, 2), None);
         assert!(stop_pressure_nudge(5, 5, 5).is_some());
+    }
+
+    #[test]
+    fn semantic_repair_preserves_requested_deliverables() {
+        let prompt = semantic_repair_prompt(
+            "a figure was not supported by the query result",
+            &["evidence-5 (make_chart)".into()],
+        );
+        assert!(prompt.contains("requested output deliverable"));
+        assert!(prompt.contains("recreate that deliverable from the revised accepted evidence"));
+        assert!(prompt.contains("do not silently replace it with prose alone"));
+        assert!(prompt.contains("evidence-5 (make_chart)"));
+        assert!(prompt.contains("not accepted evidence"));
     }
 }

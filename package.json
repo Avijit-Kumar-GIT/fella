@@ -16,6 +16,7 @@
 		"electron:run": "pnpm electron:build && electron electron/main.mjs",
 		"electron:package": "pnpm electron:build && electron-builder",
 		"preview": "vite preview",
+		"test:chart-renderer": "node scripts/test-chart-renderer.mjs",
 		"prepare": "svelte-kit sync || echo ''",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",

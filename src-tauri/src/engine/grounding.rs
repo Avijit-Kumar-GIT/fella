@@ -61,20 +61,15 @@ pub fn ground(engine: &EngineState, contract: AnalysisContract) -> GroundingResu
 
 /// Ground a model-proposed contract with the user's selected Context starting
 /// points. A single selected source is a deterministic scope hint only when
-/// the contract did not name a source; it never grants access, overrides an
-/// explicit subject, or turns a column label into evidence.
+/// the contract did not name a source; it never grants access or turns a
+/// column label into evidence.
 pub fn ground_with_context(
     engine: &EngineState,
     mut contract: AnalysisContract,
     context_refs: &[ContextReference],
 ) -> GroundingResult {
     let context_source = context_source_hint(engine, context_refs);
-    let context_applied = contract.subject.is_none() && context_source.is_some();
-    if context_applied {
-        if let Some(source) = context_source.as_deref() {
-            contract.subject = Some(source.to_string());
-        }
-    }
+    let context_applied = apply_context_source_hint(&mut contract, context_source.as_deref());
     let mut result = ground_unhinted(engine, contract);
     if context_applied {
         let source = context_source.expect("context source exists when context is applied");
@@ -89,6 +84,23 @@ pub fn ground_with_context(
         );
     }
     result
+}
+
+fn apply_context_source_hint(
+    contract: &mut AnalysisContract,
+    context_source: Option<&str>,
+) -> bool {
+    if contract.source.is_some() {
+        return false;
+    }
+    let Some(source) = context_source
+        .map(str::trim)
+        .filter(|source| !source.is_empty())
+    else {
+        return false;
+    };
+    contract.source = Some(source.to_string());
+    true
 }
 
 fn ground_unhinted(engine: &EngineState, mut contract: AnalysisContract) -> GroundingResult {
@@ -122,6 +134,7 @@ fn ground_unhinted(engine: &EngineState, mut contract: AnalysisContract) -> Grou
         );
         return finish(contract, report);
     };
+    contract.source = source.view.clone().or_else(|| Some(source.name.clone()));
     let Some(view) = source.view.clone() else {
         add_unresolved(
             &mut report,
@@ -1106,6 +1119,41 @@ fn select_source(
         .cloned()
         .collect();
 
+    if let Some(source_hint) = contract
+        .source
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        let exact_matches: Vec<SourceInfo> = queryable
+            .iter()
+            .filter(|source| {
+                source_name_exact_matches(&source.name, source.view.as_deref(), source_hint)
+            })
+            .cloned()
+            .collect();
+        if !exact_matches.is_empty() {
+            return match exact_matches.len() {
+                1 => Ok(exact_matches.into_iter().next()),
+                _ => Err(format!(
+                    "source {source_hint:?} matched more than one table"
+                )),
+            };
+        }
+
+        let fuzzy_matches: Vec<SourceInfo> = queryable
+            .into_iter()
+            .filter(|source| source_name_matches(&source.name, source.view.as_deref(), source_hint))
+            .collect();
+        return match fuzzy_matches.len() {
+            0 => Err(format!("could not find queryable source {source_hint:?}")),
+            1 => Ok(fuzzy_matches.into_iter().next()),
+            _ => Err(format!(
+                "source {source_hint:?} matched more than one table"
+            )),
+        };
+    }
+
     let requested = requested_fields(contract);
 
     if let Some(subject) = contract.subject.as_deref() {
@@ -1226,6 +1274,20 @@ fn requested_fields(contract: &AnalysisContract) -> Vec<String> {
 }
 
 fn resolve_field<'a>(source: &'a SourceInfo, requested: &str) -> Result<&'a ColumnInfo, String> {
+    // Accept either the bare physical column name or a source-qualified name
+    // emitted by a model. The source is already selected here, so strip a
+    // prefix only when it actually identifies this source; dotted column
+    // labels from other formats remain eligible for ordinary matching.
+    let requested = requested
+        .rsplit_once('.')
+        .filter(|(hint, _)| {
+            source.name.eq_ignore_ascii_case(hint)
+                || source
+                    .view
+                    .as_deref()
+                    .is_some_and(|view| view.eq_ignore_ascii_case(hint))
+        })
+        .map_or(requested, |(_, field)| field);
     let columns = source.columns.as_deref().unwrap_or_default();
     let normalized_requested = normalize(requested);
     let exact_matches: Vec<&ColumnInfo> = columns
@@ -1322,11 +1384,32 @@ fn normalize(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::runtime::ContractMeasure;
 
     #[test]
     fn field_matching_ignores_case_and_separators() {
         assert_eq!(normalize("Order Amount"), "orderamount");
         assert_eq!(normalize("order_amount"), "orderamount");
+    }
+
+    #[test]
+    fn context_source_applies_without_replacing_the_semantic_subject() {
+        let mut contract = AnalysisContract {
+            subject: Some("monthly rental total".into()),
+            ..Default::default()
+        };
+        assert!(apply_context_source_hint(
+            &mut contract,
+            Some("selected_metrics_table")
+        ));
+        assert_eq!(contract.subject.as_deref(), Some("monthly rental total"));
+        assert_eq!(contract.source.as_deref(), Some("selected_metrics_table"));
+
+        assert!(!apply_context_source_hint(
+            &mut contract,
+            Some("another_source")
+        ));
+        assert_eq!(contract.source.as_deref(), Some("selected_metrics_table"));
     }
 
     #[test]
@@ -1367,6 +1450,54 @@ mod tests {
         assert_eq!(
             find_source(&sources, "bank_export_current").unwrap().name,
             first.name
+        );
+    }
+
+    #[test]
+    fn explicit_source_disambiguates_shared_fields() {
+        let source = |name: &str, view: &str| SourceInfo {
+            name: format!("{name}.csv"),
+            path: format!("/tmp/{name}.csv"),
+            kind: crate::engine::catalog::SourceKind::Csv,
+            view: Some(view.into()),
+            row_count: Some(1),
+            columns: Some(vec![ColumnInfo::bare("rides", "BIGINT")]),
+            size_bytes: 1,
+            mtime: 1,
+            synopsis: None,
+            note: None,
+        };
+        let catalog = Catalog {
+            sources: vec![
+                source("daily", "daily"),
+                source("monthly_usage_from_hourly", "monthly_usage_from_hourly"),
+            ],
+            ..Default::default()
+        };
+        let mut contract = AnalysisContract {
+            measures: vec![ContractMeasure {
+                concept: "rentals".into(),
+                field: Some("rides".into()),
+                operation: "sum".into(),
+                unit: Some("rentals".into()),
+            }],
+            ..Default::default()
+        };
+
+        assert!(select_source(&catalog, &contract)
+            .unwrap_err()
+            .contains("occur in more than one table"));
+
+        contract.source = Some("monthly_usage_from_hourly".into());
+        let selected = select_source(&catalog, &contract)
+            .unwrap()
+            .expect("explicit source should select one of the matching tables");
+        assert_eq!(selected.view.as_deref(), Some("monthly_usage_from_hourly"));
+        assert_eq!(
+            resolve_field(&selected, "monthly_usage_from_hourly.rides")
+                .unwrap()
+                .name,
+            "rides"
         );
     }
 }

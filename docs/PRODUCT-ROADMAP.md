@@ -37,15 +37,9 @@ The harness should guide the model toward careful analysis, not prevent a
 plausible useful answer merely because it cannot be labeled “verified” by one
 specific execution path. Preserve the read-only workspace boundary. Do not
 send file contents, rows, or attachments to a web service as an implicit
-consequence of asking a question. The accepted policy is **use web research
-when needed and make it visible**: stable questions can use model knowledge;
-the model may search when the user asks for sources/current information or
-freshness materially affects the answer. Show that research is happening and
-show the sources used. Search only with a minimal, generalized query; never
-include mounted-file contents, rows, snippets, hidden workspace memory, or
-credentials. For hybrid tasks, keep local analysis and public research
-separate, then combine their conclusions in Fella. This policy is recorded in
-[`DECISIONS.md`](DECISIONS.md).
+consequence of asking a question. Decide and document the exact web-query
+privacy/default policy before enabling web access; make any outbound research
+visible to the user.
 
 ## What the current implementation tells us
 
@@ -57,11 +51,9 @@ currently composed and described:
 - The no-workspace branch in `src-tauri/src/engine/agent.rs` supplies no tools
   and currently directs the model toward asking the user to open a folder for
   data/file requests, while its fallback wording narrows normal answers.
-- The active runtime prompt permits forecasts and scenarios and asks the model
-  to state method, assumptions, and uncertainty. The observed forecast mismatch
-  came from a pre-release benchmark gold that required refusal, not a blanket
-  refusal in the shipped prompt. Forecast-method quality, calibration, and
-  clear separation of observed values from projected ones remain unfinished.
+- The same prompt includes a broad instruction to decline forecasts and future
+  questions. This rules out useful analysis before the model can inspect the
+  data or explain the limits of a forecast.
 - `src-tauri/src/engine/tools.rs` offers local workspace tools but no web
   search or page-reading tool. The current local search is lexical, which is
   useful for locating text but is not by itself semantic interpretation.
@@ -86,98 +78,65 @@ purpose.
 
 ### 0. Establish the product rules and baseline
 
-- [x] **Write the Ask routing and privacy decision.** Stable questions can
-  use model knowledge; web research is allowed when the user asks for sources
-  or current information, or freshness materially affects the answer. Make
-  research visible and show sources. Use a minimal generalized query and
-  never send mounted-file contents, rows, snippets, workspace memory, or
-  credentials to the search service. Keep workspace analysis local and combine
-  it with public findings inside Fella. Recorded in `DECISIONS.md`; runtime
-  implementation remains a later backlog item.
-- [x] **Reconcile the core product documents.** Updated `VISION.md`,
-  `PRINCIPLES.md`, `NON-GOALS.md`, `ARCHITECTURE.md`, `WHY.md`, and `README.md`
-  to distinguish the Ask-led product direction from the current
-  workspace-focused release. Detailed help pages still describe current
-  shipped behavior and should be updated only when the corresponding feature
-  ships.
-- [x] **Capture a before-change baseline.** Ran the same pinned model/provider,
+- [ ] **Write the Ask routing and privacy decision.** Specify when Fella uses
+  model knowledge, web research, workspace tools, or a combination; whether
+  web access is off by default, enabled by an explicit user setting, or
+  activated only by a clear request; what query text may leave the device;
+  how the user can see and stop an outbound request; and how credentials are
+  stored. The policy must state that workspace file contents and attachments
+  are never silently uploaded to web search.
+- [ ] **Reconcile the product documents.** Update `VISION.md`, `PRINCIPLES.md`,
+  `NON-GOALS.md`, and `ARCHITECTURE.md` so they agree that Ask can handle
+  general knowledge, web research, local analytics, and justified hybrids,
+  while Fella remains opinionated about careful analytics and read-only data
+  work. Remove claims that all questions must concern mounted files or that
+  web access is categorically out of scope if those no longer express the
+  product.
+- [ ] **Capture a before-change baseline.** Run the same pinned model/provider,
   prompts, settings, and task set against the current branch. Save question,
   route/tool trace, response, latency, token/cost data when available, and
-  correctness/source judgments. The evaluation runner now creates genuine
-  no-workspace cases. Captured the seed general-knowledge suite against both
-  bare-model and Fella conditions, plus representative current file and chart
-  routes; web research is not implemented, and forecast quality has not yet
-  been benchmarked. The small snapshot
-  is a smoke baseline, not a representative quality claim; see
-  [`bench/product-eval/baselines/2026-10-01.md`](../bench/product-eval/baselines/2026-10-01.md).
-- [x] **Separate evaluation families in the methodology.** FQA-Bench remains
-  scoped to filesystem analysis. Added a product-wide evaluation map for
-  general knowledge, web research, filesystem analytics, forecasting,
-  visualizations, and hybrid tasks; each is scored independently. Fixtures
-  and substantial family baselines will be curated in their own follow-up
-  work, before runtime behavior changes.
+  independent correctness/source judgments. Mark this as the baseline rather
+  than silently comparing results from different model versions.
+- [ ] **Separate evaluation families.** Keep FQA-Bench focused on filesystem
+  question answering. Add separately reported slices for general knowledge,
+  web research, forecasting, visualization, clarification, and hybrid
+  file-plus-research questions. Define tasks before implementation changes;
+  do not convert observed failures into special-case production rules.
 
 **Complete when:** the product/privacy policy is explicit, conflicting docs no
-longer contradict it, and a reproducible baseline exists for each currently
-implemented route. Baseline breadth and repeat-run coverage remain limited and
-must be expanded before drawing product-quality conclusions.
+longer contradict it, and a reproducible baseline exists for each route that
+is in scope.
 
 ### 1. Make Ask useful without a mounted folder
 
-- [x] **Remove the accidental folder prerequisite for general questions.**
+- [ ] **Remove the accidental folder prerequisite for general questions.**
   Revise the no-workspace prompt and route so that a missing folder blocks
   only questions that actually require local files. A user asking “What is
   Rust?” or “How are steps counted on Apple Health?” should get a direct
   answer without being told to mount a folder first.
-- [x] **Give the model a clear no-tool path.** Let it answer stable, ordinary
+- [ ] **Give the model a clear no-tool path.** Let it answer stable, ordinary
   background questions from its configured model knowledge. Do not require a
   workspace inspection, SQL plan, verification pass, or clarification when
   none is needed. If its knowledge may be stale or the user asks for sources,
   let it select web research instead.
-- [x] **Handle mixed intent.** When a question contains both a general
+- [ ] **Handle mixed intent.** When a question contains both a general
   explanation and a workspace-dependent request, answer the part that can be
   answered, inspect the workspace for the rest, and distinguish the two
   results. Do not turn one missing file/source into a refusal of the entire
   question.
-- [x] **Keep the conversation coherent.** A general answer, a later question
-  about a mounted folder, and a follow-up remain in the same conversation.
-  Per-turn workspace path/revision travels with the compact conversation
-  memory; switching folders preserves prior wording for reference resolution,
-  while old query/interpretation hints are withheld unless that exact snapshot
-  is mounted. Archive hydration applies the same rule after restart, including
-  when no workspace is open. Regression tests cover these transitions.
-- [x] **Remove contradictory prompt instructions.** The no-workspace
-  greeting-only rule was replaced with
-  route-aware guidance. Forecasts are described as estimates and must include
-  method, assumptions, and uncertainty. The pre-release draft `fqa-refusal-spend`
-  case expected refusal, which conflicted with this product behavior. Its
-  recorded **0/1 against that legacy gold** is preserved as a historical policy
-  mismatch, not evidence that a forecast should have been refused or that the
-  current forecast is correct. The old refusal expectation is retired from
-  active scoring in the first target-state FQA-Bench v0.1 and replaced by
-  estimate, partial-answer, clarification, and evidence-limit contracts.
-  Forecast quality remains a separate workstream in backlog #4.
-  Prompt guidance describes task judgment rather than example phrases or
-  filenames.
+- [ ] **Keep the conversation coherent.** A general answer, a later question
+  about a mounted folder, and a follow-up should remain in the same
+  conversation. Preserve relevant prior assumptions and results without
+  treating all prior assistant prose as established fact.
+- [ ] **Remove contradictory prompt instructions.** In particular, replace
+  “only greetings/Fella questions” behavior and blanket forecast refusals
+  with route-aware guidance. Prompt changes should express task judgment,
+  not enumerate example phrases or file names.
 
-**Acceptance checks:** after a general prompt clarification, the fixed
-no-workspace routing cases passed 3/3 by majority over three iterations (9/9
-phrase checks). An earlier unchanged-suite run scored 2/3 because the mixed
-answer did not explicitly offer mounting a folder; that failure was recorded,
-then the unchanged suite was rerun. A separate direct-OpenAI smoke run on the
-same three cases scored 3/3 (one run per case); this is not a broad quality
-claim. The general-knowledge suite passed 3/3 over three iterations, but its
-phrase rubric was broadened after exploratory outputs, so it is not independent
-evidence. Deterministic regression tests now cover context across mount,
-revision, and restart boundaries. A separately frozen live trajectory case
-passed its final-answer screen 1/1 across a general answer, folder mount, local
-calculation, and follow-up. Runtime verification still emitted unsupported
-semantic-operation warnings, so this is not a verified-runtime or broad
-reliability claim. The unchanged legacy forecast-refusal case scored **0/1
-against obsolete refusal expectations**; it is not an in-scope acceptance
-check for the current policy. Its trace also flags the requested monthly
-bucket, which needs separate technical review under backlog #4. See
-[`bench/product-eval/reports/backlog-1.md`](../bench/product-eval/reports/backlog-1.md).
+**Acceptance checks:** no-folder general question succeeds; no-folder
+file-dependent question clearly asks for or offers a folder; mixed question
+answers the answerable portion and identifies the missing dependency; a
+follow-up uses prior conversation context correctly.
 
 ### 2. Add bounded, source-grounded web research
 
@@ -217,86 +176,47 @@ gracefully.
 
 ### 3. Replace one binary “Verified” label with honest provenance
 
-- [x] **Inventory every producer and consumer of verification status.** Map
+- [ ] **Inventory every producer and consumer of verification status.** Map
   status generation, persistence, APIs, chat rendering, evidence/detail
-  surfaces, and tests. Current producers converge in `agent::finish_with`;
-  status is persisted to the analysis-turn record and memory episode; the UI
-  no longer renders the status as routine answer chrome.
-- [x] **Represent current answer inputs directly.** `AnswerProvenance` links
-  successful tool evidence IDs, the context sections supplied to the model,
-  and clarification lineage. Evidence retains document operations, SQL,
-  result rows, and workspace revision links. Python computations now expose
-  the exact SQL inputs, columns, row counts, and trace completeness in the
-  detail disclosure; fetched row values remain internal to verification.
-  Provenance records observable inputs, not claims about private model
-  reasoning. Web citations/retrieval time and forecast method/uncertainty are
-  added with backlog #2 and #4 respectively; they are not claimed as supported
-  by this slice.
-- [x] **Reserve computation replay for computational claims.** SQL and
-  Python execution are replayed against the mounted revision when feasible;
-  cost-skipped or incomplete traces remain ineligible for “Verified.” The
-  answer details keep the selected sources, query/input references, and
-  execution result together. Document and general-knowledge answers do not
-  need to pass through SQL.
-- [x] **Use language that matches the evidence in current routes.** The
-  Analysis details disclosure separates model responses with no workspace
-  tool result from workspace-backed tool evidence, lists context supplied,
-  and records clarification lineage. SQL/Python evidence shows the operation
-  and result; a replay is not described as proof of the user's interpretation
-  or of source-data truth. External citations and forecast-specific wording
-  remain dependent on #2 and #4.
-- [x] **Define a meaningful bar for “Verified.”** Reserve the positive label
-  for claims whose relevant meaning and scope are grounded in the data or
-  confirmed by the user, whose computation completed, whose reported values
-  match the returned evidence, and whose applicable checks passed. A replay
-  establishes reproducibility, not semantic correctness or source-data truth.
-  Forecasts may have their method checked, but a future outcome is not
-  “Verified.” When the bar is not met, do not downgrade every useful answer to
-  a negative status; state a material assumption or limitation, or ask when
-  ambiguity changes the result.
-- [x] **Make uncertainty informative, not suppressive.** If uncertainty is
+  surfaces, and tests across the supported Tauri/Electron paths before
+  changing semantics.
+- [ ] **Represent the basis of an answer directly.** Introduce a typed
+  provenance/report model that can describe, as applicable: model knowledge;
+  web sources and retrieval time; workspace documents and passages; executed
+  SQL/Python with inputs and result references; user-confirmed definitions or
+  assumptions; and estimates/forecasts with method and uncertainty. These
+  are evidence facets, not competing labels on one scale.
+- [ ] **Reserve computation replay for computational claims.** A result
+  derived from local data should record the source revision, selected data,
+  transformation or query, and execution result sufficiently to inspect or
+  replay it. A cited explanation should not be forced through SQL merely to
+  earn a status badge.
+- [ ] **Use language that matches the evidence.** Distinguish “calculated
+  from…”, “the document says…”, “web sources report…”, “general explanation,”
+  “estimate,” and “forecast.” Do not imply that citations prove truth or that
+  a replay proves the user's interpretation was correct.
+- [ ] **Make uncertainty informative, not suppressive.** If uncertainty is
   material, state what is known, what is assumed, and what would change the
   result. Ask a focused clarification when the ambiguity materially changes
   the answer. Otherwise give a qualified answer rather than refusing solely
-  because a secondary checker disagreed. The model policy already continues
-  safe partial/candidate analysis, uses a stated assumption when one
-  interpretation is reasonably likely, and asks only when investigation leaves
-  a material user-owned choice. A same-model disagreement remains advisory and
-  cannot replace or stream over the answer.
-- [x] **Keep verification out of routine chat chrome.** Do not repeat
-  “Verified,” “Not verified,” or “Needs review” on every answer. Keep
-  answer-specific sources, method, and checks together behind one clearly
-  named, collapsible **Analysis details** disclosure. Put only consequential,
-  user-actionable caveats in the answer itself; do not add a conversation-wide
-  verification score or duplicate checks elsewhere in the UI.
-- [x] **Audit hard gates and brittle checks.** Numeric-token matching remains
-  a heuristic for spotting unsupported figures, not proof that a figure is
-  attached to the correct semantic measure; the grounded contract and
-  operation-specific checks are also required before “Verified.” A second
-  pass from the same model is not independent evidence, so disagreement is a
-  soft review signal rather than a hard failure. Checker errors or empty
-  responses fail open and cannot erase the answer; checker text is not
-  streamed into the user's response. Re-run mismatches, execution errors, and
-  unsupported numeric claims still trigger the existing repair/issue paths.
+  because a secondary checker disagreed.
+- [ ] **Audit hard gates and brittle checks.** Review numeric-token comparison,
+  second-opinion disagreement, and checker failure behavior. A hard stop is
+  justified for a safety, execution, or irrecoverable data-integrity problem;
+  a soft quality signal should trigger a better explanation/review, not
+  automatically discard a likely useful answer.
 
-**Acceptance checks:** currently supported general-knowledge responses,
-workspace context, document operations, SQL/Python calculations, and
-clarification continuations expose their observable basis without copying raw
-context or Python input rows. “Verified” requires grounded semantics, clean
-computation replay, and passing applicable checks—not merely a tool-route
-condition. Ordinary answers do not carry repeated verification badges;
-answer-specific checks remain discoverable in Analysis details. Web-sourced
-answers and forecast-specific provenance are explicitly gated on completion
-of #2 and #4 rather than represented by placeholder claims.
+**Acceptance checks:** general knowledge, cited research, document
+interpretation, replayed calculations, and forecasts each display an
+appropriate basis; no category is mislabeled “Verified” merely because of its
+tool route; low-confidence output remains useful and appropriately qualified.
 
 ### 4. Support forecasts and forward-looking analysis responsibly
 
-- [x] **Remove blanket forecast rejection.** Allow the model to inspect the
+- [ ] **Remove blanket forecast rejection.** Allow the model to inspect the
   available series and decide whether the data can support a forecast, a
   scenario, or neither. Keep the user-facing distinction between observed
-  facts, model estimates, and hypothetical scenarios. Prompt policy now
-  permits estimation; forecast quality remains unbenchmarked beyond the
-  draft development diagnostics in the first target-state FQA-Bench v0.1.
+  facts, model estimates, and hypothetical scenarios.
 - [ ] **Inspect before fitting.** For a time-series request, establish the
   relevant measure, time field, grain, date coverage, gaps, duplicates,
   outliers, and aggregation before selecting a method. Use the workspace
@@ -325,29 +245,29 @@ predicted values are never conflated.
 
 ### 5. Expand visual analysis beyond basic bars and lines
 
-- [ ] **Decouple chart data from SQL.** Define a typed visualization
+- [x] **Decouple chart data from SQL.** Define a typed visualization
   specification that can consume validated tabular output from SQL, Python,
   a forecast, or a scenario. Keep computation and rendering separate so a
   chart is not silently recomputed with different semantics.
-- [ ] **Add analytical forms based on evaluation need.** At minimum, assess
+- [x] **Add analytical forms based on evaluation need.** At minimum, assess
   scatter plots for relationships, histograms for distributions, box/quantile
   plots for spread and outliers, stacked/area forms for composition over
   time, heatmaps for two-dimensional patterns, and observed-versus-forecast
   charts with uncertainty bands. Preserve existing bar and line charts.
-- [ ] **Validate chart meaning.** Check that selected fields exist, numeric and
+- [x] **Validate chart meaning.** Check that selected fields exist, numeric and
   categorical roles are compatible, units/aggregation are coherent, series
   and category cardinality are manageable, and missing values are handled
   explicitly. Do not silently drop rows that materially affect the displayed
   result.
-- [ ] **Preserve inspectability.** Let users see the plotted values and
+- [x] **Preserve inspectability.** Let users see the plotted values and
   definitions, including time range, aggregation, filters, units, and missing
   data treatment. The chart should be an additional presentation of the
   result, not a replacement for the answer or its provenance.
-- [ ] **Make charts readable and accessible.** Define responsive sizing,
+- [x] **Make charts readable and accessible.** Define responsive sizing,
   legible labels, keyboard/screen-reader descriptions, color-safe series
   palettes, and light/dark behavior. Avoid arbitrary generated HTML/SVG or
   model-supplied executable markup.
-- [ ] **Test visual correctness independently.** Verify the rendered chart
+- [x] **Test visual correctness independently.** Verify the rendered chart
   against the underlying result table/spec, not merely that a chart object
   exists. Add snapshots or structural checks for labels, axes, series,
   missingness, and uncertainty bands.
@@ -355,6 +275,14 @@ predicted values are never conflated.
 **Acceptance checks:** at least one non-SQL chart and each prioritized chart
 family can be generated from a clear dataset; the displayed marks match the
 underlying values; users can inspect how the chart was constructed.
+
+**Implementation update (2026-10-04):** the typed engine and UI render all
+prioritized chart families, and automated data/render checks are in place.
+Product acceptance remains qualified: the unchanged 25-case live run scored
+20/25, three failures have potential gold-specification ambiguities, a full
+post-fix run has not been performed, and desktop light/dark visual review is
+still pending. See `bench/product-eval/reports/backlog-5.md`; preserve those
+failures until they are adjudicated.
 
 ### 6. Make mounted folders easier to understand and analyze
 

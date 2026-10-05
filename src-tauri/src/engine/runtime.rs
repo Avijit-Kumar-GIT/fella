@@ -232,6 +232,10 @@ pub struct ContractComparison {
 pub struct AnalysisContract {
     #[serde(default)]
     pub interpretation: InterpretationStatus,
+    /// Physical workspace source selected for this analysis. This remains
+    /// separate from `subject`, which describes the user's semantic topic.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subject: Option<String>,
     /// Human-language population selected by the model before physical filters
@@ -714,6 +718,7 @@ mod tests {
     fn contract_serializes_as_a_small_stable_ir() {
         let contract = AnalysisContract {
             interpretation: InterpretationStatus::Grounded,
+            source: Some("transactions".into()),
             subject: Some("transactions".into()),
             grain: Some("transaction".into()),
             measures: vec![ContractMeasure {
@@ -726,8 +731,24 @@ mod tests {
         };
         let value = serde_json::to_value(contract).unwrap();
         assert_eq!(value["interpretation"], "grounded");
+        assert_eq!(value["source"], "transactions");
         assert_eq!(value["measures"][0]["operation"], "sum");
         assert!(value.get("unresolved").is_none());
+    }
+
+    #[test]
+    fn legacy_contracts_without_a_source_remain_readable() {
+        let contract: AnalysisContract = serde_json::from_value(serde_json::json!({
+            "interpretation": "assumed",
+            "measures": [],
+            "filters": [],
+            "group_by": [],
+            "assumptions": [],
+            "unresolved": []
+        }))
+        .unwrap();
+
+        assert_eq!(contract.source, None);
     }
 
     #[test]

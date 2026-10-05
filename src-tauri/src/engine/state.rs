@@ -471,7 +471,16 @@ struct SessionMemory {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum TurnWorkspace {
     NoWorkspace,
-    Snapshot { path: String, revision: String },
+    Snapshot {
+        path: String,
+        revision: String,
+    },
+    /// Older transcript formats recorded the conversation's folder but not
+    /// the indexed revision on each answer. Use prior analysis only as a hint
+    /// when that same folder is mounted; it must still be re-run as evidence.
+    PathOnly {
+        path: String,
+    },
     Unknown,
 }
 
@@ -483,18 +492,22 @@ struct TurnDigest {
     queries: Vec<String>,
 }
 
-fn turn_workspace_matches(workspace: &TurnWorkspace, catalog: &Catalog) -> bool {
+fn turn_context_matches(workspace: &TurnWorkspace, catalog: &Catalog) -> bool {
     match workspace {
         TurnWorkspace::NoWorkspace => catalog.workspace.is_none(),
         TurnWorkspace::Snapshot { path, revision } => {
             catalog.workspace.as_deref() == Some(path.as_str())
                 && catalog.revision.as_deref() == Some(revision.as_str())
         }
+        TurnWorkspace::PathOnly { path } => catalog.workspace.as_deref() == Some(path.as_str()),
         TurnWorkspace::Unknown => false,
     }
 }
 
-fn archived_turn_workspace(answer: Option<&serde_json::Value>) -> TurnWorkspace {
+fn archived_turn_workspace(
+    answer: Option<&serde_json::Value>,
+    transcript_workspace: Option<&str>,
+) -> TurnWorkspace {
     let Some(answer) = answer else {
         return TurnWorkspace::Unknown;
     };
@@ -528,6 +541,10 @@ fn archived_turn_workspace(answer: Option<&serde_json::Value>) -> TurnWorkspace 
             .is_none_or(serde_json::Value::is_null)
     {
         TurnWorkspace::NoWorkspace
+    } else if let Some(path) = transcript_workspace.filter(|path| !path.trim().is_empty()) {
+        TurnWorkspace::PathOnly {
+            path: path.to_string(),
+        }
     } else {
         TurnWorkspace::Unknown
     }
@@ -592,6 +609,7 @@ fn archived_turns(value: &serde_json::Value) -> Vec<TurnDigest> {
     let Some(messages) = value.get("messages").and_then(|value| value.as_array()) else {
         return Vec::new();
     };
+    let transcript_workspace = value.get("workspace").and_then(|path| path.as_str());
 
     let mut turns = Vec::new();
     for (index, message) in messages.iter().enumerate() {
@@ -635,7 +653,7 @@ fn archived_turns(value: &serde_json::Value) -> Vec<TurnDigest> {
             .filter(|item| {
                 matches!(
                     item.get("tool").and_then(|tool| tool.as_str()),
-                    Some("run_sql" | "make_chart")
+                    Some("run_sql" | "make_chart" | "forecast_analysis")
                 ) && item
                     .get("error")
                     .map(|error| error.is_null())
@@ -663,7 +681,7 @@ fn archived_turns(value: &serde_json::Value) -> Vec<TurnDigest> {
                 .map(|text| cap_chars(text, 200))
                 .unwrap_or_default(),
             headline,
-            workspace: archived_turn_workspace(answer),
+            workspace: archived_turn_workspace(answer, transcript_workspace),
             frame,
             queries,
         });
@@ -815,6 +833,46 @@ mod conversation_context_tests {
         drop(engine);
         let _ = std::fs::remove_dir_all(data_dir);
         let _ = std::fs::remove_dir_all(current_workspace);
+    }
+
+    #[test]
+    fn legacy_archive_path_keeps_query_as_a_replay_only_hint() {
+        let data_dir = scratch("archive-path-only-data");
+        let workspace = scratch("archive-path-only-ws");
+        std::fs::write(workspace.join("values.csv"), "value\n20\n").unwrap();
+        let engine = EngineState::new(&data_dir).unwrap();
+        engine.open_workspace(&workspace).unwrap();
+        let path = workspace.display().to_string();
+        let transcript = serde_json::json!({
+            "id": "legacy-path-only-thread",
+            "workspace": path,
+            "messages": [
+                {"role":"user", "text":"What was the total?"},
+                {"role":"assistant", "text":"The total was 20.", "answer": {
+                    "text":"The total was 20.",
+                    "evidence":[{
+                        "tool":"run_sql",
+                        "sql":"SELECT SUM(value) FROM values",
+                        "error":null
+                    }]
+                }}
+            ]
+        });
+        engine
+            .archive_conversation("legacy-path-only-thread", &transcript.to_string())
+            .unwrap();
+        engine.hydrate_session_from_archive("legacy-path-only-thread");
+
+        let prompt_context = engine
+            .session_block("legacy-path-only-thread")
+            .expect("archive should hydrate");
+        assert!(prompt_context.contains("archived revision unavailable"));
+        assert!(prompt_context.contains("prior query is only a hint"));
+        assert!(prompt_context.contains("SELECT SUM(value) FROM values"));
+
+        drop(engine);
+        let _ = std::fs::remove_dir_all(data_dir);
+        let _ = std::fs::remove_dir_all(workspace);
     }
 
     #[test]
@@ -1954,17 +2012,23 @@ impl EngineState {
             _ => return None,
         };
         let mut p = String::from(
-            "Earlier conversation for reference resolution only; assistant wording and result values are not evidence:\n",
+            "Earlier in this conversation (for reference resolution only; assistant wording and result values are not evidence):\n",
         );
         for t in turns {
-            let current_snapshot = turn_workspace_matches(&t.workspace, &catalog);
-            let scope = match (&t.workspace, current_snapshot) {
+            let current_context = turn_context_matches(&t.workspace, &catalog);
+            let scope = match (&t.workspace, current_context) {
                 (TurnWorkspace::NoWorkspace, _) => "general turn; no local evidence",
                 (TurnWorkspace::Snapshot { .. }, true) => {
                     "same workspace revision; prior query is only a hint"
                 }
+                (TurnWorkspace::PathOnly { .. }, true) => {
+                    "same folder path; archived revision unavailable, prior query is only a hint"
+                }
                 (TurnWorkspace::Snapshot { .. }, false) => {
                     "other or older workspace; not current evidence"
+                }
+                (TurnWorkspace::PathOnly { .. }, false) => {
+                    "other workspace path; not current evidence"
                 }
                 (TurnWorkspace::Unknown, _) => "unknown source scope; not evidence",
             };
@@ -1972,7 +2036,7 @@ impl EngineState {
                 "- [{scope}] Q: \"{}\"  A: \"{}\"\n",
                 t.question, t.headline
             ));
-            if current_snapshot {
+            if current_context {
                 if let Some(frame) = &t.frame {
                     p.push_str(&format!("  prior interpretation (re-check): {frame}\n"));
                 }
@@ -2102,7 +2166,12 @@ impl EngineState {
         let sqls: Vec<&str> = answer
             .evidence
             .iter()
-            .filter(|e| matches!(e.tool.as_str(), "run_sql" | "make_chart") && e.error.is_none())
+            .filter(|e| {
+                matches!(
+                    e.tool.as_str(),
+                    "run_sql" | "make_chart" | "forecast_analysis"
+                ) && e.error.is_none()
+            })
             .filter_map(|e| e.sql.as_deref())
             .collect();
         let corrected = prior_q.is_some() && memory::is_correction(question);
@@ -3078,7 +3147,10 @@ exactly, character for character, from the list below.";
                 .evidence
                 .iter()
                 .filter(|e| {
-                    matches!(e.tool.as_str(), "run_sql" | "make_chart") && e.error.is_none()
+                    matches!(
+                        e.tool.as_str(),
+                        "run_sql" | "make_chart" | "forecast_analysis"
+                    ) && e.error.is_none()
                 })
                 .filter_map(|e| e.sql.clone())
                 .map(|s| {

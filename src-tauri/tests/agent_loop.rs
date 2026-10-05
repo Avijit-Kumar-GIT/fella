@@ -407,6 +407,10 @@ async fn semantic_verification_repeats_for_multiple_independent_findings() {
     assert!(requests[4].to_string().contains("not found in any result"));
     assert!(requests[4]
         .to_string()
+        .contains("marked these prior evidence items as superseded"));
+    assert!(requests[4].to_string().contains("not accepted evidence"));
+    assert!(requests[4]
+        .to_string()
         .contains("Housing costs total $1,500"));
 
     let _ = fs::remove_dir_all(&ws);
@@ -1443,7 +1447,10 @@ async fn agent_calls_make_chart_then_answers_with_verified_visual_evidence() {
         fella_lib::engine::analytics::chart::ChartKind::Line
     );
     assert_eq!(chart.labels, vec!["2024-01", "2024-02", "2024-03"]);
-    assert_eq!(chart.series[0].values, vec![100.0, 150.0, 200.0]);
+    assert_eq!(
+        chart.series[0].values,
+        vec![Some(100.0), Some(150.0), Some(200.0)]
+    );
     assert_eq!(answer.status, VerificationStatus::Verified);
     assert!(
         answer.verification.iter().all(|check| check.ok),
