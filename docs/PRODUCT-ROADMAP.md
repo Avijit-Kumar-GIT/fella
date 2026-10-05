@@ -440,15 +440,65 @@ surprising, private files remain local unless a separately approved feature
 explicitly changes that boundary, and both maintained shells pass the same
 capability suite.
 
+### 10. Bound verifier authority and make its decisions inspectable
+
+The verifier is a quality-control part of the harness, not a second agent
+with an opaque veto over the whole answer. It should catch concrete problems
+and help the model repair them without discarding sound analysis because of a
+disagreement, a brittle comparison, or a failure in an unrelated output.
+
+- [ ] **Define verifier authority explicitly.** Separate informational
+  findings, repair requests, and hard gates. A hard gate must name the exact
+  affected claim or artifact and cite an objective reason, such as failed or
+  stale execution, invalid result structure, a safety boundary, or a chart
+  whose plotted values do not match its source result. Semantic disagreement
+  or a checker error alone is not a whole-answer hard gate.
+- [ ] **Keep verification scoped to what failed.** A chart problem should not
+  erase valid prose or tabular results; an unsupported sentence should not
+  invalidate independent calculations. Preserve accepted SQL/Python results
+  and charts unless the verifier identifies a concrete defect in those
+  artifacts. Any removal or supersession must identify the specific item and
+  reason in the trace.
+- [ ] **Make findings useful to the model.** Return structured findings that
+  identify the affected claim/artifact, the failed check, the supporting
+  evidence, and a possible repair direction. The harness can then revise,
+  qualify, omit only the unsupported claim, ask for material clarification,
+  or retain a supported answer with an appropriate caveat.
+- [ ] **Bound repair and preserve work.** Set a small, explicit repair budget;
+  do not repeat equivalent tool calls or clear valid evidence to force a
+  restart. If repair cannot resolve one finding, keep the rest of the answer
+  and report the unresolved part precisely.
+- [ ] **Expose the decision without clutter.** Let users inspect what was
+  checked, what passed or failed, and what effect the finding had. Keep this
+  detail available on demand rather than adding a success/failure badge or a
+  repeated verifier report to every message. Do not offer a blanket “ignore
+  verification” switch for safety or execution-integrity gates.
+- [ ] **Evaluate verifier errors as product failures.** Add independently
+  specified cases for false-positive rejection, checker disagreement,
+  valid calculations with an unsupported prose claim, valid prose with a
+  broken chart, stale/failed execution, and a genuinely unsupported result.
+  Track false-positive blocks, false negatives, answer coverage, evidence
+  retained, repair/tool-call count, and latency through the full agent loop.
+  Declare expected behavior before running candidates; preserve failures for
+  review instead of tuning expectations to observed output.
+
+**Acceptance checks:** a verifier finding cannot silently erase unrelated
+valid work; every hard gate is scoped and justified; supported portions of a
+partial answer remain available; genuine execution, safety, and artifact
+integrity failures still block the affected output; and evaluation shows both
+reduced false-positive blocking and no material increase in unsupported
+claims.
+
 ## Delivery order and dependencies
 
 1. Complete **0** first: settle routing/privacy policy and capture the
    baseline so later changes are measurable.
 2. Implement **1** next; it is a prompt/routing correction with high product
    impact and does not depend on web access.
-3. Build **3** alongside the next small slice of **7**. Honest provenance is
-   needed before adding more routes, so the UI can represent their different
-   evidence without abusing `Verified`.
+3. Build **3** and **10** alongside the next small slice of **7**. Honest
+   provenance and bounded verifier authority belong together: the UI should
+   represent evidence without abusing `Verified`, and a checker should not
+   veto unrelated supported work.
 4. Add **2** after the privacy decision and provenance shape are agreed.
    Use deterministic mocked search/page tools for most tests, then a small,
    separately reported live-web evaluation.
@@ -459,7 +509,9 @@ capability suite.
    source discovery, lineage, clarification/resume, and user-authored meaning
    over adding a long list of file-specific heuristics.
 7. Run **8** at each systemic milestone and complete **9** before calling a
-   capability ready for users.
+   capability ready for users. Treat **10** as a release-critical part of
+   verification, not as permission to disable concrete safety or integrity
+   checks.
 
 Each delivery slice should be reviewable on its own and include implementation,
 tests, docs, and evaluation evidence. Keep changes on the active feature branch
