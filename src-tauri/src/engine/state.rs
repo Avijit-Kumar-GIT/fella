@@ -2701,6 +2701,7 @@ exactly, character for character, from the list below.";
             prepared_files: 0,
             total_supported_files: None,
             skipped_files: 0,
+            ingest: None,
         });
         let mut visited_files = 0usize;
         let (scanned, mut skipped) = catalog::scan_with_progress(path, |progress| {
@@ -2715,6 +2716,7 @@ exactly, character for character, from the list below.";
             prepared_files: 0,
             total_supported_files: Some(total_supported_files),
             skipped_files: skipped.len(),
+            ingest: None,
         });
         let tabular_files: Vec<_> = scanned
             .iter()
@@ -2754,6 +2756,7 @@ exactly, character for character, from the list below.";
                         prepared_files,
                         total_supported_files: Some(total_supported_files),
                         skipped_files: skipped.len(),
+                        ingest: None,
                     });
                 }
                 let name = f
@@ -2845,7 +2848,31 @@ exactly, character for character, from the list below.";
                     }
                     k if k.is_tabular() && k != SourceKind::Xlsx => {
                         let view = catalog::unique_view_name(stem, &mut used);
-                        match data.add_source(&view, f.kind, &path_str) {
+                        let load_result = {
+                            let mut report_ingest = |progress: data::SourceIngestProgress| {
+                                on_progress(catalog::WorkspaceProgress {
+                                    phase: "preparing",
+                                    visited_files,
+                                    supported_files: total_supported_files,
+                                    prepared_files,
+                                    total_supported_files: Some(total_supported_files),
+                                    skipped_files: skipped.len(),
+                                    ingest: Some(catalog::WorkspaceIngestProgress {
+                                        path: relative_path.clone(),
+                                        stage: progress.stage,
+                                        bytes_read: progress.bytes_read,
+                                        total_bytes: f.size_bytes,
+                                    }),
+                                });
+                            };
+                            data.add_source_with_progress(
+                                &view,
+                                f.kind,
+                                &path_str,
+                                &mut report_ingest,
+                            )
+                        };
+                        match load_result {
                             Ok(load) => {
                                 info.row_count = Some(load.row_count);
                                 info.columns = Some(
@@ -2883,6 +2910,7 @@ exactly, character for character, from the list below.";
             prepared_files: total_supported_files,
             total_supported_files: Some(total_supported_files),
             skipped_files: skipped.len(),
+            ingest: None,
         });
 
         // `fella.md` at the root is optional user context, not a data file.
@@ -2921,6 +2949,7 @@ exactly, character for character, from the list below.";
             prepared_files: total_supported_files,
             total_supported_files: Some(total_supported_files),
             skipped_files: total_skipped_files,
+            ingest: None,
         });
         let publish_permit = self.workspace_gate.write();
 
@@ -2966,6 +2995,7 @@ exactly, character for character, from the list below.";
             prepared_files: total_supported_files,
             total_supported_files: Some(total_supported_files),
             skipped_files: total_skipped_files,
+            ingest: None,
         });
         Ok(self.catalog())
     }

@@ -86,6 +86,13 @@ pub struct SourceLoad {
     pub note: Option<String>,
 }
 
+/// Bounded progress emitted by streaming source readers during a long mount.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SourceIngestProgress {
+    pub stage: &'static str,
+    pub bytes_read: u64,
+}
+
 /// How `run_python`'s `sql()` helper reaches the workspace data.
 pub enum PythonBridge {
     /// The host opens this SQLite file read-only on behalf of the guest.
@@ -100,6 +107,18 @@ pub trait DataEngine: Send {
     /// Register a path-readable tabular file (CSV/TSV/JSON/NDJSON, and Parquet
     /// on the DuckDB backend) as a table called `name`.
     fn add_source(&mut self, name: &str, kind: SourceKind, path: &str) -> EngineResult<SourceLoad>;
+
+    /// Register a source while optionally reporting stream progress. Backends
+    /// that cannot report progress keep the default one-shot behavior.
+    fn add_source_with_progress(
+        &mut self,
+        name: &str,
+        kind: SourceKind,
+        path: &str,
+        _on_progress: &mut dyn FnMut(SourceIngestProgress),
+    ) -> EngineResult<SourceLoad> {
+        self.add_source(name, kind, path)
+    }
 
     /// Build a table from already-parsed rows (used by the Excel ingest).
     fn add_rows(

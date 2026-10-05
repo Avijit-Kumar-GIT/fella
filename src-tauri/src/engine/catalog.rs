@@ -287,6 +287,18 @@ pub struct WorkspaceProgress {
     pub prepared_files: usize,
     pub total_supported_files: Option<usize>,
     pub skipped_files: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ingest: Option<WorkspaceIngestProgress>,
+}
+
+/// Byte progress for the source currently being profiled or loaded.
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkspaceIngestProgress {
+    /// Workspace-relative path; stable even when basenames are duplicated.
+    pub path: String,
+    pub stage: &'static str,
+    pub bytes_read: u64,
+    pub total_bytes: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -699,6 +711,7 @@ pub(crate) fn scan_with_progress(
         prepared_files: 0,
         total_supported_files: Some(out.len()),
         skipped_files: skipped.len(),
+        ingest: None,
     });
     Ok((out, skipped))
 }
@@ -717,6 +730,7 @@ fn report_scan_progress(
             prepared_files: 0,
             total_supported_files: None,
             skipped_files,
+            ingest: None,
         });
     }
 }

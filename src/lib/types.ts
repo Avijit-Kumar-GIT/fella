@@ -457,6 +457,13 @@ export interface Catalog {
 }
 
 /** Mount status only; the active workspace is replaced atomically on success. */
+export interface WorkspaceIngestProgress {
+	path: string;
+	stage: 'profiling' | 'loading';
+	bytes_read: number;
+	total_bytes: number;
+}
+
 export interface WorkspaceProgress {
 	phase: 'scanning' | 'preparing' | 'waiting' | 'ready';
 	visited_files: number;
@@ -464,6 +471,7 @@ export interface WorkspaceProgress {
 	prepared_files: number;
 	total_supported_files?: number;
 	skipped_files: number;
+	ingest?: WorkspaceIngestProgress;
 }
 
 export type FieldRole = 'date' | 'measure' | 'dimension' | 'identifier' | 'text';

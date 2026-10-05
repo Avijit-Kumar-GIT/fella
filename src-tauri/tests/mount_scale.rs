@@ -237,6 +237,7 @@ async fn mounts_five_thousand_nested_sources_without_omissions() {
     let started = std::time::Instant::now();
     let engine = EngineState::new(data.path()).unwrap();
     let mut inventory_ready_ms = None;
+    let mut large_source_progress = Vec::new();
     let catalog = engine
         .open_workspace_with_progress(workspace.path(), |progress| {
             if inventory_ready_ms.is_none()
@@ -244,6 +245,12 @@ async fn mounts_five_thousand_nested_sources_without_omissions() {
                 && progress.prepared_files == 0
             {
                 inventory_ready_ms = Some(started.elapsed().as_millis());
+            }
+            if let Some(ingest) = progress
+                .ingest
+                .filter(|ingest| ingest.path == "large/large_records.csv")
+            {
+                large_source_progress.push((ingest.stage, ingest.bytes_read, ingest.total_bytes));
             }
         })
         .unwrap();
@@ -416,6 +423,27 @@ async fn mounts_five_thousand_nested_sources_without_omissions() {
             .find(|source| source.path.ends_with("large/large_records.csv"))
             .expect("the optional large CSV is present in the catalog");
         assert_eq!(source.row_count, Some(large_rows as i64));
+        if !cfg!(feature = "duckdb") && large_file_bytes >= 64 * 1024 * 1024 {
+            for stage in ["profiling", "loading"] {
+                let progress: Vec<u64> = large_source_progress
+                    .iter()
+                    .filter(|(observed_stage, _, _)| *observed_stage == stage)
+                    .map(|(_, bytes_read, _)| *bytes_read)
+                    .collect();
+                assert!(progress.len() > 2, "{stage} reports in-file byte progress");
+                assert_eq!(progress.first(), Some(&0), "{stage} reports its start");
+                assert_eq!(
+                    progress.last(),
+                    Some(&large_file_bytes),
+                    "{stage} reports full source completion"
+                );
+                assert!(
+                    progress.windows(2).all(|window| window[0] <= window[1]),
+                    "{stage} byte progress is monotonic"
+                );
+                assert!(progress.iter().all(|bytes| *bytes <= large_file_bytes));
+            }
+        }
     }
 
     let inspected = engine.describe_source(first_view).unwrap();

@@ -17,7 +17,7 @@ use serde_json::Value as Json;
 use crate::engine::analytics::data::{
     infer_numeric_date_order, is_blankish, parse_date_value, parse_date_value_with_order,
     parse_numeric, quote_ident, Cell, ColType, DataEngine, NumericDateOrder, PythonBridge,
-    QueryOutcome, SourceLoad,
+    QueryOutcome, SourceIngestProgress, SourceLoad,
 };
 use crate::engine::catalog::{ColumnInfo, SourceKind};
 use crate::engine::error::{EngineError, EngineResult};
@@ -34,6 +34,10 @@ fn ingest_timing_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| std::env::var_os("FELLA_INGEST_TIMING").is_some())
 }
+
+const INGEST_PROGRESS_MIN_BYTES: u64 = 64 * 1024 * 1024;
+const INGEST_PROGRESS_INTERVAL_BYTES: u64 = 64 * 1024 * 1024;
+const INGEST_PROGRESS_ROW_CHECK_INTERVAL: usize = 65_536;
 
 impl SqliteEngine {
     pub fn open(data_dir: &Path) -> EngineResult<Self> {
@@ -70,11 +74,26 @@ impl SqliteEngine {
         name: &str,
         path: &str,
         default_delim: u8,
+        allow_progress: bool,
+        on_progress: &mut dyn FnMut(SourceIngestProgress),
     ) -> EngineResult<SourceLoad> {
         let stamp = file_stamp(path)?;
+        let report_progress = allow_progress && stamp.size >= INGEST_PROGRESS_MIN_BYTES;
         let timing = ingest_timing_enabled();
         let profile_started = timing.then(std::time::Instant::now);
-        let profile = inspect_delimited(path, default_delim)?;
+        let mut profile_progress = |bytes_read| {
+            on_progress(SourceIngestProgress {
+                stage: "profiling",
+                bytes_read,
+            });
+        };
+        let profile = inspect_delimited_with_progress(
+            path,
+            default_delim,
+            INGEST_PROGRESS_INTERVAL_BYTES,
+            report_progress,
+            &mut profile_progress,
+        )?;
         let profile_elapsed = profile_started.map(|started| started.elapsed());
         if file_stamp(path)? != stamp {
             return Err(EngineError::msg(format!(
@@ -110,13 +129,39 @@ impl SqliteEngine {
         let mut case_collisions: Vec<CaseCollisionAccumulator> = (0..columns.len())
             .map(|_| CaseCollisionAccumulator::default())
             .collect();
+        let mut rows_since_progress_check = 0usize;
+        let mut last_progress_bytes = 0u64;
+        let mut next_progress_bytes = INGEST_PROGRESS_INTERVAL_BYTES;
         {
             let mut statement = tx.prepare(&insert_sql)?;
             let mut reader = delimited_reader(path, profile.delimiter)?;
             let mut sqlite_values = Vec::with_capacity(columns.len());
             let mut record = csv::StringRecord::new();
+            if report_progress {
+                on_progress(SourceIngestProgress {
+                    stage: "loading",
+                    bytes_read: 0,
+                });
+            }
             loop {
-                match reader.read_record(&mut record) {
+                let read_result = reader.read_record(&mut record);
+                if report_progress {
+                    rows_since_progress_check += 1;
+                    if rows_since_progress_check >= INGEST_PROGRESS_ROW_CHECK_INTERVAL {
+                        rows_since_progress_check = 0;
+                        let bytes_read = reader.position().byte().min(stamp.size);
+                        if bytes_read >= next_progress_bytes {
+                            on_progress(SourceIngestProgress {
+                                stage: "loading",
+                                bytes_read,
+                            });
+                            last_progress_bytes = bytes_read;
+                            next_progress_bytes =
+                                bytes_read.saturating_add(INGEST_PROGRESS_INTERVAL_BYTES);
+                        }
+                    }
+                }
+                match read_result {
                     Ok(true) => {}
                     Ok(false) => break,
                     Err(_) => {
@@ -159,6 +204,12 @@ impl SqliteEngine {
         }
         tx.commit()?;
         let load_elapsed = load_started.map(|started| started.elapsed());
+        if report_progress && last_progress_bytes < stamp.size {
+            on_progress(SourceIngestProgress {
+                stage: "loading",
+                bytes_read: stamp.size,
+            });
+        }
 
         if let (Some(profile_elapsed), Some(load_elapsed)) = (profile_elapsed, load_elapsed) {
             eprintln!(
@@ -319,8 +370,17 @@ fn register_parse_num(conn: &Connection) -> EngineResult<()> {
 impl DataEngine for SqliteEngine {
     fn add_source(&mut self, name: &str, kind: SourceKind, path: &str) -> EngineResult<SourceLoad> {
         match kind {
-            SourceKind::Csv => return self.add_delimited_source(name, path, b','),
-            SourceKind::Tsv => return self.add_delimited_source(name, path, b'\t'),
+            SourceKind::Csv | SourceKind::Tsv => {
+                let mut ignore_progress = |_| {};
+                let delimiter = if kind == SourceKind::Csv { b',' } else { b'\t' };
+                return self.add_delimited_source(
+                    name,
+                    path,
+                    delimiter,
+                    false,
+                    &mut ignore_progress,
+                );
+            }
             _ => {}
         }
         match kind {
@@ -330,6 +390,20 @@ impl DataEngine for SqliteEngine {
                 "Parquet needs the DuckDB build rebuild with `cargo build --features duckdb`",
             )),
             _ => Err(EngineError::msg("not a path-readable tabular source")),
+        }
+    }
+
+    fn add_source_with_progress(
+        &mut self,
+        name: &str,
+        kind: SourceKind,
+        path: &str,
+        on_progress: &mut dyn FnMut(SourceIngestProgress),
+    ) -> EngineResult<SourceLoad> {
+        match kind {
+            SourceKind::Csv => self.add_delimited_source(name, path, b',', true, on_progress),
+            SourceKind::Tsv => self.add_delimited_source(name, path, b'\t', true, on_progress),
+            _ => self.add_source(name, kind, path),
         }
     }
 
@@ -1286,7 +1360,13 @@ fn sniff_delimiter(path: &str, default_delim: u8) -> u8 {
     }
 }
 
-fn inspect_delimited(path: &str, default_delim: u8) -> EngineResult<DelimitedProfile> {
+fn inspect_delimited_with_progress(
+    path: &str,
+    default_delim: u8,
+    progress_interval_bytes: u64,
+    report_progress: bool,
+    on_progress: &mut dyn FnMut(u64),
+) -> EngineResult<DelimitedProfile> {
     let mut note: Option<String> = None;
     let delimiter = sniff_delimiter(path, default_delim);
     if delimiter != default_delim {
@@ -1308,8 +1388,30 @@ fn inspect_delimited(path: &str, default_delim: u8) -> EngineResult<DelimitedPro
     let mut width = 0usize;
     let mut total_records = 0usize;
     let mut dropped_records = 0usize;
+    let total_bytes = std::fs::metadata(path)
+        .map(|metadata| metadata.len())
+        .unwrap_or_default();
+    let mut rows_since_progress_check = 0usize;
+    let mut last_progress_bytes = 0u64;
+    let mut next_progress_bytes = progress_interval_bytes.max(1);
+    if report_progress {
+        on_progress(0);
+    }
     loop {
-        match reader.read_record(&mut record) {
+        let read_result = reader.read_record(&mut record);
+        if report_progress {
+            rows_since_progress_check += 1;
+            if rows_since_progress_check >= INGEST_PROGRESS_ROW_CHECK_INTERVAL {
+                rows_since_progress_check = 0;
+                let bytes_read = reader.position().byte().min(total_bytes);
+                if bytes_read >= next_progress_bytes {
+                    on_progress(bytes_read);
+                    last_progress_bytes = bytes_read;
+                    next_progress_bytes = bytes_read.saturating_add(progress_interval_bytes.max(1));
+                }
+            }
+        }
+        match read_result {
             Ok(true) => {
                 if total_records == 0 {
                     strip_leading_bom(&mut record);
@@ -1331,6 +1433,9 @@ fn inspect_delimited(path: &str, default_delim: u8) -> EngineResult<DelimitedPro
                 record.clear();
             }
         }
+    }
+    if report_progress && last_progress_bytes < total_bytes {
+        on_progress(total_bytes);
     }
 
     if dropped_records > 0 {

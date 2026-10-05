@@ -33,7 +33,25 @@
 				: 'Scanning folder…';
 		}
 		if (progress.phase === 'waiting') return 'Finishing the current analysis…';
+		if (progress.ingest) {
+			const fileName = progress.ingest.path.split(/[\\/]/).pop() || progress.ingest.path;
+			const percent = Math.floor(
+				(progress.ingest.bytes_read / Math.max(1, progress.ingest.total_bytes)) * 100
+			);
+			const action = progress.ingest.stage === 'profiling' ? 'Profiling' : 'Loading';
+			return `${action} ${fileName} · ${count(Math.min(100, percent))}%`;
+		}
 		return `Preparing data · ${count(progress.prepared_files)} of ${count(progress.total_supported_files ?? progress.supported_files)} sources`;
+	}
+
+	function mountProgressValue(progress: NonNullable<typeof session.mountProgress>): number {
+		const total = progress.total_supported_files ?? progress.supported_files;
+		const ingest = progress.ingest;
+		if (!ingest || total <= 0 || ingest.total_bytes <= 0) return progress.prepared_files;
+
+		const fileFraction = Math.min(1, ingest.bytes_read / ingest.total_bytes);
+		const passFraction = ingest.stage === 'loading' ? 0.5 + fileFraction * 0.5 : fileFraction * 0.5;
+		return Math.min(total, progress.prepared_files + passFraction);
 	}
 
 	async function refreshHealth() {
@@ -286,7 +304,7 @@
 					<span class="mount-label">{mountStatusLabel(session.mountProgress)}</span>
 					{#if session.mountProgress.phase === 'preparing' && session.mountProgress.total_supported_files}
 						<progress
-							value={session.mountProgress.prepared_files}
+							value={mountProgressValue(session.mountProgress)}
 							max={session.mountProgress.total_supported_files}
 						></progress>
 					{:else}

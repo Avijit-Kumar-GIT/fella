@@ -286,7 +286,7 @@ failures until they are adjudicated.
 
 ### 6. Make mounted folders easier to understand and analyze
 
-- [ ] **Establish a fair mount-scale baseline.** Add a reproducible, mixed
+- [x] **Establish a fair mount-scale baseline.** Add a reproducible, mixed
   folder fixture with nested directories, varied file sizes, duplicate
   basenames, messy supported files, unsupported files, and realistic parse
   errors. Use 5,000 files / 10 GB as a performance target—not a product limit—and
@@ -500,6 +500,23 @@ performance guarantee; the mixed small-source case showed no mount-time gain,
 while large-file scratch use was about halved. Regression validation passed
 320 library tests, 22 workspace integration tests, and the full 10-GiB
 coverage probe. Windows and packaged-shell measurements remain open.
+
+Large CSV/TSV files (64 MiB and above) now report bounded byte progress during
+both streaming passes: full-file profiling and analytical-store loading. The
+existing mount event carries the workspace-relative path, stage, bytes read,
+and source size; the UI shows the active filename and percentage. Updates are
+sampled around every 64 MiB (with a bounded row-count polling interval), not
+emitted for every record. The 5,000-source + 256-MiB release probe passed its
+new assertions for monotonic progress from zero through EOF in both stages;
+it found 5,001 tables, 6,942,859 rows, 100 documents, and all 102 expected
+skips. That run took 16,569 ms, used 292,741,120 bytes of scratch, and reached
+48,398,336 bytes process high-water RSS. This is one functional probe, not a
+controlled speed comparison, and its timing is not attributed to progress
+reporting. Per-file byte progress is currently implemented for SQLite-backed
+CSV/TSV only; JSON/NDJSON, XLSX, and optional DuckDB ingestion still report
+mount-level counts without within-file progress. Publication also remains
+atomic at whole-workspace completion, so the user cannot query an early-ready
+source during a long mount.
 
 The current implementation also avoids mount-time exact distinct/null/range
 profiles on larger workspaces and computes them when a table is inspected;
