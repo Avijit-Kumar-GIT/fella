@@ -35,8 +35,8 @@ failure without changing the case or expected behavior to match the output.
 | G3 | While a longer model response is streaming, stop it. | The run stops promptly; completed evidence remains inspectable and no later response appears in the deleted/closed turn. | Not run | **Partial** — stop/no-late-text passed; preservation of completed evidence was not checked |
 | G4 | Request a chart from the fixture, then expand its analysis details. | One chart renders; labels, values, units, and source query agree. Python calculations identify Python; the built-in forecast route identifies a forecast, not a user-written Python script. | Not run | **Pass** — one 24-point line chart matched the independent monthly oracle; one tick-spacing defect fixed |
 | G5 | Ask an ambiguous but answerable question that should trigger one clarification; select an option and continue. | The clarification is visible and the resumed answer retains the parent-turn link and selected assumption. | Not run | **Expected clarification not triggered** — the real model stated a net-revenue interpretation and answered directly; clarification/resume UI remains untested |
-| G6 | Change model and appearance, save a conversation, restart the shell, reopen it, then delete it. | Settings and transcript persist across restart. Deletion removes the transcript and its canonical analysis records and does not resurrect the row. | Not run | **Partial** — provider/model/theme and a general conversation survived full restart; history reopen and delete passed. Post-delete restart/non-resurrection and canonical analysis-record deletion remain untested |
-| G7 | Repeat the relevant answer/detail interactions in light and dark mode. | Text, source, calculation, and forecast distinctions remain legible without relying on accent color alone. | Not run | **Partial** — general answer and expanded Basis details visually inspected in both themes; analysis/source/chart/forecast detail states remain untested |
+| G6 | Change model and appearance, save a conversation, restart the shell, reopen it, then delete it. | Settings and transcript persist across restart. Deletion removes the transcript and its canonical analysis records and does not resurrect the row. | Not run | **Pass for a single-turn analytical conversation** — provider/model/theme and chart transcript survived restart; reopen worked; sidebar deletion removed the transcript and canonical turn record, still absent after a second restart |
+| G7 | Repeat the relevant answer/detail interactions in light and dark mode. | Text, source, calculation, and forecast distinctions remain legible without relying on accent color alone. | Not run | **Partial** — chart exact-value table and source/calculation details inspected in both themes; the plot was not fully framed in screenshots, and forecast-specific details remain untested |
 
 Web research and web-page prompt-injection cases are intentionally absent: the
 web tool is not shipped yet (product backlog #2 remains deferred). Do not mark
@@ -158,18 +158,32 @@ Electron persistence and theme follow-up on 2026-10-06:
   and model through the app, verify that the composer and saved settings
   agreed, wait for command completion, and start a clean conversation before
   evaluating the answer.
-- G6: **partial**. The actual general answer was archived; selected provider,
-  model, and dark appearance survived a full Electron process restart. The
-  archived conversation reopened in the UI and sidebar deletion removed its
-  entry from `conversations_list`. The test did not restart again after
-  deletion to check non-resurrection and used a general answer with no
-  canonical analysis records, so those acceptance conditions remain open.
-- G7: **partial**. The actual answer and expanded Basis details were visually
-  inspected in dark and light appearance. The direct answer rendered with one
-  model call (about 2 seconds, 525 reported tokens). This does not exercise
-  chart, source, calculation, or forecast evidence contrast; those remain open.
+- The initial general-answer pass visually inspected its answer and Basis
+  details in both themes. A separate chart pass used the synthetic
+  `fella-chart-visual-lab` fixture and an independent `csv`/`Decimal` oracle
+  calculated before the model call: 1,440 transaction rows, 24 month buckets,
+  high $87,248.30 in August 2025, low $66,419.28 in April 2024. The actual
+  Enter-submitted gpt-5.6-luna answer produced one line series and 24 markers;
+  all 24 exact-value rows matched the oracle to the cent, and it named the
+  expected high/low months. Chart context and expanded analysis details both
+  identified `transactions.csv`.
+- G6: **pass for this single-turn analytical conversation**. OpenAI provider,
+  gpt-5.6-luna model, and dark appearance survived a full Electron process
+  restart. The chart conversation and canonical analysis turn reopened. Sidebar
+  deletion removed the transcript from `conversations_list` and made
+  `analysis_turn_load` fail for its former turn ID; after a second full restart,
+  both remained absent. Multi-turn deletion was not covered.
+- G7: **partial**. The chart's exact-value table and source/calculation details
+  were visually inspected in both themes. The details screenshot showed the
+  source steps and checks legibly; the table screenshot showed its top rows, and
+  all 24 rows were independently compared in the DOM. The chart screenshot was
+  scrolled too far down to show the full plotted line. This is a test-capture
+  limitation, not a chart correctness failure; the exact values, one-series
+  structure, and source text checks passed. Forecast-specific detail states
+  remain untested.
 
-Tauri G1–G7 remain **Not run**. Electron G6 and G7 are partial as described;
-G5 clarification/resume remains unexercised. The live-model runs improve
+Tauri G1–G7 remain **Not run**. Electron G6 passed for the tested single-turn
+analytical conversation; G7 remains partial as described. G5
+clarification/resume remains unexercised. The live-model runs improve
 confidence in Electron Ask and chart paths, but do not establish shell parity
 or complete backlog #9.

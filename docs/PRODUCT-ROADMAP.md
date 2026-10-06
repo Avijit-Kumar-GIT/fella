@@ -751,14 +751,15 @@ phrase matcher false negative and its unmodified result—is in
 SHELL-PARITY.md. A crowded chart-axis edge case found during visual review was
 fixed and covered by an SSR regression test.
 
-A persistence/theme follow-up then used the app's actual provider/model command
-flow and Enter submission. An actual OpenAI answer, selected model/provider,
-and dark appearance survived a full Electron process restart; the archived
-conversation reopened and its sidebar entry was deleted. The answer and
-expanded Basis details were visually inspected in both themes. This is partial
-G6/G7 coverage, not completion: deletion was not followed by a second restart,
-there were no canonical analysis records to test deletion against, and the
-desktop screenshots did not include chart/source/calculation/forecast details.
+A persistence/theme follow-up used the app's actual provider/model command flow
+and Enter submission. The OpenAI provider/model and dark appearance persisted
+across a full Electron restart; a chart conversation reopened, then sidebar
+deletion removed both its transcript and canonical turn record, still absent
+after a second restart. This passes G6 for a single-turn analytical
+conversation. A separate light/dark inspection confirmed the chart's 24 exact
+monthly values against an independent Decimal oracle and legible source and
+calculation details. G7 remains partial: the chart screenshot was scrolled too
+far to inspect the full plot, and forecast-specific details were not tested.
 One preliminary runner mismatch sent the UI's default Gemma model to OpenAI and
 received a 404; it is documented as invalid test setup, not a model-quality
 result. Full conditions are recorded in [`SHELL-PARITY.md`](SHELL-PARITY.md).
@@ -775,15 +776,15 @@ from recreating them. The Electron bridge contract test is part of CI, and the
 current native run record is in [`SHELL-PARITY.md`](SHELL-PARITY.md).
 
 This item remains **open**: Electron workspace reading, table calculation,
-chart rendering, cancellation, and part of restart/history/deletion have now
-been exercised, but Tauri parity has not. Clarification/resume, post-delete
-non-resurrection, deletion of canonical analysis records, and analysis-detail
-contrast for charts/sources/calculations/forecasts still need desktop
-validation. The measured startup, memory, and unpacked-package figures are
-Linux/WSLg Electron baselines, not Windows or a Tauri comparison. A local
-prompt regression is not a live-model security guarantee; web-specific
-controls depend on backlog #2. The 5,000-file and 10-GiB ingestion observations
-are recorded under backlog #6 and do not substitute for shell measurements.
+chart rendering, cancellation, and a single-turn restart/history/deletion
+cycle have now been exercised, but Tauri parity has not. Clarification/resume,
+multi-turn deletion, a fully framed visual chart capture, forecast detail
+states, and all equivalent Tauri behaviors remain untested. The measured
+startup, memory, and unpacked-package figures are Linux/WSLg Electron baselines,
+not Windows or a Tauri comparison. A local prompt regression is not a
+live-model security guarantee; web-specific controls depend on backlog #2.
+The 5,000-file and 10-GiB ingestion observations are recorded under backlog #6
+and do not substitute for shell measurements.
 
 **Acceptance checks:** users understand what Fella used, web access is not
 surprising, provider transmission and local retention are explicit, and both
