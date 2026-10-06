@@ -52,6 +52,10 @@ pub fn load(data_dir: &Path, turn_id: &str) -> EngineResult<AnalysisTurn> {
     })
 }
 
+pub fn exists(data_dir: &Path, turn_id: &str) -> bool {
+    turn_path(data_dir, turn_id).is_ok_and(|path| path.is_file())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -68,6 +72,7 @@ mod tests {
             conversation_id: "conversation-1".into(),
             question: "total sales?".into(),
             context_refs: Vec::new(),
+            prior_turn_refs: Vec::new(),
             clarification_of: None,
             clarification_response: None,
             workspace: Some("/tmp/workspace".into()),
@@ -90,6 +95,10 @@ mod tests {
                 id: "trace-test-1".into(),
                 turn_id: "turn-test-1".into(),
                 workspace_revision: Some("revision-1".into()),
+                mode: None,
+                model: None,
+                model_calls: Vec::new(),
+                elapsed_ms: None,
                 steps: vec![TraceStep {
                     id: "evidence-1".into(),
                     operation: "run_sql".into(),
@@ -123,6 +132,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let path = save(&dir, &turn()).unwrap();
         assert!(path.ends_with("turn-test-1.json"));
+        assert!(exists(&dir, "turn-test-1"));
+        assert!(!exists(&dir, "missing-turn"));
+        assert!(!exists(&dir, "../turn-test-1"));
         let loaded = load(&dir, "turn-test-1").unwrap();
         assert_eq!(loaded.question, "total sales?");
         assert_eq!(loaded.trace.steps[0].operation, "run_sql");

@@ -1278,7 +1278,7 @@ async fn clarification_keeps_safe_candidate_analysis_available() {
         "prompt_tokens": 31,
         "completion_tokens": 4
     });
-    let (url, seen, server) = fake_openai_with_requests(vec![
+    let (url, parent_seen, parent_server) = fake_openai_with_requests(vec![
         openai_response(serde_json::json!({
             "role": "assistant",
             "content": "I should inspect the segment labels before deciding whether to ask.",
@@ -1317,27 +1317,6 @@ async fn clarification_keeps_safe_candidate_analysis_available() {
         openai_response(serde_json::json!({
             "role": "assistant",
             "content": "The observed alternatives total $5,000 for Alpha and $1,500 for Beta. Which segment should I use?"
-        })),
-        openai_response(serde_json::json!({
-            "role": "assistant",
-            "content": "I will calculate the selected Alpha population.",
-            "tool_calls": [{ "id": "spending", "type": "function", "function": {
-                "name": "run_sql",
-                "arguments": "{\"sql\":\"SELECT SUM(amount) AS alpha_total FROM measurements WHERE lower(segment) = 'alpha'\"}"
-            } }]
-        })),
-        selected_answer,
-        openai_response(serde_json::json!({
-            "role": "assistant",
-            "content": "I will rerun the Alpha calculation against the current workspace.",
-            "tool_calls": [{ "id": "rerun-alpha", "type": "function", "function": {
-                "name": "run_sql",
-                "arguments": "{\"sql\":\"SELECT SUM(amount) AS alpha_total FROM measurements WHERE lower(segment) = 'alpha'\"}"
-            } }]
-        })),
-        openai_response(serde_json::json!({
-            "role": "assistant",
-            "content": "Alpha totals $5,000."
         })),
     ]);
 
@@ -1390,6 +1369,30 @@ async fn clarification_keeps_safe_candidate_analysis_available() {
         .context_audit
         .as_ref()
         .is_some_and(|audit| !audit.sections.is_empty()));
+    parent_server.join().unwrap();
+
+    let (continue_url, continuation_seen, continuation_server) = fake_openai_with_requests(vec![
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "I will retrieve the candidate calculations from the pending analysis.",
+            "tool_calls": [{ "id": "prior", "type": "function", "function": {
+                "name": "read_prior_analysis",
+                "arguments": serde_json::json!({ "turn_id": answer.turn_id.clone() }).to_string()
+            } }]
+        })),
+        selected_answer,
+    ]);
+    engine
+        .save_settings(
+            serde_json::json!({
+                "provider": "custom",
+                "base_url": continue_url,
+                "model": "test"
+            })
+            .as_object()
+            .unwrap(),
+        )
+        .unwrap();
 
     let wrong_conversation = engine
         .ask_with_mode_and_context_and_clarification(
@@ -1450,7 +1453,22 @@ async fn clarification_keeps_safe_candidate_analysis_available() {
         continued.text
     );
     assert_eq!(continued.evidence.len(), 1);
-    assert_eq!(continued.evidence[0].tool, "run_sql");
+    assert_eq!(continued.evidence[0].tool, "read_prior_analysis");
+    assert!(continued.evidence[0]
+        .output
+        .as_deref()
+        .is_some_and(|output| output.contains("5000") && output.contains("1500")));
+    assert!(continued.evidence[0]
+        .sources
+        .iter()
+        .any(|source| source.source.ends_with("measurements.csv")));
+    assert_eq!(continued.trace.model.as_deref(), Some("test"));
+    assert_eq!(continued.trace.model_calls.len(), 2);
+    assert_eq!(
+        continued.trace.mode,
+        Some(fella_lib::engine::runtime::InteractionMode::WorkspaceAsk)
+    );
+    assert!(continued.trace.elapsed_ms.is_some());
     assert_eq!(
         continued.usage,
         Some(fella_lib::engine::evidence::Usage {
@@ -1471,6 +1489,7 @@ async fn clarification_keeps_safe_candidate_analysis_available() {
         continued_turn.clarification_response.as_deref(),
         Some("Use the Alpha segment only.")
     );
+    assert_eq!(continued_turn.prior_turn_refs, [answer.turn_id.clone()]);
     assert_eq!(continued_turn.result.usage, continued.usage);
     assert!(continued_turn
         .context_audit
@@ -1479,6 +1498,31 @@ async fn clarification_keeps_safe_candidate_analysis_available() {
             section.section == fella_lib::engine::context::ContextSection::WorkspaceSchema
                 && section.included_chars > 0
         })));
+    let (rerun_url, rerun_seen, rerun_server) = fake_openai_with_requests(vec![
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "I will freshly calculate the clarified population.",
+            "tool_calls": [{ "id": "rerun-alpha", "type": "function", "function": {
+                "name": "run_sql",
+                "arguments": "{\"sql\":\"SELECT SUM(amount) AS alpha_total FROM measurements WHERE lower(segment) = 'alpha'\"}"
+            } }]
+        })),
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "Alpha totals $5,000."
+        })),
+    ]);
+    engine
+        .save_settings(
+            serde_json::json!({
+                "provider": "custom",
+                "base_url": rerun_url,
+                "model": "test"
+            })
+            .as_object()
+            .unwrap(),
+        )
+        .unwrap();
     let rerun = engine
         .analysis_turn_rerun(&continued.turn_id, None, false, |_| {})
         .await
@@ -1497,37 +1541,131 @@ async fn clarification_keeps_safe_candidate_analysis_available() {
         rerun_turn.clarification_response.as_deref(),
         Some("Use the Alpha segment only.")
     );
-    server.join().unwrap();
 
-    let requests = seen.lock().unwrap();
-    assert_eq!(requests.len(), 7);
-    let available_tools = requests[1]["tools"].as_array().unwrap();
+    fs::write(
+        ws.join("measurements.csv"),
+        "segment,amount\nalpha,7000\nbeta,1500\n",
+    )
+    .unwrap();
+    engine.open_workspace(&ws).unwrap();
+    let (changed_url, changed_seen, changed_server) = fake_openai_with_requests(vec![
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "The workspace changed; I will inspect its current segment data.",
+            "tool_calls": [{ "id": "inspect-current", "type": "function", "function": {
+                "name": "inspect_table",
+                "arguments": "{\"name\":\"measurements\",\"rows\":5}"
+            } }]
+        })),
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "I will recompute Alpha against the current revision.",
+            "tool_calls": [{ "id": "current-alpha", "type": "function", "function": {
+                "name": "run_sql",
+                "arguments": "{\"sql\":\"SELECT SUM(amount) AS alpha_total FROM measurements WHERE lower(segment) = 'alpha'\"}"
+            } }]
+        })),
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "Alpha totals $7,000 in the current workspace revision."
+        })),
+    ]);
+    engine
+        .save_settings(
+            serde_json::json!({
+                "provider": "custom",
+                "base_url": changed_url,
+                "model": "test"
+            })
+            .as_object()
+            .unwrap(),
+        )
+        .unwrap();
+    let changed_continuation = engine
+        .ask_with_mode_and_context_and_clarification(
+            "clarification",
+            "Use the Alpha segment only.",
+            None,
+            false,
+            &[],
+            Some(ClarificationReply {
+                turn_id: answer.turn_id.clone(),
+                response: "Use the Alpha segment only.".into(),
+            }),
+            |_| {},
+        )
+        .await
+        .unwrap();
+    changed_server.join().unwrap();
+    assert!(changed_continuation.text.contains("7,000"));
+    assert_eq!(
+        changed_continuation
+            .evidence
+            .iter()
+            .map(|item| item.tool.as_str())
+            .collect::<Vec<_>>(),
+        ["inspect_table", "run_sql"]
+    );
+    let changed_turn = engine
+        .analysis_turn_load(&changed_continuation.turn_id)
+        .unwrap();
+    assert!(changed_turn.prior_turn_refs.is_empty());
+    assert_ne!(
+        changed_turn.workspace_revision,
+        parent_turn.workspace_revision
+    );
+
+    continuation_server.join().unwrap();
+    rerun_server.join().unwrap();
+
+    let parent_requests = parent_seen.lock().unwrap();
+    assert_eq!(parent_requests.len(), 3);
+    let parent_tool_names = parent_requests[1]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|tool| tool["function"]["name"].as_str())
+        .collect::<Vec<_>>();
+    assert!(parent_tool_names.contains(&"inspect_table"));
+    assert!(parent_tool_names.contains(&"read_file"));
+    assert!(parent_tool_names.contains(&"run_sql"));
+    assert!(parent_tool_names.contains(&"run_python"));
+    assert!(parent_tool_names.contains(&"make_chart"));
+    let candidate_prompt = parent_requests[2].to_string();
+    assert!(candidate_prompt.contains("5000") && candidate_prompt.contains("1500"));
+
+    let continuation_requests = continuation_seen.lock().unwrap();
+    assert_eq!(continuation_requests.len(), 2);
+    let available_tools = continuation_requests[0]["tools"].as_array().unwrap();
     let available_names = available_tools
         .iter()
         .filter_map(|tool| tool["function"]["name"].as_str())
         .collect::<Vec<_>>();
-    assert!(available_names.contains(&"inspect_table"));
-    assert!(available_names.contains(&"read_file"));
+    assert!(available_names.contains(&"read_prior_analysis"));
     assert!(available_names.contains(&"run_sql"));
-    assert!(available_names.contains(&"run_python"));
-    assert!(available_names.contains(&"make_chart"));
-    let candidate_prompt = requests[2].to_string();
-    assert!(candidate_prompt.contains("5000") && candidate_prompt.contains("1500"));
-    let continuation_prompt = requests[3].to_string();
+    let continuation_prompt = continuation_requests[0].to_string();
+    assert!(continuation_prompt.contains(&answer.turn_id));
     assert!(continuation_prompt.contains("What is the total for the relevant segment?"));
     assert!(continuation_prompt.contains("Pending clarification"));
     assert!(continuation_prompt.contains("Which segment should the total cover?"));
     assert!(continuation_prompt.contains("User's response"));
-    assert!(continuation_prompt.contains("Alpha"));
-    assert!(requests[3]["tools"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|tool| tool["function"]["name"] == "run_sql"));
-    let rerun_prompt = requests[5].to_string();
+    assert!(continuation_prompt.contains("Use the Alpha segment only."));
+
+    let rerun_requests = rerun_seen.lock().unwrap();
+    assert_eq!(rerun_requests.len(), 2);
+    let rerun_prompt = rerun_requests[0].to_string();
     assert!(rerun_prompt.contains("Original analytical question"));
     assert!(rerun_prompt.contains("User's response"));
     assert!(rerun_prompt.contains("Use the Alpha segment only."));
+
+    let changed_request = &changed_seen.lock().unwrap()[0];
+    let changed_tools = changed_request["tools"].as_array().unwrap();
+    assert!(!changed_tools
+        .iter()
+        .any(|tool| tool["function"]["name"] == "read_prior_analysis"));
+    assert!(changed_request
+        .to_string()
+        .contains("The workspace revision changed while this clarification was pending"));
 
     let _ = fs::remove_dir_all(&ws);
     let _ = fs::remove_dir_all(&data);
@@ -2054,6 +2192,11 @@ async fn keeps_partial_evidence_when_the_model_fails_after_a_tool_call() {
 
     assert_eq!(answer.evidence.len(), 1, "evidence was kept");
     assert_eq!(answer.evidence[0].tool, "run_sql");
+    assert_eq!(answer.trace.model.as_deref(), Some("gpt-x"));
+    assert_eq!(answer.trace.model_calls.len(), 2);
+    assert!(answer.trace.model_calls[0].success);
+    assert!(!answer.trace.model_calls[1].success);
+    assert!(answer.trace.elapsed_ms.is_some());
     assert!(
         answer.text.contains("gathered so far"),
         "text: {}",

@@ -15,7 +15,7 @@ use crate::engine::analytics::pyexec;
 use crate::engine::catalog::{self, Catalog, ColumnInfo, SourceInfo, SourceKind};
 use crate::engine::context::{ContextAssembler, ContextAssemblyAudit, ContextPacket};
 use crate::engine::error::{EngineError, EngineResult};
-use crate::engine::evidence::{Answer, AskEvent};
+use crate::engine::evidence::{Answer, AskEvent, EvidenceItem};
 use crate::engine::ingest::docs;
 use crate::engine::llm::{LlmClient, ProviderHealth};
 use crate::engine::memory::{self, FolderMemory};
@@ -584,8 +584,8 @@ enum TurnWorkspace {
         revision: String,
     },
     /// Older transcript formats recorded the conversation's folder but not
-    /// the indexed revision on each answer. Use prior analysis only as a hint
-    /// when that same folder is mounted; it must still be re-run as evidence.
+    /// the indexed revision on each answer. These turns may help resolve
+    /// references but their execution evidence is never reusable.
     PathOnly {
         path: String,
     },
@@ -593,6 +593,7 @@ enum TurnWorkspace {
 }
 
 struct TurnDigest {
+    turn_id: Option<String>,
     question: String,
     headline: String,
     workspace: TurnWorkspace,
@@ -709,6 +710,25 @@ fn contract_frame(contract: &AnalysisContract) -> Option<String> {
     (!parts.is_empty()).then(|| cap_chars(&parts.join("; "), 600))
 }
 
+fn reusable_prior_turn_ref(item: &EvidenceItem) -> Option<&str> {
+    if item.tool != "read_prior_analysis" || item.error.is_some() {
+        return None;
+    }
+    let freshness = item
+        .output
+        .as_deref()
+        .and_then(|output| serde_json::from_str::<serde_json::Value>(output).ok())
+        .and_then(|packet| {
+            packet
+                .get("freshness")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        });
+    (freshness.as_deref() == Some("same_workspace_revision"))
+        .then(|| item.args.get("turn_id").and_then(serde_json::Value::as_str))
+        .flatten()
+}
+
 /// Recover the small backend session projection from a transcript archive.
 /// The transcript remains the UI source of truth; this deliberately extracts
 /// only the question, answer headline, and successful analytical queries that
@@ -734,6 +754,10 @@ fn archived_turns(value: &serde_json::Value) -> Vec<TurnDigest> {
             continue;
         };
         let answer = assistant.get("answer");
+        let turn_id = answer
+            .and_then(|answer| answer.get("turn_id"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
         let headline = assistant
             .get("text")
             .and_then(|text| text.as_str())
@@ -783,6 +807,7 @@ fn archived_turns(value: &serde_json::Value) -> Vec<TurnDigest> {
             .and_then(|contract| serde_json::from_value::<AnalysisContract>(contract.clone()).ok())
             .and_then(|contract| contract_frame(&contract));
         turns.push(TurnDigest {
+            turn_id,
             question: message
                 .get("text")
                 .and_then(|text| text.as_str())
@@ -827,6 +852,7 @@ mod conversation_context_tests {
             "same-conversation".into(),
             SessionMemory {
                 turns: vec![TurnDigest {
+                    turn_id: None,
                     question: "What does variance mean?".into(),
                     headline: "Variance measures spread around a mean.".into(),
                     workspace: TurnWorkspace::NoWorkspace,
@@ -838,7 +864,7 @@ mod conversation_context_tests {
         );
 
         let first_catalog = engine.open_workspace(&first_workspace).unwrap();
-        let first_revision = first_catalog.revision.unwrap();
+        let first_revision = first_catalog.revision.clone().unwrap();
         engine
             .inner
             .lock()
@@ -848,6 +874,7 @@ mod conversation_context_tests {
             .unwrap()
             .turns
             .push(TurnDigest {
+                turn_id: Some("turn-first-mount".into()),
                 question: "What was the total in this folder?".into(),
                 headline: "The total was 10.".into(),
                 workspace: TurnWorkspace::Snapshot {
@@ -857,24 +884,26 @@ mod conversation_context_tests {
                 frame: Some("measure=value; population=all rows".into()),
                 queries: vec!["SELECT SUM(value) FROM values".into()],
             });
-
         let in_first_mount = engine
             .session_block("same-conversation")
             .expect("conversation survives the first mount");
         assert!(in_first_mount.contains("What does variance mean?"));
-        assert!(in_first_mount.contains("prior query hint (re-run before use)"));
+        assert!(in_first_mount.contains("prior query shape"));
+        assert!(in_first_mount.contains("turn-first-mount"));
 
         // A changed revision at the same path is stale too; path equality by
         // itself must not keep old analytical hints eligible.
         std::fs::write(first_workspace.join("values.csv"), "value\n11\n").unwrap();
-        engine.open_workspace(&first_workspace).unwrap();
+        let changed_catalog = engine.open_workspace(&first_workspace).unwrap();
+        assert!(!engine.session_has_reusable_analysis("same-conversation", &changed_catalog));
         let after_reindex = engine
             .session_block("same-conversation")
             .expect("conversation survives a reindex");
         assert!(after_reindex.contains("other or older workspace; not current evidence"));
         assert!(!after_reindex.contains("SELECT SUM(value) FROM values"));
 
-        engine.open_workspace(&second_workspace).unwrap();
+        let second_catalog = engine.open_workspace(&second_workspace).unwrap();
+        assert!(!engine.session_has_reusable_analysis("same-conversation", &second_catalog));
         let in_second_mount = engine
             .session_block("same-conversation")
             .expect("conversation survives another mount");
@@ -975,7 +1004,8 @@ mod conversation_context_tests {
             .session_block("legacy-path-only-thread")
             .expect("archive should hydrate");
         assert!(prompt_context.contains("archived revision unavailable"));
-        assert!(prompt_context.contains("prior query is only a hint"));
+        assert!(prompt_context.contains("prior evidence is not reusable"));
+        assert!(prompt_context.contains("prior query shape"));
         assert!(prompt_context.contains("SELECT SUM(value) FROM values"));
 
         drop(engine);
@@ -1884,6 +1914,12 @@ impl EngineState {
             .iter()
             .filter_map(|item| serde_json::to_value(item).ok())
             .collect();
+        let mut prior_turn_refs = Vec::new();
+        for turn_id in answer.evidence.iter().filter_map(reusable_prior_turn_ref) {
+            if !prior_turn_refs.iter().any(|prior| prior == turn_id) {
+                prior_turn_refs.push(turn_id.to_string());
+            }
+        }
         let workspace_snapshot = revision_snapshot(catalog).filter(|snapshot| {
             answer.workspace.as_ref().is_some_and(|workspace| {
                 snapshot.path == workspace.path && snapshot.revision == workspace.revision
@@ -1894,6 +1930,7 @@ impl EngineState {
             conversation_id: conversation_id.to_string(),
             question: question.to_string(),
             context_refs: context_refs.to_vec(),
+            prior_turn_refs,
             clarification_of: clarification.map(|reply| reply.turn_id.clone()),
             clarification_response: clarification.map(|reply| reply.response.clone()),
             workspace: answer
@@ -2175,10 +2212,10 @@ impl EngineState {
             let scope = match (&t.workspace, current_context) {
                 (TurnWorkspace::NoWorkspace, _) => "general turn; no local evidence",
                 (TurnWorkspace::Snapshot { .. }, true) => {
-                    "same workspace revision; prior query is only a hint"
+                    "same workspace revision; prior tool evidence can be retrieved"
                 }
                 (TurnWorkspace::PathOnly { .. }, true) => {
-                    "same folder path; archived revision unavailable, prior query is only a hint"
+                    "same folder path; archived revision unavailable, prior evidence is not reusable"
                 }
                 (TurnWorkspace::Snapshot { .. }, false) => {
                     "other or older workspace; not current evidence"
@@ -2188,20 +2225,65 @@ impl EngineState {
                 }
                 (TurnWorkspace::Unknown, _) => "unknown source scope; not evidence",
             };
+            let analysis_ref = match (&t.turn_id, &t.workspace, current_context) {
+                (Some(id), TurnWorkspace::Snapshot { .. }, true) => {
+                    format!(" [analysis turn {id}; retrieve with read_prior_analysis if needed]")
+                }
+                (Some(id), TurnWorkspace::PathOnly { .. }, true) => {
+                    format!(" [analysis turn {id}; revision unknown, do not reuse evidence]")
+                }
+                (
+                    Some(id),
+                    TurnWorkspace::Snapshot { .. } | TurnWorkspace::PathOnly { .. },
+                    false,
+                ) => format!(" [analysis turn {id}; stale for the current workspace]"),
+                _ => String::new(),
+            };
             p.push_str(&format!(
-                "- [{scope}] Q: \"{}\"  A: \"{}\"\n",
-                t.question, t.headline
+                "- [{scope}]{analysis_ref} Q: \"{}\"  A: \"{}\"\n",
+                t.question, t.headline,
             ));
             if current_context {
                 if let Some(frame) = &t.frame {
                     p.push_str(&format!("  prior interpretation (re-check): {frame}\n"));
                 }
                 for q in &t.queries {
-                    p.push_str(&format!("  prior query hint (re-run before use): {q}\n"));
+                    p.push_str(&format!(
+                        "  prior query shape (not evidence; retrieve its execution if the exact revision still matches, otherwise re-run): {q}\n"
+                    ));
                 }
             }
         }
         Some(p)
+    }
+
+    fn session_has_reusable_analysis(&self, conversation_id: &str, catalog: &Catalog) -> bool {
+        let (Some(workspace), Some(revision)) = (&catalog.workspace, &catalog.revision) else {
+            return false;
+        };
+        let workspace = workspace.as_str();
+        let candidate_turn_ids: Vec<String> = self
+            .inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .sessions
+            .get(conversation_id)
+            .into_iter()
+            .flat_map(|session| &session.turns)
+            .filter(|turn| {
+                matches!(
+                    &turn.workspace,
+                    TurnWorkspace::Snapshot {
+                        path,
+                        revision: turn_revision,
+                    } if path == workspace && turn_revision == revision
+                )
+            })
+            .filter_map(|turn| turn.turn_id.clone())
+            .collect();
+        candidate_turn_ids
+            .iter()
+            .any(|turn_id| analysis_store::exists(&self.data_dir, turn_id))
     }
 
     /// User-written context for the system prompt: the workspace `fella.md`.
@@ -3392,16 +3474,19 @@ exactly, character for character, from the list below.";
             turn_id: turn_id.clone(),
             state: crate::engine::runtime::TurnState::Received,
         });
-        #[allow(unused_mut)]
-        let mut registry = if inspect {
-            Registry::inspect_with(settings.capabilities)
+        let has_reusable_analysis =
+            self.session_has_reusable_analysis(conversation_id, &turn_catalog);
+        let registry = if inspect {
+            Registry::inspect_with_history(settings.capabilities, has_reusable_analysis)
         } else {
-            Registry::standard_with(settings.capabilities)
+            Registry::standard_with_history(settings.capabilities, has_reusable_analysis)
         };
         let answer = agent::run(agent::RunRequest {
             engine: self,
             llm: &llm,
             registry: &registry,
+            conversation_id,
+            model: &effective_model,
             turn_id: &turn_id,
             question: analysis_question,
             context: &context,
@@ -3518,6 +3603,7 @@ exactly, character for character, from the list below.";
                         });
                     }
                     entry.turns.push(TurnDigest {
+                        turn_id: Some(answer.turn_id.clone()),
                         question: analysis_question.chars().take(200).collect(),
                         headline,
                         workspace: answer

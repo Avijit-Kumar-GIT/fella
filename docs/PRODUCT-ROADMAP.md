@@ -584,31 +584,31 @@ Fella's analytical ingestion and must not define which supported data is read.
 
 ### 7. Make the agent loop cohesive across routes
 
-- [ ] **Use one traceable conversation loop with route-specific tools.** The
+- [x] **Use one traceable conversation loop with route-specific tools.** The
   same turn/session model should cover direct model answers, workspace
   inspection, computation, and clarification. Web research and local-plus-web
   hybrids are explicitly deferred to **2**; when added, they should join this
   conversation rather than become a separate agent that loses context.
-- [ ] **Keep the analyst loop available without making it mandatory for every
+- [x] **Keep the analyst loop available without making it mandatory for every
   request.** For data analysis, the model should inspect, form/decompose a
   question, probe or clarify where useful, execute, review, and communicate.
   For a simple definition, answer directly. Let the model stop when it has a
   good answer; retain any early-stop nudge only if evaluation shows it does
   not increase incomplete or incorrect answers.
-- [ ] **Make context and memory participate in decisions.** Keep conversation
+- [x] **Make context and memory participate in decisions.** Keep conversation
   history, workspace facts/definitions, retrieved source evidence, and derived
   results distinct and identify their origin and freshness. A follow-up may
   retrieve prior execution evidence from the same conversation only when its
   workspace revision still matches; otherwise it must inspect and compute
   against the current revision. Conversation summaries and prior assistant
   prose help resolve references but are not data evidence.
-- [ ] **Use clarification instead of forced semantic guessing.** Ask only
+- [x] **Use clarification instead of forced semantic guessing.** Ask only
   about a decision that changes the result; offer concise choices plus a
   free-text response; keep the question and answer in the transcript; resume
   the same logical analysis with its still-current inspection and evidence.
   If the workspace revision changed while paused, make the old evidence
   unavailable to the continuation and inspect the new revision.
-- [ ] **Instrument every in-scope route.** Record the interaction mode, model
+- [x] **Instrument every in-scope route.** Record the interaction mode, model
   identifier, model-call and tool timing, source revision, provider-reported
   token usage, clarification lineage, errors, and provenance. Do not persist
   prompt contents or credentials. Cost estimates are only valid when provider

@@ -459,8 +459,39 @@ pub struct ExecutionTrace {
     pub turn_id: TurnId,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workspace_revision: Option<String>,
+    /// Capability path for this turn. None on older persisted traces.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<InteractionMode>,
+    /// Configured model identifier; prompt contents and credentials are never
+    /// stored in the trace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Provider round trips, separate from local tool steps.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub model_calls: Vec<ModelCallTrace>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elapsed_ms: Option<u64>,
     #[serde(default)]
     pub steps: Vec<TraceStep>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InteractionMode {
+    ModelOnly,
+    WorkspaceAsk,
+    WorkspaceInspect,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelCallTrace {
+    pub model: String,
+    pub duration_ms: u64,
+    pub success: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion_tokens: Option<u32>,
 }
 
 /// Compact catalog metadata captured with a canonical turn. It is deliberately
@@ -649,6 +680,11 @@ pub struct AnalysisTurn {
     /// turn. Optional in serialized records so older turns remain readable.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub context_refs: Vec<ContextReference>,
+    /// Earlier workspace analyses explicitly retrieved by this turn. These
+    /// links are validated against conversation and source revision before
+    /// their evidence is made available to the model.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prior_turn_refs: Vec<TurnId>,
     /// Parent turn when this analysis continues after a clarification.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clarification_of: Option<TurnId>,

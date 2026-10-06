@@ -89,7 +89,7 @@ pub struct AnswerProvenance {
     pub clarification_of: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EvidenceSource {
     pub table: String,
     pub source: String,
@@ -221,6 +221,10 @@ mod tests {
                 id: "trace-1".into(),
                 turn_id: "turn-1".into(),
                 workspace_revision: None,
+                mode: None,
+                model: None,
+                model_calls: Vec::new(),
+                elapsed_ms: None,
                 steps: Vec::new(),
             },
             plan: None,

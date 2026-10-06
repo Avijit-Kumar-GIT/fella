@@ -30,8 +30,24 @@
 
 	// Which steps have their raw detail (SQL, table, output) revealed.
 	let openDetail = $state<Record<number, boolean>>({});
+	let showModelCalls = $state(false);
 	function toggleDetail(i: number) {
 		openDetail = { ...openDetail, [i]: !openDetail[i] };
+	}
+	function formatDuration(ms: number): string {
+		return ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(1)} s`;
+	}
+	function modeLabel(mode: NonNullable<Answer['trace']>['mode']): string {
+		switch (mode) {
+			case 'model_only':
+				return 'Direct answer';
+			case 'workspace_ask':
+				return 'Workspace analysis';
+			case 'workspace_inspect':
+				return 'Workspace inspection';
+			default:
+				return 'Analysis';
+		}
 	}
 
 	// Plain-language fallback when the model didn't write a note for a step.
@@ -43,6 +59,7 @@
 		read_file: 'Read one of your files',
 		run_python: 'Ran a calculation',
 		forecast_analysis: 'Forecasted and backtested a time series',
+		read_prior_analysis: 'Retrieved an earlier analysis from this conversation',
 		list_files: 'Listed your files',
 		make_chart: 'Drew a chart'
 	};
@@ -87,6 +104,39 @@
 				{#if answer.provenance?.clarification_of}
 					<div class="basis-copy">This analysis continues from your clarification.</div>
 				{/if}
+				{#if answer.trace?.model}
+					{@const calls = answer.trace.model_calls ?? []}
+					<div class="trace-meta">
+						{modeLabel(answer.trace.mode)} · {answer.trace.model}
+						{#if calls.length} · {calls.length} model call{calls.length === 1 ? '' : 's'}{/if}
+						{#if answer.trace.elapsed_ms != null} · {formatDuration(answer.trace.elapsed_ms)} total{/if}
+						{#if answer.usage}
+							· {answer.usage.prompt_tokens + answer.usage.completion_tokens} tokens
+						{/if}
+					</div>
+					{#if calls.length}
+						<button
+							class="detailtoggle"
+							onclick={() => (showModelCalls = !showModelCalls)}
+							aria-expanded={showModelCalls}
+						>
+							{showModelCalls ? 'hide model timings' : 'show model timings'}
+						</button>
+						{#if showModelCalls}
+							<ul class="model-calls">
+								{#each calls as call, i (`${i}-${call.model}-${call.duration_ms}`)}
+									<li>
+										{call.model} · {formatDuration(call.duration_ms)}
+										{#if !call.success} · failed{/if}
+										{#if call.prompt_tokens != null || call.completion_tokens != null}
+											· {(call.prompt_tokens ?? 0) + (call.completion_tokens ?? 0)} tokens
+										{/if}
+									</li>
+								{/each}
+							</ul>
+						{/if}
+					{/if}
+				{/if}
 			</div>
 			{#if answer.evidence.length}
 			<ol class="steps">
@@ -104,6 +154,9 @@
 					<li class="step" class:failed={!!e.error}>
 						<span class="line">{stepLabel(e)}</span>
 						{#if isPythonExecution(e)}<span class="language-badge">Python</span>{/if}
+						{#if e.tool === 'read_prior_analysis' && e.result_summary.startsWith('retrieved prior analysis from the current workspace revision')}
+							<div class="source-line">Earlier execution · same workspace revision</div>
+						{/if}
 						{#if e.sources?.length}
 							<div class="source-line">from {sourceLabel(e)}</div>
 						{/if}
@@ -233,6 +286,17 @@
 	}
 	.basis-copy {
 		color: var(--text-dim);
+		font-size: var(--fs-xs);
+	}
+	.trace-meta {
+		margin-top: 3px;
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+	}
+	.model-calls {
+		margin: 4px 0 2px;
+		padding-left: 16px;
+		color: var(--text-faint);
 		font-size: var(--fs-xs);
 	}
 	.steps {

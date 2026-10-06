@@ -162,6 +162,271 @@ async fn follow_up_question_sees_the_earlier_turn() {
 }
 
 #[tokio::test]
+async fn restored_conversation_reuses_same_revision_execution_evidence() {
+    let ws = scratch("continuity-restart-ws");
+    let data = scratch("continuity-restart-data");
+    fs::write(
+        ws.join("ledger.csv"),
+        "month,amount\n2024-01,1200\n2024-02,1300\n",
+    )
+    .unwrap();
+
+    let (url, _, first_server) = fake_openai(vec![
+        sql_turn("SELECT SUM(amount) AS total FROM ledger"),
+        answer_turn("The total was 2500."),
+    ]);
+    let engine = engine_on(&ws, &data, &url);
+    let first = engine
+        .ask(
+            "continuity-conversation",
+            "What did I pay in total?",
+            None,
+            |_| {},
+        )
+        .await
+        .unwrap();
+    first_server.join().unwrap();
+    let first_revision = first.workspace.as_ref().unwrap().revision.clone();
+    let transcript = serde_json::json!({
+        "id": "continuity-conversation",
+        "saved_at_ms": 1,
+        "workspace": ws.to_string_lossy(),
+        "messages": [
+            {
+                "id": "user-first",
+                "role": "user",
+                "text": "What did I pay in total?",
+                "ts": 1
+            },
+            {
+                "id": "assistant-first",
+                "role": "assistant",
+                "text": first.text,
+                "ts": 2,
+                "answer": serde_json::to_value(&first).unwrap()
+            }
+        ]
+    });
+    engine
+        .archive_conversation("continuity-conversation", &transcript.to_string())
+        .unwrap();
+    drop(engine);
+
+    let (follow_url, requests, follow_server) = fake_openai(vec![
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "I will reuse the earlier checked execution result.",
+            "tool_calls": [{
+                "id": "prior-analysis",
+                "type": "function",
+                "function": {
+                    "name": "read_prior_analysis",
+                    "arguments": serde_json::json!({ "turn_id": first.turn_id }).to_string()
+                }
+            }]
+        })),
+        answer_turn("For the same 2024 period, the total remains 2500."),
+    ]);
+    let engine = engine_on(&ws, &data, &follow_url);
+    assert_eq!(
+        engine.catalog().revision.as_deref(),
+        Some(first_revision.as_str()),
+        "an unchanged local workspace must retain the revision used by its prior turn"
+    );
+    let follow_up = engine
+        .ask("continuity-conversation", "And in 2024?", None, |_| {})
+        .await
+        .unwrap();
+    follow_server.join().unwrap();
+
+    assert!(follow_up.text.contains("2500"));
+    assert_eq!(follow_up.evidence.len(), 1);
+    assert_eq!(follow_up.evidence[0].tool, "read_prior_analysis");
+    assert!(follow_up.evidence[0]
+        .sources
+        .iter()
+        .any(|source| source.source.ends_with("ledger.csv")));
+    let stored = engine.analysis_turn_load(&follow_up.turn_id).unwrap();
+    assert_eq!(stored.prior_turn_refs, [first.turn_id.clone()]);
+    assert_eq!(follow_up.trace.model.as_deref(), Some("test"));
+    assert_eq!(follow_up.trace.model_calls.len(), 2);
+    assert_eq!(
+        follow_up.trace.mode,
+        Some(fella_lib::engine::runtime::InteractionMode::WorkspaceAsk)
+    );
+
+    let request = &requests.lock().unwrap()[0];
+    let system = system_of(request);
+    assert!(system.contains(&first.turn_id));
+    assert!(system.contains("retrieve its execution evidence"));
+    assert!(request["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|tool| tool["function"]["name"] == "read_prior_analysis"));
+
+    drop(engine);
+    let _ = fs::remove_dir_all(&ws);
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[tokio::test]
+async fn general_answer_and_inspect_share_traceable_conversation_routes() {
+    let ws = scratch("trace-routes-ws");
+    let data = scratch("trace-routes-data");
+    fs::write(ws.join("ledger.csv"), "month,amount\n2024-01,1200\n").unwrap();
+    let (url, requests, server) = fake_openai(vec![
+        answer_turn("Rust is a systems programming language."),
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "I will inspect the ledger's fields.",
+            "tool_calls": [{
+                "id": "inspect-ledger",
+                "type": "function",
+                "function": {
+                    "name": "inspect_table",
+                    "arguments": serde_json::json!({ "name": "ledger", "rows": 5 }).to_string()
+                }
+            }]
+        })),
+        answer_turn("The ledger has month and amount columns."),
+    ]);
+    let engine = EngineState::new(&data).unwrap();
+    engine
+        .save_settings(
+            serde_json::json!({ "provider": "custom", "base_url": url, "model": "test" })
+                .as_object()
+                .unwrap(),
+        )
+        .unwrap();
+    engine.set_api_key("custom", "sk-test").unwrap();
+
+    let general = engine
+        .ask("shared-conversation", "What is Rust?", None, |_| {})
+        .await
+        .unwrap();
+    assert_eq!(
+        general.trace.mode,
+        Some(fella_lib::engine::runtime::InteractionMode::ModelOnly)
+    );
+    assert_eq!(general.trace.model.as_deref(), Some("test"));
+    assert_eq!(general.trace.model_calls.len(), 1);
+    assert!(general.trace.elapsed_ms.is_some());
+
+    engine.open_workspace(&ws).unwrap();
+    let inspected = engine
+        .ask_with_mode(
+            "shared-conversation",
+            "Which columns are in the ledger?",
+            None,
+            true,
+            |_| {},
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        inspected.trace.mode,
+        Some(fella_lib::engine::runtime::InteractionMode::WorkspaceInspect)
+    );
+    assert_eq!(inspected.trace.model_calls.len(), 2);
+    assert_eq!(inspected.evidence[0].tool, "inspect_table");
+    assert_eq!(
+        engine
+            .analysis_turn_load(&general.turn_id)
+            .unwrap()
+            .conversation_id,
+        engine
+            .analysis_turn_load(&inspected.turn_id)
+            .unwrap()
+            .conversation_id
+    );
+
+    server.join().unwrap();
+    let requests = requests.lock().unwrap();
+    assert!(requests[0]["tools"]
+        .as_array()
+        .is_none_or(|tools| tools.is_empty()));
+    let inspect_tools = requests[1]["tools"].as_array().unwrap();
+    assert!(inspect_tools
+        .iter()
+        .any(|tool| tool["function"]["name"] == "inspect_table"));
+    assert!(!inspect_tools
+        .iter()
+        .any(|tool| tool["function"]["name"] == "run_python"));
+    assert!(system_of(&requests[1]).contains("What is Rust?"));
+
+    drop(engine);
+    let _ = fs::remove_dir_all(&ws);
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[tokio::test]
+async fn changed_workspace_revision_uses_fresh_analysis_not_prior_evidence() {
+    let ws = scratch("stale-continuity-ws");
+    let data = scratch("stale-continuity-data");
+    fs::write(ws.join("sales.csv"), "amount\n100\n").unwrap();
+
+    let (first_url, _, first_server) = fake_openai(vec![
+        sql_turn("SELECT SUM(amount) AS total FROM sales"),
+        answer_turn("The total is 100."),
+    ]);
+    let engine = engine_on(&ws, &data, &first_url);
+    let first = engine
+        .ask("stale-conversation", "What are total sales?", None, |_| {})
+        .await
+        .unwrap();
+    first_server.join().unwrap();
+
+    fs::write(ws.join("sales.csv"), "amount\n900\n").unwrap();
+    engine.open_workspace(&ws).unwrap();
+    let (current_url, requests, current_server) = fake_openai(vec![
+        sql_turn("SELECT SUM(amount) AS total FROM sales"),
+        answer_turn("The current total is 900."),
+    ]);
+    engine
+        .save_settings(
+            serde_json::json!({
+                "provider": "custom",
+                "base_url": current_url,
+                "model": "test"
+            })
+            .as_object()
+            .unwrap(),
+        )
+        .unwrap();
+    let current = engine
+        .ask(
+            "stale-conversation",
+            "What are total sales now?",
+            None,
+            |_| {},
+        )
+        .await
+        .unwrap();
+    current_server.join().unwrap();
+
+    assert_ne!(
+        first.workspace.as_ref().unwrap().revision,
+        current.workspace.as_ref().unwrap().revision
+    );
+    assert_eq!(current.evidence[0].tool, "run_sql");
+    assert!(format!("{:?}", current.evidence[0].rows).contains("900"));
+    let request = &requests.lock().unwrap()[0];
+    let tool_names = request["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|tool| tool["function"]["name"].as_str())
+        .collect::<Vec<_>>();
+    assert!(!tool_names.contains(&"read_prior_analysis"));
+    assert!(system_of(request).contains("stale for the current workspace"));
+
+    drop(engine);
+    let _ = fs::remove_dir_all(&ws);
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[tokio::test]
 async fn archived_conversation_restores_backend_context_after_restart() {
     let ws = scratch("restore-ws");
     let data = scratch("restore-data");

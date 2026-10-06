@@ -15,8 +15,8 @@ use crate::engine::evidence::{
 };
 use crate::engine::llm::{ChatMessage, LlmClient, ToolCall};
 use crate::engine::runtime::{
-    self, AnalysisContract, ContextReference, ExecutionTrace, LogicalPlan, PlanStrategy,
-    ResolvedClarification, TraceStep, TurnState,
+    self, AnalysisContract, ContextReference, ExecutionTrace, InteractionMode, LogicalPlan,
+    ModelCallTrace, PlanStrategy, ResolvedClarification, TraceStep, TurnState,
 };
 use crate::engine::state::EngineState;
 use crate::engine::tools::Registry;
@@ -44,6 +44,11 @@ const SOFT_STOP_ROUND_TRIPS: usize = 3;
 struct RunIds {
     turn_id: String,
     trace_id: String,
+    conversation_id: String,
+    model: String,
+    mode: InteractionMode,
+    started_at: Instant,
+    model_calls: Vec<ModelCallTrace>,
     contract: Option<AnalysisContract>,
     clarification: Option<runtime::ClarificationRequest>,
     grounding: Option<crate::engine::grounding::GroundingReport>,
@@ -56,6 +61,8 @@ pub(crate) struct RunRequest<'a> {
     pub(crate) engine: &'a EngineState,
     pub(crate) llm: &'a LlmClient,
     pub(crate) registry: &'a Registry,
+    pub(crate) conversation_id: &'a str,
+    pub(crate) model: &'a str,
     pub(crate) turn_id: &'a str,
     pub(crate) question: &'a str,
     pub(crate) context: &'a ContextPacket,
@@ -89,6 +96,16 @@ fn finish_context<'a>(
 
 fn soft_stop_round_trips() -> usize {
     super::env::positive("FELLA_SOFT_STOP", SOFT_STOP_ROUND_TRIPS)
+}
+
+fn record_model_call(ids: &mut RunIds, started: Instant, success: bool, usage: Option<Usage>) {
+    ids.model_calls.push(ModelCallTrace {
+        model: ids.model.clone(),
+        duration_ms: started.elapsed().as_millis() as u64,
+        success,
+        prompt_tokens: usage.map(|usage| usage.prompt_tokens),
+        completion_tokens: usage.map(|usage| usage.completion_tokens),
+    });
 }
 
 /// A live nudge for the round trip about to start, once a run has already
@@ -181,7 +198,7 @@ fn is_computation_tool(name: &str) -> bool {
 fn is_observation_tool(name: &str) -> bool {
     matches!(
         name,
-        "list_files" | "inspect_table" | "grep_files" | "read_file"
+        "list_files" | "inspect_table" | "grep_files" | "read_file" | "read_prior_analysis"
     )
 }
 
@@ -208,6 +225,8 @@ pub(crate) async fn run(request: RunRequest<'_>) -> EngineResult<Answer> {
         engine,
         llm,
         registry,
+        conversation_id,
+        model,
         turn_id,
         question,
         context,
@@ -217,9 +236,22 @@ pub(crate) async fn run(request: RunRequest<'_>) -> EngineResult<Answer> {
         cancel,
         emit,
     } = request;
+    let started_at = Instant::now();
+    let mode = if engine.catalog().workspace.is_none() {
+        InteractionMode::ModelOnly
+    } else if inspect {
+        InteractionMode::WorkspaceInspect
+    } else {
+        InteractionMode::WorkspaceAsk
+    };
     let mut ids = RunIds {
         turn_id: turn_id.to_string(),
         trace_id: runtime::new_trace_id(),
+        conversation_id: conversation_id.to_string(),
+        model: model.to_string(),
+        mode,
+        started_at,
+        model_calls: Vec::new(),
         contract: None,
         clarification: None,
         grounding: None,
@@ -263,11 +295,16 @@ pub(crate) async fn run(request: RunRequest<'_>) -> EngineResult<Answer> {
             "\n\nInteraction mode: Inspect. Start with the relevant read-only workspace sources and schema, then explain the checks briefly before answering.\n",
         );
     }
-    if clarification.is_some() {
+    if let Some(reply) = clarification {
         if workspace.is_some() {
             sys.push_str(
-                "\n\nClarification continuation: the user explicitly resolved one pending choice. Treat their response as authoritative for that choice only; preserve the original analytical request, then continue the analysis with the current workspace tools. Any earlier candidate figures are provisional; ground the final result in evidence from this turn. If the workspace revision changed since the clarification, inspect the relevant sources again before relying on prior findings.\n",
+            "\n\nClarification continuation: the user explicitly resolved one pending choice. Treat their response as authoritative for that choice only and preserve the original analytical request. If the conversation identifies a prior analysis from the exact current workspace revision, retrieve its execution evidence with `read_prior_analysis` when it helps answer; do not rely on its answer prose. If the revision changed or cannot be confirmed, inspect and recompute against the current workspace.\n",
             );
+            if reply.source_revision_changed {
+                sys.push_str(
+                    "\nThe workspace revision changed while this clarification was pending. All earlier observations and results are stale; prior-analysis retrieval is unavailable. Inspect the current workspace and recompute before using local figures.\n",
+                );
+            }
         } else {
             sys.push_str(
                 "\n\nClarification continuation: treat the user's response as resolving only the choice they addressed and preserve the original request. Continue any general-knowledge part directly. If an unresolved part depends on local files, explain that a workspace must be opened; prior assistant claims about those files are not evidence.\n",
@@ -383,8 +420,7 @@ pretend workspace field.",
     // request that same result until the global step ceiling.
     let mut force_final_answer = false;
 
-    let run_start = Instant::now();
-    let mut model_calls = 0usize;
+    let run_start = ids.started_at;
     let mut tool_calls_total = 0usize;
     let mut usage: Option<Usage> = None;
     let steps = max_steps();
@@ -400,12 +436,26 @@ pretend workspace field.",
         } else {
             schemas.as_slice()
         };
-        let resp = tokio::select! {
-            r = llm.chat(&messages, available_tools, &notify, &on_delta) => match r {
-                Ok(resp) => resp,
-                // Failed with work already in hand: hand back the partial
-                // evidence and a note rather than losing the whole question.
-                Err(e) if !evidence.is_empty() => {
+        let model_call_started = Instant::now();
+        let model_result = tokio::select! {
+            result = llm.chat(&messages, available_tools, &notify, &on_delta) => result,
+            _ = cancelled(cancel.as_ref()) => {
+                return Ok(stopped(
+                    finish_context(engine, workspace.as_ref(), &ids, emit),
+                    question,
+                    evidence,
+                    usage,
+                ))
+            }
+        };
+        let resp = match model_result {
+            Ok(resp) => {
+                record_model_call(&mut ids, model_call_started, true, resp.usage);
+                resp
+            }
+            Err(e) => {
+                record_model_call(&mut ids, model_call_started, false, None);
+                if !evidence.is_empty() {
                     log::warn!("agent: model call failed mid-run: {e}");
                     emit(AskEvent::TurnState {
                         turn_id: ids.turn_id.clone(),
@@ -422,18 +472,9 @@ pretend workspace field.",
                         usage,
                     ));
                 }
-                Err(e) => return Err(e),
-            },
-            _ = cancelled(cancel.as_ref()) => {
-                return Ok(stopped(
-                    finish_context(engine, workspace.as_ref(), &ids, emit),
-                    question,
-                    evidence,
-                    usage,
-                ))
+                return Err(e);
             }
         };
-        model_calls += 1;
         usage = Usage::merge(usage, resp.usage);
 
         if force_final_answer && !resp.tool_calls.is_empty() {
@@ -453,8 +494,9 @@ pretend workspace field.",
                 state: TurnState::Verifying,
             });
             log::info!(
-                "agent run: {:?}, {model_calls} model call(s), {tool_calls_total} tool call(s), {} evidence",
+                "agent run: {:?}, {} model call(s), {tool_calls_total} tool call(s), {} evidence",
                 run_start.elapsed(),
+                ids.model_calls.len(),
                 evidence.len()
             );
             // A model that returns neither text nor a tool call would otherwise
@@ -485,8 +527,19 @@ pretend workspace field.",
 different result now. Using only what you've already gathered no new tools give the \
 corrected answer to match the re-run."
                     )));
+                    let reask_started = Instant::now();
                     let r = tokio::select! {
-                        r = llm.chat(&messages, &[], &notify, &on_delta) => r.unwrap_or_default(),
+                        result = llm.chat(&messages, &[], &notify, &on_delta) => match result {
+                            Ok(response) => {
+                                record_model_call(&mut ids, reask_started, true, response.usage);
+                                response
+                            }
+                            Err(error) => {
+                                record_model_call(&mut ids, reask_started, false, None);
+                                log::warn!("agent: verification re-ask failed: {error}");
+                                Default::default()
+                            }
+                        },
                         _ = cancelled(cancel.as_ref()) => Default::default(),
                     };
                     usage = Usage::merge(usage, r.usage);
@@ -600,13 +653,24 @@ the requested measure, filters, and scope. State just the number(s); don't round
                 let suppress_checker_stream = |_text: &str| {};
                 // A checker failure is deliberately fail-open: this pass is
                 // supplemental, so it cannot erase or delay the answer.
+                let check_started = Instant::now();
                 let r = tokio::select! {
-                    r = llm.chat(
+                    result = llm.chat(
                         &messages,
                         &[],
                         &suppress_checker_stream,
                         &suppress_checker_stream
-                    ) => r.unwrap_or_default(),
+                    ) => match result {
+                        Ok(response) => {
+                            record_model_call(&mut ids, check_started, true, response.usage);
+                            response
+                        }
+                        Err(error) => {
+                            record_model_call(&mut ids, check_started, false, None);
+                            log::warn!("agent: consistency check failed: {error}");
+                            Default::default()
+                        }
+                    },
                     _ = cancelled(cancel.as_ref()) => Default::default(),
                 };
                 usage = Usage::merge(usage, r.usage);
@@ -806,6 +870,7 @@ the requested measure, filters, and scope. State just the number(s); don't round
                     engine,
                     &catalog,
                     registry,
+                    &ids.conversation_id,
                     &planned_call,
                     &evidence,
                     cancel.clone(),
@@ -914,6 +979,7 @@ run again. Use the previous result, refine the call, or answer now.\n\n{prev}",
                 engine,
                 &catalog,
                 registry,
+                &ids.conversation_id,
                 &resp.tool_calls[i],
                 &evidence,
                 cancel.clone(),
@@ -1049,8 +1115,19 @@ tools give your best answer now, using only what you've already found. If \
 you're not confident, say so plainly rather than guessing."
             .to_string(),
     ));
+    let final_call_started = Instant::now();
     let resp = tokio::select! {
-        r = llm.chat(&messages, &[], &notify, &on_delta) => r.unwrap_or_default(),
+        result = llm.chat(&messages, &[], &notify, &on_delta) => match result {
+            Ok(response) => {
+                record_model_call(&mut ids, final_call_started, true, response.usage);
+                response
+            }
+            Err(error) => {
+                record_model_call(&mut ids, final_call_started, false, None);
+                log::warn!("agent: final response call failed: {error}");
+                Default::default()
+            }
+        },
         _ = cancelled(cancel.as_ref()) => {
             return Ok(stopped(
                 finish_context(engine, workspace.as_ref(), &ids, emit),
@@ -1060,7 +1137,6 @@ you're not confident, say so plainly rather than guessing."
             ))
         }
     };
-    model_calls += 1;
     usage = Usage::merge(usage, resp.usage);
     let text = if resp.content.trim().is_empty() {
         "I ran out of analysis steps before reaching a confident answer.".to_string()
@@ -1068,8 +1144,9 @@ you're not confident, say so plainly rather than guessing."
         resp.content
     };
     log::info!(
-        "agent run: {:?}, {model_calls} model call(s), {tool_calls_total} tool call(s), {} evidence (hit step cap)",
+        "agent run: {:?}, {} model call(s), {tool_calls_total} tool call(s), {} evidence (hit step cap)",
         run_start.elapsed(),
+        ids.model_calls.len(),
         evidence.len()
     );
     Ok(finish(
@@ -1206,6 +1283,10 @@ fn finish_with(
         id: context.ids.trace_id.clone(),
         turn_id: context.ids.turn_id.clone(),
         workspace_revision: context.workspace.map(|snapshot| snapshot.revision.clone()),
+        mode: Some(context.ids.mode),
+        model: Some(context.ids.model.clone()),
+        model_calls: context.ids.model_calls.clone(),
+        elapsed_ms: Some(context.ids.started_at.elapsed().as_millis() as u64),
         steps: evidence
             .iter()
             .map(|item| TraceStep {
@@ -1423,6 +1504,7 @@ async fn run_tool_call(
     engine: &EngineState,
     catalog: &Catalog,
     registry: &Registry,
+    conversation_id: &str,
     call: &ToolCall,
     prior_evidence: &[EvidenceItem],
     cancel: Arc<AtomicBool>,
@@ -1436,7 +1518,10 @@ async fn run_tool_call(
             started,
         );
     }
-    let tool_context = crate::engine::tools::ToolContext { prior_evidence };
+    let tool_context = crate::engine::tools::ToolContext {
+        prior_evidence,
+        conversation_id: Some(conversation_id),
+    };
     let result = registry
         .run_with_context_cancel(engine, &call.name, &call.arguments, &tool_context, cancel)
         .await;
@@ -1450,11 +1535,17 @@ async fn run_tool_call(
     }
     match result {
         Some(Ok(out)) => {
-            let mut sources = out
+            let mut sources = out.sources.clone();
+            for source in out
                 .sql
                 .as_deref()
                 .map(|sql| provenance::for_sql(catalog, sql))
-                .unwrap_or_default();
+                .unwrap_or_default()
+            {
+                if !sources.contains(&source) {
+                    sources.push(source);
+                }
+            }
             if let Some(queries) = out.python_queries.as_deref() {
                 for source in queries
                     .iter()
@@ -1882,11 +1973,13 @@ available, be clear that live sources were not checked."
     }
     if profile.session_block {
         rules.push(
-            "Use prior turns to resolve references and preserve the thread, not as proof. Treat \
-earlier assistant prose and result values as conversation context, never as evidence for a new \
-local-data claim. A prior interpretation or query is only a hint; re-check it against the \
-currently mounted workspace before relying on it. Turns marked as another or older workspace \
-must not support current-workspace claims."
+            "Use prior turns to resolve references and preserve the thread, not as proof. Earlier \
+assistant prose and result assertions are not evidence. When a follow-up depends on an earlier \
+workspace analysis and the conversation marks its exact workspace revision as current, retrieve \
+its execution evidence with `read_prior_analysis`; the tool validates conversation and revision. \
+Do not rerun work solely to reproduce a valid prior result. If the revision is stale or unknown, \
+inspect and compute against the current workspace. Turns from another workspace must not support \
+current-workspace claims."
                 .into(),
         );
     }

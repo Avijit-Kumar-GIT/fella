@@ -283,10 +283,24 @@ export interface ExecutionTraceStep {
 	sources: string[];
 }
 
+export type InteractionMode = 'model_only' | 'workspace_ask' | 'workspace_inspect';
+
+export interface ModelCallTrace {
+	model: string;
+	duration_ms: number;
+	success: boolean;
+	prompt_tokens?: number;
+	completion_tokens?: number;
+}
+
 export interface ExecutionTrace {
 	id: string;
 	turn_id: string;
 	workspace_revision?: string;
+	mode?: InteractionMode;
+	model?: string;
+	model_calls?: ModelCallTrace[];
+	elapsed_ms?: number;
 	steps: ExecutionTraceStep[];
 }
 
@@ -318,6 +332,7 @@ export interface AnalysisTurn {
 	conversation_id: string;
 	question: string;
 	context_refs?: ContextReference[];
+	prior_turn_refs?: string[];
 	clarification_of?: string;
 	clarification_response?: string;
 	workspace?: string;
