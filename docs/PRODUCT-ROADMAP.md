@@ -744,8 +744,12 @@ no-folder question, README/table grounding, and a 24-month chart checked
 against an independent Decimal oracle. Live cancellation also stopped promptly
 after the composer was submitted with Enter. The ambiguous “best channel”
 question received a disclosed net-revenue interpretation rather than a
-clarification, so the clarification/resume UI remains unvalidated. The
-document question's live trace reported 18,763 tokens for two model calls,
+clarification. A separate explicit clarification prompt produced natural-
+language choices; automation prefilled the first choice in the main composer
+and submitted with Enter, but the resumed answer returned a workspace-wide
+total instead of comparing channels. This continuation failed; structured
+clarification UI and linked-turn logging remain unvalidated. The document
+question's live trace reported 18,763 tokens for two model calls,
 an efficiency signal to investigate. The run record—including the temporary
 phrase matcher false negative and its unmodified result—is in
 SHELL-PARITY.md. A crowded chart-axis edge case found during visual review was

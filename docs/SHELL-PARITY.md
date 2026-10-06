@@ -140,7 +140,31 @@ Follow-up live-model Electron run on 2026-10-06:
   request clarification. It selected total net revenue as the meaning of
   “best,” stated that criterion, and showed revenue, transaction count, and
   units by channel. Preserve the observed result; it does not validate the
-  clarification/resume UI, which remains untested.
+  clarification/resume path. A separate explicit clarification smoke is
+  recorded below; it exercises only a prose choice followed in the main
+  composer.
+
+**Clarification continuation smoke (2026-10-06):** a separate explicit prompt
+asked the live OpenAI gpt-5.6-luna model to ask which of three channel metrics
+to prioritize. The model returned a natural-language question with three
+numbered choices, not a structured clarification card. Automation read the
+visible list items, placed the first choice (“Net revenue — total transaction
+revenue, including refunds as signed negative amounts”) into the main Ask
+composer, verified its value before submission, and sent it with Enter. The
+choice appeared as a user message in the same conversation. The model resumed,
+but answered only with the workspace-wide net transaction revenue
+($1,820,345.59), not a comparison by channel; this continuation **failed** the
+requested task. The amount was not independently checked. This does not pass
+the structured clarification card or `clarification_continuation` trace path.
+
+The first automation tried to parse list numbering from rendered text, but the
+browser's `innerText` omits ordered-list markers. A corrected in-process runner
+still stalled despite the completed response and visible options; its cause is
+unresolved. A separate CDP driver attached to that same disposable Electron
+window completed the prefill/Enter/resume sequence. Treat the interaction as
+observed, but the standalone runner is not yet reliable. No benchmark gold or
+test expectation was changed. The temporary app profile and auth copy were
+removed after the run.
 
 Electron persistence and theme follow-up on 2026-10-06:
 
@@ -183,7 +207,8 @@ Electron persistence and theme follow-up on 2026-10-06:
   remain untested.
 
 Tauri G1–G7 remain **Not run**. Electron G6 passed for the tested single-turn
-analytical conversation; G7 remains partial as described. G5
-clarification/resume remains unexercised. The live-model runs improve
-confidence in Electron Ask and chart paths, but do not establish shell parity
-or complete backlog #9.
+analytical conversation; G7 remains partial as described. G5 is **not passed**:
+a prose clarification was followed through the main composer, but the resumed
+answer failed to compare channels; structured clarification UI and linked-turn
+logging remain unvalidated. The live-model runs improve confidence in Electron
+Ask and chart paths, but do not establish shell parity or complete backlog #9.
