@@ -770,6 +770,30 @@ Each delivery slice should be reviewable on its own and include implementation,
 tests, docs, and evaluation evidence. Keep changes on the active feature branch
 until the corresponding capability passes its agreed acceptance checks.
 
+## Longer-term direction: a user-composable interface
+
+This is a product exploration, not a commitment for the next release. The idea
+is to let people shape Fella's interface around the way they work, rather than
+making them adapt to one fixed arrangement. This means more than building the
+UI from reusable components internally: the user would be able to choose,
+arrange, resize, and hide supported parts of the interface.
+
+Potential composable parts include the sidebar and its navigation sections,
+the conversation/workspace, source and context views, analysis details, and
+generated visualizations such as charts. A user might keep a chart beside the
+conversation, give the workspace more room, or hide panels they rarely use.
+Layouts could eventually be saved and switched between, while Fella's default
+layout remains coherent and useful without any customization.
+
+Before committing to implementation, explore a constrained composition model:
+which regions can move independently, what minimum sizes and relationships
+must remain intact, how layouts adapt to smaller windows, and how preferences
+are saved and reset. Preserve keyboard and screen-reader accessibility, and
+keep the experience understandable rather than turning the app into an
+unbounded dashboard builder. The initial exploration should establish whether
+people want global layouts, workspace-specific layouts, or both; no plugin or
+user-code system is implied by this idea.
+
 ## Explicitly not the goal
 
 - Do not hardcode the wording, filenames, fields, categories, or expected
