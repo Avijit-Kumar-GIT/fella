@@ -243,6 +243,30 @@ try {
 	assert.match(line, /Month/);
 	assert.match(line, /Observed/);
 
+	// Period labels should remain separated on a 24-month line chart. In
+	// particular, do not force a final tick into the narrow tail gap when the
+	// nearest regular tick is already within one label-width of the chart edge.
+	const monthlyLabels = Array.from({ length: 24 }, (_, index) => {
+		const date = new Date(Date.UTC(2024, index, 1));
+		return date.toISOString().slice(0, 7);
+	});
+	const monthlyTrend = renderChart(generic('line', monthlyLabels, [{
+		name: 'Net revenue',
+		values: monthlyLabels.map((_, index) => 66000 + index * 700)
+	}]));
+	const monthlyAxisLabels = [...monthlyTrend.matchAll(/<text\b([^>]*)>([^<]*)<\/text>/g)]
+		.filter((match) => /\bclass="axis-label(?:\s|")/.test(match[1]))
+		.map((match) => ({ x: Number(match[1].match(/\bx="([\d.]+)"/)?.[1]), label: match[2] }));
+	assert.ok(
+		monthlyAxisLabels.length >= 6 && monthlyAxisLabels.length < monthlyLabels.length,
+		'expected thinned monthly ticks; found ' + monthlyAxisLabels.map((item) => item.label).join(', ')
+	);
+	for (let index = 1; index < monthlyAxisLabels.length; index += 1) {
+		const gap = monthlyAxisLabels[index].x - monthlyAxisLabels[index - 1].x;
+		assert.ok(gap >= 55, `monthly x-axis labels should not collide (gap=${gap})`);
+	}
+	assert.notEqual(monthlyAxisLabels.at(-1).label, '2025-12', 'omit a crowded final tick, not the data point');
+
 	// A full-archive daily series keeps every point in its paths and exact-value
 	// table, while the visible axis labels are thinned and dense point markers
 	// are omitted to keep the chart legible and the SVG light.

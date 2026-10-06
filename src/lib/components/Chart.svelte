@@ -122,11 +122,23 @@
 			.range([HEIGHT - PLOT.bottom, PLOT.top])
 	);
 	let yTicks = $derived(yScale.ticks(4));
-	let labelStep = $derived.by(() => {
+	let xLabelWidth = $derived.by(() => {
 		const longestLabel = spec.labels.reduce((length, label) => Math.max(length, label.length), 0);
-		const labelWidth = Math.max(52, Math.min(120, longestLabel * 6 + 14));
-		return Math.max(1, Math.ceil((spec.labels.length * labelWidth) / WIDTH));
+		return Math.max(52, Math.min(120, longestLabel * 6 + 14));
 	});
+	let labelStep = $derived.by(() => {
+		return Math.max(1, Math.ceil(xLabelWidth / xScale.step()));
+	});
+	function showXAxisLabel(index: number): boolean {
+		if (index % labelStep === 0) return true;
+		if (index !== spec.labels.length - 1) return false;
+		const previousLabeledIndex = Math.floor(index / labelStep) * labelStep;
+		const currentX = xScale(spec.labels[index] ?? '') ?? 0;
+		const previousX = xScale(spec.labels[previousLabeledIndex] ?? '') ?? 0;
+		// Keep the final period label only when it has enough room after the
+		// previous tick. Dense series still retain every point and exact value.
+		return currentX - previousX >= xLabelWidth;
+	}
 	// Markers help short series; on dense series they overlap into visual noise
 	// and thousands of extra SVG nodes. The line retains every value either way.
 	let showLineMarkers = $derived(spec.labels.length <= 80);
@@ -500,7 +512,7 @@
 					{/each}
 				{/if}
 				{#each spec.labels as label, index (label + index)}
-					{#if index % labelStep === 0 || index === spec.labels.length - 1}<text x={xScale(label) ?? 0} y={HEIGHT - 12} class="axis-label" text-anchor="middle">{label}</text>{/if}
+					{#if showXAxisLabel(index)}<text x={xScale(label) ?? 0} y={HEIGHT - 12} class="axis-label" text-anchor="middle">{label}</text>{/if}
 				{/each}
 				{#if spec.x_label}<text x={(PLOT.left + WIDTH - PLOT.right) / 2} y={HEIGHT - 1} class="axis-title" text-anchor="middle">{spec.x_label}</text>{/if}
 			</svg>

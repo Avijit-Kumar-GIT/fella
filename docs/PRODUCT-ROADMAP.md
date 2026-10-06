@@ -738,6 +738,19 @@ currently presents a null-scoped conversation in a synthetic “No repository”
 row under Repositories. Its stored scope is null, but the visual grouping can
 still read like a repository and deserves a separate UX decision.
 
+**Follow-up live-model run (2026-10-06):** using OpenAI directly with
+gpt-5.6-luna, the actual Electron UI and Rust sidecar passed the general
+no-folder question, README/table grounding, and a 24-month chart checked
+against an independent Decimal oracle. Live cancellation also stopped promptly
+after the composer was submitted with Enter. The ambiguous “best channel”
+question received a disclosed net-revenue interpretation rather than a
+clarification, so the clarification/resume UI remains unvalidated. The
+document question's live trace reported 18,763 tokens for two model calls,
+an efficiency signal to investigate. The run record—including the temporary
+phrase matcher false negative and its unmodified result—is in
+SHELL-PARITY.md. A crowded chart-axis edge case found during visual review was
+fixed and covered by an SSR regression test.
+
 The shared UI now labels general answers, inspections, and analyses distinctly;
 analysis details distinguish user-authored Python from Fella's forecast
 method. Settings links to an expanded privacy page documenting local
@@ -749,15 +762,15 @@ removes its transcript and canonical analysis records and prevents late writes
 from recreating them. The Electron bridge contract test is part of CI, and the
 current native run record is in [`SHELL-PARITY.md`](SHELL-PARITY.md).
 
-This item remains **open**: only the Electron general-Ask path and basic
-light/dark response presentation were exercised manually. Tauri and the other
-Electron cases (workspace-backed reading/calculation, cancellation, charts,
-clarification/resume, and process-restart deletion) remain untested in the
-desktop matrix. The measured startup, memory, and unpacked-package figures are
-Linux/WSLg Electron baselines, not Windows or a Tauri comparison. A local
-prompt regression is not a live-model security guarantee; web-specific
-controls depend on backlog #2. The 5,000-file and 10-GiB ingestion observations
-are recorded under backlog #6 and do not substitute for shell measurements.
+This item remains **open**: Electron workspace reading, table calculation,
+chart rendering, and live cancellation have now been exercised, but Tauri
+parity has not. Clarification/resume, restart-and-delete behavior, and
+analysis-detail contrast in both modes still need desktop validation. The
+measured startup, memory, and unpacked-package figures are Linux/WSLg Electron
+baselines, not Windows or a Tauri comparison. A local prompt regression is not
+a live-model security guarantee; web-specific controls depend on backlog #2.
+The 5,000-file and 10-GiB ingestion observations are recorded under backlog #6
+and do not substitute for shell measurements.
 
 **Acceptance checks:** users understand what Fella used, web access is not
 surprising, provider transmission and local retention are explicit, and both

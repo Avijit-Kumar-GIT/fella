@@ -30,11 +30,11 @@ failure without changing the case or expected behavior to match the output.
 
 | ID | Setup and action | Expected behavior | Tauri | Electron |
 | --- | --- | --- | --- | --- |
-| G1 | Start with no mounted folder; ask a stable general question. | The question is accepted without opening a folder. It is a direct/model-only answer, not a workspace claim. | Not run | **Pass** — Linux/WSLg, local mock provider |
-| G2 | Mount the same fixture; ask one simple question whose answer needs a document passage and one whose answer needs a table calculation. | Both requests stream; file-dependent claims have inspectable source/tool evidence. Source files remain unchanged. | Not run | Not run |
-| G3 | While a longer model response is streaming, stop it. | The run stops promptly; completed evidence remains inspectable and no later response appears in the deleted/closed turn. | Not run | Not run |
-| G4 | Request a chart from the fixture, then expand its analysis details. | One chart renders; labels, values, units, and source query agree. Python calculations identify Python; the built-in forecast route identifies a forecast, not a user-written Python script. | Not run | Not run |
-| G5 | Ask an ambiguous but answerable question that should trigger one clarification; select an option and continue. | The clarification is visible and the resumed answer retains the parent-turn link and selected assumption. | Not run | Not run |
+| G1 | Start with no mounted folder; ask a stable general question. | The question is accepted without opening a folder. It is a direct/model-only answer, not a workspace claim. | Not run | **Pass** — local mock and direct OpenAI |
+| G2 | Mount the same fixture; ask one simple question whose answer needs a document passage and one whose answer needs a table calculation. | Both requests stream; file-dependent claims have inspectable source/tool evidence. Source files remain unchanged. | Not run | **Scratch matcher failed** — direct review found the answer and provenance correct; the matcher rejected an equivalent paraphrase (details below) |
+| G3 | While a longer model response is streaming, stop it. | The run stops promptly; completed evidence remains inspectable and no later response appears in the deleted/closed turn. | Not run | **Partial** — stop/no-late-text passed; preservation of completed evidence was not checked |
+| G4 | Request a chart from the fixture, then expand its analysis details. | One chart renders; labels, values, units, and source query agree. Python calculations identify Python; the built-in forecast route identifies a forecast, not a user-written Python script. | Not run | **Pass** — one 24-point line chart matched the independent monthly oracle; one tick-spacing defect fixed |
+| G5 | Ask an ambiguous but answerable question that should trigger one clarification; select an option and continue. | The clarification is visible and the resumed answer retains the parent-turn link and selected assumption. | Not run | **Expected clarification not triggered** — the real model stated a net-revenue interpretation and answered directly; clarification/resume UI remains untested |
 | G6 | Change model and appearance, save a conversation, restart the shell, reopen it, then delete it. | Settings and transcript persist across restart. Deletion removes the transcript and its canonical analysis records and does not resurrect the row. | Not run | **Partial** — archived general chat reopened in the same process; restart/delete not tested |
 | G7 | Repeat the relevant answer/detail interactions in light and dark mode. | Text, source, calculation, and forecast distinctions remain legible without relying on accent color alone. | Not run | **Partial** — basic general answer inspected in both themes; analysis details not tested |
 
@@ -108,6 +108,47 @@ Electron desktop run on 2026-10-06:
   preserving all other stored tabs. The reported successful rerun used fresh
   temporary Electron and engine profiles.
 
-Tauri and Electron G2–G5 remain **Not run** in the manual matrix. Do not treat
-the Electron general-answer pass as shell parity or as completion of backlog
-#9; record each remaining case independently when it is exercised.
+Follow-up live-model Electron run on 2026-10-06:
+
+- Used OpenAI directly with gpt-5.6-luna, the actual Electron window, Rust
+  sidecar, and the synthetic /mnt/c/Users/aviji/Documents/fella-chart-visual-lab
+  fixture. Prompts were submitted through the visible composer; the later
+  interaction cases used an actual Enter key event. The API key was read from
+  the existing local auth file, stored only in the disposable Fella data
+  directory, and not printed. Only the synthetic fixture was sent to OpenAI.
+- G1: **pass**. “What is Rust?” returned a direct answer with no folder
+  mounted: one model call, 502 reported tokens, 4.9 seconds.
+- G2 document: the answer correctly described transaction rows and negative
+  refunds. Expanded details showed a grep_files result from README.md line 5
+  followed by read_file of that exact file, in two tool steps and with no
+  failed steps. A temporary literal-phrase assertion nevertheless reported
+  false because the answer said “one sale or one refund” instead of matching
+  its narrower “sale or refund” substring. This is retained as a grader
+  false-negative concern, not silently counted as an automated pass or used
+  to change the expected answer. The live trace reported 2 model calls,
+  18,763 tokens, and 3.6 seconds for this short document question.
+- G2 table: **pass**. The direct answer was $1,820,345.59 across 1,440 rows,
+  exactly matching a separate Python csv/Decimal sum computed before the
+  model run. Two tool steps, no failed steps, and transactions.csv provenance.
+- G3: stop was available during streaming, after 88 visible characters. The
+  run settled about 1.9 seconds after Stop; the UI changed to its “Stopped.”
+  state and remained stable during a further 1.8-second observation. No
+  post-stop text arrived. The test did not inspect retained tool evidence.
+- G4: **pass**. The model produced one line chart with all 24 month points.
+  Every rendered tooltip value matched an independently aggregated monthly
+  Decimal oracle within one cent; the answer correctly identified August
+  2025 ($87,248.30) as highest and April 2024 ($66,419.28) as lowest.
+  The answer used two tool steps with no failures. Visual inspection showed
+  the last x-axis labels crowded together; tick selection now uses the actual
+  plotted point spacing and an SSR regression asserts non-overlapping monthly
+  ticks while retaining all exact-value rows.
+- G5: the live prompt “Which channel performs best in this data?” did not
+  request clarification. It selected total net revenue as the meaning of
+  “best,” stated that criterion, and showed revenue, transaction count, and
+  units by channel. Preserve the observed result; it does not validate the
+  clarification/resume UI, which remains untested.
+
+Tauri G1–G7 remain **Not run**. Electron G6 restart/delete is still untested;
+G7 analysis-detail contrast is still partial; G5 clarification/resume remains
+unexercised. The live-model run improves confidence in the Electron Ask and
+chart paths, but does not establish shell parity or complete backlog #9.
