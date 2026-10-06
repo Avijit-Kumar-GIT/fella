@@ -760,20 +760,25 @@ disagreement, a brittle comparison, or a failure in an unrelated output.
   detail available on demand rather than adding a success/failure badge or a
   repeated verifier report to every message. Do not offer a blanket “ignore
   verification” switch for safety or execution-integrity gates.
-- [ ] **Evaluate verifier errors as product failures.** Add independently
+- [x] **Evaluate verifier errors as product failures.** Add independently
   specified cases for false-positive rejection, checker disagreement,
   valid calculations with an unsupported prose claim, valid prose with a
   broken chart, stale/failed execution, and a genuinely unsupported result.
   Track false-positive blocks, false negatives, answer coverage, evidence
   retained, repair/tool-call count, and latency through the full agent loop.
   Declare expected behavior before running candidates; preserve failures for
-  review instead of tuning expectations to observed output.
+  review instead of tuning expectations to observed output. The controlled
+  conformance run is recorded in `docs/VERIFIER-AUTHORITY-EVAL.md`; its scripted
+  counts are not estimates of live-model accuracy or latency.
 
 Implementation note (2026-10-06): the typed finding model, exact-scope evidence
-dispositions, three-pass tool-backed repair, and on-demand effect/target display
-are implemented with focused policy tests in `docs/VERIFIER-AUTHORITY.md`.
-The full-loop benchmark and its false-positive/false-negative measurements
-have not run, so this roadmap item is not complete until that evaluation does.
+dispositions, three-pass tool-backed repair, on-demand effect/target display,
+and scripted whole-loop conformance evaluation are complete. The documented
+run measures authority outcomes, retained evidence, and repair/tool-call
+counts on fixed scenarios. It does not estimate real-provider latency,
+generalize to live-model false-positive/false-negative rates, or compare
+against a pre-change baseline; those broader product-quality measurements
+belong to FQA-Bench rather than being inferred from this conformance suite.
 
 **Acceptance checks:** a verifier finding cannot silently erase unrelated
 valid work; every hard gate is scoped and justified; supported portions of a

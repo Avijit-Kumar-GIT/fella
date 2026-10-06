@@ -1,24 +1,9 @@
-//! Deterministic post-answer checks. Cheap, no extra LLM call, run in this
-//! order by `run()`:
-//!   1. every table named in a cited query exists in the catalog
-//!   2. re-running each cited query still gives the same result
-//!   3. every number in the answer appears in some tool result
-//!   4. a cited query aggregates a TEXT column (likely needs a cast/parse)
-//!   5. a cited query filters a mixed-case label column without folding case
-//!   6. the question's wording implies a SQL aggregate no cited query used
-//!   7. a column named in the question is never mentioned in any cited query
-//!   8. a date/time GROUP BY produced a NULL key instead of a real bucket
-//!   9. a positive missing/unparseable quality count makes a result partial
-//!  10. a query that packed several aggregates into one row has a value in
-//!      the answer sitting next to a different column's name than the one
-//!      it actually came from
-//!  11. a structured chart still matches the rows returned by its source query
-//!
-//! Plus one cost-gated check that *does* spend an extra LLM round-trip, used
-//! sparingly (agent.rs only calls it once a cheap check above already left a
-//! warning standing) and isn't part of `run()`'s list above:
-//!   12. a same-model consistency pass agrees with the first answer; this is a
-//!       soft signal, not an independent judge or proof of correctness
+//! Verifier checks produce typed findings with explicit authority and scope.
+//! Objective defects can exclude a specific evidence item or artifact; they do
+//! not implicitly invalidate unrelated results or block the whole answer.
+//! Whole-answer blocking is reserved for explicit answer-scoped findings such
+//! as a workspace revision changing during the turn. Same-model disagreement
+//! remains advisory, not an independent correctness oracle.
 
 use std::collections::HashSet;
 
@@ -4185,6 +4170,84 @@ mod tests {
                     .contains("re-checked the SQL inputs to this Python computation")
         }));
         assert!(reran_clean(&checks));
+    }
+
+    #[test]
+    fn replay_mismatch_excludes_only_the_result_that_changed() {
+        struct ReplaySource;
+
+        impl AnalyticsSource for ReplaySource {
+            fn catalog(&self) -> crate::engine::catalog::Catalog {
+                crate::engine::catalog::Catalog::default()
+            }
+
+            fn run_sql(
+                &self,
+                sql: &str,
+            ) -> crate::engine::error::EngineResult<crate::engine::state::QueryResult> {
+                let (columns, rows) = match sql {
+                    "SELECT amount FROM current" => {
+                        (vec!["amount".into()], vec![vec![Json::from(100)]])
+                    }
+                    "SELECT COUNT(*) AS rows FROM other" => {
+                        (vec!["rows".into()], vec![vec![Json::from(2)]])
+                    }
+                    _ => panic!("unexpected replay query: {sql}"),
+                };
+                Ok(crate::engine::state::QueryResult {
+                    row_count: rows.len(),
+                    columns,
+                    rows,
+                    ms: 1,
+                    truncated: false,
+                })
+            }
+
+            fn run_sql_with_limit(
+                &self,
+                sql: &str,
+                _max_rows: usize,
+            ) -> crate::engine::error::EngineResult<crate::engine::state::QueryResult> {
+                self.run_sql(sql)
+            }
+        }
+
+        let mut changed = run_sql_ev(
+            "SELECT amount FROM current",
+            &["amount"],
+            vec![vec![Json::from(90)]],
+        );
+        changed.id = "changed-query".into();
+        let mut stable = run_sql_ev(
+            "SELECT COUNT(*) AS rows FROM other",
+            &["rows"],
+            vec![vec![Json::from(2)]],
+        );
+        stable.id = "stable-query".into();
+
+        let mut checks = Vec::new();
+        rerun_queries(&ReplaySource, &[changed, stable], &mut checks);
+
+        let mismatch = checks
+            .iter()
+            .find(|check| {
+                check
+                    .finding
+                    .as_ref()
+                    .is_some_and(|finding| finding.code == VerificationFindingCode::ReplayMismatch)
+            })
+            .expect("changed query should create a replay finding");
+        let finding = mismatch.finding.as_ref().unwrap();
+        assert_eq!(finding.effect, VerificationEffect::ExcludeEvidence);
+        assert_eq!(finding.target, VerificationTarget::Evidence);
+        assert_eq!(finding.evidence_ids, vec!["changed-query"]);
+        assert!(checks.iter().any(|check| {
+            check.ok
+                && check
+                    .label
+                    .contains("re-checked the queries behind this answer")
+        }));
+        assert!(hard_fail(&checks).is_none());
     }
 
     #[test]

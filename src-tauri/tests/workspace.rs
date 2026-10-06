@@ -1229,7 +1229,21 @@ fn grounds_and_executes_a_typed_period_comparison() {
             .any(|check| { !check.ok && check.label == "grouped totals did not reconcile" }),
         "{bad_checks:?}"
     );
-    assert!(fella_lib::engine::analytics::verify::hard_fail(&bad_checks).is_some());
+    let reconciliation = bad_checks
+        .iter()
+        .find(|check| !check.ok && check.label == "grouped totals did not reconcile")
+        .unwrap();
+    let finding = reconciliation.finding.as_ref().unwrap();
+    assert_eq!(
+        finding.effect,
+        fella_lib::engine::evidence::VerificationEffect::ExcludeEvidence
+    );
+    assert_eq!(
+        finding.target,
+        fella_lib::engine::evidence::VerificationTarget::Evidence
+    );
+    assert_eq!(finding.evidence_ids, vec![evidence.id.clone()]);
+    assert!(fella_lib::engine::analytics::verify::hard_fail(&bad_checks).is_none());
 
     let _ = fs::remove_dir_all(&ws);
     let _ = fs::remove_dir_all(&data);
@@ -1318,7 +1332,23 @@ fn grounds_and_verifies_an_average_against_observed_bounds() {
         }),
         "{bad_checks:?}"
     );
-    assert!(fella_lib::engine::analytics::verify::hard_fail(&bad_checks).is_some());
+    let bounds = bad_checks
+        .iter()
+        .find(|check| {
+            !check.ok && check.label == "average fell outside observed bounds for `average amount`"
+        })
+        .unwrap();
+    let finding = bounds.finding.as_ref().unwrap();
+    assert_eq!(
+        finding.effect,
+        fella_lib::engine::evidence::VerificationEffect::ExcludeEvidence
+    );
+    assert_eq!(
+        finding.target,
+        fella_lib::engine::evidence::VerificationTarget::Evidence
+    );
+    assert_eq!(finding.evidence_ids, vec![evidence.id.clone()]);
+    assert!(fella_lib::engine::analytics::verify::hard_fail(&bad_checks).is_none());
 
     let _ = fs::remove_dir_all(&ws);
     let _ = fs::remove_dir_all(&data);

@@ -209,6 +209,77 @@ async fn agent_calls_a_tool_then_answers() {
 }
 
 #[tokio::test]
+async fn tool_execution_error_stays_local_while_the_model_recovers() {
+    let ws = scratch("tool-error-recovery-ws");
+    let data = scratch("tool-error-recovery-data");
+    fs::write(ws.join("sales.csv"), "amount\n10\n20\n").unwrap();
+
+    let (url, requests, server) = fake_openai_with_requests(vec![
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "I will total the sales.",
+            "tool_calls": [{ "id": "bad-query", "type": "function", "function": {
+                "name": "run_sql",
+                "arguments": "{\"sql\":\"SELECT SUM(missing_column) AS total FROM sales\"}"
+            } }]
+        })),
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "I will use the available amount field instead.",
+            "tool_calls": [{ "id": "correct-query", "type": "function", "function": {
+                "name": "run_sql",
+                "arguments": "{\"sql\":\"SELECT SUM(amount) AS total FROM sales\"}"
+            } }]
+        })),
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "The sales total is $30."
+        })),
+    ]);
+
+    let engine = EngineState::new(&data).unwrap();
+    engine
+        .save_settings(
+            serde_json::json!({ "provider": "custom", "base_url": url, "model": "test" })
+                .as_object()
+                .unwrap(),
+        )
+        .unwrap();
+    engine.set_api_key("custom", "sk-test").unwrap();
+    engine.open_workspace(&ws).unwrap();
+
+    let answer = engine
+        .ask("tool-error-recovery", "What are total sales?", None, |_| {})
+        .await
+        .unwrap();
+    server.join().unwrap();
+
+    assert!(answer.text.contains("30"), "answer: {}", answer.text);
+    assert_eq!(answer.status, VerificationStatus::Verified);
+    assert_eq!(requests.lock().unwrap().len(), 3, "one recovery turn");
+    assert_eq!(answer.evidence.len(), 2, "failed and corrected tool calls");
+    assert!(
+        answer.evidence[0].error.is_some(),
+        "{:?}",
+        answer.evidence[0]
+    );
+    assert!(answer.evidence[0].verifier_disposition.is_none());
+    assert!(
+        answer.evidence[1].error.is_none(),
+        "{:?}",
+        answer.evidence[1]
+    );
+    assert!(answer.evidence[1].verifier_disposition.is_none());
+    assert!(answer.evidence[1]
+        .sql
+        .as_deref()
+        .is_some_and(|sql| sql.contains("SUM(amount)")));
+
+    let _ = fs::remove_dir_all(&ws);
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[tokio::test]
 async fn shared_dimension_does_not_force_a_join_or_duplicate_the_final_chart() {
     let ws = scratch("shared-dimension-chart-ws");
     let data = scratch("shared-dimension-chart-data");
@@ -408,7 +479,10 @@ async fn unsupported_derived_claim_does_not_invalidate_a_valid_regional_chart() 
     );
     assert!(answer.text.contains("130") && answer.text.contains("100"));
     assert_eq!(answer.evidence.len(), 2, "evidence: {:?}", answer.evidence);
-    assert!(answer.evidence.iter().all(|item| item.error.is_none()));
+    assert!(answer
+        .evidence
+        .iter()
+        .all(|item| item.error.is_none() && item.verifier_disposition.is_none()));
     let chart_items: Vec<_> = answer
         .evidence
         .iter()
@@ -591,7 +665,7 @@ async fn semantic_verification_repairs_archive_scope_before_accepting_an_answer(
     fs::write(ws.join("current.csv"), "amount\n100\n").unwrap();
     fs::write(ws.join("archive").join("old.csv"), "amount\n200\n").unwrap();
 
-    let (url, server) = fake_openai(vec![
+    let (url, requests, server) = fake_openai_with_requests(vec![
         openai_response(serde_json::json!({
             "role": "assistant",
             "content": "I checked both files.",
@@ -650,6 +724,8 @@ async fn semantic_verification_repairs_archive_scope_before_accepting_an_answer(
 
     assert!(answer.text.contains("100"), "answer: {}", answer.text);
     assert_eq!(answer.status, VerificationStatus::Verified);
+    assert_eq!(requests.lock().unwrap().len(), 4, "one bounded repair");
+    assert_eq!(answer.evidence.len(), 2, "original and corrected query");
     let excluded_scope = answer
         .evidence
         .iter()
@@ -888,7 +964,7 @@ async fn semantic_verification_repairs_a_zero_row_filter_instead_of_accepting_ze
     )
     .unwrap();
 
-    let (url, server) = fake_openai(vec![
+    let (url, requests, server) = fake_openai_with_requests(vec![
         openai_response(serde_json::json!({
             "role": "assistant",
             "content": "I found no matching rows, so the total is $0.",
@@ -947,6 +1023,8 @@ async fn semantic_verification_repairs_a_zero_row_filter_instead_of_accepting_ze
 
     assert!(answer.text.contains("1,200"), "answer: {}", answer.text);
     assert_eq!(answer.status, VerificationStatus::Verified);
+    assert_eq!(requests.lock().unwrap().len(), 4, "one bounded repair");
+    assert_eq!(answer.evidence.len(), 2, "original and corrected query");
     let rejected_filter = answer
         .evidence
         .iter()

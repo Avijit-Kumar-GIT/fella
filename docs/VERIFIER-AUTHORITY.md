@@ -53,8 +53,9 @@ expected result. The following behavior is required:
    withheld chart is not rendered as if it passed, while unrelated answer
    content remains visible.
 
-For later full-loop evaluations, report false-positive artifact/evidence
+The controlled scripted run and its limitations are recorded in
+[`VERIFIER-AUTHORITY-EVAL.md`](./VERIFIER-AUTHORITY-EVAL.md). For subsequent
+model-backed or benchmark evaluations, report false-positive artifact/evidence
 blocks, unsupported-claim acceptance, supported-answer coverage, retained
-evidence, repair/tool-call count, and latency. These rates must be measured on
-an independently specified task set; this document does not claim an
-improvement in any of them until such a run is performed.
+evidence, repair/tool-call count, and latency on an independently specified
+task set. The scripted run does not claim general live-model improvement.

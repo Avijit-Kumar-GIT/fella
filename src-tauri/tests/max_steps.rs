@@ -124,7 +124,20 @@ async fn step_cap_and_forced_final_turn() {
 
     let (url, _seen, server) = fake_openai(vec![
         tool_call_response(),
-        tool_call_response(),
+        // Use distinct operations here: an identical cached call exercises
+        // the repeat guard and can end the loop before the configured cap.
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "I will inspect the sales table.",
+            "tool_calls": [{
+                "id": "inspect_sales",
+                "type": "function",
+                "function": {
+                    "name": "inspect_table",
+                    "arguments": "{\"name\":\"sales\",\"rows\":5}"
+                }
+            }]
+        })),
         openai_response(
             serde_json::json!({ "role": "assistant", "content": "Here's my best guess from what I found." }),
         ),
