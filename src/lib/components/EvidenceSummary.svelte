@@ -3,10 +3,12 @@
 
 	let {
 		bodyId,
+		label = 'Analysis details',
 		expanded = false,
 		ontoggle
 	}: {
 		bodyId: string;
+		label?: string;
 		expanded?: boolean;
 		ontoggle?: () => void;
 	} = $props();
@@ -19,10 +21,10 @@
 		type="button"
 		aria-expanded={expanded}
 		aria-controls={bodyId}
-		title={expanded ? 'Hide analysis details' : 'Show analysis details'}
+		title={`${expanded ? 'Hide' : 'Show'} ${label.toLowerCase()}`}
 		onclick={() => ontoggle?.()}
 	>
-		<span class="summary-label">Analysis details</span>
+		<span class="summary-label">{label}</span>
 		<span class="caret" class:open={expanded} aria-hidden="true"><Icon name="chevron-right" size={12} /></span>
 	</button>
 </div>

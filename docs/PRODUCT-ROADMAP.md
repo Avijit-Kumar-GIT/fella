@@ -702,10 +702,10 @@ rather than assigning them a passing score.
 - [ ] **Make Ask's scope obvious without making it feel like a file-only
   utility.** The empty state should accept general questions and make folder
   analysis/research discoverable without forcing a workspace selection.
-- [ ] **Present evidence without duplicating the answer.** Put compact source,
-  calculation, or forecast details adjacent to the relevant answer and make
-  deeper provenance inspectable on demand. Do not repeat the same “checked
-  workspace/details” block under every message.
+- [x] **Present evidence without duplicating the answer.** Keep the disclosure
+  adjacent to the response, show the chart's source next to the chart, and put
+  detailed source/calculation provenance on demand rather than repeating a
+  checked-workspace block under every message.
 - [ ] **Make modality visible.** Use restrained, consistent treatments for
   model explanation, web-cited claims, file-backed findings, computed values,
   and projections in both light and dark themes. Keep the language more
@@ -722,10 +722,32 @@ rather than assigning them a passing score.
   source profiling do not make ordinary Ask noticeably slower or require a
   cloud service.
 
+**Implementation progress (2026-10-06):** no-folder general Ask and folder
+mounting were already present; current Ask copy does not advertise web
+research. Backlog #2 remains deferred, so research discoverability, citations,
+and web-page injection coverage are intentionally not claimed. The response
+disclosure now distinguishes a general answer from workspace analysis or
+inspection, and analysis details identify forecasts separately from
+user-authored Python. Settings links to an expanded privacy page documenting
+local normalized-data storage, model-provider egress, credentials, local
+retention/deletion, and the current lack of web research. Workspace-derived
+content now has an always-on untrusted-data instruction in the system prompt,
+with prompt and scripted agent-loop regression checks. Conversation deletion
+removes its transcript and canonical analysis records and prevents late writes
+from recreating them. An Electron bridge contract test is part of CI, and the
+manual shell matrix is recorded in [`SHELL-PARITY.md`](SHELL-PARITY.md).
+
+This item is **not complete**: a prompt regression is not a live-model security
+guarantee; web-specific controls depend on backlog #2; the manual shell matrix
+has not been run in native desktop windows from this WSL session; and fresh
+startup, idle-memory, and packaged-size measurements remain a release gate.
+The 5,000-file and 10-GiB ingestion observations are recorded under backlog #6
+and do not substitute for those measurements.
+
 **Acceptance checks:** users understand what Fella used, web access is not
-surprising, private files remain local unless a separately approved feature
-explicitly changes that boundary, and both maintained shells pass the same
-capability suite.
+surprising, provider transmission and local retention are explicit, and both
+maintained shells pass the same capability suite. Until web research exists,
+the product must clearly state that it has not checked current web sources.
 
 ### 10. Bound verifier authority and make its decisions inspectable
 

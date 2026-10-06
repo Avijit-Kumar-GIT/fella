@@ -166,8 +166,42 @@ fn deletes_a_conversation_by_id_and_rejects_an_unknown_one() {
     engine.archive_conversation("deleteme", body).unwrap();
     assert!(engine.conversation_load("deleteme").is_ok());
 
+    // Deleting a conversation must also erase its separate, backend-owned
+    // analysis records; they contain the question, result, and evidence too.
+    let turns = data.join("analysis/turns");
+    fs::create_dir_all(&turns).unwrap();
+    fs::write(
+        turns.join("turn-1.json"),
+        r#"{"id":"turn-1","conversation_id":"deleteme","result":{"text":"private result"}}"#,
+    )
+    .unwrap();
+    fs::write(
+        turns.join("turn-2.json"),
+        r#"{"id":"turn-2","conversation_id":"deleteme","result":{"text":"private follow-up"}}"#,
+    )
+    .unwrap();
+    fs::write(
+        turns.join("turn-other.json"),
+        r#"{"id":"turn-other","conversation_id":"keepme","result":{"text":"unrelated"}}"#,
+    )
+    .unwrap();
+
     engine.delete_conversation("deleteme").unwrap();
     assert!(engine.conversation_load("deleteme").is_err());
+    assert!(!turns.join("turn-1.json").exists());
+    assert!(!turns.join("turn-2.json").exists());
+    assert!(turns.join("turn-other.json").exists());
+
+    // A late transcript persist from a tab that was still closing must not
+    // resurrect the conversation after the user deleted it.
+    assert!(engine
+        .archive_conversation("deleteme", body)
+        .unwrap()
+        .is_empty());
+    assert!(engine
+        .conversations_list()
+        .iter()
+        .all(|item| item.id != "deleteme"));
 
     assert!(engine.delete_conversation("no-such-id").is_err());
 

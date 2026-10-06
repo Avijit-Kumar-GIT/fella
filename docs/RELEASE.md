@@ -36,6 +36,9 @@ edition. The release gate is:
       installer sizes, and launch at least one packaged build through the
       folder-open, question, evidence, stop, login, model, workspace, tabs, and
       focus flows.
+- [ ] Run the native-window checks in [`SHELL-PARITY.md`](SHELL-PARITY.md)
+      for every shell/platform being called supported; record unrun cells as
+      gaps, not passes.
 - [x] Capture a hosted BYOK baseline in `docs/PERFORMANCE-LOG.md`; local model
       server measurements are outside the product's supported deployment.
 - [ ] Freeze the release question battery across the supported model set and

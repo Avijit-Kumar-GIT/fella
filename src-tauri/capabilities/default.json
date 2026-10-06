@@ -14,6 +14,7 @@
       "identifier": "opener:allow-open-url",
       "allow": [
         { "url": "https://github.com/*" },
+        { "url": "https://docs.lilfella.app/*" },
         { "url": "https://platform.openai.com/*" },
         { "url": "https://vercel.com/*" },
         { "url": "https://console.x.ai/*" },

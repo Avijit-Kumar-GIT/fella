@@ -131,6 +131,16 @@
 	let followups = $derived(
 		message.answer && question ? followupQuestions(question, message.answer) : []
 	);
+	let detailsLabel = $derived.by(() => {
+		switch (message.answer?.trace?.mode) {
+			case 'model_only':
+				return 'General answer';
+			case 'workspace_inspect':
+				return 'Inspection details';
+			default:
+				return 'Analysis details';
+		}
+	});
 	let clarificationResponse = $state('');
 
 	function submitClarification(event: SubmitEvent) {
@@ -159,6 +169,7 @@
 			{#if message.answer}
 				<EvidenceSummary
 					bodyId={`evidence-${message.id}`}
+					label={detailsLabel}
 					{expanded}
 					{ontoggle}
 				/>

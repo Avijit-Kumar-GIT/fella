@@ -2,6 +2,7 @@
 	import type { EvidenceItem } from '$lib/types';
 
 	let { evidence }: { evidence: EvidenceItem } = $props();
+	let isForecast = $derived(evidence.tool === 'forecast_analysis');
 
 	const code = $derived(
 		evidence.tool === 'run_python' && typeof evidence.args?.code === 'string'
@@ -28,10 +29,10 @@
 	}
 </script>
 
-<section class="computation" aria-label="Python calculation">
+<section class="computation" aria-label={isForecast ? 'Forecast method' : 'Python calculation'}>
 	<div class="computation-heading">
-		<strong>Python</strong>
-		<span>{evidence.tool === 'forecast_analysis' ? 'Fella forecast helpers · local sandbox' : 'Generated code · local sandbox'}</span>
+		<strong>{isForecast ? 'Forecast' : 'Python'}</strong>
+		<span>{isForecast ? 'Fella forecast helpers · local sandbox' : 'Generated code · local sandbox'}</span>
 	</div>
 	{#if code}
 		<div class="code-caption">Calculation code</div>

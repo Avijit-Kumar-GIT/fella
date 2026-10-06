@@ -1,36 +1,100 @@
 ---
 title: "Privacy and security"
-description: "Understand the read-only boundary, network behavior, credentials, and Python guard rails."
+description: "Understand local file access, provider transmission, retention, credentials, and execution boundaries."
 icon: "shield-check"
 ---
 
-The base agent has no workspace write tools, but local execution and provider
-network behavior have important limits.
+Fella reads and computes on your computer, but it is not a local-model-only
+application. When you use a hosted model, selected parts of the workspace may
+leave the computer as part of the request. The provider and model you choose
+determine that service's handling of the data.
 
-## Read-only by construction
+## Local file access
 
-The base agent has no write, move, or delete tool. SQL accepts one `SELECT` or `WITH` statement and runs through a read-only data connection. Document tools resolve only catalogued names from the selected workspace.
+You choose the workspace folder. Fella scans and reads supported files there;
+supported tabular rows are normalized into a local SQLite database in Fella's
+application-data directory. Text and PDF documents are read locally by the
+document tools. The agent has no direct filesystem API, and the built-in tools
+cannot write, move, or delete workspace files. SQL accepts one `SELECT` or
+`WITH` statement and runs through a read-only connection. The user may
+explicitly edit `fella.md` from the Workspace surface; the model cannot write
+it.
 
-The user can explicitly edit `fella.md` from the Workspace surface. The model
-still has no path to that write operation.
+## What is sent to a model provider
 
-## Network behavior
+When configured, the selected provider receives the API key for authentication,
+along with the model requests needed to answer. Requests can include the question, recent
+conversation context, system prompt, registered tool schemas, workspace
+schema/sample rows, user or folder context, and results returned by tools.
+Those tool results may contain document passages (or the complete text of a
+short document), selected table rows, aggregate values, or Python output. Fella
+does not upload the workspace folder as a bulk file, but it can send
+file-derived text and data to the provider when the model requests and uses
+them. A question may cause multiple provider requests because the model can
+inspect, calculate, and revise in separate turns.
 
 | Destination | When Fella connects | Data involved |
 | --- | --- | --- |
-| Selected model provider | Health/model-list probes and model turns after you connect it; Ollama-wire providers can also receive a warm-up request | Your API key, prompts, tool schemas, conversation digest, context, and tool results |
-| GitHub releases | Only for `/update` | Version check and installer download |
+| Selected model provider | Connection/model-list checks and model turns after you connect it; Ollama-wire providers may also receive a warm-up request | Configured API key, prompts, tool schemas, conversation context, workspace context, and requested tool results—including file-derived text or values |
+| Custom provider endpoint | When you configure and use it | The same model payload, sent to the endpoint you entered |
+| GitHub releases | Only when you run `/update` | Release/version check and installer download |
 
-The selected provider can receive multiple requests for one question because the
-agent loop is multi-turn, retries transient failures, and may perform a
-corrective or second-opinion turn. Fella does not proxy these requests through
-a Fella service.
+The current runtime has no web-search or page-reading tool. It does not send
+workspace content to a search service, and it must not imply that it researched
+current web sources. `/mcp` is inert. Fella does not proxy model requests
+through a Fella service and does not transmit the local run log as telemetry.
 
 ## Credentials
 
-Provider API keys are stored in `auth.json` with restrictive permissions. They
-are not stored in the settings database, browser `localStorage`, or conversation
-archives. Secret-bearing command lines are redacted from the transcript.
+Provider API keys are stored in `auth.json` in Fella's application-data
+directory, not in the settings database, browser `localStorage`, or conversation
+archives. On Unix-like systems Fella sets file mode `0600`. On Windows the file
+inherits the permissions of the per-user application-data directory; Fella
+does not currently use Windows Credential Manager or the macOS Keychain.
+Secret-bearing commands are redacted from the transcript.
+
+## Local retention and deletion
+
+Fella has no Fella-hosted account or server-side conversation store. Local data
+remains in the application-data directory until you delete it or remove that
+directory; there is no automatic age-based cleanup. That directory can include:
+
+- `auth.json`: provider keys.
+- `fella.db`: settings and local app state.
+- `analysis.db`: the currently mounted workspace's normalized tabular data.
+- `conversations/`: saved transcripts and embedded evidence.
+- `analysis/turns/`: canonical analysis records, including questions, results,
+  and detailed evidence.
+- `memory/` and `signals.jsonl`: local folder memory and content-minimized
+  runtime friction signals.
+
+Deleting a conversation in the sidebar removes its transcript and associated
+canonical analysis records. **Forget memory** removes learned folder memory;
+it does not delete the workspace, provider settings, or API key. To clear all
+Fella-local state, quit the app and remove its `dev.fella.app` application-data
+directory. This also removes saved credentials, settings, conversations,
+analysis records, and the local workspace database; it does not modify source
+files in your workspace.
+
+Default locations are `%APPDATA%\\dev.fella.app` on Windows,
+`~/Library/Application Support/dev.fella.app` on macOS, and
+`$XDG_DATA_HOME/dev.fella.app` (usually `~/.local/share/dev.fella.app`) on
+Linux. A custom `XDG_DATA_HOME` changes the Linux location.
+
+Deleting a local conversation cannot delete copies a provider may have retained
+under its own policies. Review those terms before sending sensitive data to a
+hosted model.
+
+## Untrusted file contents
+
+Local documents and table cells can contain text that looks like instructions
+to the model. Fella labels workspace-derived content as untrusted evidence and
+instructs the model not to follow such text. The tool registry is fixed and
+read-only, so file contents cannot add a filesystem-write, shell, or web tool.
+This prompt boundary is defense in depth, not a guarantee that a model cannot be
+influenced by adversarial content; provider transmission still applies as
+described above. Web-page prompt-injection handling is not applicable until a
+web research tool is shipped.
 
 ## Python runs inside a local capability boundary
 
@@ -48,17 +112,17 @@ response limits.
   or a package installer.
 </Warning>
 
-## Hosted-provider decision
+## Operational signals
+
+Locally archived conversations include messages and evidence. The Settings Run
+Log is a local-only, content-minimized view of saved turn metrics and coarse
+friction signals; it does not duplicate prompts, answers, tool inputs/results,
+source names, or workspace paths. It is operational diagnostics, not a
+correctness score. The run log is derived from canonical turn records, so
+deleting a conversation also removes its associated record from that view.
 
 Before using a hosted model with sensitive files, review that service's
-retention, logging, and training terms. Locally archived conversations include
-messages and evidence. Local folder-memory episode logs and friction signals
-are not telemetry and are not transmitted by Fella. The Settings Run Log is a
-local-only, content-minimized view of saved turn metrics and coarse friction
-signals; it does not duplicate prompts, answers, tool inputs/results, source
-names, or workspace paths. It is operational diagnostics, not a correctness
-score. `/mcp` is inert in this release and creates no connector network
-activity.
+retention, logging, and training terms.
 
 <CardGroup cols={2}>
   <Card title="Verification" icon="badge-check" href="/concepts/verification">

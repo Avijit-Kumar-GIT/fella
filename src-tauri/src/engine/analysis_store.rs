@@ -61,6 +61,62 @@ pub fn exists(data_dir: &Path, turn_id: &str) -> bool {
     turn_path(data_dir, turn_id).is_ok_and(|path| path.is_file())
 }
 
+/// Remove every persisted analysis record belonging to a deleted conversation.
+/// These records contain the question, answer, and evidence independently of
+/// the user-visible transcript archive, so deleting only that archive is not a
+/// complete deletion.
+pub fn delete_conversation(data_dir: &Path, conversation_id: &str) -> EngineResult<usize> {
+    let directory = turns_dir(data_dir);
+    let entries = match std::fs::read_dir(&directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => {
+            return Err(EngineError::io(
+                format!("read {}", directory.display()),
+                error,
+            ));
+        }
+    };
+
+    let mut matches = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            EngineError::io(format!("read entries in {}", directory.display()), error)
+        })?;
+        let file_type = entry.file_type().map_err(|error| {
+            EngineError::io(format!("inspect {}", entry.path().display()), error)
+        })?;
+        if !file_type.is_file()
+            || entry.path().extension().and_then(|ext| ext.to_str()) != Some("json")
+        {
+            continue;
+        }
+        let path = entry.path();
+        let text = std::fs::read_to_string(&path)
+            .map_err(|error| EngineError::io(format!("read {}", path.display()), error))?;
+        let record: serde_json::Value = serde_json::from_str(&text).map_err(|error| {
+            EngineError::msg(format!(
+                "inspect analysis record {}: {error}",
+                path.display()
+            ))
+        })?;
+        if record
+            .get("conversation_id")
+            .and_then(serde_json::Value::as_str)
+            == Some(conversation_id)
+        {
+            matches.push(path);
+        }
+    }
+
+    let count = matches.len();
+    for path in matches {
+        std::fs::remove_file(&path)
+            .map_err(|error| EngineError::io(format!("remove {}", path.display()), error))?;
+    }
+    Ok(count)
+}
+
 /// Read a bounded recent slice and project it to the content-minimized form
 /// used by Settings. This is derived from canonical turn records; no second
 /// per-run history is written.

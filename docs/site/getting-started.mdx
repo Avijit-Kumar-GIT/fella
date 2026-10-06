@@ -41,7 +41,7 @@ By the end of this guide, Fella will have scanned a folder, answered a question 
     /model
     ```
 
-    Hosted providers receive prompts and tool results. Keys are stored in local `auth.json` with `0600` permissions where supported, not in the settings database, browser storage, or transcript.
+    The provider receives prompts and any context or tool results used for the answer; tool results can include document text or data rows from your folder. Keys are stored in local `auth.json`, not in the settings database, browser storage, or transcript. Read [Privacy and security](/developer-platform/using-fella/privacy) before using sensitive files.
   </Step>
 
   <Step title="Open a focused folder">

@@ -78,3 +78,7 @@ Fella because it includes the Rust engine and indexed workspace state.
 The Linux container used for development may not have Electron's desktop system
 libraries installed, so the authoritative comparison should be run on the same
 Windows machine using the same release configuration.
+
+Use [`SHELL-PARITY.md`](SHELL-PARITY.md) for the shared engine/bridge checks
+and the manual capability matrix. The bridge test is not a substitute for
+launching and exercising the packaged desktop app.

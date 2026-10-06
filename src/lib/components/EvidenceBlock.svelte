@@ -71,7 +71,10 @@
 		return e.tool;
 	}
 	function isPythonExecution(e: EvidenceItem): boolean {
-		return e.tool === 'run_python' || e.tool === 'forecast_analysis';
+		return e.tool === 'run_python';
+	}
+	function isForecastExecution(e: EvidenceItem): boolean {
+		return e.tool === 'forecast_analysis';
 	}
 
 	// The model's `note` is already the step's headline drop it from the raw
@@ -164,12 +167,13 @@
 						!!e.sources?.length ||
 						!!e.python_input_trace ||
 						isPythonExecution(e) ||
+						isForecastExecution(e) ||
 						Object.keys(shownArgs).length > 0 ||
 						!!e.output ||
 						!!(e.columns && e.rows)}
 					<li class="step" class:failed={!!e.error}>
 						<span class="line">{stepLabel(e)}</span>
-						{#if isPythonExecution(e)}<span class="language-badge">Python</span>{/if}
+						{#if isPythonExecution(e)}<span class="language-badge">Python</span>{:else if isForecastExecution(e)}<span class="language-badge">Forecast</span>{/if}
 						{#if e.tool === 'read_prior_analysis' && e.result_summary.startsWith('retrieved prior analysis from the current workspace revision')}
 							<div class="source-line">Earlier execution · same workspace revision</div>
 						{/if}
@@ -192,7 +196,7 @@
 								onclick={() => toggleDetail(i)}
 								aria-expanded={!!openDetail[i]}
 							>
-								{openDetail[i] ? 'hide' : isPythonExecution(e) ? 'show calculation' : e.sql ? 'show the query' : 'show details'}
+								{openDetail[i] ? 'hide' : isPythonExecution(e) ? 'show calculation' : isForecastExecution(e) ? 'show forecast method' : e.sql ? 'show the query' : 'show details'}
 							</button>
 						{/if}
 
@@ -202,7 +206,7 @@
 									? e.rows
 									: e.rows?.slice(0, 20)}
 							<div class="detail rich">
-								{#if isPythonExecution(e)}
+								{#if isPythonExecution(e) || isForecastExecution(e)}
 									<PythonCalculationDetails evidence={e} />
 								{/if}
 								{#if e.sql}

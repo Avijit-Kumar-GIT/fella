@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { dispatch, openFolder } from '$lib/commands';
-	import { ipc, isDesktop } from '$lib/ipc';
+	import { ipc, isDesktop, openExternal } from '$lib/ipc';
 	import { prefs, type Appearance } from '$lib/prefs.svelte';
 	import { session } from '$lib/session.svelte';
 	import type { AnalysisCapabilities, RunLogEntry } from '$lib/types';
@@ -190,7 +190,7 @@
 			<div class="card-head">
 				<div>
 					<h2 id="model-title">Model</h2>
-					<p>Fella uses your provider key and sends only the question and requested evidence.</p>
+					<p>Fella reads and computes locally. Your chosen provider receives prompts, relevant context, and tool results—which may include document text or data rows.</p>
 				</div>
 				{#if provider}<ProviderIcon providerId={provider.id} size={20} />{/if}
 			</div>
@@ -225,6 +225,13 @@
 					{/each}
 				</div>
 			{/if}
+			<button
+				class="text-button"
+				type="button"
+				onclick={() => void openExternal('https://docs.lilfella.app/developer-platform/using-fella/privacy')}
+			>
+				Privacy and security <Icon name="arrow-up-right" size={12} />
+			</button>
 			<button class="text-button" type="button" onclick={() => void refreshSettings()}>
 				<Icon name="check" size={16} /> Refresh connection status
 			</button>

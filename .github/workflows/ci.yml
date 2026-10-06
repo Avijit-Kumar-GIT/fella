@@ -49,6 +49,9 @@ jobs:
       - name: BYOK test surface
         run: bash scripts/check-byok-test-surface.sh
 
+      - name: Electron engine bridge tests
+        run: pnpm run test:electron-bridge
+
       # SQLite default features only never --features duckdb (OOMs CI, CI-only path).
       - name: Clippy
         working-directory: src-tauri

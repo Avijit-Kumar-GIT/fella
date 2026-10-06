@@ -157,6 +157,9 @@ pub struct EngineState {
     /// cancel another tab's run. Keyed by `conversation_id`; an entry is created
     /// when `ask` starts and removed when it finishes.
     cancel: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    /// Conversation IDs deleted during this process lifetime. Prevents a late
+    /// frontend archive or in-flight analysis save from recreating deleted data.
+    deleted_conversations: Mutex<HashSet<String>>,
     /// Extracted PDF text, keyed by path. PDF parsing is slow and `grep_files` /
     /// `read_file` can each hit the same file many times in one run. Entries are
     /// invalidated when the file's mtime changes. Text files aren't cached they
@@ -1432,6 +1435,7 @@ impl EngineState {
             secrets,
             data_dir: data_dir.to_path_buf(),
             cancel: Mutex::new(HashMap::new()),
+            deleted_conversations: Mutex::new(HashSet::new()),
             doc_cache: Mutex::new(HashMap::new()),
         })
     }
@@ -1458,6 +1462,13 @@ impl EngineState {
         self.cancel
             .lock()
             .unwrap_or_else(|e| e.into_inner())
+            .remove(conversation_id);
+    }
+
+    fn allow_conversation_persistence(&self, conversation_id: &str) {
+        self.deleted_conversations
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
             .remove(conversation_id);
     }
 
@@ -1505,6 +1516,13 @@ impl EngineState {
     /// its own path (and original timestamp prefix) is reused rather than
     /// creating a new one each time.
     pub fn archive_conversation(&self, id: &str, body: &str) -> EngineResult<String> {
+        let deleted = self
+            .deleted_conversations
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if deleted.contains(id) {
+            return Ok(String::new());
+        }
         let value: serde_json::Value = serde_json::from_str(body)
             .map_err(|e| EngineError::msg(format!("conversation body is not JSON: {e}")))?;
 
@@ -1725,15 +1743,40 @@ impl EngineState {
         let suffix = format!("_{slug}.json");
         let entries = std::fs::read_dir(&dir)
             .map_err(|e| EngineError::io(format!("read {}", dir.display()), e))?;
-        for entry in entries.flatten() {
-            if entry.file_name().to_string_lossy().ends_with(&suffix) {
-                return std::fs::remove_file(entry.path())
-                    .map_err(|e| EngineError::io(format!("remove {}", entry.path().display()), e));
-            }
+        let archive = entries.flatten().find_map(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .ends_with(&suffix)
+                .then(|| entry.path())
+        });
+        let Some(archive) = archive else {
+            return Err(EngineError::msg(
+                "that conversation couldn't be found it may have been deleted",
+            ));
+        };
+
+        // Serialize deletion with both transcript and canonical-turn writes.
+        // The marker stays set after success so late UI persistence cannot
+        // resurrect the transcript; it is removed if any deletion step fails.
+        self.deleted_conversations
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .insert(id.to_string());
+        self.cancel_run(id);
+        self.forget_conversation(id);
+        if let Err(error) = analysis_store::delete_conversation(&self.data_dir, id) {
+            self.allow_conversation_persistence(id);
+            return Err(error);
         }
-        Err(EngineError::msg(
-            "that conversation couldn't be found it may have been deleted",
-        ))
+        if let Err(error) = std::fs::remove_file(&archive) {
+            self.allow_conversation_persistence(id);
+            return Err(EngineError::io(
+                format!("remove {}", archive.display()),
+                error,
+            ));
+        }
+        Ok(())
     }
 
     /// Load one backend-owned analytical turn. The UI transcript remains the
@@ -1960,6 +2003,13 @@ impl EngineState {
         catalog: &Catalog,
         answer: &Answer,
     ) {
+        let deleted = self
+            .deleted_conversations
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if deleted.contains(conversation_id) {
+            return;
+        }
         let state = if answer.clarification.is_some() {
             TurnState::Clarify
         } else {

@@ -7,8 +7,8 @@ export class EngineClient {
 	#nextId = 1;
 	#pending = new Map();
 
-	constructor(binary, dataDir) {
-		this.child = spawn(binary, ['--engine-stdio', '--data-dir', dataDir], {
+	constructor(binary, dataDir, { spawnProcess = spawn } = {}) {
+		this.child = spawnProcess(binary, ['--engine-stdio', '--data-dir', dataDir], {
 			stdio: ['pipe', 'pipe', 'inherit'],
 			windowsHide: true
 		});
