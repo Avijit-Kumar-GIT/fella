@@ -772,27 +772,30 @@ until the corresponding capability passes its agreed acceptance checks.
 
 ## Longer-term direction: a user-composable interface
 
-This is a product exploration, not a commitment for the next release. The idea
-is to let people shape Fella's interface around the way they work, rather than
-making them adapt to one fixed arrangement. This means more than building the
-UI from reusable components internally: the user would be able to choose,
-arrange, resize, and hide supported parts of the interface.
+This is a product exploration, not a commitment for the next release. A useful
+mental model is a terminal multiplexer: users compose a workspace from panes
+and arrange the tools they need together, rather than adapting to one fixed
+screen or building an unrestricted dashboard. This means more than building
+the UI from reusable components internally; the user would control how
+supported views are arranged and presented.
 
-Potential composable parts include the sidebar and its navigation sections,
-the conversation/workspace, source and context views, analysis details, and
-generated visualizations such as charts. A user might keep a chart beside the
-conversation, give the workspace more room, or hide panels they rarely use.
-Layouts could eventually be saved and switched between, while Fella's default
-layout remains coherent and useful without any customization.
+Possible pane content includes a conversation, source/data views, analysis
+details, and generated visualizations such as charts. A user might split the
+workspace to keep a chart beside the conversation, open another view alongside
+it, resize the panes, then focus or zoom one pane when needed. Views could be
+rearranged, hidden, closed, and reopened. The sidebar and other application
+chrome should remain adaptable too, but need not behave exactly like content
+panes. Layouts could eventually be saved and switched between, while Fella's
+default layout remains coherent and useful without customization.
 
-Before committing to implementation, explore a constrained composition model:
-which regions can move independently, what minimum sizes and relationships
-must remain intact, how layouts adapt to smaller windows, and how preferences
-are saved and reset. Preserve keyboard and screen-reader accessibility, and
-keep the experience understandable rather than turning the app into an
-unbounded dashboard builder. The initial exploration should establish whether
-people want global layouts, workspace-specific layouts, or both; no plugin or
-user-code system is implied by this idea.
+Before committing to implementation, explore a constrained pane model: which
+views can occupy panes, which split directions and nesting are useful, what
+minimum sizes and relationships must remain intact, and how layouts adapt to
+smaller windows. Include keyboard navigation and accessible pane controls, plus
+clear save/reset behavior. Keep the interaction understandable and avoid
+making users manage a complex window tree. The initial exploration should
+establish whether people want global layouts, workspace-specific layouts, or
+both; no plugin or user-code system is implied by this idea.
 
 ## Explicitly not the goal
 
