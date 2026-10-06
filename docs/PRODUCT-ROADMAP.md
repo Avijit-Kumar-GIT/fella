@@ -592,9 +592,11 @@ Fella's analytical ingestion and must not define which supported data is read.
 - [x] **Keep the analyst loop available without making it mandatory for every
   request.** For data analysis, the model should inspect, form/decompose a
   question, probe or clarify where useful, execute, review, and communicate.
-  For a simple definition, answer directly. Let the model stop when it has a
-  good answer; retain any early-stop nudge only if evaluation shows it does
-  not increase incomplete or incorrect answers.
+  For a simple definition, answer directly.
+- [ ] **Evaluate the soft-stop nudge separately.** It remains advisory and
+  does not remove tools, but compare incomplete and incorrect answer rates with
+  and without it on the same interaction tasks before deciding whether to
+  retain or tune it.
 - [x] **Make context and memory participate in decisions.** Keep conversation
   history, workspace facts/definitions, retrieved source evidence, and derived
   results distinct and identify their origin and freshness. A follow-up may
