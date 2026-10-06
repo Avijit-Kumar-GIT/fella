@@ -11,8 +11,8 @@ use tauri::{State, Window};
 use crate::engine::{
     AnalysisTurn, AnalysisTurnReplayStatus, Answer, AskEvent, Catalog, ClarificationReply,
     ContextReference, ConversationSummary, ConversationsInfo, EngineError, EngineResult,
-    EngineState, ProviderHealth, ProviderInfo, QueryResult, Settings, SourceInfo, UpdateStatus,
-    WorkspaceModel, WorkspaceProgress,
+    EngineState, ProviderHealth, ProviderInfo, QueryResult, RunLogEntry, Settings, SourceInfo,
+    UpdateStatus, WorkspaceModel, WorkspaceProgress,
 };
 use crate::AppState;
 
@@ -313,6 +313,15 @@ pub fn analysis_turn_load(
     engine: State<'_, Arc<EngineState>>,
 ) -> Result<AnalysisTurn, EngineError> {
     engine.analysis_turn_load(&turn_id)
+}
+
+/// Recent content-minimized turn traces and coarse local friction events.
+#[tauri::command]
+pub fn run_log_recent(
+    limit: Option<usize>,
+    engine: State<'_, Arc<EngineState>>,
+) -> Vec<RunLogEntry> {
+    engine.recent_run_log(limit.unwrap_or(50))
 }
 
 #[tauri::command]

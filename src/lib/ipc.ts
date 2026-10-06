@@ -18,6 +18,7 @@ import type {
 	ProviderHealth,
 	ProviderInfo,
 	QueryResult,
+	RunLogEntry,
 	Settings,
 	SourceInfo,
 	WorkspaceModel,
@@ -176,6 +177,8 @@ export const ipc = {
 	/** Raw JSON of one archived conversation `{id, workspace, messages}`,
 	 * matching what `archiveConversation` originally wrote. */
 	conversationLoad: (id: string) => invoke<string>('conversation_load', { id }),
+	/** Recent local-only run metadata; never includes transcript or workspace contents. */
+	runLogRecent: (limit = 50) => invoke<RunLogEntry[]>('run_log_recent', { limit }),
 	/** Load the canonical backend record for one analytical turn. */
 	analysisTurnLoad: (turnId: string) => invoke<AnalysisTurn>('analysis_turn_load', { turnId }),
 	/** Compare a stored turn's source snapshot with the mounted workspace. */

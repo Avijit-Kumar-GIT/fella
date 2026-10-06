@@ -53,8 +53,12 @@ response limits.
 Before using a hosted model with sensitive files, review that service's
 retention, logging, and training terms. Locally archived conversations include
 messages and evidence. Local folder-memory episode logs and friction signals
-are not telemetry and are not transmitted by Fella. `/mcp` is inert in this
-release and creates no connector network activity.
+are not telemetry and are not transmitted by Fella. The Settings Run Log is a
+local-only, content-minimized view of saved turn metrics and coarse friction
+signals; it does not duplicate prompts, answers, tool inputs/results, source
+names, or workspace paths. It is operational diagnostics, not a correctness
+score. `/mcp` is inert in this release and creates no connector network
+activity.
 
 <CardGroup cols={2}>
   <Card title="Verification" icon="badge-check" href="/concepts/verification">

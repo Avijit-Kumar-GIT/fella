@@ -7,6 +7,7 @@
 
 use std::path::{Path, PathBuf};
 
+use serde::Deserialize;
 use serde_json::json;
 
 use crate::engine::analytics::verify;
@@ -15,6 +16,14 @@ use crate::engine::evidence::{EvidenceItem, VerificationCheck};
 /// Keep the log from growing unbounded on a long-lived install, same cap
 /// style as `memory::record_episode`'s `.episodes.jsonl`.
 const MAX_SIGNALS: usize = 500;
+
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct FrictionSignal {
+    pub at_ms: u64,
+    pub reason: String,
+    pub steps: usize,
+    pub errors: usize,
+}
 
 /// Which trigger, if any, this answer hits. `checks` is the *final* set (post
 /// corrective re-ask); `evidence` this answer's tool calls. Pure so it's
@@ -34,6 +43,22 @@ pub(crate) fn trigger(
 
 fn signals_path(data_dir: &Path) -> PathBuf {
     data_dir.join("signals.jsonl")
+}
+
+/// Read the bounded, coarse friction log for the Settings run log. Older or
+/// malformed rows are ignored; no raw tool or conversation content is read.
+pub(crate) fn recent(data_dir: &Path) -> Vec<FrictionSignal> {
+    let Ok(contents) = std::fs::read_to_string(signals_path(data_dir)) else {
+        return Vec::new();
+    };
+    let mut signals: Vec<FrictionSignal> = contents
+        .lines()
+        .rev()
+        .take(MAX_SIGNALS)
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+    signals.sort_by(|a, b| b.at_ms.cmp(&a.at_ms));
+    signals
 }
 
 /// Append one coarse record. Best-effort: a write failure here must never

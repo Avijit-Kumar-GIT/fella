@@ -304,6 +304,25 @@ export interface ExecutionTrace {
 	steps: ExecutionTraceStep[];
 }
 
+export interface RunLogEntry {
+	id: string;
+	at_ms: number;
+	kind: 'turn' | 'trigger';
+	mode?: InteractionMode;
+	model?: string;
+	elapsed_ms?: number;
+	model_calls: ModelCallTrace[];
+	operations: Pick<ExecutionTraceStep, 'operation' | 'duration_ms' | 'success'>[];
+	prior_analysis_count: number;
+	context_reference_count: number;
+	clarification_continuation: boolean;
+	rerun: boolean;
+	outcome: string;
+	trigger?: string;
+	trigger_steps?: number;
+	trigger_errors?: number;
+}
+
 export interface WorkspaceColumnSnapshot {
 	name: string;
 	type: string;

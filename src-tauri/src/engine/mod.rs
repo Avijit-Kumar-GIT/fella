@@ -40,8 +40,8 @@ pub use provider::{AuthKind, Provider, PROVIDERS};
 pub use runtime::{
     AnalysisContract, AnalysisTurn, AnalysisTurnReplayStatus, ClarificationReply, ComparisonKind,
     ContextReference, ContractComparison, ContractDerivedMetric, ContractFilter, ContractJoin,
-    ContractMeasure, ContractOrder, DerivedMetricKind, InterpretationStatus, JoinKind,
-    SortDirection, TimeBucket,
+    ContractMeasure, ContractOrder, DerivedMetricKind, InterpretationStatus, JoinKind, RunLogEntry,
+    RunLogKind, RunLogModelCall, RunLogOperation, SortDirection, TimeBucket,
 };
 pub use sqlite::Settings;
 pub use state::{ConversationSummary, ConversationsInfo, EngineState, ProviderInfo, QueryResult};

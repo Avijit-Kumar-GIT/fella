@@ -653,6 +653,16 @@ is added only when backlog **2** is resumed.
   necessary clarification, computed correctly, cited/supports claims, and
   communicated limits. Include complete successful traces and failure
   diagnoses.
+- [x] **Expose a local Run Log in Settings.** Make recent completed turns and
+  coarse friction triggers inspectable as an operational trace: route, model,
+  elapsed time, reported tokens, model/tool-call counts and timings, and
+  observable outcomes, plus content-free continuity counters for reused
+  analyses, attached context references, clarification continuation, and
+  reruns. Derive turn rows from canonical local turn records and
+  friction rows from the existing bounded signal log; do not create a second
+  transcript store. Never include prompts, answers, tool arguments or
+  results, source names, or workspace paths in the Run Log. Keep it local and
+  make clear that operational outcomes are not a correctness verdict.
 - [ ] **Measure helpfulness as well as restraint.** Track answer correctness,
   coverage/answer rate, false-refusal or unnecessary-clarification rate,
   unsupported-claim rate, citation support, forecast error/calibration, chart
@@ -674,7 +684,9 @@ is added only when backlog **2** is resumed.
 **Acceptance checks:** results can be reproduced and independently reviewed;
 each supported capability has a visible score and failure taxonomy; changes
 show whether they improve the quality/coverage tradeoff rather than merely
-changing the wording of outputs.
+changing the wording of outputs. The Settings Run Log makes recent runtime
+behavior legible without duplicating transcript content, leaking workspace
+data, or presenting execution metadata as proof of answer correctness.
 
 ### 9. Finish user experience, privacy, and release integration
 

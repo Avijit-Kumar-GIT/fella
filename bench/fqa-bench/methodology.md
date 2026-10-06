@@ -105,6 +105,12 @@ For each run, record benchmark version and split, task/workspace hashes, code co
 
 Keep raw run artifacts outside fixture directories. Redact secrets and avoid publishing traces containing private data. A failed provider call, missing trace, stale fixture, or grader crash must be surfaced as invalid/incomplete—not silently dropped from the denominator.
 
+The Settings Run Log is a separate, local operational aid. It summarizes saved
+turn metadata and coarse friction triggers; it does not grade correctness,
+replace benchmark run artifacts, or establish a capability score. Its
+content-minimized view must not expose prompts, answers, tool arguments or
+results, source names, or workspace paths.
+
 ## 7. Known limitation at v0.1
 
 The first active suites are still draft coverage, not a representative release

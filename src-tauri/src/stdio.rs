@@ -219,6 +219,15 @@ async fn dispatch(
             let id: String = required(&request.params, "id")?;
             value_result(engine.conversation_load(&id))
         }
+        "run_log_recent" => {
+            let limit = request
+                .params
+                .get("limit")
+                .and_then(Value::as_u64)
+                .and_then(|value| usize::try_from(value).ok())
+                .unwrap_or(50);
+            serialized(engine.recent_run_log(limit))
+        }
         "analysis_turn_load" => {
             let turn_id: String = required(&request.params, "turnId")?;
             value_result(engine.analysis_turn_load(&turn_id))

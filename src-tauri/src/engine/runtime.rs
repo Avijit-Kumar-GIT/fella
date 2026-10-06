@@ -494,6 +494,62 @@ pub struct ModelCallTrace {
     pub completion_tokens: Option<u32>,
 }
 
+/// A content-minimized, local projection of a completed run for the Settings
+/// activity log. Deliberately excludes prompts, answers, tool arguments/results,
+/// source names, and workspace paths.
+#[derive(Debug, Clone, Serialize)]
+pub struct RunLogEntry {
+    pub id: String,
+    pub at_ms: u64,
+    pub kind: RunLogKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<InteractionMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub elapsed_ms: Option<u64>,
+    #[serde(default)]
+    pub model_calls: Vec<RunLogModelCall>,
+    #[serde(default)]
+    pub operations: Vec<RunLogOperation>,
+    pub prior_analysis_count: usize,
+    pub context_reference_count: usize,
+    pub clarification_continuation: bool,
+    pub rerun: bool,
+    pub outcome: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trigger: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trigger_steps: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trigger_errors: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunLogKind {
+    Turn,
+    Trigger,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RunLogModelCall {
+    pub model: String,
+    pub duration_ms: u64,
+    pub success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completion_tokens: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RunLogOperation {
+    pub operation: String,
+    pub duration_ms: u64,
+    pub success: bool,
+}
+
 /// Compact catalog metadata captured with a canonical turn. It is deliberately
 /// smaller than `WorkspaceModel`: replay needs to explain freshness changes,
 /// not persist every inferred statistic or sample value.

@@ -23,8 +23,8 @@ use crate::engine::provider::{self, AuthKind, PROVIDERS};
 use crate::engine::runtime::{
     AnalysisContract, AnalysisResult, AnalysisTurn, AnalysisTurnReplayStatus, ClarificationReply,
     ContextReference, InterpretationStatus, LogicalPlan, PlanStrategy, ResolvedClarification,
-    TurnState, VerificationReport, WorkspaceColumnSnapshot, WorkspaceRevisionSnapshot,
-    WorkspaceSourceSnapshot,
+    RunLogEntry, RunLogKind, TurnState, VerificationReport, WorkspaceColumnSnapshot,
+    WorkspaceRevisionSnapshot, WorkspaceSourceSnapshot,
 };
 use crate::engine::secrets::Secrets;
 use crate::engine::semantic_memory::{
@@ -525,6 +525,36 @@ mod scratch_tests {
             !path.exists(),
             "replaced scratch is removed after the last lease drops"
         );
+    }
+}
+
+#[cfg(test)]
+mod run_log_tests {
+    use super::*;
+
+    #[test]
+    fn recent_run_log_includes_existing_content_free_friction_signals() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let data_dir = std::env::temp_dir().join(format!("fella-run-log-{nonce}"));
+        let engine = EngineState::new(&data_dir).unwrap();
+        std::fs::write(
+            data_dir.join("signals.jsonl"),
+            r#"{"at_ms":1234,"reason":"repeated_tool_errors","steps":3,"errors":2}"#,
+        )
+        .unwrap();
+
+        let entries = engine.recent_run_log(10);
+        assert_eq!(entries.len(), 1);
+        assert!(matches!(entries[0].kind, RunLogKind::Trigger));
+        assert_eq!(entries[0].trigger.as_deref(), Some("repeated_tool_errors"));
+        assert_eq!(entries[0].trigger_steps, Some(3));
+        assert_eq!(entries[0].trigger_errors, Some(2));
+
+        drop(engine);
+        let _ = std::fs::remove_dir_all(data_dir);
     }
 }
 
@@ -1711,6 +1741,39 @@ impl EngineState {
     /// contract/plan/trace/result used by future replay and rerun features.
     pub fn analysis_turn_load(&self, turn_id: &str) -> EngineResult<AnalysisTurn> {
         analysis_store::load(&self.data_dir, turn_id)
+    }
+
+    /// Recent local run metadata for Settings. This is a projection of saved
+    /// canonical turns plus the existing coarse friction log, never a second
+    /// transcript or telemetry store.
+    pub fn recent_run_log(&self, limit: usize) -> Vec<RunLogEntry> {
+        let mut entries = analysis_store::recent(&self.data_dir, limit);
+        entries.extend(
+            crate::engine::friction::recent(&self.data_dir)
+                .into_iter()
+                .enumerate()
+                .map(|(index, signal)| RunLogEntry {
+                    id: format!("trigger-{}-{index}", signal.at_ms),
+                    at_ms: signal.at_ms,
+                    kind: RunLogKind::Trigger,
+                    mode: None,
+                    model: None,
+                    elapsed_ms: None,
+                    model_calls: Vec::new(),
+                    operations: Vec::new(),
+                    prior_analysis_count: 0,
+                    context_reference_count: 0,
+                    clarification_continuation: false,
+                    rerun: false,
+                    outcome: "triggered".into(),
+                    trigger: Some(signal.reason),
+                    trigger_steps: Some(signal.steps),
+                    trigger_errors: Some(signal.errors),
+                }),
+        );
+        entries.sort_by(|a, b| b.at_ms.cmp(&a.at_ms).then_with(|| a.id.cmp(&b.id)));
+        entries.truncate(limit.clamp(1, 100));
+        entries
     }
 
     /// Compare a stored turn's source snapshot with the currently mounted
