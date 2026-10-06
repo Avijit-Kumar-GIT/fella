@@ -28,7 +28,10 @@ use crate::engine::analytics::chart;
 use crate::engine::analytics::data::quote_str;
 use crate::engine::analytics::AnalyticsSource;
 use crate::engine::catalog::{source_scope, SourceScope};
-use crate::engine::evidence::{EvidenceItem, VerificationCheck, VerificationStatus};
+use crate::engine::evidence::{
+    EvidenceItem, VerificationCheck, VerificationEffect, VerificationFinding,
+    VerificationFindingCode, VerificationStatus, VerificationTarget,
+};
 use crate::engine::grounding::{GroundingReport, ProbeOutcome};
 use crate::engine::risk;
 use crate::engine::runtime::{
@@ -72,45 +75,44 @@ pub fn run(
     checks
 }
 
-fn first_bad(checks: &[VerificationCheck], labels: &[&str]) -> Option<String> {
+/// Full final-answer verification, including contract-level checks that need
+/// independent SQL probes. The agent loop uses this before repair so the
+/// findings can guide a targeted revision rather than appearing only after
+/// the answer is already final.
+pub fn run_for_answer(
+    engine: &dyn AnalyticsSource,
+    question: &str,
+    answer: &str,
+    evidence: &[EvidenceItem],
+    contract: Option<&AnalysisContract>,
+    grounding: Option<&GroundingReport>,
+) -> Vec<VerificationCheck> {
+    let mut checks = run(engine, question, answer, evidence, contract);
+    if let Some(contract) =
+        contract.filter(|value| value.interpretation == InterpretationStatus::Grounded)
+    {
+        checks.extend(execution_checks(engine, contract, grounding, evidence));
+    }
     checks
-        .iter()
-        .find(|c| !c.ok && labels.iter().any(|h| c.label.contains(h)))
-        .map(|c| match &c.detail {
-            Some(d) => format!("{} ({d})", c.label),
-            None => c.label.clone(),
-        })
 }
 
-/// The subset of failures that mean the answer is probably *wrong*, not merely
-/// worth a look: a cited query that now re-runs to a different result or won't
-/// run, or a figure in the answer that appears in no tool result. A stray-year
-/// nudge or a text-column-aggregation caution is a soft warning and does not
-/// count. Returns the first such check's `label` with its `detail` folded in.
-///
-/// Matched on the label string, the same altitude as `is_schema_error`. Used by
-/// the eval harness to separate hard misses from soft warnings.
+/// Whole-answer gates are deliberately rare and opt-in. Evidence replay,
+/// unsupported claims, and broken artifacts are scoped to their target and
+/// must not turn unrelated supported output into a failed answer.
 pub fn hard_fail(checks: &[VerificationCheck]) -> Option<String> {
-    first_bad(
-        checks,
-        &[
-            "different result now",
-            "no longer runs",
-            "not found in any result",
-            "returned no value for at least one row",
-            "actually came from",
-            "period comparison arithmetic",
-            "derived metric arithmetic",
-            "grouped totals did not reconcile",
-            "average fell outside observed bounds",
-            "chart values did not match source query",
-            "signed values were discarded",
-            "excluding filter `",
-            "requested current scope was not preserved",
-            "requested historical scope was not preserved",
-            "aggregate query matched no rows",
-        ],
-    )
+    checks
+        .iter()
+        .find(|check| {
+            !check.ok
+                && check
+                    .finding
+                    .as_ref()
+                    .is_some_and(|finding| finding.effect == VerificationEffect::BlockAnswer)
+        })
+        .map(|check| match &check.detail {
+            Some(detail) => format!("{} ({detail})", check.label),
+            None => check.label.clone(),
+        })
 }
 
 /// A bounded, tool-backed repair pass handles semantic mistakes that cannot
@@ -119,117 +121,44 @@ pub fn hard_fail(checks: &[VerificationCheck]) -> Option<String> {
 /// unsupported claim, regardless of whether earlier evidence was scalar or
 /// grouped. The model can compute the requested value or retract it; the
 /// runtime does not guess which correction is right.
-pub fn semantic_repair_hint(
-    _question: &str,
-    _evidence: &[EvidenceItem],
-    checks: &[VerificationCheck],
-) -> Option<String> {
-    if let Some(forecast) = first_bad(checks, &["forecast lacks chronological evaluation"]) {
-        return Some(forecast);
-    }
-    let ordinary = first_bad(
-        checks,
-        &[
-            "requested current scope was not preserved",
-            "requested historical scope was not preserved",
-            "aggregate query matched no rows",
-            "question names `",
-            "question implies ",
-            "groups by a date expression that returned no value",
-            "signed values were discarded",
-            "matches exact case",
-            "forecast lacks chronological evaluation",
-        ],
-    );
-    if ordinary.is_some() {
-        return ordinary;
-    }
-    first_bad(checks, &["not found in any result"])
+pub fn semantic_repair_hint(checks: &[VerificationCheck]) -> Option<String> {
+    semantic_repair_check(checks).map(|check| {
+        let finding = check
+            .finding
+            .as_ref()
+            .expect("repair checks carry a finding");
+        let guidance = finding
+            .guidance
+            .clone()
+            .or_else(|| check.detail.clone())
+            .unwrap_or_else(|| "repair only the identified target".into());
+        if guidance == check.label {
+            check.label.clone()
+        } else {
+            format!("{}: {guidance}", check.label)
+        }
+    })
 }
 
-/// Identify the evidence item that made a semantic check fail. Keeping this
-/// beside the checks lets the agent retain useful inspection evidence while
-/// superseding only the bad query during its one repair pass.
-pub fn semantic_evidence_matches(
-    engine: &dyn AnalyticsSource,
-    question: &str,
-    item: &EvidenceItem,
-    hint: &str,
-) -> bool {
-    // A point result can be valid evidence even when its forecast evaluation
-    // is incomplete. Keep it available while the model adds the missing
-    // holdout/backtest rather than forcing a needless re-query.
-    if hint.contains("forecast lacks chronological evaluation") {
-        return false;
-    }
-    if item.error.is_some() || !is_sql_evidence(item) {
-        return false;
-    }
-    if hint.contains("scope was not preserved") {
-        let Some(requested) = requested_scope(question) else {
-            return false;
-        };
-        let catalog = engine.catalog();
-        return item.sources.iter().any(|source| {
-            catalog
-                .sources
-                .iter()
-                .find(|candidate| {
-                    candidate.name == source.source
-                        || candidate.view.as_deref() == Some(source.table.as_str())
-                })
-                .is_some_and(|info| {
-                    matches!(
-                        (
-                            requested,
-                            source_scope(&info.name, &info.path, info.view.as_deref())
-                        ),
-                        (SourceScope::Current, SourceScope::Historical)
-                            | (SourceScope::Historical, SourceScope::Current)
-                    )
-                })
-        });
-    }
-    if hint.contains("aggregate query matched no rows") {
-        let Some(sql) = item.sql.as_deref() else {
-            return false;
-        };
-        let lower = sql.to_ascii_lowercase();
-        let filtered = lower.contains(" where ")
-            || lower.contains(" where\n")
-            || lower.contains(" having ")
-            || lower.contains("case when ");
-        let non_empty_source = engine.catalog().sources.iter().any(|source| {
-            item.sources.iter().any(|used| {
-                (source.name == used.source || source.view.as_deref() == Some(used.table.as_str()))
-                    && source.row_count.is_some_and(|row_count| row_count > 0)
-            })
-        });
-        return filtered
-            && is_aggregate_sql(sql)
-            && item.rows.as_deref().is_some_and(null_result)
-            && non_empty_source;
-    }
-    if hint.contains("signed values were discarded") {
-        return item
-            .sql
-            .as_deref()
-            .is_some_and(signed_value_abs_is_discarding);
-    }
-    if hint.contains("not found in any result") {
-        // Keep source inspection and document evidence available. Supersede
-        // only quantitative executions that failed to produce a scalar result
-        // for a scalar question; the next model turn can choose a corrected
-        // aggregate, a different tool, or a clarification.
-        return matches!(
-            item.tool.as_str(),
-            "run_sql" | "make_chart" | "run_python" | "forecast_analysis"
-        ) && !item
-            .sql
-            .as_deref()
-            .is_some_and(|sql| is_aggregate_sql(sql) && item.row_count == Some(1));
-    }
-    true
+/// Return the first actionable check. Repairs and evidence/artifact
+/// invalidations are intentionally represented separately so the loop never
+/// has to guess the target from user-facing label text.
+pub fn semantic_repair_check(checks: &[VerificationCheck]) -> Option<&VerificationCheck> {
+    [
+        VerificationEffect::ExcludeEvidence,
+        VerificationEffect::WithholdArtifact,
+        VerificationEffect::Repair,
+    ]
+    .into_iter()
+    .find_map(|effect| {
+        checks.iter().find(|check| {
+            !check.ok
+                && check
+                    .finding
+                    .as_ref()
+                    .is_some_and(|finding| finding.effect == effect)
+        })
+    })
 }
 
 /// True when a query behind the answer was actually re-executed and matched,
@@ -238,13 +167,158 @@ pub fn semantic_evidence_matches(
 /// caches no query, however cleanly it verified).
 pub fn reran_clean(checks: &[VerificationCheck]) -> bool {
     hard_fail(checks).is_none()
-        && checks.iter().any(|c| {
-            c.ok && (c
-                .label
-                .contains("re-checked the queries behind this answer")
-                || c.label
-                    .contains("re-checked the SQL inputs to this Python computation"))
+        && !checks.iter().any(|check| {
+            !check.ok
+                && check
+                    .finding
+                    .as_ref()
+                    .is_some_and(|finding| finding.code == VerificationFindingCode::ReplayMismatch)
         })
+        && checks.iter().any(|c| {
+            c.ok && c
+                .finding
+                .as_ref()
+                .is_some_and(|finding| finding.code == VerificationFindingCode::ReplayMatch)
+        })
+}
+
+fn scoped_finding(
+    code: VerificationFindingCode,
+    effect: VerificationEffect,
+    target: VerificationTarget,
+    target_id: Option<String>,
+    evidence_ids: Vec<String>,
+    guidance: Option<String>,
+) -> VerificationFinding {
+    VerificationFinding {
+        code,
+        effect,
+        target,
+        target_id,
+        evidence_ids,
+        guidance,
+    }
+}
+
+fn targeted_warning(
+    label: impl Into<String>,
+    detail: Option<String>,
+    finding: VerificationFinding,
+) -> VerificationCheck {
+    VerificationCheck {
+        label: label.into(),
+        ok: false,
+        detail,
+        finding: Some(finding),
+    }
+}
+
+fn warn_with_effect(
+    label: impl Into<String>,
+    detail: Option<String>,
+    code: VerificationFindingCode,
+    effect: VerificationEffect,
+    target: VerificationTarget,
+    target_id: Option<String>,
+    evidence_ids: Vec<String>,
+    guidance: Option<String>,
+) -> VerificationCheck {
+    targeted_warning(
+        label,
+        detail,
+        scoped_finding(code, effect, target, target_id, evidence_ids, guidance),
+    )
+}
+
+fn successful_replay_check(label: impl Into<String>) -> VerificationCheck {
+    VerificationCheck {
+        label: label.into(),
+        ok: true,
+        detail: None,
+        finding: Some(scoped_finding(
+            VerificationFindingCode::ReplayMatch,
+            VerificationEffect::Informational,
+            VerificationTarget::Answer,
+            None,
+            Vec::new(),
+            None,
+        )),
+    }
+}
+
+fn repair_claim_warning(
+    label: impl Into<String>,
+    detail: Option<String>,
+    code: VerificationFindingCode,
+    claim: impl Into<String>,
+    evidence_ids: Vec<String>,
+    guidance: impl Into<String>,
+) -> VerificationCheck {
+    warn_with_effect(
+        label,
+        detail,
+        code,
+        VerificationEffect::Repair,
+        VerificationTarget::Claim,
+        Some(claim.into()),
+        evidence_ids,
+        Some(guidance.into()),
+    )
+}
+
+fn exclude_evidence_warning(
+    label: impl Into<String>,
+    detail: Option<String>,
+    code: VerificationFindingCode,
+    evidence_ids: Vec<String>,
+    guidance: impl Into<String>,
+) -> VerificationCheck {
+    warn_with_effect(
+        label,
+        detail,
+        code,
+        VerificationEffect::ExcludeEvidence,
+        VerificationTarget::Evidence,
+        evidence_ids.first().cloned(),
+        evidence_ids,
+        Some(guidance.into()),
+    )
+}
+
+fn withhold_artifact_warning(
+    label: impl Into<String>,
+    detail: Option<String>,
+    code: VerificationFindingCode,
+    artifact: impl Into<String>,
+    evidence_ids: Vec<String>,
+    guidance: impl Into<String>,
+) -> VerificationCheck {
+    warn_with_effect(
+        label,
+        detail,
+        code,
+        VerificationEffect::WithholdArtifact,
+        VerificationTarget::Artifact,
+        Some(artifact.into()),
+        evidence_ids,
+        Some(guidance.into()),
+    )
+}
+
+fn withhold_chart_warning(
+    item: &EvidenceItem,
+    source: &EvidenceItem,
+    label: impl Into<String>,
+    detail: Option<String>,
+) -> VerificationCheck {
+    withhold_artifact_warning(
+        label,
+        detail,
+        VerificationFindingCode::ChartMismatch,
+        item.id.clone(),
+        vec![source.id.clone()],
+        "withhold or rebuild only this chart; retain its source result and answer text",
+    )
 }
 
 /// Classify the complete answer result once. A clean replay proves that the
@@ -257,13 +331,25 @@ pub fn status(
     evidence: &[EvidenceItem],
     semantics_grounded: bool,
 ) -> VerificationStatus {
-    if evidence.is_empty() || !evidence.iter().any(|item| item.error.is_none()) {
+    if evidence.is_empty() || !evidence.iter().any(EvidenceItem::is_accepted) {
         return VerificationStatus::InsufficientData;
     }
     if hard_fail(checks).is_some() {
         return VerificationStatus::Failed;
     }
     if checks.iter().any(|check| !check.ok) {
+        return VerificationStatus::NeedsReview;
+    }
+    let withheld_chart_without_replacement = evidence.iter().any(|item| {
+        item.artifact_is_withheld("chart")
+            && item.tool == "make_chart"
+            && !evidence.iter().any(|replacement| {
+                replacement.tool == "make_chart"
+                    && replacement.is_accepted()
+                    && !replacement.artifact_is_withheld("chart")
+            })
+    });
+    if withheld_chart_without_replacement {
         return VerificationStatus::NeedsReview;
     }
     if semantics_grounded && reran_clean(checks) {
@@ -336,9 +422,10 @@ fn check_source_scope(
     };
     let catalog = engine.catalog();
     let mut mismatched = Vec::new();
+    let mut mismatched_items = Vec::new();
     for item in evidence
         .iter()
-        .filter(|item| is_sql_evidence(item) && item.error.is_none())
+        .filter(|item| is_sql_evidence(item) && item.is_accepted())
     {
         for source in &item.sources {
             let Some(info) = catalog.sources.iter().find(|candidate| {
@@ -355,6 +442,7 @@ fn check_source_scope(
             );
             if mismatch {
                 mismatched.push(info.name.clone());
+                mismatched_items.push(item.id.clone());
             }
         }
     }
@@ -368,13 +456,18 @@ fn check_source_scope(
         SourceScope::Historical => "historical",
         SourceScope::Unknown => return,
     };
-    out.push(warn(
+    mismatched_items.sort();
+    mismatched_items.dedup();
+    out.push(exclude_evidence_warning(
         format!("requested {requested_label} scope was not preserved by the query"),
         Some(format!(
             "the evidence also used {} source file(s): {}",
             mismatched.len(),
             mismatched.join(", ")
         )),
+        VerificationFindingCode::SemanticExecutionMismatch,
+        mismatched_items,
+        "rerun only the affected query against the requested source scope; keep unrelated results",
     ));
 }
 
@@ -403,7 +496,7 @@ fn check_empty_aggregate(
     let catalog = engine.catalog();
     for item in evidence
         .iter()
-        .filter(|item| is_sql_evidence(item) && item.error.is_none())
+        .filter(|item| is_sql_evidence(item) && item.is_accepted())
     {
         let Some(sql) = item.sql.as_deref() else {
             continue;
@@ -431,12 +524,15 @@ fn check_empty_aggregate(
                 .is_some_and(|row_count| row_count > 0)
         });
         if non_empty_source {
-            out.push(warn(
+            out.push(exclude_evidence_warning(
                 "aggregate query matched no rows in a non-empty source",
                 Some(
                     "the query returned NULL for a filtered aggregate; inspect the filter and source values before treating this as zero"
                         .into(),
                 ),
+                VerificationFindingCode::SemanticExecutionMismatch,
+                vec![item.id.clone()],
+                "inspect the affected filter and rerun this aggregate; do not treat NULL as zero",
             ));
             return;
         }
@@ -469,7 +565,7 @@ fn check_forecast_evaluation(
     }
 
     let has_workspace_computation = evidence.iter().any(|item| {
-        item.error.is_none()
+        item.is_accepted()
             && matches!(
                 item.tool.as_str(),
                 "run_sql" | "run_python" | "forecast_analysis"
@@ -480,7 +576,7 @@ fn check_forecast_evaluation(
     }
 
     let has_evaluation = evidence.iter().any(|item| {
-        if item.error.is_some() {
+        if !item.is_accepted() {
             return false;
         }
         if item.tool == "forecast_analysis" {
@@ -517,7 +613,10 @@ fn check_forecast_evaluation(
 
 fn charts_precomputed_forecast(evidence: &[EvidenceItem]) -> bool {
     evidence.iter().any(|chart_item| {
-        if chart_item.tool != "make_chart" || chart_item.error.is_some() {
+        if chart_item.tool != "make_chart"
+            || !chart_item.is_accepted()
+            || chart_item.artifact_is_withheld("chart")
+        {
             return false;
         }
         let Some(chart) = chart_item.chart.as_ref() else {
@@ -551,7 +650,7 @@ fn charts_precomputed_forecast(evidence: &[EvidenceItem]) -> bool {
         let is_reused_tabular_source =
             source.tool == "run_sql" || (source.tool == "make_chart" && source.id == chart_item.id);
         is_reused_tabular_source
-            && source.error.is_none()
+            && source.is_accepted()
             && source.sql.as_deref().is_some_and(|sql| {
                 !is_aggregate_sql(sql)
                     && !sql
@@ -611,7 +710,7 @@ pub fn contract_checks(
 
     let sql: Vec<String> = evidence
         .iter()
-        .filter(|item| is_sql_evidence(item) && item.error.is_none())
+        .filter(|item| is_sql_evidence(item) && item.is_accepted())
         .filter_map(|item| item.sql.clone())
         .map(|query| query.to_ascii_lowercase())
         .collect();
@@ -676,6 +775,30 @@ pub fn contract_checks(
         check_comparison_usage(&mut checks, contract, comparison, &sql);
         check_comparison_arithmetic(&mut checks, contract, evidence);
     }
+    if contract.interpretation == InterpretationStatus::Grounded {
+        let related_evidence: Vec<String> = evidence
+            .iter()
+            .filter(|item| item.is_accepted() && is_sql_evidence(item))
+            .map(|item| item.id.clone())
+            .collect();
+        for check in &mut checks {
+            if !check.ok
+                && check
+                    .finding
+                    .as_ref()
+                    .is_some_and(|finding| finding.code == VerificationFindingCode::Advisory)
+            {
+                check.finding = Some(scoped_finding(
+                    VerificationFindingCode::ContractMismatch,
+                    VerificationEffect::Repair,
+                    VerificationTarget::Claim,
+                    Some(check.label.clone()),
+                    related_evidence.clone(),
+                    Some("reconcile this grounded contract requirement with the query and revise only the affected part".into()),
+                ));
+            }
+        }
+    }
     checks
 }
 
@@ -683,10 +806,9 @@ pub fn contract_checks(
 /// payload cannot make a chart disagree with the result it represents. This
 /// also covers Python-published tables and forecast output, not only SQL.
 fn check_chart_values(evidence: &[EvidenceItem], checks: &mut Vec<VerificationCheck>) {
-    for item in evidence
-        .iter()
-        .filter(|item| item.tool == "make_chart" && item.error.is_none())
-    {
+    for item in evidence.iter().filter(|item| {
+        item.tool == "make_chart" && item.is_accepted() && !item.artifact_is_withheld("chart")
+    }) {
         let Some(chart_data) = item.chart.as_ref() else {
             continue;
         };
@@ -696,8 +818,10 @@ fn check_chart_values(evidence: &[EvidenceItem], checks: &mut Vec<VerificationCh
             .and_then(|metadata| metadata.source_evidence_id.as_deref())
             .and_then(|id| evidence.iter().find(|candidate| candidate.id == id))
             .unwrap_or(item);
-        if source.error.is_some() {
-            checks.push(warn(
+        if !source.is_accepted() {
+            checks.push(withhold_chart_warning(
+                item,
+                source,
                 "chart source result could not be checked",
                 Some("the referenced analytical result failed".into()),
             ));
@@ -708,7 +832,9 @@ fn check_chart_values(evidence: &[EvidenceItem], checks: &mut Vec<VerificationCh
             table.clone()
         } else if let (Some(columns), Some(rows)) = (&source.columns, &source.rows) {
             if source.row_count.is_some_and(|count| count != rows.len()) {
-                checks.push(warn(
+                checks.push(withhold_chart_warning(
+                    item,
+                    source,
                     "chart source result could not be checked",
                     Some("the referenced result contained an incomplete row set".into()),
                 ));
@@ -719,7 +845,9 @@ fn check_chart_values(evidence: &[EvidenceItem], checks: &mut Vec<VerificationCh
                 rows: rows.clone(),
             }
         } else {
-            checks.push(warn(
+            checks.push(withhold_chart_warning(
+                item,
+                source,
                 "chart source result could not be checked",
                 Some("the referenced result did not include a reusable typed table".into()),
             ));
@@ -776,14 +904,21 @@ fn check_chart_values(evidence: &[EvidenceItem], checks: &mut Vec<VerificationCh
         ) {
             Ok(expected) => expected,
             Err(error) => {
-                checks.push(warn("chart values did not match source query", Some(error)));
+                checks.push(withhold_chart_warning(
+                    item,
+                    source,
+                    "chart values did not match source query",
+                    Some(error),
+                ));
                 continue;
             }
         };
         if serde_json::to_value(expected).ok() == serde_json::to_value(chart_data).ok() {
             checks.push(ok("chart values matched the source query"));
         } else {
-            checks.push(warn(
+            checks.push(withhold_chart_warning(
+                item,
+                source,
                 "chart values did not match source query",
                 Some(
                     "the chart specification differs from a fresh projection of its source result"
@@ -837,7 +972,7 @@ fn check_grouped_totals(
     let aliases = grouped_measure_aliases(contract);
     let Some(grouped) = evidence.iter().find(|item| {
         is_sql_evidence(item)
-            && item.error.is_none()
+            && item.is_accepted()
             && item
                 .row_count
                 .is_some_and(|count| item.rows.as_ref().is_some_and(|rows| count == rows.len()))
@@ -928,9 +1063,12 @@ fn check_grouped_totals(
     }
 
     if !mismatches.is_empty() {
-        checks.push(warn(
+        checks.push(exclude_evidence_warning(
             "grouped totals did not reconcile",
             Some(mismatches.join("; ")),
+            VerificationFindingCode::ContractMismatch,
+            vec![grouped.id.clone()],
+            "recompute this grouped result so its included groups reconcile with the independent total",
         ));
     } else if incomplete {
         checks.push(warn(
@@ -992,7 +1130,7 @@ fn check_average_bounds(
         let alias = format!("measure_{index}");
         let Some(average_evidence) = evidence.iter().find(|item| {
             is_sql_evidence(item)
-                && item.error.is_none()
+                && item.is_accepted()
                 && item
                     .row_count
                     .is_some_and(|count| item.rows.as_ref().is_some_and(|rows| count == rows.len()))
@@ -1178,12 +1316,15 @@ fn check_average_bounds(
             }
         }
         if !mismatches.is_empty() {
-            checks.push(warn(
+            checks.push(exclude_evidence_warning(
                 format!(
                     "average fell outside observed bounds for `{}`",
                     measure.concept
                 ),
                 Some(mismatches.join("; ")),
+                VerificationFindingCode::ContractMismatch,
+                vec![average_evidence.id.clone()],
+                "recompute only this average using the same population as its observed bounds",
             ));
         } else if incomplete {
             checks.push(warn(
@@ -1305,9 +1446,10 @@ fn check_comparison_arithmetic(
 ) {
     let mut saw_shape = false;
     let mut mismatches = Vec::new();
+    let mut affected_ids = Vec::new();
     for item in evidence
         .iter()
-        .filter(|item| is_sql_evidence(item) && item.error.is_none())
+        .filter(|item| is_sql_evidence(item) && item.is_accepted())
     {
         let Some(columns) = item.columns.as_deref() else {
             continue;
@@ -1374,6 +1516,7 @@ fn check_comparison_arithmetic(
                     _ => false,
                 };
                 if !change_ok || !percent_ok {
+                    affected_ids.push(item.id.clone());
                     mismatches.push(format!(
                         "comparison metric `{}` row {} expected change={:?}, change_pct={:?}; got change={:?}, change_pct={:?}",
                         label,
@@ -1401,9 +1544,15 @@ fn check_comparison_arithmetic(
             "period comparison arithmetic reconciled from returned rows",
         ));
     } else {
-        checks.push(warn(
+        affected_ids.sort();
+        affected_ids.dedup();
+        checks.push(repair_claim_warning(
             "period comparison arithmetic did not reconcile",
             Some(mismatches.join("; ")),
+            VerificationFindingCode::ContractMismatch,
+            "period comparison change or percent",
+            affected_ids,
+            "recompute only the comparison claim from its current and prior values; keep those values",
         ));
     }
 }
@@ -1568,9 +1717,10 @@ fn check_derived_arithmetic(
     let denominator_alias = format!("measure_{denominator_index}");
     let mut saw_shape = false;
     let mut mismatches = Vec::new();
+    let mut affected_ids = Vec::new();
     for item in evidence
         .iter()
-        .filter(|item| is_sql_evidence(item) && item.error.is_none())
+        .filter(|item| is_sql_evidence(item) && item.is_accepted())
     {
         let Some(columns) = item.columns.as_deref() else {
             continue;
@@ -1626,6 +1776,7 @@ fn check_derived_arithmetic(
                 _ => false,
             };
             if !matches {
+                affected_ids.push(item.id.clone());
                 mismatches.push(format!(
                     "derived `{}` row {} expected {:?}, got {:?}",
                     derived.concept,
@@ -1651,12 +1802,18 @@ fn check_derived_arithmetic(
             derived.concept
         )));
     } else {
-        checks.push(warn(
+        affected_ids.sort();
+        affected_ids.dedup();
+        checks.push(repair_claim_warning(
             format!(
                 "derived metric arithmetic did not reconcile for `{}`",
                 derived.concept
             ),
             Some(mismatches.join("; ")),
+            VerificationFindingCode::ContractMismatch,
+            derived.concept.clone(),
+            affected_ids,
+            "recompute or correct only this derived metric from the retained operand values",
         ));
     }
 }
@@ -1686,9 +1843,10 @@ fn check_derived_population(
     let denominator_alias = format!("measure_{denominator_index}");
     let mut saw_shape = false;
     let mut incompatible = Vec::new();
+    let mut related_evidence = Vec::new();
     for item in evidence
         .iter()
-        .filter(|item| is_sql_evidence(item) && item.error.is_none())
+        .filter(|item| is_sql_evidence(item) && item.is_accepted())
     {
         let Some(sql) = item.sql.as_deref() else {
             continue;
@@ -1702,6 +1860,7 @@ fn check_derived_population(
         saw_shape = true;
         if !has_single_population_scope(sql) {
             incompatible.push("the ratio uses nested or separate SQL scopes".to_string());
+            related_evidence.push(item.id.clone());
         }
     }
     if !saw_shape {
@@ -1713,12 +1872,21 @@ fn check_derived_population(
             derived.concept
         )));
     } else {
-        checks.push(warn(
+        checks.push(warn_with_effect(
             format!(
                 "derived metric `{}` may use incompatible populations",
                 derived.concept
             ),
             Some(incompatible.join("; ")),
+            VerificationFindingCode::SemanticCaveat,
+            VerificationEffect::Informational,
+            VerificationTarget::Claim,
+            Some(derived.concept.clone()),
+            related_evidence,
+            Some(
+                "this is a caution, not a rejection; cross-population ratios can be intentional"
+                    .into(),
+            ),
         ));
     }
 }
@@ -1903,7 +2071,7 @@ fn check_measure_operation(
         "avg" | "average" | "mean" | "arithmetic mean"
     ) && evidence.iter().any(|item| {
         item.tool == "forecast_analysis"
-            && item.error.is_none()
+            && item.is_accepted()
             && item.args.get("method").and_then(Json::as_str) == Some("mean")
     });
     if forecast_mean
@@ -2066,24 +2234,27 @@ fn check_signed_semantics(
     {
         return;
     }
-    let mut discarded = evidence
+    let discarded: Vec<_> = evidence
         .iter()
         .filter(|item| {
-            item.error.is_none()
+            item.is_accepted()
                 && is_sql_evidence(item)
                 && item
                     .sql
                     .as_deref()
                     .is_some_and(signed_value_abs_is_discarding)
         })
-        .map(|item| item.sql.as_deref().unwrap_or_default());
-    if let Some(sql) = discarded.next() {
-        checks.push(warn(
+        .collect();
+    if let Some(item) = discarded.first() {
+        checks.push(exclude_evidence_warning(
             "signed values were discarded by ABS in the executed query",
             Some(format!(
                 "this question requires signed amounts; revise the semantic plan instead of summing absolute magnitudes: {}",
-                truncate(sql, 140)
+                truncate(item.sql.as_deref().unwrap_or_default(), 140)
             )),
+            VerificationFindingCode::SemanticExecutionMismatch,
+            discarded.iter().map(|item| item.id.clone()).collect(),
+            "replace only the affected computation with signed values; preserve other results",
         ));
     }
 }
@@ -2151,15 +2322,23 @@ fn check_binding_usage(
     }
 }
 
-/// The narrower subset the agent loop's corrective re-ask acts on: a cited query
-/// that now re-runs differently, or no longer runs. These are precise the query
-/// is re-executed so "restate your answer to match the re-run" is a safe,
-/// tool-free fix. The fuzzier "a figure appears in no result" is deliberately
-/// *not* here: it's a number-shape heuristic, and a tool-free reconcile there
-/// tends to make the model parrot a raw evidence value (the ratio 0.176 instead
-/// of the "18%" it correctly derived). That stays a fold warning only.
+/// Return a replay mismatch for focused telemetry. The agent loop consumes its
+/// typed evidence scope and performs a tool-backed repair rather than asking
+/// for prose against stale results.
 pub fn rerun_regression(checks: &[VerificationCheck]) -> Option<String> {
-    first_bad(checks, &["different result now", "no longer runs"])
+    checks
+        .iter()
+        .find(|check| {
+            !check.ok
+                && check
+                    .finding
+                    .as_ref()
+                    .is_some_and(|finding| finding.code == VerificationFindingCode::ReplayMismatch)
+        })
+        .map(|check| match &check.detail {
+            Some(detail) => format!("{} ({detail})", check.label),
+            None => check.label.clone(),
+        })
 }
 
 // --- 4. aggregates over a text column --------------------------------------
@@ -2382,7 +2561,7 @@ fn check_case_filter(
     let lowered: Vec<String> = cols.iter().map(|(l, _)| l.clone()).collect();
     for e in evidence
         .iter()
-        .filter(|e| is_sql_evidence(e) && e.error.is_none())
+        .filter(|e| is_sql_evidence(e) && e.is_accepted())
     {
         let Some(sql) = &e.sql else { continue };
         if let Some(hit) = case_sensitive_label_filter(sql, &lowered) {
@@ -2390,12 +2569,15 @@ fn check_case_filter(
                 .iter()
                 .find(|(l, _)| l == hit)
                 .map_or(hit, |(_, n)| n.as_str());
-            out.push(warn(
+            out.push(exclude_evidence_warning(
                 format!("a filter on `{name}` matches exact case"),
                 Some(format!(
                     "`{name}` has values that differ only in capitalisation; \
                      rows like `Rent` vs `rent` may be excluded unless the filter folds case"
                 )),
+                VerificationFindingCode::SemanticExecutionMismatch,
+                vec![e.id.clone()],
+                "revise only this filter to match the observed label values without losing valid rows",
             ));
             return;
         }
@@ -2416,7 +2598,7 @@ fn check_text_agg(
     let lowered: Vec<String> = cols.iter().map(|(l, _)| l.clone()).collect();
     for e in evidence
         .iter()
-        .filter(|e| is_sql_evidence(e) && e.error.is_none())
+        .filter(|e| is_sql_evidence(e) && e.is_accepted())
     {
         let Some(sql) = &e.sql else { continue };
         if let Some(hit) = aggregates_text_column(sql, &lowered) {
@@ -2453,7 +2635,7 @@ fn check_incomplete_quality_audit(
 
     for item in evidence
         .iter()
-        .filter(|item| is_sql_evidence(item) && item.error.is_none())
+        .filter(|item| is_sql_evidence(item) && item.is_accepted())
     {
         let Some(columns) = item.columns.as_deref() else {
             continue;
@@ -2526,6 +2708,7 @@ fn ok(label: impl Into<String>) -> VerificationCheck {
         label: label.into(),
         ok: true,
         detail: None,
+        finding: None,
     }
 }
 
@@ -2534,6 +2717,7 @@ fn ok_with_detail(label: impl Into<String>, detail: Option<String>) -> Verificat
         label: label.into(),
         ok: true,
         detail,
+        finding: None,
     }
 }
 
@@ -2542,6 +2726,14 @@ fn warn(label: impl Into<String>, detail: Option<String>) -> VerificationCheck {
         label: label.into(),
         ok: false,
         detail,
+        finding: Some(crate::engine::evidence::VerificationFinding {
+            code: crate::engine::evidence::VerificationFindingCode::Advisory,
+            effect: crate::engine::evidence::VerificationEffect::Informational,
+            target: crate::engine::evidence::VerificationTarget::Answer,
+            target_id: None,
+            evidence_ids: Vec::new(),
+            guidance: None,
+        }),
     }
 }
 
@@ -2584,13 +2776,13 @@ fn check_aggregate_verb(
 ) {
     let sql: Vec<String> = evidence
         .iter()
-        .filter(|e| is_sql_evidence(e) && e.error.is_none())
+        .filter(|e| is_sql_evidence(e) && e.is_accepted())
         .filter_map(|e| e.sql.as_deref())
         .map(str::to_uppercase)
         .collect();
     let mean_forecast = evidence.iter().any(|item| {
         item.tool == "forecast_analysis"
-            && item.error.is_none()
+            && item.is_accepted()
             && item.args.get("method").and_then(Json::as_str) == Some("mean")
     });
     for name in missing_aggregate_verbs(question, &sql) {
@@ -2798,7 +2990,7 @@ fn check_dropped_column(
 ) {
     let sql: Vec<String> = evidence
         .iter()
-        .filter(|e| is_sql_evidence(e) && e.error.is_none())
+        .filter(|e| is_sql_evidence(e) && e.is_accepted())
         .filter_map(|e| e.sql.as_deref())
         .map(str::to_string)
         .collect();
@@ -2884,7 +3076,7 @@ fn rerun_queries(
     let mut seen: HashSet<&str> = HashSet::new();
     for e in evidence
         .iter()
-        .filter(|e| is_sql_evidence(e) && e.tool != "forecast_analysis" && e.error.is_none())
+        .filter(|e| e.is_accepted() && is_sql_evidence(e) && e.tool != "forecast_analysis")
     {
         let Some(sql) = &e.sql else { continue };
         // One re-run per distinct query - the model often cites the same SQL twice.
@@ -2914,20 +3106,26 @@ fn rerun_queries(
                 if same {
                     matched += 1;
                 } else {
-                    out.push(warn(
+                    out.push(exclude_evidence_warning(
                         "a query behind this answer gives a different result now",
                         Some(truncate(sql, 120)),
+                        VerificationFindingCode::ReplayMismatch,
+                        vec![e.id.clone()],
+                        "rerun this query and revise claims that depended on its stale result",
                     ));
                 }
             }
-            Err(err) => out.push(warn(
+            Err(err) => out.push(exclude_evidence_warning(
                 "a query behind this answer no longer runs",
                 Some(format!("{}: {err}", truncate(sql, 100))),
+                VerificationFindingCode::ReplayMismatch,
+                vec![e.id.clone()],
+                "replace only this result with a query that runs on the current workspace",
             )),
         }
     }
     if matched > 0 {
-        out.push(ok(
+        out.push(successful_replay_check(
             "re-checked the queries behind this answer  same results",
         ));
     }
@@ -2951,7 +3149,7 @@ fn rerun_python_inputs(
     let mut matched = 0usize;
     let mut saw_python = false;
     for item in evidence.iter().filter(|item| {
-        matches!(item.tool.as_str(), "run_python" | "forecast_analysis") && item.error.is_none()
+        matches!(item.tool.as_str(), "run_python" | "forecast_analysis") && item.is_accepted()
     }) {
         saw_python = true;
         if item.python_queries_complete != Some(true) {
@@ -2987,17 +3185,23 @@ fn rerun_python_inputs(
                         matched += 1;
                     } else {
                         item_ok = false;
-                        out.push(warn(
+                        out.push(exclude_evidence_warning(
                             "a SQL input to the Python computation gives a different result now",
                             Some(truncate(&query.sql, 120)),
+                            VerificationFindingCode::ReplayMismatch,
+                            vec![item.id.clone()],
+                            "recompute only this Python result using current SQL inputs",
                         ));
                     }
                 }
                 Err(error) => {
                     item_ok = false;
-                    out.push(warn(
+                    out.push(exclude_evidence_warning(
                         "a SQL input to the Python computation no longer runs",
                         Some(format!("{}: {error}", truncate(&query.sql, 100))),
+                        VerificationFindingCode::ReplayMismatch,
+                        vec![item.id.clone()],
+                        "repair the recorded input query and recompute this Python result",
                     ));
                 }
             }
@@ -3007,7 +3211,7 @@ fn rerun_python_inputs(
         }
     }
     if saw_python && matched > 0 {
-        out.push(ok(
+        out.push(successful_replay_check(
             "re-checked the SQL inputs to this Python computation  same results",
         ));
     }
@@ -3036,7 +3240,7 @@ fn check_numbers(
         // for the final answer. In particular, a rejected query must not
         // suppress a repair merely because its retained rows happen to
         // contain the answer's number.
-        if e.error.is_some() {
+        if !e.is_accepted() {
             continue;
         }
         // SQL summaries contain execution metadata such as `2 rows in 50ms`.
@@ -3055,7 +3259,7 @@ fn check_numbers(
             // (or zero rows). That result backs the answer "0" / "none" - so
             // the model reporting 0 here isn't an ungrounded figure.
             let empty_aggregate = is_sql_evidence(e)
-                && e.error.is_none()
+                && e.is_accepted()
                 && (rows.is_empty() || (rows.len() == 1 && rows[0].iter().all(Json::is_null)));
             if empty_aggregate {
                 supported.push(0.0);
@@ -3074,7 +3278,11 @@ fn check_numbers(
                 }
             }
         }
-        if let Some(chart) = &e.chart {
+        if let Some(chart) = e
+            .chart
+            .as_ref()
+            .filter(|_| !e.artifact_is_withheld("chart"))
+        {
             collect_chart_numbers(chart, &mut supported);
         }
     }
@@ -3136,12 +3344,21 @@ fn check_numbers(
         }
     } else {
         let shown: Vec<_> = unsupported.iter().take(4).cloned().collect();
-        out.push(warn(
+        let evidence_ids = evidence
+            .iter()
+            .filter(|item| item.is_accepted())
+            .map(|item| item.id.clone())
+            .collect();
+        out.push(repair_claim_warning(
             format!(
                 "the answer mentions {} not found in any result",
                 shown.join(", ")
             ),
             Some("check these against the evidence below".into()),
+            VerificationFindingCode::UnsupportedClaim,
+            shown.join(", "),
+            evidence_ids,
+            "revise, qualify, or omit only these unsupported figures; keep valid source results",
         ));
     }
 }
@@ -3371,7 +3588,7 @@ fn is_percentage_unit(unit: Option<&str>) -> bool {
 /// exactly, or is a number within `close()` tolerance. A float SUM/AVG can
 /// serialise with a low-bit difference when the query runs again a
 /// microseconds-later `738022.3` vs `738022.30000000001` is not a changed
-/// answer, and shouldn't trip the corrective re-ask.
+/// answer, and shouldn't invalidate the result or prompt a repair.
 fn rows_match(a: &[Vec<Json>], b: &[Vec<Json>]) -> bool {
     a.len() == b.len()
         && a.iter().zip(b).all(|(ra, rb)| {
@@ -3457,13 +3674,22 @@ pub fn self_consistency_check(first: &str, second: &str) -> Option<VerificationC
     if !answers_disagree(first, second) {
         return None;
     }
-    Some(warn(
+    let mut check = warn(
         "a second model pass disagrees with this answer",
         Some(format!(
             "asked again with stricter instructions, the model answered: \"{}\"",
             truncate(second.trim(), 200)
         )),
-    ))
+    );
+    check.finding = Some(scoped_finding(
+        VerificationFindingCode::ModelDisagreement,
+        VerificationEffect::Informational,
+        VerificationTarget::Answer,
+        None,
+        Vec::new(),
+        Some("treat this as a review signal, not proof that either answer is wrong".into()),
+    ));
+    Some(check)
 }
 
 // --- 9. a date/time GROUP BY collapsed to a NULL bucket --------------------
@@ -3505,7 +3731,7 @@ fn has_null_group_key(rows: &[Vec<Json>]) -> bool {
 /// real, non-null key in its one row and is left alone).
 fn check_null_group_key(evidence: &[EvidenceItem], out: &mut Vec<VerificationCheck>) {
     for e in evidence {
-        if !is_sql_evidence(e) || e.error.is_some() {
+        if !is_sql_evidence(e) || !e.is_accepted() {
             continue;
         }
         let Some(sql) = &e.sql else { continue };
@@ -3514,7 +3740,7 @@ fn check_null_group_key(evidence: &[EvidenceItem], out: &mut Vec<VerificationChe
         }
         let Some(rows) = &e.rows else { continue };
         if has_null_group_key(rows) {
-            out.push(warn(
+            out.push(exclude_evidence_warning(
                 "a query behind this answer groups by a date expression that returned no \
 value for at least one row",
                 Some(
@@ -3523,6 +3749,9 @@ parse for every row, so those rows collapsed into one ungrouped bucket instead o
 month/week/year check the raw column's values"
                         .into(),
                 ),
+                VerificationFindingCode::SemanticExecutionMismatch,
+                vec![e.id.clone()],
+                "inspect the raw date values and repair only this grouped result; keep other evidence",
             ));
             return;
         }
@@ -3676,7 +3905,7 @@ fn check_row_value_labels(
     out: &mut Vec<VerificationCheck>,
 ) {
     for e in evidence {
-        if !is_sql_evidence(e) || e.error.is_some() {
+        if !is_sql_evidence(e) || !e.is_accepted() {
             continue;
         }
         let (Some(columns), Some(rows)) = (&e.columns, &e.rows) else {
@@ -3779,7 +4008,7 @@ fn check_row_value_labels(
                         })
                 });
                 if let Some((_, (other_col, _))) = swap {
-                    out.push(warn(
+                    out.push(repair_claim_warning(
                         format!(
                             "\"{raw}\" is labeled like {other_col} but actually came from {true_col}"
                         ),
@@ -3788,6 +4017,10 @@ fn check_row_value_labels(
 this line is actually quoting"
                                 .into(),
                         ),
+                        VerificationFindingCode::ContractMismatch,
+                        raw.to_string(),
+                        vec![e.id.clone()],
+                        "correct only the claim-to-column attribution; retain the query result",
                     ));
                     return;
                 }
@@ -3866,7 +4099,14 @@ mod tests {
         assert!(checks
             .iter()
             .any(|check| { !check.ok && check.label.contains("signed values were discarded") }));
-        assert!(hard_fail(&checks).is_some());
+        assert!(checks.iter().any(|check| {
+            check.finding.as_ref().is_some_and(|finding| {
+                finding.effect == VerificationEffect::ExcludeEvidence
+                    && finding.target == VerificationTarget::Evidence
+                    && finding.evidence_ids == vec![evidence[0].id.clone()]
+            })
+        }));
+        assert!(hard_fail(&checks).is_none());
 
         let mut explicit_absolute = Vec::new();
         check_signed_semantics(
@@ -4225,10 +4465,16 @@ mod tests {
         evidence[0].chart.as_mut().unwrap().series[0].values[0] = Some(99.0);
         let mut bad = Vec::new();
         check_chart_values(&evidence, &mut bad);
-        assert!(bad.iter().any(|check| {
-            !check.ok && check.label == "chart values did not match source query"
-        }));
-        assert!(hard_fail(&bad).is_some());
+        let finding = bad
+            .iter()
+            .find(|check| !check.ok && check.label == "chart values did not match source query")
+            .and_then(|check| check.finding.as_ref())
+            .expect("chart mismatch carries a scoped finding");
+        assert_eq!(finding.effect, VerificationEffect::WithholdArtifact);
+        assert_eq!(finding.target, VerificationTarget::Artifact);
+        assert_eq!(finding.target_id.as_deref(), Some(evidence[0].id.as_str()));
+        assert_eq!(finding.evidence_ids, vec!["evidence-test"]);
+        assert!(hard_fail(&bad).is_none());
     }
 
     #[test]
@@ -4516,7 +4762,7 @@ mod tests {
             "this question looked like it needed a join across tables; the answer only used one",
             None,
         )];
-        assert!(semantic_repair_hint("Show the total by category", &[], &checks).is_none());
+        assert!(semantic_repair_hint(&checks).is_none());
     }
 
     #[test]
@@ -4647,7 +4893,7 @@ mod tests {
     }
 
     #[test]
-    fn forecast_without_evaluation_gets_a_soft_repair_hint_but_keeps_the_point_result() {
+    fn forecast_without_evaluation_is_advisory_and_keeps_the_point_result() {
         let point_only = run_sql_ev(
             "SELECT AVG(value) AS estimate FROM monthly_values",
             &["estimate"],
@@ -4664,12 +4910,12 @@ mod tests {
         assert!(checks[0]
             .label
             .contains("forecast lacks chronological evaluation"));
-        assert!(semantic_repair_hint(
-            "Forecast next month from the workspace series",
-            &[point_only],
-            &checks
-        )
-        .is_some());
+        assert!(semantic_repair_hint(&checks).is_none());
+        assert_eq!(
+            checks[0].finding.as_ref().unwrap().effect,
+            VerificationEffect::Informational
+        );
+        assert!(point_only.is_accepted());
 
         let mut evaluated = run_sql_ev(
             "SELECT period, value FROM monthly_values ORDER BY period",
@@ -4935,44 +5181,54 @@ mod tests {
         ];
         assert_eq!(hard_fail(&soft), None);
 
-        // A re-run mismatch is a hard fail; label + detail (the SQL) come back.
-        let hard = vec![
-            ok("re-checked the queries behind this answer  same results"),
-            warn(
-                "a query behind this answer gives a different result now",
-                Some("SELECT sum(amount) FROM t".into()),
-            ),
-        ];
-        assert_eq!(
-            hard_fail(&hard).as_deref(),
-            Some(
-                "a query behind this answer gives a different result now (SELECT sum(amount) FROM t)"
-            )
-        );
+        // A replay mismatch excludes only its cited evidence and is actionable,
+        // but it does not veto unrelated supported claims.
+        let replay = vec![exclude_evidence_warning(
+            "a query behind this answer gives a different result now",
+            Some("SELECT sum(amount) FROM t".into()),
+            VerificationFindingCode::ReplayMismatch,
+            vec!["query-1".into()],
+            "rerun only this query and revise dependent claims",
+        )];
+        assert_eq!(hard_fail(&replay), None);
+        assert!(rerun_regression(&replay).is_some());
+        let replay_finding = replay[0].finding.as_ref().unwrap();
+        assert_eq!(replay_finding.effect, VerificationEffect::ExcludeEvidence);
+        assert_eq!(replay_finding.evidence_ids, vec!["query-1"]);
 
-        // An unbacked figure is a hard fail; label used when there's no detail.
-        let stray = vec![warn(
+        // An unsupported figure scopes repair to the claim and leaves source
+        // results eligible for use; it is not an answer-wide veto.
+        let unsupported = vec![repair_claim_warning(
             "the answer mentions 999 not found in any result",
             None,
+            VerificationFindingCode::UnsupportedClaim,
+            "999",
+            vec!["query-1".into()],
+            "revise or omit only this figure",
         )];
+        assert_eq!(hard_fail(&unsupported), None);
+        assert_eq!(rerun_regression(&unsupported), None);
         assert_eq!(
-            hard_fail(&stray).as_deref(),
-            Some("the answer mentions 999 not found in any result")
+            unsupported[0].finding.as_ref().unwrap().target,
+            VerificationTarget::Claim
         );
 
-        // ...but the corrective re-ask only acts on the re-run checks.
-        assert_eq!(
-            rerun_regression(&stray),
-            None,
-            "unbacked figure is fold-only"
-        );
-        assert!(
-            rerun_regression(&hard).is_some(),
-            "a changed re-run does trigger it"
-        );
+        // Only a finding explicitly authorized to block the complete answer
+        // creates a hard failure (for example, a stale workspace snapshot).
+        let stale = vec![warn_with_effect(
+            "workspace changed while this answer was running",
+            Some("revision changed".into()),
+            VerificationFindingCode::WorkspaceStale,
+            VerificationEffect::BlockAnswer,
+            VerificationTarget::Answer,
+            Some("turn-1".into()),
+            vec!["query-1".into()],
+            Some("rerun against the current revision".into()),
+        )];
+        assert!(hard_fail(&stale).is_some());
 
         // A same-model disagreement is a quality warning, not proof that the
-        // answer is wrong; a tool replay mismatch remains a hard failure.
+        // answer is wrong; replay mismatches remain scoped to their evidence.
         let disagreed = vec![self_consistency_check("Total: $450", "Total: $600").unwrap()];
         assert_eq!(hard_fail(&disagreed), None);
         assert_eq!(
@@ -4999,11 +5255,15 @@ mod tests {
                 vec![Json::from("south"), Json::from(200)],
             ],
         )];
-        let checks = vec![warn(
+        let checks = vec![repair_claim_warning(
             "the answer mentions 93914.13 not found in any result",
             Some("check these against the evidence below".into()),
+            VerificationFindingCode::UnsupportedClaim,
+            "93914.13",
+            vec![evidence[0].id.clone()],
+            "recompute or retract this figure",
         )];
-        let hint = semantic_repair_hint("Break spending down by area", &evidence, &checks);
+        let hint = semantic_repair_hint(&checks);
         assert!(
             hint.is_some(),
             "an unbacked number may need a derived computation or retraction"
@@ -5017,14 +5277,16 @@ mod tests {
             &["sum"],
             vec![vec![Json::from(100)]],
         )];
-        let checks = vec![warn(
+        let checks = vec![exclude_evidence_warning(
             "a filter on `category` matches exact case",
             Some("values differ only in capitalisation".into()),
+            VerificationFindingCode::SemanticExecutionMismatch,
+            vec![evidence[0].id.clone()],
+            "revise only this filter",
         )];
 
         assert!(
-            semantic_repair_hint("What are housing costs?", &evidence, &checks)
-                .is_some_and(|hint| hint.contains("matches exact case"))
+            semantic_repair_hint(&checks).is_some_and(|hint| hint.contains("matches exact case"))
         );
     }
 
@@ -5038,12 +5300,15 @@ mod tests {
                 vec![Json::from("south"), Json::from(200)],
             ],
         )];
-        let checks = vec![warn(
+        let checks = vec![repair_claim_warning(
             "the answer mentions 93914.13 not found in any result",
             None,
+            VerificationFindingCode::UnsupportedClaim,
+            "93914.13",
+            vec![evidence[0].id.clone()],
+            "revise or omit this figure",
         )];
-        assert!(semantic_repair_hint("Break down by area", &evidence, &checks).is_some());
-        assert!(semantic_repair_hint("Show the total as a chart", &evidence, &checks).is_some());
+        assert!(semantic_repair_hint(&checks).is_some());
     }
 
     #[test]
@@ -5053,11 +5318,15 @@ mod tests {
             &["total"],
             vec![vec![Json::from(300)]],
         )];
-        let checks = vec![warn(
+        let checks = vec![repair_claim_warning(
             "the answer mentions 93914.13 not found in any result",
             None,
+            VerificationFindingCode::UnsupportedClaim,
+            "93914.13",
+            vec![evidence[0].id.clone()],
+            "revise or omit this figure",
         )];
-        assert!(semantic_repair_hint("What is the total spending?", &evidence, &checks).is_some());
+        assert!(semantic_repair_hint(&checks).is_some());
     }
 
     #[test]
@@ -5134,13 +5403,8 @@ mod tests {
 
     #[test]
     fn a_fully_backed_scalar_answer_does_not_trigger_a_duplicate_repair() {
-        let evidence = vec![run_sql_ev(
-            "SELECT SUM(amount) AS total FROM transactions",
-            &["total"],
-            vec![vec![Json::from(300)]],
-        )];
         let checks = vec![ok("every number in the answer came from the data above")];
-        assert!(semantic_repair_hint("What is the total spending?", &evidence, &checks).is_none());
+        assert!(semantic_repair_hint(&checks).is_none());
     }
 
     #[test]
@@ -5151,7 +5415,7 @@ mod tests {
             vec![vec![Json::from(1)]],
         )];
         let clean = vec![
-            ok("re-checked the queries behind this answer  same results"),
+            successful_replay_check("re-checked the queries behind this answer  same results"),
             ok("every number in the answer came from the data above"),
         ];
         assert_eq!(
@@ -5173,14 +5437,18 @@ mod tests {
         );
         assert_eq!(
             status(
-                &[warn(
+                &[repair_claim_warning(
                     "the answer mentions 999 not found in any result",
-                    None
+                    None,
+                    VerificationFindingCode::UnsupportedClaim,
+                    "999",
+                    vec![evidence[0].id.clone()],
+                    "revise or omit this unsupported figure",
                 )],
                 &evidence,
                 true
             ),
-            VerificationStatus::Failed
+            VerificationStatus::NeedsReview
         );
         assert_eq!(
             status(&[], &[], false),
@@ -5354,6 +5622,7 @@ mod tests {
             python_queries_complete: None,
             ms: 1,
             error: None,
+            verifier_disposition: None,
         }];
         let mut out = Vec::new();
         check_numbers(
@@ -5413,6 +5682,7 @@ mod tests {
             python_queries_complete: None,
             ms: 1,
             error: None,
+            verifier_disposition: None,
         }];
         let mut out = Vec::new();
         check_numbers(
@@ -5448,6 +5718,7 @@ mod tests {
             python_queries_complete: None,
             ms: 1,
             error: None,
+            verifier_disposition: None,
         }
     }
 
@@ -5488,10 +5759,10 @@ mod tests {
         check_null_group_key(&ev, &mut out);
         assert_eq!(out.len(), 1, "{out:?}");
         assert!(!out[0].ok);
-        assert!(
-            hard_fail(&out).is_some(),
-            "should surface as a hard fail, not just a caution"
-        );
+        let finding = out[0].finding.as_ref().unwrap();
+        assert_eq!(finding.effect, VerificationEffect::ExcludeEvidence);
+        assert_eq!(finding.evidence_ids, vec![ev[0].id.clone()]);
+        assert!(hard_fail(&out).is_none());
     }
 
     #[test]
@@ -5732,10 +6003,11 @@ mod tests {
         assert_eq!(out.len(), 1, "{out:?}");
         assert!(!out[0].ok);
         assert!(out[0].label.contains("max_dining"), "{}", out[0].label);
-        assert!(
-            hard_fail(&out).is_some(),
-            "a label swap is a wrong answer, not just a caution"
+        assert_eq!(
+            out[0].finding.as_ref().unwrap().effect,
+            VerificationEffect::Repair
         );
+        assert!(hard_fail(&out).is_none());
     }
 
     #[test]
@@ -5923,7 +6195,14 @@ mod tests {
         assert!(arithmetic_checks
             .iter()
             .any(|check| { !check.ok && check.label.contains("period comparison arithmetic") }));
-        assert!(hard_fail(&arithmetic_checks).is_some());
+        assert!(hard_fail(&arithmetic_checks).is_none());
+        assert!(arithmetic_checks.iter().any(|check| {
+            !check.ok
+                && check.finding.as_ref().is_some_and(|finding| {
+                    finding.effect == VerificationEffect::Repair
+                        && finding.target == VerificationTarget::Claim
+                })
+        }));
 
         let bad = vec![run_sql_ev(
             "SELECT SUM(amount) AS measure_0_current FROM spend",
@@ -6133,7 +6412,14 @@ mod tests {
         assert!(arithmetic_checks
             .iter()
             .any(|check| { !check.ok && check.label.contains("derived metric arithmetic") }));
-        assert!(hard_fail(&arithmetic_checks).is_some());
+        assert!(hard_fail(&arithmetic_checks).is_none());
+        assert!(arithmetic_checks.iter().any(|check| {
+            !check.ok
+                && check.finding.as_ref().is_some_and(|finding| {
+                    finding.effect == VerificationEffect::Repair
+                        && finding.target == VerificationTarget::Claim
+                })
+        }));
 
         let bad = vec![run_sql_ev(
             "SELECT SUM(amount) AS measure_0, COUNT(*) AS measure_1 FROM spend",

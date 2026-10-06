@@ -104,6 +104,10 @@ export interface EvidenceItem {
 	python_input_trace?: PythonInputTrace;
 	ms: number;
 	error?: string;
+	/** Verifier decision; separate from whether the tool itself executed. */
+	verifier_disposition?:
+		| { state: 'excluded'; reason: string }
+		| { state: 'artifact_withheld'; artifact: string; reason: string };
 }
 
 export interface PythonInputTrace {
@@ -134,6 +138,37 @@ export interface VerificationCheck {
 	label: string;
 	ok: boolean;
 	detail?: string;
+	finding?: VerificationFinding;
+}
+
+export type VerificationEffect =
+	| 'informational'
+	| 'repair'
+	| 'exclude_evidence'
+	| 'withhold_artifact'
+	| 'block_answer';
+
+export type VerificationFindingCode =
+	| 'advisory'
+	| 'replay_match'
+	| 'replay_mismatch'
+	| 'unsupported_claim'
+	| 'semantic_execution_mismatch'
+	| 'semantic_caveat'
+	| 'chart_mismatch'
+	| 'contract_mismatch'
+	| 'workspace_stale'
+	| 'model_disagreement';
+
+export type VerificationTarget = 'answer' | 'claim' | 'evidence' | 'artifact';
+
+export interface VerificationFinding {
+	code: VerificationFindingCode;
+	effect: VerificationEffect;
+	target: VerificationTarget;
+	target_id?: string;
+	evidence_ids?: string[];
+	guidance?: string;
 }
 
 export type VerificationStatus = 'verified' | 'needs_review' | 'insufficient_data' | 'failed';

@@ -7,6 +7,21 @@ this app repo (now **`fella`**; `fella-ai` is a private pre-v0.1 archive),
 `fella-marketplace` to mean the browse-site half of the **`fella-web`** repo,
 and any `CODE_OF_CONDUCT.md` mention as folded into `CONTRIBUTING.md` (§Conduct).
 
+- **2026-10-06** **Verifier authority is typed, target-scoped, and non-destructive.**
+  A failed check is not automatically a whole-answer veto. Findings carry one
+  explicit effect (`informational`, `repair`, `exclude_evidence`,
+  `withhold_artifact`, or `block_answer`), a target, and related evidence IDs.
+  The agent repairs only that target, preserves unrelated accepted work, and
+  gets at most three repair passes. A broken chart can be withheld without
+  dropping its source result; a claim problem can be corrected while retaining
+  its evidence. Whole-answer blocking is reserved for a named answer-level
+  integrity condition such as the workspace changing during the turn. Finding
+  details are available in the evidence inspector, not repeated as message
+  badges. This supersedes the 2026-09-07 tool-free verifier re-ask: changed
+  replay evidence is now excluded by ID and handled through a bounded,
+  tool-backed repair. The behavior matrix and fair-test protocol are recorded
+  in `VERIFIER-AUTHORITY.md`; the full-loop quality benchmark remains to be run.
+
 - **2026-10-02** **Forecasting is an allowed analysis, not a refusal category.**
   The model may inspect a time series, choose an appropriate read-only method,
   and estimate a future value or scenario. Distinguish observed data from the
@@ -283,10 +298,11 @@ and any `CODE_OF_CONDUCT.md` mention as folded into `CONTRIBUTING.md` (§Conduct
   reproduces.** Amends the 2026-08-27 "no extra LLM call in verification" line:
   the verify pass is still deterministic and still never supplies a number, but
   if `verify::rerun_regression` fires (a cited query re-runs to a different
-  result, or no longer runs) the loop spends **one** tool-free turn asking the
+  result, or no longer runs) the loop spent **one** tool-free turn asking the
   model to restate its answer to match the re-run, then re-verifies once.
   Bounded to a single extra call, normal completion path only.
-  `FELLA_VERIFY_REASK=0` disables it. *Deliberately narrower than
+  `FELLA_VERIFY_REASK=0` disabled it. This decision was superseded on
+  2026-10-06 by typed, target-scoped, tool-backed repair. *Deliberately narrower than
   `verify::hard_fail`:* the third hard-fail kind, "a figure appears in no
   result", is a number-shape heuristic left as a fold warning only measuring it
   (`agent_eval`, gemma/luna/grok) showed a tool-free reconcile there degrades a

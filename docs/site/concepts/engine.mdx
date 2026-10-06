@@ -164,7 +164,7 @@ source metadata, schema, ingest notes, skipped files, or root context changes.
 
 ### Verification boundary
 
-`verify.rs` belongs in the analytics module because its checks are deterministic operations over the catalog, SQL, answers, and recorded evidence. It receives only `AnalyticsSource`, never the full `EngineState`, and never calls a model. The [verification page](/concepts/verification) documents its ten checks, SQL rerun policy, corrective re-ask boundary, and known false-negative/false-positive limits.
+`verify.rs` belongs in the analytics module because its checks are deterministic operations over the catalog, SQL, answers, contracts, and recorded evidence. It receives only `AnalyticsSource`, never the full `EngineState`, and never calls a model. The agent owns bounded, model-driven repair; each verifier finding specifies its effect and target so the harness can preserve unrelated work. The [verification page](/concepts/verification) documents that authority boundary and its known false-negative/false-positive limits.
 
 ## Limits
 

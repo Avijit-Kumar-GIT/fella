@@ -80,8 +80,8 @@ comparison shows otherwise.
 
 - **M0 — runtime spine:** implemented in the typed `runtime` module and the
   shared Tauri/Electron answer protocol. Recoverable provider/tool failures and
-  deterministic verification re-asks now emit the explicit `retry` lifecycle
-  state instead of leaving the shells to infer recovery from raw errors; a
+  typed, target-scoped verification repairs now emit the explicit `retry`
+  lifecycle state instead of leaving the shells to infer recovery from raw errors; a
   mid-turn workspace revision change now stops stale tool retries and preserves
   the partial trace for an explicit rerun.
 - **M1 — WorkspaceModel:** first slice implemented; the mounted catalog now
@@ -128,7 +128,8 @@ comparison shows otherwise.
   grouped and ungrouped averages are now checked against independent min/max
   bounds under the same grounded scope; explicit cross-population and
   chart payloads are now re-projected from their stored source rows during
-  verification so mutated labels or values become hard failures; richer
+  verification so mutated labels or values produce artifact-scoped withhold
+  findings; richer
   chart-shape semantics remain ahead, and
   unresolved, ambiguous, and unsupported hypotheses remain visible in the
   trace, but they do not veto a separately grounded direct computation. Numeric

@@ -734,28 +734,28 @@ with an opaque veto over the whole answer. It should catch concrete problems
 and help the model repair them without discarding sound analysis because of a
 disagreement, a brittle comparison, or a failure in an unrelated output.
 
-- [ ] **Define verifier authority explicitly.** Separate informational
+- [x] **Define verifier authority explicitly.** Separate informational
   findings, repair requests, and hard gates. A hard gate must name the exact
   affected claim or artifact and cite an objective reason, such as failed or
   stale execution, invalid result structure, a safety boundary, or a chart
   whose plotted values do not match its source result. Semantic disagreement
   or a checker error alone is not a whole-answer hard gate.
-- [ ] **Keep verification scoped to what failed.** A chart problem should not
+- [x] **Keep verification scoped to what failed.** A chart problem should not
   erase valid prose or tabular results; an unsupported sentence should not
   invalidate independent calculations. Preserve accepted SQL/Python results
   and charts unless the verifier identifies a concrete defect in those
   artifacts. Any removal or supersession must identify the specific item and
   reason in the trace.
-- [ ] **Make findings useful to the model.** Return structured findings that
+- [x] **Make findings useful to the model.** Return structured findings that
   identify the affected claim/artifact, the failed check, the supporting
   evidence, and a possible repair direction. The harness can then revise,
   qualify, omit only the unsupported claim, ask for material clarification,
   or retain a supported answer with an appropriate caveat.
-- [ ] **Bound repair and preserve work.** Set a small, explicit repair budget;
+- [x] **Bound repair and preserve work.** Set a small, explicit repair budget;
   do not repeat equivalent tool calls or clear valid evidence to force a
   restart. If repair cannot resolve one finding, keep the rest of the answer
   and report the unresolved part precisely.
-- [ ] **Expose the decision without clutter.** Let users inspect what was
+- [x] **Expose the decision without clutter.** Let users inspect what was
   checked, what passed or failed, and what effect the finding had. Keep this
   detail available on demand rather than adding a success/failure badge or a
   repeated verifier report to every message. Do not offer a blanket “ignore
@@ -768,6 +768,12 @@ disagreement, a brittle comparison, or a failure in an unrelated output.
   retained, repair/tool-call count, and latency through the full agent loop.
   Declare expected behavior before running candidates; preserve failures for
   review instead of tuning expectations to observed output.
+
+Implementation note (2026-10-06): the typed finding model, exact-scope evidence
+dispositions, three-pass tool-backed repair, and on-demand effect/target display
+are implemented with focused policy tests in `docs/VERIFIER-AUTHORITY.md`.
+The full-loop benchmark and its false-positive/false-negative measurements
+have not run, so this roadmap item is not complete until that evaluation does.
 
 **Acceptance checks:** a verifier finding cannot silently erase unrelated
 valid work; every hard gate is scoped and justified; supported portions of a

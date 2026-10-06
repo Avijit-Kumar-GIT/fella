@@ -64,7 +64,20 @@
 	// references it. Correctness shouldn't depend on a small model correctly
 	// placing a chart mention in freeform text.
 	let chartItems = $derived(
-		(message.answer?.evidence ?? []).filter((e) => e.tool === 'make_chart' && e.chart && !e.error)
+		(message.answer?.evidence ?? []).filter(
+			(e) =>
+				e.tool === 'make_chart' &&
+				e.chart &&
+				!e.error &&
+				e.verifier_disposition?.state !== 'excluded' &&
+				!(e.verifier_disposition?.state === 'artifact_withheld' && e.verifier_disposition.artifact === 'chart') &&
+				!(message.answer?.verification ?? []).some(
+					(check) =>
+						!check.ok &&
+						check.finding?.effect === 'withhold_artifact' &&
+						check.finding.target_id === e.id
+				)
+		)
 	);
 	let hasVisualAnswer = $derived(chartItems.length > 0 && !message.pending);
 
@@ -75,7 +88,7 @@
 	let answerSources = $derived.by(() => {
 		const names = new Set<string>();
 		for (const item of message.answer?.evidence ?? []) {
-			if (item.error) continue;
+			if (item.error || item.verifier_disposition?.state === 'excluded') continue;
 			for (const source of item.sources ?? []) {
 				if (source.source.trim()) names.add(source.source.trim());
 			}
@@ -103,7 +116,13 @@
 			add('What else stands out?');
 			add('Show this over time');
 		}
-		if (!answer.evidence.some((item) => item.tool === 'make_chart' && item.chart && !item.error)) {
+		if (!answer.evidence.some((item) =>
+			item.tool === 'make_chart' &&
+			item.chart &&
+			!item.error &&
+			item.verifier_disposition?.state !== 'excluded' &&
+			!(item.verifier_disposition?.state === 'artifact_withheld' && item.verifier_disposition.artifact === 'chart')
+		)) {
 			add('Show this as a chart');
 		}
 		return suggestions.slice(0, 3);

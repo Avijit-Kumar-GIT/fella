@@ -220,6 +220,7 @@ mod tests {
                     label: "query reruns".into(),
                     ok: true,
                     detail: None,
+                    finding: None,
                 }],
             }),
             result: AnalysisResult {

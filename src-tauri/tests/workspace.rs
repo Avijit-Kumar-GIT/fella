@@ -1200,6 +1200,7 @@ fn grounds_and_executes_a_typed_period_comparison() {
         python_queries_complete: None,
         ms: result.ms,
         error: None,
+        verifier_disposition: None,
     };
     let checks = fella_lib::engine::analytics::verify::execution_checks(
         &engine,
@@ -1288,6 +1289,7 @@ fn grounds_and_verifies_an_average_against_observed_bounds() {
         python_queries_complete: None,
         ms: result.ms,
         error: None,
+        verifier_disposition: None,
     };
     let checks = fella_lib::engine::analytics::verify::execution_checks(
         &engine,

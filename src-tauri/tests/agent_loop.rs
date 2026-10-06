@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use fella_lib::engine::evidence::VerificationStatus;
+use fella_lib::engine::evidence::{EvidenceDisposition, VerificationStatus};
 use fella_lib::engine::{AskEvent, ClarificationReply, EngineState};
 
 fn scratch(tag: &str) -> PathBuf {
@@ -650,13 +650,23 @@ async fn semantic_verification_repairs_archive_scope_before_accepting_an_answer(
 
     assert!(answer.text.contains("100"), "answer: {}", answer.text);
     assert_eq!(answer.status, VerificationStatus::Verified);
-    assert!(answer.evidence.iter().any(|item| {
-        item.error
-            .as_deref()
-            .is_some_and(|error| error.contains("superseded"))
-    }));
+    let excluded_scope = answer
+        .evidence
+        .iter()
+        .find(|item| {
+            item.sql
+                .as_deref()
+                .is_some_and(|sql| sql.contains("UNION ALL"))
+        })
+        .expect("the original broad-scope query remains visible");
+    assert!(excluded_scope.error.is_none(), "tool execution succeeded");
+    assert!(matches!(
+        &excluded_scope.verifier_disposition,
+        Some(EvidenceDisposition::Excluded { .. })
+    ));
     assert!(answer.evidence.iter().any(|item| {
         item.error.is_none()
+            && item.verifier_disposition.is_none()
             && item
                 .sql
                 .as_deref()
@@ -758,32 +768,26 @@ async fn semantic_verification_repeats_for_multiple_independent_findings() {
         .filter(|item| item.tool == "run_sql")
         .collect();
     assert_eq!(sql_evidence.len(), 3, "evidence: {:?}", answer.evidence);
-    assert!(sql_evidence[0]
-        .error
-        .as_deref()
-        .is_some_and(|error| error.contains("matches exact case")));
-    assert!(sql_evidence[1]
-        .error
-        .as_deref()
-        .is_some_and(|error| error.contains("not found in any result")));
+    assert!(sql_evidence[0].error.is_none(), "tool execution succeeded");
+    assert!(matches!(
+        &sql_evidence[0].verifier_disposition,
+        Some(EvidenceDisposition::Excluded { reason }) if reason.contains("matches exact case")
+    ));
+    assert!(sql_evidence[1].error.is_none());
+    assert!(sql_evidence[1].verifier_disposition.is_none());
     assert!(sql_evidence[2].error.is_none());
+    assert!(sql_evidence[2].verifier_disposition.is_none());
     assert!(sql_evidence[2]
         .sql
         .as_deref()
         .is_some_and(|sql| sql.contains("lower(category)") && sql.contains("'mortgage'")));
-    assert!(answer.evidence.iter().any(|item| {
-        item.error.as_deref().is_some_and(|error| {
-            error.contains("superseded") && error.contains("matches exact case")
-        })
-    }));
     let requests = requests.lock().unwrap();
     assert_eq!(requests.len(), 6);
     assert!(requests[2].to_string().contains("matches exact case"));
     assert!(requests[4].to_string().contains("not found in any result"));
     assert!(requests[4]
         .to_string()
-        .contains("marked these prior evidence items as superseded"));
-    assert!(requests[4].to_string().contains("not accepted evidence"));
+        .contains("No source result has been invalidated by this finding"));
     assert!(requests[4]
         .to_string()
         .contains("Housing costs total $1,500"));
@@ -943,10 +947,27 @@ async fn semantic_verification_repairs_a_zero_row_filter_instead_of_accepting_ze
 
     assert!(answer.text.contains("1,200"), "answer: {}", answer.text);
     assert_eq!(answer.status, VerificationStatus::Verified);
+    let rejected_filter = answer
+        .evidence
+        .iter()
+        .find(|item| {
+            item.sql
+                .as_deref()
+                .is_some_and(|sql| sql.contains("current export"))
+        })
+        .expect("the original empty-result filter remains visible");
+    assert!(rejected_filter.error.is_none(), "tool execution succeeded");
+    assert!(matches!(
+        &rejected_filter.verifier_disposition,
+        Some(EvidenceDisposition::Excluded { .. })
+    ));
     assert!(answer.evidence.iter().any(|item| {
-        item.error
-            .as_deref()
-            .is_some_and(|error| error.contains("superseded"))
+        item.error.is_none()
+            && item.verifier_disposition.is_none()
+            && item
+                .sql
+                .as_deref()
+                .is_some_and(|sql| sql == "SELECT SUM(amount) AS total FROM transactions")
     }));
 
     let _ = fs::remove_dir_all(&ws);
@@ -1036,13 +1057,20 @@ async fn semantic_verification_repairs_a_derived_value_missing_from_query_result
 
     assert!(answer.text.contains("$50"), "answer: {}", answer.text);
     assert_eq!(answer.status, VerificationStatus::Verified);
-    assert!(answer.evidence.iter().any(|item| {
-        item.error
-            .as_deref()
-            .is_some_and(|error| error.contains("superseded"))
-    }));
+    assert!(
+        answer.evidence.iter().any(|item| {
+            item.error.is_none()
+                && item.verifier_disposition.is_none()
+                && item
+                    .sql
+                    .as_deref()
+                    .is_some_and(|sql| sql.contains("GROUP BY period"))
+        }),
+        "the grouped source result remains accepted for the repaired claim"
+    );
     assert!(answer.evidence.iter().any(|item| {
         item.error.is_none()
+            && item.verifier_disposition.is_none()
             && item
                 .sql
                 .as_deref()

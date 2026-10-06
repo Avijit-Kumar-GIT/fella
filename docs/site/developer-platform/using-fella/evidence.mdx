@@ -39,9 +39,9 @@ Evidence is not proof that the model chose the right source or interpreted the q
 
 ## What verification checks
 
-The deterministic pass can flag unknown tables, changed or broken query re-runs, unsupported figures, text-column aggregates, exact-case filters, missing aggregate operations or columns, likely missed joins, null date buckets, and mislabeled values in single-row aggregate results.
+The deterministic pass can flag unknown tables, changed or broken query re-runs, unsupported figures, text-column aggregates, exact-case filters, missing contract bindings, null date buckets, arithmetic mismatches, and mislabeled values in single-row aggregate results. Findings identify their effect and scope in **Analysis Details**.
 
-If a query re-run changes or fails, Fella can make one tool-free corrective model request. If any warning remains, an optional cost-gated second opinion can compare the answer's figures. That second opinion is model-based, not deterministic.
+Actionable findings can trigger up to three targeted, tool-backed repair passes. Only the named result is excluded or the named artifact withheld; unrelated accepted evidence remains available. A changed or failed query replay is not reconciled with a prose-only re-ask. A separate cost-gated same-model second opinion may compare figures; disagreement is informational, not proof that the answer is wrong.
 
 ## Warnings are signals
 

@@ -11,7 +11,7 @@ use crate::engine::context::ContextPacket;
 use crate::engine::error::{EngineError, EngineResult};
 use crate::engine::evidence::{
     Answer, AnswerProvenance, AskEvent, EvidenceItem, PythonInputTrace, PythonQueryReference,
-    Usage, VerificationCheck, WorkspaceSnapshot,
+    Usage, VerificationCheck, VerificationFinding, WorkspaceSnapshot,
 };
 use crate::engine::llm::{ChatMessage, LlmClient, ToolCall};
 use crate::engine::runtime::{
@@ -31,6 +31,43 @@ const MAX_STEPS: usize = 20;
 /// execution, or answer-shape problems. Let the model repair them iteratively,
 /// while bounding extra model/tool cost.
 const MAX_SEMANTIC_REPAIRS: usize = 3;
+
+/// Apply only the evidence disposition named by a verifier finding. The
+/// successful tool execution remains intact in `error`; verifier authority is
+/// recorded in its own field so unrelated results stay usable.
+fn apply_verifier_disposition(
+    item: &mut EvidenceItem,
+    finding: &VerificationFinding,
+    reason: &str,
+) -> bool {
+    use crate::engine::evidence::{
+        EvidenceDisposition, VerificationEffect, VerificationFindingCode, VerificationTarget,
+    };
+
+    match finding.effect {
+        VerificationEffect::ExcludeEvidence if finding.evidence_ids.contains(&item.id) => {
+            item.verifier_disposition = Some(EvidenceDisposition::Excluded {
+                reason: reason.to_string(),
+            });
+            true
+        }
+        VerificationEffect::WithholdArtifact
+            if finding.target == VerificationTarget::Artifact
+                && finding.target_id.as_deref() == Some(item.id.as_str()) =>
+        {
+            let artifact = match finding.code {
+                VerificationFindingCode::ChartMismatch => "chart",
+                _ => "artifact",
+            };
+            item.verifier_disposition = Some(EvidenceDisposition::ArtifactWithheld {
+                artifact: artifact.into(),
+                reason: reason.to_string(),
+            });
+            true
+        }
+        _ => false,
+    }
+}
 
 fn max_steps() -> usize {
     super::env::positive("FELLA_MAX_STEPS", MAX_STEPS)
@@ -138,40 +175,41 @@ stop and answer now; don't keep exploring."
     })
 }
 
-fn semantic_repair_prompt(
-    detail: &str,
-    superseded: &[String],
-    preserve_successful_chart: bool,
-) -> String {
-    let invalidated = if superseded.is_empty() {
-        String::new()
+fn semantic_repair_prompt(check: &VerificationCheck, affected: &[String]) -> String {
+    let finding = check.finding.as_ref();
+    let target = finding.map_or("the answer", |finding| match finding.target {
+        crate::engine::evidence::VerificationTarget::Answer => "the answer",
+        crate::engine::evidence::VerificationTarget::Claim => "the identified claim",
+        crate::engine::evidence::VerificationTarget::Evidence => "the identified evidence",
+        crate::engine::evidence::VerificationTarget::Artifact => "the identified artifact",
+    });
+    let invalidated = if affected.is_empty() {
+        "No source result has been invalidated by this finding.".to_string()
     } else {
         format!(
-            " The runtime marked these prior evidence items as superseded and they are not \
-accepted evidence: {}. Do not rely on them as successful results.",
-            superseded.join(", ")
+            "Only these items are excluded or withheld: {}. Do not use those items as accepted output.",
+            affected.join(", ")
         )
     };
-    let chart_guidance = if preserve_successful_chart {
-        " The number check found a claim that is not a direct value in the results; it did not reject the checked source data or chart. Recheck any derived arithmetic against the retained result, then correct or omit the unsupported figure. Keep the successful chart and its source evidence; do not rerun the same query or create another chart unless a required input is genuinely missing."
-    } else {
-        " If a result supporting a requested chart or other visualization is superseded, recreate that deliverable from the revised accepted evidence before finalizing; do so once, and do not silently replace it with prose alone or produce interim alternatives."
-    };
-    let derivation_guidance = if preserve_successful_chart {
-        " Check a derived figure against the retained rows; don't rerun a query or recreate the chart for arithmetic those rows already support. If the figure cannot be supported from them, omit that figure while still answering the supported parts."
-    } else {
-        " If the question asks for a derived value, execute a computation that returns it with labeled operands; otherwise omit any figure the evidence does not support."
-    };
+    let guidance = finding
+        .and_then(|finding| finding.guidance.as_deref())
+        .unwrap_or("repair only the identified target");
+    let detail = check
+        .detail
+        .as_deref()
+        .map(|detail| format!(" — {detail}"))
+        .unwrap_or_default();
     format!(
-        "Semantic verification failed: {detail}.{invalidated} Use the existing non-superseded evidence \
-and revise only what the failed check calls into question. Do not repeat a successful inspection, \
-query, or chart unless the check makes that result unusable or a specific missing input is needed. \
-Preserve every explicit source scope, date range, filter, \
-exclusion, grouping, denominator, unit, and requested output deliverable from the question and prior \
-turn.{chart_guidance} Carry forward the established interpretation unless evidence disproves it; if a material \
-scope choice remains unresolved, ask one focused clarification instead of silently changing it. Do not \
-defend an unsupported figure.{derivation_guidance} Then answer \
-from the checked results."
+        "Semantic verification failed for {target}: {label}{detail}. {invalidated} {guidance}. Revise only what this finding calls into question; \
+preserve all other accepted evidence and answer components. Do not repeat a successful query or \
+inspection. Preserve the requested scope, filters, grouping, units, and every explicitly requested \
+output deliverable. If a figure \
+cannot be supported, qualify or omit that claim while still answering the supported parts. If a \
+material interpretation remains unresolved, ask one focused clarification. Then answer from the \
+accepted evidence.",
+        label = check.label,
+        invalidated = invalidated,
+        guidance = guidance
     )
 }
 
@@ -501,120 +539,55 @@ pretend workspace field.",
             );
             // A model that returns neither text nor a tool call would otherwise
             // leave a blank reply. Give the user something to act on.
-            let mut text = if resp.content.trim().is_empty() && evidence.is_empty() {
+            let text = if resp.content.trim().is_empty() && evidence.is_empty() {
                 "The model returned an empty reply. Try rephrasing the question, or switch model \
                  with /model."
                     .to_string()
             } else {
                 resp.content
             };
-            let mut checks = verify::run(engine, question, &text, &evidence, ids.contract.as_ref());
-            // One tool-free corrective turn when a cited query re-runs to a
-            // different result (or no longer runs). The value the model
-            // reconciles against comes from that re-run, so the answer stays
-            // checkable. An unbacked figure is handled separately below: it
-            // gets one tool-backed repair regardless of result shape, so the
-            // model can compute a missing derived value or retract a claim.
-            // `FELLA_VERIFY_REASK=0` opts out.
-            if reask_enabled() && !evidence.is_empty() && !cancel.load(Ordering::Relaxed) {
-                if let Some(detail) = verify::rerun_regression(&checks) {
-                    emit(AskEvent::TurnState {
-                        turn_id: ids.turn_id.clone(),
-                        state: TurnState::Retry,
-                    });
-                    messages.push(ChatMessage::User(format!(
-                        "Self-check: {detail}. Re-running the query behind your answer gives a \
-different result now. Using only what you've already gathered no new tools give the \
-corrected answer to match the re-run."
-                    )));
-                    let reask_started = Instant::now();
-                    let r = tokio::select! {
-                        result = llm.chat(&messages, &[], &notify, &on_delta) => match result {
-                            Ok(response) => {
-                                record_model_call(&mut ids, reask_started, true, response.usage);
-                                response
-                            }
-                            Err(error) => {
-                                record_model_call(&mut ids, reask_started, false, None);
-                                log::warn!("agent: verification re-ask failed: {error}");
-                                Default::default()
-                            }
-                        },
-                        _ = cancelled(cancel.as_ref()) => Default::default(),
-                    };
-                    usage = Usage::merge(usage, r.usage);
-                    if !r.content.trim().is_empty() {
-                        text = r.content;
-                        checks =
-                            verify::run(engine, question, &text, &evidence, ids.contract.as_ref());
-                    }
-                }
-            }
-            let semantic_repair_hint = verify::semantic_repair_hint(question, &evidence, &checks);
+            let mut checks = verify::run_for_answer(
+                engine,
+                question,
+                &text,
+                &evidence,
+                ids.contract.as_ref(),
+                ids.grounding.as_ref(),
+            );
+            let semantic_repair_hint = verify::semantic_repair_hint(&checks);
             if semantic_repair_attempts < MAX_SEMANTIC_REPAIRS
                 && !evidence.is_empty()
                 && !cancel.load(Ordering::Relaxed)
                 && step + 1 < steps
                 && semantic_repair_hint.is_some()
             {
-                let detail = semantic_repair_hint.expect("semantic repair hint exists");
+                let repair_check = verify::semantic_repair_check(&checks)
+                    .cloned()
+                    .expect("repair hint must identify a check");
+                let finding = repair_check
+                    .finding
+                    .as_ref()
+                    .expect("actionable checks carry structured findings")
+                    .clone();
                 semantic_repair_attempts += 1;
-                // A missing direct numeric match is a claim-level issue, not
-                // grounds to discard otherwise valid data. When the requested
-                // visualization and its source projection both passed checks,
-                // preserve them while the model corrects or derives its prose.
-                let has_checked_chart = detail.contains("not found in any result")
-                    && evidence.iter().any(|item| {
-                        item.tool == "make_chart" && item.error.is_none() && item.chart.is_some()
-                    })
-                    && checks.iter().any(|check| {
-                        check.ok && check.label == "chart values matched the source query"
-                    })
-                    && !checks.iter().any(|check| {
-                        !check.ok
-                            && matches!(
-                                check.label.as_str(),
-                                "chart values did not match source query"
-                                    | "chart source result could not be checked"
-                            )
-                    });
-                // A repair may legitimately need to rerun a query that the
-                // verifier invalidated; do not let the loop memo block it.
-                // Retain the memo when a checked chart already satisfies the
-                // requested deliverable, preventing duplicate work.
-                if !has_checked_chart {
-                    seen_calls.clear();
-                }
                 force_final_answer = false;
-                let mut superseded = 0;
-                let mut superseded_refs = Vec::new();
-                if !has_checked_chart {
-                    for item in &mut evidence {
-                        if verify::semantic_evidence_matches(engine, question, item, &detail) {
-                            superseded_refs.push(format!("{} ({})", item.id, item.tool));
-                            item.error = Some(format!(
-                                "superseded: semantic verification rejected this evidence ({detail})"
-                            ));
-                            superseded += 1;
-                        }
+                let mut affected_refs = Vec::new();
+                let disposition_reason = repair_check
+                    .detail
+                    .as_deref()
+                    .map(|detail| format!("{}: {detail}", repair_check.label))
+                    .unwrap_or_else(|| repair_check.label.clone());
+                for item in &mut evidence {
+                    if !apply_verifier_disposition(item, &finding, &disposition_reason) {
+                        continue;
                     }
-                }
-                if superseded == 0
-                    && !has_checked_chart
-                    && !detail.contains("forecast lacks chronological evaluation")
-                {
-                    if let Some(item) = evidence.iter_mut().find(|item| {
-                        item.error.is_none()
-                            && matches!(
-                                item.tool.as_str(),
-                                "run_sql" | "forecast_analysis" | "make_chart"
-                            )
-                    }) {
-                        superseded_refs.push(format!("{} ({})", item.id, item.tool));
-                        item.error = Some(format!(
-                            "superseded: semantic verification rejected this evidence ({detail})"
-                        ));
-                    }
+                    affected_refs.push(format!("{} ({})", item.id, item.tool));
+                    let previous_call = ToolCall {
+                        id: item.id.clone(),
+                        name: item.tool.clone(),
+                        arguments: item.args.clone(),
+                    };
+                    seen_calls.remove(&tool_call_key(&previous_call));
                 }
                 emit(AskEvent::TurnState {
                     turn_id: ids.turn_id.clone(),
@@ -625,9 +598,8 @@ corrected answer to match the re-run."
                     tool_calls: Vec::new(),
                 });
                 messages.push(ChatMessage::User(semantic_repair_prompt(
-                    &detail,
-                    &superseded_refs,
-                    has_checked_chart,
+                    &repair_check,
+                    &affected_refs,
                 )));
                 continue;
             }
@@ -1191,11 +1163,6 @@ fn workspace_matches(engine: &EngineState, expected: Option<&WorkspaceSnapshot>)
     }
 }
 
-/// The corrective re-ask fires unless `FELLA_VERIFY_REASK=0`.
-fn reask_enabled() -> bool {
-    !matches!(std::env::var("FELLA_VERIFY_REASK").as_deref(), Ok("0"))
-}
-
 /// The same-model consistency pass (#80) fires unless `FELLA_SELF_CHECK=0`.
 fn self_check_enabled() -> bool {
     !matches!(std::env::var("FELLA_SELF_CHECK").as_deref(), Ok("0"))
@@ -1208,12 +1175,13 @@ fn finish(
     evidence: Vec<EvidenceItem>,
     usage: Option<Usage>,
 ) -> Answer {
-    let checks = verify::run(
+    let checks = verify::run_for_answer(
         context.engine,
         question,
         &text,
         &evidence,
         context.ids.contract.as_ref(),
+        context.ids.grounding.as_ref(),
     );
     finish_with(context, question, text, evidence, usage, checks)
 }
@@ -1234,17 +1202,15 @@ fn finish_with(
                 "the data changed during this question, so its evidence may not describe the current workspace; ask again"
                     .into(),
             ),
+            finding: Some(crate::engine::evidence::VerificationFinding {
+                code: crate::engine::evidence::VerificationFindingCode::WorkspaceStale,
+                effect: crate::engine::evidence::VerificationEffect::BlockAnswer,
+                target: crate::engine::evidence::VerificationTarget::Answer,
+                target_id: Some(context.ids.turn_id.clone()),
+                evidence_ids: evidence.iter().map(|item| item.id.clone()).collect(),
+                guidance: Some("rerun against the current workspace revision".into()),
+            }),
         });
-    }
-    if let Some(contract) = context.ids.contract.as_ref() {
-        if contract.interpretation == runtime::InterpretationStatus::Grounded {
-            verification.extend(verify::execution_checks(
-                context.engine,
-                contract,
-                context.ids.grounding.as_ref(),
-                &evidence,
-            ));
-        }
     }
     log::info!(
         "agent done: {} char answer, {} evidence item(s)",
@@ -1492,6 +1458,7 @@ fn duplicate_tool_outcome(call: &ToolCall, content: String) -> (EvidenceItem, St
             python_queries_complete: None,
             ms: 0,
             error: None,
+            verifier_disposition: None,
         },
         content,
     )
@@ -1601,6 +1568,7 @@ async fn run_tool_call(
                 python_queries_complete: out.python_queries_complete,
                 ms: started.elapsed().as_millis() as u64,
                 error: None,
+                verifier_disposition: None,
             };
             (item, out.llm_text)
         }
@@ -1649,6 +1617,7 @@ fn tool_error(
             python_queries_complete: None,
             ms: started.elapsed().as_millis() as u64,
             error: Some(message.clone()),
+            verifier_disposition: None,
         },
         format!("ERROR: {message}"),
     )
@@ -2099,7 +2068,68 @@ mod tests {
             python_queries_complete: None,
             ms: 0,
             error: None,
+            verifier_disposition: None,
         }
+    }
+
+    #[test]
+    fn evidence_exclusion_applies_only_to_the_named_item() {
+        let finding = VerificationFinding {
+            code: crate::engine::evidence::VerificationFindingCode::ReplayMismatch,
+            effect: crate::engine::evidence::VerificationEffect::ExcludeEvidence,
+            target: crate::engine::evidence::VerificationTarget::Evidence,
+            target_id: Some("query-1".into()),
+            evidence_ids: vec!["query-1".into()],
+            guidance: Some("rerun the affected query".into()),
+        };
+        let mut affected = evidence_item("run_sql");
+        affected.id = "query-1".into();
+        let mut unrelated = evidence_item("run_sql");
+        unrelated.id = "query-2".into();
+
+        assert!(apply_verifier_disposition(
+            &mut affected,
+            &finding,
+            "the result changed on replay"
+        ));
+        assert!(!apply_verifier_disposition(
+            &mut unrelated,
+            &finding,
+            "the result changed on replay"
+        ));
+        assert!(!affected.is_accepted());
+        assert!(unrelated.is_accepted());
+        assert_eq!(affected.error, None, "execution outcome is not rewritten");
+    }
+
+    #[test]
+    fn chart_withholding_keeps_the_source_result_accepted() {
+        let finding = VerificationFinding {
+            code: crate::engine::evidence::VerificationFindingCode::ChartMismatch,
+            effect: crate::engine::evidence::VerificationEffect::WithholdArtifact,
+            target: crate::engine::evidence::VerificationTarget::Artifact,
+            target_id: Some("chart-1".into()),
+            evidence_ids: vec!["query-1".into()],
+            guidance: Some("rebuild only the chart".into()),
+        };
+        let mut source = evidence_item("run_sql");
+        source.id = "query-1".into();
+        let mut chart = evidence_item("make_chart");
+        chart.id = "chart-1".into();
+
+        assert!(!apply_verifier_disposition(
+            &mut source,
+            &finding,
+            "plotted values differ from the source"
+        ));
+        assert!(apply_verifier_disposition(
+            &mut chart,
+            &finding,
+            "plotted values differ from the source"
+        ));
+        assert!(source.is_accepted());
+        assert!(chart.is_accepted());
+        assert!(chart.artifact_is_withheld("chart"));
     }
 
     #[test]
@@ -2450,17 +2480,6 @@ mod tests {
         assert!(!got.contains("decline it even though you have tools"));
     }
     #[test]
-    fn reask_enabled_defaults_on_and_env_opts_out() {
-        std::env::remove_var("FELLA_VERIFY_REASK");
-        assert!(reask_enabled());
-        std::env::set_var("FELLA_VERIFY_REASK", "0");
-        assert!(!reask_enabled());
-        std::env::set_var("FELLA_VERIFY_REASK", "1");
-        assert!(reask_enabled());
-        std::env::remove_var("FELLA_VERIFY_REASK");
-    }
-
-    #[test]
     fn self_check_enabled_defaults_on_and_env_opts_out() {
         std::env::remove_var("FELLA_SELF_CHECK");
         assert!(self_check_enabled());
@@ -2603,22 +2622,42 @@ mod tests {
 
     #[test]
     fn semantic_repair_preserves_requested_deliverables() {
-        let prompt = semantic_repair_prompt(
-            "a figure was not supported by the query result",
-            &["evidence-5 (make_chart)".into()],
-            false,
-        );
+        let chart_check = VerificationCheck {
+            label: "chart values did not match source query".into(),
+            ok: false,
+            detail: Some("plotted values differ from source rows".into()),
+            finding: Some(crate::engine::evidence::VerificationFinding {
+                code: crate::engine::evidence::VerificationFindingCode::ChartMismatch,
+                effect: crate::engine::evidence::VerificationEffect::WithholdArtifact,
+                target: crate::engine::evidence::VerificationTarget::Artifact,
+                target_id: Some("chart-5".into()),
+                evidence_ids: vec!["query-4".into()],
+                guidance: Some("rebuild only this chart; retain the source result".into()),
+            }),
+        };
+        let prompt = semantic_repair_prompt(&chart_check, &["chart-5 (make_chart)".into()]);
         assert!(prompt.contains("requested output deliverable"));
-        assert!(prompt.contains("recreate that deliverable from the revised accepted evidence"));
-        assert!(prompt.contains("Do not repeat a successful inspection, "));
-        assert!(prompt.contains("do not silently replace it with prose alone"));
-        assert!(prompt.contains("evidence-5 (make_chart)"));
-        assert!(prompt.contains("not accepted evidence"));
+        assert!(prompt.contains("chart-5 (make_chart)"));
+        assert!(prompt.contains("Only these items are excluded or withheld"));
+        assert!(prompt.contains("rebuild only this chart; retain the source result"));
+        assert!(prompt.contains("preserve all other accepted evidence"));
 
-        let chart_prompt =
-            semantic_repair_prompt("the answer mentions 40 not found in any result", &[], true);
-        assert!(chart_prompt.contains("did not reject the checked source data or chart"));
-        assert!(chart_prompt.contains("do not rerun the same query or create another chart"));
-        assert!(chart_prompt.contains("don't rerun a query or recreate the chart for arithmetic"));
+        let claim_check = VerificationCheck {
+            label: "the answer mentions 40 not found in any result".into(),
+            ok: false,
+            detail: None,
+            finding: Some(crate::engine::evidence::VerificationFinding {
+                code: crate::engine::evidence::VerificationFindingCode::UnsupportedClaim,
+                effect: crate::engine::evidence::VerificationEffect::Repair,
+                target: crate::engine::evidence::VerificationTarget::Claim,
+                target_id: Some("40".into()),
+                evidence_ids: vec!["query-4".into()],
+                guidance: Some("revise or omit only this figure".into()),
+            }),
+        };
+        let claim_prompt = semantic_repair_prompt(&claim_check, &[]);
+        assert!(claim_prompt.contains("No source result has been invalidated"));
+        assert!(claim_prompt.contains("revise or omit only this figure"));
+        assert!(claim_prompt.contains("every explicitly requested output deliverable"));
     }
 }

@@ -1,5 +1,5 @@
-//! Local, telemetry-free log of moments the harness hit a wall: a `hard_fail`
-//! that survives the corrective re-ask, or repeated tool errors within one
+//! Local, telemetry-free log of moments the harness hit a wall: an explicit
+//! answer-wide verifier block, or repeated tool errors within one
 //! answer. Never transmitted — a plain JSONL file the user (or the
 //! maintainer, dogfooding their own sessions) can choose to open. Deliberately
 //! coarse: no question text, no answer text, no file paths, no SQL, no tool
@@ -25,8 +25,8 @@ pub(crate) struct FrictionSignal {
     pub errors: usize,
 }
 
-/// Which trigger, if any, this answer hits. `checks` is the *final* set (post
-/// corrective re-ask); `evidence` this answer's tool calls. Pure so it's
+/// Which trigger, if any, this answer hits. `checks` is the *final* set after
+/// any targeted repair; `evidence` is this answer's tool calls. Pure so it's
 /// testable without touching disk.
 pub(crate) fn trigger(
     checks: &[VerificationCheck],
@@ -111,6 +111,7 @@ mod tests {
             python_queries_complete: None,
             ms: 0,
             error: error.map(String::from),
+            verifier_disposition: None,
         }
     }
 
@@ -119,21 +120,28 @@ mod tests {
             label: label.into(),
             ok: true,
             detail: None,
+            finding: None,
         }
     }
-    fn warn(label: &str) -> VerificationCheck {
+    fn block_answer(label: &str) -> VerificationCheck {
         VerificationCheck {
             label: label.into(),
             ok: false,
             detail: None,
+            finding: Some(crate::engine::evidence::VerificationFinding {
+                code: crate::engine::evidence::VerificationFindingCode::WorkspaceStale,
+                effect: crate::engine::evidence::VerificationEffect::BlockAnswer,
+                target: crate::engine::evidence::VerificationTarget::Answer,
+                target_id: Some("turn-test".into()),
+                evidence_ids: Vec::new(),
+                guidance: None,
+            }),
         }
     }
 
     #[test]
-    fn hard_fail_wins_over_repeated_errors() {
-        let checks = vec![warn(
-            "a query behind this answer gives a different result now",
-        )];
+    fn explicit_answer_block_wins_over_repeated_errors() {
+        let checks = vec![block_answer("workspace changed during the answer")];
         let evidence = vec![ev(Some("timeout")), ev(Some("timeout"))];
         assert_eq!(trigger(&checks, &evidence), Some("hard_fail_unresolved"));
     }

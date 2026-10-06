@@ -116,12 +116,10 @@ src-tauri/src/
       chart.rs                VisualizationSpec/Series/ChartKind + validate() (flat/degenerate
                              data refused before it reaches the UI; `auto` resolves to a
                              deterministic bar/line renderer from the query shape)
-      verify.rs               ten deterministic post-answer checks against `&dyn
-                             AnalyticsSource` (re-run cited SQL, catalog/column
-                             sanity, text-aggregate and case-filter traps, a NULL
-                             date GROUP BY, a value attached to the wrong column's
-                             name in a multi-aggregate row) + one cost-gated
-                             second-opinion re-ask
+      verify.rs               deterministic checks against `&dyn AnalyticsSource`
+                             (replay, contract execution, numeric support, result
+                             invariants, and chart/source reconciliation); findings
+                             carry explicit effect and target
     ingest/
       docs.rs                pdf-extract / plain text → extract() (no chunking)
       excel.rs               calamine → typed rows → DataEngine::add_rows
@@ -250,10 +248,10 @@ run(question):
   loop up to max_steps() (MAX_STEPS = 20, FELLA_MAX_STEPS overrides):
     resp = llm.chat(msgs, tool_schemas)            # raced against a cancel flag
     if not resp.tool_calls:
-      checks = verify(resp.content, evidence)
-      if actionable(checks) and repair_budget_left:
-        supersede(checks' invalidated evidence)
-        msgs.push(assistant answer, verification feedback)
+      checks = verify_for_answer(resp.content, evidence)
+      if actionable_typed_finding(checks) and repair_budget_left:
+        apply_finding_to_exact_target(checks' evidence or artifact)
+        msgs.push(assistant answer, scoped verification guidance)
         continue                                  # same analytical turn
       return finish(resp.content, checks)          # AnswerDone (may need review)
     for call:
@@ -264,7 +262,7 @@ run(question):
   # out of steps: one last turn with no tools, telling the model why, for a hedged answer
   return finish(last_turn.text or "I ran out of analysis steps …")
 
-finish(text): verification = verify(text, evidence); emit AnswerDone
+finish(text): persist typed verification findings; emit AnswerDone
 ```
 
 The evaluation-only `EngineState::ask_once` and `ask_once_usage` helpers call
@@ -285,26 +283,25 @@ useful partial result, or focused question—not a blanket refusal. Work should
 be proportional to the request. Conversation and user context help interpret
 references and vocabulary but are not evidence for new data claims.
 
-**Verification pass** (`analytics::verify`, deterministic): re-execute any SQL cited in
-the answer and confirm the headline value is unchanged; confirm every table
-named in cited SQL exists in the catalog; flag numerals in the answer that
-appear in no tool result; flag a `SUM`/`AVG` over a text column, and an
-exact-case filter on a column whose values differ only in capitalisation;
-flag wording that implies an aggregate no cited query used, or a column
-named in the question that no cited query touches; flag a question naming a
-shared join column answered from one table alone; flag a date/time
-`GROUP BY` that collapsed to a NULL key; flag a value in the answer sitting
-next to a different column's name than the one it actually came from (a
-query that packs several aggregates into one row). Rendered as a ✓/⚠
-checklist in the evidence block. Actionable failures can return the same turn
-to the model for a tool-backed repair, up to three attempts; invalidated
-evidence is marked superseded. If checks remain unresolved when the budget is
-exhausted, the answer stays in review. `FELLA_VERIFY_REASK` separately controls
-the single tool-free reconciliation when re-executing a cited query produces a
-different result. When the model requests observation and computation in the
-same response, the controller also defers computation until the model has
-received the requested inspection output, preserving the analyst's
-observe-interpret-compute loop instead of running both calls concurrently.
+**Verification pass** (`analytics::verify`, deterministic): checks executed
+queries and Python inputs for replayability, grounds numeric claims in results,
+validates contract execution and result invariants, and checks chart payloads
+against their source tables. Each finding has a typed effect and scope:
+`informational`, `repair`, `exclude_evidence`, `withhold_artifact`, or
+`block_answer`, plus its target and related evidence IDs. The model can repair
+one identified claim or rerun excluded evidence without invalidating unrelated
+results; a malformed chart can be withheld while retaining its source table
+and prose. The loop is capped at three targeted repair passes. Only an explicit
+`block_answer` finding, currently a workspace revision change during the turn,
+sets the whole answer status to failed. Other unresolved checks remain
+inspectable in the on-demand evidence details; historical checks without typed
+findings remain readable but are not promoted to answer-wide vetoes from their
+labels. No tool-free verifier re-ask remains. When the model requests
+observation and computation in the same response, the controller defers
+computation until the model has received the requested inspection output,
+preserving the analyst's observe-interpret-compute loop instead of running
+both calls concurrently. The normative authority and acceptance matrix is in
+[`VERIFIER-AUTHORITY.md`](VERIFIER-AUTHORITY.md).
 
 ## Tools
 

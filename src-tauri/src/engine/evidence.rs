@@ -58,6 +58,39 @@ pub struct EvidenceItem {
     pub ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Verifier disposition is distinct from a tool error: an execution may
+    /// have succeeded while its result is excluded from this answer, or only
+    /// one artifact produced from it (such as a chart) may be withheld.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verifier_disposition: Option<EvidenceDisposition>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum EvidenceDisposition {
+    Excluded { reason: String },
+    ArtifactWithheld { artifact: String, reason: String },
+}
+
+impl EvidenceItem {
+    /// Whether this result is eligible to support the current answer. Tool
+    /// failures and verifier-excluded results are both ineligible, but remain
+    /// distinguishable in the transcript.
+    pub fn is_accepted(&self) -> bool {
+        self.error.is_none()
+            && !matches!(
+                self.verifier_disposition,
+                Some(EvidenceDisposition::Excluded { .. })
+            )
+    }
+
+    pub fn artifact_is_withheld(&self, artifact: &str) -> bool {
+        matches!(
+            &self.verifier_disposition,
+            Some(EvidenceDisposition::ArtifactWithheld { artifact: withheld, .. })
+                if withheld == artifact
+        )
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -112,12 +145,69 @@ pub enum VerificationStatus {
     Failed,
 }
 
+/// What the verifier is authorized to do about one finding. A failed check is
+/// not automatically a veto: its effect and target are explicit so callers
+/// can preserve unrelated claims and evidence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VerificationEffect {
+    Informational,
+    Repair,
+    ExcludeEvidence,
+    WithholdArtifact,
+    BlockAnswer,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VerificationFindingCode {
+    Advisory,
+    ReplayMatch,
+    ReplayMismatch,
+    UnsupportedClaim,
+    SemanticExecutionMismatch,
+    SemanticCaveat,
+    ChartMismatch,
+    ContractMismatch,
+    WorkspaceStale,
+    ModelDisagreement,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VerificationTarget {
+    Answer,
+    Claim,
+    Evidence,
+    Artifact,
+}
+
+/// Machine-readable authority, scope, and next action for an individual
+/// verification check. `target_id` identifies a claim/artifact/evidence item;
+/// `evidence_ids` identify the supporting or affected evidence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VerificationFinding {
+    pub code: VerificationFindingCode,
+    pub effect: VerificationEffect,
+    pub target: VerificationTarget,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guidance: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VerificationCheck {
     pub label: String,
     pub ok: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    /// Optional for compatibility with archived checks written before
+    /// verifier authority and scope were explicit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finding: Option<VerificationFinding>,
 }
 
 /// Token accounting for one `ask`, summed across every model turn. Populated
@@ -183,6 +273,30 @@ pub struct Answer {
 mod tests {
     use super::*;
 
+    fn evidence() -> EvidenceItem {
+        EvidenceItem {
+            id: "evidence-1".into(),
+            tool: "run_sql".into(),
+            sources: Vec::new(),
+            args: serde_json::json!({}),
+            note: None,
+            sql: Some("SELECT 1".into()),
+            result_summary: "1 row".into(),
+            columns: Some(vec!["value".into()]),
+            rows: Some(vec![vec![serde_json::json!(1)]]),
+            row_count: Some(1),
+            output: None,
+            chart: None,
+            result_table: None,
+            python_input_trace: None,
+            python_queries: None,
+            python_queries_complete: None,
+            ms: 1,
+            error: None,
+            verifier_disposition: None,
+        }
+    }
+
     #[test]
     fn usage_merge_sums_and_tolerates_missing() {
         let a = Usage {
@@ -211,6 +325,42 @@ mod tests {
             serde_json::to_value(VerificationStatus::NeedsReview).unwrap(),
             serde_json::json!("needs_review")
         );
+    }
+
+    #[test]
+    fn verifier_disposition_is_separate_from_tool_execution() {
+        let mut item = evidence();
+        assert!(item.is_accepted());
+
+        item.verifier_disposition = Some(EvidenceDisposition::Excluded {
+            reason: "replay changed".into(),
+        });
+        assert!(!item.is_accepted());
+        assert_eq!(item.error, None, "a verifier decision is not a tool error");
+
+        item.verifier_disposition = Some(EvidenceDisposition::ArtifactWithheld {
+            artifact: "chart".into(),
+            reason: "chart values did not match".into(),
+        });
+        assert!(item.is_accepted(), "the underlying result remains usable");
+        assert!(item.artifact_is_withheld("chart"));
+        assert!(!item.artifact_is_withheld("table"));
+
+        item.error = Some("SQL execution failed".into());
+        assert!(
+            !item.is_accepted(),
+            "tool failures remain independently visible"
+        );
+    }
+
+    #[test]
+    fn older_verification_checks_deserialize_without_authority_metadata() {
+        let check: VerificationCheck = serde_json::from_value(serde_json::json!({
+            "label": "old stored check",
+            "ok": false
+        }))
+        .unwrap();
+        assert_eq!(check.finding, None);
     }
 
     #[test]
@@ -308,6 +458,7 @@ mod tests {
             python_queries_complete: Some(true),
             ms: 1,
             error: None,
+            verifier_disposition: None,
         };
 
         let wire = serde_json::to_value(evidence).unwrap();

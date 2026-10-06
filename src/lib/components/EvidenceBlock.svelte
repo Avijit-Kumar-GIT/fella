@@ -22,7 +22,9 @@
 	let hasToolEvidence = $derived(
 		answer.provenance
 			? answer.provenance.evidence_ids.length > 0
-			: answer.evidence.some((item) => !item.error)
+			: answer.evidence.some(
+					(item) => !item.error && item.verifier_disposition?.state !== 'excluded'
+				)
 	);
 	let providedContext = $derived(
 		(answer.provenance?.context_sections ?? []).map((section) => CONTEXT_LABEL[section])
@@ -83,6 +85,20 @@
 	}
 	function sourceLabel(e: EvidenceItem): string {
 		return (e.sources ?? []).map((s) => `${s.source} (${s.table})`).join(', ');
+	}
+	function findingTargetLabel(check: NonNullable<Answer['verification']>[number]): string | undefined {
+		const finding = check.finding;
+		if (!finding) return undefined;
+		const targetId = finding.target_id ? ` ${finding.target_id}` : '';
+		return `${finding.target.replace('_', ' ')}${targetId}`;
+	}
+	function findingEffectLabel(check: NonNullable<Answer['verification']>[number]): string | undefined {
+		const effect = check.finding?.effect;
+		if (!effect || effect === 'informational') return undefined;
+		if (effect === 'repair') return 'Repair requested';
+		if (effect === 'exclude_evidence') return 'Evidence excluded';
+		if (effect === 'withhold_artifact') return 'Artifact withheld';
+		return 'Answer blocked';
 	}
 
 </script>
@@ -163,6 +179,11 @@
 
 						{#if e.error}
 							<div class="steperr">didn't work: {e.error}</div>
+						{/if}
+						{#if e.verifier_disposition}
+							<div class="verifier-note">
+								{e.verifier_disposition.state === 'excluded' ? 'Not used to support this answer' : `${e.verifier_disposition.artifact} withheld`}: {e.verifier_disposition.reason}
+							</div>
 						{/if}
 
 						{#if hasDetail}
@@ -257,6 +278,9 @@
 							</span>
 							<span>{v.label}</span>
 							{#if v.detail}<span class="detail-note">— {v.detail}</span>{/if}
+							{#if findingEffectLabel(v)}
+								<span class="finding-note">{findingEffectLabel(v)}{#if findingTargetLabel(v)} · {findingTargetLabel(v)}{/if}</span>
+							{/if}
 						</div>
 					{/each}
 				</div>
@@ -338,6 +362,11 @@
 	.steperr {
 		color: var(--err);
 		margin-top: 2px;
+	}
+	.verifier-note {
+		color: var(--warn);
+		margin-top: 2px;
+		font-size: var(--fs-xs);
 	}
 	.detailtoggle {
 		display: block;
@@ -446,5 +475,9 @@
 	}
 	.detail-note {
 		color: var(--text-faint);
+	}
+	.finding-note {
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
 	}
 </style>

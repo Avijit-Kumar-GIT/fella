@@ -90,7 +90,7 @@ verification.
 
 The prompt guides the model to inspect, interpret, decompose, and choose among the available read-only tools. It may use SQL, sandboxed Python, document search, or charts, and can revise its plan as new observations arrive. Forecasts and scenarios are allowed, with observed data kept distinct from estimates and assumptions. These are behavior instructions, not enforcement boundaries.
 
-Deterministic verification always runs when the harness finishes an answer. A changed or failed SQL rerun can trigger one tool-free corrective turn. If checks still contain a warning, a separate default-on self-consistency path can request one stricter tool-free second opinion; `FELLA_SELF_CHECK=0` disables it.
+Deterministic verification always runs when the harness finishes an answer. Findings carry an explicit effect and target; the agent can make up to three tool-backed repairs without discarding unrelated accepted evidence. Only an explicit answer-scoped integrity finding blocks the answer. A separate cost-gated same-model consistency check may run after a warning; disagreement is informational, not independent proof. Set `FELLA_SELF_CHECK=0` to opt out. See [Verification and evidence](/concepts/verification) for the current authority policy.
 
 ### Guidance versus enforcement
 
