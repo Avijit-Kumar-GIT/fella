@@ -159,6 +159,8 @@ struct ReplayRef {
     /// analysis-turn bridge while the benchmark data directory is available.
     turn_id: String,
     workspace_revision: Option<String>,
+    /// Content-free position in a multi-turn benchmark episode.
+    episode_turn: String,
 }
 
 struct RunResult {
@@ -175,7 +177,26 @@ struct RunResult {
     total: Duration,
     first_token: Option<Duration>,
     steps: usize,
+    /// Exact counts copied from the canonical backend trace when available.
+    model_calls: Option<usize>,
+    tool_calls: Option<usize>,
     err: Option<String>,
+}
+
+fn mark_episode_turn(result: &mut RunResult, role: &str) {
+    if let Some(replay) = result.replay.as_mut() {
+        replay.episode_turn = role.to_string();
+    }
+}
+
+fn episode_call_counts(turns: &[&RunResult]) -> (Option<usize>, Option<usize>) {
+    let model_calls = turns
+        .iter()
+        .try_fold(0usize, |sum, turn| Some(sum + turn.model_calls?));
+    let tool_calls = turns
+        .iter()
+        .try_fold(0usize, |sum, turn| Some(sum + turn.tool_calls?));
+    (model_calls, tool_calls)
 }
 
 async fn run_case(
@@ -241,7 +262,12 @@ async fn run_case(
                     .workspace
                     .as_ref()
                     .map(|workspace| workspace.revision.clone()),
+                episode_turn: "turn".into(),
             });
+            let trace_counts = engine
+                .analysis_turn_load(&a.turn_id)
+                .ok()
+                .map(|turn| (turn.trace.model_calls.len(), turn.trace.steps.len()));
             RunResult {
                 hard_fail: matches!(a.status, VerificationStatus::Failed),
                 text: a.text,
@@ -256,6 +282,8 @@ async fn run_case(
                 total,
                 first_token,
                 steps,
+                model_calls: trace_counts.as_ref().map(|(models, _)| *models),
+                tool_calls: trace_counts.as_ref().map(|(_, tools)| *tools),
                 err: None,
             }
         }
@@ -273,6 +301,8 @@ async fn run_case(
             total,
             first_token,
             steps,
+            model_calls: None,
+            tool_calls: None,
             err: Some(e.to_string()),
         },
     }
@@ -1162,6 +1192,13 @@ struct CaseScore {
     total_s: f64,
     first_tok_s: Option<f64>,
     steps: usize,
+    /// Mean whole-episode counts across iterations. None means trace coverage
+    /// was unavailable for every iteration; observed iteration counts are
+    /// emitted alongside these values.
+    model_calls: Option<f32>,
+    model_call_observed_iterations: usize,
+    tool_calls: Option<f32>,
+    tool_call_observed_iterations: usize,
     hard_fail: bool,
     err: Option<String>,
 }
@@ -1309,6 +1346,8 @@ async fn run_bare(engine: &EngineState, dir: &Path, question: &str, files: &[Str
                 total: t0.elapsed(),
                 first_token: None,
                 steps: 0,
+                model_calls: None,
+                tool_calls: None,
                 err: Some(format!("bare: {e}")),
             };
         }
@@ -1343,6 +1382,8 @@ number or short phrase, no explanation. If the files can't answer it, say so pla
                 total,
                 first_token: None,
                 steps: 0,
+                model_calls: Some(1),
+                tool_calls: Some(0),
                 err: None,
             }
         }
@@ -1360,6 +1401,8 @@ number or short phrase, no explanation. If the files can't answer it, say so pla
             total,
             first_token: None,
             steps: 0,
+            model_calls: None,
+            tool_calls: None,
             err: Some(format!("bare: {e}")),
         },
     }
@@ -1423,6 +1466,8 @@ async fn run_openai_ci(h: &CiHarness, dir: &Path, question: &str, files: &[Strin
         total,
         first_token: None,
         steps: 0,
+        model_calls: None,
+        tool_calls: None,
         err,
     };
     let t0 = Instant::now();
@@ -1482,6 +1527,8 @@ async fn run_openai_ci(h: &CiHarness, dir: &Path, question: &str, files: &[Strin
         total,
         first_token: None,
         steps: ci_steps(&v),
+        model_calls: Some(1),
+        tool_calls: Some(ci_steps(&v)),
         err: None,
     }
 }
@@ -1516,6 +1563,10 @@ async fn score_case(
     let mut interpretation_statuses: Vec<InterpretationStatus> = Vec::new();
     let mut plan_strategies: Vec<PlanStrategy> = Vec::new();
     let mut replays: Vec<ReplayRef> = Vec::new();
+    let mut model_call_total = 0usize;
+    let mut model_call_observed_iterations = 0usize;
+    let mut tool_call_total = 0usize;
+    let mut tool_call_observed_iterations = 0usize;
     let mut any_hard = false;
     let mut last_err = None;
 
@@ -1523,7 +1574,8 @@ async fn score_case(
     for it in 0..iters {
         let mut trajectory_ready = true;
         let mut graded_setup_results = Vec::new();
-        let r = match runner {
+        let mut auxiliary_results = Vec::new();
+        let mut r = match runner {
             Runner::Fella => {
                 let c = format!("{conv}-{it}");
                 // A mount-transition trajectory must begin from a genuinely
@@ -1554,7 +1606,8 @@ async fn score_case(
                     trajectory_ready = false;
                 }
                 for (index, turn) in pre_mount_turns.iter().enumerate() {
-                    let prior = run_case(turn_engine, &c, turn, None).await;
+                    let mut prior = run_case(turn_engine, &c, turn, None).await;
+                    mark_episode_turn(&mut prior, "pre_mount");
                     if prior.err.is_some() || prior.text.trim().is_empty() {
                         trajectory_ready = false;
                     }
@@ -1570,6 +1623,7 @@ async fn score_case(
                                 .unwrap_or_default(),
                         );
                     }
+                    auxiliary_results.push(prior);
                 }
                 if let Some(workspace) = mount_after_pre_mount {
                     if let Err(error) = turn_engine.open_workspace(workspace) {
@@ -1578,7 +1632,8 @@ async fn score_case(
                     }
                 }
                 for turn in setup_turns {
-                    let prior = run_case(turn_engine, &c, turn, None).await;
+                    let mut prior = run_case(turn_engine, &c, turn, None).await;
+                    mark_episode_turn(&mut prior, "setup");
                     if mount_after_pre_mount.is_some()
                         && (prior.err.is_some() || prior.text.trim().is_empty())
                     {
@@ -1595,9 +1650,11 @@ async fn score_case(
                                 .unwrap_or_default(),
                         );
                     }
+                    auxiliary_results.push(prior);
                 }
                 for (index, (turn, gold)) in case.graded_setup_turns.iter().enumerate() {
-                    let prior = run_case(turn_engine, &c, turn, None).await;
+                    let mut prior = run_case(turn_engine, &c, turn, None).await;
+                    mark_episode_turn(&mut prior, "graded_setup");
                     let turn_ok =
                         prior.err.is_none() && !prior.text.trim().is_empty() && grade(&prior, gold);
                     trajectory_ready &= turn_ok;
@@ -1633,6 +1690,7 @@ async fn score_case(
                 run_openai_ci(h, dir, &case.question, files).await
             }
         };
+        mark_episode_turn(&mut r, "final_answer");
         let ok = trajectory_ready && grade(&r, &case.gold);
         if ok {
             oks += 1;
@@ -1702,42 +1760,45 @@ async fn score_case(
             // provider/model; restore the case's before the next iter/case.
             set_model(engine, model);
         }
-        ptok += r.prompt_tok as u64
-            + graded_setup_results
-                .iter()
-                .map(|turn| turn.prompt_tok as u64)
-                .sum::<u64>();
-        ctok += r.completion_tok as u64
-            + graded_setup_results
-                .iter()
-                .map(|turn| turn.completion_tok as u64)
-                .sum::<u64>();
-        secs += r.total.as_secs_f64()
-            + graded_setup_results
-                .iter()
-                .map(|turn| turn.total.as_secs_f64())
-                .sum::<f64>();
-        steps += r.steps
-            + graded_setup_results
-                .iter()
-                .map(|turn| turn.steps)
-                .sum::<usize>();
-        let episode_first_token = graded_setup_results
-            .first()
-            .and_then(|turn| turn.first_token)
-            .or(r.first_token);
+        let mut episode_turns: Vec<&RunResult> = auxiliary_results.iter().collect();
+        episode_turns.extend(graded_setup_results.iter());
+        episode_turns.push(&r);
+        ptok += episode_turns
+            .iter()
+            .map(|turn| turn.prompt_tok as u64)
+            .sum::<u64>();
+        ctok += episode_turns
+            .iter()
+            .map(|turn| turn.completion_tok as u64)
+            .sum::<u64>();
+        secs += episode_turns
+            .iter()
+            .map(|turn| turn.total.as_secs_f64())
+            .sum::<f64>();
+        steps += episode_turns.iter().map(|turn| turn.steps).sum::<usize>();
+        let episode_first_token = episode_turns.iter().find_map(|turn| turn.first_token);
         if let Some(ft) = episode_first_token {
             first_toks.push(ft.as_secs_f64());
         }
-        call_signals.extend(graded_setup_results.iter().map(classify_calls));
-        call_signals.push(classify_calls(&r));
+        call_signals.extend(episode_turns.iter().map(|turn| classify_calls(turn)));
+        let (iteration_model_calls, iteration_tool_calls) = episode_call_counts(&episode_turns);
+        if let Some(count) = iteration_model_calls {
+            model_call_total += count;
+            model_call_observed_iterations += 1;
+        }
+        if let Some(count) = iteration_tool_calls {
+            tool_call_total += count;
+            tool_call_observed_iterations += 1;
+        }
         if let Some(status) = r.verification_status {
             verification_statuses.push(status);
             acceptance_observations.push((status, r.err.is_none() && !r.text.trim().is_empty()));
             verification_observations.push((ok, status));
         }
-        if let Some(replay) = r.replay {
-            replays.push(replay);
+        for turn in &episode_turns {
+            if let Some(replay) = &turn.replay {
+                replays.push(replay.clone());
+            }
         }
         if let Some(status) = r.interpretation_status {
             interpretation_statuses.push(status);
@@ -1780,6 +1841,12 @@ async fn score_case(
         first_tok_s: (!first_toks.is_empty())
             .then(|| first_toks.iter().sum::<f64>() / first_toks.len() as f64),
         steps: steps / iters,
+        model_calls: (model_call_observed_iterations > 0)
+            .then(|| model_call_total as f32 / model_call_observed_iterations as f32),
+        model_call_observed_iterations,
+        tool_calls: (tool_call_observed_iterations > 0)
+            .then(|| tool_call_total as f32 / tool_call_observed_iterations as f32),
+        tool_call_observed_iterations,
         hard_fail: any_hard,
         err: last_err,
     }
@@ -2740,6 +2807,10 @@ async fn cmd_session_memory(
             total_s: 0.0,
             first_tok_s: None,
             steps: steps / iters,
+            model_calls: None,
+            model_call_observed_iterations: 0,
+            tool_calls: None,
+            tool_call_observed_iterations: 0,
             hard_fail: false,
             err: None,
         });
@@ -2997,6 +3068,10 @@ async fn cmd_memory(
             total_s: 0.0,
             first_tok_s: None,
             steps: steps / iters,
+            model_calls: None,
+            model_call_observed_iterations: 0,
+            tool_calls: None,
+            tool_call_observed_iterations: 0,
             hard_fail: false,
             err: None,
         });
@@ -3064,6 +3139,10 @@ async fn cmd_memory_axes(
             total_s: 0.0,
             first_tok_s: None,
             steps: 0,
+            model_calls: None,
+            model_call_observed_iterations: 0,
+            tool_calls: None,
+            tool_call_observed_iterations: 0,
             hard_fail: false,
             err: None,
         });
@@ -3399,6 +3478,10 @@ fn write_json(path: &str, scores: &[CaseScore]) {
                 "unreferenced_sql_results": s.calls.unreferenced_results,
                 "prompt_tok": s.prompt_tok,
                 "completion_tok": s.completion_tok, "total_s": s.total_s,
+                "model_calls": s.model_calls,
+                "model_call_observed_iterations": s.model_call_observed_iterations,
+                "tool_calls": s.tool_calls,
+                "tool_call_observed_iterations": s.tool_call_observed_iterations,
                 "steps": s.steps, "hard_fail": s.hard_fail, "err": s.err,
             })
         })
@@ -3736,6 +3819,8 @@ mod tests {
             total: Duration::ZERO,
             first_token: None,
             steps: 0,
+            model_calls: None,
+            tool_calls: None,
             err: None,
         }
     }
@@ -3969,15 +4054,31 @@ mod tests {
         let value = serde_json::to_value(ReplayRef {
             turn_id: "turn-123".into(),
             workspace_revision: Some("rev-456".into()),
+            episode_turn: "final_answer".into(),
         })
         .unwrap();
         assert_eq!(
             value,
             serde_json::json!({
                 "turn_id": "turn-123",
-                "workspace_revision": "rev-456"
+                "workspace_revision": "rev-456",
+                "episode_turn": "final_answer"
             })
         );
+    }
+
+    #[test]
+    fn episode_call_counts_sum_all_traceable_turns_and_preserve_missing_traces() {
+        let mut setup = rr("setup", Vec::new());
+        setup.model_calls = Some(2);
+        setup.tool_calls = Some(1);
+        let mut answer = rr("answer", Vec::new());
+        answer.model_calls = Some(3);
+        answer.tool_calls = Some(4);
+        assert_eq!(episode_call_counts(&[&setup, &answer]), (Some(5), Some(5)));
+
+        let unavailable = rr("turn without persisted trace", Vec::new());
+        assert_eq!(episode_call_counts(&[&setup, &unavailable]), (None, None));
     }
 
     #[test]

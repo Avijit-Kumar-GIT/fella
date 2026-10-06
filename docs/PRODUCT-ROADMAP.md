@@ -633,7 +633,7 @@ is added only when backlog **2** is resumed.
 
 ### 8. Build a disciplined quality and capability evaluation
 
-- [ ] **Keep task families separately reportable.** Report filesystem
+- [x] **Keep task families separately reportable.** Report filesystem
   analytics, general knowledge, web research, forecasting, chart correctness,
   clarification, and hybrid tasks independently as well as in an overall
   summary. A strong score in one family must not hide a broken family.
@@ -663,20 +663,20 @@ is added only when backlog **2** is resumed.
   transcript store. Never include prompts, answers, tool arguments or
   results, source names, or workspace paths in the Run Log. Keep it local and
   make clear that operational outcomes are not a correctness verdict.
-- [ ] **Measure helpfulness as well as restraint.** Track answer correctness,
+- [x] **Measure helpfulness as well as restraint.** Track answer correctness,
   coverage/answer rate, false-refusal or unnecessary-clarification rate,
   unsupported-claim rate, citation support, forecast error/calibration, chart
   correctness, time, tool/model calls, and cost. A refusal is not a success
   simply because it avoids a wrong number.
-- [ ] **Compare fairly.** Pin model/version and settings; use paired runs for
+- [x] **Compare fairly.** Pin model/version and settings; use paired runs for
   baseline versus candidate; separate deterministic fixture tests from live
   model/web runs; record variance and failed/incomplete runs. Do not use a
   test threshold as a reason to hardcode a task-specific rule.
-- [ ] **Pre-register release gates.** Establish acceptable thresholds for
+- [x] **Pre-register release gates.** Establish acceptable thresholds for
   correctness, answer coverage, false refusal, provenance, and cost from the
   baseline and product risk. Set them before evaluating a candidate; block
   release on regressions that matter, not on a single cherry-picked example.
-- [ ] **Use an iterative slice size.** After a systemic change, rerun the
+- [x] **Use an iterative slice size.** After a systemic change, rerun the
   affected family and a representative cross-family regression slice. Run
   the full suite at integration/release checkpoints, not after every prompt
   edit.
@@ -687,6 +687,15 @@ show whether they improve the quality/coverage tradeoff rather than merely
 changing the wording of outputs. The Settings Run Log makes recent runtime
 behavior legible without duplicating transcript content, leaking workspace
 data, or presenting execution metadata as proof of answer correctness.
+
+**Current status:** the family scorecard, paired run-manifest checks,
+task/workspace fingerprinting, separate blinded-assessment and locked-review
+schemas, reviewer-agreement report, and pre-registered release protocol are
+in place. This backlog item remains open: whole-workspace and independent-
+review corpus requirements have not been met, and no new blinded cross-family
+run has yet produced an auditable scorecard. The family catalog explicitly
+reports web research and hybrid analysis as not implemented/not evaluated
+rather than assigning them a passing score.
 
 ### 9. Finish user experience, privacy, and release integration
 

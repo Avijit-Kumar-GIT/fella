@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fella.app/schemas/product-eval-review-v1.json",
+  "title": "Blind qualitative evaluation annotation",
+  "description": "Content-free labels from reviewers inspecting a blinded answer/trace packet. Does not change task golds or machine results.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "benchmark_version", "run_id", "task_id", "model",
+    "profile", "iteration", "reviewer_code", "condition", "task_expected_behavior", "answer_behavior", "correctness",
+    "evidence_support", "unsupported_claims", "clarification", "chart_correctness",
+    "forecast_quality", "failure_tags", "adjudication"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "benchmark_version": {"type": "string", "minLength": 1},
+    "run_id": {"type": "string", "minLength": 1},
+    "task_id": {"type": "string", "minLength": 1},
+    "model": {"type": "string", "minLength": 1},
+    "profile": {"type": "string"},
+    "iteration": {"type": "integer", "minimum": 1},
+    "reviewer_code": {"type": "string", "minLength": 1},
+    "condition": {"enum": ["baseline", "candidate", "ablation", "diagnostic"], "description": "Restored after blind labels are locked; never exposed to the reviewer packet."},
+    "task_expected_behavior": {"enum": ["answer", "estimate", "clarify", "unsupported", "no_analysis_needed"]},
+    "answer_behavior": {"enum": ["answered", "clarified", "useful_limit", "unnecessary_deferral", "error_or_empty", "unresolved"]},
+    "correctness": {"enum": ["correct", "partially_correct", "incorrect", "unresolved"]},
+    "evidence_support": {"enum": ["supported", "partially_supported", "unsupported", "not_applicable", "unresolved"]},
+    "unsupported_claims": {"type": "integer", "minimum": 0},
+    "forecast_value": {"type": ["number", "null"]},
+    "forecast_observed": {"type": ["number", "null"]},
+    "forecast_baseline_value": {"type": ["number", "null"]},
+    "forecast_interval_lower": {"type": ["number", "null"]},
+    "forecast_interval_upper": {"type": ["number", "null"]},
+    "clarification": {"enum": ["necessary_and_used", "necessary_but_not_asked", "unnecessary", "not_applicable", "unresolved"]},
+    "chart_correctness": {"enum": ["faithful_and_appropriate", "data_error", "semantic_error", "inappropriate_chart", "not_applicable", "unresolved"]},
+    "forecast_quality": {"enum": ["appropriate_and_calibrated", "method_acceptable_limits_missing", "incorrect", "unsupported", "not_applicable", "unresolved"]},
+    "failure_tags": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"enum": ["source_missed", "intent_misread", "normalization_error", "wrong_scope_or_filter", "wrong_join_or_grain", "calculation_error", "unsupported_claim", "unnecessary_deferral", "missed_clarification", "bad_continuity", "chart_data_error", "chart_semantics_error", "forecast_method_or_calibration", "provenance_gap", "tool_friction", "privacy_or_boundary_violation", "communication_issue", "other"]}
+    },
+    "adjudication": {"enum": ["single_review", "agreement", "adjudicated"]}
+  }
+}

@@ -96,8 +96,10 @@ corpus_targets:
   # paraphrases over one synthetic persona. These are curation targets, not
   # post-hoc score thresholds.
   distinct_workspace_families: 12
+  # The blind holdout is a subset of the 180 independently reviewed episodes.
   independently_reviewed_episodes: 180
   blind_holdout_episodes: 60
+  blind_holdout_is_reviewed_subset: true
   minimum_independent_workspaces_per_claimed_family: 4
   require_workspace_family_disjoint_splits: true
   require_public_source_license_or_synthetic_provenance: true

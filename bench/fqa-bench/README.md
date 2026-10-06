@@ -82,7 +82,10 @@ interaction, answerability, workspace scope, file format, and data condition.
 It reports task correctness and efficiency; qualitative dimensions such as
 clarification necessity, evidence quality, unsupported claims, and chart
 semantics still require the separate rubric/review process described in the
-methodology.
+methodology. For the separate top-level product-family view and paired
+baseline/candidate protocol, use
+[`bench/product-eval/scorecard.py`](../product-eval/scorecard.py) with this
+suite's `tasks.jsonl` and the saved `agent_eval` result JSON.
 
 Invalid setup/provider/evaluator runs are reported separately, never counted as model failures or quietly excluded. A task or grading change requires user-visible rationale, a new benchmark version, and same-version comparisons; candidate output is never a reason to revise a gold.
 

@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fella.app/schemas/product-eval-prices-v1.json",
+  "title": "Pinned model price snapshot",
+  "description": "Optional dated rates used to estimate cost from recorded token usage. Never fetch or apply current rates retroactively.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "as_of", "source", "currency", "rates"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "as_of": {"type": "string", "format": "date"},
+    "source": {"type": "string", "minLength": 1},
+    "currency": {"const": "USD"},
+    "rates": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["input_per_million", "output_per_million"],
+        "properties": {
+          "input_per_million": {"type": "number", "minimum": 0},
+          "output_per_million": {"type": "number", "minimum": 0}
+        }
+      }
+    }
+  }
+}

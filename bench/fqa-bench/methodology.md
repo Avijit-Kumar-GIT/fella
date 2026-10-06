@@ -103,7 +103,33 @@ Show numerator, denominator, and task count for every slice. Repeat stochastic e
 
 For each run, record benchmark version and split, task/workspace hashes, code commit, exact model/provider/endpoint and settings, harness/tool configuration, iteration count, run validity, traces, outputs, tokens, latency, and grader version. Use the same model and budgets for paired `main` versus candidate runs. A model/harness ablation must change only the component being studied.
 
+Record the content-free metadata in
+[`bench/product-eval/run-manifest.schema.json`](../product-eval/run-manifest.schema.json).
+Before the run, compute hashes with
+[`fingerprint_suites.py`](../product-eval/fingerprint_suites.py); it checks
+the task-declared workspace digests and complete inventory for whole-workspace
+tasks. The paired scorecard rejects mismatched benchmark/workspace hashes, model or
+generation settings, shared evaluation protocol, split, repetition count, and
+result-file hashes. The harness/toolset/configuration under test is recorded
+per condition and may differ in a baseline-versus-candidate comparison. Hashes
+must be computed from the frozen task and mounted-workspace snapshots before
+the run. During paired reporting, the scorecard recomputes those fingerprints
+from the supplied catalogs and mounted workspaces, then checks both manifests
+and result-file digests. Never include credentials, prompts, answers, or
+workspace paths in a run manifest.
+
 Keep raw run artifacts outside fixture directories. Redact secrets and avoid publishing traces containing private data. A failed provider call, missing trace, stale fixture, or grader crash must be surfaced as invalid/incomplete—not silently dropped from the denominator.
+
+Use the cross-family
+[`product-eval scorecard`](../product-eval/README.md) to report task coverage,
+invalid runs, objective correctness, tokens, latency, agent steps, and the
+runner's explicitly classified tool-friction signals. Its paired comparison
+reports per-task transitions and a deterministic paired-bootstrap interval;
+that interval is descriptive and does not replace review or determine release
+by itself. Qualitative review annotations use the frozen
+[`review rubric`](../product-eval/review-rubric-v0.1.md). Keep reviewer packets
+blind to model and condition, lock labels before restoring the run mapping,
+and report only consensus/adjudicated rows as review results.
 
 The Settings Run Log is a separate, local operational aid. It summarizes saved
 turn metadata and coarse friction triggers; it does not grade correctness,
@@ -129,6 +155,20 @@ clarification-housing episode exercises that contract. This is protocol
 support, not proof of the quality of the current implementation. Third-party
 or bare-model comparison runners do not yet replay such episodes; mark those
 conditions unsupported rather than comparing a different interaction.
+
+`agent_eval` result rows aggregate model calls, runtime tool operations,
+tokens, latency, steps, friction signals, and replay references over the full
+declared episode (pre-mount/setup/graded turns plus the final answer). The
+replay references identify each turn's role without copying its contents into
+the result JSON. If a canonical trace is missing, call counts are null with
+their observed-iteration coverage; they are not silently reported as zero.
+
+After a systemic change, first rerun the affected task family, then a
+predeclared cross-family regression slice spanning at least one no-workspace,
+one mounted-data, and one interaction/chart/forecast task where supported.
+Run the full development suite at integration checkpoints; run the blind set
+only at predeclared evaluation/release checkpoints. Preserve all task IDs and
+failed rows in each report.
 
 ## References
 

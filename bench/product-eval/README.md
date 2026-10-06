@@ -7,6 +7,90 @@ knowledge, web research, local analysis, or a combination. Keep family scores
 separate. A high folder-QA score must not conceal a no-folder refusal or a
 missing research route.
 
+The machine-readable top-level family registry is
+[`family-catalog-v0.1.json`](family-catalog-v0.1.json). The scorecard runner
+joins frozen task catalogs to `agent_eval` JSON, reports absent/invalid cases,
+and keeps analytic subfamilies separate from product routes. Episode cost and
+calls include the complete declared trajectory—pre-mount, setup, clarification,
+and final turns—when the canonical turn trace exists:
+
+```bash
+python3 bench/product-eval/scorecard.py \
+  --fqa-suite bench/fqa-bench/suites/uci-bike-sharing/tasks.jsonl /path/to/fqa-run.json \
+  --product-suite general_knowledge bench/product-eval/general-knowledge/cases.jsonl /path/to/general-run.json
+```
+
+Repeat `--fqa-suite`/`--product-suite` for additional disjoint task catalogs.
+Families without catalog tasks or run rows appear as not evaluated. A live web
+or hybrid score cannot be produced until those routes and frozen task sets
+exist. Add `--reviews /path/to/consensus-review.jsonl` for qualitative scores;
+the answer and trace stay in the controlled review packet and are not copied
+into the annotation file.
+
+Before a model run, fingerprint the exact task catalogs and workspace snapshots
+that will be mounted:
+
+```bash
+python3 bench/product-eval/fingerprint_suites.py \
+  --suite bench/fqa-bench/suites/uci-bike-sharing/tasks.jsonl \
+  --suite bench/fqa-bench/suites/clarification-housing/tasks.jsonl
+```
+
+Copy the returned task/workspace SHA-256 values into both paired run
+manifests. This helper hashes the exact task-catalog bytes, rechecks each
+task's declared workspace digest, and for `entire_workspace` tasks verifies
+that the declared inventory exactly matches every file in the mounted folder.
+It emits counts and hashes only, not prompts or paths. Use distinct suite IDs
+for separate catalogs; the fingerprint is not a blind-set custodian and does
+not establish independent review. The paired scorecard recomputes these
+fingerprints from the supplied task catalogs and workspace files before it
+accepts the comparison.
+
+For qualitative review, reviewers first annotate independently randomized
+packets using [`reviewer-assessment.schema.json`](reviewer-assessment.schema.json).
+Those rows contain no task/model/condition identity or expected behavior. Run
+the agreement report before restoring the private packet mapping:
+
+```bash
+python3 bench/product-eval/review_agreement.py \
+  --assessments /controlled-review/raw-blinded-assessments.jsonl
+```
+
+Keep raw assessments and packet mapping in the controlled evaluation area.
+Resolve disagreements without changing the frozen task gold, then join the
+locked consensus/adjudication and run mapping into
+[`review-annotation.schema.json`](review-annotation.schema.json) records for
+`--reviews`. The scorecard accepts only agreement/adjudicated rows; it never
+turns a single reviewer label into consensus.
+
+For a paired comparison, point the catalog result path at the candidate result
+and additionally pass `--baseline`, `--candidate`, `--baseline-manifest`, and
+`--candidate-manifest`. The two content-free manifests must match on benchmark,
+task/workspace hashes, split, provider/model/version, generation settings,
+shared evaluation protocol/budget, pricing snapshot, and at least three
+repetitions; each result-file digest is checked. Harness/toolset/configuration
+metadata is recorded per condition and may differ when that is the
+intervention being measured.
+Positive paired deltas favor the candidate. The bootstrap interval is
+descriptive, not a release verdict. See the [run manifest schema](run-manifest.schema.json),
+[review annotation schema](review-annotation.schema.json),
+[blind-review rubric](review-rubric-v0.1.md), and
+[pre-registered release protocol](release-gates-v0.1.md).
+Pass `--prices /path/to/pinned-prices.json` to estimate USD cost from the
+recorded input/output tokens. The rate file must be dated, cite its source,
+and match `pricing_snapshot_sha256` in both paired manifests; otherwise cost
+is left unpriced. No prices are hard-coded or fetched live.
+
+The scorecard is a reporter, not a new grader. It does not change task golds,
+classify an incorrect answer as a refusal, or infer chart/forecast/evidence
+quality from a final-answer score. The current `agent_eval` JSON does not
+contain all those qualitative dimensions; attach consensus review labels or
+leave them unscored.
+For held-out forecast episodes, review labels can also carry prediction,
+observed value, baseline value, and interval bounds; the scorecard computes
+MAE against that frozen observation and reports interval coverage where an
+interval was requested.
+
 ## Capability families
 
 | Family | What it measures | Current fixtures / status |

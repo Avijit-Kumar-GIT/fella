@@ -31,6 +31,8 @@ class ReportSlicesTests(unittest.TestCase):
                 "graded_setup_turn_rates": [1.0, 0.0],
                 "prompt_tok": 100,
                 "completion_tok": 20,
+                "model_calls": 3.0,
+                "tool_calls": 2.0,
             },
             {
                 "err": "provider error",
@@ -44,6 +46,10 @@ class ReportSlicesTests(unittest.TestCase):
         self.assertEqual(result["correct"], 1)
         self.assertEqual(result["intermediate_turns"], 2)
         self.assertEqual(result["intermediate_turn_rate"], 0.5)
+        self.assertEqual(result["model_calls"], 3.0)
+        self.assertEqual(result["tool_calls"], 2.0)
+        self.assertEqual(result["model_call_coverage"], 1.0)
+        self.assertEqual(result["tool_call_coverage"], 1.0)
 
     def test_slice_report_includes_analysis_families_and_turn_quality(self) -> None:
         tasks = [{
@@ -64,15 +70,40 @@ class ReportSlicesTests(unittest.TestCase):
             "model": "test/model",
             "correct": True,
             "correct_rate": 1.0,
+            "iters": 1,
+            "model_call_observed_iterations": 1,
+            "tool_call_observed_iterations": 1,
             "graded_setup_turn_rates": [1.0],
             "prompt_tok": 100,
             "completion_tok": 20,
+            "model_calls": 2.0,
+            "tool_calls": 3.0,
             "err": None,
         }]
         rendered = report.render(tasks, results, ["analysis_family"])
         self.assertIn("clarification_and_continuity", rendered)
         self.assertIn("Graded turns", rendered)
+        self.assertIn("Model calls / episode", rendered)
+        self.assertIn("(trace coverage)", rendered)
+        self.assertIn("2.0 (100% traced)", rendered)
+        self.assertIn("3.0 (100% traced)", rendered)
         self.assertIn("| 1 | 100% |", rendered)
+
+    def test_same_model_profiles_are_reported_separately(self) -> None:
+        tasks = [{"id": "t1", "labels": {"domain": "finance"}}]
+        results = [
+            {"id": "t1", "model": "m", "profile": "bare", "correct": False, "err": None},
+            {"id": "t1", "model": "m", "profile": "fella", "correct": True, "err": None},
+        ]
+        rendered = report.render(tasks, results, ["domain"])
+        self.assertIn("| m | bare | finance | 1 | 1 | 0 | 0/1 (0%)", rendered)
+        self.assertIn("| m | fella | finance | 1 | 1 | 0 | 1/1 (100%)", rendered)
+
+    def test_duplicate_result_for_same_task_model_profile_is_rejected(self) -> None:
+        task = {"id": "t1", "labels": {}}
+        row = {"id": "t1", "model": "m", "profile": "fella", "correct": True, "err": None}
+        with self.assertRaisesRegex(ValueError, "duplicate result row"):
+            report.render([task], [row, dict(row)], ["domain"])
 
 
 if __name__ == "__main__":

@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fella.app/schemas/product-eval-reviewer-assessment-v1.json",
+  "title": "Blinded independent reviewer assessment",
+  "description": "One reviewer’s content-free assessment of a randomized packet. It contains no task, model, run-condition, or answer-key identity.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "packet_id", "reviewer_code", "answer_behavior",
+    "correctness", "evidence_support", "unsupported_claims", "clarification",
+    "chart_correctness", "forecast_quality", "failure_tags"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "packet_id": {"type": "string", "minLength": 1},
+    "reviewer_code": {"type": "string", "minLength": 1},
+    "answer_behavior": {"enum": ["answered", "clarified", "useful_limit", "unnecessary_deferral", "error_or_empty", "unresolved"]},
+    "correctness": {"enum": ["correct", "partially_correct", "incorrect", "unresolved"]},
+    "evidence_support": {"enum": ["supported", "partially_supported", "unsupported", "not_applicable", "unresolved"]},
+    "unsupported_claims": {"type": "integer", "minimum": 0},
+    "forecast_value": {"type": ["number", "null"]},
+    "forecast_observed": {"type": ["number", "null"]},
+    "forecast_baseline_value": {"type": ["number", "null"]},
+    "forecast_interval_lower": {"type": ["number", "null"]},
+    "forecast_interval_upper": {"type": ["number", "null"]},
+    "clarification": {"enum": ["necessary_and_used", "necessary_but_not_asked", "unnecessary", "not_applicable", "unresolved"]},
+    "chart_correctness": {"enum": ["faithful_and_appropriate", "data_error", "semantic_error", "inappropriate_chart", "not_applicable", "unresolved"]},
+    "forecast_quality": {"enum": ["appropriate_and_calibrated", "method_acceptable_limits_missing", "incorrect", "unsupported", "not_applicable", "unresolved"]},
+    "failure_tags": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"enum": ["source_missed", "intent_misread", "normalization_error", "wrong_scope_or_filter", "wrong_join_or_grain", "calculation_error", "unsupported_claim", "unnecessary_deferral", "missed_clarification", "bad_continuity", "chart_data_error", "chart_semantics_error", "forecast_method_or_calibration", "provenance_gap", "tool_friction", "privacy_or_boundary_violation", "communication_issue", "other"]}
+    }
+  }
+}
