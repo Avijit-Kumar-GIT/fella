@@ -751,6 +751,18 @@ phrase matcher false negative and its unmodified result—is in
 SHELL-PARITY.md. A crowded chart-axis edge case found during visual review was
 fixed and covered by an SSR regression test.
 
+A persistence/theme follow-up then used the app's actual provider/model command
+flow and Enter submission. An actual OpenAI answer, selected model/provider,
+and dark appearance survived a full Electron process restart; the archived
+conversation reopened and its sidebar entry was deleted. The answer and
+expanded Basis details were visually inspected in both themes. This is partial
+G6/G7 coverage, not completion: deletion was not followed by a second restart,
+there were no canonical analysis records to test deletion against, and the
+desktop screenshots did not include chart/source/calculation/forecast details.
+One preliminary runner mismatch sent the UI's default Gemma model to OpenAI and
+received a 404; it is documented as invalid test setup, not a model-quality
+result. Full conditions are recorded in [`SHELL-PARITY.md`](SHELL-PARITY.md).
+
 The shared UI now labels general answers, inspections, and analyses distinctly;
 analysis details distinguish user-authored Python from Fella's forecast
 method. Settings links to an expanded privacy page documenting local
@@ -763,14 +775,15 @@ from recreating them. The Electron bridge contract test is part of CI, and the
 current native run record is in [`SHELL-PARITY.md`](SHELL-PARITY.md).
 
 This item remains **open**: Electron workspace reading, table calculation,
-chart rendering, and live cancellation have now been exercised, but Tauri
-parity has not. Clarification/resume, restart-and-delete behavior, and
-analysis-detail contrast in both modes still need desktop validation. The
-measured startup, memory, and unpacked-package figures are Linux/WSLg Electron
-baselines, not Windows or a Tauri comparison. A local prompt regression is not
-a live-model security guarantee; web-specific controls depend on backlog #2.
-The 5,000-file and 10-GiB ingestion observations are recorded under backlog #6
-and do not substitute for shell measurements.
+chart rendering, cancellation, and part of restart/history/deletion have now
+been exercised, but Tauri parity has not. Clarification/resume, post-delete
+non-resurrection, deletion of canonical analysis records, and analysis-detail
+contrast for charts/sources/calculations/forecasts still need desktop
+validation. The measured startup, memory, and unpacked-package figures are
+Linux/WSLg Electron baselines, not Windows or a Tauri comparison. A local
+prompt regression is not a live-model security guarantee; web-specific
+controls depend on backlog #2. The 5,000-file and 10-GiB ingestion observations
+are recorded under backlog #6 and do not substitute for shell measurements.
 
 **Acceptance checks:** users understand what Fella used, web access is not
 surprising, provider transmission and local retention are explicit, and both

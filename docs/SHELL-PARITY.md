@@ -35,8 +35,8 @@ failure without changing the case or expected behavior to match the output.
 | G3 | While a longer model response is streaming, stop it. | The run stops promptly; completed evidence remains inspectable and no later response appears in the deleted/closed turn. | Not run | **Partial** — stop/no-late-text passed; preservation of completed evidence was not checked |
 | G4 | Request a chart from the fixture, then expand its analysis details. | One chart renders; labels, values, units, and source query agree. Python calculations identify Python; the built-in forecast route identifies a forecast, not a user-written Python script. | Not run | **Pass** — one 24-point line chart matched the independent monthly oracle; one tick-spacing defect fixed |
 | G5 | Ask an ambiguous but answerable question that should trigger one clarification; select an option and continue. | The clarification is visible and the resumed answer retains the parent-turn link and selected assumption. | Not run | **Expected clarification not triggered** — the real model stated a net-revenue interpretation and answered directly; clarification/resume UI remains untested |
-| G6 | Change model and appearance, save a conversation, restart the shell, reopen it, then delete it. | Settings and transcript persist across restart. Deletion removes the transcript and its canonical analysis records and does not resurrect the row. | Not run | **Partial** — archived general chat reopened in the same process; restart/delete not tested |
-| G7 | Repeat the relevant answer/detail interactions in light and dark mode. | Text, source, calculation, and forecast distinctions remain legible without relying on accent color alone. | Not run | **Partial** — basic general answer inspected in both themes; analysis details not tested |
+| G6 | Change model and appearance, save a conversation, restart the shell, reopen it, then delete it. | Settings and transcript persist across restart. Deletion removes the transcript and its canonical analysis records and does not resurrect the row. | Not run | **Partial** — provider/model/theme and a general conversation survived full restart; history reopen and delete passed. Post-delete restart/non-resurrection and canonical analysis-record deletion remain untested |
+| G7 | Repeat the relevant answer/detail interactions in light and dark mode. | Text, source, calculation, and forecast distinctions remain legible without relying on accent color alone. | Not run | **Partial** — general answer and expanded Basis details visually inspected in both themes; analysis/source/chart/forecast detail states remain untested |
 
 Web research and web-page prompt-injection cases are intentionally absent: the
 web tool is not shipped yet (product backlog #2 remains deferred). Do not mark
@@ -85,14 +85,8 @@ Electron desktop run on 2026-10-06:
   history. The current sidebar still places this null-scoped conversation in a
   synthetic “No repository” row under Repositories; that is display grouping,
   not an assigned filesystem path, but it remains potentially confusing.
-- G7 partial: changed appearance through the actual Settings view and inspected
-  the general-answer transcript in light and dark modes. The chart renderer's
-  automated suite checks all supported chart families and light/dark chart
-  color contrast; no chart/evidence-detail interaction was manually checked in
-  the desktop window.
-- G6 partial: selected model and appearance persisted across a renderer reload;
-  the archived conversation reopened in the same app process. Full app restart,
-  post-restart settings validation, and deletion were not tested.
+- An initial G6/G7 pass only tested renderer reload and same-process history;
+  its limitations are superseded by the follow-up below.
 - Measured startup from process spawn to interactive Ask DOM: **764 ms** in this
   WSLg run. At 15 seconds after the response and history reopen, the Electron
   process tree contained 8 processes and summed to **677.6 MiB RSS**, including
@@ -148,7 +142,34 @@ Follow-up live-model Electron run on 2026-10-06:
   units by channel. Preserve the observed result; it does not validate the
   clarification/resume UI, which remains untested.
 
-Tauri G1–G7 remain **Not run**. Electron G6 restart/delete is still untested;
-G7 analysis-detail contrast is still partial; G5 clarification/resume remains
-unexercised. The live-model run improves confidence in the Electron Ask and
-chart paths, but does not establish shell parity or complete backlog #9.
+Electron persistence and theme follow-up on 2026-10-06:
+
+- Used the actual Electron window and Rust sidecar with a disposable app-data
+  directory and browser profile. The OpenAI key was read from the local auth
+  file and copied only into that disposable app-data directory. Provider and
+  model were selected through the app's `/login` and `/model` command flow;
+  the actual question was submitted with Enter. The run used OpenAI
+  gpt-5.6-luna, not Gemma/Ollama, and no workspace files were involved.
+- One preliminary runner attempt set the engine's OpenAI settings directly
+  while the fresh UI conversation still had its default `gemma4:31b` model.
+  It consequently sent `gemma4:31b` to OpenAI and received a 404. This was a
+  test-setup/configuration failure, not a model-quality result; it is recorded
+  rather than counted or hidden. The runner was corrected to select provider
+  and model through the app, verify that the composer and saved settings
+  agreed, wait for command completion, and start a clean conversation before
+  evaluating the answer.
+- G6: **partial**. The actual general answer was archived; selected provider,
+  model, and dark appearance survived a full Electron process restart. The
+  archived conversation reopened in the UI and sidebar deletion removed its
+  entry from `conversations_list`. The test did not restart again after
+  deletion to check non-resurrection and used a general answer with no
+  canonical analysis records, so those acceptance conditions remain open.
+- G7: **partial**. The actual answer and expanded Basis details were visually
+  inspected in dark and light appearance. The direct answer rendered with one
+  model call (about 2 seconds, 525 reported tokens). This does not exercise
+  chart, source, calculation, or forecast evidence contrast; those remain open.
+
+Tauri G1–G7 remain **Not run**. Electron G6 and G7 are partial as described;
+G5 clarification/resume remains unexercised. The live-model runs improve
+confidence in Electron Ask and chart paths, but do not establish shell parity
+or complete backlog #9.
