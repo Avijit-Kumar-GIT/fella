@@ -585,38 +585,49 @@ Fella's analytical ingestion and must not define which supported data is read.
 ### 7. Make the agent loop cohesive across routes
 
 - [ ] **Use one traceable conversation loop with route-specific tools.** The
-  same turn/session model should cover direct model answers, research,
-  workspace inspection, computation, clarification, and combinations. Do not
-  implement a separate “web agent” that loses conversation context or an
-  analytics sub-agent that cannot use the user's answer to a clarification.
+  same turn/session model should cover direct model answers, workspace
+  inspection, computation, and clarification. Web research and local-plus-web
+  hybrids are explicitly deferred to **2**; when added, they should join this
+  conversation rather than become a separate agent that loses context.
 - [ ] **Keep the analyst loop available without making it mandatory for every
   request.** For data analysis, the model should inspect, form/decompose a
   question, probe or clarify where useful, execute, review, and communicate.
   For a simple definition, answer directly. Let the model stop when it has a
   good answer; retain any early-stop nudge only if evaluation shows it does
   not increase incomplete or incorrect answers.
-- [ ] **Make context and memory participate in decisions.** Separate
-  conversation history, workspace facts/definitions, retrieved source
-  evidence, and derived results. Label each by origin and freshness. A
-  follow-up should reuse prior result references or rerun against a changed
-  source revision, not invent continuity from a summary.
+- [ ] **Make context and memory participate in decisions.** Keep conversation
+  history, workspace facts/definitions, retrieved source evidence, and derived
+  results distinct and identify their origin and freshness. A follow-up may
+  retrieve prior execution evidence from the same conversation only when its
+  workspace revision still matches; otherwise it must inspect and compute
+  against the current revision. Conversation summaries and prior assistant
+  prose help resolve references but are not data evidence.
 - [ ] **Use clarification instead of forced semantic guessing.** Ask only
   about a decision that changes the result; offer concise choices plus a
   free-text response; keep the question and answer in the transcript; resume
-  the paused turn with the inspection already done.
-- [ ] **Instrument every route.** Record model/tool steps, source revision,
-  prompts/model identifiers where safe, elapsed time, token/cost estimates,
-  research citations, clarifications, errors, and provenance. Redact secrets
-  and provide a clear local retention/deletion policy.
-- [ ] **Do not add multi-agent orchestration by default.** First identify a
+  the same logical analysis with its still-current inspection and evidence.
+  If the workspace revision changed while paused, make the old evidence
+  unavailable to the continuation and inspect the new revision.
+- [ ] **Instrument every in-scope route.** Record the interaction mode, model
+  identifier, model-call and tool timing, source revision, provider-reported
+  token usage, clarification lineage, errors, and provenance. Do not persist
+  prompt contents or credentials. Cost estimates are only valid when provider
+  pricing data is available; research citations are deferred to **2**. Keep
+  retention local and documented.
+- [x] **Do not add multi-agent orchestration by default.** First identify a
   measurable quality or latency limitation that parallel/specialist agents
   solve, then compare it against one model-directed loop with better tools
-  and source inspection.
+  and source inspection. The current product direction remains one
+  model-directed loop; revisit only with measured evidence.
 
-**Acceptance checks:** a multi-step hybrid question retains one coherent
-trace and conversation; context used in the answer can be inspected; simple
-questions do not incur unnecessary analytics stages; clarification resumes
-the same work.
+**Acceptance checks for the currently in-scope routes:** a general answer, a
+workspace analysis, an Inspect turn, and a clarification continuation retain
+one conversation identity and have inspectable turn/trace lineage; a relevant
+same-revision follow-up can retrieve its earlier execution evidence; changed
+workspace data makes prior evidence unavailable until refreshed; context origin
+and freshness are visible without persisting prompt bodies; simple questions do
+not incur unnecessary workspace calls. A hybrid local-plus-web acceptance case
+is added only when backlog **2** is resumed.
 
 ### 8. Build a disciplined quality and capability evaluation
 
