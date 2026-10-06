@@ -699,20 +699,25 @@ rather than assigning them a passing score.
 
 ### 9. Finish user experience, privacy, and release integration
 
-- [ ] **Make Ask's scope obvious without making it feel like a file-only
-  utility.** The empty state should accept general questions and make folder
-  analysis/research discoverable without forcing a workspace selection.
+- [x] **Make Ask's scope obvious without making it feel like a file-only
+  utility.** The empty state accepts general questions and makes local folder
+  analysis discoverable without forcing a workspace selection. It does not
+  imply that web research is available.
 - [x] **Present evidence without duplicating the answer.** Keep the disclosure
   adjacent to the response, show the chart's source next to the chart, and put
   detailed source/calculation provenance on demand rather than repeating a
   checked-workspace block under every message.
-- [ ] **Make modality visible.** Use restrained, consistent treatments for
-  model explanation, web-cited claims, file-backed findings, computed values,
-  and projections in both light and dark themes. Keep the language more
-  important than badges.
-- [ ] **Review permissions and threat boundaries.** Document local file
-  access, provider transmission, web research, credentials, telemetry, and
-  retention. Test prompt injection from both local documents and web pages.
+- [x] **Make supported modalities visible.** Use restrained, consistent
+  treatments for general answers, workspace inspection, analysis, Python
+  calculations, and forecasts in both themes. Keep the language more important
+  than badges. Web citations remain out of scope until backlog #2 ships.
+- [x] **Document current privacy and local-file threat boundaries.** Explain
+  local file access, provider transmission, credentials, telemetry, retention,
+  and the fact that web research is not available. Workspace documents are
+  explicitly untrusted evidence, and the prompt boundary has a regression test.
+- [ ] **Add web-page threat coverage when web research is implemented.** Test
+  hostile page instructions, citation provenance, and local-file isolation
+  before enabling any web-backed answer path.
 - [ ] **Verify supported shells.** Run the same representative functionality
   checks against Tauri and Electron where both are maintained: streaming,
   tool approval/cancellation as applicable, chart display, citations,
@@ -722,27 +727,37 @@ rather than assigning them a passing score.
   source profiling do not make ordinary Ask noticeably slower or require a
   cloud service.
 
-**Implementation progress (2026-10-06):** no-folder general Ask and folder
-mounting were already present; current Ask copy does not advertise web
-research. Backlog #2 remains deferred, so research discoverability, citations,
-and web-page injection coverage are intentionally not claimed. The response
-disclosure now distinguishes a general answer from workspace analysis or
-inspection, and analysis details identify forecasts separately from
-user-authored Python. Settings links to an expanded privacy page documenting
-local normalized-data storage, model-provider egress, credentials, local
-retention/deletion, and the current lack of web research. Workspace-derived
-content now has an always-on untrusted-data instruction in the system prompt,
-with prompt and scripted agent-loop regression checks. Conversation deletion
-removes its transcript and canonical analysis records and prevents late writes
-from recreating them. An Electron bridge contract test is part of CI, and the
-manual shell matrix is recorded in [`SHELL-PARITY.md`](SHELL-PARITY.md).
+**Implementation progress (2026-10-06):** the Electron GUI was exercised under
+WSLg with a disposable Electron profile, a disposable engine data directory,
+and a localhost-only mock model. A no-folder question streamed through the
+composer and Rust sidecar in one request, rendered, was archived with
+`workspace: null`, and reopened from history. The actual Settings control
+switched the conversation between light and dark themes. This establishes the
+Electron general-Ask path; it is not a full shell-parity run. The sidebar
+currently presents a null-scoped conversation in a synthetic “No repository”
+row under Repositories. Its stored scope is null, but the visual grouping can
+still read like a repository and deserves a separate UX decision.
 
-This item is **not complete**: a prompt regression is not a live-model security
-guarantee; web-specific controls depend on backlog #2; the manual shell matrix
-has not been run in native desktop windows from this WSL session; and fresh
-startup, idle-memory, and packaged-size measurements remain a release gate.
-The 5,000-file and 10-GiB ingestion observations are recorded under backlog #6
-and do not substitute for those measurements.
+The shared UI now labels general answers, inspections, and analyses distinctly;
+analysis details distinguish user-authored Python from Fella's forecast
+method. Settings links to an expanded privacy page documenting local
+normalized-data storage, model-provider egress, credentials, local
+retention/deletion, and the current lack of web research. Workspace-derived
+content has an always-on untrusted-data instruction in the system prompt, with
+prompt and scripted agent-loop regression checks. Conversation deletion
+removes its transcript and canonical analysis records and prevents late writes
+from recreating them. The Electron bridge contract test is part of CI, and the
+current native run record is in [`SHELL-PARITY.md`](SHELL-PARITY.md).
+
+This item remains **open**: only the Electron general-Ask path and basic
+light/dark response presentation were exercised manually. Tauri and the other
+Electron cases (workspace-backed reading/calculation, cancellation, charts,
+clarification/resume, and process-restart deletion) remain untested in the
+desktop matrix. The measured startup, memory, and unpacked-package figures are
+Linux/WSLg Electron baselines, not Windows or a Tauri comparison. A local
+prompt regression is not a live-model security guarantee; web-specific
+controls depend on backlog #2. The 5,000-file and 10-GiB ingestion observations
+are recorded under backlog #6 and do not substitute for shell measurements.
 
 **Acceptance checks:** users understand what Fella used, web access is not
 surprising, provider transmission and local retention are explicit, and both

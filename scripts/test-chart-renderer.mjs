@@ -6,7 +6,7 @@ const server = await createServer({
 	configFile: 'vite.config.ts',
 	appType: 'custom',
 	logLevel: 'error',
-	server: { middlewareMode: true, hmr: false }
+	server: { middlewareMode: true, hmr: false, ws: false }
 });
 
 function count(html, pattern) {
@@ -98,6 +98,32 @@ try {
 		}
 	}).body;
 	assert.equal(count(renderedMessage, /class="[^"]*\bchart-card\b[^"]*"/g), 1);
+
+	// The evidence disclosure names the answer mode instead of presenting the
+	// same generic analysis label for general answers, inspections, and analysis.
+	for (const [mode, label] of [
+		['model_only', 'General answer'],
+		['workspace_inspect', 'Inspection details'],
+		['workspace_ask', 'Analysis details']
+	]) {
+		const modeMessage = render(Message, {
+			props: {
+				message: {
+					id: `mode-${mode}`,
+					role: 'assistant',
+					text: 'A short answer.',
+					ts: 1,
+					answer: {
+						text: 'A short answer.',
+						evidence: [],
+						verification: [],
+						trace: { mode }
+					}
+				}
+			}
+		}).body;
+		assert.match(modeMessage, new RegExp(label));
+	}
 
 	// Real runs can emit multiple independent checks with identical labels.
 	// Opening Analysis Details must not crash, and the answer's line chart must
@@ -195,6 +221,15 @@ try {
 	const forecastDetails = render(PythonCalculationDetails, {
 		props: { evidence: forecastEvidence }
 	}).body;
+	const forecastEvidenceBlock = render(EvidenceBlock, {
+		props: {
+			answer: { text: 'Forecast summary.', evidence: [forecastEvidence], verification: [] },
+			expanded: true,
+			bodyId: 'forecast-evidence'
+		}
+	}).body;
+	assert.match(forecastEvidenceBlock, /Forecast/);
+	assert.match(forecastEvidenceBlock, /show forecast method/);
 	assert.match(forecastDetails, /Fella forecast helpers · local sandbox/);
 	assert.match(forecastDetails, /forecast_series\(method="linear_trend", horizon=3\)/);
 	assert.match(forecastDetails, /rolling_origin_backtest\(baseline_method="naive"\)/);
