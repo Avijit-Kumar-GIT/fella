@@ -527,6 +527,24 @@ instead of allocating two intermediate vectors per row; a reference-parity
 test checks its conversions across missing, numeric, date, boolean, and text
 values. No speedup claim is made without an A/B run on the same fixture.
 
+A 32-MiB SQLite page-cache candidate was compared on an 8-source fixture plus
+the same 256-MiB CSV (6,882,959 rows). Two rollback-journal baseline runs loaded
+the CSV in 5,092 / 5,050 ms, with 12,845,056 / 12,976,128 bytes process
+high-water RSS. The candidate loaded it in 5,041 ms but raised high-water RSS
+to 45,481,984 bytes; profiling and total mount time were also not better than
+the baseline range. This is too small a timing difference to distinguish from
+noise for roughly 32 MiB more transient memory, so the candidate was reverted.
+The default SQLite page cache remains unchanged.
+
+A separate `synchronous=OFF` trial on the 5,000-source / 59,900-row release
+fixture measured 3,003 ms mount readiness and 48,582,656 bytes process
+high-water RSS. Two default-setting runs were 2,948 / 3,065 ms and
+48,349,184 / 48,226,304 bytes RSS, with identical source, row, document, skip,
+and scratch coverage. The candidate did not beat the baseline range, so it was
+reverted; SQLite documents that OFF can leave a database corrupt after an OS
+crash or power loss ([synchronous modes](https://sqlite.org/pragma.html#pragma_synchronous)).
+The default synchronous setting is retained.
+
 The current implementation also avoids mount-time exact distinct/null/range
 profiles on larger workspaces and computes them when a table is inspected;
 relationship-hint discovery uses an inverted field-name index and retains at
