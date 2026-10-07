@@ -204,6 +204,9 @@
 	{#if message.answer?.clarification && showFollowups && onfollowup}
 		<div class="clarification" aria-label="Choose an interpretation">
 			<span class="clarification-label">Choose one to continue</span>
+			{#if message.answer.clarification.question.trim()}
+				<p class="clarification-question">{message.answer.clarification.question}</p>
+			{/if}
 			{#if message.answer.clarification.options.length}
 				<div class="clarification-options">
 					{#each message.answer.clarification.options as option (option)}
@@ -386,6 +389,12 @@
 		margin-bottom: var(--space-1);
 		color: var(--text-faint);
 		font-size: var(--fs-xs);
+	}
+	.clarification-question {
+		margin: 0 0 var(--space-2);
+		color: var(--text);
+		font-size: var(--fs-sm);
+		line-height: 1.5;
 	}
 	.clarification-options {
 		display: flex;

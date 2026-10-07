@@ -43,6 +43,7 @@ vite.config.ts.timestamp-*
 
 # Local scratch data used while developing
 /demo-data
+/test-results/e2e-journeys/
 
 # Personal notes
 /STUDY.md
