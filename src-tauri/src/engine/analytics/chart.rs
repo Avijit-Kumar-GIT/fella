@@ -30,7 +30,10 @@ pub const MAX_TIME_POINTS: usize = 1_000;
 /// Keep simultaneous series limited to a legible, color-safe palette.
 pub const MAX_SERIES: usize = 5;
 pub const MAX_PIE_SLICES: usize = 8;
-pub const MAX_SCATTER_POINTS: usize = 500;
+/// A bounded scatter still needs one SVG mark per observation. One thousand
+/// points supports a few years of daily records while keeping that DOM work
+/// predictable; larger point clouds should be sampled or aggregated explicitly.
+pub const MAX_SCATTER_POINTS: usize = 1_000;
 pub const MAX_HEATMAP_AXIS: usize = 24;
 pub const MAX_HISTOGRAM_BINS: usize = 40;
 
@@ -2249,6 +2252,45 @@ mod tests {
             .missing_treatment
             .unwrap()
             .contains("excluded 1"));
+    }
+
+    #[test]
+    fn scatter_preserves_daily_observations_and_rejects_unbounded_point_clouds() {
+        let rows = (0..731)
+            .map(|index| vec![Json::from(index), Json::from(index * 2)])
+            .collect();
+        let daily_archive = TabularResult {
+            columns: vec!["temperature".into(), "rentals".into()],
+            rows,
+        };
+        let chart = from_table(
+            &daily_archive,
+            ChartRequest {
+                kind: ChartKind::Scatter,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let Some(ChartPayload::Scatter { points }) = chart.payload else {
+            panic!("expected typed scatter points")
+        };
+        assert_eq!(points.len(), 731);
+
+        let oversized = TabularResult {
+            columns: vec!["temperature".into(), "rentals".into()],
+            rows: (0..=MAX_SCATTER_POINTS)
+                .map(|index| vec![Json::from(index), Json::from(index * 2)])
+                .collect(),
+        };
+        assert!(from_table(
+            &oversized,
+            ChartRequest {
+                kind: ChartKind::Scatter,
+                ..Default::default()
+            }
+        )
+        .unwrap_err()
+        .contains("max 1000"));
     }
 
     #[test]

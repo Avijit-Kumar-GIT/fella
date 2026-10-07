@@ -42,6 +42,7 @@ The cases are defined before execution:
 | G5 | Existing `clarification-housing` fixture; ask the ambiguous Q1 2024 housing-spend question; resolve it in the composer. | A typed clarification replaces the normal composer input with suggested choices and an “Other” response field; the reply appears as a submitted user turn; the same conversation resumes; Analysis Details exposes clarification lineage and source evidence. The response amount and interpretation are recorded but not graded here. |
 | G7 chart | Existing UCI Bike Sharing fixture; ask the monthly chart question using the real model. | Exactly one chart renders and the assistant turn settles. Its title, accessible visual, labels, and non-empty exact-values disclosure are visible. The card and selected visualization remain contained; if SVG is selected, its axis text remains in the viewBox. Capture light and dark appearances. Chart values and chart-family suitability are not graded here. |
 | Chart-family journey | `pnpm test:e2e:charts:journey`; one Electron process, one mounted synthetic workspace, and one conversation. A local OpenAI-wire mock requests bar, line, pie, donut, scatter, histogram, box plot, area, stacked area, heatmap, and forecast charts in sequence. It uses no credentials or external provider. | Every turn settles with exactly one chart; each family has its expected visible marks; exact values are populated; Analysis Details exposes the source and exact SQL; card/plot geometry is contained and SVG text stays within its viewBox; no renderer exception. Light/dark screenshots and a JSONL audit are saved under `test-results/e2e-chart-families/`. This checks app/tool/renderer integration, not model-selected chart suitability or numerical correctness. The positive sweep uses varied inputs; near-flat-series rejection is separately covered by engine tests and is not judged by this journey. `auto` is a selector, not a separate renderer; its live-model selection remains covered by G7 and the Rust chart tests. |
+| Real-model analysis-family journey | `pnpm test:e2e:analysis-families:real`; two independent Electron sessions, each mounting the same public Capital Bikeshare workspace and submitting the same six requests in one conversation. It calls OpenAI `gpt-5.6-luna` and Ollama Cloud `gemma4:31b` using existing local credentials; neither provider is mocked. Prompts span time series, composition, distribution, relationship, segmented comparison, and forecast, and request charts without naming a chart type. | Each submitted turn settles and renders at least one titled chart with visible marks; the forecast must show a July mark explicitly identified as Forecast (a line-point title or a July bar in the Forecast series). Chart containment, duplicate visuals, Analysis Details, evidence steps, model-call timings, and uncaught renderer errors are recorded. JSONL transcripts and per-chart light/dark screenshots are saved under `test-results/e2e-analysis-families/`. This is a real-provider app journey, not a correctness benchmark: answer values and chart suitability are captured for review but not scored. If a turn stalls, requests clarification, or exposes a provider failure, later prompts are recorded as not run rather than sent into an unresolved conversation. Journey definition v5 corrects a v4 false positive where June’s final marker could be mistaken for July, and keeps screenshots for multi-chart answers separate; prompts and intended behavior are unchanged. |
 | G7 forecast | Existing UCI Bike Sharing fixture; ask the July forecast question using the real model. | The assistant turn settles; Analysis Details exposes a forecast-method step, its source line, a method disclosure, and an inspectable input table. Forecast value, training-window correctness, and method suitability are not graded here. |
 | G8 | Mount a tiny local CSV workspace and set the renderer to 1288×832 and 1024×640 CSS-pixel viewports. | The dock, composer, field, source/context row, question field, and bottom controls have non-zero dimensions and remain wholly inside the renderer viewport; the document itself does not extend below the viewport. This checks the renderer layout, not platform-specific window decorations. |
 
@@ -487,3 +488,40 @@ The candidate remains **not ready for release** until the default Rust suite
 is green or the owner explicitly adjudicates those two test contracts, G5's
 live behavior is acceptably reliable, the remaining G3/G7 checks are complete
 or explicitly accepted, and the release commit is on `main`.
+
+## Real-model chart-family journey (2026-10-07)
+
+`pnpm test:e2e:analysis-families:real` ran the same six-turn conversation in
+separate Electron sessions against OpenAI `gpt-5.6-luna` and Ollama Cloud
+`gemma4:31b`. Both used the same public Capital Bikeshare workspace and real
+credentials. The local Ollama daemon was not running, so Gemma was called
+through the configured Ollama Cloud provider. No model output was mocked.
+
+- **Luna: 4/6 turns passed; 2 failed to render a chart.** Its time-series,
+  composition, distribution, and relationship charts rendered. The model
+  recovered from an initial composition-chart field mismatch, but its
+  segmented comparison used duplicate month/group rows and its forecast chart
+  rejected the unresolved observed/forecast gaps. No turn stalled.
+- **Gemma 4 31B: 6/6 turns passed.** It produced seven charts across six turns
+  (two different distribution views). One forecast-chart tool attempt used an
+  incorrect field name, then the model recovered and rendered the chart.
+- Neither run had a provider connection failure or uncaught renderer error.
+  Generated answer correctness and chart-family suitability were recorded but
+  **not graded**; this is a journey/rendering check, not a correctness score.
+
+The v5 forecast check requires the July mark itself to be identified as a
+forecast. A prior v4 locator incorrectly counted June's final point as the
+forecast; those initial results remain in their original audit directory and
+are not combined with v5. The prompts and expected behavior did not change.
+The first v5 audits are at
+`test-results/e2e-analysis-families/2026-10-07T22-41-42-270Z/` (Luna) and
+`test-results/e2e-analysis-families/2026-10-07T22-43-16-527Z/` (Gemma). A
+paired repeat produced Luna 6/6 and Gemma 5/6; the Gemma forecast chart failed
+after two invalid chart-tool attempts. That repeat's audit and chart-indexed
+light/dark captures are at
+`test-results/e2e-analysis-families/2026-10-07T23-28-31-066Z/`. An attempted
+Gemma-only rerun was forwarded through pnpm incorrectly and ran both providers;
+it is recorded as a paired repeat, not as an isolated Gemma sample. Tall
+histogram screenshots capture the visible app viewport while the DOM audit
+records all 30 rendered bins, so those images are not full-height chart
+captures.

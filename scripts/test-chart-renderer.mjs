@@ -486,9 +486,43 @@ try {
 	}));
 	assert.match(forecast, /class="[^"]*\bforecast-band\b[^"]*"/);
 	assert.match(forecast, /class="[^"]*\bline\b[^"]*\bdashed\b[^"]*"/);
+	assert.equal(count(forecast, /class="[^"]*\bforecast-dot\b[^"]*"/g), 2);
+	assert.match(forecast, /Forecast, Mar: 15/);
 	assert.match(forecast, /Lower bound/);
 	assert.match(forecast, /Upper bound/);
 	assert.match(forecast, /18\.5/);
+
+	// Singleton forecast periods need an explicit plotted mark; a one-point
+	// dashed path is otherwise invisible even though exact values are present.
+	const singlePointForecast = renderChart(generic('forecast', ['Jan', 'Feb', 'Mar'], [], {
+		x_label: 'Month',
+		payload: {
+			type: 'forecast',
+			observed: [10, 12, null],
+			forecast: [null, null, 15],
+			lower: [null, null, 13],
+			upper: [null, null, 17],
+			uncertainty_note: undefined
+		}
+	}));
+	assert.equal(count(singlePointForecast, /class="[^"]*\bforecast-dot\b[^"]*"/g), 1);
+	assert.match(singlePointForecast, /Forecast, Mar: 15/);
+	const isolatedLinePoint = renderChart(generic('line', Array.from({ length: 100 }, (_, index) => `P${index + 1}`), [
+		{ name: 'Observed', values: Array.from({ length: 100 }, (_, index) => index + 1) },
+		{ name: 'Forecast', values: Array.from({ length: 100 }, (_, index) => index === 99 ? 42 : null) }
+	]));
+	assert.equal(count(isolatedLinePoint, /class="[^"]*\bline-dot\b[^"]*"/g), 1);
+	assert.match(isolatedLinePoint, /Forecast, P100: 42/);
+
+	const dailyScatter = renderChart(generic('scatter', [], [], {
+		x_label: 'Temperature',
+		y_label: 'Daily rentals',
+		payload: {
+			type: 'scatter',
+			points: Array.from({ length: 731 }, (_, index) => ({ x: index / 1000, y: index * 2, label: String(index + 1) }))
+		}
+	}));
+	assert.equal(count(dailyScatter, /class="[^\"]*\bscatter-dot\b[^\"]*"/g), 731);
 
 	// Chart series use application tokens, with separate values in both themes.
 	// This is a structural theme check; visual contrast still needs a human pass.

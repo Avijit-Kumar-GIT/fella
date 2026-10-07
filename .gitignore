@@ -45,6 +45,7 @@ vite.config.ts.timestamp-*
 /demo-data
 /test-results/e2e-journeys/
 /test-results/e2e-chart-families/
+/test-results/e2e-analysis-families/
 
 # Personal notes
 /STUDY.md

@@ -146,6 +146,7 @@
 				  ].filter(isNumber)
 			: []
 	);
+	let forecastPointCount = $derived(forecastPayload?.forecast.filter(isNumber).length ?? 0);
 	let stackedTotals = $derived(
 		spec.kind === 'stacked_area'
 			? spec.labels
@@ -551,15 +552,25 @@
 					{#if band}<path d={band} class="forecast-band" />{/if}
 					<path d={pointsLine(forecastPayload.observed) ?? ''} class="line" style={`stroke:${color(0)}`} />
 					<path d={pointsLine(forecastPayload.forecast) ?? ''} class="line dashed" style={`stroke:${color(1)}`} />
+					{#if forecastPointCount <= 80}
+						{#each forecastPayload.forecast as value, index (`forecast-${index}`)}
+							{#if isNumber(value)}
+								<circle cx={xScale(spec.labels[index] ?? '') ?? 0} cy={yScale(value)} r="4.5" class="line-dot forecast-dot" style={`fill:${color(1)}`}>
+									<title>Forecast, {displayLabels[index] ?? spec.labels[index]}: {formatValue(value, spec.unit)}</title>
+								</circle>
+							{/if}
+						{/each}
+					{/if}
 				{:else if spec.kind === 'stacked_area'}
 					{#each stackPaths as series (series.name)}
 						{#each series.paths as path, index (`${series.name}-${index}`)}<path d={path} class="area-fill" style={`fill:${series.color}`} />{/each}
 					{/each}
 				{:else}
 					{#each spec.series as series, seriesIndex (series.name)}
+						{@const seriesPointCount = series.values.filter(isNumber).length}
 						{#if spec.kind === 'area'}<path d={pointsArea(series.values) ?? ''} class="area-fill" style={`fill:${color(seriesIndex)}`} />{/if}
 						<path d={pointsLine(series.values) ?? ''} class="line" class:dashed={seriesIndex > 0} style={`stroke:${color(seriesIndex)}`} />
-						{#if showLineMarkers}
+						{#if showLineMarkers || seriesPointCount === 1}
 							{#each series.values as value, index (`${series.name}-${index}`)}
 								{#if isNumber(value)}
 									<circle cx={xScale(spec.labels[index] ?? '') ?? 0} cy={yScale(value)} r="3.2" class="line-dot" style={`fill:${color(seriesIndex)}`}>

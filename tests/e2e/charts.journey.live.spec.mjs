@@ -211,6 +211,7 @@ const chartCases = [
 		markers: [
 			{ selector: 'svg[role="img"] path.line:not(.dashed)', min: 1 },
 			{ selector: 'svg[role="img"] path.line.dashed', min: 1 },
+			{ selector: 'svg[role="img"] .forecast-dot', min: 3 },
 			{ selector: 'svg[role="img"] .forecast-band', min: 1 },
 			{ selector: '.chart-legend .forecast-swatch', min: 1 }
 		]

@@ -653,15 +653,25 @@ def _fella_json(value):
     raise TypeError('fella_table cells must be scalar strings, numbers, booleans, or None')
 
 def fella_table(columns, rows):
-    """Publish a bounded, typed table for a later chart in this analysis turn."""
+    """Publish a bounded table; rows may be positional or keyed by column name."""
     columns = list(columns)
-    rows = [list(row) for row in rows]
     if not columns or len(columns) > 64:
         raise ValueError('fella_table needs 1-64 columns')
-    if len(rows) > 10000:
-        raise ValueError('fella_table supports at most 10000 rows')
     if any(type(column) is not str or not column.strip() for column in columns):
         raise ValueError('fella_table column names must be non-empty strings')
+    rows = list(rows)
+    if len(rows) > 10000:
+        raise ValueError('fella_table supports at most 10000 rows')
+    normalized_rows = []
+    for row in rows:
+        if isinstance(row, dict):
+            if set(row.keys()) != set(columns):
+                raise ValueError('dictionary rows must contain exactly the published column names')
+            row = [row[column] for column in columns]
+        else:
+            row = list(row)
+        normalized_rows.append(row)
+    rows = normalized_rows
     if any(len(row) != len(columns) for row in rows):
         raise ValueError('fella_table rows must match the column count')
     payload = '{"columns":' + _fella_json(columns) + ',"rows":' + _fella_json(rows) + '}'

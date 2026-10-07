@@ -1378,7 +1378,8 @@ bands are not guaranteed prediction intervals. Forecast helpers reject missing/n
 not inspect dates or infer the time grain for you. The snippet runs in Fella's local WASM + RustPython \
 sandbox: it has no filesystem, network, environment, or subprocess access, and can only print or request \
 bounded read-only workspace SQL. When a computed result needs a chart, publish it using \
-`fella_table([column_names], rows)`; `make_chart` can reuse this typed table without repeating \
+`fella_table([column_names], rows)` accepts positional sequences or dictionaries keyed by those column names; \
+`make_chart` can reuse this typed table without repeating \
 the computation. Publish a table only when a chart/table was requested or materially helps the \
 answer. If execution fails, use the traceback to fix the cause and do not repeat unchanged code. \
 Use Python for local analysis, not for fetching anything."

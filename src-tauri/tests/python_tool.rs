@@ -166,6 +166,37 @@ async fn python_can_publish_a_typed_chartable_result_without_leaking_wire_data()
 }
 
 #[tokio::test]
+async fn python_chart_table_accepts_mapping_rows_in_declared_column_order() {
+    let data = scratch("py-published-mapping-table");
+    let engine = EngineState::new(&data).unwrap();
+
+    let result = engine
+        .run_python(
+            "fella_table(['period', 'value'], [\n\
+             {'value': 12.5, 'period': 'Jan'},\n\
+             {'value': 18, 'period': 'Feb'}\n\
+             ])",
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(result.exit_code, Some(0), "stderr: {}", result.stderr);
+    let table = result
+        .result_table
+        .expect("mapping rows publish as a typed table");
+    assert_eq!(table.columns, vec!["period", "value"]);
+    assert_eq!(
+        table.rows,
+        vec![
+            vec![serde_json::json!("Jan"), serde_json::json!(12.5)],
+            vec![serde_json::json!("Feb"), serde_json::json!(18)]
+        ]
+    );
+
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[tokio::test]
 async fn python_has_built_in_stats_helpers() {
     let data = scratch("py-stats");
     let engine = EngineState::new(&data).unwrap();
