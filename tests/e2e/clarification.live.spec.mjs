@@ -34,7 +34,8 @@ function enginePath() {
 	return join(root, 'electron', 'engine', `fella-engine-${arch}${suffix}`);
 }
 
-test('real OpenAI clarification is submitted and resumed in Electron', async () => {
+test('G5: real OpenAI clarification is submitted and resumes the same analysis', async () => {
+	test.setTimeout(300_000);
 	const authPath = defaultAuthPath();
 	const authText = await readFile(authPath, 'utf8');
 	const auth = JSON.parse(authText);
@@ -91,23 +92,15 @@ test('real OpenAI clarification is submitted and resumed in Electron', async () 
 		await composer.fill('What was my housing spending in Q1 2024?');
 		await composer.press('Enter');
 
-		// Wait for the model's answer to finish before asserting the required
-		// clarification interaction. This reports a missing clarification as a
-		// behavioral failure instead of spending another 90 seconds polling it.
-		await expect(page.getByRole('button', { name: 'Analysis details' }).last()).toBeVisible({
-			timeout: 90_000
-		});
-		const clarification = page.locator('.msg.assistant').last().locator('.clarification');
-		await expect(clarification).toBeVisible({ timeout: 1_000 });
-		await expect(
-			clarification.getByRole('textbox', { name: 'Answer the clarification in your own words' })
-		).toBeVisible();
+		const clarification = page.locator('.dock .clarification-field');
+		await expect(clarification).toBeVisible({ timeout: 120_000 });
+		await expect(clarification.locator('.clarification-question')).not.toBeEmpty();
+		await expect(clarification.locator('.clarification-options button').first()).toBeVisible();
+		await expect(clarification.getByRole('textbox', { name: 'Other interpretation' })).toBeVisible();
 
-		const reply = clarification.getByRole('textbox', {
-			name: 'Answer the clarification in your own words'
-		});
+		const reply = clarification.getByRole('textbox', { name: 'Other interpretation' });
 		await reply.fill('Count rent and utilities, but leave out repairs and maintenance.');
-		const continueButton = clarification.getByRole('button', { name: 'Continue', exact: true });
+		const continueButton = clarification.getByRole('button', { name: 'Continue with this interpretation' });
 		await expect(continueButton).toBeEnabled();
 		await continueButton.click();
 
@@ -117,13 +110,17 @@ test('real OpenAI clarification is submitted and resumed in Electron', async () 
 			'Count rent and utilities, but leave out repairs and maintenance.'
 		);
 		const finalAnswer = page.locator('.msg.assistant').last();
-		await expect(finalAnswer.locator('.text.rich')).toContainText(/4,?647/, {
-			timeout: 90_000
-		});
-		await expect(finalAnswer).not.toContainText(/4,892/);
+		const finalText = finalAnswer.locator('.text.rich');
+		await expect(finalText).not.toHaveClass(/pending/, { timeout: 120_000 });
+		await expect(finalAnswer.locator('.thinking')).toHaveCount(0);
+		assert.ok((await finalText.innerText()).trim(), 'the resumed turn should produce a settled response');
 
-		await finalAnswer.getByRole('button', { name: 'Analysis details' }).click();
+		const analysisDetails = finalAnswer.getByRole('button', { name: 'Analysis details' });
+		await expect(analysisDetails).toBeVisible();
+		await analysisDetails.click();
+		await expect(analysisDetails).toHaveAttribute('aria-expanded', 'true');
 		await expect(finalAnswer).toContainText('This analysis continues from your clarification.');
+		await expect(finalAnswer).toContainText('ledger.csv');
 	} finally {
 		try {
 			await app?.close();

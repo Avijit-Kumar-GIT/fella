@@ -25,9 +25,38 @@ profile, checks that Electron reports the app as packaged, waits for the Ask
 composer, and pings the bundled Rust sidecar. It requires a desktop display (or
 Xvfb on Linux), uses no provider credentials, and removes its temporary data.
 
+## Electron E2E acceptance definitions
+
+Run every Playwright Electron E2E case together, serially, with
+`pnpm test:e2e:release:live`. G5 and G7 use the configured OpenAI credential
+and incur normal model usage; all cases use disposable Fella/browser profiles.
+The suite is opt-in because it requires a GUI and, for live cases, a credential.
+Do not run one case as the release verdict, and do not modify benchmark gold or
+acceptance criteria after seeing a candidate result.
+
+The cases are defined before execution:
+
+| Case | Fixed setup and action | Pass criteria |
+| --- | --- | --- |
+| G3 | Local OpenAI-wire SSE mock; mount a three-row CSV; submit a direct total; stop after the final model response starts streaming. | The stop state appears; completed SQL evidence remains inspectable; the mock’s later sentinel text never appears; the request count remains exactly two. This checks cancellation/evidence plumbing, not numerical correctness. |
+| G5 | Existing `clarification-housing` fixture; ask the ambiguous Q1 2024 housing-spend question; resolve it in the composer. | A typed clarification replaces the normal composer input with suggested choices and an “Other” response field; the reply appears as a submitted user turn; the same conversation resumes; Analysis Details exposes clarification lineage and source evidence. The response amount and interpretation are recorded but not graded here. |
+| G7 chart | Existing UCI Bike Sharing fixture; ask the monthly chart question using the real model. | Exactly one chart renders and the assistant turn settles. Its title, accessible visual, labels, and non-empty exact-values disclosure are visible. The card and selected visualization remain contained; if SVG is selected, its axis text remains in the viewBox. Capture light and dark appearances. Chart values and chart-family suitability are not graded here. |
+| G7 forecast | Existing UCI Bike Sharing fixture; ask the July forecast question using the real model. | The assistant turn settles; Analysis Details exposes a forecast-method step, its source line, a method disclosure, and an inspectable input table. Forecast value, training-window correctness, and method suitability are not graded here. |
+| G8 | Mount a tiny local CSV workspace and set the renderer to 1288×832 and 1024×640 CSS-pixel viewports. | The dock, composer, field, source/context row, question field, and bottom controls have non-zero dimensions and remain wholly inside the renderer viewport; the document itself does not extend below the viewport. This checks the renderer layout, not platform-specific window decorations. |
+
+These are harness/UI journeys, not answer-quality tests. They verify that
+requests flow through the app, tool outputs and provenance can be inspected,
+clarification can resume, charts and forecast artifacts render, and the UI
+remains contained. They do not compare model answers, calculated values,
+selected labels, or analysis choices against FQA gold. Those correctness
+criteria remain in the unchanged FQA-Bench suite. A workflow failure remains a
+failure; a suspected test defect is documented and adjudicated before changing
+its criterion.
+
 The credentialed Electron clarification flow uses Playwright and the real
 OpenAI provider. After `pnpm electron:build`, run
-`pnpm test:e2e:clarification:live`. It reads the existing `auth.json` without
+`pnpm test:e2e:release:live` (or the compatibility alias
+`pnpm test:e2e:clarification:live`). It reads the existing `auth.json` without
 printing it, accepts `FELLA_E2E_AUTH_FILE` to select another auth file, copies
 it into a private temporary profile, and removes that profile when the run
 ends. The test exercises the real Electron window, engine sidecar, and model;
@@ -367,8 +396,71 @@ smoke has passed on a native OS.
 - No macOS GUI test was run, per maintainer direction. The release workflow
   continues to build the universal macOS artifacts; this is not a GUI test.
 
+## Windows packaged-app validation (2026-10-07)
+
+- Used a fresh temporary clone of `feat/eval-replay-refs`; the maintainer's
+  existing Windows checkout and its uncommitted files were not touched.
+- `pnpm electron:build` completed, including the optimized Windows Rust
+  sidecar. `electron-builder --win --x64 --publish never` generated both
+  `Fella_0.3.0_x64.exe` (NSIS) and `Fella_0.3.0_x64.msi`.
+- `scripts/check-release-artifacts.mjs v0.3.0 win dist-electron` accepted both
+  expected, non-empty artifacts.
+- `scripts/test-packaged-electron.mjs` launched the packaged `Fella.exe`,
+  confirmed the Ask composer rendered, and received `pong` from its bundled
+  Rust engine. The test used an isolated temporary profile and no provider
+  credentials.
+- This validates Windows packaging and startup/bridge only. It does not
+  establish Windows signing identity, provider quality, update installation,
+  or full visual behavior. No macOS GUI test was run.
+
+## Final local release-gate run (2026-10-07)
+
+This run supersedes the earlier “release-gate recheck” status above for the
+current feature branch. The earlier failures remain historical observations;
+they were not erased or re-scored.
+
+- `pnpm check`: **pass**, zero errors and zero warnings.
+- `pnpm electron:build`: **pass**, including the optimized Rust sidecar.
+- `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check`: **pass**.
+- `cargo test --locked --manifest-path src-tauri/Cargo.toml`: **pass**. The
+  library suite reports 330 passed; `agent_loop` reports 23 passed and one
+  ignored; all remaining integration/doc-test binaries pass. Two intentional
+  manual/performance tests remain ignored: the slow concurrent Wasmi timing
+  probe and the 5,000-file inventory probe. No test or benchmark gold was
+  changed to match a candidate answer. The two malformed `agent_loop` fixtures
+  were corrected with maintainer approval: the time-series case now includes
+  dates and a grouped monthly query, while the no-contract case asks for the
+  direct total its amount-only fixture supports. Their expected behaviors were
+  preserved.
+- `cargo clippy --all-targets --features eval --locked --manifest-path
+  src-tauri/Cargo.toml -- -D warnings`: **pass**.
+- `pnpm test:electron-bridge`, `pnpm test:electron-update`,
+  `pnpm test:release-artifacts`, and `pnpm test:chart-renderer`: **pass**.
+- `pnpm test:e2e:release:live`: **8 passed, 0 failed** in one serial run
+  (3.6 minutes). This used the configured real OpenAI credential only for the
+  live model cases and disposable app profiles. G3 Stop/evidence retention,
+  real and mocked G5 typed clarification/resume, G8 compact layout, G7 chart
+  containment/themes, and G7 forecast method/source disclosure all passed.
+  The analyst journey recorded 13 turns. E2E grades workflow and UI plumbing,
+  not numerical accuracy or model answer quality.
+- A targeted G7 forecast rerun after the repair change also passed. An
+  explicitly requested backtest that is missing from the first tool results
+  now prompts a bounded model repair to run the forecast evaluation; this is
+  non-blocking, and ordinary point forecasts retain their advisory behavior.
+
+Auditable live journey output is at
+`test-results/e2e-journeys/2026-10-07T19-52-42-433Z.jsonl`; associated chart
+captures are in the sibling `*-screenshots/` directory. The live G7 visual
+captures are in `/tmp/fella-v030-g7-captures-0khlNb` and
+`/tmp/fella-v030-g7-forecast-captures-9qb7vc`.
+
+This establishes green local gates for the current source branch, not a
+published release. The branch still needs maintainer merge to `main`, followed
+by the tagged GitHub workflow and review of its complete platform artifacts.
+The release remains unsigned; no macOS GUI test was run, per maintainer
+direction.
+
 The candidate remains **not ready for release** until the default Rust suite
 is green or the owner explicitly adjudicates those two test contracts, G5's
 live behavior is acceptably reliable, the remaining G3/G7 checks are complete
-or explicitly accepted, Windows packaged validation passes, and the release
-commit is on `main`.
+or explicitly accepted, and the release commit is on `main`.

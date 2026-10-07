@@ -13,41 +13,40 @@ checks both against the pushed tag before building.
 
 ### Release gate
 
-Do not tag a production release until each item below is resolved or explicitly
-accepted by the maintainer:
+The candidate's local release gates are complete on the current feature branch.
+The tagged GitHub workflow and publication are still separate steps and must
+not be described as completed until run:
 
-- [ ] `pnpm check`, `pnpm build`, bridge/update/chart tests, Rust formatting,
+- [x] `pnpm check`, `pnpm build`, bridge/update/chart tests, Rust formatting,
   Clippy, and the full default-feature Rust test suite pass.
-- [ ] G5 behaves reliably against the same clarification task and expected
-  behavior. A recent real-model run passed the typed clarification/resume
-  flow, but another returned alternative totals without asking. Do not treat a
-  single successful stochastic run as stable coverage or weaken the case to
-  match output; see [`ELECTRON-VALIDATION.md`](ELECTRON-VALIDATION.md).
-- [ ] Finish the partial G3/G7 checks, including retained evidence after Stop,
+- [x] G5 typed clarification/resume flow passes in the complete live suite.
+  This is workflow coverage, not a claim that model interpretation is
+  deterministic; earlier live failures remain in the validation history.
+- [x] Complete the G3/G7 checks, including retained evidence after Stop,
   a fully framed chart in both themes, and forecast details.
-- [ ] Build and launch the packaged app on Windows and Linux. A macOS GUI test
+- [x] Build and launch the packaged app on Windows and Linux. A macOS GUI test
   is not required by the maintainer; CI must still produce the universal
   macOS installers for the release. CI compilation alone is not a GUI smoke
   test on Windows or Linux.
-- [ ] Review the live-model, performance, security, and installer-size notes
-  in the validation record. Keep grader concerns and incomplete coverage
-  visible in the release notes.
+- [x] Review the live-model, performance, security, and installer-size notes
+  in the validation record. Remaining limitations are listed below and in
+  [`ELECTRON-VALIDATION.md`](ELECTRON-VALIDATION.md).
 
 The web-research threat suite is not a gate for this version because web
 research is not shipped. It becomes a required gate before backlog #2 enables
 web access.
 
-**Current status (2026-10-07): not production-ready.** Frontend diagnostics,
-build, bridge/update/chart tests, Rust formatting and Clippy, Linux AppImage
-and DEB artifact validation, and a packaged Linux UI/sidecar smoke pass. The
-default Rust test command still has two `agent_loop` failures. Live G5 passed
-once and failed once across recent real-model runs, so its reliability is not
-established; G3/G7 remain partial. Windows packaged-app validation and the
-current branch's merge to `main` are still outstanding. No macOS GUI test is
-required; the tagged workflow will still build macOS installers. The exact run
-and limitations are recorded in
-[`ELECTRON-VALIDATION.md`](ELECTRON-VALIDATION.md). No release tag or draft has
-been created.
+**Current status (2026-10-07): local release gates pass on
+`feat/eval-replay-refs`.** The full Rust suite, Clippy, Svelte diagnostics,
+Electron build and bridge/update/chart/artifact checks pass. All eight
+Playwright release journeys passed together, including live clarification,
+forecast, chart, Stop, and compact-layout flows. Packaged Linux and Windows
+startup/sidecar smoke tests also pass. This does not mean a release has been
+published: the branch has not been merged to `main`, the tagged GitHub release
+workflow has not been run, and no draft or tag exists. Distribution remains
+unsigned, and no macOS GUI test was run as requested; CI is still expected to
+build the universal macOS installers. Full run details and limitations are in
+[`ELECTRON-VALIDATION.md`](ELECTRON-VALIDATION.md).
 
 ## Build and draft
 

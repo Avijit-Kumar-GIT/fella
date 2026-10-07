@@ -522,10 +522,11 @@ fn check_empty_aggregate(
 }
 
 /// A forecast built from workspace observations should compare against
-/// chronological holdouts when they can be formed. This is a soft nudge, not
-/// a reason to suppress the point estimate: the model can add the dedicated
-/// forecast tool or a replayable custom Python backtest, and short-history
-/// cases remain answerable with an explicit limitation.
+/// chronological holdouts when they can be formed. By default this is a soft
+/// nudge, not a reason to suppress the point estimate. If the user explicitly
+/// asked for a backtest/evaluation, it becomes an actionable repair so the
+/// model gets a chance to deliver that requested analysis; the point estimate
+/// remains available if the evaluation cannot be produced.
 fn check_forecast_evaluation(
     question: &str,
     evidence: &[EvidenceItem],
@@ -584,12 +585,33 @@ fn check_forecast_evaluation(
                 .is_some_and(|queries| !queries.is_empty())
     });
     if !has_evaluation {
-        out.push(warn(
-            "forecast lacks chronological evaluation",
-            Some(
-                "the workspace-backed point estimate can remain, but add a chronological rolling-origin comparison against a baseline with an interpretable error metric when history permits; use forecast_analysis for a regular series, or a replayable run_python backtest for a custom series, and state when no holdout is available".into(),
-            ),
-        ));
+        let guidance = "the user requested historical forecast evaluation; add a chronological rolling-origin comparison against a baseline with an interpretable error metric when history permits; use forecast_analysis for a regular series, or a replayable run_python backtest for a custom series, and state when no holdout is available";
+        let check = if risk::assess(question)
+            .signals
+            .iter()
+            .any(|signal| signal == "forecast_evaluation")
+        {
+            warn_with_effect(
+                "forecast lacks chronological evaluation",
+                Some(guidance.into()),
+                scoped_finding(
+                    VerificationFindingCode::SemanticExecutionMismatch,
+                    VerificationEffect::Repair,
+                    VerificationTarget::Answer,
+                    None,
+                    Vec::new(),
+                    Some(guidance.into()),
+                ),
+            )
+        } else {
+            warn(
+                "forecast lacks chronological evaluation",
+                Some(
+                    "the workspace-backed point estimate can remain, but add a chronological rolling-origin comparison against a baseline with an interpretable error metric when history permits; use forecast_analysis for a regular series, or a replayable run_python backtest for a custom series, and state when no holdout is available".into(),
+                ),
+            )
+        };
+        out.push(check);
     }
 }
 
@@ -1606,6 +1628,42 @@ fn check_order_usage(
             "requested order by `{}` was used by the query",
             order.by
         )));
+    } else if contract
+        .time
+        .as_ref()
+        .is_some_and(|time| time.bucket.is_some())
+        && !contract.measures.iter().any(|measure| {
+            measure.concept.eq_ignore_ascii_case(&order.by)
+                || measure
+                    .field
+                    .as_deref()
+                    .is_some_and(|field| field.eq_ignore_ascii_case(&order.by))
+        })
+        && sql
+            .iter()
+            .any(|query| query.to_ascii_lowercase().contains("order by"))
+    {
+        // SQL aliases for a temporal grouping (for example `month_num` or
+        // `time_month`) need not have the same spelling as the source field
+        // recorded in the contract. The query did order its result; a lexical
+        // mismatch alone cannot establish that its order is wrong. Keep the
+        // uncertainty visible, but don't trigger a costly recomputation that
+        // can append another identical chart.
+        checks.push(warn_with_effect(
+            format!(
+                "requested temporal order by `{}` could not be matched by field name",
+                order.by
+            ),
+            Some("the query ordered by a different projection name; the verifier cannot establish whether that alias is equivalent from its name alone".into()),
+            scoped_finding(
+                VerificationFindingCode::SemanticCaveat,
+                VerificationEffect::Informational,
+                VerificationTarget::Claim,
+                Some(order.by.clone()),
+                Vec::new(),
+                Some("preserve the executed result and surface the ordering uncertainty; do not rerun solely to make a SQL alias match the source-field name".into()),
+            ),
+        ));
     } else {
         checks.push(warn(
             format!(
@@ -5006,6 +5064,35 @@ mod tests {
     }
 
     #[test]
+    fn explicitly_requested_forecast_backtest_gets_a_nonblocking_repair_hint() {
+        let point_only = run_sql_ev(
+            "SELECT AVG(value) AS estimate FROM monthly_values",
+            &["estimate"],
+            vec![vec![Json::from(35)]],
+        );
+        let mut checks = Vec::new();
+        check_forecast_evaluation(
+            "Backtest the forecast against a naive baseline",
+            std::slice::from_ref(&point_only),
+            &mut checks,
+        );
+
+        assert_eq!(checks.len(), 1);
+        assert!(!checks[0].ok);
+        let finding = checks[0].finding.as_ref().unwrap();
+        assert_eq!(finding.effect, VerificationEffect::Repair);
+        assert_eq!(
+            finding.code,
+            VerificationFindingCode::SemanticExecutionMismatch
+        );
+        assert!(semantic_repair_check(&checks).is_some());
+        assert!(semantic_repair_hint(&checks)
+            .unwrap()
+            .contains("forecast_analysis"));
+        assert!(point_only.is_accepted(), "the point result remains usable");
+    }
+
+    #[test]
     fn rendering_a_precomputed_forecast_does_not_require_a_second_backtest() {
         let sql = "SELECT period, observed, forecast, lower, upper FROM forecast_values";
         let rows = vec![
@@ -6422,6 +6509,42 @@ mod tests {
         assert!(bad_checks.iter().any(|check| {
             !check.ok && check.label.contains("requested row limit `3` was not used")
         }));
+    }
+
+    #[test]
+    fn temporal_order_alias_mismatch_is_informational_not_a_repair_loop() {
+        let contract = AnalysisContract {
+            interpretation: InterpretationStatus::Grounded,
+            group_by: vec!["mnth".into()],
+            time: Some(crate::engine::runtime::ContractTime {
+                field: Some("dteday".into()),
+                range: None,
+                bucket: Some(TimeBucket::Month),
+                timezone: None,
+            }),
+            ..Default::default()
+        };
+        let order = ContractOrder {
+            by: "mnth".into(),
+            direction: SortDirection::Asc,
+        };
+        let mut checks = Vec::new();
+        check_order_usage(
+            &mut checks,
+            &contract,
+            &order,
+            &["SELECT CAST(strftime('%m', dteday) AS INTEGER) AS month_num, SUM(cnt) AS total FROM daily GROUP BY month_num ORDER BY month_num ASC".into()],
+        );
+
+        assert_eq!(checks.len(), 1);
+        assert!(
+            !checks[0].ok,
+            "the verifier must not claim it proved alias equivalence"
+        );
+        let finding = checks[0].finding.as_ref().unwrap();
+        assert_eq!(finding.code, VerificationFindingCode::SemanticCaveat);
+        assert_eq!(finding.effect, VerificationEffect::Informational);
+        assert!(semantic_repair_check(&checks).is_none());
     }
 
     #[test]

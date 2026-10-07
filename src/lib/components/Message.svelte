@@ -63,22 +63,43 @@
 	// A chart is selected from evidence, independent of whether the model's text
 	// references it. Correctness shouldn't depend on a small model correctly
 	// placing a chart mention in freeform text.
-	let chartItems = $derived(
-		(message.answer?.evidence ?? []).filter(
-			(e) =>
-				e.tool === 'make_chart' &&
-				e.chart &&
-				!e.error &&
-				e.verifier_disposition?.state !== 'excluded' &&
-				!(e.verifier_disposition?.state === 'artifact_withheld' && e.verifier_disposition.artifact === 'chart') &&
-				!(message.answer?.verification ?? []).some(
+	let chartItems = $derived.by(() => {
+		const seenVisuals = new Set<string>();
+		return (message.answer?.evidence ?? []).filter((e) => {
+			if (
+				e.tool !== 'make_chart' ||
+				!e.chart ||
+				e.error ||
+				e.verifier_disposition?.state === 'excluded' ||
+				(e.verifier_disposition?.state === 'artifact_withheld' && e.verifier_disposition.artifact === 'chart') ||
+				(message.answer?.verification ?? []).some(
 					(check) =>
 						!check.ok &&
 						check.finding?.effect === 'withhold_artifact' &&
 						check.finding.target_id === e.id
 				)
-		)
-	);
+			) return false;
+
+			// A repair iteration can leave several evidence entries that render the
+			// same visual while using different SQL aliases/source metadata. Keep
+			// the first visible instance; all original calls remain in Analysis
+			// Details so this presentation cleanup doesn't discard audit history.
+			const visual = e.chart;
+			const key = JSON.stringify({
+				kind: visual.kind,
+				title: visual.title,
+				labels: visual.labels,
+				series: visual.series,
+				unit: visual.unit,
+				x_label: visual.x_label,
+				y_label: visual.y_label,
+				payload: visual.payload
+			});
+			if (seenVisuals.has(key)) return false;
+			seenVisuals.add(key);
+			return true;
+		});
+	});
 	let hasVisualAnswer = $derived(chartItems.length > 0 && !message.pending);
 
 	// Keep the useful trust signal close to the finding. This deliberately uses
@@ -141,15 +162,6 @@
 				return 'Analysis details';
 		}
 	});
-	let clarificationResponse = $state('');
-
-	function submitClarification(event: SubmitEvent) {
-		event.preventDefault();
-		const response = clarificationResponse.trim();
-		if (!response) return;
-		onfollowup?.(response, message.answer?.turn_id);
-		clarificationResponse = '';
-	}
 </script>
 
 <div class="msg {message.role}" transition:enterUp>
@@ -194,39 +206,17 @@
 				<div class="text rich answer-supporting">{@html remainderHtml}</div>
 			{/if}
 		{:else}
-			<div class="text rich" class:pending={message.pending}>{@html bodyHtml}{#if message.pending}<span
-					class="thinking" aria-hidden="true"></span
-				>{/if}</div>
+			<div class="text rich" class:pending={message.pending}>
+				{#if message.answer?.clarification}
+					<p class="clarification-transcript-note">Choose an option below to continue.</p>
+				{:else}
+					{@html bodyHtml}
+				{/if}
+				{#if message.pending}<span class="thinking" aria-hidden="true"></span>{/if}
+			</div>
 		{/if}
 	{:else}
 		<div class="text">{message.text}</div>
-	{/if}
-	{#if message.answer?.clarification && showFollowups && onfollowup}
-		<div class="clarification" aria-label="Choose an interpretation">
-			<span class="clarification-label">Choose one to continue</span>
-			{#if message.answer.clarification.question.trim()}
-				<p class="clarification-question">{message.answer.clarification.question}</p>
-			{/if}
-			{#if message.answer.clarification.options.length}
-				<div class="clarification-options">
-					{#each message.answer.clarification.options as option (option)}
-						<button
-							type="button"
-							onclick={() => onfollowup?.(option, message.answer?.turn_id)}>{option}</button
-						>
-					{/each}
-				</div>
-			{/if}
-			<form class="clarification-reply" onsubmit={submitClarification}>
-				<input
-					bind:value={clarificationResponse}
-					aria-label="Answer the clarification in your own words"
-					placeholder="Or answer in your own words…"
-					maxlength="500"
-				/>
-				<button type="submit" disabled={!clarificationResponse.trim()}>Continue</button>
-			</form>
-		</div>
 	{/if}
 	{#if message.answer}
 		<EvidenceBlock
@@ -379,76 +369,11 @@
 		color: var(--text);
 		text-decoration: underline;
 	}
-	.clarification {
-		margin-top: var(--space-3);
-		padding-top: var(--space-2);
-		border-top: 1px solid var(--border);
-	}
-	.clarification-label {
-		display: block;
-		margin-bottom: var(--space-1);
-		color: var(--text-faint);
-		font-size: var(--fs-xs);
-	}
-	.clarification-question {
-		margin: 0 0 var(--space-2);
-		color: var(--text);
+	.clarification-transcript-note {
+		margin: 0;
+		color: var(--chat-meta);
 		font-size: var(--fs-sm);
-		line-height: 1.5;
-	}
-	.clarification-options {
-		display: flex;
-		flex-wrap: wrap;
-		gap: var(--space-1);
-	}
-	.clarification-options button {
-		padding: 5px 9px;
-		border: 1px solid var(--border);
-		border-radius: var(--radius-chip);
-		color: var(--text-dim);
-		font-size: var(--fs-sm);
-		text-align: left;
-	}
-	.clarification-options button:hover {
-		border-color: var(--accent);
-		color: var(--text);
-		background: var(--bg-inset);
-	}
-	.clarification-reply {
-		display: flex;
-		gap: var(--space-1);
-		margin-top: var(--space-2);
-	}
-	.clarification-reply input {
-		flex: 1;
-		min-width: 0;
-		padding: 7px 9px;
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		color: var(--text);
-		background: var(--bg-inset);
-		font: inherit;
-		font-size: var(--fs-sm);
-	}
-	.clarification-reply input:focus-visible {
-		border-color: var(--accent);
-		outline: 2px solid color-mix(in srgb, var(--accent) 24%, transparent);
-		outline-offset: 1px;
-	}
-	.clarification-reply button {
-		padding: 6px 10px;
-		border: 1px solid var(--border);
-		border-radius: var(--radius-chip);
-		color: var(--text);
-		background: var(--bg-inset);
-		font-size: var(--fs-sm);
-	}
-	.clarification-reply button:not(:disabled):hover {
-		border-color: var(--accent);
-	}
-	.clarification-reply button:disabled {
-		color: var(--text-faint);
-		cursor: default;
+		font-style: italic;
 	}
 
 	/* The assistant's answer is rendered from markdown (see markdown.ts). Code,

@@ -114,18 +114,21 @@ async function readRenderedCharts(assistant, caseId) {
 			const visualBounds = visual?.getBoundingClientRect();
 			const svg = figure.querySelector('svg[role="img"]');
 			const viewBox = svg?.viewBox.baseVal;
-			const svgTextContained = !svg || [...svg.querySelectorAll('text')].every((label) => {
+			const outOfBoundsTexts = svg && viewBox ? [...svg.querySelectorAll('text')].flatMap((label) => {
 				try {
 					const box = label.getBBox();
-					return box.x >= -2 && box.y >= -2 && box.x + box.width <= viewBox.width + 2 && box.y + box.height <= viewBox.height + 2;
-				} catch { return false; }
-			});
+					const contained = box.x >= -2 && box.y >= -2 && box.x + box.width <= viewBox.width + 2 && box.y + box.height <= viewBox.height + 2;
+					return contained ? [] : [{ text: label.textContent?.trim() ?? '', x: box.x, y: box.y, right: box.x + box.width, bottom: box.y + box.height }];
+				} catch { return [{ text: label.textContent?.trim() ?? '', measurementFailed: true }]; }
+			}) : [];
+			const svgTextContained = outOfBoundsTexts.length === 0;
 			return {
 				cardWidth: figure.clientWidth,
 				cardScrollWidth: figure.scrollWidth,
 				cardWithinAnswer: Boolean(parent && frame.left >= parent.left - 0.5 && frame.right <= parent.right + 0.5),
 				visualWithinCard: Boolean(visualBounds && visualBounds.left >= frame.left - 0.5 && visualBounds.right <= frame.right + 0.5),
 				svgTextContained,
+				outOfBoundsTexts,
 				visibleLabelCount: figure.querySelectorAll('.row-label, .axis-label, .pie-label, .box-label, .heatmap th').length
 			};
 		});
@@ -186,9 +189,11 @@ async function submitQuestion(page, task, {
 			return pending === 0 && thinking === 0;
 		}, { timeout: 120_000, intervals: [250, 500, 1000] }).toBe(true);
 		const textLocator = assistant.locator('.text.rich');
-		response.text = (await textLocator.count()) ? await textLocator.innerText() : await assistant.innerText();
-		const clarification = assistant.locator('.clarification');
-		if (await clarification.count()) {
+		response.text = (await textLocator.count())
+			? (await textLocator.allTextContents()).join('\n\n').trim()
+			: await assistant.innerText();
+		const clarification = page.locator('.dock .clarification-field');
+		if (await clarification.count() && await clarification.isVisible()) {
 			const question = clarification.locator('.clarification-question');
 			response.clarification = {
 				question: (await question.count()) ? (await question.innerText()).trim() : '',
@@ -203,9 +208,11 @@ async function submitQuestion(page, task, {
 	} catch (error) {
 		operationalError = String(error?.stack || error);
 		if (assistant && await assistant.count()) {
-			response.text = await assistant.locator('.text.rich').innerText().catch(() => assistant.innerText().catch(() => ''));
-			response.clarification = await assistant.locator('.clarification').count().catch(() => 0)
-				? { question: await assistant.locator('.clarification-question').innerText().catch(() => ''), options: [] }
+			const textParts = await assistant.locator('.text.rich').allTextContents().catch(() => []);
+			response.text = textParts.join('\n\n').trim() || await assistant.innerText().catch(() => '');
+			const clarification = page.locator('.dock .clarification-field');
+			response.clarification = await clarification.count().catch(() => 0) && await clarification.isVisible().catch(() => false)
+				? { question: await clarification.locator('.clarification-question').innerText().catch(() => ''), options: await clarification.locator('.clarification-options button').allTextContents().catch(() => []) }
 				: null;
 		}
 	}
@@ -234,8 +241,8 @@ async function submitQuestion(page, task, {
 	}
 	if (task.id === 'housing-q1-clarification-and-resume' && !clarificationReply) {
 		checks.push({
-			criterion: 'the typed clarification question is visible and the card accepts a reply',
-			passed: !!response.clarification?.question && !!assistant && await assistant.locator('.clarification').getByRole('textbox', { name: 'Answer the clarification in your own words' }).count().catch(() => 0) === 1
+			criterion: 'the typed clarification replaces the chat input with choices and an Other response field',
+			passed: !!response.clarification?.question && response.clarification.options.length > 0 && await page.locator('.dock .clarification-field').getByRole('textbox', { name: 'Other interpretation' }).count().catch(() => 0) === 1
 		});
 	}
 	const passed = !operationalError && checks.every((check) => check.passed);
@@ -381,20 +388,20 @@ test('complete clarification journey: ask, surface the question, resolve, and co
 		await mount(page, app, join(housingSuite, 'workspaces/housing'));
 
 		const initial = await submitQuestion(page, task, { journey: 'housing-clarification-session', rendererErrors });
-		const clarification = initial.assistant?.locator('.clarification');
+		const clarification = page.locator('.dock .clarification-field');
 		const initialPassed = initial.record.result === 'pass' && !!initial.record.response.clarification?.question;
 		if (clarification && await clarification.count().catch(() => 0)) {
 			await clarification.screenshot({ path: join(screenshotDir, 'housing-clarification.png') });
 		}
 		assert.ok(initialPassed && clarification && await clarification.count().catch(() => 0),
-			`The visible clarification card is part of the journey contract; actual answer correctness is not graded. ${JSON.stringify(initial.record.workflow_checks)}`);
+			`The in-composer clarification step is part of the journey contract; actual answer correctness is not graded. ${JSON.stringify(initial.record.workflow_checks)}`);
 
 		const reply = task.request.clarification_reply;
 		const priorUserCount = await page.locator('.msg.user').count();
 		const priorAssistantCount = await page.locator('.msg.assistant').count();
-		const replyInput = clarification.getByRole('textbox', { name: 'Answer the clarification in your own words' });
+		const replyInput = clarification.getByRole('textbox', { name: 'Other interpretation' });
 		await replyInput.fill(reply);
-		await clarification.getByRole('button', { name: 'Continue', exact: true }).click();
+		await clarification.getByRole('button', { name: 'Continue with this interpretation' }).click();
 		await expect(page.locator('.msg.user').last()).toContainText(reply);
 
 		const resolvedTask = { ...task, id: `${task.id}-resolved`, request: { prompt: reply, prior_turns: [task.request.prompt] } };

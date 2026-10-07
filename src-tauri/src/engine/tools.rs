@@ -16,7 +16,7 @@ use crate::engine::capabilities::AnalysisCapabilities;
 use crate::engine::catalog;
 use crate::engine::error::{EngineError, EngineResult};
 use crate::engine::llm::ToolSchema;
-use crate::engine::runtime::CONTRACT_TOOL_NAME;
+use crate::engine::runtime::{CLARIFICATION_TOOL_NAME, CONTRACT_TOOL_NAME};
 use crate::engine::state::{EngineState, GrepHit, QueryResult};
 
 /// Keep the model's context bounded for large result sets, while allowing it
@@ -303,15 +303,20 @@ impl Registry {
 
     /// Add the non-executing semantic-hypothesis function. It is available to
     /// the model alongside the fixed read-only tools and never grants access
-    /// to them. A contract may also request one user clarification when
-    /// grounding leaves materially different interpretations alive.
+    /// to them. User clarification is a separate control-flow action so it
+    /// cannot be confused with optional contract metadata.
     pub fn schemas_with_contract(&self) -> Vec<ToolSchema> {
         let mut schemas = vec![ToolSchema {
             name: CONTRACT_TOOL_NAME.to_string(),
-            description: "State or revise a compact analytical interpretation after considering the question and relevant workspace observations. Use it when a question requires non-literal semantic mapping (including a roll-up across observed labels) or a material population, measure, or scope choice; simple exact lookups may use direct tools. When shared field names or multiple tables make the source ambiguous, set `source` to the exact mounted source name or queryable table shown by inspection. Record semantic mappings and user-provided scenario assumptions separately from observed data. Do not invent observed values. If materially different interpretations remain after reasonable inspection, include one focused `clarification`; otherwise record the supported assumption. This function does not access the workspace and does not count as evidence."
+            description: "State or revise a compact analytical interpretation after considering the question and relevant workspace observations. Use it when a question requires non-literal semantic mapping (including a roll-up across observed labels) or a material population, measure, or scope choice; simple exact lookups may use direct tools. When shared field names or multiple tables make the source ambiguous, set `source` to the exact mounted source name or queryable table shown by inspection. Record semantic mappings and user-provided scenario assumptions separately from observed data. Do not invent observed values. If materially different interpretations remain after reasonable inspection, use the separate clarification action; otherwise record the supported assumption. This function does not access the workspace and does not count as evidence."
                 .to_string(),
             parameters: contract_schema(),
         }];
+        schemas.push(ToolSchema {
+            name: CLARIFICATION_TOOL_NAME.to_string(),
+            description: "Pause for a user decision when reasonable inspection leaves materially different interpretations that the user should choose between. This is an explicit control-flow action, not evidence and not a substitute for analysis. Ask one concise, answerable question; include short mutually exclusive options when useful, and explain briefly why the choice changes the result. Do not use this for minor uncertainty or when the files, prior user definitions, or a reasonable stated assumption resolve the meaning. Do not ask only in final prose; call this action so the app can collect the answer and resume the same analysis. Safe read-only candidate analysis may continue in the same turn when useful. This action does not access the workspace.".to_string(),
+            parameters: clarification_schema(),
+        });
         schemas.extend(self.schemas());
         schemas
     }
@@ -319,6 +324,30 @@ impl Registry {
     pub fn capability_notice(&self) -> Option<String> {
         self.capabilities.prompt_notice()
     }
+}
+
+fn clarification_schema() -> Json {
+    json!({
+        "type": "object",
+        "properties": {
+            "question": {
+                "type": "string",
+                "description": "One concise question the user can answer to resolve a material interpretation choice."
+            },
+            "options": {
+                "type": "array",
+                "items": { "type": "string" },
+                "maxItems": 6,
+                "description": "Optional short, mutually exclusive choices."
+            },
+            "reason": {
+                "type": "string",
+                "description": "Optional brief explanation of why the choice changes the analysis."
+            }
+        },
+        "required": ["question"],
+        "additionalProperties": false
+    })
 }
 
 fn contract_schema() -> Json {
@@ -502,29 +531,7 @@ fn contract_schema() -> Json {
                 "items": { "type": "string" },
                 "description": "Interpretive choices that affect the result, including semantic mappings and the exact observed labels combined. For a numeric what-if, preserve the user's original value, unit, and direction here (for example, '10% lower'), separately from any transformed multiplier used to calculate it. These are user inputs, not observed facts. Disclose material assumptions in the final answer."
             },
-            "unresolved": { "type": "array", "items": { "type": "string" } },
-            "clarification": {
-                "type": "object",
-                "properties": {
-                    "question": {
-                        "type": "string",
-                        "description": "One concise question the user can answer to choose between materially different interpretations."
-                    },
-                    "options": {
-                        "type": "array",
-                        "items": { "type": "string" },
-                        "maxItems": 6,
-                        "description": "Optional short, mutually exclusive choices."
-                    },
-                    "reason": {
-                        "type": "string",
-                        "description": "Optional short explanation of why the choice changes the analysis."
-                    }
-                },
-                "required": ["question"],
-                "additionalProperties": false,
-                "description": "Use only when the data and wording do not safely determine one interpretation. Asking is better than silently reporting a number from the wrong population."
-            }
+            "unresolved": { "type": "array", "items": { "type": "string" } }
         },
         "required": ["interpretation", "measures", "filters", "group_by", "assumptions", "unresolved"],
         "additionalProperties": false
@@ -2391,9 +2398,24 @@ mod tests {
             .map(|schema| schema.name)
             .collect();
         assert!(!standard_names.iter().any(|name| name == CONTRACT_TOOL_NAME));
+        assert!(!standard_names
+            .iter()
+            .any(|name| name == CLARIFICATION_TOOL_NAME));
 
         let contract_schemas = Registry::standard().schemas_with_contract();
         assert_eq!(contract_schemas[0].name, CONTRACT_TOOL_NAME);
+        assert!(!contract_schemas[0].parameters["properties"]
+            .as_object()
+            .unwrap()
+            .contains_key("clarification"));
+        assert_eq!(contract_schemas[1].name, CLARIFICATION_TOOL_NAME);
+        assert!(contract_schemas[1]
+            .description
+            .contains("explicit control-flow action"));
+        assert_eq!(
+            contract_schemas[1].parameters["required"],
+            serde_json::json!(["question"])
+        );
         assert!(contract_schemas[0]
             .description
             .contains("does not access the workspace"));

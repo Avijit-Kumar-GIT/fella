@@ -205,7 +205,8 @@ preserve all other accepted evidence and answer components. Do not repeat a succ
 inspection. Preserve the requested scope, filters, grouping, units, and every explicitly requested \
 output deliverable. If a figure \
 cannot be supported, qualify or omit that claim while still answering the supported parts. If a \
-material interpretation remains unresolved, ask one focused clarification. Then answer from the \
+material interpretation remains unresolved, call `__request_clarification` rather than asking only \
+in final prose. Then answer from the \
 accepted evidence.",
         label = check.label,
         invalidated = invalidated,
@@ -226,6 +227,13 @@ fn is_computation_tool(name: &str) -> bool {
     matches!(
         name,
         "run_sql" | "run_python" | "forecast_analysis" | "make_chart"
+    )
+}
+
+fn is_internal_tool(name: &str) -> bool {
+    matches!(
+        name,
+        runtime::CONTRACT_TOOL_NAME | runtime::CLARIFICATION_TOOL_NAME
     )
 }
 
@@ -407,10 +415,10 @@ pretend workspace field.",
             "\n\nScenario contract guidance: use comparison_spec only for a comparison of two observed periods. For a hypothetical scenario, preserve the user's original numeric input, unit, and direction in assumptions; do not record only the transformed multiplier or invent a physical measure for the scenario result. Use a canonical aggregation name such as avg for an arithmetic mean. Include order_by only when the user requests ranking or sorted output.\n",
         );
         sys.push_str(
-            "\n\nAnalyst loop: Treat the source inventory as reconnaissance, not a finished interpretation. Inspect relevant profiles, observed labels, samples, and document notes when needed; decompose multi-part questions; use each observation to refine the source, fields, population, filters, time range, units, joins, and computation. Do not request inspection and computation in the same tool-call batch: wait for the observation result, incorporate it, then compute. Execute once the analysis is grounded enough, then check the result against the question and return to inspection if it is empty, unexpectedly broad, or inconsistent. Ask a focused clarification only when reasonable investigation leaves a material choice the user must decide. A pending choice does not disable safe read-only analysis: when useful, compute supported alternatives or partial results, label each interpretation, and leave the user-owned choice open rather than presenting one scenario as settled. Assume you can analyze when given relevant evidence and tools; do not refuse just because a human concept is not an exact field or value.\n",
+            "\n\nAnalyst loop: Treat the source inventory as reconnaissance, not a finished interpretation. Inspect relevant profiles, observed labels, samples, and document notes when needed; decompose multi-part questions; use each observation to refine the source, fields, population, filters, time range, units, joins, and computation. Do not request inspection and computation in the same tool-call batch: wait for the observation result, incorporate it, then compute. Execute once the analysis is grounded enough, then check the result against the question and return to inspection if it is empty, unexpectedly broad, or inconsistent. Ask a focused clarification only when reasonable investigation leaves a material choice the user must decide, using `__request_clarification` so the UI can collect the choice and resume this turn. If that user-owned choice remains necessary, you MUST call the tool before finalizing: prose that names the ambiguity, a direct question, or a list of competing candidate results does not create an interactive clarification. You may compute and share supported alternatives while the choice is pending, but still call the tool. If a reasonable, evidence-supported interpretation is sufficient, state the assumption and answer without asking. Assume you can analyze when given relevant evidence and tools; do not refuse just because a human concept is not an exact field or value.\n",
         );
         sys.push_str(
-            "\n\nSemantic decision policy: do not force a semantic guess when two supported interpretations would materially change the result. First use the workspace schema, observed values, source notes, prior user definitions, and read-only probes to resolve ordinary aliases and messy labels. Treat a quoted category or value as an exact label request by default; do not silently substitute a nearby observed label based only on semantic similarity. Map it only when workspace evidence or a prior user definition supports the mapping; otherwise preserve the exact match or clarify if the intended meaning would change the answer. For a non-literal mapping or a roll-up across distinct observed labels, inspect the relevant values, record the selected mapping and exact labels in the contract's `assumptions` before computing, and name those labels in the final answer. If one interpretation is still clearly more likely, proceed with that assumption and state it. If materially different interpretations remain, emit one `clarification` object on the analytical contract with a concise question and at most six choices; where useful, continue safe read-only analysis by computing labeled candidate results or partial results. Do not present one unresolved scenario as the definitive answer, but do not withhold useful computed alternatives merely because clarification is pending. The runtime will return the question with any supported findings. A typed decision/classifier may route among resolve, assume, clarify, and unsupported, but it must not invent candidates, replace the model's analytical reasoning, or override observed data. When asking the user to choose, put the question and options in the contract's typed `clarification` field rather than only in free-form answer text; the app uses that turn ID to resume this same analysis.\n",
+            "\n\nSemantic decision policy: do not force a semantic guess when two supported interpretations would materially change the result. First use the workspace schema, observed values, source notes, prior user definitions, and read-only probes to resolve ordinary aliases and messy labels. Treat a quoted category or value as an exact label request by default; do not silently substitute a nearby observed label based only on semantic similarity. Map it only when workspace evidence or a prior user definition supports the mapping; otherwise preserve the exact match or clarify if the intended meaning would change the answer. For a non-literal mapping or a roll-up across distinct observed labels, inspect the relevant values, record the selected mapping and exact labels in the contract's `assumptions` before computing, and name those labels in the final answer. If one interpretation is still clearly more likely, proceed with that assumption and state it. If materially different interpretations remain, call `__request_clarification` once with a concise question and at most six choices; where useful, continue safe read-only analysis by computing labeled candidate results or partial results. Do not present one unresolved scenario as the definitive answer, but do not withhold useful computed alternatives merely because clarification is pending. The runtime will return the typed question with any supported findings. A typed decision/classifier may route among resolve, assume, clarify, and unsupported, but it must not invent candidates, replace the model's analytical reasoning, or override observed data. A question in final prose is not a substitute for the clarification action: only `__request_clarification` makes the app collect the user's choice and resume this same analysis.\n",
         );
     }
     let mut messages = vec![
@@ -743,7 +751,7 @@ the requested measure, filters, and scope. State just the number(s); don't round
                         },
                     });
                     let mut text = format!(
-                        "Grounded interpretation (not evidence):\n{serialized}\nGrounding probes:\n{grounding}\nIf unresolved items remain, do not silently choose among them; ask a focused clarification or explain the limitation."
+                        "Grounded interpretation (not evidence):\n{serialized}\nGrounding probes:\n{grounding}\nIf unresolved items remain, do not silently choose among them; call `__request_clarification` when the user must decide, or explain the limitation."
                     );
                     if let Some(clarification) = ids.clarification.as_ref() {
                         text.push_str(
@@ -798,6 +806,64 @@ the requested measure, filters, and scope. State just the number(s); don't round
             internal_results.insert(i, contract_text);
         }
 
+        // A clarification is a model-selected control-flow action: validate
+        // and persist the request, but never expose it as analytical evidence
+        // or send it through the ordinary workspace tool registry.
+        for (i, call) in resp
+            .tool_calls
+            .iter()
+            .enumerate()
+            .filter(|(_, call)| call.name == runtime::CLARIFICATION_TOOL_NAME)
+        {
+            let key = tool_call_key(call);
+            if let Some(previous) = seen_calls.get(&key) {
+                reused_calls[i] = true;
+                internal_results.insert(
+                    i,
+                    format!(
+                        "This clarification request was already recorded for this question. Use the existing pending choice rather than asking again.\n\n{previous}"
+                    ),
+                );
+                continue;
+            }
+            let clarification_text = match runtime::clarification_from_tool_args(&call.arguments) {
+                Ok(clarification) => {
+                    let mut contract = ids.contract.clone().unwrap_or_default();
+                    contract.interpretation = runtime::InterpretationStatus::Ambiguous;
+                    if contract.subject.is_none() {
+                        contract.subject = Some(question.to_string());
+                    }
+                    contract.clarification = Some(clarification.clone());
+                    ids.contract = Some(contract);
+                    ids.clarification = Some(clarification.clone());
+                    compiled_contracts.clear();
+                    emit(AskEvent::TurnState {
+                        turn_id: ids.turn_id.clone(),
+                        state: TurnState::Clarify,
+                    });
+                    let options = if clarification.options.is_empty() {
+                        String::new()
+                    } else {
+                        format!("\nChoices: {}", clarification.options.join(" | "))
+                    };
+                    let reason = clarification
+                        .reason
+                        .as_deref()
+                        .map(|reason| format!("\nWhy it matters: {reason}"))
+                        .unwrap_or_default();
+                    format!(
+                        "Typed user clarification recorded for this turn. The app will present it and resume this analysis with the user's answer. Do not repeat the question in prose as a substitute. You may continue useful read-only candidate analysis, but do not present one unresolved interpretation as definitive.\nQuestion: {}{}{}",
+                        clarification.question, options, reason
+                    )
+                }
+                Err(error) => format!(
+                    "The clarification request was not accepted: {error}. Continue investigating, make a supported assumption explicit, or ask one valid focused question."
+                ),
+            };
+            seen_calls.insert(key, clarification_text.clone());
+            internal_results.insert(i, clarification_text);
+        }
+
         // A grounded hypothesis can compile into a deterministic execution
         // plan. Use it only when the model has not already selected an
         // execution/inspection tool in this response. Otherwise the model's
@@ -807,7 +873,7 @@ the requested measure, filters, and scope. State just the number(s); don't round
         let model_selected_tool = resp
             .tool_calls
             .iter()
-            .any(|call| call.name != runtime::CONTRACT_TOOL_NAME);
+            .any(|call| !is_internal_tool(&call.name));
         let has_contract_call = resp
             .tool_calls
             .iter()
@@ -897,7 +963,7 @@ the requested measure, filters, and scope. State just the number(s); don't round
             .tool_calls
             .iter()
             .enumerate()
-            .filter(|(_, call)| call.name != runtime::CONTRACT_TOOL_NAME && !should_defer(call))
+            .filter(|(_, call)| !is_internal_tool(&call.name) && !should_defer(call))
         {
             let key = tool_call_key(call);
             let dup = (!call.name.contains("__"))
@@ -939,10 +1005,11 @@ run again. Use the previous result, refine the call, or answer now.\n\n{prev}",
         }
 
         if defer_model_computations || defer_for_observation {
-            for (i, call) in
-                resp.tool_calls.iter().enumerate().filter(|(_, call)| {
-                    call.name != runtime::CONTRACT_TOOL_NAME && should_defer(call)
-                })
+            for (i, call) in resp
+                .tool_calls
+                .iter()
+                .enumerate()
+                .filter(|(_, call)| !is_internal_tool(&call.name) && should_defer(call))
             {
                 let why_not_run = if defer_model_computations {
                     "the semantic hypothesis needs review first"
@@ -1381,6 +1448,12 @@ fn trim_history(messages: &mut [ChatMessage]) {
             ChatMessage::Tool { name, .. } if name == runtime::CONTRACT_TOOL_NAME
         )
     });
+    let latest_clarification = tool_idx.iter().rev().copied().find(|&i| {
+        matches!(
+            &messages[i],
+            ChatMessage::Tool { name, .. } if name == runtime::CLARIFICATION_TOOL_NAME
+        )
+    });
 
     // Reserve context for the newest document observations first. If several
     // documents together exceed the cap, older contents are truncated/elided
@@ -1421,7 +1494,11 @@ fn trim_history(messages: &mut [ChatMessage]) {
     }
 
     for &i in &tool_idx {
-        if recent.contains(&i) || latest_contract == Some(i) || retained_documents.contains(&i) {
+        if recent.contains(&i)
+            || latest_contract == Some(i)
+            || latest_clarification == Some(i)
+            || retained_documents.contains(&i)
+        {
             continue;
         }
         if let ChatMessage::Tool { content, .. } = &mut messages[i] {
@@ -1808,13 +1885,15 @@ spend a separate turn announcing routine work before using a tool."
         rules.push(
             "Use available evidence and context to interpret labels, aliases, units, signs, dates, \
 and source scope; inspect observed values when they can resolve uncertainty. If more than one \
-material interpretation remains, ask a focused clarification. If one interpretation is reasonable \
+material interpretation remains, ask a focused clarification using `__request_clarification`. If one interpretation is reasonable \
 and the uncertainty is minor, proceed with the assumption stated briefly. When asking the user to \
-choose, put the question and options in the contract's typed `clarification` field rather than only \
-in free-form answer text; the app uses that turn ID to resume this same analysis. If a source note \
+choose, call `__request_clarification` rather than asking only in free-form answer text; the app \
+uses that turn ID to resume this same analysis. If a source note \
 explicitly says a term's definition or mapping is absent, treat that as evidence the meaning is \
-unresolved—not as permission to infer it from convention. When competing scopes materially change \
-the result, ask the user or show clearly labeled alternatives rather than presenting one as settled."
+ unresolved—not as permission to infer it from convention. When competing scopes materially change \
+ the result and the user's choice is still needed, call `__request_clarification`; labeled alternatives \
+ may help explain the choice but do not replace the interactive request. A question or list of \
+ scenarios in final prose is not a clarification action."
                 .into(),
         );
         rules.push(
@@ -1947,8 +2026,11 @@ drop or impute observations. Respect the user's forecast cutoff: no later observ
 holdout. Use `time.range` for a training window or single period and `time.bucket` only for output grouped across periods. \
 Do not finalize a point-only forecast when historical evaluation is possible, and honor an explicit request to backtest. \
 For a numeric series that can be represented as one value per equally spaced period, use `forecast_analysis` after choosing \
-a read-only query, method, horizon, and (when supported by the observed data) seasonal period. It returns the point \
-estimate, chronological rolling-origin comparison against a baseline, and empirical error bands, not guaranteed \
+a read-only query, method, horizon, and (when supported by the observed data) seasonal period. This applies even when \
+the requested forecast method is a simple arithmetic mean: SQL shapes the historical training series, while \
+`forecast_analysis` produces the estimate and its chronological evaluation. Do not substitute a standalone SQL aggregate \
+for this tool on a forecast request when the series fits its regular-series contract. It returns the point estimate, \
+chronological rolling-origin comparison against a baseline, and empirical error bands, not guaranteed \
 prediction intervals, only when calibration evidence is sufficient. If the series is irregular or needs a custom method, use \
 `run_python` and the forecast helpers \
 instead; when a historical holdout is available, call `rolling_origin_backtest(values, method, horizon=..., min_train=...)` \
@@ -2433,6 +2515,11 @@ mod tests {
         assert!(p.contains("no later observation may enter an earlier forecast or holdout"));
         assert!(p.contains("time.bucket` only for output grouped across periods"));
         assert!(p.contains("rolling_origin_backtest"));
+        assert!(p.contains("simple arithmetic mean"));
+        assert!(p.contains("Do not substitute a standalone SQL aggregate"));
+        assert!(
+            p.contains("forecast_analysis` produces the estimate and its chronological evaluation")
+        );
         assert!(p.contains("in `run_python`"));
         assert!(p.contains("chronological rather than random holdouts"));
         assert!(p.contains("empirical error bands, not guaranteed prediction intervals"));
@@ -2523,7 +2610,11 @@ mod tests {
         assert!(got.contains("Treat the request as an analysis problem"));
         assert!(got.contains("The model drives interpretation and tool choice"));
         assert!(got.contains("ask a focused clarification"));
-        assert!(got.contains("contract's typed `clarification` field"));
+        assert!(got.contains("`__request_clarification`"));
+        assert!(got.contains("the user's choice is still needed"));
+        assert!(got.contains("do not replace the interactive request"));
+        assert!(got.contains("scenarios in final prose is not a clarification action"));
+        assert!(!got.contains("contract's typed `clarification` field"));
         assert!(got.contains("explicitly says a term's definition or mapping is absent"));
         assert!(got.contains("Preserve relevant scope, filters, units, and definitions"));
         assert!(got.contains("An explicitly requested visualization is a required deliverable"));
@@ -2631,6 +2722,29 @@ mod tests {
         assert!(
             matches!(&msgs[9], ChatMessage::Tool { content, .. } if content == "query result 7")
         );
+    }
+
+    #[test]
+    fn trim_history_keeps_the_latest_clarification_action() {
+        let mut msgs = vec![ChatMessage::Tool {
+            call_id: "clarify".into(),
+            name: runtime::CLARIFICATION_TOOL_NAME.into(),
+            content: "pending choice: include utilities?".into(),
+        }];
+        for i in 0..8 {
+            msgs.push(ChatMessage::Tool {
+                call_id: format!("sql-{i}"),
+                name: "run_sql".into(),
+                content: format!("query result {i}"),
+            });
+        }
+
+        trim_history(&mut msgs);
+
+        assert!(matches!(
+            &msgs[0],
+            ChatMessage::Tool { content, .. } if content == "pending choice: include utilities?"
+        ));
     }
 
     #[test]

@@ -40,6 +40,7 @@ try {
 	const { default: EvidenceBlock } = await server.ssrLoadModule('/src/lib/components/EvidenceBlock.svelte');
 	const { default: PythonCalculationDetails } = await server.ssrLoadModule('/src/lib/components/PythonCalculationDetails.svelte');
 	const renderChart = (spec) => render(Chart, { props: { spec } }).body;
+	const componentCss = await readFile('src/lib/components/Chart.svelte', 'utf8');
 	const metadata = {
 		source_label: 'fixture.csv',
 		fields: ['period', 'value'],
@@ -161,7 +162,8 @@ try {
 	assert.match(stoppedMessage, /sales\.csv/);
 
 	// Clarification is a typed part of the answer, not just prose in the body.
-	// Keep its choices and free-form response control present in the transcript.
+	// Its controls live in the dock composer; the transcript should point there
+	// without duplicating the question and choices beside the assistant answer.
 	const clarificationMessage = render(Message, {
 		props: {
 			showFollowups: true,
@@ -185,11 +187,10 @@ try {
 			}
 		}
 	}).body;
-	assert.match(clarificationMessage, /aria-label="Choose an interpretation"/);
-	assert.match(clarificationMessage, /Rent and utilities/);
-	assert.match(clarificationMessage, /All housing-related costs/);
-	assert.match(clarificationMessage, /Answer the clarification in your own words/);
-	assert.match(clarificationMessage, />Continue</);
+	assert.match(clarificationMessage, /Choose an option below to continue\./);
+	assert.doesNotMatch(clarificationMessage, /Choose an interpretation/);
+	assert.doesNotMatch(clarificationMessage, /Rent and utilities/);
+	assert.doesNotMatch(clarificationMessage, /Answer the clarification in your own words/);
 
 	// Real runs can emit multiple independent checks with identical labels.
 	// Opening Analysis Details must not crash, and the answer's line chart must
@@ -308,6 +309,47 @@ try {
 	assert.match(line, /<svg[^>]+role="img" aria-label="line validation"/);
 	assert.match(line, /Month/);
 	assert.match(line, /Observed/);
+
+	// Axis ticks stay compact and numeric when a long unit is already stated in
+	// the chart header; exact values retain their unit in the table. This keeps
+	// y-axis text within the plot's reserved left gutter instead of bleeding
+	// across the card edge.
+	const rentalsLine = renderChart(generic('line', ['2012-01', '2012-02', '2012-03'], [{
+		name: 'Rentals', values: [50000, 150000, 250000]
+	}], { unit: 'rentals', x_label: 'Month' }));
+	assert.match(rentalsLine, /Values in rentals/);
+	assert.match(rentalsLine, />January</, 'exact values retain full month names');
+	assert.doesNotMatch(rentalsLine, />2012-01</, 'the display should not expose raw ISO labels on a month-name axis');
+	const rentalAxisLabels = [...rentalsLine.matchAll(/<text\b([^>]*)>([^<]*)<\/text>/g)]
+		.filter((match) => /\bclass="axis-label(?:\s|")/.test(match[1]))
+		.map((match) => match[2]);
+	assert.deepEqual(rentalAxisLabels.slice(0, 3), ['Jan', 'Feb', 'Mar'],
+		'month axis uses readable compact names without discarding full source periods');
+	const rentalsTicks = [...rentalsLine.matchAll(/<text\b([^>]*)>([^<]*)<\/text>/g)]
+		.filter((match) => /\bclass="y-axis-label(?:\s|")/.test(match[1]))
+		.map((match) => match[2]);
+	assert.ok(rentalsTicks.length > 0, 'expected y-axis ticks');
+	assert.ok(rentalsTicks.every((tick) => !tick.includes('rentals')),
+		'long units belong in the chart header, not concatenated to every tick');
+	assert.ok(rentalsTicks.includes('250k'), 'large y-axis values should use compact notation');
+	assert.match(rentalsLine, /250,000 rentals/, 'exact-value table preserves the full value and separates the unit');
+	assert.doesNotMatch(rentalsLine, /class="chart-axis-summary"/,
+		'the x-axis name should not be repeated above and below the plot');
+	assert.match(componentCss, /\.chart-card\s*\{[^}]*min-width:\s*0;[^}]*max-width:\s*100%;[^}]*overflow:\s*hidden/s,
+		'chart frame contains oversized content instead of bleeding into the transcript');
+	const rentalsBars = renderChart(generic('bar', ['2012-01', '2012-02'], [{
+		name: 'Rentals', values: [50000, 150000]
+	}], { unit: 'rentals', x_label: 'Month' }));
+	assert.match(rentalsBars, /class="row-label(?: [^"]+)?"[^>]*>January<\/span>/,
+		'categorical chart labels use the readable month display formatter too');
+	assert.match(rentalsBars, /class="value(?: [^"]+)?"[^>]*>50,000 rentals<\/span>/,
+		'bar values separate word units while retaining exact magnitudes');
+	const crossYearMonths = renderChart(generic('line', ['2024-12', '2025-01'], [{
+		name: 'Rentals', values: [200, 240]
+	}], { x_label: 'Month' }));
+	assert.match(crossYearMonths, />Dec 24</);
+	assert.match(crossYearMonths, />Jan 25</);
+	assert.match(crossYearMonths, />December 2024</, 'exact values preserve a year for multi-year periods');
 
 	// Period labels should remain separated on a 24-month line chart. In
 	// particular, do not force a final tick into the narrow tail gap when the
@@ -451,7 +493,6 @@ try {
 	// Chart series use application tokens, with separate values in both themes.
 	// This is a structural theme check; visual contrast still needs a human pass.
 	const css = await readFile('src/app.css', 'utf8');
-	const componentCss = await readFile('src/lib/components/Chart.svelte', 'utf8');
 	const light = css.match(/:root\s*\{([\s\S]*?)\n\}/)?.[1];
 	const dark = css.match(/:root\[data-color-mode='dark'\]\s*\{([\s\S]*?)\n\}/)?.[1];
 	assert.ok(light, 'light theme tokens exist');

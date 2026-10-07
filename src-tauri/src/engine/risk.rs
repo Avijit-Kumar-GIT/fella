@@ -52,6 +52,30 @@ pub fn assess(question: &str) -> RiskAssessment {
         }
     }
 
+    // An explicit request to backtest/evaluate a forecast is a deliverable,
+    // not just a cue to be cautious. Keep it separate from the general
+    // forecast signal so a point-only forecast remains answerable when the
+    // user did not ask for historical evaluation.
+    if contains_any(
+        &lower,
+        &[
+            "backtest",
+            "back-test",
+            "back test",
+            "rolling origin",
+            "rolling-origin",
+            "out-of-sample",
+            "out of sample",
+            "holdout",
+            "historical forecast accuracy",
+            "forecast evaluation",
+            "evaluate the forecast",
+            "evaluate this forecast",
+        ],
+    ) {
+        signals.push("forecast_evaluation".to_string());
+    }
+
     let elevated = [
         (
             "signed_values",
@@ -165,6 +189,26 @@ mod tests {
         assert_eq!(assessment.route, AnalysisRoute::ModelGuided);
         assert!(assessment.signals.contains(&"explanation".into()));
         assert!(assessment.signals.contains(&"forecast".into()));
+    }
+
+    #[test]
+    fn explicit_forecast_evaluation_is_distinguished_from_a_point_forecast() {
+        for question in [
+            "Backtest the forecast against a naive baseline",
+            "Use a rolling-origin evaluation for the forecast",
+            "Compare the projection with an out-of-sample holdout",
+        ] {
+            assert!(
+                assess(question)
+                    .signals
+                    .contains(&"forecast_evaluation".into()),
+                "{question}"
+            );
+        }
+
+        assert!(!assess("Forecast next month from the workspace series")
+            .signals
+            .contains(&"forecast_evaluation".into()));
     }
 
     #[test]

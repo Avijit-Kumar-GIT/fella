@@ -19,7 +19,7 @@ import ProviderIcon from './ProviderIcon.svelte';
 	let { onafterrun }: { onafterrun?: () => void } = $props();
 
 	let value = $state('');
-	let ta: HTMLTextAreaElement;
+	let ta = $state<HTMLTextAreaElement>();
 	let contextInput = $state<HTMLInputElement>();
 	let modelInput = $state<HTMLInputElement>();
 	let wrapEl = $state<HTMLDivElement>();
@@ -62,6 +62,15 @@ import ProviderIcon from './ProviderIcon.svelte';
 			.filter((model) => !query || model.toLowerCase().includes(query))
 			.sort((a, b) => a.localeCompare(b));
 	});
+	let pendingClarification = $derived.by(() => {
+		const latest = session.activeChat?.messages.at(-1);
+		if (latest?.role !== 'assistant' || latest.pending) return null;
+		const request = latest.answer?.clarification;
+		const turnId = latest.answer?.turn_id;
+		return request && turnId ? { request, turnId } : null;
+	});
+	let clarificationOther = $state('');
+
 	let contextSources = $derived.by((): SourceInfo[] => {
 		const q = contextQuery.trim().toLowerCase();
 		return session.catalog.sources
@@ -163,6 +172,22 @@ import ProviderIcon from './ProviderIcon.svelte';
 		// the deliberate ways to restore the last folder.
 		await dispatch(text);
 		onafterrun?.();
+	}
+
+	async function submitClarificationResponse(raw: string) {
+		const pending = pendingClarification;
+		const response = raw.trim();
+		if (!pending || !response || session.busy || session.mountProgress) return;
+		if (!carriesSecret(response)) history.unshift(response);
+		histIx = -1;
+		clarificationOther = '';
+		await dispatch(response, pending.turnId);
+		onafterrun?.();
+	}
+
+	function submitOtherClarification(event: SubmitEvent) {
+		event.preventDefault();
+		void submitClarificationResponse(clarificationOther);
 	}
 
 	function onKey(e: KeyboardEvent) {
@@ -396,6 +421,51 @@ import ProviderIcon from './ProviderIcon.svelte';
 		</ul>
 	{/if}
 
+	{#if pendingClarification && !pendingInput}
+		<div class="field clarification-field" role="region" aria-label="Clarification response">
+			<h2 class="clarification-question">{pendingClarification.request.question}</h2>
+			{#if pendingClarification.request.reason}
+				<p class="clarification-reason">{pendingClarification.request.reason}</p>
+			{/if}
+			{#if pendingClarification.request.options.length}
+				<div class="clarification-options" role="group" aria-label="Suggested answers">
+					{#each pendingClarification.request.options as option, index (option)}
+						<button
+							class="clarification-option"
+							type="button"
+							disabled={session.busy}
+							onclick={() => void submitClarificationResponse(option)}
+						>
+							<span class="clarification-index">{index + 1}</span>
+							<span>{option}</span>
+						</button>
+					{/each}
+				</div>
+			{/if}
+			<form class="clarification-other" onsubmit={submitOtherClarification}>
+				<label for="clarification-other-input">Other</label>
+				<div class="clarification-other-row">
+					<textarea
+						id="clarification-other-input"
+						bind:value={clarificationOther}
+						aria-label="Other interpretation"
+						placeholder="Describe what you mean…"
+						maxlength="500"
+						rows="2"
+						disabled={session.busy}
+					></textarea>
+					<button
+						class="clarification-send"
+						type="submit"
+						disabled={!clarificationOther.trim() || session.busy}
+						aria-label="Continue with this interpretation"
+					>
+						<Icon name="corner-down-left" size={16} />
+					</button>
+				</div>
+			</form>
+		</div>
+	{:else}
 	<div class="field" class:secret={pendingInput}>
 		{#if !pendingInput}
 			<div class="context-row">
@@ -543,6 +613,7 @@ import ProviderIcon from './ProviderIcon.svelte';
 			{/if}
 		</div>
 	</div>
+	{/if}
 </div>
 
 <style>
@@ -980,6 +1051,115 @@ import ProviderIcon from './ProviderIcon.svelte';
 		border-color: var(--link);
 		box-shadow: var(--focus-ring);
 	}
+	.clarification-field {
+		gap: 0;
+		max-height: min(68vh, 520px);
+		overflow-y: auto;
+		padding: var(--space-3) var(--space-4);
+	}
+	.clarification-question {
+		margin: 0;
+		color: var(--text);
+		font-size: var(--fs-lg);
+		font-weight: 600;
+		line-height: 1.4;
+	}
+	.clarification-reason {
+		margin: 6px 0 0;
+		color: var(--text-faint);
+		font-size: var(--fs-sm);
+		line-height: 1.45;
+	}
+	.clarification-options {
+		display: grid;
+		gap: 0;
+		margin-top: var(--space-2);
+		max-height: 228px;
+		overflow-y: auto;
+		scrollbar-width: thin;
+	}
+	.clarification-option {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		width: 100%;
+		min-height: 44px;
+		padding: 6px 8px;
+		border-bottom: 1px solid var(--border);
+		border-radius: var(--radius-sm);
+		color: var(--text-dim);
+		background: transparent;
+		font-size: var(--fs-sm);
+		text-align: left;
+		transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+	}
+	.clarification-option:hover:not(:disabled) {
+		color: var(--text);
+		background: var(--bg-inset);
+	}
+	.clarification-option:disabled {
+		cursor: progress;
+		opacity: 0.6;
+	}
+	.clarification-index {
+		display: grid;
+		place-items: center;
+		flex: none;
+		width: 26px;
+		height: 26px;
+		border-radius: 8px;
+		color: var(--text-faint);
+		background: var(--bg-inset);
+		font-size: var(--fs-xs);
+		font-variant-numeric: tabular-nums;
+	}
+	.clarification-other {
+		margin-top: var(--space-2);
+		padding-top: var(--space-2);
+		border-top: 1px solid var(--border);
+	}
+	.clarification-other label {
+		display: block;
+		margin-bottom: 4px;
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+		font-weight: 600;
+	}
+	.clarification-other-row {
+		display: flex;
+		align-items: flex-end;
+		gap: var(--space-2);
+	}
+	.clarification-other-row textarea {
+		min-width: 0;
+		min-height: 42px;
+		max-height: 100px;
+		padding: 7px 9px;
+		border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
+		background: var(--bg-inset);
+		font-size: var(--fs-sm);
+		line-height: 1.4;
+		resize: vertical;
+	}
+	.clarification-other-row textarea:focus-visible {
+		border-color: var(--link);
+		outline: 2px solid color-mix(in srgb, var(--link) 22%, transparent);
+		outline-offset: 1px;
+	}
+	.clarification-send {
+		display: grid;
+		place-items: center;
+		flex: none;
+		width: 30px;
+		height: 30px;
+		border-radius: 50%;
+		color: var(--on-brand);
+		background: var(--brand);
+		transition: filter var(--dur-fast) var(--ease), opacity var(--dur-fast) var(--ease);
+	}
+	.clarification-send:hover:not(:disabled) { filter: brightness(0.92); }
+	.clarification-send:disabled { opacity: 0.45; cursor: default; }
 	.bottom-row {
 		display: flex;
 		align-items: center;
@@ -999,6 +1179,11 @@ import ProviderIcon from './ProviderIcon.svelte';
 		max-height: 200px;
 		overflow-y: auto;
 		padding: var(--space-1) 0;
+	}
+	.clarification-other-row textarea {
+		width: 100%;
+		font: inherit;
+		color: var(--text);
 	}
 	textarea:focus-visible {
 		box-shadow: none;

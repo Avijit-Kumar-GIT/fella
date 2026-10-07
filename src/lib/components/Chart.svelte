@@ -29,7 +29,9 @@
 	];
 	const WIDTH = 520;
 	const HEIGHT = 240;
-	const PLOT = { top: 16, right: 18, bottom: 42, left: 66 };
+	const X_TICK_Y = HEIGHT - 22;
+	const X_TITLE_Y = HEIGHT - 5;
+	const PLOT = { top: 16, right: 18, bottom: 50, left: 66 };
 
 	function color(index: number): string {
 		return `var(${CATEGORY_COLORS[index % CATEGORY_COLORS.length]})`;
@@ -42,9 +44,30 @@
 			: abs.toLocaleString(undefined, { maximumFractionDigits: 2 });
 		const sign = value < 0 ? '-' : '';
 		if (!unit) return sign + body;
-		return unit === '$' || unit === '€' || unit === '£'
-			? `${sign}${unit}${body}`
-			: `${sign}${body}${unit}`;
+		if (unit === '$' || unit === '€' || unit === '£') return `${sign}${unit}${body}`;
+		const separator = /^[%°]/.test(unit) ? '' : ' ';
+		return `${sign}${body}${separator}${unit}`;
+	}
+
+	// Axis ticks are a compact scale, not the exact-value surface. The unit is
+	// already stated in the chart header; repeating long units on every tick
+	// pushes labels outside the plot. Compact large magnitudes so even narrow
+	// cards keep their y-axis inside the frame, while exact values stay in the
+	// tooltip/table and currency symbols remain explicit.
+	function formatAxisValue(value: number, unit?: string): string {
+		const abs = Math.abs(value);
+		const sign = value < 0 ? '-' : '';
+		const currency = unit === '$' || unit === '€' || unit === '£' ? unit : '';
+		const compact = (divisor: number, suffix: string) =>
+			`${(abs / divisor).toLocaleString(undefined, { maximumFractionDigits: 1 })}${suffix}`;
+		const body = abs >= 1_000_000_000
+			? compact(1_000_000_000, 'B')
+			: abs >= 1_000_000
+				? compact(1_000_000, 'M')
+				: abs >= 1_000
+					? compact(1_000, 'k')
+					: abs.toLocaleString(undefined, { maximumFractionDigits: 2 });
+		return `${sign}${currency}${body}`;
 	}
 
 	function formatCell(value: string | number | null): string {
@@ -57,6 +80,42 @@
 
 	let chartTitle = $derived(
 		spec.title?.trim() || (spec.kind === 'line' || spec.kind === 'forecast' ? 'Trend over time' : 'Breakdown')
+	);
+	let periodLabels = $derived.by(() => {
+		const months = spec.labels.map((label) => {
+			const match = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(label);
+			return match ? { label, year: Number(match[1]), month: Number(match[2]) } : null;
+		});
+		const monthAxis = /month/i.test(spec.x_label ?? '');
+		const years = new Set(months.filter((month) => month !== null).map((month) => month.year));
+		const display = spec.labels.map((label, index) => {
+			const month = months[index];
+			if (!monthAxis || !month) return label;
+			const date = new Date(Date.UTC(month.year, month.month - 1, 1));
+			const format: Intl.DateTimeFormatOptions = years.size === 1
+				? { month: 'long', timeZone: 'UTC' }
+				: { month: 'long', year: 'numeric', timeZone: 'UTC' };
+			return new Intl.DateTimeFormat('en-US', format).format(date);
+		});
+		const axis = spec.labels.map((label, index) => {
+			const month = months[index];
+			if (!monthAxis || !month) return label;
+			const date = new Date(Date.UTC(month.year, month.month - 1, 1));
+			const format: Intl.DateTimeFormatOptions = years.size === 1
+				? { month: 'short', timeZone: 'UTC' }
+				: { month: 'short', year: '2-digit', timeZone: 'UTC' };
+			return new Intl.DateTimeFormat('en-US', format).format(date);
+		});
+		return { display, axis };
+	});
+	let displayLabels = $derived(periodLabels.display);
+	let axisLabels = $derived(periodLabels.axis);
+	let hasSvgXAxisTitle = $derived(
+		['line', 'area', 'stacked_area', 'forecast', 'scatter'].includes(spec.kind)
+	);
+	let hasSvgYAxisTitle = $derived(spec.kind === 'scatter');
+	let showAxisSummary = $derived(
+		Boolean((spec.x_label && !hasSvgXAxisTitle) || (spec.y_label && !hasSvgYAxisTitle))
 	);
 	let payload = $derived(spec.payload);
 	let scatterPayload = $derived(payload?.type === 'scatter' ? payload : undefined);
@@ -123,7 +182,7 @@
 	);
 	let yTicks = $derived(yScale.ticks(4));
 	let xLabelWidth = $derived.by(() => {
-		const longestLabel = spec.labels.reduce((length, label) => Math.max(length, label.length), 0);
+		const longestLabel = axisLabels.reduce((length, label) => Math.max(length, label.length), 0);
 		return Math.max(52, Math.min(120, longestLabel * 6 + 14));
 	});
 	let labelStep = $derived.by(() => {
@@ -294,7 +353,7 @@
 			return {
 				headings: [spec.x_label || 'Period', 'Observed', 'Forecast', 'Lower bound', 'Upper bound'],
 				rows: spec.labels.map((label, index) => [
-					label,
+					displayLabels[index] ?? label,
 					forecastPayload.observed[index],
 					forecastPayload.forecast[index],
 					forecastPayload.lower[index],
@@ -304,7 +363,7 @@
 		}
 		return {
 			headings: [spec.x_label || (spec.kind === 'line' ? 'Period' : 'Category'), ...spec.series.map((series) => series.name)],
-			rows: spec.labels.map((label, index) => [label, ...spec.series.map((series) => series.values[index])])
+			rows: spec.labels.map((label, index) => [displayLabels[index] ?? label, ...spec.series.map((series) => series.values[index])])
 		};
 	});
 
@@ -330,11 +389,11 @@
 		<div class="chart-header-copy">
 			<div class="chart-title">{chartTitle}</div>
 			{#if spec.unit}<div class="chart-unit">Values in {spec.unit}</div>{/if}
-			{#if spec.x_label || spec.y_label}
+			{#if showAxisSummary}
 				<div class="chart-axis-summary">
-					{#if spec.x_label}<span>{spec.x_label}</span>{/if}
-					{#if spec.x_label && spec.y_label}<span aria-hidden="true"> · </span>{/if}
-					{#if spec.y_label}<span>{spec.y_label}</span>{/if}
+					{#if spec.x_label && !hasSvgXAxisTitle}<span>{spec.x_label}</span>{/if}
+					{#if spec.x_label && !hasSvgXAxisTitle && spec.y_label && !hasSvgYAxisTitle}<span aria-hidden="true"> · </span>{/if}
+					{#if spec.y_label && !hasSvgYAxisTitle}<span>{spec.y_label}</span>{/if}
 				</div>
 			{/if}
 		</div>
@@ -353,7 +412,7 @@
 			<div class="rows">
 				{#each spec.labels as label, rowIndex (label + rowIndex)}
 					<div class="row">
-						<span class="row-label" title={label}>{label}</span>
+						<span class="row-label" title={label}>{displayLabels[rowIndex] ?? label}</span>
 						<div class="row-tracks">
 							{#each spec.series as series, seriesIndex (series.name)}
 								{@const value = series.values[rowIndex]}
@@ -378,8 +437,8 @@
 				<title>{chartTitle}</title>
 				<g transform="translate(100,100)">
 					{#each pieSlices as slice, index (spec.labels[index])}
-						<path d={pieArc(slice) ?? ''} fill={color(index)} class="pie-slice" aria-label={`${spec.labels[index]}: ${formatValue(pieValues[index] ?? 0, spec.unit)}`}>
-							<title>{spec.labels[index]}: {formatValue(pieValues[index] ?? 0, spec.unit)} ({pieTotal ? (((pieValues[index] ?? 0) / pieTotal) * 100).toFixed(1) : '0.0'}%)</title>
+						<path d={pieArc(slice) ?? ''} fill={color(index)} class="pie-slice" aria-label={`${displayLabels[index] ?? spec.labels[index]}: ${formatValue(pieValues[index] ?? 0, spec.unit)}`}>
+							<title>{displayLabels[index] ?? spec.labels[index]}: {formatValue(pieValues[index] ?? 0, spec.unit)} ({pieTotal ? (((pieValues[index] ?? 0) / pieTotal) * 100).toFixed(1) : '0.0'}%)</title>
 						</path>
 					{/each}
 				</g>
@@ -388,7 +447,7 @@
 				{#each spec.labels as label, index (label)}
 					<div class="pie-legend-row">
 						<i class="swatch" style={`background:${color(index)}`}></i>
-						<span class="pie-label" title={label}>{label}</span>
+						<span class="pie-label" title={label}>{displayLabels[index] ?? label}</span>
 						<span class="pie-value">{formatValue(pieValues[index] ?? 0, spec.unit)}</span>
 						<span class="pie-percent">{pieTotal ? (((pieValues[index] ?? 0) / pieTotal) * 100).toFixed(1) : '0.0'}%</span>
 					</div>
@@ -408,18 +467,18 @@
 				<title>{chartTitle}</title>
 				{#each scatterY.ticks(4) as tick (tick)}
 					<line x1={PLOT.left} x2={WIDTH - PLOT.right} y1={scatterY(tick)} y2={scatterY(tick)} class="grid-line" />
-					<text x={PLOT.left - 8} y={scatterY(tick) + 4} class="y-axis-label" text-anchor="end">{formatValue(tick, spec.unit)}</text>
+					<text x={PLOT.left - 8} y={scatterY(tick) + 4} class="y-axis-label" text-anchor="end">{formatAxisValue(tick, spec.unit)}</text>
 				{/each}
 				<line x1={PLOT.left} x2={WIDTH - PLOT.right} y1={HEIGHT - PLOT.bottom} y2={HEIGHT - PLOT.bottom} class="zero-axis" />
 				{#each scatterX.ticks(5) as tick (tick)}
-					<text x={scatterX(tick)} y={HEIGHT - 12} class="axis-label" text-anchor="middle">{formatValue(tick)}</text>
+					<text x={scatterX(tick)} y={X_TICK_Y} class="axis-label" text-anchor="middle">{formatValue(tick)}</text>
 				{/each}
 				{#each scatterPayload.points as point, index (`${point.label}-${index}`)}
 					<circle cx={scatterX(point.x)} cy={scatterY(point.y)} r="4" class="scatter-dot" style={`fill:${scatterColor(point.group, index)}`}>
 						<title>{point.label}: {spec.x_label || 'X'} {formatValue(point.x)}, {spec.y_label || 'Y'} {formatValue(point.y)}{point.group ? ` · ${point.group}` : ''}</title>
 					</circle>
 				{/each}
-				<text x={(PLOT.left + WIDTH - PLOT.right) / 2} y={HEIGHT - 1} class="axis-title" text-anchor="middle">{spec.x_label || 'X'}</text>
+				<text x={(PLOT.left + WIDTH - PLOT.right) / 2} y={X_TITLE_Y} class="axis-title" text-anchor="middle">{spec.x_label || 'X'}</text>
 				<text transform={`translate(15 ${(PLOT.top + HEIGHT - PLOT.bottom) / 2}) rotate(-90)`} class="axis-title" text-anchor="middle">{spec.y_label || 'Y'}</text>
 			</svg>
 		</div>
@@ -429,7 +488,7 @@
 				<title>{chartTitle}</title>
 				{#each boxPlotScale.ticks(5) as tick (tick)}
 					<line x1={boxPlotScale(tick)} x2={boxPlotScale(tick)} y1="12" y2={boxPlotHeight - 26} class="grid-line" />
-					<text x={boxPlotScale(tick)} y={boxPlotHeight - 8} class="axis-label" text-anchor="middle">{formatValue(tick, spec.unit)}</text>
+					<text x={boxPlotScale(tick)} y={boxPlotHeight - 8} class="axis-label" text-anchor="middle">{formatAxisValue(tick, spec.unit)}</text>
 				{/each}
 				{#each boxPayload.groups as group, index (group.label)}
 					{@const cy = 28 + index * 46}
@@ -479,7 +538,7 @@
 				<title>{chartTitle}</title>
 				{#each yTicks as tick (tick)}
 					<line x1={PLOT.left} x2={WIDTH - PLOT.right} y1={yScale(tick)} y2={yScale(tick)} class="grid-line" class:zero-grid={tick === 0} />
-					<text x={PLOT.left - 8} y={yScale(tick) + 4} class="y-axis-label" text-anchor="end">{formatValue(tick, spec.unit)}</text>
+					<text x={PLOT.left - 8} y={yScale(tick) + 4} class="y-axis-label" text-anchor="end">{formatAxisValue(tick, spec.unit)}</text>
 				{/each}
 				<line x1={PLOT.left} x2={WIDTH - PLOT.right} y1={yScale(0)} y2={yScale(0)} class="zero-axis" />
 				{#if forecastPayload}
@@ -504,7 +563,7 @@
 							{#each series.values as value, index (`${series.name}-${index}`)}
 								{#if isNumber(value)}
 									<circle cx={xScale(spec.labels[index] ?? '') ?? 0} cy={yScale(value)} r="3.2" class="line-dot" style={`fill:${color(seriesIndex)}`}>
-										<title>{series.name}, {spec.labels[index]}: {formatValue(value, spec.unit)}</title>
+										<title>{series.name}, {displayLabels[index] ?? spec.labels[index]}: {formatValue(value, spec.unit)}</title>
 									</circle>
 								{/if}
 							{/each}
@@ -512,9 +571,10 @@
 					{/each}
 				{/if}
 				{#each spec.labels as label, index (label + index)}
-					{#if showXAxisLabel(index)}<text x={xScale(label) ?? 0} y={HEIGHT - 12} class="axis-label" text-anchor="middle">{label}</text>{/if}
+					{@const axisLabel = axisLabels[index] ?? label}
+					{#if showXAxisLabel(index)}<text x={xScale(label) ?? 0} y={X_TICK_Y} class="axis-label" text-anchor="middle">{axisLabel}</text>{/if}
 				{/each}
-				{#if spec.x_label}<text x={(PLOT.left + WIDTH - PLOT.right) / 2} y={HEIGHT - 1} class="axis-title" text-anchor="middle">{spec.x_label}</text>{/if}
+				{#if spec.x_label}<text x={(PLOT.left + WIDTH - PLOT.right) / 2} y={X_TITLE_Y} class="axis-title" text-anchor="middle">{spec.x_label}</text>{/if}
 			</svg>
 			{#if forecastPayload?.uncertainty_note}<p class="uncertainty-note">{forecastPayload.uncertainty_note}</p>{/if}
 		</div>
@@ -541,8 +601,11 @@
 
 <style>
 	.chart-card {
+		min-width: 0;
+		max-width: 100%;
 		margin: var(--space-4) 0;
 		padding: var(--space-3) var(--space-4) var(--space-2);
+		overflow: hidden;
 		border: 1px solid var(--border);
 		border-radius: var(--radius);
 		background: var(--bg-raised);
@@ -554,7 +617,7 @@
 	.chart-unit, .chart-context { margin-top: 2px; color: var(--text-faint); font-size: var(--fs-xs); }
 	.chart-axis-summary { margin-top: 2px; color: var(--text-dim); font-size: var(--fs-xs); }
 	.chart-context { margin-bottom: var(--space-2); }
-	.chart { max-width: 100%; }
+	.chart { min-width: 0; max-width: 100%; overflow: hidden; }
 	.chart-legend { display: flex; flex-wrap: wrap; gap: var(--space-3); margin-bottom: var(--space-2); color: var(--text-dim); font-size: var(--fs-xs); }
 	.legend-item { display: inline-flex; align-items: center; gap: 5px; }
 	.swatch { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--brand); }
@@ -567,7 +630,7 @@
 	.track { position: relative; height: 12px; overflow: hidden; border-radius: var(--radius-sm); background: var(--bg-inset); }
 	.fill { position: absolute; top: 0; bottom: 0; border-radius: var(--radius-sm); transition: width var(--dur) var(--ease), left var(--dur) var(--ease); }
 	.value, .pie-value, .pie-percent { color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap; }
-	svg { display: block; width: 100%; height: auto; overflow: visible; }
+	svg { display: block; width: 100%; max-width: 100%; height: auto; overflow: visible; }
 	.grid-line { stroke: var(--border); stroke-width: 0.75; }
 	.grid-line.zero-grid { stroke: var(--border-strong); }
 	.zero-axis, .whisker { stroke: var(--border-strong); stroke-width: 1; }

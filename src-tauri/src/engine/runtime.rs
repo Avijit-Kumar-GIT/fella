@@ -26,6 +26,10 @@ pub type TraceId = String;
 /// evidence.
 pub const CONTRACT_TOOL_NAME: &str = "__analysis_contract";
 
+/// Internal control-flow action used when the model concludes that a user,
+/// rather than another heuristic, must resolve a material interpretation.
+pub const CLARIFICATION_TOOL_NAME: &str = "__request_clarification";
+
 /// A user-selected workspace starting point. References are hints for
 /// interpretation, never evidence or permission grants; the engine still
 /// resolves them against the current catalog and verifies all results.
@@ -367,43 +371,8 @@ impl AnalysisContract {
             if !contract.unresolved.is_empty() {
                 contract.interpretation = InterpretationStatus::Ambiguous;
             }
-            if let Some(clarification) = contract.clarification.as_mut() {
-                clarification.question = clarification.question.trim().to_string();
-                if clarification.question.is_empty() {
-                    return Err("a clarification needs a user-facing question".into());
-                }
-                if clarification.question.chars().count() > 800 {
-                    return Err("a clarification question is too long".into());
-                }
-                clarification.options = clarification
-                    .options
-                    .iter()
-                    .map(|option| option.trim().to_string())
-                    .filter(|option| !option.is_empty())
-                    .collect();
-                if clarification.options.len() > 6 {
-                    return Err("a clarification may offer at most six options".into());
-                }
-                if clarification
-                    .options
-                    .iter()
-                    .any(|option| option.chars().count() > 240)
-                {
-                    return Err("a clarification option is too long".into());
-                }
-                if clarification
-                    .reason
-                    .as_ref()
-                    .is_some_and(|reason| reason.trim().is_empty() || reason.chars().count() > 500)
-                {
-                    return Err("a clarification reason must be short and non-empty".into());
-                }
-                if !clarification.options.is_empty() {
-                    let mut unique = clarification.options.clone();
-                    unique.sort_by_key(|option| option.to_ascii_lowercase());
-                    unique.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
-                    clarification.options = unique;
-                }
+            if let Some(clarification) = contract.clarification.take() {
+                contract.clarification = Some(normalize_clarification(clarification)?);
                 // Asking the user is a semantic decision, not a weakly stated
                 // assumption. Keep the state explicit even if a provider
                 // accidentally sent `assumed` beside the request.
@@ -420,6 +389,60 @@ impl AnalysisContract {
         }
         Ok(contract)
     }
+}
+
+/// Parse and validate the model's explicit user-interaction action. Keeping
+/// this separate from the analytical contract makes a clarification a clear
+/// control-flow decision rather than optional metadata buried in a larger IR.
+pub fn clarification_from_tool_args(value: &Json) -> Result<ClarificationRequest, String> {
+    let request: ClarificationRequest = serde_json::from_value(value.clone())
+        .map_err(|error| format!("invalid clarification request: {error}"))?;
+    normalize_clarification(request)
+}
+
+fn normalize_clarification(
+    mut clarification: ClarificationRequest,
+) -> Result<ClarificationRequest, String> {
+    clarification.question = clarification.question.trim().to_string();
+    if clarification.question.is_empty() {
+        return Err("a clarification needs a user-facing question".into());
+    }
+    if clarification.question.chars().count() > 800 {
+        return Err("a clarification question is too long".into());
+    }
+    clarification.options = clarification
+        .options
+        .iter()
+        .map(|option| option.trim().to_string())
+        .filter(|option| !option.is_empty())
+        .collect();
+    if clarification.options.len() > 6 {
+        return Err("a clarification may offer at most six options".into());
+    }
+    if clarification
+        .options
+        .iter()
+        .any(|option| option.chars().count() > 240)
+    {
+        return Err("a clarification option is too long".into());
+    }
+    if clarification
+        .reason
+        .as_ref()
+        .is_some_and(|reason| reason.trim().is_empty() || reason.chars().count() > 500)
+    {
+        return Err("a clarification reason must be short and non-empty".into());
+    }
+    if !clarification.options.is_empty() {
+        let mut unique = clarification.options.clone();
+        unique.sort_by_key(|option| option.to_ascii_lowercase());
+        unique.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+        clarification.options = unique;
+    }
+    if let Some(reason) = clarification.reason.as_mut() {
+        *reason = reason.trim().to_string();
+    }
+    Ok(clarification)
 }
 
 /// The strategy used to reach the execution layer.  `DirectTools` is the
@@ -920,6 +943,23 @@ mod tests {
             "unresolved": []
         }));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn standalone_clarification_action_uses_the_same_validation() {
+        let request = clarification_from_tool_args(&serde_json::json!({
+            "question": "  Include utilities? ",
+            "options": [" Yes ", "No", "yes"],
+            "reason": "  This changes the total.  "
+        }))
+        .unwrap();
+        assert_eq!(request.question, "Include utilities?");
+        assert_eq!(request.options, ["No", "Yes"]);
+        assert_eq!(request.reason.as_deref(), Some("This changes the total."));
+        assert!(clarification_from_tool_args(&serde_json::json!({
+            "question": "  "
+        }))
+        .is_err());
     }
 
     #[test]

@@ -1364,7 +1364,11 @@ async fn sequential_questions_keep_the_workspace_and_resolve_each_subject() {
 async fn unresolved_contract_defers_direct_data_tools_until_revised() {
     let ws = scratch("contract-gate-ws");
     let data = scratch("contract-gate-data");
-    fs::write(ws.join("sales.csv"), "amount\n10\n20\n").unwrap();
+    fs::write(
+        ws.join("sales.csv"),
+        "date,amount\n2024-01-15,10\n2024-02-15,20\n",
+    )
+    .unwrap();
 
     // Deliberately put an unresolved contract and a runnable SQL call in the
     // same model response. The SQL is deferred until the model has seen the
@@ -1382,7 +1386,8 @@ async fn unresolved_contract_defers_direct_data_tools_until_revised() {
                     "name": "__analysis_contract",
                     "arguments": serde_json::json!({
                         "interpretation": "assumed",
-                        "measures": [{ "concept": "amount", "field": "amount", "operation": "sum" }],
+                        "subject": "sales",
+                        "measures": [{ "concept": "sales amount", "field": "amount", "operation": "sum" }],
                         "unresolved": ["which period field should be used"]
                     }).to_string()
                 } }
@@ -1390,15 +1395,22 @@ async fn unresolved_contract_defers_direct_data_tools_until_revised() {
         })),
         openai_response(serde_json::json!({
             "role": "assistant",
-            "content": "I will use the available sales table and compute the total.",
-            "tool_calls": [{ "id": "sql-2", "type": "function", "function": {
-                "name": "run_sql",
-                "arguments": "{\"sql\":\"SELECT sum(amount) AS total FROM sales\"}"
+            "content": "The observed date column supports a monthly comparison.",
+            "tool_calls": [{ "id": "contract-2", "type": "function", "function": {
+                "name": "__analysis_contract",
+                "arguments": serde_json::json!({
+                    "interpretation": "assumed",
+                    "subject": "sales",
+                    "population": "all recorded sales rows",
+                    "measures": [{ "concept": "sales amount", "field": "amount", "operation": "sum" }],
+                    "time": { "field": "date", "bucket": "month" },
+                    "unresolved": []
+                }).to_string()
             } }]
         })),
         openai_response(serde_json::json!({
             "role": "assistant",
-            "content": "The sales total is 30."
+            "content": "Sales rose from 10 in January to 20 in February."
         })),
     ]);
 
@@ -1426,17 +1438,23 @@ async fn unresolved_contract_defers_direct_data_tools_until_revised() {
         .unwrap();
     server.join().unwrap();
 
-    assert!(answer.text.contains("30"), "answer: {}", answer.text);
+    assert!(answer.text.contains("January") && answer.text.contains("February"));
     assert_eq!(answer.evidence.len(), 1);
-    assert!(answer.evidence[0]
-        .sql
-        .as_deref()
-        .is_some_and(|sql| sql.contains("sum(amount)")));
+    assert!(answer.evidence[0].sql.as_deref().is_some_and(|sql| {
+        let sql = sql.to_ascii_lowercase();
+        sql.contains("sum(\"amount\")") && sql.contains("group by") && sql.contains("date")
+    }));
     assert_eq!(answer.status, VerificationStatus::Verified);
+    assert!(answer.text.contains("10") && answer.text.contains("20"));
+    let contract = answer.contract.as_ref().unwrap();
     assert_eq!(
-        answer.contract.as_ref().unwrap().interpretation,
-        fella_lib::engine::runtime::InterpretationStatus::Ambiguous
+        contract.interpretation,
+        fella_lib::engine::runtime::InterpretationStatus::Grounded
     );
+    assert!(contract.time.as_ref().is_some_and(|time| {
+        time.field.as_deref() == Some("date")
+            && time.bucket == Some(fella_lib::engine::runtime::TimeBucket::Month)
+    }));
     let events = events.lock().unwrap();
     assert!(events.iter().any(|event| matches!(
         event,
@@ -1479,12 +1497,15 @@ async fn clarification_keeps_safe_candidate_analysis_available() {
                         "group_by": ["segment"],
                         "filters": [],
                         "assumptions": [],
-                        "unresolved": [],
-                        "clarification": {
-                            "question": "Which segment should the total cover?",
-                            "options": ["Alpha", "Beta"],
-                            "reason": "The workspace contains separate segment values."
-                        }
+                        "unresolved": []
+                    }).to_string()
+                } },
+                { "id": "clarify", "type": "function", "function": {
+                    "name": "__request_clarification",
+                    "arguments": serde_json::json!({
+                        "question": "Which segment should the total cover?",
+                        "options": ["Alpha", "Beta"],
+                        "reason": "The workspace contains separate segment values."
                     }).to_string()
                 } },
                 { "id": "inspect", "type": "function", "function": {
@@ -1543,6 +1564,9 @@ async fn clarification_keeps_safe_candidate_analysis_available() {
     let clarification = answer.clarification.as_ref().unwrap();
     assert_eq!(clarification.options, ["Alpha", "Beta"]);
     assert!(answer.text.contains("Which segment"));
+    assert!(answer.contract.as_ref().is_some_and(|contract| {
+        contract.interpretation == fella_lib::engine::runtime::InterpretationStatus::Ambiguous
+    }));
     assert!(events.lock().unwrap().iter().any(|event| matches!(
         event,
         AskEvent::ToolStart { tool, .. } if tool == "run_sql"
@@ -1829,6 +1853,7 @@ async fn clarification_keeps_safe_candidate_analysis_available() {
     assert!(parent_tool_names.contains(&"run_sql"));
     assert!(parent_tool_names.contains(&"run_python"));
     assert!(parent_tool_names.contains(&"make_chart"));
+    assert!(parent_tool_names.contains(&"__request_clarification"));
     let candidate_prompt = parent_requests[2].to_string();
     assert!(candidate_prompt.contains("5000") && candidate_prompt.contains("1500"));
 
@@ -1898,7 +1923,7 @@ async fn direct_data_calls_do_not_require_a_contract() {
         })),
         openai_response(serde_json::json!({
             "role": "assistant",
-            "content": "I need to state the analytical interpretation before checking the data."
+            "content": "The total sales amount is 30."
         })),
     ]);
 
@@ -1914,7 +1939,12 @@ async fn direct_data_calls_do_not_require_a_contract() {
     engine.open_workspace(&ws).unwrap();
 
     let answer = engine
-        .ask("missing-contract", "compare sales over time", None, |_| {})
+        .ask(
+            "missing-contract",
+            "What is the total sales amount?",
+            None,
+            |_| {},
+        )
         .await
         .unwrap();
     server.join().unwrap();
