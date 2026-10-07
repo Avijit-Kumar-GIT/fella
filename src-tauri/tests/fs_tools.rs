@@ -111,7 +111,7 @@ async fn ranked_search_combines_terms_across_nearby_lines_and_prefers_coverage()
 fn ranked_search_uses_workspace_term_rarity_to_order_passages() {
     let ws = scratch("rarity-search-ws");
     let data = scratch("rarity-search-data");
-    let frequent_mentions = std::iter::repeat("review\n").take(60).collect::<String>();
+    let frequent_mentions = "review\n".repeat(60);
     fs::write(ws.join("frequent.txt"), frequent_mentions).unwrap();
     fs::write(ws.join("rare.txt"), "A cohort arrived.\n").unwrap();
 

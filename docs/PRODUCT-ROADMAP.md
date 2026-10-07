@@ -791,6 +791,16 @@ controls depend on backlog #2.
 The 5,000-file and 10-GiB ingestion observations are recorded under backlog #6
 and do not substitute for shell measurements.
 
+**Release-gate recheck (2026-10-07):** the unchanged clarification-housing
+episode failed twice with OpenAI gpt-5.6-luna: it selected all three ledger
+categories despite the source note saying the broader measure was undefined,
+and returned no typed clarification. A generalized prompt instruction about
+source-documented missing definitions did not change that behavior. The
+parent-linked continuation itself passes the mock-model integration test, but
+the user-facing Electron 44 card/selection flow remains unverified because the
+local GUI runtime lacks NSS libraries. Full details and the FQA grader caveat
+are in [`ELECTRON-VALIDATION.md`](ELECTRON-VALIDATION.md).
+
 **Acceptance checks:** users understand what Fella used, web access is not
 surprising, provider transmission and local retention are explicit, and the
 maintained Electron shell passes its capability suite. Until web research

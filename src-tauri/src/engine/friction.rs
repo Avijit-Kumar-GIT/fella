@@ -57,7 +57,7 @@ pub(crate) fn recent(data_dir: &Path) -> Vec<FrictionSignal> {
         .take(MAX_SIGNALS)
         .filter_map(|line| serde_json::from_str(line).ok())
         .collect();
-    signals.sort_by(|a, b| b.at_ms.cmp(&a.at_ms));
+    signals.sort_by_key(|signal| std::cmp::Reverse(signal.at_ms));
     signals
 }
 

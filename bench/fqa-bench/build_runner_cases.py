@@ -119,6 +119,7 @@ def render(suite: Path) -> bytes:
         case = {
             "id": task_id,
             "question": clarification_reply or request["prompt"],
+            "resumes_clarification": clarification_reply is not None,
             "files": suite_files,
             "gold": key["runner_gold"],
             "category": task["labels"]["domain"],

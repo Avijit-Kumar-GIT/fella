@@ -67,7 +67,18 @@ test('correlates concurrent bridge requests and forwards streamed events', async
 	const child = new FakeEngineProcess();
 	const client = new EngineClient('engine', '/app-data', { spawnProcess: () => child });
 	const events = [];
-	const answer = client.request('ask', { question: 'count rows' }, (event) => events.push(event));
+	const answer = client.request(
+		'ask',
+		{
+			conversationId: 'conversation-1',
+			question: 'count rows',
+			clarificationReply: {
+				turn_id: 'turn-parent',
+				response: 'Use the North region only.'
+			}
+		},
+		(event) => events.push(event)
+	);
 	const settings = client.request('get_settings');
 	await waitForRequests(child, 2);
 
@@ -75,7 +86,14 @@ test('correlates concurrent bridge requests and forwards streamed events', async
 	const settingsRequest = child.requests.find((request) => request.method === 'get_settings');
 	assert.ok(askRequest);
 	assert.ok(settingsRequest);
-	assert.deepEqual(askRequest.params, { question: 'count rows' });
+	assert.deepEqual(askRequest.params, {
+		conversationId: 'conversation-1',
+		question: 'count rows',
+		clarificationReply: {
+			turn_id: 'turn-parent',
+			response: 'Use the North region only.'
+		}
+	});
 
 	child.respond({ id: askRequest.id, event: { type: 'assistant_delta', text: 'Rows: ' } });
 	child.respond({ id: settingsRequest.id, ok: true, result: { model: 'test-model' } });

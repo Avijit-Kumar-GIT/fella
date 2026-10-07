@@ -103,7 +103,7 @@ fn write_mixed_table(path: &Path, index: usize, rows: usize) {
     let mut writer = BufWriter::new(File::create(path).unwrap());
     match index % 4 {
         0 | 1 => {
-            let separator = if index % 4 == 0 { ',' } else { '\t' };
+            let separator = if index.is_multiple_of(4) { ',' } else { '\t' };
             writeln!(
                 writer,
                 "record_id{separator}amount{separator}category{separator}day"

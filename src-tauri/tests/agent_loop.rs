@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use fella_lib::engine::evidence::{EvidenceDisposition, VerificationStatus};
-use fella_lib::engine::{AskEvent, ClarificationReply, EngineState};
+use fella_lib::engine::{AskEvent, AskOptions, ClarificationReply, EngineState};
 
 fn scratch(tag: &str) -> PathBuf {
     // Point-at-a-mock tests: the warm-up ping would steal a scripted response.
@@ -1476,8 +1476,8 @@ async fn clarification_keeps_safe_candidate_analysis_available() {
                         "interpretation": "assumed",
                         "subject": "measurements",
                         "measures": [{ "concept": "amount", "field": "amount", "operation": "sum" }],
+                        "group_by": ["segment"],
                         "filters": [],
-                        "group_by": [],
                         "assumptions": [],
                         "unresolved": [],
                         "clarification": {
@@ -1585,13 +1585,15 @@ async fn clarification_keeps_safe_candidate_analysis_available() {
         .ask_with_mode_and_context_and_clarification(
             "another-conversation",
             "Alpha",
-            None,
-            false,
-            &[],
-            Some(ClarificationReply {
-                turn_id: answer.turn_id.clone(),
-                response: "Alpha".into(),
-            }),
+            AskOptions {
+                model: None,
+                inspect: false,
+                context_refs: &[],
+                clarification_reply: Some(ClarificationReply {
+                    turn_id: answer.turn_id.clone(),
+                    response: "Alpha".into(),
+                }),
+            },
             |_| {},
         )
         .await
@@ -1604,13 +1606,15 @@ async fn clarification_keeps_safe_candidate_analysis_available() {
         .ask_with_mode_and_context_and_clarification(
             "clarification",
             "",
-            None,
-            false,
-            &[],
-            Some(ClarificationReply {
-                turn_id: answer.turn_id.clone(),
-                response: "  ".into(),
-            }),
+            AskOptions {
+                model: None,
+                inspect: false,
+                context_refs: &[],
+                clarification_reply: Some(ClarificationReply {
+                    turn_id: answer.turn_id.clone(),
+                    response: "  ".into(),
+                }),
+            },
             |_| {},
         )
         .await
@@ -1623,13 +1627,15 @@ async fn clarification_keeps_safe_candidate_analysis_available() {
         .ask_with_mode_and_context_and_clarification(
             "clarification",
             "Use the Alpha segment only.",
-            None,
-            false,
-            &[],
-            Some(ClarificationReply {
-                turn_id: answer.turn_id.clone(),
-                response: "Use the Alpha segment only.".into(),
-            }),
+            AskOptions {
+                model: None,
+                inspect: false,
+                context_refs: &[],
+                clarification_reply: Some(ClarificationReply {
+                    turn_id: answer.turn_id.clone(),
+                    response: "Use the Alpha segment only.".into(),
+                }),
+            },
             |_| {},
         )
         .await
@@ -1676,7 +1682,10 @@ async fn clarification_keeps_safe_candidate_analysis_available() {
         continued_turn.clarification_response.as_deref(),
         Some("Use the Alpha segment only.")
     );
-    assert_eq!(continued_turn.prior_turn_refs, [answer.turn_id.clone()]);
+    assert_eq!(
+        continued_turn.prior_turn_refs.as_slice(),
+        std::slice::from_ref(&answer.turn_id)
+    );
     assert_eq!(continued_turn.result.usage, continued.usage);
     assert!(continued_turn
         .context_audit
@@ -1772,13 +1781,15 @@ async fn clarification_keeps_safe_candidate_analysis_available() {
         .ask_with_mode_and_context_and_clarification(
             "clarification",
             "Use the Alpha segment only.",
-            None,
-            false,
-            &[],
-            Some(ClarificationReply {
-                turn_id: answer.turn_id.clone(),
-                response: "Use the Alpha segment only.".into(),
-            }),
+            AskOptions {
+                model: None,
+                inspect: false,
+                context_refs: &[],
+                clarification_reply: Some(ClarificationReply {
+                    turn_id: answer.turn_id.clone(),
+                    response: "Use the Alpha segment only.".into(),
+                }),
+            },
             |_| {},
         )
         .await
@@ -1837,6 +1848,18 @@ async fn clarification_keeps_safe_candidate_analysis_available() {
     assert!(continuation_prompt.contains("Which segment should the total cover?"));
     assert!(continuation_prompt.contains("User's response"));
     assert!(continuation_prompt.contains("Use the Alpha segment only."));
+    assert!(continuation_prompt
+        .contains("Parent analysis contract (working interpretation only; not evidence)"));
+    let continuation_user_content = continuation_requests[0]["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|message| message["role"] == "user")
+        .and_then(|message| message["content"].as_str())
+        .unwrap_or_default();
+    assert!(continuation_user_content.contains("\"group_by\":[\"segment\"]"));
+    assert!(continuation_prompt
+        .contains("Do not replace a requested breakdown with a workspace-wide aggregate"));
 
     let rerun_requests = rerun_seen.lock().unwrap();
     assert_eq!(rerun_requests.len(), 2);

@@ -410,16 +410,31 @@ pretend workspace field.",
             "\n\nAnalyst loop: Treat the source inventory as reconnaissance, not a finished interpretation. Inspect relevant profiles, observed labels, samples, and document notes when needed; decompose multi-part questions; use each observation to refine the source, fields, population, filters, time range, units, joins, and computation. Do not request inspection and computation in the same tool-call batch: wait for the observation result, incorporate it, then compute. Execute once the analysis is grounded enough, then check the result against the question and return to inspection if it is empty, unexpectedly broad, or inconsistent. Ask a focused clarification only when reasonable investigation leaves a material choice the user must decide. A pending choice does not disable safe read-only analysis: when useful, compute supported alternatives or partial results, label each interpretation, and leave the user-owned choice open rather than presenting one scenario as settled. Assume you can analyze when given relevant evidence and tools; do not refuse just because a human concept is not an exact field or value.\n",
         );
         sys.push_str(
-            "\n\nSemantic decision policy: do not force a semantic guess when two supported interpretations would materially change the result. First use the workspace schema, observed values, source notes, prior user definitions, and read-only probes to resolve ordinary aliases and messy labels. Treat a quoted category or value as an exact label request by default; do not silently substitute a nearby observed label based only on semantic similarity. Map it only when workspace evidence or a prior user definition supports the mapping; otherwise preserve the exact match or clarify if the intended meaning would change the answer. For a non-literal mapping or a roll-up across distinct observed labels, inspect the relevant values, record the selected mapping and exact labels in the contract's `assumptions` before computing, and name those labels in the final answer. If one interpretation is still clearly more likely, proceed with that assumption and state it. If materially different interpretations remain, emit one `clarification` object on the analytical contract with a concise question and at most six choices; where useful, continue safe read-only analysis by computing labeled candidate results or partial results. Do not present one unresolved scenario as the definitive answer, but do not withhold useful computed alternatives merely because clarification is pending. The runtime will return the question with any supported findings. A typed decision/classifier may route among resolve, assume, clarify, and unsupported, but it must not invent candidates, replace the model's analytical reasoning, or override observed data.\n",
+            "\n\nSemantic decision policy: do not force a semantic guess when two supported interpretations would materially change the result. First use the workspace schema, observed values, source notes, prior user definitions, and read-only probes to resolve ordinary aliases and messy labels. Treat a quoted category or value as an exact label request by default; do not silently substitute a nearby observed label based only on semantic similarity. Map it only when workspace evidence or a prior user definition supports the mapping; otherwise preserve the exact match or clarify if the intended meaning would change the answer. For a non-literal mapping or a roll-up across distinct observed labels, inspect the relevant values, record the selected mapping and exact labels in the contract's `assumptions` before computing, and name those labels in the final answer. If one interpretation is still clearly more likely, proceed with that assumption and state it. If materially different interpretations remain, emit one `clarification` object on the analytical contract with a concise question and at most six choices; where useful, continue safe read-only analysis by computing labeled candidate results or partial results. Do not present one unresolved scenario as the definitive answer, but do not withhold useful computed alternatives merely because clarification is pending. The runtime will return the question with any supported findings. A typed decision/classifier may route among resolve, assume, clarify, and unsupported, but it must not invent candidates, replace the model's analytical reasoning, or override observed data. When asking the user to choose, put the question and options in the contract's typed `clarification` field rather than only in free-form answer text; the app uses that turn ID to resume this same analysis.\n",
         );
     }
     let mut messages = vec![
         ChatMessage::System(sys),
         ChatMessage::User(if let Some(reply) = clarification {
-            format!(
+            let mut prompt = format!(
                 "Original analytical question:\n{}\n\nPending clarification:\n{}\n\nUser's response:\n{}",
                 reply.original_question, reply.request.question, reply.response
-            )
+            );
+            if let Some(contract) = reply.parent_contract.as_ref() {
+                // This contract is a working interpretation, not evidence.
+                // Preserve dimensions the user's answer did not resolve, but
+                // re-check source facts and recompute when the mount changed.
+                if let Ok(contract) = serde_json::to_string(contract) {
+                    prompt.push_str(
+                        "\n\nParent analysis contract (working interpretation only; not evidence):\n",
+                    );
+                    prompt.push_str(&contract);
+                }
+            }
+            prompt.push_str(
+                "\n\nContinue the original deliverable. Apply the user's response only to the pending choice; preserve all other requested dimensions, such as grouping, filters, time range, comparisons, ranking, and chart requirements. Do not replace a requested breakdown with a workspace-wide aggregate. Reuse prior execution evidence only when its workspace revision is still current; otherwise inspect and recompute.",
+            );
+            prompt
         } else {
             question.to_string()
         }),
@@ -1794,7 +1809,12 @@ spend a separate turn announcing routine work before using a tool."
             "Use available evidence and context to interpret labels, aliases, units, signs, dates, \
 and source scope; inspect observed values when they can resolve uncertainty. If more than one \
 material interpretation remains, ask a focused clarification. If one interpretation is reasonable \
-and the uncertainty is minor, proceed with the assumption stated briefly."
+and the uncertainty is minor, proceed with the assumption stated briefly. When asking the user to \
+choose, put the question and options in the contract's typed `clarification` field rather than only \
+in free-form answer text; the app uses that turn ID to resume this same analysis. If a source note \
+explicitly says a term's definition or mapping is absent, treat that as evidence the meaning is \
+unresolved—not as permission to infer it from convention. When competing scopes materially change \
+the result, ask the user or show clearly labeled alternatives rather than presenting one as settled."
                 .into(),
         );
         rules.push(
@@ -2503,6 +2523,8 @@ mod tests {
         assert!(got.contains("Treat the request as an analysis problem"));
         assert!(got.contains("The model drives interpretation and tool choice"));
         assert!(got.contains("ask a focused clarification"));
+        assert!(got.contains("contract's typed `clarification` field"));
+        assert!(got.contains("explicitly says a term's definition or mapping is absent"));
         assert!(got.contains("Preserve relevant scope, filters, units, and definitions"));
         assert!(got.contains("An explicitly requested visualization is a required deliverable"));
         assert!(got

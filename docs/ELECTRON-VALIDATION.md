@@ -31,7 +31,7 @@ expected behavior to match the output.
 | G2 | Mount the same fixture; ask one simple question whose answer needs a document passage and one whose answer needs a table calculation. | Both requests stream; file-dependent claims have inspectable source/tool evidence. Source files remain unchanged. | **Partial** — table calculation passed against an independent oracle; document answer/provenance looked correct, but a scratch literal-phrase matcher failed on an equivalent paraphrase |
 | G3 | While a longer model response is streaming, stop it. | The run stops promptly; completed evidence remains inspectable and no later response appears in the deleted/closed turn. | **Partial** — stop/no-late-text passed; preservation of completed evidence was not checked |
 | G4 | Request a chart from the fixture, then expand its analysis details. | One chart renders; labels, values, units, and source query agree. Python calculations identify Python; the built-in forecast route identifies a forecast, not a user-written Python script. | **Pass** — one 24-point line chart matched the independent monthly oracle; one tick-spacing defect fixed |
-| G5 | Ask an ambiguous but answerable question that should trigger one clarification; select an option and continue. | The clarification is visible and the resumed answer retains the parent-turn link and selected assumption. | **Fail** — explicit prose clarification was resumed through the main composer, but the model returned a workspace-wide total instead of the requested channel comparison; structured clarification and linked-turn logging remain unvalidated |
+| G5 | Ask an ambiguous but answerable question that should trigger one clarification; select an option and continue. | The clarification is visible and the resumed answer retains the parent-turn link and selected assumption. | **Fail** — the earlier UI run resumed prose through the main composer and lost the requested breakdown. A later frozen FQA episode also failed: the model assumed a category scope instead of emitting a typed clarification. Electron 44 UI interaction remains unvalidated. |
 | G6 | Change model and appearance, save a conversation, restart the app, reopen it, then delete it. | Settings and transcript persist across restart. Deletion removes the transcript and its canonical analysis records and does not resurrect the row. | **Pass for a single-turn analytical conversation** — provider/model/theme and chart transcript survived restart; reopen worked; sidebar deletion removed the transcript and canonical turn record, still absent after a second restart |
 | G7 | Repeat the relevant answer/detail interactions in light and dark mode. | Text, source, calculation, and forecast distinctions remain legible without relying on accent color alone. | **Partial** — chart exact-value table and source/calculation details inspected in both themes; the plot was not fully framed in screenshots, and forecast-specific details remain untested |
 
@@ -204,13 +204,15 @@ Electron persistence and theme follow-up on 2026-10-06:
   remain untested.
 
 Electron G6 passed for the tested single-turn analytical conversation; G7
-remains partial as described. G5 is **not passed**: a prose clarification was
-followed through the main composer, but the resumed answer failed to compare
-channels; structured clarification UI and linked-turn logging remain
-unvalidated. The live-model runs improve confidence in Electron Ask and chart
-paths, but do not complete backlog #9.
+remains partial as described. G5 is **not passed**: the earlier UI run used
+prose in the main composer and lost the requested comparison; a later FQA
+episode showed the model did not emit a typed clarification at all. The
+parent-linked continuation path passes a mock-model integration test, but its
+visible card-and-selection flow has not been exercised in Electron 44. The
+live-model runs improve confidence in Electron Ask and chart paths, but do not
+complete backlog #9.
 
-## Electron 44.5.1 upgrade check
+## Initial Electron 44.5.1 upgrade check (2026-10-06)
 
 The maintained package is now pinned to Electron 44.5.1. `pnpm check`,
 `pnpm build`, all four Electron bridge tests, all eight updater tests, all chart
@@ -234,3 +236,51 @@ environment. Therefore Electron 44 could not be launched here. The earlier UI
 observations above remain Electron 42.3.3 evidence—not a claim that the new
 major has passed packaged GUI smoke tests. The repository's pre-existing
 `dist-electron/` validation artifact was not overwritten.
+
+## Release-gate recheck (2026-10-07)
+
+- `pnpm check`, `pnpm build`, `test:electron-bridge`, `test:electron-update`,
+  `test:chart-renderer`, the FQA adapter consistency check, and its independent
+  fixture/oracle validation pass. Rust formatting and Clippy pass with
+  `-D warnings`.
+- The clarification parent-linked continuation integration test passes with a
+  mock provider. The FQA answer key and numeric gold were not edited to fit
+  model output; the generated adapter was refreshed only to carry typed-resume
+  metadata. A live OpenAI gpt-5.6-luna run of that unchanged task failed twice:
+  the model selected rent, utilities, and maintenance as its scope, reported
+  $4,892, and emitted no typed clarification. The expected clarified total is
+  $4,647. The app correctly rejected the attempted continuation because no
+  pending clarification existed. A general prompt rule treating source-noted
+  missing definitions as unresolved did not change the result.
+- The first live attempt exposed an evaluator weakness: its intermediate
+  string-only rubric could count clarification-like prose without a typed
+  clarification. The runner now requires a typed request on the parent turn
+  before grading the clarification step or sending the continuation. This
+  changes no task text, answer key, or numeric expectation. The task's
+  intermediate substring rubric remains a documented grader limitation for
+  maintainer review; the case is still marked **failed**, not passed.
+- `cargo test --locked`: all 324 library tests pass. In `tests/agent_loop.rs`,
+  21 pass, two fail, and one is ignored. The failures are
+  `direct_data_calls_do_not_require_a_contract` and
+  `unresolved_contract_defers_direct_data_tools_until_revised`; both expect
+  `Verified` but receive `NeedsReview`. Their expectations were not changed.
+  Both mocked prompts ask to compare sales “over time,” while the mocked SQL
+  returns one scalar sum across all rows. That result does not satisfy the
+  requested time grain, so the current `NeedsReview` appears defensible; these
+  assertions need owner review rather than being silently weakened.
+  The full command stops at this failing test binary; the other integration
+  binaries were run separately and passed 113 tests, with the manual 5,000-file
+  performance probe ignored. The 28 `agent_eval` example tests and eval-feature
+  Clippy also pass.
+- `pnpm electron:build` and an Electron 44.5.1 Linux x64 unpacked package build
+  pass in an isolated `/tmp` output directory. The package is 318,981,740
+  bytes, includes one x64 engine sidecar, and that exact packaged sidecar
+  answers the JSON-lines `ping` request with `pong`.
+- The Electron 44 GUI still cannot launch in this Linux environment: `ldd`
+  reports missing `libnspr4`, `libnss3`, `libnssutil3`, and `libsmime3`. No
+  system packages were installed. Windows and macOS packaged GUI launches
+  remain untested.
+
+The release gate therefore remains **blocked**. The Rust suite is not green,
+G5 fails on the real model, G3/G7 are partial, and no Electron 44 packaged GUI
+smoke has passed on a native OS.

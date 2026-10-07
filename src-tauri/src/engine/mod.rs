@@ -43,7 +43,9 @@ pub use runtime::{
     RunLogKind, RunLogModelCall, RunLogOperation, SortDirection, TimeBucket,
 };
 pub use sqlite::Settings;
-pub use state::{ConversationSummary, ConversationsInfo, EngineState, ProviderInfo, QueryResult};
+pub use state::{
+    AskOptions, ConversationSummary, ConversationsInfo, EngineState, ProviderInfo, QueryResult,
+};
 pub use workspace_model::{
     FieldProfile, FieldRole, RelationshipCandidate, SourceModel, WorkspaceModel,
 };

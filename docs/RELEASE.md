@@ -18,9 +18,10 @@ accepted by the maintainer:
 
 - [ ] `pnpm check`, `pnpm build`, bridge/update/chart tests, Rust formatting,
   Clippy, and the full default-feature Rust test suite pass.
-- [ ] The G5 clarification-continuation failure in
-  [`ELECTRON-VALIDATION.md`](ELECTRON-VALIDATION.md) is fixed and rerun with the
-  same expected behavior. Do not weaken the case to match the current output.
+- [ ] G5 passes against the same clarification task and expected behavior.
+  The current OpenAI run is a failure: the model assumed a category scope and
+  did not emit a typed clarification. Do not weaken the case to match the
+  current output; see [`ELECTRON-VALIDATION.md`](ELECTRON-VALIDATION.md).
 - [ ] Finish the partial G3/G7 checks, including retained evidence after Stop,
   a fully framed chart in both themes, and forecast details.
 - [ ] Build and launch the packaged app on Windows, macOS, and Linux, or record
@@ -33,6 +34,15 @@ accepted by the maintainer:
 The web-research threat suite is not a gate for this version because web
 research is not shipped. It becomes a required gate before backlog #2 enables
 web access.
+
+**Current status (2026-10-07): not production-ready.** Frontend diagnostics,
+build, bridge/update/chart tests, Rust formatting and Clippy, Electron 44
+packaging, and the packaged sidecar ping pass. The default Rust test command
+still has two `agent_loop` failures, live G5 clarification failed, G3/G7 remain
+partial, and Electron 44's packaged GUI has not been smoke-tested on a native
+OS. The exact run and limitations are recorded in
+[`ELECTRON-VALIDATION.md`](ELECTRON-VALIDATION.md). No release tag or draft has
+been created.
 
 ## Build and draft
 

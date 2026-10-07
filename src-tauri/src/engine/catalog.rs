@@ -722,7 +722,7 @@ fn report_scan_progress(
     supported_files: usize,
     skipped_files: usize,
 ) {
-    if visited_files % 128 == 0 {
+    if visited_files.is_multiple_of(128) {
         on_progress(WorkspaceProgress {
             phase: "scanning",
             visited_files,

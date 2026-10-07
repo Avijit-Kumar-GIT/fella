@@ -39,6 +39,13 @@ const INGEST_PROGRESS_MIN_BYTES: u64 = 64 * 1024 * 1024;
 const INGEST_PROGRESS_INTERVAL_BYTES: u64 = 64 * 1024 * 1024;
 const INGEST_PROGRESS_ROW_CHECK_INTERVAL: usize = 65_536;
 
+struct JsonSourceOptions {
+    ndjson: bool,
+    allow_progress: bool,
+    progress_min_bytes: u64,
+    progress_interval_bytes: u64,
+}
+
 impl SqliteEngine {
     pub fn open(data_dir: &Path) -> EngineResult<Self> {
         let path = data_dir.join("analysis.db");
@@ -252,14 +259,11 @@ impl SqliteEngine {
         &mut self,
         name: &str,
         path: &str,
-        ndjson: bool,
-        allow_progress: bool,
-        progress_min_bytes: u64,
-        progress_interval_bytes: u64,
+        options: JsonSourceOptions,
         on_progress: &mut dyn FnMut(SourceIngestProgress),
     ) -> EngineResult<SourceLoad> {
         let stamp = file_stamp(path)?;
-        let report_progress = allow_progress && stamp.size >= progress_min_bytes;
+        let report_progress = options.allow_progress && stamp.size >= options.progress_min_bytes;
         let mut profile = JsonSourceProfile::default();
         if report_progress {
             on_progress(SourceIngestProgress {
@@ -268,27 +272,28 @@ impl SqliteEngine {
             });
         }
         let mut profile_bytes = 0;
-        let mut report_profile = |bytes_read| {
-            profile_bytes = bytes_read;
-            on_progress(SourceIngestProgress {
-                stage: "profiling",
-                bytes_read,
-            });
+        let first_pass = {
+            let mut report_profile = |bytes_read| {
+                profile_bytes = bytes_read;
+                on_progress(SourceIngestProgress {
+                    stage: "profiling",
+                    bytes_read,
+                });
+            };
+            let profile_callback =
+                report_progress.then_some(&mut report_profile as &mut dyn FnMut(u64));
+            visit_json_objects(
+                path,
+                options.ndjson,
+                stamp.size,
+                options.progress_interval_bytes,
+                profile_callback,
+                |object| {
+                    profile.observe(&object);
+                    Ok(())
+                },
+            )?
         };
-        let profile_callback =
-            report_progress.then_some(&mut report_profile as &mut dyn FnMut(u64));
-        let first_pass = visit_json_objects(
-            path,
-            ndjson,
-            stamp.size,
-            progress_interval_bytes,
-            profile_callback,
-            |object| {
-                profile.observe(&object);
-                Ok(())
-            },
-        )?;
-        drop(report_profile);
         if report_progress && profile_bytes < stamp.size {
             on_progress(SourceIngestProgress {
                 stage: "profiling",
@@ -331,39 +336,43 @@ impl SqliteEngine {
                 });
             }
             let mut load_bytes = 0;
-            let mut report_load = |bytes_read| {
-                load_bytes = bytes_read;
-                on_progress(SourceIngestProgress {
-                    stage: "loading",
-                    bytes_read,
-                });
+            let second_pass = {
+                let mut report_load = |bytes_read| {
+                    load_bytes = bytes_read;
+                    on_progress(SourceIngestProgress {
+                        stage: "loading",
+                        bytes_read,
+                    });
+                };
+                let load_callback =
+                    report_progress.then_some(&mut report_load as &mut dyn FnMut(u64));
+                visit_json_objects(
+                    path,
+                    options.ndjson,
+                    stamp.size,
+                    options.progress_interval_bytes,
+                    load_callback,
+                    |object| {
+                        sqlite_values.clear();
+                        sqlite_values.extend(
+                            headers.iter().zip(types.iter().zip(&date_orders)).map(
+                                |(header, (ty, order))| {
+                                    json_cell_to_sqlite(
+                                        object.get(header).unwrap_or(&Json::Null),
+                                        *ty,
+                                        *order,
+                                    )
+                                },
+                            ),
+                        );
+                        statement
+                            .execute(rusqlite::params_from_iter(sqlite_values.iter()))
+                            .map_err(|error| EngineError::msg(error.to_string()))?;
+                        loaded += 1;
+                        Ok(())
+                    },
+                )?
             };
-            let load_callback = report_progress.then_some(&mut report_load as &mut dyn FnMut(u64));
-            let second_pass = visit_json_objects(
-                path,
-                ndjson,
-                stamp.size,
-                progress_interval_bytes,
-                load_callback,
-                |object| {
-                    sqlite_values.clear();
-                    sqlite_values.extend(headers.iter().zip(types.iter().zip(&date_orders)).map(
-                        |(header, (ty, order))| {
-                            json_cell_to_sqlite(
-                                object.get(header).unwrap_or(&Json::Null),
-                                *ty,
-                                *order,
-                            )
-                        },
-                    ));
-                    statement
-                        .execute(rusqlite::params_from_iter(sqlite_values.iter()))
-                        .map_err(|error| EngineError::msg(error.to_string()))?;
-                    loaded += 1;
-                    Ok(())
-                },
-            )?;
-            drop(report_load);
             if report_progress && load_bytes < stamp.size {
                 on_progress(SourceIngestProgress {
                     stage: "loading",
@@ -450,15 +459,17 @@ impl DataEngine for SqliteEngine {
         match kind {
             SourceKind::Json | SourceKind::Ndjson => {
                 let mut ignore_progress = |_| {};
-                return self.add_json_source(
+                self.add_json_source(
                     name,
                     path,
-                    kind == SourceKind::Ndjson,
-                    false,
-                    INGEST_PROGRESS_MIN_BYTES,
-                    INGEST_PROGRESS_INTERVAL_BYTES,
+                    JsonSourceOptions {
+                        ndjson: kind == SourceKind::Ndjson,
+                        allow_progress: false,
+                        progress_min_bytes: INGEST_PROGRESS_MIN_BYTES,
+                        progress_interval_bytes: INGEST_PROGRESS_INTERVAL_BYTES,
+                    },
                     &mut ignore_progress,
-                );
+                )
             }
             SourceKind::Parquet => Err(EngineError::msg(
                 "Parquet needs the DuckDB build rebuild with `cargo build --features duckdb`",
@@ -480,10 +491,12 @@ impl DataEngine for SqliteEngine {
             SourceKind::Json | SourceKind::Ndjson => self.add_json_source(
                 name,
                 path,
-                kind == SourceKind::Ndjson,
-                true,
-                INGEST_PROGRESS_MIN_BYTES,
-                INGEST_PROGRESS_INTERVAL_BYTES,
+                JsonSourceOptions {
+                    ndjson: kind == SourceKind::Ndjson,
+                    allow_progress: true,
+                    progress_min_bytes: INGEST_PROGRESS_MIN_BYTES,
+                    progress_interval_bytes: INGEST_PROGRESS_INTERVAL_BYTES,
+                },
                 on_progress,
             ),
             _ => self.add_source(name, kind, path),
@@ -986,6 +999,13 @@ struct JsonSourceProfile {
     rows: usize,
 }
 
+type JsonSourceProfileResult = (
+    Vec<String>,
+    Vec<ColType>,
+    Vec<Option<NumericDateOrder>>,
+    Vec<Option<String>>,
+);
+
 impl JsonSourceProfile {
     fn observe(&mut self, object: &serde_json::Map<String, Json>) {
         for (name, value) in object {
@@ -1004,14 +1024,7 @@ impl JsonSourceProfile {
         self.rows += 1;
     }
 
-    fn finish(
-        self,
-    ) -> (
-        Vec<String>,
-        Vec<ColType>,
-        Vec<Option<NumericDateOrder>>,
-        Vec<Option<String>>,
-    ) {
+    fn finish(self) -> JsonSourceProfileResult {
         let mut types = Vec::with_capacity(self.columns.len());
         let mut date_orders = Vec::with_capacity(self.columns.len());
         let mut notes = Vec::with_capacity(self.columns.len());
@@ -2557,10 +2570,12 @@ mod tests {
                 .add_json_source(
                     "records",
                     path.to_str().unwrap(),
-                    ndjson,
-                    true,
-                    1,
-                    1_024,
+                    JsonSourceOptions {
+                        ndjson,
+                        allow_progress: true,
+                        progress_min_bytes: 1,
+                        progress_interval_bytes: 1_024,
+                    },
                     &mut on_progress,
                 )
                 .unwrap();

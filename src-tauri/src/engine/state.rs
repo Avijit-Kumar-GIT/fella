@@ -38,8 +38,27 @@ use crate::engine::workspace_model::WorkspaceModel;
 // but not worth rescanning many or large tables before the first question.
 // Larger tables keep their full rows and inferred types; inspect_table calls
 // describe_source to produce exact statistics lazily when one matters.
-const EAGER_PROFILE_TOTAL_SOURCE_BYTES: u64 = 1 * 1024 * 1024;
+const EAGER_PROFILE_TOTAL_SOURCE_BYTES: u64 = 1024 * 1024;
 const EAGER_PROFILE_MAX_ROWS: i64 = 10_000;
+
+/// Optional controls for one model-driven analysis turn.
+#[derive(Default)]
+pub struct AskOptions<'a> {
+    pub model: Option<&'a str>,
+    pub inspect: bool,
+    pub context_refs: &'a [ContextReference],
+    pub clarification_reply: Option<ClarificationReply>,
+}
+
+struct PersistAnalysisTurn<'a> {
+    conversation_id: &'a str,
+    question: &'a str,
+    context_refs: &'a [ContextReference],
+    clarification: Option<&'a ResolvedClarification>,
+    context_audit: &'a ContextAssemblyAudit,
+    catalog: &'a Catalog,
+    answer: &'a Answer,
+}
 
 #[derive(Default)]
 struct WorkspaceGateState {
@@ -1897,10 +1916,12 @@ impl EngineState {
             .ask_with_mode_and_context_and_clarification(
                 &original.conversation_id,
                 &original.question,
-                model,
-                inspect,
-                &original.context_refs,
-                clarification_reply,
+                AskOptions {
+                    model,
+                    inspect,
+                    context_refs: &original.context_refs,
+                    clarification_reply,
+                },
                 emit,
             )
             .await?;
@@ -1992,16 +2013,16 @@ impl EngineState {
     /// This is best-effort so a local disk problem never turns a valid answer
     /// into a failed question; the conversation archive remains an independent
     /// fallback projection.
-    fn persist_analysis_turn(
-        &self,
-        conversation_id: &str,
-        question: &str,
-        context_refs: &[ContextReference],
-        clarification: Option<&ResolvedClarification>,
-        context_audit: &ContextAssemblyAudit,
-        catalog: &Catalog,
-        answer: &Answer,
-    ) {
+    fn persist_analysis_turn(&self, turn: PersistAnalysisTurn<'_>) {
+        let PersistAnalysisTurn {
+            conversation_id,
+            question,
+            context_refs,
+            clarification,
+            context_audit,
+            catalog,
+            answer,
+        } = turn;
         let deleted = self
             .deleted_conversations
             .lock()
@@ -3484,10 +3505,12 @@ exactly, character for character, from the list below.";
         self.ask_with_mode_and_context_and_clarification(
             conversation_id,
             question,
-            model,
-            inspect,
-            context_refs,
-            None,
+            AskOptions {
+                model,
+                inspect,
+                context_refs,
+                clarification_reply: None,
+            },
             emit,
         )
         .await
@@ -3499,12 +3522,15 @@ exactly, character for character, from the list below.";
         &self,
         conversation_id: &str,
         question: &str,
-        model: Option<&str>,
-        inspect: bool,
-        context_refs: &[ContextReference],
-        reply: Option<ClarificationReply>,
+        options: AskOptions<'_>,
         emit: impl Fn(AskEvent) + Send + Sync,
     ) -> EngineResult<Answer> {
+        let AskOptions {
+            model,
+            inspect,
+            context_refs,
+            clarification_reply: reply,
+        } = options;
         let _workspace_read_permit = self.workspace_gate.read();
         let settings = self.settings();
         if !settings.has_credential {
@@ -3606,15 +3632,15 @@ exactly, character for character, from the list below.";
             }
         }
         let answer = answer?;
-        self.persist_analysis_turn(
+        self.persist_analysis_turn(PersistAnalysisTurn {
             conversation_id,
-            analysis_question,
+            question: analysis_question,
             context_refs,
-            clarification.as_ref(),
-            &context.audit,
-            &turn_catalog,
-            &answer,
-        );
+            clarification: clarification.as_ref(),
+            context_audit: &context.audit,
+            catalog: &turn_catalog,
+            answer: &answer,
+        });
 
         // Fold this turn into the folder's learned notes (a correction becomes
         // a vocabulary note; an ordinary question teaches nothing). Needs the
@@ -3765,6 +3791,7 @@ exactly, character for character, from the list below.";
             request,
             response: response.to_string(),
             source_revision_changed: parent.workspace_revision != catalog.revision,
+            parent_contract: parent.contract,
         })
     }
 

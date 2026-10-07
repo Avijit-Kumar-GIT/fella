@@ -78,9 +78,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use fella_lib::engine::evidence::{EvidenceItem, VerificationStatus};
-use fella_lib::engine::runtime::{InterpretationStatus, PlanStrategy};
+use fella_lib::engine::runtime::{ClarificationReply, InterpretationStatus, PlanStrategy};
 use fella_lib::engine::testkit::{self, Goldens, Messiness, TableGold, WorkspaceSpec};
-use fella_lib::engine::{memory, AskEvent, EngineState};
+use fella_lib::engine::{memory, AskEvent, AskOptions, EngineState};
 
 // --- what a correct answer looks like -------------------------------------
 
@@ -142,6 +142,9 @@ struct EvalCase {
     question: String,
     gold: Gold,
     graded_setup_turns: Vec<(String, Gold)>,
+    /// The final user prompt is the response to the last graded clarification
+    /// turn and must be sent through the typed, parent-linked continuation API.
+    resumes_clarification: bool,
     /// How many tool calls a clean run needs. Documented per case; the
     /// redundancy classifier is currently structural (it doesn't subtract
     /// this), kept for a future per-case "extra calls" metric.
@@ -170,6 +173,8 @@ struct RunResult {
     verification_status: Option<VerificationStatus>,
     interpretation_status: Option<InterpretationStatus>,
     plan_strategy: Option<PlanStrategy>,
+    clarification_requested: bool,
+    clarification_of: Option<String>,
     replay: Option<ReplayRef>,
     hard_fail: bool,
     prompt_tok: u32,
@@ -205,6 +210,16 @@ async fn run_case(
     question: &str,
     model: Option<&str>,
 ) -> RunResult {
+    run_case_with_clarification(engine, conv, question, model, None).await
+}
+
+async fn run_case_with_clarification(
+    engine: &EngineState,
+    conv: &str,
+    question: &str,
+    model: Option<&str>,
+    clarification_reply: Option<ClarificationReply>,
+) -> RunResult {
     #[derive(Clone)]
     struct Ev {
         at: Duration,
@@ -215,20 +230,30 @@ async fn run_case(
     let t0 = Instant::now();
     let scoped_conv = invocation_conversation_id(conv);
     let res = engine
-        .ask(&scoped_conv, question, model, move |e: AskEvent| {
-            let kind = match &e {
-                AskEvent::TurnState { .. } => "turn_state",
-                AskEvent::AssistantDelta { .. } => "delta",
-                AskEvent::ToolStart { .. } => "tool_start",
-                AskEvent::ToolEnd { .. } => "tool_end",
-                AskEvent::Notice { .. } => "notice",
-                AskEvent::AnswerDone { .. } => "answer_done",
-            };
-            sink.lock().unwrap().push(Ev {
-                at: t0.elapsed(),
-                kind,
-            });
-        })
+        .ask_with_mode_and_context_and_clarification(
+            &scoped_conv,
+            question,
+            AskOptions {
+                model,
+                inspect: false,
+                context_refs: &[],
+                clarification_reply,
+            },
+            move |e: AskEvent| {
+                let kind = match &e {
+                    AskEvent::TurnState { .. } => "turn_state",
+                    AskEvent::AssistantDelta { .. } => "delta",
+                    AskEvent::ToolStart { .. } => "tool_start",
+                    AskEvent::ToolEnd { .. } => "tool_end",
+                    AskEvent::Notice { .. } => "notice",
+                    AskEvent::AnswerDone { .. } => "answer_done",
+                };
+                sink.lock().unwrap().push(Ev {
+                    at: t0.elapsed(),
+                    kind,
+                });
+            },
+        )
         .await;
     let total = t0.elapsed();
     let evs = evs.lock().unwrap().clone();
@@ -268,6 +293,8 @@ async fn run_case(
                 .analysis_turn_load(&a.turn_id)
                 .ok()
                 .map(|turn| (turn.trace.model_calls.len(), turn.trace.steps.len()));
+            let clarification_requested = a.clarification.is_some();
+            let clarification_of = a.provenance.clarification_of.clone();
             RunResult {
                 hard_fail: matches!(a.status, VerificationStatus::Failed),
                 text: a.text,
@@ -276,6 +303,8 @@ async fn run_case(
                 verification_status: Some(a.status),
                 interpretation_status: a.contract.map(|contract| contract.interpretation),
                 plan_strategy: a.plan.map(|plan| plan.strategy),
+                clarification_requested,
+                clarification_of,
                 replay,
                 prompt_tok: p,
                 completion_tok: c,
@@ -294,6 +323,8 @@ async fn run_case(
             verification_status: None,
             interpretation_status: None,
             plan_strategy: None,
+            clarification_requested: false,
+            clarification_of: None,
             replay: None,
             hard_fail: false,
             prompt_tok: 0,
@@ -312,6 +343,29 @@ fn require_successful_run(result: RunResult, context: &str) -> Result<RunResult,
     match result.err.as_deref() {
         Some(error) => Err(format!("{context}: {}", eval_error_class(error))),
         None => Ok(result),
+    }
+}
+
+fn failed_episode_result(message: &str) -> RunResult {
+    RunResult {
+        text: String::new(),
+        evidence: Vec::new(),
+        verification: Vec::new(),
+        verification_status: None,
+        interpretation_status: None,
+        plan_strategy: None,
+        clarification_requested: false,
+        clarification_of: None,
+        replay: None,
+        hard_fail: false,
+        prompt_tok: 0,
+        completion_tok: 0,
+        total: Duration::ZERO,
+        first_token: None,
+        steps: 0,
+        model_calls: Some(0),
+        tool_calls: Some(0),
+        err: Some(message.to_string()),
     }
 }
 
@@ -573,6 +627,13 @@ fn grade(r: &RunResult, gold: &Gold) -> bool {
                 && contains_all(&low, &r.text, contains)
         }
     }
+}
+
+fn grade_setup_turn(r: &RunResult, gold: &Gold, require_typed_clarification: bool) -> bool {
+    r.err.is_none()
+        && !r.text.trim().is_empty()
+        && (!require_typed_clarification || r.clarification_requested)
+        && grade(r, gold)
 }
 
 /// A judge-readable description of what a correct answer must contain, for
@@ -930,6 +991,7 @@ fn battery(g: &Goldens, rent_total: f64) -> Vec<EvalCase> {
         question: question.trim().to_string(),
         gold,
         graded_setup_turns: Vec::new(),
+        resumes_clarification: false,
         min_tools: 1,
         reference,
     };
@@ -1339,6 +1401,8 @@ async fn run_bare(engine: &EngineState, dir: &Path, question: &str, files: &[Str
                 verification_status: None,
                 interpretation_status: None,
                 plan_strategy: None,
+                clarification_requested: false,
+                clarification_of: None,
                 replay: None,
                 hard_fail: false,
                 prompt_tok: 0,
@@ -1375,6 +1439,8 @@ number or short phrase, no explanation. If the files can't answer it, say so pla
                 verification_status: None,
                 interpretation_status: None,
                 plan_strategy: None,
+                clarification_requested: false,
+                clarification_of: None,
                 replay: None,
                 hard_fail: false,
                 prompt_tok: p,
@@ -1394,6 +1460,8 @@ number or short phrase, no explanation. If the files can't answer it, say so pla
             verification_status: None,
             interpretation_status: None,
             plan_strategy: None,
+            clarification_requested: false,
+            clarification_of: None,
             replay: None,
             hard_fail: false,
             prompt_tok: 0,
@@ -1459,6 +1527,8 @@ async fn run_openai_ci(h: &CiHarness, dir: &Path, question: &str, files: &[Strin
         verification_status: None,
         interpretation_status: None,
         plan_strategy: None,
+        clarification_requested: false,
+        clarification_of: None,
         replay: None,
         hard_fail: false,
         prompt_tok: 0,
@@ -1520,6 +1590,8 @@ async fn run_openai_ci(h: &CiHarness, dir: &Path, question: &str, files: &[Strin
         verification_status: None,
         interpretation_status: None,
         plan_strategy: None,
+        clarification_requested: false,
+        clarification_of: None,
         replay: None,
         hard_fail: false,
         prompt_tok: v["usage"]["input_tokens"].as_u64().unwrap_or(0) as u32,
@@ -1655,8 +1727,9 @@ async fn score_case(
                 for (index, (turn, gold)) in case.graded_setup_turns.iter().enumerate() {
                     let mut prior = run_case(turn_engine, &c, turn, None).await;
                     mark_episode_turn(&mut prior, "graded_setup");
-                    let turn_ok =
-                        prior.err.is_none() && !prior.text.trim().is_empty() && grade(&prior, gold);
+                    let is_clarification_parent =
+                        case.resumes_clarification && index + 1 == case.graded_setup_turns.len();
+                    let turn_ok = grade_setup_turn(&prior, gold, is_clarification_parent);
                     trajectory_ready &= turn_ok;
                     if turn_ok {
                         graded_setup_oks[index] += 1;
@@ -1675,16 +1748,67 @@ async fn score_case(
                     }
                     graded_setup_results.push(prior);
                 }
-                run_case(turn_engine, &c, &case.question, None).await
+                let clarification_parent = case
+                    .resumes_clarification
+                    .then(|| {
+                        graded_setup_results
+                            .last()
+                            .and_then(|result: &RunResult| result.replay.as_ref())
+                            .map(|replay| replay.turn_id.clone())
+                    })
+                    .flatten();
+                let parent_requested_clarification = graded_setup_results
+                    .last()
+                    .is_some_and(|result| result.clarification_requested);
+                if case.resumes_clarification
+                    && (clarification_parent.is_none() || !parent_requested_clarification)
+                {
+                    trajectory_ready = false;
+                }
+                let missing_typed_parent = case.resumes_clarification
+                    && (clarification_parent.is_none() || !parent_requested_clarification);
+                let mut final_answer = if missing_typed_parent {
+                    failed_episode_result(
+                        "expected a typed clarification from the setup turn; linked continuation was not sent",
+                    )
+                } else {
+                    match clarification_parent.as_ref() {
+                        Some(turn_id) => {
+                            run_case_with_clarification(
+                                turn_engine,
+                                &c,
+                                &case.question,
+                                None,
+                                Some(ClarificationReply {
+                                    turn_id: turn_id.clone(),
+                                    response: case.question.clone(),
+                                }),
+                            )
+                            .await
+                        }
+                        None => run_case(turn_engine, &c, &case.question, None).await,
+                    }
+                };
+                if case.resumes_clarification
+                    && final_answer.clarification_of.as_deref() != clarification_parent.as_deref()
+                {
+                    trajectory_ready = false;
+                    if final_answer.err.is_none() {
+                        final_answer.err = Some(
+                            "clarification continuation did not retain its parent-turn link".into(),
+                        );
+                    }
+                }
+                final_answer
             }
             Runner::Bare { dir, files } => {
-                if !case.graded_setup_turns.is_empty() {
+                if !case.graded_setup_turns.is_empty() || case.resumes_clarification {
                     trajectory_ready = false;
                 }
                 run_bare(engine, dir, &case.question, files).await
             }
             Runner::OpenAiCi { h, dir, files } => {
-                if !case.graded_setup_turns.is_empty() {
+                if !case.graded_setup_turns.is_empty() || case.resumes_clarification {
                     trajectory_ready = false;
                 }
                 run_openai_ci(h, dir, &case.question, files).await
@@ -1856,7 +1980,12 @@ async fn score_case(
 /// bodies, which may contain account details or credential fragments.
 fn eval_error_class(error: &str) -> &'static str {
     let error = error.to_ascii_lowercase();
-    if error.contains("couldn't reach") || error.contains("connection") || error.contains("dns") {
+    if error.contains("expected a typed clarification") {
+        "model did not request the required typed clarification"
+    } else if error.contains("couldn't reach")
+        || error.contains("connection")
+        || error.contains("dns")
+    {
         "transport/connectivity failure (provider details withheld)"
     } else if error.contains("didn't respond within") || error.contains("timed out") {
         "provider request timed out"
@@ -2247,6 +2376,10 @@ struct BenchSpec {
     /// question. Used for multi-turn clarification/resume episodes.
     #[serde(default)]
     graded_setup_turns: Vec<BenchTurnSpec>,
+    /// Send the final question as a structured response to the last graded
+    /// setup turn, preserving its canonical clarification parent ID.
+    #[serde(default)]
+    resumes_clarification: bool,
 }
 
 #[derive(serde::Deserialize)]
@@ -2363,15 +2496,15 @@ impl BenchGold {
 
 /// Parse `<dir>/cases.jsonl`; blank lines and `#` comments are skipped.
 /// Returns staged workspace metadata, interaction turns, and each case.
-fn load_bench_dir(
-    dir: &Path,
-) -> Vec<(
+type LoadedBenchCase = (
     BenchWorkspaceScope,
     Vec<String>,
     Vec<String>,
     Vec<String>,
     EvalCase,
-)> {
+);
+
+fn load_bench_dir(dir: &Path) -> Vec<LoadedBenchCase> {
     let path = dir.join("cases.jsonl");
     let txt = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("bench: can't read {}: {e}", path.display()));
@@ -2405,7 +2538,7 @@ fn load_bench_dir(
             .gold
             .into_gold()
             .unwrap_or_else(|e| panic!("bench: {}:{}: {e}", path.display(), n + 1));
-        let graded_setup_turns = spec
+        let graded_setup_turns: Vec<(String, Gold)> = spec
             .graded_setup_turns
             .into_iter()
             .map(|turn| {
@@ -2419,6 +2552,12 @@ fn load_bench_dir(
                 (turn.question, gold)
             })
             .collect();
+        assert!(
+            !spec.resumes_clarification || !graded_setup_turns.is_empty(),
+            "bench: {}:{}: resumes_clarification requires a graded setup turn",
+            path.display(),
+            n + 1
+        );
         out.push((
             spec.workspace_scope,
             spec.files,
@@ -2430,6 +2569,7 @@ fn load_bench_dir(
                 question: spec.question,
                 gold,
                 graded_setup_turns,
+                resumes_clarification: spec.resumes_clarification,
                 min_tools: 1,
                 reference: spec.reference.unwrap_or_default(),
             },
@@ -2745,6 +2885,7 @@ async fn cmd_session_memory(
         question: q2.clone(),
         gold: Gold::Figures(vec![a]),
         graded_setup_turns: Vec::new(),
+        resumes_clarification: false,
         min_tools: 1,
         reference: format!("You spent {a:.2} on {c}."),
     };
@@ -2970,7 +3111,7 @@ async fn cmd_memory(
     println!("_session 1, turn 1_: {}", first_line(&p1.text));
     println!("_session 1, turn 2 (correction)_: {}", first_line(&p2.text));
     println!("\n_learned `memory.md` after session 1:_\n```");
-    print!("{}", std::fs::read_to_string(&mem).unwrap_or_default());
+    print!("{}", std::fs::read_to_string(mem).unwrap_or_default());
     println!("```\n");
 
     let q = "what's my total rent spending in spend.csv?";
@@ -2981,6 +3122,7 @@ async fn cmd_memory(
         question: q.to_string(),
         gold: gold.clone(),
         graded_setup_turns: Vec::new(),
+        resumes_clarification: false,
         min_tools: 1,
         reference: format!("You spent {rent_all:.2} on rent (rent + housing + mortgage)."),
     };
@@ -3812,6 +3954,8 @@ mod tests {
             verification_status: None,
             interpretation_status: None,
             plan_strategy: None,
+            clarification_requested: false,
+            clarification_of: None,
             replay: None,
             hard_fail: false,
             prompt_tok: 0,
@@ -3845,6 +3989,7 @@ mod tests {
             python_input_trace: None,
             ms: 1,
             error: err.map(str::to_string),
+            verifier_disposition: None,
         }
     }
     fn ev_sql(summary: &str, values: &[f64]) -> EvidenceItem {
@@ -4577,6 +4722,7 @@ mod tests {
             question: "q".into(),
             gold: Gold::Figures(vec![450.0]),
             graded_setup_turns: Vec::new(),
+            resumes_clarification: false,
             min_tools: 1,
             reference: "Your total spending was 450.".into(),
         };
@@ -4789,6 +4935,7 @@ mod tests {
         let (_, files, _, setup_turns, case) = &cases[0];
         assert_eq!(files.len(), 2);
         assert!(setup_turns.is_empty());
+        assert!(case.resumes_clarification);
         assert_eq!(
             case.graded_setup_turns.len(),
             1,
@@ -4804,6 +4951,35 @@ mod tests {
             "Count rent and utilities, but leave out repairs and maintenance."
         );
         assert!(matches!(case.gold, Gold::AllOf(_)));
+    }
+
+    #[test]
+    fn clarification_episode_requires_a_typed_request_not_matching_prose_alone() {
+        let result = |clarification_requested| RunResult {
+            text: "Housing includes utilities and maintenance.".into(),
+            evidence: Vec::new(),
+            verification: Vec::new(),
+            verification_status: None,
+            interpretation_status: None,
+            plan_strategy: None,
+            clarification_requested,
+            clarification_of: None,
+            replay: None,
+            hard_fail: false,
+            prompt_tok: 0,
+            completion_tok: 0,
+            total: Duration::ZERO,
+            first_token: None,
+            steps: 0,
+            model_calls: Some(0),
+            tool_calls: Some(0),
+            err: None,
+        };
+        let gold = Gold::Contains(vec!["housing", "utilities", "maintenance"]);
+
+        assert!(grade_setup_turn(&result(true), &gold, true));
+        assert!(!grade_setup_turn(&result(false), &gold, true));
+        assert!(grade_setup_turn(&result(false), &gold, false));
     }
 
     #[test]

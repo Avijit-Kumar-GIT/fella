@@ -247,7 +247,10 @@ async fn restored_conversation_reuses_same_revision_execution_evidence() {
         .iter()
         .any(|source| source.source.ends_with("ledger.csv")));
     let stored = engine.analysis_turn_load(&follow_up.turn_id).unwrap();
-    assert_eq!(stored.prior_turn_refs, [first.turn_id.clone()]);
+    assert_eq!(
+        stored.prior_turn_refs.as_slice(),
+        std::slice::from_ref(&first.turn_id)
+    );
     assert_eq!(follow_up.trace.model.as_deref(), Some("test"));
     assert_eq!(follow_up.trace.model_calls.len(), 2);
     assert_eq!(

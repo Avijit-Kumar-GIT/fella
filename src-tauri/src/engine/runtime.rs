@@ -101,6 +101,10 @@ pub struct ResolvedClarification {
     pub request: ClarificationRequest,
     pub response: String,
     pub source_revision_changed: bool,
+    /// The parent's structured working interpretation. It helps the resumed
+    /// model preserve unaffected dimensions (such as grouping and time scope),
+    /// but is not execution evidence and must not be trusted as a result.
+    pub parent_contract: Option<AnalysisContract>,
 }
 
 /// A measure in the semantic question representation.  These are semantic

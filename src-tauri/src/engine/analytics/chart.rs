@@ -359,7 +359,7 @@ fn selected_numeric_columns(
             .iter()
             .map(|field| column_index(table, Some(field), 0))
             .collect::<Result<Vec<_>, _>>()?;
-        if indices.iter().any(|index| *index == x_index) {
+        if indices.contains(&x_index) {
             return Err("the x/category field cannot also be a numeric series".into());
         }
         return Ok(indices);
@@ -424,14 +424,9 @@ fn build_series_chart(
         .collect::<Result<Vec<_>, _>>()?;
     let kind = resolve_kind(request.kind, &table.columns[x_index], &labels);
     let indices = selected_numeric_columns(table, x_index, &request)?;
-    let max_series = if kind == ChartKind::StackedArea {
-        MAX_SERIES
-    } else {
-        MAX_SERIES
-    };
-    if indices.len() > max_series {
+    if indices.len() > MAX_SERIES {
         return Err(format!(
-            "chart has {} series, above the readable limit of {max_series}",
+            "chart has {} series, above the readable limit of {MAX_SERIES}",
             indices.len()
         ));
     }
@@ -1422,7 +1417,7 @@ fn temporal_sort_key(label: &str) -> Option<(i32, u32, u32)> {
             .parse::<u32>()
             .ok()
             .filter(|month| (1..=12).contains(month));
-        numeric.or_else(|| match token {
+        numeric.or(match token {
             "jan" | "january" => Some(1),
             "feb" | "february" => Some(2),
             "mar" | "march" => Some(3),

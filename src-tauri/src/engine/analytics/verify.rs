@@ -201,18 +201,9 @@ fn targeted_warning(
 fn warn_with_effect(
     label: impl Into<String>,
     detail: Option<String>,
-    code: VerificationFindingCode,
-    effect: VerificationEffect,
-    target: VerificationTarget,
-    target_id: Option<String>,
-    evidence_ids: Vec<String>,
-    guidance: Option<String>,
+    finding: VerificationFinding,
 ) -> VerificationCheck {
-    targeted_warning(
-        label,
-        detail,
-        scoped_finding(code, effect, target, target_id, evidence_ids, guidance),
-    )
+    targeted_warning(label, detail, finding)
 }
 
 fn successful_replay_check(label: impl Into<String>) -> VerificationCheck {
@@ -242,12 +233,14 @@ fn repair_claim_warning(
     warn_with_effect(
         label,
         detail,
-        code,
-        VerificationEffect::Repair,
-        VerificationTarget::Claim,
-        Some(claim.into()),
-        evidence_ids,
-        Some(guidance.into()),
+        scoped_finding(
+            code,
+            VerificationEffect::Repair,
+            VerificationTarget::Claim,
+            Some(claim.into()),
+            evidence_ids,
+            Some(guidance.into()),
+        ),
     )
 }
 
@@ -261,12 +254,14 @@ fn exclude_evidence_warning(
     warn_with_effect(
         label,
         detail,
-        code,
-        VerificationEffect::ExcludeEvidence,
-        VerificationTarget::Evidence,
-        evidence_ids.first().cloned(),
-        evidence_ids,
-        Some(guidance.into()),
+        scoped_finding(
+            code,
+            VerificationEffect::ExcludeEvidence,
+            VerificationTarget::Evidence,
+            evidence_ids.first().cloned(),
+            evidence_ids,
+            Some(guidance.into()),
+        ),
     )
 }
 
@@ -281,12 +276,14 @@ fn withhold_artifact_warning(
     warn_with_effect(
         label,
         detail,
-        code,
-        VerificationEffect::WithholdArtifact,
-        VerificationTarget::Artifact,
-        Some(artifact.into()),
-        evidence_ids,
-        Some(guidance.into()),
+        scoped_finding(
+            code,
+            VerificationEffect::WithholdArtifact,
+            VerificationTarget::Artifact,
+            Some(artifact.into()),
+            evidence_ids,
+            Some(guidance.into()),
+        ),
     )
 }
 
@@ -1863,14 +1860,16 @@ fn check_derived_population(
                 derived.concept
             ),
             Some(incompatible.join("; ")),
-            VerificationFindingCode::SemanticCaveat,
-            VerificationEffect::Informational,
-            VerificationTarget::Claim,
-            Some(derived.concept.clone()),
-            related_evidence,
-            Some(
-                "this is a caution, not a rejection; cross-population ratios can be intentional"
-                    .into(),
+            scoped_finding(
+                VerificationFindingCode::SemanticCaveat,
+                VerificationEffect::Informational,
+                VerificationTarget::Claim,
+                Some(derived.concept.clone()),
+                related_evidence,
+                Some(
+                    "this is a caution, not a rejection; cross-population ratios can be intentional"
+                        .into(),
+                ),
             ),
         ));
     }
@@ -2096,9 +2095,8 @@ fn check_literal_usage(
                 |field| numeric_filter_uses_value(query, field, value),
             )
         } else {
-            field.map_or(true, |field| {
-                contains_field_reference(query, &field.to_ascii_lowercase())
-            }) && query.contains(&literal)
+            field.is_none_or(|field| contains_field_reference(query, &field.to_ascii_lowercase()))
+                && query.contains(&literal)
         }
     }) {
         checks.push(ok(format!(
@@ -4965,7 +4963,7 @@ mod tests {
         let mut checks = Vec::new();
         check_forecast_evaluation(
             "Forecast next month from the workspace series",
-            &[point_only.clone()],
+            std::slice::from_ref(&point_only),
             &mut checks,
         );
         assert_eq!(checks.len(), 1);
@@ -5281,12 +5279,14 @@ mod tests {
         let stale = vec![warn_with_effect(
             "workspace changed while this answer was running",
             Some("revision changed".into()),
-            VerificationFindingCode::WorkspaceStale,
-            VerificationEffect::BlockAnswer,
-            VerificationTarget::Answer,
-            Some("turn-1".into()),
-            vec!["query-1".into()],
-            Some("rerun against the current revision".into()),
+            scoped_finding(
+                VerificationFindingCode::WorkspaceStale,
+                VerificationEffect::BlockAnswer,
+                VerificationTarget::Answer,
+                Some("turn-1".into()),
+                vec!["query-1".into()],
+                Some("rerun against the current revision".into()),
+            ),
         )];
         assert!(hard_fail(&stale).is_some());
 
@@ -5310,7 +5310,7 @@ mod tests {
 
     #[test]
     fn unbacked_figures_request_a_tool_backed_repair_when_only_groups_exist() {
-        let evidence = vec![run_sql_ev(
+        let evidence = [run_sql_ev(
             "SELECT area, SUM(amount) AS total FROM transactions GROUP BY area",
             &["area", "total"],
             vec![
@@ -5335,7 +5335,7 @@ mod tests {
 
     #[test]
     fn case_sensitive_label_warning_requests_a_tool_backed_repair() {
-        let evidence = vec![run_sql_ev(
+        let evidence = [run_sql_ev(
             "SELECT SUM(amount) FROM spending WHERE category IN ('Rent', 'housing')",
             &["sum"],
             vec![vec![Json::from(100)]],
@@ -5355,7 +5355,7 @@ mod tests {
 
     #[test]
     fn unbacked_claims_request_repair_without_changing_the_requested_shape() {
-        let evidence = vec![run_sql_ev(
+        let evidence = [run_sql_ev(
             "SELECT area, SUM(amount) AS total FROM transactions GROUP BY area",
             &["area", "total"],
             vec![
@@ -5376,7 +5376,7 @@ mod tests {
 
     #[test]
     fn an_unbacked_figure_is_rechecked_even_when_a_scalar_aggregate_exists() {
-        let evidence = vec![run_sql_ev(
+        let evidence = [run_sql_ev(
             "SELECT SUM(amount) AS total FROM transactions",
             &["total"],
             vec![vec![Json::from(300)]],

@@ -13,7 +13,9 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::engine::{ClarificationReply, ContextReference, EngineError, EngineResult, EngineState};
+use crate::engine::{
+    AskOptions, ClarificationReply, ContextReference, EngineError, EngineResult, EngineState,
+};
 
 type Output = Arc<Mutex<BufWriter<io::Stdout>>>;
 
@@ -287,10 +289,12 @@ async fn dispatch(
                 .ask_with_mode_and_context_and_clarification(
                     &conversation_id,
                     &question,
-                    model.as_deref(),
-                    inspect,
-                    &context_refs,
-                    clarification_reply,
+                    AskOptions {
+                        model: model.as_deref(),
+                        inspect,
+                        context_refs: &context_refs,
+                        clarification_reply,
+                    },
                     move |item| event(&events, id, item),
                 )
                 .await;

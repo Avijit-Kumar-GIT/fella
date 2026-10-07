@@ -304,7 +304,7 @@ fn infer_columns(data: &[&[Data]], width: usize) -> Vec<ColInfer> {
                         if let Some(iso) = parse_date_value_with_order(&raw, date_order) {
                             date_used = true;
                             date_count += 1;
-                            date_example.get_or_insert_with(|| (raw, iso));
+                            date_example.get_or_insert((raw, iso));
                         } else {
                             date_ok = false;
                         }

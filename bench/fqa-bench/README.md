@@ -60,10 +60,13 @@ that copy. Set the provider/model explicitly; each suite is a separate run:
       --models provider/model --iters 3 --json /tmp/fqa-housing.json
 
 The clarification episode is Fella-only because baseline adapters do not
-replay and grade the intermediate clarification turn. Preserve all task
-failures in the report. Never edit a gold after seeing candidate output; a
-corrected task needs an approved rationale, a new benchmark version, and a
-comparable rerun.
+replay and grade the intermediate clarification turn. The runner requires an
+actual typed clarification on the graded parent turn; matching clarification-
+like prose alone does not pass. Only then does it submit the user's resolution
+through the parent-linked continuation API and check that the resulting turn
+retains that lineage. Preserve all task failures in the report. Never edit a
+gold after seeing candidate output; a corrected task needs an approved
+rationale, a new benchmark version, and a comparable rerun.
 
 The UCI Bike Sharing suite is an independently sourced, clean public-data anchor with 13 episodes, including descriptive comparisons, a chart, a held-out mean-baseline forecast, a what-if scenario, follow-up context, and specific evidence-limit cases. It is one small domain anchor, not a representative v0.1 benchmark by itself. The generated personal-data batteries and older component suites remain useful development diagnostics; they do not become authoritative simply by being numerous. Their earlier run artifacts are preserved as historical records and are not silently rescored under v0.1.
 

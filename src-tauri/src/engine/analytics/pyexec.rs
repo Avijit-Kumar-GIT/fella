@@ -527,31 +527,6 @@ fn references_forecast_helper(code: &str) -> bool {
         })
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{references_forecast_helper, visible_stdout, TABLE_MARKER};
-
-    #[test]
-    fn forecast_helpers_are_selected_by_python_api_use() {
-        assert!(!references_forecast_helper("print(sum([1, 2, 3]))"));
-        assert!(references_forecast_helper(
-            "pred = forecast_series(values, 3)"
-        ));
-        assert!(references_forecast_helper(
-            "metrics = rolling_origin_backtest(values, 'mean')"
-        ));
-        assert!(references_forecast_helper(
-            "bands = forecast_error_bands(values, 'naive', 2)"
-        ));
-    }
-
-    #[test]
-    fn internal_published_table_record_is_not_user_facing_stdout() {
-        let output = format!("printed summary\n{TABLE_MARKER}{{\"columns\":[],\"rows\":[]}}\n");
-        assert_eq!(visible_stdout(&output), "printed summary");
-    }
-}
-
 fn checked_range(ptr: i32, len: i32, cap: usize) -> Option<(usize, usize)> {
     if ptr < 0 || len < 0 {
         return None;
@@ -918,3 +893,28 @@ def forecast_error_bands(values, method, horizon, level=0.8, seasonal_period=Non
         "interpretation": "empirical rolling-origin error bands, not guaranteed prediction intervals",
     }
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::{references_forecast_helper, visible_stdout, TABLE_MARKER};
+
+    #[test]
+    fn forecast_helpers_are_selected_by_python_api_use() {
+        assert!(!references_forecast_helper("print(sum([1, 2, 3]))"));
+        assert!(references_forecast_helper(
+            "pred = forecast_series(values, 3)"
+        ));
+        assert!(references_forecast_helper(
+            "metrics = rolling_origin_backtest(values, 'mean')"
+        ));
+        assert!(references_forecast_helper(
+            "bands = forecast_error_bands(values, 'naive', 2)"
+        ));
+    }
+
+    #[test]
+    fn internal_published_table_record_is_not_user_facing_stdout() {
+        let output = format!("printed summary\n{TABLE_MARKER}{{\"columns\":[],\"rows\":[]}}\n");
+        assert_eq!(visible_stdout(&output), "printed summary");
+    }
+}
