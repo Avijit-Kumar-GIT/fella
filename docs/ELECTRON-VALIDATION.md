@@ -19,6 +19,12 @@ These checks do not launch a packaged desktop app. The Electron bridge test
 uses a fake child process; it does not establish provider quality, native
 dialog behavior, OS-specific packaging, or visual correctness.
 
+After packaging an unpacked build, `pnpm run test:electron:packaged --
+<path-to-Fella-executable>` launches that exact executable in a disposable
+profile, checks that Electron reports the app as packaged, waits for the Ask
+composer, and pings the bundled Rust sidecar. It requires a desktop display (or
+Xvfb on Linux), uses no provider credentials, and removes its temporary data.
+
 The credentialed Electron clarification flow uses Playwright and the real
 OpenAI provider. After `pnpm electron:build`, run
 `pnpm test:e2e:clarification:live`. It reads the existing `auth.json` without
@@ -321,3 +327,48 @@ major has passed packaged GUI smoke tests. The repository's pre-existing
 The release gate therefore remains **blocked**. The Rust suite is not green,
 G5 fails on the real model, G3/G7 are partial, and no Electron 44 packaged GUI
 smoke has passed on a native OS.
+
+## v0.3.0 packaging follow-up (2026-10-07)
+
+- Electron's official release feed shows 44.6.0 as the latest 44.x patch, but
+  this candidate remains pinned to 44.5.1 because 44.6.0 had not cleared the
+  configured package minimum-release-age window. Electron 44 is still a
+  supported major; the official schedule lists its end of life as 2027-03-02.
+- The first real Linux installer build exposed release-config defects that the
+  artifact unit tests had not covered: electron-builder emitted architecture
+  names inconsistent with the updater, and the DEB had no maintainer metadata.
+  The Linux config now pins the established updater artifact names, declares
+  the package maintainer, and aligns the desktop name. The rerun produced
+  `Fella_0.3.0_x64.AppImage` and `Fella_0.3.0_x64.deb`; the artifact checker
+  passed. `dpkg-deb` confirmed package `fella`, version `0.3.0`, architecture
+  `amd64`, and the bundled `fella-engine-x64` sidecar.
+- A Playwright smoke launched the exact unpacked Linux package, confirmed
+  `app.isPackaged`, loaded the Ask composer, and received `pong` from the
+  packaged Rust sidecar. The smoke uses a fresh temporary profile and no model
+  credential. CI now runs this check under Xvfb on Linux and on the packaged
+  Windows executable; the Windows job has not run for this branch yet.
+- The credentialed Playwright clarification test completed one full real
+  OpenAI gpt-5.6-luna run: it mounted the fixture, rendered a typed
+  clarification, submitted the user's explicit scope through the Continue
+  button, showed the submitted user turn, and returned $4,647 with parent-turn
+  continuity in Analysis Details. Another live run returned all three scope
+  totals as prose without a typed clarification. Preserve that as an observed
+  failure; one pass does not establish stable model behavior. No fixture or
+  expected answer was modified.
+- On this exact candidate state, Svelte diagnostics, Electron bridge/update/
+  chart/release-artifact tests, FQA fixture checks, Rust formatting, the
+  28-test FQA evaluator, and Clippy with `-D warnings` pass. `cargo test
+  --locked` reports 325 library tests passing, then 21 `agent_loop` tests
+  passing, two failing, and one ignored. The same two assertions still expect
+  `Verified` for a “compare sales over time” request whose fixture has only an
+  `amount` column and whose mock SQL returns one scalar sum. Their expectations
+  remain untouched; whether those task setups justify `Verified` requires
+  maintainer adjudication before the release quality gate can pass.
+- No macOS GUI test was run, per maintainer direction. The release workflow
+  continues to build the universal macOS artifacts; this is not a GUI test.
+
+The candidate remains **not ready for release** until the default Rust suite
+is green or the owner explicitly adjudicates those two test contracts, G5's
+live behavior is acceptably reliable, the remaining G3/G7 checks are complete
+or explicitly accepted, Windows packaged validation passes, and the release
+commit is on `main`.

@@ -2,6 +2,7 @@
 	"name": "fella",
 	"private": true,
 	"version": "0.3.0",
+	"desktopName": "Fella",
 	"main": "electron/main.mjs",
 	"description": "Ask questions about your own files",
 	"author": "Avijit Kumar and contributors",
@@ -20,6 +21,7 @@
 		"preview": "vite preview",
 		"test:electron-bridge": "node --test scripts/test-electron-bridge.mjs",
 		"test:electron-update": "node --test scripts/test-electron-update.mjs",
+		"test:electron:packaged": "node scripts/test-packaged-electron.mjs",
 		"test:e2e:clarification:live": "playwright test --config=playwright.live.config.mjs",
 		"test:chart-renderer": "node scripts/test-chart-renderer.mjs",
 		"test:release-artifacts": "node --test scripts/test-release-artifacts.mjs",
@@ -61,6 +63,9 @@
 		},
 		"linux": {
 			"icon": "src-tauri/icons/icon.png",
+			"artifactName": "Fella_${version}_x64.${ext}",
+			"maintainer": "Avijit Kumar and contributors",
+			"syncDesktopName": true,
 			"target": ["AppImage", "deb"],
 			"category": "Utility"
 		}

@@ -18,15 +18,17 @@ accepted by the maintainer:
 
 - [ ] `pnpm check`, `pnpm build`, bridge/update/chart tests, Rust formatting,
   Clippy, and the full default-feature Rust test suite pass.
-- [ ] G5 passes against the same clarification task and expected behavior.
-  The current OpenAI run is a failure: the model assumed a category scope and
-  did not emit a typed clarification. Do not weaken the case to match the
-  current output; see [`ELECTRON-VALIDATION.md`](ELECTRON-VALIDATION.md).
+- [ ] G5 behaves reliably against the same clarification task and expected
+  behavior. A recent real-model run passed the typed clarification/resume
+  flow, but another returned alternative totals without asking. Do not treat a
+  single successful stochastic run as stable coverage or weaken the case to
+  match output; see [`ELECTRON-VALIDATION.md`](ELECTRON-VALIDATION.md).
 - [ ] Finish the partial G3/G7 checks, including retained evidence after Stop,
   a fully framed chart in both themes, and forecast details.
-- [ ] Build and launch the packaged app on Windows, macOS, and Linux, or record
-  an explicit platform limitation before publication. CI compilation alone is
-  not a native GUI smoke test.
+- [ ] Build and launch the packaged app on Windows and Linux. A macOS GUI test
+  is not required by the maintainer; CI must still produce the universal
+  macOS installers for the release. CI compilation alone is not a GUI smoke
+  test on Windows or Linux.
 - [ ] Review the live-model, performance, security, and installer-size notes
   in the validation record. Keep grader concerns and incomplete coverage
   visible in the release notes.
@@ -36,11 +38,14 @@ research is not shipped. It becomes a required gate before backlog #2 enables
 web access.
 
 **Current status (2026-10-07): not production-ready.** Frontend diagnostics,
-build, bridge/update/chart tests, Rust formatting and Clippy, Electron 44
-packaging, and the packaged sidecar ping pass. The default Rust test command
-still has two `agent_loop` failures, live G5 clarification failed, G3/G7 remain
-partial, and Electron 44's packaged GUI has not been smoke-tested on a native
-OS. The exact run and limitations are recorded in
+build, bridge/update/chart tests, Rust formatting and Clippy, Linux AppImage
+and DEB artifact validation, and a packaged Linux UI/sidecar smoke pass. The
+default Rust test command still has two `agent_loop` failures. Live G5 passed
+once and failed once across recent real-model runs, so its reliability is not
+established; G3/G7 remain partial. Windows packaged-app validation and the
+current branch's merge to `main` are still outstanding. No macOS GUI test is
+required; the tagged workflow will still build macOS installers. The exact run
+and limitations are recorded in
 [`ELECTRON-VALIDATION.md`](ELECTRON-VALIDATION.md). No release tag or draft has
 been created.
 
