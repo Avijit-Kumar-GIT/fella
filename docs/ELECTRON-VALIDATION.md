@@ -41,6 +41,7 @@ The cases are defined before execution:
 | G3 | Local OpenAI-wire SSE mock; mount a three-row CSV; submit a direct total; stop after the final model response starts streaming. | The stop state appears; completed SQL evidence remains inspectable; the mock’s later sentinel text never appears; the request count remains exactly two. This checks cancellation/evidence plumbing, not numerical correctness. |
 | G5 | Existing `clarification-housing` fixture; ask the ambiguous Q1 2024 housing-spend question; resolve it in the composer. | A typed clarification replaces the normal composer input with suggested choices and an “Other” response field; the reply appears as a submitted user turn; the same conversation resumes; Analysis Details exposes clarification lineage and source evidence. The response amount and interpretation are recorded but not graded here. |
 | G7 chart | Existing UCI Bike Sharing fixture; ask the monthly chart question using the real model. | Exactly one chart renders and the assistant turn settles. Its title, accessible visual, labels, and non-empty exact-values disclosure are visible. The card and selected visualization remain contained; if SVG is selected, its axis text remains in the viewBox. Capture light and dark appearances. Chart values and chart-family suitability are not graded here. |
+| Chart-family journey | `pnpm test:e2e:charts:journey`; one Electron process, one mounted synthetic workspace, and one conversation. A local OpenAI-wire mock requests bar, line, pie, donut, scatter, histogram, box plot, area, stacked area, heatmap, and forecast charts in sequence. It uses no credentials or external provider. | Every turn settles with exactly one chart; each family has its expected visible marks; exact values are populated; Analysis Details exposes the source and exact SQL; card/plot geometry is contained and SVG text stays within its viewBox; no renderer exception. Light/dark screenshots and a JSONL audit are saved under `test-results/e2e-chart-families/`. This checks app/tool/renderer integration, not model-selected chart suitability or numerical correctness. The positive sweep uses varied inputs; near-flat-series rejection is separately covered by engine tests and is not judged by this journey. `auto` is a selector, not a separate renderer; its live-model selection remains covered by G7 and the Rust chart tests. |
 | G7 forecast | Existing UCI Bike Sharing fixture; ask the July forecast question using the real model. | The assistant turn settles; Analysis Details exposes a forecast-method step, its source line, a method disclosure, and an inspectable input table. Forecast value, training-window correctness, and method suitability are not graded here. |
 | G8 | Mount a tiny local CSV workspace and set the renderer to 1288×832 and 1024×640 CSS-pixel viewports. | The dock, composer, field, source/context row, question field, and bottom controls have non-zero dimensions and remain wholly inside the renderer viewport; the document itself does not extend below the viewport. This checks the renderer layout, not platform-specific window decorations. |
 
@@ -86,6 +87,28 @@ for visible outbound requests, citation provenance, no local-file disclosure,
 and hostile page instructions before enabling it by default.
 
 ## Current run record
+
+Electron chart-family journey on 2026-10-07 (Linux/WSL; Electron app, Rust
+sidecar, and Svelte UI):
+
+- `pnpm check`, `pnpm run test:chart-renderer`, `pnpm electron:build`, and
+  `cargo test --locked --manifest-path src-tauri/Cargo.toml --test chart_tool`:
+  **pass**. The live Electron journey passed **11/11** chart families in one
+  conversation, with exactly 22 local OpenAI-wire mock requests (one chart-tool
+  call and one final response per prompt), populated exact-value tables,
+  inspectable source/SQL, contained visuals, and no renderer exceptions.
+- Light and dark card screenshots plus per-turn checks are recorded in
+  `test-results/e2e-chart-families/2026-10-07T20-28-50-965Z/`. The mock fixes
+  the requested family, so this validates the app/tool/render path—not model
+  chart selection or numerical correctness.
+- During test development, the first synthetic category totals were nearly
+  flat and correctly triggered the existing chart-usefulness rejection; the
+  positive fixture was revised to provide meaningful variation without
+  changing acceptance criteria. A forecast-source assertion was also corrected
+  to match its declared `projection.csv` fixture. Neither change altered an
+  answer gold or runtime rule. Visual review found the heatmap corner label was
+  clipped; the label width/tooltip and a no-clipping assertion were added, then
+  the full journey passed again.
 
 Automated checks on 2026-10-06 (Linux/WSL; application source at
 `70e0e24`, with current test/documentation changes):

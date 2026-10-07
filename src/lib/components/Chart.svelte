@@ -508,7 +508,7 @@
 	{:else if spec.kind === 'heatmap' && heatmapPayload}
 		<div class="heatmap-scroll" role="img" aria-label={chartTitle}>
 			<table class="heatmap">
-				<thead><tr><th scope="col">{spec.y_label || 'Group'} / {spec.x_label || 'Category'}</th>{#each heatmapPayload.x_labels as label (label)}<th scope="col" title={label}>{label}</th>{/each}</tr></thead>
+				<thead><tr><th scope="col" title={`${spec.y_label || 'Group'} / ${spec.x_label || 'Category'}`}>{spec.y_label || 'Group'} / {spec.x_label || 'Category'}</th>{#each heatmapPayload.x_labels as label (label)}<th scope="col" title={label}>{label}</th>{/each}</tr></thead>
 				<tbody>
 					{#each heatmapPayload.y_labels as yLabel, rowIndex (yLabel)}
 						<tr><th scope="row">{yLabel}</th>
@@ -658,7 +658,7 @@
 	.heatmap-scroll { max-width: 100%; overflow: auto; }
 	.heatmap { border-collapse: separate; border-spacing: 3px; font-size: var(--fs-xs); }
 	.heatmap th { max-width: 110px; padding: 2px 5px; overflow: hidden; color: var(--text-dim); text-overflow: ellipsis; white-space: nowrap; }
-	.heatmap th:first-child { position: sticky; left: 0; z-index: 1; background: var(--bg-raised); text-align: left; }
+	.heatmap th:first-child { width: 140px; min-width: 140px; max-width: 180px; position: sticky; left: 0; z-index: 1; background: var(--bg-raised); text-align: left; }
 	.heatmap td { width: 28px; min-width: 28px; padding: 0; }
 	.heat-cell { display: block; width: 26px; height: 22px; border-radius: 4px; background: var(--brand); opacity: var(--heat-opacity); }
 	.heat-cell.empty { border: 1px dashed var(--border-strong); background: transparent; opacity: 1; }

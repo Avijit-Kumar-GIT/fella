@@ -26,6 +26,7 @@
 		"test:e2e:clarification:live": "pnpm test:e2e:release:live",
 		"test:e2e:release-ui": "playwright test --config=playwright.live.config.mjs --grep=G3",
 		"test:e2e:visual:live": "playwright test --config=playwright.live.config.mjs --grep=G7",
+		"test:e2e:charts:journey": "playwright test --config=playwright.live.config.mjs tests/e2e/charts.journey.live.spec.mjs",
 		"test:chart-renderer": "node scripts/test-chart-renderer.mjs",
 		"test:release-artifacts": "node --test scripts/test-release-artifacts.mjs",
 		"prepare": "svelte-kit sync || echo ''",
