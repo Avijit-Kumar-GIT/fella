@@ -2293,7 +2293,7 @@ impl EngineState {
                 "Document analysis is disabled by the current experimental capability policy.\n",
             );
         } else if !docs.is_empty() {
-            p.push_str("Documents (list_files/grep_files/read_file):\n");
+            p.push_str("Documents (bounded leading previews; use list_files/grep_files/read_file for more):\n");
             for d in docs {
                 let relative_path = workspace_root
                     .as_deref()
@@ -2943,7 +2943,7 @@ exactly, character for character, from the list below.";
         let mut sources = Vec::with_capacity(scanned.len());
         {
             let mut used: HashSet<String> = HashSet::new();
-            // Each text-doc synopsis is a file open + short read; cap how many we
+            // Each text-doc preview is a file open + short read; cap how many we
             // do so a folder with thousands of notes doesn't pay thousands of
             // extra reads on every open. Beyond the cap, docs list without one.
             let mut synopsis_budget: usize = 250;
@@ -2975,7 +2975,7 @@ exactly, character for character, from the list below.";
 
                 let synopsis = if f.kind == SourceKind::Text && synopsis_budget > 0 {
                     synopsis_budget -= 1;
-                    first_line_synopsis(&path_str)
+                    leading_document_preview(&path_str)
                 } else {
                     None
                 };
@@ -4366,20 +4366,26 @@ fn parse_vocab_action(reply: &str, existing: &[(String, String)]) -> Option<Voca
     }
 }
 
-/// First non-empty line of a text document, trimmed and capped, for the
-/// system-prompt document listing. Reads at most a few KB.
-fn first_line_synopsis(path: &str) -> Option<String> {
+/// Bounded leading text for the system-prompt document listing. Keeping more
+/// than a title lets the model see nearby definitions and caveats during its
+/// initial inspection, while the cap and short read avoid ingesting full
+/// documents into the prompt. Full-text tools remain authoritative.
+fn leading_document_preview(path: &str) -> Option<String> {
+    const PREVIEW_CHAR_CAP: usize = 800;
     use std::io::Read;
     let mut f = std::fs::File::open(path).ok()?;
     let mut buf = [0u8; 4096];
     let n = f.read(&mut buf).ok()?;
     let text = String::from_utf8_lossy(&buf[..n]);
-    let line = text.lines().map(str::trim).find(|l| !l.is_empty())?;
-    let s: String = line.chars().take(120).collect();
-    if s.is_empty() {
+    let flattened = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flattened.is_empty() {
         None
     } else {
-        Some(s)
+        let mut preview = cap_chars(&flattened, PREVIEW_CHAR_CAP);
+        if flattened.chars().count() > PREVIEW_CHAR_CAP {
+            preview.push('…');
+        }
+        Some(preview)
     }
 }
 
@@ -4808,6 +4814,37 @@ mod jit_schema_tests {
         let block = engine.schema_block();
         assert!(block.contains("town0"));
         assert!(block.contains("town1"));
+    }
+
+    #[test]
+    fn initial_workspace_map_includes_bounded_document_definitions() {
+        let ws = ScratchDir::new("document-preview-ws");
+        let data = ScratchDir::new("document-preview-data");
+        std::fs::write(
+            ws.join("analysis-notes.md"),
+            "# Analysis notes\n\nThe broad operating-cost measure has no recorded definition. Fees and maintenance are separate labels, and the source does not say whether either belongs in that measure.\n",
+        )
+        .unwrap();
+
+        let engine = EngineState::new(&data).unwrap();
+        engine.open_workspace(&ws).unwrap();
+
+        let question = "What is the operating-cost measure?";
+        let packet = engine.context_packet(question, "document-preview-test");
+        assert!(
+            packet.schema.contains("has no recorded definition"),
+            "the initial model context should expose relevant document caveats, not only a title"
+        );
+        assert!(
+            packet
+                .schema
+                .contains("Fees and maintenance are separate labels"),
+            "the preview should preserve nearby source terminology"
+        );
+        assert!(
+            packet.schema.contains("bounded leading previews"),
+            "the prompt should distinguish previews from full document contents"
+        );
     }
 }
 

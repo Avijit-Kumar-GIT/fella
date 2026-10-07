@@ -248,8 +248,9 @@ pub struct SourceInfo {
     pub columns: Option<Vec<ColumnInfo>>,
     pub size_bytes: u64,
     pub mtime: i64,
-    /// One-line preview of a text document's first non-empty line. `None` for
-    /// tables and for PDFs (avoids a parse at open time).
+    /// Bounded preview of a text document's leading content. `None` for tables
+    /// and PDFs (avoids a parse at open time). Used as an initial clue, not as
+    /// a substitute for reading the source when more context is needed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub synopsis: Option<String>,
     /// Ingest-time caveat about the whole source, e.g. preamble rows skipped

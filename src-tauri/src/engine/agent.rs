@@ -1925,7 +1925,7 @@ doesn't support the requested chart or is too large to read, say so rather than 
     }
     if has_workspace && profile.docs_rule {
         rules.push(
-            "Documents (notes, PDFs) may be listed below with a short first-line preview. The \
+            "Documents (notes, PDFs) may be listed below with a bounded preview of their leading text. Treat relevant definitions and caveats in those previews as workspace evidence; inspect or search the full source when the preview is incomplete or more context is needed. The \
 workspace inventory is paginated: use `list_files` with `search`, `kind`, and the returned \
 `offset` to find other sources or inspect skipped files. Use the exact workspace-relative path \
 shown by the inventory with `read_file`; this distinguishes nested files with duplicate basenames. \

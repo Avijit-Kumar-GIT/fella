@@ -20,6 +20,7 @@
 		"preview": "vite preview",
 		"test:electron-bridge": "node --test scripts/test-electron-bridge.mjs",
 		"test:electron-update": "node --test scripts/test-electron-update.mjs",
+		"test:e2e:clarification:live": "playwright test --config=playwright.live.config.mjs",
 		"test:chart-renderer": "node scripts/test-chart-renderer.mjs",
 		"test:release-artifacts": "node --test scripts/test-release-artifacts.mjs",
 		"prepare": "svelte-kit sync || echo ''",
@@ -28,6 +29,7 @@
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch"
 	},
 	"devDependencies": {
+		"@playwright/test": "^1.63.0",
 		"@sveltejs/adapter-static": "^3.0.10",
 		"@sveltejs/kit": "^2.63.0",
 		"@sveltejs/vite-plugin-svelte": "^7.1.2",
@@ -50,10 +52,7 @@
 		"directories": { "output": "dist-electron" },
 		"mac": {
 			"icon": "src-tauri/icons/icon.icns",
-			"target": [
-				{ "target": "dmg", "arch": ["universal"] },
-				{ "target": "zip", "arch": ["universal"] }
-			],
+			"target": [{ "target": "dmg", "arch": ["universal"] }, { "target": "zip", "arch": ["universal"] }],
 			"category": "public.app-category.productivity"
 		},
 		"win": {

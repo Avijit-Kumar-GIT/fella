@@ -19,6 +19,15 @@ These checks do not launch a packaged desktop app. The Electron bridge test
 uses a fake child process; it does not establish provider quality, native
 dialog behavior, OS-specific packaging, or visual correctness.
 
+The credentialed Electron clarification flow uses Playwright and the real
+OpenAI provider. After `pnpm electron:build`, run
+`pnpm test:e2e:clarification:live`. It reads the existing `auth.json` without
+printing it, accepts `FELLA_E2E_AUTH_FILE` to select another auth file, copies
+it into a private temporary profile, and removes that profile when the run
+ends. The test exercises the real Electron window, engine sidecar, and model;
+only the native folder-picker dialog is stubbed to mount the synthetic fixture.
+It incurs normal provider usage and is intentionally not part of offline CI.
+
 ## Manual desktop smoke suite
 
 Run each case against a packaged Electron build using the same provider/model,
