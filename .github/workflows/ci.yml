@@ -60,6 +60,9 @@ jobs:
       - name: Chart renderer tests
         run: pnpm run test:chart-renderer
 
+      - name: Release artifact validation tests
+        run: pnpm run test:release-artifacts
+
       - name: FQA-Bench adapter and fixture checks
         run: |
           python3 bench/fqa-bench/build_runner_cases.py --suite-dir bench/fqa-bench/suites/uci-bike-sharing --check

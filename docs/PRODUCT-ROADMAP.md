@@ -781,13 +781,17 @@ current native run record is in [`ELECTRON-VALIDATION.md`](ELECTRON-VALIDATION.m
 
 This item remains **open**: Electron workspace reading, table calculation,
 chart rendering, cancellation, and a single-turn restart/history/deletion
-cycle have been exercised. Clarification/resume failed its live continuation
-case; retained evidence after Stop, multi-turn deletion, a fully framed visual
-chart capture, forecast detail states, and native packaged launch on each OS
-remain incomplete. The measured startup, memory, and unpacked-package figures
-are Linux/WSLg Electron baselines, not Windows or macOS measurements. A local
-prompt regression is not a live-model security guarantee; web-specific
-controls depend on backlog #2.
+cycle have been exercised. An agent-loop integration and renderer regression
+now confirm that completed evidence survives Stop and remains exposed in the
+transcript, but this behavior has not been visually rechecked in Electron 44.
+The typed clarification card has renderer markup coverage and the backend
+continuation contract passes with a mock model, but clarification/resume failed
+its live-model case. Multi-turn deletion, a fully framed visual chart capture,
+a visual forecast-details pass, and native packaged launch on each OS remain
+incomplete. The measured startup, memory,
+and unpacked-package figures are Linux/WSLg Electron baselines, not Windows or
+macOS measurements. A local prompt regression is not a live-model security
+guarantee; web-specific controls depend on backlog #2.
 The 5,000-file and 10-GiB ingestion observations are recorded under backlog #6
 and do not substitute for shell measurements.
 

@@ -29,11 +29,11 @@ expected behavior to match the output.
 | --- | --- | --- | --- |
 | G1 | Start with no mounted folder; ask a stable general question. | The question is accepted without opening a folder. It is a direct/model-only answer, not a workspace claim. | **Pass** — local mock and direct OpenAI |
 | G2 | Mount the same fixture; ask one simple question whose answer needs a document passage and one whose answer needs a table calculation. | Both requests stream; file-dependent claims have inspectable source/tool evidence. Source files remain unchanged. | **Partial** — table calculation passed against an independent oracle; document answer/provenance looked correct, but a scratch literal-phrase matcher failed on an equivalent paraphrase |
-| G3 | While a longer model response is streaming, stop it. | The run stops promptly; completed evidence remains inspectable and no later response appears in the deleted/closed turn. | **Partial** — stop/no-late-text passed; preservation of completed evidence was not checked |
+| G3 | While a longer model response is streaming, stop it. | The run stops promptly; completed evidence remains inspectable and no later response appears in the deleted/closed turn. | **Partial** — live Electron stop/no-late-text passed; a Rust integration test verifies completed evidence survives cancellation, and an SSR regression verifies the stopped transcript exposes it. The full Electron 44 interaction remains unvalidated |
 | G4 | Request a chart from the fixture, then expand its analysis details. | One chart renders; labels, values, units, and source query agree. Python calculations identify Python; the built-in forecast route identifies a forecast, not a user-written Python script. | **Pass** — one 24-point line chart matched the independent monthly oracle; one tick-spacing defect fixed |
-| G5 | Ask an ambiguous but answerable question that should trigger one clarification; select an option and continue. | The clarification is visible and the resumed answer retains the parent-turn link and selected assumption. | **Fail** — the earlier UI run resumed prose through the main composer and lost the requested breakdown. A later frozen FQA episode also failed: the model assumed a category scope instead of emitting a typed clarification. Electron 44 UI interaction remains unvalidated. |
+| G5 | Ask an ambiguous but answerable question that should trigger one clarification; select an option and continue. | The clarification is visible and the resumed answer retains the parent-turn link and selected assumption. | **Fail** — the earlier UI run resumed prose through the main composer and lost the requested breakdown. A later frozen FQA episode also failed: the model assumed a category scope instead of emitting a typed clarification. The typed card markup and mock-model continuation have automated coverage, but live Electron 44 interaction remains unvalidated. |
 | G6 | Change model and appearance, save a conversation, restart the app, reopen it, then delete it. | Settings and transcript persist across restart. Deletion removes the transcript and its canonical analysis records and does not resurrect the row. | **Pass for a single-turn analytical conversation** — provider/model/theme and chart transcript survived restart; reopen worked; sidebar deletion removed the transcript and canonical turn record, still absent after a second restart |
-| G7 | Repeat the relevant answer/detail interactions in light and dark mode. | Text, source, calculation, and forecast distinctions remain legible without relying on accent color alone. | **Partial** — chart exact-value table and source/calculation details inspected in both themes; the plot was not fully framed in screenshots, and forecast-specific details remain untested |
+| G7 | Repeat the relevant answer/detail interactions in light and dark mode. | Text, source, calculation, and forecast distinctions remain legible without relying on accent color alone. | **Partial** — chart exact-value table and source/calculation details inspected in both themes; the plot was not fully framed in screenshots. Forecast detail markup has automated SSR coverage, but no full visual forecast-details pass has been captured in Electron 44 |
 
 Web research and web-page prompt-injection cases are intentionally absent: the
 web tool is not shipped yet (product backlog #2 remains deferred). Do not mark
@@ -162,6 +162,34 @@ window completed the prefill/Enter/resume sequence. Treat the interaction as
 observed, but the standalone runner is not yet reliable. No benchmark gold or
 test expectation was changed. The temporary app profile and auth copy were
 removed after the run.
+
+Cancellation evidence-retention follow-up (2026-10-07):
+
+- A Rust agent-loop integration test now completes a read-only SQL query, waits
+  until the next model request is in flight, then cancels the conversation.
+  The run returns `Stopped.` while preserving SQL evidence in both the returned
+  `Answer` and its `answer_done` event. This passed with the local loopback mock
+  provider.
+- The chart-renderer SSR suite now renders a stopped assistant message carrying
+  completed evidence and checks that its Analysis Details disclosure, operation
+  label, and source remain visible. This is renderer contract coverage, not a
+  replacement for visually exercising the Electron 44 window.
+- The same renderer suite asserts that a typed clarification displays its
+  question, choices, and free-form reply control. This does not simulate
+  clicking a choice or prove the Electron bridge resumes the parent turn; the
+  Rust mock-model continuation test covers that backend contract, while G5's
+  live model behavior remains failed.
+- Forecast method, baseline-comparison, and error-band detail markup are
+  asserted in the renderer suite. G7 remains partial because the visual
+  forecast-details state and fully framed chart have not been inspected in
+  Electron 44.
+- A local Linux installer-name validation attempt did not complete: the
+  sandboxed `electron-builder` run failed to resolve `github.com` while fetching
+  its packaging helper, and the retried run did not finish before it was
+  stopped. No installer artifacts were produced; the empty temporary output
+  directory was removed. The release-name checker is covered by fixture tests
+  and cross-checked against updater asset names, but the new name gate still
+  needs confirmation from a successful platform packaging job.
 
 Electron persistence and theme follow-up on 2026-10-06:
 

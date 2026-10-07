@@ -125,6 +125,72 @@ try {
 		assert.match(modeMessage, new RegExp(label));
 	}
 
+	// A stopped run can still contain completed read-only work. The transcript
+	// must keep its details disclosure and source visible instead of dropping
+	// the already-finished evidence with the cancelled model response.
+	const stoppedMessage = render(Message, {
+		props: {
+			expanded: true,
+			message: {
+				id: 'stopped-with-evidence',
+				role: 'assistant',
+				text: 'Stopped.',
+				ts: 3,
+				answer: {
+					text: 'Stopped.',
+					evidence: [{
+						id: 'completed-before-stop',
+						tool: 'run_sql',
+						args: {},
+						note: 'Calculate total sales',
+						result_summary: '1 row',
+						sources: [{ source: 'sales.csv', table: 'sales' }],
+						columns: ['total'],
+						rows: [[450]],
+						row_count: 1
+					}],
+					verification: [],
+					trace: { mode: 'workspace_ask' }
+				}
+			}
+		}
+	}).body;
+	assert.match(stoppedMessage, /Stopped\./);
+	assert.match(stoppedMessage, /Analysis details/);
+	assert.match(stoppedMessage, /Calculate total sales/);
+	assert.match(stoppedMessage, /sales\.csv/);
+
+	// Clarification is a typed part of the answer, not just prose in the body.
+	// Keep its choices and free-form response control present in the transcript.
+	const clarificationMessage = render(Message, {
+		props: {
+			showFollowups: true,
+			onfollowup: () => {},
+			message: {
+				id: 'typed-clarification',
+				role: 'assistant',
+				text: 'The scope changes the total.',
+				ts: 4,
+				answer: {
+					turn_id: 'parent-turn',
+					text: 'The scope changes the total.',
+					clarification: {
+						question: 'Which categories should count?',
+						options: ['Rent and utilities', 'All housing-related costs'],
+						reason: 'These choices produce different totals.'
+					},
+					evidence: [],
+					verification: []
+				}
+			}
+		}
+	}).body;
+	assert.match(clarificationMessage, /aria-label="Choose an interpretation"/);
+	assert.match(clarificationMessage, /Rent and utilities/);
+	assert.match(clarificationMessage, /All housing-related costs/);
+	assert.match(clarificationMessage, /Answer the clarification in your own words/);
+	assert.match(clarificationMessage, />Continue</);
+
 	// Real runs can emit multiple independent checks with identical labels.
 	// Opening Analysis Details must not crash, and the answer's line chart must
 	// still render alongside both checks.

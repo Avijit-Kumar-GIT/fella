@@ -21,6 +21,7 @@
 		"test:electron-bridge": "node --test scripts/test-electron-bridge.mjs",
 		"test:electron-update": "node --test scripts/test-electron-update.mjs",
 		"test:chart-renderer": "node scripts/test-chart-renderer.mjs",
+		"test:release-artifacts": "node --test scripts/test-release-artifacts.mjs",
 		"prepare": "svelte-kit sync || echo ''",
 		"postinstall": "install-electron",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",

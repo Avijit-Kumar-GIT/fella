@@ -62,7 +62,12 @@ git tag v0.3.0
 git push origin v0.3.0
 ```
 
-The workflow reruns the quality gate before creating a GitHub draft. It builds:
+The workflow reruns the quality gate and builds all three platform packages
+before creating a GitHub draft. Each platform's expected installer names and
+non-empty files are checked first; the final job requires the complete six-file
+set, computes checksums, and creates the draft with installers and
+`SHA256SUMS` attached. A failed platform build or missing artifact therefore
+does not leave a draft candidate. It builds:
 
 - macOS universal DMG and ZIP (Intel + Apple silicon)
 - Windows x64 NSIS EXE and MSI

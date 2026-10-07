@@ -5,7 +5,7 @@ use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -2186,19 +2186,22 @@ async fn agent_calls_make_chart_then_answers_with_verified_visual_evidence() {
 }
 
 #[tokio::test]
-async fn cancel_stops_an_in_flight_run() {
+async fn cancel_stops_an_in_flight_run_and_retains_completed_evidence() {
     let ws = scratch("cancel-ws");
     let data = scratch("cancel-data");
     fs::write(ws.join("sales.csv"), "amount\n10\n20\n30\n").unwrap();
 
-    // A `/chat/completions` endpoint that stalls ~2s before replying, so the run is still
-    // waiting on the model when we cancel. Write errors are ignored: the
-    // client drops the connection the moment the run is cancelled.
+    // First return a completed calculation, then stall the next model call.
+    // This covers the user-visible case: cancellation should stop additional
+    // reasoning without discarding evidence already gathered in this turn.
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     let url = format!("http://{addr}");
+    let second_request_received = Arc::new(AtomicBool::new(false));
+    let server_saw_second_request = second_request_received.clone();
     let server = std::thread::spawn(move || {
-        if let Some(Ok(stream)) = listener.incoming().next() {
+        for (index, stream) in listener.incoming().take(2).enumerate() {
+            let Ok(stream) = stream else { break };
             let mut reader = BufReader::new(&stream);
             let mut len = 0usize;
             loop {
@@ -2212,11 +2215,23 @@ async fn cancel_stops_an_in_flight_run() {
             }
             let mut body = vec![0u8; len];
             let _ = reader.read_exact(&mut body);
-            std::thread::sleep(std::time::Duration::from_secs(2));
-            let payload = serde_json::to_vec(&openai_response(serde_json::json!({
-                "role": "assistant", "content": "too late"
-            })))
-            .unwrap();
+            if index == 1 {
+                server_saw_second_request.store(true, Ordering::SeqCst);
+                std::thread::sleep(std::time::Duration::from_secs(2));
+            }
+            let response = if index == 0 {
+                openai_response(serde_json::json!({
+                    "role": "assistant",
+                    "content": "I will calculate the total.",
+                    "tool_calls": [{ "id": "sales-total", "type": "function", "function": {
+                        "name": "run_sql",
+                        "arguments": "{\"sql\":\"SELECT SUM(amount) AS total FROM sales\"}"
+                    } }]
+                }))
+            } else {
+                openai_response(serde_json::json!({ "role": "assistant", "content": "too late" }))
+            };
+            let payload = serde_json::to_vec(&response).unwrap();
             let head = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                 payload.len()
@@ -2240,13 +2255,31 @@ async fn cancel_stops_an_in_flight_run() {
     engine.open_workspace(&ws).unwrap();
 
     let running = engine.clone();
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let run_events = events.clone();
     let run = tokio::spawn(async move {
         running
-            .ask("c1", "how much did we sell?", None, |_| {})
+            .ask("c1", "how much did we sell?", None, move |event| {
+                run_events.lock().unwrap().push(event)
+            })
             .await
     });
 
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            let completed_tool =
+                events.lock().unwrap().iter().any(
+                    |event| matches!(event, AskEvent::ToolEnd { item } if item.tool == "run_sql"),
+                );
+            if completed_tool && second_request_received.load(Ordering::SeqCst) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the completed calculation and next model request should be observable");
+
     engine.cancel_run("c1");
 
     let answer = tokio::time::timeout(std::time::Duration::from_secs(3), run)
@@ -2256,11 +2289,16 @@ async fn cancel_stops_an_in_flight_run() {
         .unwrap();
 
     assert_eq!(answer.text, "Stopped.");
-    assert!(
-        answer.evidence.is_empty(),
-        "evidence: {:?}",
-        answer.evidence
-    );
+    assert_eq!(answer.evidence.len(), 1, "completed evidence was lost");
+    assert_eq!(answer.evidence[0].tool, "run_sql");
+    assert!(answer.evidence[0]
+        .sql
+        .as_deref()
+        .is_some_and(|sql| sql.contains("SUM(amount)")));
+    assert!(events.lock().unwrap().iter().any(|event| matches!(
+        event,
+        AskEvent::AnswerDone { answer } if answer.text == "Stopped." && answer.evidence.len() == 1
+    )));
 
     let _ = server.join();
     let _ = fs::remove_dir_all(&ws);

@@ -12,7 +12,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   quality:
@@ -54,6 +54,9 @@ jobs:
       - name: Chart renderer tests
         run: pnpm run test:chart-renderer
 
+      - name: Release artifact validation tests
+        run: pnpm run test:release-artifacts
+
       - name: FQA-Bench adapter and fixture checks
         run: |
           python3 bench/fqa-bench/build_runner_cases.py --suite-dir bench/fqa-bench/suites/uci-bike-sharing --check
@@ -73,24 +76,8 @@ jobs:
       - name: Rust tests
         run: cargo test --manifest-path src-tauri/Cargo.toml --locked
 
-  prepare-draft:
-    needs: quality
-    runs-on: ubuntu-22.04
-    steps:
-      - name: Create unsigned draft release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.ref_name }}
-        run: |
-          notes="Unsigned Electron installers for Fella ${TAG}. Review each platform package and SHA256SUMS before publishing. macOS may require opening the app from Privacy & Security; Windows may show a SmartScreen warning."
-          args=("$TAG" --repo "$GITHUB_REPOSITORY" --title "Fella $TAG" --draft --verify-tag --notes "$notes")
-          if [[ "$TAG" == *-* ]]; then
-            args+=(--prerelease)
-          fi
-          gh release create "${args[@]}"
-
   build:
-    needs: prepare-draft
+    needs: quality
     strategy:
       fail-fast: false
       matrix:
@@ -147,34 +134,62 @@ jobs:
         if: matrix.target == 'win'
         run: pnpm electron:build && pnpm exec electron-builder --win --x64 --publish never
 
-      - name: Upload installers to draft release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.ref_name }}
-        shell: bash
-        run: |
-          shopt -s nullglob
-          assets=(dist-electron/Fella_*.dmg dist-electron/Fella_*.zip dist-electron/Fella_*.exe dist-electron/Fella_*.msi dist-electron/Fella_*.AppImage dist-electron/Fella_*.deb)
-          if ((${#assets[@]} == 0)); then
-            echo "::error::No Electron installer artifacts were produced."
-            exit 1
-          fi
-          gh release upload "$TAG" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --clobber
+      - name: Validate platform installers
+        run: node scripts/check-release-artifacts.mjs "${GITHUB_REF_NAME}" "${{ matrix.target }}" dist-electron
 
-  checksums:
+      - name: Preserve platform installers for gated publication
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fella-release-${{ matrix.target }}
+          path: dist-electron/Fella_*
+          if-no-files-found: error
+          compression-level: 0
+
+  publish-draft:
     needs: build
     runs-on: ubuntu-22.04
+    permissions:
+      contents: write
     steps:
-      - name: Compute and upload SHA256SUMS
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
+      - name: Collect every platform installer
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: fella-release-*
+          path: dist-electron
+          merge-multiple: true
+
+      - name: Require the complete release artifact set
+        env:
+          TAG: ${{ github.ref_name }}
+        run: node scripts/check-release-artifacts.mjs "$TAG" all dist-electron
+
+      - name: Create checksums and the complete unsigned draft
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: |
           set -eu
-          mkdir sums
-          cd sums
-          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern '*'
-          rm -f SHA256SUMS
-          sha256sum -b * | sort -k2 > SHA256SUMS
+          version="${TAG#v}"
+          (
+            cd dist-electron
+            sha256sum -b \
+              "Fella_${version}_universal.dmg" \
+              "Fella_${version}_universal.zip" \
+              "Fella_${version}_x64.exe" \
+              "Fella_${version}_x64.msi" \
+              "Fella_${version}_x64.AppImage" \
+              "Fella_${version}_x64.deb" | sort -k2 > ../SHA256SUMS
+          )
           cat SHA256SUMS
-          gh release upload "$TAG" SHA256SUMS --repo "$GITHUB_REPOSITORY" --clobber
+          notes="Unsigned Electron installers for Fella ${TAG}. Review each platform package and SHA256SUMS before publishing. macOS may require opening the app from Privacy & Security; Windows may show a SmartScreen warning."
+          args=("$TAG" dist-electron/Fella_*.dmg dist-electron/Fella_*.zip dist-electron/Fella_*.exe dist-electron/Fella_*.msi dist-electron/Fella_*.AppImage dist-electron/Fella_*.deb SHA256SUMS --repo "$GITHUB_REPOSITORY" --title "Fella $TAG" --draft --verify-tag --notes "$notes")
+          if [[ "$TAG" == *-* ]]; then
+            args+=(--prerelease)
+          fi
+          gh release create "${args[@]}"
