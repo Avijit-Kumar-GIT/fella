@@ -671,7 +671,7 @@ export interface Project {
 	updated_at_ms: number;
 }
 
-/** Streaming events emitted by the `ask` command over a Tauri Channel. */
+/** Streaming events emitted by the Rust engine through the Electron bridge. */
 export type AskEvent =
 	| { kind: 'turn_state'; turn_id: string; state: RuntimeTurnState }
 	| { kind: 'assistant_delta'; text: string }

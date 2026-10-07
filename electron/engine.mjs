@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { spawn } from 'node:child_process';
 
@@ -72,10 +72,19 @@ export class EngineClient {
 }
 
 export function assertBinary(binary) {
-	if (!binary || !existsSync(binary)) {
+	if (!isRegularFile(binary)) {
 		throw new Error(
 			`Fella's Rust engine was not found at ${binary ?? '(no path)'}. ` +
 			'Run pnpm electron:build first, or set FELLA_ENGINE_PATH.'
 		);
+	}
+}
+
+export function isRegularFile(path) {
+	if (!path || !existsSync(path)) return false;
+	try {
+		return statSync(path).isFile();
+	} catch {
+		return false;
 	}
 }

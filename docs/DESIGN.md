@@ -100,7 +100,7 @@ real content, so it must hold WCAG AA (≥ 4.5:1) on both grounds in both themes
 `src/routes/+page.svelte` is a flex column: `TabBar?` / `Header?` / `main`
 (the scrolling `Transcript` on `--bg-raised`) / `Composer` / `StatusBar`. The
 chrome rows are `flex: none` on `--bg`; the transcript is the only scroller. The
-top band is a `data-tauri-drag-region` (moves the window). Message text is
+top band uses Electron's `-webkit-app-region: drag` window-drag surface. Message text is
 capped to a readable column width.
 
 ## When you add UI
@@ -111,4 +111,4 @@ capped to a readable column width.
 4. New interactive element? It gets `:focus-visible`, an accessible name, and
    keyboard operation.
 5. Motion goes through `--dur*` / `--ease` (or `src/lib/motion.ts` presets).
-6. `npm run check` stays at 0/0; check both themes in `pnpm tauri dev`.
+6. `pnpm check` stays at 0/0; check both themes in `pnpm electron:dev`.

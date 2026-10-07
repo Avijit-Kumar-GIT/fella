@@ -1,9 +1,8 @@
 //! Line-delimited JSON bridge used by the Electron shell.
 //!
-//! The Tauri shell calls the same `EngineState` methods through
-//! `#[tauri::command]`. Electron cannot call those commands directly, so the
-//! Rust engine exposes the identical command names over stdin/stdout instead.
-//! stdout is reserved for JSON responses; diagnostics stay on stderr.
+//! Electron sends app commands as JSON lines over stdin and receives results
+//! and stream events over stdout. stdout is reserved for protocol messages;
+//! diagnostics stay on stderr.
 
 use std::io::{self, BufRead, BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -192,7 +191,6 @@ async fn dispatch(
             value_result(engine.logout(&provider, forget))
         }
         "provider_health" => value_result(Ok(engine.provider_health().await)),
-        "set_window_appearance" | "unhide_cursor" => Ok(Value::Null),
         "cancel" => {
             let conversation_id: String = required(&request.params, "conversationId")?;
             engine.cancel_run(&conversation_id);
@@ -261,7 +259,6 @@ async fn dispatch(
             let title: String = required(&request.params, "title")?;
             value_result(engine.rename_conversation(&id, &title))
         }
-        "update" => value_result(engine.check_update().await),
         "ask" => {
             let conversation_id: String = required(&request.params, "conversationId")?;
             let question: String = required(&request.params, "question")?;

@@ -7,9 +7,8 @@ commit as any change that alters a design decision here.
 > a Workspace surface for sources and `fella.md`, Ask, History, Search, and
 > Settings. The extension, pack, MCP client, augment, and standalone analysis
 > sections below are historical design notes unless explicitly marked current.
-> The broader Ask contract—general answers without a mounted folder and
-> visible web research when useful—is product direction tracked in
-> [`PRODUCT-ROADMAP.md`](PRODUCT-ROADMAP.md), not shipped behavior yet.
+> General answers without a mounted folder are supported. Visible web research
+> remains future work in [`PRODUCT-ROADMAP.md`](PRODUCT-ROADMAP.md).
 
 ## What Fella is
 
@@ -18,8 +17,9 @@ Fella's product is the conversation around a question: model knowledge for
 stable general explanations, visible web research when freshness or sources
 matter, and local analysis when an answer depends on mounted files. The folder
 organizes and grounds local-data work; it is not a prerequisite for every
-question. The current release is primarily workspace-based; the no-folder
-general-answer path and web-research route are not implemented yet.
+question. General questions do not require a mounted folder. The current
+release has no web-research route; web-backed answers remain a separate,
+visible capability to build.
 
 For mounted-data questions, the model drives interpretation and tool choice
 inside a bounded read-only harness. SQL/Python perform computations against
@@ -46,7 +46,7 @@ The user-facing capability backlog and routing/privacy decision are tracked in
 
 | Layer | Choice | Why |
 |-------|--------|-----|
-| Shell | Tauri 2 | Small binary, Rust backend, system webview (no bundled Chromium) |
+| Shell | Electron 44.5.1 | Cross-platform desktop shell with a sandboxed renderer and a narrow preload bridge |
 | UI | SvelteKit + Svelte 5 + TS, `adapter-static`, SSR off | Static SPA, no server; compiles small |
 | Data engine | **SQLite** (`rusqlite`, `bundled` + `window`) behind the `DataEngine` trait | Already bundled (+0 crates); covers personal-analytics SQL. DuckDB's size and build-time trade-offs are recorded in `PERFORMANCE.md` and `PERFORMANCE-LOG.md`. |
 | Data engine (opt-in) | DuckDB (`--features duckdb`) | Parquet, faster on large files, `SUMMARIZE`. Adds ~30 MB. |
@@ -56,14 +56,14 @@ The user-facing capability backlog and routing/privacy decision are tracked in
 | Excel (`--features xlsx`, default on) | `calamine` → typed rows → `DataEngine::add_rows` | Pure Rust; ~8 crates |
 | PDF (`--features pdf`, default on) | `pdf-extract` | Pure Rust text extraction (scanned/OCR out of scope); ~28 crates |
 
-## Electron comparison branch
+## Desktop shell and Rust sidecar
 
-The `electron-migration` branch is a shell comparison, not a second analytics
-implementation. It keeps the Svelte UI and `EngineState` intact, launches the
-Rust engine as a sidecar, and replaces Tauri's command/channel transport with a
-secure Electron preload bridge backed by line-delimited JSON. The Tauri shell
-above remains the current release architecture; [`ELECTRON.md`](ELECTRON.md)
-documents the alternative and the process-tree memory measurement.
+Electron is the only maintained desktop shell. Its main process owns windows,
+native dialogs, external links, and updates. A context-isolated, sandboxed
+preload exposes a small typed API to Svelte; the renderer has no Node
+integration. The Rust engine runs as a child sidecar and communicates through
+correlated newline-delimited JSON requests and streamed events. See
+[`ELECTRON.md`](ELECTRON.md) for development and packaging details.
 
 ### Cargo features
 
@@ -84,13 +84,14 @@ src/                         SvelteKit frontend presentation only
   routes/+layout.ts          export const ssr = false; prerender = true
   routes/+layout.svelte      global CSS, key handling
   routes/+page.svelte        the single REPL view
-  lib/ipc.ts                 typed wrappers over invoke() + Channel events
+  lib/ipc.ts                 typed wrappers over the Electron preload bridge
   lib/components/            Transcript, Message, EvidenceBlock, Composer, Sidebar,
                              Titlebar, Workspace, Sources, Context, Settings
 
-src-tauri/src/
-  lib.rs                     tauri::Builder, managed state, command registration
-  commands.rs                #[tauri::command] IPC surface thin adapter, no logic
+src-tauri/src/               Rust engine crate (legacy directory name)
+  main.rs                    sidecar executable entry point
+  lib.rs                     engine modules and JSON-lines process entry
+  stdio.rs                   request dispatch and streamed event protocol
   engine/
     state.rs                 EngineState { data: Mutex<Box<dyn DataEngine>>,
                                            sqlite: Mutex<Connection>, inner: Mutex<Inner>,
@@ -100,7 +101,7 @@ src-tauri/src/
     catalog.rs               walk workspace (depth ≤ 8), classify, slugify names, dedupe;
                              honour .fellaignore; skip a root fella.md
     analytics/                the engine: deterministic compute + verification, no LLM
-                             calls, no Tauri/IPC, no conversation state. The one seam
+                             calls, no shell IPC, no conversation state. The one seam
                              back into the rest of the app is `AnalyticsSource`
                              (`catalog()` + `run_sql()`); `EngineState` implements it.
       mod.rs                 AnalyticsSource trait + module doc (the four-sentence
@@ -219,7 +220,7 @@ when this inference was used.
 `LlmClient` (`llm.rs`) one struct, branching on the provider's `wire`:
 
 - **Ollama wire** → `POST {base}/api/chat` with `tools`, `stream: true`
-  (the harness forwards deltas over a Tauri `Channel`). Ollama Cloud is the
+  (the harness forwards deltas over the Electron sidecar bridge). Ollama Cloud is the
   shipped hosted provider for this wire and requires a key.
 - **OpenAI wire** → `POST {base}/chat/completions`, streamed as SSE. The client
   reassembles content and split tool-call fragments, then hands the normalized
@@ -323,16 +324,19 @@ panel). Every call and result is captured as evidence whether or not the model
 cites it. Experimental builds must preserve this evidence boundary if they add
 an external tool.
 
-## IPC surface (`commands.rs` thin adapters; registered in `lib.rs`)
+## Electron IPC and sidecar surface
+
+The renderer calls typed wrappers in `src/lib/ipc.ts`. `electron/preload.cjs`
+exposes only the allowlisted `window.fella` methods; `electron/main.mjs`
+routes those requests to `electron/engine.mjs`. The Rust `stdio.rs` dispatcher
+accepts the engine methods:
 
 `open_workspace(path)` · `get_catalog()` · `describe(name)` · `run_sql_direct(sql)`
-· `reindex()` · `get_settings()` / `set_settings()` · `list_providers()` /
-`set_api_key(provider, key)` / `logout(provider)` · `ask(conversation_id,
-question, channel)` streams `assistant_delta` / `tool_start` / `tool_end` /
-`notice` / `answer_done` · `cancel()` · `provider_health()` ·
-`set_window_appearance(dark)` ·
-`context_file()` / `save_context(contents)` ·
-`archive_conversation(id, body)` / `conversations_info()`.
+· `reindex()` · settings and provider operations · `ask(...)` and
+`analysis_turn_rerun(...)` with streamed events · `cancel(...)` ·
+`provider_health()` · context/memory · conversation archive, replay, and
+deletion. Folder picking, window controls, external links, and `/update` stay
+in Electron main; they do not enter the Rust engine protocol.
 
 ## Extension boundary (historical)
 

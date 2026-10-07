@@ -1,6 +1,6 @@
 [package]
 name = "fella"
-version = "0.2.0"
+version = "0.3.0"
 description = "Ask questions about your own files"
 authors = ["Avijit Kumar and contributors"]
 license = "MIT"
@@ -9,7 +9,7 @@ rust-version = "1.93"   # RustPython 0.5 (the embedded Python guest) needs 1.93
 
 [lib]
 name = "fella_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+crate-type = ["rlib"]
 
 [features]
 # The shipped desktop app builds with these on; all are removable. The data
@@ -31,14 +31,7 @@ eval = []
 name = "agent_eval"
 required-features = ["eval"]
 
-[build-dependencies]
-tauri-build = { version = "2", features = [] }
-
 [dependencies]
-tauri = { version = "2", features = [] }
-tauri-plugin-log = "2"
-tauri-plugin-dialog = "2"
-tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 log = "0.4"
@@ -61,12 +54,6 @@ wasmi = { version = "2.0.0", default-features = false, features = ["std", "valid
 duckdb = { version = "1.4.0", features = ["bundled"], optional = true }
 calamine = { version = "0.36", optional = true }
 pdf-extract = { version = "0.12.0", optional = true }
-
-# Windows-only: one Win32 call (ShowCursor) in `commands::unhide_cursor`.
-# Already in the tree transitively via tauri/wry at this exact version, so this
-# adds a direct edge, not a crate.
-[target.'cfg(windows)'.dependencies]
-windows = { version = "0.62", features = ["Win32_UI_WindowsAndMessaging"] }
 
 [profile.dev]
 opt-level = 0

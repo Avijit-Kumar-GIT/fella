@@ -94,15 +94,14 @@ store connector credentials, or add tools in the personal release. A custom
 fork that implements a connector owns its network, credential, and permission
 review.
 
-## The Linux window renders incorrectly
+## The desktop window does not open
 
-On WSLg, if the window opens but layout or compositing is broken, try:
-
-```bash filename="terminal"
-WEBKIT_DISABLE_DMABUF_RENDERER=1 pnpm tauri dev
-```
-
-This development workaround does not fix every Linux display failure. Linux requires WebKitGTK 4.1 and the Tauri system libraries listed in the [developer setup](https://github.com/Avijit-Kumar-GIT/fella/blob/main/docs/DEV_SETUP.md).
+Use the installer built for your operating system and architecture. On Linux,
+Electron requires the system's Chromium runtime libraries; install missing
+shared-library packages reported by your distribution before retrying. For
+development, run `pnpm electron:dev` from the repository root. If it reports
+that port 1420 is already in use, stop the other Vite/dev session before
+starting another one.
 
 ## Next steps
 

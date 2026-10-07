@@ -46,14 +46,13 @@
 
 </script>
 
-<div class="titlebar" class:mac={isMac} class:focus={session.focus} class:collapsed={!session.focus && session.sidebarCollapsed} data-tauri-drag-region>
+<div class="titlebar" class:mac={isMac} class:focus={session.focus} class:collapsed={!session.focus && session.sidebarCollapsed}>
 	{#if isMac}<span class="lights" aria-hidden="true"></span>{/if}
 
 	{#if !session.focus && session.sidebarCollapsed}
 		<span class="logo"><Logo size={18} active={session.busy} /></span>
 		<button
 			class="navbtn"
-			data-tauri-drag-region="false"
 			aria-expanded={!session.sidebarCollapsed}
 			title={`Expand sidebar (${shortcutModifier}+B)`}
 			onclick={() => session.toggleSidebar()}
@@ -63,14 +62,14 @@
 	{/if}
 
 	{#if session.focus}
-		<span class="spacer" data-tauri-drag-region></span>
+		<span class="spacer"></span>
 		{#if folder}<span class="folder faint" title={session.catalog.workspace}>{folder}</span>{/if}
-		<span class="spacer" data-tauri-drag-region></span>
+		<span class="spacer"></span>
 	{:else}
 		{#if multiTab}
 			<TabBar />
 		{:else}
-			<span class="id" data-tauri-drag-region>
+			<span class="id">
 				{#if folder}
 					<span class="folder" title={displayTitle}>{displayTitle}</span>
 				{:else}
@@ -79,11 +78,10 @@
 			</span>
 		{/if}
 
-		<span class="spacer" data-tauri-drag-region></span>
+		<span class="spacer"></span>
 
 		<button
 			class="hint"
-			data-tauri-drag-region="false"
 			onclick={onpalette}
 			title={`Search Fella (${shortcutModifier}+K or ${shortcutModifier}+Shift+P)`}
 		>
@@ -92,7 +90,7 @@
 	{/if}
 
 	{#if isWindows && isDesktop()}
-		<div class="winctl" data-tauri-drag-region="false">
+		<div class="winctl">
 			<button aria-label="Minimize" onclick={() => void win.minimize()}>
 				<Icon name="minus" size={16} />
 			</button>
@@ -121,8 +119,7 @@
 		white-space: nowrap;
 		-webkit-app-region: drag;
 	}
-	.titlebar button,
-	.titlebar [data-tauri-drag-region='false'] {
+	.titlebar button {
 		-webkit-app-region: no-drag;
 	}
 	.titlebar.mac {

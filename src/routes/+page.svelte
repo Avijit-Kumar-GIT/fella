@@ -12,7 +12,7 @@
 	import Transcript from '$lib/components/Transcript.svelte';
 	import WorkspaceView from '$lib/components/WorkspaceView.svelte';
 	import { dispatch, loadStartupCatalog, openFolder, stop } from '$lib/commands';
-	import { ipc, isDesktop, isTauri } from '$lib/ipc';
+	import { ipc, isDesktop } from '$lib/ipc';
 	import { fadeQuick } from '$lib/motion';
 	import { prefs } from '$lib/prefs.svelte';
 	import { session } from '$lib/session.svelte';
@@ -92,29 +92,10 @@
 		document.addEventListener('visibilitychange', onVisible);
 		window.addEventListener('focus', onVisible);
 
-		// Native folder drop -> /open, with a full-window drop target while a
-		// drag is over the window.
-		let unlisten: (() => void) | undefined;
-		if (isTauri()) {
-			void import('@tauri-apps/api/webview')
-				.then(({ getCurrentWebview }) =>
-					getCurrentWebview().onDragDropEvent((e) => {
-						const t = e.payload.type;
-						dragging = t === 'enter' || t === 'over';
-						if (t === 'drop' && e.payload.paths.length) {
-							void dispatch(`/open ${e.payload.paths[0]}`);
-						}
-					})
-				)
-				.then((u) => (unlisten = u))
-				.catch(() => {});
-		}
-
 		return () => {
 			clearTimeout(timer);
 			document.removeEventListener('visibilitychange', onVisible);
 			window.removeEventListener('focus', onVisible);
-			unlisten?.();
 		};
 	});
 

@@ -16,12 +16,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: System libraries (Tauri / WebKitGTK)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
-            librsvg2-dev libxdo-dev build-essential libssl-dev pkg-config file
+      - name: Native build tools
+        run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config file
 
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
 
@@ -32,7 +28,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
         with:
-          components: clippy
+          components: clippy, rustfmt
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
@@ -40,39 +36,45 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - name: svelte-check
+      - name: Svelte diagnostics
         run: pnpm run check
 
-      - name: Frontend build
-        run: pnpm run build
+      - name: Frontend and Rust sidecar build
+        run: pnpm run electron:build
+
+      - name: Package Electron app directory
+        run: pnpm exec electron-builder --linux --dir --publish never
+
+      - name: Rust formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
 
       - name: BYOK test surface
         run: bash scripts/check-byok-test-surface.sh
 
-      - name: Electron engine bridge tests
+      - name: Electron bridge tests
         run: pnpm run test:electron-bridge
 
-      # SQLite default features only never --features duckdb (OOMs CI, CI-only path).
+      - name: Electron update tests
+        run: pnpm run test:electron-update
+
+      - name: Chart renderer tests
+        run: pnpm run test:chart-renderer
+
       - name: Clippy
-        working-directory: src-tauri
-        run: cargo clippy --all-targets --locked -- -D warnings
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings
 
+      # SQLite is the shipped engine; do not enable the optional DuckDB build here.
       - name: Rust tests
-        working-directory: src-tauri
-        run: cargo test --locked
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked
 
-  # Advisory only not a required check. A red X here means "look at the
-  # advisory", not "you can't merge". Promote to required once the tree is clean.
   audit:
+    # Advisory only until the tree is fully clear. This never masks a failed build/test.
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
 
-      # No `cache: pnpm` here this job never runs `pnpm install`, so
-      # setup-node's post-step cache save fails ("Path(s) ... do(es) not exist")
-      # on any PR that changes pnpm-lock.yaml and misses the store cache.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
@@ -86,7 +88,7 @@ jobs:
 
       - name: cargo-audit
         run: |
-          cargo install cargo-audit --locked   # 0.22+ parses CVSS v4.0 advisories
+          cargo install cargo-audit --locked
           cargo audit --file src-tauri/Cargo.lock
 
       - name: pnpm audit
@@ -96,10 +98,8 @@ jobs:
           out=$(pnpm audit --prod 2>&1); rc=$?
           echo "$out"
           [ "$rc" -eq 0 ] && exit 0
-          # exit 1 means "found advisories" OR "couldn't reach the registry".
-          # Only fail the (advisory-only) job for a real finding.
           if echo "$out" | grep -qiE "TimeoutError|ENOTFOUND|ECONNRESET|EAI_AGAIN|ETIMEDOUT|Will retry|socket hang up|request to .* failed"; then
-            echo "::warning::pnpm audit could not reach the npm registry skipped this run."
+            echo "::warning::pnpm audit could not reach the npm registry; skipped this run."
             exit 0
           fi
           exit "$rc"

@@ -45,7 +45,7 @@ const SQL_TRACE_CAP: usize = 8;
 const MEMORY_CAP_BYTES: usize = 256 * 1024 * 1024;
 const STACK_CAP_BYTES: usize = 2 * 1024 * 1024;
 
-// `build-python-sandbox.sh` (and the Tauri build instructions) keep this
+// `build-python-sandbox.sh` (and the Electron build instructions) keep this
 // artifact in the source tree so a clean desktop build does not need Python,
 // WASI, or a platform-specific sandbox executable installed on the user's
 // machine.

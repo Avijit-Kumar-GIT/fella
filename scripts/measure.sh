@@ -2,7 +2,7 @@
 #
 # measure.sh Fella's size / speed / memory numbers, in one place.
 #
-#   ./scripts/measure.sh              quick: sizes, deps, bundle, startup, memory
+#   ./scripts/measure.sh              engine binary size, deps, bundle, build time
 #   ./scripts/measure.sh --bloat      + per-crate binary breakdown (relinks, ~10 min)
 #   ./scripts/measure.sh --build      + time an incremental Rust rebuild
 #   ./scripts/measure.sh --build-cold + time a full clean rebuild (~20 min!)
@@ -32,9 +32,8 @@ for a in "$@"; do
 done
 
 BIN=src-tauri/target/release/fella
-export DISPLAY="${DISPLAY:-:0}" WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-0}"
 TMP=$(mktemp -d)
-trap 'rm -rf "$TMP"; pkill -f "target/release/fella" 2>/dev/null' EXIT
+trap 'rm -rf "$TMP"' EXIT
 
 have() { command -v "$1" >/dev/null 2>&1; }
 sec() { printf '\n### %s\n\n' "$1"; }
@@ -130,47 +129,17 @@ main() {
 		echo "(pnpm not found source ~/.fella_env)"
 	fi
 
-	sec "Cold start -> interactive"
-	if [ -x "$BIN" ]; then
-		echo "(a window opens briefly for each run)"
-		for i in 1 2 3; do
-			l=$(timeout 15 "./$BIN" 2>&1 | grep -m1 'interactive in' || true)
-			[ -n "$l" ] && echo "run $i: ${l#fella: }" || echo "run $i: no timing line (no display / WSLg?)"
-			pkill -f 'target/release/fella' 2>/dev/null
-			sleep 1
-		done
-	else
-		echo "(no release binary yet)"
-	fi
-
-	sec "Idle memory"
-	if [ -x "$BIN" ]; then
-		"./$BIN" >/dev/null 2>&1 &
-		pid=$!
-		sleep 6
-		if kill -0 "$pid" 2>/dev/null; then
-			m=$(ps -o rss= -p "$pid" 2>/dev/null | awk '{print int($1/1024)}')
-			h=$(pgrep -cf 'WebKitWebProcess|WebKitNetworkProcess' 2>/dev/null || echo 0)
-			echo "main process RSS : ${m:-?} MB   (+ $h WebKit helper process(es), not summed)"
-		else
-			echo "(process exited early no display?)"
-		fi
-		kill "$pid" 2>/dev/null
-		pkill -f 'target/release/fella' 2>/dev/null
-		/usr/bin/time -v timeout 8 "./$BIN" 2>&1 |
-			grep -E 'Maximum resident set size|Elapsed \(wall' | sed 's/^[[:space:]]*/  /'
-		pkill -f 'target/release/fella' 2>/dev/null
-	else
-		echo "(no release binary yet)"
-	fi
+	sec "Whole-app startup and memory"
+	echo "Not measured here: this script profiles the Rust sidecar, not the Electron desktop process tree."
+	echo "On Windows, build the sidecar with 'pnpm electron:build', then run:"
+	echo "  .\\scripts\\measure-windows.ps1 -Seconds 15"
 
 	sec "Notes"
 	cat <<'EOF'
-- GUI metrics (cold start, memory) need a display WSLg on Windows.
-- `time -v` "Maximum resident set size" is the main process only; WebKit
-  helpers add ~20-60 MB more.
+- This script reports Rust sidecar build and binary metrics; it does not launch the Electron UI.
+- Use the Windows helper or a platform process-tree profiler for full-app memory.
 - `du --apparent-size` = file bytes, not blocks-on-disk.
-- First `cargo build --release` is slow (DuckDB C++); later ones are fast.
+- First `cargo build --release` is slow; later ones are fast.
 EOF
 }
 

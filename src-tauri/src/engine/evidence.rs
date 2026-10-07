@@ -472,11 +472,11 @@ mod tests {
     }
 }
 
-/// Streamed to the UI over a Tauri channel during `ask`.
+/// Streamed to the UI over the Electron engine bridge during `ask`.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AskEvent {
-    /// A lifecycle update shared by the Tauri Channel and Electron bridge.
+    /// A lifecycle update streamed through the Electron sidecar bridge.
     TurnState {
         turn_id: String,
         state: crate::engine::runtime::TurnState,

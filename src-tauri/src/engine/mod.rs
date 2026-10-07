@@ -28,7 +28,6 @@ pub mod state;
 #[cfg(any(test, feature = "eval"))]
 pub mod testkit;
 pub mod tools;
-pub mod update;
 pub mod workspace_model;
 
 pub use capabilities::AnalysisCapabilities;
@@ -45,7 +44,6 @@ pub use runtime::{
 };
 pub use sqlite::Settings;
 pub use state::{ConversationSummary, ConversationsInfo, EngineState, ProviderInfo, QueryResult};
-pub use update::UpdateStatus;
 pub use workspace_model::{
     FieldProfile, FieldRole, RelationshipCandidate, SourceModel, WorkspaceModel,
 };

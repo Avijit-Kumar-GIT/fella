@@ -1,42 +1,39 @@
-# Tauri / Electron capability parity
+# Electron release validation
 
-Use this checklist before claiming a shell is release-ready. The UI and Rust
-engine are shared, but native dialogs, event transport, process lifetime, and
-packaging differ by shell. Passing Rust engine tests alone does not prove both
-desktop applications work.
+This record covers the maintained Electron shell, Svelte renderer, and Rust
+sidecar. Passing engine or bridge tests alone does not prove the packaged
+desktop app works. Preserve observed failures and partial runs; do not adjust
+the expected behavior to match a candidate response.
 
 ## Automated coverage
 
-- `cargo test --locked` exercises the shared `EngineState` and full mock-model
-  agent loop used directly by Tauri.
+- `cargo test --locked` exercises the Rust `EngineState` and mock-model agent
+  loop independently of the desktop shell.
 - `pnpm run test:electron-bridge` exercises Electron's JSON-lines client for
   concurrent request correlation, streamed events, engine errors, and shutdown
   of pending requests.
 - `pnpm run check`, `pnpm run build`, and `pnpm run test:chart-renderer` cover
   the shared Svelte UI and chart renderer.
 
-These checks do not launch either desktop shell. The Electron bridge test uses
-a fake child process; it does not establish provider quality, native dialog
-behavior, OS-specific packaging, or visual correctness.
+These checks do not launch a packaged desktop app. The Electron bridge test
+uses a fake child process; it does not establish provider quality, native
+dialog behavior, OS-specific packaging, or visual correctness.
 
 ## Manual desktop smoke suite
 
-Run the cases in **each maintained shell** using the same application build
-commit, provider/model, workspace fixture, and settings. Run one shell at a
-time: Tauri and Electron use the same default application-data directory, so
-concurrent launches can race on settings, databases, or conversation files.
-Keep the model/provider and exact prompt fixed between shells. Record any
-failure without changing the case or expected behavior to match the output.
+Run each case against a packaged Electron build using the same provider/model,
+workspace fixture, and settings. Record failures without changing the case or
+expected behavior to match the output.
 
-| ID | Setup and action | Expected behavior | Tauri | Electron |
-| --- | --- | --- | --- | --- |
-| G1 | Start with no mounted folder; ask a stable general question. | The question is accepted without opening a folder. It is a direct/model-only answer, not a workspace claim. | Not run | **Pass** — local mock and direct OpenAI |
-| G2 | Mount the same fixture; ask one simple question whose answer needs a document passage and one whose answer needs a table calculation. | Both requests stream; file-dependent claims have inspectable source/tool evidence. Source files remain unchanged. | Not run | **Scratch matcher failed** — direct review found the answer and provenance correct; the matcher rejected an equivalent paraphrase (details below) |
-| G3 | While a longer model response is streaming, stop it. | The run stops promptly; completed evidence remains inspectable and no later response appears in the deleted/closed turn. | Not run | **Partial** — stop/no-late-text passed; preservation of completed evidence was not checked |
-| G4 | Request a chart from the fixture, then expand its analysis details. | One chart renders; labels, values, units, and source query agree. Python calculations identify Python; the built-in forecast route identifies a forecast, not a user-written Python script. | Not run | **Pass** — one 24-point line chart matched the independent monthly oracle; one tick-spacing defect fixed |
-| G5 | Ask an ambiguous but answerable question that should trigger one clarification; select an option and continue. | The clarification is visible and the resumed answer retains the parent-turn link and selected assumption. | Not run | **Expected clarification not triggered** — the real model stated a net-revenue interpretation and answered directly; clarification/resume UI remains untested |
-| G6 | Change model and appearance, save a conversation, restart the shell, reopen it, then delete it. | Settings and transcript persist across restart. Deletion removes the transcript and its canonical analysis records and does not resurrect the row. | Not run | **Pass for a single-turn analytical conversation** — provider/model/theme and chart transcript survived restart; reopen worked; sidebar deletion removed the transcript and canonical turn record, still absent after a second restart |
-| G7 | Repeat the relevant answer/detail interactions in light and dark mode. | Text, source, calculation, and forecast distinctions remain legible without relying on accent color alone. | Not run | **Partial** — chart exact-value table and source/calculation details inspected in both themes; the plot was not fully framed in screenshots, and forecast-specific details remain untested |
+| ID | Setup and action | Expected behavior | Electron |
+| --- | --- | --- | --- |
+| G1 | Start with no mounted folder; ask a stable general question. | The question is accepted without opening a folder. It is a direct/model-only answer, not a workspace claim. | **Pass** — local mock and direct OpenAI |
+| G2 | Mount the same fixture; ask one simple question whose answer needs a document passage and one whose answer needs a table calculation. | Both requests stream; file-dependent claims have inspectable source/tool evidence. Source files remain unchanged. | **Partial** — table calculation passed against an independent oracle; document answer/provenance looked correct, but a scratch literal-phrase matcher failed on an equivalent paraphrase |
+| G3 | While a longer model response is streaming, stop it. | The run stops promptly; completed evidence remains inspectable and no later response appears in the deleted/closed turn. | **Partial** — stop/no-late-text passed; preservation of completed evidence was not checked |
+| G4 | Request a chart from the fixture, then expand its analysis details. | One chart renders; labels, values, units, and source query agree. Python calculations identify Python; the built-in forecast route identifies a forecast, not a user-written Python script. | **Pass** — one 24-point line chart matched the independent monthly oracle; one tick-spacing defect fixed |
+| G5 | Ask an ambiguous but answerable question that should trigger one clarification; select an option and continue. | The clarification is visible and the resumed answer retains the parent-turn link and selected assumption. | **Fail** — explicit prose clarification was resumed through the main composer, but the model returned a workspace-wide total instead of the requested channel comparison; structured clarification and linked-turn logging remain unvalidated |
+| G6 | Change model and appearance, save a conversation, restart the app, reopen it, then delete it. | Settings and transcript persist across restart. Deletion removes the transcript and its canonical analysis records and does not resurrect the row. | **Pass for a single-turn analytical conversation** — provider/model/theme and chart transcript survived restart; reopen worked; sidebar deletion removed the transcript and canonical turn record, still absent after a second restart |
+| G7 | Repeat the relevant answer/detail interactions in light and dark mode. | Text, source, calculation, and forecast distinctions remain legible without relying on accent color alone. | **Partial** — chart exact-value table and source/calculation details inspected in both themes; the plot was not fully framed in screenshots, and forecast-specific details remain untested |
 
 Web research and web-page prompt-injection cases are intentionally absent: the
 web tool is not shipped yet (product backlog #2 remains deferred). Do not mark
@@ -90,8 +87,8 @@ Electron desktop run on 2026-10-06:
 - Measured startup from process spawn to interactive Ask DOM: **764 ms** in this
   WSLg run. At 15 seconds after the response and history reopen, the Electron
   process tree contained 8 processes and summed to **677.6 MiB RSS**, including
-  the Rust engine. This is a single Linux/WSLg sample, not a Windows figure or
-  a matched Tauri comparison.
+  the Rust engine. This is a single Linux/WSLg sample, not a Windows or macOS
+  figure.
 - `electron-builder --linux dir` produced an unpacked package of
   **381,927,791 bytes (about 364.1 MiB)**. `app.asar` was 30,567,439 bytes and
   the engine binary 28,300,992 bytes. This is the unpacked Linux directory, not
@@ -206,9 +203,34 @@ Electron persistence and theme follow-up on 2026-10-06:
   structure, and source text checks passed. Forecast-specific detail states
   remain untested.
 
-Tauri G1–G7 remain **Not run**. Electron G6 passed for the tested single-turn
-analytical conversation; G7 remains partial as described. G5 is **not passed**:
-a prose clarification was followed through the main composer, but the resumed
-answer failed to compare channels; structured clarification UI and linked-turn
-logging remain unvalidated. The live-model runs improve confidence in Electron
-Ask and chart paths, but do not establish shell parity or complete backlog #9.
+Electron G6 passed for the tested single-turn analytical conversation; G7
+remains partial as described. G5 is **not passed**: a prose clarification was
+followed through the main composer, but the resumed answer failed to compare
+channels; structured clarification UI and linked-turn logging remain
+unvalidated. The live-model runs improve confidence in Electron Ask and chart
+paths, but do not complete backlog #9.
+
+## Electron 44.5.1 upgrade check
+
+The maintained package is now pinned to Electron 44.5.1. `pnpm check`,
+`pnpm build`, all four Electron bridge tests, all eight updater tests, all chart
+renderer checks, and `cargo fmt --check` pass. `cargo test --locked` remains a
+failure: 324 unit tests and 21 agent-loop integration tests pass, one test is
+ignored, and the two existing agent-loop cases named above still expect
+`Verified` where the runtime returns `NeedsReview`. Their expectations and
+answers were not changed. `cargo clippy --all-targets --locked -- -D warnings`
+also fails on 22 lint diagnostics across existing library and test code.
+
+`pnpm electron:build` and `electron-builder --linux --x64 --dir` both pass.
+The unpacked package is 318,982,396 bytes; `app.asar` is 1,784,888 bytes and
+the packaged x64 Rust sidecar is 20,979,488 bytes. Its resources contain only
+the architecture-specific sidecar (no stale generic duplicate). Running that
+exact packaged binary with the JSON-lines `ping` request returned `pong`.
+This validates packaging and the sidecar protocol, not the Electron GUI.
+
+This Linux environment does not have Electron's `libnspr4` and `libnss3`
+runtime libraries; installing system packages was denied by the managed
+environment. Therefore Electron 44 could not be launched here. The earlier UI
+observations above remain Electron 42.3.3 evidence—not a claim that the new
+major has passed packaged GUI smoke tests. The repository's pre-existing
+`dist-electron/` validation artifact was not overwritten.

@@ -5,20 +5,23 @@
 > [release](https://github.com/Avijit-Kumar-GIT/fella/releases) download.
 > This page is for **building it yourself**.
 
-Fella needs a Rust toolchain, Node + pnpm, a BYOK LLM provider, and —
-on Linux GTK/WebKit system libraries for Tauri.
+Fella needs a Rust toolchain, Node + pnpm, a BYOK LLM provider, and the
+platform's Electron runtime libraries. End users do not need Node or Rust; the
+packaged app includes Electron and the Rust sidecar.
 
 ## 1. System libraries (Linux / Debian-Ubuntu)
 
 ```sh
 sudo apt-get update && sudo apt-get install -y \
   build-essential pkg-config cmake curl wget file \
-  libssl-dev libgtk-3-dev libwebkit2gtk-4.1-dev \
-  libayatana-appindicator3-dev librsvg2-dev libxdo-dev
+  libssl-dev libnspr4 libnss3 libatk1.0-0 libatk-bridge2.0-0 \
+  libx11-xcb1 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
+  libgbm1 libasound2
 ```
 
 macOS: install Xcode Command Line Tools (`xcode-select --install`).
-Windows: install the Visual Studio C++ Build Tools and WebView2 (ships with Windows 11).
+Windows: install the Visual Studio C++ Build Tools. Electron bundles Chromium;
+WebView2 is not used.
 
 ## 2. Rust (stable, **1.93+**)
 
@@ -121,35 +124,25 @@ Each provider is **one row** in `PROVIDERS` in
 Add the row and it shows up in `/auth`, `/login`, and the registry-driven
 defaults no other code changes for an OpenAI-compatible endpoint.
 
-## 5. Run
+## 5. Run Electron
 
 ```sh
 pnpm install
-pnpm tauri dev
+pnpm electron:dev
 ```
 
-**WSLg:** if the window opens but the layout looks broken CSS variables/fonts
-loading, but no centering, no spacing, flex layout not applying while
-individual component styles (buttons) partly do launch with the DMA-BUF
-renderer disabled:
+`pnpm electron:dev` builds the UI and Rust sidecar, starts Vite, waits for it,
+then launches Electron. It is intended to run in one terminal. For the manual
+two-terminal flow, run `pnpm dev` first, then set
+`$env:FELLA_ELECTRON_URL = "http://127.0.0.1:1420"` in PowerShell and run
+`pnpm exec electron .\electron\main.mjs` in the second terminal.
 
-```sh
-WEBKIT_DISABLE_DMABUF_RENDERER=1 pnpm tauri dev
-```
-
-WSLg's virtualised GPU doesn't get along with WebKitGTK's default compositing
-path; this forces a fallback that renders correctly. Confirmed working
-2026-09-11. If that alone doesn't fully fix it, also try
-`WEBKIT_DISABLE_COMPOSITING_MODE=1` alongside it. A harder failure a window
-that never opens at all, `EGL_BAD_PARAMETER` is a separate, still-open
-problem (`docs/RELEASE.md`, "Not yet exercised") this env var is for a
-window that opens but paints wrong, not for that.
-
-Verify gates before a PR (see `CONTRIBUTING.md`), all from a clean tree:
-`cargo test --locked` and `cargo clippy --all-targets --locked -- -D warnings`
-from `src-tauri/` (the default SQLite build with `pdf` and `xlsx`),
-`pnpm run check` (0/0), `pnpm run build`. Never `--features duckdb` locally it
-is CI-only.
+Verify gates before a PR (see `CONTRIBUTING.md`): `pnpm run check`,
+`pnpm run build`, Electron bridge/update/chart tests, `cargo fmt --check`,
+`cargo clippy --all-targets --locked -- -D warnings`, and
+`cargo test --locked`. Run Cargo commands with
+`--manifest-path src-tauri/Cargo.toml`. Never use `--features duckdb` for the
+normal release build; it is an opt-in backend with known parity gaps.
 
 ## Experimental extension boundary
 

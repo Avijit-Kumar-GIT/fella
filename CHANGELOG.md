@@ -6,7 +6,27 @@ All notable changes to Fella are recorded here. Format follows
 
 ## [Unreleased]
 
-No unreleased changes.
+### Added
+
+- Electron desktop shell with a sandboxed renderer, allowlisted preload bridge,
+  and the Rust analytics engine running as a local JSON-lines sidecar.
+- Cross-platform Electron packaging and updater artifact checks for macOS,
+  Windows, and Linux, with SHA-256 verification.
+
+### Changed
+
+- Provider-free general questions no longer require a mounted repository.
+- Existing `dev.fella.app` data directories remain the default so settings,
+  credentials, and conversation history survive the shell transition.
+- The app and sidecar version is being advanced to 0.3.0; published builds
+  remain unsigned, and the release is not ready until the documented quality
+  and packaged-app gates pass.
+
+### Removed
+
+- Tauri runtime, plugins, shell commands, and bundle configuration. The Rust
+  engine remains; its existing `src-tauri/` directory name is retained for now
+  to avoid a broad path-only rename during the shell migration.
 
 ## [0.2.0] - 2026-09-20
 

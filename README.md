@@ -34,10 +34,10 @@ Fella combines a Rust analytics engine with an opinionated AI harness. The
 model drives interpretation, decomposition, tool choice, and explanation inside
 a reviewed, read-only boundary. The local engine catalogs files, queries data,
 searches documents, makes charts, compiles supported analytical plans, and
-checks computational claims. The broader product direction also includes
-general answers without a folder and visible web research when external
-sources matter. Those no-folder and web routes are not yet shipped in the
-current release.
+checks computational claims. General questions can be asked without mounting
+a folder. Visible web research when external sources matter remains future
+work; the current release does not send questions or local data to a web-search
+service.
 
 For analytics, a plausible answer is not good enough. The goal is to reach the
 right answer the first time, with as little unnecessary reasoning between the
@@ -122,6 +122,12 @@ curl -fsSL https://lilfella.app/install.sh | sh
 irm https://lilfella.app/install.ps1 | iex
 ```
 
+**Upgrading from the published 0.2.0 Tauri app:** install the Electron build
+manually from the releases page once; `/update` in the old shell cannot convert
+the app. The new shell reuses the existing `dev.fella.app` data directory, so
+settings, provider credentials, and conversation history remain available.
+After that migration, `/update` checks and applies Electron releases.
+
 On first launch:
 
 1. Mount a folder.
@@ -176,14 +182,15 @@ Read the full [security review](SECURITY.md) and the project's [principles](docs
 
 ## Build from source
 
-The current release uses Tauri 2, SvelteKit, and Rust. See
-[`docs/DEV_SETUP.md`](docs/DEV_SETUP.md) for platform dependencies and provider setup.
+The desktop shell is Electron, with the SvelteKit UI and Rust analytics engine
+running as a local sidecar. See [`docs/DEV_SETUP.md`](docs/DEV_SETUP.md) for
+toolchain requirements and provider setup.
 
 ```sh
 git clone https://github.com/Avijit-Kumar-GIT/fella.git
 cd fella
 pnpm install
-pnpm tauri dev
+pnpm electron:dev
 ```
 
 Useful verification commands:
@@ -194,8 +201,8 @@ pnpm build
 cargo test --manifest-path src-tauri/Cargo.toml --locked
 ```
 
-The Electron shell comparison lives on the `electron-migration` branch and is
-documented separately in [`docs/ELECTRON.md`](docs/ELECTRON.md).
+The Electron shell and its line-delimited JSON bridge are described in
+[`docs/ELECTRON.md`](docs/ELECTRON.md).
 
 ## Documentation
 

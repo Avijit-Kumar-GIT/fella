@@ -26,7 +26,7 @@ workspace artifact, open an issue first so the product boundary can be reviewed.
 - Rust 1.93 or newer.
 - Node 22 or newer. CI currently uses Node 24.
 - pnpm 11.
-- Tauri system dependencies; Linux requires GTK 3 and WebKitGTK 4.1 development packages.
+- Electron runtime libraries on Linux; Rust build tools and OpenSSL development headers.
 - A model provider only for live app/evaluation work; deterministic tests do not need one.
 
 The [developer setup guide](https://github.com/Avijit-Kumar-GIT/fella/blob/main/docs/DEV_SETUP.md) lists platform packages and provider setup.
@@ -35,7 +35,7 @@ The [developer setup guide](https://github.com/Avijit-Kumar-GIT/fella/blob/main/
 git clone https://github.com/Avijit-Kumar-GIT/fella
 cd fella
 pnpm install
-pnpm tauri dev
+pnpm electron:dev
 ```
 
 ## Make a focused app change

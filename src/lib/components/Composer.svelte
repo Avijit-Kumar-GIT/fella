@@ -1006,7 +1006,7 @@ import ProviderIcon from './ProviderIcon.svelte';
 	textarea::placeholder {
 		color: var(--text-faint);
 	}
-	/* API-key entry: mask the characters (WebKit Tauri's engine). */
+	/* API-key entry: mask the characters in the Electron renderer. */
 	.field.secret textarea {
 		-webkit-text-security: disc;
 		font-family: var(--mono);

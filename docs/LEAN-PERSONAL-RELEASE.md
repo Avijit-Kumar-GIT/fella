@@ -219,7 +219,7 @@ The layers have distinct responsibilities:
 - **Provider transport:** sends only the user's model request to the selected
   BYOK provider.
 
-The analytics engine should not know about packs, MCP, augment tabs, Tauri
+The analytics engine should not know about packs, MCP, augment tabs, desktop-shell APIs
 commands, or frontend state. The harness should not compute figures itself.
 The UI should not decide whether a number is correct.
 

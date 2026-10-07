@@ -178,7 +178,7 @@ gracefully.
 
 - [ ] **Inventory every producer and consumer of verification status.** Map
   status generation, persistence, APIs, chat rendering, evidence/detail
-  surfaces, and tests across the supported Tauri/Electron paths before
+  surfaces, and tests across the maintained Electron path before
   changing semantics.
 - [ ] **Represent the basis of an answer directly.** Introduce a typed
   provenance/report model that can describe, as applicable: model knowledge;
@@ -411,8 +411,8 @@ loaded completely in about 2.5 seconds in a local debug run.
 
 A one-run serialization diagnostic measured the full `Catalog` response at
 2,865,584 JSON bytes and 90 ms of `serde_json` serialization for the same
-fixture. This is the serialized payload size—not measured Tauri/Electron
-transport latency or WebView parse/render time. Its test-process peak RSS was
+fixture. This is the serialized payload size—not measured Electron transport
+latency or renderer parse/render time. Its test-process peak RSS was
 59,068,416 bytes while the response buffer was live, so it is not directly
 comparable to the earlier mount-only RSS readings.
 
@@ -553,9 +553,9 @@ inventory is now bounded to 50 entries / 12,000 characters per call, supports
 path search and kind filters (including skipped files), and the Sources page
 renders 100 rows at a time. This bounds tool output and DOM row count, but not
 the full catalog sent over desktop IPC or retained in memory: the UI still
-receives every source record. Mounts now run away from the Tauri/Electron
-command executor, and both shells show scan/preparation phase and count
-updates; the existing workspace remains available until the full new snapshot
+receives every source record. Mounts now run away from the Electron command
+executor, which shows scan/preparation phase and count updates; the existing
+workspace remains available until the full new snapshot
 is ready. Existing analysis runs hold a workspace read permit through
 finalization, and publication waits for them before swapping revisions; new
 analyses queue behind a pending publication, preventing one answer from
@@ -718,10 +718,10 @@ rather than assigning them a passing score.
 - [ ] **Add web-page threat coverage when web research is implemented.** Test
   hostile page instructions, citation provenance, and local-file isolation
   before enabling any web-backed answer path.
-- [ ] **Verify supported shells.** Run the same representative functionality
-  checks against Tauri and Electron where both are maintained: streaming,
-  tool approval/cancellation as applicable, chart display, citations,
-  clarification/resume, settings, and persisted conversations.
+- [ ] **Verify the maintained desktop shell.** Complete the Electron checks for
+  streaming, cancellation and retained evidence, chart display, clarification
+  and resume, settings, persisted conversations, and packaged startup. Electron
+  is the only supported desktop shell.
 - [ ] **Check performance and packaging.** Measure startup, idle memory,
   folder-inspection responsiveness, and packaged size. Ensure indexing and
   source profiling do not make ordinary Ask noticeably slower or require a
@@ -733,7 +733,7 @@ and a localhost-only mock model. A no-folder question streamed through the
 composer and Rust sidecar in one request, rendered, was archived with
 `workspace: null`, and reopened from history. The actual Settings control
 switched the conversation between light and dark themes. This establishes the
-Electron general-Ask path; it is not a full shell-parity run. The sidebar
+Electron general-Ask path; it is not a full release-validation run. The sidebar
 currently presents a null-scoped conversation in a synthetic “No repository”
 row under Repositories. Its stored scope is null, but the visual grouping can
 still read like a repository and deserves a separate UX decision.
@@ -752,7 +752,7 @@ clarification UI and linked-turn logging remain unvalidated. The document
 question's live trace reported 18,763 tokens for two model calls,
 an efficiency signal to investigate. The run record—including the temporary
 phrase matcher false negative and its unmodified result—is in
-SHELL-PARITY.md. A crowded chart-axis edge case found during visual review was
+ELECTRON-VALIDATION.md. A crowded chart-axis edge case found during visual review was
 fixed and covered by an SSR regression test.
 
 A persistence/theme follow-up used the app's actual provider/model command flow
@@ -766,7 +766,7 @@ calculation details. G7 remains partial: the chart screenshot was scrolled too
 far to inspect the full plot, and forecast-specific details were not tested.
 One preliminary runner mismatch sent the UI's default Gemma model to OpenAI and
 received a 404; it is documented as invalid test setup, not a model-quality
-result. Full conditions are recorded in [`SHELL-PARITY.md`](SHELL-PARITY.md).
+result. Full conditions are recorded in [`ELECTRON-VALIDATION.md`](ELECTRON-VALIDATION.md).
 
 The shared UI now labels general answers, inspections, and analyses distinctly;
 analysis details distinguish user-authored Python from Fella's forecast
@@ -777,23 +777,25 @@ content has an always-on untrusted-data instruction in the system prompt, with
 prompt and scripted agent-loop regression checks. Conversation deletion
 removes its transcript and canonical analysis records and prevents late writes
 from recreating them. The Electron bridge contract test is part of CI, and the
-current native run record is in [`SHELL-PARITY.md`](SHELL-PARITY.md).
+current native run record is in [`ELECTRON-VALIDATION.md`](ELECTRON-VALIDATION.md).
 
 This item remains **open**: Electron workspace reading, table calculation,
 chart rendering, cancellation, and a single-turn restart/history/deletion
-cycle have now been exercised, but Tauri parity has not. Clarification/resume,
-multi-turn deletion, a fully framed visual chart capture, forecast detail
-states, and all equivalent Tauri behaviors remain untested. The measured
-startup, memory, and unpacked-package figures are Linux/WSLg Electron baselines,
-not Windows or a Tauri comparison. A local prompt regression is not a
-live-model security guarantee; web-specific controls depend on backlog #2.
+cycle have been exercised. Clarification/resume failed its live continuation
+case; retained evidence after Stop, multi-turn deletion, a fully framed visual
+chart capture, forecast detail states, and native packaged launch on each OS
+remain incomplete. The measured startup, memory, and unpacked-package figures
+are Linux/WSLg Electron baselines, not Windows or macOS measurements. A local
+prompt regression is not a live-model security guarantee; web-specific
+controls depend on backlog #2.
 The 5,000-file and 10-GiB ingestion observations are recorded under backlog #6
 and do not substitute for shell measurements.
 
 **Acceptance checks:** users understand what Fella used, web access is not
-surprising, provider transmission and local retention are explicit, and both
-maintained shells pass the same capability suite. Until web research exists,
-the product must clearly state that it has not checked current web sources.
+surprising, provider transmission and local retention are explicit, and the
+maintained Electron shell passes its capability suite. Until web research
+exists, the product must clearly state that it has not checked current web
+sources.
 
 ### 10. Bound verifier authority and make its decisions inspectable
 

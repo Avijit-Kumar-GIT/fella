@@ -6,26 +6,26 @@ import { spawn } from 'node:child_process';
 
 const REPO = 'Avijit-Kumar-GIT/fella';
 
-function releaseUrl() {
-	return process.env.FELLA_RELEASE_API_URL?.trim() ||
+function releaseUrl(override) {
+	return override?.trim() || process.env.FELLA_RELEASE_API_URL?.trim() ||
 		`https://api.github.com/repos/${REPO}/releases/latest`;
 }
 
-function versionTuple(value) {
+export function versionTuple(value) {
 	const parts = value.trim().replace(/^v/i, '').split('.');
 	if (parts.length !== 3 || parts.some((part) => !/^\d+$/.test(part))) return null;
 	return parts.map(Number);
 }
 
-function isNewer(current, latest) {
+export function isNewer(current, latest) {
 	const a = versionTuple(current);
 	const b = versionTuple(latest);
 	if (!a || !b) return false;
 	return b[0] > a[0] || (b[0] === a[0] && (b[1] > a[1] || (b[1] === a[1] && b[2] > a[2])));
 }
 
-async function fetchResponse(url, headers, timeoutMs) {
-	const response = await fetch(url, {
+async function fetchResponse(url, headers, timeoutMs, fetcher = fetch) {
+	const response = await fetcher(url, {
 		headers,
 		signal: AbortSignal.timeout(timeoutMs)
 	});
@@ -33,29 +33,30 @@ async function fetchResponse(url, headers, timeoutMs) {
 	return response;
 }
 
-async function fetchRelease() {
+async function fetchRelease(fetcher, apiUrl) {
 	const response = await fetchResponse(
-		releaseUrl(),
+		releaseUrl(apiUrl),
 		{ Accept: 'application/vnd.github+json', 'User-Agent': 'fella-app' },
-		20000
+		20000,
+		fetcher
 	);
 	return response.json();
 }
 
-async function fetchBytes(url) {
-	const response = await fetchResponse(url, { 'User-Agent': 'fella-app' }, 60000);
+async function fetchBytes(url, fetcher) {
+	const response = await fetchResponse(url, { 'User-Agent': 'fella-app' }, 60000, fetcher);
 	return Buffer.from(await response.arrayBuffer());
 }
 
-function assetCandidates(version) {
-	if (process.platform === 'win32') {
-		return [`Fella_${version}_x64-setup.exe`, `Fella_${version}_x64_en-US.msi`];
+export function assetCandidates(version, platform = process.platform) {
+	if (platform === 'win32') {
+		return [`Fella_${version}_x64.exe`, `Fella_${version}_x64.msi`];
 	}
-	if (process.platform === 'darwin') {
-		return [`Fella_${version}_universal.dmg`, `Fella_${version}_universal.app.tar.gz`];
+	if (platform === 'darwin') {
+		return [`Fella_${version}_universal.dmg`, `Fella_${version}_universal.zip`];
 	}
-	if (process.platform === 'linux') {
-		return [`Fella_${version}_amd64.AppImage`, `Fella_${version}_amd64.deb`];
+	if (platform === 'linux') {
+		return [`Fella_${version}_x64.AppImage`, `Fella_${version}_x64.deb`];
 	}
 	return [];
 }
@@ -64,7 +65,7 @@ function findAsset(assets, candidates) {
 	return candidates.map((name) => assets.find((asset) => asset.name === name)).find(Boolean);
 }
 
-function checksumFor(text, filename) {
+export function checksumFor(text, filename) {
 	for (const line of text.split(/\r?\n/)) {
 		const match = /^([0-9a-fA-F]{64})\s+\*?(.+?)\s*$/.exec(line);
 		if (match?.[2] === filename) return match[1].toLowerCase();
@@ -72,10 +73,13 @@ function checksumFor(text, filename) {
 	return null;
 }
 
-async function verifyChecksum(release, asset, bytes) {
+async function verifyChecksum(release, asset, bytes, fetcher) {
 	const sums = release.assets?.find((candidate) => candidate.name === 'SHA256SUMS');
 	if (!sums) throw new Error('the latest release has no SHA256SUMS nothing installed');
-	const expected = checksumFor((await fetchBytes(sums.browser_download_url)).toString('utf8'), asset.name);
+	const expected = checksumFor(
+		(await fetchBytes(sums.browser_download_url, fetcher)).toString('utf8'),
+		asset.name
+	);
 	if (!expected) throw new Error(`SHA256SUMS has no entry for ${asset.name}`);
 	const actual = createHash('sha256').update(bytes).digest('hex');
 	if (expected !== actual) {
@@ -87,7 +91,7 @@ function psQuote(value) {
 	return value.replaceAll("'", "''");
 }
 
-function windowsUpdateScript(installer, executable, log) {
+export function windowsUpdateScript(installer, executable, log) {
 	const isMsi = installer.toLowerCase().endsWith('.msi');
 	const file = isMsi ? 'msiexec' : psQuote(installer);
 	const args = isMsi
@@ -146,7 +150,6 @@ function applyMac(installer, app) {
 		`rm -rf ${shQuote(join(destination, name))}`,
 		`cp -R "$src" ${shQuote(destination)}`,
 		`hdiutil detach -quiet "$mnt" || true`,
-		`xattr -dr com.apple.quarantine ${shQuote(join(destination, name))} 2>/dev/null || true`,
 		`open ${shQuote(join(destination, name))}`
 	].join('\n');
 	spawnDetached('sh', ['-c', script]);
@@ -171,26 +174,40 @@ async function apply(installer, app) {
 	throw new Error('no update path for this OS yet');
 }
 
+async function stageAsset(filename, bytes) {
+	const directory = join(tmpdir(), 'fella-update');
+	await mkdir(directory, { recursive: true });
+	const staged = join(directory, filename);
+	await writeFile(staged, bytes);
+	return staged;
+}
+
 /** Check GitHub, verify the matching installer, and hand it to the shell. */
-export async function checkAndApply(app) {
+export async function checkAndApply(
+	app,
+	{
+		fetcher = fetch,
+		platform = process.platform,
+		releaseApiUrl,
+		stage = stageAsset,
+		applyUpdate = apply
+	} = {}
+) {
 	if (!app.isPackaged) throw new Error('Electron updates are only available from a packaged build.');
 	const current = app.getVersion();
-	const release = await fetchRelease();
+	const release = await fetchRelease(fetcher, releaseApiUrl);
 	const latest = String(release.tag_name ?? '').trim().replace(/^v/i, '');
 	const status = { current, latest, available: isNewer(current, latest) };
 	if (!status.available) return status;
 
-	const candidates = assetCandidates(latest);
+	const candidates = assetCandidates(latest, platform);
 	const asset = findAsset(release.assets ?? [], candidates);
 	if (!asset) {
 		throw new Error(`the latest release has no installer for this platform (looked for ${candidates.join(' or ')})`);
 	}
-	const bytes = await fetchBytes(asset.browser_download_url);
-	await verifyChecksum(release, asset, bytes);
-	const directory = join(tmpdir(), 'fella-update');
-	await mkdir(directory, { recursive: true });
-	const staged = join(directory, asset.name);
-	await writeFile(staged, bytes);
-	await apply(staged, app);
+	const bytes = await fetchBytes(asset.browser_download_url, fetcher);
+	await verifyChecksum(release, asset, bytes, fetcher);
+	const staged = await stage(asset.name, bytes);
+	await applyUpdate(staged, app);
 	return status;
 }

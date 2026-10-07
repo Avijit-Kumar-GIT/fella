@@ -1,7 +1,7 @@
 //! The deterministic compute-and-check layer: SQL execution, the Python
 //! stats sandbox, chart-data validation, and answer verification. Everything
 //! in this module is independently readable and testable on its own —
-//! no LLM calls, no Tauri/IPC, no secrets, no conversation state. The only
+//! no LLM calls, no desktop IPC, no secrets, no conversation state. The only
 //! seam back into the rest of the app is [`AnalyticsSource`], which the
 //! agent loop and tools reach through instead of a full [`crate::engine::state::EngineState`].
 //!

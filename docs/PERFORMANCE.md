@@ -1,19 +1,36 @@
 # Performance & size
 
-Fella claims to be "small, fast, anti-bloat, <1s startup, low idle memory."
-This file is how we hold that claim to account with actual numbers.
+Fella aims to be small, responsive, and light on memory. This file explains
+how to measure those claims. Most historical binary tables below describe the
+former Rust/Tauri bundle; they are not Electron installer or process-tree
+measurements. Current whole-app test notes live in
+[`ELECTRON-VALIDATION.md`](ELECTRON-VALIDATION.md).
 
 ## Run it
 
 ```sh
 cargo install cargo-bloat hyperfine   # one-time, no sudo, ~5 min each
 
-./scripts/measure.sh                  # quick: sizes, deps, bundle, startup, memory (~2 min)
+./scripts/measure.sh                  # Rust sidecar size, dependencies, frontend, build time
 ./scripts/measure.sh --bloat          # + which crates fill the binary (relinks it, ~10 min)
 ./scripts/measure.sh --build          # + time an edit-one-file rebuild
 ./scripts/measure.sh --build-cold     # + time a full clean rebuild (~20 min)
 ./scripts/measure.sh --min            # + build the size-minimised profile
 ```
+
+For the whole Electron process tree on Windows, build the sidecar and run the
+desktop memory probe:
+
+```powershell
+pnpm electron:build
+.\scripts\measure-windows.ps1 -Seconds 15
+```
+
+That helper launches Electron with an isolated Fella data directory and sums
+the Electron and Rust child processes. It is a development-shell sample, not a
+measurement of the installed package. For a release comparison, install and
+launch the packaged app and record the full process tree under the same OS,
+idle interval, and workspace state.
 
 Every run appends a dated block to [`PERFORMANCE-LOG.md`](PERFORMANCE-LOG.md),
 so you can watch the numbers move as the code changes. Already installed and
@@ -25,17 +42,17 @@ used automatically: `time`, `du`, `strip`, `size` (binutils), `cargo tree`,
 | Number | What it is | Rough target |
 |---|---|---|
 | **binary size with symbols** | the `target/release/fella` file as built | |
-| **binary size stripped** | the same file with debug info removed; **this is what actually ships** (Tauri's installer strips it) | low tens of MB is fine for an app that embeds DuckDB |
+| **binary size stripped** | the Rust engine sidecar with debug info removed; not the complete Electron application | compare the sidecar and packaged app separately |
 | **`size` text/data/bss** | machine code / initialised data / zeroed data sections | text dominates; watch its trend |
 | **unique crates in the graph** | every third-party crate compiled into the build (`-e normal`, so runtime deps only) code to compile, audit and trust | fewer is better; adding a dependency adds to this |
-| **duplicate versions** | the same crate pulled in at two versions wasted compile time and binary bytes | 0, or a small known list (a Tauri app always has a handful) |
+| **duplicate versions** | the same crate pulled in at two versions wastes compile time and binary bytes | 0, or a small known list |
 | **cargo-bloat, by crate** (`--bloat`) | how many **bytes of the binary** each crate's code occupies. `libduckdb_sys` sits at the top; compare its measured cost with the historical trade-offs in `PERFORMANCE-LOG.md` | |
 | **incremental rebuild** | change one file, `cargo build` again your dev feedback loop | seconds |
 | **cold rebuild** | from `cargo clean`; dominated by DuckDB's C++ (~15 min). Only changes when dependencies change | one-time pain |
 | **`cargo-timing.html`** | a Gantt chart of which crate took how long to compile. Open it in a browser | |
-| **cold start → interactive** | milliseconds from launching the binary to the UI being ready, from the `fella: interactive in N ms` line the app prints | **< 1000 ms** once the OS disk cache is warm (i.e. not the very first launch) |
-| **main process RSS** | resident memory the main process holds while idle. WebKit helper processes add more on top | idle around **100–150 MB** for the main process is healthy |
-| **frontend bundle** | the JS/CSS the webview loads. Already ~190 KB uncompressed, ~60 KB gzipped | not a concern; the number's here to catch a regression |
+| **engine initialization** | Rust sidecar initialization time; this is not end-to-end Electron window readiness | compare across the same build and machine |
+| **Electron process-tree RSS** | resident memory summed across Electron's main/renderer/GPU processes and the Rust sidecar | compare at the same idle interval, platform, workspace state, and app build |
+| **frontend bundle** | the JS/CSS the Electron renderer loads | track regressions; Chromium itself is measured separately in process-tree RSS |
 
 ## How to read it, as a beginner
 
@@ -46,12 +63,16 @@ used automatically: `time`, `du`, `strip`, `size` (binutils), `cargo tree`,
 - **`hyperfine`**: runs a command several times and reports `mean ± σ`, so one
   slow run from a busy laptop doesn't mislead you. Without it the script falls
   back to a single `time` measurement.
-- **`time -v`**: the line that matters is *Maximum resident set size* (peak RAM,
-  in KB divide by 1024 for MB).
-- **cold start**: the first launch after a build is always slow (cold disk
-  cache); the 2nd and 3rd runs are the real number.
+- **`time -v`**: the line that matters for a build is *Maximum resident set
+  size* (peak build RAM, in KB divide by 1024 for MB); it is not app idle RAM.
 
-## Before / after the SQLite migration
+## Historical Rust/Tauri measurements
+
+The following binary breakdown was captured before the shell migration. Use it
+as history for the Rust engine and SQLite change, not as a current full-app
+size or memory comparison.
+
+### Before / after the SQLite migration
 
 | Metric | DuckDB default (`d057220`) | **SQLite default (`5b71f54`)** | change |
 |---|---|---|---|
@@ -88,7 +109,7 @@ No crate dominates any more the sign of a small binary.
 
 ## Agent-loop latency (question → answer)
 
-`measure.sh` covers *startup* and *size*. The other number a user feels is how
+`measure.sh` covers Rust build and sidecar size, not desktop startup. The other number a user feels is how
 long a question takes. It is dominated by **model round trips**, not by Fella's
 own code (a `run_sql` is ~10–50 ms; a model turn is seconds). The loop's job is
 to keep the round-trip count low and the provider responsive.
@@ -115,7 +136,7 @@ to keep the round-trip count low and the provider responsive.
 
 **Measure it**
 
-Run `pnpm tauri dev` with logging on and watch for these lines:
+Run `pnpm electron:dev` with logging on and watch for these lines:
 
 ```
 model response ← 200 streamed 47 chars in 3.1s        # one model round trip

@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
+import { tmpdir } from 'node:os';
 import test from 'node:test';
 
-import { EngineClient } from '../electron/engine.mjs';
+import { assertBinary, EngineClient, isRegularFile } from '../electron/engine.mjs';
 
 class FakeEngineProcess extends EventEmitter {
 	stdin = new PassThrough();
@@ -42,6 +45,23 @@ async function waitForRequests(child, count) {
 	}
 	assert.equal(child.requests.length, count, 'engine requests should be written as JSON lines');
 }
+
+test('sidecar resolution skips the packaged resource directory and accepts its binary', () => {
+	const temp = mkdtempSync(join(tmpdir(), 'fella-sidecar-test-'));
+	const resourceDirectory = join(temp, 'fella-engine');
+	const sidecar = join(resourceDirectory, 'fella-engine-x64');
+	mkdirSync(resourceDirectory);
+	writeFileSync(sidecar, 'test executable');
+
+	try {
+		assert.equal(isRegularFile(resourceDirectory), false);
+		assert.equal(isRegularFile(sidecar), true);
+		assert.throws(() => assertBinary(resourceDirectory), /engine was not found/);
+		assert.doesNotThrow(() => assertBinary(sidecar));
+	} finally {
+		rmSync(temp, { recursive: true, force: true });
+	}
+});
 
 test('correlates concurrent bridge requests and forwards streamed events', async () => {
 	const child = new FakeEngineProcess();

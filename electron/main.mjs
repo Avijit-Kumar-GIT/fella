@@ -1,10 +1,10 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, protocol, shell } from 'electron';
-import { existsSync, mkdirSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { EngineClient, assertBinary } from './engine.mjs';
+import { EngineClient, assertBinary, isRegularFile } from './engine.mjs';
 import { checkAndApply } from './update.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -19,9 +19,8 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 function engineCandidates() {
-	const names = process.platform === 'win32'
-		? ['fella-engine.exe', 'fella.exe', 'fella-engine', 'fella']
-		: ['fella-engine', 'fella'];
+	const suffix = process.platform === 'win32' ? '.exe' : '';
+	const names = [`fella-engine-${process.arch}${suffix}`, `fella-engine${suffix}`, `fella${suffix}`];
 	const explicit = process.env.FELLA_ENGINE_PATH?.trim();
 	const roots = [
 		process.resourcesPath,
@@ -40,7 +39,7 @@ function engineCandidates() {
 }
 
 function findEngine() {
-	return engineCandidates().find((candidate) => existsSync(candidate));
+	return engineCandidates().find(isRegularFile);
 }
 
 function contentType(pathname) {
@@ -66,8 +65,8 @@ function contentType(pathname) {
 function dataDirectory() {
 	const configured = process.env.FELLA_DATA_DIR?.trim();
 	if (configured) return resolve(configured);
-	// Match Tauri's app.path().app_data_dir() for the dev.fella.app
-	// identifier. FELLA_DATA_DIR remains available for isolated tests and
+	// Keep the stable dev.fella.app data directory across the shell migration.
+	// FELLA_DATA_DIR remains available for isolated tests and
 	// benchmarks.
 	if (process.platform === 'linux') {
 		const xdgDataHome = process.env.XDG_DATA_HOME?.trim();
@@ -110,8 +109,8 @@ async function createWindow() {
 		minHeight: 640,
 		resizable: true,
 		show: false,
-		// Match the Tauri overlays: Windows is frameless because Fella draws its
-		// own controls; Linux and macOS retain the native frame.
+		// Windows is frameless because Fella draws its own controls; Linux and
+		// macOS retain the native frame.
 		frame: !windows,
 		titleBarStyle: mac ? 'hiddenInset' : undefined,
 		backgroundColor: nativeTheme.shouldUseDarkColors ? DARK_WINDOW : LIGHT_WINDOW,

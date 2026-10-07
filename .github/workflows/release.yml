@@ -1,10 +1,7 @@
 name: Release
 
-# Push a tag like v0.1.0 (or v0.1.0-rc.1 to shake out the workflow first).
-# Produces a DRAFT GitHub release with per-OS installers + SHA256SUMS, which you
-# review and publish by hand. An `-rc.N` tag is flagged prerelease; a clean tag
-# is a normal release (so the install scripts, which read /releases/latest,
-# can see it).
+# A pushed version tag builds unsigned Electron installers and attaches them to
+# a GitHub draft. Maintainers review the artifacts and publish the draft by hand.
 on:
   push:
     tags:
@@ -18,29 +15,13 @@ permissions:
   contents: write
 
 jobs:
-  build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: macos-latest
-            args: "--target universal-apple-darwin"
-          - platform: ubuntu-22.04
-            args: ""
-          - platform: windows-latest
-            args: ""
-
-    runs-on: ${{ matrix.platform }}
+  quality:
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: System libraries (Linux only)
-        if: matrix.platform == 'ubuntu-22.04'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
-            librsvg2-dev libxdo-dev build-essential libssl-dev pkg-config file
+      - name: Native build tools
+        run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config file libssl-dev
 
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
 
@@ -51,7 +32,85 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
         with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          components: clippy, rustfmt
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Match tag to package versions
+        run: node scripts/check-release-version.mjs "${GITHUB_REF_NAME}"
+
+      - name: Svelte diagnostics
+        run: pnpm run check
+
+      - name: Electron frontend and sidecar build
+        run: pnpm run electron:build
+
+      - name: Electron update tests
+        run: pnpm run test:electron-update
+
+      - name: Electron bridge tests
+        run: pnpm run test:electron-bridge
+
+      - name: Chart renderer tests
+        run: pnpm run test:chart-renderer
+
+      - name: Rust formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings
+
+      - name: Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+
+  prepare-draft:
+    needs: quality
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Create unsigned draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          notes="Unsigned Electron installers for Fella ${TAG}. Review each platform package and SHA256SUMS before publishing. macOS may require opening the app from Privacy & Security; Windows may show a SmartScreen warning."
+          args=("$TAG" --repo "$GITHUB_REPOSITORY" --title "Fella $TAG" --draft --verify-tag --notes "$notes")
+          if [[ "$TAG" == *-* ]]; then
+            args+=(--prerelease)
+          fi
+          gh release create "${args[@]}"
+
+  build:
+    needs: prepare-draft
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            target: mac
+          - platform: ubuntu-22.04
+            target: linux
+          - platform: windows-latest
+            target: win
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Linux build dependencies
+        if: matrix.target == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config file libssl-dev
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+
+      - name: Add universal macOS Rust targets
+        if: matrix.target == 'mac'
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
@@ -59,43 +118,51 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # No signing env for v0.1 builds are unsigned; users get the documented
-      # open steps (docs/RELEASE.md "Not in v0.1").
-      - uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          # Use the pushed tag verbatim. `v__VERSION__` expands to the
-          # package.json version and would ignore an `-rc.N` suffix, so an RC
-          # tag would publish as `v0.1.0` and the checksums job (which looks up
-          # the pushed tag) would find nothing.
-          tagName: ${{ github.ref_name }}
-          releaseName: "Fella ${{ github.ref_name }}"
-          releaseBody: "Unsigned early build. Verify your download against SHA256SUMS (attached). See the README for install and open steps."
-          releaseDraft: true
-          # A hyphenated tag (v0.1.0-rc.1) is a prerelease; a clean tag
-          # (v0.1.0) publishes as a normal release so the install scripts,
-          # which read /releases/latest, can see it.
-          prerelease: ${{ contains(github.ref_name, '-') }}
-          args: ${{ matrix.args }}
+      - name: Build universal macOS app and sidecars
+        if: matrix.target == 'mac'
+        shell: bash
+        run: |
+          pnpm build
+          cargo build --release --locked --target aarch64-apple-darwin --manifest-path src-tauri/Cargo.toml
+          node electron/prepare-engine.mjs --target=aarch64-apple-darwin
+          cargo build --release --locked --target x86_64-apple-darwin --manifest-path src-tauri/Cargo.toml
+          node electron/prepare-engine.mjs --target=x86_64-apple-darwin
+          pnpm exec electron-builder --mac --universal --publish never
 
-  # After all three platform builds have attached their installers to the draft
-  # release, compute one SHA256SUMS over every asset and attach it. Unsigned
-  # builds: this is the only integrity check for v0.1, used by the install
-  # scripts and by anyone downloading by hand.
+      - name: Build Linux app and sidecar
+        if: matrix.target == 'linux'
+        run: pnpm electron:build && pnpm exec electron-builder --linux --x64 --publish never
+
+      - name: Build Windows app and sidecar
+        if: matrix.target == 'win'
+        run: pnpm electron:build && pnpm exec electron-builder --win --x64 --publish never
+
+      - name: Upload installers to draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          shopt -s nullglob
+          assets=(dist-electron/Fella_*.dmg dist-electron/Fella_*.zip dist-electron/Fella_*.exe dist-electron/Fella_*.msi dist-electron/Fella_*.AppImage dist-electron/Fella_*.deb)
+          if ((${#assets[@]} == 0)); then
+            echo "::error::No Electron installer artifacts were produced."
+            exit 1
+          fi
+          gh release upload "$TAG" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --clobber
+
   checksums:
     needs: build
     runs-on: ubuntu-22.04
-    permissions:
-      contents: write
     steps:
-      - name: Build and upload SHA256SUMS
+      - name: Compute and upload SHA256SUMS
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: |
           set -eu
-          mkdir sums && cd sums
+          mkdir sums
+          cd sums
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern '*'
           rm -f SHA256SUMS
           sha256sum -b * | sort -k2 > SHA256SUMS

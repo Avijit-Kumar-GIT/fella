@@ -1,4 +1,4 @@
-// Prevents an extra console window on Windows in release. DO NOT REMOVE.
+// Keep the sidecar process from opening a separate console window on Windows.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
@@ -22,5 +22,6 @@ fn main() {
         }
         return;
     }
-    fella_lib::run();
+    eprintln!("fella engine: launch this process with --engine-stdio --data-dir <path>");
+    std::process::exit(2);
 }

@@ -80,7 +80,7 @@ separately.
 
 ## Releases and platforms
 
-Published builds are currently unsigned, so macOS and Windows can show unknown-developer warnings. Integrity depends on HTTPS and `SHA256SUMS`, not code signing or notarization. macOS requires 10.15+, Windows requires 10+, and Linux requires WebKitGTK 4.1. Release automation builds macOS universal plus Windows and Linux artifacts on GitHub-hosted runners, but every apply/update path has not been manually exercised on every OS.
+Published builds are currently unsigned. macOS may block an unnotarized app until you explicitly approve it in Privacy & Security; Windows may show a SmartScreen warning. Integrity depends on HTTPS and `SHA256SUMS`, not code signing or notarization. The current Electron 44 build targets macOS 13+, Windows x64, and Linux x86_64. Release automation builds macOS universal plus Windows and Linux installers, but packaged launch and every update path have not been manually exercised on every OS.
 
 ## Experimental compatibility boundary
 

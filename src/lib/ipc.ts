@@ -1,8 +1,7 @@
 // Typed wrappers around the desktop command surface.
 //
-// The Tauri and Electron shells intentionally share this contract. The UI
-// should not know whether a command crossed a WebView IPC boundary or a Rust
-// sidecar's JSON-lines boundary.
+// The renderer uses one narrow, typed-in-practice bridge into the Electron
+// main process and Rust analytics sidecar.
 
 import type {
 	Answer,
@@ -26,60 +25,27 @@ import type {
 	WorkspaceProgress
 } from './types';
 
-function isTauriRuntime(): boolean {
-	return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
-}
-
 export function isElectron(): boolean {
 	return typeof window !== 'undefined' && typeof window.fella?.invoke === 'function';
 }
 
 export function isDesktop(): boolean {
-	return isTauriRuntime() || isElectron();
-}
-
-/** Kept for the few places that need to call a Tauri-only API. */
-export function isTauri(): boolean {
-	return isTauriRuntime();
+	return isElectron();
 }
 
 /** Native folder picker. Returns the chosen path, or null if cancelled. */
 export async function pickFolder(): Promise<string | null> {
-	if (isElectron()) return window.fella?.pickFolder() ?? null;
-	if (!isTauriRuntime()) return null;
-	const { open } = await import('@tauri-apps/plugin-dialog');
-	const picked = await open({ directory: true, multiple: false, title: 'Choose a folder' });
-	return typeof picked === 'string' ? picked : null;
+	return isElectron() ? window.fella?.pickFolder() ?? null : null;
 }
 
 /** Open an https URL in the user's default browser. No-op outside the app. */
 export async function openExternal(url: string): Promise<void> {
-	if (isElectron()) {
-		await window.fella?.openExternal(url);
-		return;
-	}
-	if (!isTauriRuntime()) return;
-	try {
-		const { openUrl } = await import('@tauri-apps/plugin-opener');
-		await openUrl(url);
-	} catch {
-		/* opener unavailable the URL is still shown as text to copy */
-	}
+	if (isElectron()) await window.fella?.openExternal(url);
 }
 
 /** Window controls for the custom titlebar. No-op outside the app. */
 async function windowAction(fn: 'minimize' | 'toggleMaximize' | 'close'): Promise<void> {
-	if (isElectron()) {
-		await window.fella?.windowAction(fn);
-		return;
-	}
-	if (!isTauriRuntime()) return;
-	try {
-		const { getCurrentWindow } = await import('@tauri-apps/api/window');
-		await getCurrentWindow()[fn]();
-	} catch {
-		/* window API unavailable ignore */
-	}
+	if (isElectron()) await window.fella?.windowAction(fn);
 }
 export const win = {
 	minimize: () => windowAction('minimize'),
@@ -89,32 +55,14 @@ export const win = {
 
 /** Keep the native Electron surface in step with the document theme. */
 async function setWindowAppearance(dark: boolean): Promise<void> {
-	if (isElectron()) {
-		await window.fella?.setWindowAppearance(dark);
-		return;
-	}
-	if (isTauriRuntime()) {
-		await invoke<void>('set_window_appearance', { dark });
-	}
+	if (isElectron()) await window.fella?.setWindowAppearance(dark);
 }
 
-type InvokeFn = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
-
-let _invoke: InvokeFn | null = null;
-
 async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
-	if (isElectron()) {
-		if (!window.fella) throw new Error('Electron preload bridge is unavailable');
-		return window.fella.invoke<T>(cmd, args);
+	if (!isElectron() || !window.fella) {
+		throw new Error(`ipc: "${cmd}" is unavailable outside the Electron app`);
 	}
-	if (!isTauriRuntime()) {
-		throw new Error(`ipc: "${cmd}" is unavailable outside the desktop app`);
-	}
-	if (!_invoke) {
-		const core = await import('@tauri-apps/api/core');
-		_invoke = core.invoke as InvokeFn;
-	}
-	return _invoke<T>(cmd, args);
+	return window.fella.invoke<T>(cmd, args);
 }
 
 export const ipc = {
@@ -122,14 +70,8 @@ export const ipc = {
 	appReady: () => invoke<number>('app_ready'),
 	appInfo: () => invoke<AppInfo>('app_info'),
 	async openWorkspace(path: string, onProgress: (progress: WorkspaceProgress) => void) {
-		if (isElectron()) {
-			if (!window.fella) throw new Error('Electron preload bridge is unavailable');
-			return window.fella.openWorkspace(path, onProgress);
-		}
-		const { Channel } = await import('@tauri-apps/api/core');
-		const channel = new Channel<WorkspaceProgress>();
-		channel.onmessage = onProgress;
-		return invoke<Catalog>('open_workspace', { path, progress: channel });
+		if (!window.fella) throw new Error('Electron preload bridge is unavailable');
+		return window.fella.openWorkspace(path, onProgress);
 	},
 	getCatalog: () => invoke<Catalog>('get_catalog'),
 	getWorkspaceModel: () => invoke<WorkspaceModel | null>('get_workspace_model'),
@@ -162,11 +104,6 @@ export const ipc = {
 	 * install it and exit. Only ever called by `/update`; never automatic. */
 	update: () => invoke<UpdateStatus>('update'),
 
-	/** Windows: pull the OS cursor-visibility counter back to >= 0 before a
-	 * modal native dialog, so "hide pointer while typing" can't leave the
-	 * pointer invisible inside the folder picker. No-op on other platforms. */
-	unhideCursor: () => invoke<void>('unhide_cursor'),
-
 	/** Archive a finished transcript to a file; resolves with its path. */
 	archiveConversation: (id: string, body: string) =>
 		invoke<string>('archive_conversation', { id, body }),
@@ -191,22 +128,11 @@ export const ipc = {
 		model?: string,
 		mode?: AskMode
 	): Promise<Answer> {
-		if (isElectron()) {
-			if (!window.fella) throw new Error('Electron preload bridge is unavailable');
-			return window.fella.rerunAnalysisTurn(
-				{ turnId, model: model || null, mode: mode || null },
-				onEvent
-			);
-		}
-		const { Channel } = await import('@tauri-apps/api/core');
-		const channel = new Channel<AskEvent>();
-		channel.onmessage = onEvent;
-		return invoke<Answer>('analysis_turn_rerun', {
-			turnId,
-			model: model || null,
-			mode: mode || null,
-			channel
-		});
+		if (!window.fella) throw new Error('Electron preload bridge is unavailable');
+		return window.fella.rerunAnalysisTurn(
+			{ turnId, model: model || null, mode: mode || null },
+			onEvent
+		);
 	},
 	/** Remove one archived conversation from the sidebar's history. */
 	deleteConversation: (id: string) => invoke<void>('delete_conversation', { id }),
@@ -228,41 +154,25 @@ export const ipc = {
 		contextRefs?: ContextReference[],
 		clarificationReply?: ClarificationReply
 	): Promise<Answer> {
-		if (isElectron()) {
-			if (!window.fella) throw new Error('Electron preload bridge is unavailable');
-			// Conversation.contextRefs is a Svelte $state proxy. Electron's
-			// contextBridge uses structured cloning for arguments, which rejects
-			// those proxies even though the same objects work through Tauri's
-			// invoke path. Project each reference into plain data at this boundary.
-			const wireContextRefs = (contextRefs ?? []).map((reference) => ({
-				kind: reference.kind,
-				key: reference.key,
-				label: reference.label,
-				...(reference.detail === undefined ? {} : { detail: reference.detail })
-			}));
-			return window.fella.ask(
-				{
-					conversationId,
-					question,
-					model: model || null,
-					mode: mode || null,
-					contextRefs: wireContextRefs,
-					clarificationReply: clarificationReply ?? null
-				},
-				onEvent
-			);
-		}
-		const { Channel } = await import('@tauri-apps/api/core');
-		const channel = new Channel<AskEvent>();
-		channel.onmessage = onEvent;
-		return invoke<Answer>('ask', {
-			conversationId,
-			question,
-			model: model || null,
-			mode: mode || null,
-			contextRefs: contextRefs ?? [],
-			clarificationReply: clarificationReply ?? null,
-			channel
-		});
+		if (!window.fella) throw new Error('Electron preload bridge is unavailable');
+		// Svelte state proxies cannot cross Electron's structured-clone boundary.
+		// Project references into plain data before sending them to the main process.
+		const wireContextRefs = (contextRefs ?? []).map((reference) => ({
+			kind: reference.kind,
+			key: reference.key,
+			label: reference.label,
+			...(reference.detail === undefined ? {} : { detail: reference.detail })
+		}));
+		return window.fella.ask(
+			{
+				conversationId,
+				question,
+				model: model || null,
+				mode: mode || null,
+				contextRefs: wireContextRefs,
+				clarificationReply: clarificationReply ?? null
+			},
+			onEvent
+		);
 	}
 };

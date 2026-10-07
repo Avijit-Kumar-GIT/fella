@@ -34,7 +34,6 @@
 			tabindex={i === session.active ? 0 : -1}
 			onclick={() => session.activateTab(i)}
 			onkeydown={(e) => onKey(e, i)}
-			data-tauri-drag-region="false"
 		>
 			{#if tab.busy}
 				<span class="thinking" aria-hidden="true"></span>
@@ -56,7 +55,6 @@
 	<button
 		class="add"
 		aria-label="New conversation"
-		data-tauri-drag-region="false"
 		onclick={() => session.newTab()}
 	>
 		<Icon name="plus" size={16} />

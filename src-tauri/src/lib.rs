@@ -1,112 +1,12 @@
-//! Fella desktop runtime.
-//!
-//! The UI is a thin presentation layer; everything meaningful happens here in
-//! Rust. The analytical engine (catalog, data engine, tools, agent loop) lives under
-//! `engine/`.
+//! Fella's Rust analytics engine and its Electron JSON-lines adapter.
 
-mod commands;
 pub mod engine;
 pub mod stdio;
 
-/// Small process-wide bits not owned by the engine.
-pub struct AppState {
-    pub started: std::time::Instant,
-}
-
-impl Default for AppState {
-    fn default() -> Self {
-        Self {
-            started: std::time::Instant::now(),
-        }
-    }
-}
-
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_opener::init())
-        .setup(|app| {
-            use tauri::Manager;
-
-            // The window's static backgroundColor (tauri.conf.json) is the dark
-            // default, so a light-theme user briefly sees dark at the window
-            // edges before the webview's first paint. Repaint it to match the OS
-            // theme here.
-            if let Some(win) = app.get_webview_window("main") {
-                let color = if matches!(win.theme(), Ok(tauri::Theme::Light)) {
-                    tauri::webview::Color(252, 252, 251, 255)
-                } else {
-                    tauri::webview::Color(14, 14, 16, 255)
-                };
-                let _ = win.set_background_color(Some(color));
-            }
-
-            if cfg!(debug_assertions) {
-                app.handle().plugin(
-                    tauri_plugin_log::Builder::default()
-                        .level(log::LevelFilter::Info)
-                        .build(),
-                )?;
-            }
-
-            let data_dir = app.path().app_data_dir()?;
-            migrate_from_woody(&data_dir);
-            let engine = engine::EngineState::new(&data_dir)
-                .map_err(|e| format!("engine init failed: {e}"))?;
-            app.manage(std::sync::Arc::new(engine));
-
-            Ok(())
-        })
-        .manage(AppState::default())
-        .invoke_handler(tauri::generate_handler![
-            commands::ping,
-            commands::app_info,
-            commands::app_ready,
-            commands::open_workspace,
-            commands::get_catalog,
-            commands::get_workspace_model,
-            commands::last_workspace_path,
-            commands::describe,
-            commands::sample_source,
-            commands::run_sql_direct,
-            commands::reindex,
-            commands::memory_file,
-            commands::forget_memory,
-            commands::get_settings,
-            commands::set_settings,
-            commands::list_providers,
-            commands::set_api_key,
-            commands::logout,
-            commands::context_file,
-            commands::save_context,
-            commands::provider_health,
-            commands::set_window_appearance,
-            commands::ask,
-            commands::cancel,
-            commands::forget_conversation,
-            commands::unhide_cursor,
-            commands::archive_conversation,
-            commands::conversations_info,
-            commands::conversations_list,
-            commands::conversation_load,
-            commands::analysis_turn_load,
-            commands::run_log_recent,
-            commands::analysis_turn_replay_status,
-            commands::analysis_turn_rerun,
-            commands::delete_conversation,
-            commands::rename_conversation,
-            commands::update,
-        ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
-}
-
 /// Start the engine-only JSON-lines bridge used by the Electron shell.
 pub fn run_engine_stdio(data_dir: &std::path::Path) -> Result<(), String> {
-    // The sidecar must follow the same one-time rename migration as the Tauri
-    // shell. Otherwise an Electron launch after an older Woody install would
-    // appear to lose its settings, keys, and saved conversations.
+    // Preserve local settings, credentials, and history from the former app
+    // identifier before initializing the engine under the Fella name.
     migrate_from_woody(data_dir);
     stdio::run(data_dir)
 }
@@ -124,7 +24,7 @@ fn migrate_from_woody(new_dir: &std::path::Path) {
         return;
     }
     if new_dir.join("auth.json").exists() || new_dir.join("fella.db").exists() {
-        return; // already set up under the new name
+        return;
     }
     let _ = std::fs::create_dir_all(new_dir);
     let Ok(entries) = std::fs::read_dir(&old_dir) else {

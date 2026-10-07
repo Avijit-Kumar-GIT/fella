@@ -3,7 +3,7 @@
 This is the implementation roadmap for turning Fella's current analytics
 harness into a revision-aware analytical computer. It is intentionally a
 roadmap for the shared Rust runtime, not a UI redesign or a replacement for
-the Tauri/Electron shell.
+the Electron shell.
 
 The broader user-facing backlog—including general questions, web research,
 forecasting, and expanded visual analysis—is tracked in the
@@ -79,7 +79,7 @@ comparison shows otherwise.
 ## Delivery status
 
 - **M0 — runtime spine:** implemented in the typed `runtime` module and the
-  shared Tauri/Electron answer protocol. Recoverable provider/tool failures and
+  shared answer protocol between the Rust runtime and Electron bridge. Recoverable provider/tool failures and
   typed, target-scoped verification repairs now emit the explicit `retry`
   lifecycle state instead of leaving the shells to infer recovery from raw errors; a
   mid-turn workspace revision change now stops stale tool retries and preserves
@@ -144,7 +144,7 @@ comparison shows otherwise.
   persists a typed backend-owned turn record with its optional hypothesis,
   model-directed plan, execution trace, verification report, and bounded
   result/evidence. The
-  same record can be loaded or rerun through the Tauri and Electron bridges;
+  same record can be loaded or rerun through the Electron bridge;
   reruns are mount-checked and linked to their source turn. A compact catalog
   snapshot and shared replay-status command now explain revision drift and
   source-level changes before a rerun; the expanded evidence view now exposes
@@ -203,9 +203,9 @@ general capability or quality boundary, not an individual fixture.
 5. **Keep every analytical path first-class.** SQL, Python, documents, and
    charts remain available as model-selected capabilities, with their actual
    verification level made explicit.
-6. **Make the backend canonical.** Tauri and Electron should consume the same
-   runtime protocol; the Svelte UI should project runtime state rather than
-   assemble its own interpretation of a turn.
+6. **Make the backend canonical.** Electron consumes the Rust runtime protocol;
+   the Svelte UI should project runtime state rather than assemble its own
+   interpretation of a turn.
 7. **Measure every quality trade-off.** A semantic feature must be evaluated
    for correctness, clarification quality, latency, token use, and regressions
    across the supported model ladder.
@@ -222,7 +222,7 @@ path:
 - `AnalysisContract` and `LogicalPlan` placeholders with stable serialization;
 - `ExecutionTrace` and `VerificationReport` envelopes;
 - turn IDs and workspace revision on emitted events and results;
-- the same typed event protocol through Tauri and the Electron stdio bridge.
+- the typed event protocol through the Electron stdio bridge.
 
 The first implementation may populate a minimal contract and trace from the
 existing direct loop. The important result is that later work has a stable
@@ -398,7 +398,7 @@ The UI then becomes a projection:
 - Context becomes definitions and scoped references, not a second prompt editor;
 - Projects become summaries of workspace knowledge, not another source of truth.
 
-**Exit criteria:** Tauri and Electron show the same runtime result and a past
+**Exit criteria:** the Electron UI shows the Rust runtime result and a past
 turn can be inspected or rerun against a newer workspace revision.
 
 ### M7 — Evaluation, replay, and optimization
@@ -496,7 +496,7 @@ The framework is working when:
 - a query that merely runs is not treated as an answer that is semantically correct;
 - accepted results are tied to a workspace revision and trace;
 - user-confirmed definitions improve later questions without leaking across workspaces;
-- Tauri and Electron consume the same runtime protocol;
+- Electron consumes the canonical Rust runtime protocol;
 - every new quality feature is covered by a replayable evaluation case.
 
 ## Explicit non-goals
