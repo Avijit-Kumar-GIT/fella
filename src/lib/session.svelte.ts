@@ -8,23 +8,39 @@
 // specific `Conversation` so it keeps streaming into its own tab after a
 // switch.
 
-import { ipc, isTauri } from './ipc';
+import { ipc, isDesktop } from './ipc';
 import type {
 	AskMode,
 	Catalog,
 	ContextReference,
 	EvidenceItem,
-	InspectorSelection,
 	Message,
 	ProviderHealth,
 	ProviderInfo,
+	Project,
 	RunStep,
-	Settings
+	Settings,
+	WorkspaceProgress
 } from './types';
 
 
 function uid(): string {
 	return Math.random().toString(36).slice(2, 10);
+}
+
+/** Commands are controls for the workspace, not conversational turns. Older
+ * archives may contain them as user messages, so every history surface uses
+ * this predicate when deciding what counts as a real question. */
+export function isActualQuestion(message: Pick<Message, 'role' | 'text'>): boolean {
+	return message.role === 'user' && message.text.trim().length > 0 && !message.text.trimStart().startsWith('/');
+}
+
+export function hasActualQuestion(messages: readonly Message[]): boolean {
+	return messages.some(isActualQuestion);
+}
+
+export function firstActualQuestion(messages: readonly Message[]): Message | undefined {
+	return messages.find(isActualQuestion);
 }
 
 function humanToolName(tool: string): string {
@@ -40,10 +56,50 @@ function humanToolName(tool: string): string {
 	return labels[tool] ?? tool.replace(/[_-]+/g, ' ').replace(/^./, (c) => c.toUpperCase());
 }
 
+/** The first completed answer is authoritative for a conversation's origin.
+ * Older session snapshots were repeatedly stamped with the currently mounted
+ * repository, so recover their initial scope from that answer when possible. */
+function archivedWorkspace(messages: unknown, fallback: string | null | undefined): string | null {
+	if (Array.isArray(messages)) {
+		const isQuestion = (message: unknown): message is Message =>
+			message !== null && typeof message === 'object' && isActualQuestion(message as Message);
+		for (let questionIndex = 0; questionIndex < messages.length; questionIndex++) {
+			if (!isQuestion(messages[questionIndex])) continue;
+			for (let i = questionIndex + 1; i < messages.length; i++) {
+				const message = messages[i];
+				if (isQuestion(message)) break;
+				if (!message || typeof message !== 'object') continue;
+				const candidate = message as Record<string, unknown>;
+				if (candidate.role !== 'assistant' || !candidate.answer || typeof candidate.answer !== 'object') continue;
+				const answer = candidate.answer as Record<string, unknown>;
+				const answerWorkspace = answer.workspace;
+				if (Object.hasOwn(answer, 'workspace') && answerWorkspace === null) return null;
+				if (answerWorkspace && typeof answerWorkspace === 'object') {
+					const path = (answerWorkspace as Record<string, unknown>).path;
+					if (typeof path === 'string' && path.length > 0) return path;
+				}
+				const trace = answer.trace;
+				if (trace && typeof trace === 'object') {
+					const traceRecord = trace as Record<string, unknown>;
+					const revision = traceRecord.workspace_revision;
+					if (revision === null || (revision === undefined && (traceRecord.id || traceRecord.turn_id))) {
+						return null;
+					}
+				}
+				break;
+			}
+		}
+	}
+	return fallback ?? null;
+}
+
 const PREFIX = 'fella:conversation:'; // one key per tab: fella:conversation:<id>
 const LEGACY_KEY = 'fella:conversation'; // the single pre-tabs blob
 const INDEX_KEY = 'fella:tabs'; // JSON array of open tab ids
 const SIDEBAR_KEY = 'fella:sidebar-collapsed';
+const REPOSITORIES_KEY = 'fella:repositories';
+const HIDDEN_REPOSITORIES_KEY = 'fella:hidden-repositories';
+const PROJECTS_KEY = 'fella:projects';
 
 function readSidebarCollapsed(): boolean {
 	try {
@@ -51,6 +107,38 @@ function readSidebarCollapsed(): boolean {
 		return v === null ? false : v === '1';
 	} catch {
 		return false;
+	}
+}
+
+function readStringList(key: string): string[] {
+	try {
+		const parsed: unknown = JSON.parse(localStorage.getItem(key) ?? '[]');
+		return Array.isArray(parsed)
+			? parsed.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+			: [];
+	} catch {
+		return [];
+	}
+}
+
+function readProjects(): Project[] {
+	try {
+		const parsed: unknown = JSON.parse(localStorage.getItem(PROJECTS_KEY) ?? '[]');
+		if (!Array.isArray(parsed)) return [];
+		return parsed.filter((item): item is Project => {
+			if (!item || typeof item !== 'object') return false;
+			const candidate = item as Record<string, unknown>;
+			return (
+				typeof candidate.id === 'string' &&
+				typeof candidate.name === 'string' &&
+				typeof candidate.workspace === 'string' &&
+				typeof candidate.body === 'string' &&
+				typeof candidate.created_at_ms === 'number' &&
+				typeof candidate.updated_at_ms === 'number'
+			);
+		});
+	} catch {
+		return [];
 	}
 }
 
@@ -71,8 +159,11 @@ export class Conversation {
 	/** The model this tab answers with. Empty = use the saved default. All tabs
 	 *  share one provider / login; only the model is per-tab. */
 	model = $state<string>('');
-	/** A user-given name. null = derive one from the folder + first message,
-	 *  the same as an un-renamed conversation always has. */
+	/** Origin repository, pinned when the first real question is asked. Null
+	 *  means the conversation began without a mounted repository. */
+	workspaceScope = $state<string | null | undefined>(undefined);
+	/** A user-given name. null = derive one from the folder + first actual
+	 *  question, the same as an un-renamed conversation always has. */
 	title = $state<string | null>(null);
 	/** The current question's intent. Inspect selects the stricter read-only
 	 *  tool registry and makes the source-first workflow explicit to the model. */
@@ -111,6 +202,10 @@ export class Conversation {
 
 	setMode(mode: AskMode): void {
 		this.mode = mode;
+	}
+
+	bindWorkspaceScope(workspace: string | null): void {
+		if (this.workspaceScope === undefined) this.workspaceScope = workspace;
 	}
 
 	addContext(ref: ContextReference): void {
@@ -185,13 +280,16 @@ export class Conversation {
 	}
 
 	/** Coalesce writes while a run streams; flush immediately once it settles. */
-	persist(workspace: string | null): void {
-		if (this.messages.length === 0) return;
+	persist(): void {
+		if (!hasActualQuestion(this.messages)) {
+			this.dropSnapshot();
+			return;
+		}
 		clearTimeout(this.#persistTimer);
 		if (this.busy) {
-			this.#persistTimer = setTimeout(() => this.#writeSnapshot(workspace), 250);
+			this.#persistTimer = setTimeout(() => this.#writeSnapshot(this.workspaceScope ?? null), 250);
 		} else {
-			this.#writeSnapshot(workspace);
+			this.#writeSnapshot(this.workspaceScope ?? null);
 		}
 	}
 	#writeSnapshot(workspace: string | null): void {
@@ -216,11 +314,12 @@ export class Conversation {
 
 
 export type Tab = Conversation;
-export type WorkspaceView = 'ask' | 'workspace' | 'settings';
+export type WorkspaceView = 'ask' | 'workspace' | 'settings' | 'project';
 export type WorkspacePane = 'sources' | 'context';
 
 class Session {
 	catalog = $state<Catalog>({ workspace: null, sources: [] });
+	mountProgress = $state<WorkspaceProgress | null>(null);
 	/** The lightweight workspace surface currently shown beside the tab state. */
 	workspaceView = $state<WorkspaceView>('ask');
 	/** The active pane inside Workspace. */
@@ -246,9 +345,119 @@ class Session {
 	/** Bumped whenever a conversation is archived, so the sidebar's list
 	 *  knows to refetch without polling. */
 	historyVersion = $state<number>(0);
-	/** Right-hand contextual inspector, shared by Ask and Workspace. */
-	inspectorOpen = $state<boolean>(false);
-	inspectorSelection = $state<InspectorSelection>(null);
+	/** Source selected by global search for the Sources master/detail view. */
+	selectedSourcePath = $state<string | null>(null);
+	/** Repositories shown in the local sidebar, in user-defined order. */
+	repositoryPaths = $state<string[]>(readStringList(REPOSITORIES_KEY));
+	/** Repositories intentionally hidden from the local sidebar. */
+	hiddenRepositoryPaths = $state<string[]>(readStringList(HIDDEN_REPOSITORIES_KEY));
+	/** User-created repository wikis, kept entirely on this computer. */
+	projects = $state<Project[]>(readProjects());
+	activeProjectId = $state<string | null>(null);
+
+	#writeStringList(key: string, values: string[]): void {
+		try {
+			localStorage.setItem(key, JSON.stringify(values));
+		} catch {
+			/* ignore */
+		}
+	}
+
+	#writeProjects(): void {
+		try {
+			localStorage.setItem(PROJECTS_KEY, JSON.stringify(this.projects));
+		} catch {
+			/* ignore */
+		}
+	}
+
+	/** Remember a folder explicitly opened by the user and unhide it if needed. */
+	rememberRepository(path: string | null | undefined): void {
+		const normalized = path?.trim();
+		if (!normalized) return;
+		if (this.hiddenRepositoryPaths.includes(normalized)) {
+			this.hiddenRepositoryPaths = this.hiddenRepositoryPaths.filter((item) => item !== normalized);
+			this.#writeStringList(HIDDEN_REPOSITORIES_KEY, this.hiddenRepositoryPaths);
+		}
+		if (this.repositoryPaths.includes(normalized)) return;
+		this.repositoryPaths = [...this.repositoryPaths, normalized];
+		this.#writeStringList(REPOSITORIES_KEY, this.repositoryPaths);
+	}
+
+	/** Migrate workspace paths found in archived conversations without unhiding one. */
+	rememberRepositories(paths: (string | null | undefined)[]): void {
+		const hidden = new Set(this.hiddenRepositoryPaths);
+		const additions = paths
+			.map((path) => path?.trim())
+			.filter((path): path is string => !!path && !hidden.has(path) && !this.repositoryPaths.includes(path));
+		if (!additions.length) return;
+		this.repositoryPaths = [...this.repositoryPaths, ...new Set(additions)];
+		this.#writeStringList(REPOSITORIES_KEY, this.repositoryPaths);
+	}
+
+	/** Hide a repository from navigation without deleting its conversations or files. */
+	forgetRepository(path: string): void {
+		this.repositoryPaths = this.repositoryPaths.filter((item) => item !== path);
+		if (!this.hiddenRepositoryPaths.includes(path)) {
+			this.hiddenRepositoryPaths = [...this.hiddenRepositoryPaths, path];
+		}
+		this.#writeStringList(REPOSITORIES_KEY, this.repositoryPaths);
+		this.#writeStringList(HIDDEN_REPOSITORIES_KEY, this.hiddenRepositoryPaths);
+	}
+
+	get activeProject(): Project | null {
+		return this.projects.find((project) => project.id === this.activeProjectId) ?? null;
+	}
+
+	projectForWorkspace(workspace: string): Project | null {
+		return this.projects.find((project) => project.workspace === workspace) ?? null;
+	}
+
+	createProject(name: string, workspace: string): Project {
+		const existing = this.projectForWorkspace(workspace);
+		if (existing) {
+			this.activeProjectId = existing.id;
+			this.workspaceView = 'project';
+			return existing;
+		}
+
+		const now = Date.now();
+		const project: Project = {
+			id: `project-${uid()}`,
+			name: name.trim() || 'Untitled project',
+			workspace,
+			body: '',
+			created_at_ms: now,
+			updated_at_ms: now
+		};
+		this.projects = [project, ...this.projects];
+		this.#writeProjects();
+		this.activeProjectId = project.id;
+		this.workspaceView = 'project';
+		return project;
+	}
+
+	updateProject(id: string, patch: Partial<Pick<Project, 'name' | 'body'>>): void {
+		this.projects = this.projects.map((project) =>
+			project.id === id ? { ...project, ...patch, updated_at_ms: Date.now() } : project
+		);
+		this.#writeProjects();
+	}
+
+	openProject(id: string): void {
+		if (!this.projects.some((project) => project.id === id)) return;
+		this.activeProjectId = id;
+		this.workspaceView = 'project';
+	}
+
+	deleteProject(id: string): void {
+		this.projects = this.projects.filter((project) => project.id !== id);
+		this.#writeProjects();
+		if (this.activeProjectId === id) {
+			this.activeProjectId = null;
+			this.workspaceView = 'ask';
+		}
+	}
 
 	toggleSidebar(): void {
 		this.sidebarCollapsed = !this.sidebarCollapsed;
@@ -276,6 +485,10 @@ class Session {
 		this.workspaceView = 'workspace';
 	}
 
+	selectSource(path: string | null): void {
+		this.selectedSourcePath = path;
+	}
+
 	/** Focus a conversation tab. */
 	activateTab(index: number): void {
 		if (!this.tabs[index]) return;
@@ -299,17 +512,6 @@ class Session {
 	clearContextReferences(): void {
 		this.activeChat?.clearContext();
 	}
-
-	openInspector(selection: InspectorSelection): void {
-		this.inspectorSelection = selection;
-		this.inspectorOpen = selection !== null;
-	}
-
-	closeInspector(): void {
-		this.inspectorOpen = false;
-		this.inspectorSelection = null;
-	}
-
 
 	get activeTab(): Tab {
 		return this.tabs[this.active] ?? this.tabs[0];
@@ -384,12 +586,19 @@ class Session {
 	 *  open right now, the caller is responsible for warning that new
 	 *  questions here will run against the current folder, not the
 	 *  original one there's only ever one open folder for every tab. */
-	loadArchivedTab(id: string, messages: Message[], title: string | null = null): void {
+	loadArchivedTab(
+		id: string,
+		messages: Message[],
+		title: string | null = null,
+		workspace: string | null = null
+	): void {
 		// Already open (e.g. the very conversation you're re-clicking in the
 		// sidebar) -- focus it instead of forking a second live copy under
 		// the same id, which would collide as a duplicate tab key.
 		const existing = this.tabs.findIndex((t) => t.kind === 'chat' && t.id === id);
 		if (existing >= 0) {
+			const tab = this.tabs[existing];
+			if (tab.workspaceScope === undefined) tab.workspaceScope = workspace;
 			this.active = existing;
 			return;
 		}
@@ -397,6 +606,7 @@ class Session {
 		const c = new Conversation(id);
 		c.model = inherit;
 		c.title = title;
+		c.workspaceScope = workspace;
 		// A reloaded transcript never has a run in flight.
 		c.messages = messages.map((m) => (m.pending ? { ...m, pending: false } : m));
 		this.tabs.push(c);
@@ -416,7 +626,7 @@ class Session {
 			await this.#archive(tab);
 			return;
 		}
-		if (!isTauri()) return;
+		if (!isDesktop()) return;
 		await ipc.renameConversation(id, trimmed);
 		this.historyVersion++;
 	}
@@ -427,7 +637,7 @@ class Session {
 		if (!tab) return;
 		await this.#archive(tab);
 		tab.dropSnapshot();
-		if (isTauri()) void ipc.forgetConversation(tab.id).catch(() => {});
+		if (isDesktop()) void ipc.forgetConversation(tab.id).catch(() => {});
 		this.tabs.splice(i, 1);
 		if (this.tabs.length === 0) this.tabs.push(new Conversation());
 		if (this.active > i) this.active -= 1;
@@ -448,7 +658,7 @@ class Session {
 		if (i < 0) return;
 		const tab = this.tabs[i] as Conversation;
 		tab.dropSnapshot();
-		if (isTauri()) void ipc.forgetConversation(tab.id).catch(() => {});
+		if (isDesktop()) void ipc.forgetConversation(tab.id).catch(() => {});
 		this.tabs.splice(i, 1);
 		if (this.tabs.length === 0) this.tabs.push(new Conversation());
 		if (this.active > i) this.active -= 1;
@@ -515,9 +725,8 @@ class Session {
 	 *  file) on every later settle too, so the sidebar's title/preview
 	 *  reflects the real conversation even if you never close the tab. */
 	persist(): void {
-		const ws = this.catalog.workspace ?? null;
 		for (const t of this.tabs) {
-			t.persist(ws);
+			t.persist();
 			if (!t.busy && t.messages.length > 0) void this.#archive(t);
 		}
 		this.#writeIndex();
@@ -532,11 +741,11 @@ class Session {
 	}
 
 	async #archive(tab: Conversation): Promise<void> {
-		if (tab.messages.length === 0 || !isTauri()) return;
+		if (tab.messages.length === 0 || !isDesktop()) return;
 		const body = JSON.stringify({
 			id: tab.id,
 			saved_at_ms: Date.now(),
-			workspace: this.catalog.workspace ?? null,
+			workspace: tab.workspaceScope ?? null,
 			messages: tab.messages,
 			title: tab.title ?? undefined
 		});
@@ -558,7 +767,7 @@ class Session {
 		} catch {
 			return true;
 		}
-		if (!Array.isArray(saved.messages) || saved.messages.length === 0 || !isTauri()) return true;
+		if (!Array.isArray(saved.messages) || saved.messages.length === 0 || !isDesktop()) return true;
 		// This is a previous run's leftover conversation, recovered on launch --
 		// date it by its own last message, not by "now" (the relaunch moment),
 		// or it files under today's date no matter how long ago it happened.
@@ -566,7 +775,7 @@ class Session {
 		const body = JSON.stringify({
 			id: saved.id ?? '',
 			saved_at_ms: last?.ts ?? Date.now(),
-			workspace: saved.workspace ?? this.catalog.workspace ?? null,
+			workspace: archivedWorkspace(saved.messages, saved.workspace),
 			messages: saved.messages
 		});
 		try {

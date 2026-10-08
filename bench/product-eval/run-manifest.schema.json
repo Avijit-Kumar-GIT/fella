@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fella.app/schemas/product-eval-run-v1.json",
+  "title": "Fella evaluation run manifest",
+  "description": "Content-free metadata for reproducible and paired benchmark runs. Never put credentials or prompts here.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "run_id", "benchmark_id", "benchmark_version",
+    "task_set_sha256", "workspace_set_sha256", "split", "git_commit",
+    "started_at_utc", "condition", "provider", "model", "model_version",
+    "model_settings", "evaluation_protocol_settings", "runner_settings", "iterations", "result_sha256", "pricing_snapshot_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "run_id": {"type": "string", "minLength": 1},
+    "benchmark_id": {"type": "string", "minLength": 1},
+    "benchmark_version": {"type": "string", "minLength": 1},
+    "task_set_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "workspace_set_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "split": {"enum": ["development", "anchor", "blind", "smoke"]},
+    "git_commit": {"type": "string", "minLength": 7},
+    "started_at_utc": {"type": "string", "format": "date-time"},
+    "condition": {"enum": ["baseline", "candidate", "ablation", "diagnostic"]},
+    "provider": {"type": "string", "minLength": 1},
+    "model": {"type": "string", "minLength": 1},
+    "model_version": {"type": "string", "minLength": 1},
+    "model_settings": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "temperature": {"type": "number"},
+        "top_p": {"type": "number"},
+        "seed": {"type": "integer"},
+        "max_output_tokens": {"type": "integer", "minimum": 1},
+        "reasoning_effort": {"type": "string"},
+        "other_settings_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+      }
+    },
+    "evaluation_protocol_settings": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "budget_policy_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "max_episode_seconds": {"type": "number", "exclusiveMinimum": 0},
+        "max_model_calls": {"type": "integer", "minimum": 1},
+        "max_tool_calls": {"type": "integer", "minimum": 0},
+        "evaluator_version": {"type": "string", "minLength": 1},
+        "rubric_version": {"type": "string", "minLength": 1}
+      }
+    },
+    "runner_settings": {
+      "description": "Condition-specific implementation under test; expected to differ when harness/tooling is the intervention.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["harness"],
+      "properties": {
+        "harness": {"type": "string", "minLength": 1},
+        "toolset_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "configuration_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "profile": {"type": "string"}
+      }
+    },
+    "iterations": {"type": "integer", "minimum": 1},
+    "result_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "pricing_snapshot_sha256": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"}
+  }
+}

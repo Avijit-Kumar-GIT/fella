@@ -1,0 +1,173 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1120" role="img" aria-labelledby="title desc">
+  <title id="title">Fella analytical turn architecture</title>
+  <desc id="desc">A diagram of Fella's model-directed analytics turn: general questions or mounted-workspace context, iterative read-only investigation, SQL or Python execution, scoped verification, clarification, and a persisted answer.</desc>
+
+  <defs>
+    <linearGradient id="orb" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f0efff"/>
+      <stop offset="0.42" stop-color="#9c94e9"/>
+      <stop offset="0.72" stop-color="#28d0c5"/>
+      <stop offset="1" stop-color="#087680"/>
+    </linearGradient>
+    <marker id="arrow-teal" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#42d6cb"/>
+    </marker>
+    <marker id="arrow-violet" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#ad9eff"/>
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#9bd89c"/>
+    </marker>
+    <style>
+      text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif; }
+      .title { fill: #f5faf9; font-size: 34px; font-weight: 700; letter-spacing: -0.7px; }
+      .subtitle { fill: #9caeb1; font-size: 17px; }
+      .eyebrow { fill: #8da2a5; font-size: 12px; font-weight: 700; letter-spacing: 1.4px; }
+      .heading { fill: #eef7f5; font-size: 19px; font-weight: 650; }
+      .body { fill: #c3d0d1; font-size: 15px; }
+      .small { fill: #8ea2a5; font-size: 13px; }
+      .label { fill: #42d6cb; font-size: 12px; font-weight: 650; letter-spacing: .2px; }
+      .card { fill: #172125; stroke: #304147; stroke-width: 1.5; }
+      .teal { stroke: #42d6cb; }
+      .violet { stroke: #ad9eff; }
+      .blue { stroke: #86b4ff; }
+      .green { stroke: #9bd89c; }
+      .amber { stroke: #e3c37b; }
+      .arrow { fill: none; stroke: #42d6cb; stroke-width: 2.2; marker-end: url(#arrow-teal); }
+      .return-arrow { fill: none; stroke: #ad9eff; stroke-width: 2; stroke-dasharray: 8 8; marker-end: url(#arrow-violet); }
+      .memory-arrow { fill: none; stroke: #9bd89c; stroke-width: 2; stroke-dasharray: 5 7; marker-end: url(#arrow-green); }
+      .arrow-label { fill: #91aaa9; font-size: 12px; font-weight: 600; }
+    </style>
+  </defs>
+
+  <rect width="1600" height="1120" rx="28" fill="#0e1417"/>
+  <circle cx="76" cy="72" r="18" fill="url(#orb)"/>
+  <circle cx="70" cy="65" r="8" fill="#ffffff" opacity=".18"/>
+  <text x="112" y="70" class="title">Fella analytical turn</text>
+  <text x="112" y="99" class="subtitle">An opinionated harness around a read-only analytics engine.</text>
+
+  <line x1="1280" y1="70" x2="1320" y2="70" class="arrow"/>
+  <text x="1335" y="75" class="small">control flow</text>
+  <line x1="1280" y1="98" x2="1320" y2="98" class="return-arrow"/>
+  <text x="1335" y="103" class="small">tool result / feedback</text>
+
+  <!-- Entry -->
+  <rect x="70" y="236" width="190" height="140" rx="16" class="card teal"/>
+  <text x="94" y="268" class="eyebrow">ENTRY</text>
+  <text x="94" y="302" class="heading">User question</text>
+  <text x="94" y="332" class="body">General or</text>
+  <text x="94" y="355" class="body">folder question.</text>
+
+  <!-- Context -->
+  <rect x="300" y="180" width="300" height="240" rx="16" class="card teal"/>
+  <text x="326" y="214" class="eyebrow">01 · SNAPSHOT</text>
+  <text x="326" y="249" class="heading">Context compiler</text>
+  <text x="326" y="286" class="body">Workspace path + revision</text>
+  <text x="326" y="311" class="body">Catalog + typed schema</text>
+  <text x="326" y="336" class="body">fella.md + folder memory</text>
+  <text x="326" y="361" class="body">Bounded history + prior analysis</text>
+  <text x="326" y="395" class="small">The model sees a bounded world.</text>
+
+  <!-- Harness -->
+  <rect x="650" y="180" width="300" height="240" rx="16" class="card violet"/>
+  <text x="676" y="214" class="eyebrow">02 · HARNESS</text>
+  <text x="676" y="249" class="heading">Model-directed runtime</text>
+  <text x="676" y="286" class="body">Fixed read-only tool surface</text>
+  <text x="676" y="311" class="body">Inspect · SQL · Python · documents</text>
+  <text x="676" y="336" class="body">Clarify material ambiguity</text>
+  <text x="676" y="361" class="body">Revise · retry · cancel</text>
+  <text x="676" y="395" class="small">No workspace writes, shell, or web route.</text>
+
+  <!-- Model -->
+  <rect x="650" y="490" width="300" height="160" rx="16" class="card violet"/>
+  <text x="676" y="524" class="eyebrow">03 · MODEL</text>
+  <text x="676" y="559" class="heading">Reasoning loop</text>
+  <text x="676" y="596" class="body">Interpret · decompose · choose</text>
+  <text x="676" y="621" class="body">Use evidence · explain · answer</text>
+
+  <!-- Engine -->
+  <rect x="1020" y="180" width="510" height="470" rx="18" fill="#111b20" stroke="#86b4ff" stroke-width="1.6"/>
+  <text x="1050" y="218" class="eyebrow">04 · RUST ANALYTICS ENGINE</text>
+  <text x="1050" y="253" class="heading">The model drives bounded read-only tools.</text>
+
+  <rect x="1050" y="286" width="215" height="190" rx="14" class="card blue"/>
+  <text x="1074" y="319" class="label">TOOL BOUNDARY</text>
+  <text x="1074" y="356" class="body">List + inspect</text>
+  <text x="1074" y="380" class="body">Read-only SQL</text>
+  <text x="1074" y="404" class="body">Document search</text>
+  <text x="1074" y="428" class="body">Python/WASM + charts</text>
+  <text x="1074" y="459" class="small">Every call is bounded.</text>
+
+  <rect x="1285" y="286" width="215" height="190" rx="14" class="card blue"/>
+  <text x="1309" y="319" class="label">DATA PLANE</text>
+  <text x="1309" y="356" class="body">Catalog + source map</text>
+  <text x="1309" y="380" class="body">SQLite typed tables</text>
+  <text x="1309" y="404" class="body">Deterministic compute</text>
+  <text x="1309" y="428" class="body">Query-derived visuals</text>
+  <text x="1309" y="459" class="small">Rust owns the numbers.</text>
+
+  <line x1="1050" y1="526" x2="1500" y2="526" stroke="#2d4047"/>
+  <text x="1050" y="564" class="small">revision guard</text>
+  <text x="1200" y="564" class="small">·</text>
+  <text x="1220" y="564" class="small">cancellation</text>
+  <text x="1360" y="564" class="small">·</text>
+  <text x="1380" y="564" class="small">bounded outputs</text>
+  <text x="1050" y="601" class="small">A changed workspace invalidates the result instead of silently mixing data.</text>
+
+  <!-- Verification -->
+  <rect x="300" y="730" width="300" height="190" rx="16" class="card green"/>
+  <text x="326" y="764" class="eyebrow">05 · VERIFIER</text>
+  <text x="326" y="799" class="heading">Scoped findings</text>
+  <text x="326" y="835" class="body">Replay and grounding checks</text>
+  <text x="326" y="859" class="body">Keep unrelated evidence intact</text>
+  <text x="326" y="883" class="body">Withhold only affected artifacts</text>
+  <text x="326" y="907" class="small">Reproducibility does not prove intent.</text>
+
+  <!-- Result -->
+  <rect x="650" y="730" width="300" height="190" rx="16" class="card green"/>
+  <text x="676" y="764" class="eyebrow">06 · RESULT</text>
+  <text x="676" y="799" class="heading">Answer + inspectable basis</text>
+  <text x="676" y="835" class="body">Answer · chart · useful caveat</text>
+  <text x="676" y="859" class="body">Evidence details on demand</text>
+  <text x="676" y="883" class="body">Clarification resumes same turn</text>
+  <text x="676" y="907" class="small">Evidence helps inspect work; it is not a truth badge.</text>
+
+  <!-- UI -->
+  <rect x="1020" y="730" width="510" height="190" rx="16" class="card teal"/>
+  <text x="1050" y="764" class="eyebrow">07 · PUBLISH</text>
+  <text x="1050" y="799" class="heading">Conversation UI</text>
+  <text x="1050" y="835" class="body">Answer first · chart when useful</text>
+  <text x="1050" y="859" class="body">Clarification choices + free text</text>
+  <text x="1050" y="883" class="body">Sources and calculations on demand</text>
+  <text x="1050" y="907" class="small">One conversation across analysis and clarification.</text>
+
+  <!-- Local memory -->
+  <rect x="300" y="970" width="650" height="90" rx="16" class="card amber"/>
+  <text x="326" y="1004" class="eyebrow">08 · LOCAL MEMORY</text>
+  <text x="326" y="1037" class="body">Workspace-scoped facts · conversation continuity · local trace</text>
+
+  <!-- Explicitly absent capabilities -->
+  <rect x="1020" y="970" width="510" height="90" rx="16" class="card"/>
+  <text x="1050" y="1004" class="eyebrow">STRUCTURAL NON-GOALS</text>
+  <text x="1050" y="1037" class="body">No web research · workspace writes · shell · or default multi-agent loop</text>
+
+  <!-- Flow arrows -->
+  <line x1="260" y1="306" x2="300" y2="306" class="arrow"/>
+  <line x1="600" y1="306" x2="650" y2="306" class="arrow"/>
+  <line x1="800" y1="420" x2="800" y2="490" class="arrow"/>
+  <text x="816" y="461" class="arrow-label">plan / call</text>
+
+  <line x1="950" y1="570" x2="1020" y2="570" class="arrow"/>
+  <text x="959" y="550" class="arrow-label">tool call</text>
+  <path d="M 1020 330 C 982 330, 982 545, 950 545" class="return-arrow"/>
+  <text x="966" y="374" class="arrow-label">bounded result</text>
+
+  <path d="M 800 650 L 800 690 L 450 690 L 450 730" class="arrow"/>
+  <text x="562" y="680" class="arrow-label">final text + tool record</text>
+  <line x1="600" y1="825" x2="650" y2="825" class="arrow"/>
+  <line x1="950" y1="825" x2="1020" y2="825" class="arrow"/>
+  <path d="M 1020 780 C 984 748, 982 650, 950 620" class="return-arrow"/>
+  <text x="963" y="704" class="arrow-label">clarification reply</text>
+  <path d="M 800 920 L 800 950 L 625 950 L 625 970" class="memory-arrow"/>
+  <text x="814" y="948" class="arrow-label">safe local update</text>
+</svg>

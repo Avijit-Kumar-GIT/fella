@@ -1,12 +1,12 @@
 <script lang="ts">
-	import { session } from '$lib/session.svelte';
+	import { firstActualQuestion, session } from '$lib/session.svelte';
 	import type { Tab } from '$lib/session.svelte';
 	import Icon from './Icon.svelte';
 
-	/** A chip-sized label: a custom name if renamed, or a conversation's first line. */
+	/** A chip-sized label: a custom name if renamed, or the first actual question. */
 	function label(tab: Tab): string {
 		if (tab.title) return tab.title;
-		const first = tab.messages.find((m) => m.role === 'user');
+		const first = firstActualQuestion(tab.messages);
 		const t = first?.text.replace(/\s+/g, ' ').trim();
 		if (!t) return 'New conversation';
 		return t.length > 24 ? t.slice(0, 23) + '…' : t;
@@ -34,7 +34,6 @@
 			tabindex={i === session.active ? 0 : -1}
 			onclick={() => session.activateTab(i)}
 			onkeydown={(e) => onKey(e, i)}
-			data-tauri-drag-region="false"
 		>
 			{#if tab.busy}
 				<span class="thinking" aria-hidden="true"></span>
@@ -56,10 +55,9 @@
 	<button
 		class="add"
 		aria-label="New conversation"
-		data-tauri-drag-region="false"
 		onclick={() => session.newTab()}
 	>
-		<Icon name="plus" size={14} />
+		<Icon name="plus" size={16} />
 	</button>
 </div>
 
@@ -71,6 +69,10 @@
 		min-width: 0;
 		overflow-x: auto;
 		scrollbar-width: none;
+		/* TabBar is rendered inside Electron's draggable titlebar. Keep the
+		   whole strip interactive; Titlebar.svelte's scoped no-drag rule cannot
+		   style elements rendered by this child component. */
+		-webkit-app-region: no-drag;
 	}
 	.tabs::-webkit-scrollbar {
 		display: none;
@@ -86,6 +88,7 @@
 		font-size: var(--fs-sm);
 		cursor: pointer;
 		white-space: nowrap;
+		-webkit-app-region: no-drag;
 		transition:
 			background var(--dur-fast) var(--ease),
 			color var(--dur-fast) var(--ease);
@@ -112,6 +115,7 @@
 			background var(--dur-fast) var(--ease),
 			color var(--dur-fast) var(--ease),
 			opacity var(--dur-fast) var(--ease);
+		-webkit-app-region: no-drag;
 	}
 	.close {
 		width: 16px;

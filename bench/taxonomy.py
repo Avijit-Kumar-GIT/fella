@@ -99,10 +99,12 @@ def main():
                 continue
             if r.get("err"):
                 mode = "err"
-            elif c.get("tier") == "refusal":
-                mode = "refusal-fabrication"
+            elif (c.get("tier") or "").startswith("forecast-estimate"):
+                mode = "forecast-estimate-mismatch"
+            elif (c.get("tier") or "").startswith("forecast-source-limit"):
+                mode = "evidence-limit-mismatch"
             else:
-                mode = "value-error"  # valid query, wrong number (verify can't see it)
+                mode = "outcome-error"
             miss.append({
                 "case": cid, "model": r["model"], "domain": c.get("domain", ""),
                 "tier": c.get("tier", ""), "closeness": round(r["closeness_det"], 2),
@@ -190,16 +192,14 @@ def main():
 
     from collections import Counter
     mc = Counter(m["mode"] for m in miss)
-    vg = Counter(m["model"].rsplit("/", 1)[-1] for m in miss if m["mode"] == "value-error")
+    vg = Counter(m["model"].rsplit("/", 1)[-1] for m in miss if m["mode"] == "outcome-error")
     md.append(f"\n### Wrong `fella` answers ({len(miss)} of "
               f"{sum(len(h['fella']) for h in per.values())})\n")
     md.append("| mode | n | note |\n|---|--:|---|")
-    md.append(f"| refusal-fabrication | {mc['refusal-fabrication']} | computed a "
-              "forecast instead of declining (`fqa-refusal`) |")
+    md.append(f"| forecast-estimate-mismatch | {mc['forecast-estimate-mismatch']} | estimate value or required qualification missed its frozen contract |")
+    md.append(f"| evidence-limit-mismatch | {mc['evidence-limit-mismatch']} | evidence gap, partial result, or next step missed its frozen contract |")
     top = vg.most_common(1)[0] if vg else ("—", 0)
-    md.append(f"| value-error | {mc['value-error']} | valid query, wrong number; "
-              f"`verify` blind. {top[1]} of {mc['value-error']} are one model "
-              f"(`{top[0]}`) |")
+    md.append(f"| outcome-error | {mc['outcome-error']} | other outcome mismatch. {top[1]} of {mc['outcome-error']} are one model (`{top[0]}`) |")
     if mc["err"]:
         md.append(f"| err | {mc['err']} | endpoint / parse failure |")
     md.append("\nFull list with model + question: `misses.csv`.\n")

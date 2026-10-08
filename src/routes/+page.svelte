@@ -2,15 +2,17 @@
 	import { onMount } from 'svelte';
 	import CommandPalette from '$lib/components/CommandPalette.svelte';
 	import Composer from '$lib/components/Composer.svelte';
-	import ContextInspector from '$lib/components/ContextInspector.svelte';
 	import Icon from '$lib/components/Icon.svelte';
+	import Logo from '$lib/components/Logo.svelte';
+	import ProjectDialog from '$lib/components/ProjectDialog.svelte';
+	import ProjectView from '$lib/components/ProjectView.svelte';
 	import Sidebar from '$lib/components/Sidebar.svelte';
 	import SettingsView from '$lib/components/SettingsView.svelte';
 	import Titlebar from '$lib/components/Titlebar.svelte';
 	import Transcript from '$lib/components/Transcript.svelte';
 	import WorkspaceView from '$lib/components/WorkspaceView.svelte';
 	import { dispatch, loadStartupCatalog, openFolder, stop } from '$lib/commands';
-	import { ipc, isTauri } from '$lib/ipc';
+	import { ipc, isDesktop } from '$lib/ipc';
 	import { fadeQuick } from '$lib/motion';
 	import { prefs } from '$lib/prefs.svelte';
 	import { session } from '$lib/session.svelte';
@@ -18,12 +20,42 @@
 	let transcript = $state<Transcript | undefined>();
 	let composer = $state<Composer | undefined>();
 	let paletteOpen = $state(false);
+	let projectDialogOpen = $state(false);
 	let dragging = $state(false);
 
 	let activeView = $derived(session.workspaceView);
 
+	function mountStatusLabel(progress: NonNullable<typeof session.mountProgress>): string {
+		const count = (value: number) => new Intl.NumberFormat().format(value);
+		if (progress.phase === 'scanning') {
+			return progress.visited_files
+				? `Scanning folder · ${count(progress.visited_files)} files checked`
+				: 'Scanning folder…';
+		}
+		if (progress.phase === 'waiting') return 'Finishing the current analysis…';
+		if (progress.ingest) {
+			const fileName = progress.ingest.path.split(/[\\/]/).pop() || progress.ingest.path;
+			const percent = Math.floor(
+				(progress.ingest.bytes_read / Math.max(1, progress.ingest.total_bytes)) * 100
+			);
+			const action = progress.ingest.stage === 'profiling' ? 'Profiling' : 'Loading';
+			return `${action} ${fileName} · ${count(Math.min(100, percent))}%`;
+		}
+		return `Preparing data · ${count(progress.prepared_files)} of ${count(progress.total_supported_files ?? progress.supported_files)} sources`;
+	}
+
+	function mountProgressValue(progress: NonNullable<typeof session.mountProgress>): number {
+		const total = progress.total_supported_files ?? progress.supported_files;
+		const ingest = progress.ingest;
+		if (!ingest || total <= 0 || ingest.total_bytes <= 0) return progress.prepared_files;
+
+		const fileFraction = Math.min(1, ingest.bytes_read / ingest.total_bytes);
+		const passFraction = ingest.stage === 'loading' ? 0.5 + fileFraction * 0.5 : fileFraction * 0.5;
+		return Math.min(total, progress.prepared_files + passFraction);
+	}
+
 	async function refreshHealth() {
-		if (!isTauri()) return;
+		if (!isDesktop()) return;
 		try {
 			session.health = await ipc.providerHealth();
 		} catch {
@@ -34,7 +66,7 @@
 	onMount(() => {
 		void session.rollOver();
 		composer?.focus();
-		if (!isTauri()) return;
+		if (!isDesktop()) return;
 
 		void ipc
 			.appReady()
@@ -60,27 +92,10 @@
 		document.addEventListener('visibilitychange', onVisible);
 		window.addEventListener('focus', onVisible);
 
-		// Native folder drop -> /open, with a full-window drop target while a
-		// drag is over the window.
-		let unlisten: (() => void) | undefined;
-		void import('@tauri-apps/api/webview')
-			.then(({ getCurrentWebview }) =>
-				getCurrentWebview().onDragDropEvent((e) => {
-					const t = e.payload.type;
-					dragging = t === 'enter' || t === 'over';
-					if (t === 'drop' && e.payload.paths.length) {
-						void dispatch(`/open ${e.payload.paths[0]}`);
-					}
-				})
-			)
-			.then((u) => (unlisten = u))
-			.catch(() => {});
-
 		return () => {
 			clearTimeout(timer);
 			document.removeEventListener('visibilitychange', onVisible);
 			window.removeEventListener('focus', onVisible);
-			unlisten?.();
 		};
 	});
 
@@ -109,6 +124,7 @@
 		if (commandKey && e.shiftKey && key === 'a') {
 			e.preventDefault();
 			session.setWorkspaceView('ask');
+			session.newTab();
 			composer?.focus();
 		} else if (commandKey && e.shiftKey && key === 's') {
 			e.preventDefault();
@@ -159,14 +175,32 @@
 			e.preventDefault();
 			session.focus = !session.focus;
 		} else if (e.key === 'Escape' && !paletteOpen) {
-			if (session.inspectorOpen) {
-				session.closeInspector();
-			} else if (session.pendingKey) {
+			if (session.pendingKey) {
 				session.pendingKey = null;
 				session.addSystem('Cancelled.');
 			} else if (session.busy) void stop();
 			else transcript?.collapseAll();
 		}
+	}
+
+	function onDragOver(e: DragEvent): void {
+		if (e.dataTransfer?.types.includes('Files')) {
+			e.preventDefault();
+			dragging = true;
+		}
+	}
+
+	function onDragLeave(e: DragEvent): void {
+		if (e.relatedTarget === null) dragging = false;
+	}
+
+	function onDrop(e: DragEvent): void {
+		e.preventDefault();
+		dragging = false;
+		const file = e.dataTransfer?.files?.[0];
+		if (!file) return;
+		const path = window.fella?.pathForFile(file) ?? (file as File & { path?: string }).path;
+		if (path) void dispatch(`/open ${path}`);
 	}
 
 	// Persist the conversation transcript as it changes.
@@ -226,31 +260,48 @@
 	// into a div it isn't watching). Announce what Fella is doing, and that the
 	// answer has landed.
 	let live = $derived.by(() => {
+		if (session.mountProgress?.phase === 'scanning') return 'Scanning the mounted folder';
+		if (session.mountProgress?.phase === 'preparing') return 'Preparing workspace data';
+		if (session.mountProgress?.phase === 'waiting') return 'Waiting for the current analysis to finish';
+		if (session.mountProgress?.phase === 'ready') return 'Workspace ready';
 		if (session.busy) return session.activity || 'working…';
 		const last = session.messages.at(-1);
 		return last?.role === 'assistant' && last.text.trim() ? 'answer ready' : '';
 	});
 </script>
 
-<svelte:window onkeydown={onKey} />
+<svelte:window onkeydown={onKey} ondragover={onDragOver} ondragleave={onDragLeave} ondrop={onDrop} />
 
 	<div class="shell">
 		{#if !session.focus && !session.sidebarCollapsed}
-			<Sidebar onsearch={() => (paletteOpen = true)} />
+			<Sidebar onsearch={() => (paletteOpen = true)} onnewproject={() => (projectDialogOpen = true)} />
 		{/if}
 	<div class="app" class:focus={session.focus}>
 		<Titlebar onpalette={() => (paletteOpen = true)} />
 		<main>
+			{#if session.mountProgress && session.mountProgress.phase !== 'ready'}
+				<div class="mount-status" aria-hidden="true">
+					<span class="mount-orb"><Logo size={17} active /></span>
+					<span class="mount-label">{mountStatusLabel(session.mountProgress)}</span>
+					{#if session.mountProgress.phase === 'preparing' && session.mountProgress.total_supported_files}
+						<progress
+							value={mountProgressValue(session.mountProgress)}
+							max={session.mountProgress.total_supported_files}
+						></progress>
+					{:else}
+						<progress></progress>
+					{/if}
+				</div>
+			{/if}
 			<div class="main-row">
 				{#if activeView === 'workspace'}
 					<WorkspaceView />
+				{:else if activeView === 'project'}
+					<ProjectView />
 				{:else if activeView === 'settings'}
 					<SettingsView />
 				{:else}
 					<Transcript bind:this={transcript} />
-				{/if}
-				{#if session.inspectorOpen}
-					<ContextInspector />
 				{/if}
 			</div>
 		</main>
@@ -271,22 +322,13 @@
 {/if}
 
 <CommandPalette bind:open={paletteOpen} onpick={pickCommand} />
+<ProjectDialog bind:open={projectDialogOpen} />
 
 <style>
 	.shell {
 		position: relative;
 		display: flex;
 		height: 100%;
-	}
-	.shell::before {
-		content: '';
-		position: absolute;
-		top: 0;
-		left: 0;
-		right: 0;
-		height: 2px;
-		background: var(--brand);
-		pointer-events: none;
 	}
 	.app {
 		display: flex;
@@ -303,6 +345,46 @@
 		/* Same fill as the titlebar/sidebar/panel so the whole shell reads as
 		   one open canvas, not stacked boxes -- no seam, no colour change. */
 		background: var(--bg);
+	}
+	.mount-status {
+		flex: none;
+		display: flex;
+		align-items: center;
+		gap: var(--space-2);
+		min-height: 32px;
+		padding: 0 var(--pad);
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+	}
+	.mount-orb {
+		flex: none;
+		display: grid;
+		place-items: center;
+		width: 18px;
+		height: 18px;
+	}
+	.mount-label {
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.mount-status progress {
+		flex: none;
+		width: clamp(64px, 12vw, 140px);
+		height: 3px;
+		border: 0;
+		border-radius: 99px;
+		background: var(--bg-raised);
+		accent-color: var(--accent);
+	}
+	.mount-status progress::-webkit-progress-bar {
+		border-radius: 99px;
+		background: var(--bg-raised);
+	}
+	.mount-status progress::-webkit-progress-value {
+		border-radius: 99px;
+		background: var(--accent);
 	}
 	.main-row {
 		position: relative;

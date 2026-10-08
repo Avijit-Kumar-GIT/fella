@@ -1,9 +1,10 @@
 <script lang="ts">
 	import { onDestroy } from 'svelte';
 	import { openFolder } from '$lib/commands';
-	import { ipc, isTauri } from '$lib/ipc';
+	import { ipc, isDesktop } from '$lib/ipc';
 	import { session } from '$lib/session.svelte';
 	import Icon from './Icon.svelte';
+	import DataLoader from './DataLoader.svelte';
 
 	let contents = $state('');
 	let savedContents = $state('');
@@ -15,7 +16,7 @@
 	let saveTimer: ReturnType<typeof setTimeout> | undefined;
 
 	async function load(): Promise<void> {
-		if (!isTauri() || !session.catalog.workspace) return;
+		if (!isDesktop() || !session.catalog.workspace) return;
 		loading = true;
 		error = '';
 		try {
@@ -31,7 +32,7 @@
 	}
 
 	async function save(): Promise<void> {
-		if (!isTauri() || !session.catalog.workspace || contents === savedContents) return;
+		if (!isDesktop() || !session.catalog.workspace || contents === savedContents) return;
 		saving = true;
 		error = '';
 		try {
@@ -78,51 +79,51 @@
 <section class="context-page" aria-labelledby="context-title">
 	<header class="page-head">
 		<div>
-			<p class="eyebrow">Workspace</p>
-			<h1 id="context-title">Context</h1>
-			<p class="lede">A short note about your files that Fella reads before it answers.</p>
+			<h1 id="context-title">Guide</h1>
 		</div>
-		<button class="pill ghost" type="button" onclick={() => void openFolder()}>
-			<Icon name="folder" size={14} /> Change folder
-		</button>
 	</header>
 
-	<div class="editor-card">
-		<div class="editor-head">
-			<div>
-				<strong>fella.md</strong>
-				{#if path}<p>{path}</p>{/if}
+	{#if !session.catalog.workspace}
+		<div class="empty-state">
+			<div class="empty-icon"><Icon name="folder" size={20} /></div>
+			<h2>Mount a workspace to write its guide</h2>
+			<p>Choose a folder and Fella will keep its workspace note beside the files it understands.</p>
+			<button class="pill primary" type="button" onclick={() => void openFolder()}>Choose a folder</button>
+		</div>
+	{:else}
+		<div class="editor-card">
+			<div class="editor-head">
+				<div>
+					<strong>fella.md</strong>
+					{#if path}<p>{path}</p>{/if}
+				</div>
+				<div class="editor-actions">
+					{#if contents.trim() === ''}
+						<button class="text-button" type="button" onclick={useTemplate}>Use a template</button>
+					{/if}
+					<button class="pill primary" type="button" disabled={saving || loading || contents === savedContents} onclick={() => void save()}>
+						<Icon name="check" size={16} />
+						{saving ? 'Saving…' : 'Save'}
+					</button>
+				</div>
 			</div>
-			<div class="editor-actions">
-				{#if contents.trim() === ''}
-					<button class="text-button" type="button" onclick={useTemplate}>Use a template</button>
-				{/if}
-				<button class="pill primary" type="button" disabled={saving || loading || contents === savedContents} onclick={() => void save()}>
-					<Icon name="check" size={13} />
-					{saving ? 'Saving…' : 'Save'}
-				</button>
+			{#if loading}
+				<div class="loading"><DataLoader size={28} /><span>Loading your workspace guide…</span></div>
+			{:else}
+				<textarea
+					bind:value={contents}
+					aria-label="Workspace guide"
+					placeholder="Tell Fella what these files mean, which fields matter, and what it should keep in mind…"
+					oninput={scheduleSave}
+				></textarea>
+			{/if}
+			<div class="editor-foot">
+				<span>{error || (saving ? 'Saving to the workspace…' : contents === savedContents ? 'Saved locally in this folder' : 'Unsaved changes')}</span>
+				<span>Only you can edit this file.</span>
 			</div>
 		</div>
-		{#if loading}
-			<div class="loading">Loading your workspace context…</div>
-		{:else}
-			<textarea
-				bind:value={contents}
-				aria-label="Workspace context"
-				placeholder="Tell Fella what your files mean, which fields matter, and what it should keep in mind…"
-				oninput={scheduleSave}
-			></textarea>
-		{/if}
-		<div class="editor-foot">
-			<span>{error || (saving ? 'Saving to the workspace…' : contents === savedContents ? 'Saved locally in this folder' : 'Unsaved changes')}</span>
-			<span>Only you can edit this file.</span>
-		</div>
-	</div>
+	{/if}
 
-	<div class="tip">
-		<Icon name="info" size={14} />
-		<span>Use context for definitions and guidance. Fella can read it, but it does not rewrite it.</span>
-	</div>
 </section>
 
 <style>
@@ -142,27 +143,41 @@
 		gap: var(--space-5);
 		margin-bottom: var(--space-5);
 	}
-	.eyebrow {
-		margin: 0 0 var(--space-1);
-		color: var(--text-faint);
-		font-size: var(--fs-xs);
-		font-weight: 650;
-		letter-spacing: 0.01em;
-	}
 	h1 {
 		margin: 0;
 		font-size: clamp(24px, 3vw, 32px);
-		font-weight: 620;
+		font-weight: 650;
 		letter-spacing: -0.03em;
 	}
-	.lede {
-		margin: var(--space-2) 0 0;
+	.empty-state {
+		max-width: 46ch;
+		margin: 10vh auto 0;
+		text-align: center;
+	}
+	.empty-icon {
+		display: grid;
+		place-items: center;
+		width: 42px;
+		height: 42px;
+		margin: 0 auto var(--space-3);
+		border-radius: 50%;
+		background: var(--bg-inset);
+		color: var(--text-faint);
+	}
+	.empty-state h2 {
+		margin: 0;
+		font-size: var(--fs-lg);
+		font-weight: 650;
+	}
+	.empty-state p {
+		margin: var(--space-2) 0 var(--space-4);
 		color: var(--text-dim);
 	}
 	.editor-card {
-		border: 1px solid var(--border);
-		border-radius: var(--radius);
-		background: var(--bg-raised);
+		border-block: 1px solid var(--border);
+		border-inline: 0;
+		border-radius: 0;
+		background: transparent;
 		overflow: hidden;
 	}
 	.editor-head,
@@ -171,7 +186,7 @@
 		align-items: center;
 		justify-content: space-between;
 		gap: var(--space-3);
-		padding: var(--space-3) var(--space-4);
+		padding: var(--space-3) 0;
 	}
 	.editor-head {
 		border-bottom: 1px solid var(--border);
@@ -186,7 +201,7 @@
 		margin: 3px 0 0;
 		color: var(--text-faint);
 		font-family: var(--mono);
-		font-size: 10px;
+		font-size: var(--fs-xs);
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
@@ -215,25 +230,27 @@
 	textarea {
 		display: block;
 		width: 100%;
-		min-height: 360px;
-		padding: var(--space-4);
+		min-height: min(56vh, 620px);
+		padding: var(--space-4) 0;
 		border: 0;
 		outline: 0;
 		resize: vertical;
-		background: var(--bg-raised);
+		background: transparent;
 		color: var(--text);
 		font: 14px/1.65 var(--mono);
 	}
 	textarea:focus {
-		box-shadow: inset 0 0 0 2px var(--brand);
+		box-shadow: inset 0 0 0 2px var(--link);
 	}
 	textarea::placeholder {
 		color: var(--text-faint);
 	}
 	.loading {
-		min-height: 360px;
+		min-height: min(56vh, 620px);
 		display: grid;
 		place-items: center;
+		align-content: center;
+		gap: var(--space-3);
 		color: var(--text-faint);
 		font-size: var(--fs-sm);
 	}
@@ -244,18 +261,6 @@
 	}
 	.editor-foot span:first-child {
 		color: var(--text-dim);
-	}
-	.tip {
-		display: flex;
-		align-items: flex-start;
-		gap: var(--space-2);
-		margin-top: var(--space-4);
-		color: var(--text-faint);
-		font-size: var(--fs-xs);
-	}
-	.tip :global(svg) {
-		flex: none;
-		color: var(--brand);
 	}
 	@media (max-width: 680px) {
 		.page-head,

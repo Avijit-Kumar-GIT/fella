@@ -6,9 +6,9 @@ xlsx/pdf writers for files this battery doesn't need) but harder questions:
 rank-2/3 with an exact gap, weighted composites, a genuine 3-condition join,
 unit conversion the DB can't do for you (km -> miles), a non-standard-date
 half-year split, two "does it correctly say no / zero" traps, and two
-`make_chart`-graded cases. Deliberately scoped so accuracy has real headroom
--- see docs/HARNESS-COMPARISON.md's "Scoped to the everyday-question tier"
-note; this is the next tier up, not a general data-science benchmark.
+`make_chart`-graded cases. This is a harder variant of the same synthetic
+profile, not an independent or representative data-science benchmark; see the
+FQA-Bench methodology for the current scope and limitations.
 
 Every gold value below is *computed from the copied files*, not hand-typed,
 so a data edit here can't silently drift from the actual grader.

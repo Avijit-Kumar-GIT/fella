@@ -2,6 +2,7 @@
 	import { session } from '$lib/session.svelte';
 	import type { Message, RunStep } from '$lib/types';
 	import Icon from './Icon.svelte';
+	import DataLoader from './DataLoader.svelte';
 
 	let chat = $derived(session.activeChat);
 	let steps = $derived(chat?.runSteps ?? []);
@@ -30,16 +31,6 @@
 		return null;
 	}
 
-	function inspect(step: RunStep, visibleIndex: number): void {
-		const answer = lastAnswer();
-		if (!answer) return;
-		session.openInspector({
-			kind: 'answer',
-			messageId: answer.id,
-			stepIndex: steps.length - visibleSteps.length + visibleIndex
-		});
-	}
-
 	function duration(ms: number | null | undefined): string {
 		if (ms == null) return '';
 		if (ms < 1000) return `${ms}ms`;
@@ -53,13 +44,22 @@
 		if (step.state === 'error') return 'Could not complete this step';
 		return 'Complete';
 	}
+
+	let hasCompletedAnswer = $derived.by(() => {
+		const answer = lastAnswer();
+		return !!answer?.answer && !answer.pending;
+	});
 </script>
 
-{#if steps.length}
+{#if steps.length && (running || !hasCompletedAnswer)}
 	<section class="run-timeline" class:active={running} aria-label="Question run">
 		<div class="timeline-head">
 			<div class="run-status">
-				<span class="run-dot" class:pulse={running} class:error={failed && !running} aria-hidden="true"></span>
+				{#if running}
+					<DataLoader size={18} />
+				{:else}
+					<span class="run-dot" class:error={failed} aria-hidden="true"></span>
+				{/if}
 				<strong>{running ? chat?.activity || 'Working through the workspace' : failed ? 'Run needs review' : evidenceSteps ? 'Workspace checked' : 'Question answered'}</strong>
 			</div>
 			<div class="timeline-tools">
@@ -73,20 +73,20 @@
 					aria-expanded={expanded}
 					onclick={() => (expanded = !expanded)}
 				>
-					<Icon name="chevron-right" size={13} />
+					<Icon name="chevron-right" size={12} />
 				</button>
 			</div>
 		</div>
 
 		{#if expanded}
 			<div class="steps">
-				{#each visibleSteps as step, i (step.id)}
-					<button class="step" class:clickable={!!lastAnswer()} type="button" onclick={() => inspect(step, i)}>
+				{#each visibleSteps as step (step.id)}
+					<div class="step">
 						<span class="step-mark" class:running={step.state === 'running'} class:error={step.state === 'error'}>
 							{#if step.state === 'complete'}
-								<Icon name="check" size={11} />
+								<Icon name="check" size={12} />
 							{:else if step.state === 'error'}
-								<Icon name="alert" size={11} />
+								<Icon name="alert" size={12} />
 							{:else}
 								<span class="mini-thinking" aria-hidden="true"></span>
 							{/if}
@@ -95,8 +95,7 @@
 							<strong>{step.label}</strong>
 							<small>{stepResult(step)}</small>
 						</span>
-						{#if lastAnswer()}<span class="step-info"><Icon name="info" size={13} /></span>{/if}
-					</button>
+					</div>
 				{/each}
 				{#if steps.length > visibleSteps.length}
 					<p class="more-steps">Showing the last {visibleSteps.length} steps</p>
@@ -109,8 +108,7 @@
 <style>
 	.run-timeline {
 		max-width: 76ch;
-		margin: 0 auto var(--space-4);
-		border-bottom: 1px solid var(--border);
+		margin: 0 auto var(--space-3);
 		color: var(--text-dim);
 	}
 	.timeline-head {
@@ -118,7 +116,7 @@
 		align-items: center;
 		justify-content: space-between;
 		gap: var(--space-3);
-		min-height: 34px;
+		min-height: 30px;
 	}
 	.run-status,
 	.timeline-tools,
@@ -134,8 +132,8 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
-		font-size: var(--fs-xs);
-		font-weight: 560;
+		font-size: var(--fs-sm);
+		font-weight: 600;
 	}
 	.run-dot {
 		width: 7px;
@@ -143,10 +141,6 @@
 		flex: none;
 		border-radius: 50%;
 		background: var(--ok);
-	}
-	.run-dot.pulse {
-		background: var(--brand);
-		animation: run-pulse 1.4s ease-in-out infinite;
 	}
 	.run-dot.error {
 		background: var(--err);
@@ -184,7 +178,7 @@
 	}
 	.steps {
 		position: relative;
-		padding: 2px 0 var(--space-3) 15px;
+		padding: 2px 0 var(--space-2) 15px;
 	}
 	.steps::before {
 		content: '';
@@ -201,15 +195,11 @@
 		display: flex;
 		align-items: center;
 		gap: var(--space-2);
-		min-height: 28px;
+		min-height: 26px;
 		padding: 3px var(--space-2);
 		border-radius: var(--radius-chip);
 		text-align: left;
 		color: var(--text-dim);
-	}
-	.step.clickable:hover {
-		background: var(--bg-inset);
-		color: var(--text);
 	}
 	.step-mark {
 		position: relative;
@@ -241,7 +231,7 @@
 	}
 	.step-copy strong {
 		font-size: var(--fs-xs);
-		font-weight: 560;
+		font-weight: 600;
 		white-space: nowrap;
 	}
 	.step-copy small {
@@ -249,16 +239,12 @@
 		text-overflow: ellipsis;
 		white-space: nowrap;
 		color: var(--text-faint);
-		font-size: 10.5px;
-	}
-	.step-info {
-		flex: none;
-		color: var(--text-faint);
+		font-size: var(--fs-xs);
 	}
 	.more-steps {
 		margin: var(--space-1) 0 0;
 		color: var(--text-faint);
-		font-size: 10.5px;
+		font-size: var(--fs-xs);
 	}
 	.mini-thinking {
 		width: 3px;
@@ -267,9 +253,6 @@
 		background: currentColor;
 		box-shadow: 4px 0 currentColor, -4px 0 currentColor;
 		animation: mini-thinking 1.2s ease-in-out infinite;
-	}
-	@keyframes run-pulse {
-		50% { opacity: 0.42; }
 	}
 	@keyframes mini-thinking {
 		0%, 100% { opacity: 0.35; }

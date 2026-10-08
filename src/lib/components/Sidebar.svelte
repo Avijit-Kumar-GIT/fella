@@ -1,36 +1,37 @@
 <script lang="ts">
-	import { ipc, isTauri } from '$lib/ipc';
-	import { errMsg, openFolder, relativeAge } from '$lib/commands';
+	import { ipc, isDesktop } from '$lib/ipc';
+	import { errMsg, openConversation, openFolder } from '$lib/commands';
 	import { session } from '$lib/session.svelte';
-	import type { ConversationSummary, Message } from '$lib/types';
+	import type { ConversationSummary } from '$lib/types';
 	import Icon from './Icon.svelte';
 	import Logo from './Logo.svelte';
 
-	let { onsearch }: { onsearch?: () => void } = $props();
+	let { onsearch, onnewproject }: { onsearch?: () => void; onnewproject?: () => void } = $props();
 
+	type Repository = {
+		key: string;
+		path: string | null;
+		name: string;
+		items: ConversationSummary[];
+		current: boolean;
+		expanded: boolean;
+	};
+
+	const LOCAL_REPOSITORY = '__no-repository__';
 	let list = $state<ConversationSummary[]>([]);
-	let query = $state('');
-	let searchOpen = $state(false);
-	let searchInput = $state<HTMLInputElement | null>(null);
-	let folderName = $derived(
-		session.catalog.workspace?.replace(/[/\\]+$/, '').replace(/^.*[/\\]/, '') ?? ''
-	);
-	let fileCount = $derived(session.catalog.sources.length);
+	let expandedRepos = $state<Record<string, boolean>>({});
+	let menuRepository = $state<string | null>(null);
 	const shortcutModifier =
 		typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform || navigator.userAgent)
 			? '⌘'
 			: 'Ctrl';
 
-	function toggleSearch() {
-		searchOpen = !searchOpen;
-		if (searchOpen) queueMicrotask(() => searchInput?.focus());
-		else query = '';
-	}
-
 	async function refresh() {
-		if (!isTauri()) return;
+		if (!isDesktop()) return;
 		try {
-			list = await ipc.conversationsList();
+			const next = await ipc.conversationsList();
+			session.rememberRepositories(next.map((item) => item.workspace));
+			list = next;
 		} catch {
 			/* leave the last-known list rather than blanking it on a hiccup */
 		}
@@ -47,6 +48,85 @@
 	 *  conversation from the currently open folder. */
 	function title(c: ConversationSummary): string {
 		return c.title ?? c.preview;
+	}
+
+	function repositoryKey(path: string | null | undefined): string {
+		return path || LOCAL_REPOSITORY;
+	}
+
+	function repositoryName(path: string | null): string {
+		if (!path) return 'No repository';
+		return path.replace(/[/\\]+$/, '').replace(/^.*[/\\]/, '') || path;
+	}
+
+	let repositories = $derived.by((): Repository[] => {
+		const grouped = new Map<string, { path: string | null; items: ConversationSummary[] }>();
+		const add = (path: string | null, item?: ConversationSummary) => {
+			const key = repositoryKey(path);
+			const group = grouped.get(key) ?? { path, items: [] };
+			if (item) group.items.push(item);
+			grouped.set(key, group);
+		};
+
+		for (const path of session.repositoryPaths) add(path);
+		if (session.catalog.workspace) add(session.catalog.workspace);
+		for (const item of list) {
+			if (!item.workspace || !session.hiddenRepositoryPaths.includes(item.workspace)) {
+				add(item.workspace, item);
+			}
+		}
+		const current = session.catalog.workspace;
+		const order = new Map(session.repositoryPaths.map((path, index) => [path, index]));
+		return [...grouped.values()]
+			.sort((a, b) => {
+				if (a.path === null) return 1;
+				if (b.path === null) return -1;
+				return (order.get(a.path) ?? Number.MAX_SAFE_INTEGER) - (order.get(b.path) ?? Number.MAX_SAFE_INTEGER);
+			})
+			.map((group) => {
+				const key = repositoryKey(group.path);
+				const active = group.path !== null && group.path === current;
+				return {
+					key,
+					path: group.path,
+					name: repositoryName(group.path),
+					items: group.items,
+					current: active,
+					expanded: expandedRepos[key] ?? active
+				};
+			});
+	});
+
+	function newChat(): void {
+		menuRepository = null;
+		session.setWorkspaceView('ask');
+		session.newTab();
+	}
+
+	function toggleRepository(repo: Repository): void {
+		menuRepository = null;
+		expandedRepos = { ...expandedRepos, [repo.key]: !repo.expanded };
+		if (repo.expanded || !repo.path) return;
+		session.setWorkspaceView('ask');
+		if (repo.path !== session.catalog.workspace) void openFolder(repo.path);
+	}
+
+	async function openRepositoryWorkspace(repo: Repository): Promise<void> {
+		menuRepository = null;
+		expandedRepos = { ...expandedRepos, [repo.key]: true };
+		if (repo.path && repo.path !== session.catalog.workspace) await openFolder(repo.path);
+		session.setWorkspacePane('sources');
+	}
+
+	async function addRepository(): Promise<void> {
+		session.setWorkspaceView('ask');
+		await openFolder();
+	}
+
+	function hideRepository(repo: Repository, event: MouseEvent): void {
+		event.stopPropagation();
+		menuRepository = null;
+		if (repo.path && repo.path !== session.catalog.workspace) session.forgetRepository(repo.path);
 	}
 
 	let renamingId = $state<string | null>(null);
@@ -69,63 +149,16 @@
 		if (next === original) return; // unedited -- nothing to save
 		try {
 			await session.renameConversation(id, next); // empty clears a custom title
-			if (isTauri()) list = await ipc.conversationsList();
+			if (isDesktop()) list = await ipc.conversationsList();
 		} catch (e) {
 			session.addSystem(`error: ${errMsg(e)}`);
 		}
 	}
 
-	/** Today / Yesterday / This week / Older, from local-midnight boundaries. */
-	function groupLabel(ms: number): string {
-		const startOf = (t: number) => {
-			const d = new Date(t);
-			return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-		};
-		const days = Math.round((startOf(Date.now()) - startOf(ms)) / 86_400_000);
-		if (days <= 0) return 'Today';
-		if (days === 1) return 'Yesterday';
-		if (days < 7) return 'This week';
-		return 'Older';
-	}
-
-	// `list` is already newest-first from the backend, so consecutive items
-	// sharing a label land in the same group without a separate sort pass.
-	let groups = $derived.by(() => {
-		const q = query.trim().toLowerCase();
-		const filtered = q
-			? list.filter(
-					(c) =>
-						c.preview.toLowerCase().includes(q) ||
-						(c.workspace ?? '').toLowerCase().includes(q) ||
-						(c.title ?? '').toLowerCase().includes(q)
-				)
-			: list;
-		const out: { label: string; items: ConversationSummary[] }[] = [];
-		for (const c of filtered) {
-			const label = groupLabel(c.saved_at_ms);
-			const last = out[out.length - 1];
-			if (last && last.label === label) last.items.push(c);
-			else out.push({ label, items: [c] });
-		}
-		return out;
-	});
-
 	async function open(c: ConversationSummary) {
 		try {
-			session.setWorkspaceView('ask');
-			const raw = await ipc.conversationLoad(c.id);
-			const saved: { workspace?: string | null; messages?: unknown; title?: string | null } =
-				JSON.parse(raw);
-			const messages = Array.isArray(saved.messages) ? (saved.messages as Message[]) : [];
-			session.loadArchivedTab(c.id, messages, saved.title ?? null);
-			// Auto-mount the folder this conversation was about, so a follow-up
-			// question here answers from the same files it originally did,
-			// instead of just telling the user to /open it themselves.
-			// openFolder already reports a failure (moved/deleted folder) as a
-			// system message, so no separate handling is needed for that.
-			if (saved.workspace && saved.workspace !== session.catalog.workspace) {
-				await openFolder(saved.workspace);
-			}
+			expandedRepos = { ...expandedRepos, [repositoryKey(c.workspace)]: true };
+			await openConversation(c);
 		} catch (e) {
 			session.addSystem(`error: ${errMsg(e)}`);
 		}
@@ -147,56 +180,30 @@
 
 <aside class="sidebar">
 	<div class="header">
-		<span class="logo"><Logo size={18} /></span>
+		<span class="logo"><Logo size={18} active={session.busy} /></span>
 		<div class="header-actions">
 			<button
 				class="icon-btn"
 				type="button"
-				aria-label="New conversation"
-				title={`New conversation (${shortcutModifier}+N)`}
-				onclick={() => {
-					session.setWorkspaceView('ask');
-					session.newTab();
-				}}
+				aria-label="Collapse sidebar"
+				title={`Collapse sidebar (${shortcutModifier}+B)`}
+				onclick={() => session.toggleSidebar()}
 			>
-				<Icon name="plus" size={15} />
-			</button>
-			<button
-				class="icon-btn"
-				type="button"
-				aria-label="Filter conversations"
-				title="Filter conversations"
-				aria-pressed={searchOpen}
-				onclick={toggleSearch}
-			>
-				<Icon name="search" size={14} />
+				<Icon name="panel" size={16} />
 			</button>
 		</div>
 	</div>
-	{#if searchOpen}
-		<div class="search">
-			<Icon name="search" size={13} />
-			<input
-				bind:this={searchInput}
-				bind:value={query}
-				placeholder="Search…"
-				spellcheck="false"
-				aria-label="Search history"
-			/>
-		</div>
-	{/if}
-	<nav class="nav-section" aria-label="Main">
-		<div class="nav-heading">Work</div>
+	<nav class="nav-section" aria-label="General">
+		<div class="nav-heading">General</div>
 		<button
 			class="nav-row"
-			title={`Ask (${shortcutModifier}+Shift+A)`}
+			title={`New conversation (${shortcutModifier}+Shift+A)`}
+			aria-label="New conversation"
 			aria-keyshortcuts="Control+Shift+A Meta+Shift+A"
-			class:active={session.workspaceView === 'ask'}
 			type="button"
-			aria-current={session.workspaceView === 'ask' ? 'page' : undefined}
-			onclick={() => session.setWorkspaceView('ask')}
+			onclick={newChat}
 		>
-			<Icon name="compose" size={14} />
+			<Icon name="ask" size={16} />
 			<span>Ask</span>
 		</button>
 		<button
@@ -207,150 +214,182 @@
 			aria-haspopup="dialog"
 			onclick={() => onsearch?.()}
 		>
-			<Icon name="search" size={14} />
+			<Icon name="search" size={16} />
 			<span>Search</span>
-			<kbd>{shortcutModifier}K</kbd>
 		</button>
 	</nav>
-	<nav class="nav-section" aria-label="Workspace">
-		<div class="nav-heading">Workspace</div>
-		<button
-			class="nav-row"
-			title={`Sources (${shortcutModifier}+Shift+S)`}
-			aria-keyshortcuts="Control+Shift+S Meta+Shift+S"
-			class:active={session.workspaceView === 'workspace' && session.workspacePane === 'sources'}
-			type="button"
-			disabled={!session.catalog.workspace}
-			aria-current={
-				session.workspaceView === 'workspace' && session.workspacePane === 'sources' ? 'page' : undefined
-			}
-			onclick={() => session.setWorkspacePane('sources')}
-		>
-			<Icon name="table" size={14} />
-			<span>Sources</span>
-			{#if fileCount}<small>{fileCount}</small>{/if}
-		</button>
-		<button
-			class="nav-row"
-			title={`Context (${shortcutModifier}+Shift+C)`}
-			aria-keyshortcuts="Control+Shift+C Meta+Shift+C"
-			class:active={session.workspaceView === 'workspace' && session.workspacePane === 'context'}
-			type="button"
-			disabled={!session.catalog.workspace}
-			aria-current={
-				session.workspaceView === 'workspace' && session.workspacePane === 'context' ? 'page' : undefined
-			}
-			onclick={() => session.setWorkspacePane('context')}
-		>
-			<Icon name="file" size={14} />
-			<span>Context</span>
-		</button>
-	</nav>
-	<div class="history-label">
-		<span>Recent</span>
-		{#if list.length}<span class="history-count">{list.length}</span>{/if}
-	</div>
-	<div class="list">
-		{#each groups as group (group.label)}
-			<div class="group-label">{group.label}</div>
-			{#each group.items as c (c.id)}
-				<div class="item-wrap">
-					{#if renamingId === c.id}
-						<input
-							class="rename-input"
-							bind:this={renameInput}
-							bind:value={renameValue}
-							onkeydown={(e) => {
-								if (e.key === 'Enter') commitRename(c);
-								else if (e.key === 'Escape') renamingId = null;
-							}}
-							onblur={() => commitRename(c)}
-							aria-label="Rename conversation"
-						/>
-					{:else}
+	<section class="projects-section" aria-labelledby="projects-heading">
+		<div class="section-head">
+			<div class="nav-heading" id="projects-heading">Projects</div>
+			<button
+				class="section-action"
+				type="button"
+				aria-label="New project"
+				title="New project"
+				onclick={() => onnewproject?.()}
+			>
+				<Icon name="plus" size={16} />
+			</button>
+		</div>
+		<div class="project-list">
+			{#each session.projects as project (project.id)}
+				<button
+					class="project-row"
+					class:active={session.workspaceView === 'project' && session.activeProjectId === project.id}
+					type="button"
+					title={project.workspace}
+					aria-current={session.workspaceView === 'project' && session.activeProjectId === project.id ? 'page' : undefined}
+					onclick={() => session.openProject(project.id)}
+				>
+					<span class="row-slot row-icon"><Icon name="project" size={16} /></span>
+					<span>{project.name}</span>
+				</button>
+			{/each}
+		</div>
+	</section>
+	<section class="repository-section" aria-labelledby="repositories-heading">
+		<div class="section-head">
+			<div class="nav-heading" id="repositories-heading">Repositories</div>
+			<button
+				class="section-action"
+				type="button"
+				aria-label="Add repository"
+				title={`Add repository (${shortcutModifier}+O)`}
+				onclick={() => void addRepository()}
+			>
+				<Icon name="plus" size={16} />
+			</button>
+		</div>
+		<div class="repositories">
+			{#each repositories as repo (repo.key)}
+				<div
+					class="repository"
+					class:current={repo.current}
+					class:expanded={repo.expanded}
+				>
+					<div class="repository-row-wrap">
 						<button
-							class="rowbtn item"
+							class="repository-row"
 							type="button"
-							onclick={() => open(c)}
-							title={title(c)}
-							aria-label={`Open conversation: ${title(c)}`}
+							title={repo.path ?? 'No repository'}
+							aria-expanded={repo.expanded}
+							onclick={() => toggleRepository(repo)}
 						>
-							<span class="preview">{title(c)}</span>
-							<span class="row-end">
-								<span class="age">{relativeAge(c.saved_at_ms)}</span>
-							</span>
+							<span class="row-slot row-chevron"><Icon name="chevron-right" size={12} /></span>
+							<span class="row-slot row-icon"><Icon name="repository" size={16} /></span>
+							<span class="repository-copy">{repo.name}</span>
 						</button>
-						<div class="row-actions">
-							<button
-								class="ren"
-								type="button"
-								aria-label="Rename conversation"
-								title="Rename"
-								onclick={(e) => startRename(c, e)}
-							>
-								<Icon name="pencil" size={12} />
-							</button>
-							<button
-								class="del"
-								type="button"
-								aria-label="Delete conversation"
-								title="Delete"
-								onclick={(e) => remove(c, e)}
-							>
-								<Icon name="x" size={12} />
-							</button>
+						{#if repo.path}
+							<div class="repository-actions">
+								{#if !repo.current}
+									<button
+										class="repository-action"
+										type="button"
+										aria-label="Repository actions"
+										aria-haspopup="menu"
+										aria-expanded={menuRepository === repo.key}
+										title="Repository actions"
+										onclick={(event) => {
+											event.stopPropagation();
+											menuRepository = menuRepository === repo.key ? null : repo.key;
+										}}
+									>
+										<Icon name="more-horizontal" size={14} />
+									</button>
+								{/if}
+							</div>
+						{/if}
+						{#if menuRepository === repo.key && repo.path && !repo.current}
+							<div class="repository-menu" role="menu">
+								<button
+									type="button"
+									role="menuitem"
+									onclick={(event) => hideRepository(repo, event)}
+								>
+									Hide repository
+								</button>
+							</div>
+						{/if}
+					</div>
+					{#if repo.expanded}
+						<div class="repository-contents">
+							{#if repo.path}
+								<div class="repository-tools" aria-label={`${repo.name} tools`}>
+									<button
+										class="repository-tool"
+										class:active={repo.current && session.workspaceView === 'workspace'}
+										type="button"
+										aria-label={`Open ${repo.name} workspace`}
+										aria-current={repo.current && session.workspaceView === 'workspace' ? 'page' : undefined}
+										title={`Open workspace (${shortcutModifier}+Shift+S)`}
+										onclick={() => void openRepositoryWorkspace(repo)}
+									>
+										<span class="row-slot row-icon"><Icon name="folder" size={16} /></span>
+										<span>Workspace</span>
+									</button>
+								</div>
+							{/if}
+							{#each repo.items as c (c.id)}
+								<div class="item-wrap">
+									{#if renamingId === c.id}
+										<input
+											class="rename-input"
+											bind:this={renameInput}
+											bind:value={renameValue}
+											onkeydown={(e) => {
+												if (e.key === 'Enter') commitRename(c);
+												else if (e.key === 'Escape') renamingId = null;
+											}}
+											onblur={() => commitRename(c)}
+											aria-label="Rename conversation"
+										/>
+									{:else}
+										<button
+											class="rowbtn item"
+											class:active={session.conversationId === c.id}
+											type="button"
+											onclick={() => void open(c)}
+											title={title(c)}
+											aria-label={`Open conversation: ${title(c)}`}
+											aria-current={session.conversationId === c.id ? 'page' : undefined}
+										>
+											<span class="row-slot row-icon row-placeholder" aria-hidden="true"></span>
+											<span class="preview">{title(c)}</span>
+										</button>
+										<div class="row-actions">
+											<button class="ren" type="button" aria-label="Rename conversation" title="Rename" onclick={(e) => startRename(c, e)}>
+												<Icon name="pencil" size={14} />
+											</button>
+											<button class="del" type="button" aria-label="Delete conversation" title="Delete" onclick={(e) => remove(c, e)}>
+												<Icon name="x" size={14} />
+											</button>
+										</div>
+									{/if}
+								</div>
+							{/each}
 						</div>
 					{/if}
 				</div>
 			{/each}
-		{/each}
-		{#if groups.length === 0}
-			<div class="empty">
-				{query ? 'No matches' : "No past conversations yet — they're saved here once you /clear or close a tab."}
-			</div>
-		{/if}
-	</div>
+			{#if repositories.length === 0}
+				<button class="add-repository" type="button" onclick={() => void addRepository()}>
+					<span class="row-slot row-icon"><Icon name="folder" size={16} /></span> Add a repository
+				</button>
+			{/if}
+		</div>
+	</section>
 	<div class="sidebar-footer">
-		{#if session.catalog.workspace}
-			<button
-				class="mount-status"
-				type="button"
-				title={`${session.catalog.workspace} · Change folder (${shortcutModifier}+O)`}
-				aria-label={`Change folder: ${folderName}`}
-				onclick={() => void openFolder()}
-			>
-				<span class="mount-icon"><Icon name="folder" size={14} /></span>
-				<span class="mount-copy">
-					<strong>{folderName}</strong>
-					<small>Mounted folder</small>
-				</span>
-				<Icon name="chevron-right" size={13} />
-			</button>
-		{:else}
-			<button
-				class="mount-status"
-				type="button"
-				title={`Open a folder (${shortcutModifier}+O)`}
-				onclick={() => void openFolder()}
-			>
-				<span class="mount-icon"><Icon name="folder" size={14} /></span>
-				<span class="mount-copy">
-					<strong>Open a folder</strong>
-					<small>Choose a local workspace</small>
-				</span>
-				<Icon name="chevron-right" size={13} />
-			</button>
-		{/if}
 		<button
 			class="nav-row settings-row"
 			title={`Settings (${shortcutModifier}+,)`}
+			aria-label="Settings"
 			aria-keyshortcuts="Control+Comma Meta+Comma"
 			class:active={session.workspaceView === 'settings'}
 			type="button"
 			aria-current={session.workspaceView === 'settings' ? 'page' : undefined}
 			onclick={() => session.setWorkspaceView('settings')}
 		>
-			<Icon name="settings" size={14} />
+			<Icon name="settings" size={16} />
 			<span>Settings</span>
 		</button>
 	</div>
@@ -364,6 +403,8 @@
 		flex-direction: column;
 		gap: var(--space-1);
 		padding: 0 var(--space-2) var(--space-2);
+		--sidebar-hover: color-mix(in srgb, var(--bg-inset) 58%, var(--bg));
+		--sidebar-selected: var(--bg-inset);
 		/* No top padding: .header is 38px flush against the top edge, to
 		   match the titlebar's height exactly across the sidebar seam. */
 		background: var(--bg);
@@ -381,6 +422,9 @@
 	.logo {
 		display: flex;
 		align-items: center;
+		justify-content: center;
+		width: 26px;
+		height: 26px;
 	}
 	.header-actions {
 		display: flex;
@@ -397,36 +441,225 @@
 	}
 	.icon-btn:hover {
 		color: var(--text);
-		background: var(--bg-inset);
-	}
-	.search {
-		display: flex;
-		align-items: center;
-		gap: var(--space-2);
-		padding: var(--space-1) var(--space-2);
-		color: var(--text-faint);
-		flex: none;
-	}
-	.search input {
-		flex: 1;
-		border: none;
-		background: transparent;
-		color: var(--text);
-		font: inherit;
-		font-size: var(--fs-sm);
-		outline: none;
-	}
-	.search input::placeholder {
-		color: var(--text-faint);
+		background: var(--sidebar-hover);
 	}
 	.nav-section {
 		display: grid;
-		gap: 2px;
+		gap: 1px;
 		padding: var(--space-3) var(--space-1) var(--space-2);
 	}
-	.nav-section + .nav-section {
-		padding-top: var(--space-2);
-		border-top: 1px solid var(--border);
+	.projects-section {
+		flex: none;
+		display: grid;
+		gap: 1px;
+		padding: var(--space-1) var(--space-1) var(--space-2);
+	}
+	.project-list {
+		display: grid;
+		gap: 1px;
+		max-height: 144px;
+		overflow-y: auto;
+	}
+	.repository-section {
+		flex: 1;
+		min-height: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 1px;
+		padding: var(--space-2) var(--space-1);
+	}
+	.section-head {
+		display: flex;
+		align-items: center;
+		min-height: 24px;
+	}
+	.section-head .nav-heading {
+		flex: 1;
+		padding: 0 var(--space-2);
+		line-height: 24px;
+	}
+	.section-action {
+		display: grid;
+		place-items: center;
+		width: 22px;
+		height: 22px;
+		border-radius: var(--radius-chip);
+		color: var(--text-faint);
+	}
+	.section-action:hover {
+		background: var(--sidebar-hover);
+		color: var(--text);
+	}
+	.repositories {
+		flex: 1;
+		min-height: 0;
+		display: grid;
+		align-content: start;
+		grid-auto-rows: max-content;
+		gap: 1px;
+		overflow-y: auto;
+	}
+	.repository {
+		min-width: 0;
+	}
+	.repository-row-wrap {
+		position: relative;
+	}
+	.repository-row {
+		position: relative;
+		width: 100%;
+		display: grid;
+		grid-template-columns: 16px 16px minmax(0, 1fr);
+		align-items: center;
+		gap: 6px;
+		min-width: 0;
+		min-height: 28px;
+		padding: 4px 32px 4px var(--space-2);
+		border-radius: var(--radius-sm);
+		color: var(--text-dim);
+		text-align: left;
+		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+	}
+	.repository-row:hover {
+		background: var(--sidebar-hover);
+		color: var(--text);
+	}
+	.row-slot {
+		display: grid;
+		place-items: center;
+		width: 16px;
+		height: 20px;
+		flex: none;
+		color: var(--text-faint);
+	}
+	.row-slot :global(svg) {
+		display: block;
+	}
+	.row-chevron {
+		transition: color var(--dur-fast) var(--ease);
+	}
+	.repository-row:hover .row-slot,
+	.repository-row:focus-visible .row-slot {
+		color: var(--text-dim);
+	}
+	.repository.expanded .row-chevron :global(svg) {
+		transform: rotate(90deg);
+		transition: transform var(--dur-fast) var(--ease);
+	}
+	.repository.current .row-chevron,
+	.repository.current .row-icon {
+		color: var(--text-dim);
+	}
+	.repository-copy {
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		color: var(--text-dim);
+		font-size: var(--fs-sm);
+		font-weight: 550;
+	}
+	.repository-row:hover .repository-copy,
+	.repository-row:focus-visible .repository-copy {
+		color: var(--text);
+	}
+	.repository-actions {
+		position: absolute;
+		top: 3px;
+		right: 4px;
+		display: none;
+		align-items: center;
+		gap: 2px;
+		padding-left: 4px;
+		background: transparent;
+		color: var(--text-faint);
+	}
+	.repository:hover .repository-actions,
+	.repository:focus-within .repository-actions {
+		display: flex;
+		color: var(--text);
+	}
+	.repository-action {
+		display: grid;
+		place-items: center;
+		width: 22px;
+		height: 22px;
+		border-radius: var(--radius-chip);
+		color: inherit;
+	}
+	.repository-action:hover {
+		background: var(--sidebar-hover);
+		color: inherit;
+	}
+	.repository-action :global(svg) {
+		flex: none;
+		color: inherit;
+	}
+	.repository-menu {
+		position: absolute;
+		top: calc(100% - 2px);
+		right: 4px;
+		z-index: 4;
+		min-width: 136px;
+		padding: 4px;
+		border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
+		background: var(--bg-raised);
+		box-shadow: var(--shadow-pop);
+	}
+	.repository-menu button {
+		width: 100%;
+		padding: 7px 8px;
+		border-radius: var(--radius-chip);
+		color: var(--text-dim);
+		font-size: var(--fs-sm);
+		text-align: left;
+	}
+	.repository-menu button:hover {
+		background: var(--sidebar-hover);
+		color: var(--text);
+	}
+	.repository-contents {
+		padding: 0 0 2px 30px;
+	}
+	.repository-tools {
+		display: grid;
+		padding: 1px 0 2px;
+	}
+	.repository-tool {
+		display: grid;
+		grid-template-columns: 16px minmax(0, 1fr);
+		align-items: center;
+		gap: 6px;
+		width: 100%;
+		min-height: 27px;
+		padding: 4px 4px 4px 0;
+		border-radius: var(--radius-chip);
+		color: var(--text-faint);
+		font-size: var(--fs-sm);
+		text-align: left;
+	}
+	.repository-tool:hover {
+		background: var(--sidebar-hover);
+		color: var(--text);
+	}
+	.repository-tool.active {
+		background: var(--sidebar-selected);
+		color: var(--text);
+	}
+	.add-repository {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		padding: 7px var(--space-2);
+		border-radius: var(--radius-sm);
+		color: var(--text-dim);
+		font-size: var(--fs-sm);
+		text-align: left;
+	}
+	.add-repository:hover {
+		background: var(--sidebar-hover);
+		color: var(--text);
 	}
 	.nav-heading {
 		padding: 0 var(--space-2) var(--space-1);
@@ -441,7 +674,8 @@
 		display: flex;
 		align-items: center;
 		gap: var(--space-2);
-		padding: var(--space-2) var(--space-2);
+		min-height: 28px;
+		padding: 4px var(--space-2);
 		border-radius: var(--radius-sm);
 		color: var(--text-dim);
 		font-size: var(--fs-sm);
@@ -450,115 +684,81 @@
 		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 	}
 	.nav-row:hover:not(:disabled) {
-		background: var(--bg-inset);
+		background: var(--sidebar-hover);
 		color: var(--text);
 	}
 	.nav-row.active {
-		background: var(--bg-raised);
+		background: var(--sidebar-selected);
 		color: var(--text);
-		font-weight: 620;
-	}
-	.nav-row.active::before {
-		content: '';
-		position: absolute;
-		left: 0;
-		top: 6px;
-		bottom: 6px;
-		width: 3px;
-		border-radius: 2px;
-		background: var(--brand);
-	}
-	.nav-row.active :global(svg) {
-		color: var(--brand);
+		font-weight: 500;
 	}
 	.nav-row:disabled {
 		color: var(--border-strong);
 		cursor: default;
 	}
-	.nav-row small {
-		margin-left: auto;
-		color: var(--text-faint);
-		font-family: var(--mono);
-		font-size: 10px;
-	}
-	.nav-row kbd {
-		margin-left: auto;
-		color: var(--text-faint);
-		font-family: var(--mono);
-		font-size: 10px;
-	}
-	.history-label {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		padding: var(--space-3) var(--space-2) var(--space-1);
-		border-top: 1px solid var(--border);
-		color: var(--text-faint);
-		font-size: var(--fs-xs);
-		font-weight: 650;
-		letter-spacing: 0.01em;
-	}
-	.history-count {
-		font-family: var(--mono);
-		font-size: 10px;
-		font-weight: 500;
-		letter-spacing: 0;
-		text-transform: none;
-	}
-	.list {
-		flex: 1;
-		min-height: 0;
-		padding: 0 var(--space-1);
-		overflow-y: auto;
-	}
-	.group-label {
-		padding: var(--space-2) var(--space-2) var(--space-1);
-		color: var(--text-faint);
-		font-size: var(--fs-xs);
-		font-weight: 600;
-		letter-spacing: 0.01em;
-	}
 	.item-wrap {
 		position: relative;
 	}
 	.item {
-		display: flex;
+		position: relative;
+		display: grid;
+		grid-template-columns: 16px minmax(0, 1fr);
 		align-items: center;
-		gap: var(--space-2);
+		gap: 6px;
 		width: 100%;
-		min-height: 30px;
-		padding-top: 6px;
-		padding-bottom: 6px;
+		min-height: 27px;
+		padding-left: 0;
+		padding-right: 48px;
+		padding-top: 4px;
+		padding-bottom: 4px;
 		border-radius: var(--radius-sm);
 	}
 	.item:hover,
 	.item:focus-visible {
-		background: var(--bg-inset);
+		background: var(--sidebar-hover);
+	}
+	.item.active {
+		background: var(--sidebar-selected);
+		color: var(--text);
 	}
 	.item-wrap:focus-within .row-actions,
 	.item-wrap:hover .row-actions {
 		display: flex;
 	}
-	.item-wrap:hover .row-end,
-	.item-wrap:focus-within .row-end {
-		opacity: 0;
-	}
-	.row-end {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		flex: none;
-		max-width: 42%;
-		transition: opacity var(--dur-fast) var(--ease);
-	}
 	.preview {
-		flex: 1;
 		min-width: 0;
-		color: var(--text);
+		color: var(--text-dim);
 		font-size: var(--fs-sm);
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+	}
+	.item.active .preview {
+		color: var(--text);
+	}
+	.project-row {
+		position: relative;
+		width: 100%;
+		display: grid;
+		grid-template-columns: 16px minmax(0, 1fr);
+		align-items: center;
+		gap: 6px;
+		min-width: 0;
+		min-height: 27px;
+		padding: 4px var(--space-2);
+		border-radius: var(--radius-sm);
+		color: var(--text-dim);
+		font-size: var(--fs-sm);
+		text-align: left;
+		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+	}
+	.project-row:hover {
+		background: var(--sidebar-hover);
+		color: var(--text);
+	}
+	.project-row.active {
+		background: var(--sidebar-selected);
+		color: var(--text);
 	}
 	.rename-input {
 		width: 100%;
@@ -594,71 +794,13 @@
 	.ren:hover,
 	.del:hover {
 		color: var(--text);
-		background: var(--bg-inset);
-	}
-	.age {
-		color: var(--text-faint);
-		font-family: var(--mono);
-		font-size: 10px;
-		white-space: nowrap;
-	}
-	.empty {
-		padding: var(--space-2);
-		color: var(--text-faint);
-		font-size: var(--fs-sm);
+		background: var(--sidebar-hover);
 	}
 	.sidebar-footer {
 		flex: none;
-		display: grid;
-		gap: 2px;
+		display: flex;
+		justify-content: flex-end;
 		padding: var(--space-2) var(--space-1) 0;
 		border-top: 1px solid var(--border);
-	}
-	.mount-status {
-		width: 100%;
-		display: flex;
-		align-items: center;
-		gap: var(--space-2);
-		min-width: 0;
-		padding: var(--space-2);
-		border-radius: var(--radius-sm);
-		color: var(--text-dim);
-		text-align: left;
-		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
-	}
-	.mount-status:hover {
-		background: var(--bg-inset);
-		color: var(--text);
-	}
-	.mount-icon {
-		display: grid;
-		place-items: center;
-		flex: none;
-		color: var(--brand);
-	}
-	.mount-copy {
-		min-width: 0;
-		flex: 1;
-		display: flex;
-		flex-direction: column;
-		gap: 1px;
-	}
-	.mount-copy strong,
-	.mount-copy small {
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-	.mount-copy strong {
-		color: var(--text);
-		font-size: var(--fs-sm);
-		font-weight: 580;
-	}
-	.mount-copy small {
-		color: var(--text-faint);
-		font-size: var(--fs-xs);
-	}
-	.settings-row {
-		margin-top: 1px;
 	}
 </style>

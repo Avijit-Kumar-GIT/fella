@@ -1,9 +1,10 @@
 <script lang="ts">
-	import { dispatch, openFolder, resumeLastFolder } from '$lib/commands';
+	import { dispatch, openFolder, rerunAnalysisTurn, resumeLastFolder } from '$lib/commands';
 	import { session } from '$lib/session.svelte';
-	import { isTauri, openExternal } from '$lib/ipc';
+	import { isDesktop, openExternal } from '$lib/ipc';
 	import { fadeQuick } from '$lib/motion';
 	import Icon from './Icon.svelte';
+	import Logo from './Logo.svelte';
 	import Message from './Message.svelte';
 	import RunTimeline from './RunTimeline.svelte';
 
@@ -72,6 +73,10 @@
 		return '';
 	}
 
+	function rerun(message: import('$lib/types').Message): Promise<void> {
+		return rerunAnalysisTurn(message);
+	}
+
 	let stick = true;
 	function onScroll() {
 		if (!scroller) return;
@@ -115,13 +120,14 @@
 	<RunTimeline />
 	{#if session.messages.length === 0}
 		<div class="onboard" class:center={!hasFolder && !showSetup}>
+			<div class="onboard-mark"><Logo size={40} active={session.busy} /></div>
 			<div class="wordmark" aria-label="Fella">Fella</div>
-			<h1 class="hero">Ask about your own files</h1>
+			<h1 class="hero">{hasFolder ? 'Ask about your own files' : 'Ask Fella a question'}</h1>
 
 			{#if !hasFolder}
 				<p class="lead">
-					Spreadsheets, PDFs, notes anything you keep in one folder. Answered on
-					your computer, from your files, never changed.
+					General questions work without a folder. Mount one when you want Fella to analyze local files;
+					Fella reads them for analysis and never changes them.
 				</p>
 				<div class="cta">
 					{#if session.lastFolder}
@@ -130,20 +136,16 @@
 							title="Reopen your last folder (Enter)"
 							onclick={() => void resumeLastFolder()}
 						>
-							<Icon name="folder" size={14} /> Reopen {lastFolderName}
+							<Icon name="folder" size={16} /> Reopen {lastFolderName}
 						</button>
-						<button class="pill" onclick={() => void openFolder()}>Choose another</button>
+						<button class="pill" onclick={() => void openFolder()}>Mount another</button>
 					{:else}
 						<button class="pill primary" onclick={() => void openFolder()}>
-							<Icon name="folder" size={14} /> Choose a folder
+							<Icon name="folder" size={16} /> Mount a folder
 						</button>
 					{/if}
 				</div>
-				{#if isTauri()}<p class="drophint">or drag a folder onto this window</p>{/if}
-				<p class="egs">
-					e.g. <em>“how did my spending change this year?”</em> ·
-					<em>“what stands out in my workout log?”</em>
-				</p>
+				{#if isDesktop()}<p class="drophint">or drag a folder here to mount it</p>{/if}
 			{:else if fileCount === 0}
 				<p class="lead"><strong>{folderName}</strong> is open, but nothing in it is readable yet.</p>
 				<p>
@@ -152,7 +154,7 @@
 				</p>
 				<div class="cta">
 					<button class="pill primary" onclick={() => void openFolder()}>
-						<Icon name="folder" size={14} /> Choose a different folder
+						<Icon name="folder" size={16} /> Choose a different folder
 					</button>
 				</div>
 			{:else}
@@ -178,7 +180,7 @@
 							<button class="pill" onclick={() => void dispatch(`/login ${providerId}`)}>Enter a new key</button>
 							{#if getKeyUrl}
 								<button class="pill ghost" onclick={() => void openExternal(getKeyUrl)}>
-									Get a new key <Icon name="arrow-up-right" size={13} />
+									Get a new key <Icon name="arrow-up-right" size={12} />
 								</button>
 							{/if}
 						</div>
@@ -265,7 +267,9 @@
 							ontoggle={() => toggle(m.id)}
 							question={questionFor(i)}
 							showFollowups={i === session.messages.length - 1 && !m.pending}
-							onfollowup={(next) => void dispatch(next)}
+							onfollowup={(next, clarificationTurnId) =>
+								void dispatch(next, clarificationTurnId)}
+							onrerun={() => rerun(m)}
 						/>
 					{/each}
 					{#snippet failed(error)}
@@ -318,10 +322,15 @@
 	}
 	.wordmark {
 		font-size: var(--fs-xl);
-		font-weight: 560;
+		font-weight: 600;
 		letter-spacing: -0.02em;
 		color: var(--text);
 		margin: 0 0 var(--space-2);
+	}
+	.onboard-mark {
+		display: flex;
+		justify-content: center;
+		margin: 0 0 var(--space-3);
 	}
 	.hero {
 		font-size: var(--fs-lg);
@@ -373,10 +382,6 @@
 	}
 	.egs {
 		color: var(--text-faint);
-	}
-	.egs em {
-		font-style: italic;
-		color: var(--text-dim);
 	}
 	.personalize {
 		margin-top: 22px;

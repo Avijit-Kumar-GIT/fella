@@ -28,7 +28,7 @@ try {
     Fail 'no published release yet'
 }
 
-$asset = $rel.assets | Where-Object { $_.name -like '*-setup.exe' } | Select-Object -First 1
+$asset = $rel.assets | Where-Object { $_.name -like 'Fella_*_x64.exe' } | Select-Object -First 1
 if (-not $asset) {
     $asset = $rel.assets | Where-Object { $_.name -like '*.msi' } | Select-Object -First 1
 }

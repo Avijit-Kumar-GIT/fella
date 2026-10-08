@@ -10,9 +10,8 @@
    - Monochrome first, with one accent. Color (--ok / --warn / --err / --link)
      only carries meaning state, a link, a result and is always paired with a
      word or shape, never color alone. --brand is the single exception: one
-     warm hue standing in for "this is the thing to notice," reused everywhere
-     that applies (the primary action, the empty-state glyph, the top
-     hairline, a connected-status icon) rather than invented per-component.
+     brand teal standing in for Fella's presence and primary action. Object icons
+     stay neutral until they represent a selected or active state.
    - Hierarchy comes from type and spacing before borders or fills. Earn a
      border/surface only for selection, grouping, or a raised layer.
    - One focus ring: a soft --link glow (:focus-visible below).
@@ -52,16 +51,35 @@
 	/* faint text still carries real content (status line, evidence summary,
 	   completion hints), so it holds WCAG AA (>= 4.5:1 on --bg). */
 	--text-faint: #6c6a63;
+	/* Conversation text has its own two-step reading scale. Body copy is
+	   intentionally softer than the ink used for findings and headings; the
+	   relationship is repeated with tuned values in dark mode below. */
+	--chat-body: #4d4b45;
+	--chat-strong: #1a1a17;
+	--chat-meta: #6c6a63;
+	--chat-question: #262521;
 	--accent: #1a1a17;
 	/* the one hue used outside the neutral/status palette: the primary-action
 	   pill, the empty-state glyph, the composer connected-icon, the top
 	   hairline -- one consistent "notice me" color, not a different one per
 	   component. */
 	--brand: #008080;
+	--on-brand: #ffffff;
+	--user-bubble: var(--brand);
+	--user-bubble-text: var(--on-brand);
 	--link: #3a5c8a;
 	--ok: #3f7d3f;
 	--warn: #855800;
 	--err: #b23b3b;
+	/* Analytical series have their own palette. Status colors stay reserved for
+	   verification and errors instead of becoming arbitrary chart categories. */
+	--chart-violet: #7462a8;
+	--chart-cyan: #2e9da4;
+	--chart-slate: #78818a;
+	--chart-plum: #a26478;
+	--chart-orange: #c87936;
+	--chart-green: #3f805b;
+	--chart-gold: #a27b24;
 	--radius: 8px;
 	--pad: 28px;
 
@@ -89,6 +107,7 @@
 
 	--radius-sm: 6px;
 	--radius-chip: 4px;
+	--radius-conversation: 18px;
 
 	/* soft, diffuse, layered the macOS elevation feel */
 	--shadow-sm: 0 1px 2px rgba(20, 20, 26, 0.05), 0 4px 12px rgba(20, 20, 26, 0.06);
@@ -109,12 +128,28 @@
 	--text: #ededec;
 	--text-dim: #8f8d88;
 	--text-faint: #838079;
+	--chat-body: #c8c7c2;
+	--chat-strong: #f1f1ee;
+	--chat-meta: #9b9992;
+	--chat-question: #ededec;
 	--accent: #ededec;
 	--brand: #008080;
+	--on-brand: #ffffff;
+	/* A touch more lightness keeps the outgoing bubble distinct from the dark
+	   canvas without introducing another hue. */
+	--user-bubble: color-mix(in srgb, var(--brand) 90%, white);
+	--user-bubble-text: #ffffff;
 	--link: #8fb0dd;
 	--ok: #7cc07c;
 	--warn: #d8a640;
 	--err: #e06c6c;
+	--chart-violet: #aa99e2;
+	--chart-cyan: #56d1cf;
+	--chart-slate: #b0b7bd;
+	--chart-plum: #df9aae;
+	--chart-orange: #efa763;
+	--chart-green: #70b58a;
+	--chart-gold: #e0ba5e;
 	--shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 12px rgba(0, 0, 0, 0.35);
 	--shadow-pop: 0 4px 12px rgba(0, 0, 0, 0.4), 0 20px 56px rgba(0, 0, 0, 0.55);
 }
@@ -135,6 +170,7 @@ body {
 	color: var(--text);
 	font-family: var(--sans);
 	font-size: var(--fs);
+	font-weight: 450;
 	line-height: var(--lh);
 	letter-spacing: -0.006em;
 	-webkit-font-smoothing: antialiased;
@@ -156,6 +192,7 @@ a:hover {
 
 button {
 	font: inherit;
+	font-weight: 500;
 	color: inherit;
 	background: transparent;
 	border: none;
@@ -224,6 +261,7 @@ kbd {
 	border-radius: var(--radius-sm);
 	padding: 7px 14px;
 	font: inherit;
+	font-weight: 500;
 	transition:
 		background var(--dur-fast) var(--ease),
 		border-color var(--dur-fast) var(--ease),
@@ -246,7 +284,7 @@ kbd {
    one thing to do here" reads as one consistent color language. */
 .pill.primary {
 	background: var(--brand);
-	color: #fff;
+	color: var(--on-brand);
 	border-color: var(--brand);
 }
 .pill.primary:hover {
@@ -267,6 +305,7 @@ kbd {
 	border-radius: var(--radius-chip);
 	text-align: left;
 	font: inherit;
+	font-weight: 500;
 	color: var(--text);
 	transition: background var(--dur-fast) var(--ease);
 }

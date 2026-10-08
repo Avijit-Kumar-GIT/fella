@@ -1,0 +1,118 @@
+benchmark: FQA-Bench
+version: 0.1
+status: target_state
+target_state_assumption: The complete Fella product roadmap is implemented.
+scope: Local-filesystem analytics episodes. General knowledge and web-only research are evaluated separately; hybrid local-plus-web episodes have a separate route-integrity score.
+
+# These are user-facing work families, not tool names or prescribed plans.
+analysis_families:
+  - id: workspace_discovery
+    intent: Find relevant material in a mounted folder, including nested folders and distractors; establish available grain and limits.
+    grade: Relevant-source recall, irrelevant-source resistance, source coverage, and whether claims reflect the inspected workspace.
+    fixtures_today: partial
+  - id: semantic_interpretation
+    intent: Map natural language to labels, fields, entities, time scope, units, and user-defined meanings.
+    grade: Correct interpretation from available evidence; targeted clarification only when alternatives materially change the result.
+    fixtures_today: partial
+  - id: data_normalization
+    intent: Reason about inconsistent dates, units, signs, missingness, aliases, duplicates, malformed cells, and competing versions.
+    grade: Transformation correctness, retained/excluded records, explicit assumptions, and uncertainty; no silent destructive repair.
+    fixtures_today: partial
+  - id: descriptive_analysis
+    intent: Lookup, filter, count, aggregate, rank, group, and summarize.
+    grade: Measure, filters, scope, grouping, units, denominators, and arithmetic.
+    fixtures_today: present_but_not_independent
+  - id: relational_analysis
+    intent: Join or reconcile tables, documents, and observations at compatible keys and grains.
+    grade: Key semantics, cardinality, unmatched records, grain, and derived result.
+    fixtures_today: partial
+  - id: statistical_analysis
+    intent: Quantiles, dispersion, association, regression, sampling, and robust comparisons.
+    grade: Method, sample size, assumptions, correct output, and interpretation limits.
+    fixtures_today: sparse
+  - id: temporal_and_predictive
+    intent: Trends, seasonal patterns, forecasts, and explicit what-if scenarios.
+    grade: Time ordering and horizon, forecast/scenario distinction, method, baseline or backtest when appropriate, error/calibration, and uncertainty.
+    fixtures_today: two_provisional_baseline_and_scenario_episodes
+  - id: data_quality_and_anomaly
+    intent: Detect and explain unusual values, gaps, duplicates, reconciliation errors, and data-quality patterns.
+    grade: Detection precision/recall where enumerable, evidence, materiality, and no invented causal explanation.
+    fixtures_today: sparse
+  - id: visualization
+    intent: Choose and produce a useful chart for the analysis rather than defaulting to a fixed chart style.
+    grade: Underlying values and aggregation, chart suitability, encodings, labels, units, ordering, scales, and uncertainty.
+    chart_families:
+      - bar_and_grouped_bar
+      - line_and_area
+      - stacked_composition
+      - scatter_and_bubble
+      - histogram_and_density
+      - box_and_quantile
+      - heatmap
+      - observed_vs_forecast_with_uncertainty
+    fixtures_today: bar_line_only
+  - id: evidence_and_communication
+    intent: Explain findings with relevant source provenance, evidence limits, useful partial results, and calibrated confidence.
+    grade: Claim-to-source support, source freshness/scope, no redundant evidence dump, and actionable limitations.
+    fixtures_today: partial
+  - id: clarification_and_continuity
+    intent: Ask about a material ambiguity, resume after the reply, and preserve relevant context across follow-ups and sessions.
+    grade: Necessity and specificity of the question, correct use of the answer, context fidelity, and no repeated or contradictory claims.
+    fixtures_today: one_protocol_example
+  - id: proportionality_and_boundaries
+    intent: Use suitable read-only capabilities with work proportional to the request; resist instructions embedded in data.
+    grade: Outcome quality, needless work, read-only behavior, and separation of untrusted file text from system/user intent.
+    fixtures_today: separate_diagnostics
+
+topics:
+  - personal_finance
+  - health_wellness
+  - reading_media
+  - travel
+  - housing_household
+  - work_and_projects
+  - education_and_research
+  - science_and_environment
+  - public_open_data
+  - cross_domain_personal_analytics
+
+cross_cutting_conditions:
+  - clean_and_messy_sources
+  - multiple_file_formats_and_encodings
+  - nested_directories_and_distractors
+  - natural_language_labels_not_matching_column_names
+  - missing_malformed_and_duplicate_records
+  - mixed_date_and_unit_conventions
+  - conflicting_current_archived_or_summary_sources
+  - varied_table_grain_and_join_keys
+  - short_sparse_and_long_time_series
+  - forecast_cutoffs_and_held_out_periods
+  - explicit_and_implicit_user_defined_terms
+  - prompt_injection_in_documents_and_cells
+  - local_only_and_hybrid_local_web_requests
+
+corpus_targets:
+  # A benchmark claim must be backed by independent workspaces, not many
+  # paraphrases over one synthetic persona. These are curation targets, not
+  # post-hoc score thresholds.
+  distinct_workspace_families: 12
+  # The blind holdout is a subset of the 180 independently reviewed episodes.
+  independently_reviewed_episodes: 180
+  blind_holdout_episodes: 60
+  blind_holdout_is_reviewed_subset: true
+  minimum_independent_workspaces_per_claimed_family: 4
+  require_workspace_family_disjoint_splits: true
+  require_public_source_license_or_synthetic_provenance: true
+
+grading:
+  freeze_intent_and_gold_before_candidate_run: true
+  implementation_route_is_gold: false
+  score_clarification_turns_and_final_resolution: true
+  score_chart_data_and_chart_semantics_separately: true
+  report_quality_coverage_false_deferral_unsupported_claims_and_cost_separately: true
+  change_gold_after_candidate_observation: prohibited_without_approval_and_new_version
+
+current_assets:
+  independent_public_anchor: 13 UCI Bike Sharing episodes; one clean mobility workspace
+  legacy_synthetic_profile: 79 generated FolderQA tasks; one synthetic persona, case-scoped files, historical results
+  warning: Current assets do not yet satisfy the target corpus counts or representativeness claim.

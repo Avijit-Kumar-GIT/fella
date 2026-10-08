@@ -29,16 +29,17 @@ rather than including a working exploit.
 - **Credentials** (provider API keys) live in `auth.json` (mode `0600`) in the
   OS app-data directory, never in the settings database, `localStorage`, or the
   transcript, and are never echoed.
-- **Deterministic answers.** Figures in an answer come from a tool result (SQL
-  or Python), checked by a verification pass never from the model directly.
+- **Computed figures.** Analytical figures come from SQL, sandboxed Python, or
+  source evidence; verification checks the execution trace. The model remains
+  responsible for interpreting the question and explaining the result.
 
 ## Experimental extension boundary
 
 The personal release has no pack manager, augment runtime, or MCP connector.
 `/mcp` is retained as an inert signpost and creates no connector or network
 activity. The root `fella.md` file is the supported user-authored context
-surface. Extension designs are archived for future custom forks; see
-[`docs/EXTENSIBILITY.md`](docs/EXTENSIBILITY.md).
+surface. The current boundary is described in
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 `run_python` executes code the model writes inside the checked-in
 `wasm32-unknown-unknown` RustPython guest through Wasmi. The guest receives no

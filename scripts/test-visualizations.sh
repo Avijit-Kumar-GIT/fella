@@ -18,7 +18,7 @@ case "$model" in
     ;;
 esac
 
-cd "$repo_root/src-tauri"
+cd "$repo_root/backend"
 cargo run --release --locked --features eval --example agent_eval -- \
   bench \
   --dir "$repo_root/bench/visualization" \

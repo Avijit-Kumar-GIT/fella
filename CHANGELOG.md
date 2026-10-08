@@ -6,7 +6,26 @@ All notable changes to Fella are recorded here. Format follows
 
 ## [Unreleased]
 
-No unreleased changes.
+### Added
+
+- Electron desktop shell with a sandboxed renderer, allowlisted preload bridge,
+  and the Rust analytics engine running as a local JSON-lines sidecar.
+- Cross-platform Electron packaging and updater artifact checks for macOS,
+  Windows, and Linux, with SHA-256 verification.
+
+### Changed
+
+- Provider-free general questions no longer require a mounted repository.
+- Existing `dev.fella.app` data directories remain the default so settings,
+  credentials, and conversation history survive the shell transition.
+- The app and sidecar version is 0.3.0. Local quality and packaged-app gates
+  passed on 2026-10-07; the release tag and GitHub draft remain pending.
+
+### Removed
+
+- Tauri runtime, plugins, shell commands, and bundle configuration. The Rust
+  backend remains as an Electron-managed sidecar in the neutral `backend/`
+  directory.
 
 ## [0.2.0] - 2026-09-20
 
@@ -25,7 +44,7 @@ and workspace experience substantially more capable.
 - **Embedded Python analytics.** Model-generated Python runs inside a bounded
   WASM RustPython guest through Wasmi, with no filesystem, network, environment,
   or subprocess capability. A read-only SQL bridge and explicit resource limits
-  support the personal analytics path. See [`docs/PYTHON-SANDBOX.md`](docs/PYTHON-SANDBOX.md).
+  support the personal analytics path. See the [runtime and Python boundary](docs/ARCHITECTURE.md#analysis-tools).
 - **Experimental capability policy.** Table, document, Python, and
   visualization analysis paths can be enabled or disabled in Settings, with
   the engine enforcing the same policy used by the UI.
@@ -289,7 +308,7 @@ and workspace experience substantially more capable.
   downloads + checksum-verifies the right installer for your OS and
   installs it (Fella closes; reopen it once the installer finishes). Manual
   only there's still no automatic or background check. See `SECURITY.md`
-  and `docs/SECURITY-REVIEW-v0.1.md` for the egress entry this adds.
+  for the manually invoked update-check boundary.
 
 ### Fixed
 

@@ -4,22 +4,24 @@
 		COMMAND_DESCRIPTIONS,
 		completionsFor,
 		dispatch,
-		openFolder,
 		resumeLastFolder,
+		selectModel,
 		steerRun,
 		stop
 	} from '$lib/commands';
 	import { session } from '$lib/session.svelte';
 	import { enterUp } from '$lib/motion';
-	import type { ContextReference, SourceInfo } from '$lib/types';
-	import Icon from './Icon.svelte';
-	import ProviderIcon from './ProviderIcon.svelte';
+import type { ContextReference, SourceInfo } from '$lib/types';
+import Icon from './Icon.svelte';
+import Logo from './Logo.svelte';
+import ProviderIcon from './ProviderIcon.svelte';
 
 	let { onafterrun }: { onafterrun?: () => void } = $props();
 
 	let value = $state('');
-	let ta: HTMLTextAreaElement;
+	let ta = $state<HTMLTextAreaElement>();
 	let contextInput = $state<HTMLInputElement>();
+	let modelInput = $state<HTMLInputElement>();
 	let wrapEl = $state<HTMLDivElement>();
 	// ↑-recall history lives on the active conversation, so each tab has its own.
 	let history = $derived(session.activeChat?.history ?? []);
@@ -32,30 +34,9 @@
 		session.pendingKey
 			? `Paste your ${session.pendingKey.display} API key…`
 			: folderName
-				? `Ask about ${folderName}…`
-				: 'Choose a folder to ask about…'
+				? 'Ask a question…'
+				: 'Ask a question, or mount a folder to analyze…'
 	);
-
-	// --- live-state chips (moved from the retired StatusBar) -------------
-	let up = $derived(session.health?.reachable ?? null);
-	let rejected = $derived(session.health?.rejected === true);
-	let providerId = $derived(session.settings?.provider ?? 'ollama-cloud');
-	let providerName = $derived(
-		session.providers.find((p) => p.id === providerId)?.display ?? providerId
-	);
-	let hasFolder = $derived(!!session.catalog.workspace);
-	let fileCount = $derived(session.catalog.sources.length);
-	// Show the effective model rather than a generic connection state. A tab can
-	// choose its own model, so this is the model the next answer will use; when
-	// no tab override exists it is the saved provider default.
-	let modelLabel = $derived(session.model || session.settings?.model || '');
-	let activityNote = $derived.by(() => {
-		if (session.activity) return session.activity;
-		if (session.busy) return 'working…';
-		if (up === false || rejected) return providerName;
-		if (session.focus) return 'focus mode · /focus to exit';
-		return null;
-	});
 
 	// --- completion menu -------------------------------------------------
 	const MAX_ITEMS = 8;
@@ -63,9 +44,33 @@
 	let menuOff = $state(false); // dismissed with Esc until the text changes
 	let contextOpen = $state(false);
 	let modeOpen = $state(false);
+	let modelOpen = $state(false);
 	let contextQuery = $state('');
+	let modelQuery = $state('');
 	let mode = $derived(session.activeChat?.mode ?? 'ask');
 	let contextRefs = $derived(session.activeChat?.contextRefs ?? []);
+	let providerId = $derived(session.settings?.provider ?? '');
+	let providerName = $derived(
+		(session.providers.find((provider) => provider.id === providerId)?.display ?? providerId) || 'Provider'
+	);
+	let currentModel = $derived(session.model.trim());
+	let modelOptions = $derived.by(() => {
+		const available = new Set(session.health?.models ?? []);
+		if (currentModel) available.add(currentModel);
+		const query = modelQuery.trim().toLowerCase();
+		return [...available]
+			.filter((model) => !query || model.toLowerCase().includes(query))
+			.sort((a, b) => a.localeCompare(b));
+	});
+	let pendingClarification = $derived.by(() => {
+		const latest = session.activeChat?.messages.at(-1);
+		if (latest?.role !== 'assistant' || latest.pending) return null;
+		const request = latest.answer?.clarification;
+		const turnId = latest.answer?.turn_id;
+		return request && turnId ? { request, turnId } : null;
+	});
+	let clarificationOther = $state('');
+
 	let contextSources = $derived.by((): SourceInfo[] => {
 		const q = contextQuery.trim().toLowerCase();
 		return session.catalog.sources
@@ -83,14 +88,12 @@
 	});
 	$effect(() => {
 		if (contextOpen) queueMicrotask(() => contextInput?.focus());
+		if (modelOpen) queueMicrotask(() => modelInput?.focus());
 	});
 
 	let pendingInput = $derived(!!session.pendingKey);
-	// `session.busy` alone isn't specific enough to mean "an answer is
-	// streaming, steering it makes sense" -- it's also true while a folder
-	// is still loading (openFolder reuses it for progress feedback), which
-	// has no answer in flight to steer. Only ask()'s pending assistant
-	// placeholder means there's actually something to steer.
+	// Mount progress is separate from conversation activity. Only ask()'s
+	// pending assistant placeholder means there is an answer to steer.
 	let answering = $derived(session.activeChat?.messages.at(-1)?.pending === true);
 	let items = $derived(menuOff || pendingInput ? [] : completionsFor(value));
 	let shown = $derived(items.slice(0, MAX_ITEMS));
@@ -138,17 +141,15 @@
 	async function submit() {
 		const text = value.trim();
 		if (!text) return;
+		// Do not start or steer an analysis across a workspace snapshot change.
+		if (session.mountProgress) return;
 		contextOpen = false;
 		modeOpen = false;
 		// Mid-run: a plain line (not a command, not a key paste) steers the live
 		// answer — cancel and re-ask with it appended. A command or key still
 		// waits for the run to end.
 		if (session.busy) {
-			// Busy but nothing is actually answering (e.g. a folder is still
-			// being read after auto-mounting a reopened conversation) -- there's
-			// no run to steer and no workspace ready yet either; ignore the
-			// send rather than firing early against a folder that hasn't
-			// finished opening.
+			// Busy but nothing is actually answering -- ignore the send.
 			if (!answering) return;
 			if (pendingInput || text.startsWith('/')) return;
 			if (!carriesSecret(text)) history.unshift(text);
@@ -166,17 +167,27 @@
 		value = '';
 		menuSel = -1;
 		queueMicrotask(grow);
-		// A real question with no folder open otherwise goes to the model with
-		// no tools at all, and a small model fills the gap by guessing or
-		// referencing the conversation as if a folder were still open, instead
-		// of saying so. If we know the last folder, reopen it first rather
-		// than making the user type /open themselves; a slash command still
-		// goes straight through (e.g. /open <a different folder>).
-		if (!session.catalog.workspace && !text.startsWith('/') && session.lastFolder) {
-			await resumeLastFolder();
-		}
+		// A typed question is never a request to reopen a previous repository.
+		// The empty-composer Enter shortcut and explicit Reopen button remain
+		// the deliberate ways to restore the last folder.
 		await dispatch(text);
 		onafterrun?.();
+	}
+
+	async function submitClarificationResponse(raw: string) {
+		const pending = pendingClarification;
+		const response = raw.trim();
+		if (!pending || !response || session.busy || session.mountProgress) return;
+		if (!carriesSecret(response)) history.unshift(response);
+		histIx = -1;
+		clarificationOther = '';
+		await dispatch(response, pending.turnId);
+		onafterrun?.();
+	}
+
+	function submitOtherClarification(event: SubmitEvent) {
+		event.preventDefault();
+		void submitClarificationResponse(clarificationOther);
 	}
 
 	function onKey(e: KeyboardEvent) {
@@ -189,6 +200,13 @@
 		}
 		if (modeOpen && e.key === 'Escape') {
 			modeOpen = false;
+			e.preventDefault();
+			e.stopPropagation();
+			return;
+		}
+		if (modelOpen && e.key === 'Escape') {
+			modelOpen = false;
+			modelQuery = '';
 			e.preventDefault();
 			e.stopPropagation();
 			return;
@@ -302,11 +320,6 @@
 		contextQuery = '';
 	}
 
-	function inspectSource(source: SourceInfo): void {
-		contextOpen = false;
-		session.openInspector({ kind: 'source', path: source.path });
-	}
-
 	function removeReference(ref: ContextReference): void {
 		session.removeContextReference(ref.kind, ref.key);
 	}
@@ -316,10 +329,19 @@
 		modeOpen = false;
 	}
 
+	async function chooseModel(next: string): Promise<void> {
+		if (!(await selectModel(next))) return;
+		modelOpen = false;
+		modelQuery = '';
+		ta?.focus();
+	}
+
 	function onWindowClick(e: MouseEvent): void {
 		if (!wrapEl?.contains(e.target as Node)) {
 			contextOpen = false;
 			modeOpen = false;
+			modelOpen = false;
+			modelQuery = '';
 		}
 	}
 </script>
@@ -330,9 +352,9 @@
 	{#if contextOpen}
 		<div class="context-menu" transition:enterUp>
 			<div class="context-search">
-				<Icon name="search" size={13} />
+				<Icon name="search" size={16} />
 				<input bind:this={contextInput} bind:value={contextQuery} placeholder="Find a source or field…" spellcheck="false" />
-				<button type="button" aria-label="Close context picker" onclick={() => (contextOpen = false)}><Icon name="x" size={13} /></button>
+				<button type="button" aria-label="Close context picker" onclick={() => (contextOpen = false)}><Icon name="x" size={16} /></button>
 			</div>
 			{#if contextSources.length}
 				<p class="context-heading">Sources</p>
@@ -340,11 +362,8 @@
 					{#each contextSources as source (source.path)}
 						<div class="context-item">
 							<button class="context-main" type="button" onclick={() => addSource(source)}>
-								<span class="context-icon"><Icon name={source.view ? 'table' : 'file'} size={13} /></span>
+								<span class="context-icon"><Icon name={source.view ? 'table' : 'file'} size={16} /></span>
 								<span class="context-copy"><strong>{source.name}</strong><small>{sourceDetail(source)}</small></span>
-							</button>
-							<button class="context-inspect" type="button" aria-label={`Inspect ${source.name}`} title="Inspect source" onclick={() => inspectSource(source)}>
-								<Icon name="info" size={13} />
 							</button>
 						</div>
 					{/each}
@@ -355,7 +374,7 @@
 				<div class="context-list compact-list">
 					{#each contextColumns as item (item.source.path + ':' + item.column.name)}
 						<button class="context-field" type="button" onclick={() => addColumn(item.source, item.column.name, item.column.type)}>
-							<span class="context-icon"><Icon name="table" size={13} /></span>
+							<span class="context-icon"><Icon name="table" size={16} /></span>
 							<span class="context-copy"><strong>{item.source.name}.{item.column.name}</strong><small>{item.column.type}</small></span>
 						</button>
 					{/each}
@@ -367,7 +386,7 @@
 			<p class="context-hint">Add a source or field to guide your next question.</p>
 		</div>
 	{/if}
-	{#if menuOpen && !contextOpen && !modeOpen}
+	{#if menuOpen && !contextOpen && !modeOpen && !modelOpen}
 		<ul
 			class="menu"
 			id="composer-completions"
@@ -402,18 +421,70 @@
 		</ul>
 	{/if}
 
+	{#if pendingClarification && !pendingInput}
+		<div class="field clarification-field" role="region" aria-label="Clarification response">
+			<h2 class="clarification-question">{pendingClarification.request.question}</h2>
+			{#if pendingClarification.request.reason}
+				<p class="clarification-reason">{pendingClarification.request.reason}</p>
+			{/if}
+			{#if pendingClarification.request.options.length}
+				<div class="clarification-options" role="group" aria-label="Suggested answers">
+					{#each pendingClarification.request.options as option, index (option)}
+						<button
+							class="clarification-option"
+							type="button"
+							disabled={session.busy}
+							onclick={() => void submitClarificationResponse(option)}
+						>
+							<span class="clarification-index">{index + 1}</span>
+							<span>{option}</span>
+						</button>
+					{/each}
+				</div>
+			{/if}
+			<form class="clarification-other" onsubmit={submitOtherClarification}>
+				<label for="clarification-other-input">Other</label>
+				<div class="clarification-other-row">
+					<textarea
+						id="clarification-other-input"
+						bind:value={clarificationOther}
+						aria-label="Other interpretation"
+						placeholder="Describe what you mean…"
+						maxlength="500"
+						rows="2"
+						disabled={session.busy}
+					></textarea>
+					<button
+						class="clarification-send"
+						type="submit"
+						disabled={!clarificationOther.trim() || session.busy}
+						aria-label="Continue with this interpretation"
+					>
+						<Icon name="corner-down-left" size={16} />
+					</button>
+				</div>
+			</form>
+		</div>
+	{:else}
 	<div class="field" class:secret={pendingInput}>
 		{#if !pendingInput}
 			<div class="context-row">
 				{#each contextRefs as ref (ref.kind + ':' + ref.key)}
 					<span class="ref-pill" title={ref.detail ?? ref.label}>
-						<Icon name={ref.kind === 'source' ? 'file' : 'table'} size={11} />
+							<Icon name={ref.kind === 'source' ? 'file' : 'table'} size={12} />
 						<span>{ref.label}</span>
-						<button type="button" aria-label={`Remove ${ref.label} from context`} onclick={() => removeReference(ref)}><Icon name="x" size={11} /></button>
+						<button type="button" aria-label={`Remove ${ref.label} from this question`} onclick={() => removeReference(ref)}><Icon name="x" size={12} /></button>
 					</span>
 				{/each}
-				<button class="context-add" type="button" aria-expanded={contextOpen} onclick={() => { contextOpen = !contextOpen; modeOpen = false; }}>
-					<Icon name="plus" size={12} /> Add context{#if contextRefs.length} · {contextRefs.length}{/if}
+				<button
+					class="context-add"
+					type="button"
+					aria-label="Add a source or field to this question"
+					title="Add a source or field to this question"
+					aria-expanded={contextOpen}
+					onclick={() => { contextOpen = !contextOpen; modeOpen = false; modelOpen = false; modelQuery = ''; }}
+				>
+					<Icon name="plus" size={16} /> Add source{#if contextRefs.length} · {contextRefs.length}{/if}
 				</button>
 			</div>
 		{/if}
@@ -425,10 +496,10 @@
 			autocapitalize="off"
 			autocomplete="off"
 			role="combobox"
-			aria-expanded={menuOpen && !contextOpen && !modeOpen}
+			aria-expanded={menuOpen && !contextOpen && !modeOpen && !modelOpen}
 			aria-controls="composer-completions"
 			aria-autocomplete="list"
-			aria-activedescendant={menuOpen && !contextOpen && !modeOpen && menuSel >= 0 ? 'composer-opt-' + menuSel : undefined}
+			aria-activedescendant={menuOpen && !contextOpen && !modeOpen && !modelOpen && menuSel >= 0 ? 'composer-opt-' + menuSel : undefined}
 			aria-label={folderName ? `Ask about ${folderName}` : 'Ask a question'}
 			{placeholder}
 			oninput={onInput}
@@ -438,10 +509,10 @@
 		<div class="bottom-row">
 			{#if !session.focus}
 				<div class="mode-wrap">
-					<button class="mode-trigger" type="button" aria-expanded={modeOpen} onclick={() => { modeOpen = !modeOpen; contextOpen = false; }}>
+					<button class="mode-trigger" type="button" aria-expanded={modeOpen} onclick={() => { modeOpen = !modeOpen; contextOpen = false; modelOpen = false; modelQuery = ''; }}>
 						<span class="mode-mark" class:inspect={mode === 'inspect'}></span>
 						{mode === 'inspect' ? 'Check data' : 'Ask'}
-						<Icon name="chevron-right" size={11} />
+						<Icon name="chevron-right" size={12} />
 					</button>
 					{#if modeOpen}
 						<div class="mode-menu">
@@ -454,48 +525,94 @@
 						</div>
 					{/if}
 				</div>
-			{/if}
-			{#if !session.focus}
-				<div class="chips">
-					<span class="chip model-chip" title={modelLabel ? `${providerName} · ${modelLabel}` : providerName}>
-						<ProviderIcon providerId={providerId} size={13} />
-						{modelLabel || 'No model selected'}
-					</span>
-				{#if activityNote}
-					<span class="chip">
-						{#if session.busy}<span class="thinking" aria-hidden="true"></span>{/if}
-						{activityNote}
-					</span>
+				{#if !pendingInput}
+					<div class="model-wrap">
+						<button
+							class="model-trigger"
+							type="button"
+							aria-expanded={modelOpen}
+							aria-haspopup="dialog"
+							title={currentModel ? `Model: ${currentModel}` : 'Choose a model'}
+							onclick={() => { modelOpen = !modelOpen; contextOpen = false; modeOpen = false; if (!modelOpen) modelQuery = ''; }}
+						>
+							{#if providerId}<ProviderIcon providerId={providerId} size={14} />{/if}
+							<span class="model-name" class:empty={!currentModel}>{currentModel || 'Choose model'}</span>
+							<Icon name="chevron-right" size={12} />
+						</button>
+						{#if modelOpen}
+							<div class="model-menu" role="dialog" aria-label="Choose a model" transition:enterUp>
+								<div class="model-menu-head">
+									<strong>Model</strong>
+									<small>{providerName}</small>
+								</div>
+								<label class="model-search">
+									<Icon name="search" size={14} />
+									<span class="sr-only">Find a model</span>
+									<input
+										bind:this={modelInput}
+										bind:value={modelQuery}
+										placeholder="Find a model…"
+										spellcheck="false"
+										onkeydown={(event) => {
+											if (event.key === 'Escape') {
+												modelOpen = false;
+												modelQuery = '';
+												event.preventDefault();
+											}
+										}}
+									/>
+								</label>
+								{#if modelOptions.length}
+									<div class="model-list" role="listbox" aria-label="Available models">
+										{#each modelOptions as modelOption (modelOption)}
+											<button
+												class="model-option"
+												class:selected={modelOption === currentModel}
+												type="button"
+												role="option"
+												aria-selected={modelOption === currentModel}
+												onclick={() => void chooseModel(modelOption)}
+											>
+												<span>{modelOption}</span>
+												{#if modelOption === currentModel}<Icon name="check" size={14} />{/if}
+											</button>
+										{/each}
+									</div>
+								{:else}
+									<p class="model-empty">No models available from {providerName}. Refresh the connection in Settings.</p>
+								{/if}
+								<button class="model-settings" type="button" onclick={() => { modelOpen = false; session.setWorkspaceView('settings'); }}>
+									<Icon name="settings" size={14} /> Provider settings
+								</button>
+							</div>
+						{/if}
+					</div>
 				{/if}
-				</div>
 			{/if}
-			{#if answering && value.trim() && !pendingInput && !value.startsWith('/')}
+			{#if answering && value.trim() && !pendingInput && !value.startsWith('/') && !session.mountProgress}
 				<button
 					class="act send"
 					title="Cancel and re-ask with this (Enter)"
 					aria-label="Cancel and re-ask with this"
 					onclick={() => void submit()}
 				>
-					<Icon name="corner-down-left" size={15} />
+						<Icon name="corner-down-left" size={16} />
 				</button>
 			{:else if session.busy}
 				<button class="act stop" title="Stop (Esc)" aria-label="Stop" onclick={() => stop()}>
-					<Icon name="stop" fill size={13} />
+					<Icon name="stop" fill size={16} />
+				</button>
+			{:else if session.mountProgress}
+				<button class="act mount-wait" disabled title="Preparing workspace" aria-label="Preparing workspace">
+					<Logo size={18} active />
 				</button>
 			{:else if value.trim()}
 				<button class="act send" aria-label="Send" onclick={() => void submit()}>
-					<Icon name="corner-down-left" size={15} />
+					<Icon name="corner-down-left" size={16} />
 				</button>
 			{/if}
 		</div>
 	</div>
-	{#if !session.focus}
-		<div class="below">
-			<button class="below-btn" type="button" onclick={() => void openFolder()}>
-				<Icon name="folder" size={12} />
-				{hasFolder ? `${folderName} · ${fileCount} file${fileCount === 1 ? '' : 's'}` : 'Choose a folder'}
-			</button>
-		</div>
 	{/if}
 </div>
 
@@ -507,26 +624,6 @@
 		max-width: var(--content-max);
 		margin-inline: auto;
 		padding: var(--space-1) var(--pad) var(--space-2);
-	}
-	/* Live session state, moved here from the retired StatusBar so it reads
-	   as part of the composer instead of a separate strip -- plain inline
-	   labels, not bordered chips, so the box holds one surface, not nested
-	   ones. */
-	.chips {
-		display: flex;
-		flex-wrap: wrap;
-		align-items: center;
-		gap: var(--space-4);
-		flex: 1;
-		min-width: 0;
-	}
-	.chip {
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
-		color: var(--text-dim);
-		font-size: var(--fs-sm);
-		white-space: nowrap;
 	}
 	.context-row {
 		display: flex;
@@ -545,12 +642,12 @@
 		align-items: center;
 		gap: 5px;
 		max-width: 210px;
-		padding: 3px 4px 3px 7px;
+		padding: 4px 5px 4px 8px;
 		border: 1px solid var(--border-strong);
 		border-radius: var(--radius-chip);
 		background: var(--bg-inset);
 		color: var(--text-dim);
-		font-size: 10.5px;
+		font-size: var(--fs-xs);
 		white-space: nowrap;
 	}
 	.ref-pill > span {
@@ -558,7 +655,7 @@
 		text-overflow: ellipsis;
 	}
 	.ref-pill :global(svg) {
-		color: var(--brand);
+		color: var(--text-faint);
 	}
 	.ref-pill button {
 		display: grid;
@@ -580,7 +677,7 @@
 		padding: 3px 6px;
 		border-radius: var(--radius-chip);
 		color: var(--text-faint);
-		font-size: 10.5px;
+		font-size: var(--fs-xs);
 		white-space: nowrap;
 	}
 	.context-add:hover,
@@ -600,7 +697,7 @@
 		border-radius: var(--radius-chip);
 		color: var(--text-dim);
 		font-size: var(--fs-xs);
-		font-weight: 560;
+		font-weight: 600;
 		white-space: nowrap;
 	}
 	.mode-trigger:hover,
@@ -616,7 +713,7 @@
 		width: 6px;
 		height: 6px;
 		border-radius: 50%;
-		background: var(--link);
+		background: var(--text-faint);
 	}
 	.mode-mark.inspect {
 		background: var(--brand);
@@ -657,7 +754,150 @@
 	}
 	.mode-menu small {
 		color: var(--text-faint);
-		font-size: 10.5px;
+		font-size: var(--fs-xs);
+	}
+	.model-wrap {
+		position: relative;
+		min-width: 0;
+		flex: none;
+	}
+	.model-trigger {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		min-width: 0;
+		max-width: min(260px, 32vw);
+		padding: 4px 6px;
+		border-radius: var(--radius-chip);
+		color: var(--text-dim);
+		font-size: var(--fs-xs);
+		font-weight: 500;
+		white-space: nowrap;
+	}
+	.model-trigger:hover,
+	.model-trigger[aria-expanded='true'] {
+		background: var(--bg-inset);
+		color: var(--text);
+	}
+	.model-trigger > :global(svg) {
+		transform: rotate(90deg);
+		color: var(--text-faint);
+	}
+	.model-name {
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+	.model-name.empty {
+		color: var(--text-faint);
+	}
+	.model-menu {
+		position: absolute;
+		bottom: calc(100% + 8px);
+		left: -6px;
+		z-index: 22;
+		width: min(300px, calc(100vw - 48px));
+		padding: var(--space-2);
+		border: 1px solid var(--border);
+		border-radius: var(--radius);
+		background: var(--bg-raised);
+		box-shadow: var(--shadow-pop);
+	}
+	.model-menu-head {
+		display: flex;
+		align-items: baseline;
+		justify-content: space-between;
+		gap: var(--space-2);
+		padding: 2px var(--space-2) var(--space-2);
+	}
+	.model-menu-head strong {
+		font-size: var(--fs-sm);
+		font-weight: 600;
+	}
+	.model-menu-head small {
+		max-width: 16ch;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+	}
+	.model-search {
+		display: flex;
+		align-items: center;
+		gap: 7px;
+		margin-bottom: var(--space-2);
+		padding: 6px 8px;
+		border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
+		color: var(--text-faint);
+	}
+	.model-search:focus-within {
+		border-color: var(--link);
+		box-shadow: var(--focus-ring);
+	}
+	.model-search input {
+		min-width: 0;
+		width: 100%;
+		border: 0;
+		outline: 0;
+		background: transparent;
+		color: var(--text);
+		font: inherit;
+		font-size: var(--fs-sm);
+	}
+	.model-search input::placeholder {
+		color: var(--text-faint);
+	}
+	.model-list {
+		max-height: min(280px, 38vh);
+		overflow: auto;
+	}
+	.model-option {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: var(--space-2);
+		width: 100%;
+		padding: 7px 8px;
+		border-radius: var(--radius-chip);
+		text-align: left;
+		font-family: var(--mono);
+		font-size: var(--fs-xs);
+	}
+	.model-option:hover,
+	.model-option.selected {
+		background: var(--bg-inset);
+	}
+	.model-option span {
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.model-option :global(svg) {
+		flex: none;
+		color: var(--brand);
+	}
+	.model-empty {
+		margin: var(--space-3) var(--space-2);
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+	}
+	.model-settings {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		width: 100%;
+		margin-top: var(--space-2);
+		padding: var(--space-2);
+		border-top: 1px solid var(--border);
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+		text-align: left;
+	}
+	.model-settings:hover {
+		color: var(--text);
 	}
 	.context-menu {
 		position: absolute;
@@ -710,7 +950,7 @@
 	.context-heading {
 		margin: var(--space-3) var(--space-2) var(--space-1);
 		color: var(--text-faint);
-		font-size: 10px;
+		font-size: var(--fs-xs);
 		font-weight: 650;
 		letter-spacing: 0.01em;
 	}
@@ -760,7 +1000,7 @@
 		flex: none;
 		border-radius: var(--radius-chip);
 		background: var(--bg-inset);
-		color: var(--brand);
+		color: var(--text-faint);
 	}
 	.context-copy {
 		min-width: 0;
@@ -776,24 +1016,11 @@
 	}
 	.context-copy strong {
 		font-size: var(--fs-xs);
-		font-weight: 560;
+		font-weight: 600;
 	}
 	.context-copy small {
 		color: var(--text-faint);
-		font-size: 10.5px;
-	}
-	.context-inspect {
-		display: grid;
-		place-items: center;
-		width: 26px;
-		height: 26px;
-		margin-right: 4px;
-		border-radius: var(--radius-chip);
-		color: var(--text-faint);
-	}
-	.context-inspect:hover {
-		background: var(--bg-raised);
-		color: var(--text);
+		font-size: var(--fs-xs);
 	}
 	.context-empty,
 	.context-hint {
@@ -824,30 +1051,120 @@
 		border-color: var(--link);
 		box-shadow: var(--focus-ring);
 	}
+	.clarification-field {
+		gap: 0;
+		max-height: min(68vh, 520px);
+		overflow-y: auto;
+		padding: var(--space-3) var(--space-4);
+	}
+	.clarification-question {
+		margin: 0;
+		color: var(--text);
+		font-size: var(--fs-lg);
+		font-weight: 600;
+		line-height: 1.4;
+	}
+	.clarification-reason {
+		margin: 6px 0 0;
+		color: var(--text-faint);
+		font-size: var(--fs-sm);
+		line-height: 1.45;
+	}
+	.clarification-options {
+		display: grid;
+		gap: 0;
+		margin-top: var(--space-2);
+		max-height: 228px;
+		overflow-y: auto;
+		scrollbar-width: thin;
+	}
+	.clarification-option {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		width: 100%;
+		min-height: 44px;
+		padding: 6px 8px;
+		border-bottom: 1px solid var(--border);
+		border-radius: var(--radius-sm);
+		color: var(--text-dim);
+		background: transparent;
+		font-size: var(--fs-sm);
+		text-align: left;
+		transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+	}
+	.clarification-option:hover:not(:disabled) {
+		color: var(--text);
+		background: var(--bg-inset);
+	}
+	.clarification-option:disabled {
+		cursor: progress;
+		opacity: 0.6;
+	}
+	.clarification-index {
+		display: grid;
+		place-items: center;
+		flex: none;
+		width: 26px;
+		height: 26px;
+		border-radius: 8px;
+		color: var(--text-faint);
+		background: var(--bg-inset);
+		font-size: var(--fs-xs);
+		font-variant-numeric: tabular-nums;
+	}
+	.clarification-other {
+		margin-top: var(--space-2);
+		padding-top: var(--space-2);
+		border-top: 1px solid var(--border);
+	}
+	.clarification-other label {
+		display: block;
+		margin-bottom: 4px;
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+		font-weight: 600;
+	}
+	.clarification-other-row {
+		display: flex;
+		align-items: flex-end;
+		gap: var(--space-2);
+	}
+	.clarification-other-row textarea {
+		min-width: 0;
+		min-height: 42px;
+		max-height: 100px;
+		padding: 7px 9px;
+		border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
+		background: var(--bg-inset);
+		font-size: var(--fs-sm);
+		line-height: 1.4;
+		resize: vertical;
+	}
+	.clarification-other-row textarea:focus-visible {
+		border-color: var(--link);
+		outline: 2px solid color-mix(in srgb, var(--link) 22%, transparent);
+		outline-offset: 1px;
+	}
+	.clarification-send {
+		display: grid;
+		place-items: center;
+		flex: none;
+		width: 30px;
+		height: 30px;
+		border-radius: 50%;
+		color: var(--on-brand);
+		background: var(--brand);
+		transition: filter var(--dur-fast) var(--ease), opacity var(--dur-fast) var(--ease);
+	}
+	.clarification-send:hover:not(:disabled) { filter: brightness(0.92); }
+	.clarification-send:disabled { opacity: 0.45; cursor: default; }
 	.bottom-row {
 		display: flex;
 		align-items: center;
-		gap: var(--space-3);
+		gap: var(--space-2);
 		min-height: 28px;
-	}
-	.below {
-		display: flex;
-		margin-top: var(--space-2);
-	}
-	.below-btn {
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
-		color: var(--text-faint);
-		font-size: var(--fs-xs);
-		white-space: nowrap;
-		padding: 3px 6px;
-		border-radius: var(--radius-chip);
-		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
-	}
-	.below-btn:hover {
-		background: var(--bg-inset);
-		color: var(--text-dim);
 	}
 	textarea {
 		width: 100%;
@@ -857,10 +1174,16 @@
 		background: transparent;
 		color: var(--text);
 		font: inherit;
-		line-height: var(--lh);
+		font-size: var(--fs-lg);
+		line-height: 1.5;
 		max-height: 200px;
 		overflow-y: auto;
 		padding: var(--space-1) 0;
+	}
+	.clarification-other-row textarea {
+		width: 100%;
+		font: inherit;
+		color: var(--text);
 	}
 	textarea:focus-visible {
 		box-shadow: none;
@@ -868,7 +1191,7 @@
 	textarea::placeholder {
 		color: var(--text-faint);
 	}
-	/* API-key entry: mask the characters (WebKit Tauri's engine). */
+	/* API-key entry: mask the characters in the Electron renderer. */
 	.field.secret textarea {
 		-webkit-text-security: disc;
 		font-family: var(--mono);
@@ -888,12 +1211,13 @@
 			color var(--dur-fast) var(--ease);
 	}
 	.act.send {
-		background: var(--bg-inset);
-		color: var(--text-dim);
+		background: var(--brand);
+		color: var(--on-brand);
 	}
 	.act.send:hover {
-		color: var(--bg-raised);
-		background: var(--text);
+		color: var(--on-brand);
+		background: var(--brand);
+		filter: brightness(0.9);
 	}
 	.act.stop {
 		color: var(--err);

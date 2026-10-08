@@ -1,0 +1,134 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fella.app/schemas/fqa-bench-answer-key-v1.json",
+  "title": "Fella FolderQA Benchmark answer contract",
+  "description": "Evaluator-only expected behavior and semantic result contract. Store outside the workspace visible to the agent.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "task_id", "expected_behavior", "contracts", "review"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "task_id": {"type": "string", "minLength": 1},
+    "expected_behavior": {"enum": ["answer", "estimate", "clarify", "unsupported", "no_analysis_needed"]},
+    "contracts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "semantic_target"],
+        "properties": {
+          "kind": {"enum": ["scalar", "table", "chart", "text_fact", "decision", "clarification", "forecast"]},
+          "semantic_target": {"type": "object"},
+          "expected_values": {"type": "array"},
+          "absolute_tolerance": {"type": "number", "minimum": 0},
+          "relative_tolerance": {"type": "number", "minimum": 0},
+          "unit": {"type": "string"},
+          "required_dimensions": {"type": "array", "items": {"type": "string"}},
+          "source_expectations": {"type": "array", "items": {"type": "string"}},
+          "acceptable_variants": {"type": "array"}
+        }
+      }
+    },
+    "runner_gold": {
+      "description": "Compatibility grade consumed by the current agent_eval bench adapter. It stays evaluator-only and is never mounted into a workspace.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["figures"],
+          "properties": {"figures": {"type": "array", "items": {"type": "number"}}}
+        },
+        {
+          "type": "object",
+          "required": ["approx"],
+          "properties": {"approx": {"type": "array", "prefixItems": [{"type": "number"}, {"type": "number", "minimum": 0}], "minItems": 2, "maxItems": 2}}
+        },
+        {
+          "type": "object",
+          "required": ["contains"],
+          "properties": {"contains": {"type": "array", "items": {"type": "string"}}}
+        },
+        {
+          "type": "object",
+          "required": ["chart"],
+          "properties": {
+            "chart": {
+              "type": "object",
+              "required": ["labels", "series"],
+              "properties": {
+                "kind": {"type": "string"},
+                "require_label_order": {"type": "boolean"},
+                "labels": {"type": "array", "items": {"type": "string"}},
+                "series": {"type": "array", "items": {"type": "object", "required": ["name", "values"], "properties": {"name": {"type": "string"}, "values": {"type": "array", "items": {"type": "number"}}}}},
+                "contains": {"type": "array", "items": {"type": "string"}}
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["all_of"],
+          "properties": {
+            "all_of": {
+              "type": "array",
+              "minItems": 1,
+              "items": {"$ref": "#/$defs/runner_gold"}
+            }
+          }
+        },
+        {
+          "type": "string",
+          "enum": ["notool"]
+        }
+      ]
+    },
+    "clarification_turn_gold": {
+      "description": "Evaluator contract for the assistant turn responding to request.prompt before the benchmark supplies request.clarification_reply.",
+      "$ref": "#/$defs/runner_gold"
+    },
+    "clarification_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "material_ambiguity": {"type": "string"},
+        "distinguishing_information": {"type": "array", "items": {"type": "string"}},
+        "acceptable_questions": {"type": "array", "items": {"type": "string"}},
+        "resolved_answer_ref": {"type": "string"}
+      }
+    },
+    "unsupported_reason": {"type": "string"},
+    "must_not_claim": {"type": "array", "items": {"type": "string"}},
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["review_status", "oracle_method"],
+      "properties": {
+        "review_status": {"enum": ["draft", "independently_checked", "adjudicated"]},
+        "oracle_method": {"type": "string", "minLength": 1},
+        "reviewer_count": {"type": "integer", "minimum": 1},
+        "notes": {"type": "string"}
+      }
+    }
+  },
+  "$defs": {
+    "runner_gold": {
+      "oneOf": [
+        {"type": "object", "required": ["figures"], "properties": {"figures": {"type": "array", "items": {"type": "number"}}}},
+        {"type": "object", "required": ["approx"], "properties": {"approx": {"type": "array", "prefixItems": [{"type": "number"}, {"type": "number", "minimum": 0}], "minItems": 2, "maxItems": 2}}},
+        {"type": "object", "required": ["contains"], "properties": {"contains": {"type": "array", "items": {"type": "string"}}}},
+        {"type": "object", "required": ["must_not_contain"], "properties": {"must_not_contain": {"type": "array", "items": {"type": "string"}}}},
+        {"type": "object", "required": ["all_of"], "properties": {"all_of": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/runner_gold"}}}},
+        {"type": "string", "enum": ["notool"]}
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"expected_behavior": {"const": "clarify"}}},
+      "then": {"required": ["clarification_contract", "clarification_turn_gold"]}
+    },
+    {
+      "if": {"properties": {"expected_behavior": {"const": "unsupported"}}},
+      "then": {"required": ["unsupported_reason"]}
+    }
+  ]
+}

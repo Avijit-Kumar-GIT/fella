@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "benchmark": "Fella Product Capability Evaluation",
+  "version": "0.1",
+  "families": [
+    {
+      "id": "filesystem_analytics",
+      "title": "Filesystem analytics",
+      "status": "limited_development_coverage",
+      "source": "FQA-Bench; keep all 12 analytic families visible in its slice report"
+    },
+    {
+      "id": "general_knowledge",
+      "title": "General knowledge / no-workspace routing",
+      "status": "smoke_coverage_only",
+      "source": "product-eval/general-knowledge and ask-routing"
+    },
+    {
+      "id": "web_research",
+      "title": "Web research",
+      "status": "not_implemented",
+      "source": null
+    },
+    {
+      "id": "forecasting",
+      "title": "Forecasting and scenarios",
+      "status": "sparse_development_coverage",
+      "source": "FQA-Bench episodes tagged forecast_and_scenario"
+    },
+    {
+      "id": "chart_correctness",
+      "title": "Chart correctness",
+      "status": "diagnostic_coverage_only",
+      "source": "FQA-Bench visualization episodes; component diagnostics remain separate"
+    },
+    {
+      "id": "clarification",
+      "title": "Clarification and continuation",
+      "status": "one_protocol_example",
+      "source": "FQA-Bench clarification episodes; score the clarification and resolved turn"
+    },
+    {
+      "id": "hybrid",
+      "title": "Hybrid local + external research",
+      "status": "not_implemented",
+      "source": null
+    }
+  ],
+  "cross_cutting_dimensions": [
+    "answer coverage and avoidable deferral",
+    "unsupported claims and provenance",
+    "conversation continuity",
+    "tool proportionality and cost",
+    "privacy and untrusted-input boundaries"
+  ],
+  "reporting_rule": "Never infer a pass from missing coverage or a missing run. Report family scores and denominators separately; do not collapse them into one product score."
+}

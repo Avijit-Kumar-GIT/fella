@@ -12,7 +12,7 @@ export default defineConfig({
 				runes: ({ filename }) =>
 					filename.split(/[/\\]/).includes('node_modules') ? undefined : true
 			},
-			// Tauri serves a static bundle; no server runtime.
+			// Electron serves a static bundle; no server runtime.
 			adapter: adapter({
 				pages: 'build',
 				assets: 'build',
@@ -23,17 +23,15 @@ export default defineConfig({
 		})
 	],
 
-	// --- Tauri integration -------------------------------------------------
-	// Tauri expects a fixed dev server it can point the webview at.
+	// Electron development uses the same stable Vite port in electron/dev.mjs.
 	clearScreen: false,
 	server: {
 		port: 1420,
 		strictPort: true,
 		watch: {
-			// src-tauri is watched by the Tauri CLI, not Vite.
-			ignored: ['**/src-tauri/**']
+			// Rust changes are rebuilt by Cargo, not Vite.
+			ignored: ['**/backend/**']
 		}
 	},
-	// Only VITE_ and TAURI_ vars are exposed to the frontend.
-	envPrefix: ['VITE_', 'TAURI_ENV_']
+	envPrefix: ['VITE_']
 });

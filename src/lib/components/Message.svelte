@@ -1,11 +1,12 @@
 <script lang="ts">
 	import type { Answer, Message } from '$lib/types';
 	import EvidenceBlock from './EvidenceBlock.svelte';
+	import EvidenceSummary from './EvidenceSummary.svelte';
 	import Chart from './Chart.svelte';
 	import Icon from './Icon.svelte';
+	import Logo from './Logo.svelte';
 	import { renderMarkdown } from '$lib/markdown';
 	import { enterUp } from '$lib/motion';
-	import { answerStatus } from '$lib/verify';
 
 	let {
 		message,
@@ -13,14 +14,16 @@
 		ontoggle,
 		question = '',
 		showFollowups = false,
-		onfollowup
+		onfollowup,
+		onrerun
 	}: {
 		message: Message;
 		expanded?: boolean;
 		ontoggle?: () => void;
 		question?: string;
 		showFollowups?: boolean;
-		onfollowup?: (question: string) => void;
+		onfollowup?: (question: string, clarificationTurnId?: string) => void;
+		onrerun?: () => Promise<void>;
 	} = $props();
 
 	// The model marks a one-line general-knowledge aside with "Background:" on
@@ -57,21 +60,46 @@
 	let leadHtml = $derived(renderMarkdown(composition.lead));
 	let remainderHtml = $derived(renderMarkdown(composition.remainder));
 
-	// Set when a query behind the answer still disagrees after the agent's
-	// one-shot corrective re-ask the trust gap the verification system
-	// exists to close, surfaced at the point the user actually reads it.
-	let unconfirmed = $derived(
-		message.role === 'assistant' && message.answer
-			? answerStatus(message.answer) === 'failed'
-			: undefined
-	);
-
 	// A chart is selected from evidence, independent of whether the model's text
 	// references it. Correctness shouldn't depend on a small model correctly
 	// placing a chart mention in freeform text.
-	let chartItems = $derived(
-		(message.answer?.evidence ?? []).filter((e) => e.tool === 'make_chart' && e.chart)
-	);
+	let chartItems = $derived.by(() => {
+		const seenVisuals = new Set<string>();
+		return (message.answer?.evidence ?? []).filter((e) => {
+			if (
+				e.tool !== 'make_chart' ||
+				!e.chart ||
+				e.error ||
+				e.verifier_disposition?.state === 'excluded' ||
+				(e.verifier_disposition?.state === 'artifact_withheld' && e.verifier_disposition.artifact === 'chart') ||
+				(message.answer?.verification ?? []).some(
+					(check) =>
+						!check.ok &&
+						check.finding?.effect === 'withhold_artifact' &&
+						check.finding.target_id === e.id
+				)
+			) return false;
+
+			// A repair iteration can leave several evidence entries that render the
+			// same visual while using different SQL aliases/source metadata. Keep
+			// the first visible instance; all original calls remain in Analysis
+			// Details so this presentation cleanup doesn't discard audit history.
+			const visual = e.chart;
+			const key = JSON.stringify({
+				kind: visual.kind,
+				title: visual.title,
+				labels: visual.labels,
+				series: visual.series,
+				unit: visual.unit,
+				x_label: visual.x_label,
+				y_label: visual.y_label,
+				payload: visual.payload
+			});
+			if (seenVisuals.has(key)) return false;
+			seenVisuals.add(key);
+			return true;
+		});
+	});
 	let hasVisualAnswer = $derived(chartItems.length > 0 && !message.pending);
 
 	// Keep the useful trust signal close to the finding. This deliberately uses
@@ -81,6 +109,7 @@
 	let answerSources = $derived.by(() => {
 		const names = new Set<string>();
 		for (const item of message.answer?.evidence ?? []) {
+			if (item.error || item.verifier_disposition?.state === 'excluded') continue;
 			for (const source of item.sources ?? []) {
 				if (source.source.trim()) names.add(source.source.trim());
 			}
@@ -92,25 +121,6 @@
 		if (answerSources.length > 1) return `Based on ${answerSources.length} sources`;
 		return message.answer?.workspace ? 'Based on this workspace' : 'Based on the available evidence';
 	});
-	let scopeDetail = $derived(
-		answerSources.length ? answerSources.join(', ') : 'The current workspace snapshot'
-	);
-	let status = $derived(message.answer ? answerStatus(message.answer) : null);
-	let statusLabel = $derived.by(() => {
-		switch (status) {
-			case 'verified':
-				return 'Checked against your data';
-			case 'needs_review':
-				return 'Needs a closer look';
-			case 'insufficient_data':
-				return 'Not enough data';
-			case 'failed':
-				return 'Could not fully check';
-			default:
-				return '';
-		}
-	});
-
 	function followupQuestions(text: string, answer: Answer): string[] {
 		const q = text.toLowerCase();
 		const suggestions: string[] = [];
@@ -127,7 +137,13 @@
 			add('What else stands out?');
 			add('Show this over time');
 		}
-		if (!answer.evidence.some((item) => item.tool === 'make_chart' && item.chart)) {
+		if (!answer.evidence.some((item) =>
+			item.tool === 'make_chart' &&
+			item.chart &&
+			!item.error &&
+			item.verifier_disposition?.state !== 'excluded' &&
+			!(item.verifier_disposition?.state === 'artifact_withheld' && item.verifier_disposition.artifact === 'chart')
+		)) {
 			add('Show this as a chart');
 		}
 		return suggestions.slice(0, 3);
@@ -136,32 +152,53 @@
 	let followups = $derived(
 		message.answer && question ? followupQuestions(question, message.answer) : []
 	);
+	let detailsLabel = $derived.by(() => {
+		switch (message.answer?.trace?.mode) {
+			case 'model_only':
+				return 'General answer';
+			case 'workspace_inspect':
+				return 'Inspection details';
+			default:
+				return 'Analysis details';
+		}
+	});
 </script>
 
 <div class="msg {message.role}" transition:enterUp>
 	{#if message.role === 'user'}
 		<span class="sr-only">You asked: </span>
-		<div class="you">{message.text}</div>
+		<div class="you">
+			<div class="you-copy">{message.text}</div>
+		</div>
 	{:else if message.role === 'assistant'}
 		<span class="sr-only">Fella replied: </span>
+		<div class="assistant-heading">
+			<div class="assistant-identity">
+				<Logo size={18} active={message.pending} />
+				<strong>Fella</strong>
+				{#if message.pending}<span class="status">Working through the workspace</span>{/if}
+			</div>
+			{#if message.answer}
+				<EvidenceSummary
+					bodyId={`evidence-${message.id}`}
+					label={detailsLabel}
+					{expanded}
+					{ontoggle}
+				/>
+			{/if}
+		</div>
 		{#if message.plan}
 			<div class="plan">{message.plan}</div>
 		{/if}
 		{#if split.background}
 			<div class="background">{split.background}</div>
 		{/if}
-		{#if unconfirmed}
-			<div class="unconfirmed">
-				<Icon name="alert" size={13} />
-				<span>Fella couldn't confirm this figure against the data — here's its best answer.</span>
-			</div>
-		{/if}
 		{#if hasVisualAnswer}
 			<div class="text rich answer-lead">{@html leadHtml}</div>
 			<div class="answer-visuals" aria-label="Visual answer">
 				{#each chartItems as e, i (e.id ?? `chart-${i}`)}
 					{#if e.chart}
-						<Chart spec={e.chart} source={scopeLabel} verified={status === 'verified'} />
+						<Chart spec={e.chart} source={scopeLabel} />
 					{/if}
 				{/each}
 			</div>
@@ -169,28 +206,30 @@
 				<div class="text rich answer-supporting">{@html remainderHtml}</div>
 			{/if}
 		{:else}
-			<div class="text rich" class:pending={message.pending}>{@html bodyHtml}{#if message.pending}<span
-					class="thinking" aria-hidden="true"></span
-				>{/if}</div>
-		{/if}
-		{#if message.answer && !message.pending}
-			<div class="answer-meta" aria-label="Answer context">
-				{#if statusLabel}
-					<span class="answer-status {status}"><span class="status-dot" aria-hidden="true"></span>{statusLabel}</span>
+			<div class="text rich" class:pending={message.pending}>
+				{#if message.answer?.clarification}
+					<p class="clarification-transcript-note">Choose an option below to continue.</p>
+				{:else}
+					{@html bodyHtml}
 				{/if}
-				<span class="answer-scope" title={scopeDetail}>{scopeLabel}</span>
+				{#if message.pending}<span class="thinking" aria-hidden="true"></span>{/if}
 			</div>
 		{/if}
 	{:else}
 		<div class="text">{message.text}</div>
 	{/if}
 	{#if message.answer}
-		<EvidenceBlock answer={message.answer} {expanded} {ontoggle} />
-		{#if showFollowups && onfollowup && followups.length}
+		<EvidenceBlock
+			answer={message.answer}
+			bodyId={`evidence-${message.id}`}
+			{expanded}
+			onrerun={message.answer.turn_id ? onrerun : undefined}
+		/>
+		{#if showFollowups && onfollowup && followups.length && !message.answer.clarification}
 			<div class="followups" aria-label="Suggested follow-up questions">
 				<span class="followup-label">Continue with</span>
 				{#each followups as next (next)}
-					<button type="button" onclick={() => onfollowup?.(next)}>{next}<Icon name="arrow-up-right" size={11} /></button>
+			<button type="button" onclick={() => onfollowup?.(next)}>{next}<Icon name="arrow-up-right" size={12} /></button>
 				{/each}
 			</div>
 		{/if}
@@ -202,27 +241,67 @@
 		padding: var(--space-3) 0;
 	}
 	.msg.user {
-		padding-top: var(--space-5);
+		display: flex;
+		justify-content: flex-end;
+		padding: var(--space-4) 0 var(--space-2);
 	}
 	.you {
-		color: var(--text-dim);
+		max-width: min(72%, 58ch);
+		padding: 9px 14px 10px;
+		border-radius: var(--radius-conversation) var(--radius-conversation) var(--radius-sm) var(--radius-conversation);
+		background: var(--user-bubble);
+		color: var(--user-bubble-text);
+		font-size: var(--fs);
+		line-height: 1.48;
+		text-align: left;
+	}
+	.you-copy {
 		white-space: pre-wrap;
 		word-break: break-word;
 	}
-	/* The user's turn is marked like a shell prompt; Fella's reply is unprefixed. */
-	.you::before {
-		content: '❯ ';
-		font-family: var(--mono);
-		color: var(--text-dim);
+	.assistant-heading {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: var(--space-2);
+		margin-bottom: var(--space-2);
+		color: var(--chat-meta);
+		font-size: var(--fs-sm);
+	}
+	.assistant-identity {
+		display: flex;
+		align-items: center;
+		gap: var(--space-2);
+		min-width: 0;
+	}
+	.assistant-heading strong {
+		color: var(--chat-meta);
+		font-weight: 600;
+	}
+	.assistant-heading .status {
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
 	}
 	.text {
 		word-break: break-word;
+	}
+	.msg.assistant .text {
+		font-size: var(--fs-lg);
+		line-height: 1.6;
+		color: var(--chat-body);
+	}
+	/* Markdown emphasis is deliberately brighter, not dramatically heavier.
+	   The color step makes a finding legible in both themes without turning
+	   every bold phrase into an accent-colored badge. */
+	.msg.assistant .text :global(strong) {
+		color: var(--chat-strong);
+		font-weight: 650;
 	}
 	/* The model's one-line plan, shown dimmed while its tools run. */
 	.plan {
 		white-space: pre-wrap;
 		word-break: break-word;
-		color: var(--text-faint);
+		color: var(--chat-meta);
 		font-size: 0.95em;
 		margin-bottom: 4px;
 		font-style: italic;
@@ -231,7 +310,7 @@
 	.background {
 		white-space: pre-wrap;
 		word-break: break-word;
-		color: var(--text-faint);
+		color: var(--chat-meta);
 		font-size: 0.95em;
 		margin-bottom: 4px;
 	}
@@ -250,19 +329,6 @@
 	.text.pending {
 		color: var(--text-dim);
 	}
-	/* A hard-failed answer (verify's re-ask still disagreed) reads distinctly
-	   from a clean one, at the point the user actually reads it. */
-	.unconfirmed {
-		display: flex;
-		align-items: baseline;
-		gap: var(--space-2);
-		color: var(--warn);
-		font-size: var(--fs-sm);
-		margin-bottom: 4px;
-	}
-	.unconfirmed :global(svg) {
-		align-self: center;
-	}
 	.answer-visuals {
 		margin-top: var(--space-3);
 	}
@@ -272,57 +338,14 @@
 	.answer-supporting {
 		margin-top: var(--space-3);
 	}
-	.answer-meta {
-		display: flex;
-		align-items: center;
-		flex-wrap: wrap;
-		gap: 6px 12px;
-		margin-top: var(--space-3);
-		color: var(--text-faint);
-		font-size: var(--fs-xs);
-	}
-	.answer-status,
-	.answer-scope {
-		display: inline-flex;
-		align-items: center;
-		gap: 5px;
-	}
-	.answer-status {
-		color: var(--text-dim);
-	}
-	.answer-status.needs_review,
-	.answer-status.failed {
-		color: var(--warn);
-	}
-	.answer-status.insufficient_data {
-		color: var(--text-faint);
-	}
-	.answer-status .status-dot {
-		width: 5px;
-		height: 5px;
-		border-radius: 50%;
-		background: var(--ok);
-	}
-	.answer-status.needs_review .status-dot,
-	.answer-status.failed .status-dot {
-		background: var(--warn);
-	}
-	.answer-status.insufficient_data .status-dot {
-		background: var(--text-faint);
-	}
-	.answer-scope {
-		min-width: 0;
-		max-width: 100%;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
 	.followups {
 		display: flex;
 		align-items: center;
 		flex-wrap: wrap;
-		gap: 6px;
+		gap: var(--space-3);
 		margin-top: var(--space-3);
+		padding-top: var(--space-3);
+		border-top: 1px solid var(--border);
 	}
 	.followup-label {
 		color: var(--text-faint);
@@ -333,19 +356,24 @@
 		display: inline-flex;
 		align-items: center;
 		gap: 5px;
-		padding: 5px 8px;
-		border: 1px solid var(--border);
-		border-radius: var(--radius-chip);
-		color: var(--text-dim);
-		background: var(--bg-raised);
-		font-size: var(--fs-xs);
+		padding: 0;
+		border: 0;
+		border-radius: 0;
+		color: var(--link);
+		background: transparent;
+		font-size: var(--fs-sm);
 		text-align: left;
-		transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+		transition: color var(--dur-fast) var(--ease);
 	}
 	.followups button:hover {
-		border-color: var(--border-strong);
-		background: var(--bg-inset);
 		color: var(--text);
+		text-decoration: underline;
+	}
+	.clarification-transcript-note {
+		margin: 0;
+		color: var(--chat-meta);
+		font-size: var(--fs-sm);
+		font-style: italic;
 	}
 
 	/* The assistant's answer is rendered from markdown (see markdown.ts). Code,
@@ -367,14 +395,15 @@
 	.msg.assistant .text :global(h3),
 	.msg.assistant .text :global(h4) {
 		font-size: 1.05em;
-		font-weight: 600;
+		color: var(--chat-strong);
+		font-weight: 650;
 		margin: 0.6em 0 0.25em;
 	}
 	.msg.assistant .text :global(blockquote) {
 		margin: 0.4em 0;
 		padding-left: 0.6em;
 		border-left: 2px solid var(--border-strong);
-		color: var(--text-dim);
+		color: var(--chat-meta);
 	}
 	/* markdown tables can't be wrapped in a scroll container (they come from
 	   @html), so let the table itself scroll. */

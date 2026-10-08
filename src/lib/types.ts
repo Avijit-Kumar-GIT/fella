@@ -1,21 +1,76 @@
 // Shared types between the UI and the Rust engine. Keep in sync with
-// src-tauri/src/engine/*.rs (serde-serialized).
+// backend/src/engine/*.rs (serde-serialized).
 
 export type Role = 'user' | 'assistant' | 'system';
 
 export interface ChartSeries {
 	name: string;
-	values: number[];
+	values: (number | null)[];
 }
+
+export type ChartKind =
+	| 'auto'
+	| 'bar'
+	| 'line'
+	| 'pie'
+	| 'donut'
+	| 'scatter'
+	| 'histogram'
+	| 'box_plot'
+	| 'area'
+	| 'stacked_area'
+	| 'heatmap'
+	| 'forecast';
+
+export interface ChartMetadata {
+	source_evidence_id?: string;
+	source_label?: string;
+	fields: string[];
+	aggregation?: string;
+	filters: string[];
+	time_range?: string;
+	denominator?: string;
+	part_to_whole: boolean;
+	missing_treatment?: string;
+}
+
+export type ChartPayload =
+	| { type: 'scatter'; points: { x: number; y: number; label: string; group?: string }[] }
+	| {
+			type: 'box_plot';
+			groups: {
+				label: string;
+				low_whisker: number;
+				q1: number;
+				median: number;
+				q3: number;
+				high_whisker: number;
+				outliers: number[];
+				n: number;
+			}[];
+	  }
+	| { type: 'heatmap'; x_labels: string[]; y_labels: string[]; values: (number | null)[][] }
+	| {
+			type: 'forecast';
+			observed: (number | null)[];
+			forecast: (number | null)[];
+			lower: (number | null)[];
+			upper: (number | null)[];
+			uncertainty_note?: string;
+	  };
 
 /** Typed visualization data from a chart tool (e.g. `make_chart`) -- labels
  *  and numbers only, never markup. Rendered by `$lib/components/Chart.svelte`. */
 export interface VisualizationSpec {
-	kind: 'bar' | 'line';
+	kind: Exclude<ChartKind, 'auto'>;
 	title?: string;
 	labels: string[];
 	series: ChartSeries[];
 	unit?: string;
+	x_label?: string;
+	y_label?: string;
+	payload?: ChartPayload;
+	metadata?: ChartMetadata;
 }
 
 /** Compatibility name used by chart-facing components. */
@@ -43,8 +98,34 @@ export interface EvidenceItem {
 	output?: string;
 	/** Structured visualization data, when the tool was `make_chart`. */
 	chart?: VisualizationSpec;
+	/** Typed derived table published by Python or forecast analysis. */
+	result_table?: { columns: string[]; rows: unknown[][] };
+	/** Bounded SQL/schema references for data read by a Python computation. */
+	python_input_trace?: PythonInputTrace;
 	ms: number;
 	error?: string;
+	/** Verifier decision; separate from whether the tool itself executed. */
+	verifier_disposition?:
+		| { state: 'excluded'; reason: string }
+		| { state: 'artifact_withheld'; artifact: string; reason: string };
+}
+
+export interface PythonInputTrace {
+	complete: boolean;
+	queries: {
+		sql: string;
+		columns: string[];
+		row_count: number;
+		truncated: boolean;
+	}[];
+}
+
+/** Observable answer inputs. Context means supplied to the model, not proof of
+ *  private reasoning; evidence IDs refer to the answer's evidence list. */
+export interface AnswerProvenance {
+	evidence_ids: string[];
+	context_sections: ContextSection[];
+	clarification_of?: string;
 }
 
 export interface EvidenceSource {
@@ -57,19 +138,296 @@ export interface VerificationCheck {
 	label: string;
 	ok: boolean;
 	detail?: string;
+	finding?: VerificationFinding;
+}
+
+export type VerificationEffect =
+	| 'informational'
+	| 'repair'
+	| 'exclude_evidence'
+	| 'withhold_artifact'
+	| 'block_answer';
+
+export type VerificationFindingCode =
+	| 'advisory'
+	| 'replay_match'
+	| 'replay_mismatch'
+	| 'unsupported_claim'
+	| 'semantic_execution_mismatch'
+	| 'semantic_caveat'
+	| 'chart_mismatch'
+	| 'contract_mismatch'
+	| 'workspace_stale'
+	| 'model_disagreement';
+
+export type VerificationTarget = 'answer' | 'claim' | 'evidence' | 'artifact';
+
+export interface VerificationFinding {
+	code: VerificationFindingCode;
+	effect: VerificationEffect;
+	target: VerificationTarget;
+	target_id?: string;
+	evidence_ids?: string[];
+	guidance?: string;
 }
 
 export type VerificationStatus = 'verified' | 'needs_review' | 'insufficient_data' | 'failed';
 
 export interface Answer {
+	/** Runtime turn id; older archived answers may not have one. */
+	turn_id?: string;
+	/** Compact execution summary; raw SQL/rows remain in evidence. */
+	trace?: ExecutionTrace;
+	/** Validated strategy used for this answer, when the runtime produced one. */
+	plan?: {
+		strategy: 'direct_tools' | 'compiled_sql' | 'python_fallback' | 'document_fallback';
+		steps: string[];
+	};
+	/** Model-proposed semantic interpretation, when contract-first routing ran. */
+	contract?: AnalysisContract;
+	/** Deterministic field/value probes used to ground that interpretation. */
+	grounding?: GroundingReport;
+	/** Typed links to evidence, included context, and clarification lineage. */
+	provenance?: AnswerProvenance;
 	text: string;
 	evidence: EvidenceItem[];
 	verification: VerificationCheck[];
+	/** One user-facing semantic choice that must be answered before computing. */
+	clarification?: ClarificationRequest;
 	/** Optional for archived answers written before typed verification status. */
 	status?: VerificationStatus;
 	workspace?: { path: string; revision: string };
 	/** Token counts for the whole run, when the provider reported them. */
 	usage?: { prompt_tokens: number; completion_tokens: number };
+}
+
+export type InterpretationStatus = 'unresolved' | 'grounded' | 'assumed' | 'ambiguous' | 'unsupported';
+
+export interface ClarificationRequest {
+	question: string;
+	options: string[];
+	reason?: string;
+}
+
+/** A selection from a pending clarification card, linked to its source turn. */
+export interface ClarificationReply {
+	turn_id: string;
+	response: string;
+}
+
+export type ContextSection =
+	| 'user_context'
+	| 'workspace_schema'
+	| 'workspace_model'
+	| 'conversation'
+	| 'folder_memory';
+
+/** Length-only account of bounded context; never includes the source text. */
+export interface ContextSectionAudit {
+	section: ContextSection;
+	source_chars: number;
+	included_chars: number;
+	truncated: boolean;
+}
+
+export interface ContextAssemblyAudit {
+	sections: ContextSectionAudit[];
+}
+
+export interface AnalysisContract {
+	interpretation: InterpretationStatus;
+	subject?: string;
+	grain?: string;
+	measures: { concept: string; field?: string; operation: string; unit?: string }[];
+	filters: {
+		concept: string;
+		field?: string;
+		exclude?: boolean;
+		candidate_values: string[];
+		resolved_values: string[];
+		resolution?: string;
+	}[];
+	time?: { field?: string; range?: string; bucket?: 'year' | 'month' | 'week' | 'day'; timezone?: string };
+	group_by: string[];
+	order_by?: { by: string; direction: 'asc' | 'desc' };
+	limit?: number;
+	derived_metrics?: {
+		concept: string;
+		kind: 'ratio' | 'difference';
+		numerator: string;
+		denominator: string;
+		unit?: string;
+	}[];
+	joins?: {
+		left_source: string;
+		left_field: string;
+		right_source: string;
+		right_field: string;
+		kind: 'inner' | 'left';
+	}[];
+	comparison_spec?: {
+		kind: 'period_over_period';
+		current_range: string;
+		previous_range: string;
+	};
+	/** Legacy freeform field retained for archived contracts; it is not a deterministic plan. */
+	comparison?: string;
+	presentation?: string;
+	assumptions: string[];
+	unresolved: string[];
+	clarification?: ClarificationRequest;
+}
+
+export type ProbeOutcome = 'resolved' | 'not_observed' | 'ambiguous' | 'unavailable';
+
+export interface GroundingProbe {
+	kind: string;
+	target: string;
+	outcome: ProbeOutcome;
+	detail: string;
+}
+
+export interface GroundingReport {
+	source?: string;
+	sources?: string[];
+	probes: GroundingProbe[];
+	unresolved: string[];
+}
+
+export type RuntimeTurnState =
+	| 'received'
+	| 'interpreting'
+	| 'grounding'
+	| 'planning'
+	| 'executing'
+	| 'verifying'
+	| 'accepted'
+	| 'clarify'
+	| 'retry'
+	| 'needs_review'
+	| 'unsupported'
+	| 'failed'
+	| 'cancelled';
+
+export interface ExecutionTraceStep {
+	id: string;
+	operation: string;
+	duration_ms: number;
+	success: boolean;
+	summary?: string;
+	sources: string[];
+}
+
+export type InteractionMode = 'model_only' | 'workspace_ask' | 'workspace_inspect';
+
+export interface ModelCallTrace {
+	model: string;
+	duration_ms: number;
+	success: boolean;
+	prompt_tokens?: number;
+	completion_tokens?: number;
+}
+
+export interface ExecutionTrace {
+	id: string;
+	turn_id: string;
+	workspace_revision?: string;
+	mode?: InteractionMode;
+	model?: string;
+	model_calls?: ModelCallTrace[];
+	elapsed_ms?: number;
+	steps: ExecutionTraceStep[];
+}
+
+export interface RunLogEntry {
+	id: string;
+	at_ms: number;
+	kind: 'turn' | 'trigger';
+	mode?: InteractionMode;
+	model?: string;
+	elapsed_ms?: number;
+	model_calls: ModelCallTrace[];
+	operations: Pick<ExecutionTraceStep, 'operation' | 'duration_ms' | 'success'>[];
+	prior_analysis_count: number;
+	context_reference_count: number;
+	clarification_continuation: boolean;
+	rerun: boolean;
+	outcome: string;
+	trigger?: string;
+	trigger_steps?: number;
+	trigger_errors?: number;
+}
+
+export interface WorkspaceColumnSnapshot {
+	name: string;
+	type: string;
+}
+
+export interface WorkspaceSourceSnapshot {
+	name: string;
+	view?: string;
+	kind: string;
+	row_count?: number;
+	columns: WorkspaceColumnSnapshot[];
+	size_bytes: number;
+	mtime: number;
+}
+
+export interface WorkspaceRevisionSnapshot {
+	path: string;
+	revision: string;
+	sources: WorkspaceSourceSnapshot[];
+	skipped: string[];
+}
+
+/** Backend-owned record persisted for one analytical turn. */
+export interface AnalysisTurn {
+	id: string;
+	conversation_id: string;
+	question: string;
+	context_refs?: ContextReference[];
+	prior_turn_refs?: string[];
+	clarification_of?: string;
+	clarification_response?: string;
+	workspace?: string;
+	workspace_revision?: string;
+	workspace_snapshot?: WorkspaceRevisionSnapshot;
+	context_audit?: ContextAssemblyAudit;
+	provenance?: AnswerProvenance;
+	rerun_of?: string;
+	state: RuntimeTurnState;
+	contract?: AnalysisContract;
+	plan: { strategy: 'direct_tools' | 'compiled_sql' | 'python_fallback' | 'document_fallback'; steps: string[] };
+	trace: ExecutionTrace;
+	verification?: { status: VerificationStatus; checks: VerificationCheck[] };
+	result: {
+		text: string;
+		status: VerificationStatus;
+		usage?: { prompt_tokens: number; completion_tokens: number };
+		verification: VerificationCheck[];
+		evidence: unknown[];
+	};
+}
+
+export type WorkspaceChangeKind = 'added' | 'removed' | 'changed';
+
+export interface WorkspaceSourceChange {
+	name: string;
+	kind: WorkspaceChangeKind;
+	details: string[];
+}
+
+/** Freshness/diff information shown before inspecting or rerunning a turn. */
+export interface AnalysisTurnReplayStatus {
+	turn_id: string;
+	workspace?: string;
+	original_revision?: string;
+	current_revision?: string;
+	same_workspace: boolean;
+	revision_changed: boolean;
+	snapshot_available: boolean;
+	can_rerun: boolean;
+	source_changes: WorkspaceSourceChange[];
 }
 
 /** The two user-facing ways to work with a mounted workspace. Ask is the
@@ -96,12 +454,6 @@ export interface RunStep {
 	note?: string;
 	evidence?: EvidenceItem;
 }
-
-/** Selection rendered by the right-hand inspector drawer. */
-export type InspectorSelection =
-	| { kind: 'source'; path: string }
-	| { kind: 'answer'; messageId: string; stepIndex?: number }
-	| null;
 
 export interface Message {
 	id: string;
@@ -173,6 +525,63 @@ export interface Catalog {
 	skipped?: SkippedFile[];
 }
 
+/** Mount status only; the active workspace is replaced atomically on success. */
+export interface WorkspaceIngestProgress {
+	path: string;
+	stage: 'profiling' | 'loading';
+	bytes_read: number;
+	total_bytes: number;
+}
+
+export interface WorkspaceProgress {
+	phase: 'scanning' | 'preparing' | 'waiting' | 'ready';
+	visited_files: number;
+	supported_files: number;
+	prepared_files: number;
+	total_supported_files?: number;
+	skipped_files: number;
+	ingest?: WorkspaceIngestProgress;
+}
+
+export type FieldRole = 'date' | 'measure' | 'dimension' | 'identifier' | 'text';
+
+export interface FieldProfile extends ColumnInfo {
+	role: FieldRole;
+}
+
+export interface SourceModel {
+	name: string;
+	path: string;
+	kind: SourceKind;
+	view?: string;
+	row_count?: number;
+	fields: FieldProfile[];
+	size_bytes: number;
+	mtime: number;
+	synopsis?: string;
+	note?: string;
+}
+
+/** A naming-based join hypothesis; the backend still grounds and probes joins. */
+export interface RelationshipCandidate {
+	left_source: string;
+	left_field: string;
+	right_source: string;
+	right_field: string;
+	evidence: string;
+}
+
+/** Revision-bound semantic projection of a mounted workspace. */
+export interface WorkspaceModel {
+	workspace: string;
+	revision: string;
+	indexed_at_ms?: number;
+	sources: SourceModel[];
+	relationships?: RelationshipCandidate[];
+	relationships_truncated?: boolean;
+	skipped?: SkippedFile[];
+}
+
 export interface AnalysisCapabilities {
 	table_analysis: boolean;
 	document_analysis: boolean;
@@ -217,6 +626,12 @@ export interface ProviderHealth {
 	models: string[];
 }
 
+export interface AppInfo {
+	name: string;
+	version: string;
+	uptime_ms: number;
+}
+
 export interface QueryResult {
 	columns: string[];
 	rows: unknown[][];
@@ -246,8 +661,19 @@ export interface ConversationSummary {
 	title: string | null;
 }
 
-/** Streaming events emitted by the `ask` command over a Tauri Channel. */
+/** A user-created local wiki attached to one mounted repository. */
+export interface Project {
+	id: string;
+	name: string;
+	workspace: string;
+	body: string;
+	created_at_ms: number;
+	updated_at_ms: number;
+}
+
+/** Streaming events emitted by the Rust engine through the Electron bridge. */
 export type AskEvent =
+	| { kind: 'turn_state'; turn_id: string; state: RuntimeTurnState }
 	| { kind: 'assistant_delta'; text: string }
 	| { kind: 'tool_start'; tool: string; args: Record<string, unknown> }
 	| { kind: 'tool_end'; item: EvidenceItem }

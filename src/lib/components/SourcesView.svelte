@@ -7,10 +7,13 @@
 
 	let query = $state('');
 	let selectedPath = $state<string | null>(null);
+	let page = $state(0);
+	let skippedQuery = $state('');
+	let skippedPage = $state(0);
+	const PAGE_SIZE = 100;
 
 	let sources = $derived(session.catalog.sources);
 	let workspace = $derived(session.catalog.workspace);
-	let folderName = $derived(workspace ? baseName(workspace) : 'Your workspace');
 	let skipped = $derived(session.catalog.skipped ?? []);
 	let tabularCount = $derived(
 		sources.filter((s) => ['csv', 'tsv', 'parquet', 'xlsx', 'json', 'ndjson'].includes(s.kind)).length
@@ -25,16 +28,47 @@
 			return haystack.toLowerCase().includes(q);
 		});
 	});
+	let visibleSources = $derived(filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE));
+	let pageCount = $derived(Math.ceil(filtered.length / PAGE_SIZE));
+	let pageStart = $derived(filtered.length ? page * PAGE_SIZE + 1 : 0);
+	let pageEnd = $derived(Math.min((page + 1) * PAGE_SIZE, filtered.length));
+	let filteredSkipped = $derived.by(() => {
+		const q = skippedQuery.trim().toLowerCase();
+		return q
+			? skipped.filter((item) => `${item.name} ${item.reason}`.toLowerCase().includes(q))
+			: skipped;
+	});
+	let visibleSkipped = $derived(
+		filteredSkipped.slice(skippedPage * PAGE_SIZE, (skippedPage + 1) * PAGE_SIZE)
+	);
+	let skippedPageCount = $derived(Math.ceil(filteredSkipped.length / PAGE_SIZE));
+	let skippedPageStart = $derived(filteredSkipped.length ? skippedPage * PAGE_SIZE + 1 : 0);
+	let skippedPageEnd = $derived(Math.min((skippedPage + 1) * PAGE_SIZE, filteredSkipped.length));
+
+	$effect(() => {
+		query;
+		page = 0;
+	});
+	$effect(() => {
+		skippedQuery;
+		skippedPage = 0;
+	});
 
 	let selected = $derived.by(() => sources.find((source) => source.path === selectedPath) ?? null);
 
 	$effect(() => {
+		const requestedPath = session.selectedSourcePath;
+		if (requestedPath && sources.some((source) => source.path === requestedPath)) {
+			selectedPath = requestedPath;
+			return;
+		}
 		if (selectedPath && sources.some((source) => source.path === selectedPath)) return;
 		selectedPath = sources[0]?.path ?? null;
 	});
 
 	function select(source: SourceInfo): void {
 		selectedPath = source.path;
+		session.selectSource(source.path);
 	}
 
 	function relativePath(path: string): string {
@@ -80,55 +114,46 @@
 <section class="sources-page" aria-labelledby="sources-title">
 	<header class="page-head">
 		<div>
-			<p class="eyebrow">Workspace</p>
 			<h1 id="sources-title">Sources</h1>
-			<p class="lede">
-				{#if workspace}
-					{folderName} · {sources.length} readable file{sources.length === 1 ? '' : 's'}
-				{:else}
-					Open a folder to see what Fella can work with.
-				{/if}
-			</p>
 		</div>
-		<button class="pill ghost" type="button" onclick={() => void openFolder()}>
-			<Icon name="folder" size={14} /> {workspace ? 'Change folder' : 'Choose folder'}
-		</button>
 	</header>
 
 	{#if !workspace}
 		<div class="empty-state">
-			<div class="empty-icon"><Icon name="folder" size={22} /></div>
+			<div class="empty-icon"><Icon name="folder" size={20} /></div>
 			<h2>Your workspace is still empty</h2>
 			<p>Choose a folder and Fella will catalog spreadsheets, documents, and notes without changing them.</p>
 			<button class="pill primary" type="button" onclick={() => void openFolder()}>Choose a folder</button>
 		</div>
 	{:else}
-		<div class="summary" aria-label="Source summary">
-			<div class="summary-item"><strong>{sources.length}</strong><span>files</span></div>
-			<div class="summary-item"><strong>{tabularCount}</strong><span>data files</span></div>
-			<div class="summary-item"><strong>{documentCount}</strong><span>documents</span></div>
-			{#if skipped.length}<div class="summary-item warn"><strong>{skipped.length}</strong><span>skipped</span></div>{/if}
-		</div>
-		<div class="freshness" title={session.catalog.revision ?? undefined}>
-			<Icon name="check" size={13} />
-			<span>Indexed {formatIndexed(session.catalog.indexed_at_ms)}</span>
-			<span class="dot">·</span>
-			<span>Snapshot <code>{shortRevision(session.catalog.revision)}</code></span>
+		<div class="catalog-meta" aria-label="Source summary">
+			<span class="catalog-count">{sources.length} files</span>
+			<span>{tabularCount} data files</span>
+			<span>{documentCount} documents</span>
+			{#if skipped.length}<span class="catalog-warn">{skipped.length} skipped</span>{/if}
+			<span class="catalog-divider" aria-hidden="true">·</span>
+			<span class="catalog-status" title={session.catalog.revision ?? undefined}>
+				<Icon name="check" size={14} /> Indexed {formatIndexed(session.catalog.indexed_at_ms)}
+			</span>
+			<span class="catalog-snapshot">Snapshot <code>{shortRevision(session.catalog.revision)}</code></span>
 		</div>
 
 		<div class="toolbar">
+			<div class="toolbar-title">
+				<strong>Files</strong>
+				<span>{filtered.length ? `${pageStart}–${pageEnd} of ` : ''}{filtered.length} files</span>
+			</div>
 			<label class="searchbox">
-				<Icon name="search" size={14} />
+				<Icon name="search" size={16} />
 				<span class="sr-only">Filter sources</span>
 				<input bind:value={query} placeholder="Filter sources…" spellcheck="false" />
 			</label>
-			<span class="result-count">{filtered.length} shown</span>
 		</div>
 
 		{#if sources.length}
 		<div class="source-layout">
 			<div class="source-list" role="listbox" aria-label="Workspace sources">
-				{#each filtered as source (source.path)}
+				{#each visibleSources as source (source.path)}
 					<button
 						class="source-row"
 						class:selected={selectedPath === source.path}
@@ -137,9 +162,12 @@
 						aria-selected={selectedPath === source.path}
 						onclick={() => select(source)}
 					>
-						<span class="source-icon"><Icon name={source.view ? 'table' : 'file'} size={15} /></span>
+				<span class="source-icon"><Icon name={source.view ? 'table' : 'file'} size={16} /></span>
 						<span class="source-copy">
 							<strong>{source.name}</strong>
+							{#if relativePath(source.path) !== source.name}
+								<small>{relativePath(source.path)}</small>
+							{/if}
 						</span>
 						<span class="source-meta">
 							<small>{kindLabel(source.kind)}</small>
@@ -154,9 +182,9 @@
 			<aside class="detail" aria-label="Selected source details">
 				{#if selected}
 					<div class="detail-head">
-						<div class="detail-icon"><Icon name={selected.view ? 'table' : 'file'} size={17} /></div>
+				<div class="detail-icon"><Icon name={selected.view ? 'table' : 'file'} size={20} /></div>
 						<div>
-							<p class="eyebrow">{kindLabel(selected.kind)}</p>
+							<p class="type-label">{kindLabel(selected.kind)}</p>
 							<h2>{selected.name}</h2>
 						</div>
 					</div>
@@ -202,6 +230,15 @@
 				{/if}
 			</aside>
 		</div>
+		{#if pageCount > 1}
+			<nav class="pagination" aria-label="Source pages">
+				<span>{pageStart}–{pageEnd} of {filtered.length}</span>
+				<div>
+					<button class="pill ghost" type="button" disabled={page === 0} onclick={() => page--}>Previous</button>
+					<button class="pill ghost" type="button" disabled={page + 1 >= pageCount} onclick={() => page++}>Next</button>
+				</div>
+			</nav>
+		{/if}
 		{:else}
 			<div class="no-sources">
 				<div class="empty-icon"><Icon name="folder" size={20} /></div>
@@ -214,9 +251,24 @@
 		{#if skipped.length}
 			<details class="skipped">
 				<summary><span>{skipped.length} skipped file{skipped.length === 1 ? '' : 's'}</span><span>Why?</span></summary>
-				{#each skipped as item (item.name)}
+				<label class="skipped-search">
+					<Icon name="search" size={16} />
+					<span class="sr-only">Filter skipped files</span>
+					<input bind:value={skippedQuery} placeholder="Filter skipped files…" spellcheck="false" />
+				</label>
+				<p class="skipped-count">{filteredSkipped.length ? `${skippedPageStart}–${skippedPageEnd} of ` : ''}{filteredSkipped.length} files</p>
+				{#each visibleSkipped as item (item.name)}
 					<div><code>{item.name}</code><span>{item.reason}</span></div>
 				{/each}
+				{#if skippedPageCount > 1}
+					<nav class="pagination" aria-label="Skipped file pages">
+						<span>{skippedPageStart}–{skippedPageEnd} of {filteredSkipped.length}</span>
+						<div>
+							<button class="pill ghost" type="button" disabled={skippedPage === 0} onclick={() => skippedPage--}>Previous</button>
+							<button class="pill ghost" type="button" disabled={skippedPage + 1 >= skippedPageCount} onclick={() => skippedPage++}>Next</button>
+						</div>
+					</nav>
+				{/if}
 			</details>
 		{/if}
 	{/if}
@@ -239,7 +291,7 @@
 		gap: var(--space-5);
 		margin-bottom: var(--space-5);
 	}
-	.eyebrow {
+	.type-label {
 		margin: 0 0 var(--space-1);
 		color: var(--text-faint);
 		font-size: var(--fs-xs);
@@ -249,7 +301,7 @@
 	h1,
 	h2 {
 		margin: 0;
-		font-weight: 620;
+		font-weight: 650;
 		letter-spacing: -0.03em;
 	}
 	h1 {
@@ -260,59 +312,37 @@
 		font-size: var(--fs-lg);
 		line-height: 1.3;
 	}
-	.lede {
-		margin: var(--space-2) 0 0;
-		color: var(--text-dim);
-	}
-	.summary {
-		display: flex;
-		width: fit-content;
-		max-width: 100%;
-		align-items: stretch;
-		gap: 1px;
-		margin-bottom: var(--space-5);
-		background: var(--border);
-		border: 1px solid var(--border);
-		border-radius: var(--radius);
-		overflow: hidden;
-	}
-	.summary-item {
-		min-width: 100px;
-		display: flex;
-		flex-direction: column;
-		gap: 2px;
-		padding: var(--space-3) var(--space-4);
-		background: var(--bg-raised);
-	}
-	.summary-item strong {
-		font-size: var(--fs-lg);
-		font-weight: 620;
-	}
-	.summary-item span {
-		color: var(--text-faint);
-		font-size: var(--fs-xs);
-	}
-	.summary-item.warn strong {
-		color: var(--warn);
-	}
-	.freshness {
+	.catalog-meta {
 		display: flex;
 		align-items: center;
-		gap: 6px;
-		margin: -12px 0 var(--space-4);
+		flex-wrap: wrap;
+		gap: 4px 10px;
+		margin: 0 0 var(--space-5);
 		color: var(--text-faint);
 		font-size: var(--fs-xs);
 	}
-	.freshness :global(svg) {
+	.catalog-count {
+		color: var(--text-dim);
+		font-weight: 600;
+	}
+	.catalog-warn {
+		color: var(--warn);
+	}
+	.catalog-divider {
+		color: var(--border-strong);
+	}
+	.catalog-status {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+	}
+	.catalog-status :global(svg) {
 		color: var(--ok);
 		flex: none;
 	}
-	.freshness .dot {
-		color: var(--border-strong);
-	}
-	.freshness code {
+	.catalog-snapshot code {
 		font-family: var(--mono);
-		font-size: 10px;
+		font-size: var(--fs-xs);
 	}
 	.toolbar {
 		display: flex;
@@ -320,8 +350,35 @@
 		gap: var(--space-3);
 		margin-bottom: var(--space-2);
 	}
+	.toolbar-title {
+		display: inline-flex;
+		align-items: baseline;
+		gap: var(--space-2);
+		margin-right: auto;
+	}
+	.toolbar-title strong {
+		font-size: var(--fs-sm);
+		font-weight: 650;
+	}
+	.toolbar-title span {
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+	}
+	.pagination {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: var(--space-3);
+		padding: var(--space-2) 0;
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+	}
+	.pagination > div {
+		display: flex;
+		gap: var(--space-2);
+	}
 	.searchbox {
-		flex: 1;
+		flex: 0 1 360px;
 		max-width: 360px;
 		display: flex;
 		align-items: center;
@@ -348,22 +405,19 @@
 	.searchbox input::placeholder {
 		color: var(--text-faint);
 	}
-	.result-count {
-		color: var(--text-faint);
-		font-size: var(--fs-xs);
-	}
 	.source-layout {
 		display: grid;
 		grid-template-columns: minmax(0, 1.15fr) minmax(260px, 0.85fr);
 		min-height: 340px;
-		border: 1px solid var(--border);
-		border-radius: var(--radius);
+		border-block: 1px solid var(--border);
+		border-inline: 0;
+		border-radius: 0;
 		overflow: hidden;
-		background: var(--bg-raised);
+		background: transparent;
 	}
 	.source-list {
 		min-width: 0;
-		padding: var(--space-2);
+		padding: var(--space-2) 0;
 		overflow: auto;
 	}
 	.source-row {
@@ -385,7 +439,7 @@
 	.empty-icon {
 		display: grid;
 		place-items: center;
-		color: var(--brand);
+		color: var(--text-faint);
 	}
 	.source-copy {
 		min-width: 0;
@@ -398,7 +452,14 @@
 		text-overflow: ellipsis;
 		white-space: nowrap;
 		font-size: var(--fs-sm);
-		font-weight: 560;
+		font-weight: 600;
+	}
+	.source-copy small {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
 	}
 	.source-meta small,
 	.path,
@@ -416,13 +477,13 @@
 	.source-meta small:first-child {
 		color: var(--text-dim);
 		font-family: var(--mono);
-		font-size: 10px;
+		font-size: var(--fs-xs);
 	}
 	.detail {
 		min-width: 0;
 		padding: var(--space-5);
 		border-left: 1px solid var(--border);
-		background: var(--bg-raised);
+		background: transparent;
 		overflow: auto;
 	}
 	.detail-head {
@@ -468,7 +529,7 @@
 	}
 	.facts strong {
 		font-size: var(--fs-sm);
-		font-weight: 560;
+		font-weight: 600;
 	}
 	.source-freshness {
 		margin: -8px 0 var(--space-4);
@@ -533,7 +594,7 @@
 	}
 	.column-row > small {
 		color: var(--text-faint);
-		font-size: 10px;
+		font-size: var(--fs-xs);
 	}
 	.column-row code {
 		min-width: 0;
@@ -553,7 +614,7 @@
 		text-overflow: ellipsis;
 		white-space: nowrap;
 		color: var(--text-dim);
-		font-size: 10px;
+		font-size: var(--fs-xs);
 	}
 	.common-values span {
 		margin-right: 6px;
@@ -583,6 +644,32 @@
 	}
 	.skipped summary span:last-child {
 		color: var(--text-faint);
+	}
+	.skipped-search {
+		display: flex;
+		align-items: center;
+		gap: var(--space-2);
+		padding: var(--space-2) var(--space-3);
+		color: var(--text-faint);
+		background: var(--bg-inset);
+		border-radius: var(--radius-sm);
+	}
+	.skipped-search:focus-within {
+		box-shadow: var(--focus-ring);
+	}
+	.skipped-search input {
+		width: 100%;
+		border: 0;
+		outline: 0;
+		background: transparent;
+		color: var(--text);
+		font: inherit;
+		font-size: var(--fs-sm);
+	}
+	.skipped-count {
+		margin: var(--space-2) 0;
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
 	}
 	.skipped div {
 		display: flex;
@@ -622,9 +709,10 @@
 	}
 	.no-sources {
 		padding: var(--space-6) var(--space-5);
-		border: 1px solid var(--border);
-		border-radius: var(--radius);
-		background: var(--bg-raised);
+		border-block: 1px solid var(--border);
+		border-inline: 0;
+		border-radius: 0;
+		background: transparent;
 		text-align: center;
 	}
 	.no-sources .empty-icon {
@@ -648,15 +736,18 @@
 			align-items: stretch;
 			flex-direction: column;
 		}
-		.page-head .pill {
-			align-self: flex-start;
+		.catalog-meta {
+			margin-bottom: var(--space-4);
 		}
-		.summary {
-			width: 100%;
-			flex-wrap: wrap;
+		.toolbar {
+			align-items: stretch;
+			flex-direction: column;
 		}
-		.summary-item {
-			flex: 1 0 40%;
+		.toolbar-title {
+			margin-right: 0;
+		}
+		.searchbox {
+			max-width: none;
 		}
 		.source-layout {
 			grid-template-columns: 1fr;

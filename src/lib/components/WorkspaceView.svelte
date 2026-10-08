@@ -15,9 +15,8 @@
 			aria-current={pane === 'sources' ? 'page' : undefined}
 			onclick={() => session.setWorkspacePane('sources')}
 		>
-			<Icon name="table" size={14} />
+			<Icon name="table" size={16} />
 			<span>Sources</span>
-			<small>{session.catalog.sources.length}</small>
 		</button>
 		<button
 			class:active={pane === 'context'}
@@ -25,8 +24,8 @@
 			aria-current={pane === 'context' ? 'page' : undefined}
 			onclick={() => session.setWorkspacePane('context')}
 		>
-			<Icon name="file" size={14} />
-			<span>Context</span>
+			<Icon name="bookmark" size={16} />
+			<span>Guide</span>
 		</button>
 	</nav>
 
@@ -66,7 +65,7 @@
 		border-bottom: 2px solid transparent;
 		color: var(--text-faint);
 		font-size: var(--fs-sm);
-		font-weight: 560;
+		font-weight: 600;
 		white-space: nowrap;
 	}
 	.workspace-tabs button:hover {
@@ -77,12 +76,7 @@
 		color: var(--text);
 	}
 	.workspace-tabs button :global(svg) {
-		color: var(--brand);
-		flex: none;
-	}
-	.workspace-tabs small {
 		color: var(--text-faint);
-		font-size: 10px;
-		font-variant-numeric: tabular-nums;
+		flex: none;
 	}
 </style>

@@ -5,16 +5,22 @@
 		'chevron-right': 'm9 18 6-6-6-6',
 		x: 'M18 6 6 18M6 6l12 12',
 		plus: 'M5 12h14M12 5v14',
+		'more-horizontal': 'M5 12h.01M12 12h.01M19 12h.01',
 		check: 'M20 6 9 17l-5-5',
 		alert:
 			'm10.24 4.5-8 14A2 2 0 0 0 4 21.5h16a2 2 0 0 0 1.76-3l-8-14a2 2 0 0 0-3.52 0ZM12 9.5v4M12 17.5h.01',
 		'arrow-up-right': 'M7 17 17 7M7 7h10v10',
+		refresh: 'M20 11a8 8 0 1 1-2.34-5.66L20 8M20 4v4h-4',
 		minus: 'M5 12h14',
 		square: 'M5 5h14v14H5z',
 		folder:
 			'M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z',
 		search: 'M11 3a8 8 0 1 0 0 16 8 8 0 0 0 0-16ZM21 21l-4.35-4.35',
 		'corner-down-left': 'M9 10 4 15l5 5M20 4v7a4 4 0 0 1-4 4H4',
+		ask: 'M4 5h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H9l-5 4v-4H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1Z',
+		repository:
+			'M3 7.5A1.5 1.5 0 0 1 4.5 6h5l1.75 2H19.5A1.5 1.5 0 0 1 21 9.5v8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5v-10ZM7 12h10M7 15h6',
+		project: 'M5.5 4h13A1.5 1.5 0 0 1 20 5.5v13a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 18.5v-13A1.5 1.5 0 0 1 5.5 4ZM8 9h8M8 13h5M8 17h3',
 		stop: 'M7 6h10a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1Z',
 		asterisk: 'M12 6v12M17.196 9 6.804 15M6.804 9l10.392 6',
 		info: 'M2 12a10 10 0 1 0 20 0 10 10 0 1 0-20 0M12 16v-4M12 8h.01',
@@ -34,6 +40,8 @@
 	} as const;
 
 	export type IconName = keyof typeof ICONS;
+	/** 12px metadata, 14px compact controls, 16px standard UI, 20px display. */
+	export type IconSize = 12 | 14 | 16 | 20;
 </script>
 
 <script lang="ts">
@@ -41,7 +49,7 @@
 		name,
 		size = 16,
 		fill = false
-	}: { name: IconName; size?: number; fill?: boolean } = $props();
+	}: { name: IconName; size?: IconSize; fill?: boolean } = $props();
 </script>
 
 <svg
@@ -51,7 +59,7 @@
 	viewBox="0 0 24 24"
 	fill={fill ? 'currentColor' : 'none'}
 	stroke="currentColor"
-	stroke-width="1.75"
+	stroke-width={size === 12 ? 1.8 : 2}
 	stroke-linecap="round"
 	stroke-linejoin="round"
 	aria-hidden="true"

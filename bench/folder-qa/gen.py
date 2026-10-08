@@ -8,9 +8,9 @@ A stand-in for "a folder of a person's own files" — deliberately spread across
 life domains, not just finances: spending, workouts, a reading log, trips, a
 plain-text journal, plus a budget and an authors table for cross-file joins.
 The questions cover numeric aggregates, categorical group-by / top-N, boolean
-filters, ratings/averages, date ranges, free-text lookup and search, one
-refusal (no forecasting), one that needs no tool, and a multi-file tier where
-each case needs a JOIN or a table + a document.
+filters, ratings/averages, date ranges, free-text lookup and search, forecasts
+with an explicit baseline, a genuinely unsupported time-series request, one
+no-tool question, and multi-file work requiring joins or documents.
 
 It also exercises every file type Fella ingests, one file per format:
 CSV, TSV (screen_time.tsv), JSON array (contacts.json), NDJSON (sleep.jsonl),
@@ -35,7 +35,7 @@ def dump(name, header, records, delim=","):
 
 def dump_xlsx(name, sheet, header, rows):
     """One-sheet .xlsx via hand-written OOXML (stdlib zipfile, no openpyxl).
-    Same approach as src-tauri/tests/fixtures/make_messy_ledger.py."""
+    Same approach as backend/tests/fixtures/make_messy_ledger.py."""
     import zipfile
 
     def col(i):
@@ -150,6 +150,10 @@ total_2023 = sp(lambda r: r["month"][:4] == "2023")
 rent_2024 = sp(lambda r: r["category"] == "rent" and r["month"][:4] == "2024")
 by_cat = {c: sp(lambda r, c=c: r["category"] == c) for c in cats}
 top_cat = max(by_cat, key=by_cat.get)
+grocery_baseline_2023 = R(
+    sp(lambda r: r["category"] == "groceries" and r["month"].startswith("2023-")) / 12,
+    2,
+)
 
 # --- budget (shares `category` with spend — a same-named join key) -------
 monthly_budget = {"rent": 1200, "groceries": 400, "transport": 90, "utilities": 130, "dining": 150}
@@ -193,6 +197,10 @@ books = [{"title": t, "author": a, "genre": g, "pages": p, "rating": r, "finishe
 dump("books.csv", ["title", "author", "genre", "pages", "rating", "finished", "finished_date"], books)
 finished_books = [b for b in books if b["finished"] == "yes"]
 n_finished = len(finished_books)
+finished_first_half = sum(
+    1 for b in finished_books if "2024-01-01" <= b["finished_date"] <= "2024-06-30"
+)
+books_annualized_pace = finished_first_half * 2
 avg_rating_finished = R(sum(b["rating"] for b in finished_books) / n_finished, 2)
 pages_by_genre_fin = {}
 for b in finished_books:
@@ -581,10 +589,25 @@ cases = [
     # case-insensitive text search
     ("subs-video-ci", "Do I have a subscription called 'VIDEO STREAMING'? If so, what does it cost per month?", ["subscriptions.xlsx"], {"contains": ["15.49"]}, "text-search-ci"),
 
-    # refusal (no forecasting — the loop must decline, not compute an estimate)
-    ("refusal", "Based on my reading log, how many books will I finish next year?", ["books.csv"], "refusal", "refusal"),
-    ("refusal-spend", "Given my 2024 spending, what will my total grocery bill be next month?", ["spend.csv"], "refusal", "refusal"),
-    ("refusal-trips", "Based on my travel history, how many trips will I take in 2025?", clut(["trips.csv"]), "refusal", "refusal"),
+    # Explicitly scoped baselines make the numerical oracle reproducible while
+    # still testing estimation and uncertainty rather than a mandated tool path.
+    ("forecast-book-pace", "Using the books finished from January through June 2024 as a simple six-month pace, estimate a 12-month total if that pace continues. Label it as an estimate.", ["books.csv"], {
+        "all_of": [
+            {"approx": [float(books_annualized_pace), 0.01]},
+            {"contains": ["estimate|projection|projected", "pace|annualized|six-month"]},
+            {"must_not_contain": ["will definitely", "guaranteed"]},
+        ]
+    }, "forecast-estimate"),
+    ("forecast-grocery-baseline", "Using the 12 monthly grocery totals recorded in 2023, use their arithmetic mean as a simple baseline estimate for a future month. State the estimate and label it as a baseline, not an observed result.", ["spend.csv"], {
+        "all_of": [
+            {"approx": [grocery_baseline_2023, 0.05]},
+            {"contains": ["estimate|projection|projected", "mean|average|baseline"]},
+            {"must_not_contain": ["will definitely", "guaranteed"]},
+        ]
+    }, "forecast-estimate"),
+    ("forecast-trips-source-limit", "Based on my travel history, how many trips will I take in 2025?", clut(["trips.csv"]), {
+        "contains": ["no dates|missing dates|without dates|undated", "can't|cannot|not enough|insufficient", "provide|add|include|share"]
+    }, "forecast-source-limit"),
     # no-tool
     ("notool", "What does the word 'anthology' mean?", [], "notool", "no-tool"),
 ]
@@ -606,8 +629,9 @@ DOMAIN_BY_ID = {  # multi-file / cross-format cases get their primary domain
     "fqa-xf-nationality-pages": "reading", "fqa-xf-contacts-nights": "contacts",
     "fqa-xf-dining-cap-months": "spending",
     "fqa-mf-utilities-signed": "spending", "fqa-mf-screen-vs-workout": "fitness",
-    "fqa-refusal": "reading", "fqa-refusal-spend": "spending",
-    "fqa-refusal-trips": "travel", "fqa-notool": "general",
+    "fqa-forecast-book-pace": "reading",
+    "fqa-forecast-grocery-baseline": "spending",
+    "fqa-forecast-trips-source-limit": "travel", "fqa-notool": "general",
 }
 
 

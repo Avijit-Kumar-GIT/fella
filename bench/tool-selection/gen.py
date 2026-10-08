@@ -2,8 +2,8 @@
 """Axis: tool selection / irrelevance. Does the right capability get used for
 the job -- including using NO tool when none is needed, reusing a fact
 already stated in conversation instead of re-deriving it, routing text search
-vs tabular query correctly, and declining honestly when the folder has no
-relevant file at all. stdlib only.
+vs tabular query correctly, and explaining when mounted files lack the needed
+source with a useful next step instead of a cold refusal. stdlib only.
 
     python3 gen.py
     agent_eval bench --dir bench/tool-selection --models "ollama-cloud/gemma4:31b" --iters 3
@@ -125,8 +125,12 @@ cases = [
         "no-relevant-file",
         "How much did I spend on my gym membership last month?",
         ["workouts.csv", "sleep.csv"],
-        "refusal",
-        "irrelevance-no-data",
+        {"contains": [
+            "can't calculate|cannot calculate|can't find|cannot find|no financial|no expense",
+            "transaction|charge|expense",
+            "add|provide|share|mount|upload",
+        ]},
+        "source-limit-helpful-next-step",
     ),
     (
         "single-fact-not-a-chart",

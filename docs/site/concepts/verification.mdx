@@ -1,0 +1,99 @@
+---
+title: "Verification and evidence"
+description: "How Fella checks analytical work without giving a checker an opaque veto."
+icon: "badge-check"
+---
+
+> Verification ties an answer to recorded work; it does not make a model or a heuristic infallible.
+
+## Evidence and checks
+
+Evidence is the record of tool execution: source references, queries, returned
+rows, Python outputs, charts, and execution errors. Fella's verifier is local
+deterministic code. It checks replayable SQL and Python inputs, numeric support,
+contract execution, result invariants, and whether a chart agrees with its
+source result. These checks can catch concrete defects, but they cannot prove
+that every interpretation or conclusion is correct.
+
+A finding carries a machine-readable effect, target, and related evidence IDs.
+A failed check is not automatically a whole-answer veto:
+
+| Effect | What it means | Typical scope |
+| --- | --- | --- |
+| Informational | Surface a caveat or disagreement; do not invalidate evidence | Answer or claim |
+| Repair | Ask the model to correct or qualify one identified claim | Claim |
+| Exclude evidence | Stop relying on one result that failed an objective check | Evidence item |
+| Withhold artifact | Do not render one malformed artifact as valid | Chart or other artifact |
+| Block answer | Stop use of a result tied to a stale workspace revision | Answer |
+
+These effects are deliberately different from tool errors. A successful query
+that later fails replay remains a successful execution in the trace, but is
+marked as excluded from the current answer. A chart can be withheld while its
+source result, prose, and other artifacts remain available. An unsupported
+claim can be repaired or omitted without discarding the evidence that supports
+the rest of the answer.
+
+## Flow
+
+1. The model answers from its gathered evidence; the verifier runs deterministic
+   checks against the answer, catalog, analysis contract, and evidence.
+2. Each actionable finding identifies its effect, target, evidence references,
+   and repair guidance. Informational findings do not trigger repair.
+3. The agent may make up to three targeted, tool-backed repair passes within
+   the turn's remaining model-step budget. It preserves unrelated accepted
+   evidence and does not clear the tool-call memo. A new run is allowed when
+   the finding excludes the specific result that needs replacing.
+4. If the workspace revision changed during the turn, the stale answer is
+   blocked. Other unresolved findings remain attached to the answer for
+   inspection; they do not silently erase unrelated output.
+5. A cost-gated same-model consistency check may run after a warning. Its
+   disagreement is informational, not independent proof or an answer-wide
+   gate. Set `FELLA_SELF_CHECK=0` to opt out.
+
+Expensive queries (over 500 ms) and truncated result sets are not replayed; the
+verifier keeps the original result and records the applicable limitation. The
+repair budget is bounded to keep a detected issue from turning into repeated,
+identical tool calls.
+
+## Inspecting a decision
+
+The answer text stays in the conversation. Open **Analysis Details** to inspect
+the checks, their target and effect, and which evidence was excluded or
+withheld. No success/failure badge is repeated on each message. Historical
+verification records created before typed findings remain readable; their
+labels are not retroactively treated as authority to block an answer.
+
+`Verified` is reserved for an answer with a grounded interpretation and a
+successful replay signal. A replay proves reproducibility at that moment, not
+source completeness or truth. An unresolved meaningful check can leave the
+answer in review; a whole-answer failure is reserved for an explicit
+answer-scoped block.
+
+## Limits
+
+- Numeric grounding does not prove every derived percentage or narrative
+  interpretation.
+- Heuristic checks can produce false positives and miss semantic mistakes.
+- Replaying Python inputs validates its source boundary, not arbitrary Python
+  arithmetic independently.
+- A second opinion from the same model is another model output, not an
+  independent judge.
+
+For high-stakes use, inspect the query, returned rows, and source data yourself.
+The current authority boundary is summarized in the
+[architecture reference](https://github.com/Avijit-Kumar-GIT/fella/blob/main/docs/ARCHITECTURE.md#the-analytical-turn); a dated scripted conformance report is linked from the
+[testing guide](https://github.com/Avijit-Kumar-GIT/fella/blob/main/docs/TESTING.md).
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Read the evidence" icon="search-check" href="/developer-platform/using-fella/evidence">
+    Follow files, queries, outputs, and checks in the product.
+  </Card>
+  <Card title="The analytics engine" icon="database" href="/concepts/engine">
+    See where deterministic query results come from.
+  </Card>
+  <Card title="Built-in tools" icon="wrench" href="/concepts/tools">
+    Review what is and is not independently rerunnable.
+  </Card>
+</CardGroup>

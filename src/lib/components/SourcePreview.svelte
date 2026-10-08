@@ -1,6 +1,7 @@
 <script lang="ts">
-	import { ipc, isTauri } from '$lib/ipc';
+	import { ipc, isDesktop } from '$lib/ipc';
 	import type { QueryResult, SourceInfo } from '$lib/types';
+	import DataLoader from './DataLoader.svelte';
 
 	let { source }: { source: SourceInfo } = $props();
 	let preview = $state<QueryResult | null>(null);
@@ -18,7 +19,7 @@
 		preview = null;
 		error = '';
 		loadedPath = path;
-		if (!isTauri()) {
+		if (!isDesktop()) {
 			error = 'Preview is available in the Fella desktop app.';
 			return;
 		}
@@ -52,7 +53,7 @@
 			<span>{preview ? `${preview.rows.length} rows shown` : ''}</span>
 		</div>
 		{#if loading}
-			<p class="preview-note">Loading a few rows…</p>
+			<div class="preview-loading"><DataLoader size={18} /><span>Loading a few rows…</span></div>
 		{:else if error}
 			<p class="preview-note">{error}</p>
 		{:else if preview?.columns.length}
@@ -103,6 +104,13 @@
 		color: var(--text-faint);
 		font-size: var(--fs-xs);
 	}
+	.preview-loading {
+		display: inline-flex;
+		align-items: center;
+		gap: var(--space-2);
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+	}
 	.table-wrap {
 		max-width: 100%;
 		overflow-x: auto;
@@ -113,7 +121,7 @@
 		border-collapse: collapse;
 		min-width: 100%;
 		font-family: var(--mono);
-		font-size: 10px;
+		font-size: var(--fs-xs);
 		white-space: nowrap;
 	}
 	th,

@@ -92,8 +92,8 @@ Darwin)
     ;;
   esac
 
-  xattr -dr com.apple.quarantine "$dest/$(basename "$app")" 2>/dev/null || true
   echo "Installed to $dest/$(basename "$app"). Open it from Launchpad or Spotlight."
+  echo "If macOS blocks this unsigned app, use Finder's Open command and approve it in Privacy & Security."
   ;;
 
 Linux)

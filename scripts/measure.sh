@@ -2,14 +2,14 @@
 #
 # measure.sh Fella's size / speed / memory numbers, in one place.
 #
-#   ./scripts/measure.sh              quick: sizes, deps, bundle, startup, memory
+#   ./scripts/measure.sh              engine binary size, deps, bundle, build time
 #   ./scripts/measure.sh --bloat      + per-crate binary breakdown (relinks, ~10 min)
 #   ./scripts/measure.sh --build      + time an incremental Rust rebuild
 #   ./scripts/measure.sh --build-cold + time a full clean rebuild (~20 min!)
 #   ./scripts/measure.sh --min        + build the size-minimised profile
 #
-# Everything printed is also appended, under a dated heading, to
-# docs/PERFORMANCE-LOG.md see docs/PERFORMANCE.md for what each number means.
+# To keep a local copy, pipe the output to a file; see docs/PERFORMANCE.md for
+# what each number means and how to compare measurements fairly.
 #
 # One-time setup (no sudo):  cargo install cargo-bloat hyperfine
 
@@ -31,10 +31,9 @@ for a in "$@"; do
 	esac
 done
 
-BIN=src-tauri/target/release/fella
-export DISPLAY="${DISPLAY:-:0}" WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-0}"
+BIN=backend/target/release/fella
 TMP=$(mktemp -d)
-trap 'rm -rf "$TMP"; pkill -f "target/release/fella" 2>/dev/null' EXIT
+trap 'rm -rf "$TMP"' EXIT
 
 have() { command -v "$1" >/dev/null 2>&1; }
 sec() { printf '\n### %s\n\n' "$1"; }
@@ -50,7 +49,7 @@ main() {
 
 	sec "Dependencies"
 	(
-		cd src-tauri || exit
+		cd backend || exit
 		u=$(cargo tree -e normal --prefix none 2>/dev/null | sed 's/ (\*)//' | sort -u | grep -c .)
 		d=$(cargo tree --depth 1 -e normal --prefix none 2>/dev/null | tail -n +2 | grep -c .)
 		echo "unique crates in the graph : $u"
@@ -62,7 +61,7 @@ main() {
 
 	sec "Release build"
 	(
-		cd src-tauri || exit
+		cd backend || exit
 		[ "$WANT_COLD" = 1 ] && cargo clean
 		# cargo itself is the up-to-date check; this is a no-op when nothing changed.
 		if have hyperfine && [ "$WANT_COLD" = 1 ]; then
@@ -75,7 +74,7 @@ main() {
 	if [ "$WANT_BUILD" = 1 ] && [ "$WANT_COLD" != 1 ]; then
 		sec "Incremental rebuild time (edit one file, rebuild)"
 		(
-			cd src-tauri || exit
+			cd backend || exit
 			if have hyperfine; then
 				hyperfine --warmup 0 --runs 3 --prepare 'touch src/lib.rs' 'cargo build --release'
 			else
@@ -84,8 +83,8 @@ main() {
 		)
 	fi
 	echo
-	echo "per-crate compile times: cd src-tauri && cargo build --release --timings"
-	echo "  then open src-tauri/target/cargo-timings/cargo-timing.html"
+	echo "per-crate compile times: cd backend && cargo build --release --timings"
+	echo "  then open backend/target/cargo-timings/cargo-timing.html"
 
 	sec "Binary size"
 	if [ -x "$BIN" ]; then
@@ -101,8 +100,8 @@ main() {
 
 	if [ "$WANT_MIN" = 1 ]; then
 		sec "Binary size release-min profile (opt-level z, fat LTO, abort, stripped)"
-		(cd src-tauri && cargo build --profile release-min)
-		M=src-tauri/target/release-min/fella
+		(cd backend && cargo build --profile release-min)
+		M=backend/target/release-min/fella
 		[ -x "$M" ] && echo "release-min : $(du -h --apparent-size "$M" | cut -f1)  ($(stat -c%s "$M") bytes)"
 	fi
 
@@ -111,7 +110,7 @@ main() {
 		echo "(skipped pass --bloat; it relinks the LTO binary, ~10 min)"
 	elif have cargo-bloat; then
 		(
-			cd src-tauri || exit
+			cd backend || exit
 			echo "how many bytes of the binary each crate's code occupies:"
 			cargo bloat --release --crates -n 18 2>/dev/null
 		)
@@ -130,51 +129,18 @@ main() {
 		echo "(pnpm not found source ~/.fella_env)"
 	fi
 
-	sec "Cold start -> interactive"
-	if [ -x "$BIN" ]; then
-		echo "(a window opens briefly for each run)"
-		for i in 1 2 3; do
-			l=$(timeout 15 "./$BIN" 2>&1 | grep -m1 'interactive in' || true)
-			[ -n "$l" ] && echo "run $i: ${l#fella: }" || echo "run $i: no timing line (no display / WSLg?)"
-			pkill -f 'target/release/fella' 2>/dev/null
-			sleep 1
-		done
-	else
-		echo "(no release binary yet)"
-	fi
-
-	sec "Idle memory"
-	if [ -x "$BIN" ]; then
-		"./$BIN" >/dev/null 2>&1 &
-		pid=$!
-		sleep 6
-		if kill -0 "$pid" 2>/dev/null; then
-			m=$(ps -o rss= -p "$pid" 2>/dev/null | awk '{print int($1/1024)}')
-			h=$(pgrep -cf 'WebKitWebProcess|WebKitNetworkProcess' 2>/dev/null || echo 0)
-			echo "main process RSS : ${m:-?} MB   (+ $h WebKit helper process(es), not summed)"
-		else
-			echo "(process exited early no display?)"
-		fi
-		kill "$pid" 2>/dev/null
-		pkill -f 'target/release/fella' 2>/dev/null
-		/usr/bin/time -v timeout 8 "./$BIN" 2>&1 |
-			grep -E 'Maximum resident set size|Elapsed \(wall' | sed 's/^[[:space:]]*/  /'
-		pkill -f 'target/release/fella' 2>/dev/null
-	else
-		echo "(no release binary yet)"
-	fi
+	sec "Whole-app startup and memory"
+	echo "Not measured here: this script profiles the Rust sidecar, not the Electron desktop process tree."
+	echo "On Windows, build the sidecar with 'pnpm electron:build', then run:"
+	echo "  .\\scripts\\measure-windows.ps1 -Seconds 15"
 
 	sec "Notes"
 	cat <<'EOF'
-- GUI metrics (cold start, memory) need a display WSLg on Windows.
-- `time -v` "Maximum resident set size" is the main process only; WebKit
-  helpers add ~20-60 MB more.
+- This script reports Rust sidecar build and binary metrics; it does not launch the Electron UI.
+- Use the Windows helper or a platform process-tree profiler for full-app memory.
 - `du --apparent-size` = file bytes, not blocks-on-disk.
-- First `cargo build --release` is slow (DuckDB C++); later ones are fast.
+- First `cargo build --release` is slow; later ones are fast.
 EOF
 }
 
-main 2>&1 | tee "$TMP/report.md"
-{ echo; cat "$TMP/report.md"; } >>"$ROOT/docs/PERFORMANCE-LOG.md"
-echo
-echo "→ appended to docs/PERFORMANCE-LOG.md"
+main

@@ -1,10 +1,10 @@
 // Slash-command parsing and input dispatch for the REPL.
 
-import { ipc, isTauri, pickFolder } from './ipc';
-import { Conversation, session } from './session.svelte';
+import { ipc, isDesktop, isElectron, pickFolder } from './ipc';
+import { Conversation, isActualQuestion, session } from './session.svelte';
 import type {
 	AskEvent,
-	ContextReference,
+	ConversationSummary,
 	Message,
 	ProviderHealth,
 	ProviderInfo
@@ -15,7 +15,7 @@ showing the exact steps it took. You never need these commands, but here they ar
 
   Ask / Inspect     choose the normal answer flow or a stricter source-first,
                    read-only inspection flow from the composer
-  + Context / @     attach a source or field to your next question
+  + Add source / @  attach a source or field to your next question
 
   /open <path>     choose the folder Fella looks at
   /files           see what Fella found in your folder
@@ -29,7 +29,7 @@ showing the exact steps it took. You never need these commands, but here they ar
   /model           see or change which model answers
   /reindex         check the folder again for new or changed files
   /memory          see what Fella has learned about this folder (/memory forget to clear)
-  /context         open fella.md, where you tell Fella about your files
+  /context         open the workspace guide (fella.md)
   /update          check for a newer version of Fella and install it
   /mcp             experimental and inert; no connectors are enabled
   /tab             open another conversation in a new tab
@@ -39,10 +39,10 @@ showing the exact steps it took. You never need these commands, but here they ar
   /retry           ask the last question again
   /help            this list
 
-keys  Enter send · Shift+Enter new line · Ctrl/Cmd+K or Ctrl/Cmd+Shift+P commands
+keys  Enter send · Shift+Enter new line · Ctrl/Cmd+K or Ctrl/Cmd+Shift+P search Fella
       Ctrl/Cmd+N new conversation · Ctrl/Cmd+T new tab · Ctrl/Cmd+W close tab
       Ctrl/Cmd+[ / ] previous or next tab · Ctrl/Cmd+1…9 switch tab
-      Ctrl/Cmd+Shift+A Ask · Ctrl/Cmd+Shift+S Sources · Ctrl/Cmd+Shift+C Context
+      Ctrl/Cmd+Shift+A new conversation · Ctrl/Cmd+Shift+S Sources · Ctrl/Cmd+Shift+C Context
       Ctrl/Cmd+, settings · Ctrl/Cmd+O open folder · Ctrl/Cmd+B sidebar · Ctrl/Cmd+L clear
       Ctrl/Cmd+Shift+F focus mode · Esc stop a run / hide details`;
 
@@ -82,7 +82,7 @@ export const COMMAND_DESCRIPTIONS: Record<string, string> = {
 	'/model': 'see or change which model answers',
 	'/reindex': 'check the folder again for new or changed files',
 	'/memory': 'see what Fella has learned about this folder',
-	'/context': 'open fella.md, where you tell Fella about your files',
+	'/context': 'open the workspace guide (fella.md)',
 	'/update': 'check for a newer version of Fella and install it',
 	'/mcp': 'experimental and inert; no connectors are enabled',
 	'/tab': 'open another conversation in a new tab',
@@ -155,7 +155,8 @@ export function completionsFor(input: string): string[] {
 
 /** Open a folder as the workspace. With no path, shows the native picker. */
 export async function openFolder(path?: string): Promise<void> {
-	if (!isTauri()) {
+	if (session.mountProgress) return;
+	if (!isDesktop()) {
 		session.setWorkspaceView('ask');
 		session.addSystem('Fella needs the desktop app to do that.');
 		return;
@@ -163,30 +164,28 @@ export async function openFolder(path?: string): Promise<void> {
 
 	let chosen = path;
 	if (chosen == null) {
-		// The native picker inherits the OS cursor state from the instant it
-		// opens. Reached by a mouse click (the welcome-screen button) that's
-		// fine. Reached by `Enter` in the composer, Windows has just hidden the
-		// pointer ("hide pointer while typing") and the modal dialog seizes the
-		// message loop before a mouse-move restores it, so the cursor stays
-		// invisible for the life of the picker. Drop the text caret and let the
-		// webview settle its own cursor first, then have the OS re-show the
-		// pointer (no-op off Windows) matching what the click path gets for free.
+		// Drop the text caret before opening the native Electron folder picker.
 		(document.activeElement as HTMLElement | null)?.blur();
-		await new Promise((r) => requestAnimationFrame(r));
-		await ipc.unhideCursor().catch(() => {}); // best-effort; never block the picker
 		chosen = (await pickFolder()) ?? undefined;
 	}
 	if (!chosen) return;
 	try {
-		session.busy = true;
-		session.activity = 'reading the folder…';
-		session.catalog = await ipc.openWorkspace(chosen);
+		session.mountProgress = {
+			phase: 'scanning',
+			visited_files: 0,
+			supported_files: 0,
+			prepared_files: 0,
+			skipped_files: 0
+		};
+		session.catalog = await ipc.openWorkspace(chosen, (progress) => {
+			session.mountProgress = progress;
+		});
+		session.rememberRepository(session.catalog.workspace ?? chosen);
 		session.addSystem(summarizeCatalog());
 	} catch (e) {
 		session.addSystem(`Couldn't open that folder: ${errMsg(e)}`);
 	} finally {
-		session.busy = false;
-		session.activity = '';
+		session.mountProgress = null;
 	}
 }
 
@@ -194,9 +193,10 @@ export async function openFolder(path?: string): Promise<void> {
  *  the welcome screen can offer a one-click reopen. Fella no longer opens that
  *  folder automatically the user picks. Called once from the page's onMount. */
 export async function loadStartupCatalog(): Promise<void> {
-	if (!isTauri() || session.catalog.workspace) return;
+	if (!isDesktop() || session.catalog.workspace) return;
 	try {
 		session.catalog = await ipc.getCatalog();
+		session.rememberRepository(session.catalog.workspace);
 	} catch {
 		/* no engine yet the welcome screen handles it */
 	}
@@ -211,6 +211,27 @@ export async function loadStartupCatalog(): Promise<void> {
  *  button, and Enter on an empty composer with no folder open). */
 export async function resumeLastFolder(): Promise<void> {
 	if (session.lastFolder) await openFolder(session.lastFolder);
+}
+
+/** Reopen an archived conversation and restore the folder it belongs to. */
+export async function openConversation(summary: ConversationSummary): Promise<void> {
+	if (!isDesktop()) {
+		session.addSystem('Saved conversations need the desktop app.');
+		return;
+	}
+	try {
+		session.setWorkspaceView('ask');
+		const raw = await ipc.conversationLoad(summary.id);
+		const saved: { workspace?: string | null; messages?: unknown; title?: string | null } =
+			JSON.parse(raw);
+		const messages = Array.isArray(saved.messages) ? (saved.messages as Message[]) : [];
+		session.loadArchivedTab(summary.id, messages, saved.title ?? null, summary.workspace);
+		if (summary.workspace && summary.workspace !== session.catalog.workspace) {
+			await openFolder(summary.workspace);
+		}
+	} catch (e) {
+		session.addSystem(`error: ${errMsg(e)}`);
+	}
 }
 
 /** Open the workspace's fella.md editor from a navigation surface. Unlike the
@@ -229,7 +250,7 @@ export async function openContext(): Promise<void> {
  *  default). The `ask` promise then resolves normally (a "Stopped." answer) and
  *  clears that tab's `busy`. */
 export async function stop(conv: Conversation | null = session.activeChat): Promise<void> {
-	if (!conv || !conv.busy || !isTauri()) return;
+	if (!conv || !conv.busy || !isDesktop()) return;
 	conv.activity = 'stopping…';
 	try {
 		await ipc.cancel(conv.id);
@@ -249,11 +270,11 @@ export async function steerRun(conv: Conversation, extra: string): Promise<void>
 	// Let the cancelled run unwind (its `ask` resolves "Stopped." and clears busy).
 	for (let i = 0; i < 60 && conv.busy; i++) await new Promise((r) => setTimeout(r, 50));
 	conv.addUser(extra);
-	await ask(buildQuestion(`${prior.text}\n\nAlso: ${extra}`, conv), conv);
+	await ask(`${prior.text}\n\nAlso: ${extra}`, conv);
 }
 
 /** Entry point: called with the raw composer text. */
-export async function dispatch(raw: string): Promise<void> {
+export async function dispatch(raw: string, clarificationTurnId?: string): Promise<void> {
 	const text = raw.trim();
 	if (!text) return;
 
@@ -282,30 +303,31 @@ export async function dispatch(raw: string): Promise<void> {
 	}
 
 	const conv = session.ensureChat();
+	conv.bindWorkspaceScope(session.catalog.workspace ?? null);
 	conv.addUser(text);
-	await ask(buildQuestion(text, conv), conv);
+	await ask(text, conv, clarificationTurnId);
 }
 
-/** Turn the small UI context selection into explicit model guidance. The
- * catalog and engine still decide what can be read; this only makes the
- * user's chosen starting points visible in the prompt. */
-function buildQuestion(question: string, conv: Conversation): string {
-	const instructions =
-		conv.mode === 'inspect'
-			? 'Start by inspecting the relevant workspace sources and schema. Briefly explain what you used and any caveats before giving the answer.'
-			: '';
-	const refs = conv.contextRefs;
-	if (!instructions && refs.length === 0) return question;
-	const context = refs.length
-		? `Use these references as the starting point for this question. Treat saved results as hypotheses and verify them against the current workspace:\n${refs
-				.map((ref) => `- ${contextReferenceText(ref)}`)
-				.join('\n')}`
-		: '';
-	return [instructions, context, question].filter(Boolean).join('\n\n');
-}
+/** Change the active conversation's model from a UI picker without writing a
+ * slash command into the transcript. The selected model is also remembered as
+ * the default for new conversations, matching `/model <name>`. */
+export async function selectModel(model: string): Promise<boolean> {
+	const next = model.trim();
+	if (!next) return false;
 
-function contextReferenceText(ref: ContextReference): string {
-	return `${ref.label}${ref.detail ? ` (${ref.detail})` : ''}`;
+	const conv = session.ensureChat();
+	const previous = conv.model;
+	conv.model = next;
+	if (!isDesktop()) return true;
+
+	try {
+		session.settings = await ipc.setSettings({ model: next });
+		return true;
+	} catch (e) {
+		conv.model = previous;
+		session.addSystem(`Couldn't choose ${next}: ${errMsg(e)}`);
+		return false;
+	}
 }
 
 /** Fetch the provider list and cache it on the session so the composer hint
@@ -401,12 +423,12 @@ async function runCommand(text: string): Promise<void> {
 				return;
 			}
 			const retryChat = session.ensureChat();
-			await ask(buildQuestion(q, retryChat), retryChat);
+			await ask(q, retryChat);
 			return;
 		}
 
 		case '/history': {
-			if (!isTauri()) {
+			if (!isDesktop()) {
 				session.addSystem('Saved conversations need the desktop app.');
 				return;
 			}
@@ -427,15 +449,15 @@ async function runCommand(text: string): Promise<void> {
 					const saved: { workspace?: string | null; messages?: unknown; title?: string | null } =
 						JSON.parse(raw);
 					const messages = Array.isArray(saved.messages) ? (saved.messages as Message[]) : [];
-					session.loadArchivedTab(chosen.id, messages, saved.title ?? null);
+					session.loadArchivedTab(chosen.id, messages, saved.title ?? null, chosen.workspace);
 					session.addSystem(
 						`Reopened: "${chosen.title ?? chosen.preview}" (${dateLabel(chosen.saved_at_ms)}).`
 					);
 					// Auto-mount the folder this conversation was about (openFolder
 					// reports a failure -- moved/deleted folder -- as a system
 					// message on its own, nothing extra needed here for that).
-					if (saved.workspace && saved.workspace !== session.catalog.workspace) {
-						await openFolder(saved.workspace);
+					if (chosen.workspace && chosen.workspace !== session.catalog.workspace) {
+						await openFolder(chosen.workspace);
 					}
 					return;
 				}
@@ -787,13 +809,14 @@ async function runCommand(text: string): Promise<void> {
 					conv.busy = true;
 					conv.activity = 'checking for an update…';
 					const status = await ipc.update();
-					// A found update is applied immediately (no separate confirm
-					// step) the app exits as part of that, so this message may
-					// never actually be seen before the window closes.
 					conv.addSystem(
-						status.available
-							? `Updating to ${status.latest}… Fella will close; reopen it once the installer finishes.`
-							: `You're up to date (${status.current}).`
+						isElectron()
+							? status.available
+								? `Updating to ${status.latest}… Fella will close; reopen it once the installer finishes.`
+								: `You're up to date (${status.current}).`
+							: status.available
+								? `Updating to ${status.latest}… Fella will close; reopen it once the installer finishes.`
+								: `You're up to date (${status.current}).`
 					);
 				} catch (e) {
 					conv.addSystem(`error: ${errMsg(e)}`);
@@ -820,7 +843,11 @@ async function runCommand(text: string): Promise<void> {
 
 /** Run one question in `conv` (its own tab). Bound to the tab, not "the active
  *  tab", so it keeps streaming there after the user switches away. */
-async function ask(question: string, conv: Conversation): Promise<void> {
+async function ask(
+	question: string,
+	conv: Conversation,
+	clarificationTurnId?: string
+): Promise<void> {
 	if (!requireEngine()) return;
 
 	const msg = conv.addAssistant('');
@@ -881,7 +908,17 @@ async function ask(question: string, conv: Conversation): Promise<void> {
 	};
 
 	try {
-		const answer = await ipc.ask(conv.id, question, onEvent, conv.model || undefined, conv.mode);
+		const answer = await ipc.ask(
+			conv.id,
+			question,
+			onEvent,
+			conv.model || undefined,
+			conv.mode,
+			conv.contextRefs,
+		clarificationTurnId
+			? { turn_id: clarificationTurnId, response: question }
+			: undefined
+		);
 		msg.answer = answer;
 		msg.text = answer.text;
 	} catch (e) {
@@ -903,6 +940,72 @@ async function ask(question: string, conv: Conversation): Promise<void> {
 		}
 	} finally {
 		clearInterval(tick);
+		msg.pending = false;
+		msg.plan = undefined;
+		conv.busy = false;
+		conv.activity = '';
+		conv.finishRun(failed);
+	}
+}
+
+/** Re-execute a persisted analytical turn against the current mount. The
+ * rerun is appended as a fresh assistant result so the original answer stays
+ * visible for comparison; the backend keeps the canonical lineage. */
+export async function rerunAnalysisTurn(message: Message): Promise<void> {
+	const turnId = message.answer?.turn_id;
+	if (!turnId || !isDesktop()) return;
+	const conv = session.activeChat;
+	if (conv.busy) {
+		conv.addSystem('Finish the current question before rerunning this answer.');
+		return;
+	}
+
+	const msg = conv.addAssistant('');
+	conv.startRun();
+	conv.busy = true;
+	conv.activity = 'rechecking the workspace…';
+	let failed = false;
+	const onEvent = (e: AskEvent) => {
+		switch (e.kind) {
+			case 'assistant_delta':
+				msg.text += e.text;
+				break;
+			case 'tool_start': {
+				if (!msg.plan && msg.text.trim()) msg.plan = msg.text.trim();
+				msg.text = '';
+				const note = typeof e.args?.note === 'string' ? e.args.note.trim() : '';
+				conv.beginRunStep(e.tool, note || undefined);
+				conv.activity = note ? `${note}…` : 'rechecking…';
+				break;
+			}
+			case 'tool_end':
+				conv.completeRunStep(e.item);
+				conv.activity = 'thinking…';
+				break;
+			case 'notice':
+				conv.activity = e.text;
+				break;
+			case 'answer_done':
+				msg.answer = e.answer;
+				msg.text = e.answer.text;
+				msg.plan = undefined;
+				break;
+		}
+	};
+
+	try {
+		const answer = await ipc.analysisTurnRerun(
+			turnId,
+			onEvent,
+			conv.model || undefined,
+			conv.mode
+		);
+		msg.answer = answer;
+		msg.text = answer.text;
+	} catch (e) {
+		failed = true;
+		msg.text = `error: ${errMsg(e)}`;
+	} finally {
 		msg.pending = false;
 		msg.plan = undefined;
 		conv.busy = false;
@@ -965,7 +1068,7 @@ function renderModelChoices(models: string[], current: string): string {
 }
 
 function requireEngine(): boolean {
-	if (isTauri()) return true;
+	if (isDesktop()) return true;
 	session.addSystem('Fella needs the desktop app to do that.');
 	return false;
 }
@@ -1060,7 +1163,7 @@ export function relativeAge(ms: number): string {
 	return `${days}d`;
 }
 
-/** The engine serialises errors as `{ kind, message }`; older / Tauri-internal
+/** The engine serialises errors as `{ kind, message }`; older internal
  *  errors are plain strings or `Error`s. Unwrap either. */
 export function errMsg(e: unknown): string {
 	if (e && typeof e === 'object' && typeof (e as Record<string, unknown>).message === 'string') {
@@ -1083,7 +1186,7 @@ function errKind(e: unknown): string {
 function lastQuestion(): string | null {
 	for (let i = session.messages.length - 1; i >= 0; i--) {
 		const m = session.messages[i];
-		if (m.role === 'user' && !m.text.trimStart().startsWith('/')) return m.text;
+		if (isActualQuestion(m)) return m.text;
 	}
 	return null;
 }

@@ -1,35 +1,81 @@
 {
 	"name": "fella",
 	"private": true,
-	"version": "0.2.0",
+	"version": "0.3.0",
+	"desktopName": "Fella",
+	"main": "electron/main.mjs",
+	"description": "Ask questions about your own files",
+	"author": "Avijit Kumar and contributors",
 	"license": "MIT",
 	"packageManager": "pnpm@11.24.0",
 	"type": "module",
 	"scripts": {
 		"dev": "vite dev",
 		"build": "vite build",
+		"electron:build": "pnpm build && cargo build --release --locked --manifest-path backend/Cargo.toml && node electron/prepare-engine.mjs",
+		"electron:dev": "pnpm electron:build && node electron/dev.mjs",
+		"electron:run": "pnpm electron:build && electron electron/main.mjs",
+		"electron:package": "pnpm electron:build && electron-builder --publish never",
+		"electron:package:dir": "pnpm electron:build && electron-builder --dir --publish never",
+		"release:check": "node scripts/check-release-version.mjs",
 		"preview": "vite preview",
+		"test:electron-bridge": "node --test scripts/test-electron-bridge.mjs",
+		"test:electron-update": "node --test scripts/test-electron-update.mjs",
+		"test:electron:packaged": "node scripts/test-packaged-electron.mjs",
+		"test:e2e:release:live": "playwright test --config=playwright.live.config.mjs",
+		"test:e2e:clarification:live": "pnpm test:e2e:release:live",
+		"test:e2e:release-ui": "playwright test --config=playwright.live.config.mjs --grep=G3",
+		"test:e2e:visual:live": "playwright test --config=playwright.live.config.mjs --grep=G7",
+		"test:e2e:charts:journey": "playwright test --config=playwright.live.config.mjs tests/e2e/charts.journey.live.spec.mjs",
+		"test:e2e:analysis-families:real": "playwright test --config=playwright.live.config.mjs tests/e2e/analysis-families.real.live.spec.mjs",
+		"test:chart-renderer": "node scripts/test-chart-renderer.mjs",
+		"test:release-artifacts": "node --test scripts/test-release-artifacts.mjs",
 		"prepare": "svelte-kit sync || echo ''",
+		"postinstall": "install-electron",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
-		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
-		"tauri": "tauri"
+		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch"
 	},
 	"devDependencies": {
+		"@playwright/test": "^1.63.0",
 		"@sveltejs/adapter-static": "^3.0.10",
 		"@sveltejs/kit": "^2.63.0",
 		"@sveltejs/vite-plugin-svelte": "^7.1.2",
-		"@tauri-apps/cli": "^2.11.5",
 		"@types/d3-scale": "^4.0.9",
 		"@types/d3-shape": "^3.2.0",
+		"electron": "44.5.1",
+		"electron-builder": "26.15.2",
 		"svelte": "^5.57.1",
 		"svelte-check": "^4.6.0",
 		"typescript": "^6.0.3",
 		"vite": "^8.3.0"
 	},
+	"build": {
+		"appId": "dev.fella.app",
+		"productName": "Fella",
+		"asar": true,
+		"artifactName": "Fella_${version}_${arch}.${ext}",
+		"files": ["build/**/*", "electron/**/*", "!electron/engine/**/*", "package.json"],
+		"extraResources": [{ "from": "electron/engine", "to": "fella-engine", "filter": ["fella-engine-*"] }],
+		"directories": { "output": "dist-electron" },
+		"mac": {
+			"icon": "electron/icons/icon.icns",
+			"target": [{ "target": "dmg", "arch": ["universal"] }, { "target": "zip", "arch": ["universal"] }],
+			"category": "public.app-category.productivity"
+		},
+		"win": {
+			"icon": "electron/icons/icon.ico",
+			"target": ["nsis", "msi"]
+		},
+		"linux": {
+			"icon": "electron/icons/icon.png",
+			"artifactName": "Fella_${version}_x64.${ext}",
+			"maintainer": "Avijit Kumar and contributors",
+			"syncDesktopName": true,
+			"target": ["AppImage", "deb"],
+			"category": "Utility"
+		}
+	},
 	"dependencies": {
-		"@tauri-apps/api": "^2.11.1",
-		"@tauri-apps/plugin-dialog": "^2.7.3",
-		"@tauri-apps/plugin-opener": "^2.5.5",
 		"d3-scale": "^4.0.2",
 		"d3-shape": "^3.2.0",
 		"marked": "^18.0.13"

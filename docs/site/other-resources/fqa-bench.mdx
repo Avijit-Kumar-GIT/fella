@@ -1,0 +1,62 @@
+---
+title: "Fella FolderQA Benchmark"
+description: "How Fella evaluates analytics over mounted folders."
+icon: "flask-conical"
+---
+
+# Fella FolderQA Benchmark
+
+FQA-Bench is Fella's benchmark for model-driven analytics over mounted folders. It evaluates the **complete product loop**—inspection, interpretation, analysis, clarification, verification, and communication—not just whether a model can produce a plausible number in one prompt.
+
+**FQA-Bench v0.1 is the first unreleased target-state specification.** Its tasks assume the full product roadmap is implemented. They can measure roadmap capabilities even while today's app is still building them; a current-build run is a diagnostic, not proof that the benchmark is wrong or that the target capability is already shipped.
+
+## What it measures
+
+The benchmark follows an analyst's work: inspect the available data, interpret and decompose the request, analyze and verify the result, then explain it or ask a focused clarification if an important detail is missing.
+
+Tasks are organized by capability. Topics, formats, and data conditions are cross-cutting tags.
+
+| Capability family | What a task tests |
+| --- | --- |
+| Inspect and select | Find relevant files, understand their contents, and avoid distractors |
+| Interpret and normalize | Map natural language to fields, dates, units, labels, and missing values |
+| Plan and decompose | Identify the analyses needed for a compound request |
+| Maintain conversation context | Carry the relevant prior measure, filters, or reference into a follow-up |
+| Compute and compare | Apply filters, aggregations, rankings, and derived calculations correctly |
+| Combine sources | Relate multiple files with the right keys, grain, and scope |
+| Verify and explain | Ground conclusions, communicate assumptions, and state limits |
+| Visualize | Match chart values, grouping, labels, units, and time buckets to the data |
+| Clarify and continue | Ask about material ambiguity and use the answer in the next turn |
+| Explain evidence limits | Identify the missing evidence, preserve useful partial results, and offer a next step |
+| Forecast and scenario | Estimate future outcomes from history or explicit assumptions, with method and uncertainty |
+| Tool proportionality | Choose suitable read-only work without needless calls or analysis |
+
+Analysis-family tags separately cover workspace discovery, semantic interpretation, normalization, descriptive, relational, statistical, temporal/predictive, data-quality, visualization, evidence, clarification/continuity, and proportionality/boundary tasks. Topics, formats, data conditions, and interaction shape are cross-cutting labels. Forecasts and scenarios are valid analyses, not an automatic refusal category. A missing source should be explained specifically; a material ambiguity should be clarified and then resolved in the same scored episode.
+
+One episode can test several capabilities, but gets one primary capability for diagnosis. FQA-Bench reports results by capability, analytical family, and topic with task counts. A single overall percentage can hide important weaknesses.
+
+For existing `agent_eval --json` results, a small report utility joins case IDs to the canonical tags and prints separate slices:
+
+```bash
+python3 bench/fqa-bench/report_slices.py \
+  --tasks bench/fqa-bench/suites/uci-bike-sharing/tasks.jsonl \
+  --results /path/to/run.json
+```
+
+## How tasks are built and scored
+
+An episode pairs a frozen workspace with a natural-language request or conversation. Its grading contract specifies the intended analytical result and acceptable behavior, rather than requiring exact prose or one internal query plan. Numeric results, table dimensions, and chart series are checked against independently verified values where possible. Ambiguity and response usefulness receive human review; any automated judge must be checked against those labels.
+
+Development tasks and blind evaluation tasks are split by workspace and data source, not by question. The benchmark records the model, harness configuration, code revision, fixture hash, grader, run validity, traces, cost, and latency so comparisons can be reproduced.
+
+## v0.1 scope and current coverage
+
+The v0.1 target spans whole-folder discovery, messy multi-format ingestion, semantic normalization, direct and compound analytics, statistics, forecasts and scenarios, richer chart types, provenance, clarification/resume, follow-ups, and safe read-only operation. Its product claim is filesystem analytics; model-only general knowledge and web research are measured separately, with hybrid local-plus-web tasks tracked as a distinct route.
+
+Current draft fixtures include a 13-episode UCI Bike Sharing public-data anchor, a controlled housing clarification-and-resume episode, and the older generated personal-data batteries as development diagnostics. The UCI anchor now includes one explicit held-out mean-baseline forecast and one what-if scenario; these are policy/contract coverage, not enough to claim forecast calibration. The clarification runner grades the assistant's clarification turn and resolved answer in one conversation. The existing generated profile still covers only one persona; UCI is one clean mobility domain; the clarification fixture is one protocol example. None alone—or all together—establishes broad representativeness or production readiness.
+
+Prior runs against retired forecast-refusal or implementation-route golds remain historical and are not rescored as v0.1 results. Gold criteria are frozen before candidate runs; suspected grader problems remain visible for review rather than silently being changed.
+
+FQA-Bench is not evidence that Fella has been validated on production customer workflows or every kind of personal data. Independent workspaces across topics, naturalistic messy-data coverage, richer chart contracts, independent review, and a blind holdout are still needed before representative claims. Because real personal analytics data is sensitive, the benchmark uses controlled synthetic workspaces and licensed public datasets and labels them honestly.
+
+See the [benchmark run guide](/other-resources/benchmarks) and the [methodology and data audit on GitHub](https://github.com/Avijit-Kumar-GIT/fella/tree/main/bench/fqa-bench).

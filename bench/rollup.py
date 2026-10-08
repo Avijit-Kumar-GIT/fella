@@ -63,6 +63,15 @@ def main():
                 "prompt_tok": r["prompt_tok"],
                 "completion_tok": r["completion_tok"],
                 "total_s": r["total_s"],
+                "verification_status": r.get("verification_status"),
+                "interpretation_status": r.get("interpretation_status"),
+                "plan_strategy": r.get("plan_strategy"),
+                "interpretation_correct_rate": r.get("interpretation_correct_rate"),
+                "plan_correct_rate": r.get("plan_correct_rate"),
+                "accepted_rate": r.get("accepted_rate"),
+                "unsafe_guess_rate": r.get("unsafe_guess_rate"),
+                "verification_catch_rate": r.get("verification_catch_rate"),
+                "replays": r.get("replays", []),
                 "err": r.get("err"),
             })
 

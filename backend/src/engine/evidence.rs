@@ -1,0 +1,504 @@
+//! Types that make an answer auditable. These serialize to match
+//! `src/lib/types.ts` (EvidenceItem / VerificationCheck / Answer / AskEvent).
+
+use serde::{Deserialize, Serialize};
+use serde_json::Value as Json;
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EvidenceItem {
+    /// Stable within one answer and ordered by the tool-call result presented
+    /// to the user. This is also the UI key for evidence and chart items.
+    pub id: String,
+    pub tool: String,
+    /// Catalogued files/sheets behind a SQL-backed result or traced Python input.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<EvidenceSource>,
+    pub args: Json,
+    /// One plain sentence the model wrote describing what this step does, for a
+    /// non-technical reader (e.g. "Add up spending by month"). Absent if the
+    /// model omitted it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sql: Option<String>,
+    pub result_summary: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub columns: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rows: Option<Vec<Vec<Json>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub row_count: Option<usize>,
+    /// Free-form text output (e.g. Python stdout/stderr).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output: Option<String>,
+    /// Structured chart data from a chart tool (e.g. `make_chart`) --
+    /// labels and numbers only, never markup. Rendered client-side
+    /// (`src/lib/components/Chart.svelte`), so there's no sanitizer
+    /// boundary here the way an HTML/SVG string would need.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chart: Option<crate::engine::analytics::chart::ChartData>,
+    /// A typed derived table published by Python or a forecast. Raw SQL
+    /// evidence continues to use `columns`/`rows`; keeping this separate
+    /// preserves the original input rows used to replay a computation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_table: Option<crate::engine::analytics::chart::TabularResult>,
+    /// Compact references to the SQL inputs read by a Python computation.
+    /// Row values stay private to the verifier; SQL, schema, and row counts
+    /// are enough to inspect the input and rerun it against the recorded
+    /// workspace revision without duplicating raw data in the transcript.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub python_input_trace: Option<PythonInputTrace>,
+    /// Internal SQL trace for a Python-backed computation. It is used by the
+    /// verifier to replay the guest's read-only inputs, but is intentionally
+    /// not serialized as a second evidence panel.
+    #[serde(skip_serializing)]
+    pub python_queries: Option<Vec<crate::engine::analytics::pyexec::PythonQueryTrace>>,
+    #[serde(skip_serializing)]
+    pub python_queries_complete: Option<bool>,
+    pub ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// Verifier disposition is distinct from a tool error: an execution may
+    /// have succeeded while its result is excluded from this answer, or only
+    /// one artifact produced from it (such as a chart) may be withheld.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verifier_disposition: Option<EvidenceDisposition>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum EvidenceDisposition {
+    Excluded { reason: String },
+    ArtifactWithheld { artifact: String, reason: String },
+}
+
+impl EvidenceItem {
+    /// Whether this result is eligible to support the current answer. Tool
+    /// failures and verifier-excluded results are both ineligible, but remain
+    /// distinguishable in the transcript.
+    pub fn is_accepted(&self) -> bool {
+        self.error.is_none()
+            && !matches!(
+                self.verifier_disposition,
+                Some(EvidenceDisposition::Excluded { .. })
+            )
+    }
+
+    pub fn artifact_is_withheld(&self, artifact: &str) -> bool {
+        matches!(
+            &self.verifier_disposition,
+            Some(EvidenceDisposition::ArtifactWithheld { artifact: withheld, .. })
+                if withheld == artifact
+        )
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PythonInputTrace {
+    pub complete: bool,
+    pub queries: Vec<PythonQueryReference>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PythonQueryReference {
+    pub sql: String,
+    pub columns: Vec<String>,
+    pub row_count: usize,
+    pub truncated: bool,
+}
+
+/// Observable inputs to one model-generated answer. Evidence IDs point into
+/// `Answer.evidence`; context sections say what was supplied to the model, not
+/// what its private reasoning relied on. Clarification lineage records the
+/// user's authority over an interpretation without copying their response.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AnswerProvenance {
+    #[serde(default)]
+    pub evidence_ids: Vec<String>,
+    #[serde(default)]
+    pub context_sections: Vec<crate::engine::context::ContextSection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clarification_of: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EvidenceSource {
+    pub table: String,
+    pub source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct WorkspaceSnapshot {
+    pub path: String,
+    pub revision: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VerificationStatus {
+    Verified,
+    NeedsReview,
+    InsufficientData,
+    Failed,
+}
+
+/// What the verifier is authorized to do about one finding. A failed check is
+/// not automatically a veto: its effect and target are explicit so callers
+/// can preserve unrelated claims and evidence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VerificationEffect {
+    Informational,
+    Repair,
+    ExcludeEvidence,
+    WithholdArtifact,
+    BlockAnswer,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VerificationFindingCode {
+    Advisory,
+    ReplayMatch,
+    ReplayMismatch,
+    UnsupportedClaim,
+    SemanticExecutionMismatch,
+    SemanticCaveat,
+    ChartMismatch,
+    ContractMismatch,
+    WorkspaceStale,
+    ModelDisagreement,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VerificationTarget {
+    Answer,
+    Claim,
+    Evidence,
+    Artifact,
+}
+
+/// Machine-readable authority, scope, and next action for an individual
+/// verification check. `target_id` identifies a claim/artifact/evidence item;
+/// `evidence_ids` identify the supporting or affected evidence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VerificationFinding {
+    pub code: VerificationFindingCode,
+    pub effect: VerificationEffect,
+    pub target: VerificationTarget,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guidance: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VerificationCheck {
+    pub label: String,
+    pub ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    /// Optional for compatibility with archived checks written before
+    /// verifier authority and scope were explicit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finding: Option<VerificationFinding>,
+}
+
+/// Token accounting for one `ask`, summed across every model turn. Populated
+/// only when the provider reports it (Ollama-compatible providers always; an OpenAI-compatible
+/// endpoint when it honours `stream_options.include_usage`). `None` otherwise.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Usage {
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+}
+
+impl Usage {
+    /// Add two optional readings; `Some` wins over `None` so a single turn that
+    /// reported usage isn't lost because another turn didn't.
+    pub fn merge(a: Option<Usage>, b: Option<Usage>) -> Option<Usage> {
+        match (a, b) {
+            (Some(x), Some(y)) => Some(Usage {
+                prompt_tokens: x.prompt_tokens.saturating_add(y.prompt_tokens),
+                completion_tokens: x.completion_tokens.saturating_add(y.completion_tokens),
+            }),
+            (x, y) => x.or(y),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Answer {
+    /// Analytical turn id. Older archived answers may not have one.
+    pub turn_id: String,
+    /// Stable runtime trace for this answer. Raw rows and SQL remain in
+    /// `evidence`; this is the shell-independent execution summary.
+    pub trace: crate::engine::runtime::ExecutionTrace,
+    /// The validated logical strategy used for the common analytical core,
+    /// when one was available. Older archived answers may not have one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plan: Option<crate::engine::runtime::LogicalPlan>,
+    /// The model's proposed semantic interpretation, when it chose to provide
+    /// one. It is not evidence and may still be only assumed or ambiguous.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contract: Option<crate::engine::runtime::AnalysisContract>,
+    /// Deterministic field/value grounding performed against the current
+    /// workspace revision, when the model supplied a semantic hypothesis.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grounding: Option<crate::engine::grounding::GroundingReport>,
+    pub text: String,
+    /// Typed links to the observed inputs behind this model-generated answer.
+    pub provenance: AnswerProvenance,
+    pub evidence: Vec<EvidenceItem>,
+    pub verification: Vec<VerificationCheck>,
+    pub status: VerificationStatus,
+    /// A semantic choice that must come from the user before Fella can safely
+    /// compute the requested result. It is separate from verification status:
+    /// no calculation has failed; the runtime is waiting for meaning.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clarification: Option<crate::engine::runtime::ClarificationRequest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<WorkspaceSnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage: Option<Usage>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn evidence() -> EvidenceItem {
+        EvidenceItem {
+            id: "evidence-1".into(),
+            tool: "run_sql".into(),
+            sources: Vec::new(),
+            args: serde_json::json!({}),
+            note: None,
+            sql: Some("SELECT 1".into()),
+            result_summary: "1 row".into(),
+            columns: Some(vec!["value".into()]),
+            rows: Some(vec![vec![serde_json::json!(1)]]),
+            row_count: Some(1),
+            output: None,
+            chart: None,
+            result_table: None,
+            python_input_trace: None,
+            python_queries: None,
+            python_queries_complete: None,
+            ms: 1,
+            error: None,
+            verifier_disposition: None,
+        }
+    }
+
+    #[test]
+    fn usage_merge_sums_and_tolerates_missing() {
+        let a = Usage {
+            prompt_tokens: 100,
+            completion_tokens: 10,
+        };
+        let b = Usage {
+            prompt_tokens: 40,
+            completion_tokens: 5,
+        };
+        assert_eq!(
+            Usage::merge(Some(a), Some(b)),
+            Some(Usage {
+                prompt_tokens: 140,
+                completion_tokens: 15
+            })
+        );
+        assert_eq!(Usage::merge(None, Some(b)), Some(b));
+        assert_eq!(Usage::merge(Some(a), None), Some(a));
+        assert_eq!(Usage::merge(None, None), None);
+    }
+
+    #[test]
+    fn verification_status_serializes_as_a_stable_code() {
+        assert_eq!(
+            serde_json::to_value(VerificationStatus::NeedsReview).unwrap(),
+            serde_json::json!("needs_review")
+        );
+    }
+
+    #[test]
+    fn verifier_disposition_is_separate_from_tool_execution() {
+        let mut item = evidence();
+        assert!(item.is_accepted());
+
+        item.verifier_disposition = Some(EvidenceDisposition::Excluded {
+            reason: "replay changed".into(),
+        });
+        assert!(!item.is_accepted());
+        assert_eq!(item.error, None, "a verifier decision is not a tool error");
+
+        item.verifier_disposition = Some(EvidenceDisposition::ArtifactWithheld {
+            artifact: "chart".into(),
+            reason: "chart values did not match".into(),
+        });
+        assert!(item.is_accepted(), "the underlying result remains usable");
+        assert!(item.artifact_is_withheld("chart"));
+        assert!(!item.artifact_is_withheld("table"));
+
+        item.error = Some("SQL execution failed".into());
+        assert!(
+            !item.is_accepted(),
+            "tool failures remain independently visible"
+        );
+    }
+
+    #[test]
+    fn older_verification_checks_deserialize_without_authority_metadata() {
+        let check: VerificationCheck = serde_json::from_value(serde_json::json!({
+            "label": "old stored check",
+            "ok": false
+        }))
+        .unwrap();
+        assert_eq!(check.finding, None);
+    }
+
+    #[test]
+    fn boxed_answer_done_keeps_the_frontend_wire_shape() {
+        let answer = Answer {
+            turn_id: "turn-1".into(),
+            trace: crate::engine::runtime::ExecutionTrace {
+                id: "trace-1".into(),
+                turn_id: "turn-1".into(),
+                workspace_revision: None,
+                mode: None,
+                model: None,
+                model_calls: Vec::new(),
+                elapsed_ms: None,
+                steps: Vec::new(),
+            },
+            plan: None,
+            contract: None,
+            grounding: None,
+            text: "done".into(),
+            provenance: AnswerProvenance {
+                evidence_ids: vec!["evidence-1".into()],
+                context_sections: vec![crate::engine::context::ContextSection::Conversation],
+                clarification_of: Some("turn-parent".into()),
+            },
+            evidence: Vec::new(),
+            verification: Vec::new(),
+            status: VerificationStatus::InsufficientData,
+            clarification: Some(crate::engine::runtime::ClarificationRequest {
+                question: "Include income or spending only?".into(),
+                options: vec!["Include income".into(), "Spending only".into()],
+                reason: Some("The selected population changes the total.".into()),
+            }),
+            workspace: None,
+            usage: None,
+        };
+        let wire = serde_json::to_value(AskEvent::AnswerDone {
+            answer: Box::new(answer),
+        })
+        .unwrap();
+
+        assert_eq!(wire["kind"], "answer_done");
+        assert_eq!(wire["answer"]["turn_id"], "turn-1");
+        assert_eq!(
+            wire["answer"]["provenance"]["evidence_ids"],
+            serde_json::json!(["evidence-1"])
+        );
+        assert_eq!(
+            wire["answer"]["provenance"]["context_sections"],
+            serde_json::json!(["conversation"])
+        );
+        assert_eq!(
+            wire["answer"]["provenance"]["clarification_of"],
+            "turn-parent"
+        );
+        assert_eq!(
+            wire["answer"]["clarification"]["options"][1],
+            "Spending only"
+        );
+        assert!(wire["answer"].is_object());
+    }
+
+    #[test]
+    fn serialized_python_provenance_keeps_queries_but_not_input_rows() {
+        let evidence = EvidenceItem {
+            id: "evidence-python".into(),
+            tool: "run_python".into(),
+            sources: Vec::new(),
+            args: serde_json::json!({"code": "print('summary')"}),
+            note: None,
+            sql: None,
+            result_summary: "python finished".into(),
+            columns: None,
+            rows: None,
+            row_count: None,
+            output: Some("summary".into()),
+            chart: None,
+            result_table: None,
+            python_input_trace: Some(PythonInputTrace {
+                complete: true,
+                queries: vec![PythonQueryReference {
+                    sql: "SELECT amount FROM ledger".into(),
+                    columns: vec!["amount".into()],
+                    row_count: 1,
+                    truncated: false,
+                }],
+            }),
+            python_queries: Some(vec![crate::engine::analytics::pyexec::PythonQueryTrace {
+                sql: "SELECT amount FROM ledger".into(),
+                columns: vec!["amount".into()],
+                rows: vec![vec![serde_json::json!("private-row-value")]],
+                row_count: 1,
+                truncated: false,
+            }]),
+            python_queries_complete: Some(true),
+            ms: 1,
+            error: None,
+            verifier_disposition: None,
+        };
+
+        let wire = serde_json::to_value(evidence).unwrap();
+        assert_eq!(wire["python_input_trace"]["complete"], true);
+        assert_eq!(
+            wire["python_input_trace"]["queries"][0]["sql"],
+            "SELECT amount FROM ledger"
+        );
+        assert!(wire.get("python_queries").is_none());
+        assert!(!wire.to_string().contains("private-row-value"));
+    }
+}
+
+/// Streamed to the UI over the Electron engine bridge during `ask`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AskEvent {
+    /// A lifecycle update streamed through the Electron sidecar bridge.
+    TurnState {
+        turn_id: String,
+        state: crate::engine::runtime::TurnState,
+    },
+    AssistantDelta {
+        text: String,
+    },
+    ToolStart {
+        tool: String,
+        args: Json,
+    },
+    // Boxed: `EvidenceItem` grew past clippy's large-enum-variant threshold
+    // once `chart` started carrying structured data (labels/series) inline
+    // instead of a single SVG string.
+    ToolEnd {
+        item: Box<EvidenceItem>,
+    },
+    /// A transient status line for the UI (e.g. "rate limited retrying in 3s…").
+    Notice {
+        text: String,
+    },
+    AnswerDone {
+        answer: Box<Answer>,
+    },
+}

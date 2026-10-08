@@ -1,0 +1,90 @@
+[package]
+name = "fella"
+version = "0.3.0"
+description = "Ask questions about your own files"
+authors = ["Avijit Kumar and contributors"]
+license = "MIT"
+edition = "2021"
+rust-version = "1.93"   # RustPython 0.5 (the embedded Python guest) needs 1.93
+
+[lib]
+name = "fella_lib"
+crate-type = ["rlib"]
+
+[features]
+# The shipped desktop app builds with these on; all are removable. The data
+# engine is SQLite; `--features duckdb` swaps in DuckDB (Parquet, big files).
+default = ["pdf", "xlsx"]
+pdf = ["dep:pdf-extract"]           # PDF text extraction (~28 crates)
+xlsx = ["dep:calamine"]             # Excel ingest (~8 crates)
+# Opt-in "power" build: swap the SQLite data engine for DuckDB adds Parquet,
+# faster queries on large files, ~30 MB, ~15 min cold build.
+duckdb = ["dep:duckdb"]
+# Dev-only: compiles `engine::testkit` (deterministic eval fixtures + goldens)
+# and enables the `agent_eval` harness example. Never in the shipped app.
+eval = []
+
+# The scored eval harness pulls `engine::testkit`, which is behind `eval`.
+# Without this, `cargo build --all-targets` (and CI clippy) would try to
+# compile the example unconditionally and fail.
+[[example]]
+name = "agent_eval"
+required-features = ["eval"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+log = "0.4"
+thiserror = "2"
+rusqlite = { version = "0.40.2", features = ["bundled", "window"] }
+csv = "1"
+walkdir = "2.5.0"
+regex = "1"
+reqwest = { version = "0.13.4", default-features = false, features = ["json", "stream", "rustls-no-provider"] }
+futures-util = { version = "0.3", default-features = false }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+ring = "0.17"
+async-trait = "0.1.92"
+nix = { version = "0.31.3", features = ["resource"] }
+tokio = { version = "1.53.1", features = ["rt", "rt-multi-thread", "time", "macros", "sync"] }
+getrandom = "0.4.3"
+wasmi = { version = "2.0.0", default-features = false, features = ["std", "validate", "auto-dispatch", "extra-checks"] }
+
+# optional
+duckdb = { version = "1.4.0", features = ["bundled"], optional = true }
+calamine = { version = "0.36", optional = true }
+pdf-extract = { version = "0.12.0", optional = true }
+
+[profile.dev]
+opt-level = 0
+
+# The bundled C engine is slow at opt 0; keep it optimised in dev builds.
+# `debug = false` drops the `-g` flag `cc` would otherwise pass: DuckDB's C++
+# amalgamation debug info is multi-GB per build and useless here (DuckDB is
+# CI-only; Rust code keeps its own symbols).
+[profile.dev.package.libsqlite3-sys]
+opt-level = 2
+debug = false
+[profile.dev.package.libduckdb-sys]
+opt-level = 2
+debug = false
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = "debuginfo"     # drop DWARF (~8 MB) but keep the symbol table so
+                       # cargo-bloat and backtraces still work. Was `false`;
+                       # the deb/AppImage bundler does not strip.
+
+# Not the default. `scripts/measure.sh --min` builds this to report a
+# "smallest possible" binary size.
+[profile.release-min]
+inherits = "release"
+opt-level = "z"
+lto = "fat"
+strip = true
+
+[dev-dependencies]
+tokio = { version = "1.53.1", features = ["macros", "rt", "rt-multi-thread"] }
