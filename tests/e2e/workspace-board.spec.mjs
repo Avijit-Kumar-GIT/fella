@@ -33,10 +33,34 @@ const folders = [
 	}))
 ];
 
-async function installDesktopMock(page) {
-	await page.addInitScript((fixtureFolders) => {
+async function installDesktopMock(page, { seedUnavailableConversation = false } = {}) {
+	await page.addInitScript(({ fixtureFolders, seedUnavailableConversation }) => {
 		const calls = [];
 		const archivedConversations = new Map();
+		const unavailablePath = 'C:\\FellaFixture\\unavailable-archive';
+		if (seedUnavailableConversation) {
+			const id = 'archived-unavailable-workspace';
+			const saved = {
+				id,
+				workspace: unavailablePath,
+				title: null,
+				messages: [
+					{ id: 'archived-user', role: 'user', text: 'Summarize the unavailable archive', ts: 1 },
+					{ id: 'archived-assistant', role: 'assistant', text: 'Saved result from this folder.', ts: 2 }
+				]
+			};
+			archivedConversations.set(id, {
+				saved,
+				summary: {
+					id,
+					saved_at_ms: 2,
+					workspace: unavailablePath,
+					preview: 'Summarize the unavailable archive',
+					message_count: 2,
+					title: null
+				}
+			});
+		}
 		let pickerIndex = 0;
 		const settings = {
 			provider: 'openai',
@@ -47,6 +71,7 @@ async function installDesktopMock(page) {
 			capabilities: { table_analysis: true, document_analysis: true, python_analysis: true, visualizations: true }
 		};
 		window.__workspaceAskCalls = calls;
+		window.__workspaceOpenCalls = [];
 		window.fella = {
 			invoke: async (command, args = {}) => {
 				switch (command) {
@@ -87,6 +112,7 @@ async function installDesktopMock(page) {
 				}
 			},
 			openWorkspace: async (path) => {
+				window.__workspaceOpenCalls.push(path);
 				const folder = fixtureFolders.find((entry) => entry.path === path);
 				if (!folder) throw new Error(`Unexpected fixture folder: ${path}`);
 				return folder.catalog;
@@ -110,53 +136,59 @@ async function installDesktopMock(page) {
 			windowAction: async () => {},
 			pathForFile: () => ''
 		};
-	}, folders);
+	}, { fixtureFolders: folders, seedUnavailableConversation });
 }
 
 async function dispatchWorkspaceDrag(page, type, workspacePath) {
 	await page.evaluate(({ eventType, path }) => {
-		const board = document.querySelector('[aria-label="Repository workspace board"]');
+		const board = document.querySelector('[aria-label="Workspace board"]');
 		const dataTransfer = new DataTransfer();
 		dataTransfer.setData('application/x-fella-workspace', path);
 		board.dispatchEvent(new DragEvent(eventType, { bubbles: true, dataTransfer }));
 	}, { eventType: type, path: workspacePath });
 }
 
-test('repository workspaces render independently, compose, and keep Ask scoped to the focused tile', async ({ page }) => {
+test('General and repository workspaces render independently, compose, and keep Ask scoped to the focused workspace', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
+	const general = page.getByRole('article', { name: 'General workspace' });
+	await expect(general).toBeVisible();
+	await expect(page.getByText('1 of 4 open')).toBeVisible();
 	await page.getByRole('button', { name: 'New conversation' }).click();
-	// Ask reuses the pristine welcome tab rather than creating duplicate blanks.
+	// Ask acts inside General; history selection is not titlebar-tab creation.
 	await expect(page.getByRole('tablist')).toHaveCount(0);
 	await page.getByRole('combobox', { name: 'Ask a question' }).fill('What is a useful way to compare trends?');
 	await page.getByRole('button', { name: 'Send' }).click();
 	await expect(page.getByText('Scoped to general.')).toBeVisible();
 	const unboundCall = await page.evaluate(() => window.__workspaceAskCalls.at(-1));
 	expect(unboundCall.workspaceId).toBeNull();
+	// A second conversation in General must not overwrite the first one's history.
+	await page.getByRole('button', { name: 'New conversation' }).click();
 
 	await page.getByRole('button', { name: 'Add repository' }).first().click();
-	await expect(page.getByRole('region', { name: 'Repository workspace board' })).toBeVisible();
-	await expect(page.getByRole('article', { name: 'northwind-sales repository workspace' })).toContainText('sales.csv');
-
-	await dispatchWorkspaceDrag(page, 'dragover', folders[1].path);
-	await expect(page.locator('.placement-preview .preview-slot')).toHaveCount(2);
-	await expect(page.locator('.placement-preview .preview-slot.target')).toHaveText('New workspace');
-	await dispatchWorkspaceDrag(page, 'drop', folders[1].path);
-	const sales = page.getByRole('article', { name: 'northwind-sales repository workspace' });
-	const health = page.getByRole('article', { name: 'health-journal repository workspace' });
-	await expect(sales).toContainText('sales.csv');
-	await expect(health).toContainText('sleep.csv');
+	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
+	await expect(page.getByRole('article', { name: 'northwind-sales workspace' })).toContainText('sales.csv');
 	await expect(page.getByText('2 of 4 open')).toBeVisible();
 
+	await dispatchWorkspaceDrag(page, 'dragover', folders[1].path);
+	// Two open workspaces plus the proposed placement produce three preview slots.
+	await expect(page.locator('.placement-preview .preview-slot')).toHaveCount(3);
+	await expect(page.locator('.placement-preview .preview-slot.target')).toHaveText('New workspace');
+	await dispatchWorkspaceDrag(page, 'drop', folders[1].path);
+	const sales = page.getByRole('article', { name: 'northwind-sales workspace' });
+	const health = page.getByRole('article', { name: 'health-journal workspace' });
+	await expect(sales).toContainText('sales.csv');
+	await expect(health).toContainText('sleep.csv');
+	await expect(page.getByText('3 of 4 open')).toBeVisible();
+
 	const arrangement = page.getByRole('combobox', { name: 'Workspace arrangement' });
-	await arrangement.selectOption('stacked');
+	await arrangement.selectOption('one-left-two-right');
 	const salesBox = await sales.boundingBox();
 	const healthBox = await health.boundingBox();
 	expect(salesBox).not.toBeNull();
 	expect(healthBox).not.toBeNull();
 	expect(Math.abs(salesBox.x - healthBox.x)).toBeLessThan(3);
 	expect(healthBox.y).toBeGreaterThan(salesBox.y);
-	await arrangement.selectOption('side-by-side');
 
 	await sales.locator('.tile-focus').click();
 	const salesComposer = page.getByRole('combobox', { name: 'Ask about northwind-sales' });
@@ -170,37 +202,31 @@ test('repository workspaces render independently, compose, and keep Ask scoped t
 	await page.getByRole('button', { name: 'Send' }).click();
 	await expect(health).toContainText('Scoped to C:\\FellaFixture\\health-journal.');
 
-	const salesTab = page.getByRole('tab', { name: /northwind-sales: Summarize sales/ });
-	const healthTab = page.getByRole('tab', { name: /health-journal: Summarize sleep/ });
-	await salesTab.click();
-	await expect(salesTab).toHaveAttribute('aria-selected', 'true');
-	await expect(sales.locator('.tile-focus')).toHaveAttribute('aria-pressed', 'true');
+	const salesFocus = sales.locator('.tile-focus');
+	const healthFocus = health.locator('.tile-focus');
+	await salesFocus.click();
+	await expect(salesFocus).toHaveAttribute('aria-pressed', 'true');
 	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
 
-	await page.keyboard.press('ArrowRight');
-	await expect(healthTab).toHaveAttribute('aria-selected', 'true');
-	await expect(healthTab).toBeFocused();
-	await expect(health.locator('.tile-focus')).toHaveAttribute('aria-pressed', 'true');
-	await page.getByRole('button', { name: /Close conversation: health-journal: Summarize sleep/ }).click();
-	await expect(salesTab).toHaveAttribute('aria-selected', 'true');
-	await expect(sales.locator('.tile-focus')).toHaveAttribute('aria-pressed', 'true');
+	await healthFocus.click();
+	await expect(healthFocus).toHaveAttribute('aria-pressed', 'true');
+	await salesFocus.click();
+	await expect(salesFocus).toHaveAttribute('aria-pressed', 'true');
 	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
 
-	// No repository is a history group, not a fourth workspace kind. Reopening
-	// its saved conversation must select its existing General tab, not fork a
-	// duplicate or inherit the currently focused repository.
-	const openTabsBeforeHistory = await page.getByRole('tab').count();
-	await expect(page.getByRole('button', { name: 'No repository' })).toBeVisible();
-	await page.getByRole('button', { name: 'No repository' }).click();
+	// General owns non-mounted conversations. Selecting its history switches
+	// the conversation in the existing General window.
+	await page.getByRole('button', { name: 'General', exact: true }).click();
 	const generalHistory = page.getByRole('button', {
 		name: 'Open conversation: What is a useful way to compare trends?'
 	});
 	await expect(generalHistory).toBeVisible();
 	await generalHistory.click();
-	const generalTab = page.getByRole('tab', { name: /General: What is a useful way/ });
-	await expect(generalTab).toHaveAttribute('aria-selected', 'true');
+	await expect(page.getByRole('article', { name: 'General workspace' })).toHaveCount(1);
+	await expect(general).toContainText('What is a useful way to compare trends?');
+	await expect(general.locator('.tile-focus')).toHaveAttribute('aria-pressed', 'true');
 	await expect(page.getByRole('combobox', { name: 'Ask a question' })).toBeVisible();
-	expect(await page.getByRole('tab').count()).toBe(openTabsBeforeHistory);
+	await expect(page.getByRole('tablist')).toHaveCount(0);
 
 	const calls = await page.evaluate(() => window.__workspaceAskCalls);
 	expect(calls.map((call) => call.workspaceId)).toEqual([
@@ -212,28 +238,49 @@ test('repository workspaces render independently, compose, and keep Ask scoped t
 test('the fifth workspace is refused without replacing a tile, and closing a tile frees a slot', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
+	await expect(page.getByRole('article', { name: 'General workspace' })).toBeVisible();
 	await page.getByRole('button', { name: 'Add repository' }).first().click();
-	for (let index = 1; index < 4; index += 1) {
+	for (let index = 1; index < 3; index += 1) {
 		await page.locator('.board-head').getByRole('button', { name: 'Add repository' }).click();
 	}
 	await expect(page.getByText('4 of 4 open')).toBeVisible();
-	const fifth = folders[4];
+	const fifth = folders[3];
 
 	await dispatchWorkspaceDrag(page, 'dragover', fifth.path);
-	await expect(page.getByText('All four spaces are in use. Close a workspace before adding another.')).toBeVisible();
+	await expect(page.getByText('All four workspaces are in use. Close one before adding another.')).toBeVisible();
 	const beforeDrop = await page.getByRole('article').count();
 	await dispatchWorkspaceDrag(page, 'drop', fifth.path);
-	await expect(page.getByText('All four workspace spaces are in use. Close a repository tile before opening another.')).toBeVisible();
+	await expect(page.getByText('All four workspace windows are in use. Close one before opening another.')).toBeVisible();
 	await expect(page.getByRole('article')).toHaveCount(beforeDrop);
 
-	await page.getByRole('button', { name: 'Close northwind-sales workspace' }).click();
+	await page.getByRole('button', { name: 'Close General workspace' }).click();
 	await expect(page.getByText('3 of 4 open')).toBeVisible();
-	await page.locator('.board-head').getByRole('button', { name: 'Add repository' }).click();
-	await expect(page.getByRole('article', { name: 'reading-notes repository workspace' })).toBeVisible();
+	await dispatchWorkspaceDrag(page, 'drop', fifth.path);
+	await expect(page.getByRole('article', { name: 'travel-plans workspace' })).toBeVisible();
 	await expect(page.getByText('4 of 4 open')).toBeVisible();
 
 	await page.reload();
 	await expect(page.getByText('4 of 4 open')).toBeVisible();
-	await expect(page.getByRole('article', { name: 'health-journal repository workspace' })).toBeVisible();
-	await expect(page.getByRole('article', { name: 'reading-notes repository workspace' })).toBeVisible();
+	await expect(page.getByRole('article', { name: 'health-journal workspace' })).toBeVisible();
+	await expect(page.getByRole('article', { name: 'travel-plans workspace' })).toBeVisible();
+});
+
+test('a history-only workspace retries its folder mount and keeps history available when it is still missing', async ({ page }) => {
+	await installDesktopMock(page, { seedUnavailableConversation: true });
+	await page.goto('/');
+	await page.getByRole('button', { name: 'Expand unavailable-archive conversations' }).click();
+	await page.getByRole('button', { name: 'Open conversation: Summarize the unavailable archive' }).click();
+	const workspace = page.getByRole('article', { name: 'unavailable-archive workspace' });
+	await expect(workspace).toContainText('History only');
+	await expect(page.getByRole('status', {
+		name: 'History only. The folder could not be opened; saved conversations remain available.'
+	})).toBeVisible();
+	const initialOpenCalls = await page.evaluate(() => window.__workspaceOpenCalls.length);
+	expect(initialOpenCalls).toBe(1);
+
+	await page.getByRole('button', { name: 'Try to reopen unavailable-archive' }).click();
+	await expect.poll(() => page.evaluate(() => window.__workspaceOpenCalls.length)).toBe(2);
+	await expect(page.getByText(/Its conversations remain in history only/)).toBeVisible();
+	await expect(workspace).toContainText('Saved result from this folder.');
+	await expect(page.getByRole('combobox', { name: 'Workspace unavailable: unavailable-archive' })).toBeDisabled();
 });

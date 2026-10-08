@@ -71,7 +71,7 @@
 		if (!mounted) await mountRepository();
 		if (!session.catalog.workspace || session.catalog.workspace !== project?.workspace) return;
 		session.setWorkspaceView('ask');
-		session.newTab();
+		session.newConversation(project?.workspace);
 	}
 
 	async function openSources(): Promise<void> {

@@ -443,7 +443,7 @@ export type ContextReference =
 	| { kind: 'column'; key: string; label: string; detail?: string };
 
 /** One observable step in a local question run. Kept in the conversation so
- * switching tabs never loses the small amount of run history shown in the UI. */
+ * switching workspaces never loses the small amount of run history shown in the UI. */
 export interface RunStep {
 	id: string;
 	label: string;

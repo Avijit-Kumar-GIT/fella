@@ -32,9 +32,9 @@
 
 	let currentProvider = $derived(session.settings?.provider ?? '');
 	let currentModel = $derived.by(() => {
-		const tabModel = session.activeChat?.model.trim() ?? '';
+		const conversationModel = session.activeChat?.model.trim() ?? '';
 		const defaultModel = session.settings?.model?.trim() ?? '';
-		return tabModel || defaultModel;
+		return conversationModel || defaultModel;
 	});
 	let provider = $derived(session.providers.find((item) => item.id === currentProvider));
 	let workspace = $derived(session.catalog.workspace);

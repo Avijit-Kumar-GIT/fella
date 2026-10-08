@@ -11,12 +11,12 @@
 	let draggingWorkspace = $state(false);
 
 	let tiles = $derived(
-		resolveWorkspaceTileLayout(session.workspaceWindows.map((workspace) => workspace.path), session.workspaceLayout)
+		resolveWorkspaceTileLayout(session.workspaceWindows.map((workspace) => workspace.id), session.workspaceLayout)
 	);
 	let previewTiles = $derived(
 		session.workspaceWindows.length < 4
 			? resolveWorkspaceTileLayout(
-					[...session.workspaceWindows.map((workspace) => workspace.path), '__fella-new-workspace__'],
+					[...session.workspaceWindows.map((workspace) => workspace.id), '__fella-new-workspace__'],
 					session.workspaceLayout
 				)
 			: []
@@ -24,6 +24,10 @@
 
 	function folderName(path: string): string {
 		return path.replace(/[/\\]+$/, '').split(/[/\\]/).at(-1) || path;
+	}
+
+	function workspaceName(workspace: NonNullable<ReturnType<typeof session.workspaceAt>>): string {
+		return workspace.kind === 'general' ? 'General' : folderName(workspace.path ?? 'Workspace');
 	}
 
 	function gridPlacement(rect: { x: number; y: number; width: number; height: number }): string {
@@ -68,16 +72,16 @@
 		else await openRepository(path);
 	}
 
-	function closeWorkspace(event: MouseEvent, path: string): void {
+	function closeWorkspace(event: MouseEvent, id: string): void {
 		event.stopPropagation();
-		void session.closeWorkspaceWindow(path);
+		void session.closeWorkspaceWindow(id);
 	}
 </script>
 
 <section
 	class="board"
 	class:dragging={draggingWorkspace}
-	aria-label="Repository workspace board"
+	aria-label="Workspace board"
 	ondragover={onDragOver}
 	ondragleave={onDragLeave}
 	ondrop={(event) => void onDrop(event)}
@@ -119,29 +123,29 @@
 			{#if workspace}
 				<article
 					class="workspace-tile"
-					class:focused={session.activeWorkspaceId === workspace.path}
+					class:focused={session.activeWorkspaceId === workspace.id}
 					style={gridPlacement(tile)}
-					aria-label={`${folderName(workspace.path)} repository workspace`}
+					aria-label={`${workspaceName(workspace)} workspace`}
 				>
 					<header class="tile-head">
 						<button
 							class="tile-focus"
 							type="button"
-							aria-pressed={session.activeWorkspaceId === workspace.path}
-							title={workspace.path}
-							onclick={() => session.focusWorkspace(workspace.path)}
+							aria-pressed={session.activeWorkspaceId === workspace.id}
+							title={workspace.path ?? 'Conversations that are not tied to a folder'}
+							onclick={() => session.focusWorkspace(workspace.id)}
 						>
-							<Icon name="repository" size={16} />
-							<span>{folderName(workspace.path)}</span>
-							<small>{workspace.catalog.sources.length} source{workspace.catalog.sources.length === 1 ? '' : 's'}</small>
+							<Icon name={workspace.kind === 'general' ? 'ask' : 'repository'} size={16} />
+							<span>{workspaceName(workspace)}</span>
+							<small>{workspace.historyOnly ? 'History only' : workspace.kind === 'general' ? 'No folder' : `${workspace.catalog.sources.length} source${workspace.catalog.sources.length === 1 ? '' : 's'}`}</small>
 						</button>
-						<button class="tile-close" type="button" aria-label={`Close ${folderName(workspace.path)} workspace`} title="Close workspace" onclick={(event) => closeWorkspace(event, workspace.path)}>
+						<button class="tile-close" type="button" aria-label={`Close ${workspaceName(workspace)} workspace`} title="Close workspace" onclick={(event) => closeWorkspace(event, workspace.id)}>
 							<Icon name="x" size={14} />
 						</button>
 					</header>
-					{#if session.activeWorkspaceId === workspace.path}
-						{#if workspace.catalog.sources.length}
-							<div class="active-sources" aria-label={`Sources in ${folderName(workspace.path)}`}>
+					{#if session.activeWorkspaceId === workspace.id}
+						{#if workspace.kind === 'repository' && workspace.catalog.sources.length}
+							<div class="active-sources" aria-label={`Sources in ${workspaceName(workspace)}`}>
 								<span class="sources-label">Sources</span>
 								{#each workspace.catalog.sources.slice(0, 3) as source (source.path)}
 									<span class="source-chip" title={source.path}><Icon name={source.view ? 'table' : 'file'} size={12} /><span>{source.name}</span></span>
@@ -154,8 +158,12 @@
 							{#if session.activeChat.companionPane}<CompanionPane />{/if}
 						</div>
 					{:else}
-						<button class="tile-overview" type="button" onclick={() => session.focusWorkspace(workspace.path)}>
-							{#if workspace.catalog.sources.length}
+						<button class="tile-overview" type="button" onclick={() => session.focusWorkspace(workspace.id)}>
+							{#if workspace.kind === 'general'}
+								<p class="overview-label">Conversations without a mounted folder</p>
+							{:else if workspace.historyOnly}
+								<p class="overview-label">Folder unavailable · saved history remains here</p>
+							{:else if workspace.catalog.sources.length}
 								<p class="overview-label">Sources in this workspace</p>
 								<ul>
 									{#each workspace.catalog.sources.slice(0, 4) as source (source.path)}
@@ -174,10 +182,13 @@
 		{/each}
 		{#if tiles.length === 0}
 			<div class="empty-board">
-			<Icon name="repository" size={20} />
-				<h1>Open a repository workspace</h1>
-				<p>Each folder keeps its own sources and conversation scope. Open up to four side by side.</p>
-			<button class="add" type="button" onclick={() => void openFolder()}><Icon name="plus" size={14} /> Add repository</button>
+				<Icon name="ask" size={20} />
+				<h1>Choose a workspace</h1>
+				<p>Start a conversation in General or open a folder to analyze its files.</p>
+				<div class="empty-actions">
+					<button class="add" type="button" onclick={() => session.openGeneralWorkspace()}><Icon name="ask" size={14} /> Open General</button>
+					<button class="add" type="button" onclick={() => void openFolder()}><Icon name="plus" size={14} /> Add repository</button>
+				</div>
 			</div>
 		{/if}
 	</div>
@@ -186,11 +197,11 @@
 			{#if previewTiles.length}
 				{#each previewTiles as preview (preview.id)}
 					<div class="preview-slot" class:target={preview.id === '__fella-new-workspace__'} style={gridPlacement(preview)}>
-						{preview.id === '__fella-new-workspace__' ? 'New workspace' : folderName(preview.id)}
+						{preview.id === '__fella-new-workspace__' ? 'New workspace' : workspaceName(session.workspaceAt(preview.id)!)}
 					</div>
 				{/each}
 			{:else}
-				<div class="full-notice">All four spaces are in use. Close a workspace before adding another.</div>
+				<div class="full-notice">All four workspaces are in use. Close one before adding another.</div>
 			{/if}
 		</div>
 	{/if}
@@ -357,6 +368,7 @@
 	.tile-overview li small, .more { flex: none; color: var(--text-faint); font-size: 11px; }
 	.focus-hint { display: flex; align-items: center; gap: 5px; margin-top: auto; padding-top: 12px; color: var(--brand); font-size: var(--fs-xs); }
 	.empty-board { max-width: 42ch; padding: 24px; text-align: center; color: var(--text-dim); }
+	.empty-actions { display: flex; justify-content: center; flex-wrap: wrap; gap: 8px; }
 	.empty-board > :global(svg) { color: var(--brand); }
 	.empty-board h1 { margin: 12px 0 7px; color: var(--text); font-size: var(--fs-lg); font-weight: 650; }
 	.empty-board p { margin: 0 0 15px; color: var(--text-faint); font-size: var(--fs-sm); line-height: 1.5; }

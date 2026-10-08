@@ -82,11 +82,11 @@
 		if (!scroller) return;
 		stick = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 40;
 	}
-	// Switching tabs shows a different transcript jump it to the latest and
-	// drop any stale expanded-evidence state from the previous tab. Entering
+	// Switching conversations shows a different transcript jump it to the latest and
+	// drop any stale expanded-evidence state from the previous one. Entering
 	// focus mode collapses evidence too, so it's just the answers.
 	$effect(() => {
-		session.active;
+		session.activeConversationIndex;
 		session.focus;
 		stick = true;
 		expanded = {};
@@ -257,7 +257,7 @@
 				{/if}
 			</div>
 		{/if}
-		{#key session.active}
+		{#key session.activeConversationIndex}
 			<div class="stream" in:fadeQuick>
 				<svelte:boundary>
 					{#each session.messages as m, i (m.id)}

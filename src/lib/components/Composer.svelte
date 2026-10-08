@@ -24,7 +24,7 @@ import ProviderIcon from './ProviderIcon.svelte';
 	let contextInput = $state<HTMLInputElement>();
 	let modelInput = $state<HTMLInputElement>();
 	let wrapEl = $state<HTMLDivElement>();
-	// ↑-recall history lives on the active conversation, so each tab has its own.
+	// ↑-recall history belongs to the active conversation.
 	let history = $derived(session.activeChat?.history ?? []);
 	let histIx = -1;
 
@@ -33,7 +33,8 @@ import ProviderIcon from './ProviderIcon.svelte';
 	);
 	let unavailableWorkspacePath = $derived.by(() => {
 		const path = session.activeChat?.workspaceScope;
-		return path && !session.workspaceAt(path)
+		const workspace = path ? session.workspaceAt(path) : null;
+		return path && (!workspace || workspace.historyOnly)
 			? path
 			: null;
 	});
@@ -486,7 +487,7 @@ import ProviderIcon from './ProviderIcon.svelte';
 						? `The original folder for this conversation is unavailable. Reopen ${unavailableWorkspaceName} to continue.`
 						: `This workspace is closed. Reopen ${unavailableWorkspaceName} to continue.`}
 				</span>
-				<button type="button" onclick={() => void openRepository(unavailableWorkspacePath!)}>Open workspace</button>
+				<button type="button" onclick={() => void openRepository(unavailableWorkspacePath!, { reportFailure: true })}>Open workspace</button>
 			</div>
 		{/if}
 		{#if !pendingInput}

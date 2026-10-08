@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { ipc, isDesktop } from '$lib/ipc';
 	import { errMsg, openConversation, openFolder, openRepository } from '$lib/commands';
-	import { session } from '$lib/session.svelte';
+	import { GENERAL_WORKSPACE_ID, session } from '$lib/session.svelte';
 	import type { ConversationSummary } from '$lib/types';
 	import Icon from './Icon.svelte';
 	import Logo from './Logo.svelte';
@@ -18,7 +18,6 @@
 		historyOnly: boolean;
 	};
 
-	const LOCAL_REPOSITORY = '__no-repository__';
 	let list = $state<ConversationSummary[]>([]);
 	let expandedRepos = $state<Record<string, boolean>>({});
 	let menuRepository = $state<string | null>(null);
@@ -52,11 +51,11 @@
 	}
 
 	function repositoryKey(path: string | null | undefined): string {
-		return path || LOCAL_REPOSITORY;
+		return path ?? GENERAL_WORKSPACE_ID;
 	}
 
 	function repositoryName(path: string | null): string {
-		if (!path) return 'No repository';
+		if (!path) return 'General';
 		return path.replace(/[/\\]+$/, '').replace(/^.*[/\\]/, '') || path;
 	}
 
@@ -76,17 +75,17 @@
 				add(item.workspace, item);
 			}
 		}
-		const current = session.catalog.workspace;
 		const order = new Map(session.repositoryPaths.map((path, index) => [path, index]));
+		add(null);
 		return [...grouped.values()]
 			.sort((a, b) => {
-				if (a.path === null) return 1;
-				if (b.path === null) return -1;
+				if (a.path === null) return -1;
+				if (b.path === null) return 1;
 				return (order.get(a.path) ?? Number.MAX_SAFE_INTEGER) - (order.get(b.path) ?? Number.MAX_SAFE_INTEGER);
 			})
 			.map((group) => {
 				const key = repositoryKey(group.path);
-				const active = group.path !== null && group.path === current;
+				const active = key === session.activeWorkspaceId;
 				return {
 					key,
 					path: group.path,
@@ -94,35 +93,45 @@
 					items: group.items,
 					current: active,
 					historyOnly: !!group.path && session.historyOnlyRepositoryPaths.includes(group.path),
-					expanded: expandedRepos[key] ?? active
+					expanded: expandedRepos[key] ?? (active || group.path === null)
 				};
 			});
 	});
 
 	function newChat(): void {
 		menuRepository = null;
-		session.setWorkspaceView('ask');
-		session.newTab(null);
+		if (!session.newConversation()) {
+			session.addSystem('All four workspace windows are in use. Close one before starting a conversation.');
+		}
 	}
 
 	async function selectRepository(repo: Repository): Promise<boolean> {
-		if (!repo.path) return false;
-		if (session.workspaceAt(repo.path)) return session.focusWorkspace(repo.path);
-		return openRepository(repo.path);
+		if (!repo.path) {
+			if (session.workspaceAt(GENERAL_WORKSPACE_ID)) return session.focusWorkspace(GENERAL_WORKSPACE_ID);
+			return session.openGeneralWorkspace();
+		}
+		const workspace = session.workspaceAt(repo.path);
+		if (workspace && !workspace.historyOnly) return session.focusWorkspace(workspace.id);
+		return openRepository(repo.path, { reportFailure: true });
 	}
 
 	async function toggleRepository(repo: Repository): Promise<void> {
 		menuRepository = null;
-		const opening = !repo.expanded;
-		expandedRepos = { ...expandedRepos, [repo.key]: opening };
-		if (!repo.path) return;
-		await selectRepository(repo);
+		if (!(await selectRepository(repo)) && !repo.path) {
+			session.addSystem('All four workspace windows are in use. Close one before opening this workspace.');
+		}
+	}
+
+	function toggleExpansion(repo: Repository, event: MouseEvent): void {
+		event.stopPropagation();
+		expandedRepos = { ...expandedRepos, [repo.key]: !repo.expanded };
 	}
 
 	async function openRepositoryWorkspace(repo: Repository): Promise<void> {
 		menuRepository = null;
 		expandedRepos = { ...expandedRepos, [repo.key]: true };
-		if (repo.path && !(await selectRepository(repo))) return;
+		if (!(await selectRepository(repo))) return;
+		if (!repo.path) return;
 		session.setWorkspacePane('sources');
 	}
 
@@ -133,7 +142,6 @@
 	}
 
 	async function addRepository(): Promise<void> {
-		session.setWorkspaceView('ask');
 		await openFolder();
 	}
 
@@ -183,9 +191,9 @@
 		try {
 			await ipc.deleteConversation(c.id);
 			list = list.filter((x) => x.id !== c.id);
-			// If this conversation is still open as a live tab, close it too --
+			// If this conversation is still live, remove it too --
 			// otherwise its very next settle re-archives it, undoing the delete.
-			session.removeTabWithoutArchiving(c.id);
+			session.removeConversationWithoutArchiving(c.id);
 		} catch (err) {
 			session.addSystem(`error: ${errMsg(err)}`);
 		}
@@ -263,7 +271,7 @@
 	</section>
 	<section class="repository-section" aria-labelledby="repositories-heading">
 		<div class="section-head">
-			<div class="nav-heading" id="repositories-heading">Repositories</div>
+			<div class="nav-heading" id="repositories-heading">Workspaces</div>
 			<button
 				class="section-action"
 				type="button"
@@ -283,16 +291,26 @@
 				>
 					<div class="repository-row-wrap">
 						<button
+							class="repository-disclosure"
+							type="button"
+							aria-label={`${repo.expanded ? 'Collapse' : 'Expand'} ${repo.name} conversations`}
+							aria-expanded={repo.expanded}
+							title={`${repo.expanded ? 'Collapse' : 'Expand'} conversations`}
+							onclick={(event) => toggleExpansion(repo, event)}
+						>
+							<span class="row-slot row-chevron"><Icon name="chevron-right" size={12} /></span>
+						</button>
+						<button
 							class="repository-row"
 							type="button"
 							draggable={!!repo.path}
-							title={repo.path ?? 'No repository'}
-							aria-expanded={repo.expanded}
+							title={repo.path ?? 'General · conversations without a mounted folder'}
+							aria-pressed={repo.current}
+							aria-label={repo.path ? `Open workspace ${repo.name}` : 'General'}
 							ondragstart={(event) => beginRepositoryDrag(event, repo)}
 							onclick={() => toggleRepository(repo)}
 						>
-							<span class="row-slot row-chevron"><Icon name="chevron-right" size={12} /></span>
-							<span class="row-slot row-icon"><Icon name="repository" size={16} /></span>
+							<span class="row-slot row-icon"><Icon name={repo.path ? 'repository' : 'ask'} size={16} /></span>
 							<span class="repository-copy">{repo.name}</span>
 						</button>
 						{#if repo.path}
@@ -544,16 +562,29 @@
 	.repository-row-wrap {
 		position: relative;
 	}
+	.repository-disclosure {
+		position: absolute;
+		z-index: 1;
+		top: 4px;
+		left: 4px;
+		display: grid;
+		place-items: center;
+		width: 18px;
+		height: 20px;
+		border-radius: var(--radius-chip);
+		color: var(--text-faint);
+	}
+	.repository-disclosure:hover { background: var(--sidebar-hover); color: var(--text); }
 	.repository-row {
 		position: relative;
 		width: 100%;
 		display: grid;
-		grid-template-columns: 16px 16px minmax(0, 1fr);
+		grid-template-columns: 16px minmax(0, 1fr);
 		align-items: center;
 		gap: 6px;
 		min-width: 0;
 		min-height: 28px;
-		padding: 4px 32px 4px var(--space-2);
+		padding: 4px 32px 4px 28px;
 		border-radius: var(--radius-sm);
 		color: var(--text-dim);
 		text-align: left;
@@ -583,7 +614,8 @@
 		transition: color var(--dur-fast) var(--ease);
 	}
 	.repository-row:hover .row-slot,
-	.repository-row:focus-visible .row-slot {
+	.repository-row:focus-visible .row-slot,
+	.repository-disclosure:focus-visible .row-slot {
 		color: var(--text-dim);
 	}
 	.repository.expanded .row-chevron :global(svg) {

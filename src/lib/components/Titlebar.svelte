@@ -1,16 +1,17 @@
 <script lang="ts">
-	import { firstActualQuestion, session } from '$lib/session.svelte';
+	import { firstActualQuestion, GENERAL_WORKSPACE_ID, session } from '$lib/session.svelte';
 	import { isDesktop, win } from '$lib/ipc';
 	import Icon from './Icon.svelte';
 	import Logo from './Logo.svelte';
-	import TabBar from './TabBar.svelte';
 
 	let { onpalette }: { onpalette: () => void } = $props();
 
-	let multiTab = $derived(session.tabs.length > 1);
-	let folder = $derived(
-		session.catalog.workspace?.replace(/[/\\]+$/, '').replace(/^.*[/\\]/, '') ?? ''
-	);
+	let folder = $derived.by(() => {
+		const workspace = session.activeWorkspace;
+		if (!workspace) return '';
+		if (workspace.id === GENERAL_WORKSPACE_ID) return 'General';
+		return workspace.path?.replace(/[/\\]+$/, '').replace(/^.*[/\\]/, '') ?? 'Workspace';
+	});
 
 	// --- the active conversation's own title: a custom name if renamed,
 	// otherwise folder + its first message, not just the raw message -- the
@@ -67,17 +68,13 @@
 		{#if folder}<span class="folder faint" title={session.catalog.workspace}>{folder}</span>{/if}
 		<span class="spacer"></span>
 	{:else}
-		{#if multiTab}
-			<TabBar />
-		{:else}
-			<span class="id">
-				{#if folder}
-					<span class="folder" title={displayTitle}>{displayTitle}</span>
-				{:else}
-					<span class="wordmark">Fella</span>
-				{/if}
-			</span>
-		{/if}
+		<span class="id">
+			{#if folder}
+				<span class="folder" title={displayTitle}>{displayTitle}</span>
+			{:else}
+				<span class="wordmark">Fella</span>
+			{/if}
+		</span>
 
 		<span class="spacer"></span>
 

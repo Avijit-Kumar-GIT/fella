@@ -101,10 +101,10 @@
 		};
 	});
 
-	function moveTab(delta: number): void {
-		if (session.tabs.length < 2) return;
-		const next = (session.active + delta + session.tabs.length) % session.tabs.length;
-		session.activateTab(next);
+	function startConversation(): void {
+		if (!session.newConversation()) {
+			session.addSystem('All four workspace windows are in use. Close one before starting a conversation.');
+		}
 		composer?.focus();
 	}
 
@@ -125,9 +125,7 @@
 		if (paletteOpen) return;
 		if (commandKey && e.shiftKey && key === 'a') {
 			e.preventDefault();
-			session.setWorkspaceView('ask');
-			session.newTab();
-			composer?.focus();
+			startConversation();
 		} else if (commandKey && e.shiftKey && key === 's') {
 			e.preventDefault();
 			session.setWorkspacePane('sources');
@@ -142,37 +140,13 @@
 			void openFolder();
 		} else if (commandKey && key === 'n') {
 			e.preventDefault();
-			session.setWorkspaceView('ask');
-			session.newTab();
-			composer?.focus();
-		} else if (commandKey && e.key === '[') {
-			e.preventDefault();
-			moveTab(-1);
-		} else if (commandKey && e.key === ']') {
-			e.preventDefault();
-			moveTab(1);
+			startConversation();
 		} else if (commandKey && key === 'l') {
 			e.preventDefault();
 			void session.clear();
 		} else if (commandKey && key === 'b') {
 			e.preventDefault();
 			session.toggleSidebar();
-		} else if (commandKey && key === 't') {
-			e.preventDefault();
-			session.setWorkspaceView('ask');
-			session.newTab();
-			composer?.focus();
-		} else if (commandKey && key === 'w') {
-			e.preventDefault();
-			void session.closeTab(session.active);
-			composer?.focus();
-		} else if (commandKey && e.key >= '1' && e.key <= '9') {
-			const i = Number(e.key) - 1;
-			if (i < session.tabs.length) {
-				e.preventDefault();
-				session.activateTab(i);
-				composer?.focus();
-			}
 		} else if (commandKey && e.shiftKey && key === 'f') {
 			e.preventDefault();
 			session.focus = !session.focus;
@@ -207,12 +181,11 @@
 
 	// Persist the conversation transcript as it changes.
 	$effect(() => {
-		session.tabs.length;
-		for (const t of session.tabs) {
-			if (t.kind !== 'chat') continue;
-			t.messages.length;
-			t.messages.at(-1)?.text;
-			t.messages.at(-1)?.pending;
+		session.conversations.length;
+		for (const conversation of session.conversations) {
+			conversation.messages.length;
+			conversation.messages.at(-1)?.text;
+			conversation.messages.at(-1)?.pending;
 		}
 		session.persist();
 	});
@@ -231,7 +204,7 @@
 			'/model',
 			'/auth',
 			'/history',
-			'/tab',
+			'/new',
 			'/focus',
 			'/context'
 		];

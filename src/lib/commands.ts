@@ -1,7 +1,7 @@
 // Slash-command parsing and input dispatch for the REPL.
 
 import { ipc, isDesktop, isElectron, pickFolder } from './ipc';
-import { Conversation, isActualQuestion, session } from './session.svelte';
+import { Conversation, GENERAL_WORKSPACE_ID, isActualQuestion, session } from './session.svelte';
 import type {
 	AskEvent,
 	ConversationSummary,
@@ -32,17 +32,16 @@ showing the exact steps it took. You never need these commands, but here they ar
   /context         open the workspace guide (fella.md)
   /update          check for a newer version of Fella and install it
   /mcp             experimental and inert; no connectors are enabled
-  /tab             open another conversation in a new tab
-  /focus           hide the tabs and header for a plain view (again to undo)
+  /new             start a new conversation in this workspace
+  /focus           hide navigation and the header for a plain view (again to undo)
   /clear           start this conversation over (the old one is saved)
   /history         list your saved conversations, /history <n> to reopen one
   /retry           ask the last question again
   /help            this list
 
 keys  Enter send · Shift+Enter new line · Ctrl/Cmd+K or Ctrl/Cmd+Shift+P search Fella
-      Ctrl/Cmd+N new conversation · Ctrl/Cmd+T new tab · Ctrl/Cmd+W close tab
-      Ctrl/Cmd+[ / ] previous or next tab · Ctrl/Cmd+1…9 switch tab
-      Ctrl/Cmd+Shift+A new conversation · Ctrl/Cmd+Shift+S Sources · Ctrl/Cmd+Shift+C Context
+      Ctrl/Cmd+N new conversation · Ctrl/Cmd+Shift+A new conversation
+      Ctrl/Cmd+Shift+S Sources · Ctrl/Cmd+Shift+C Context
       Ctrl/Cmd+, settings · Ctrl/Cmd+O open folder · Ctrl/Cmd+B sidebar · Ctrl/Cmd+L clear
       Ctrl/Cmd+Shift+F focus mode · Esc stop a run / hide details`;
 
@@ -60,7 +59,7 @@ export const SLASH_COMMANDS = [
 	'/context',
 	'/update',
 	'/mcp',
-	'/tab',
+	'/new',
 	'/focus',
 	'/clear',
 	'/history',
@@ -85,8 +84,8 @@ export const COMMAND_DESCRIPTIONS: Record<string, string> = {
 	'/context': 'open the workspace guide (fella.md)',
 	'/update': 'check for a newer version of Fella and install it',
 	'/mcp': 'experimental and inert; no connectors are enabled',
-	'/tab': 'open another conversation in a new tab',
-	'/focus': 'hide the tabs and header for a plain view',
+	'/new': 'start a new conversation in this workspace',
+	'/focus': 'hide navigation and the header for a plain view',
 	'/clear': 'start this conversation over (the old one is saved)',
 	'/history': 'list your saved conversations, /history <n> to reopen one',
 	'/retry': 'ask the last question again',
@@ -173,13 +172,13 @@ export async function openFolder(
 	}
 	if (!chosen) return false;
 	const alreadyOpen = session.workspaceWindows.find((workspace) => workspace.path === chosen);
-	if (alreadyOpen) {
-		session.focusWorkspace(alreadyOpen.path);
+	if (alreadyOpen && !alreadyOpen.historyOnly) {
+		session.focusWorkspace(alreadyOpen.id);
 		return true;
 	}
-	if (session.workspaceWindows.length >= 4) {
+	if (!alreadyOpen && session.workspaceWindows.length >= 4) {
 		if (options.reportError !== false) {
-			session.addSystem('All four workspace spaces are in use. Close a repository tile before opening another.');
+			session.addSystem('All four workspace windows are in use. Close one before opening another.');
 		}
 		return false;
 	}
@@ -195,7 +194,7 @@ export async function openFolder(
 			session.mountProgress = progress;
 		});
 		if (!session.registerWorkspace(catalog)) {
-			throw new Error('Fella can show up to four repository workspaces at a time. Close one before opening another.');
+			throw new Error('Fella can show up to four workspace windows at a time. Close one before opening another.');
 		}
 		session.addSystem(summarizeCatalog());
 		return true;
@@ -210,29 +209,51 @@ export async function openFolder(
 /** Reopen a remembered repository without writing a low-level mount error into chat.
  *  A failed attempt keeps the path as a history group and lets the sidebar explain
  *  that its conversations remain available. */
-export async function openRepository(path: string): Promise<boolean> {
+export async function openRepository(
+	path: string,
+	options: { reportFailure?: boolean } = {}
+): Promise<boolean> {
 	if (!path.trim()) return false;
 	if (session.mountProgress) return false;
 	const openedWorkspace = session.workspaceAt(path);
-	if (openedWorkspace) return session.focusWorkspace(openedWorkspace.path);
+	if (openedWorkspace && !openedWorkspace.historyOnly) return session.focusWorkspace(openedWorkspace.id);
 	if (!isDesktop()) return openFolder(path);
-	if (session.workspaceWindows.length >= 4) return openFolder(path);
+	if (!openedWorkspace && session.workspaceWindows.length >= 4) {
+		session.addSystem('All four workspace windows are in use. Close one before opening another.');
+		return false;
+	}
 	const opened = await openFolder(path, { reportError: false });
 	if (opened) session.markRepositoryAvailable(path);
-	else if (!session.mountProgress) session.markRepositoryHistoryOnly(path);
+	else if (!session.mountProgress) {
+		session.markRepositoryHistoryOnly(path);
+		if (options.reportFailure) {
+			const name = path.replace(/[/\\]+$/, '').split(/[/\\]/).pop() || 'workspace';
+			session.addSystem(
+				`The folder “${name}” isn’t available at its saved location. Its conversations remain in history only; reopen the folder to continue analysis.`
+			);
+		}
+	}
 	return opened;
 }
 
-/** On launch, restore the user's saved open repositories, layout, and focused
- *  workspace. Missing folders remain in repository history without replacing
- *  or inheriting another workspace's catalog. Called once from page onMount. */
+/** On launch, restore the user's saved workspaces, layout, and focused owner.
+ *  Missing folders remain available in history-only state without borrowing
+ *  another workspace's catalog. Called once from page onMount. */
 export async function loadStartupCatalog(): Promise<void> {
-	if (!isDesktop() || session.workspaceWindows.length) return;
+	if (!isDesktop()) return;
 	try {
 		const catalog = await ipc.getCatalog();
 		if (catalog.workspace) {
-			session.registerWorkspace(catalog);
-			session.setWorkspaceView('ask');
+			const existing = session.workspaceAt(catalog.workspace);
+			if (existing) {
+				existing.catalog = catalog;
+				existing.historyOnly = false;
+			} else if (
+				session.workspaceWindows.length + session.pendingWorkspacePaths.length < 4 ||
+				session.pendingWorkspacePaths.includes(catalog.workspace)
+			) {
+				session.registerWorkspace(catalog);
+			}
 		}
 	} catch {
 		/* no engine yet the welcome screen handles it */
@@ -247,8 +268,8 @@ export async function loadStartupCatalog(): Promise<void> {
 		if (session.workspaceWindows.length >= 4) break;
 		await openRepository(path);
 	}
-	const preferred = session.workspaceWindows.find((workspace) => workspace.path === session.savedActiveWorkspaceId);
-	if (preferred) session.focusWorkspace(preferred.path);
+	const preferred = session.workspaceAt(session.savedActiveWorkspaceId ?? '');
+	if (preferred) session.focusWorkspace(preferred.id);
 }
 
 /** Reopen the folder from the last session (the welcome screen's "Reopen"
@@ -257,26 +278,47 @@ export async function resumeLastFolder(): Promise<void> {
 	if (session.lastFolder) await openRepository(session.lastFolder);
 }
 
-/** Reopen an archived conversation and restore the folder it belongs to. */
-export async function openConversation(summary: ConversationSummary): Promise<void> {
+/** Select an archived conversation inside its owning workspace. */
+export async function openConversation(summary: ConversationSummary): Promise<boolean> {
 	if (!isDesktop()) {
 		session.addSystem('Saved conversations need the desktop app.');
-		return;
+		return false;
 	}
 	try {
-		session.setWorkspaceView('ask');
+		const workspaceId = summary.workspace ?? GENERAL_WORKSPACE_ID;
+		if (!session.workspaceAt(workspaceId)) {
+			if (workspaceId === GENERAL_WORKSPACE_ID) {
+				if (!session.openGeneralWorkspace()) {
+					session.addSystem('All four workspace windows are in use. Close one to open General.');
+					return false;
+				}
+			} else {
+				if (session.workspaceWindows.length >= 4) {
+					session.addSystem('All four workspace windows are in use. Close one to open this conversation’s workspace.');
+					return false;
+				}
+				if (!session.historyOnlyRepositoryPaths.includes(workspaceId)) {
+					await openRepository(workspaceId);
+				}
+				if (!session.workspaceAt(workspaceId) && session.historyOnlyRepositoryPaths.includes(workspaceId)) {
+					if (!session.openHistoryOnlyWorkspace(workspaceId, summary.id)) {
+						session.addSystem('All four workspace windows are in use. Close one to open this conversation’s history.');
+						return false;
+					}
+				}
+				if (!session.workspaceAt(workspaceId)) return false;
+			}
+		}
 		const raw = await ipc.conversationLoad(summary.id);
 		const saved: { workspace?: string | null; messages?: unknown; title?: string | null; companionPane?: unknown } =
 			JSON.parse(raw);
 		const messages = Array.isArray(saved.messages) ? (saved.messages as Message[]) : [];
-		session.loadArchivedTab(summary.id, messages, saved.title ?? null, summary.workspace, saved.companionPane);
-		if (summary.workspace) {
-			if (session.workspaceAt(summary.workspace)) session.focusWorkspace(summary.workspace, summary.id);
-			else if (!session.historyOnlyRepositoryPaths.includes(summary.workspace)) await openRepository(summary.workspace);
-			if (session.workspaceAt(summary.workspace)) session.focusWorkspace(summary.workspace, summary.id);
-		}
+		session.loadConversation(summary.id, messages, saved.title ?? null, summary.workspace, saved.companionPane);
+		session.focusWorkspace(workspaceId, summary.id);
+		return true;
 	} catch (e) {
 		session.addSystem(`error: ${errMsg(e)}`);
+		return false;
 	}
 }
 
@@ -292,9 +334,8 @@ export async function openContext(): Promise<void> {
 	session.setWorkspacePane('context');
 }
 
-/** Ask the engine to stop one tab's in-progress run (the active tab by
- *  default). The `ask` promise then resolves normally (a "Stopped." answer) and
- *  clears that tab's `busy`. */
+/** Stop one conversation's in-progress run. The `ask` promise then resolves
+ *  normally (a "Stopped." answer) and clears that conversation's busy state. */
 export async function stop(conv: Conversation | null = session.activeChat): Promise<void> {
 	if (!conv || !conv.busy || !isDesktop()) return;
 	conv.activity = 'stopping…';
@@ -350,7 +391,7 @@ export async function dispatch(raw: string, clarificationTurnId?: string): Promi
 
 	const conv = session.ensureChat();
 	const origin = conv.workspaceScope;
-	if (origin && !session.workspaceAt(origin)) {
+	if (origin && (!session.workspaceAt(origin) || session.workspaceAt(origin)?.historyOnly)) {
 		const name = origin.replace(/[/\\]+$/, '').split(/[/\\]/).pop() || 'workspace';
 		conv.addSystem(
 			session.historyOnlyRepositoryPaths.includes(origin)
@@ -359,7 +400,7 @@ export async function dispatch(raw: string, clarificationTurnId?: string): Promi
 		);
 		return;
 	}
-	conv.bindWorkspaceScope(session.activeWorkspaceId ?? null);
+	conv.bindWorkspaceScope(session.activeRepositoryPath);
 	conv.addUser(text);
 	await ask(text, conv, clarificationTurnId);
 }
@@ -459,15 +500,18 @@ async function runCommand(text: string): Promise<void> {
 			await session.clear();
 			return;
 
-		case '/tab':
-			session.newTab();
+		case '/new':
+		case '/tab': // legacy alias; conversation navigation is workspace-owned now
+			if (!session.newConversation()) {
+				session.addSystem('All four workspace windows are in use. Close one before starting a conversation.');
+			}
 			return;
 
 		case '/focus':
 			session.focus = !session.focus;
 			session.addSystem(
 				session.focus
-					? 'Focus mode on. The tabs and header are hidden. /focus again to bring them back.'
+					? 'Focus mode on. The app header is hidden. /focus again to bring it back.'
 					: 'Focus mode off.'
 			);
 			return;
@@ -491,7 +535,7 @@ async function runCommand(text: string): Promise<void> {
 			try {
 				const list = await ipc.conversationsList();
 				if (list.length === 0) {
-					session.addSystem("No past conversations yet — they're saved here once you /clear or close a tab.");
+					session.addSystem("No past conversations yet — they're saved here once you /clear or leave a conversation.");
 					return;
 				}
 				const n = arg ? Number.parseInt(arg, 10) : NaN;
@@ -501,20 +545,10 @@ async function runCommand(text: string): Promise<void> {
 						session.addSystem(`No conversation #${n}. Type /history to see the list again.`);
 						return;
 					}
-					const raw = await ipc.conversationLoad(chosen.id);
-					const saved: { workspace?: string | null; messages?: unknown; title?: string | null; companionPane?: unknown } =
-						JSON.parse(raw);
-					const messages = Array.isArray(saved.messages) ? (saved.messages as Message[]) : [];
-					session.loadArchivedTab(chosen.id, messages, saved.title ?? null, chosen.workspace, saved.companionPane);
-					session.addSystem(
-						`Reopened: "${chosen.title ?? chosen.preview}" (${dateLabel(chosen.saved_at_ms)}).`
-					);
-					// Restore the original folder when possible. If unavailable, keep
-					// the archived conversation and label its repository history-only.
-					if (chosen.workspace) {
-						if (session.workspaceAt(chosen.workspace)) session.focusWorkspace(chosen.workspace, chosen.id);
-						else await openRepository(chosen.workspace);
-						if (session.workspaceAt(chosen.workspace)) session.focusWorkspace(chosen.workspace, chosen.id);
+					if (await openConversation(chosen)) {
+						session.addSystem(
+							`Reopened: "${chosen.title ?? chosen.preview}" (${dateLabel(chosen.saved_at_ms)}).`
+						);
 					}
 					return;
 				}
@@ -538,8 +572,13 @@ async function runCommand(text: string): Promise<void> {
 
 		case '/files':
 			if (!requireEngine()) return;
+			if (!session.activeRepositoryPath) {
+				session.catalog = { workspace: null, sources: [] };
+				session.addSystem('General has no mounted folder. Open a repository workspace to inspect its files.');
+				return;
+			}
 			try {
-				session.catalog = await ipc.getCatalog(session.activeWorkspaceId ?? undefined);
+				session.catalog = await ipc.getCatalog(session.activeRepositoryPath);
 				session.addSystem(
 					session.catalog.workspace
 						? summarizeCatalog(true)
@@ -552,6 +591,10 @@ async function runCommand(text: string): Promise<void> {
 
 		case '/schema':
 			if (!requireEngine()) return;
+			if (!session.activeRepositoryPath) {
+				session.addSystem('General has no mounted folder. Open a repository workspace to inspect its schema.');
+				return;
+			}
 			if (!arg) {
 				const tables = session.catalog.sources.filter((s) => s.view).map((s) => s.name);
 				session.addSystem(
@@ -562,7 +605,7 @@ async function runCommand(text: string): Promise<void> {
 				return;
 			}
 			try {
-				const s = await ipc.describe(arg, session.activeWorkspaceId ?? undefined);
+				const s = await ipc.describe(arg, session.activeRepositoryPath);
 				const lines = (s.columns ?? []).map(
 					(c) =>
 						`  ${c.name.padEnd(24)} ${c.type.padEnd(12)} ` +
@@ -584,6 +627,10 @@ async function runCommand(text: string): Promise<void> {
 
 		case '/sql':
 			if (!requireEngine()) return;
+			if (!session.activeRepositoryPath) {
+				session.addSystem('General has no mounted folder. Open a repository workspace to run a folder query.');
+				return;
+			}
 			if (!arg) {
 				session.addSystem('Type a query after /sql, e.g. /sql select * from transactions limit 5');
 				return;
@@ -593,7 +640,7 @@ async function runCommand(text: string): Promise<void> {
 				try {
 					conv.busy = true;
 					conv.activity = 'running your query…';
-					const r = await ipc.runSqlDirect(arg, session.activeWorkspaceId ?? undefined);
+					const r = await ipc.runSqlDirect(arg, session.activeRepositoryPath);
 					conv.addSystem(renderTable(r.columns, r.rows, r.row_count, r.ms, r.truncated));
 				} catch (e) {
 					conv.addSystem(`error: ${errMsg(e)}`);
@@ -754,10 +801,10 @@ async function runCommand(text: string): Promise<void> {
 					const patch = parseModelArg(arg);
 					if (!patch) {
 						session.addSystem(
-							'To switch this tab’s model, type /model followed by a name from the list ' +
-								'(names have no spaces). Each tab can use a different model; they all share ' +
+							'To switch this conversation’s model, type /model followed by a name from the list ' +
+							'(names have no spaces). Conversations can use different models; they share ' +
 								'one provider.\n' +
-								'To change a setting: /model <field> <value> where field is provider, base_url, or embed_model.\n' +
+							'To change a setting: /model <field> <value> where field is provider, base_url, or embed_model.\n' +
 								'To connect to a new model service, use /login.'
 						);
 						return;
@@ -771,13 +818,13 @@ async function runCommand(text: string): Promise<void> {
 					}
 					if (Object.keys(rest).length > 0) {
 						session.settings = await ipc.setSettings(rest);
-						// A provider / endpoint change invalidates every tab's model.
+						// A provider / endpoint change invalidates per-conversation overrides.
 						if (rest.provider || rest.base_url)
-							for (const t of session.tabs) if (t.kind === 'chat') t.model = '';
+							for (const conversation of session.conversations) conversation.model = '';
 					}
 					if (newModel !== undefined) {
-						// Per-tab: only the focused conversation switches. Also remember
-						// it as the default a fresh tab / next launch starts from.
+						// Only the focused conversation switches. Also remember it as the
+						// default for future conversations.
 						session.ensureChat().model = newModel;
 						session.settings = await ipc.setSettings({ model: newModel });
 					}
@@ -787,18 +834,13 @@ async function runCommand(text: string): Promise<void> {
 				// Re-probe so the model list reflects the provider you're signed in to.
 				await refreshHealthSoon();
 				const prov = session.providers.find((p) => p.id === s.provider);
-				const tabModel = session.model;
-				const perTab =
-					session.tabs.length > 1
-						? `\n\n${session.tabs.length} tabs open each can /model its own; the provider is shared.`
-						: '';
+				const conversationModel = session.model;
 				session.addSystem(
 					`model service:   ${prov?.display ?? s.provider}\n` +
 						`address:         ${s.base_url}\n` +
-					`model:           ${tabModel}   (this tab)\n` +
+						`model:           ${conversationModel}   (this conversation)\n` +
 					`connected:       ${s.has_credential ? 'yes' : 'no'}` +
-					renderModelChoices(session.health?.models ?? [], tabModel) +
-					perTab
+						renderModelChoices(session.health?.models ?? [], conversationModel)
 				);
 			} catch (e) {
 				session.addSystem(`error: ${errMsg(e)}`);
@@ -807,12 +849,16 @@ async function runCommand(text: string): Promise<void> {
 
 		case '/reindex':
 			if (!requireEngine()) return;
+			if (!session.activeRepositoryPath) {
+				session.addSystem('General has no mounted folder to reindex. Open a repository workspace first.');
+				return;
+			}
 			{
 				const conv = session.ensureChat();
 				try {
 					conv.busy = true;
 					conv.activity = 'checking the folder…';
-					session.catalog = await ipc.reindex(session.activeWorkspaceId ?? undefined);
+					session.catalog = await ipc.reindex(session.activeRepositoryPath);
 					if (session.activeWorkspaceId) {
 						const workspace = session.workspaceAt(session.activeWorkspaceId);
 						if (workspace) workspace.catalog = session.catalog;
@@ -829,9 +875,13 @@ async function runCommand(text: string): Promise<void> {
 
 		case '/memory': {
 			if (!requireEngine()) return;
+			if (!session.activeRepositoryPath) {
+				session.addSystem('General has no folder-specific memory. Open a repository workspace to view its memory.');
+				return;
+			}
 			try {
 				if (arg.trim().toLowerCase() === 'forget') {
-					const had = await ipc.forgetMemory(session.activeWorkspaceId ?? undefined);
+					const had = await ipc.forgetMemory(session.activeRepositoryPath);
 					session.addSystem(
 						had
 							? 'Cleared what Fella had learned about this folder.'
@@ -839,7 +889,7 @@ async function runCommand(text: string): Promise<void> {
 					);
 					return;
 				}
-				const res = await ipc.memoryFile(session.activeWorkspaceId ?? undefined);
+				const res = await ipc.memoryFile(session.activeRepositoryPath);
 				if (!res) {
 					session.addSystem('Open a folder first, then /memory shows what Fella has learned about it.');
 					return;
@@ -902,8 +952,8 @@ async function runCommand(text: string): Promise<void> {
 		}
 	}
 
-/** Run one question in `conv` (its own tab). Bound to the tab, not "the active
- *  tab", so it keeps streaming there after the user switches away. */
+/** Run one question in its owning conversation, so it keeps streaming there
+ *  after the user focuses a different workspace. */
 async function ask(
 	question: string,
 	conv: Conversation,

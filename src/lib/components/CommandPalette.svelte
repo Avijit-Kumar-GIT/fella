@@ -191,7 +191,7 @@
 			case 'repository':
 				return `${result.count} conversation${result.count === 1 ? '' : 's'}`;
 			case 'conversation':
-				return result.item.workspace ? baseName(result.item.workspace) : 'No repository';
+				return result.item.workspace ? baseName(result.item.workspace) : 'General';
 			case 'source':
 				return result.source.path;
 			case 'project':
