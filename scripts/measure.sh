@@ -8,8 +8,8 @@
 #   ./scripts/measure.sh --build-cold + time a full clean rebuild (~20 min!)
 #   ./scripts/measure.sh --min        + build the size-minimised profile
 #
-# Everything printed is also appended, under a dated heading, to
-# docs/PERFORMANCE-LOG.md see docs/PERFORMANCE.md for what each number means.
+# To keep a local copy, pipe the output to a file; see docs/PERFORMANCE.md for
+# what each number means and how to compare measurements fairly.
 #
 # One-time setup (no sudo):  cargo install cargo-bloat hyperfine
 
@@ -143,7 +143,4 @@ main() {
 EOF
 }
 
-main 2>&1 | tee "$TMP/report.md"
-{ echo; cat "$TMP/report.md"; } >>"$ROOT/docs/PERFORMANCE-LOG.md"
-echo
-echo "→ appended to docs/PERFORMANCE-LOG.md"
+main

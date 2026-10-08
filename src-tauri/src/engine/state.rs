@@ -2522,9 +2522,9 @@ impl EngineState {
 
     /// After a completed turn: append an episode, and if it plainly corrects
     /// the previous answer, learn a vocabulary note from it. Deliberately
-    /// does not cache the query itself as a "recipe" (cut 2026-09-11, see
-    /// `docs/DECISIONS.md`) memory holds durable facts, not code snapshotted
-    /// against one verify pass. `prior_q` is the previous question in this
+    /// does not cache the query itself as a "recipe". Memory holds durable
+    /// facts, not code snapshotted against one verifier pass; see
+    /// `docs/ARCHITECTURE.md`. `prior_q` is the previous question in this
     /// conversation, if any.
     async fn record_turn_memory(&self, prior_q: Option<&str>, question: &str, answer: &Answer) {
         if !memory::writes_enabled() {
@@ -2638,15 +2638,13 @@ impl EngineState {
     }
 
     /// Decide whether a new correction updates an existing vocabulary note,
-    /// is genuinely new, or just restates one already there -- "supersede,
-    /// don't append" (`docs/ANALYTICAL-COMPUTER-ROADMAP.md`, milestone M5),
-    /// done the way ChatGPT's `bio`
-    /// tool and Mem0/Zep do it: the model judges against the small existing
-    /// list, not a keyword/position heuristic (which can't tell two
-    /// rewordings of the same correction apart see `docs/DECISIONS.md`
-    /// 2026-09-12). Uses whichever model is currently active no override so
-    /// the memory file stays legible to any model that later reads it, and
-    /// costs nothing when there's nothing yet to reconcile against.
+    /// is genuinely new, or restates one already there: supersede rather than
+    /// append. The model judges against the small existing list instead of a
+    /// keyword/position heuristic, which cannot reliably match reworded
+    /// corrections. Uses whichever model is currently active, with no
+    /// override, so the memory file stays legible to any model that later
+    /// reads it, and costs nothing when there's nothing yet to reconcile
+    /// against.
     async fn reconcile_vocab_key(
         &self,
         correction: &str,

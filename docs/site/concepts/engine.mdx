@@ -118,7 +118,11 @@ SQLite materializes at most 1,000 rows by default and interrupts queries after 1
 
 SQL and Python are peer analysis routes, not a primary path plus a fallback. SQL is suited to relational access and shaping—filters, joins, grouping, and simple aggregates. Python is often clearer for statistical or multi-stage numerical work such as medians, quantiles, dispersion, correlation, and regression. Fella's model selects the route that fits the question, and can combine SQL-selected inputs with Python computation. For workspace calculations, Python retrieves data through its bounded `sql(query)` bridge rather than embedding copied rows in generated code. The embedded RustPython/WASM guest includes Python built-ins and Fella's analytics helpers, but not pandas, NumPy, SciPy, or a package installer. Helper contracts are explicit: `pearsonr(x, y)` returns a scalar coefficient (not a p-value pair), and `linregress(x, y)` returns `(slope, intercept, r)`. A coefficient alone does not establish statistical significance. Python code, inputs, and output are available in Analysis Details.
 
-Charts are structured bar or line data derived from a bounded read-only SQL result, validated in Rust, and rendered by the client; the model supplies the query, not the chart's numeric arrays or executable markup.
+Charts are structured data in the supported families: bar, line, area, stacked
+area, pie/donut, scatter, histogram, box plot, heatmap, and forecast. Inputs are
+bounded analytical results validated in Rust and rendered by the client; the
+model does not emit executable markup. See the [chart examples](/examples) for
+the display and data-shape details.
 
 ### Ingestion and normalization
 

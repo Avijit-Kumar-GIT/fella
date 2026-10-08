@@ -11,15 +11,12 @@
 //! into a generated `## Semantic facts` section with their provenance visible.
 //!
 //! Deliberately stores only durable *facts* (preferences, vocabulary, table
-//! notes) never a cached *query*. An earlier version also cached
-//! `question -> SQL` "recipes" reused whenever a later question looked
-//! similar enough. Cut (2026-09-11, see `docs/DECISIONS.md`): a recipe is
-//! code, not a fact, and it's recorded the moment `verify` happens to pass —
-//! so a query that only *looked* right (or that a since-strengthened check
-//! would now catch) got frozen in and replayed verbatim, which is a stronger
-//! claim than "this fact holds," and it discourages the fresh reasoning that
-//! would otherwise re-derive the right query for a subtly different
-//! question. A `## Recipes` section from an older memory file is silently
+//! notes), never a cached *query*. Earlier versions cached `question -> SQL`
+//! "recipes" for questions that looked similar. Those recipes were removed;
+//! see `docs/ARCHITECTURE.md` for the current context and memory contract.
+//! A recipe is executable code, not a durable fact: replaying it can freeze
+//! an interpretation that only looked right or no longer passes stronger
+//! checks. A `## Recipes` section from an older memory file is silently
 //! dropped on next load.
 //!
 //! `FELLA_MEMORY=0` turns the whole thing off (read and write).

@@ -1,405 +1,168 @@
-# Fella Architecture
+# Fella architecture
 
-This document is the maintained reference for how Fella is built. Update it in the same
-commit as any change that alters a design decision here.
+This is the current implementation reference for the Electron desktop app and
+its Rust analytics runtime. Update it when a code change alters a boundary or
+data flow. `src-tauri/` is the Rust crate's retained repository path; the app
+does not use Tauri.
 
-> **Current lean personal release:** the compiled product has fixed local tools,
-> a Workspace surface for sources and `fella.md`, Ask, History, Search, and
-> Settings. The extension, pack, MCP client, augment, and standalone analysis
-> sections below are historical design notes unless explicitly marked current.
-> General answers without a mounted folder are supported. Visible web research
-> remains future work in [`PRODUCT-ROADMAP.md`](PRODUCT-ROADMAP.md).
+## System at a glance
 
-## What Fella is
-
-A local-first desktop application with an opinionated analytical harness.
-Fella's product is the conversation around a question: model knowledge for
-stable general explanations, visible web research when freshness or sources
-matter, and local analysis when an answer depends on mounted files. The folder
-organizes and grounds local-data work; it is not a prerequisite for every
-question. General questions do not require a mounted folder. The current
-release has no web-research route; web-backed answers remain a separate,
-visible capability to build.
-
-For mounted-data questions, the model drives interpretation and tool choice
-inside a bounded read-only harness. SQL/Python perform computations against
-local data; source passages support document claims; execution and provenance
-are retained for inspection. A deterministic replay supports a computation,
-but it does not by itself prove that the interpretation matched the user's
-intent.
-
-**Read-only agent.** The agent reads the folder; it never writes, moves or deletes
-anything, and it produces answers, not files. The read-only boundary is the safety
-story, and it is structural: there is no write tool to disable. The user may
-edit the explicit `fella.md` context file from the Workspace surface; that is a
-user action and never an agent write.
-
-The product commitments are in [`PRINCIPLES.md`](PRINCIPLES.md) and
-[`NON-GOALS.md`](NON-GOALS.md). The model-directed runtime, implementation
-status, and remaining quality gates are tracked in
-[`ANALYTICAL-COMPUTER-ROADMAP.md`](ANALYTICAL-COMPUTER-ROADMAP.md); measured
-performance history is in [`PERFORMANCE-LOG.md`](PERFORMANCE-LOG.md).
-The user-facing capability backlog and routing/privacy decision are tracked in
-[`PRODUCT-ROADMAP.md`](PRODUCT-ROADMAP.md) and [`DECISIONS.md`](DECISIONS.md).
-
-## Stack
-
-| Layer | Choice | Why |
-|-------|--------|-----|
-| Shell | Electron 44.5.1 | Cross-platform desktop shell with a sandboxed renderer and a narrow preload bridge |
-| UI | SvelteKit + Svelte 5 + TS, `adapter-static`, SSR off | Static SPA, no server; compiles small |
-| Data engine | **SQLite** (`rusqlite`, `bundled` + `window`) behind the `DataEngine` trait | Already bundled (+0 crates); covers personal-analytics SQL. DuckDB's size and build-time trade-offs are recorded in `PERFORMANCE.md` and `PERFORMANCE-LOG.md`. |
-| Data engine (opt-in) | DuckDB (`--features duckdb`) | Parquet, faster on large files, `SUMMARIZE`. Adds ~30 MB. |
-| App state | SQLite (`rusqlite`) | Settings, source cache, recent workspaces, and conversation metadata |
-| CSV/JSON import | `csv` crate + `serde_json`, own type sniffer (`data/sqlite.rs`) | DuckDB's `read_csv_auto` replacement; reuses the Excel type-inference idea |
-| HTTP | `reqwest` (rustls, `ring` provider, no HTTP/2) | Talk to hosted Ollama-wire / OpenAI-compatible APIs; `ring` avoids the aws-lc cmake/NASM build |
-| Excel (`--features xlsx`, default on) | `calamine` → typed rows → `DataEngine::add_rows` | Pure Rust; ~8 crates |
-| PDF (`--features pdf`, default on) | `pdf-extract` | Pure Rust text extraction (scanned/OCR out of scope); ~28 crates |
-
-## Desktop shell and Rust sidecar
-
-Electron is the only maintained desktop shell. Its main process owns windows,
-native dialogs, external links, and updates. A context-isolated, sandboxed
-preload exposes a small typed API to Svelte; the renderer has no Node
-integration. The Rust engine runs as a child sidecar and communicates through
-correlated newline-delimited JSON requests and streamed events. See
-[`ELECTRON.md`](ELECTRON.md) for development and packaging details.
-
-### Cargo features
-
+```text
+Svelte renderer
+   │ typed, allowlisted API
+   ▼
+Electron preload ── Electron main
+                         │ dialogs, window, updater
+                         │ correlated JSON-lines requests/events
+                         ▼
+                   Rust sidecar
+                    ├─ model-directed conversation runtime
+                    ├─ local workspace catalog and context
+                    ├─ read-only SQL / sandboxed Python / document tools
+                    ├─ evidence, verification, and turn persistence
+                    └─ selected model provider (network)
 ```
-default = ["pdf", "xlsx"]         # the shipped build (MSRV 1.93, for RustPython 0.5)
---no-default-features              # CSV/JSON/SQL + agent only; no PDF/Excel
---features duckdb                  # swap SQLite → DuckDB (CI-only; OOMs a laptop)
-```
-
-Frontend config note: this SvelteKit version carries adapter config in
-`vite.config.ts` (via the `sveltekit()` plugin options), not a separate
-`svelte.config.js`.
-
-## Process & module layout
-
-```
-src/                         SvelteKit frontend presentation only
-  routes/+layout.ts          export const ssr = false; prerender = true
-  routes/+layout.svelte      global CSS, key handling
-  routes/+page.svelte        the single REPL view
-  lib/ipc.ts                 typed wrappers over the Electron preload bridge
-  lib/components/            Transcript, Message, EvidenceBlock, Composer, Sidebar,
-                             Titlebar, Workspace, Sources, Context, Settings
-
-src-tauri/src/               Rust engine crate (legacy directory name)
-  main.rs                    sidecar executable entry point
-  lib.rs                     engine modules and JSON-lines process entry
-  stdio.rs                   request dispatch and streamed event protocol
-  engine/
-    state.rs                 EngineState { data: Mutex<Box<dyn DataEngine>>,
-                                           sqlite: Mutex<Connection>, inner: Mutex<Inner>,
-                                           http: reqwest::Client, secrets: Secrets,
-                                           data_dir, cancel: HashMap<String, Arc<AtomicBool>>,
-                                           doc_cache: bounded PDF cache }
-    catalog.rs               walk workspace (depth ≤ 8), classify, slugify names, dedupe;
-                             honour .fellaignore; skip a root fella.md
-    analytics/                the engine: deterministic compute + verification, no LLM
-                             calls, no shell IPC, no conversation state. The one seam
-                             back into the rest of the app is `AnalyticsSource`
-                             (`catalog()` + `run_sql()`); `EngineState` implements it.
-      mod.rs                 AnalyticsSource trait + module doc (the four-sentence
-                             contract this module is held to)
-      data/
-        mod.rs                 DataEngine trait + shared read-only guard, quote_ident
-        sqlite.rs              default engine: type sniff → CREATE TABLE + bulk INSERT
-        duck.rs                #[cfg(feature="duckdb")] engine: read_*_auto views
-      pyexec.rs               Wasmi host for the embedded RustPython/WASM guest; fresh Store
-                             per call, Store-owned guest allocation lifetime, resumable
-                             fuel slices, cancellation, bounded output/memory/stack, SQL bridge, and
-                             pearsonr/linregress helpers
-      chart.rs                VisualizationSpec/Series/ChartKind + validate() (flat/degenerate
-                             data refused before it reaches the UI; `auto` resolves to a
-                             deterministic bar/line renderer from the query shape)
-      verify.rs               deterministic checks against `&dyn AnalyticsSource`
-                             (replay, contract execution, numeric support, result
-                             invariants, and chart/source reconciliation); findings
-                             carry explicit effect and target
-    ingest/
-      docs.rs                pdf-extract / plain text → extract() (no chunking)
-      excel.rs               calamine → typed rows → DataEngine::add_rows
-    llm.rs                   LlmClient (one struct; branches on the provider `wire`)
-    provider.rs              PROVIDERS registry (one row per provider)
-    secrets.rs               Secrets → auth.json (0600); provider API keys
-    sqlite.rs                fella.db: settings, sources cache, recent_workspaces
-    agent.rs                 the interactive harness: model-directed reasoning loop + system prompt
-                             (`PromptProfile`); owns no compute of its own and calls
-                             into `analytics::*`; hypotheses remain advisory, and a pending
-                             clarification keeps candidate read-only computations available
-    evidence.rs              EvidenceItem / Answer / AskEvent types
-    tools.rs                 Tool trait, Registry, JSON-Schema export; the 7 built-ins
-    memory.rs                per-folder learned notes (memory.md); FELLA_MEMORY
-```
-
-**Harness vs. engine, explicitly:** `agent.rs` is the interactive harness — it
-owns the model-directed reasoning loop, system prompt, tool orchestration, and
-turn trace for a product answer, and has no compute of its own. The model may
-choose inspection, a semantic hypothesis, direct SQL/Python/document/chart
-tools, a revision of its plan, or a typed clarification. It records non-literal
-semantic mappings and material scope choices in the hypothesis contract, while
-simple exact lookups can use direct tools. A hypothesis remains advisory; a
-pending clarification does not disable safe read-only candidate or partial
-calculations, but the unresolved choice is not presented as settled. When one model response
-requests both workspace inspection and a calculation, the controller runs the
-inspection first and returns the calculation as deferred; the model must see
-the observation before submitting a fresh calculation. This is a phase
-boundary, not a domain-specific interpretation rule. `engine/analytics/` is the engine —
-deterministic SQL/stats/chart/verification logic with no knowledge that a model
-or a loop exists. The engine supplies safe consequences for the harness, never
-the reverse; `AnalyticsSource` is the one seam between them. See
-`docs/PRINCIPLES.md` and `docs/NON-GOALS.md` for the philosophy and scope
-behind that split.
 
 ![Fella analytical turn architecture](fella-harness-architecture.svg)
 
-## Data layer
+| Layer | Responsibility | Main code |
+| --- | --- | --- |
+| Svelte UI | Conversation, clarification controls, charts, evidence details, settings, and workspace views | `src/routes/`, `src/lib/` |
+| Electron | Window and native dialogs, safe external links, updater, typed preload API, and Rust process lifecycle | `electron/main.mjs`, `electron/preload.cjs`, `electron/engine.mjs` |
+| Bridge | Correlated newline-delimited requests and streamed events between Electron and Rust | `src-tauri/src/stdio.rs`, `src/lib/ipc.ts` |
+| Harness | Model calls, context assembly, tool orchestration, clarification/resume, and canonical turn trace | `src-tauri/src/engine/agent.rs`, `runtime.rs`, `context.rs` |
+| Workspace model | Catalog, revision, source profiles, semantic hints, and grounding | `catalog.rs`, `workspace_model.rs`, `grounding.rs` |
+| Analytical engine | Ingestion, SQL, Python execution, charts, and verification; does not call the model | `engine/analytics/`, `engine/ingest/` |
+| Local persistence | Settings, provider credentials, source metadata, conversation and analysis records, and scoped memory | `sqlite.rs`, `secrets.rs`, `analysis_store.rs`, `memory.rs`, `semantic_memory.rs` |
 
-`engine/analytics/data/` a `DataEngine` trait with a **SQLite** impl (default) and a
-**DuckDB** impl (`#[cfg(feature = "duckdb")]`). The trait is the only seam;
-`analytics::verify`, `tools.rs`, `catalog.rs`, `llm.rs` are backend-agnostic. Shared
-free functions live in `data/mod.rs`: the read-only guard (`ensure_read_only`),
-`quote_ident`.
+Electron's renderer is sandboxed and has no Node or direct filesystem access.
+The Rust process reads only the workspace selected by the user through its
+catalog and bounded operations. The selected model provider receives the
+prompt and any context or tool results used in the answer; Fella does not
+proxy that request through a Fella service.
 
-**Catalog scan** (`catalog.rs`): walk the chosen folder, depth ≤ 8, skip dotfiles,
-honour an optional `.fellaignore`, and skip a root `fella.md` (that is user
-context, not data see `EXTENSIBILITY.md`). Classify by extension. Each tabular
-file becomes a table named after the slugified stem (collisions get a numeric
-suffix); recorded in `fella.db` `sources`.
+## The analytical turn
 
-- CSV/TSV → `csv` crate → per-column type sniff (Int/Float/Bool/Text) → `CREATE TABLE`
-  + bulk `INSERT` in a transaction. (DuckDB backend: `CREATE VIEW … read_csv_auto`.)
-- JSON/NDJSON → `serde_json` → same sniff-and-insert.
-- Parquet → **DuckDB backend only**; the SQLite build lists the file and returns a
-  clear "rebuild with `--features duckdb`" on query.
-- XLSX → `calamine` reads each sheet → inferred rows → `DataEngine::add_rows`.
+Fella is one model-directed loop, not a deterministic router followed by a
+separate agent. A turn typically follows this shape, but may skip or repeat
+steps when the question and observations allow:
 
-`describe` (the `inspect_table` tool): SQLite composes `count(*) / count(col) /
-count(DISTINCT col) / min / max` per column and adds a few frequent values for
-low-cardinality columns; DuckDB uses `SUMMARIZE`. The catalog carries a stable
-workspace revision and the time it was indexed so the UI and answer evidence can
-show which snapshot was used.
+1. **Assemble relevant context.** Include the current workspace revision and
+   compact source profiles when mounted, applicable user context, bounded
+   conversation history, and relevant prior analysis. Context preserves
+   provenance; it is not itself proof of a new data claim.
+2. **Interpret and investigate.** The model can answer from model knowledge,
+   inspect files and tables, read/search documents, propose an analytical
+   interpretation, or ask for a material user decision. There is no workspace
+   requirement for a general question.
+3. **Compute with the suitable route.** The model may use read-only SQL,
+   sandboxed Python, document evidence, and charts. Python is not a fallback;
+   it is appropriate for statistical or multi-stage calculations. A grounded
+   compiler can help with supported plans, while direct model-selected tools
+   remain available when it cannot express the analysis.
+4. **Review and repair locally.** The runtime checks execution and evidence,
+   attaches findings to the specific claim, evidence, or artifact they affect,
+   and allows bounded repair. If one chart is invalid, that does not by itself
+   discard an unrelated supported result.
+5. **Persist and present.** The Rust runtime owns the typed analysis record;
+   the UI projects its answer, clarification, chart, and progressively
+   disclosed details. A clarification response resumes the same logical
+   analysis, with prior evidence usable only when its source revision remains
+   current.
 
-**Documents** (`ingest/docs.rs`): `.pdf` / `.txt` / `.md` / `.log` are catalogued
-but not loaded as tables. There is no index and no embedding step: the agent
-reads them directly with `grep_files` (case-insensitive regex over the extracted
-text, returns file + line) and `read_file` (full text of one file, capped
-~12k chars). Works identically on every model provider. (This replaced an
-embed-and-cosine pipeline see `docs/DECISIONS.md`, 2026-08-29.)
+An optional `__analysis_contract` function lets the model state semantic
+mappings, scope, measures, and assumptions. It does not access data or grant
+permission. `__request_clarification` is a separate control-flow action that
+replaces the composer with a question and selectable choices plus free text;
+it is not evidence or a substitute for reasonable inspection. When the model
+requests new observations and a dependent calculation together, the runtime
+returns the observations first so the model can use them before computing.
 
-**`run_python`** reaches the data through `PythonBridge`: the host opens the
-workspace backend itself and exposes only a bounded read-only `sql()` bridge to
-the embedded RustPython/WASM guest. The guest returns a Python list of
-dictionaries and carries no workspace path, filesystem, network, environment,
-or subprocess capability. Each call gets a fresh Wasmi Store; dropping that
-Store releases the guest input, SQL response, interpreter heap, and Wasm memory
-together. Resumable fuel slices let Stop reach a pure-Python loop. It has
-no package installer or pandas dependency; `median`, `stdev`, `pearsonr`, and
-`linregress` are injected as small helpers.
+The model drives interpretation and tool choice. Rust owns file scope,
+permissions, resource limits, deterministic execution, lifecycle, persistence,
+and the consequences of verification findings. The verifier is not an oracle
+for user intent: an executed and replayable query can still answer the wrong
+question. Its typed findings are target-scoped; only an explicit answer-level
+integrity failure such as a changed workspace revision blocks the whole turn.
+The user can inspect details without seeing a pass/fail badge repeated under
+every message.
 
-All generated calculations have explicit bounds: 64 KiB source and output,
-256 MiB guest memory, 2 MiB stack, 10,000 SQL rows, a 1 MiB SQL response, a
-60-second Python wall budget, and a 1 billion fuel budget. CSV/JSON ingestion
-also has a 256 MiB source retention cap. The release memory probe exercises
-these allocation and teardown paths repeatedly in an optimized build.
+## Workspace and analysis data
 
-When tabular ingestion encounters ambiguous slash dates, it can infer the
-column's month/day order from unambiguous numeric dates in that same column.
-Consistent evidence lets CSV, JSON, and Excel ingestion normalize ambiguous
-rows to ISO dates; conflicting or absent evidence leaves ambiguous values
-unresolved instead of guessing from the machine locale. The column note records
-when this inference was used.
+`catalog.rs` walks the selected folder, applies `.fellaignore`, classifies
+supported and unsupported paths, and assigns workspace-relative source names.
+The catalog and prepared data are revision-bound. Replacing a workspace
+publishes a complete new snapshot atomically; in-flight analysis holds the
+revision it started with.
 
-## AI layer
+The shipped data engine is bundled SQLite. CSV/TSV, JSON/NDJSON, and supported
+spreadsheet sheets are normalized into a local analytical database. Text,
+Markdown, logs, and extractable-text PDFs are read as documents, not turned
+into tables; document lookup is lexical search plus bounded reads, not an
+embedding index. OCR and arbitrary document formats are not supported.
 
-`LlmClient` (`llm.rs`) one struct, branching on the provider's `wire`:
+DuckDB is an optional Cargo feature for custom builds, not the default release
+or CI backend. It is not an automatic fallback. The default build includes
+PDF and Excel ingestion. Exact supported extensions and limits are maintained
+in the public [getting-started guide](site/getting-started.mdx) and at the
+catalog/ingestion code boundary.
 
-- **Ollama wire** → `POST {base}/api/chat` with `tools`, `stream: true`
-  (the harness forwards deltas over the Electron sidecar bridge). Ollama Cloud is the
-  shipped hosted provider for this wire and requires a key.
-- **OpenAI wire** → `POST {base}/chat/completions`, streamed as SSE. The client
-  reassembles content and split tool-call fragments, then hands the normalized
-  reply to the same harness path.
+### Analysis tools
 
-Providers are one row each in `provider.rs` `PROVIDERS` (`id`, `display`, `auth`,
-`base_url`, `wire`, …); adding an OpenAI-compatible endpoint needs no other Rust
-change. Provider, base URL, key and model live in SQLite settings, edited via
-`/model`; provider keys live in `auth.json` (`Secrets`), never the DB. Transient
-model failures retry with backoff; a partial answer is kept. If
-the provider is unreachable, `ask` returns a clear message and the status bar
-shows a red dot.
+The fixed workspace surface includes file listing, table inspection,
+single-statement read-only SQL, document search/read, a bounded Python
+environment, and validated chart production. Prior-turn evidence may also be
+made available when a same-conversation follow-up can safely reuse it. The
+registry can disable capability groups, and the engine enforces the same
+policy at execution boundaries.
 
-**Research route status:** the current `LlmClient` connects to the selected
-model provider; the shipped tool registry has no web search or page-fetch
-tool. The product direction adds a bounded, visible, read-only research route
-without granting local file access to that route. The privacy contract and
-implementation plan are in [`PRODUCT-ROADMAP.md`](PRODUCT-ROADMAP.md).
+`run_python` uses an embedded RustPython guest compiled to
+`wasm32-unknown-unknown`, executed by Wasmi. The guest has no filesystem,
+network, environment, or subprocess access. A narrow host bridge captures
+output and provides bounded read-only SQL results. There is no package
+installer, pandas, NumPy, or SciPy; small analytics helpers are provided by
+Fella. Resource limits and the current execution boundary are documented in
+the root [security policy](../SECURITY.md).
 
-## Agent loop (`agent.rs`)
+Charts are structured data, not generated HTML or SVG. A chart can use an
+exact SQL result or an explicitly published Python result. Rendering, source
+reconciliation, and verification are separate concerns; a visually rendered
+chart is not automatically a semantically correct chart.
 
-```
-run(question):
-  msgs = [system_prompt(catalog, user_context), user: question];  evidence = []
-  # no workspace → no tools offered (a plain "hello" stays one turn)
-  loop up to max_steps() (MAX_STEPS = 20, FELLA_MAX_STEPS overrides):
-    resp = llm.chat(msgs, tool_schemas)            # raced against a cancel flag
-    if not resp.tool_calls:
-      checks = verify_for_answer(resp.content, evidence)
-      if actionable_typed_finding(checks) and repair_budget_left:
-        apply_finding_to_exact_target(checks' evidence or artifact)
-        msgs.push(assistant answer, scoped verification guidance)
-        continue                                  # same analytical turn
-      return finish(resp.content, checks)          # AnswerDone (may need review)
-    for call:
-      out = registry.run_with_cancel(call.name, args, cancel)
-                                                   # fixed built-in; only data access
-      evidence.push({ tool, args, note, sql?, rows, result_summary, output, ms, error })
-      msgs.push(assistant tool_call); msgs.push(tool result)
-  # out of steps: one last turn with no tools, telling the model why, for a hedged answer
-  return finish(last_turn.text or "I ran out of analysis steps …")
+## Context, continuity, and evidence
 
-finish(text): persist typed verification findings; emit AnswerDone
-```
+- **Conversation history** resolves references and follow-ups. Prior assistant
+  prose is context, not evidence for a new factual claim.
+- **`fella.md`** is user-authored workspace guidance. It is separate from
+  source data and editable only through an explicit user action.
+- **Semantic memory** is local and workspace-scoped. User-confirmed facts and
+  revision-valid observations may inform later interpretation; model
+  suggestions do not silently become authoritative definitions.
+- **Analysis records** retain the question, workspace revision, interpretation
+  where present, execution trace, verification report, provenance, and result.
+  Explicit reruns are linked to the original turn and execute against the
+  currently mounted matching workspace.
+- **Evidence** identifies the source and computation behind an answer. It
+  helps a person inspect the work; it does not guarantee that a semantic
+  choice matched their intent.
 
-The evaluation-only `EngineState::ask_once` and `ask_once_usage` helpers call
-the same `LlmClient` directly for judge/baseline measurements. They have no
-tools, workspace context, evidence fold, or product UI path; they are not an
-alternative interactive harness.
+The primary implementation is in `context.rs`, `memory.rs`,
+`semantic_memory.rs`, `analysis_store.rs`, and `evidence.rs`.
 
-**System prompt** (`agent.rs`, sections gated by `PromptProfile` — droppable
-via `FELLA_PROMPT_DROP` for eval ablation): the model treats the request as an
-analysis problem, inspects relevant evidence, maps user language to available
-fields and records, and chooses among read-only tools. It can revise its
-approach when output does not answer the request, clarify material ambiguity,
-or proceed with a stated minor assumption. It should verify the result and
-explain method, scope, uncertainty, and evidence as relevant. SQL, Python,
-document tools, and charts are options, not a prescribed route. Forecasts and
-scenarios are allowed; missing evidence should prompt a specific explanation,
-useful partial result, or focused question—not a blanket refusal. Work should
-be proportional to the request. Conversation and user context help interpret
-references and vocabulary but are not evidence for new data claims.
+## Network and trust boundaries
 
-**Verification pass** (`analytics::verify`, deterministic): checks executed
-queries and Python inputs for replayability, grounds numeric claims in results,
-validates contract execution and result invariants, and checks chart payloads
-against their source tables. Each finding has a typed effect and scope:
-`informational`, `repair`, `exclude_evidence`, `withhold_artifact`, or
-`block_answer`, plus its target and related evidence IDs. The model can repair
-one identified claim or rerun excluded evidence without invalidating unrelated
-results; a malformed chart can be withheld while retaining its source table
-and prose. The loop is capped at three targeted repair passes. Only an explicit
-`block_answer` finding, currently a workspace revision change during the turn,
-sets the whole answer status to failed. Other unresolved checks remain
-inspectable in the on-demand evidence details; historical checks without typed
-findings remain readable but are not promoted to answer-wide vetoes from their
-labels. No tool-free verifier re-ask remains. When the model requests
-observation and computation in the same response, the controller defers
-computation until the model has received the requested inspection output,
-preserving the analyst's observe-interpret-compute loop instead of running
-both calls concurrently. The normative authority and acceptance matrix is in
-[`VERIFIER-AUTHORITY.md`](VERIFIER-AUTHORITY.md).
+- Model traffic goes directly from the Rust sidecar to the provider selected
+  by the user. Prompts and selected context/tool results may include workspace
+  content. Provider retention and training are governed by that provider.
+- No web search or page-fetch route is shipped. The inert `/mcp` command does
+  not connect to anything or add tools.
+- Workspace operations are read-only. There is no agent tool for writing,
+  moving, or deleting source files. Editing `fella.md` is an explicit UI action.
+- Provider keys are stored in `auth.json` in the application-data directory,
+  separate from the settings database and transcript.
+- `/update` is user-triggered in packaged builds. The Python guest has no
+  network capability.
 
-## Tools
-
-Seven fixed built-ins (`tools.rs`). There is no dynamic tool registry in the
-lean release.
-
-| Tool | Args | Returns / guardrails |
-|------|------|----------------------|
-| `list_files` | | workspace files: kind, row count / size, which table each maps to |
-| `inspect_table` | `name`, `rows=5` | per column: type, null %, distinct, min/max; plus the first `rows` rows (0-50). Merged `describe_schema` + `sample_rows` (2026-09-08) |
-| `run_sql` | `sql` | columns + rows (capped), row_count, ms. Read-only guard: single SELECT/WITH statement; rejects DDL/DML/`ATTACH`/`COPY`/`INSTALL`, `read_text`/`read_blob`/`glob`; a watchdog interrupts a runaway query (`FELLA_QUERY_TIMEOUT_SECS`, 15 s), and Stop interrupts SQLite immediately |
-| `grep_files` | `pattern`, `max_hits=30` (max 100) | matching lines (file + line) from every catalogued document, case-insensitive regex. No index |
-| `read_file` | `name` or `names` | extracted text by catalogued name, capped 12k chars per document and 16k combined for a multi-file call |
-| `run_python` | `code` | stdout / stderr from the embedded RustPython/WASM guest. No filesystem, network, environment, or subprocess capability; bounded source/output/fuel/memory/stack, plus `sql(q)` → a list of dictionaries from bounded read-only host SQL. Built-in `median`, `stdev`, `pearsonr(x, y)`, and `linregress(x, y)` need no packages |
-| `make_chart` | `kind`, `sql`, `title?`, `unit?` | a validated structured visualization (`analytics::chart`) from a read-only query; `kind=auto` chooses a line for temporal labels or a bar for categories, and refuses flat/degenerate data server-side |
-
-Every tool call takes an optional plain-language `note` (shown in the evidence
-panel). Every call and result is captured as evidence whether or not the model
-cites it. Experimental builds must preserve this evidence boundary if they add
-an external tool.
-
-## Electron IPC and sidecar surface
-
-The renderer calls typed wrappers in `src/lib/ipc.ts`. `electron/preload.cjs`
-exposes only the allowlisted `window.fella` methods; `electron/main.mjs`
-routes those requests to `electron/engine.mjs`. The Rust `stdio.rs` dispatcher
-accepts the engine methods:
-
-`open_workspace(path)` · `get_catalog()` · `describe(name)` · `run_sql_direct(sql)`
-· `reindex()` · settings and provider operations · `ask(...)` and
-`analysis_turn_rerun(...)` with streamed events · `cancel(...)` ·
-`provider_health()` · context/memory · conversation archive, replay, and
-deletion. Folder picking, window controls, external links, and `/update` stay
-in Electron main; they do not enter the Rust engine protocol.
-
-## Extension boundary (historical)
-
-The pack, augment, and MCP designs remain in the experimental branch and in
-the archived [`EXTENSIBILITY.md`](EXTENSIBILITY.md) reference. They are not
-compiled, registered, or exposed by the lean personal release. `/mcp` is an
-inert command whose only purpose is to mark this future seam. See
-[`LEAN-PERSONAL-RELEASE.md`](LEAN-PERSONAL-RELEASE.md).
-
-## UI
-
-One window with a focused shell: **Ask** is the default conversation, **Search**
-is the Ctrl/Command+K palette, **Workspace** contains **Sources** and
-user-authored **Context**, and **Settings** contains provider, model, appearance,
-folder, and experimental analysis capability controls. Recent conversations form the History surface. The bottom **Composer** carries the
-active model name and brand icon. Plain-language and sans-serif; monospace only
-where data lines up (tables, SQL). System/Light/Dark appearance is a local
-preference.
-Assistant prose renders as markdown (`marked`, raw HTML stripped), while charts
-cross the boundary as typed visualization data and render through the native
-Svelte chart component; user/system lines stay plain text. A chart answer leads
-with the model's takeaway, places the visual below it, and keeps exact values in
-the chart card. The evidence block is collapsed by default. `↑` recalls input;
-`Esc` stops a run or collapses evidence.
-
-### Capability policy (experimental)
-
-Settings can turn the current analysis paths on or off locally: table analysis,
-document analysis, Python calculations, and visualizations. The tool registry
-uses the policy when it builds the model's schemas, while `EngineState` checks
-the same policy at its data boundaries so a disabled path cannot be reached
-through a direct command. Visualization also depends on table analysis. File
-listing, evidence, verification, and the read-only boundary remain core
-harness behavior. The policy is intentionally a small personal seam; the
-enterprise profile and context governance ideas are recorded in
-[`CAPABILITY-POLICY.md`](CAPABILITY-POLICY.md) for later reference.
-
-## Build milestones
-
-- [x] **0** Repo init, `.gitignore`, README + this doc.
-- [x] **1** SvelteKit scaffold → adapter-static, SSR off, blank REPL + StatusBar.
-- [x] **2** Data layer: DuckDB + SQLite in managed state; `open_workspace` scans a
-  folder and creates views for CSV/TSV/Parquet/JSON; `/open` `/files` `/schema`
-  `/sql` no AI.
-- [x] **3** Excel via `calamine` → DuckDB appender (one table per sheet).
-- [x] **4** LLM + agent loop: `LlmClient`, streaming `ask`, tool registry,
-  evidence capture, Transcript + collapsible EvidenceBlock.
-- [x] **5** Verification pass.
-- [x] **6** Documents: `extract()` + `grep_files` / `read_file` (originally an
-  embed pipeline, replaced 2026-08-29).
-- [x] **7** Python tool.
-- [x] **8** OpenAI-compatible provider + `/model` command + provider health dot.
-  Config is command-driven; no settings modal.
-- [x] **9** Polish: keybindings, `Ctrl+K` palette, light/dark, transcript in
-  `localStorage`; a fresh conversation on restart, old ones archived to files.
-
-MVP (0–9) delivered. Since then: SQLite default data engine (`DataEngine`
-trait), Vercel AI Gateway, `run_sql` timeout + mid-run stop, markdown answers,
-the **analytics module** (`engine/analytics/` — SQL, stats, charts, and
-verification pulled behind one `AnalyticsSource` seam, `depth_rule` /
-`aside_rule`, and the value-attribution verification check). The lean personal
-release removes the extension surfaces and keeps `fella.md` as the one explicit
-user-authored context file. Notable choices are logged in
-`docs/DECISIONS.md`. The runtime design and delivery status are in
-`docs/ANALYTICAL-COMPUTER-ROADMAP.md`; measured harness results are in
-`docs/PERFORMANCE-LOG.md`.
+See [Security](../SECURITY.md) for the user-facing guarantees and their limits,
+[Product](PRODUCT.md) for the scope, and [Testing](TESTING.md) for what the
+current checks establish.

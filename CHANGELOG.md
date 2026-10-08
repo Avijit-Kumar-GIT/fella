@@ -45,7 +45,7 @@ and workspace experience substantially more capable.
 - **Embedded Python analytics.** Model-generated Python runs inside a bounded
   WASM RustPython guest through Wasmi, with no filesystem, network, environment,
   or subprocess capability. A read-only SQL bridge and explicit resource limits
-  support the personal analytics path. See [`docs/PYTHON-SANDBOX.md`](docs/PYTHON-SANDBOX.md).
+  support the personal analytics path. See the [runtime and Python boundary](docs/ARCHITECTURE.md#analysis-tools).
 - **Experimental capability policy.** Table, document, Python, and
   visualization analysis paths can be enabled or disabled in Settings, with
   the engine enforcing the same policy used by the UI.

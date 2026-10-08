@@ -52,7 +52,7 @@ pub struct Provider {
 /// "`/model base_url` + `/model key`" path for anything not listed here.
 ///
 /// Hosted model names drift; if a `default_model` 404s, `/model <name>` fixes
-/// it and `docs/DEV_SETUP.md` carries the current-good values.
+/// it and `docs/DEVELOPMENT.md` carries the provider setup guidance.
 pub const PROVIDERS: &[Provider] = &[
     Provider {
         id: "openai",

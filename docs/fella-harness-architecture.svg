@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1120" role="img" aria-labelledby="title desc">
   <title id="title">Fella analytical turn architecture</title>
-  <desc id="desc">A diagram showing a question entering Fella's opinionated harness, passing through a bounded Rust analytics engine and deterministic verifier, then becoming an answer in the UI with small local memory updates.</desc>
+  <desc id="desc">A diagram of Fella's model-directed analytics turn: general questions or mounted-workspace context, iterative read-only investigation, SQL or Python execution, scoped verification, clarification, and a persisted answer.</desc>
 
   <defs>
     <linearGradient id="orb" x1="0" y1="0" x2="1" y2="1">
@@ -55,8 +55,8 @@
   <rect x="70" y="236" width="190" height="140" rx="16" class="card teal"/>
   <text x="94" y="268" class="eyebrow">ENTRY</text>
   <text x="94" y="302" class="heading">User question</text>
-  <text x="94" y="332" class="body">Plain language</text>
-  <text x="94" y="355" class="body">about one folder.</text>
+  <text x="94" y="332" class="body">General or</text>
+  <text x="94" y="355" class="body">folder question.</text>
 
   <!-- Context -->
   <rect x="300" y="180" width="300" height="240" rx="16" class="card teal"/>
@@ -65,25 +65,25 @@
   <text x="326" y="286" class="body">Workspace path + revision</text>
   <text x="326" y="311" class="body">Catalog + typed schema</text>
   <text x="326" y="336" class="body">fella.md + folder memory</text>
-  <text x="326" y="361" class="body">Three-turn conversation digest</text>
+  <text x="326" y="361" class="body">Bounded history + prior analysis</text>
   <text x="326" y="395" class="small">The model sees a bounded world.</text>
 
   <!-- Harness -->
   <rect x="650" y="180" width="300" height="240" rx="16" class="card violet"/>
   <text x="676" y="214" class="eyebrow">02 · HARNESS</text>
-  <text x="676" y="249" class="heading">Opinionated policy</text>
-  <text x="676" y="286" class="body">Fixed 5–7 tool registry</text>
-  <text x="676" y="311" class="body">SQL-first analysis</text>
-  <text x="676" y="336" class="body">Decompose deep questions</text>
-  <text x="676" y="361" class="body">Parallelize · stop early</text>
-  <text x="676" y="395" class="small">No write, shell, browser, or action tools.</text>
+  <text x="676" y="249" class="heading">Model-directed runtime</text>
+  <text x="676" y="286" class="body">Fixed read-only tool surface</text>
+  <text x="676" y="311" class="body">Inspect · SQL · Python · documents</text>
+  <text x="676" y="336" class="body">Clarify material ambiguity</text>
+  <text x="676" y="361" class="body">Revise · retry · cancel</text>
+  <text x="676" y="395" class="small">No workspace writes, shell, or web route.</text>
 
   <!-- Model -->
   <rect x="650" y="490" width="300" height="160" rx="16" class="card violet"/>
   <text x="676" y="524" class="eyebrow">03 · MODEL</text>
   <text x="676" y="559" class="heading">Reasoning loop</text>
-  <text x="676" y="596" class="body">Answer directly or emit calls</text>
-  <text x="676" y="621" class="body">Stream · retry · cancel</text>
+  <text x="676" y="596" class="body">Interpret · decompose · choose</text>
+  <text x="676" y="621" class="body">Use evidence · explain · answer</text>
 
   <!-- Engine -->
   <rect x="1020" y="180" width="510" height="470" rx="18" fill="#111b20" stroke="#86b4ff" stroke-width="1.6"/>
@@ -117,39 +117,39 @@
   <!-- Verification -->
   <rect x="300" y="730" width="300" height="190" rx="16" class="card green"/>
   <text x="326" y="764" class="eyebrow">05 · VERIFIER</text>
-  <text x="326" y="799" class="heading">Claim-level checks</text>
-  <text x="326" y="835" class="body">Re-run cited queries</text>
-  <text x="326" y="859" class="body">Ground numbers + semantics</text>
-  <text x="326" y="883" class="body">Check the same workspace</text>
-  <text x="326" y="907" class="small">Repair only when a check needs it.</text>
+  <text x="326" y="799" class="heading">Scoped findings</text>
+  <text x="326" y="835" class="body">Replay and grounding checks</text>
+  <text x="326" y="859" class="body">Keep unrelated evidence intact</text>
+  <text x="326" y="883" class="body">Withhold only affected artifacts</text>
+  <text x="326" y="907" class="small">Reproducibility does not prove intent.</text>
 
   <!-- Result -->
   <rect x="650" y="730" width="300" height="190" rx="16" class="card green"/>
   <text x="676" y="764" class="eyebrow">06 · RESULT</text>
-  <text x="676" y="799" class="heading">Verified analytical answer</text>
-  <text x="676" y="835" class="body">Answer · chart · caveat</text>
-  <text x="676" y="859" class="body">verified / review / failed</text>
-  <text x="676" y="883" class="body">Details available on demand</text>
-  <text x="676" y="907" class="small">The analysis is primary; evidence is depth.</text>
+  <text x="676" y="799" class="heading">Answer + inspectable basis</text>
+  <text x="676" y="835" class="body">Answer · chart · useful caveat</text>
+  <text x="676" y="859" class="body">Evidence details on demand</text>
+  <text x="676" y="883" class="body">Clarification resumes same turn</text>
+  <text x="676" y="907" class="small">Evidence helps inspect work; it is not a truth badge.</text>
 
   <!-- UI -->
   <rect x="1020" y="730" width="510" height="190" rx="16" class="card teal"/>
   <text x="1050" y="764" class="eyebrow">07 · PUBLISH</text>
   <text x="1050" y="799" class="heading">Conversation UI</text>
-  <text x="1050" y="835" class="body">Short result first</text>
-  <text x="1050" y="859" class="body">Useful visual when it helps</text>
-  <text x="1050" y="883" class="body">Source and calculation detail below</text>
-  <text x="1050" y="907" class="small">AnswerDone → transcript / chart / optional inspection</text>
+  <text x="1050" y="835" class="body">Answer first · chart when useful</text>
+  <text x="1050" y="859" class="body">Clarification choices + free text</text>
+  <text x="1050" y="883" class="body">Sources and calculations on demand</text>
+  <text x="1050" y="907" class="small">One conversation across analysis and clarification.</text>
 
   <!-- Local memory -->
   <rect x="300" y="970" width="650" height="90" rx="16" class="card amber"/>
   <text x="326" y="1004" class="eyebrow">08 · LOCAL MEMORY</text>
-  <text x="326" y="1037" class="body">Three-turn digest · correction vocabulary · local episode log</text>
+  <text x="326" y="1037" class="body">Workspace-scoped facts · conversation continuity · local trace</text>
 
   <!-- Explicitly absent capabilities -->
   <rect x="1020" y="970" width="510" height="90" rx="16" class="card"/>
   <text x="1050" y="1004" class="eyebrow">STRUCTURAL NON-GOALS</text>
-  <text x="1050" y="1037" class="body">No approval handshake · no writes · no shell · no browser · no agents</text>
+  <text x="1050" y="1037" class="body">No web research · workspace writes · shell · or default multi-agent loop</text>
 
   <!-- Flow arrows -->
   <line x1="260" y1="306" x2="300" y2="306" class="arrow"/>
@@ -166,6 +166,8 @@
   <text x="562" y="680" class="arrow-label">final text + tool record</text>
   <line x1="600" y1="825" x2="650" y2="825" class="arrow"/>
   <line x1="950" y1="825" x2="1020" y2="825" class="arrow"/>
+  <path d="M 1020 780 C 984 748, 982 650, 950 620" class="return-arrow"/>
+  <text x="963" y="704" class="arrow-label">clarification reply</text>
   <path d="M 800 920 L 800 950 L 625 950 L 625 970" class="memory-arrow"/>
   <text x="814" y="948" class="arrow-label">safe local update</text>
 </svg>

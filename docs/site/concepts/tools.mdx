@@ -70,7 +70,7 @@ tools: vec![
 | `grep_files` | Search document text | Case-insensitive regex over cataloged documents; 30 hits by default and 100 maximum |
 | `read_file` | Read cataloged document bodies | Resolves one or more catalogued names; 12,000 characters per document and 16,000 characters combined |
 | `run_python` | First-class route for statistical and multi-stage numerical analysis | Embedded WASM/RustPython guest with no filesystem, network, environment, or subprocess imports; fuel, memory, stack, source, output, SQL-row, and SQL-response limits |
-| `make_chart` | Build a bar or line chart from a query | Runs a guarded read-only query, derives the first column as labels and the next one or two columns as numeric series, then validates the result before client rendering |
+| `make_chart` | Build a validated chart from a read-only query or prior result | Supports bar, line, area, stacked area, pie/donut, scatter, histogram, box plot, heatmap, and forecast forms; validates structured chart data before client rendering |
 
 The built-ins are offered when a workspace is open. With no workspace, the model
 receives no data tools.

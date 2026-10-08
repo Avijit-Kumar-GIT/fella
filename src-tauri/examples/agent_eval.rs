@@ -1183,7 +1183,7 @@ fn set_model(engine: &EngineState, spec: &str) -> bool {
 /// $ per 100 answers for a model, from a small static price table
 /// ($ / 1M input, $ / 1M output). `None` for local / unknown.
 fn price_per_100(model: &str, prompt_tok: f64, completion_tok: f64) -> Option<f64> {
-    // Sept 2026 list prices; keep in sync with docs/DEV_SETUP.md.
+    // Sept 2026 list prices; update this table when model pricing changes.
     const P: &[(&str, f64, f64)] = &[
         ("gpt-5.6-luna", 0.20, 1.20),
         ("gpt-5.6-terra", 2.00, 12.00),
@@ -3484,8 +3484,8 @@ async fn cmd_memory_axes(
 /// - a correction should produce exactly one new vocabulary note;
 /// - that note should carry into a fresh, cold conversation;
 /// - a second correction on the same topic should supersede, not duplicate;
-/// - no `## Recipes` should ever appear (removed, `docs/DECISIONS.md`
-///   2026-09-11); `## Preferences`/`## Table notes` are printed too, since
+/// - no `## Recipes` should ever appear (removed 2026-09-11; see
+///   `docs/ARCHITECTURE.md`); `## Preferences`/`## Table notes` are printed too, since
 ///   nothing in the live `ask()` path currently writes to either or
 ///   `set_table_note`/`preferences.push` calls exist).
 async fn cmd_memory_sandbox(engine: &EngineState, model: &str, data_dir: &Path) {

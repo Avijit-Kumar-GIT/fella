@@ -38,8 +38,8 @@ rather than including a working exploit.
 The personal release has no pack manager, augment runtime, or MCP connector.
 `/mcp` is retained as an inert signpost and creates no connector or network
 activity. The root `fella.md` file is the supported user-authored context
-surface. Extension designs are archived for future custom forks; see
-[`docs/EXTENSIBILITY.md`](docs/EXTENSIBILITY.md).
+surface. The current boundary is described in
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 `run_python` executes code the model writes inside the checked-in
 `wasm32-unknown-unknown` RustPython guest through Wasmi. The guest receives no

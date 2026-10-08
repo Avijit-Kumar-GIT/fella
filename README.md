@@ -178,12 +178,12 @@ Useful commands:
   machine.
 - Updates happen only when explicitly requested with `/update`.
 
-Read the full [security review](SECURITY.md) and the project's [principles](docs/PRINCIPLES.md).
+Read the [security policy](SECURITY.md) and [product commitments](docs/PRODUCT.md).
 
 ## Build from source
 
 The desktop shell is Electron, with the SvelteKit UI and Rust analytics engine
-running as a local sidecar. See [`docs/DEV_SETUP.md`](docs/DEV_SETUP.md) for
+running as a local sidecar. See [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) for
 toolchain requirements and provider setup.
 
 ```sh
@@ -202,18 +202,19 @@ cargo test --manifest-path src-tauri/Cargo.toml --locked
 ```
 
 The Electron shell and its line-delimited JSON bridge are described in
-[`docs/ELECTRON.md`](docs/ELECTRON.md).
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ## Documentation
 
-- [Architecture](docs/ARCHITECTURE.md) — engine, harness, data flow, and boundaries
-- [Why Fella](docs/WHY.md) — the product thesis
-- [Principles](docs/PRINCIPLES.md) — the commitments behind the design
-- [Non-goals](docs/NON-GOALS.md) — what Fella deliberately does not become
-- [Developer setup](docs/DEV_SETUP.md) — dependencies, providers, tests, and evaluation
-- [Product roadmap](docs/PRODUCT-ROADMAP.md) — detailed backlog for general Ask, web research, forecasts, visual analysis, provenance, and evaluation
-- [Analytical computer roadmap](docs/ANALYTICAL-COMPUTER-ROADMAP.md) — runtime design, implementation status, and quality gates
-- [Decisions](docs/DECISIONS.md) — the engineering decision log
+- [Product](docs/PRODUCT.md) — Fella's purpose, analyst loop, and boundaries
+- [Architecture](docs/ARCHITECTURE.md) — the Electron shell and Rust analytics runtime
+- [Roadmap](docs/ROADMAP.md) — current quality priorities and deferred work
+- [Development](docs/DEVELOPMENT.md) — setup and contributor conventions
+- [Testing](docs/TESTING.md) — regression, end-to-end, and model evaluation
+- [Performance](docs/PERFORMANCE.md) — ingestion, build, and memory measurement
+- [Release](docs/RELEASE.md) — packaging and release procedure
+- [Design](docs/DESIGN.md) — UI tokens and interaction guidance
+- [Mintlify deployment](docs/DOCS-DEPLOYMENT.md) — public docs hosting
 - [Contributing](CONTRIBUTING.md) — contribution guidelines
 
 ## Status
