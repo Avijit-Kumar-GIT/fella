@@ -556,6 +556,11 @@
 		background: var(--sidebar-hover);
 		color: var(--text);
 	}
+	.repository.current .repository-row {
+		background: var(--sidebar-selected);
+		box-shadow: inset 0 0 0 1px var(--border);
+		color: var(--text);
+	}
 	.row-slot {
 		display: grid;
 		place-items: center;
@@ -578,9 +583,11 @@
 		transform: rotate(90deg);
 		transition: transform var(--dur-fast) var(--ease);
 	}
-	.repository.current .row-chevron,
-	.repository.current .row-icon {
+	.repository.current .row-chevron {
 		color: var(--text-dim);
+	}
+	.repository.current .row-icon {
+		color: color-mix(in srgb, var(--brand) 48%, var(--text-dim));
 	}
 	.repository-copy {
 		min-width: 0;

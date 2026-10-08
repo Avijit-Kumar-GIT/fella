@@ -279,7 +279,7 @@
 		{/if}
 	<div class="app" class:focus={session.focus}>
 		<Titlebar onpalette={() => (paletteOpen = true)} />
-		<main>
+		<section class="workspace-window" aria-label="Current workspace">
 			{#if session.mountProgress && session.mountProgress.phase !== 'ready'}
 				<div class="mount-status" aria-hidden="true">
 					<span class="mount-orb"><Logo size={17} active /></span>
@@ -294,28 +294,30 @@
 					{/if}
 				</div>
 			{/if}
-			<div class="main-row">
-				{#if activeView === 'workspace'}
-					<WorkspaceView />
-				{:else if activeView === 'project'}
-					<ProjectView />
-				{:else if activeView === 'settings'}
-					<SettingsView />
-				{:else}
-					<div class="ask-workbench">
-						<Transcript bind:this={transcript} />
-						{#if session.activeChat.companionPane}
-							<CompanionPane />
-						{/if}
-					</div>
+			<main>
+				<div class="main-row">
+					{#if activeView === 'workspace'}
+						<WorkspaceView />
+					{:else if activeView === 'project'}
+						<ProjectView />
+					{:else if activeView === 'settings'}
+						<SettingsView />
+					{:else}
+						<div class="ask-workbench">
+							<Transcript bind:this={transcript} />
+							{#if session.activeChat.companionPane}
+								<CompanionPane />
+							{/if}
+						</div>
+					{/if}
+				</div>
+			</main>
+			<div class="dock">
+				{#if activeView === 'ask'}
+					<Composer bind:this={composer} onafterrun={refreshHealth} />
 				{/if}
 			</div>
-		</main>
-		<div class="dock">
-			{#if activeView === 'ask'}
-				<Composer bind:this={composer} onafterrun={refreshHealth} />
-			{/if}
-		</div>
+		</section>
 	</div>
 </div>
 
@@ -343,14 +345,26 @@
 		min-width: 0;
 		background: var(--bg);
 	}
+	.workspace-window {
+		position: relative;
+		display: flex;
+		flex: 1;
+		flex-direction: column;
+		min-width: 0;
+		min-height: 0;
+		margin: 8px 10px 10px;
+		overflow: hidden;
+		border: 1px solid var(--border);
+		border-radius: var(--radius-window);
+		background: var(--bg-raised);
+	}
 	main {
 		flex: 1;
 		min-height: 0;
 		display: flex;
 		flex-direction: column;
-		/* Same fill as the titlebar/sidebar/panel so the whole shell reads as
-		   one open canvas, not stacked boxes -- no seam, no colour change. */
-		background: var(--bg);
+		min-width: 0;
+		background: transparent;
 	}
 	.mount-status {
 		flex: none;
@@ -407,11 +421,10 @@
 		min-height: 0;
 	}
 	.ask-workbench > :global(.transcript) { flex: 1; min-width: 0; }
-	/* Status line + composer read as one calm footer zone, continuous with the
-	   transcript surface above it no rule, no colour change. */
+	/* Keep the composer inside the framed workspace, aligned to its content. */
 	.dock {
 		flex: none;
-		padding-bottom: var(--space-4);
+		padding: 0 var(--space-2) var(--space-3);
 	}
 	.dropzone {
 		position: fixed;

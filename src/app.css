@@ -108,6 +108,7 @@
 	--radius-sm: 6px;
 	--radius-chip: 4px;
 	--radius-conversation: 18px;
+	--radius-window: 16px;
 
 	/* soft, diffuse, layered the macOS elevation feel */
 	--shadow-sm: 0 1px 2px rgba(20, 20, 26, 0.05), 0 4px 12px rgba(20, 20, 26, 0.06);

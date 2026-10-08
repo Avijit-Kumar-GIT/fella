@@ -83,7 +83,7 @@
 		gap: var(--space-1);
 		max-width: 20ch;
 		padding: 3px var(--space-1) 3px var(--space-2);
-		border-radius: var(--radius-chip);
+		border-radius: var(--radius-sm);
 		color: var(--text-faint);
 		font-size: var(--fs-sm);
 		cursor: pointer;
@@ -100,6 +100,7 @@
 	.tab.active {
 		color: var(--text);
 		background: var(--bg-inset);
+		box-shadow: inset 0 0 0 1px var(--border);
 	}
 	.label {
 		overflow: hidden;
