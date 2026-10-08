@@ -22,7 +22,8 @@ All notable changes to Fella are recorded here. Format follows
   credentials, and conversation history survive the shell transition.
 - The app and sidecar are version 0.3.0. Local quality and packaged-app gates
   passed on 2026-10-07. Pushing the `v0.3.0` tag starts the cross-platform
-  release gates and creates an unsigned GitHub draft for review.
+  release gates; when they pass, the workflow creates an unsigned GitHub draft
+  with the platform installers for review.
 
 ### Removed
 
