@@ -60,7 +60,7 @@ computer understandable without making the reasoning needlessly complicated.
 | **Consistency** | A coherent model-led loop and reviewed tools keep the route from question to answer understandable. |
 | **Correctness** | The engine computes the numbers, the harness checks the work, and the result should be right the first time whenever the data can support it. |
 | **Efficiency** | Deliberate context and proportionate tool use keep wasted reasoning down without an arbitrary tool-count limit. |
-| **Read-only by design** | Fella can analyze the workspace, but it cannot write, move, delete, send, or act. The boundary is part of the architecture, not a setting. |
+| **Read-only analysis** | Analysis tools can inspect and compute over mounted files, but cannot alter them, run shell commands, or take external actions. |
 | **Useful on real files** | Mount the folder when a question depends on it; ask in plain language and get an analysis or chart without building a warehouse or learning SQL first. |
 | **Bring your own model** | Connect OpenAI, Vercel AI Gateway, xAI, Ollama Cloud, OpenRouter, or a custom OpenAI-compatible endpoint. |
 
@@ -100,10 +100,11 @@ That makes Fella useful for questions such as:
 
 | Type | Formats | Behavior |
 | --- | --- | --- |
-| Tabular data | `.csv`, `.tsv`, `.json`, `.ndjson` | Detects column types and loads a queryable local table. |
-| Spreadsheets | `.xlsx` | Loads each worksheet as a table. |
-| Documents | `.pdf`, `.txt`, `.md`, `.log` | Searches extracted text directly; no embedding index is required. |
-| Parquet | `.parquet` | Available in the optional DuckDB build; not included in the default SQLite build. |
+| Delimited tables | `.csv`, `.tsv`, `.tab` | Detects column types and loads a queryable local table. |
+| JSON tables | `.json`, `.ndjson`, `.jsonl` | Reads JSON objects, arrays of objects, or newline-delimited records as tables. |
+| Spreadsheets | `.xlsx`, `.xlsm`, `.xlsb`, `.xls` | Loads each readable worksheet as a table. |
+| Documents | `.pdf`, `.txt`, `.text`, `.md`, `.markdown`, `.log` | Searches extracted text directly; PDFs need a selectable text layer. No OCR or embedding index is required. |
+| Parquet | `.parquet`, `.pq` | Available only in a custom DuckDB build; not included in release builds. |
 
 ## Install
 
@@ -128,12 +129,11 @@ the app. The new shell reuses the existing `dev.fella.app` data directory, so
 settings, provider credentials, and conversation history remain available.
 After that migration, `/update` checks and applies Electron releases.
 
-On first launch:
+To get started:
 
-1. Mount a folder.
-2. Type `/login` and connect a model provider with your own API key.
-3. Choose a model with `/model`.
-4. Ask a question.
+1. Type `/login` to connect a model provider with your own API key, unless one is already configured.
+2. Choose a model with `/model`.
+3. Ask a general question right away, or mount a folder with `/open` when your question depends on local files.
 
 Fella does not require a Fella account. Provider credentials are stored locally
 in `auth.json`, separate from settings and conversation history.
@@ -166,16 +166,18 @@ Useful commands:
 
 ## Privacy and safety
 
-- Fella reads the mounted workspace but never modifies its files.
-- The current release has no write, shell, desktop-control, or web-research
-  tools. The roadmap adds visible web research as a bounded read-only route;
-  it must not send mounted-file contents, rows, snippets, workspace memory, or
-  credentials to a search service.
+- Analysis tools read the mounted workspace but cannot modify its files or run
+  shell commands. You can edit the user-authored `fella.md` context file in the
+  app. Settings, conversations, and memory are stored in Fella's local app data.
+- The current release has no shell, desktop-control, or web-research tools. Web
+  research remains planned as a bounded, visible, read-only route; it must not
+  send mounted-file contents, rows, snippets, workspace memory, or credentials
+  to a search service.
 - Provider API keys stay in local `auth.json` with restrictive permissions where
   supported; they are not stored in the settings database or browser storage.
-- With a hosted provider, the question and the relevant tool results are sent
-  to the provider you selected. With a local provider, they can remain on the
-  machine.
+- With a hosted provider, the question and relevant tool results are sent to
+  that provider. Built-in providers are hosted; a custom OpenAI-compatible
+  endpoint can be configured to point to a local service.
 - Updates happen only when explicitly requested with `/update`.
 
 Read the [security policy](SECURITY.md) and [product commitments](docs/PRODUCT.md).

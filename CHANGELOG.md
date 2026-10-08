@@ -6,6 +6,8 @@ All notable changes to Fella are recorded here. Format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-07
+
 ### Added
 
 - Electron desktop shell with a sandboxed renderer, allowlisted preload bridge,
@@ -18,8 +20,9 @@ All notable changes to Fella are recorded here. Format follows
 - Provider-free general questions no longer require a mounted repository.
 - Existing `dev.fella.app` data directories remain the default so settings,
   credentials, and conversation history survive the shell transition.
-- The app and sidecar version is 0.3.0. Local quality and packaged-app gates
-  passed on 2026-10-07; the release tag and GitHub draft remain pending.
+- The app and sidecar are version 0.3.0. Local quality and packaged-app gates
+  passed on 2026-10-07. Pushing the `v0.3.0` tag starts the cross-platform
+  release gates and creates an unsigned GitHub draft for review.
 
 ### Removed
 
@@ -381,7 +384,8 @@ folder of your own files with deterministic SQL / Python, and shows its working.
 - The hosted pack browser isn't live yet: `/packs add <path>` works offline, and
   `/packs install <id>` pulls from a small seed catalog.
 
-[Unreleased]: https://github.com/Avijit-Kumar-GIT/fella/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/Avijit-Kumar-GIT/fella/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/Avijit-Kumar-GIT/fella/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Avijit-Kumar-GIT/fella/compare/v0.1.5...v0.2.0
 [0.1.5]: https://github.com/Avijit-Kumar-GIT/fella/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/Avijit-Kumar-GIT/fella/compare/v0.1.3...v0.1.4
