@@ -101,6 +101,7 @@ const INDEX_KEY = 'fella:tabs'; // JSON array of open tab ids
 const SIDEBAR_KEY = 'fella:sidebar-collapsed';
 const REPOSITORIES_KEY = 'fella:repositories';
 const HIDDEN_REPOSITORIES_KEY = 'fella:hidden-repositories';
+const HISTORY_ONLY_REPOSITORIES_KEY = 'fella:history-only-repositories';
 const PROJECTS_KEY = 'fella:projects';
 
 function readSidebarCollapsed(): boolean {
@@ -360,6 +361,8 @@ class Session {
 	repositoryPaths = $state<string[]>(readStringList(REPOSITORIES_KEY));
 	/** Repositories intentionally hidden from the local sidebar. */
 	hiddenRepositoryPaths = $state<string[]>(readStringList(HIDDEN_REPOSITORIES_KEY));
+	/** Saved conversation groups whose workspace path could not be mounted. */
+	historyOnlyRepositoryPaths = $state<string[]>(readStringList(HISTORY_ONLY_REPOSITORIES_KEY));
 	/** User-created repository wikis, kept entirely on this computer. */
 	projects = $state<Project[]>(readProjects());
 	activeProjectId = $state<string | null>(null);
@@ -404,14 +407,33 @@ class Session {
 		this.#writeStringList(REPOSITORIES_KEY, this.repositoryPaths);
 	}
 
+	/** Preserve a conversation group when its original folder cannot be mounted. */
+	markRepositoryHistoryOnly(path: string): void {
+		const normalized = path.trim();
+		if (!normalized) return;
+		if (this.historyOnlyRepositoryPaths.includes(normalized)) return;
+		this.historyOnlyRepositoryPaths = [...this.historyOnlyRepositoryPaths, normalized];
+		this.#writeStringList(HISTORY_ONLY_REPOSITORIES_KEY, this.historyOnlyRepositoryPaths);
+	}
+
+	/** A successful mount restores the repository's normal, live state. */
+	markRepositoryAvailable(path: string): void {
+		const normalized = path.trim();
+		if (!normalized || !this.historyOnlyRepositoryPaths.includes(normalized)) return;
+		this.historyOnlyRepositoryPaths = this.historyOnlyRepositoryPaths.filter((item) => item !== normalized);
+		this.#writeStringList(HISTORY_ONLY_REPOSITORIES_KEY, this.historyOnlyRepositoryPaths);
+	}
+
 	/** Hide a repository from navigation without deleting its conversations or files. */
 	forgetRepository(path: string): void {
 		this.repositoryPaths = this.repositoryPaths.filter((item) => item !== path);
+		this.historyOnlyRepositoryPaths = this.historyOnlyRepositoryPaths.filter((item) => item !== path);
 		if (!this.hiddenRepositoryPaths.includes(path)) {
 			this.hiddenRepositoryPaths = [...this.hiddenRepositoryPaths, path];
 		}
 		this.#writeStringList(REPOSITORIES_KEY, this.repositoryPaths);
 		this.#writeStringList(HIDDEN_REPOSITORIES_KEY, this.hiddenRepositoryPaths);
+		this.#writeStringList(HISTORY_ONLY_REPOSITORIES_KEY, this.historyOnlyRepositoryPaths);
 	}
 
 	get activeProject(): Project | null {

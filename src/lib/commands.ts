@@ -154,12 +154,15 @@ export function completionsFor(input: string): string[] {
 }
 
 /** Open a folder as the workspace. With no path, shows the native picker. */
-export async function openFolder(path?: string): Promise<void> {
-	if (session.mountProgress) return;
+export async function openFolder(
+	path?: string,
+	options: { reportError?: boolean } = {}
+): Promise<boolean> {
+	if (session.mountProgress) return false;
 	if (!isDesktop()) {
 		session.setWorkspaceView('ask');
-		session.addSystem('Fella needs the desktop app to do that.');
-		return;
+		if (options.reportError !== false) session.addSystem('Fella needs the desktop app to do that.');
+		return false;
 	}
 
 	let chosen = path;
@@ -168,7 +171,7 @@ export async function openFolder(path?: string): Promise<void> {
 		(document.activeElement as HTMLElement | null)?.blur();
 		chosen = (await pickFolder()) ?? undefined;
 	}
-	if (!chosen) return;
+	if (!chosen) return false;
 	try {
 		session.mountProgress = {
 			phase: 'scanning',
@@ -181,12 +184,28 @@ export async function openFolder(path?: string): Promise<void> {
 			session.mountProgress = progress;
 		});
 		session.rememberRepository(session.catalog.workspace ?? chosen);
+		session.markRepositoryAvailable(session.catalog.workspace ?? chosen);
 		session.addSystem(summarizeCatalog());
+		return true;
 	} catch (e) {
-		session.addSystem(`Couldn't open that folder: ${errMsg(e)}`);
+		if (options.reportError !== false) session.addSystem(`Couldn't open that folder: ${errMsg(e)}`);
+		return false;
 	} finally {
 		session.mountProgress = null;
 	}
+}
+
+/** Reopen a remembered repository without writing a low-level mount error into chat.
+ *  A failed attempt keeps the path as a history group and lets the sidebar explain
+ *  that its conversations remain available. */
+export async function openRepository(path: string): Promise<boolean> {
+	if (!path.trim()) return false;
+	if (session.mountProgress) return false;
+	if (!isDesktop()) return openFolder(path);
+	const opened = await openFolder(path, { reportError: false });
+	if (opened) session.markRepositoryAvailable(path);
+	else if (!session.mountProgress) session.markRepositoryHistoryOnly(path);
+	return opened;
 }
 
 /** On launch, load the (empty) catalog and note the last session's folder so
@@ -197,6 +216,7 @@ export async function loadStartupCatalog(): Promise<void> {
 	try {
 		session.catalog = await ipc.getCatalog();
 		session.rememberRepository(session.catalog.workspace);
+		if (session.catalog.workspace) session.markRepositoryAvailable(session.catalog.workspace);
 	} catch {
 		/* no engine yet the welcome screen handles it */
 	}
@@ -210,7 +230,7 @@ export async function loadStartupCatalog(): Promise<void> {
 /** Reopen the folder from the last session (the welcome screen's "Reopen"
  *  button, and Enter on an empty composer with no folder open). */
 export async function resumeLastFolder(): Promise<void> {
-	if (session.lastFolder) await openFolder(session.lastFolder);
+	if (session.lastFolder) await openRepository(session.lastFolder);
 }
 
 /** Reopen an archived conversation and restore the folder it belongs to. */
@@ -226,8 +246,12 @@ export async function openConversation(summary: ConversationSummary): Promise<vo
 			JSON.parse(raw);
 		const messages = Array.isArray(saved.messages) ? (saved.messages as Message[]) : [];
 		session.loadArchivedTab(summary.id, messages, saved.title ?? null, summary.workspace, saved.companionPane);
-		if (summary.workspace && summary.workspace !== session.catalog.workspace) {
-			await openFolder(summary.workspace);
+		if (
+			summary.workspace &&
+			summary.workspace !== session.catalog.workspace &&
+			!session.historyOnlyRepositoryPaths.includes(summary.workspace)
+		) {
+			await openRepository(summary.workspace);
 		}
 	} catch (e) {
 		session.addSystem(`error: ${errMsg(e)}`);
@@ -303,6 +327,16 @@ export async function dispatch(raw: string, clarificationTurnId?: string): Promi
 	}
 
 	const conv = session.ensureChat();
+	const origin = conv.workspaceScope;
+	if (
+		origin &&
+		origin !== session.catalog.workspace &&
+		session.historyOnlyRepositoryPaths.includes(origin)
+	) {
+		const name = origin.replace(/[/\\]+$/, '').split(/[/\\]/).pop() || 'workspace';
+		conv.addSystem(`“${name}” is available as history only. Reconnect its folder before continuing analysis.`);
+		return;
+	}
 	conv.bindWorkspaceScope(session.catalog.workspace ?? null);
 	conv.addUser(text);
 	await ask(text, conv, clarificationTurnId);
@@ -453,11 +487,10 @@ async function runCommand(text: string): Promise<void> {
 					session.addSystem(
 						`Reopened: "${chosen.title ?? chosen.preview}" (${dateLabel(chosen.saved_at_ms)}).`
 					);
-					// Auto-mount the folder this conversation was about (openFolder
-					// reports a failure -- moved/deleted folder -- as a system
-					// message on its own, nothing extra needed here for that).
+					// Restore the original folder when possible. If unavailable, keep
+					// the archived conversation and label its repository history-only.
 					if (chosen.workspace && chosen.workspace !== session.catalog.workspace) {
-						await openFolder(chosen.workspace);
+						await openRepository(chosen.workspace);
 					}
 					return;
 				}

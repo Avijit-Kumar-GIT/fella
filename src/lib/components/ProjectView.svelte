@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { baseName, openFolder } from '$lib/commands';
+	import { baseName, openRepository } from '$lib/commands';
 	import { ipc, isDesktop } from '$lib/ipc';
 	import { session } from '$lib/session.svelte';
 	import type { ConversationSummary } from '$lib/types';
@@ -64,7 +64,7 @@
 	}
 
 	async function mountRepository(): Promise<void> {
-		if (project) await openFolder(project.workspace);
+		if (project) await openRepository(project.workspace);
 	}
 
 	async function askRepository(): Promise<void> {

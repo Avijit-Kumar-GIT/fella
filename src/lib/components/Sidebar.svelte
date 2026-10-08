@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { ipc, isDesktop } from '$lib/ipc';
-	import { errMsg, openConversation, openFolder } from '$lib/commands';
+	import { errMsg, openConversation, openFolder, openRepository } from '$lib/commands';
 	import { session } from '$lib/session.svelte';
 	import type { ConversationSummary } from '$lib/types';
 	import Icon from './Icon.svelte';
@@ -15,6 +15,7 @@
 		items: ConversationSummary[];
 		current: boolean;
 		expanded: boolean;
+		historyOnly: boolean;
 	};
 
 	const LOCAL_REPOSITORY = '__no-repository__';
@@ -92,6 +93,7 @@
 					name: repositoryName(group.path),
 					items: group.items,
 					current: active,
+					historyOnly: !!group.path && session.historyOnlyRepositoryPaths.includes(group.path),
 					expanded: expandedRepos[key] ?? active
 				};
 			});
@@ -103,18 +105,25 @@
 		session.newTab();
 	}
 
-	function toggleRepository(repo: Repository): void {
-		menuRepository = null;
-		expandedRepos = { ...expandedRepos, [repo.key]: !repo.expanded };
-		if (repo.expanded || !repo.path) return;
+	async function selectRepository(repo: Repository): Promise<boolean> {
+		if (!repo.path) return false;
 		session.setWorkspaceView('ask');
-		if (repo.path !== session.catalog.workspace) void openFolder(repo.path);
+		if (repo.path === session.catalog.workspace) return true;
+		return openRepository(repo.path);
+	}
+
+	async function toggleRepository(repo: Repository): Promise<void> {
+		menuRepository = null;
+		const opening = !repo.expanded;
+		expandedRepos = { ...expandedRepos, [repo.key]: opening };
+		if (!repo.path) return;
+		await selectRepository(repo);
 	}
 
 	async function openRepositoryWorkspace(repo: Repository): Promise<void> {
 		menuRepository = null;
 		expandedRepos = { ...expandedRepos, [repo.key]: true };
-		if (repo.path && repo.path !== session.catalog.workspace) await openFolder(repo.path);
+		if (repo.path && repo.path !== session.catalog.workspace && !(await openRepository(repo.path))) return;
 		session.setWorkspacePane('sources');
 	}
 
@@ -311,22 +320,45 @@
 							</div>
 						{/if}
 					</div>
+					{#if repo.historyOnly}
+						<div
+							class="repository-history-state"
+							role="status"
+							aria-label="History only. The folder could not be opened; saved conversations remain available."
+							title="The folder could not be opened here. Saved conversations remain available."
+						>
+							History only · folder unavailable
+						</div>
+					{/if}
 					{#if repo.expanded}
 						<div class="repository-contents">
 							{#if repo.path}
 								<div class="repository-tools" aria-label={`${repo.name} tools`}>
-									<button
-										class="repository-tool"
-										class:active={repo.current && session.workspaceView === 'workspace'}
-										type="button"
-										aria-label={`Open ${repo.name} workspace`}
-										aria-current={repo.current && session.workspaceView === 'workspace' ? 'page' : undefined}
-										title={`Open workspace (${shortcutModifier}+Shift+S)`}
-										onclick={() => void openRepositoryWorkspace(repo)}
-									>
-										<span class="row-slot row-icon"><Icon name="folder" size={16} /></span>
-										<span>Workspace</span>
-									</button>
+									{#if repo.historyOnly}
+										<button
+											class="repository-tool"
+											type="button"
+											aria-label={`Try to reopen ${repo.name}`}
+											title="Try the saved folder location again"
+											onclick={() => void selectRepository(repo)}
+										>
+											<span class="row-slot row-icon"><Icon name="folder" size={16} /></span>
+											<span>Try to reopen folder</span>
+										</button>
+									{:else}
+										<button
+											class="repository-tool"
+											class:active={repo.current && session.workspaceView === 'workspace'}
+											type="button"
+											aria-label={`Open ${repo.name} workspace`}
+											aria-current={repo.current && session.workspaceView === 'workspace' ? 'page' : undefined}
+											title={`Open workspace (${shortcutModifier}+Shift+S)`}
+											onclick={() => void openRepositoryWorkspace(repo)}
+										>
+											<span class="row-slot row-icon"><Icon name="folder" size={16} /></span>
+											<span>Workspace</span>
+										</button>
+									{/if}
 								</div>
 							{/if}
 							{#each repo.items as c (c.id)}
@@ -558,6 +590,16 @@
 		color: var(--text-dim);
 		font-size: var(--fs-sm);
 		font-weight: 550;
+	}
+	.repository-history-state {
+		min-width: 0;
+		padding: 0 8px 3px 44px;
+		overflow: hidden;
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+		line-height: 16px;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 	.repository-row:hover .repository-copy,
 	.repository-row:focus-visible .repository-copy {

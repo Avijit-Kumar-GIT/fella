@@ -4,6 +4,7 @@
 		COMMAND_DESCRIPTIONS,
 		completionsFor,
 		dispatch,
+		openRepository,
 		resumeLastFolder,
 		selectModel,
 		steerRun,
@@ -30,12 +31,23 @@ import ProviderIcon from './ProviderIcon.svelte';
 	let folderName = $derived(
 		session.catalog.workspace?.replace(/[/\\]+$/, '').replace(/^.*[/\\]/, '') ?? ''
 	);
+	let historyOnlyPath = $derived.by(() => {
+		const path = session.activeChat?.workspaceScope;
+		return path && path !== session.catalog.workspace && session.historyOnlyRepositoryPaths.includes(path)
+			? path
+			: null;
+	});
+	let historyOnlyName = $derived(
+		historyOnlyPath?.replace(/[/\\]+$/, '').replace(/^.*[/\\]/, '') ?? ''
+	);
 	let placeholder = $derived(
 		session.pendingKey
 			? `Paste your ${session.pendingKey.display} API key…`
-			: folderName
-				? 'Ask a question…'
-				: 'Ask a question, or mount a folder to analyze…'
+			: historyOnlyPath
+				? 'Reconnect this folder to continue analysis…'
+				: folderName
+					? 'Ask a question…'
+					: 'Ask a question, or mount a folder to analyze…'
 	);
 
 	// --- completion menu -------------------------------------------------
@@ -467,6 +479,12 @@ import ProviderIcon from './ProviderIcon.svelte';
 		</div>
 	{:else}
 	<div class="field" class:secret={pendingInput}>
+		{#if historyOnlyPath && !pendingInput}
+			<div class="history-only-note" role="status">
+				<span>This conversation is history only. Reconnect <strong>{historyOnlyName}</strong> to continue analysis.</span>
+				<button type="button" onclick={() => void openRepository(historyOnlyPath!)}>Reconnect</button>
+			</div>
+		{/if}
 		{#if !pendingInput}
 			<div class="context-row">
 				{#each contextRefs as ref (ref.kind + ':' + ref.key)}
@@ -500,7 +518,14 @@ import ProviderIcon from './ProviderIcon.svelte';
 			aria-controls="composer-completions"
 			aria-autocomplete="list"
 			aria-activedescendant={menuOpen && !contextOpen && !modeOpen && !modelOpen && menuSel >= 0 ? 'composer-opt-' + menuSel : undefined}
-			aria-label={folderName ? `Ask about ${folderName}` : 'Ask a question'}
+			aria-label={
+				historyOnlyPath
+					? `History only conversation from ${historyOnlyName}`
+					: folderName
+						? `Ask about ${folderName}`
+						: 'Ask a question'
+			}
+			disabled={!!historyOnlyPath}
 			{placeholder}
 			oninput={onInput}
 			onkeydown={onKey}
@@ -624,6 +649,33 @@ import ProviderIcon from './ProviderIcon.svelte';
 		max-width: var(--content-max);
 		margin-inline: auto;
 		padding: var(--space-1) var(--pad) var(--space-2);
+	}
+	.history-only-note {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: var(--space-2);
+		padding: 2px 0 8px;
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+	}
+	.history-only-note span {
+		min-width: 0;
+	}
+	.history-only-note strong {
+		color: var(--text-dim);
+		font-weight: 600;
+	}
+	.history-only-note button {
+		flex: none;
+		padding: 3px 8px;
+		border-radius: var(--radius-chip);
+		background: var(--bg-inset);
+		color: var(--text-dim);
+		font-size: var(--fs-xs);
+	}
+	.history-only-note button:hover {
+		color: var(--text);
 	}
 	.context-row {
 		display: flex;

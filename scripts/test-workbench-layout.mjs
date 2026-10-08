@@ -11,7 +11,9 @@ const server = await createServer({
 const { isRenderableChartEvidence, paneFreshness, parseCompanionPane } = await server.ssrLoadModule('/src/lib/workbench.ts');
 const { render } = await server.ssrLoadModule('svelte/server');
 const { session } = await server.ssrLoadModule('/src/lib/session.svelte.ts');
+const { dispatch, openRepository } = await server.ssrLoadModule('/src/lib/commands.ts');
 const { default: CompanionPane } = await server.ssrLoadModule('/src/lib/components/CompanionPane.svelte');
+const { default: Sidebar } = await server.ssrLoadModule('/src/lib/components/Sidebar.svelte');
 after(() => server.close());
 
 test('conversation archive accepts a chart reference without copying chart data', () => {
@@ -135,5 +137,120 @@ test('a chart companion resolves the selected conversation evidence by identity'
 		session.catalog = oldCatalog;
 		session.activeChat.messages = oldMessages;
 		session.activeChat.companionPane = oldPane;
+	}
+});
+
+test('an unavailable repository becomes history-only without adding a raw mount error to chat', async () => {
+	const oldWindow = globalThis.window;
+	const oldCatalog = session.catalog;
+	const oldProgress = session.mountProgress;
+	const oldMessages = session.activeChat.messages;
+	const oldRepositories = session.repositoryPaths;
+	const oldHistoryOnly = session.historyOnlyRepositoryPaths;
+	const oldHidden = session.hiddenRepositoryPaths;
+	const path = 'C:/Users/test/Documents/archived-workspace';
+	try {
+		Object.defineProperty(globalThis, 'window', {
+			configurable: true,
+			writable: true,
+			value: {
+				fella: {
+					invoke: async () => undefined,
+					openWorkspace: async () => {
+						throw new Error(`That doesn't look like a folder: ${path}`);
+					}
+				}
+			}
+		});
+		session.catalog = { workspace: null, sources: [] };
+		session.mountProgress = null;
+		session.activeChat.messages = [];
+		session.repositoryPaths = [path];
+		session.historyOnlyRepositoryPaths = [];
+		session.hiddenRepositoryPaths = [];
+
+		assert.equal(await openRepository(path), false);
+		assert.ok(session.repositoryPaths.includes(path));
+		assert.ok(session.historyOnlyRepositoryPaths.includes(path));
+		assert.equal(session.activeChat.messages.length, 0);
+
+		const html = render(Sidebar).body;
+		assert.match(html, /History only · folder unavailable/);
+		assert.match(html, /saved conversations remain available/i);
+		assert.doesNotMatch(html, /That doesn't look like a folder/);
+	} finally {
+		session.catalog = oldCatalog;
+		session.mountProgress = oldProgress;
+		session.activeChat.messages = oldMessages;
+		session.repositoryPaths = oldRepositories;
+		session.historyOnlyRepositoryPaths = oldHistoryOnly;
+		session.hiddenRepositoryPaths = oldHidden;
+		if (oldWindow === undefined) delete globalThis.window;
+		else Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: oldWindow });
+	}
+});
+
+test('a later successful repository mount restores the normal live state', async () => {
+	const oldWindow = globalThis.window;
+	const oldCatalog = session.catalog;
+	const oldProgress = session.mountProgress;
+	const oldMessages = session.activeChat.messages;
+	const oldRepositories = session.repositoryPaths;
+	const oldHistoryOnly = session.historyOnlyRepositoryPaths;
+	const path = 'C:/Users/test/Documents/reconnected-workspace';
+	try {
+		Object.defineProperty(globalThis, 'window', {
+			configurable: true,
+			writable: true,
+			value: {
+				fella: {
+					invoke: async () => undefined,
+					openWorkspace: async (chosen) => ({ workspace: chosen, sources: [], skipped: [] })
+				}
+			}
+		});
+		session.catalog = { workspace: null, sources: [] };
+		session.mountProgress = null;
+		session.activeChat.messages = [];
+		session.repositoryPaths = [path];
+		session.historyOnlyRepositoryPaths = [path];
+
+		assert.equal(await openRepository(path), true);
+		assert.equal(session.catalog.workspace, path);
+		assert.ok(!session.historyOnlyRepositoryPaths.includes(path));
+	} finally {
+		session.catalog = oldCatalog;
+		session.mountProgress = oldProgress;
+		session.activeChat.messages = oldMessages;
+		session.repositoryPaths = oldRepositories;
+		session.historyOnlyRepositoryPaths = oldHistoryOnly;
+		if (oldWindow === undefined) delete globalThis.window;
+		else Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: oldWindow });
+	}
+});
+
+test('a history-only conversation cannot silently analyze the currently mounted different folder', async () => {
+	const oldCatalog = session.catalog;
+	const oldMessages = session.activeChat.messages;
+	const oldWorkspaceScope = session.activeChat.workspaceScope;
+	const oldHistoryOnly = session.historyOnlyRepositoryPaths;
+	const origin = 'C:/Users/test/Documents/archived-workspace';
+	try {
+		session.catalog = { workspace: 'C:/Users/test/Documents/another-workspace', sources: [] };
+		session.activeChat.messages = [];
+		session.activeChat.workspaceScope = origin;
+		session.historyOnlyRepositoryPaths = [origin];
+
+		await dispatch('Continue the analysis from my saved conversation');
+
+		assert.equal(session.activeChat.messages.length, 1);
+		assert.equal(session.activeChat.messages[0].role, 'system');
+		assert.match(session.activeChat.messages[0].text, /available as history only/i);
+		assert.doesNotMatch(session.activeChat.messages.map((message) => message.text).join('\n'), /Continue the analysis/);
+	} finally {
+		session.catalog = oldCatalog;
+		session.activeChat.messages = oldMessages;
+		session.activeChat.workspaceScope = oldWorkspaceScope;
+		session.historyOnlyRepositoryPaths = oldHistoryOnly;
 	}
 });

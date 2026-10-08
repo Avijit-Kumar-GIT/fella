@@ -3,7 +3,7 @@
 		baseName,
 		COMMAND_DESCRIPTIONS,
 		openConversation,
-		openFolder,
+		openRepository,
 		SLASH_COMMANDS
 	} from '$lib/commands';
 	import { ipc, isDesktop } from '$lib/ipc';
@@ -259,7 +259,7 @@
 				return;
 			case 'repository':
 				session.setWorkspaceView('ask');
-				await openFolder(result.path);
+				await openRepository(result.path);
 				return;
 			case 'conversation':
 				await openConversation(result.item);
