@@ -20,8 +20,10 @@ import type {
 	Project,
 	RunStep,
 	Settings,
+	SourceInfo,
 	WorkspaceProgress
 } from './types';
+import { isRenderableChartEvidence, parseCompanionPane, type CompanionPane } from './workbench';
 
 
 function uid(): string {
@@ -170,6 +172,8 @@ export class Conversation {
 	mode = $state<AskMode>('ask');
 	/** Sources and fields chosen from the workspace for this tab. */
 	contextRefs = $state<ContextReference[]>([]);
+	/** Optional artifact surface beside this conversation's transcript. */
+	companionPane = $state<CompanionPane | null>(null);
 	/** The compact, local run trace shown beneath the transcript. */
 	runSteps = $state<RunStep[]>([]);
 	runStartedAt = $state<number | null>(null);
@@ -296,7 +300,12 @@ export class Conversation {
 		try {
 			localStorage.setItem(
 				PREFIX + this.id,
-				JSON.stringify({ id: this.id, workspace, messages: this.messages.slice(-200) })
+				JSON.stringify({
+					id: this.id,
+					workspace,
+					messages: this.messages.slice(-200),
+					companionPane: this.companionPane
+				})
 			);
 		} catch {
 			/* ignore */
@@ -489,6 +498,49 @@ class Session {
 		this.selectedSourcePath = path;
 	}
 
+	/** Open a catalog-backed source without changing the conversation's data
+	 * scope. The pane is a user interface choice, not analysis context. */
+	openSourcePane(source: SourceInfo): void {
+		const workspace = this.catalog.workspace;
+		if (!workspace || !this.catalog.sources.some((item) => item.path === source.path)) return;
+		this.activeChat.companionPane = {
+			kind: 'source',
+			path: source.path,
+			name: source.name,
+			workspacePath: workspace,
+			revision: this.catalog.revision ?? null
+		};
+		this.workspaceView = 'ask';
+		this.persist();
+	}
+
+	/** Open an already-produced chart by its transcript/evidence identity. */
+	openChartPane(messageId: string, evidenceIndex: number): void {
+		const message = this.activeChat.messages.find((item) => item.id === messageId);
+		const evidence = message?.answer?.evidence[evidenceIndex];
+		if (
+			message?.role !== 'assistant' ||
+			!message.answer ||
+			!evidence ||
+			!isRenderableChartEvidence(evidence, message.answer.verification ?? [])
+		) return;
+		this.activeChat.companionPane = {
+			kind: 'chart',
+			messageId,
+			evidenceIndex,
+			...(evidence.id ? { evidenceId: evidence.id } : {}),
+			workspacePath: message.answer?.workspace?.path ?? this.activeChat.workspaceScope ?? null,
+			revision: message.answer?.workspace?.revision ?? null
+		};
+		this.workspaceView = 'ask';
+		this.persist();
+	}
+
+	closeCompanionPane(): void {
+		this.activeChat.companionPane = null;
+		this.persist();
+	}
+
 	/** Focus a conversation tab. */
 	activateTab(index: number): void {
 		if (!this.tabs[index]) return;
@@ -590,7 +642,8 @@ class Session {
 		id: string,
 		messages: Message[],
 		title: string | null = null,
-		workspace: string | null = null
+		workspace: string | null = null,
+		companionPane: unknown = null
 	): void {
 		// Already open (e.g. the very conversation you're re-clicking in the
 		// sidebar) -- focus it instead of forking a second live copy under
@@ -599,6 +652,7 @@ class Session {
 		if (existing >= 0) {
 			const tab = this.tabs[existing];
 			if (tab.workspaceScope === undefined) tab.workspaceScope = workspace;
+			tab.companionPane = parseCompanionPane(companionPane) ?? tab.companionPane;
 			this.active = existing;
 			return;
 		}
@@ -607,6 +661,7 @@ class Session {
 		c.model = inherit;
 		c.title = title;
 		c.workspaceScope = workspace;
+		c.companionPane = parseCompanionPane(companionPane);
 		// A reloaded transcript never has a run in flight.
 		c.messages = messages.map((m) => (m.pending ? { ...m, pending: false } : m));
 		this.tabs.push(c);
@@ -747,7 +802,8 @@ class Session {
 			saved_at_ms: Date.now(),
 			workspace: tab.workspaceScope ?? null,
 			messages: tab.messages,
-			title: tab.title ?? undefined
+			title: tab.title ?? undefined,
+			companionPane: tab.companionPane
 		});
 		try {
 			await ipc.archiveConversation(tab.id, body);
@@ -761,7 +817,7 @@ class Session {
 	 *  keeping); false only when the archive IPC threw. */
 	async #archiveRaw(raw: string | null): Promise<boolean> {
 		if (!raw) return true;
-		let saved: { id?: string; workspace?: string | null; messages?: unknown };
+		let saved: { id?: string; workspace?: string | null; messages?: unknown; companionPane?: unknown };
 		try {
 			saved = JSON.parse(raw);
 		} catch {
@@ -776,7 +832,8 @@ class Session {
 			id: saved.id ?? '',
 			saved_at_ms: last?.ts ?? Date.now(),
 			workspace: archivedWorkspace(saved.messages, saved.workspace),
-			messages: saved.messages
+			messages: saved.messages,
+			companionPane: parseCompanionPane(saved.companionPane)
 		});
 		try {
 			await ipc.archiveConversation(String(saved.id ?? ''), body);

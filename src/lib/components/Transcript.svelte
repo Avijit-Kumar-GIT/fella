@@ -267,6 +267,13 @@
 							ontoggle={() => toggle(m.id)}
 							question={questionFor(i)}
 							showFollowups={i === session.messages.length - 1 && !m.pending}
+							openChartIndex={
+								session.activeChat.companionPane?.kind === 'chart' &&
+								session.activeChat.companionPane.messageId === m.id
+									? session.activeChat.companionPane.evidenceIndex
+									: null
+							}
+							onopenchart={(messageId, evidenceIndex) => session.openChartPane(messageId, evidenceIndex)}
 							onfollowup={(next, clarificationTurnId) =>
 								void dispatch(next, clarificationTurnId)}
 							onrerun={() => rerun(m)}

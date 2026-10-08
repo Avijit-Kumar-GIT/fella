@@ -99,6 +99,47 @@ try {
 		}
 	}).body;
 	assert.equal(count(renderedMessage, /class="[^"]*\bchart-card\b[^"]*"/g), 1);
+	const openableChartMessage = render(Message, {
+		props: {
+			onopenchart: () => {},
+			message: {
+				id: 'openable-chart', role: 'assistant', text: 'Metric totals by segment.', ts: 2,
+				answer: {
+					text: 'Metric totals by segment.', verification: [],
+					evidence: [{ id: 'chart-evidence', tool: 'make_chart', args: {}, result_summary: 'accepted', chart: finalChart }]
+				}
+			}
+		}
+	}).body;
+	assert.equal(count(openableChartMessage, /class="[^"]*\bchart-card\b[^"]*"/g), 1);
+	assert.match(openableChartMessage, />Open beside<\/button>/);
+
+	// In the composable Ask layout, opening a chart beside the conversation
+	// moves the full visual into the companion pane and leaves a compact
+	// transcript reference instead of rendering the same chart twice.
+	const movedChartMessage = render(Message, {
+		props: {
+			openChartIndex: 0,
+			onopenchart: () => {},
+			message: {
+				id: 'moved-chart',
+				role: 'assistant',
+				text: 'Metric totals by segment.',
+				ts: 2,
+				answer: {
+					text: 'Metric totals by segment.',
+					verification: [],
+					evidence: [{
+						id: 'chart-evidence', tool: 'make_chart', args: {},
+						result_summary: 'accepted', chart: finalChart
+					}]
+				}
+			}
+		}
+	}).body;
+	assert.equal(count(movedChartMessage, /class="[^\"]*\bchart-card\b[^\"]*"/g), 0);
+	assert.match(movedChartMessage, /Chart open beside conversation/);
+	assert.doesNotMatch(movedChartMessage, /Open beside/);
 
 	// The evidence disclosure names the answer mode instead of presenting the
 	// same generic analysis label for general answers, inspections, and analysis.

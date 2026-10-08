@@ -87,6 +87,53 @@ integrity failure such as a changed workspace revision blocks the whole turn.
 The user can inspect details without seeing a pass/fail badge repeated under
 every message.
 
+## Interaction model and composable interface
+
+Fella's interaction model is conversation-first: a conversation is the durable
+unit of questions, follow-ups, clarifications, model choice, and analysis
+history. It may be unbound to a folder or pinned to the repository where its
+first question began. Switching conversations changes the active analytical
+thread; it does not transfer another thread's workspace scope or view state.
+
+The app shell stays stable while the Ask work area can compose a small set of
+typed surfaces:
+
+```text
+App shell (fixed)
+├─ Sidebar and repository/history navigation
+├─ Titlebar and conversation tabs
+└─ Ask workbench (active conversation)
+   ├─ Conversation pane (always present)
+   ├─ Companion pane (optional; chart or source preview)
+   └─ Composer (fixed to the active conversation)
+```
+
+The first implementation is intentionally bounded to one optional companion
+pane. A user opens a chart from its answer or a source from Sources; the chosen
+artifact appears beside the transcript, and the composer remains docked to the
+same conversation. Opening a pane changes presentation only: it does not add
+context, rerun analysis, change folder scope, or grant the model another tool.
+Closing it restores the full-width transcript. A chart shown in the companion
+is represented by a small reference in the transcript rather than duplicated.
+
+Companion state belongs to a conversation and is persisted with its local
+conversation record. Chart panes reference the answer/evidence entry, so the
+rendered values remain those produced by that run. Source panes resolve to the
+currently mounted catalog entry by exact path; if workspace or revision differs,
+the UI identifies the stale state and does not silently present a newer source
+as the old preview. Evidence and analysis details remain attached to their
+answer rather than becoming another general-purpose pane.
+
+Composable surfaces are selected from a fixed, typed registry. The shell,
+sidebar, titlebar, tab strip, composer, settings, dialogs, and command palette
+are not draggable widgets. Users cannot create arbitrary panes, run custom UI
+code, or ask the model to author new interface components. Future work may add
+resizing or a small number of side-by-side artifacts, but only where it keeps
+the conversation primary and has a clear information hierarchy; Fella is not
+intended to become a terminal multiplexer or an unbounded widget canvas.
+Workspace/Guide, Project, and Settings remain dedicated navigated surfaces in
+this first phase; they are not currently dockable into the Ask workbench.
+
 ## Workspace and analysis data
 
 `catalog.rs` walks the selected folder, applies `.fellaignore`, classifies

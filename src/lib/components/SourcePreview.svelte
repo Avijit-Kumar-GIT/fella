@@ -3,11 +3,16 @@
 	import type { QueryResult, SourceInfo } from '$lib/types';
 	import DataLoader from './DataLoader.svelte';
 
-	let { source }: { source: SourceInfo } = $props();
+	let {
+		source,
+		workspacePath = null,
+		revision = null
+	}: { source: SourceInfo; workspacePath?: string | null; revision?: string | null } = $props();
 	let preview = $state<QueryResult | null>(null);
 	let loading = $state(false);
 	let error = $state('');
-	let loadedPath = $state('');
+	let loadedIdentity = $state('');
+	let requestGeneration = 0;
 
 	function cellValue(value: unknown): string {
 		if (value == null) return '—';
@@ -15,10 +20,11 @@
 		return String(value);
 	}
 
-	async function load(path: string, name: string): Promise<void> {
+	async function load(identity: string, name: string): Promise<void> {
+		const generation = ++requestGeneration;
 		preview = null;
 		error = '';
-		loadedPath = path;
+		loadedIdentity = identity;
 		if (!isDesktop()) {
 			error = 'Preview is available in the Fella desktop app.';
 			return;
@@ -26,23 +32,30 @@
 		loading = true;
 		try {
 			const result = await ipc.sampleSource(name, 5);
-			if (loadedPath === path) preview = result;
+			if (requestGeneration === generation && loadedIdentity === identity) preview = result;
 		} catch (e) {
-			if (loadedPath === path) error = e instanceof Error ? e.message : String(e);
+			if (requestGeneration === generation && loadedIdentity === identity) {
+				error = e instanceof Error ? e.message : String(e);
+			}
 		} finally {
-			if (loadedPath === path) loading = false;
+			if (requestGeneration === generation && loadedIdentity === identity) loading = false;
 		}
 	}
 
 	$effect(() => {
 		const path = source.path;
+		const root = workspacePath;
+		const sourceRevision = revision;
+		const identity = `${root ?? ''}\u0000${sourceRevision ?? ''}\u0000${path}`;
 		if (!source.view) {
+			requestGeneration++;
 			preview = null;
 			error = '';
-			loadedPath = path;
+			loadedIdentity = identity;
+			loading = false;
 			return;
 		}
-		void load(path, source.name);
+		void load(identity, source.name);
 	});
 </script>
 

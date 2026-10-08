@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import CommandPalette from '$lib/components/CommandPalette.svelte';
+	import CompanionPane from '$lib/components/CompanionPane.svelte';
 	import Composer from '$lib/components/Composer.svelte';
 	import Icon from '$lib/components/Icon.svelte';
 	import Logo from '$lib/components/Logo.svelte';
@@ -301,7 +302,12 @@
 				{:else if activeView === 'settings'}
 					<SettingsView />
 				{:else}
-					<Transcript bind:this={transcript} />
+					<div class="ask-workbench">
+						<Transcript bind:this={transcript} />
+						{#if session.activeChat.companionPane}
+							<CompanionPane />
+						{/if}
+					</div>
 				{/if}
 			</div>
 		</main>
@@ -393,6 +399,14 @@
 		min-height: 0;
 		display: flex;
 	}
+	.ask-workbench {
+		position: relative;
+		display: flex;
+		flex: 1;
+		min-width: 0;
+		min-height: 0;
+	}
+	.ask-workbench > :global(.transcript) { flex: 1; min-width: 0; }
 	/* Status line + composer read as one calm footer zone, continuous with the
 	   transcript surface above it no rule, no colour change. */
 	.dock {

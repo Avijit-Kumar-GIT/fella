@@ -222,10 +222,10 @@ export async function openConversation(summary: ConversationSummary): Promise<vo
 	try {
 		session.setWorkspaceView('ask');
 		const raw = await ipc.conversationLoad(summary.id);
-		const saved: { workspace?: string | null; messages?: unknown; title?: string | null } =
+		const saved: { workspace?: string | null; messages?: unknown; title?: string | null; companionPane?: unknown } =
 			JSON.parse(raw);
 		const messages = Array.isArray(saved.messages) ? (saved.messages as Message[]) : [];
-		session.loadArchivedTab(summary.id, messages, saved.title ?? null, summary.workspace);
+		session.loadArchivedTab(summary.id, messages, saved.title ?? null, summary.workspace, saved.companionPane);
 		if (summary.workspace && summary.workspace !== session.catalog.workspace) {
 			await openFolder(summary.workspace);
 		}
@@ -446,10 +446,10 @@ async function runCommand(text: string): Promise<void> {
 						return;
 					}
 					const raw = await ipc.conversationLoad(chosen.id);
-					const saved: { workspace?: string | null; messages?: unknown; title?: string | null } =
+					const saved: { workspace?: string | null; messages?: unknown; title?: string | null; companionPane?: unknown } =
 						JSON.parse(raw);
 					const messages = Array.isArray(saved.messages) ? (saved.messages as Message[]) : [];
-					session.loadArchivedTab(chosen.id, messages, saved.title ?? null, chosen.workspace);
+					session.loadArchivedTab(chosen.id, messages, saved.title ?? null, chosen.workspace, saved.companionPane);
 					session.addSystem(
 						`Reopened: "${chosen.title ?? chosen.preview}" (${dateLabel(chosen.saved_at_ms)}).`
 					);

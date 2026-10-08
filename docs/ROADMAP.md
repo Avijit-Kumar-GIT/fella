@@ -30,14 +30,17 @@ individual failed example into a special-case production rule.
 5. **Keep the runtime understandable.** Improve the analysis-turn trace and
    replay experience only where evaluation or user workflows show a real gap;
    preserve one model-directed loop and a small, fixed, read-only tool surface.
+6. **Make the Ask work area composable without making the app a canvas.** Keep
+   navigation and the composer anchored; let users open a chart or source
+   preview beside the active conversation. Expand to additional pane types or
+   resizing only when the conversation remains primary and provenance stays
+   clear.
 
 ## Deferred
 
 - **Web research:** intentionally deferred. It needs an explicit privacy and
   network policy, source provenance, hostile-page handling, and its own
   evaluation route before it is enabled.
-- **Composable/multiplexer-style UI:** a long-term product exploration, not a
-  near-term commitment.
 - **Multi-agent orchestration, file-writing tools, and enterprise governance:**
   not planned for the personal release without measured user need and a clear
   security and product design.

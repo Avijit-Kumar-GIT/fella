@@ -7,6 +7,7 @@
 	import Logo from './Logo.svelte';
 	import { renderMarkdown } from '$lib/markdown';
 	import { enterUp } from '$lib/motion';
+	import { isRenderableChartEvidence } from '$lib/workbench';
 
 	let {
 		message,
@@ -15,7 +16,9 @@
 		question = '',
 		showFollowups = false,
 		onfollowup,
-		onrerun
+		onrerun,
+		onopenchart,
+		openChartIndex = null
 	}: {
 		message: Message;
 		expanded?: boolean;
@@ -24,6 +27,8 @@
 		showFollowups?: boolean;
 		onfollowup?: (question: string, clarificationTurnId?: string) => void;
 		onrerun?: () => Promise<void>;
+		onopenchart?: (messageId: string, evidenceIndex: number) => void;
+		openChartIndex?: number | null;
 	} = $props();
 
 	// The model marks a one-line general-knowledge aside with "Background:" on
@@ -66,25 +71,14 @@
 	let chartItems = $derived.by(() => {
 		const seenVisuals = new Set<string>();
 		return (message.answer?.evidence ?? []).filter((e) => {
-			if (
-				e.tool !== 'make_chart' ||
-				!e.chart ||
-				e.error ||
-				e.verifier_disposition?.state === 'excluded' ||
-				(e.verifier_disposition?.state === 'artifact_withheld' && e.verifier_disposition.artifact === 'chart') ||
-				(message.answer?.verification ?? []).some(
-					(check) =>
-						!check.ok &&
-						check.finding?.effect === 'withhold_artifact' &&
-						check.finding.target_id === e.id
-				)
-			) return false;
+			if (!isRenderableChartEvidence(e, message.answer?.verification ?? [])) return false;
+			const visual = e.chart;
+			if (!visual) return false;
 
 			// A repair iteration can leave several evidence entries that render the
 			// same visual while using different SQL aliases/source metadata. Keep
 			// the first visible instance; all original calls remain in Analysis
 			// Details so this presentation cleanup doesn't discard audit history.
-			const visual = e.chart;
 			const key = JSON.stringify({
 				kind: visual.kind,
 				title: visual.title,
@@ -198,7 +192,19 @@
 			<div class="answer-visuals" aria-label="Visual answer">
 				{#each chartItems as e, i (e.id ?? `chart-${i}`)}
 					{#if e.chart}
-						<Chart spec={e.chart} source={scopeLabel} />
+						{@const evidenceIndex = message.answer?.evidence.indexOf(e) ?? i}
+						{#if openChartIndex === evidenceIndex}
+							<div class="chart-reference" aria-label="Chart open beside conversation">
+								<span>{e.chart.title?.trim() || 'Chart'} is open beside the conversation.</span>
+								<span>Close the side pane to return it here.</span>
+							</div>
+						{:else}
+							<Chart
+								spec={e.chart}
+								source={scopeLabel}
+								onopen={onopenchart ? () => onopenchart(message.id, evidenceIndex) : undefined}
+							/>
+						{/if}
 					{/if}
 				{/each}
 			</div>
@@ -240,6 +246,16 @@
 	.msg {
 		padding: var(--space-3) 0;
 	}
+	.chart-reference {
+		display: flex;
+		flex-direction: column;
+		gap: 3px;
+		padding: var(--space-3);
+		border-left: 2px solid var(--brand);
+		color: var(--text-dim);
+		font-size: var(--fs-xs);
+	}
+	.chart-reference span:first-child { color: var(--text); font-weight: 600; }
 	.msg.user {
 		display: flex;
 		justify-content: flex-end;

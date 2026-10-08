@@ -111,8 +111,8 @@ export const ipc = {
 	conversationsInfo: () => invoke<{ path: string; count: number }>('conversations_info'),
 	/** Every archived conversation, newest first, for `/history` to list. */
 	conversationsList: () => invoke<ConversationSummary[]>('conversations_list'),
-	/** Raw JSON of one archived conversation `{id, workspace, messages}`,
-	 * matching what `archiveConversation` originally wrote. */
+	/** Raw JSON of one archived conversation, including its transcript and
+	 * optional conversation-scoped presentation state. */
 	conversationLoad: (id: string) => invoke<string>('conversation_load', { id }),
 	/** Recent local-only run metadata; never includes transcript or workspace contents. */
 	runLogRecent: (limit = 50) => invoke<RunLogEntry[]>('run_log_recent', { limit }),

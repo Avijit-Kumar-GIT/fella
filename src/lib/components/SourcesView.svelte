@@ -187,6 +187,13 @@
 							<p class="type-label">{kindLabel(selected.kind)}</p>
 							<h2>{selected.name}</h2>
 						</div>
+						<button
+							class="open-beside"
+							type="button"
+							title="Return to Ask and open this source beside the conversation"
+							aria-label="Open source preview beside the active conversation"
+							onclick={() => session.openSourcePane(selected)}
+						>Open beside</button>
 					</div>
 					{#if relativePath(selected.path) !== selected.name}
 						<p class="path">{relativePath(selected.path)}</p>
@@ -206,7 +213,7 @@
 						<div class="note"><span>Note</span>{selected.note}</div>
 					{/if}
 
-					<SourcePreview source={selected} />
+					<SourcePreview source={selected} workspacePath={workspace} revision={session.catalog.revision ?? null} />
 
 					{#if selected.columns?.length}
 						<div class="columns">
@@ -491,6 +498,18 @@
 		align-items: flex-start;
 		gap: var(--space-3);
 	}
+	.detail-head > div:nth-child(2) { min-width: 0; }
+	.open-beside {
+		flex: none;
+		margin-left: auto;
+		padding: 5px 8px;
+		border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
+		color: var(--text-dim);
+		font-size: var(--fs-xs);
+		font-weight: 600;
+	}
+	.open-beside:hover { background: var(--bg-inset); color: var(--text); }
 	.detail-icon {
 		width: 30px;
 		height: 30px;

@@ -12,8 +12,9 @@
 
 	let {
 		spec,
-		source = ''
-	}: { spec: VisualizationSpec; source?: string } = $props();
+		source = '',
+		onopen
+	}: { spec: VisualizationSpec; source?: string; onopen?: () => void } = $props();
 
 	// Chart colors are deliberately separate from verification/status colors.
 	// Every mark also gets a label or a data-table equivalent.
@@ -398,6 +399,9 @@
 				</div>
 			{/if}
 		</div>
+		{#if onopen}
+			<button class="open-beside" type="button" onclick={onopen}>Open beside</button>
+		{/if}
 	</figcaption>
 	{#if source}<div class="chart-context">{source}</div>{/if}
 
@@ -625,6 +629,16 @@
 	.chart-header { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); }
 	.chart-header-copy { min-width: 0; }
 	.chart-title { color: var(--text); font-weight: 600; }
+	.open-beside {
+		flex: none;
+		padding: 4px 8px;
+		border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
+		color: var(--text-dim);
+		font-size: var(--fs-xs);
+		font-weight: 600;
+	}
+	.open-beside:hover { color: var(--text); background: var(--bg-inset); }
 	.chart-unit, .chart-context { margin-top: 2px; color: var(--text-faint); font-size: var(--fs-xs); }
 	.chart-axis-summary { margin-top: 2px; color: var(--text-dim); font-size: var(--fs-xs); }
 	.chart-context { margin-bottom: var(--space-2); }
