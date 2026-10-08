@@ -153,8 +153,8 @@ test('General and repository workspaces render independently, compose, and keep 
 	await page.goto('/');
 	const general = page.getByRole('article', { name: 'General workspace' });
 	await expect(general).toBeVisible();
-	await expect(page.getByText('1 of 4 open')).toBeVisible();
-	await page.getByRole('button', { name: 'New conversation' }).click();
+	await expect(page.getByRole('article')).toHaveCount(1);
+	await page.getByRole('button', { name: 'New conversation', exact: true }).click();
 	// Ask acts inside General; history selection is not titlebar-tab creation.
 	await expect(page.getByRole('tablist')).toHaveCount(0);
 	await page.getByRole('combobox', { name: 'Ask a question' }).fill('What is a useful way to compare trends?');
@@ -163,12 +163,16 @@ test('General and repository workspaces render independently, compose, and keep 
 	const unboundCall = await page.evaluate(() => window.__workspaceAskCalls.at(-1));
 	expect(unboundCall.workspaceId).toBeNull();
 	// A second conversation in General must not overwrite the first one's history.
-	await page.getByRole('button', { name: 'New conversation' }).click();
+	await page.getByRole('button', { name: 'New conversation', exact: true }).click();
 
 	await page.getByRole('button', { name: 'Add repository' }).first().click();
 	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
-	await expect(page.getByRole('article', { name: 'northwind-sales workspace' })).toContainText('sales.csv');
-	await expect(page.getByText('2 of 4 open')).toBeVisible();
+	await expect(page.getByRole('article', { name: 'northwind-sales workspace' })).toBeVisible();
+	await page.getByRole('button', { name: 'Open sources in northwind-sales' }).click();
+	await expect(page.getByRole('heading', { name: 'sales.csv' })).toBeVisible();
+	await page.getByRole('button', { name: 'New conversation', exact: true }).click();
+	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
+	await expect(page.getByRole('article')).toHaveCount(2);
 
 	await dispatchWorkspaceDrag(page, 'dragover', folders[1].path);
 	// Two open workspaces plus the proposed placement produce three preview slots.
@@ -177,9 +181,10 @@ test('General and repository workspaces render independently, compose, and keep 
 	await dispatchWorkspaceDrag(page, 'drop', folders[1].path);
 	const sales = page.getByRole('article', { name: 'northwind-sales workspace' });
 	const health = page.getByRole('article', { name: 'health-journal workspace' });
-	await expect(sales).toContainText('sales.csv');
-	await expect(health).toContainText('sleep.csv');
-	await expect(page.getByText('3 of 4 open')).toBeVisible();
+	await expect(sales).toBeVisible();
+	await expect(health).toBeVisible();
+	await expect(page.getByRole('button', { name: 'Open sources in health-journal' })).toBeVisible();
+	await expect(page.getByRole('article')).toHaveCount(3);
 
 	const arrangement = page.getByRole('combobox', { name: 'Workspace arrangement' });
 	await arrangement.selectOption('one-left-two-right');
@@ -216,7 +221,7 @@ test('General and repository workspaces render independently, compose, and keep 
 
 	// General owns non-mounted conversations. Selecting its history switches
 	// the conversation in the existing General window.
-	await page.getByRole('button', { name: 'General', exact: true }).click();
+	await page.locator('.sidebar').getByRole('button', { name: 'General', exact: true }).click();
 	const generalHistory = page.getByRole('button', {
 		name: 'Open conversation: What is a useful way to compare trends?'
 	});
@@ -241,26 +246,26 @@ test('the fifth workspace is refused without replacing a tile, and closing a til
 	await expect(page.getByRole('article', { name: 'General workspace' })).toBeVisible();
 	await page.getByRole('button', { name: 'Add repository' }).first().click();
 	for (let index = 1; index < 3; index += 1) {
-		await page.locator('.board-head').getByRole('button', { name: 'Add repository' }).click();
+		await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
 	}
-	await expect(page.getByText('4 of 4 open')).toBeVisible();
+	await expect(page.getByRole('article')).toHaveCount(4);
 	const fifth = folders[3];
 
 	await dispatchWorkspaceDrag(page, 'dragover', fifth.path);
-	await expect(page.getByText('All four workspaces are in use. Close one before adding another.')).toBeVisible();
+	await expect(page.getByText('Close a workspace to add another.')).toBeVisible();
 	const beforeDrop = await page.getByRole('article').count();
 	await dispatchWorkspaceDrag(page, 'drop', fifth.path);
-	await expect(page.getByText('All four workspace windows are in use. Close one before opening another.')).toBeVisible();
+	await expect(page.getByText('Close a workspace to add another.')).toBeVisible();
 	await expect(page.getByRole('article')).toHaveCount(beforeDrop);
 
 	await page.getByRole('button', { name: 'Close General workspace' }).click();
-	await expect(page.getByText('3 of 4 open')).toBeVisible();
+	await expect(page.getByRole('article')).toHaveCount(3);
 	await dispatchWorkspaceDrag(page, 'drop', fifth.path);
 	await expect(page.getByRole('article', { name: 'travel-plans workspace' })).toBeVisible();
-	await expect(page.getByText('4 of 4 open')).toBeVisible();
+	await expect(page.getByRole('article')).toHaveCount(4);
 
 	await page.reload();
-	await expect(page.getByText('4 of 4 open')).toBeVisible();
+	await expect(page.getByRole('article')).toHaveCount(4);
 	await expect(page.getByRole('article', { name: 'health-journal workspace' })).toBeVisible();
 	await expect(page.getByRole('article', { name: 'travel-plans workspace' })).toBeVisible();
 });
@@ -271,14 +276,14 @@ test('a history-only workspace retries its folder mount and keeps history availa
 	await page.getByRole('button', { name: 'Expand unavailable-archive conversations' }).click();
 	await page.getByRole('button', { name: 'Open conversation: Summarize the unavailable archive' }).click();
 	const workspace = page.getByRole('article', { name: 'unavailable-archive workspace' });
-	await expect(workspace).toContainText('History only');
+	await expect(workspace).toBeVisible();
 	await expect(page.getByRole('status', {
 		name: 'History only. The folder could not be opened; saved conversations remain available.'
 	})).toBeVisible();
 	const initialOpenCalls = await page.evaluate(() => window.__workspaceOpenCalls.length);
 	expect(initialOpenCalls).toBe(1);
 
-	await page.getByRole('button', { name: 'Try to reopen unavailable-archive' }).click();
+	await page.getByRole('button', { name: 'Reconnect unavailable-archive' }).click();
 	await expect.poll(() => page.evaluate(() => window.__workspaceOpenCalls.length)).toBe(2);
 	await expect(page.getByText(/Its conversations remain in history only/)).toBeVisible();
 	await expect(workspace).toContainText('Saved result from this folder.');

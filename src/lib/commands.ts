@@ -178,7 +178,7 @@ export async function openFolder(
 	}
 	if (!alreadyOpen && session.workspaceWindows.length >= 4) {
 		if (options.reportError !== false) {
-			session.addSystem('All four workspace windows are in use. Close one before opening another.');
+			session.addSystem('Close a workspace to add another.');
 		}
 		return false;
 	}
@@ -219,7 +219,7 @@ export async function openRepository(
 	if (openedWorkspace && !openedWorkspace.historyOnly) return session.focusWorkspace(openedWorkspace.id);
 	if (!isDesktop()) return openFolder(path);
 	if (!openedWorkspace && session.workspaceWindows.length >= 4) {
-		session.addSystem('All four workspace windows are in use. Close one before opening another.');
+		session.addSystem('Close a workspace to add another.');
 		return false;
 	}
 	const opened = await openFolder(path, { reportError: false });
@@ -289,12 +289,12 @@ export async function openConversation(summary: ConversationSummary): Promise<bo
 		if (!session.workspaceAt(workspaceId)) {
 			if (workspaceId === GENERAL_WORKSPACE_ID) {
 				if (!session.openGeneralWorkspace()) {
-					session.addSystem('All four workspace windows are in use. Close one to open General.');
+					session.addSystem('Close a workspace to open General.');
 					return false;
 				}
 			} else {
 				if (session.workspaceWindows.length >= 4) {
-					session.addSystem('All four workspace windows are in use. Close one to open this conversation’s workspace.');
+					session.addSystem('Close a workspace to open this conversation’s workspace.');
 					return false;
 				}
 				if (!session.historyOnlyRepositoryPaths.includes(workspaceId)) {
@@ -302,7 +302,7 @@ export async function openConversation(summary: ConversationSummary): Promise<bo
 				}
 				if (!session.workspaceAt(workspaceId) && session.historyOnlyRepositoryPaths.includes(workspaceId)) {
 					if (!session.openHistoryOnlyWorkspace(workspaceId, summary.id)) {
-						session.addSystem('All four workspace windows are in use. Close one to open this conversation’s history.');
+						session.addSystem('Close a workspace to open this conversation.');
 						return false;
 					}
 				}
@@ -503,7 +503,7 @@ async function runCommand(text: string): Promise<void> {
 		case '/new':
 		case '/tab': // legacy alias; conversation navigation is workspace-owned now
 			if (!session.newConversation()) {
-				session.addSystem('All four workspace windows are in use. Close one before starting a conversation.');
+				session.addSystem('Close a workspace before starting a conversation.');
 			}
 			return;
 

@@ -94,7 +94,7 @@
 	<section class="project-page" aria-labelledby="project-title">
 		<header class="project-header">
 			<div class="project-heading">
-				<span class="project-mark"><Icon name="project" size={20} /></span>
+				<span class="project-mark"><Icon name="project" size={20} solid /></span>
 				<div class="project-title-wrap">
 					<input id="project-title" class="project-title" bind:value={name} onblur={commitName} aria-label="Project name" />
 					</div>
@@ -195,9 +195,8 @@
 		height: 42px;
 		flex: none;
 		border-radius: var(--radius);
-		background: var(--bg-inset);
-		border: 1px solid var(--border);
-		color: var(--text-dim);
+		background: color-mix(in srgb, var(--brand-icon) 9%, var(--bg-inset));
+		color: var(--brand-icon);
 	}
 	.project-title-wrap {
 		min-width: 0;

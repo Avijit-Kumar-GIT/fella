@@ -28,7 +28,7 @@
 	});
 	let displayTitle = $derived.by(() => {
 		const prefix = folder || 'Workspace';
-		if (session.workspaceView === 'board') return `${prefix} · ${session.workspaceWindows.length} workspace${session.workspaceWindows.length === 1 ? '' : 's'}`;
+		if (session.workspaceView === 'board') return prefix;
 		if (session.workspaceView === 'workspace') return `${prefix} — Workspace`;
 		if (session.workspaceView === 'project') return `${session.activeProject?.name ?? 'Project'} — Project`;
 		if (session.workspaceView === 'settings') return `${prefix} — Settings`;
@@ -110,7 +110,7 @@
 		gap: var(--space-2);
 		height: 38px;
 		padding: 0 var(--space-2) 0 var(--pad);
-		background: var(--bg);
+		background: var(--app-chrome);
 		color: var(--text-faint);
 		font-size: var(--fs-sm);
 		user-select: none;

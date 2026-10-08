@@ -101,7 +101,7 @@
 	function newChat(): void {
 		menuRepository = null;
 		if (!session.newConversation()) {
-			session.addSystem('All four workspace windows are in use. Close one before starting a conversation.');
+			session.addSystem('Close a workspace to start another conversation.');
 		}
 	}
 
@@ -118,7 +118,7 @@
 	async function toggleRepository(repo: Repository): Promise<void> {
 		menuRepository = null;
 		if (!(await selectRepository(repo)) && !repo.path) {
-			session.addSystem('All four workspace windows are in use. Close one before opening this workspace.');
+			session.addSystem('Close a workspace to open General.');
 		}
 	}
 
@@ -263,7 +263,7 @@
 					aria-current={session.workspaceView === 'project' && session.activeProjectId === project.id ? 'page' : undefined}
 					onclick={() => session.openProject(project.id)}
 				>
-					<span class="row-slot row-icon"><Icon name="project" size={16} /></span>
+					<span class="row-slot row-icon"><Icon name="project" size={16} solid={session.workspaceView === 'project' && session.activeProjectId === project.id} /></span>
 					<span>{project.name}</span>
 				</button>
 			{/each}
@@ -310,7 +310,7 @@
 							ondragstart={(event) => beginRepositoryDrag(event, repo)}
 							onclick={() => toggleRepository(repo)}
 						>
-							<span class="row-slot row-icon"><Icon name={repo.path ? 'repository' : 'ask'} size={16} /></span>
+							<span class="row-slot row-icon"><Icon name={repo.path ? 'repository' : 'ask'} size={16} solid={repo.current} /></span>
 							<span class="repository-copy">{repo.name}</span>
 						</button>
 						{#if repo.path}
@@ -350,40 +350,33 @@
 							class="repository-history-state"
 							role="status"
 							aria-label="History only. The folder could not be opened; saved conversations remain available."
-							title="The folder could not be opened here. Saved conversations remain available."
 						>
-							History only · folder unavailable
+							<span title="Saved conversations remain available while the folder is offline">History only</span>
+							<button
+								class="repository-reconnect"
+								type="button"
+								aria-label={`Reconnect ${repo.name}`}
+								title="Try the saved folder location again"
+								onclick={() => void selectRepository(repo)}
+							>Reconnect</button>
 						</div>
 					{/if}
 					{#if repo.expanded}
 						<div class="repository-contents">
-							{#if repo.path}
+							{#if repo.path && !repo.historyOnly}
 								<div class="repository-tools" aria-label={`${repo.name} tools`}>
-									{#if repo.historyOnly}
-										<button
-											class="repository-tool"
-											type="button"
-											aria-label={`Try to reopen ${repo.name}`}
-											title="Try the saved folder location again"
-											onclick={() => void selectRepository(repo)}
-										>
-											<span class="row-slot row-icon"><Icon name="folder" size={16} /></span>
-											<span>Try to reopen folder</span>
-										</button>
-									{:else}
-										<button
-											class="repository-tool"
-											class:active={repo.current && session.workspaceView === 'workspace'}
-											type="button"
-											aria-label={`Open ${repo.name} workspace`}
-											aria-current={repo.current && session.workspaceView === 'workspace' ? 'page' : undefined}
-											title={`Open workspace (${shortcutModifier}+Shift+S)`}
-											onclick={() => void openRepositoryWorkspace(repo)}
-										>
-											<span class="row-slot row-icon"><Icon name="folder" size={16} /></span>
-											<span>Workspace</span>
-										</button>
-									{/if}
+									<button
+										class="repository-tool"
+										class:active={repo.current && session.workspaceView === 'workspace'}
+										type="button"
+										aria-label={`Open sources in ${repo.name}`}
+										aria-current={repo.current && session.workspaceView === 'workspace' ? 'page' : undefined}
+										title={`Open sources (${shortcutModifier}+Shift+S)`}
+										onclick={() => void openRepositoryWorkspace(repo)}
+									>
+										<span class="row-slot row-icon"><Icon name="table" size={16} /></span>
+										<span>Sources</span>
+									</button>
 								</div>
 							{/if}
 							{#each repo.items as c (c.id)}
@@ -460,12 +453,12 @@
 		flex-direction: column;
 		gap: var(--space-1);
 		padding: 0 var(--space-2) var(--space-2);
-		--sidebar-hover: color-mix(in srgb, var(--bg-inset) 58%, var(--bg));
-		--sidebar-selected: var(--bg-inset);
+		--sidebar-hover: color-mix(in srgb, var(--text) 4%, var(--sidebar-surface));
+		--sidebar-selected: color-mix(in srgb, var(--text) 7%, var(--sidebar-surface));
 		/* No top padding: .header is 38px flush against the top edge, to
 		   match the titlebar's height exactly across the sidebar seam. */
-		background: var(--bg);
-		border-right: 1px solid var(--border);
+		background: var(--sidebar-surface);
+		border-right: 1px solid var(--pane-edge);
 		overflow: hidden;
 	}
 	.header {
@@ -596,7 +589,6 @@
 	}
 	.repository.current .repository-row {
 		background: var(--sidebar-selected);
-		box-shadow: inset 0 0 0 1px var(--border);
 		color: var(--text);
 	}
 	.row-slot {
@@ -626,7 +618,7 @@
 		color: var(--text-dim);
 	}
 	.repository.current .row-icon {
-		color: color-mix(in srgb, var(--brand) 48%, var(--text-dim));
+		color: var(--brand-icon);
 	}
 	.repository-copy {
 		min-width: 0;
@@ -638,15 +630,24 @@
 		font-weight: 550;
 	}
 	.repository-history-state {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
 		min-width: 0;
-		padding: 0 8px 3px 44px;
-		overflow: hidden;
+		min-height: 24px;
+		padding: 0 5px 0 44px;
 		color: var(--text-faint);
 		font-size: var(--fs-xs);
-		line-height: 16px;
-		text-overflow: ellipsis;
-		white-space: nowrap;
 	}
+	.repository-history-state span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.repository-reconnect {
+		flex: none;
+		padding: 2px 5px;
+		border-radius: var(--radius-chip);
+		color: var(--text-dim);
+		font-size: 10px;
+	}
+	.repository-reconnect:hover { background: var(--sidebar-hover); color: var(--text); }
 	.repository-row:hover .repository-copy,
 	.repository-row:focus-visible .repository-copy {
 		color: var(--text);
@@ -848,6 +849,7 @@
 		background: var(--sidebar-selected);
 		color: var(--text);
 	}
+	.project-row.active .row-icon { color: var(--brand-icon); }
 	.rename-input {
 		width: 100%;
 		padding: var(--space-2) var(--space-3);
@@ -889,6 +891,6 @@
 		display: flex;
 		justify-content: flex-end;
 		padding: var(--space-2) var(--space-1) 0;
-		border-top: 1px solid var(--border);
+		border-top: 1px solid var(--pane-edge);
 	}
 </style>

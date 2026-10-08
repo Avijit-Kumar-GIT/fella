@@ -1,6 +1,6 @@
 <script lang="ts" module>
-	// Hand-picked line icons (Lucide geometry, 24x24, currentColor). No package
-	// re-inline a `d` string here when a new one is needed.
+	// Hand-picked 24x24 icons, with filled silhouettes for semantic marks that
+	// may use color. Avoid simulating a filled icon by filling outline geometry.
 	export const ICONS = {
 		'chevron-right': 'm9 18 6-6-6-6',
 		x: 'M18 6 6 18M6 6l12 12',
@@ -40,6 +40,12 @@
 	} as const;
 
 	export type IconName = keyof typeof ICONS;
+	const SOLID_ICONS: Partial<Record<IconName, string>> = {
+		folder: 'M4 6a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.67.9l.81 1.2a2 2 0 0 0 1.66.9H18a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6Z',
+		repository: 'M4.5 6h5.03a2 2 0 0 1 1.42.59L12.36 8h7.14A1.5 1.5 0 0 1 21 9.5v8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5v-10A1.5 1.5 0 0 1 4.5 6ZM7 12h10v1.4H7Zm0 3h6v1.4H7Z',
+		ask: 'M4 5h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H9l-5 4v-4H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1Z',
+		project: 'M5.5 3.5h13A2.5 2.5 0 0 1 21 6v12a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 18V6a2.5 2.5 0 0 1 2.5-2.5ZM7 7.5h10V9H7Zm0 4h10V13H7Zm0 4h6V17H7Z'
+	};
 	/** 12px metadata, 14px compact controls, 16px standard UI, 20px display. */
 	export type IconSize = 12 | 14 | 16 | 20;
 </script>
@@ -48,8 +54,11 @@
 	let {
 		name,
 		size = 16,
-		fill = false
-	}: { name: IconName; size?: IconSize; fill?: boolean } = $props();
+		fill = false,
+		solid = false
+	}: { name: IconName; size?: IconSize; fill?: boolean; solid?: boolean } = $props();
+	let solidPath = $derived(SOLID_ICONS[name]);
+	let useSolid = $derived(solid && solidPath !== undefined);
 </script>
 
 <svg
@@ -57,15 +66,18 @@
 	width={size}
 	height={size}
 	viewBox="0 0 24 24"
-	fill={fill ? 'currentColor' : 'none'}
-	stroke="currentColor"
+	fill={useSolid || fill ? 'currentColor' : 'none'}
+	stroke={useSolid ? 'none' : 'currentColor'}
 	stroke-width={size === 12 ? 1.8 : 2}
 	stroke-linecap="round"
 	stroke-linejoin="round"
 	aria-hidden="true"
 	focusable="false"
 >
-	<path d={ICONS[name]} />
+	<path
+		d={useSolid ? (solidPath ?? ICONS[name]) : ICONS[name]}
+		fill-rule={useSolid && (name === 'repository' || name === 'project') ? 'evenodd' : undefined}
+	/>
 </svg>
 
 <style>

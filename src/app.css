@@ -44,6 +44,15 @@
 	--bg: #fcfcfb;
 	--bg-raised: #ffffff;
 	--bg-inset: #f2f2f0;
+	--app-chrome: #f0efec;
+	--sidebar-surface: #f5f4f1;
+	--workspace-surface: #ffffff;
+	--workspace-canvas: #f3f2ef;
+	--pane-surface: #ffffff;
+	--pane-head: #fbfbfa;
+	--pane-edge: #e2e1dc;
+	--pane-edge-active: #c9c7c1;
+	--window-shadow: 0 1px 2px rgba(20, 20, 26, 0.045), 0 4px 14px rgba(20, 20, 26, 0.045);
 	--border: #e9e8e4;
 	--border-strong: #d7d5d0;
 	--text: #1a1a17;
@@ -64,6 +73,7 @@
 	   hairline -- one consistent "notice me" color, not a different one per
 	   component. */
 	--brand: #008080;
+	--brand-icon: #007b76;
 	--on-brand: #ffffff;
 	--user-bubble: var(--brand);
 	--user-bubble-text: var(--on-brand);
@@ -124,6 +134,15 @@
 	--bg: #0e0e10;
 	--bg-raised: #17171a;
 	--bg-inset: #1e1e22;
+	--app-chrome: #111113;
+	--sidebar-surface: #151517;
+	--workspace-surface: #18181b;
+	--workspace-canvas: #141416;
+	--pane-surface: #1b1b1e;
+	--pane-head: #1d1d20;
+	--pane-edge: #2b2b30;
+	--pane-edge-active: #45454b;
+	--window-shadow: 0 1px 2px rgba(0, 0, 0, 0.24), 0 5px 16px rgba(0, 0, 0, 0.16);
 	--border: #26262a;
 	--border-strong: #37373d;
 	--text: #ededec;
@@ -135,6 +154,7 @@
 	--chat-question: #ededec;
 	--accent: #ededec;
 	--brand: #008080;
+	--brand-icon: #55c6bf;
 	--on-brand: #ffffff;
 	/* A touch more lightness keeps the outgoing bubble distinct from the dark
 	   canvas without introducing another hue. */

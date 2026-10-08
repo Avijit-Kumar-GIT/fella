@@ -319,7 +319,7 @@
 		flex-direction: column;
 		flex: 1;
 		min-width: 0;
-		background: var(--bg);
+		background: var(--app-chrome);
 	}
 	.workspace-window {
 		position: relative;
@@ -330,9 +330,10 @@
 		min-height: 0;
 		margin: 8px 10px 10px;
 		overflow: hidden;
-		border: 1px solid var(--border);
+		border: 1px solid var(--pane-edge);
 		border-radius: var(--radius-window);
-		background: var(--bg-raised);
+		background: var(--workspace-surface);
+		box-shadow: var(--window-shadow);
 	}
 	main {
 		flex: 1;
