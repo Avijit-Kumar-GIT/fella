@@ -20,7 +20,7 @@
 		loading = true;
 		error = '';
 		try {
-			const result = await ipc.contextFile();
+			const result = await ipc.contextFile(session.activeWorkspaceId ?? undefined);
 			path = result?.[0] ?? null;
 			contents = result?.[1] ?? '';
 			savedContents = contents;
@@ -36,10 +36,10 @@
 		saving = true;
 		error = '';
 		try {
-			await ipc.saveContext(contents);
+			await ipc.saveContext(contents, session.activeWorkspaceId ?? undefined);
 			savedContents = contents;
 			if (!path) {
-				const result = await ipc.contextFile();
+				const result = await ipc.contextFile(session.activeWorkspaceId ?? undefined);
 				path = result?.[0] ?? null;
 			}
 		} catch (e) {

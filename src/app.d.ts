@@ -19,6 +19,7 @@ declare global {
 					mode: string | null;
 					contextRefs: import('./lib/types').ContextReference[];
 					clarificationReply?: import('./lib/types').ClarificationReply | null;
+					workspaceId?: string | null;
 				},
 				onEvent: (event: AskEvent) => void
 			): Promise<import('./lib/types').Answer>;
@@ -27,6 +28,7 @@ declare global {
 					turnId: string;
 					model: string | null;
 					mode: string | null;
+					workspaceId?: string | null;
 				},
 				onEvent: (event: AskEvent) => void
 			): Promise<import('./lib/types').Answer>;

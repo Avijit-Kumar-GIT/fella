@@ -93,11 +93,17 @@ every message.
 
 A conversation is the durable unit of questions, follow-ups, clarifications,
 model choice, and analysis history. It may be unbound to a folder or pinned to
-the repository where it began. The app currently has one mutable Rust workspace
-catalog, app-wide conversation tabs, and at most one conversation-owned
-companion reference (chart or source preview). The latest rounded frame is a
-visual treatment for that one active work area; it does not implement multiple
-simultaneous repository runtimes.
+the repository where it began. The Electron shell now keeps up to four
+repository runtimes open through an app-level Rust registry; each has an
+independent `EngineState` and catalog, while settings, credentials, and
+archived conversations remain app-scoped. Global conversation tabs retain
+their folder identity, and workspace-aware IPC routes Ask and source/context
+operations to the matching runtime. A general conversation stays unbound.
+
+The first board slice renders the focused workspace as a live conversation and
+shows compact source inventories for the other open repositories. The global
+composer targets the focused workspace. It does not yet render multiple live
+transcripts or workspace-owned chart/source/analysis components concurrently.
 
 The current companion changes presentation only: it does not rerun analysis,
 change folder scope, or grant the model another tool. Chart and source panes
@@ -120,11 +126,10 @@ or arbitrary widget canvas. The same typed layout model is shared by the outer
 repository board and the composition inside a workspace. Sidebar, titlebar,
 settings, dialogs, and command palette remain app-level and immovable.
 
-This target requires an explicit workspace identity across IPC and the Rust
-runtime. The current unscoped `open_workspace`, `get_catalog`, analysis, and
-source commands operate on the single active catalog; a UI-only tile layer
-would therefore be incorrect. The runtime boundary and testable invariants are
-specified in [`COMPOSABLE-INTERFACE.md`](COMPOSABLE-INTERFACE.md).
+The outer board now uses explicit workspace identity across IPC and the Rust
+runtime; a UI-only tile layer is not used. Workspace-owned typed surfaces and
+their provenance-safe persistence are still pending. The target and testable
+invariants are specified in [`COMPOSABLE-INTERFACE.md`](COMPOSABLE-INTERFACE.md).
 
 ## Workspace and analysis data
 

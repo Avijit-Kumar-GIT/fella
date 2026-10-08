@@ -5,8 +5,9 @@
 
 	let {
 		turnId,
+		workspaceId = null,
 		onrerun
-	}: { turnId: string; onrerun?: () => Promise<void> } = $props();
+	}: { turnId: string; workspaceId?: string | null; onrerun?: () => Promise<void> } = $props();
 
 	let phase = $state<'idle' | 'loading' | 'ready' | 'error'>('idle');
 	let status = $state<AnalysisTurnReplayStatus | null>(null);
@@ -18,7 +19,7 @@
 		phase = 'loading';
 		error = '';
 		try {
-			status = await ipc.analysisTurnReplayStatus(turnId);
+			status = await ipc.analysisTurnReplayStatus(turnId, workspaceId);
 			phase = 'ready';
 		} catch (cause) {
 			status = null;
@@ -46,6 +47,7 @@
 	}
 
 	$effect(() => {
+		workspaceId;
 		if (phase === 'idle') void check();
 	});
 </script>

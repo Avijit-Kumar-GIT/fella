@@ -65,6 +65,10 @@ async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T
 	return window.fella.invoke<T>(cmd, args);
 }
 
+function workspaceArgs(workspaceId?: string | null): Record<string, unknown> {
+	return workspaceId ? { workspaceId } : {};
+}
+
 export const ipc = {
 	/** Signals the app is interactive; returns cold-start ms. */
 	appReady: () => invoke<number>('app_ready'),
@@ -73,12 +77,17 @@ export const ipc = {
 		if (!window.fella) throw new Error('Electron preload bridge is unavailable');
 		return window.fella.openWorkspace(path, onProgress);
 	},
-	getCatalog: () => invoke<Catalog>('get_catalog'),
-	getWorkspaceModel: () => invoke<WorkspaceModel | null>('get_workspace_model'),
+	getCatalog: (workspaceId?: string) => invoke<Catalog>('get_catalog', workspaceArgs(workspaceId)),
+	closeWorkspace: (workspaceId: string) => invoke<void>('close_workspace', { workspaceId }),
+	getWorkspaceModel: (workspaceId?: string) =>
+		invoke<WorkspaceModel | null>('get_workspace_model', workspaceArgs(workspaceId)),
 	lastWorkspacePath: () => invoke<string | null>('last_workspace_path'),
-	describe: (name: string) => invoke<SourceInfo>('describe', { name }),
-	sampleSource: (name: string, rows = 5) => invoke<QueryResult>('sample_source', { name, rows }),
-	runSqlDirect: (sql: string) => invoke<QueryResult>('run_sql_direct', { sql }),
+	describe: (name: string, workspaceId?: string) =>
+		invoke<SourceInfo>('describe', { name, ...workspaceArgs(workspaceId) }),
+	sampleSource: (name: string, rows = 5, workspaceId?: string) =>
+		invoke<QueryResult>('sample_source', { name, rows, ...workspaceArgs(workspaceId) }),
+	runSqlDirect: (sql: string, workspaceId?: string) =>
+		invoke<QueryResult>('run_sql_direct', { sql, ...workspaceArgs(workspaceId) }),
 	getSettings: () => invoke<Settings>('get_settings'),
 	setSettings: (settings: Partial<Settings>) => invoke<Settings>('set_settings', { settings }),
 	listProviders: () => invoke<ProviderInfo[]>('list_providers'),
@@ -89,16 +98,21 @@ export const ipc = {
 
 	providerHealth: () => invoke<ProviderHealth>('provider_health'),
 	setWindowAppearance,
-	cancel: (conversationId: string) => invoke<void>('cancel', { conversationId }),
+	cancel: (conversationId: string, workspaceId?: string | null) =>
+		invoke<void>('cancel', { conversationId, ...workspaceArgs(workspaceId) }),
 	forgetConversation: (conversationId: string) =>
 		invoke<void>('forget_conversation', { conversationId }),
-	reindex: () => invoke<Catalog>('reindex'),
-	memoryFile: () => invoke<[string, string | null] | null>('memory_file'),
-	forgetMemory: () => invoke<boolean>('forget_memory'),
+	reindex: (workspaceId?: string) => invoke<Catalog>('reindex', workspaceArgs(workspaceId)),
+	memoryFile: (workspaceId?: string) =>
+		invoke<[string, string | null] | null>('memory_file', workspaceArgs(workspaceId)),
+	forgetMemory: (workspaceId?: string) =>
+		invoke<boolean>('forget_memory', workspaceArgs(workspaceId)),
 
 	/** Read and write the explicit user-authored workspace context file. */
-	contextFile: () => invoke<[string, string | null] | null>('context_file'),
-	saveContext: (contents: string) => invoke<void>('save_context', { contents }),
+	contextFile: (workspaceId?: string) =>
+		invoke<[string, string | null] | null>('context_file', workspaceArgs(workspaceId)),
+	saveContext: (contents: string, workspaceId?: string) =>
+		invoke<void>('save_context', { contents, ...workspaceArgs(workspaceId) }),
 
 	/** Check for a newer release and, if one exists, download + verify +
 	 * install it and exit. Only ever called by `/update`; never automatic. */
@@ -119,18 +133,19 @@ export const ipc = {
 	/** Load the canonical backend record for one analytical turn. */
 	analysisTurnLoad: (turnId: string) => invoke<AnalysisTurn>('analysis_turn_load', { turnId }),
 	/** Compare a stored turn's source snapshot with the mounted workspace. */
-	analysisTurnReplayStatus: (turnId: string) =>
-		invoke<AnalysisTurnReplayStatus>('analysis_turn_replay_status', { turnId }),
+	analysisTurnReplayStatus: (turnId: string, workspaceId?: string | null) =>
+		invoke<AnalysisTurnReplayStatus>('analysis_turn_replay_status', { turnId, ...workspaceArgs(workspaceId) }),
 	/** Rerun a canonical turn against the currently mounted workspace. */
 	async analysisTurnRerun(
 		turnId: string,
 		onEvent: (event: AskEvent) => void,
 		model?: string,
-		mode?: AskMode
+		mode?: AskMode,
+		workspaceId?: string | null
 	): Promise<Answer> {
 		if (!window.fella) throw new Error('Electron preload bridge is unavailable');
 		return window.fella.rerunAnalysisTurn(
-			{ turnId, model: model || null, mode: mode || null },
+			{ turnId, model: model || null, mode: mode || null, workspaceId: workspaceId ?? null },
 			onEvent
 		);
 	},
@@ -152,7 +167,8 @@ export const ipc = {
 		model?: string,
 		mode?: AskMode,
 		contextRefs?: ContextReference[],
-		clarificationReply?: ClarificationReply
+		clarificationReply?: ClarificationReply,
+		workspaceId?: string | null
 	): Promise<Answer> {
 		if (!window.fella) throw new Error('Electron preload bridge is unavailable');
 		// Svelte state proxies cannot cross Electron's structured-clone boundary.
@@ -170,7 +186,8 @@ export const ipc = {
 				model: model || null,
 				mode: mode || null,
 				contextRefs: wireContextRefs,
-				clarificationReply: clarificationReply ?? null
+				clarificationReply: clarificationReply ?? null,
+				workspaceId: workspaceId ?? null
 			},
 			onEvent
 		);

@@ -291,7 +291,7 @@
 			{/if}
 
 			{#if answer.turn_id && answer.evidence.length}
-				<ReplayStatus turnId={answer.turn_id} {onrerun} />
+				<ReplayStatus turnId={answer.turn_id} workspaceId={answer.workspace?.path ?? null} {onrerun} />
 			{/if}
 		</div>
 	{/if}

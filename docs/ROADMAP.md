@@ -31,13 +31,13 @@ individual failed example into a special-case production rule.
    replay experience only where evaluation or user workflows show a real gap;
    preserve one model-directed loop and a small, fixed, read-only tool surface.
 6. **Build repo-owned composable workspaces without making the app a canvas.**
-   Keep the shell/sidebar global; give each mounted repository an independently
-   scoped workspace, with up to four repo tiles and up to four typed surfaces
-   inside each. Use fixed 50/50 split layouts, accessible placement controls,
-   and provenance-preserving chart/source/analysis references. The current UI
-   only frames one active workspace and the Rust engine still has one mutable
-   catalog. See [`COMPOSABLE-INTERFACE.md`](COMPOSABLE-INTERFACE.md) for the
-   ownership model, delivery stages, and completion criteria.
+   The first outer-board slice now keeps up to four repositories independently
+   mounted, routes Ask by workspace identity, uses fixed 50/50 layouts, and
+   persists/restores open tiles. Next: workspace-owned typed surfaces,
+   simultaneous per-repository conversations, provenance-preserving chart and
+   source references, and broader real-shell journeys. See
+   [`COMPOSABLE-INTERFACE.md`](COMPOSABLE-INTERFACE.md) for the ownership model,
+   current limits, delivery stages, and completion criteria.
 
 ## Deferred
 

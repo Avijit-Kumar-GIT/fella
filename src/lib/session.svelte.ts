@@ -1,7 +1,7 @@
 // Shared reactive session state (Svelte 5 runes in a .svelte.ts module).
 //
-// `Session` holds workspace-level state (one open folder, one model) plus an
-// array of independent `Conversation` tabs. The per-conversation fields
+// `Session` holds app-level state (up to four open folder runtimes, one model)
+// plus an array of independent `Conversation` tabs. The per-conversation fields
 // (`messages`, `busy`, `activity`, …) are exposed as getters/setters that
 // proxy the active tab, so the many `session.addSystem(...)` call sites keep
 // acting on whichever tab is focused. Long-lived work (`ask`) is handed the
@@ -24,6 +24,7 @@ import type {
 	WorkspaceProgress
 } from './types';
 import { isRenderableChartEvidence, parseCompanionPane, type CompanionPane } from './workbench';
+import type { WorkspaceTilePreference } from './workspace-layout';
 
 
 function uid(): string {
@@ -103,6 +104,43 @@ const REPOSITORIES_KEY = 'fella:repositories';
 const HIDDEN_REPOSITORIES_KEY = 'fella:hidden-repositories';
 const HISTORY_ONLY_REPOSITORIES_KEY = 'fella:history-only-repositories';
 const PROJECTS_KEY = 'fella:projects';
+const OPEN_WORKSPACES_KEY = 'fella:open-workspaces';
+
+export interface RepositoryWorkspaceWindow {
+	path: string;
+	catalog: Catalog;
+	conversationId: string;
+}
+
+interface SavedWorkspaceState {
+	paths: string[];
+	active: string | null;
+	layout: WorkspaceTilePreference;
+}
+
+function readWorkspaceState(): SavedWorkspaceState {
+	try {
+		const parsed: unknown = JSON.parse(localStorage.getItem(OPEN_WORKSPACES_KEY) ?? '{}');
+		if (!parsed || typeof parsed !== 'object') return { paths: [], active: null, layout: {} };
+		const record = parsed as Record<string, unknown>;
+		const paths = Array.isArray(record.paths)
+			? [...new Set(record.paths.filter((path): path is string => typeof path === 'string' && path.trim().length > 0))].slice(0, 4)
+			: [];
+		const active = typeof record.active === 'string' && paths.includes(record.active) ? record.active : null;
+		const layoutRecord = record.layout && typeof record.layout === 'object'
+			? (record.layout as Record<string, unknown>)
+			: {};
+		const layout: WorkspaceTilePreference = {
+			two: layoutRecord.two === 'stacked' ? 'stacked' : 'side-by-side',
+			three: ['two-top-one-bottom', 'one-top-two-bottom', 'two-left-one-right', 'one-left-two-right'].includes(String(layoutRecord.three))
+				? (layoutRecord.three as WorkspaceTilePreference['three'])
+				: 'two-top-one-bottom'
+		};
+		return { paths, active, layout };
+	} catch {
+		return { paths: [], active: null, layout: {} };
+	}
+}
 
 function readSidebarCollapsed(): boolean {
 	try {
@@ -324,18 +362,24 @@ export class Conversation {
 
 
 export type Tab = Conversation;
-export type WorkspaceView = 'ask' | 'workspace' | 'settings' | 'project';
+export type WorkspaceView = 'ask' | 'workspace' | 'board' | 'settings' | 'project';
 export type WorkspacePane = 'sources' | 'context';
 
 class Session {
 	catalog = $state<Catalog>({ workspace: null, sources: [] });
+	/** Live repository runtimes currently placed on the outer workspace board. */
+	workspaceWindows = $state<RepositoryWorkspaceWindow[]>([]);
+	activeWorkspaceId = $state<string | null>(null);
+	workspaceLayout = $state<WorkspaceTilePreference>(readWorkspaceState().layout);
+	#pendingWorkspacePaths = readWorkspaceState().paths;
+	#preferredWorkspacePath = readWorkspaceState().active;
 	mountProgress = $state<WorkspaceProgress | null>(null);
 	/** The lightweight workspace surface currently shown beside the tab state. */
 	workspaceView = $state<WorkspaceView>('ask');
 	/** The active pane inside Workspace. */
 	workspacePane = $state<WorkspacePane>('sources');
-	/** Folder from the last session, if it still exists shown on the welcome
-	 *  screen as a one-click "reopen". Fella no longer opens it automatically. */
+	/** Last folder remembered by the engine, used as a recovery affordance if
+	 *  saved open-workspace state cannot be restored. */
 	lastFolder = $state<string | null>(null);
 	settings = $state<Settings | null>(null);
 	health = $state<ProviderHealth | null>(null);
@@ -381,6 +425,145 @@ class Session {
 		} catch {
 			/* ignore */
 		}
+	}
+
+	#writeWorkspaceState(): void {
+		try {
+			localStorage.setItem(OPEN_WORKSPACES_KEY, JSON.stringify({
+				paths: this.workspaceWindows.map((workspace) => workspace.path),
+				active: this.activeWorkspaceId,
+				layout: this.workspaceLayout
+			}));
+		} catch {
+			/* workspace state is a convenience; a full localStorage must not block analysis */
+		}
+	}
+
+	get pendingWorkspacePaths(): string[] {
+		return [...this.#pendingWorkspacePaths];
+	}
+
+	get savedActiveWorkspaceId(): string | null {
+		return this.#preferredWorkspacePath;
+	}
+
+	get activeWorkspace(): RepositoryWorkspaceWindow | null {
+		return this.workspaceWindows.find((workspace) => workspace.path === this.activeWorkspaceId) ?? null;
+	}
+
+	workspaceAt(path: string): RepositoryWorkspaceWindow | null {
+		return this.workspaceWindows.find((workspace) => workspace.path === path) ?? null;
+	}
+
+	setWorkspaceLayout(layout: WorkspaceTilePreference): void {
+		this.workspaceLayout = { ...layout };
+		this.#writeWorkspaceState();
+	}
+
+	/** Register a mounted catalog and focus its repository-owned conversation.
+	 *  An untouched welcome tab may become the first workspace conversation;
+	 *  an explicitly unbound or already-used chat is never silently reassigned. */
+	registerWorkspace(catalog: Catalog): boolean {
+		const path = catalog.workspace;
+		if (!path) return false;
+		const existing = this.workspaceAt(path);
+		if (existing) existing.catalog = catalog;
+		else {
+			if (this.workspaceWindows.length >= 4) return false;
+			this.workspaceWindows = [...this.workspaceWindows, {
+				path,
+				catalog,
+				conversationId: ''
+			}];
+		}
+		this.catalog = catalog;
+		this.activeWorkspaceId = path;
+		this.rememberRepository(path);
+		this.markRepositoryAvailable(path);
+
+		const current = this.activeChat;
+		if (current.workspaceScope === undefined && current.messages.length === 0) {
+			current.workspaceScope = path;
+			this.setWorkspaceConversation(path, current.id);
+		} else {
+			this.focusWorkspaceConversation(path);
+		}
+		this.workspaceView = 'board';
+		this.#writeWorkspaceState();
+		return true;
+	}
+
+	/** Focus a tile and its own live conversation. No catalog is assembled from
+	 *  neighboring repositories, and general chats remain unbound. */
+	focusWorkspace(path: string, conversationId?: string): boolean {
+		const workspace = this.workspaceAt(path);
+		if (!workspace) return false;
+		this.activeWorkspaceId = path;
+		this.#preferredWorkspacePath = path;
+		this.catalog = workspace.catalog;
+		if (conversationId && this.tabs.some((tab) => tab.id === conversationId && tab.workspaceScope === path)) {
+			workspace.conversationId = conversationId;
+		}
+		this.focusWorkspaceConversation(path);
+		this.workspaceView = 'board';
+		this.#writeWorkspaceState();
+		return true;
+	}
+
+	focusWorkspaceConversation(path: string): void {
+		const workspace = this.workspaceAt(path);
+		if (!workspace) return;
+		const preferred = workspace.conversationId
+			? this.tabs.findIndex((tab) => tab.id === workspace.conversationId && tab.workspaceScope === path)
+			: -1;
+		const existing = preferred >= 0 ? preferred : this.tabs.findIndex((tab) => tab.workspaceScope === path);
+		if (existing >= 0) {
+			this.active = existing;
+			workspace.conversationId = this.tabs[existing].id;
+			return;
+		}
+		const conversation = new Conversation();
+		conversation.model = this.model;
+		conversation.workspaceScope = path;
+		this.tabs.push(conversation);
+		this.active = this.tabs.length - 1;
+		workspace.conversationId = conversation.id;
+		this.#writeIndex();
+	}
+
+	setWorkspaceConversation(path: string, conversationId: string): void {
+		const workspace = this.workspaceAt(path);
+		if (!workspace) return;
+		workspace.conversationId = conversationId;
+		this.#writeWorkspaceState();
+	}
+
+	async closeWorkspaceWindow(path: string): Promise<void> {
+		const closing = this.workspaceAt(path);
+		if (!closing) return;
+		this.workspaceWindows = this.workspaceWindows.filter((workspace) => workspace.path !== path);
+		if (isDesktop()) {
+			try {
+				await ipc.closeWorkspace(path);
+			} catch (error) {
+				console.warn('workspace close failed', error);
+			}
+		}
+		if (this.activeWorkspaceId === path) {
+			const next = this.workspaceWindows.at(-1);
+			if (next) this.focusWorkspace(next.path);
+			else {
+				this.activeWorkspaceId = null;
+				this.catalog = { workspace: null, sources: [] };
+				this.workspaceView = 'ask';
+				if (this.activeChat.workspaceScope === path) {
+					const general = this.tabs.findIndex((tab) => tab.workspaceScope === null);
+					if (general >= 0) this.activateTab(general);
+					else this.newTab();
+				}
+			}
+		}
+		this.#writeWorkspaceState();
 	}
 
 	/** Remember a folder explicitly opened by the user and unhide it if needed. */
@@ -500,7 +683,7 @@ class Session {
 	}
 
 	setWorkspaceView(view: WorkspaceView): void {
-		if (view === 'workspace' && !this.catalog.workspace) {
+		if ((view === 'workspace' || view === 'board') && !this.catalog.workspace) {
 			this.workspaceView = 'ask';
 			return;
 		}
@@ -566,8 +749,22 @@ class Session {
 	/** Focus a conversation tab. */
 	activateTab(index: number): void {
 		if (!this.tabs[index]) return;
+		const keepBoard = this.workspaceView === 'board';
 		this.active = index;
-		this.workspaceView = 'ask';
+		const scope = this.activeChat.workspaceScope;
+		const workspace = scope ? this.workspaceAt(scope) : null;
+		if (workspace) {
+			this.activeWorkspaceId = workspace.path;
+			this.#preferredWorkspacePath = workspace.path;
+			this.catalog = workspace.catalog;
+			workspace.conversationId = this.activeChat.id;
+			this.workspaceView = keepBoard ? 'board' : 'ask';
+		} else {
+			this.activeWorkspaceId = null;
+			this.catalog = { workspace: null, sources: [] };
+			this.workspaceView = 'ask';
+		}
+		this.#writeWorkspaceState();
 	}
 
 
@@ -646,20 +843,20 @@ class Session {
 	}
 
 	// --- tab management ---------------------------------------------------
-	newTab(): void {
+	newTab(workspaceScope: string | null = this.activeWorkspaceId): void {
 		const inherit = this.model; // provider + login are shared; carry the model
 		const c = new Conversation();
 		c.model = inherit;
+		c.workspaceScope = workspaceScope;
 		this.tabs.push(c);
 		this.activateTab(this.tabs.length - 1);
 		this.#writeIndex();
 	}
 
-	/** Open an archived conversation (`/history <n>`) in a new tab, its
-	 *  transcript exactly as saved. If `workspace` doesn't match the folder
-	 *  open right now, the caller is responsible for warning that new
-	 *  questions here will run against the current folder, not the
-	 *  original one there's only ever one open folder for every tab. */
+	/** Open an archived conversation (`/history <n>`) in a new tab with its
+	 *  original workspace identity. The caller is responsible for restoring
+	 *  that exact workspace or making the history-only state explicit; it must
+	 *  never be silently rebound to whichever repository is currently focused. */
 	loadArchivedTab(
 		id: string,
 		messages: Message[],
@@ -675,7 +872,7 @@ class Session {
 			const tab = this.tabs[existing];
 			if (tab.workspaceScope === undefined) tab.workspaceScope = workspace;
 			tab.companionPane = parseCompanionPane(companionPane) ?? tab.companionPane;
-			this.active = existing;
+			this.activateTab(existing);
 			return;
 		}
 		const inherit = this.model; // same convention as newTab()

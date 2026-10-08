@@ -20,7 +20,7 @@
 		return String(value);
 	}
 
-	async function load(identity: string, name: string): Promise<void> {
+	async function load(identity: string, name: string, root: string | null): Promise<void> {
 		const generation = ++requestGeneration;
 		preview = null;
 		error = '';
@@ -31,7 +31,7 @@
 		}
 		loading = true;
 		try {
-			const result = await ipc.sampleSource(name, 5);
+			const result = await ipc.sampleSource(name, 5, root ?? undefined);
 			if (requestGeneration === generation && loadedIdentity === identity) preview = result;
 		} catch (e) {
 			if (requestGeneration === generation && loadedIdentity === identity) {
@@ -55,7 +55,7 @@
 			loading = false;
 			return;
 		}
-		void load(identity, source.name);
+		void load(identity, source.name, root);
 	});
 </script>
 

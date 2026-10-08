@@ -172,6 +172,17 @@ export async function openFolder(
 		chosen = (await pickFolder()) ?? undefined;
 	}
 	if (!chosen) return false;
+	const alreadyOpen = session.workspaceWindows.find((workspace) => workspace.path === chosen);
+	if (alreadyOpen) {
+		session.focusWorkspace(alreadyOpen.path);
+		return true;
+	}
+	if (session.workspaceWindows.length >= 4) {
+		if (options.reportError !== false) {
+			session.addSystem('All four workspace spaces are in use. Close a repository tile before opening another.');
+		}
+		return false;
+	}
 	try {
 		session.mountProgress = {
 			phase: 'scanning',
@@ -180,11 +191,12 @@ export async function openFolder(
 			prepared_files: 0,
 			skipped_files: 0
 		};
-		session.catalog = await ipc.openWorkspace(chosen, (progress) => {
+		const catalog = await ipc.openWorkspace(chosen, (progress) => {
 			session.mountProgress = progress;
 		});
-		session.rememberRepository(session.catalog.workspace ?? chosen);
-		session.markRepositoryAvailable(session.catalog.workspace ?? chosen);
+		if (!session.registerWorkspace(catalog)) {
+			throw new Error('Fella can show up to four repository workspaces at a time. Close one before opening another.');
+		}
 		session.addSystem(summarizeCatalog());
 		return true;
 	} catch (e) {
@@ -201,22 +213,27 @@ export async function openFolder(
 export async function openRepository(path: string): Promise<boolean> {
 	if (!path.trim()) return false;
 	if (session.mountProgress) return false;
+	const openedWorkspace = session.workspaceAt(path);
+	if (openedWorkspace) return session.focusWorkspace(openedWorkspace.path);
 	if (!isDesktop()) return openFolder(path);
+	if (session.workspaceWindows.length >= 4) return openFolder(path);
 	const opened = await openFolder(path, { reportError: false });
 	if (opened) session.markRepositoryAvailable(path);
 	else if (!session.mountProgress) session.markRepositoryHistoryOnly(path);
 	return opened;
 }
 
-/** On launch, load the (empty) catalog and note the last session's folder so
- *  the welcome screen can offer a one-click reopen. Fella no longer opens that
- *  folder automatically the user picks. Called once from the page's onMount. */
+/** On launch, restore the user's saved open repositories, layout, and focused
+ *  workspace. Missing folders remain in repository history without replacing
+ *  or inheriting another workspace's catalog. Called once from page onMount. */
 export async function loadStartupCatalog(): Promise<void> {
-	if (!isDesktop() || session.catalog.workspace) return;
+	if (!isDesktop() || session.workspaceWindows.length) return;
 	try {
-		session.catalog = await ipc.getCatalog();
-		session.rememberRepository(session.catalog.workspace);
-		if (session.catalog.workspace) session.markRepositoryAvailable(session.catalog.workspace);
+		const catalog = await ipc.getCatalog();
+		if (catalog.workspace) {
+			session.registerWorkspace(catalog);
+			session.setWorkspaceView('ask');
+		}
 	} catch {
 		/* no engine yet the welcome screen handles it */
 	}
@@ -225,6 +242,13 @@ export async function loadStartupCatalog(): Promise<void> {
 	} catch {
 		session.lastFolder = null;
 	}
+	const paths = session.pendingWorkspacePaths;
+	for (const path of paths) {
+		if (session.workspaceWindows.length >= 4) break;
+		await openRepository(path);
+	}
+	const preferred = session.workspaceWindows.find((workspace) => workspace.path === session.savedActiveWorkspaceId);
+	if (preferred) session.focusWorkspace(preferred.path);
 }
 
 /** Reopen the folder from the last session (the welcome screen's "Reopen"
@@ -246,12 +270,10 @@ export async function openConversation(summary: ConversationSummary): Promise<vo
 			JSON.parse(raw);
 		const messages = Array.isArray(saved.messages) ? (saved.messages as Message[]) : [];
 		session.loadArchivedTab(summary.id, messages, saved.title ?? null, summary.workspace, saved.companionPane);
-		if (
-			summary.workspace &&
-			summary.workspace !== session.catalog.workspace &&
-			!session.historyOnlyRepositoryPaths.includes(summary.workspace)
-		) {
-			await openRepository(summary.workspace);
+		if (summary.workspace) {
+			if (session.workspaceAt(summary.workspace)) session.focusWorkspace(summary.workspace, summary.id);
+			else if (!session.historyOnlyRepositoryPaths.includes(summary.workspace)) await openRepository(summary.workspace);
+			if (session.workspaceAt(summary.workspace)) session.focusWorkspace(summary.workspace, summary.id);
 		}
 	} catch (e) {
 		session.addSystem(`error: ${errMsg(e)}`);
@@ -277,7 +299,7 @@ export async function stop(conv: Conversation | null = session.activeChat): Prom
 	if (!conv || !conv.busy || !isDesktop()) return;
 	conv.activity = 'stopping…';
 	try {
-		await ipc.cancel(conv.id);
+		await ipc.cancel(conv.id, conv.workspaceScope);
 	} catch {
 		/* the run may have already finished nothing to stop */
 	}
@@ -328,16 +350,16 @@ export async function dispatch(raw: string, clarificationTurnId?: string): Promi
 
 	const conv = session.ensureChat();
 	const origin = conv.workspaceScope;
-	if (
-		origin &&
-		origin !== session.catalog.workspace &&
-		session.historyOnlyRepositoryPaths.includes(origin)
-	) {
+	if (origin && !session.workspaceAt(origin)) {
 		const name = origin.replace(/[/\\]+$/, '').split(/[/\\]/).pop() || 'workspace';
-		conv.addSystem(`“${name}” is available as history only. Reconnect its folder before continuing analysis.`);
+		conv.addSystem(
+			session.historyOnlyRepositoryPaths.includes(origin)
+				? `“${name}” is available as history only. Reconnect its folder before continuing analysis.`
+				: `“${name}” is not open on the workspace board. Reopen it before continuing this conversation.`
+		);
 		return;
 	}
-	conv.bindWorkspaceScope(session.catalog.workspace ?? null);
+	conv.bindWorkspaceScope(session.activeWorkspaceId ?? null);
 	conv.addUser(text);
 	await ask(text, conv, clarificationTurnId);
 }
@@ -489,8 +511,10 @@ async function runCommand(text: string): Promise<void> {
 					);
 					// Restore the original folder when possible. If unavailable, keep
 					// the archived conversation and label its repository history-only.
-					if (chosen.workspace && chosen.workspace !== session.catalog.workspace) {
-						await openRepository(chosen.workspace);
+					if (chosen.workspace) {
+						if (session.workspaceAt(chosen.workspace)) session.focusWorkspace(chosen.workspace, chosen.id);
+						else await openRepository(chosen.workspace);
+						if (session.workspaceAt(chosen.workspace)) session.focusWorkspace(chosen.workspace, chosen.id);
 					}
 					return;
 				}
@@ -515,7 +539,7 @@ async function runCommand(text: string): Promise<void> {
 		case '/files':
 			if (!requireEngine()) return;
 			try {
-				session.catalog = await ipc.getCatalog();
+				session.catalog = await ipc.getCatalog(session.activeWorkspaceId ?? undefined);
 				session.addSystem(
 					session.catalog.workspace
 						? summarizeCatalog(true)
@@ -538,7 +562,7 @@ async function runCommand(text: string): Promise<void> {
 				return;
 			}
 			try {
-				const s = await ipc.describe(arg);
+				const s = await ipc.describe(arg, session.activeWorkspaceId ?? undefined);
 				const lines = (s.columns ?? []).map(
 					(c) =>
 						`  ${c.name.padEnd(24)} ${c.type.padEnd(12)} ` +
@@ -569,7 +593,7 @@ async function runCommand(text: string): Promise<void> {
 				try {
 					conv.busy = true;
 					conv.activity = 'running your query…';
-					const r = await ipc.runSqlDirect(arg);
+					const r = await ipc.runSqlDirect(arg, session.activeWorkspaceId ?? undefined);
 					conv.addSystem(renderTable(r.columns, r.rows, r.row_count, r.ms, r.truncated));
 				} catch (e) {
 					conv.addSystem(`error: ${errMsg(e)}`);
@@ -788,7 +812,11 @@ async function runCommand(text: string): Promise<void> {
 				try {
 					conv.busy = true;
 					conv.activity = 'checking the folder…';
-					session.catalog = await ipc.reindex();
+					session.catalog = await ipc.reindex(session.activeWorkspaceId ?? undefined);
+					if (session.activeWorkspaceId) {
+						const workspace = session.workspaceAt(session.activeWorkspaceId);
+						if (workspace) workspace.catalog = session.catalog;
+					}
 					conv.addSystem(`Checked the folder again.\n${summarizeCatalog()}`);
 				} catch (e) {
 					conv.addSystem(`error: ${errMsg(e)}`);
@@ -803,7 +831,7 @@ async function runCommand(text: string): Promise<void> {
 			if (!requireEngine()) return;
 			try {
 				if (arg.trim().toLowerCase() === 'forget') {
-					const had = await ipc.forgetMemory();
+					const had = await ipc.forgetMemory(session.activeWorkspaceId ?? undefined);
 					session.addSystem(
 						had
 							? 'Cleared what Fella had learned about this folder.'
@@ -811,7 +839,7 @@ async function runCommand(text: string): Promise<void> {
 					);
 					return;
 				}
-				const res = await ipc.memoryFile();
+				const res = await ipc.memoryFile(session.activeWorkspaceId ?? undefined);
 				if (!res) {
 					session.addSystem('Open a folder first, then /memory shows what Fella has learned about it.');
 					return;
@@ -950,7 +978,8 @@ async function ask(
 			conv.contextRefs,
 		clarificationTurnId
 			? { turn_id: clarificationTurnId, response: question }
-			: undefined
+			: undefined,
+		conv.workspaceScope
 		);
 		msg.answer = answer;
 		msg.text = answer.text;
@@ -1031,7 +1060,8 @@ export async function rerunAnalysisTurn(message: Message): Promise<void> {
 			turnId,
 			onEvent,
 			conv.model || undefined,
-			conv.mode
+			conv.mode,
+			conv.workspaceScope
 		);
 		msg.answer = answer;
 		msg.text = answer.text;

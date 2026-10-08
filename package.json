@@ -23,6 +23,7 @@
 		"test:electron-update": "node --test scripts/test-electron-update.mjs",
 		"test:electron:packaged": "node scripts/test-packaged-electron.mjs",
 		"test:e2e:release:live": "playwright test --config=playwright.live.config.mjs",
+		"test:e2e:workspace-board": "playwright test --config=playwright.workspace.config.mjs",
 		"test:e2e:clarification:live": "pnpm test:e2e:release:live",
 		"test:e2e:release-ui": "playwright test --config=playwright.live.config.mjs --grep=G3",
 		"test:e2e:visual:live": "playwright test --config=playwright.live.config.mjs --grep=G7",

@@ -74,12 +74,19 @@ fn electron_sidecar_opens_a_workspace_and_runs_a_read_only_query() {
     let scratch = Scratch::new();
     let data_dir = scratch.0.join("app-data");
     let workspace = scratch.0.join("workspace");
+    let second_workspace = scratch.0.join("second-workspace");
     fs::create_dir_all(&workspace).expect("create workspace");
+    fs::create_dir_all(&second_workspace).expect("create second workspace");
     fs::write(
         workspace.join("sales.csv"),
         "month,amount\n2025-01,120\n2025-02,180\n",
     )
     .expect("write analytical fixture");
+    fs::write(
+        second_workspace.join("sales.csv"),
+        "month,amount\n2025-01,1000\n2025-02,2000\n",
+    )
+    .expect("write second analytical fixture");
 
     let child = Command::new(env!("CARGO_BIN_EXE_fella"))
         .args(["--engine-stdio", "--data-dir"])
@@ -105,17 +112,54 @@ fn electron_sidecar_opens_a_workspace_and_runs_a_read_only_query() {
         json!({ "path": workspace }),
     );
     assert_eq!(catalog["sources"][0]["name"], "sales.csv");
+    let second_catalog = request(
+        &mut stdin,
+        &mut stdout,
+        3,
+        "open_workspace",
+        json!({ "path": second_workspace }),
+    );
+    assert_eq!(second_catalog["sources"][0]["name"], "sales.csv");
+    let first_id = catalog["workspace"]
+        .as_str()
+        .expect("stable workspace identity");
+    let second_id = second_catalog["workspace"]
+        .as_str()
+        .expect("second workspace identity");
+    assert_ne!(first_id, second_id);
+    let unbound_catalog = request(&mut stdin, &mut stdout, 4, "get_catalog", json!({}));
+    assert!(unbound_catalog["workspace"].is_null());
+    assert!(unbound_catalog["sources"].as_array().unwrap().is_empty());
+
     let view = catalog["sources"][0]["view"]
         .as_str()
         .expect("catalog gives a queryable view name");
     let result = request(
         &mut stdin,
         &mut stdout,
-        3,
+        5,
         "run_sql_direct",
-        json!({ "sql": format!("SELECT SUM(amount) AS total FROM \"{view}\"") }),
+        json!({ "workspaceId": first_id, "sql": format!("SELECT SUM(amount) AS total FROM \"{view}\"") }),
     );
     assert_eq!(result["rows"][0][0], 300);
+    let second_view = second_catalog["sources"][0]["view"].as_str().unwrap();
+    let second_result = request(
+        &mut stdin,
+        &mut stdout,
+        6,
+        "run_sql_direct",
+        json!({ "workspaceId": second_id, "sql": format!("SELECT SUM(amount) AS total FROM \"{second_view}\"") }),
+    );
+    assert_eq!(second_result["rows"][0][0], 3000);
+    let focused_catalog = request(
+        &mut stdin,
+        &mut stdout,
+        7,
+        "get_catalog",
+        json!({ "workspaceId": first_id }),
+    );
+    assert_eq!(focused_catalog["workspace"], first_id);
+    assert_eq!(focused_catalog["sources"][0]["row_count"], 2);
 
     drop(stdin);
     let status = child.0.wait().expect("wait for sidecar shutdown");

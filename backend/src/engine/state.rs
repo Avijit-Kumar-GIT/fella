@@ -1415,6 +1415,17 @@ fn scan_document_lines(
 
 impl EngineState {
     pub fn new(data_dir: &Path) -> EngineResult<Self> {
+        Self::build(data_dir, true)
+    }
+
+    /// Construct a workspace-scoped runtime sharing app settings, auth, and
+    /// conversation persistence at `data_dir`. Only the app runtime performs
+    /// one-time DB migrations and provider reconciliation.
+    pub(crate) fn new_workspace_runtime(data_dir: &Path) -> EngineResult<Self> {
+        Self::build(data_dir, false)
+    }
+
+    fn build(data_dir: &Path, initialize_app_state: bool) -> EngineResult<Self> {
         // reqwest is built with `rustls-no-provider`; install `ring` once
         // (process-global). Doing it here covers both the app and the tests.
         static CRYPTO: std::sync::Once = std::sync::Once::new();
@@ -1427,8 +1438,10 @@ impl EngineState {
         let data = data::open_engine(data_dir)?;
         let sqlite = open_or_recover(&data_dir.join("fella.db"));
         let secrets = Secrets::new(data_dir);
-        migrate_legacy_key(&sqlite, &secrets);
-        reconcile_provider(&sqlite, &secrets);
+        if initialize_app_state {
+            migrate_legacy_key(&sqlite, &secrets);
+            reconcile_provider(&sqlite, &secrets);
+        }
         let http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(180))
             .connect_timeout(std::time::Duration::from_secs(10))
@@ -1456,6 +1469,13 @@ impl EngineState {
             deleted_conversations: Mutex::new(HashSet::new()),
             doc_cache: Mutex::new(HashMap::new()),
         })
+    }
+
+    pub(crate) fn invalidate_capability_schema_cache(&self) {
+        self.workspace
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .schema_cache = None;
     }
 
     /// Stop the in-progress `ask()` for one conversation (if any).

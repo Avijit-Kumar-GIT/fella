@@ -102,13 +102,12 @@
 	function newChat(): void {
 		menuRepository = null;
 		session.setWorkspaceView('ask');
-		session.newTab();
+		session.newTab(null);
 	}
 
 	async function selectRepository(repo: Repository): Promise<boolean> {
 		if (!repo.path) return false;
-		session.setWorkspaceView('ask');
-		if (repo.path === session.catalog.workspace) return true;
+		if (session.workspaceAt(repo.path)) return session.focusWorkspace(repo.path);
 		return openRepository(repo.path);
 	}
 
@@ -123,8 +122,14 @@
 	async function openRepositoryWorkspace(repo: Repository): Promise<void> {
 		menuRepository = null;
 		expandedRepos = { ...expandedRepos, [repo.key]: true };
-		if (repo.path && repo.path !== session.catalog.workspace && !(await openRepository(repo.path))) return;
+		if (repo.path && !(await selectRepository(repo))) return;
 		session.setWorkspacePane('sources');
+	}
+
+	function beginRepositoryDrag(event: DragEvent, repo: Repository): void {
+		if (!repo.path || !event.dataTransfer) return;
+		event.dataTransfer.effectAllowed = 'copy';
+		event.dataTransfer.setData('application/x-fella-workspace', repo.path);
 	}
 
 	async function addRepository(): Promise<void> {
@@ -280,8 +285,10 @@
 						<button
 							class="repository-row"
 							type="button"
+							draggable={!!repo.path}
 							title={repo.path ?? 'No repository'}
 							aria-expanded={repo.expanded}
+							ondragstart={(event) => beginRepositoryDrag(event, repo)}
 							onclick={() => toggleRepository(repo)}
 						>
 							<span class="row-slot row-chevron"><Icon name="chevron-right" size={12} /></span>

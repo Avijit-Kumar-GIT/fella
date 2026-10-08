@@ -1,9 +1,10 @@
 # Composable interface
 
-This document defines the product and engineering contract for Fella's
-composable interface. It is a roadmap, not a claim that multi-repository
-workspaces are implemented. The current UI has a rounded frame around one
-active work area; the runtime still exposes one mounted workspace at a time.
+This document defines the product contract, current implementation, and
+remaining roadmap for Fella's composable interface. The first outer-workspace
+slice is implemented: up to four independently mounted repository runtimes can
+appear on one fixed-layout board. Typed composition inside each repository is
+still future work.
 
 ## Product model
 
@@ -32,6 +33,28 @@ General, unbound Ask conversations remain unbound. Opening or focusing a
 repository must never silently attach them to that folder. Projects/wiki-like
 summaries remain optional, user-created, local artifacts owned by a repository;
 they are not created automatically and are not part of the first tiling slice.
+
+### Implemented outer-workspace slice
+
+- A Rust registry owns one isolated `EngineState` and analytical catalog per
+  canonical folder path, with a four-workspace limit. Provider settings,
+  credentials, and archived conversations remain app-scoped.
+- Workspace-aware IPC carries the folder identity for catalog, Ask, SQL,
+  context, memory, source preview, replay, reindex, and cancellation operations.
+  Unbound Ask stays on the app runtime and does not borrow a mounted catalog.
+- The board opens/focuses repository tiles by click or sidebar drag, previews
+  the resulting fixed layout, persists open paths and layout locally, restores
+  open folders on restart, and supports explicit close and capacity handling.
+- A tile shows its own source inventory. Only the focused tile currently
+  renders the live transcript; the global composer targets that tile. Other
+  tiles show a compact source overview rather than a second live transcript.
+
+This is a real multi-repository board, not yet the complete composable
+workspace. Conversation selection is app-tab state, Sources/Guide remain
+existing workspace views, and chart/source/analysis panes are not yet entries in
+a per-workspace surface registry. Independent simultaneous conversations,
+drag-reordering existing tiles, and composing up to four inner surfaces remain
+open work.
 
 ## What can be composed
 
@@ -74,13 +97,13 @@ and the other half is divided into two quarters. Four tiles each occupy one
 quarter. The board never silently resizes an existing tile or evicts a
 workspace to make room.
 
-The intended placement interaction is to drag a repository from the sidebar
-onto the board (or drag an existing tile/surface to reposition it). Valid
-drop regions preview the resulting fixed layout before release. Dragging is
-not the only route: keyboard/context-menu actions must offer equivalent
-open, move, and close commands. Clicking a repository focuses its existing
-tile, or opens it in the next available slot. At capacity, Fella explains how
-to free a slot; it does not replace a workspace without the user's choice.
+The implemented placement interaction is to drag a repository from the sidebar
+onto the board; the preview shows the resulting fixed composition before
+release. Clicking a repository focuses its existing tile, or opens it in the
+next available slot. Add, focus, close, and arrangement controls are standard
+keyboard-accessible buttons/selects. Drag-reordering existing tiles and surfaces
+is not implemented. At capacity, Fella explains how to free a slot; it does not
+replace a workspace without the user's choice.
 
 Both the board and each repository composition have a hard limit of four.
 This is a deliberate legibility and resource boundary, not a recommendation
@@ -109,34 +132,31 @@ that all four always be open.
   the owning workspace. Concurrent activity in one tile must not overwrite
   another tile's status or cancellation state.
 
-The current Rust `EngineState` contains one mutable workspace catalog, and the
-Electron IPC commands currently address that catalog without a workspace ID.
-The multi-workspace implementation must replace that implicit global scope
-with an app-level workspace registry and explicit workspace-scoped requests.
-Prefer one Rust sidecar with shared app/provider configuration and isolated
-workspace runtime contexts; do not simulate concurrency by repeatedly
-switching one global catalog, and do not launch a full copy of the app per tile.
-The registry must enforce the four-workspace cap and account for aggregate
-ingestion/query resources.
+The Rust sidecar now has an app-level registry and explicit workspace-scoped
+requests. It shares app/provider state while giving each open folder its own
+runtime context; it does not switch one mutable catalog or launch a sidecar per
+tile. The registry enforces four open workspaces. A unified aggregate CPU/memory
+budget across those runtimes is not yet implemented; per-operation limits and
+the four-workspace ceiling are the current resource controls.
 
 ## Delivery roadmap
 
-1. **Define fixed layout geometry.** Add a pure, typed layout model for 1–4
+1. **Define fixed layout geometry — complete.** Add a pure, typed layout model for 1–4
    stable tile IDs and tests for every supported composition, exact 50/50
    splits, full coverage, no overlap, duplicate IDs, and the four-tile limit.
-2. **Isolate runtime ownership.** Introduce workspace identities and an
+2. **Isolate runtime ownership — initial slice complete.** Introduce workspace identities and an
    app-level registry in Rust. Thread the workspace ID through mount/catalog,
    ask/resume, tools, cancellation, progress/events, source preview, memory,
    and persistence boundaries. Prove two same-named, different-data folders
    can be queried concurrently without cross-workspace leakage.
-3. **Build the repository board.** Render one to four actual registered
+3. **Build the repository board — initial slice complete.** Render one to four actual registered
    workspaces in the fixed layouts. Add drag placement previews plus accessible
-   menu/keyboard alternatives. Persist and restore board state locally.
+   button/select alternatives. Persist and restore open paths and layout locally.
 4. **Compose workspace surfaces.** Move from one conversation-owned companion
    reference to a workspace-owned typed surface registry. Preserve source and
    chart provenance, support up to four surfaces, and keep the conversation
    available as the default/primary surface.
-5. **Harden complete journeys.** Exercise real Electron journeys for multiple
+5. **Harden complete journeys — in progress.** Exercise real Electron journeys for multiple
    mounts, parallel analysis, workspace isolation, limit handling, restart,
    unavailable folders, stale artifacts, light/dark themes, keyboard-only
    placement, and narrow window sizes. Audit correctness and rendered geometry
@@ -151,11 +171,13 @@ retain exact answer/source provenance; state restores safely; and fifth-item,
 missing-folder, cancellation, and concurrent-progress states are explicit and
 non-destructive. Tests must cover those contracts before claiming completion.
 
-## First implementation slice
+## Current test surface
 
-Start with step 1 only. It is a small, testable foundation and does not pretend
-that runtime isolation or multi-repository rendering already exists. The pure
-layout function is intentionally independent of React/Svelte and backend
-details so both repository tiles and inner surfaces can share one geometry
-contract. The next functional milestone is step 2; the layout helper alone is
-not a user-facing completion claim.
+Run `pnpm test:workspace-layout` for all fixed geometry presets,
+`cargo test --locked --manifest-path backend/Cargo.toml electron_sidecar_opens_a_workspace_and_runs_a_read_only_query`
+for real sidecar IPC/catalog isolation, and `pnpm test:e2e:workspace-board` for
+the browser-renderer journey with a mocked Electron bridge (mount, drag preview,
+unbound and workspace-scoped Ask, capacity, close/free-slot, and restart
+restore). The browser journey validates UI/bridge wiring, not the Electron
+shell or model correctness; analytics correctness remains the responsibility
+of FQA-Bench and real-model journeys.

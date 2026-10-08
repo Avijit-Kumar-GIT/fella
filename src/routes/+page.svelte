@@ -11,6 +11,7 @@
 	import SettingsView from '$lib/components/SettingsView.svelte';
 	import Titlebar from '$lib/components/Titlebar.svelte';
 	import Transcript from '$lib/components/Transcript.svelte';
+	import WorkspaceBoard from '$lib/components/WorkspaceBoard.svelte';
 	import WorkspaceView from '$lib/components/WorkspaceView.svelte';
 	import { dispatch, loadStartupCatalog, openFolder, stop } from '$lib/commands';
 	import { ipc, isDesktop } from '$lib/ipc';
@@ -296,7 +297,9 @@
 			{/if}
 			<main>
 				<div class="main-row">
-					{#if activeView === 'workspace'}
+					{#if activeView === 'board'}
+						<WorkspaceBoard bind:transcript />
+					{:else if activeView === 'workspace'}
 						<WorkspaceView />
 					{:else if activeView === 'project'}
 						<ProjectView />
@@ -313,7 +316,7 @@
 				</div>
 			</main>
 			<div class="dock">
-				{#if activeView === 'ask'}
+				{#if activeView === 'ask' || activeView === 'board'}
 					<Composer bind:this={composer} onafterrun={refreshHealth} />
 				{/if}
 			</div>
