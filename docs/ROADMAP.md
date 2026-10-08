@@ -30,11 +30,14 @@ individual failed example into a special-case production rule.
 5. **Keep the runtime understandable.** Improve the analysis-turn trace and
    replay experience only where evaluation or user workflows show a real gap;
    preserve one model-directed loop and a small, fixed, read-only tool surface.
-6. **Make the Ask work area composable without making the app a canvas.** Keep
-   navigation and the composer anchored; let users open a chart or source
-   preview beside the active conversation. Expand to additional pane types or
-   resizing only when the conversation remains primary and provenance stays
-   clear.
+6. **Build repo-owned composable workspaces without making the app a canvas.**
+   Keep the shell/sidebar global; give each mounted repository an independently
+   scoped workspace, with up to four repo tiles and up to four typed surfaces
+   inside each. Use fixed 50/50 split layouts, accessible placement controls,
+   and provenance-preserving chart/source/analysis references. The current UI
+   only frames one active workspace and the Rust engine still has one mutable
+   catalog. See [`COMPOSABLE-INTERFACE.md`](COMPOSABLE-INTERFACE.md) for the
+   ownership model, delivery stages, and completion criteria.
 
 ## Deferred
 

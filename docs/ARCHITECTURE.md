@@ -89,50 +89,42 @@ every message.
 
 ## Interaction model and composable interface
 
-Fella's interaction model is conversation-first: a conversation is the durable
-unit of questions, follow-ups, clarifications, model choice, and analysis
-history. It may be unbound to a folder or pinned to the repository where its
-first question began. Switching conversations changes the active analytical
-thread; it does not transfer another thread's workspace scope or view state.
+### Current implementation
 
-The app shell stays stable while the Ask work area can compose a small set of
-typed surfaces:
+A conversation is the durable unit of questions, follow-ups, clarifications,
+model choice, and analysis history. It may be unbound to a folder or pinned to
+the repository where it began. The app currently has one mutable Rust workspace
+catalog, app-wide conversation tabs, and at most one conversation-owned
+companion reference (chart or source preview). The latest rounded frame is a
+visual treatment for that one active work area; it does not implement multiple
+simultaneous repository runtimes.
 
-```text
-App shell (fixed)
-├─ Sidebar and repository/history navigation
-├─ Titlebar and conversation tabs
-└─ Ask workbench (active conversation)
-   ├─ Conversation pane (always present)
-   ├─ Companion pane (optional; chart or source preview)
-   └─ Composer (fixed to the active conversation)
-```
+The current companion changes presentation only: it does not rerun analysis,
+change folder scope, or grant the model another tool. Chart and source panes
+refer back to the owning answer/evidence or exact source path and revision.
+Stale references are not silently rebound. The sidebar and app controls remain
+global. This is the baseline being extended, not the final composable model.
 
-The first implementation is intentionally bounded to one optional companion
-pane. A user opens a chart from its answer or a source from Sources; the chosen
-artifact appears beside the transcript, and the composer remains docked to the
-same conversation. Opening a pane changes presentation only: it does not add
-context, rerun analysis, change folder scope, or grant the model another tool.
-Closing it restores the full-width transcript. A chart shown in the companion
-is represented by a small reference in the transcript rather than duplicated.
+### Target model
 
-Companion state belongs to a conversation and is persisted with its local
-conversation record. Chart panes reference the answer/evidence entry, so the
-rendered values remain those produced by that run. Source panes resolve to the
-currently mounted catalog entry by exact path; if workspace or revision differs,
-the UI identifies the stale state and does not silently present a newer source
-as the old preview. Evidence and analysis details remain attached to their
-answer rather than becoming another general-purpose pane.
+The product direction is a stable global shell containing a board of up to four
+independent repository workspaces. Each repository workspace owns its mounted
+catalog, conversations, context, analysis artifacts, and a composition of up
+to four typed surfaces. The initial surface registry is Conversation, Chart,
+Analysis details, and Source preview. A general conversation stays unbound and
+must not be attached to whichever repository happens to be selected later.
 
-Composable surfaces are selected from a fixed, typed registry. The shell,
-sidebar, titlebar, tab strip, composer, settings, dialogs, and command palette
-are not draggable widgets. Users cannot create arbitrary panes, run custom UI
-code, or ask the model to author new interface components. Future work may add
-resizing or a small number of side-by-side artifacts, but only where it keeps
-the conversation primary and has a clear information hierarchy; Fella is not
-intended to become a terminal multiplexer or an unbounded widget canvas.
-Workspace/Guide, Project, and Settings remain dedicated navigated surfaces in
-this first phase; they are not currently dockable into the Ask workbench.
+Splits are fixed 50/50, with one/two/three/four-tile layouts defined by
+[`COMPOSABLE-INTERFACE.md`](COMPOSABLE-INTERFACE.md). There is no free resizing
+or arbitrary widget canvas. The same typed layout model is shared by the outer
+repository board and the composition inside a workspace. Sidebar, titlebar,
+settings, dialogs, and command palette remain app-level and immovable.
+
+This target requires an explicit workspace identity across IPC and the Rust
+runtime. The current unscoped `open_workspace`, `get_catalog`, analysis, and
+source commands operate on the single active catalog; a UI-only tile layer
+would therefore be incorrect. The runtime boundary and testable invariants are
+specified in [`COMPOSABLE-INTERFACE.md`](COMPOSABLE-INTERFACE.md).
 
 ## Workspace and analysis data
 

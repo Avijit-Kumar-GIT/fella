@@ -30,6 +30,7 @@
 		"test:e2e:analysis-families:real": "playwright test --config=playwright.live.config.mjs tests/e2e/analysis-families.real.live.spec.mjs",
 		"test:chart-renderer": "node scripts/test-chart-renderer.mjs",
 		"test:workbench": "node scripts/test-workbench-layout.mjs",
+		"test:workspace-layout": "node scripts/test-workspace-layout.mjs",
 		"test:release-artifacts": "node --test scripts/test-release-artifacts.mjs",
 		"test:release-config": "node --test scripts/test-release-config.mjs",
 		"prepare": "svelte-kit sync || echo ''",
