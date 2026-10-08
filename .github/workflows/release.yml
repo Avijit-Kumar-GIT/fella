@@ -63,6 +63,9 @@ jobs:
       - name: Release artifact validation tests
         run: pnpm run test:release-artifacts
 
+      - name: Release configuration tests
+        run: pnpm run test:release-config
+
       - name: FQA-Bench adapter and fixture checks
         run: |
           python3 bench/fqa-bench/build_runner_cases.py --suite-dir bench/fqa-bench/suites/uci-bike-sharing --check
@@ -145,6 +148,7 @@ jobs:
         run: pnpm run test:electron:packaged -- dist-electron/win-unpacked/Fella.exe
 
       - name: Validate platform installers
+        shell: bash
         run: node scripts/check-release-artifacts.mjs "${GITHUB_REF_NAME}" "${{ matrix.target }}" dist-electron
 
       - name: Preserve platform installers for gated publication
