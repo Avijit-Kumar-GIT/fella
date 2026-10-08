@@ -36,6 +36,7 @@ const folders = [
 async function installDesktopMock(page) {
 	await page.addInitScript((fixtureFolders) => {
 		const calls = [];
+		const archivedConversations = new Map();
 		let pickerIndex = 0;
 		const settings = {
 			provider: 'openai',
@@ -55,8 +56,31 @@ async function installDesktopMock(page) {
 					case 'provider_health': return { reachable: true, rejected: false, models: ['gpt-4.1-mini'] };
 					case 'get_catalog': return { workspace: null, sources: [] };
 					case 'last_workspace_path': return null;
-					case 'conversations_list': return [];
-					case 'archive_conversation': return 'fixture-archive';
+					case 'conversations_list':
+						return [...archivedConversations.values()].map(({ summary }) => summary);
+					case 'archive_conversation': {
+						const saved = JSON.parse(args.body);
+						const firstQuestion = saved.messages?.find((message) =>
+							message.role === 'user' && message.text?.trim() && !message.text.trimStart().startsWith('/')
+						);
+						archivedConversations.set(args.id, {
+							saved,
+							summary: {
+								id: args.id,
+								saved_at_ms: saved.saved_at_ms,
+								workspace: saved.workspace ?? null,
+								preview: firstQuestion?.text ?? 'New conversation',
+								message_count: saved.messages?.length ?? 0,
+								title: saved.title ?? null
+							}
+						});
+						return 'fixture-archive';
+					}
+					case 'conversation_load': {
+						const saved = archivedConversations.get(args.id)?.saved;
+						if (!saved) throw new Error(`Unknown archived conversation: ${args.id}`);
+						return JSON.stringify(saved);
+					}
 					case 'close_workspace': return null;
 					case 'run_log_recent': return [];
 					default: return null;
@@ -102,6 +126,8 @@ test('repository workspaces render independently, compose, and keep Ask scoped t
 	await installDesktopMock(page);
 	await page.goto('/');
 	await page.getByRole('button', { name: 'New conversation' }).click();
+	// Ask reuses the pristine welcome tab rather than creating duplicate blanks.
+	await expect(page.getByRole('tablist')).toHaveCount(0);
 	await page.getByRole('combobox', { name: 'Ask a question' }).fill('What is a useful way to compare trends?');
 	await page.getByRole('button', { name: 'Send' }).click();
 	await expect(page.getByText('Scoped to general.')).toBeVisible();
@@ -143,6 +169,39 @@ test('repository workspaces render independently, compose, and keep Ask scoped t
 	await healthComposer.fill('Summarize sleep trends');
 	await page.getByRole('button', { name: 'Send' }).click();
 	await expect(health).toContainText('Scoped to C:\\FellaFixture\\health-journal.');
+
+	const salesTab = page.getByRole('tab', { name: /northwind-sales: Summarize sales/ });
+	const healthTab = page.getByRole('tab', { name: /health-journal: Summarize sleep/ });
+	await salesTab.click();
+	await expect(salesTab).toHaveAttribute('aria-selected', 'true');
+	await expect(sales.locator('.tile-focus')).toHaveAttribute('aria-pressed', 'true');
+	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
+
+	await page.keyboard.press('ArrowRight');
+	await expect(healthTab).toHaveAttribute('aria-selected', 'true');
+	await expect(healthTab).toBeFocused();
+	await expect(health.locator('.tile-focus')).toHaveAttribute('aria-pressed', 'true');
+	await page.getByRole('button', { name: /Close conversation: health-journal: Summarize sleep/ }).click();
+	await expect(salesTab).toHaveAttribute('aria-selected', 'true');
+	await expect(sales.locator('.tile-focus')).toHaveAttribute('aria-pressed', 'true');
+	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
+
+	// No repository is a history group, not a fourth workspace kind. Reopening
+	// its saved conversation must select its existing General tab, not fork a
+	// duplicate or inherit the currently focused repository.
+	const openTabsBeforeHistory = await page.getByRole('tab').count();
+	await expect(page.getByRole('button', { name: 'No repository' })).toBeVisible();
+	await page.getByRole('button', { name: 'No repository' }).click();
+	const generalHistory = page.getByRole('button', {
+		name: 'Open conversation: What is a useful way to compare trends?'
+	});
+	await expect(generalHistory).toBeVisible();
+	await generalHistory.click();
+	const generalTab = page.getByRole('tab', { name: /General: What is a useful way/ });
+	await expect(generalTab).toHaveAttribute('aria-selected', 'true');
+	await expect(page.getByRole('combobox', { name: 'Ask a question' })).toBeVisible();
+	expect(await page.getByRole('tab').count()).toBe(openTabsBeforeHistory);
+
 	const calls = await page.evaluate(() => window.__workspaceAskCalls);
 	expect(calls.map((call) => call.workspaceId)).toEqual([
 		null,

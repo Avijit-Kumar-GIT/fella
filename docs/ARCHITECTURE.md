@@ -98,7 +98,11 @@ repository runtimes open through an app-level Rust registry; each has an
 independent `EngineState` and catalog, while settings, credentials, and
 archived conversations remain app-scoped. Global conversation tabs retain
 their folder identity, and workspace-aware IPC routes Ask and source/context
-operations to the matching runtime. A general conversation stays unbound.
+operations to the matching runtime. Tabs are global conversation navigation,
+not a second workspace/window layer; their owner is shown in the tab label and
+switching tabs restores the owning catalog. The four-workspace ceiling does
+not cap conversation tabs. A general conversation stays unbound and is grouped
+under “No repository” in history without consuming a repository workspace tile.
 
 The first board slice renders the focused workspace as a live conversation and
 shows compact source inventories for the other open repositories. The global

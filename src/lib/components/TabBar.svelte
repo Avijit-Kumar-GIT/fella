@@ -12,37 +12,57 @@
 		return t.length > 24 ? t.slice(0, 23) + '…' : t;
 	}
 
+	function owner(tab: Tab): string {
+		const scope = tab.workspaceScope;
+		if (!scope) return 'General';
+		return scope.replace(/[/\\]+$/, '').split(/[/\\]/).at(-1) || scope;
+	}
+
+	function accessibleLabel(tab: Tab): string {
+		return `${owner(tab)}: ${label(tab)}`;
+	}
+
 	function onKey(e: KeyboardEvent, i: number) {
 		if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
 			e.preventDefault();
 			const n = session.tabs.length;
-			session.activateTab((i + (e.key === 'ArrowRight' ? 1 : n - 1)) % n);
-		} else if (e.key === 'Enter' || e.key === ' ') {
-			e.preventDefault();
-			session.activateTab(i);
+			const next = (i + (e.key === 'ArrowRight' ? 1 : n - 1)) % n;
+			const tablist = e.currentTarget instanceof HTMLElement
+				? e.currentTarget.closest('[role="tablist"]')
+				: null;
+			session.activateTab(next);
+			queueMicrotask(() => {
+				tablist?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]?.focus();
+			});
 		}
 	}
 </script>
 
-<div class="tabs" role="tablist" aria-label="Tabs">
+<div class="tabs" role="tablist" aria-label="Open conversations">
 	{#each session.tabs as tab, i (tab.id)}
 		<div
 			class="tab"
 			class:active={i === session.active}
-			role="tab"
-			aria-selected={i === session.active}
-			tabindex={i === session.active ? 0 : -1}
-			onclick={() => session.activateTab(i)}
-			onkeydown={(e) => onKey(e, i)}
+			role="presentation"
 		>
-			{#if tab.busy}
-				<span class="thinking" aria-hidden="true"></span>
-			{/if}
-			<span class="label">{label(tab)}</span>
+			<button
+				class="select"
+				role="tab"
+				aria-label={accessibleLabel(tab)}
+				aria-selected={i === session.active}
+				tabindex={i === session.active ? 0 : -1}
+				title={`${owner(tab)} · ${label(tab)}`}
+				onclick={() => session.activateTab(i)}
+				onkeydown={(e) => onKey(e, i)}
+			>
+				{#if tab.busy}<span class="thinking" aria-hidden="true"></span>{/if}
+				<span class="owner">{owner(tab)}</span>
+				<span class="label">{label(tab)}</span>
+			</button>
 			<button
 				class="close"
-				aria-label="Close this conversation"
-				tabindex="-1"
+				aria-label={`Close conversation: ${accessibleLabel(tab)}`}
+				title={`Close ${label(tab)}`}
 				onclick={(e) => {
 					e.stopPropagation();
 					void session.closeTab(i);
@@ -80,13 +100,11 @@
 	.tab {
 		display: flex;
 		align-items: center;
-		gap: var(--space-1);
-		max-width: 20ch;
-		padding: 3px var(--space-1) 3px var(--space-2);
+		gap: 0;
+		max-width: min(29ch, 24vw);
 		border-radius: var(--radius-sm);
 		color: var(--text-faint);
 		font-size: var(--fs-sm);
-		cursor: pointer;
 		white-space: nowrap;
 		-webkit-app-region: no-drag;
 		transition:
@@ -102,7 +120,30 @@
 		background: var(--bg-inset);
 		box-shadow: inset 0 0 0 1px var(--border);
 	}
+	.select {
+		min-width: 0;
+		flex: 1;
+		display: flex;
+		align-items: center;
+		gap: 7px;
+		padding: 4px 0 4px 9px;
+		color: inherit;
+		text-align: left;
+		font: inherit;
+		cursor: pointer;
+		-webkit-app-region: no-drag;
+	}
+	.owner {
+		flex: none;
+		max-width: 10ch;
+		overflow: hidden;
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+		font-weight: 600;
+		text-overflow: ellipsis;
+	}
 	.label {
+		min-width: 0;
 		overflow: hidden;
 		text-overflow: ellipsis;
 	}
@@ -119,14 +160,22 @@
 		-webkit-app-region: no-drag;
 	}
 	.close {
-		width: 16px;
-		height: 16px;
+		flex: none;
+		width: 20px;
+		height: 20px;
+		margin-right: 4px;
 		opacity: 0;
 	}
 	.tab:hover .close,
 	.tab.active .close,
 	.close:focus-visible {
 		opacity: 1;
+	}
+	.select:focus-visible,
+	.close:focus-visible,
+	.add:focus-visible {
+		outline: 2px solid var(--brand);
+		outline-offset: 1px;
 	}
 	.close:hover {
 		color: var(--text);

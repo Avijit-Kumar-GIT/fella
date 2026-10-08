@@ -34,6 +34,17 @@ repository must never silently attach them to that folder. Projects/wiki-like
 summaries remain optional, user-created, local artifacts owned by a repository;
 they are not created automatically and are not part of the first tiling slice.
 
+Conversation tabs are app-level navigation, not another set of workspace
+windows. Each tab retains its repository owner (or `General` when unbound), and
+switching tabs restores that conversation's catalog and workspace focus. The
+four-slot limit applies to mounted repository windows, not conversation tabs;
+tabs are lightweight conversation navigation and may outnumber the four open
+repositories. General conversations stay unbound and do not consume a
+repository tile. `No repository` in the sidebar is a history group, not a
+mounted folder or a new workspace: Ask starts a new unbound conversation (or
+reuses the pristine welcome tab), while selecting a history row reopens or
+activates that exact conversation.
+
 ### Implemented outer-workspace slice
 
 - A Rust registry owns one isolated `EngineState` and analytical catalog per
@@ -50,7 +61,7 @@ they are not created automatically and are not part of the first tiling slice.
   tiles show a compact source overview rather than a second live transcript.
 
 This is a real multi-repository board, not yet the complete composable
-workspace. Conversation selection is app-tab state, Sources/Guide remain
+workspace. Conversation selection remains app-tab state, Sources/Guide remain
 existing workspace views, and chart/source/analysis panes are not yet entries in
 a per-workspace surface registry. Independent simultaneous conversations,
 drag-reordering existing tiles, and composing up to four inner surfaces remain

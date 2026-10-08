@@ -844,6 +844,21 @@ class Session {
 
 	// --- tab management ---------------------------------------------------
 	newTab(workspaceScope: string | null = this.activeWorkspaceId): void {
+		const current = this.activeChat;
+		// The startup welcome tab is already the user's empty conversation. Reuse
+		// it when Ask (or the tab-strip plus) is invoked, instead of creating a
+		// second indistinguishable blank tab. Never reuse a tab with a different
+		// explicit scope or any transcript content.
+		if (
+			!current.busy &&
+			current.messages.length === 0 &&
+			(current.workspaceScope === undefined || current.workspaceScope === workspaceScope)
+		) {
+			current.workspaceScope = workspaceScope;
+			this.activateTab(this.active);
+			this.#writeIndex();
+			return;
+		}
 		const inherit = this.model; // provider + login are shared; carry the model
 		const c = new Conversation();
 		c.model = inherit;
@@ -909,13 +924,22 @@ class Session {
 	async closeTab(i: number): Promise<void> {
 		const tab = this.tabs[i];
 		if (!tab) return;
+		const fallbackScope = tab.workspaceScope ?? null;
 		await this.#archive(tab);
 		tab.dropSnapshot();
 		if (isDesktop()) void ipc.forgetConversation(tab.id).catch(() => {});
 		this.tabs.splice(i, 1);
-		if (this.tabs.length === 0) this.tabs.push(new Conversation());
+		if (this.tabs.length === 0) {
+			const replacement = new Conversation();
+			replacement.workspaceScope = fallbackScope;
+			this.tabs.push(replacement);
+		}
 		if (this.active > i) this.active -= 1;
 		this.active = Math.min(this.active, this.tabs.length - 1);
+		// Removing the selected tab can change repository ownership as well as
+		// the index. Re-activate the replacement so catalog, board, and composer
+		// all follow the conversation now selected.
+		this.activateTab(this.active);
 		this.#writeIndex();
 	}
 
@@ -931,12 +955,18 @@ class Session {
 		const i = this.tabs.findIndex((t) => t.kind === 'chat' && t.id === id);
 		if (i < 0) return;
 		const tab = this.tabs[i] as Conversation;
+		const fallbackScope = tab.workspaceScope ?? null;
 		tab.dropSnapshot();
 		if (isDesktop()) void ipc.forgetConversation(tab.id).catch(() => {});
 		this.tabs.splice(i, 1);
-		if (this.tabs.length === 0) this.tabs.push(new Conversation());
+		if (this.tabs.length === 0) {
+			const replacement = new Conversation();
+			replacement.workspaceScope = fallbackScope;
+			this.tabs.push(replacement);
+		}
 		if (this.active > i) this.active -= 1;
 		this.active = Math.min(this.active, this.tabs.length - 1);
+		this.activateTab(this.active);
 		this.#writeIndex();
 	}
 
