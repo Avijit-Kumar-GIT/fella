@@ -16,10 +16,10 @@ pnpm test:electron-bridge
 pnpm test:electron-update
 pnpm test:release-artifacts
 pnpm test:chart-renderer
-cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+cargo fmt --manifest-path backend/Cargo.toml -- --check
 cargo clippy --all-targets --features eval --locked \
-  --manifest-path src-tauri/Cargo.toml -- -D warnings
-cargo test --locked --manifest-path src-tauri/Cargo.toml
+  --manifest-path backend/Cargo.toml -- -D warnings
+cargo test --locked --manifest-path backend/Cargo.toml
 ```
 
 These cover frontend diagnostics/build, Electron bridge and updater behavior,

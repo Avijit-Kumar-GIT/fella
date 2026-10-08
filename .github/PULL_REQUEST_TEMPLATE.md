@@ -13,7 +13,7 @@ Brief description, and the reason for it.
 
 ## Checklist
 
-- [ ] `cargo test` passes from `src-tauri/` (SQLite default features, not `--features duckdb`)
+- [ ] `cargo test` passes from `backend/` (SQLite default features, not `--features duckdb`)
 - [ ] `npm run check` is 0 errors / 0 warnings
 - [ ] `npm run build` succeeds
 - [ ] New behaviour has a test

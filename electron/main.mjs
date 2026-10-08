@@ -26,8 +26,8 @@ function engineCandidates() {
 		process.resourcesPath,
 		join(process.resourcesPath, 'fella-engine'),
 		join(root, 'electron', 'engine'),
-		join(root, 'src-tauri', 'target', 'release'),
-		join(root, 'src-tauri', 'target', 'debug')
+		join(root, 'backend', 'target', 'release'),
+		join(root, 'backend', 'target', 'debug')
 	].filter(Boolean);
 	const discovered = roots.flatMap((base) => {
 		const path = base.endsWith('.exe') || base.endsWith('/fella') || base.endsWith('\\fella')

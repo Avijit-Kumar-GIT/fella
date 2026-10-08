@@ -11,7 +11,7 @@ const arch = target === 'aarch64-apple-darwin'
 		? 'x64'
 		: process.arch;
 const suffix = process.platform === 'win32' ? '.exe' : '';
-const targetDir = target ? join(root, 'src-tauri', 'target', target) : join(root, 'src-tauri', 'target');
+const targetDir = target ? join(root, 'backend', 'target', target) : join(root, 'backend', 'target');
 const candidates = [
 	join(targetDir, 'release', `fella${suffix}`),
 	join(targetDir, 'debug', `fella${suffix}`)

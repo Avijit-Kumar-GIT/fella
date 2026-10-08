@@ -27,11 +27,10 @@ Electron. It is a single-terminal workflow on Windows, macOS, and Linux. For a
 renderer-only development server, run `pnpm dev` and launch Electron in a
 second terminal with `FELLA_ELECTRON_URL=http://127.0.0.1:1420` set.
 
-The Rust crate remains under `src-tauri/` as a historical path; it is not a
-Tauri application. The engine can be checked or tested without opening the UI:
+The Rust backend can be checked or tested without opening the UI:
 
 ```sh
-cargo test --locked --manifest-path src-tauri/Cargo.toml
+cargo test --locked --manifest-path backend/Cargo.toml
 ```
 
 ## Providers and local state

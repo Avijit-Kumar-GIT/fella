@@ -48,13 +48,13 @@ directory (including `fella.db` and `auth.json`) and point the evaluator at
 that copy. Set the provider/model explicitly; each suite is a separate run:
 
     AGENT_EVAL_DATA_DIR=/path/to/isolated-fella-data \
-    cargo run --release --manifest-path src-tauri/Cargo.toml \
+    cargo run --release --manifest-path backend/Cargo.toml \
       --features eval --example agent_eval -- bench \
       --dir bench/fqa-bench/suites/uci-bike-sharing \
       --models provider/model --iters 3 --json /tmp/fqa-uci.json
 
     AGENT_EVAL_DATA_DIR=/path/to/isolated-fella-data \
-    cargo run --release --manifest-path src-tauri/Cargo.toml \
+    cargo run --release --manifest-path backend/Cargo.toml \
       --features eval --example agent_eval -- bench \
       --dir bench/fqa-bench/suites/clarification-housing \
       --models provider/model --iters 3 --json /tmp/fqa-housing.json

@@ -144,7 +144,7 @@ Run both conditions with the same model and copied app data, saving outputs
 outside the repository:
 
 ```bash
-cd src-tauri
+cd backend
 AGENT_EVAL_DATA_DIR=/tmp/fella-eval \
   EVAL_SHOW_ANSWERS=1 cargo run --release --features eval --example agent_eval -- bench \
   --dir ../bench/product-eval/general-knowledge \

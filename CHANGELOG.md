@@ -18,15 +18,14 @@ All notable changes to Fella are recorded here. Format follows
 - Provider-free general questions no longer require a mounted repository.
 - Existing `dev.fella.app` data directories remain the default so settings,
   credentials, and conversation history survive the shell transition.
-- The app and sidecar version is being advanced to 0.3.0; published builds
-  remain unsigned, and the release is not ready until the documented quality
-  and packaged-app gates pass.
+- The app and sidecar version is 0.3.0. Local quality and packaged-app gates
+  passed on 2026-10-07; the release tag and GitHub draft remain pending.
 
 ### Removed
 
 - Tauri runtime, plugins, shell commands, and bundle configuration. The Rust
-  engine remains; its existing `src-tauri/` directory name is retained for now
-  to avoid a broad path-only rename during the shell migration.
+  backend remains as an Electron-managed sidecar in the neutral `backend/`
+  directory.
 
 ## [0.2.0] - 2026-09-20
 

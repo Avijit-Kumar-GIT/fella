@@ -9,4 +9,4 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT"
 
-cargo run --manifest-path src-tauri/Cargo.toml --release --locked --example memory_probe
+cargo run --manifest-path backend/Cargo.toml --release --locked --example memory_probe

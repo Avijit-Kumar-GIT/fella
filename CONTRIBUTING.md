@@ -16,8 +16,7 @@ pnpm install
 pnpm electron:dev
 ```
 
-The Rust engine lives under `src-tauri/` for historical path compatibility;
-this is not a Tauri app. Full setup instructions are in
+The Rust backend and sidecar live in `backend/`. Full setup instructions are in
 [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md). Run the relevant checks from
 [`docs/TESTING.md`](docs/TESTING.md) before submitting a change.
 

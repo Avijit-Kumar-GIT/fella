@@ -79,7 +79,7 @@ for step in 0..max_steps() {
 }
 ```
 
-This is a documentation excerpt, not a drop-in function: the production loop also races model calls against cancellation, handles partial model failures, memoizes exact duplicate built-in calls, emits UI events, and performs the final no-tool turn after the step cap. The implementation is in [`agent::run`](https://github.com/Avijit-Kumar-GIT/fella/blob/main/src-tauri/src/engine/agent.rs).
+This is a documentation excerpt, not a drop-in function: the production loop also races model calls against cancellation, handles partial model failures, memoizes exact duplicate built-in calls, emits UI events, and performs the final no-tool turn after the step cap. The implementation is in [`agent::run`](https://github.com/Avijit-Kumar-GIT/fella/blob/main/backend/src/engine/agent.rs).
 
 `EngineState::ask_once` and `ask_once_usage` are separate evaluation helpers.
 They make one tool-free model call for judge/baseline measurements and are not

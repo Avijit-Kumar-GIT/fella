@@ -71,16 +71,16 @@ jobs:
           python3 bench/fqa-bench/test_report_slices.py
 
       - name: FQA-Bench runner tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml --features eval --example agent_eval --locked
+        run: cargo test --manifest-path backend/Cargo.toml --features eval --example agent_eval --locked
 
       - name: Rust formatting
-        run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
+        run: cargo fmt --manifest-path backend/Cargo.toml --all -- --check
 
       - name: Clippy
-        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --features eval --locked -- -D warnings
+        run: cargo clippy --manifest-path backend/Cargo.toml --all-targets --features eval --locked -- -D warnings
 
       - name: Rust tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+        run: cargo test --manifest-path backend/Cargo.toml --locked
 
   build:
     needs: quality
@@ -117,7 +117,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
-          workspaces: src-tauri
+          workspaces: backend
 
       - run: pnpm install --frozen-lockfile
 
@@ -126,9 +126,9 @@ jobs:
         shell: bash
         run: |
           pnpm build
-          cargo build --release --locked --target aarch64-apple-darwin --manifest-path src-tauri/Cargo.toml
+          cargo build --release --locked --target aarch64-apple-darwin --manifest-path backend/Cargo.toml
           node electron/prepare-engine.mjs --target=aarch64-apple-darwin
-          cargo build --release --locked --target x86_64-apple-darwin --manifest-path src-tauri/Cargo.toml
+          cargo build --release --locked --target x86_64-apple-darwin --manifest-path backend/Cargo.toml
           node electron/prepare-engine.mjs --target=x86_64-apple-darwin
           pnpm exec electron-builder --mac --universal --publish never
 

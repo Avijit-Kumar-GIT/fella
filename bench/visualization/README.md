@@ -25,7 +25,7 @@ narrower date range.
 
 The hosted cases describe user-visible outcomes and do not assert a particular internal
 row-cap implementation. Capacity boundaries are covered separately by deterministic
-tests in `src-tauri/tests/chart_tool.rs`.
+tests in `backend/tests/chart_tool.rs`.
 
 The hosted run is opt in and BYOK only. It defaults to the hosted Ollama provider
 and Gemma 4 31B; it never starts or calls a model server on the machine.

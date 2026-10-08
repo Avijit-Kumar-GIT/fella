@@ -32,7 +32,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
-          workspaces: src-tauri
+          workspaces: backend
 
       - run: pnpm install --frozen-lockfile
 
@@ -49,7 +49,7 @@ jobs:
         run: xvfb-run -a pnpm run test:electron:packaged -- dist-electron/linux-unpacked/fella
 
       - name: Rust formatting
-        run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
+        run: cargo fmt --manifest-path backend/Cargo.toml --all -- --check
 
       - name: BYOK test surface
         run: bash scripts/check-byok-test-surface.sh
@@ -74,14 +74,14 @@ jobs:
           python3 bench/fqa-bench/test_report_slices.py
 
       - name: FQA-Bench runner tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml --features eval --example agent_eval --locked
+        run: cargo test --manifest-path backend/Cargo.toml --features eval --example agent_eval --locked
 
       - name: Clippy
-        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --features eval --locked -- -D warnings
+        run: cargo clippy --manifest-path backend/Cargo.toml --all-targets --features eval --locked -- -D warnings
 
       # SQLite is the shipped engine; do not enable the optional DuckDB build here.
       - name: Rust tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+        run: cargo test --manifest-path backend/Cargo.toml --locked
 
   audit:
     # Advisory only until the tree is fully clear. This never masks a failed build/test.
@@ -99,13 +99,13 @@ jobs:
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
-          workspaces: src-tauri
+          workspaces: backend
           cache-all-crates: true
 
       - name: cargo-audit
         run: |
           cargo install cargo-audit --locked
-          cargo audit --file src-tauri/Cargo.lock
+          cargo audit --file backend/Cargo.lock
 
       - name: pnpm audit
         shell: bash

@@ -50,7 +50,7 @@ Then use the same paired-run protocol above, replacing `--dir ../bench/folder-qa
 Use a copy of the Fella app-data directory containing the settings and provider credentials needed by the evaluation. Do not point evaluation at live app state.
 
 ```bash filename="terminal"
-cd src-tauri
+cd backend
 
 AGENT_EVAL_DATA_DIR=/tmp/fella-eval \
   cargo run --release --features eval --example agent_eval -- bench \

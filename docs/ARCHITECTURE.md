@@ -2,8 +2,8 @@
 
 This is the current implementation reference for the Electron desktop app and
 its Rust analytics runtime. Update it when a code change alters a boundary or
-data flow. `src-tauri/` is the Rust crate's retained repository path; the app
-does not use Tauri.
+data flow. The Rust backend lives in `backend/` and runs as an Electron-managed
+sidecar; the app does not use Tauri.
 
 ## System at a glance
 
@@ -29,8 +29,8 @@ Electron preload ── Electron main
 | --- | --- | --- |
 | Svelte UI | Conversation, clarification controls, charts, evidence details, settings, and workspace views | `src/routes/`, `src/lib/` |
 | Electron | Window and native dialogs, safe external links, updater, typed preload API, and Rust process lifecycle | `electron/main.mjs`, `electron/preload.cjs`, `electron/engine.mjs` |
-| Bridge | Correlated newline-delimited requests and streamed events between Electron and Rust | `src-tauri/src/stdio.rs`, `src/lib/ipc.ts` |
-| Harness | Model calls, context assembly, tool orchestration, clarification/resume, and canonical turn trace | `src-tauri/src/engine/agent.rs`, `runtime.rs`, `context.rs` |
+| Bridge | Correlated newline-delimited requests and streamed events between Electron and Rust | `backend/src/stdio.rs`, `src/lib/ipc.ts` |
+| Harness | Model calls, context assembly, tool orchestration, clarification/resume, and canonical turn trace | `backend/src/engine/agent.rs`, `runtime.rs`, `context.rs` |
 | Workspace model | Catalog, revision, source profiles, semantic hints, and grounding | `catalog.rs`, `workspace_model.rs`, `grounding.rs` |
 | Analytical engine | Ingestion, SQL, Python execution, charts, and verification; does not call the model | `engine/analytics/`, `engine/ingest/` |
 | Local persistence | Settings, provider credentials, source metadata, conversation and analysis records, and scoped memory | `sqlite.rs`, `secrets.rs`, `analysis_store.rs`, `memory.rs`, `semantic_memory.rs` |

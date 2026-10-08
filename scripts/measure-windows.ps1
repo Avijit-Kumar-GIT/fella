@@ -6,7 +6,7 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $launcher = Join-Path $root 'node_modules/electron/dist/electron.exe'
 $entry = Join-Path $root 'electron/main.mjs'
-$engine = Join-Path $root 'src-tauri/target/release/fella.exe'
+$engine = Join-Path $root 'backend/target/release/fella.exe'
 
 function Require-Path([string]$Path, [string]$Hint) {
     if (-not (Test-Path -LiteralPath $Path)) {

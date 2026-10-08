@@ -2,6 +2,9 @@
 
 Date: 2026-10-04
 
+Historical path note: commands below record the repository layout at this
+run; the Rust crate was later renamed from `src-tauri/` to `backend/`.
+
 Candidate: uncommitted working tree on `feat/eval-replay-refs`.
 Model: `openai/gpt-5.6-luna`, through the configured OpenAI credentials.
 Suite: `bench/fqa-bench/suites/uci-bike-sharing`.

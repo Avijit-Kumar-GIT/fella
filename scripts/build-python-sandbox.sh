@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SANDBOX_DIR="$REPO_ROOT/python-sandbox"
 TARGET_DIR="$SANDBOX_DIR/target/wasm32-unknown-unknown/release"
-ARTIFACT="$REPO_ROOT/src-tauri/resources/fella-python-sandbox.wasm"
+ARTIFACT="$REPO_ROOT/backend/resources/fella-python-sandbox.wasm"
 
 if ! rustup target list --installed | grep -qx 'wasm32-unknown-unknown'; then
   rustup target add wasm32-unknown-unknown

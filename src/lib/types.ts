@@ -1,5 +1,5 @@
 // Shared types between the UI and the Rust engine. Keep in sync with
-// src-tauri/src/engine/*.rs (serde-serialized).
+// backend/src/engine/*.rs (serde-serialized).
 
 export type Role = 'user' | 'assistant' | 'system';
 

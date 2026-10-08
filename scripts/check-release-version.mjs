@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 
 const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
-const cargoToml = readFileSync(new URL('../src-tauri/Cargo.toml', import.meta.url), 'utf8');
+const cargoToml = readFileSync(new URL('../backend/Cargo.toml', import.meta.url), 'utf8');
 const cargoVersion = cargoToml.match(/^version\s*=\s*"([^"]+)"/m)?.[1];
 const tag = process.argv[2] ?? process.env.GITHUB_REF_NAME ?? '';
 const match = /^v(\d+\.\d+\.\d+)(?:-[0-9A-Za-z.-]+)?$/.exec(tag);
@@ -12,7 +12,7 @@ if (!match) {
 }
 
 if (!cargoVersion || cargoVersion !== packageJson.version) {
-	console.error(`package.json (${packageJson.version}) and src-tauri/Cargo.toml (${cargoVersion ?? 'missing'}) versions must match.`);
+	console.error(`package.json (${packageJson.version}) and backend/Cargo.toml (${cargoVersion ?? 'missing'}) versions must match.`);
 	process.exit(1);
 }
 

@@ -30,7 +30,7 @@ export default defineConfig({
 		strictPort: true,
 		watch: {
 			// Rust changes are rebuilt by Cargo, not Vite.
-			ignored: ['**/src-tauri/**']
+			ignored: ['**/backend/**']
 		}
 	},
 	envPrefix: ['VITE_']

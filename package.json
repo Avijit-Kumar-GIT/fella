@@ -12,7 +12,7 @@
 	"scripts": {
 		"dev": "vite dev",
 		"build": "vite build",
-		"electron:build": "pnpm build && cargo build --release --locked --manifest-path src-tauri/Cargo.toml && node electron/prepare-engine.mjs",
+		"electron:build": "pnpm build && cargo build --release --locked --manifest-path backend/Cargo.toml && node electron/prepare-engine.mjs",
 		"electron:dev": "pnpm electron:build && node electron/dev.mjs",
 		"electron:run": "pnpm electron:build && electron electron/main.mjs",
 		"electron:package": "pnpm electron:build && electron-builder --publish never",
@@ -58,16 +58,16 @@
 		"extraResources": [{ "from": "electron/engine", "to": "fella-engine", "filter": ["fella-engine-*"] }],
 		"directories": { "output": "dist-electron" },
 		"mac": {
-			"icon": "src-tauri/icons/icon.icns",
+			"icon": "electron/icons/icon.icns",
 			"target": [{ "target": "dmg", "arch": ["universal"] }, { "target": "zip", "arch": ["universal"] }],
 			"category": "public.app-category.productivity"
 		},
 		"win": {
-			"icon": "src-tauri/icons/icon.ico",
+			"icon": "electron/icons/icon.ico",
 			"target": ["nsis", "msi"]
 		},
 		"linux": {
-			"icon": "src-tauri/icons/icon.png",
+			"icon": "electron/icons/icon.png",
 			"artifactName": "Fella_${version}_x64.${ext}",
 			"maintainer": "Avijit Kumar and contributors",
 			"syncDesktopName": true,

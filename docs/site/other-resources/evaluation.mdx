@@ -20,7 +20,7 @@ Deterministic tests establish engine behavior. Live evaluation samples whether a
 
 ## Run the local gates
 
-```bash filename="Rust checks from src-tauri"
+```bash filename="Rust checks from backend"
 cargo test --locked
 cargo clippy --all-targets --locked -- -D warnings
 ```
@@ -55,7 +55,7 @@ When a model failure reveals a deterministic defect, add the deterministic test 
 Live evaluation needs a provider and a copied app-data directory. It grades final-answer closeness, tool shape, calls, token use, refusal behavior, and whether verification surfaced a problem.
 
 ```bash filename="terminal"
-cd src-tauri
+cd backend
 AGENT_EVAL_DATA_DIR=/tmp/fella-eval \
   cargo run --release --features eval --example agent_eval -- bench \
   --dir ../bench/folder-qa \

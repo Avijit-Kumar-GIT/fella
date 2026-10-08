@@ -5,7 +5,7 @@
 //! correlation fixture, asks the question that should select `run_python`,
 //! then asserts both the tool trace and the grounded answer.
 //!
-//! Run from `src-tauri` with a scratch copy of `fella.db` + `auth.json`:
+//! Run from `backend` with a scratch copy of `fella.db` + `auth.json`:
 //!
 //!   FELLA_E2E_DATA_DIR=/tmp/fella-e2e-data \
 //!   cargo run --release --example python_e2e

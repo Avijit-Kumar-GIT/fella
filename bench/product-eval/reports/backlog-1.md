@@ -2,6 +2,9 @@
 
 Date: 2026-10-01
 
+Historical path note: commands below record the repository layout at this
+run; the Rust crate was later renamed from `src-tauri/` to `backend/`.
+
 Candidate: working tree based on `c9ca8c1`; not committed.
 Model: `openai/gpt-5.6-luna` through the configured OpenAI credentials.
 

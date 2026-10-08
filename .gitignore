@@ -27,10 +27,9 @@ auth.json.tmp
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 
-# Rust / Tauri
-/src-tauri/target
+# Rust
+/backend/target
 /python-sandbox/target
-/src-tauri/gen/schemas
 
 # Local databases / app state
 *.db

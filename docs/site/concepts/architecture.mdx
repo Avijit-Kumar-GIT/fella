@@ -73,17 +73,17 @@ pub trait AnalyticsSource {
 }
 ```
 
-`EngineState` implements this trait by delegation. That keeps verification independent of desktop-shell IPC, credentials, conversation state, and the model provider. See the [engine implementation](https://github.com/Avijit-Kumar-GIT/fella/blob/main/src-tauri/src/engine/analytics/mod.rs) and the [state adapter](https://github.com/Avijit-Kumar-GIT/fella/blob/main/src-tauri/src/engine/state.rs).
+`EngineState` implements this trait by delegation. That keeps verification independent of desktop-shell IPC, credentials, conversation state, and the model provider. See the [engine implementation](https://github.com/Avijit-Kumar-GIT/fella/blob/main/backend/src/engine/analytics/mod.rs) and the [state adapter](https://github.com/Avijit-Kumar-GIT/fella/blob/main/backend/src/engine/state.rs).
 
 ## Ownership map
 
 | Concern | Current owner | Boundary |
 | --- | --- | --- |
-| Prompt, model turns, stopping, cancellation | [`agent.rs`](https://github.com/Avijit-Kumar-GIT/fella/blob/main/src-tauri/src/engine/agent.rs) | Does not implement SQL, parsing, or statistics |
-| Built-in and runtime tool dispatch | [`tools.rs`](https://github.com/Avijit-Kumar-GIT/fella/blob/main/src-tauri/src/engine/tools.rs) | Converts tool output into the shape the harness records |
-| Catalog and data access | [`analytics/data/`](https://github.com/Avijit-Kumar-GIT/fella/tree/main/src-tauri/src/engine/analytics/data) and `catalog.rs` | Does not call an LLM |
-| Evidence and streamed answer contract | [`evidence.rs`](https://github.com/Avijit-Kumar-GIT/fella/blob/main/src-tauri/src/engine/evidence.rs) | Serializes results for the Svelte client |
-| Post-answer checks | [`analytics/verify.rs`](https://github.com/Avijit-Kumar-GIT/fella/blob/main/src-tauri/src/engine/analytics/verify.rs) | Checks recorded work; does not prove intent |
+| Prompt, model turns, stopping, cancellation | [`agent.rs`](https://github.com/Avijit-Kumar-GIT/fella/blob/main/backend/src/engine/agent.rs) | Does not implement SQL, parsing, or statistics |
+| Built-in and runtime tool dispatch | [`tools.rs`](https://github.com/Avijit-Kumar-GIT/fella/blob/main/backend/src/engine/tools.rs) | Converts tool output into the shape the harness records |
+| Catalog and data access | [`analytics/data/`](https://github.com/Avijit-Kumar-GIT/fella/tree/main/backend/src/engine/analytics/data) and `catalog.rs` | Does not call an LLM |
+| Evidence and streamed answer contract | [`evidence.rs`](https://github.com/Avijit-Kumar-GIT/fella/blob/main/backend/src/engine/evidence.rs) | Serializes results for the Svelte client |
+| Post-answer checks | [`analytics/verify.rs`](https://github.com/Avijit-Kumar-GIT/fella/blob/main/backend/src/engine/analytics/verify.rs) | Checks recorded work; does not prove intent |
 
 For the user-facing version of this flow, see [read the evidence](/developer-platform/using-fella/evidence). For provider and Python network boundaries, see [privacy and security](/developer-platform/using-fella/privacy).
 

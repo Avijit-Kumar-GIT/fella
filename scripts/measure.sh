@@ -31,7 +31,7 @@ for a in "$@"; do
 	esac
 done
 
-BIN=src-tauri/target/release/fella
+BIN=backend/target/release/fella
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
@@ -49,7 +49,7 @@ main() {
 
 	sec "Dependencies"
 	(
-		cd src-tauri || exit
+		cd backend || exit
 		u=$(cargo tree -e normal --prefix none 2>/dev/null | sed 's/ (\*)//' | sort -u | grep -c .)
 		d=$(cargo tree --depth 1 -e normal --prefix none 2>/dev/null | tail -n +2 | grep -c .)
 		echo "unique crates in the graph : $u"
@@ -61,7 +61,7 @@ main() {
 
 	sec "Release build"
 	(
-		cd src-tauri || exit
+		cd backend || exit
 		[ "$WANT_COLD" = 1 ] && cargo clean
 		# cargo itself is the up-to-date check; this is a no-op when nothing changed.
 		if have hyperfine && [ "$WANT_COLD" = 1 ]; then
@@ -74,7 +74,7 @@ main() {
 	if [ "$WANT_BUILD" = 1 ] && [ "$WANT_COLD" != 1 ]; then
 		sec "Incremental rebuild time (edit one file, rebuild)"
 		(
-			cd src-tauri || exit
+			cd backend || exit
 			if have hyperfine; then
 				hyperfine --warmup 0 --runs 3 --prepare 'touch src/lib.rs' 'cargo build --release'
 			else
@@ -83,8 +83,8 @@ main() {
 		)
 	fi
 	echo
-	echo "per-crate compile times: cd src-tauri && cargo build --release --timings"
-	echo "  then open src-tauri/target/cargo-timings/cargo-timing.html"
+	echo "per-crate compile times: cd backend && cargo build --release --timings"
+	echo "  then open backend/target/cargo-timings/cargo-timing.html"
 
 	sec "Binary size"
 	if [ -x "$BIN" ]; then
@@ -100,8 +100,8 @@ main() {
 
 	if [ "$WANT_MIN" = 1 ]; then
 		sec "Binary size release-min profile (opt-level z, fat LTO, abort, stripped)"
-		(cd src-tauri && cargo build --profile release-min)
-		M=src-tauri/target/release-min/fella
+		(cd backend && cargo build --profile release-min)
+		M=backend/target/release-min/fella
 		[ -x "$M" ] && echo "release-min : $(du -h --apparent-size "$M" | cut -f1)  ($(stat -c%s "$M") bytes)"
 	fi
 
@@ -110,7 +110,7 @@ main() {
 		echo "(skipped pass --bloat; it relinks the LTO binary, ~10 min)"
 	elif have cargo-bloat; then
 		(
-			cd src-tauri || exit
+			cd backend || exit
 			echo "how many bytes of the binary each crate's code occupies:"
 			cargo bloat --release --crates -n 18 2>/dev/null
 		)
