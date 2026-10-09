@@ -42,10 +42,11 @@ async function installDesktopMock(
 		replayStatusError = false,
 		reindexedCatalog = null,
 		chartEvidence = null,
-		detailEvidence = null
+		detailEvidence = null,
+		providerHealth = { reachable: true, rejected: false, models: ['gpt-4.1-mini'] }
 	} = {}
 ) {
-	await page.addInitScript(({ fixtureFolders, seedUnavailableConversation, replayStatus, replayStatusError, reindexedCatalog, chartEvidence, detailEvidence }) => {
+	await page.addInitScript(({ fixtureFolders, seedUnavailableConversation, replayStatus, replayStatusError, reindexedCatalog, chartEvidence, detailEvidence, providerHealth }) => {
 		const calls = [];
 		const archivedConversations = new Map();
 		const unavailablePath = 'C:\\FellaFixture\\unavailable-archive';
@@ -90,7 +91,7 @@ async function installDesktopMock(
 					case 'app_ready': return 1;
 					case 'get_settings': return settings;
 					case 'list_providers': return [];
-					case 'provider_health': return { reachable: true, rejected: false, models: ['gpt-4.1-mini'] };
+					case 'provider_health': return providerHealth;
 					case 'get_catalog': return { workspace: null, sources: [] };
 					case 'last_workspace_path': return null;
 					case 'conversations_list':
@@ -161,7 +162,7 @@ async function installDesktopMock(
 			windowAction: async () => {},
 			pathForFile: () => ''
 		};
-	}, { fixtureFolders, seedUnavailableConversation, replayStatus, replayStatusError, reindexedCatalog, chartEvidence, detailEvidence });
+	}, { fixtureFolders, seedUnavailableConversation, replayStatus, replayStatusError, reindexedCatalog, chartEvidence, detailEvidence, providerHealth });
 }
 
 async function dispatchWorkspaceDrag(page, type, workspacePath, { x = 0.5, y = 0.5, existing = false } = {}) {
@@ -958,6 +959,22 @@ test('Evidence query disclosure uses a shared button and preserves expansion beh
 	await reveal.click();
 	await expect(reveal).toHaveAttribute('aria-expanded', 'false');
 	await expect(answer.locator('pre.sql')).toHaveCount(0);
+});
+
+test('Transcript setup links use shared buttons and retain the sign-in action', async ({ page }) => {
+	await installDesktopMock(page, {
+		providerHealth: { reachable: false, rejected: true, models: [] }
+	});
+	await page.goto('/');
+	await page.getByRole('combobox', { name: 'Ask a question' }).fill('Check my data.');
+	await page.getByRole('button', { name: 'Send' }).click();
+
+	const setup = page.locator('.setup.compact');
+	await expect(setup).toContainText('key was refused');
+	const enterKey = setup.getByRole('button', { name: 'Enter a new key' });
+	await expect(enterKey).toHaveAttribute('data-slot', 'button');
+	await enterKey.click();
+	await expect(page.getByText('unknown provider: openai')).toBeVisible();
 });
 
 test('Replay freshness uses shared status badges and rerun buttons', async ({ page }) => {

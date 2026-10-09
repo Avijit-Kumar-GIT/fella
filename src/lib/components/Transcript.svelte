@@ -214,24 +214,24 @@
 				{#if rejected}
 					<p>
 						Your <strong>{providerName}</strong> key was refused.
-						<button class="link" onclick={() => void dispatch(`/login ${providerId}`)}>
+						<Button variant="link" size="sm" class="setup-inline-link" onclick={() => void dispatch(`/login ${providerId}`)}>
 							Enter a new key
-						</button>
+						</Button>
 					</p>
 				{:else if needModelPick}
 					<p>
 						Connected to <strong>{providerName}</strong>, but no model is chosen.
-						<button class="link" onclick={() => void dispatch('/model')}>Pick a model</button>
+						<Button variant="link" size="sm" class="setup-inline-link" onclick={() => void dispatch('/model')}>Pick a model</Button>
 					</p>
 				{:else if !hasCredential}
 					<p>
 						No model service is connected.
-						<button class="link" onclick={() => void dispatch('/login')}>Connect one with an API key</button>.
+						<Button variant="link" size="sm" class="setup-inline-link" onclick={() => void dispatch('/login')}>Connect one with an API key</Button>.
 					</p>
 				{:else}
 					<p>
 						Can't reach <strong>{providerName}</strong>.
-						<button class="link" onclick={() => void dispatch(`/login ${providerId}`)}>Check the key</button>
+						<Button variant="link" size="sm" class="setup-inline-link" onclick={() => void dispatch(`/login ${providerId}`)}>Check the key</Button>
 						or try another provider.
 					</p>
 				{/if}
@@ -413,17 +413,19 @@
 		gap: 8px;
 		margin-top: 4px;
 	}
-	/* An inline text button that reads as a link, for use mid-sentence. */
-	.setup button.link {
-		border: none;
+	/* Shared link buttons remain inline in compact, sentence-level guidance. */
+	.setup :global(.setup-inline-link) {
+		display: inline;
+		min-width: 0;
+		height: auto;
+		min-height: 0;
 		padding: 0;
 		border-radius: 0;
-		color: var(--link);
-		background: transparent;
-	}
-	.setup button.link:hover {
-		background: transparent;
-		text-decoration: underline;
+		font-size: inherit;
+		font-weight: 600;
+		line-height: inherit;
+		vertical-align: baseline;
+		white-space: normal;
 	}
 	.boundary-err {
 		font-family: var(--mono);

@@ -523,6 +523,21 @@ to “hide,” so the locator now follows the stable disclosure element and the
 label/state assertions remain explicit. The build reports a 505.10 KB client
 chunk above Vite's 500 KB advisory and the adapter-static fallback-page notice.
 
+#### Slice 3z: Compact Transcript setup actions
+
+Status: implemented.
+
+- Use shared link Buttons for inline sign-in, model-selection, and connection
+  guidance in the compact mid-conversation setup state.
+- Preserve sentence flow and dispatch the same setup command.
+
+Validation: `pnpm check` reports zero errors and warnings,
+`node --check tests/e2e/workspace-board.spec.mjs`, the focused Transcript setup
+browser test, and `pnpm build` succeed. The test confirms the inline action is
+a shared Button and still dispatches the sign-in command. The build reports a
+505.36 KB client chunk above Vite's 500 KB advisory and the adapter-static
+fallback-page notice.
+
 #### Remaining in Slice 3
 
 Standardize remaining feature actions and controls around shared primitives
