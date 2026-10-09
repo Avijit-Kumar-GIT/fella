@@ -607,3 +607,22 @@ test('Sidebar navigation actions use shared buttons and retain compact keyboard 
 	await settings.click();
 	await expect(settings).toHaveAttribute('aria-current', 'page');
 });
+
+test('Sidebar icon actions use shared compact buttons and Add repository still opens the board', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+	const collapse = page.getByRole('button', { name: 'Collapse sidebar' });
+	const addRepository = page.getByRole('button', { name: 'Add repository' });
+
+	for (const action of [collapse, addRepository]) {
+		await expect(action).toHaveAttribute('data-slot', 'button');
+		const bounds = await action.boundingBox();
+		expect(bounds).not.toBeNull();
+		expect(bounds.width).toBeLessThanOrEqual(32);
+		expect(bounds.height).toBeLessThanOrEqual(32);
+	}
+
+	await addRepository.click();
+	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
+	await expect(page.getByRole('article', { name: 'northwind-sales workspace' })).toBeVisible();
+});

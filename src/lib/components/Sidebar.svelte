@@ -215,7 +215,9 @@
 	<div class="header">
 		<span class="logo"><Logo size={18} active={session.busy} /></span>
 		<div class="header-actions">
-			<button
+			<Button
+				variant="ghost"
+				size="icon"
 				class="icon-btn"
 				type="button"
 				aria-label="Collapse sidebar"
@@ -223,7 +225,7 @@
 				onclick={() => session.toggleSidebar()}
 			>
 				<Icon name="panel" size={16} />
-			</button>
+			</Button>
 		</div>
 	</div>
 	<nav class="nav-section" aria-label="General">
@@ -256,7 +258,9 @@
 	<section class="repository-section" aria-labelledby="repositories-heading">
 		<div class="section-head">
 			<div class="nav-heading" id="repositories-heading">Workspaces</div>
-			<button
+			<Button
+				variant="ghost"
+				size="icon"
 				class="section-action"
 				type="button"
 				aria-label="Add repository"
@@ -264,7 +268,7 @@
 				onclick={() => void addRepository()}
 			>
 				<Icon name="plus" size={16} />
-			</button>
+			</Button>
 		</div>
 		<div class="repositories">
 			{#each repositories as repo (repo.key)}
@@ -492,15 +496,16 @@
 		align-items: center;
 		gap: var(--space-1);
 	}
-	.icon-btn {
+	.header-actions :global(.icon-btn) {
 		display: grid;
 		place-items: center;
-		width: 26px;
-		height: 26px;
+		width: 28px;
+		height: 28px;
+		padding: 0;
 		border-radius: var(--radius-sm);
 		color: var(--text-faint);
 	}
-	.icon-btn:hover {
+	.header-actions :global(.icon-btn:hover) {
 		color: var(--text);
 		background: var(--sidebar-hover);
 	}
@@ -527,15 +532,16 @@
 		padding: 0 var(--space-2);
 		line-height: 24px;
 	}
-	.section-action {
+	.section-head :global(.section-action) {
 		display: grid;
 		place-items: center;
-		width: 22px;
-		height: 22px;
+		width: 28px;
+		height: 28px;
+		padding: 0;
 		border-radius: var(--radius-chip);
 		color: var(--text-faint);
 	}
-	.section-action:hover {
+	.section-head :global(.section-action:hover) {
 		background: var(--sidebar-hover);
 		color: var(--text);
 	}

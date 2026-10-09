@@ -244,6 +244,19 @@ and focus restoration, and the active Settings marker. The build reports a
 501.97 KB client chunk above Vite's 500 KB advisory and the adapter-static
 fallback-page notice.
 
+#### Slice 3g: Sidebar icon actions
+
+Status: implemented.
+
+- Use the shared icon Button for sidebar collapse and Add repository while
+  preserving their icon-only labels, tooltips, compact hit areas, and actions.
+
+Validation: `pnpm check`, `node --check tests/e2e/workspace-board.spec.mjs`,
+the focused icon-action browser test, and `pnpm build` succeed. The test
+verifies shared Button usage, both hit areas remain at most 32 px square, and
+Add repository opens the board. The build reports a 502.07 KB client chunk
+above Vite's 500 KB advisory and the adapter-static fallback-page notice.
+
 #### Remaining in Slice 3
 
 Standardize the remaining Composer and Sidebar controls around shared
