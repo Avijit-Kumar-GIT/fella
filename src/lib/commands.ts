@@ -173,12 +173,13 @@ export async function openFolder(
 	if (!chosen) return false;
 	const alreadyOpen = session.workspaceWindows.find((workspace) => workspace.path === chosen);
 	if (alreadyOpen && !alreadyOpen.historyOnly) {
-		session.focusWorkspace(alreadyOpen.id);
-		return true;
+		if (session.focusWorkspace(alreadyOpen.id)) return true;
+		if (options.reportError !== false) session.addSystem('This environment already has four workspaces. Create or switch environments to add another.');
+		return false;
 	}
-	if (!alreadyOpen && session.workspaceWindows.length >= 4) {
+	if (!session.paneForWorkspace(chosen) && session.activeEnvironmentPanes.length >= 4) {
 		if (options.reportError !== false) {
-			session.addSystem('Close a workspace to add another.');
+			session.addSystem('This environment already has four workspaces. Create or switch environments to add another.');
 		}
 		return false;
 	}
@@ -194,7 +195,7 @@ export async function openFolder(
 			session.mountProgress = progress;
 		});
 		if (!session.registerWorkspace(catalog)) {
-			throw new Error('Fella can show up to four workspace windows at a time. Close one before opening another.');
+			throw new Error('This environment already contains four workspace panes. Switch environments to add another workspace.');
 		}
 		session.addSystem(summarizeCatalog());
 		return true;
@@ -216,10 +217,14 @@ export async function openRepository(
 	if (!path.trim()) return false;
 	if (session.mountProgress) return false;
 	const openedWorkspace = session.workspaceAt(path);
-	if (openedWorkspace && !openedWorkspace.historyOnly) return session.focusWorkspace(openedWorkspace.id);
+	if (openedWorkspace && !openedWorkspace.historyOnly) {
+		const focused = session.focusWorkspace(openedWorkspace.id);
+		if (!focused) session.addSystem('This environment already has four workspaces. Create or switch environments to add another.');
+		return focused;
+	}
 	if (!isDesktop()) return openFolder(path);
-	if (!openedWorkspace && session.workspaceWindows.length >= 4) {
-		session.addSystem('Close a workspace to add another.');
+	if (!session.paneForWorkspace(path) && session.activeEnvironmentPanes.length >= 4) {
+		session.addSystem('This environment already has four workspaces. Create or switch environments to add another.');
 		return false;
 	}
 	const opened = await openFolder(path, { reportError: false });
@@ -248,10 +253,7 @@ export async function loadStartupCatalog(): Promise<void> {
 			if (existing) {
 				existing.catalog = catalog;
 				existing.historyOnly = false;
-			} else if (
-				session.workspaceWindows.length + session.pendingWorkspacePaths.length < 4 ||
-				session.pendingWorkspacePaths.includes(catalog.workspace)
-			) {
+			} else if (session.pendingWorkspacePaths.includes(catalog.workspace)) {
 				session.registerWorkspace(catalog);
 			}
 		}
@@ -260,11 +262,9 @@ export async function loadStartupCatalog(): Promise<void> {
 	}
 	const paths = session.pendingWorkspacePaths;
 	for (const path of paths) {
-		if (session.workspaceWindows.length >= 4) break;
 		await openRepository(path);
 	}
-	const preferred = session.workspaceAt(session.savedActiveWorkspaceId ?? '');
-	if (preferred) session.focusWorkspace(preferred.id);
+	session.restoreActiveEnvironment();
 }
 
 /** Select an archived conversation inside its owning workspace. */
@@ -275,11 +275,11 @@ export async function openConversation(summary: ConversationSummary): Promise<bo
 	}
 	try {
 		const workspaceId = summary.workspace ?? null;
+		if (workspaceId && !session.paneForWorkspace(workspaceId) && session.activeEnvironmentPanes.length >= 4) {
+			session.addSystem('This environment already has four workspaces. Switch environments to open this conversation.');
+			return false;
+		}
 		if (workspaceId && !session.workspaceAt(workspaceId)) {
-			if (session.workspaceWindows.length >= 4) {
-				session.addSystem('Close a workspace to open this conversation’s workspace.');
-				return false;
-			}
 			if (!session.historyOnlyRepositoryPaths.includes(workspaceId)) {
 				await openRepository(workspaceId);
 			}
@@ -296,8 +296,10 @@ export async function openConversation(summary: ConversationSummary): Promise<bo
 			JSON.parse(raw);
 		const messages = Array.isArray(saved.messages) ? (saved.messages as Message[]) : [];
 		session.loadConversation(summary.id, messages, saved.title ?? null, summary.workspace, saved.companionPane);
-		if (workspaceId) session.focusWorkspace(workspaceId, summary.id);
-		else session.activateConversation(session.conversations.findIndex((conversation) => conversation.id === summary.id));
+		const focused = workspaceId
+			? session.focusWorkspace(workspaceId, summary.id)
+			: session.activateConversation(session.conversations.findIndex((conversation) => conversation.id === summary.id));
+		if (!focused) return false;
 		return true;
 	} catch (e) {
 		session.addSystem(`error: ${errMsg(e)}`);

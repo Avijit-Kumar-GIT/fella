@@ -1,20 +1,20 @@
 <script lang="ts">
 	import { GENERAL_WORKSPACE_ID, session } from '$lib/session.svelte';
 	import { isDesktop, win } from '$lib/ipc';
-	import ConversationTabs from './ConversationTabs.svelte';
+	import EnvironmentTabs from './EnvironmentTabs.svelte';
 	import Icon from './Icon.svelte';
 	import Logo from './Logo.svelte';
 
 	let {
 		onpalette,
-		ontabselect,
-		onnewconversation,
-		onclosetab
+		onenvironmentselect,
+		onnewenvironment,
+		oncloseenvironment
 	}: {
 		onpalette: () => void;
-		ontabselect: (index: number) => void | Promise<void>;
-		onnewconversation: () => void;
-		onclosetab: (id: string) => void | Promise<void>;
+		onenvironmentselect: (id: string) => void | Promise<void>;
+		onnewenvironment: () => void;
+		oncloseenvironment: (id: string) => void | Promise<void>;
 	} = $props();
 
 	let folder = $derived.by(() => {
@@ -73,10 +73,10 @@
 				<span class="wordmark">Fella</span>
 			{/if}
 		</span>
-		<ConversationTabs
-			onselect={ontabselect}
-			onnew={onnewconversation}
-			onclose={onclosetab}
+		<EnvironmentTabs
+			onselect={onenvironmentselect}
+			onnew={onnewenvironment}
+			onclose={oncloseenvironment}
 		/>
 
 		<button

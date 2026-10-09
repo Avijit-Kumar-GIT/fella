@@ -87,8 +87,8 @@
 			.map((group) => {
 				const key = repositoryKey(group.path);
 				const active = group.path
-					? key === session.activeWorkspaceId || (session.workspaceView === 'project' && session.activeProject?.workspace === group.path)
-					: session.activeWorkspaceId === null && session.activeChat?.workspaceScope == null && session.workspaceView === 'ask';
+					? session.activePane?.workspaceId === group.path || (session.workspaceView === 'project' && session.activeProject?.workspace === group.path)
+					: session.activePane?.workspaceId === null && session.activeChat?.workspaceScope == null && session.workspaceView !== 'settings';
 				return {
 					key,
 					path: group.path,
@@ -105,7 +105,7 @@
 	function newChat(): void {
 		menuRepository = null;
 		if (!session.newConversation()) {
-			session.addSystem('Open the workspace before starting a conversation in it.');
+			session.addSystem('This environment already has four workspaces. Create or switch environments to add another.');
 		}
 	}
 
@@ -121,10 +121,9 @@
 
 	async function selectRepository(repo: Repository): Promise<boolean> {
 		if (!repo.path) {
-			const existing = session.conversations.findLastIndex((conversation) => conversation.workspaceScope == null);
-			if (existing >= 0) session.activateConversation(existing);
-			else session.newConversation(null);
-			return true;
+			const selected = session.focusWorkspace(GENERAL_WORKSPACE_ID);
+			if (!selected) session.addSystem('This environment already has four workspaces. Create or switch environments to add General.');
+			return selected;
 		}
 		const workspace = session.workspaceAt(repo.path);
 		if (workspace && !workspace.historyOnly) return session.focusWorkspace(workspace.id);
@@ -151,7 +150,7 @@
 
 	function beginRepositoryDrag(event: DragEvent, repo: Repository): void {
 		if (!repo.path || !event.dataTransfer) return;
-		const alreadyOpen = !!session.workspaceAt(repo.path);
+		const alreadyOpen = !!session.paneForWorkspace(repo.path);
 		event.dataTransfer.effectAllowed = alreadyOpen ? 'move' : 'copy';
 		event.dataTransfer.setData('application/x-fella-workspace', repo.path);
 		if (alreadyOpen) event.dataTransfer.setData('application/x-fella-existing-workspace', repo.path);
@@ -298,9 +297,13 @@
 							onclick={() => toggleRepository(repo)}
 						>
 							<span class="row-slot row-icon"><Icon name={repo.path ? 'repository' : 'ask'} size={16} solid={repo.current} /></span>
-							<span class="repository-copy">{repo.name}</span>
+							<span class="repository-copy">
+								<span class="repository-name">{repo.name}</span>
+								{#if repo.historyOnly}<span class="history-badge" role="status" aria-label="History only. The folder could not be opened; saved conversations remain available." title="Saved conversations are available; the folder is offline">History</span>{/if}
+							</span>
 						</button>
 						<div class="repository-actions">
+							{#if !repo.historyOnly}
 							<button
 								class="repository-action"
 								type="button"
@@ -310,7 +313,8 @@
 							>
 								<Icon name="plus" size={14} />
 							</button>
-							{#if repo.path && !repo.current}
+							{/if}
+							{#if repo.path && !repo.current && !repo.historyOnly}
 								<button
 									class="repository-action"
 									type="button"
@@ -326,6 +330,17 @@
 									<Icon name="more-horizontal" size={14} />
 								</button>
 							{/if}
+							{#if repo.path && repo.historyOnly}
+								<button
+									class="repository-action reconnect-action"
+									type="button"
+									aria-label={`Reconnect ${repo.name}`}
+									title="Try the saved folder location again"
+									onclick={(event) => { event.stopPropagation(); void selectRepository(repo); }}
+								>
+									<Icon name="refresh" size={14} />
+								</button>
+							{/if}
 						</div>
 						{#if menuRepository === repo.key && repo.path && !repo.current}
 							<div class="repository-menu" role="menu">
@@ -339,22 +354,6 @@
 							</div>
 						{/if}
 					</div>
-					{#if repo.historyOnly}
-						<div
-							class="repository-history-state"
-							role="status"
-							aria-label="History only. The folder could not be opened; saved conversations remain available."
-						>
-							<span title="Saved conversations remain available while the folder is offline">History only</span>
-							<button
-								class="repository-reconnect"
-								type="button"
-								aria-label={`Reconnect ${repo.name}`}
-								title="Try the saved folder location again"
-								onclick={() => void selectRepository(repo)}
-							>Reconnect</button>
-						</div>
-					{/if}
 					{#if repo.expanded}
 						<div class="repository-contents">
 							{#if repo.path && !repo.historyOnly}
@@ -561,6 +560,7 @@
 	.repository {
 		min-width: 0;
 	}
+	.repository + .repository { margin-top: 3px; }
 	.repository-row-wrap {
 		position: relative;
 	}
@@ -631,6 +631,13 @@
 	}
 	.repository-copy {
 		min-width: 0;
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		overflow: hidden;
+	}
+	.repository-name {
+		min-width: 0;
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
@@ -638,27 +645,19 @@
 		font-size: var(--fs-sm);
 		font-weight: 550;
 	}
-	.repository-history-state {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		min-width: 0;
-		min-height: 24px;
-		padding: 0 5px 0 44px;
-		color: var(--text-faint);
-		font-size: var(--fs-xs);
-	}
-	.repository-history-state span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-	.repository-reconnect {
+	.history-badge {
 		flex: none;
-		padding: 2px 5px;
-		border-radius: var(--radius-chip);
-		color: var(--text-dim);
-		font-size: 10px;
+		padding: 1px 5px;
+		border-radius: 999px;
+		background: color-mix(in srgb, var(--text-faint) 10%, transparent);
+		color: var(--text-faint);
+		font-size: 9px;
+		font-weight: 550;
+		letter-spacing: .01em;
+		line-height: 1.4;
 	}
-	.repository-reconnect:hover { background: var(--sidebar-hover); color: var(--text); }
-	.repository-row:hover .repository-copy,
-	.repository-row:focus-visible .repository-copy {
+	.repository-row:hover .repository-name,
+	.repository-row:focus-visible .repository-name {
 		color: var(--text);
 	}
 	.repository-actions {
@@ -718,7 +717,11 @@
 		color: var(--text);
 	}
 	.repository-contents {
-		padding: 0 0 2px 30px;
+		margin: 2px 4px 5px 4px;
+		padding: 3px 5px 4px 25px;
+		border-left: 1px solid var(--pane-edge);
+		border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+		background: color-mix(in srgb, var(--sidebar-surface) 62%, var(--workspace-canvas));
 	}
 	.repository-tools {
 		display: grid;
@@ -873,8 +876,7 @@
 	.sidebar-footer {
 		flex: none;
 		display: flex;
-		justify-content: flex-end;
-		padding: var(--space-2) var(--space-1) 0;
-		border-top: 1px solid var(--pane-edge);
+		justify-content: flex-start;
+		padding: var(--space-1) var(--space-1) 0;
 	}
 </style>

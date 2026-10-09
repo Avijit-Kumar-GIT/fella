@@ -104,28 +104,43 @@
 
 	function startConversation(): void {
 		if (!session.newConversation()) {
-			session.addSystem('Open the workspace before starting a conversation in it.');
+			session.addSystem('This environment already has four workspaces. Create or switch environments to add another.');
 		}
 		composer?.focus();
 	}
 
-	async function activateConversationTab(index: number): Promise<void> {
-		const conversation = session.conversations[index];
-		if (!conversation) return;
-		const workspacePath = conversation.workspaceScope;
-		if (workspacePath && !session.workspaceAt(workspacePath)) {
-			await openRepository(workspacePath);
-			if (!session.workspaceAt(workspacePath) && session.historyOnlyRepositoryPaths.includes(workspacePath)) {
-				session.openHistoryOnlyWorkspace(workspacePath, conversation.id);
-			}
-			if (!session.workspaceAt(workspacePath)) return;
-		}
-		session.activateConversation(index);
+	function createEnvironment(): void {
+		session.createEnvironment();
+		composer?.focus();
 	}
 
-	async function closeConversationTab(id: string): Promise<void> {
-		if (!(await session.closeConversationTab(id))) return;
-		await activateConversationTab(session.activeConversationIndex);
+	async function activateEnvironment(id: string): Promise<void> {
+		if (!session.activateEnvironment(id)) return;
+		for (const path of [...session.pendingWorkspacePaths]) {
+			const pane = session.paneForWorkspace(path);
+			if (session.historyOnlyRepositoryPaths.includes(path)) {
+				session.openHistoryOnlyWorkspace(path, pane?.conversationId ?? '');
+				continue;
+			}
+			if (!(await openRepository(path))) {
+				session.openHistoryOnlyWorkspace(path, pane?.conversationId ?? '');
+			}
+		}
+		session.restoreActiveEnvironment();
+		composer?.focus();
+	}
+
+	async function closeEnvironment(id: string): Promise<void> {
+		const previousActive = session.activeEnvironmentId;
+		if (!(await session.closeEnvironment(id))) {
+			if (session.environments.find((environment) => environment.id === id)?.panes.some((pane) => session.conversations.find((item) => item.id === pane.conversationId)?.busy)) {
+				session.addSystem('Stop the running analysis before closing this environment.');
+			}
+			return;
+		}
+		if (session.activeEnvironmentId !== previousActive) {
+			await activateEnvironment(session.activeEnvironmentId);
+		}
 	}
 
 	function openProjectDialog(workspace?: string | null): void {
@@ -150,18 +165,20 @@
 		if (paletteOpen) return;
 		if (commandKey && key === 't') {
 			e.preventDefault();
-			startConversation();
+			createEnvironment();
 		} else if (commandKey && key === 'w') {
 			e.preventDefault();
-			void closeConversationTab(session.conversationId);
+			if (session.activeEnvironment) void closeEnvironment(session.activeEnvironment.id);
 		} else if (commandKey && (key === '[' || key === ']')) {
 			e.preventDefault();
-			const count = session.conversations.length;
+			const count = session.environments.length;
 			const direction = key === ']' ? 1 : -1;
-			void activateConversationTab((session.activeConversationIndex + direction + count) % count);
+			const index = session.environments.findIndex((environment) => environment.id === session.activeEnvironmentId);
+			void activateEnvironment(session.environments[(index + direction + count) % count].id);
 		} else if (commandKey && /^[1-9]$/.test(key)) {
 			e.preventDefault();
-			void activateConversationTab(Number(key) - 1);
+			const environment = session.environments[Number(key) - 1];
+			if (environment) void activateEnvironment(environment.id);
 		} else if (commandKey && e.shiftKey && key === 'a') {
 			e.preventDefault();
 			startConversation();
@@ -300,9 +317,9 @@
 	<div class="app" class:focus={session.focus}>
 		<Titlebar
 			onpalette={() => (paletteOpen = true)}
-			ontabselect={activateConversationTab}
-			onnewconversation={startConversation}
-			onclosetab={closeConversationTab}
+			onenvironmentselect={activateEnvironment}
+			onnewenvironment={createEnvironment}
+			oncloseenvironment={closeEnvironment}
 		/>
 		<section class="workspace-window" aria-label="Current workspace">
 			{#if session.mountProgress && session.mountProgress.phase !== 'ready'}

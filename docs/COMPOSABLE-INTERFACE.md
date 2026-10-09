@@ -1,247 +1,187 @@
-# Fella workspace and composable-interface architecture
+# Fella environments and composable workspaces
 
-This document is the product and implementation contract for workspace
-identity, interaction, and interface composition. It distinguishes what exists
-in the current app from the composable surfaces that remain roadmap work.
+This document defines the interaction model and ownership boundaries for
+Fella's desktop interface. It is the contract for the environment-tab redesign
+and the workspace composition that is being built on top of it.
 
 ## Product model
 
-Fella is an analytics harness. Workspaces organize analytical conversations;
-they are not the product's primary unit of value. A workspace gives those
-conversations a stable scope and continuity without forcing every question to
-be about a mounted folder.
+Fella is an analytics harness. Conversations are the primary way people ask
+questions and continue analysis; workspaces provide optional organization and
+local data scope. The interface can arrange several workspaces together without
+changing which data a conversation is allowed to use.
 
 There are two workspace kinds:
 
-- **General** is the sidebar/history group for questions and conversations
-  that do not belong to a mounted folder. It has no filesystem path, catalog,
-  or folder-specific memory. Its analytical request is genuinely unbound
-  (`workspaceId: null`); it is not an automatically opened board tile.
-- **Repository workspace** is owned by one folder. It has its own catalog,
-  source inventory, context, memory, and conversations. The folder may be
-  mounted, temporarily closed, or unavailable while its saved conversations
-  remain accessible as history.
+- **General** is an unbound workspace. It has no path, catalog, or folder
+  memory. General conversations stay unbound even when another repository is
+  open in the same environment.
+- **Repository** is identified by a resolved local folder path. It owns its
+  catalog, sources, context, memory, optional project, and conversation
+  history. If its folder is missing, its history remains readable without
+  borrowing another folder's data.
 
-An Electron app window contains one persistent global shell and a board of up
-to four workspace windows. A “workspace window” is a tile inside Fella's main
-window, not a separate operating-system window. Each workspace window can
-eventually contain up to four composable surfaces. These are separate limits:
-four outer workspaces, and four inner surfaces per workspace.
-
-## Architecture layers and ownership
+## Architecture layers
 
 ```text
 Electron app window
 ├─ Global shell
-│  ├─ Sidebar: Ask, Search, General, and workspace-owned Sources/Project/history
-│  ├─ Titlebar, settings, command palette, provider credentials
-│  ├─ Conversation tabs: global navigation, each retaining its owner
-│  └─ App-level route and workspace-board controls
+│  ├─ Sidebar: Ask, Search, workspace containers, Settings
+│  ├─ Titlebar: environment tabs and app/window controls
+│  └─ App-level views: Ask, Sources, Project, Settings
+├─ Environment tabs
+│  └─ Environment: a saved arrangement of up to four workspace panes
+│     ├─ General pane (unbound; optional in any arrangement)
+│     └─ Repository pane(s), each with its own focused conversation
 ├─ Workspace registry
-│  ├─ General conversations (unbound; no board tile by default)
-│  └─ Repository workspace (folder identity, independent of mount status)
-├─ Open workspace board (up to 4 workspace windows)
-│  └─ Workspace window (up to 4 typed surfaces; composition is being built)
-│     ├─ Active conversation surface
-│     ├─ Optional chart / analysis / source surfaces
-│     └─ Workspace-owned context and project artifacts
+│  ├─ General conversation group
+│  └─ Repository identities and mounted runtime/catalogs
 └─ Analytics runtime
    ├─ Conversation and turn identity
-   ├─ Read/inspect, plan, execute, and answer lifecycle
-   └─ Evidence and artifacts tied to the owning workspace/revision
+   ├─ Model-driven inspect, plan, execute, and answer loop
+   └─ Evidence tied to conversation, workspace, and source revision
 ```
 
-| Layer/model | Owns | Does not own |
+| Model | Owns | Does not own |
 | --- | --- | --- |
-| App shell | Global navigation, titlebar, settings, Search, credentials, app route | Conversation or folder identity |
-| Workspace identity | Stable General or folder-backed owner; conversation collection; context/memory; optional project | Open/closed state, or the analysis execution itself |
-| Mount session | A repository workspace's live catalog and runtime availability | Workspace identity or archived conversations |
-| Workspace window | A workspace's current visible placement and composition | New data, permissions, or a separate backend instance per surface |
-| Conversation | Questions, follow-ups, clarification, chosen model, and continuity; exactly one workspace owner | A workspace window or copied transcript |
-| Analysis turn | One question's plan, tool actions, evidence, answer, verification findings, and outputs | A conversation or UI surface |
-| Surface composition | Typed references to existing conversation/turn/source artifacts | Duplicate analysis, arbitrary executable UI, or cross-workspace access |
-| Project/wiki | Optional, user-created local knowledge artifact associated with a repository workspace | A workspace, conversation, or automatically generated requirement |
+| App shell | Global navigation, settings, search, provider credentials, window controls | Conversation scope or folder identity |
+| Environment | A named-by-composition collection of pane references, active pane, and fixed layout | Data permissions, workspace identity, or analysis execution |
+| Workspace pane | One General or repository workspace placement and its selected conversation | A copy of the underlying workspace, catalog, or transcript |
+| Workspace identity | General or a folder path; repository catalog, context/memory, project, and conversation collection | Open/closed placement or an environment tab |
+| Conversation | Questions, follow-ups, clarifications, model choice, and continuity; one stable workspace scope | Environment ownership or a separate copy per view |
+| Analysis turn | Plan, tool actions, evidence, answer, verification findings, and outputs | Workspace layout or other conversations |
+| Surface | A typed reference to an existing conversation, chart, analysis, or source artifact | New permissions, duplicated analysis, or model-authored UI |
 
-The implementation keeps four interaction coordinates distinct:
+The active interaction coordinates are distinct:
 
-1. **App route** — Ask/board, Sources/Guide, Projects, or Settings.
-2. **Focused workspace** — which workspace window receives workspace actions.
-3. **Active conversation tab** — the selected conversation and its stable
-   workspace scope; the global composer sends to this conversation.
-4. **Focused surface** — the selected surface within a workspace composition
-   once multi-surface composition is implemented.
+1. **App view** — Ask/board, Sources, Project, or Settings.
+2. **Environment** — the selected titlebar tab and its saved pane arrangement.
+3. **Focused pane** — which workspace receives the global composer and
+   workspace-level actions.
+4. **Conversation** — the thread selected inside that focused pane.
+5. **Surface** — an optional chart, analysis detail, or source reference within
+   the active conversation/workspace.
 
-Changing one coordinate must not silently change ownership in another. Search,
-Settings, and Projects are app-level destinations. Selecting an archived
-conversation opens its owning workspace when needed and selects its global
-conversation tab. Closing a tab archives it; it does not delete history.
+Changing the environment or focused pane must not rewrite a conversation's
+workspace scope. A General question remains unbound; a repository question
+continues using only its owning repository.
 
 ## Interaction contract
 
-- **New conversation** is the default when no repository workspace is focused.
-  It is unbound and does not prompt the user to mount a folder. `Ctrl+T` / `Cmd+T`
-  opens another conversation tab. Ask creates a conversation in the focused
-  repository when one is selected.
-- **General** is the sidebar group for unbound conversations, not an open
-  workspace window. Selecting it returns to an existing unbound conversation
-  (or starts one); opening a repository never claims those conversations.
-- **Repository selection** focuses the existing tile or opens that folder as a
-  workspace. Its sidebar container owns Sources, an optional Project, and
-  conversations; its plus action starts a conversation in that repository.
-  General also has a plus action for an unbound conversation.
-- **Conversation tabs** switch between independent conversations while keeping
-  each folder scope fixed. Switching to a repository-owned tab restores or
-  opens that workspace; it never borrows the previously focused folder.
-- **Workspace placement** uses drag previews and fixed equal-split layouts.
-  Drag a repository into the board to add it, or drag an open workspace header
-  to another preview slot to reorder it. Two and three workspaces select a
-  predefined arrangement from the drop location; four use a fixed 2×2 grid.
-  There are no resize handles or arrangement dropdowns.
-- **Capacity** is explicit and non-destructive. A fifth open workspace is not
-  substituted for an existing one; the user closes one first.
-- **No-repository history** is not a fake repository and not an automatic
-  routing bucket. It belongs to General. A missing repository is labeled
-  history-only; the conversation is readable but analysis cannot run until the
-  original folder is reopened.
+- **Environment tabs are not conversation tabs.** A tab represents a saved
+  arrangement of workspaces. Its label is derived from the arrangement (for
+  example `General`, `fella-oss`, or `General +1`). Conversation history stays
+  in the sidebar under its General or repository owner.
+- **New environment** (`Ctrl/Cmd+T`) opens a fresh General conversation in a new
+  environment. Environments can be switched with the titlebar, `Ctrl/Cmd+[`,
+  `Ctrl/Cmd+]`, or number shortcuts. The tab strip scrolls horizontally rather
+  than compressing into an unusable set of tiny tabs.
+- **New conversation** starts a thread inside the focused pane. Ask is also a
+  direct new-conversation action. A repository's plus action starts a scoped
+  thread there; General's plus starts an unbound thread.
+- **General is a composable pane.** It is the default in a new environment and
+  can sit beside repository panes. Selecting General does not mount a folder.
+- **Workspace containers** in the global sidebar group each repository's
+  Sources, optional Project, and conversations. General has its own history
+  group. The sidebar remains global while environments change.
+- **Repository selection** adds/focuses that repository in the current
+  environment. Dragging a repository from the sidebar onto the board previews
+  an available fixed placement; dragging a pane header rearranges that
+  environment. A workspace can appear in more than one environment, while its
+  underlying repository identity/catalog remains shared.
+- **Four-pane ceiling per environment.** The fifth pane is not silently
+  dropped or substituted. Create/switch environments to work with another set
+  of workspaces. Environments themselves scroll and are not artificially
+  limited to four.
+- **Fixed geometry.** Each split is equal. Two panes are side-by-side or
+  stacked; three use one of four recursive half-splits; four use a 2×2 grid.
+  Users drag to select placement—there are no resize handles or orientation
+  dropdown.
+- **Closing a pane** removes its placement from the current environment. It
+  does not delete workspace history, sources, or conversations. A repository
+  runtime can be released when no environment uses it.
+- **Missing-folder history** is compactly marked in the sidebar with a direct
+  reconnect action. The user can still open saved conversations; analysis
+  remains unavailable until the original folder is mounted.
 
-The sidebar's “Workspaces” group contains General and folder-backed workspace
-containers. The global sidebar and conversation tabs remain available no matter
-how many workspace tiles are open. With no folder selected, the composer and
-main surface remain a plain New Conversation view.
+## What is composable
 
-## Composability contract
+The outer composition unit is a workspace pane. It references an existing
+General or repository workspace and its selected conversation. Inside a
+workspace, the longer-term surface registry may arrange up to four typed views:
 
-“Composable” means a workspace owner can arrange supported, typed views of
-artifacts already owned by that workspace. It does not mean that every control
-is a tile or that model-generated code can change the interface.
+- the active conversation and composer;
+- a chart produced by an answer;
+- analysis details for a particular turn;
+- a source preview at a specific workspace/catalog revision.
 
-### Eligible surfaces
+Moving or closing a view changes presentation only. It does not rerun analysis,
+change data scope, delete its artifact, or grant another workspace's access.
+Stale source/chart references should remain visibly stale rather than being
+silently rebound to newer data.
 
-- **Conversation** — the workspace's active analytical conversation and
-  composer; the default and primary surface.
-- **Chart** — a reference to a chart produced by one answer/evidence item.
-- **Analysis details** — a reference to the trace and evidence for one turn.
-- **Source preview** — a source path and catalog revision belonging to the
-  workspace.
+The following remain global shell controls, not tiles: sidebar, titlebar,
+settings, command/search palette, dialogs, provider controls, notifications,
+and app-level navigation. Arbitrary HTML, executable widgets, and
+model-generated interface code are out of scope.
 
-The registry can grow when a surface has clear ownership, a stable identity,
-and a useful independent purpose. Opening, moving, or closing a surface changes
-presentation only. It does not rerun analysis, grant a tool, change folder
-scope, or delete the underlying artifact. Stale references remain visibly
-stale; they are never silently rebound to a newer catalog revision.
+## Visual direction
 
-### Not composable
+Use macOS desktop apps as a reference for restraint and hierarchy, not as a
+literal skin:
 
-The global sidebar, titlebar, settings, command/search palette, dialogs,
-provider controls, notifications, and app-level navigation are shell controls,
-not workspace surfaces. Arbitrary HTML, user-authored executable widgets, and
-model-generated UI are also out of scope. A source, chart, or analysis trace
-cannot be moved into another workspace if that would misrepresent its
-provenance or grant access to another folder.
+- the sidebar, app chrome, workspace canvas, pane body, and pane header use
+  related but distinct surface tones in both light and dark mode;
+- selected rows use a quiet filled highlight, not repeated accent rails;
+- colored semantic icons use solid silhouettes; neutral utility controls use
+  familiar, consistent line icons;
+- expanded workspace content is compact and clearly owned without turning the
+  sidebar into a second file manager;
+- use curvature, restrained tonal contrast, and clear focus states to create
+  depth. Do not rely on decorative drop shadows, repeated separators, or
+  accent-color flooding;
+- the composer sits directly on the workspace canvas, and the pane grid uses
+  the available area with consistent outer margins.
 
-### Fixed geometry
+## Persistence and isolation
 
-There is no free resizing. Every split divides its parent equally. The outer
-workspace board and the future inner surface layout use the same geometry:
-
-| Items | Supported layout |
-| --- | --- |
-| 1 | One full tile |
-| 2 | Side-by-side or stacked, each half |
-| 3 | Two top / one bottom; one top / two bottom; two left / one right; or one left / two right. A nested split creates two quarters. |
-| 4 | Fixed 2×2 grid |
-
-The layout is deterministic and does not evict or resize an existing item to
-make room. Four is a product ceiling for each composition, not a recommendation
-to keep every slot occupied.
-
-## Persistence, mount state, and isolation
-
-- General's UI ID is `general`, but its analytical workspace ID remains null.
-- A repository workspace is identified by its folder path as resolved by the
-  backend. Two folders with the same display name remain distinct.
-- Open workspace IDs, focused workspace, and outer layout are saved locally.
-  Closing a workspace tile does not delete its workspace history or source
-  files. Conversation transcripts are archived locally and loaded on demand;
-  on launch the workspace board is restored with a fresh conversation slot.
-- The sidebar may remember closed repository workspaces for navigation. If a
-  folder cannot be mounted, the owner remains intact and is shown as
-  history-only rather than silently borrowing another workspace's catalog.
+- Environment layouts, active environment, and active pane are stored locally.
+  A legacy single-board preference migrates into one environment.
+- Each environment has at most four pane references; a pane's conversation ID
+  is a reference, not a duplicate transcript. Conversation archives remain
+  separately stored by the desktop backend.
+- Repository runtimes are shared between environments by resolved path; this
+  avoids launching duplicate engines for the same folder.
+- General's visual identity never becomes a fake filesystem path. Its
+  analytical workspace ID remains null.
+- The active conversation scope—not the visible pane arrangement—selects data
+  for an analysis request and evidence.
 - Provider credentials and app settings are app-scoped. Catalog, context,
-  memory, and analysis source revisions are repository-workspace-scoped.
-- Every analysis request and resulting evidence remain tied to the owning
-  conversation, workspace, and catalog revision. General requests do not read
-  the last-mounted folder by accident.
-- The backend registry shares app/provider state while keeping an isolated
-  analytical runtime/catalog per open folder. It does not launch one sidecar
-  per tile.
+  memory, and source revisions are repository-scoped.
 
 ## Implementation status
 
-### Implemented in the current app
+### Implemented
 
-- The Rust sidecar has an app-level registry with isolated workspace runtimes
-  keyed by folder identity; workspace-aware requests cover catalog, Ask, SQL,
-  context, memory, source preview, replay, reindex, cancellation, and progress.
-- The app starts in a new unbound conversation and exposes global conversation
-  tabs with `Ctrl/Cmd+T`, close, previous/next, and numbered selection.
-- The workspace board supports one to four repository tiles, fixed equal-split
-  layouts, drag-placement/reordering preview, persistence, restart restoration,
-  and explicit capacity handling.
-- General is a sidebar/history group with no folder scope or board tile.
-  Opening a repository never claims General conversations.
-- Each repository container groups Sources, its optional Project, and its
-  conversations. Workspace-level plus actions create scoped conversations.
-- The repository workspace owns the live catalog and source list; the global
-  composer targets the focused workspace. Only the focused tile renders its
-  active transcript; other tiles show a source overview.
-- Unavailable repository history remains readable and cannot run analysis
-  until its original folder is successfully reopened.
+- Environment tabs in the titlebar, including create, switch, close, keyboard
+  navigation, and locally persisted arrangements.
+- General and repository panes can coexist in an environment; each has a
+  separately selected conversation reference.
+- A four-pane limit applies per environment. Repositories can be reused across
+  environments without duplicating their runtime.
+- Drag placement/reordering uses equal-split layouts and a placement preview.
+- Conversation history is no longer represented as titlebar tabs; it remains
+  grouped under General or its repository in the sidebar.
+- Sidebar status for an unavailable repository is compact, with a reconnect
+  action; Settings has no ornamental divider and uses a gear icon.
+- The board starts at its consistent outer margin without a blank header band;
+  inactive panes show a compact recent-conversation preview.
+- Workspace, conversation, and evidence scope remain separate.
 
-### Not yet implemented
+### Still to build
 
-- A workspace-owned registry of up to four independent inner surfaces. Current
-  chart/source companion UI is still conversation presentation state, not the
-  final composable surface model.
-- Independent simultaneous active conversations as multiple workspace
-  surfaces; today each workspace has one selected conversation slot, while
-  other conversations remain archived and in-flight work retains its owner.
-- Independent simultaneous conversations as multiple inner surfaces; outer
-  workspace tiles still show one active transcript at a time.
-- Unified aggregate CPU/memory budgeting across several open runtimes.
-- Workspace-owned project/wiki support for General. Existing project artifacts
-  are local and repository-associated.
-
-## Roadmap
-
-1. **Workspace identity and interaction — implemented.** Separate General
-   conversation grouping, repository identity, mount availability, open
-   workspace windows, global conversation tabs, and conversation ownership.
-2. **Outer workspace composition — implemented.** Fixed one-to-four tile board,
-   equal split layouts chosen through drag placement, tile reordering, local
-   restore, and explicit capacity behavior.
-3. **Typed inner-surface registry — next.** Move chart/source/analysis
-   presentation references from conversation-only companion state into
-   workspace-owned typed surfaces. Preserve artifact provenance; cap each
-   workspace at four surfaces.
-4. **Complete journeys and hardening — in progress.** Test General and
-   repository ownership, Ask/follow-up scope, concurrent work, capacity,
-   restart, unavailable folders, stale artifacts, keyboard access, themes, and
-   narrow-window layouts. Judge UI behavior separately from analytics
-   correctness.
-5. **Resource and recovery polish.** Add aggregate runtime budgeting and clear
-   relink/reopen paths without discarding local conversation history.
-
-## Validation
-
-- `pnpm test:workspace-layout` — geometry presets and their invariants.
-- `cargo test --locked --manifest-path backend/Cargo.toml electron_sidecar_opens_a_workspace_and_runs_a_read_only_query` — sidecar registry and scoped catalog/query behavior.
-- `pnpm test:e2e:workspace-board` — renderer/bridge journey for General and
-  repository ownership, history selection, scoped Ask, fixed composition,
-  capacity, close/free-slot, and restart restore. The bridge is mocked; this
-  does not establish Electron packaging or model-answer correctness.
-- FQA-Bench and real-model journeys separately measure analytical correctness.
-
-Test failures remain failures. UI journey tests do not grade whether an
-analysis answer is factually correct, and analytics benchmarks do not replace
-the full app interaction journey.
+- Up to four simultaneously visible inner surfaces within a workspace pane.
+- A dedicated surface registry and persistence format for chart, analysis,
+  conversation, and source references.
+- User-controlled environment naming and explicit reorder/duplicate actions.
+- Resource budgeting and lifecycle telemetry across many saved environments.

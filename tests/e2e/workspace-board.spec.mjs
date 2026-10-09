@@ -157,14 +157,22 @@ async function dispatchWorkspaceDrag(page, type, workspacePath, { x = 0.5, y = 0
 	}, { eventType: type, path: workspacePath, targetX: x, targetY: y, alreadyOpen: existing });
 }
 
-test('starts unbound, opens real conversation tabs, groups repository artifacts, and places workspaces by drag', async ({ page }) => {
+function expectSameRenderedBox(actual, expected) {
+	expect(actual).not.toBeNull();
+	expect(expected).not.toBeNull();
+	for (const edge of ['x', 'y', 'width', 'height']) {
+		expect(Math.abs(actual[edge] - expected[edge])).toBeLessThanOrEqual(1);
+	}
+}
+
+test('environments compose General and repository panes while conversations retain their original scope', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
-	const tabs = page.getByRole('tablist', { name: 'Conversations' });
+	const tabs = page.getByRole('tablist', { name: 'Environments' });
 	await expect(tabs).toBeVisible();
-	await expect(page.locator('.titlebar .conversation-tabs')).toBeVisible();
-	await expect(page.locator('.workspace-window > .conversation-tabs-row')).toHaveCount(0);
+	await expect(page.locator('.titlebar .environment-tabs')).toBeVisible();
 	await expect(tabs.getByRole('tab')).toHaveCount(1);
+	await expect(tabs.getByRole('tab').first()).toContainText('General');
 	await expect(page.getByRole('heading', { name: 'New conversation', level: 1 })).toBeVisible();
 	await expect(page.getByRole('article')).toHaveCount(0);
 	await expect(page.getByRole('button', { name: 'Mount a folder' })).toHaveCount(0);
@@ -189,33 +197,37 @@ test('starts unbound, opens real conversation tabs, groups repository artifacts,
 		expect(surfaces.composer).toBe(surfaces.main);
 	}
 
-	await page.keyboard.press('Control+t');
-	await expect(tabs.getByRole('tab')).toHaveCount(2);
 	await page.getByRole('combobox', { name: 'Ask a question' }).fill('What is a useful way to compare trends?');
 	await page.getByRole('button', { name: 'Send' }).click();
 	await expect(page.getByText('Scoped to general.')).toBeVisible();
 	const unboundCall = await page.evaluate(() => window.__workspaceAskCalls.at(-1));
 	expect(unboundCall.workspaceId).toBeNull();
-	await expect(tabs.getByRole('tab', { name: /What is a useful way to compare trends/ })).toHaveAttribute('aria-selected', 'true');
+	await expect(tabs.getByRole('tab')).toHaveCount(1);
+
 	await page.keyboard.press('Control+t');
-	await expect(tabs.getByRole('tab')).toHaveCount(3);
-	await expect(tabs.getByRole('tab').nth(2)).toHaveAttribute('aria-selected', 'true');
-	await page.keyboard.press('Control+[');
+	await expect(tabs.getByRole('tab')).toHaveCount(2);
 	await expect(tabs.getByRole('tab').nth(1)).toHaveAttribute('aria-selected', 'true');
+	await expect(page.getByRole('heading', { name: 'New conversation', level: 1 })).toBeVisible();
+	await page.getByRole('combobox', { name: 'Ask a question' }).fill('What does a seasonal pattern look like?');
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(page.getByText('Scoped to general.')).toBeVisible();
+	const conversationsAfterQuestion = await page.evaluate(() => window.__workspaceAskCalls.length);
+	await expect(tabs.getByRole('tab')).toHaveCount(2);
+	await page.keyboard.press('Control+[');
+	await expect(tabs.getByRole('tab').nth(0)).toHaveAttribute('aria-selected', 'true');
+	await expect(page.getByText('Scoped to general.')).toBeVisible();
+	await page.keyboard.press('Control+]');
+	await expect(tabs.getByRole('tab').nth(1)).toHaveAttribute('aria-selected', 'true');
+	expect(await page.evaluate(() => window.__workspaceAskCalls.length)).toBe(conversationsAfterQuestion);
 	await page.keyboard.press('Control+1');
 	await expect(tabs.getByRole('tab').nth(0)).toHaveAttribute('aria-selected', 'true');
-	await tabs.getByRole('button', { name: 'Close tab: What is a useful way to compare trends?' }).click();
-	await expect(tabs.getByRole('tab')).toHaveCount(2);
-	const archivedGeneral = page.getByRole('button', { name: 'Open conversation: What is a useful way to compare trends?' });
-	await expect(archivedGeneral).toBeVisible();
-	await archivedGeneral.click();
-	await expect(tabs.getByRole('tab')).toHaveCount(3);
-	await expect(tabs.getByRole('tab', { name: /What is a useful way to compare trends/ })).toHaveAttribute('aria-selected', 'true');
 
 	const workspaceNavigation = page.getByRole('region', { name: 'Workspaces' });
 	await workspaceNavigation.getByRole('button', { name: 'Add repository' }).click();
 	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
 	await expect(page.getByRole('article', { name: 'northwind-sales workspace' })).toBeVisible();
+	await expect(page.getByRole('article', { name: 'General workspace' })).toBeVisible();
+	await expect(page.getByRole('article')).toHaveCount(2);
 	const salesWorkspaceRow = page.getByRole('button', { name: 'Open workspace northwind-sales' });
 	await expect(page.getByRole('button', { name: 'Open sources in northwind-sales' })).toBeVisible();
 	await expect(page.getByRole('button', { name: 'Create project for northwind-sales' })).toBeVisible();
@@ -224,13 +236,23 @@ test('starts unbound, opens real conversation tabs, groups repository artifacts,
 	await salesWorkspaceRow.click();
 	await salesWorkspaceRow.hover();
 	await page.getByRole('button', { name: 'New conversation in northwind-sales' }).click();
-	await expect(tabs.getByRole('tab').last()).toHaveAttribute('aria-selected', 'true');
+	await expect(tabs.getByRole('tab')).toHaveCount(2);
 	const salesComposer = page.getByRole('combobox', { name: 'Ask about northwind-sales' });
 	await salesComposer.fill('Summarize sales trends');
 	await page.getByRole('button', { name: 'Send' }).click();
 	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
 	const salesCall = await page.evaluate(() => window.__workspaceAskCalls.at(-1));
 	expect(salesCall.workspaceId).toBe(folders[0].path);
+
+	const generalTile = page.getByRole('article', { name: 'General workspace' });
+	await generalTile.locator('.tile-focus').click();
+	await page.getByRole('combobox', { name: 'Ask a question' }).fill('How should I compare two trend lines?');
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(page.getByText('Scoped to general.').last()).toBeVisible();
+	expect((await page.evaluate(() => window.__workspaceAskCalls.at(-1))).workspaceId).toBeNull();
+	await expect(tabs.getByRole('tab')).toHaveCount(2);
+
+	await salesWorkspaceRow.click();
 
 	await page.getByRole('button', { name: 'Create project for northwind-sales' }).click();
 	await expect(page.getByRole('heading', { name: 'Create a project' })).toBeVisible();
@@ -242,66 +264,77 @@ test('starts unbound, opens real conversation tabs, groups repository artifacts,
 	await salesWorkspaceRow.click();
 
 	await dispatchWorkspaceDrag(page, 'dragover', folders[1].path, { x: 0.9, y: 0.5 });
-	await expect(page.locator('.placement-preview .preview-slot')).toHaveCount(2);
-	await expect(page.locator('.placement-preview .preview-slot.target')).toHaveText('Drop to place');
+	await expect(page.locator('.placement-preview .preview-slot')).toHaveCount(3);
+	const healthTarget = page.locator('.placement-preview .preview-slot.target');
+	await expect(healthTarget).toHaveText('Drop to place');
+	const healthTargetBox = await healthTarget.boundingBox();
 	await dispatchWorkspaceDrag(page, 'drop', folders[1].path, { x: 0.9, y: 0.5 });
 	const sales = page.getByRole('article', { name: 'northwind-sales workspace' });
 	const health = page.getByRole('article', { name: 'health-journal workspace' });
 	await expect(sales).toBeVisible();
 	await expect(health).toBeVisible();
 	await expect(page.getByRole('button', { name: 'Open sources in health-journal' })).toBeVisible();
-	await expect(page.getByRole('article')).toHaveCount(2);
+	await expect(page.getByRole('article')).toHaveCount(3);
 	await expect(page.getByRole('combobox', { name: 'Workspace arrangement' })).toHaveCount(0);
-	const salesBox = await sales.boundingBox();
 	const healthBox = await health.boundingBox();
-	expect(salesBox).not.toBeNull();
-	expect(healthBox).not.toBeNull();
-	expect(healthBox.x).toBeGreaterThan(salesBox.x);
+	expectSameRenderedBox(healthBox, healthTargetBox);
 
 	await dispatchWorkspaceDrag(page, 'dragover', folders[2].path, { x: 0.1, y: 0.5 });
-	await expect(page.locator('.placement-preview .preview-slot')).toHaveCount(3);
+	await expect(page.locator('.placement-preview .preview-slot')).toHaveCount(4);
+	const budgetTargetBox = await page.locator('.placement-preview .preview-slot.target').boundingBox();
 	await dispatchWorkspaceDrag(page, 'drop', folders[2].path, { x: 0.1, y: 0.5 });
 	const budget = page.getByRole('article', { name: 'weekly-budget workspace' });
 	await expect(budget).toBeVisible();
-	await expect(page.getByRole('article')).toHaveCount(3);
+	await expect(page.getByRole('article')).toHaveCount(4);
 	const budgetBox = await budget.boundingBox();
-	const salesThreeBox = await sales.boundingBox();
-	const healthThreeBox = await health.boundingBox();
-	expect(budgetBox).not.toBeNull();
-	expect(salesThreeBox).not.toBeNull();
-	expect(healthThreeBox).not.toBeNull();
-	expect(Math.abs(budgetBox.x - salesThreeBox.x)).toBeLessThan(3);
-	expect(budgetBox.y).not.toBe(salesThreeBox.y);
-	expect(healthThreeBox.x).toBeGreaterThan(budgetBox.x);
+	expectSameRenderedBox(budgetBox, budgetTargetBox);
+	const otherBoxes = await Promise.all([sales, health, page.getByRole('article', { name: 'General workspace' })].map((tile) => tile.boundingBox()));
+	const allFourBoxes = [budgetBox, ...otherBoxes];
+	expect(allFourBoxes.every(Boolean)).toBe(true);
+	// Four panes should occupy each cell of a balanced 2×2, regardless of
+	// which workspace identity occupies each cell after prior drag/reordering.
+	expect(new Set(allFourBoxes.map((box) => Math.round(box.x))).size).toBe(2);
+	expect(new Set(allFourBoxes.map((box) => Math.round(box.y))).size).toBe(2);
+	expect(new Set(allFourBoxes.map((box) => `${Math.round(box.x)},${Math.round(box.y)}`)).size).toBe(4);
 
-	await dispatchWorkspaceDrag(page, 'dragover', folders[0].path, { x: 0.9, y: 0.9, existing: true });
-	await expect(page.locator('.placement-preview .preview-slot')).toHaveCount(3);
-	await dispatchWorkspaceDrag(page, 'drop', folders[0].path, { x: 0.9, y: 0.9, existing: true });
+	await dispatchWorkspaceDrag(page, 'dragover', folders[0].path, { x: 0.1, y: 0.1, existing: true });
+	await expect(page.locator('.placement-preview .preview-slot')).toHaveCount(4);
+	const salesTargetBox = await page.locator('.placement-preview .preview-slot.target').boundingBox();
+	await dispatchWorkspaceDrag(page, 'drop', folders[0].path, { x: 0.1, y: 0.1, existing: true });
 	const movedSalesBox = await sales.boundingBox();
-	const movedHealthBox = await health.boundingBox();
-	expect(movedSalesBox).not.toBeNull();
-	expect(movedHealthBox).not.toBeNull();
-	expect(movedSalesBox.x).toBeGreaterThan(budgetBox.x);
-	expect(movedSalesBox.y).toBeGreaterThan(movedHealthBox.y);
+	expectSameRenderedBox(movedSalesBox, salesTargetBox);
 });
 
-test('the fifth workspace is refused without replacing a tile, and closing a tile frees a slot', async ({ page }) => {
+test('the four-pane limit is scoped to one environment and closing a pane frees its slot', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
 	const workspaceNavigation = page.getByRole('region', { name: 'Workspaces' });
-	for (let index = 0; index < 4; index += 1) {
-		await workspaceNavigation.getByRole('button', { name: 'Add repository' }).click();
-		await expect(page.getByRole('article')).toHaveCount(index + 1);
+	await workspaceNavigation.getByRole('button', { name: 'Add repository' }).click();
+	await expect(page.getByRole('article')).toHaveCount(2); // General and northwind-sales
+	for (let index = 1; index < 3; index += 1) {
+		await dispatchWorkspaceDrag(page, 'drop', folders[index].path);
+		await expect(page.getByRole('article')).toHaveCount(index + 2);
 	}
-	await expect(page.getByRole('article')).toHaveCount(4);
+	await expect(page.getByRole('article')).toHaveCount(4); // General plus three repositories
+	const fourth = folders[3];
 	const fifth = folders[4];
 
-	await dispatchWorkspaceDrag(page, 'dragover', fifth.path);
-	await expect(page.getByText('Close a workspace to add another.')).toBeVisible();
+	await dispatchWorkspaceDrag(page, 'dragover', fourth.path);
+	await expect(page.locator('.placement-preview .full-notice')).toContainText('Close a workspace');
 	const beforeDrop = await page.getByRole('article').count();
-	await dispatchWorkspaceDrag(page, 'drop', fifth.path);
-	await expect(page.getByText('Close a workspace to add another.')).toBeVisible();
+	await dispatchWorkspaceDrag(page, 'drop', fourth.path);
+	await expect(page.getByText(/environment already has four workspaces/i)).toBeVisible();
 	await expect(page.getByRole('article')).toHaveCount(beforeDrop);
+
+	await page.getByRole('button', { name: 'Close General workspace' }).click();
+	await expect(page.getByRole('article')).toHaveCount(3);
+	await dispatchWorkspaceDrag(page, 'drop', fourth.path);
+	await expect(page.getByRole('article', { name: 'travel-plans workspace' })).toBeVisible();
+	await expect(page.getByRole('article')).toHaveCount(4);
+
+	await dispatchWorkspaceDrag(page, 'drop', fifth.path);
+	await expect(page.getByText(/environment already has four workspaces/i)).toBeVisible();
+	await expect(page.getByRole('article')).toHaveCount(4);
 
 	await page.getByRole('button', { name: 'Close northwind-sales workspace' }).click();
 	await expect(page.getByRole('article')).toHaveCount(3);
@@ -313,6 +346,84 @@ test('the fifth workspace is refused without replacing a tile, and closing a til
 	await expect(page.getByRole('article')).toHaveCount(4);
 	await expect(page.getByRole('article', { name: 'health-journal workspace' })).toBeVisible();
 	await expect(page.getByRole('article', { name: 'reading-notes workspace' })).toBeVisible();
+});
+
+test('environment tabs save different workspace arrangements without leaking panes between them', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+	const navigation = page.getByRole('region', { name: 'Workspaces' });
+	await navigation.getByRole('button', { name: 'Add repository' }).click();
+	await expect(page.getByRole('article', { name: 'northwind-sales workspace' })).toBeVisible();
+
+	const tabs = page.getByRole('tablist', { name: 'Environments' });
+	await page.getByRole('button', { name: 'New environment' }).click();
+	await expect(tabs.getByRole('tab')).toHaveCount(2);
+	await navigation.getByRole('button', { name: 'Add repository' }).click();
+	await expect(page.getByRole('article', { name: 'health-journal workspace' })).toBeVisible();
+
+	await tabs.getByRole('tab').first().click();
+	await expect(page.getByRole('article', { name: 'northwind-sales workspace' })).toBeVisible();
+	await expect(page.getByRole('article', { name: 'health-journal workspace' })).toHaveCount(0);
+	await expect(page.getByRole('article', { name: 'General workspace' })).toBeVisible();
+
+	await tabs.getByRole('tab').nth(1).click();
+	await expect(page.getByRole('article', { name: 'health-journal workspace' })).toBeVisible();
+	await expect(page.getByRole('article', { name: 'northwind-sales workspace' })).toHaveCount(0);
+	await expect(page.getByRole('article', { name: 'General workspace' })).toBeVisible();
+
+	await page.reload();
+	await expect(page.getByRole('tablist', { name: 'Environments' }).getByRole('tab')).toHaveCount(2);
+	await expect(page.getByRole('article', { name: 'health-journal workspace' })).toBeVisible();
+	await expect(page.getByRole('article', { name: 'northwind-sales workspace' })).toHaveCount(0);
+});
+
+test('many environments remain a bounded, scrollable tab strip with the active environment in view', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+	const tabs = page.getByRole('tablist', { name: 'Environments' });
+	const create = page.getByRole('button', { name: 'New environment' });
+	for (let index = 0; index < 11; index += 1) await create.click();
+	await expect(tabs.getByRole('tab')).toHaveCount(12);
+	await expect(tabs.getByRole('tab').last()).toHaveAttribute('aria-selected', 'true');
+
+	const metrics = await page.evaluate(() => {
+		const strip = document.querySelector('[role="tablist"][aria-label="Environments"]');
+		const selected = strip?.querySelector('[role="tab"][aria-selected="true"]');
+		if (!(strip instanceof HTMLElement) || !(selected instanceof HTMLElement)) return null;
+		const stripRect = strip.getBoundingClientRect();
+		const selectedRect = selected.getBoundingClientRect();
+		return {
+			stripWidth: strip.clientWidth,
+			stripScrollWidth: strip.scrollWidth,
+			selectedVisible: selectedRect.left >= stripRect.left - 1 && selectedRect.right <= stripRect.right + 1,
+			pageWidth: document.documentElement.scrollWidth,
+			viewportWidth: window.innerWidth
+		};
+	});
+	expect(metrics).not.toBeNull();
+	expect(metrics.stripScrollWidth).toBeGreaterThan(metrics.stripWidth);
+	expect(metrics.selectedVisible).toBe(true);
+	expect(metrics.pageWidth).toBeLessThanOrEqual(metrics.viewportWidth);
+
+	// Move the strip itself to its older tabs, as a horizontal trackpad/mouse
+	// gesture would; Playwright's click auto-scroll is not the user interaction
+	// being exercised here.
+	await tabs.hover();
+	await page.mouse.wheel(-1200, 0);
+	await expect.poll(() => tabs.evaluate((strip) => strip.scrollLeft)).toBe(0);
+	await expect.poll(async () => {
+		const firstBox = await tabs.getByRole('tab').first().boundingBox();
+		const stripBox = await tabs.boundingBox();
+		return !!firstBox && !!stripBox && firstBox.x >= stripBox.x - 1 && firstBox.x + firstBox.width <= stripBox.x + stripBox.width + 1;
+	}).toBe(true);
+	await tabs.getByRole('tab').first().click();
+	await expect(tabs.getByRole('tab').first()).toHaveAttribute('aria-selected', 'true');
+	await expect.poll(async () => {
+		const selected = tabs.locator('[role="tab"][aria-selected="true"]');
+		const selectedBox = await selected.boundingBox();
+		const stripBox = await tabs.boundingBox();
+		return !!selectedBox && !!stripBox && selectedBox.x >= stripBox.x - 1 && selectedBox.x + selectedBox.width <= stripBox.x + stripBox.width + 1;
+	}).toBe(true);
 });
 
 test('a history-only workspace retries its folder mount and keeps history available when it is still missing', async ({ page }) => {

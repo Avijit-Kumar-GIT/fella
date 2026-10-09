@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { openFolder, openRepository } from '$lib/commands';
+	import { openRepository } from '$lib/commands';
 	import { firstActualQuestion, session } from '$lib/session.svelte';
 	import { resolveWorkspaceTileLayout } from '$lib/workspace-layout';
 	import type { WorkspaceTilePreference } from '$lib/workspace-layout';
@@ -12,14 +12,14 @@
 	let draggingWorkspace = $state(false);
 	let dragPreference = $state<WorkspaceTilePreference>({ ...session.workspaceLayout });
 	let dragTargetIndex = $state(0);
-	let dragHasOpenSource = $state(false);
+	let dragAddsPane = $state(false);
 
 	let tiles = $derived(
-		resolveWorkspaceTileLayout(session.workspaceWindows.map((workspace) => workspace.id), session.workspaceLayout)
+		resolveWorkspaceTileLayout(session.activeEnvironmentPanes.map((pane) => pane.id), session.workspaceLayout)
 	);
 	let previewIds = $derived([
-		...session.workspaceWindows.map((workspace) => workspace.id),
-		...(dragHasOpenSource ? [] : ['__fella-drop-workspace__'])
+		...session.activeEnvironmentPanes.map((pane) => pane.id),
+		...(dragAddsPane ? ['__fella-drop-workspace__'] : [])
 	]);
 	let previewTiles = $derived(
 		draggingWorkspace && previewIds.length <= 4
@@ -31,13 +31,17 @@
 		return path.replace(/[/\\]+$/, '').split(/[/\\]/).at(-1) || path;
 	}
 
-	function workspaceName(workspace: NonNullable<ReturnType<typeof session.workspaceAt>>): string {
-		return workspace.kind === 'general' ? 'General' : folderName(workspace.path ?? 'Workspace');
+	function workspaceName(paneId: string): string {
+		const pane = session.paneAt(paneId);
+		if (!pane?.workspaceId) return 'General';
+		const workspace = session.workspaceAt(pane.workspaceId);
+		return folderName(workspace?.path ?? pane.workspaceId);
 	}
 
-	function workspacePreview(workspace: NonNullable<ReturnType<typeof session.workspaceAt>>): string {
-		const conversation = session.conversations.find((item) => item.id === workspace.conversationId);
-		return conversation?.title?.trim() || firstActualQuestion(conversation?.messages ?? [])?.text.trim() || 'New conversation';
+	function workspacePreview(paneId: string): string {
+		const pane = session.paneAt(paneId);
+		const conversation = pane && session.conversations.find((item) => item.id === pane.conversationId);
+		return conversation?.title?.trim() || firstActualQuestion(conversation?.messages ?? [])?.text.trim() || 'Start a conversation';
 	}
 
 	function gridPlacement(rect: { x: number; y: number; width: number; height: number }): string {
@@ -62,10 +66,7 @@
 			else if (y < 0.22) preference.three = 'two-top-one-bottom';
 			else if (y > 0.78) preference.three = 'one-top-two-bottom';
 		}
-		const ids = [
-			...session.workspaceWindows.map((workspace) => workspace.id),
-			...((total > session.workspaceWindows.length) ? ['__fella-drop-workspace__'] : [])
-		];
+		const ids = [...session.activeEnvironmentPanes.map((pane) => pane.id), ...(total > session.activeEnvironmentPanes.length ? ['__fella-drop-workspace__'] : [])];
 		const slots = resolveWorkspaceTileLayout(ids, preference);
 		let index = 0;
 		let distance = Number.POSITIVE_INFINITY;
@@ -82,11 +83,14 @@
 	}
 
 	function onDragOver(event: DragEvent): void {
-		if (event.dataTransfer?.types.includes('application/x-fella-workspace')) {
+		const transfer = event.dataTransfer;
+		const paneDrag = transfer?.types.includes('application/x-fella-environment-pane') ?? false;
+		const workspaceDrag = transfer?.types.includes('application/x-fella-workspace') ?? false;
+		if (paneDrag || workspaceDrag) {
 			event.preventDefault();
-			event.dataTransfer.dropEffect = event.dataTransfer.types.includes('application/x-fella-existing-workspace') ? 'move' : 'copy';
-			dragHasOpenSource = event.dataTransfer.types.includes('application/x-fella-existing-workspace');
-			const total = session.workspaceWindows.length + (dragHasOpenSource ? 0 : 1);
+			dragAddsPane = workspaceDrag && !transfer?.types.includes('application/x-fella-existing-workspace');
+			transfer!.dropEffect = paneDrag || !dragAddsPane ? 'move' : 'copy';
+			const total = session.activeEnvironmentPanes.length + (dragAddsPane ? 1 : 0);
 			const proposed = placement(event, total);
 			dragPreference = proposed.preference;
 			dragTargetIndex = proposed.index;
@@ -101,35 +105,49 @@
 	}
 
 	async function onDrop(event: DragEvent): Promise<void> {
+		const paneId = event.dataTransfer?.getData('application/x-fella-environment-pane');
 		const path = event.dataTransfer?.getData('application/x-fella-workspace');
-		if (!path) return;
+		if (!path && !paneId) return;
 		event.preventDefault();
 		event.stopPropagation();
 		draggingWorkspace = false;
-		const existingIndex = session.workspaceWindows.findIndex((workspace) => workspace.id === path);
-		const total = session.workspaceWindows.length + (existingIndex >= 0 ? 0 : 1);
+		const existingPane = paneId
+			? session.activeEnvironmentPanes.find((pane) => pane.id === paneId)
+			: session.paneForWorkspace(path ?? '');
+		const total = session.activeEnvironmentPanes.length + (!existingPane && !paneId ? 1 : 0);
 		if (total > 4) {
-			session.addSystem('Close a workspace to add another.');
+			session.addSystem('This environment already has four workspaces. Create or switch environments to add another.');
 			return;
 		}
 		const proposed = placement(event, total);
-		if (existingIndex >= 0) {
+		if (paneId && existingPane) {
 			session.setWorkspaceLayout(proposed.preference);
-			session.placeWorkspaceWindow(path, proposed.index);
-			session.focusWorkspace(path);
+			session.placeWorkspacePane(paneId, proposed.index);
+			session.focusEnvironmentPane(paneId);
 			return;
 		}
-		if (await openRepository(path)) {
+		if (!path) return;
+		if (existingPane) {
 			session.setWorkspaceLayout(proposed.preference);
-			session.placeWorkspaceWindow(path, proposed.index);
+			session.placeWorkspacePane(existingPane.id, proposed.index);
+			session.focusEnvironmentPane(existingPane.id);
+			return;
+		}
+		const existingWorkspace = session.workspaceAt(path);
+		const opened = existingWorkspace && !existingWorkspace.historyOnly
+			? session.focusWorkspace(path)
+			: await openRepository(path);
+		if (opened) {
+			session.setWorkspaceLayout(proposed.preference);
+			const pane = session.paneForWorkspace(path);
+			if (pane) session.placeWorkspacePane(pane.id, proposed.index);
 		}
 	}
 
 	function startWorkspaceDrag(event: DragEvent, id: string): void {
 		if (!event.dataTransfer) return;
 		event.dataTransfer.effectAllowed = 'move';
-		event.dataTransfer.setData('application/x-fella-workspace', id);
-		event.dataTransfer.setData('application/x-fella-existing-workspace', id);
+		event.dataTransfer.setData('application/x-fella-environment-pane', id);
 	}
 
 	function closeWorkspace(event: MouseEvent, id: string): void {
@@ -146,48 +164,39 @@
 	ondragleave={onDragLeave}
 	ondrop={(event) => void onDrop(event)}
 >
-	<header class="board-head">
-		<div class="board-actions">
-			{#if session.sidebarCollapsed || session.focus}
-				<button class="add" type="button" aria-label="Add repository" title="Add repository" disabled={session.workspaceWindows.length >= 4} onclick={() => void openFolder()}>
-					<Icon name="plus" size={16} />
-				</button>
-			{/if}
-		</div>
-	</header>
-
 	<div class="tile-grid" class:empty={tiles.length === 0}>
 		{#each tiles as tile (tile.id)}
-			{@const workspace = session.workspaceAt(tile.id)}
-			{#if workspace}
+			{@const pane = session.paneAt(tile.id)}
+			{@const workspace = pane?.workspaceId ? session.workspaceAt(pane.workspaceId) : null}
+			{#if pane}
 				<article
 					class="workspace-tile"
-					class:focused={session.activeWorkspaceId === workspace.id}
+					class:focused={session.activeEnvironment?.activePaneId === pane.id}
 					style={gridPlacement(tile)}
-					aria-label={`${workspaceName(workspace)} workspace`}
+					aria-label={`${workspaceName(pane.id)} workspace`}
 				>
 					<header
 						class="tile-head"
 						role="group"
-						aria-label={`Drag ${workspaceName(workspace)} to rearrange workspaces`}
+						aria-label={`Drag ${workspaceName(pane.id)} to rearrange workspaces`}
 						draggable="true"
-						ondragstart={(event) => startWorkspaceDrag(event, workspace.id)}
+						ondragstart={(event) => startWorkspaceDrag(event, pane.id)}
 					>
 						<button
 							class="tile-focus"
 							type="button"
-							aria-pressed={session.activeWorkspaceId === workspace.id}
-							title={workspace.path ?? 'Conversations that are not tied to a folder'}
-							onclick={() => session.focusWorkspace(workspace.id)}
+							aria-pressed={session.activeEnvironment?.activePaneId === pane.id}
+							title={workspace?.path ?? 'Conversations that are not tied to a folder'}
+							onclick={() => session.focusEnvironmentPane(pane.id)}
 						>
-							<Icon name={workspace.kind === 'general' ? 'ask' : 'repository'} size={16} solid />
-							<span>{workspaceName(workspace)}</span>
+							<Icon name={workspace ? 'repository' : 'ask'} size={16} solid />
+							<span>{workspaceName(pane.id)}</span>
 						</button>
-						<button class="tile-close" type="button" aria-label={`Close ${workspaceName(workspace)} workspace`} title="Close workspace" onclick={(event) => closeWorkspace(event, workspace.id)}>
+						<button class="tile-close" type="button" aria-label={`Close ${workspaceName(pane.id)} workspace`} title="Remove from this environment" onclick={(event) => closeWorkspace(event, pane.id)}>
 							<Icon name="x" size={14} />
 						</button>
 					</header>
-					{#if session.activeWorkspaceId === workspace.id}
+					{#if session.activeEnvironment?.activePaneId === pane.id}
 						<div class="tile-chat">
 							<TranscriptView bind:this={transcript} />
 							{#if session.activeChat.companionPane}<CompanionPane />{/if}
@@ -196,21 +205,19 @@
 						<button
 							class="tile-preview"
 							type="button"
-							title={workspacePreview(workspace)}
-							aria-label={`Focus ${workspaceName(workspace)}: ${workspacePreview(workspace)}`}
-							onclick={() => session.focusWorkspace(workspace.id)}
+							title={workspacePreview(pane.id)}
+							aria-label={`Focus ${workspaceName(pane.id)}: ${workspacePreview(pane.id)}`}
+							onclick={() => session.focusEnvironmentPane(pane.id)}
 						>
-							<span>{workspacePreview(workspace)}</span>
+							<span class="preview-label">Recent conversation</span>
+							<strong>{workspacePreview(pane.id)}</strong>
 						</button>
 					{/if}
 				</article>
 			{/if}
 		{/each}
 		{#if tiles.length === 0}
-			<div class="empty-board">
-				<p>No open workspaces</p>
-				<button class="empty-action" type="button" onclick={() => void openFolder()}>Open a workspace</button>
-			</div>
+			<div class="empty-board"><p>This environment is empty.</p></div>
 		{/if}
 	</div>
 	{#if draggingWorkspace}
@@ -218,7 +225,7 @@
 			{#if previewTiles.length}
 				{#each previewTiles as preview, index (preview.id)}
 					<div class="preview-slot" class:target={index === dragTargetIndex} style={gridPlacement(preview)}>
-						{index === dragTargetIndex ? 'Drop to place' : preview.id === '__fella-drop-workspace__' ? 'Workspace' : workspaceName(session.workspaceAt(preview.id)!)}
+						{index === dragTargetIndex ? 'Drop to place' : preview.id === '__fella-drop-workspace__' ? 'Workspace' : workspaceName(preview.id)}
 					</div>
 				{/each}
 			{:else}
@@ -239,29 +246,6 @@
 		padding: 14px;
 		background: var(--workspace-canvas);
 	}
-	.board-head {
-		flex: none;
-		display: flex;
-		align-items: center;
-		justify-content: flex-end;
-		gap: 14px;
-		min-height: 34px;
-		padding: 0 2px 8px;
-	}
-	.board-actions { display: flex; align-items: center; gap: 8px; }
-	.add {
-		display: grid;
-		align-items: center;
-		justify-content: center;
-		width: 30px;
-		height: 30px;
-		border: 1px solid var(--border);
-		border-radius: 50%;
-		background: var(--bg-raised);
-		color: var(--text-dim);
-	}
-	.add:hover:not(:disabled) { border-color: var(--border-strong); color: var(--text); }
-	.add:disabled { opacity: .48; cursor: not-allowed; }
 	.tile-grid {
 		position: relative;
 		flex: 1;
@@ -287,6 +271,7 @@
 	}
 	.workspace-tile.focused {
 		border-color: var(--pane-edge-active);
+		background: color-mix(in srgb, var(--pane-surface) 96%, var(--brand));
 	}
 	.tile-head {
 		flex: none;
@@ -299,6 +284,9 @@
 		border-bottom: 1px solid var(--pane-edge);
 		background: var(--pane-head);
 		cursor: grab;
+	}
+	.workspace-tile.focused .tile-head {
+		background: color-mix(in srgb, var(--pane-head) 96%, var(--brand));
 	}
 	.tile-head:active { cursor: grabbing; }
 	.tile-focus {
@@ -331,20 +319,22 @@
 		flex: 1;
 		min-height: 0;
 		display: flex;
-		align-items: center;
-		padding: 13px 15px;
+		flex-direction: column;
+		align-items: flex-start;
+		justify-content: flex-start;
+		gap: 8px;
+		padding: 18px;
 		color: var(--text-faint);
 		text-align: left;
 	}
 	.tile-preview:hover { background: color-mix(in srgb, var(--bg-inset) 36%, transparent); color: var(--text-dim); }
-	.tile-preview > span { width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-xs); }
-	.empty-board { display: grid; justify-items: center; gap: 12px; padding: 24px; text-align: center; }
+	.tile-preview .preview-label { color: var(--text-faint); font-size: var(--fs-xs); }
+	.tile-preview strong { width: 100%; overflow: hidden; color: var(--text-dim); font-size: var(--fs-sm); font-weight: 520; line-height: 1.5; text-overflow: ellipsis; }
+	.empty-board { display: grid; justify-items: center; padding: 24px; text-align: center; }
 	.empty-board p { margin: 0; color: var(--text-faint); font-size: var(--fs-sm); }
-	.empty-action { padding: 5px 10px; border-radius: var(--radius-chip); background: var(--bg-inset); color: var(--text-dim); font-size: var(--fs-xs); }
-	.empty-action:hover { color: var(--text); }
 	.placement-preview {
 		position: absolute;
-		inset: 52px 14px 14px;
+		inset: 14px;
 		z-index: 4;
 		display: grid;
 		grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -383,8 +373,6 @@
 	.board.dragging .workspace-tile { opacity: .62; }
 	@media (max-width: 860px) {
 		.board { padding: 8px; }
-		.board-head { align-items: flex-start; }
-		.board-actions { flex-wrap: wrap; justify-content: flex-end; }
 		.workspace-tile { border-radius: var(--radius); }
 	}
 </style>
