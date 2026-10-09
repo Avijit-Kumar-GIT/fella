@@ -348,6 +348,31 @@ test('the four-pane limit is scoped to one environment and closing a pane frees 
 	await expect(page.getByRole('article', { name: 'reading-notes workspace' })).toBeVisible();
 });
 
+test('Composer source search filters and attaches a workspace source', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+	const workspaceNavigation = page.getByRole('region', { name: 'Workspaces' });
+	await workspaceNavigation.getByRole('button', { name: 'Add repository' }).click();
+	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
+	await page.getByRole('button', { name: 'Open sources in northwind-sales' }).click();
+	await expect(page.getByRole('heading', { name: 'sales.csv' })).toBeVisible();
+	const salesWorkspaceRow = page.getByRole('button', { name: 'Open workspace northwind-sales' });
+	await salesWorkspaceRow.click();
+	await salesWorkspaceRow.hover();
+	await page.getByRole('button', { name: 'New conversation in northwind-sales' }).click();
+	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
+
+	await page.getByRole('button', { name: 'Add a source or field to this question' }).click();
+	const search = page.getByRole('textbox', { name: 'Find a source or field' });
+	await expect(search).toBeFocused();
+	await expect(search).toHaveClass(/fella-ui-input/);
+	await search.fill('sales.csv');
+	const source = page.locator('.context-main').filter({ hasText: 'sales.csv' });
+	await expect(source).toBeVisible();
+	await source.click();
+	await expect(page.locator('.ref-pill').filter({ hasText: 'sales.csv' })).toBeVisible();
+});
+
 test('environment tabs save different workspace arrangements without leaking panes between them', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');

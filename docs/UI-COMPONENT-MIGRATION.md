@@ -199,6 +199,20 @@ the adapter-static fallback-page notice. There is no dedicated deterministic
 browser test for the free-form clarification field, so that flow is not
 claimed as browser-verified.
 
+#### Slice 3d: Composer source search
+
+Status: implemented.
+
+- Use the shared Input primitive for source and field search, while retaining
+  the Composer's compact search-row treatment.
+- Give the search field an explicit accessible name and preserve automatic
+  focus, filtering, and source attachment.
+
+Validation: `pnpm check` reports zero errors and warnings; the focused
+workspace-board test for filtering and attaching a source passes; and
+`pnpm build` succeeds. The build reports a 501.67 KB client chunk above Vite's
+500 KB advisory and the adapter-static fallback-page notice.
+
 #### Remaining in Slice 3
 
 Standardize the remaining Composer and Sidebar controls around shared

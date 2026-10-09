@@ -10,6 +10,7 @@
 		stop
 	} from '$lib/commands';
 	import { DropdownMenu } from '$lib/components/ui/dropdown-menu';
+	import { Input } from '$lib/components/ui/input';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { session } from '$lib/session.svelte';
 	import { enterUp } from '$lib/motion';
@@ -366,7 +367,14 @@
 		<div class="context-menu" transition:enterUp>
 			<div class="context-search">
 				<Icon name="search" size={16} />
-				<input bind:this={contextInput} bind:value={contextQuery} placeholder="Find a source or field…" spellcheck="false" />
+				<Input
+					class="context-search-input"
+					bind:ref={contextInput}
+					bind:value={contextQuery}
+					aria-label="Find a source or field"
+					placeholder="Find a source or field…"
+					spellcheck="false"
+				/>
 				<button type="button" aria-label="Close context picker" onclick={() => (contextOpen = false)}><Icon name="x" size={16} /></button>
 			</div>
 			{#if contextSources.length}
@@ -975,17 +983,25 @@
 		border-color: var(--link);
 		box-shadow: var(--focus-ring);
 	}
-	.context-search input {
+	.context-search :global(.context-search-input) {
 		min-width: 0;
 		width: 100%;
+		min-height: 0;
 		border: 0;
+		border-radius: 0;
 		outline: 0;
+		padding: 0;
 		background: transparent;
 		color: var(--text);
 		font: inherit;
 		font-size: var(--fs-sm);
 	}
-	.context-search input::placeholder {
+	.context-search :global(.context-search-input:focus-visible) {
+		border-color: transparent;
+		outline: 0;
+		box-shadow: none;
+	}
+	.context-search :global(.context-search-input::placeholder) {
 		color: var(--text-faint);
 	}
 	.context-search > button {
