@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { baseName, openRepository } from '$lib/commands';
+	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { ipc, isDesktop } from '$lib/ipc';
@@ -108,15 +109,22 @@
 				</div>
 			</div>
 			<div class="project-actions">
-				<button class="pill ghost" type="button" onclick={() => void askRepository()}>
+				<Button variant="outline" class="project-button" onclick={() => void askRepository()}>
 					<Icon name="ask" size={16} /> Ask repository
-				</button>
-				<button class="pill ghost" type="button" onclick={() => void openSources()}>
+				</Button>
+				<Button variant="outline" class="project-button" onclick={() => void openSources()}>
 					<Icon name="table" size={16} /> Sources
-				</button>
-				<button class="icon-action" type="button" aria-label="Delete project" title="Delete project" onclick={deleteProject}>
+				</Button>
+				<Button
+					variant="ghost"
+					size="icon"
+					class="project-delete-action"
+					aria-label="Delete project"
+					title="Delete project"
+					onclick={deleteProject}
+				>
 					<Icon name="x" size={16} />
-				</button>
+				</Button>
 			</div>
 		</header>
 
@@ -131,7 +139,9 @@
 			<div class="mount-note">
 				<Icon name="info" size={16} />
 				<span>This project is saved locally. Mount <strong>{baseName(project.workspace)}</strong> to see its live files and ask questions.</span>
-				<button class="pill ghost" type="button" onclick={() => void mountRepository()}>Mount repository</button>
+				<Button variant="outline" class="project-button" onclick={() => void mountRepository()}>
+					Mount repository
+				</Button>
 			</div>
 		{/if}
 
@@ -163,11 +173,6 @@
 					<div><dt>Conversations</dt><dd>{history.length || '—'}</dd></div>
 					<div><dt>Updated</dt><dd>{updatedLabel(project.updated_at_ms)}</dd></div>
 				</dl>
-				{#if !mounted}
-					<button class="pill ghost snapshot-action" type="button" onclick={() => void mountRepository()}>
-						<Icon name="folder" size={16} /> Mount repository
-					</button>
-				{/if}
 			</aside>
 		</div>
 	</section>
@@ -234,18 +239,30 @@
 		gap: var(--space-2);
 		flex: none;
 	}
-	.project-actions .pill {
-		padding: 7px 10px;
+	.project-actions :global(.project-button),
+	.mount-note :global(.project-button) {
+		height: 30px;
+		padding: 6px 10px;
+		border-color: var(--border);
+		border-radius: var(--radius-sm);
+		background: transparent;
+		color: var(--text-dim);
 	}
-	.icon-action {
+	.project-actions :global(.project-button:hover),
+	.mount-note :global(.project-button:hover) {
+		background: var(--bg-inset);
+		color: var(--text);
+	}
+	.project-actions :global(.project-delete-action) {
 		display: grid;
 		place-items: center;
 		width: 30px;
 		height: 30px;
+		min-width: 30px;
 		border-radius: var(--radius-sm);
 		color: var(--text-faint);
 	}
-	.icon-action:hover {
+	.project-actions :global(.project-delete-action:hover) {
 		background: color-mix(in srgb, var(--err) 10%, var(--bg-inset));
 		color: var(--err);
 	}
@@ -295,9 +312,8 @@
 		color: var(--text);
 		font-weight: 600;
 	}
-	.mount-note .pill {
+	.mount-note :global(.project-button) {
 		flex: none;
-		padding: 6px 10px;
 	}
 	.project-grid {
 		display: grid;
@@ -391,10 +407,6 @@
 		font-size: var(--fs-sm);
 		font-variant-numeric: tabular-nums;
 	}
-	.snapshot-action {
-		width: 100%;
-		margin-top: var(--space-3);
-	}
 	@media (max-width: 760px) {
 		.project-page {
 			padding: var(--space-5) var(--space-4) 40px;
@@ -406,7 +418,7 @@
 		.project-actions {
 			width: 100%;
 		}
-		.project-actions .pill {
+		.project-actions :global(.project-button) {
 			flex: 1;
 		}
 		.project-grid {

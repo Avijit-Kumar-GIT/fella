@@ -315,12 +315,30 @@ verifies both shared controls, title rename propagation, and wiki retention
 after switching to Sources and back. The build reports a 502.31 KB client
 chunk above Vite's 500 KB advisory and the adapter-static fallback-page notice.
 
+#### Slice 3l: Project actions
+
+Status: implemented.
+
+- Use shared Buttons for Ask repository, Sources, Mount repository, and Delete
+  project while retaining their quiet, compact styling and existing actions.
+- Remove the duplicate Mount repository action from the project snapshot; the
+  mount note already presents it when the project is not mounted.
+
+Validation: `pnpm check`, `node --check tests/e2e/workspace-board.spec.mjs`,
+the focused ProjectView actions browser test, and `pnpm build` succeed. The
+focused test verifies shared Button markers, Sources and Ask navigation, the
+delete confirmation, and project removal. Two bounded test-only corrections
+were needed: the workspace composer has a workspace-specific accessible name,
+and the native confirmation must be accepted concurrently with the click.
+The behavior assertions were preserved. The build reports a 502.20 KB client
+chunk above Vite's 500 KB advisory and the adapter-static fallback-page notice.
+
 #### Remaining in Slice 3
 
 Standardize the remaining Composer and Sidebar controls around shared
 primitives where they improve consistency without obscuring product behavior.
-Continue with the remaining Sources controls, then migrate evidence,
-transcript, and project views while retaining their distinct layouts. Keep
+Continue with the remaining Sources controls, then migrate evidence, transcript,
+and remaining project controls while retaining their distinct layouts. Keep
 chart geometry and workspace-board composition custom.
 
 ### Slice 4: converge and remove duplicates

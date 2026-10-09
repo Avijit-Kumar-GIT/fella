@@ -725,3 +725,36 @@ test('Project title and wiki use shared editing controls and retain saved conten
 		'Net revenue excludes refunds and chargebacks.'
 	);
 });
+
+test('Project actions use shared buttons and retain their navigation and delete behavior', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+	await page.getByRole('button', { name: 'Add repository' }).click();
+	await page.getByRole('button', { name: 'Create project for northwind-sales' }).click();
+	await page.getByRole('textbox', { name: 'Name' }).fill('Sales actions');
+	await page.getByRole('button', { name: 'Create project', exact: true }).click();
+	const openProject = page.getByRole('button', { name: 'Open project Sales actions' });
+	await openProject.click();
+
+	const askRepository = page.getByRole('button', { name: 'Ask repository' });
+	const sources = page.getByRole('button', { name: 'Sources', exact: true });
+	const deleteProject = page.getByRole('button', { name: 'Delete project' });
+	for (const action of [askRepository, sources, deleteProject]) {
+		await expect(action).toHaveAttribute('data-slot', 'button');
+	}
+
+	await sources.click();
+	await expect(page.getByRole('heading', { name: 'sales.csv' })).toBeVisible();
+	await openProject.click();
+	await askRepository.click();
+	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
+
+	await openProject.click();
+	const dialogPromise = page.waitForEvent('dialog');
+	const confirmationCheck = dialogPromise.then(async (confirmation) => {
+		expect(confirmation.message()).toContain('Delete the local project');
+		await confirmation.accept();
+	});
+	await Promise.all([deleteProject.click(), confirmationCheck]);
+	await expect(openProject).toHaveCount(0);
+});
