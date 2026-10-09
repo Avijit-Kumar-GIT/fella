@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Button } from '$lib/components/ui/button';
 	import Icon from './Icon.svelte';
 
 	let {
@@ -16,9 +17,10 @@
 </script>
 
 <div class="evidence-summary">
-	<button
+	<Button
+		variant="ghost"
+		size="sm"
 		class="summary-toggle"
-		type="button"
 		aria-expanded={expanded}
 		aria-controls={bodyId}
 		title={`${expanded ? 'Hide' : 'Show'} ${label.toLowerCase()}`}
@@ -26,7 +28,7 @@
 	>
 		<span class="summary-label">{label}</span>
 		<span class="caret" class:open={expanded} aria-hidden="true"><Icon name="chevron-right" size={12} /></span>
-	</button>
+	</Button>
 </div>
 
 <style>
@@ -37,10 +39,12 @@
 		min-width: 0;
 		margin-left: auto;
 	}
-	.summary-toggle {
+	.evidence-summary :global(.summary-toggle) {
 		display: inline-flex;
 		align-items: center;
 		gap: 5px;
+		height: auto;
+		min-height: 0;
 		min-width: 0;
 		padding: 3px 5px;
 		border-radius: var(--radius-chip);
@@ -48,8 +52,8 @@
 		font-size: var(--fs-xs);
 		white-space: nowrap;
 	}
-	.summary-toggle:hover,
-	.summary-toggle[aria-expanded='true'] {
+	.evidence-summary :global(.summary-toggle:hover),
+	.evidence-summary :global(.summary-toggle[aria-expanded='true']) {
 		background: var(--bg-inset);
 		color: var(--text);
 	}
@@ -60,6 +64,10 @@
 		display: inline-flex;
 		color: var(--text-faint);
 		transition: transform var(--dur-fast) var(--ease);
+	}
+	.caret :global(svg) {
+		width: 12px;
+		height: 12px;
 	}
 	.caret.open {
 		transform: rotate(90deg);

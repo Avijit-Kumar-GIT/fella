@@ -333,6 +333,20 @@ and the native confirmation must be accepted concurrently with the click.
 The behavior assertions were preserved. The build reports a 502.20 KB client
 chunk above Vite's 500 KB advisory and the adapter-static fallback-page notice.
 
+#### Slice 3m: Analysis details disclosure
+
+Status: implemented.
+
+- Use the shared ghost Button for the answer's Analysis details control while
+  preserving its compact appearance, accessible expanded state, and toggle.
+
+Validation: `pnpm check`, `node --check tests/e2e/workspace-board.spec.mjs`,
+the focused Analysis details browser test, and `pnpm build` succeed. The test
+verifies the shared Button marker, collapsed and expanded ARIA state, the
+evidence body appearing, and the body closing again. The build reports a
+502.27 KB client chunk above Vite's 500 KB advisory and the adapter-static
+fallback-page notice.
+
 #### Remaining in Slice 3
 
 Standardize the remaining Composer and Sidebar controls around shared

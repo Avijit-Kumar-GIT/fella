@@ -758,3 +758,24 @@ test('Project actions use shared buttons and retain their navigation and delete 
 	await Promise.all([deleteProject.click(), confirmationCheck]);
 	await expect(openProject).toHaveCount(0);
 });
+
+test('Analysis details uses the shared button and preserves disclosure state', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+	await page.getByRole('combobox', { name: 'Ask a question' }).fill('Summarize the workspace.');
+	await page.getByRole('button', { name: 'Send' }).click();
+
+	const answer = page.locator('.msg.assistant').last();
+	await expect(answer).toContainText('Scoped to general.');
+	const details = answer.getByRole('button', { name: 'Analysis details' });
+	await expect(details).toHaveAttribute('data-slot', 'button');
+	await expect(details).toHaveAttribute('aria-expanded', 'false');
+
+	await details.click();
+	await expect(details).toHaveAttribute('aria-expanded', 'true');
+	await expect(answer).toContainText('Source details were not recorded for this archived answer.');
+
+	await details.click();
+	await expect(details).toHaveAttribute('aria-expanded', 'false');
+	await expect(page.getByText('Source details were not recorded for this archived answer.')).toHaveCount(0);
+});
