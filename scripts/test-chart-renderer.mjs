@@ -36,6 +36,7 @@ function contrast(a, b) {
 try {
 	const { render } = await server.ssrLoadModule('svelte/server');
 	const { default: Chart } = await server.ssrLoadModule('/src/lib/components/Chart.svelte');
+	const { chartExportFilename, serializeDelimited } = await server.ssrLoadModule('/src/lib/chart-export.ts');
 	const { default: Message } = await server.ssrLoadModule('/src/lib/components/Message.svelte');
 	const { default: EvidenceBlock } = await server.ssrLoadModule('/src/lib/components/EvidenceBlock.svelte');
 	const { default: PythonCalculationDetails } = await server.ssrLoadModule('/src/lib/components/PythonCalculationDetails.svelte');
@@ -58,6 +59,15 @@ try {
 		metadata,
 		...extra
 	});
+	assert.equal(
+		serializeDelimited(['Month', 'Revenue ($)'], [['Jan', 12], ['Feb, Mar', null]], ','),
+		'Month,Revenue ($)\r\nJan,12\r\n"Feb, Mar",'
+	);
+	assert.equal(
+		serializeDelimited(['Label', 'Value'], [['=1+1', 4]], '\t'),
+		"Label\tValue\r\n'=1+1\t4"
+	);
+	assert.equal(chartExportFilename('Monthly revenue / 2026', 'png'), 'Monthly-revenue-2026.png');
 
 	const bar = renderChart(generic('bar', ['Rent', 'Food'], [{ name: 'Spend', values: [120, 45] }]));
 	assert.match(bar, /role="img" aria-label="bar validation"/);

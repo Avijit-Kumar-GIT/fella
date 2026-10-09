@@ -750,6 +750,24 @@ test file passes `node --check`, and the focused Chart browser test passes. It
 opens metadata and exact values, checks their contents and disclosure state,
 then verifies the companion-pane action.
 
+#### Slice 4c.1: Chart exports
+
+Status: implemented.
+
+- Add a compact chart menu with copy/download actions for the rendered chart
+  image (PNG) and its exact values (TSV/CSV).
+- Keep chart controls, metadata disclosures, and the exact-values table out of
+  exported images. Include units in exported numeric column headings and guard
+  spreadsheet-bound text against formula execution.
+
+Validation: the focused Chart browser test checks clipboard image MIME type,
+PNG signature, exact TSV contents, and UTF-8 CSV contents. `pnpm check`,
+`pnpm build`, `node --check tests/e2e/workspace-board.spec.mjs`, and
+`git diff --check` pass. `pnpm test:chart-renderer` reaches its existing
+“Open beside” HTML matcher and fails because the rendered button text is
+wrapped in Svelte comment markers; the added export-format assertions pass
+before that failure. The matcher was left unchanged.
+
 #### Slice 4d: Settings run-log disclosure
 
 Status: implemented.

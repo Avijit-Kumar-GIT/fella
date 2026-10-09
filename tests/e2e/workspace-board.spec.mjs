@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { readFile } from 'node:fs/promises';
 
 const folders = [
 	{
@@ -1282,6 +1283,7 @@ test('Companion snapshot recovery uses a shared button and reopens the current s
 });
 
 test('Chart disclosures use Collapsible and Open beside preserves the chart in the companion pane', async ({ page }) => {
+	await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: 'http://127.0.0.1:1421' });
 	await installDesktopMock(page, {
 		chartEvidence: {
 			id: 'fixture-chart',
@@ -1308,8 +1310,9 @@ test('Chart disclosures use Collapsible and Open beside preserves the chart in t
 		}
 	});
 	await page.goto('/');
-	await page.getByRole('combobox', { name: 'Ask a question' }).fill('Show monthly revenue.');
-	await page.getByRole('button', { name: 'Send' }).click();
+	const composer = page.getByRole('combobox', { name: 'Ask a question' });
+	await composer.fill('Show monthly revenue.');
+	await composer.press('Enter');
 
 	const chart = page.locator('.chart-card');
 	await expect(chart).toContainText('Monthly revenue');
@@ -1323,6 +1326,40 @@ test('Chart disclosures use Collapsible and Open beside preserves the chart in t
 	await expect(exactValues).toHaveAttribute('aria-expanded', 'true');
 	const exactTable = chart.getByRole('table', { name: 'Monthly revenue values' });
 	await expect(exactTable).toContainText('$18');
+
+	const exportTrigger = chart.getByRole('button', { name: 'Export chart and data' });
+	await exportTrigger.click();
+	await page.getByRole('menuitem', { name: 'Copy chart image' }).click();
+	await expect(chart.getByRole('status')).toHaveText('Chart image copied to clipboard.');
+	const copiedImageTypes = await page.evaluate(async () =>
+		(await navigator.clipboard.read()).flatMap((item) => item.types)
+	);
+	expect(copiedImageTypes).toContain('image/png');
+
+	await exportTrigger.click();
+	const pngDownloadPromise = page.waitForEvent('download');
+	await page.getByRole('menuitem', { name: 'Download chart image (PNG)' }).click();
+	const pngDownload = await pngDownloadPromise;
+	expect(pngDownload.suggestedFilename()).toBe('Monthly-revenue.png');
+	const pngPath = await pngDownload.path();
+	const pngBytes = await readFile(pngPath);
+	expect([...pngBytes.subarray(0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10]);
+
+	await exportTrigger.click();
+	await page.getByRole('menuitem', { name: 'Copy data' }).click();
+	await expect(chart.getByRole('status')).toHaveText('Chart data copied to clipboard.');
+	expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
+		'Month\tRevenue ($)\r\nJan\t12\r\nFeb\t18\r\nMar\t15'
+	);
+
+	await exportTrigger.click();
+	const csvDownloadPromise = page.waitForEvent('download');
+	await page.getByRole('menuitem', { name: 'Download data (CSV)' }).click();
+	const csvDownload = await csvDownloadPromise;
+	expect(csvDownload.suggestedFilename()).toBe('Monthly-revenue.csv');
+	const csvPath = await csvDownload.path();
+	expect(await readFile(csvPath, 'utf8')).toBe('\uFEFFMonth,Revenue ($)\r\nJan,12\r\nFeb,18\r\nMar,15');
+
 	const openBeside = page.getByRole('button', { name: 'Open beside' });
 	await expect(openBeside).toHaveAttribute('data-slot', 'button');
 	await openBeside.click();
