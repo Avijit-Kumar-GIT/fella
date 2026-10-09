@@ -389,6 +389,20 @@ marker, prompt submission as a user turn, and the corresponding workspace
 response. The build reports a 502.35 KB client chunk above Vite's 500 KB
 advisory and the adapter-static fallback-page notice.
 
+#### Slice 3q: Companion pane close
+
+Status: implemented.
+
+- Use a shared compact icon Button for closing the companion pane, retaining its
+  30 px target, accessible name, and return-to-conversation behavior.
+
+Validation: `pnpm check` reports zero errors and warnings,
+`node --check tests/e2e/workspace-board.spec.mjs`, the focused companion-close
+browser test, and `pnpm build` succeed. The test verifies the shared Button
+marker, 30 px dimensions, pane dismissal, and return to the same workspace
+conversation. The build reports a 502.39 KB client chunk above Vite's 500 KB
+advisory and the adapter-static fallback-page notice.
+
 #### Remaining in Slice 3
 
 Standardize the remaining Composer and Sidebar controls around shared

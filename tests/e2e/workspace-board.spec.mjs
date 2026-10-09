@@ -831,3 +831,24 @@ test('Workspace starter prompts use shared outline buttons and submit the select
 	await expect(page.locator('.msg.user').last()).toContainText('How did my spending change this year?');
 	await expect(page.locator('.msg.assistant').last()).toContainText('Scoped to C:\\FellaFixture\\northwind-sales.');
 });
+
+test('Companion pane close uses a shared compact button and returns to the workspace conversation', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+	await page.getByRole('button', { name: 'Add repository' }).click();
+	await page.getByRole('button', { name: 'Open sources in northwind-sales' }).click();
+	await page.getByRole('button', { name: 'Open source preview beside the active conversation' }).click();
+
+	const companion = page.getByRole('complementary', { name: 'Companion pane' });
+	await expect(companion).toBeVisible();
+	const close = companion.getByRole('button', { name: 'Close companion pane and return to conversation' });
+	await expect(close).toHaveAttribute('data-slot', 'button');
+	const bounds = await close.boundingBox();
+	expect(bounds).not.toBeNull();
+	expect(bounds.width).toBe(30);
+	expect(bounds.height).toBe(30);
+
+	await close.click();
+	await expect(companion).toHaveCount(0);
+	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
+});

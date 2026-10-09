@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { baseName } from '$lib/commands';
+	import { Button } from '$lib/components/ui/button';
 	import { session } from '$lib/session.svelte';
 	import type { EvidenceItem, SourceInfo } from '$lib/types';
 	import { isRenderableChartEvidence, paneFreshness } from '$lib/workbench';
@@ -75,10 +76,16 @@
 			<span class="eyebrow">{pane?.kind === 'chart' ? 'Chart' : 'Source preview'}</span>
 			<h2 title={title}>{title}</h2>
 		</div>
-		<button class="close" type="button" aria-label="Close companion pane and return to conversation" onclick={() => session.closeCompanionPane()}>
+		<Button
+			variant="ghost"
+			size="icon"
+			class="close"
+			aria-label="Close companion pane and return to conversation"
+			onclick={() => session.closeCompanionPane()}
+		>
 			<Icon name="x" size={16} />
 			<span class="back-label">Conversation</span>
-		</button>
+		</Button>
 	</header>
 
 	<div class="companion-body">
@@ -166,16 +173,17 @@
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
-	.close {
+	.companion-head :global(.close) {
 		flex: none;
 		display: grid;
 		place-items: center;
 		width: 30px;
+		min-width: 30px;
 		height: 30px;
 		border-radius: var(--radius-sm);
 		color: var(--text-faint);
 	}
-	.close:hover { background: var(--bg-inset); color: var(--text); }
+	.companion-head :global(.close:hover) { background: var(--bg-inset); color: var(--text); }
 	.companion-body {
 		flex: 1;
 		min-width: 0;
