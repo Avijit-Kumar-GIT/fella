@@ -286,12 +286,27 @@ unchanged, and Delete removes the history row. The build reports a 502.31 KB
 client chunk above Vite's 500 KB advisory and the adapter-static fallback-page
 notice.
 
+#### Slice 3j: Sources catalog filter
+
+Status: implemented.
+
+- Use the shared Input for the workspace source filter while keeping the
+  compact searchbox presentation and existing filtering behavior.
+- Preserve selection when a filter hides and then restores the selected source.
+
+Validation: `pnpm check`, `node --check tests/e2e/workspace-board.spec.mjs`,
+the focused Sources filter browser test, and `pnpm build` succeed. The test
+checks the empty state and restored selection. The build reports a 502.32 KB
+client chunk above Vite's 500 KB advisory and the adapter-static fallback-page
+notice.
+
 #### Remaining in Slice 3
 
 Standardize the remaining Composer and Sidebar controls around shared
-primitives. Then migrate source, evidence, transcript, and project views while
-retaining their distinct product layouts. Keep chart geometry and
-workspace-board composition custom.
+primitives where they improve consistency without obscuring product behavior.
+Continue with the remaining Sources controls, then migrate evidence,
+transcript, and project views while retaining their distinct layouts. Keep
+chart geometry and workspace-board composition custom.
 
 ### Slice 4: converge and remove duplicates
 

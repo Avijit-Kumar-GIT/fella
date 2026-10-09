@@ -683,3 +683,20 @@ test('Sidebar conversation actions use shared buttons, cancel rename, and delete
 	await page.getByRole('button', { name: 'Delete conversation' }).click();
 	await expect(conversation).toHaveCount(0);
 });
+
+test('Sources catalog filter uses the shared input and preserves source selection', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+	await page.getByRole('button', { name: 'Add repository' }).click();
+	await page.getByRole('button', { name: 'Open sources in northwind-sales' }).click();
+	await expect(page.getByRole('heading', { name: 'sales.csv' })).toBeVisible();
+
+	const filter = page.getByRole('textbox', { name: 'Filter sources' });
+	await expect(filter).toHaveClass(/fella-ui-input/);
+	await filter.fill('no-such-source');
+	await expect(page.getByText('No sources match “no-such-source”.')).toBeVisible();
+	await filter.fill('sales.csv');
+	const source = page.getByRole('option', { name: /sales\.csv/ });
+	await expect(source).toBeVisible();
+	await expect(source).toHaveAttribute('aria-selected', 'true');
+});

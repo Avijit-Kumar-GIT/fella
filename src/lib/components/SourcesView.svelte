@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { baseName, openFolder } from '$lib/commands';
+	import { Input } from '$lib/components/ui/input';
 	import { session } from '$lib/session.svelte';
 	import type { SourceInfo } from '$lib/types';
 	import Icon from './Icon.svelte';
@@ -146,7 +147,12 @@
 			<label class="searchbox">
 				<Icon name="search" size={16} />
 				<span class="sr-only">Filter sources</span>
-				<input bind:value={query} placeholder="Filter sources…" spellcheck="false" />
+				<Input
+					class="source-filter-input"
+					bind:value={query}
+					placeholder="Filter sources…"
+					spellcheck="false"
+				/>
 			</label>
 		</div>
 
@@ -400,16 +406,25 @@
 		border-color: var(--border-strong);
 		box-shadow: var(--focus-ring);
 	}
-	.searchbox input {
+	.searchbox :global(.source-filter-input) {
+		min-width: 0;
 		width: 100%;
+		min-height: 0;
+		padding: 0;
 		border: 0;
+		border-radius: 0;
 		outline: 0;
 		background: transparent;
 		color: var(--text);
 		font: inherit;
 		font-size: var(--fs-sm);
 	}
-	.searchbox input::placeholder {
+	.searchbox :global(.source-filter-input:focus-visible) {
+		border-color: transparent;
+		outline: 0;
+		box-shadow: none;
+	}
+	.searchbox :global(.source-filter-input::placeholder) {
 		color: var(--text-faint);
 	}
 	.source-layout {
