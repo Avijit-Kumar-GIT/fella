@@ -9,12 +9,13 @@
 		steerRun,
 		stop
 	} from '$lib/commands';
+	import { DropdownMenu } from '$lib/components/ui/dropdown-menu';
 	import { session } from '$lib/session.svelte';
 	import { enterUp } from '$lib/motion';
-import type { ContextReference, SourceInfo } from '$lib/types';
-import Icon from './Icon.svelte';
-import Logo from './Logo.svelte';
-import ProviderIcon from './ProviderIcon.svelte';
+	import type { ContextReference, SourceInfo } from '$lib/types';
+	import Icon from './Icon.svelte';
+	import Logo from './Logo.svelte';
+	import ProviderIcon from './ProviderIcon.svelte';
 
 	let { onafterrun }: { onafterrun?: () => void } = $props();
 
@@ -210,12 +211,6 @@ import ProviderIcon from './ProviderIcon.svelte';
 			e.stopPropagation();
 			return;
 		}
-		if (modeOpen && e.key === 'Escape') {
-			modeOpen = false;
-			e.preventDefault();
-			e.stopPropagation();
-			return;
-		}
 		if (modelOpen && e.key === 'Escape') {
 			modelOpen = false;
 			modelQuery = '';
@@ -335,6 +330,18 @@ import ProviderIcon from './ProviderIcon.svelte';
 		modeOpen = false;
 	}
 
+	function setModeMenuOpen(open: boolean): void {
+		modeOpen = open;
+		if (!open) return;
+		contextOpen = false;
+		modelOpen = false;
+		modelQuery = '';
+	}
+
+	function selectMode(value: string): void {
+		if (value === 'ask' || value === 'inspect') chooseMode(value);
+	}
+
 	async function chooseModel(next: string): Promise<void> {
 		if (!(await selectModel(next))) return;
 		modelOpen = false;
@@ -345,7 +352,6 @@ import ProviderIcon from './ProviderIcon.svelte';
 	function onWindowClick(e: MouseEvent): void {
 		if (!wrapEl?.contains(e.target as Node)) {
 			contextOpen = false;
-			modeOpen = false;
 			modelOpen = false;
 			modelQuery = '';
 		}
@@ -532,21 +538,27 @@ import ProviderIcon from './ProviderIcon.svelte';
 		<div class="bottom-row">
 			{#if !session.focus}
 				<div class="mode-wrap">
-					<button class="mode-trigger" type="button" aria-expanded={modeOpen} onclick={() => { modeOpen = !modeOpen; contextOpen = false; modelOpen = false; modelQuery = ''; }}>
-						<span class="mode-mark" class:inspect={mode === 'inspect'}></span>
-						{mode === 'inspect' ? 'Check data' : 'Ask'}
-						<Icon name="chevron-right" size={12} />
-					</button>
-					{#if modeOpen}
-						<div class="mode-menu">
-							<button class:chosen={mode === 'ask'} type="button" onclick={() => chooseMode('ask')}>
-								<span class="mode-mark"></span><span><strong>Ask</strong><small>Answer from the workspace.</small></span>
-							</button>
-							<button class:chosen={mode === 'inspect'} type="button" onclick={() => chooseMode('inspect')}>
-								<span class="mode-mark inspect"></span><span><strong>Check data</strong><small>Start with the files and show the checks.</small></span>
-							</button>
-						</div>
-					{/if}
+					<DropdownMenu.Root open={modeOpen} onOpenChange={setModeMenuOpen}>
+						<DropdownMenu.Trigger class="mode-trigger" type="button">
+							<span class="mode-mark" class:inspect={mode === 'inspect'}></span>
+							{mode === 'inspect' ? 'Check data' : 'Ask'}
+							<Icon name="chevron-right" size={12} />
+						</DropdownMenu.Trigger>
+						<DropdownMenu.Portal>
+							<DropdownMenu.Content class="fella-ui-menu-content mode-menu" side="top" align="start" sideOffset={8}>
+								<DropdownMenu.RadioGroup value={mode} onValueChange={selectMode}>
+									<DropdownMenu.RadioItem class="fella-ui-menu-item mode-option" value="ask">
+										<span class="mode-mark"></span>
+										<span class="mode-copy"><strong>Ask</strong><small>Answer from the workspace.</small></span>
+									</DropdownMenu.RadioItem>
+									<DropdownMenu.RadioItem class="fella-ui-menu-item mode-option" value="inspect">
+										<span class="mode-mark inspect"></span>
+										<span class="mode-copy"><strong>Check data</strong><small>Start with the files and show the checks.</small></span>
+									</DropdownMenu.RadioItem>
+								</DropdownMenu.RadioGroup>
+							</DropdownMenu.Content>
+						</DropdownMenu.Portal>
+					</DropdownMenu.Root>
 				</div>
 				{#if !pendingInput}
 					<div class="model-wrap">
@@ -735,7 +747,7 @@ import ProviderIcon from './ProviderIcon.svelte';
 		position: relative;
 		flex: none;
 	}
-	.mode-trigger {
+	:global(.mode-trigger) {
 		display: inline-flex;
 		align-items: center;
 		gap: 6px;
@@ -746,12 +758,12 @@ import ProviderIcon from './ProviderIcon.svelte';
 		font-weight: 600;
 		white-space: nowrap;
 	}
-	.mode-trigger:hover,
-	.mode-trigger[aria-expanded='true'] {
+	:global(.mode-trigger:hover),
+	:global(.mode-trigger[aria-expanded='true']) {
 		background: var(--bg-inset);
 		color: var(--text);
 	}
-	.mode-trigger :global(svg) {
+	:global(.mode-trigger svg) {
 		transform: rotate(90deg);
 		color: var(--text-faint);
 	}
@@ -764,41 +776,29 @@ import ProviderIcon from './ProviderIcon.svelte';
 	.mode-mark.inspect {
 		background: var(--brand);
 	}
-	.mode-menu {
-		position: absolute;
-		bottom: calc(100% + 8px);
-		left: -6px;
-		z-index: 22;
-		width: 224px;
-		padding: 5px;
-		border: 1px solid var(--border);
-		border-radius: var(--radius);
-		background: var(--bg-raised);
-		box-shadow: var(--shadow-pop);
-	}
-	.mode-menu button {
-		display: flex;
+	:global(.mode-menu) { width: 224px; }
+	:global(.mode-option) {
 		align-items: flex-start;
 		gap: 9px;
-		width: 100%;
+		min-height: 0;
 		padding: 8px;
 		border-radius: var(--radius-chip);
 		text-align: left;
 	}
-	.mode-menu button:hover,
-	.mode-menu button.chosen {
+	:global(.mode-option[data-state='checked']) {
 		background: var(--bg-inset);
+		color: var(--text);
 	}
-	.mode-menu button > span:last-child {
+	:global(.mode-option) .mode-copy {
 		display: flex;
 		flex-direction: column;
 		gap: 1px;
 	}
-	.mode-menu strong {
+	:global(.mode-option) strong {
 		font-size: var(--fs-xs);
 		font-weight: 600;
 	}
-	.mode-menu small {
+	:global(.mode-option) small {
 		color: var(--text-faint);
 		font-size: var(--fs-xs);
 	}

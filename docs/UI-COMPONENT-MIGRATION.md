@@ -161,9 +161,30 @@ a `ref` binding runtime error; the binding was corrected, then the focused test
 and the full environment-related subset passed. The separate repository-menu
 assertion caveat recorded under Slice 2 remains unresolved.
 
+#### Slice 3b: Composer mode selection
+
+Status: implemented; browser verification unresolved.
+
+- Replace the bespoke Ask/Check data menu with the shared DropdownMenu radio
+  interaction while preserving its Fella-specific descriptions and compact
+  Composer styling.
+- Leave the multi-source and model pickers custom; they need separate
+  interaction designs.
+
+Validation: `pnpm check`, `node --check tests/e2e/workspace-board.spec.mjs`,
+and `pnpm build` pass; the build reports a 501 KB client chunk over Vite's
+500 KB advisory threshold. The first focused browser attempt mixed pointer
+opening with keyboard navigation and failed because pointer-open menus retain
+trigger focus; the test now separately covers pointer-open dismissal and a
+keyboard-open selection path. The next run reached selection and captured the
+trigger showing “Check data” with the menu closed, then failed because the test
+queried the trigger by its old accessible name, “Ask.” The locator now uses the
+updated name, but was not rerun; this browser result remains unresolved and is
+not counted as a pass.
+
 #### Remaining in Slice 3
 
-Standardize Composer and the remaining Sidebar controls around the shared
+Standardize the remaining Composer and Sidebar controls around shared
 primitives. Then migrate source, evidence, transcript, and project views while
 retaining their distinct product layouts. Keep chart geometry and
 workspace-board composition custom.

@@ -395,6 +395,30 @@ test('environment tabs use shared roving focus for keyboard switching', async ({
 	await expect(first).toHaveAttribute('aria-selected', 'true');
 });
 
+test('Composer mode selection uses the shared radio menu interaction', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+	const modeTrigger = page.getByRole('button', { name: 'Ask', exact: true });
+	await modeTrigger.click();
+	const menu = page.getByRole('menu');
+	const askOption = page.getByRole('menuitemradio', { name: /^Ask/ });
+	const inspectOption = page.getByRole('menuitemradio', { name: /^Check data/ });
+	await expect(menu).toBeVisible();
+	await expect(askOption).toHaveAttribute('aria-checked', 'true');
+	await page.keyboard.press('Escape');
+	await expect(menu).toHaveCount(0);
+	await expect(modeTrigger).toBeFocused();
+
+	await page.keyboard.press('Enter');
+	await expect(askOption).toBeFocused();
+	await page.keyboard.press('ArrowDown');
+	await expect(inspectOption).toBeFocused();
+	await page.keyboard.press('Enter');
+	const selectedModeTrigger = page.getByRole('button', { name: 'Check data', exact: true });
+	await expect(selectedModeTrigger).toContainText('Check data');
+	await expect(selectedModeTrigger).toHaveAttribute('aria-expanded', 'false');
+});
+
 test('many environments remain a bounded, scrollable tab strip with the active environment in view', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
