@@ -405,6 +405,27 @@ test('Composer model search filters the available models', async ({ page }) => {
 	await expect(page.getByRole('option', { name: 'gpt-4.1-mini' })).toBeVisible();
 });
 
+test('Composer command completion uses shared buttons and keeps keyboard selection', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+	await page.getByRole('button', { name: 'Add repository' }).click();
+	const workspace = page.getByRole('button', { name: 'Open workspace northwind-sales' });
+	await workspace.click();
+	await workspace.hover();
+	await page.getByRole('button', { name: 'New conversation in northwind-sales' }).click();
+
+	const composer = page.getByRole('combobox', { name: 'Ask about northwind-sales' });
+	await composer.fill('/fi');
+	const completion = page.getByRole('option', { name: /\/files/ });
+	await expect(completion).toHaveAttribute('data-slot', 'button');
+	await expect(completion).toHaveAttribute('aria-selected', 'false');
+	await page.keyboard.press('ArrowDown');
+	await expect(completion).toHaveAttribute('aria-selected', 'true');
+	await page.keyboard.press('Enter');
+	await expect(composer).toHaveValue('/files ');
+	await expect(page.getByRole('listbox', { name: 'completions' })).toHaveCount(0);
+});
+
 test('environment tabs save different workspace arrangements without leaking panes between them', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
@@ -676,6 +697,10 @@ test('Sidebar conversation actions use shared buttons, cancel rename, and delete
 		name: 'Open conversation: Summarize the unavailable archive'
 	});
 	await expect(conversation).toBeVisible();
+	await expect(conversation).toHaveAttribute('data-slot', 'button');
+	const conversationBounds = await conversation.boundingBox();
+	expect(conversationBounds).not.toBeNull();
+	expect(conversationBounds.height).toBeLessThanOrEqual(32);
 	await conversation.hover();
 
 	const rename = page.getByRole('button', { name: 'Rename conversation' });

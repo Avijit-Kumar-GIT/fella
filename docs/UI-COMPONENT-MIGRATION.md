@@ -447,6 +447,21 @@ workspace and composer instead. This was a test expectation correction, not a
 product behavior change. The build still reports the existing Vite chunk-size
 advisory and adapter-static notice.
 
+#### Slice 3u: Composer completion and Sidebar conversation rows
+
+Status: implemented.
+
+- Replace the global row button with shared ghost Buttons in the Composer's
+  slash-command list and Sidebar conversation history.
+- Preserve the listbox's keyboard selection and compact Sidebar row geometry
+  with narrowly scoped feature styles, then remove the unused global `.rowbtn`.
+
+Validation: `pnpm check`, `node --check tests/e2e/workspace-board.spec.mjs`,
+the focused Composer completion and Sidebar conversation tests, and
+`pnpm build` pass. The browser test verifies completion keyboard selection,
+input completion, popup dismissal, and shared Button adoption. The build keeps
+the existing client chunk-size advisory and adapter-static fallback notice.
+
 #### Remaining in Slice 3
 
 Standardize the remaining Composer and Sidebar controls around shared

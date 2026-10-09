@@ -476,29 +476,6 @@ kbd {
    Defined once here so a look isn't re-typed (and quietly drifting) in every
    component. Components add only what's genuinely local. */
 
-/* A full-width row inside a drop-up / palette list. Selection is marked by the
-   caller with .sel or aria-selected. */
-.rowbtn {
-	width: 100%;
-	display: flex;
-	gap: var(--space-3);
-	align-items: baseline;
-	border: none;
-	background: transparent;
-	padding: var(--space-2) var(--space-3);
-	border-radius: var(--radius-chip);
-	text-align: left;
-	font: inherit;
-	font-weight: 500;
-	color: var(--text);
-	transition: background var(--dur-fast) var(--ease);
-}
-.rowbtn:hover,
-.rowbtn.sel,
-.rowbtn[aria-selected='true'] {
-	background: var(--bg-inset);
-}
-
 /* "Working" indicator three dots that pulse together. Inherits color. */
 .thinking {
 	display: inline-block;

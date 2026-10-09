@@ -410,9 +410,13 @@
 											aria-label="Rename conversation"
 										/>
 									{:else}
-										<button
-											class="rowbtn item"
-											class:active={session.conversationId === c.id}
+										<Button
+											variant="ghost"
+											class={
+												session.conversationId === c.id
+													? 'conversation-row active'
+													: 'conversation-row'
+											}
 											type="button"
 											onclick={() => void open(c)}
 											title={title(c)}
@@ -421,7 +425,7 @@
 										>
 											<span class="row-slot row-icon row-placeholder" aria-hidden="true"></span>
 											<span class="preview">{title(c)}</span>
-										</button>
+										</Button>
 										<div class="row-actions">
 											<Button variant="ghost" size="icon" class="ren" type="button" aria-label="Rename conversation" title="Rename" onclick={(e) => startRename(c, e)}>
 												<Icon name="pencil" size={14} />
@@ -776,25 +780,27 @@
 	.item-wrap {
 		position: relative;
 	}
-	.item {
+	.sidebar :global(.conversation-row) {
 		position: relative;
 		display: grid;
 		grid-template-columns: 16px minmax(0, 1fr);
 		align-items: center;
 		gap: 6px;
 		width: 100%;
+		height: auto;
 		min-height: 27px;
-		padding-left: 0;
-		padding-right: 52px;
-		padding-top: 4px;
-		padding-bottom: 4px;
+		padding: 4px 52px 4px 0;
 		border-radius: var(--radius-sm);
+		text-align: left;
+		font: inherit;
+		font-weight: 500;
+		color: var(--text);
 	}
-	.item:hover,
-	.item:focus-visible {
+	.sidebar :global(.conversation-row:hover),
+	.sidebar :global(.conversation-row:focus-visible) {
 		background: var(--sidebar-hover);
 	}
-	.item.active {
+	.sidebar :global(.conversation-row.active) {
 		background: var(--sidebar-selected);
 		color: var(--text);
 	}
@@ -810,7 +816,7 @@
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
-	.item.active .preview {
+	.sidebar :global(.conversation-row.active .preview) {
 		color: var(--text);
 	}
 	.rename-input {

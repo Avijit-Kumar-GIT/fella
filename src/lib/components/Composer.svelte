@@ -9,6 +9,7 @@
 		steerRun,
 		stop
 	} from '$lib/commands';
+	import { Button } from '$lib/components/ui/button';
 	import { DropdownMenu } from '$lib/components/ui/dropdown-menu';
 	import { Input } from '$lib/components/ui/input';
 	import { Textarea } from '$lib/components/ui/textarea';
@@ -417,14 +418,14 @@
 		>
 			{#each shown as item, i (item)}
 				<li>
-					<button
-						class="rowbtn"
+					<Button
+						variant="ghost"
+						class="completion-option"
 						type="button"
-						tabindex="-1"
+						tabindex={-1}
 						role="option"
 						id={'composer-opt-' + i}
 						aria-selected={i === menuSel}
-						class:sel={i === menuSel}
 						onmousedown={(e) => {
 							e.preventDefault();
 							acceptItem(item);
@@ -433,7 +434,7 @@
 					>
 						<span class="val">{item}</span>
 						{#if describe(item)}<span class="desc">{describe(item)}</span>{/if}
-					</button>
+					</Button>
 				</li>
 			{/each}
 			{#if items.length > shown.length}
@@ -1322,7 +1323,23 @@
 	.menu li {
 		list-style: none;
 	}
-	/* rows use the global .rowbtn primitive; only the inner spans are local */
+	.menu :global(.completion-option) {
+		min-width: 0;
+		width: 100%;
+		height: auto;
+		justify-content: flex-start;
+		align-items: baseline;
+		padding: var(--space-2) var(--space-3);
+		border-radius: var(--radius-chip);
+		text-align: left;
+		font: inherit;
+		font-weight: 500;
+		color: var(--text);
+	}
+	.menu :global(.completion-option:hover),
+	.menu :global(.completion-option[aria-selected='true']) {
+		background: var(--bg-inset);
+	}
 	.menu .val {
 		font-family: var(--mono);
 		font-size: var(--fs-sm);
