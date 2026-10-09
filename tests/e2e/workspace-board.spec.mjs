@@ -740,6 +740,7 @@ test('Sources catalog filter uses the shared input and preserves source selectio
 	await filter.fill('sales.csv');
 	const source = page.getByRole('option', { name: /sales\.csv/ });
 	await expect(source).toBeVisible();
+	await expect(source).toHaveAttribute('data-slot', 'button');
 	await expect(source).toHaveAttribute('aria-selected', 'true');
 });
 
@@ -821,6 +822,14 @@ test('Sources pagination uses shared buttons and preserves catalog and skipped-f
 
 	const skippedFiles = page.locator('details.skipped');
 	await skippedFiles.locator('summary').click();
+	const skippedFilter = page.getByRole('textbox', { name: 'Filter skipped files' });
+	await expect(skippedFilter).toHaveAttribute('data-slot', 'input');
+	await skippedFilter.fill('unsupported-001');
+	await expect(skippedFiles.locator('.skipped-count')).toHaveText('1–1 of 1 files');
+	await expect(skippedFiles.getByText('unsupported-001.bin')).toBeVisible();
+	await skippedFilter.fill('');
+	await expect(skippedFiles.locator('.skipped-count')).toHaveText('1–100 of 105 files');
+
 	const skippedPages = page.getByRole('navigation', { name: 'Skipped file pages' });
 	const skippedPrevious = skippedPages.getByRole('button', { name: 'Previous' });
 	const skippedNext = skippedPages.getByRole('button', { name: 'Next' });

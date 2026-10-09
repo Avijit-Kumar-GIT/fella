@@ -161,15 +161,15 @@
 		<div class="source-layout">
 			<div class="source-list" role="listbox" aria-label="Workspace sources">
 				{#each visibleSources as source (source.path)}
-					<button
-						class="source-row"
-						class:selected={selectedPath === source.path}
+					<Button
+						variant="ghost"
+						class={selectedPath === source.path ? 'source-row selected' : 'source-row'}
 						type="button"
 						role="option"
 						aria-selected={selectedPath === source.path}
 						onclick={() => select(source)}
 					>
-				<span class="source-icon"><Icon name={source.view ? 'table' : 'file'} size={16} /></span>
+						<span class="source-icon"><Icon name={source.view ? 'table' : 'file'} size={16} /></span>
 						<span class="source-copy">
 							<strong>{source.name}</strong>
 							{#if relativePath(source.path) !== source.name}
@@ -180,7 +180,7 @@
 							<small>{kindLabel(source.kind)}</small>
 							{#if source.row_count != null}<small>{formatCount(source.row_count)} rows</small>{/if}
 						</span>
-					</button>
+					</Button>
 				{:else}
 					<div class="no-results">No sources match “{query}”.</div>
 				{/each}
@@ -269,7 +269,12 @@
 				<label class="skipped-search">
 					<Icon name="search" size={16} />
 					<span class="sr-only">Filter skipped files</span>
-					<input bind:value={skippedQuery} placeholder="Filter skipped files…" spellcheck="false" />
+					<Input
+						class="skipped-filter-input"
+						bind:value={skippedQuery}
+						placeholder="Filter skipped files…"
+						spellcheck="false"
+					/>
 				</label>
 				<p class="skipped-count">{filteredSkipped.length ? `${skippedPageStart}–${skippedPageEnd} of ` : ''}{filteredSkipped.length} files</p>
 				{#each visibleSkipped as item (item.name)}
@@ -444,18 +449,24 @@
 		padding: var(--space-2) 0;
 		overflow: auto;
 	}
-	.source-row {
+	:global(.source-row) {
 		width: 100%;
 		display: grid;
 		grid-template-columns: 24px minmax(0, 1fr) auto;
 		align-items: center;
+		justify-content: stretch;
 		gap: var(--space-2);
+		height: auto;
+		min-height: 0;
 		padding: var(--space-3);
 		border-radius: var(--radius-sm);
+		font-size: var(--fs-sm);
+		font-weight: 500;
+		white-space: normal;
 		text-align: left;
 	}
-	.source-row:hover,
-	.source-row.selected {
+	:global(.source-row:hover),
+	:global(.source-row.selected) {
 		background: var(--bg-inset);
 	}
 	.source-icon,
@@ -696,14 +707,23 @@
 	.skipped-search:focus-within {
 		box-shadow: var(--focus-ring);
 	}
-	.skipped-search input {
+	.skipped-search :global(.skipped-filter-input) {
+		min-width: 0;
 		width: 100%;
+		min-height: 0;
+		padding: 0;
 		border: 0;
+		border-radius: 0;
 		outline: 0;
 		background: transparent;
 		color: var(--text);
 		font: inherit;
 		font-size: var(--fs-sm);
+	}
+	.skipped-search :global(.skipped-filter-input:focus-visible) {
+		border-color: transparent;
+		outline: 0;
+		box-shadow: none;
 	}
 	.skipped-count {
 		margin: var(--space-2) 0;

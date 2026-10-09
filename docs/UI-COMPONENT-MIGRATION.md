@@ -462,13 +462,30 @@ the focused Composer completion and Sidebar conversation tests, and
 input completion, popup dismissal, and shared Button adoption. The build keeps
 the existing client chunk-size advisory and adapter-static fallback notice.
 
+#### Slice 3v: Sources rows and skipped-file search
+
+Status: implemented.
+
+- Use shared ghost Buttons for selectable source rows while preserving their
+  listbox option semantics, selected state, and compact grid geometry.
+- Use the shared Input for filtering skipped files and retain the existing
+  search and pagination behavior.
+
+Validation: `pnpm check` reports zero errors and warnings,
+`node --check tests/e2e/workspace-board.spec.mjs`, the focused Sources filter
+and pagination browser tests, and `pnpm build` succeed. The tests verify the
+source row's shared Button marker and selected state, skipped-file filtering,
+the page reset after filtering, and existing 105-file pagination boundaries.
+The build reports a 504.90 KB client chunk above Vite's 500 KB advisory and
+the adapter-static fallback-page notice.
+
 #### Remaining in Slice 3
 
-Standardize the remaining Composer and Sidebar controls around shared
-primitives where they improve consistency without obscuring product behavior.
-Continue with the remaining Sources controls, then migrate evidence, transcript,
-and remaining project controls while retaining their distinct layouts. Keep
-chart geometry and workspace-board composition custom.
+Standardize remaining feature actions and controls around shared primitives
+where they improve consistency without obscuring product behavior. Continue
+with remaining Composer and Sidebar controls, then migrate companion, evidence,
+transcript, project, and chart actions while retaining their distinct layouts.
+Keep chart geometry and workspace-board composition custom.
 
 ### Slice 4: converge and remove duplicates
 
