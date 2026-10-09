@@ -103,20 +103,19 @@
 					{/each}
 				</DropdownMenu.RadioGroup>
 
-				<div class="environment-menu-actions">
-					<DropdownMenu.Item class="fella-ui-menu-item" onSelect={onnew}>
-						New environment
+				<div class="environment-menu-separator" role="separator"></div>
+				<DropdownMenu.Item class="fella-ui-menu-item" onSelect={onnew}>
+					New environment
+				</DropdownMenu.Item>
+				{#if session.environments.length > 1}
+					<DropdownMenu.Item
+						class="fella-ui-menu-item close-environment"
+						disabled={environmentIsBusy(activeEnvironment)}
+						onSelect={closeCurrentEnvironment}
+					>
+						Close current environment
 					</DropdownMenu.Item>
-					{#if session.environments.length > 1}
-						<DropdownMenu.Item
-							class="fella-ui-menu-item close-environment"
-							disabled={environmentIsBusy(activeEnvironment)}
-							onSelect={closeCurrentEnvironment}
-						>
-							Close current environment
-						</DropdownMenu.Item>
-					{/if}
-				</div>
+				{/if}
 			</DropdownMenu.Content>
 		</DropdownMenu.Portal>
 	</DropdownMenu.Root>
@@ -202,8 +201,10 @@
 		margin-left: auto;
 		color: var(--text-dim);
 	}
-	.environment-menu-actions {
-		margin-top: 6px;
+	.environment-menu-separator {
+		height: 1px;
+		margin: 5px 5px;
+		background: var(--border);
 	}
 	:global(.close-environment[aria-disabled='true']) {
 		color: var(--text-faint);

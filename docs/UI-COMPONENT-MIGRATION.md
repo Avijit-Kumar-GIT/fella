@@ -794,7 +794,8 @@ Status: implemented.
   environment.
 - Keep the menu compact: show one-line environment names, mark only the
   selected environment, and render create/close actions as plain text without
-  a heading, repeated icons, shortcut labels, or divider.
+  a heading, repeated icons, or shortcut labels. A quiet divider separates
+  environment choices from those actions.
 - Keep a compact copy in the titlebar only while the sidebar is collapsed.
   Preserve `Ctrl/⌘+T`, `Ctrl/⌘+W`, `Ctrl/⌘+[ / ]`, and `Ctrl/⌘+1–9` shortcuts.
 - Use the shared DropdownMenu radio interaction and retain a bounded scroll
@@ -813,11 +814,12 @@ view. The focused long-list check passes. The build retains the existing
 large-client-chunk advisory (516.39 kB) and adapter-static fallback notice.
 
 Menu declutter follow-up: removed the heading, shortcut hints, repeated row
-and action icons, two-line option copy, and divider. Environment choices now
-use one-line workspace names with a check only on the selected option. The
-five focused environment-dropdown journeys and `pnpm check` pass after this
-change; `node --check tests/e2e/workspace-board.spec.mjs` and `git diff --check`
-also pass.
+and action icons and two-line option copy. Environment choices now use one-line
+workspace names with a check only on the selected option. A quiet divider now
+separates those choices from the create/close actions. The five focused
+environment-dropdown journeys and `pnpm check` pass after this change;
+`node --check tests/e2e/workspace-board.spec.mjs` and `git diff --check` also
+pass.
 
 ## First-slice acceptance criteria
 
