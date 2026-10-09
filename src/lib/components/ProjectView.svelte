@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { baseName, openRepository } from '$lib/commands';
+	import { Input } from '$lib/components/ui/input';
+	import { Textarea } from '$lib/components/ui/textarea';
 	import { ipc, isDesktop } from '$lib/ipc';
 	import { session } from '$lib/session.svelte';
 	import type { ConversationSummary } from '$lib/types';
@@ -96,8 +98,14 @@
 			<div class="project-heading">
 				<span class="project-mark"><Icon name="project" size={20} solid /></span>
 				<div class="project-title-wrap">
-					<input id="project-title" class="project-title" bind:value={name} onblur={commitName} aria-label="Project name" />
-					</div>
+					<Input
+						id="project-title"
+						class="project-title-input"
+						bind:value={name}
+						onblur={commitName}
+						aria-label="Project name"
+					/>
+				</div>
 			</div>
 			<div class="project-actions">
 				<button class="pill ghost" type="button" onclick={() => void askRepository()}>
@@ -136,12 +144,13 @@
 					</div>
 					<span class="saved-label">Saved locally</span>
 				</div>
-				<textarea
+				<Textarea
+					class="wiki-textarea"
 					value={body}
 					oninput={updateBody}
 					placeholder="Capture decisions, definitions, recurring questions, and anything you want Fella to remember about this workspace."
 					aria-label="Project wiki"
-				></textarea>
+				/>
 			</section>
 
 			<aside class="snapshot-card" aria-labelledby="snapshot-title">
@@ -201,8 +210,11 @@
 	.project-title-wrap {
 		min-width: 0;
 	}
-	.project-title {
+	.project-title-wrap :global(.project-title-input) {
 		width: min(440px, 100%);
+		height: auto;
+		min-height: 0;
+		border-radius: 0;
 		padding: 0;
 		border: 0;
 		background: transparent;
@@ -213,7 +225,7 @@
 		letter-spacing: -0.03em;
 		outline: none;
 	}
-	.project-title:focus {
+	.project-title-wrap :global(.project-title-input:focus) {
 		box-shadow: inset 0 -1px var(--link);
 	}
 	.project-actions {
@@ -331,7 +343,7 @@
 		color: var(--text-faint);
 		font-size: var(--fs-xs);
 	}
-	textarea {
+	.wiki-card :global(.wiki-textarea) {
 		flex: 1;
 		width: 100%;
 		min-height: 300px;
@@ -343,8 +355,14 @@
 		font: inherit;
 		line-height: 1.65;
 		outline: none;
+		border-radius: 0;
 	}
-	textarea::placeholder {
+	.wiki-card :global(.wiki-textarea:focus-visible) {
+		border-color: transparent;
+		outline: 0;
+		box-shadow: none;
+	}
+	.wiki-card :global(.wiki-textarea::placeholder) {
 		color: var(--text-faint);
 	}
 	.snapshot-card {

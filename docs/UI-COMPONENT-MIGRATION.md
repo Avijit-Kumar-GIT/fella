@@ -300,6 +300,21 @@ checks the empty state and restored selection. The build reports a 502.32 KB
 client chunk above Vite's 500 KB advisory and the adapter-static fallback-page
 notice.
 
+#### Slice 3k: Project title and wiki editing
+
+Status: implemented.
+
+- Use shared Input and Textarea primitives for the inline project title and
+  wiki editor while preserving the title's heading treatment and the wiki's
+  quiet, borderless writing surface.
+- Keep title commit-on-blur and immediate local wiki updates unchanged.
+
+Validation: `pnpm check`, `node --check tests/e2e/workspace-board.spec.mjs`,
+the focused ProjectView browser test, and `pnpm build` succeed. The test
+verifies both shared controls, title rename propagation, and wiki retention
+after switching to Sources and back. The build reports a 502.31 KB client
+chunk above Vite's 500 KB advisory and the adapter-static fallback-page notice.
+
 #### Remaining in Slice 3
 
 Standardize the remaining Composer and Sidebar controls around shared

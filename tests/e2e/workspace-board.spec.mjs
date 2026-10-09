@@ -700,3 +700,28 @@ test('Sources catalog filter uses the shared input and preserves source selectio
 	await expect(source).toBeVisible();
 	await expect(source).toHaveAttribute('aria-selected', 'true');
 });
+
+test('Project title and wiki use shared editing controls and retain saved content', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+	await page.getByRole('button', { name: 'Add repository' }).click();
+	await page.getByRole('button', { name: 'Create project for northwind-sales' }).click();
+	await page.getByRole('textbox', { name: 'Name' }).fill('Sales notes');
+	await page.getByRole('button', { name: 'Create project', exact: true }).click();
+	await page.getByRole('button', { name: 'Open project Sales notes' }).click();
+
+	const title = page.getByRole('textbox', { name: 'Project name' });
+	const wiki = page.getByRole('textbox', { name: 'Project wiki' });
+	await expect(title).toHaveClass(/fella-ui-input/);
+	await expect(wiki).toHaveClass(/fella-ui-textarea/);
+	await title.fill('Sales field guide');
+	await title.press('Tab');
+	await expect(page.getByRole('button', { name: 'Open project Sales field guide' })).toBeVisible();
+
+	await wiki.fill('Net revenue excludes refunds and chargebacks.');
+	await page.getByRole('button', { name: 'Open sources in northwind-sales' }).click();
+	await page.getByRole('button', { name: 'Open project Sales field guide' }).click();
+	await expect(page.getByRole('textbox', { name: 'Project wiki' })).toHaveValue(
+		'Net revenue excludes refunds and chargebacks.'
+	);
+});
