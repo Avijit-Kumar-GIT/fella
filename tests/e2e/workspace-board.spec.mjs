@@ -608,6 +608,10 @@ test('a history-only workspace retries its folder mount and keeps history availa
 	await expect.poll(() => page.evaluate(() => window.__workspaceOpenCalls.length)).toBe(2);
 	await expect(page.getByText(/Its conversations remain in history only/)).toBeVisible();
 	await expect(workspace).toContainText('Saved result from this folder.');
+	const reconnect = page.getByRole('button', { name: 'Reconnect unavailable-archive' });
+	await expect(reconnect).toHaveAttribute('data-slot', 'button');
+	await expect(reconnect).toHaveCSS('width', '22px');
+	await expect(reconnect).toHaveCSS('height', '22px');
 	const unavailableComposer = page.getByRole('combobox', { name: 'Workspace unavailable: unavailable-archive' });
 	await expect(unavailableComposer).toBeDisabled();
 	await expect(page.getByRole('button', { name: 'Open workspace', exact: true })).toHaveAttribute('data-slot', 'button');
@@ -717,6 +721,16 @@ test('Sidebar workspace tools use shared buttons and preserve source and project
 	await page.goto('/');
 	await page.getByRole('button', { name: 'Add repository' }).click();
 	await expect(page.getByRole('article', { name: 'northwind-sales workspace' })).toBeVisible();
+	const workspaceRow = page.getByRole('button', { name: 'Open workspace northwind-sales' });
+	await expect(workspaceRow).toHaveAttribute('data-slot', 'button');
+	const collapseWorkspace = page.getByRole('button', { name: 'Collapse northwind-sales' });
+	await expect(collapseWorkspace).toHaveAttribute('data-slot', 'button');
+	await collapseWorkspace.click();
+	const expandWorkspace = page.getByRole('button', { name: 'Expand northwind-sales' });
+	await expect(expandWorkspace).toHaveAttribute('data-slot', 'button');
+	await expect(page.getByRole('button', { name: 'Open sources in northwind-sales' })).toHaveCount(0);
+	await expandWorkspace.click();
+	await expect(page.getByRole('button', { name: 'Open sources in northwind-sales' })).toBeVisible();
 
 	const sources = page.getByRole('button', { name: 'Open sources in northwind-sales' });
 	const createProject = page.getByRole('button', { name: 'Create project for northwind-sales' });

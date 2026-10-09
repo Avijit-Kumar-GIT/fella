@@ -278,19 +278,20 @@
 					class:expanded={repo.expanded}
 				>
 					<div class="repository-row-wrap">
-						<button
+						<Button
+							variant="ghost"
+							size="icon"
 							class="repository-disclosure"
-							type="button"
 							aria-label={`${repo.expanded ? 'Collapse' : 'Expand'} ${repo.name}`}
 							aria-expanded={repo.expanded}
 							title={`${repo.expanded ? 'Collapse' : 'Expand'} workspace contents`}
 							onclick={(event) => toggleExpansion(repo, event)}
 						>
 							<span class="row-slot row-chevron"><Icon name="chevron-right" size={12} /></span>
-						</button>
-						<button
+						</Button>
+						<Button
+							variant="ghost"
 							class="repository-row"
-							type="button"
 							draggable={!!repo.path}
 							title={repo.path ?? 'General · conversations without a mounted folder'}
 							aria-pressed={repo.current}
@@ -303,7 +304,7 @@
 								<span class="repository-name">{repo.name}</span>
 								{#if repo.historyOnly}<span class="history-badge" role="status" aria-label="History only. The folder could not be opened; saved conversations remain available." title="Saved conversations are available; the folder is offline">History</span>{/if}
 							</span>
-						</button>
+						</Button>
 						<div class="repository-actions">
 							{#if !repo.historyOnly}
 								<Tooltip.Root>
@@ -337,15 +338,16 @@
 								</DropdownMenu.Root>
 							{/if}
 							{#if repo.path && repo.historyOnly}
-								<button
+								<Button
+									variant="ghost"
+									size="icon"
 									class="repository-action reconnect-action"
-									type="button"
 									aria-label={`Reconnect ${repo.name}`}
 									title="Try the saved folder location again"
 									onclick={(event) => { event.stopPropagation(); void selectRepository(repo); }}
 								>
 									<Icon name="refresh" size={14} />
-								</button>
+								</Button>
 							{/if}
 						</div>
 					</div>
@@ -442,9 +444,9 @@
 				</div>
 			{/each}
 			{#if repositories.length === 0}
-				<button class="add-repository" type="button" onclick={() => void addRepository()}>
+				<Button variant="ghost" class="add-repository" onclick={() => void addRepository()}>
 					<span class="row-slot row-icon"><Icon name="folder" size={16} /></span> Add a repository
-				</button>
+				</Button>
 			{/if}
 		</div>
 	</section>
@@ -566,7 +568,7 @@
 	.repository-row-wrap {
 		position: relative;
 	}
-	.repository-disclosure {
+	.repository-row-wrap :global(.repository-disclosure) {
 		position: absolute;
 		z-index: 1;
 		top: 4px;
@@ -574,12 +576,16 @@
 		display: grid;
 		place-items: center;
 		width: 18px;
+		min-width: 18px;
 		height: 20px;
+		min-height: 20px;
+		padding: 0;
 		border-radius: var(--radius-chip);
+		background: transparent;
 		color: var(--text-faint);
 	}
-	.repository-disclosure:hover { background: var(--sidebar-hover); color: var(--text); }
-	.repository-row {
+	.repository-row-wrap :global(.repository-disclosure:hover) { background: var(--sidebar-hover); color: var(--text); }
+	.repository-row-wrap :global(.repository-row) {
 		position: relative;
 		width: 100%;
 		display: grid;
@@ -588,17 +594,21 @@
 		gap: 6px;
 		min-width: 0;
 		min-height: 28px;
+		height: auto;
+		justify-content: flex-start;
 		padding: 4px 32px 4px 28px;
 		border-radius: var(--radius-sm);
+		background: transparent;
 		color: var(--text-dim);
 		text-align: left;
+		white-space: normal;
 		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 	}
-	.repository-row:hover {
+	.repository-row-wrap :global(.repository-row:hover) {
 		background: var(--sidebar-hover);
 		color: var(--text);
 	}
-	.repository.current .repository-row {
+	.repository.current .repository-row-wrap :global(.repository-row) {
 		background: var(--sidebar-selected);
 		color: var(--text);
 	}
@@ -616,9 +626,9 @@
 	.row-chevron {
 		transition: color var(--dur-fast) var(--ease);
 	}
-	.repository-row:hover .row-slot,
-	.repository-row:focus-visible .row-slot,
-	.repository-disclosure:focus-visible .row-slot {
+	.repository-row-wrap :global(.repository-row:hover .row-slot),
+	.repository-row-wrap :global(.repository-row:focus-visible .row-slot),
+	.repository-row-wrap :global(.repository-disclosure:focus-visible .row-slot) {
 		color: var(--text-dim);
 	}
 	.repository.expanded .row-chevron :global(svg) {
@@ -658,8 +668,8 @@
 		letter-spacing: .01em;
 		line-height: 1.4;
 	}
-	.repository-row:hover .repository-name,
-	.repository-row:focus-visible .repository-name {
+	.repository-row-wrap :global(.repository-row:hover .repository-name),
+	.repository-row-wrap :global(.repository-row:focus-visible .repository-name) {
 		color: var(--text);
 	}
 	.repository-actions {
@@ -678,19 +688,23 @@
 		display: flex;
 		color: var(--text);
 	}
-	.repository-action {
+	.repository-actions :global(.repository-action) {
 		display: grid;
 		place-items: center;
 		width: 22px;
+		min-width: 22px;
 		height: 22px;
+		min-height: 22px;
+		padding: 0;
 		border-radius: var(--radius-chip);
+		background: transparent;
 		color: inherit;
 	}
-	.repository-action:hover {
+	.repository-actions :global(.repository-action:hover) {
 		background: var(--sidebar-hover);
 		color: inherit;
 	}
-	.repository-action :global(svg) {
+	.repository-actions :global(.repository-action svg) {
 		flex: none;
 		color: inherit;
 	}
@@ -727,17 +741,23 @@
 		background: var(--sidebar-selected);
 		color: var(--text);
 	}
-	.add-repository {
+	.repositories :global(.add-repository) {
 		display: inline-flex;
 		align-items: center;
+		justify-content: flex-start;
+		width: 100%;
+		height: auto;
+		min-height: 28px;
 		gap: 6px;
 		padding: 7px var(--space-2);
 		border-radius: var(--radius-sm);
+		background: transparent;
 		color: var(--text-dim);
 		font-size: var(--fs-sm);
 		text-align: left;
+		white-space: normal;
 	}
-	.add-repository:hover {
+	.repositories :global(.add-repository:hover) {
 		background: var(--sidebar-hover);
 		color: var(--text);
 	}

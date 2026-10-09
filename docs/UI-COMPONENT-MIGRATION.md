@@ -575,14 +575,41 @@ verify shared Button adoption, 26px close controls, preview and header focus
 behavior, and the existing four-pane close/reopen flow. The build reports the
 existing client-chunk advisory and adapter-static fallback notice.
 
+#### Slice 3ac: Sidebar workspace controls
+
+Status: implemented.
+
+- Use shared ghost Buttons for workspace disclosure, workspace selection,
+  reconnect, and the empty-list Add repository action.
+- Preserve the dense sidebar row geometry, drag support, selected state, and
+  compact icon-button dimensions.
+
+Validation: `pnpm check`, `node --check tests/e2e/workspace-board.spec.mjs`,
+the focused Sidebar workspace and history-only workspace browser tests, and
+`pnpm build` succeed. Browser assertions verify shared Button adoption, the
+disclosure open/close behavior, and the 22px reconnect control. The first
+check flagged Svelte's `:global()` placement and the paired browser run stopped
+at compilation; the selectors were corrected before the successful rerun. The
+build reports the existing client-chunk advisory and adapter-static fallback
+notice.
+
 #### Remaining in Slice 3
 
 Standardize remaining feature actions and controls around shared primitives
 where they improve consistency without obscuring product behavior. Audit
-Sidebar reconnect and fallback actions, CommandPalette result rows, and
-Settings option groups next. Keep keyboard-driven listbox options, native
-window controls, chart geometry, and workspace-board composition custom unless
-a shared primitive improves the interaction without changing its semantics.
+CommandPalette result rows and filters, Settings option groups, and remaining
+Composer actions next. Keep native window controls, chart geometry, and
+workspace-board composition custom unless a shared primitive improves the
+interaction without changing its semantics.
+
+The combined keyboard test for the repository menu remains unresolved. Its
+second focused run again could not find the “Repository actions” trigger after
+hover; the captured accessibility tree omitted that trigger while showing the
+prior repository was not selected. The trigger's source condition appears to
+allow that state, but the evidence does not establish whether the menu trigger
+is failing to render or whether hover synchronization is the cause. Per the
+bounded-test policy, do not rerun this same case without a materially different
+diagnostic or relevant code change; do not count the menu path as verified.
 
 ### Slice 4: converge and remove duplicates
 
