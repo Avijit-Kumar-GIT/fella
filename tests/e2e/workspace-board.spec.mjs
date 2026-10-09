@@ -626,3 +626,27 @@ test('Sidebar icon actions use shared compact buttons and Add repository still o
 	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
 	await expect(page.getByRole('article', { name: 'northwind-sales workspace' })).toBeVisible();
 });
+
+test('Sidebar workspace tools use shared buttons and preserve source and project actions', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+	await page.getByRole('button', { name: 'Add repository' }).click();
+	await expect(page.getByRole('article', { name: 'northwind-sales workspace' })).toBeVisible();
+
+	const sources = page.getByRole('button', { name: 'Open sources in northwind-sales' });
+	const createProject = page.getByRole('button', { name: 'Create project for northwind-sales' });
+	for (const action of [sources, createProject]) {
+		await expect(action).toHaveAttribute('data-slot', 'button');
+		const bounds = await action.boundingBox();
+		expect(bounds).not.toBeNull();
+		expect(bounds.height).toBeLessThanOrEqual(32);
+	}
+
+	await sources.click();
+	await expect(page.getByRole('heading', { name: 'sales.csv' })).toBeVisible();
+	await createProject.click();
+	await expect(page.getByRole('heading', { name: 'Create a project' })).toBeVisible();
+	await page.getByRole('textbox', { name: 'Name' }).fill('Sales review');
+	await page.getByRole('button', { name: 'Create project', exact: true }).click();
+	await expect(page.getByRole('button', { name: 'Open project Sales review' })).toBeVisible();
+});

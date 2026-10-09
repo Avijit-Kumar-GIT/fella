@@ -257,6 +257,20 @@ verifies shared Button usage, both hit areas remain at most 32 px square, and
 Add repository opens the board. The build reports a 502.07 KB client chunk
 above Vite's 500 KB advisory and the adapter-static fallback-page notice.
 
+#### Slice 3h: Sidebar workspace tools
+
+Status: implemented.
+
+- Use the shared ghost Button for Sources, an existing Project, and Add
+  project actions, preserving selected-state styling and compact row geometry.
+- Keep repository structure and navigation state owned by the Sidebar.
+
+Validation: `pnpm check`, `node --check tests/e2e/workspace-board.spec.mjs`,
+the focused workspace-tools browser test, and `pnpm build` succeed. The test
+verifies shared Button usage, compact row height, source navigation, and the
+create-project flow. The build reports a 502.25 KB client chunk above Vite's
+500 KB advisory and the adapter-static fallback-page notice.
+
 #### Remaining in Slice 3
 
 Standardize the remaining Composer and Sidebar controls around shared

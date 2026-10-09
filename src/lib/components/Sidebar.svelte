@@ -353,9 +353,9 @@
 						<div class="repository-contents">
 							{#if repo.path && !repo.historyOnly}
 								<div class="repository-tools" aria-label={`${repo.name} tools`}>
-									<button
-										class="repository-tool"
-										class:active={repo.current && session.workspaceView === 'workspace'}
+									<Button
+										variant="ghost"
+										class={`repository-tool${repo.current && session.workspaceView === 'workspace' ? ' active' : ''}`}
 										type="button"
 										aria-label={`Open sources in ${repo.name}`}
 										aria-current={repo.current && session.workspaceView === 'workspace' ? 'page' : undefined}
@@ -364,15 +364,15 @@
 									>
 										<span class="row-slot row-icon"><Icon name="table" size={16} /></span>
 										<span>Sources</span>
-									</button>
+									</Button>
 								</div>
 							{/if}
 							{#if repo.path}
 								<div class="repository-tools" aria-label={`${repo.name} project`}>
 									{#if repo.project}
-										<button
-											class="repository-tool"
-											class:active={session.workspaceView === 'project' && session.activeProjectId === repo.project.id}
+										<Button
+											variant="ghost"
+											class={`repository-tool${session.workspaceView === 'project' && session.activeProjectId === repo.project.id ? ' active' : ''}`}
 											type="button"
 											title={repo.project.workspace}
 											aria-label={`Open project ${repo.project.name}`}
@@ -380,9 +380,10 @@
 										>
 											<span class="row-slot row-icon"><Icon name="project" size={16} solid={session.workspaceView === 'project' && session.activeProjectId === repo.project.id} /></span>
 											<span>{repo.project.name}</span>
-										</button>
+										</Button>
 									{:else}
-										<button
+										<Button
+											variant="ghost"
 											class="repository-tool project-create"
 											type="button"
 											aria-label={`Create project for ${repo.name}`}
@@ -390,7 +391,7 @@
 										>
 											<span class="row-slot row-icon"><Icon name="plus" size={16} /></span>
 											<span>Add project</span>
-										</button>
+										</Button>
 									{/if}
 								</div>
 							{/if}
@@ -700,12 +701,13 @@
 		display: grid;
 		padding: 1px 0 2px;
 	}
-	.repository-tool {
+	.repository-contents :global(.repository-tool) {
 		display: grid;
 		grid-template-columns: 16px minmax(0, 1fr);
 		align-items: center;
 		gap: 6px;
 		width: 100%;
+		height: auto;
 		min-height: 27px;
 		padding: 4px 4px 4px 0;
 		border-radius: var(--radius-chip);
@@ -713,11 +715,11 @@
 		font-size: var(--fs-sm);
 		text-align: left;
 	}
-	.repository-tool:hover {
+	.repository-contents :global(.repository-tool:hover) {
 		background: var(--sidebar-hover);
 		color: var(--text);
 	}
-	.repository-tool.active {
+	.repository-contents :global(.repository-tool.active) {
 		background: var(--sidebar-selected);
 		color: var(--text);
 	}
