@@ -6,7 +6,7 @@
 	import Icon from './Icon.svelte';
 	import Logo from './Logo.svelte';
 
-	let { onsearch, onnewproject }: { onsearch?: () => void; onnewproject?: () => void } = $props();
+	let { onsearch, onnewproject }: { onsearch?: () => void; onnewproject?: (workspace?: string | null) => void } = $props();
 
 	type Repository = {
 		key: string;
@@ -16,6 +16,7 @@
 		current: boolean;
 		expanded: boolean;
 		historyOnly: boolean;
+		project: ReturnType<typeof session.projectForWorkspace>;
 	};
 
 	let list = $state<ConversationSummary[]>([]);
@@ -85,7 +86,9 @@
 			})
 			.map((group) => {
 				const key = repositoryKey(group.path);
-				const active = key === session.activeWorkspaceId;
+				const active = group.path
+					? key === session.activeWorkspaceId || (session.workspaceView === 'project' && session.activeProject?.workspace === group.path)
+					: session.activeWorkspaceId === null && session.activeChat?.workspaceScope == null && session.workspaceView === 'ask';
 				return {
 					key,
 					path: group.path,
@@ -93,6 +96,7 @@
 					items: group.items,
 					current: active,
 					historyOnly: !!group.path && session.historyOnlyRepositoryPaths.includes(group.path),
+					project: group.path ? session.projectForWorkspace(group.path) : null,
 					expanded: expandedRepos[key] ?? (active || group.path === null)
 				};
 			});
@@ -101,14 +105,26 @@
 	function newChat(): void {
 		menuRepository = null;
 		if (!session.newConversation()) {
-			session.addSystem('Close a workspace to start another conversation.');
+			session.addSystem('Open the workspace before starting a conversation in it.');
 		}
+	}
+
+	async function newWorkspaceChat(repo: Repository): Promise<void> {
+		menuRepository = null;
+		if (!repo.path) {
+			if (!session.newConversation(null)) session.addSystem('Could not start a new conversation.');
+			return;
+		}
+		if (!(await selectRepository(repo))) return;
+		if (!session.newConversation(repo.path)) session.addSystem('Open the workspace before starting a conversation in it.');
 	}
 
 	async function selectRepository(repo: Repository): Promise<boolean> {
 		if (!repo.path) {
-			if (session.workspaceAt(GENERAL_WORKSPACE_ID)) return session.focusWorkspace(GENERAL_WORKSPACE_ID);
-			return session.openGeneralWorkspace();
+			const existing = session.conversations.findLastIndex((conversation) => conversation.workspaceScope == null);
+			if (existing >= 0) session.activateConversation(existing);
+			else session.newConversation(null);
+			return true;
 		}
 		const workspace = session.workspaceAt(repo.path);
 		if (workspace && !workspace.historyOnly) return session.focusWorkspace(workspace.id);
@@ -117,9 +133,7 @@
 
 	async function toggleRepository(repo: Repository): Promise<void> {
 		menuRepository = null;
-		if (!(await selectRepository(repo)) && !repo.path) {
-			session.addSystem('Close a workspace to open General.');
-		}
+		await selectRepository(repo);
 	}
 
 	function toggleExpansion(repo: Repository, event: MouseEvent): void {
@@ -137,8 +151,10 @@
 
 	function beginRepositoryDrag(event: DragEvent, repo: Repository): void {
 		if (!repo.path || !event.dataTransfer) return;
-		event.dataTransfer.effectAllowed = 'copy';
+		const alreadyOpen = !!session.workspaceAt(repo.path);
+		event.dataTransfer.effectAllowed = alreadyOpen ? 'move' : 'copy';
 		event.dataTransfer.setData('application/x-fella-workspace', repo.path);
+		if (alreadyOpen) event.dataTransfer.setData('application/x-fella-existing-workspace', repo.path);
 	}
 
 	async function addRepository(): Promise<void> {
@@ -240,35 +256,6 @@
 			<span>Search</span>
 		</button>
 	</nav>
-	<section class="projects-section" aria-labelledby="projects-heading">
-		<div class="section-head">
-			<div class="nav-heading" id="projects-heading">Projects</div>
-			<button
-				class="section-action"
-				type="button"
-				aria-label="New project"
-				title="New project"
-				onclick={() => onnewproject?.()}
-			>
-				<Icon name="plus" size={16} />
-			</button>
-		</div>
-		<div class="project-list">
-			{#each session.projects as project (project.id)}
-				<button
-					class="project-row"
-					class:active={session.workspaceView === 'project' && session.activeProjectId === project.id}
-					type="button"
-					title={project.workspace}
-					aria-current={session.workspaceView === 'project' && session.activeProjectId === project.id ? 'page' : undefined}
-					onclick={() => session.openProject(project.id)}
-				>
-					<span class="row-slot row-icon"><Icon name="project" size={16} solid={session.workspaceView === 'project' && session.activeProjectId === project.id} /></span>
-					<span>{project.name}</span>
-				</button>
-			{/each}
-		</div>
-	</section>
 	<section class="repository-section" aria-labelledby="repositories-heading">
 		<div class="section-head">
 			<div class="nav-heading" id="repositories-heading">Workspaces</div>
@@ -293,9 +280,9 @@
 						<button
 							class="repository-disclosure"
 							type="button"
-							aria-label={`${repo.expanded ? 'Collapse' : 'Expand'} ${repo.name} conversations`}
+							aria-label={`${repo.expanded ? 'Collapse' : 'Expand'} ${repo.name}`}
 							aria-expanded={repo.expanded}
-							title={`${repo.expanded ? 'Collapse' : 'Expand'} conversations`}
+							title={`${repo.expanded ? 'Collapse' : 'Expand'} workspace contents`}
 							onclick={(event) => toggleExpansion(repo, event)}
 						>
 							<span class="row-slot row-chevron"><Icon name="chevron-right" size={12} /></span>
@@ -313,26 +300,33 @@
 							<span class="row-slot row-icon"><Icon name={repo.path ? 'repository' : 'ask'} size={16} solid={repo.current} /></span>
 							<span class="repository-copy">{repo.name}</span>
 						</button>
-						{#if repo.path}
-							<div class="repository-actions">
-								{#if !repo.current}
-									<button
-										class="repository-action"
-										type="button"
-										aria-label="Repository actions"
-										aria-haspopup="menu"
-										aria-expanded={menuRepository === repo.key}
-										title="Repository actions"
-										onclick={(event) => {
-											event.stopPropagation();
-											menuRepository = menuRepository === repo.key ? null : repo.key;
-										}}
-									>
-										<Icon name="more-horizontal" size={14} />
-									</button>
-								{/if}
-							</div>
-						{/if}
+						<div class="repository-actions">
+							<button
+								class="repository-action"
+								type="button"
+								aria-label={`New conversation in ${repo.name}`}
+								title={`New conversation in ${repo.name}`}
+								onclick={(event) => { event.stopPropagation(); void newWorkspaceChat(repo); }}
+							>
+								<Icon name="plus" size={14} />
+							</button>
+							{#if repo.path && !repo.current}
+								<button
+									class="repository-action"
+									type="button"
+									aria-label="Repository actions"
+									aria-haspopup="menu"
+									aria-expanded={menuRepository === repo.key}
+									title="Repository actions"
+									onclick={(event) => {
+										event.stopPropagation();
+										menuRepository = menuRepository === repo.key ? null : repo.key;
+									}}
+								>
+									<Icon name="more-horizontal" size={14} />
+								</button>
+							{/if}
+						</div>
 						{#if menuRepository === repo.key && repo.path && !repo.current}
 							<div class="repository-menu" role="menu">
 								<button
@@ -377,6 +371,33 @@
 										<span class="row-slot row-icon"><Icon name="table" size={16} /></span>
 										<span>Sources</span>
 									</button>
+								</div>
+							{/if}
+							{#if repo.path}
+								<div class="repository-tools" aria-label={`${repo.name} project`}>
+									{#if repo.project}
+										<button
+											class="repository-tool"
+											class:active={session.workspaceView === 'project' && session.activeProjectId === repo.project.id}
+											type="button"
+											title={repo.project.workspace}
+											aria-label={`Open project ${repo.project.name}`}
+											onclick={() => session.openProject(repo.project!.id)}
+										>
+											<span class="row-slot row-icon"><Icon name="project" size={16} solid={session.workspaceView === 'project' && session.activeProjectId === repo.project.id} /></span>
+											<span>{repo.project.name}</span>
+										</button>
+									{:else}
+										<button
+											class="repository-tool project-create"
+											type="button"
+											aria-label={`Create project for ${repo.name}`}
+											onclick={() => onnewproject?.(repo.path)}
+										>
+											<span class="row-slot row-icon"><Icon name="plus" size={16} /></span>
+											<span>Add project</span>
+										</button>
+									{/if}
 								</div>
 							{/if}
 							{#each repo.items as c (c.id)}
@@ -497,18 +518,6 @@
 		display: grid;
 		gap: 1px;
 		padding: var(--space-3) var(--space-1) var(--space-2);
-	}
-	.projects-section {
-		flex: none;
-		display: grid;
-		gap: 1px;
-		padding: var(--space-1) var(--space-1) var(--space-2);
-	}
-	.project-list {
-		display: grid;
-		gap: 1px;
-		max-height: 144px;
-		overflow-y: auto;
 	}
 	.repository-section {
 		flex: 1;
@@ -825,31 +834,6 @@
 	.item.active .preview {
 		color: var(--text);
 	}
-	.project-row {
-		position: relative;
-		width: 100%;
-		display: grid;
-		grid-template-columns: 16px minmax(0, 1fr);
-		align-items: center;
-		gap: 6px;
-		min-width: 0;
-		min-height: 27px;
-		padding: 4px var(--space-2);
-		border-radius: var(--radius-sm);
-		color: var(--text-dim);
-		font-size: var(--fs-sm);
-		text-align: left;
-		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
-	}
-	.project-row:hover {
-		background: var(--sidebar-hover);
-		color: var(--text);
-	}
-	.project-row.active {
-		background: var(--sidebar-selected);
-		color: var(--text);
-	}
-	.project-row.active .row-icon { color: var(--brand-icon); }
 	.rename-input {
 		width: 100%;
 		padding: var(--space-2) var(--space-3);

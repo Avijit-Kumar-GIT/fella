@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import CommandPalette from '$lib/components/CommandPalette.svelte';
 	import CompanionPane from '$lib/components/CompanionPane.svelte';
+	import ConversationTabs from '$lib/components/ConversationTabs.svelte';
 	import Composer from '$lib/components/Composer.svelte';
 	import Icon from '$lib/components/Icon.svelte';
 	import Logo from '$lib/components/Logo.svelte';
@@ -13,7 +14,7 @@
 	import Transcript from '$lib/components/Transcript.svelte';
 	import WorkspaceBoard from '$lib/components/WorkspaceBoard.svelte';
 	import WorkspaceView from '$lib/components/WorkspaceView.svelte';
-	import { dispatch, loadStartupCatalog, openFolder, stop } from '$lib/commands';
+	import { dispatch, loadStartupCatalog, openFolder, openRepository, stop } from '$lib/commands';
 	import { ipc, isDesktop } from '$lib/ipc';
 	import { fadeQuick } from '$lib/motion';
 	import { prefs } from '$lib/prefs.svelte';
@@ -23,6 +24,7 @@
 	let composer = $state<Composer | undefined>();
 	let paletteOpen = $state(false);
 	let projectDialogOpen = $state(false);
+	let projectDialogWorkspace = $state<string | null>(null);
 	let dragging = $state(false);
 
 	let activeView = $derived(session.workspaceView);
@@ -103,9 +105,33 @@
 
 	function startConversation(): void {
 		if (!session.newConversation()) {
-			session.addSystem('All four workspace windows are in use. Close one before starting a conversation.');
+			session.addSystem('Open the workspace before starting a conversation in it.');
 		}
 		composer?.focus();
+	}
+
+	async function activateConversationTab(index: number): Promise<void> {
+		const conversation = session.conversations[index];
+		if (!conversation) return;
+		const workspacePath = conversation.workspaceScope;
+		if (workspacePath && !session.workspaceAt(workspacePath)) {
+			await openRepository(workspacePath);
+			if (!session.workspaceAt(workspacePath) && session.historyOnlyRepositoryPaths.includes(workspacePath)) {
+				session.openHistoryOnlyWorkspace(workspacePath, conversation.id);
+			}
+			if (!session.workspaceAt(workspacePath)) return;
+		}
+		session.activateConversation(index);
+	}
+
+	async function closeConversationTab(id: string): Promise<void> {
+		if (!(await session.closeConversationTab(id))) return;
+		await activateConversationTab(session.activeConversationIndex);
+	}
+
+	function openProjectDialog(workspace?: string | null): void {
+		projectDialogWorkspace = workspace ?? null;
+		projectDialogOpen = true;
 	}
 
 	function onKey(e: KeyboardEvent) {
@@ -123,7 +149,21 @@
 			return;
 		}
 		if (paletteOpen) return;
-		if (commandKey && e.shiftKey && key === 'a') {
+		if (commandKey && key === 't') {
+			e.preventDefault();
+			startConversation();
+		} else if (commandKey && key === 'w') {
+			e.preventDefault();
+			void closeConversationTab(session.conversationId);
+		} else if (commandKey && (key === '[' || key === ']')) {
+			e.preventDefault();
+			const count = session.conversations.length;
+			const direction = key === ']' ? 1 : -1;
+			void activateConversationTab((session.activeConversationIndex + direction + count) % count);
+		} else if (commandKey && /^[1-9]$/.test(key)) {
+			e.preventDefault();
+			void activateConversationTab(Number(key) - 1);
+		} else if (commandKey && e.shiftKey && key === 'a') {
 			e.preventDefault();
 			startConversation();
 		} else if (commandKey && e.shiftKey && key === 's') {
@@ -160,7 +200,9 @@
 	}
 
 	function onDragOver(e: DragEvent): void {
-		if (e.dataTransfer?.types.includes('Files')) {
+		const workspaceDrag = e.dataTransfer?.types.includes('application/x-fella-workspace');
+		if (workspaceDrag && document.querySelector('[aria-label="Workspace board"]')) return;
+		if (e.dataTransfer?.types.includes('Files') || workspaceDrag) {
 			e.preventDefault();
 			dragging = true;
 		}
@@ -173,6 +215,11 @@
 	function onDrop(e: DragEvent): void {
 		e.preventDefault();
 		dragging = false;
+		const workspacePath = e.dataTransfer?.getData('application/x-fella-workspace');
+		if (workspacePath) {
+			void openRepository(workspacePath);
+			return;
+		}
 		const file = e.dataTransfer?.files?.[0];
 		if (!file) return;
 		const path = window.fella?.pathForFile(file) ?? (file as File & { path?: string }).path;
@@ -249,11 +296,12 @@
 
 	<div class="shell">
 		{#if !session.focus && !session.sidebarCollapsed}
-			<Sidebar onsearch={() => (paletteOpen = true)} onnewproject={() => (projectDialogOpen = true)} />
+			<Sidebar onsearch={() => (paletteOpen = true)} onnewproject={openProjectDialog} />
 		{/if}
 	<div class="app" class:focus={session.focus}>
 		<Titlebar onpalette={() => (paletteOpen = true)} />
 		<section class="workspace-window" aria-label="Current workspace">
+			<ConversationTabs onselect={activateConversationTab} onnew={startConversation} onclose={closeConversationTab} />
 			{#if session.mountProgress && session.mountProgress.phase !== 'ready'}
 				<div class="mount-status" aria-hidden="true">
 					<span class="mount-orb"><Logo size={17} active /></span>
@@ -301,12 +349,12 @@
 
 {#if dragging}
 	<div class="dropzone" transition:fadeQuick aria-hidden="true">
-		<div class="dropcard"><Icon name="folder" size={20} /> Drop a folder to open it</div>
+		<div class="dropcard"><Icon name="folder" size={20} /> Drop a folder or workspace to open it</div>
 	</div>
 {/if}
 
 <CommandPalette bind:open={paletteOpen} onpick={pickCommand} />
-<ProjectDialog bind:open={projectDialogOpen} />
+<ProjectDialog bind:open={projectDialogOpen} initialWorkspace={projectDialogWorkspace} />
 
 <style>
 	.shell {
@@ -402,6 +450,7 @@
 	.dock {
 		flex: none;
 		padding: 0 var(--space-2) var(--space-3);
+		background: var(--workspace-surface);
 	}
 	.dropzone {
 		position: fixed;

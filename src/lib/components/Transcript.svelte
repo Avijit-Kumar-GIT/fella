@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { dispatch, openFolder, rerunAnalysisTurn, resumeLastFolder } from '$lib/commands';
+	import { dispatch, openFolder, rerunAnalysisTurn } from '$lib/commands';
 	import { session } from '$lib/session.svelte';
-	import { isDesktop, openExternal } from '$lib/ipc';
+	import { openExternal } from '$lib/ipc';
 	import { fadeQuick } from '$lib/motion';
 	import Icon from './Icon.svelte';
 	import Logo from './Logo.svelte';
@@ -46,9 +46,6 @@
 	let hasFolder = $derived(!!session.catalog.workspace);
 	let folderName = $derived(
 		session.catalog.workspace?.replace(/[/\\]+$/, '').replace(/^.*[/\\]/, '') ?? ''
-	);
-	let lastFolderName = $derived(
-		session.lastFolder?.replace(/[/\\]+$/, '').replace(/^.*[/\\]/, '') ?? ''
 	);
 	let fileCount = $derived(session.catalog.sources.length);
 	let skipped = $derived(session.catalog.skipped ?? []);
@@ -122,30 +119,12 @@
 		<div class="onboard" class:center={!hasFolder && !showSetup}>
 			<div class="onboard-mark"><Logo size={40} active={session.busy} /></div>
 			<div class="wordmark" aria-label="Fella">Fella</div>
-			<h1 class="hero">{hasFolder ? 'Ask about your own files' : 'Ask Fella a question'}</h1>
+			<h1 class="hero">{hasFolder ? 'Ask about your own files' : 'New conversation'}</h1>
 
 			{#if !hasFolder}
 				<p class="lead">
-					General questions work without a folder. Mount one when you want Fella to analyze local files;
-					Fella reads them for analysis and never changes them.
+					Ask anything. Open a workspace when you want Fella to analyze local files.
 				</p>
-				<div class="cta">
-					{#if session.lastFolder}
-						<button
-							class="pill primary"
-							title="Reopen your last folder (Enter)"
-							onclick={() => void resumeLastFolder()}
-						>
-							<Icon name="folder" size={16} /> Reopen {lastFolderName}
-						</button>
-						<button class="pill" onclick={() => void openFolder()}>Mount another</button>
-					{:else}
-						<button class="pill primary" onclick={() => void openFolder()}>
-							<Icon name="folder" size={16} /> Mount a folder
-						</button>
-					{/if}
-				</div>
-				{#if isDesktop()}<p class="drophint">or drag a folder here to mount it</p>{/if}
 			{:else if fileCount === 0}
 				<p class="lead"><strong>{folderName}</strong> is open, but nothing in it is readable yet.</p>
 				<p>
@@ -382,10 +361,6 @@
 		display: inline-flex;
 		align-items: center;
 		gap: var(--space-2);
-	}
-	.drophint {
-		color: var(--text-faint);
-		font-size: var(--fs-sm);
 	}
 	.egs {
 		color: var(--text-faint);

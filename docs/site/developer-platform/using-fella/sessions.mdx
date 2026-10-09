@@ -4,16 +4,16 @@ description: "Keep conversations separate, reopen past work, and use the compact
 icon: "panels-top-left"
 ---
 
-Each conversation tab keeps its own transcript, in-flight run, input recall, and model selection. All tabs share one open workspace, active provider, and provider credentials.
+Conversation tabs are global. Each tab keeps its own transcript, workspace scope, in-flight run, input recall, and model selection. The app retains the same provider credentials, but switching tabs restores that conversation's repository workspace (or its unbound General scope).
 
 ## Tabs
 
-Each tab has its own conversation transcript. The workspace and provider are shared, while each tab can select its own model.
+Each tab is one conversation with a stable owner. Repository conversations stay attached to their original folder; General conversations remain unbound. A conversation can be opened in a workspace even when other workspace tiles are already open.
 
 ```text filename="keyboard and commands"
 /tab       # open a new conversation
 Ctrl+N     # open a new conversation
-Ctrl+T     # open a new conversation
+Ctrl+T     # open a new conversation tab
 Ctrl+W     # close the current tab
 Ctrl+[     # previous tab
 Ctrl+]     # next tab
@@ -26,10 +26,10 @@ Use `Ctrl` on Windows and Linux, or `Cmd` on macOS.
 
 Fella starts a fresh conversation when it launches. A conversation is archived locally as soon as an exchange settles, then updated after later turns and renames.
 
-The history sidebar is open by default. Use it to:
+The app opens with a fresh, unbound conversation. The General group in the sidebar is for unbound conversations; it is not a folder-mount prompt or a workspace tile. Use the history sidebar to:
 
 - Search conversation titles, previews, and workspace paths.
-- Reopen a conversation in a tab.
+- Reopen a conversation in its own tab and restore its workspace scope.
 - Rename or delete a conversation.
 - Start a new conversation.
 
@@ -45,7 +45,7 @@ Slash commands provide the same basic listing and reopen workflow:
 /clear         # archive this conversation and start again
 ```
 
-Conversation archives retain the workspace path, messages and embedded evidence, and an optional custom title. Reopening one remounts its saved folder when the path still exists. Deleting an archived conversation also closes its live tab if it is open.
+Conversation archives retain the workspace path, messages and embedded evidence, and an optional custom title. Reopening one remounts its saved folder when the path still exists. Closing a tab archives the conversation but does not delete it; deleting history is a separate action.
 
 ## Focus mode
 

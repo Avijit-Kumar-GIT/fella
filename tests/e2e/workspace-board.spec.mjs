@@ -139,117 +139,147 @@ async function installDesktopMock(page, { seedUnavailableConversation = false } 
 	}, { fixtureFolders: folders, seedUnavailableConversation });
 }
 
-async function dispatchWorkspaceDrag(page, type, workspacePath) {
-	await page.evaluate(({ eventType, path }) => {
+async function dispatchWorkspaceDrag(page, type, workspacePath, { x = 0.5, y = 0.5, existing = false } = {}) {
+	await page.evaluate(({ eventType, path, targetX, targetY, alreadyOpen }) => {
 		const board = document.querySelector('[aria-label="Workspace board"]');
+		if (!board) throw new Error('The workspace board is not open');
+		const rect = board.getBoundingClientRect();
 		const dataTransfer = new DataTransfer();
 		dataTransfer.setData('application/x-fella-workspace', path);
-		board.dispatchEvent(new DragEvent(eventType, { bubbles: true, dataTransfer }));
-	}, { eventType: type, path: workspacePath });
+		if (alreadyOpen) dataTransfer.setData('application/x-fella-existing-workspace', path);
+		board.dispatchEvent(new DragEvent(eventType, {
+			bubbles: true,
+			cancelable: true,
+			clientX: rect.left + rect.width * targetX,
+			clientY: rect.top + rect.height * targetY,
+			dataTransfer
+		}));
+	}, { eventType: type, path: workspacePath, targetX: x, targetY: y, alreadyOpen: existing });
 }
 
-test('General and repository workspaces render independently, compose, and keep Ask scoped to the focused workspace', async ({ page }) => {
+test('starts unbound, opens real conversation tabs, groups repository artifacts, and places workspaces by drag', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
-	const general = page.getByRole('article', { name: 'General workspace' });
-	await expect(general).toBeVisible();
-	await expect(page.getByRole('article')).toHaveCount(1);
-	await page.getByRole('button', { name: 'New conversation', exact: true }).click();
-	// Ask acts inside General; history selection is not titlebar-tab creation.
-	await expect(page.getByRole('tablist')).toHaveCount(0);
+	const tabs = page.getByRole('tablist', { name: 'Conversations' });
+	await expect(tabs).toBeVisible();
+	await expect(tabs.getByRole('tab')).toHaveCount(1);
+	await expect(page.getByRole('heading', { name: 'New conversation', level: 1 })).toBeVisible();
+	await expect(page.getByRole('article')).toHaveCount(0);
+	await expect(page.getByRole('button', { name: 'Mount a folder' })).toHaveCount(0);
+	const initialSurfaces = await page.evaluate(() => ({
+		window: getComputedStyle(document.querySelector('.workspace-window')).backgroundColor,
+		dock: getComputedStyle(document.querySelector('.dock')).backgroundColor,
+		composer: getComputedStyle(document.querySelector('.field')).backgroundColor
+	}));
+	expect(initialSurfaces.dock).toBe(initialSurfaces.window);
+	expect(initialSurfaces.composer).toBe(initialSurfaces.window);
+
+	await page.keyboard.press('Control+t');
+	await expect(tabs.getByRole('tab')).toHaveCount(2);
 	await page.getByRole('combobox', { name: 'Ask a question' }).fill('What is a useful way to compare trends?');
 	await page.getByRole('button', { name: 'Send' }).click();
 	await expect(page.getByText('Scoped to general.')).toBeVisible();
 	const unboundCall = await page.evaluate(() => window.__workspaceAskCalls.at(-1));
 	expect(unboundCall.workspaceId).toBeNull();
-	// A second conversation in General must not overwrite the first one's history.
-	await page.getByRole('button', { name: 'New conversation', exact: true }).click();
+	await expect(tabs.getByRole('tab', { name: /What is a useful way to compare trends/ })).toHaveAttribute('aria-selected', 'true');
+	await page.keyboard.press('Control+t');
+	await expect(tabs.getByRole('tab')).toHaveCount(3);
+	await expect(tabs.getByRole('tab').nth(2)).toHaveAttribute('aria-selected', 'true');
+	await page.keyboard.press('Control+[');
+	await expect(tabs.getByRole('tab').nth(1)).toHaveAttribute('aria-selected', 'true');
+	await page.keyboard.press('Control+1');
+	await expect(tabs.getByRole('tab').nth(0)).toHaveAttribute('aria-selected', 'true');
+	await tabs.getByRole('button', { name: 'Close tab: What is a useful way to compare trends?' }).click();
+	await expect(tabs.getByRole('tab')).toHaveCount(2);
+	const archivedGeneral = page.getByRole('button', { name: 'Open conversation: What is a useful way to compare trends?' });
+	await expect(archivedGeneral).toBeVisible();
+	await archivedGeneral.click();
+	await expect(tabs.getByRole('tab')).toHaveCount(3);
+	await expect(tabs.getByRole('tab', { name: /What is a useful way to compare trends/ })).toHaveAttribute('aria-selected', 'true');
 
-	await page.getByRole('button', { name: 'Add repository' }).first().click();
+	const workspaceNavigation = page.getByRole('region', { name: 'Workspaces' });
+	await workspaceNavigation.getByRole('button', { name: 'Add repository' }).click();
 	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
 	await expect(page.getByRole('article', { name: 'northwind-sales workspace' })).toBeVisible();
+	const salesWorkspaceRow = page.getByRole('button', { name: 'Open workspace northwind-sales' });
+	await expect(page.getByRole('button', { name: 'Open sources in northwind-sales' })).toBeVisible();
+	await expect(page.getByRole('button', { name: 'Create project for northwind-sales' })).toBeVisible();
 	await page.getByRole('button', { name: 'Open sources in northwind-sales' }).click();
 	await expect(page.getByRole('heading', { name: 'sales.csv' })).toBeVisible();
-	await page.getByRole('button', { name: 'New conversation', exact: true }).click();
-	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
-	await expect(page.getByRole('article')).toHaveCount(2);
+	await salesWorkspaceRow.click();
+	await salesWorkspaceRow.hover();
+	await page.getByRole('button', { name: 'New conversation in northwind-sales' }).click();
+	await expect(tabs.getByRole('tab').last()).toHaveAttribute('aria-selected', 'true');
+	const salesComposer = page.getByRole('combobox', { name: 'Ask about northwind-sales' });
+	await salesComposer.fill('Summarize sales trends');
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
+	const salesCall = await page.evaluate(() => window.__workspaceAskCalls.at(-1));
+	expect(salesCall.workspaceId).toBe(folders[0].path);
 
-	await dispatchWorkspaceDrag(page, 'dragover', folders[1].path);
-	// Two open workspaces plus the proposed placement produce three preview slots.
-	await expect(page.locator('.placement-preview .preview-slot')).toHaveCount(3);
-	await expect(page.locator('.placement-preview .preview-slot.target')).toHaveText('New workspace');
-	await dispatchWorkspaceDrag(page, 'drop', folders[1].path);
+	await page.getByRole('button', { name: 'Create project for northwind-sales' }).click();
+	await expect(page.getByRole('heading', { name: 'Create a project' })).toBeVisible();
+	await expect(page.getByLabel('Repository', { exact: true })).toHaveValue(folders[0].path);
+	await page.getByRole('textbox', { name: 'Name' }).fill('Sales review');
+	await page.getByRole('button', { name: 'Create project', exact: true }).click();
+	await expect(page.getByRole('button', { name: 'Open project Sales review' })).toBeVisible();
+
+	await salesWorkspaceRow.click();
+
+	await dispatchWorkspaceDrag(page, 'dragover', folders[1].path, { x: 0.9, y: 0.5 });
+	await expect(page.locator('.placement-preview .preview-slot')).toHaveCount(2);
+	await expect(page.locator('.placement-preview .preview-slot.target')).toHaveText('Drop to place');
+	await dispatchWorkspaceDrag(page, 'drop', folders[1].path, { x: 0.9, y: 0.5 });
 	const sales = page.getByRole('article', { name: 'northwind-sales workspace' });
 	const health = page.getByRole('article', { name: 'health-journal workspace' });
 	await expect(sales).toBeVisible();
 	await expect(health).toBeVisible();
 	await expect(page.getByRole('button', { name: 'Open sources in health-journal' })).toBeVisible();
-	await expect(page.getByRole('article')).toHaveCount(3);
-
-	const arrangement = page.getByRole('combobox', { name: 'Workspace arrangement' });
-	await arrangement.selectOption('one-left-two-right');
+	await expect(page.getByRole('article')).toHaveCount(2);
+	await expect(page.getByRole('combobox', { name: 'Workspace arrangement' })).toHaveCount(0);
 	const salesBox = await sales.boundingBox();
 	const healthBox = await health.boundingBox();
 	expect(salesBox).not.toBeNull();
 	expect(healthBox).not.toBeNull();
-	expect(Math.abs(salesBox.x - healthBox.x)).toBeLessThan(3);
-	expect(healthBox.y).toBeGreaterThan(salesBox.y);
+	expect(healthBox.x).toBeGreaterThan(salesBox.x);
 
-	await sales.locator('.tile-focus').click();
-	const salesComposer = page.getByRole('combobox', { name: 'Ask about northwind-sales' });
-	await salesComposer.fill('Summarize sales trends');
-	await page.getByRole('button', { name: 'Send' }).click();
-	await expect(sales).toContainText('Scoped to C:\\FellaFixture\\northwind-sales.');
+	await dispatchWorkspaceDrag(page, 'dragover', folders[2].path, { x: 0.1, y: 0.5 });
+	await expect(page.locator('.placement-preview .preview-slot')).toHaveCount(3);
+	await dispatchWorkspaceDrag(page, 'drop', folders[2].path, { x: 0.1, y: 0.5 });
+	const budget = page.getByRole('article', { name: 'weekly-budget workspace' });
+	await expect(budget).toBeVisible();
+	await expect(page.getByRole('article')).toHaveCount(3);
+	const budgetBox = await budget.boundingBox();
+	const salesThreeBox = await sales.boundingBox();
+	const healthThreeBox = await health.boundingBox();
+	expect(budgetBox).not.toBeNull();
+	expect(salesThreeBox).not.toBeNull();
+	expect(healthThreeBox).not.toBeNull();
+	expect(Math.abs(budgetBox.x - salesThreeBox.x)).toBeLessThan(3);
+	expect(budgetBox.y).not.toBe(salesThreeBox.y);
+	expect(healthThreeBox.x).toBeGreaterThan(budgetBox.x);
 
-	await health.locator('.tile-focus').click();
-	const healthComposer = page.getByRole('combobox', { name: 'Ask about health-journal' });
-	await healthComposer.fill('Summarize sleep trends');
-	await page.getByRole('button', { name: 'Send' }).click();
-	await expect(health).toContainText('Scoped to C:\\FellaFixture\\health-journal.');
-
-	const salesFocus = sales.locator('.tile-focus');
-	const healthFocus = health.locator('.tile-focus');
-	await salesFocus.click();
-	await expect(salesFocus).toHaveAttribute('aria-pressed', 'true');
-	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
-
-	await healthFocus.click();
-	await expect(healthFocus).toHaveAttribute('aria-pressed', 'true');
-	await salesFocus.click();
-	await expect(salesFocus).toHaveAttribute('aria-pressed', 'true');
-	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
-
-	// General owns non-mounted conversations. Selecting its history switches
-	// the conversation in the existing General window.
-	await page.locator('.sidebar').getByRole('button', { name: 'General', exact: true }).click();
-	const generalHistory = page.getByRole('button', {
-		name: 'Open conversation: What is a useful way to compare trends?'
-	});
-	await expect(generalHistory).toBeVisible();
-	await generalHistory.click();
-	await expect(page.getByRole('article', { name: 'General workspace' })).toHaveCount(1);
-	await expect(general).toContainText('What is a useful way to compare trends?');
-	await expect(general.locator('.tile-focus')).toHaveAttribute('aria-pressed', 'true');
-	await expect(page.getByRole('combobox', { name: 'Ask a question' })).toBeVisible();
-	await expect(page.getByRole('tablist')).toHaveCount(0);
-
-	const calls = await page.evaluate(() => window.__workspaceAskCalls);
-	expect(calls.map((call) => call.workspaceId)).toEqual([
-		null,
-		...folders.slice(0, 2).map((folder) => folder.path)
-	]);
+	await dispatchWorkspaceDrag(page, 'dragover', folders[0].path, { x: 0.9, y: 0.9, existing: true });
+	await expect(page.locator('.placement-preview .preview-slot')).toHaveCount(3);
+	await dispatchWorkspaceDrag(page, 'drop', folders[0].path, { x: 0.9, y: 0.9, existing: true });
+	const movedSalesBox = await sales.boundingBox();
+	const movedHealthBox = await health.boundingBox();
+	expect(movedSalesBox).not.toBeNull();
+	expect(movedHealthBox).not.toBeNull();
+	expect(movedSalesBox.x).toBeGreaterThan(budgetBox.x);
+	expect(movedSalesBox.y).toBeGreaterThan(movedHealthBox.y);
 });
 
 test('the fifth workspace is refused without replacing a tile, and closing a tile frees a slot', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
-	await expect(page.getByRole('article', { name: 'General workspace' })).toBeVisible();
-	await page.getByRole('button', { name: 'Add repository' }).first().click();
-	for (let index = 1; index < 3; index += 1) {
-		await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
+	const workspaceNavigation = page.getByRole('region', { name: 'Workspaces' });
+	for (let index = 0; index < 4; index += 1) {
+		await workspaceNavigation.getByRole('button', { name: 'Add repository' }).click();
+		await expect(page.getByRole('article')).toHaveCount(index + 1);
 	}
 	await expect(page.getByRole('article')).toHaveCount(4);
-	const fifth = folders[3];
+	const fifth = folders[4];
 
 	await dispatchWorkspaceDrag(page, 'dragover', fifth.path);
 	await expect(page.getByText('Close a workspace to add another.')).toBeVisible();
@@ -258,22 +288,22 @@ test('the fifth workspace is refused without replacing a tile, and closing a til
 	await expect(page.getByText('Close a workspace to add another.')).toBeVisible();
 	await expect(page.getByRole('article')).toHaveCount(beforeDrop);
 
-	await page.getByRole('button', { name: 'Close General workspace' }).click();
+	await page.getByRole('button', { name: 'Close northwind-sales workspace' }).click();
 	await expect(page.getByRole('article')).toHaveCount(3);
 	await dispatchWorkspaceDrag(page, 'drop', fifth.path);
-	await expect(page.getByRole('article', { name: 'travel-plans workspace' })).toBeVisible();
+	await expect(page.getByRole('article', { name: 'reading-notes workspace' })).toBeVisible();
 	await expect(page.getByRole('article')).toHaveCount(4);
 
 	await page.reload();
 	await expect(page.getByRole('article')).toHaveCount(4);
 	await expect(page.getByRole('article', { name: 'health-journal workspace' })).toBeVisible();
-	await expect(page.getByRole('article', { name: 'travel-plans workspace' })).toBeVisible();
+	await expect(page.getByRole('article', { name: 'reading-notes workspace' })).toBeVisible();
 });
 
 test('a history-only workspace retries its folder mount and keeps history available when it is still missing', async ({ page }) => {
 	await installDesktopMock(page, { seedUnavailableConversation: true });
 	await page.goto('/');
-	await page.getByRole('button', { name: 'Expand unavailable-archive conversations' }).click();
+	await page.getByRole('button', { name: 'Expand unavailable-archive' }).click();
 	await page.getByRole('button', { name: 'Open conversation: Summarize the unavailable archive' }).click();
 	const workspace = page.getByRole('article', { name: 'unavailable-archive workspace' });
 	await expect(workspace).toBeVisible();

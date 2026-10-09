@@ -3,7 +3,7 @@
 	import { session } from '$lib/session.svelte';
 	import Icon from './Icon.svelte';
 
-	let { open = $bindable(false) }: { open?: boolean } = $props();
+	let { open = $bindable(false), initialWorkspace = null }: { open?: boolean; initialWorkspace?: string | null } = $props();
 	let name = $state('');
 	let workspace = $state('');
 	let suggestedName = $state('');
@@ -21,7 +21,7 @@
 
 	$effect(() => {
 		if (open && !wasOpen) {
-			workspace = repositories[0]?.path ?? '';
+			workspace = repositories.find((repository) => repository.path === initialWorkspace)?.path ?? repositories[0]?.path ?? '';
 			suggestedName = workspace ? baseName(workspace) : '';
 			name = suggestedName;
 			queueMicrotask(() => nameInput?.focus());

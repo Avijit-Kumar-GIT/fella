@@ -1,7 +1,7 @@
 // Slash-command parsing and input dispatch for the REPL.
 
 import { ipc, isDesktop, isElectron, pickFolder } from './ipc';
-import { Conversation, GENERAL_WORKSPACE_ID, isActualQuestion, session } from './session.svelte';
+import { Conversation, isActualQuestion, session } from './session.svelte';
 import type {
 	AskEvent,
 	ConversationSummary,
@@ -243,7 +243,7 @@ export async function loadStartupCatalog(): Promise<void> {
 	if (!isDesktop()) return;
 	try {
 		const catalog = await ipc.getCatalog();
-		if (catalog.workspace) {
+		if (catalog.workspace && session.pendingWorkspacePaths.includes(catalog.workspace)) {
 			const existing = session.workspaceAt(catalog.workspace);
 			if (existing) {
 				existing.catalog = catalog;
@@ -258,11 +258,6 @@ export async function loadStartupCatalog(): Promise<void> {
 	} catch {
 		/* no engine yet the welcome screen handles it */
 	}
-	try {
-		session.lastFolder = await ipc.lastWorkspacePath();
-	} catch {
-		session.lastFolder = null;
-	}
 	const paths = session.pendingWorkspacePaths;
 	for (const path of paths) {
 		if (session.workspaceWindows.length >= 4) break;
@@ -272,12 +267,6 @@ export async function loadStartupCatalog(): Promise<void> {
 	if (preferred) session.focusWorkspace(preferred.id);
 }
 
-/** Reopen the folder from the last session (the welcome screen's "Reopen"
- *  button, and Enter on an empty composer with no folder open). */
-export async function resumeLastFolder(): Promise<void> {
-	if (session.lastFolder) await openRepository(session.lastFolder);
-}
-
 /** Select an archived conversation inside its owning workspace. */
 export async function openConversation(summary: ConversationSummary): Promise<boolean> {
 	if (!isDesktop()) {
@@ -285,36 +274,30 @@ export async function openConversation(summary: ConversationSummary): Promise<bo
 		return false;
 	}
 	try {
-		const workspaceId = summary.workspace ?? GENERAL_WORKSPACE_ID;
-		if (!session.workspaceAt(workspaceId)) {
-			if (workspaceId === GENERAL_WORKSPACE_ID) {
-				if (!session.openGeneralWorkspace()) {
-					session.addSystem('Close a workspace to open General.');
-					return false;
-				}
-			} else {
-				if (session.workspaceWindows.length >= 4) {
-					session.addSystem('Close a workspace to open this conversation’s workspace.');
-					return false;
-				}
-				if (!session.historyOnlyRepositoryPaths.includes(workspaceId)) {
-					await openRepository(workspaceId);
-				}
-				if (!session.workspaceAt(workspaceId) && session.historyOnlyRepositoryPaths.includes(workspaceId)) {
-					if (!session.openHistoryOnlyWorkspace(workspaceId, summary.id)) {
-						session.addSystem('Close a workspace to open this conversation.');
-						return false;
-					}
-				}
-				if (!session.workspaceAt(workspaceId)) return false;
+		const workspaceId = summary.workspace ?? null;
+		if (workspaceId && !session.workspaceAt(workspaceId)) {
+			if (session.workspaceWindows.length >= 4) {
+				session.addSystem('Close a workspace to open this conversation’s workspace.');
+				return false;
 			}
+			if (!session.historyOnlyRepositoryPaths.includes(workspaceId)) {
+				await openRepository(workspaceId);
+			}
+			if (!session.workspaceAt(workspaceId) && session.historyOnlyRepositoryPaths.includes(workspaceId)) {
+				if (!session.openHistoryOnlyWorkspace(workspaceId, summary.id)) {
+					session.addSystem('Close a workspace to open this conversation.');
+					return false;
+				}
+			}
+			if (!session.workspaceAt(workspaceId)) return false;
 		}
 		const raw = await ipc.conversationLoad(summary.id);
 		const saved: { workspace?: string | null; messages?: unknown; title?: string | null; companionPane?: unknown } =
 			JSON.parse(raw);
 		const messages = Array.isArray(saved.messages) ? (saved.messages as Message[]) : [];
 		session.loadConversation(summary.id, messages, saved.title ?? null, summary.workspace, saved.companionPane);
-		session.focusWorkspace(workspaceId, summary.id);
+		if (workspaceId) session.focusWorkspace(workspaceId, summary.id);
+		else session.activateConversation(session.conversations.findIndex((conversation) => conversation.id === summary.id));
 		return true;
 	} catch (e) {
 		session.addSystem(`error: ${errMsg(e)}`);

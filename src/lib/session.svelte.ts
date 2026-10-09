@@ -1,10 +1,8 @@
 // Shared reactive session state (Svelte 5 runes in a .svelte.ts module).
 //
 // `Session` owns app-level navigation and up to four open workspace windows.
-// Each workspace remembers its active conversation; the conversation objects
-// remain in a local live cache so in-flight work can finish safely while focus
-// moves elsewhere. The visible navigation hierarchy is workspace -> conversation,
-// not a global tab strip.
+// Conversation tabs retain their own scope; the conversation objects remain in
+// a local live cache so in-flight work can finish safely while focus moves.
 
 import { ipc, isDesktop } from './ipc';
 import type {
@@ -124,24 +122,23 @@ interface SavedWorkspaceState {
 function readWorkspaceState(): SavedWorkspaceState {
 	try {
 		const raw = localStorage.getItem(OPEN_WORKSPACES_KEY);
-		if (raw === null) return { ids: [GENERAL_WORKSPACE_ID], active: GENERAL_WORKSPACE_ID, layout: {} };
+		if (raw === null) return { ids: [], active: null, layout: {} };
 		const parsed: unknown = JSON.parse(raw);
-		if (!parsed || typeof parsed !== 'object') return { ids: [GENERAL_WORKSPACE_ID], active: GENERAL_WORKSPACE_ID, layout: {} };
+		if (!parsed || typeof parsed !== 'object') return { ids: [], active: null, layout: {} };
 		const record = parsed as Record<string, unknown>;
 		const legacyPaths = Array.isArray(record.paths)
 			? [...new Set(record.paths.filter((path): path is string => typeof path === 'string' && path.trim().length > 0))].slice(0, 4)
 			: [];
-		// Migration preserves four explicitly-open legacy repositories. With room,
-		// General joins them; with no saved workspace state, General is the default.
+		// General is a conversation group, not an automatically opened window.
+		// Keep old repository windows, but migrate the former implicit General tile
+		// out of the visible board.
 		const ids = Array.isArray(record.ids)
-			? [...new Set(record.ids.filter((id): id is string => typeof id === 'string' && id.trim().length > 0))].slice(0, 4)
-			: legacyPaths.length >= 4
-				? legacyPaths
-				: [GENERAL_WORKSPACE_ID, ...legacyPaths];
-		const normalizedIds = ids.length ? ids : [GENERAL_WORKSPACE_ID];
+			? [...new Set(record.ids.filter((id): id is string => typeof id === 'string' && id.trim().length > 0 && id !== GENERAL_WORKSPACE_ID))].slice(0, 4)
+			: legacyPaths;
+		const normalizedIds = ids;
 		const active = typeof record.active === 'string' && normalizedIds.includes(record.active)
 			? record.active
-			: normalizedIds.includes(GENERAL_WORKSPACE_ID) ? GENERAL_WORKSPACE_ID : null;
+			: null;
 		const layoutRecord = record.layout && typeof record.layout === 'object'
 			? (record.layout as Record<string, unknown>)
 			: {};
@@ -153,22 +150,11 @@ function readWorkspaceState(): SavedWorkspaceState {
 		};
 		return { ids: normalizedIds, active, layout };
 	} catch {
-		return { ids: [GENERAL_WORKSPACE_ID], active: GENERAL_WORKSPACE_ID, layout: {} };
+		return { ids: [], active: null, layout: {} };
 	}
 }
 
 const SAVED_WORKSPACE_STATE = readWorkspaceState();
-
-function generalWorkspace(conversationId: string, historyOnly = false): WorkspaceWindow {
-	return {
-		id: GENERAL_WORKSPACE_ID,
-		kind: 'general',
-		path: null,
-		catalog: { workspace: null, sources: [] },
-		conversationId,
-		historyOnly
-	};
-}
 
 function readSidebarCollapsed(): boolean {
 	try {
@@ -401,19 +387,16 @@ class Session {
 	#pendingWorkspacePaths = SAVED_WORKSPACE_STATE.ids.filter((id) => id !== GENERAL_WORKSPACE_ID);
 	#preferredWorkspaceId = SAVED_WORKSPACE_STATE.active;
 	mountProgress = $state<WorkspaceProgress | null>(null);
-	/** The app-level page; the selected workspace owns its conversation surface. */
-	workspaceView = $state<WorkspaceView>(SAVED_WORKSPACE_STATE.ids.includes(GENERAL_WORKSPACE_ID) ? 'board' : 'ask');
+	/** The app-level page; an unbound conversation is the initial destination. */
+	workspaceView = $state<WorkspaceView>('ask');
 	/** The active pane inside Workspace. */
 	workspacePane = $state<WorkspacePane>('sources');
-	/** Last folder remembered by the engine, used as a recovery affordance if
-	 *  saved open-workspace state cannot be restored. */
-	lastFolder = $state<string | null>(null);
 	settings = $state<Settings | null>(null);
 	health = $state<ProviderHealth | null>(null);
 	/** Built-in providers from the engine, cached so the composer can hint
 	 *  valid `/login` / `/logout` names without an await. */
 	providers = $state<ProviderInfo[]>([]);
-	/** Live conversation cache and focused index; navigation is workspace-owned. */
+	/** Live conversations are the global conversation tabs; each keeps its own scope. */
 	conversations = $state<Conversation[]>([new Conversation()]);
 	activeConversationIndex = $state<number>(0);
 	/** Focus mode: hide the shell header for a plain, single-conversation view. */
@@ -438,14 +421,8 @@ class Session {
 	activeProjectId = $state<string | null>(null);
 
 	constructor() {
-		const initialConversation = this.conversations[0];
-		const generalIsOpen = SAVED_WORKSPACE_STATE.ids.includes(GENERAL_WORKSPACE_ID);
-		if (generalIsOpen) {
-			initialConversation.workspaceScope = null;
-			this.workspaceWindows = [generalWorkspace(initialConversation.id)];
-			this.activeWorkspaceId = GENERAL_WORKSPACE_ID;
-			this.activeConversationIndex = 0;
-		}
+		// Starting Fella is a new, unbound conversation. Opening a folder is an
+		// explicit workspace action; no phantom General window is created.
 	}
 
 	#writeStringList(key: string, values: string[]): void {
@@ -501,6 +478,19 @@ class Session {
 	setWorkspaceLayout(layout: WorkspaceTilePreference): void {
 		this.workspaceLayout = { ...layout };
 		this.#writeWorkspaceState();
+	}
+
+	/** Place an open workspace in a fixed board slot; users never resize tiles. */
+	placeWorkspaceWindow(id: string, index: number): boolean {
+		const currentIndex = this.workspaceWindows.findIndex((workspace) => workspace.id === id);
+		if (currentIndex < 0) return false;
+		const next = [...this.workspaceWindows];
+		const [workspace] = next.splice(currentIndex, 1);
+		const targetIndex = Math.max(0, Math.min(Math.trunc(index), next.length));
+		next.splice(targetIndex, 0, workspace);
+		this.workspaceWindows = next;
+		this.#writeWorkspaceState();
+		return true;
 	}
 
 	/** Register a mounted catalog and focus its repository-owned conversation.
@@ -607,25 +597,6 @@ class Session {
 			}
 		}
 		this.#writeWorkspaceState();
-	}
-
-	/** Open the virtual General workspace, respecting the same visible-window
-	 *  ceiling as repository workspaces. */
-	openGeneralWorkspace(): boolean {
-		if (this.workspaceAt(GENERAL_WORKSPACE_ID)) return this.focusWorkspace(GENERAL_WORKSPACE_ID);
-		if (this.workspaceWindows.length >= 4) return false;
-		const existingConversation = this.conversations.findLast((conversation) => conversation.workspaceScope === null);
-		const conversation = existingConversation ?? new Conversation();
-		conversation.workspaceScope = null;
-		if (!existingConversation) this.conversations.push(conversation);
-		this.workspaceWindows = [...this.workspaceWindows, generalWorkspace(conversation.id)];
-		this.activeWorkspaceId = GENERAL_WORKSPACE_ID;
-		this.catalog = { workspace: null, sources: [] };
-		this.activeConversationIndex = this.conversations.indexOf(conversation);
-		this.workspaceView = 'board';
-		this.#writeIndex();
-		this.#writeWorkspaceState();
-		return true;
 	}
 
 	/** Remember a folder explicitly opened by the user and unhide it if needed. */
@@ -845,7 +816,7 @@ class Session {
 		this.persist();
 	}
 
-	/** Select a conversation and its owning workspace. */
+	/** Select a conversation and its owning workspace when that workspace is open. */
 	activateConversation(index: number): void {
 		const conversation = this.conversations[index];
 		if (!conversation) return;
@@ -868,6 +839,49 @@ class Session {
 			this.workspaceView = 'ask';
 		}
 		this.#writeWorkspaceState();
+	}
+
+	/** Close a conversation tab without deleting its archived history. */
+	async closeConversationTab(id: string): Promise<boolean> {
+		const index = this.conversations.findIndex((conversation) => conversation.id === id);
+		if (index < 0) return true;
+		const closing = this.conversations[index];
+		if (closing.busy) return false;
+
+		await this.#archive(closing);
+		closing.dropSnapshot();
+		const wasActive = index === this.activeConversationIndex;
+		this.conversations.splice(index, 1);
+
+		for (const workspace of this.workspaceWindows) {
+			if (workspace.conversationId !== id) continue;
+			const scope = workspace.kind === 'general' ? null : workspace.path;
+			let replacement = this.conversations.findLast((item) => item.workspaceScope === scope);
+			if (!replacement) {
+				replacement = new Conversation();
+				replacement.workspaceScope = scope;
+				this.conversations.push(replacement);
+			}
+			workspace.conversationId = replacement.id;
+		}
+
+		if (this.conversations.length === 0) {
+			const activeWorkspace = this.activeWorkspace;
+			const replacement = new Conversation();
+			replacement.workspaceScope = activeWorkspace?.kind === 'repository' ? activeWorkspace.path : null;
+			this.conversations.push(replacement);
+			if (activeWorkspace) activeWorkspace.conversationId = replacement.id;
+		}
+
+		if (wasActive) {
+			this.activeConversationIndex = Math.min(index, this.conversations.length - 1);
+			this.activateConversation(this.activeConversationIndex);
+		} else if (this.activeConversationIndex > index) {
+			this.activeConversationIndex -= 1;
+		}
+		this.#writeIndex();
+		this.#writeWorkspaceState();
+		return true;
 	}
 
 
@@ -945,35 +959,28 @@ class Session {
 		return this.ensureChat().addSystem(text);
 	}
 
-	// --- workspace-owned conversation selection ----------------------------
+	// --- conversation tab creation and workspace scope ----------------------
 	newConversation(workspaceId: string | null = this.activeWorkspaceId): boolean {
-		const ownerId = workspaceId ?? GENERAL_WORKSPACE_ID;
-		let workspace = this.workspaceAt(ownerId);
-		if (!workspace && ownerId === GENERAL_WORKSPACE_ID && this.openGeneralWorkspace()) {
-			workspace = this.workspaceAt(GENERAL_WORKSPACE_ID);
-		}
-		if (!workspace) return false;
-		const scope = workspace.kind === 'general' ? null : workspace.path;
-		const ownedIndex = workspace.conversationId
-			? this.conversations.findIndex((conversation) => conversation.id === workspace?.conversationId)
-			: -1;
-		const owned = ownedIndex >= 0 ? this.conversations[ownedIndex] : null;
-		if (owned && !owned.busy && owned.messages.length === 0) {
-			owned.workspaceScope = scope;
-			this.activateConversation(ownedIndex);
-			return true;
-		}
+		const workspace = workspaceId ? this.workspaceAt(workspaceId) : null;
+		if (workspaceId && !workspace) return false;
+		const scope = workspace?.kind === 'general' ? null : workspace?.path ?? null;
 		const conversation = new Conversation();
 		conversation.model = this.model;
 		conversation.workspaceScope = scope;
 		this.conversations.push(conversation);
-		workspace.conversationId = conversation.id;
 		this.activeConversationIndex = this.conversations.length - 1;
-		this.activeWorkspaceId = workspace.id;
-		this.catalog = workspace.kind === 'repository' && !workspace.historyOnly
-			? workspace.catalog
-			: { workspace: null, sources: [] };
-		this.workspaceView = 'board';
+		if (workspace) {
+			workspace.conversationId = conversation.id;
+			this.activeWorkspaceId = workspace.id;
+			this.catalog = workspace.kind === 'repository' && !workspace.historyOnly
+				? workspace.catalog
+				: { workspace: null, sources: [] };
+			this.workspaceView = 'board';
+		} else {
+			this.activeWorkspaceId = null;
+			this.catalog = { workspace: null, sources: [] };
+			this.workspaceView = 'ask';
+		}
 		this.#writeIndex();
 		this.#writeWorkspaceState();
 		return true;

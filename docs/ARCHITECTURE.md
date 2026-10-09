@@ -100,12 +100,12 @@ archived conversations remain app-scoped. Global conversation tabs retain
 their folder identity, and workspace-aware IPC routes Ask and source/context
 operations to the matching runtime. Tabs are global conversation navigation,
 not a second workspace/window layer; their owner is shown in the tab label and
-switching tabs restores the owning catalog. The four-workspace ceiling does
-not cap conversation tabs. A general conversation stays unbound and is grouped
-under “No repository” in history without consuming a repository workspace tile.
+switching tabs restores the owning workspace. The four-workspace ceiling does
+not cap conversation tabs. Fella starts in an unbound New Conversation state;
+General is a sidebar/history group and does not consume a workspace tile.
 
-The first board slice renders the focused workspace as a live conversation and
-shows compact source inventories for the other open repositories. The global
+The board renders the focused workspace as a live conversation and shows
+compact source inventories for the other open repositories. The global
 composer targets the focused workspace. It does not yet render multiple live
 transcripts or workspace-owned chart/source/analysis components concurrently.
 

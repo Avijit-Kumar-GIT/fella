@@ -13,10 +13,10 @@ be about a mounted folder.
 
 There are two workspace kinds:
 
-- **General** is a virtual workspace for questions and conversations that do
-  not belong to a mounted folder. It has no filesystem path, catalog, or
-  folder-specific memory. Its analytical request is genuinely unbound
-  (`workspaceId: null`); `general` is only its UI identity.
+- **General** is the sidebar/history group for questions and conversations
+  that do not belong to a mounted folder. It has no filesystem path, catalog,
+  or folder-specific memory. Its analytical request is genuinely unbound
+  (`workspaceId: null`); it is not an automatically opened board tile.
 - **Repository workspace** is owned by one folder. It has its own catalog,
   source inventory, context, memory, and conversations. The folder may be
   mounted, temporarily closed, or unavailable while its saved conversations
@@ -33,11 +33,12 @@ four outer workspaces, and four inner surfaces per workspace.
 ```text
 Electron app window
 ├─ Global shell
-│  ├─ Sidebar: Ask, Search, Projects, General, repository workspaces/history
+│  ├─ Sidebar: Ask, Search, General, and workspace-owned Sources/Project/history
 │  ├─ Titlebar, settings, command palette, provider credentials
+│  ├─ Conversation tabs: global navigation, each retaining its owner
 │  └─ App-level route and workspace-board controls
 ├─ Workspace registry
-│  ├─ General (virtual, no folder scope)
+│  ├─ General conversations (unbound; no board tile by default)
 │  └─ Repository workspace (folder identity, independent of mount status)
 ├─ Open workspace board (up to 4 workspace windows)
 │  └─ Workspace window (up to 4 typed surfaces; composition is being built)
@@ -65,35 +66,37 @@ The implementation keeps four interaction coordinates distinct:
 
 1. **App route** — Ask/board, Sources/Guide, Projects, or Settings.
 2. **Focused workspace** — which workspace window receives workspace actions.
-3. **Active conversation** — the selected conversation within the focused
-   workspace; the global composer sends to this conversation.
+3. **Active conversation tab** — the selected conversation and its stable
+   workspace scope; the global composer sends to this conversation.
 4. **Focused surface** — the selected surface within a workspace composition
    once multi-surface composition is implemented.
 
 Changing one coordinate must not silently change ownership in another. Search,
-Settings, and Projects are app-level destinations. Selecting a conversation
-from history focuses its owning workspace and loads it into that workspace's
-active conversation slot; it does not create a titlebar tab.
+Settings, and Projects are app-level destinations. Selecting an archived
+conversation opens its owning workspace when needed and selects its global
+conversation tab. Closing a tab archives it; it does not delete history.
 
 ## Interaction contract
 
-- **Ask** starts a new conversation in the currently focused workspace. If no
-  workspace is focused/open, it opens or uses General. It does not mean “show
-  the conversation page selected in the sidebar.”
-- **General** is listed alongside repository workspaces. Selecting it focuses
-  its existing window, or opens it if a slot is available. Its history is
-  nested under General, and its questions never acquire a folder merely
-  because another repository is later opened.
+- **New conversation** is the default when no repository workspace is focused.
+  It is unbound and does not prompt the user to mount a folder. `Ctrl+T` / `Cmd+T`
+  opens another conversation tab. Ask creates a conversation in the focused
+  repository when one is selected.
+- **General** is the sidebar group for unbound conversations, not an open
+  workspace window. Selecting it returns to an existing unbound conversation
+  (or starts one); opening a repository never claims those conversations.
 - **Repository selection** focuses the existing tile or opens that folder as a
-  workspace. The disclosure chevron only expands/collapses its sidebar history;
-  it is separate from selecting/focusing the workspace.
-- **Conversation selection** replaces the owning workspace's active
-  conversation selection while preserving other transcripts in local history.
-  An in-flight conversation remains attached to its own identity while the
-  user focuses another workspace.
-- **Drag from sidebar to board** previews placement before opening a repository
-  workspace. Accessible buttons remain available for open, focus, close, and
-  layout choices.
+  workspace. Its sidebar container owns Sources, an optional Project, and
+  conversations; its plus action starts a conversation in that repository.
+  General also has a plus action for an unbound conversation.
+- **Conversation tabs** switch between independent conversations while keeping
+  each folder scope fixed. Switching to a repository-owned tab restores or
+  opens that workspace; it never borrows the previously focused folder.
+- **Workspace placement** uses drag previews and fixed equal-split layouts.
+  Drag a repository into the board to add it, or drag an open workspace header
+  to another preview slot to reorder it. Two and three workspaces select a
+  predefined arrangement from the drop location; four use a fixed 2×2 grid.
+  There are no resize handles or arrangement dropdowns.
 - **Capacity** is explicit and non-destructive. A fifth open workspace is not
   substituted for an existing one; the user closes one first.
 - **No-repository history** is not a fake repository and not an automatic
@@ -101,10 +104,10 @@ active conversation slot; it does not create a titlebar tab.
   history-only; the conversation is readable but analysis cannot run until the
   original folder is reopened.
 
-The sidebar's “Workspaces” group contains General and folder-backed workspaces.
-The folder action may still be labeled “Add repository” because it mounts a
-folder; the resulting owner is a repository workspace. The sidebar remains a
-single global shell no matter how many workspace tiles are open.
+The sidebar's “Workspaces” group contains General and folder-backed workspace
+containers. The global sidebar and conversation tabs remain available no matter
+how many workspace tiles are open. With no folder selected, the composer and
+main surface remain a plain New Conversation view.
 
 ## Composability contract
 
@@ -180,15 +183,15 @@ to keep every slot occupied.
 - The Rust sidecar has an app-level registry with isolated workspace runtimes
   keyed by folder identity; workspace-aware requests cover catalog, Ask, SQL,
   context, memory, source preview, replay, reindex, cancellation, and progress.
-- The workspace board supports one to four workspace tiles, deterministic
-  fixed layouts, drag-placement preview, accessible layout selection, close,
-  persistence, restart restoration, and explicit capacity handling.
-- General is a virtual workspace with no folder path. Ask can run unbound,
-  General history stays under General, and opening a repository does not claim
-  General conversations.
-- Repository and General conversations are grouped in the global sidebar.
-  Selecting history focuses its owner and changes that workspace's active
-  conversation; there is no titlebar conversation-tab hierarchy.
+- The app starts in a new unbound conversation and exposes global conversation
+  tabs with `Ctrl/Cmd+T`, close, previous/next, and numbered selection.
+- The workspace board supports one to four repository tiles, fixed equal-split
+  layouts, drag-placement/reordering preview, persistence, restart restoration,
+  and explicit capacity handling.
+- General is a sidebar/history group with no folder scope or board tile.
+  Opening a repository never claims General conversations.
+- Each repository container groups Sources, its optional Project, and its
+  conversations. Workspace-level plus actions create scoped conversations.
 - The repository workspace owns the live catalog and source list; the global
   composer targets the focused workspace. Only the focused tile renders its
   active transcript; other tiles show a source overview.
@@ -203,20 +206,20 @@ to keep every slot occupied.
 - Independent simultaneous active conversations as multiple workspace
   surfaces; today each workspace has one selected conversation slot, while
   other conversations remain archived and in-flight work retains its owner.
-- Drag-reordering existing outer tiles or inner surfaces.
+- Independent simultaneous conversations as multiple inner surfaces; outer
+  workspace tiles still show one active transcript at a time.
 - Unified aggregate CPU/memory budgeting across several open runtimes.
 - Workspace-owned project/wiki support for General. Existing project artifacts
   are local and repository-associated.
 
 ## Roadmap
 
-1. **Workspace identity and interaction — implemented.** Separate General,
-   repository identity, mount availability, open workspace windows, and
-   conversation ownership. Remove global titlebar tabs as the navigation
-   model.
+1. **Workspace identity and interaction — implemented.** Separate General
+   conversation grouping, repository identity, mount availability, open
+   workspace windows, global conversation tabs, and conversation ownership.
 2. **Outer workspace composition — implemented.** Fixed one-to-four tile board,
-   equal split layouts, drag preview, accessible alternatives, local restore,
-   and explicit capacity behavior.
+   equal split layouts chosen through drag placement, tile reordering, local
+   restore, and explicit capacity behavior.
 3. **Typed inner-surface registry — next.** Move chart/source/analysis
    presentation references from conversation-only companion state into
    workspace-owned typed surfaces. Preserve artifact provenance; cap each

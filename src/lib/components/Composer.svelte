@@ -5,7 +5,6 @@
 		completionsFor,
 		dispatch,
 		openRepository,
-		resumeLastFolder,
 		selectModel,
 		steerRun,
 		stop
@@ -48,7 +47,7 @@ import ProviderIcon from './ProviderIcon.svelte';
 				? 'Reopen this workspace to continue analysis…'
 				: folderName
 					? 'Ask a question…'
-					: 'Ask a question, or mount a folder to analyze…'
+					: 'Ask Fella a question…'
 	);
 
 	// --- completion menu -------------------------------------------------
@@ -262,12 +261,6 @@ import ProviderIcon from './ProviderIcon.svelte';
 
 		if (e.key === 'Enter' && !e.shiftKey) {
 			e.preventDefault();
-			// On the welcome screen (no folder, nothing typed) Enter reopens the
-			// last folder if there is one otherwise it's the normal submit.
-			if (!value.trim() && !session.catalog.workspace && session.lastFolder) {
-				void resumeLastFolder();
-				return;
-			}
 			void submit();
 			return;
 		}
@@ -1091,7 +1084,7 @@ import ProviderIcon from './ProviderIcon.svelte';
 		display: flex;
 		flex-direction: column;
 		gap: var(--space-2);
-		background: var(--bg-raised);
+		background: var(--workspace-surface);
 		border: 1px solid var(--border);
 		border-radius: 18px;
 		box-shadow: var(--shadow-sm);
