@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { openRepository } from '$lib/commands';
+	import { Button } from '$lib/components/ui/button';
 	import { firstActualQuestion, session } from '$lib/session.svelte';
 	import { resolveWorkspaceTileLayout } from '$lib/workspace-layout';
 	import type { WorkspaceTilePreference } from '$lib/workspace-layout';
@@ -182,19 +183,19 @@
 						draggable="true"
 						ondragstart={(event) => startWorkspaceDrag(event, pane.id)}
 					>
-						<button
+						<Button
+							variant="ghost"
 							class="tile-focus"
-							type="button"
 							aria-pressed={session.activeEnvironment?.activePaneId === pane.id}
 							title={workspace?.path ?? 'Conversations that are not tied to a folder'}
 							onclick={() => session.focusEnvironmentPane(pane.id)}
 						>
 							<Icon name={workspace ? 'repository' : 'ask'} size={16} solid />
 							<span>{workspaceName(pane.id)}</span>
-						</button>
-						<button class="tile-close" type="button" aria-label={`Close ${workspaceName(pane.id)} workspace`} title="Remove from this environment" onclick={(event) => closeWorkspace(event, pane.id)}>
+						</Button>
+						<Button variant="ghost" size="icon" class="tile-close" aria-label={`Close ${workspaceName(pane.id)} workspace`} title="Remove from this environment" onclick={(event) => closeWorkspace(event, pane.id)}>
 							<Icon name="x" size={14} />
-						</button>
+						</Button>
 					</header>
 					{#if session.activeEnvironment?.activePaneId === pane.id}
 						<div class="tile-chat">
@@ -202,16 +203,16 @@
 							{#if session.activeChat.companionPane}<CompanionPane />{/if}
 						</div>
 					{:else}
-						<button
+						<Button
+							variant="ghost"
 							class="tile-preview"
-							type="button"
 							title={workspacePreview(pane.id)}
 							aria-label={`Focus ${workspaceName(pane.id)}: ${workspacePreview(pane.id)}`}
 							onclick={() => session.focusEnvironmentPane(pane.id)}
 						>
 							<span class="preview-label">Recent conversation</span>
 							<strong>{workspacePreview(pane.id)}</strong>
-						</button>
+						</Button>
 					{/if}
 				</article>
 			{/if}
@@ -289,34 +290,47 @@
 		background: color-mix(in srgb, var(--pane-head) 96%, var(--brand));
 	}
 	.tile-head:active { cursor: grabbing; }
-	.tile-focus {
+	.tile-head :global(.tile-focus) {
 		min-width: 0;
 		display: flex;
 		align-items: center;
 		gap: 7px;
+		height: auto;
+		min-height: 0;
+		justify-content: flex-start;
+		padding: 0;
+		border-radius: 0;
+		background: transparent;
 		color: var(--text-dim);
 		text-align: left;
 		font-size: var(--fs-sm);
 		font-weight: 550;
+		white-space: normal;
 	}
-	.focused .tile-focus { color: var(--text); }
-	.tile-focus > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-	.tile-focus > :global(svg) { flex: none; color: var(--text-faint); }
-	.focused .tile-focus > :global(svg) { color: var(--brand-icon); }
-	.tile-close {
+	.workspace-tile.focused .tile-head :global(.tile-focus) { color: var(--text); }
+	.tile-head :global(.tile-focus > span) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.tile-head :global(.tile-focus > svg) { flex: none; color: var(--text-faint); }
+	.workspace-tile.focused .tile-head :global(.tile-focus > svg) { color: var(--brand-icon); }
+	.tile-head :global(.tile-close) {
 		flex: none;
 		display: grid;
 		place-items: center;
 		width: 26px;
+		min-width: 26px;
 		height: 26px;
+		min-height: 26px;
+		padding: 0;
 		border-radius: var(--radius-sm);
+		background: transparent;
 		color: var(--text-faint);
 	}
-	.tile-close:hover { background: var(--bg-inset); color: var(--text); }
+	.tile-head :global(.tile-close:hover) { background: var(--bg-inset); color: var(--text); }
 	.tile-chat { flex: 1; min-width: 0; min-height: 0; display: flex; }
 	.tile-chat :global(.transcript) { flex: 1; min-width: 0; min-height: 0; padding: 16px; }
-	.tile-preview {
+	.workspace-tile :global(.tile-preview) {
 		flex: 1;
+		width: 100%;
+		height: auto;
 		min-height: 0;
 		display: flex;
 		flex-direction: column;
@@ -324,12 +338,15 @@
 		justify-content: flex-start;
 		gap: 8px;
 		padding: 18px;
+		border-radius: 0;
+		background: transparent;
 		color: var(--text-faint);
 		text-align: left;
+		white-space: normal;
 	}
-	.tile-preview:hover { background: color-mix(in srgb, var(--bg-inset) 36%, transparent); color: var(--text-dim); }
-	.tile-preview .preview-label { color: var(--text-faint); font-size: var(--fs-xs); }
-	.tile-preview strong { width: 100%; overflow: hidden; color: var(--text-dim); font-size: var(--fs-sm); font-weight: 520; line-height: 1.5; text-overflow: ellipsis; }
+	.workspace-tile :global(.tile-preview:hover) { background: color-mix(in srgb, var(--bg-inset) 36%, transparent); color: var(--text-dim); }
+	.workspace-tile :global(.tile-preview .preview-label) { color: var(--text-faint); font-size: var(--fs-xs); }
+	.workspace-tile :global(.tile-preview strong) { width: 100%; overflow: hidden; color: var(--text-dim); font-size: var(--fs-sm); font-weight: 520; line-height: 1.5; text-overflow: ellipsis; }
 	.empty-board { display: grid; justify-items: center; padding: 24px; text-align: center; }
 	.empty-board p { margin: 0; color: var(--text-faint); font-size: var(--fs-sm); }
 	.placement-preview {

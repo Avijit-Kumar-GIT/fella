@@ -558,13 +558,31 @@ immediate rerun could not start Vite; process inspection showed no leftover
 server, and the next run passed. The build reports a 505.59 KB client chunk
 above Vite's 500 KB advisory and the adapter-static fallback-page notice.
 
+#### Slice 3ab: WorkspaceBoard pane controls
+
+Status: implemented.
+
+- Use shared ghost Buttons for pane focus, close, and inactive-pane preview
+  actions.
+- Preserve the board's compact header controls, focus styling, and preview
+  surface rather than inheriting the shared button's default geometry.
+
+Validation: `pnpm check`, `node --check tests/e2e/workspace-board.spec.mjs`,
+the focused WorkspaceBoard browser tests, and `pnpm build` succeed. The first
+test invocation caught a duplicate local name in a newly added assertion before
+tests ran; the identifier was corrected, and the rerun passed. The browser tests
+verify shared Button adoption, 26px close controls, preview and header focus
+behavior, and the existing four-pane close/reopen flow. The build reports the
+existing client-chunk advisory and adapter-static fallback notice.
+
 #### Remaining in Slice 3
 
 Standardize remaining feature actions and controls around shared primitives
-where they improve consistency without obscuring product behavior. Continue
-with remaining Composer controls, then migrate evidence, transcript, and
-project actions while retaining their distinct layouts. Keep chart geometry
-and workspace-board composition custom.
+where they improve consistency without obscuring product behavior. Audit
+Sidebar reconnect and fallback actions, CommandPalette result rows, and
+Settings option groups next. Keep keyboard-driven listbox options, native
+window controls, chart geometry, and workspace-board composition custom unless
+a shared primitive improves the interaction without changing its semantics.
 
 ### Slice 4: converge and remove duplicates
 

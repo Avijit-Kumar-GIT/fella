@@ -254,6 +254,22 @@ test('environments compose General and repository panes while conversations reta
 	await expect(page.getByRole('article', { name: 'northwind-sales workspace' })).toBeVisible();
 	await expect(page.getByRole('article', { name: 'General workspace' })).toBeVisible();
 	await expect(page.getByRole('article')).toHaveCount(2);
+	const salesTile = page.getByRole('article', { name: 'northwind-sales workspace' });
+	const generalWorkspaceTile = page.getByRole('article', { name: 'General workspace' });
+	const salesFocus = salesTile.locator('.tile-focus');
+	const salesClose = salesTile.getByRole('button', { name: 'Close northwind-sales workspace' });
+	const generalPreview = generalWorkspaceTile.locator('.tile-preview');
+	await expect(salesFocus).toHaveAttribute('data-slot', 'button');
+	await expect(salesClose).toHaveAttribute('data-slot', 'button');
+	await expect(salesClose).toHaveCSS('width', '26px');
+	await expect(salesClose).toHaveCSS('height', '26px');
+	await expect(generalPreview).toHaveAttribute('data-slot', 'button');
+	await generalPreview.click();
+	await expect(generalWorkspaceTile.locator('.tile-focus')).toHaveAttribute('aria-pressed', 'true');
+	await expect(page.getByRole('combobox', { name: 'Ask a question' })).toBeVisible();
+	await salesFocus.click();
+	await expect(salesFocus).toHaveAttribute('aria-pressed', 'true');
+	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
 	const salesWorkspaceRow = page.getByRole('button', { name: 'Open workspace northwind-sales' });
 	await expect(page.getByRole('button', { name: 'Open sources in northwind-sales' })).toBeVisible();
 	await expect(page.getByRole('button', { name: 'Create project for northwind-sales' })).toBeVisible();
@@ -352,7 +368,9 @@ test('the four-pane limit is scoped to one environment and closing a pane frees 
 	await expect(page.getByText(/environment already has four workspaces/i)).toBeVisible();
 	await expect(page.getByRole('article')).toHaveCount(beforeDrop);
 
-	await page.getByRole('button', { name: 'Close General workspace' }).click();
+	const closeGeneral = page.getByRole('button', { name: 'Close General workspace' });
+	await expect(closeGeneral).toHaveAttribute('data-slot', 'button');
+	await closeGeneral.click();
 	await expect(page.getByRole('article')).toHaveCount(3);
 	await dispatchWorkspaceDrag(page, 'drop', fourth.path);
 	await expect(page.getByRole('article', { name: 'travel-plans workspace' })).toBeVisible();
@@ -362,7 +380,9 @@ test('the four-pane limit is scoped to one environment and closing a pane frees 
 	await expect(page.getByText(/environment already has four workspaces/i)).toBeVisible();
 	await expect(page.getByRole('article')).toHaveCount(4);
 
-	await page.getByRole('button', { name: 'Close northwind-sales workspace' }).click();
+	const closeSales = page.getByRole('button', { name: 'Close northwind-sales workspace' });
+	await expect(closeSales).toHaveAttribute('data-slot', 'button');
+	await closeSales.click();
 	await expect(page.getByRole('article')).toHaveCount(3);
 	await dispatchWorkspaceDrag(page, 'drop', fifth.path);
 	await expect(page.getByRole('article', { name: 'reading-notes workspace' })).toBeVisible();
