@@ -792,6 +792,9 @@ Status: implemented.
   above General in the sidebar. The menu identifies each environment by its
   workspace names and exposes selection, creation, and closing the active
   environment.
+- Keep the menu compact: show one-line environment names, mark only the
+  selected environment, and render create/close actions as plain text without
+  a heading, repeated icons, shortcut labels, or divider.
 - Keep a compact copy in the titlebar only while the sidebar is collapsed.
   Preserve `Ctrl/⌘+T`, `Ctrl/⌘+W`, `Ctrl/⌘+[ / ]`, and `Ctrl/⌘+1–9` shortcuts.
 - Use the shared DropdownMenu radio interaction and retain a bounded scroll
@@ -808,6 +811,13 @@ The first long-list check also exposed the selected environment below the
 visible menu area; opening the menu now scrolls the checked environment into
 view. The focused long-list check passes. The build retains the existing
 large-client-chunk advisory (516.39 kB) and adapter-static fallback notice.
+
+Menu declutter follow-up: removed the heading, shortcut hints, repeated row
+and action icons, two-line option copy, and divider. Environment choices now
+use one-line workspace names with a check only on the selected option. The
+five focused environment-dropdown journeys and `pnpm check` pass after this
+change; `node --check tests/e2e/workspace-board.spec.mjs` and `git diff --check`
+also pass.
 
 ## First-slice acceptance criteria
 

@@ -30,12 +30,20 @@
 		);
 	}
 
-	function environmentDetails(environment: (typeof session.environments)[number]): string {
-		return environment.panes.map((pane) => {
-			if (!pane.workspaceId) return 'General';
-			const workspace = session.workspaceAt(pane.workspaceId);
-			return (workspace?.path ?? pane.workspaceId).replace(/[/\\]+$/, '').split(/[/\\]/).at(-1) || 'Workspace';
-		}).join(' · ');
+	function environmentMenuLabel(environment: (typeof session.environments)[number]): string {
+		const locations = [
+			...new Set(
+				environment.panes.map((pane) => {
+					if (!pane.workspaceId) return 'General';
+					const workspace = session.workspaceAt(pane.workspaceId);
+					return (
+						(workspace?.path ?? pane.workspaceId).replace(/[/\\]+$/, '').split(/[/\\]/).at(-1) ||
+						'Workspace'
+					);
+				})
+			)
+		];
+		return locations.length > 1 ? locations.join(' · ') : session.environmentLabel(environment);
 	}
 
 	function selectEnvironment(id: string): void {
@@ -84,26 +92,10 @@
 				sideOffset={6}
 				bind:ref={menuContent}
 			>
-				<div class="environment-menu-heading">
-					<span>Environments</span>
-					<kbd>{shortcutModifier}+1–9</kbd>
-				</div>
 				<DropdownMenu.RadioGroup value={session.activeEnvironmentId} onValueChange={selectEnvironment}>
 					{#each session.environments as environment (environment.id)}
 						<DropdownMenu.RadioItem class="fella-ui-menu-item environment-option" value={environment.id}>
-							{#if environment.panes[0]?.workspaceId}
-								<Icon name="repository" size={14} />
-							{:else if environment.panes.length > 1}
-								<Icon name="panel" size={14} />
-							{:else}
-								<Logo size={15} active={environmentIsBusy(environment)} />
-							{/if}
-							<span class="environment-option-copy">
-								<span class="environment-option-name">{session.environmentLabel(environment)}</span>
-								<span class="environment-option-detail">
-									{environmentDetails(environment)}
-								</span>
-							</span>
+							<span class="environment-option-label">{environmentMenuLabel(environment)}</span>
 							{#if environment.id === session.activeEnvironmentId}
 								<Icon name="check" size={14} />
 							{/if}
@@ -111,23 +103,20 @@
 					{/each}
 				</DropdownMenu.RadioGroup>
 
-				<div class="environment-menu-separator" role="separator"></div>
-				<DropdownMenu.Item class="fella-ui-menu-item environment-action" onSelect={onnew}>
-					<Icon name="plus" size={14} />
-					<span>New environment</span>
-					<kbd>{shortcutModifier}+T</kbd>
-				</DropdownMenu.Item>
-				{#if session.environments.length > 1}
-					<DropdownMenu.Item
-						class="fella-ui-menu-item environment-action close-environment"
-						disabled={environmentIsBusy(activeEnvironment)}
-						onSelect={closeCurrentEnvironment}
-					>
-						<Icon name="x" size={14} />
-						<span>Close current environment</span>
-						<kbd>{shortcutModifier}+W</kbd>
+				<div class="environment-menu-actions">
+					<DropdownMenu.Item class="fella-ui-menu-item" onSelect={onnew}>
+						New environment
 					</DropdownMenu.Item>
-				{/if}
+					{#if session.environments.length > 1}
+						<DropdownMenu.Item
+							class="fella-ui-menu-item close-environment"
+							disabled={environmentIsBusy(activeEnvironment)}
+							onSelect={closeCurrentEnvironment}
+						>
+							Close current environment
+						</DropdownMenu.Item>
+					{/if}
+				</div>
 			</DropdownMenu.Content>
 		</DropdownMenu.Portal>
 	</DropdownMenu.Root>
@@ -198,55 +187,24 @@
 		max-height: min(420px, calc(100vh - 84px));
 		overflow-y: auto;
 	}
-	.environment-menu-heading {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		padding: 7px 9px 8px;
-		color: var(--text-faint);
-		font-size: var(--fs-xs);
-	}
-	.environment-menu-heading kbd,
-	:global(.environment-action kbd) {
-		color: var(--text-faint);
-		font-family: var(--mono);
-		font-size: 10px;
-	}
 	:global(.environment-option) {
-		min-height: 42px;
-		gap: 9px;
-		padding: 5px 9px;
+		gap: 8px;
 	}
-	.environment-option-copy {
+	.environment-option-label {
 		flex: 1;
 		min-width: 0;
-		display: grid;
-		gap: 1px;
-	}
-	.environment-option-name {
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
-		color: var(--text);
 	}
-	.environment-option-detail {
-		color: var(--text-faint);
-		font-size: var(--fs-xs);
-	}
-	:global(.environment-option > svg:last-child) {
+	:global(.environment-option > svg) {
+		flex: none;
 		margin-left: auto;
 		color: var(--text-dim);
 	}
-	.environment-menu-separator {
-		height: 1px;
-		margin: 5px 5px;
-		background: var(--border);
+	.environment-menu-actions {
+		margin-top: 6px;
 	}
-	:global(.environment-action) { gap: 9px; }
-	:global(.environment-action > span) { flex: 1; }
-	:global(.environment-action > svg) { color: var(--text-faint); }
-	:global(.environment-action[data-highlighted] > svg),
-	:global(.environment-action:hover > svg) { color: var(--text-dim); }
 	:global(.close-environment[aria-disabled='true']) {
 		color: var(--text-faint);
 		opacity: 0.55;
