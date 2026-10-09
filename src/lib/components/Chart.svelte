@@ -9,13 +9,17 @@
 		type PieArcDatum
 	} from 'd3-shape';
 	import { Button } from '$lib/components/ui/button';
+	import { Collapsible } from '$lib/components/ui/collapsible';
 	import type { ChartMetadata, ChartPayload, VisualizationSpec } from '$lib/types';
+	import Icon from './Icon.svelte';
 
 	let {
 		spec,
 		source = '',
 		onopen
 	}: { spec: VisualizationSpec; source?: string; onopen?: () => void } = $props();
+	let chartDetailsOpen = $state(false);
+	let exactValuesOpen = $state(false);
 
 	// Chart colors are deliberately separate from verification/status colors.
 	// Every mark also gets a label or a data-table equivalent.
@@ -597,22 +601,32 @@
 	{/if}
 
 	{#if chartDetails.length > 0}
-		<details class="chart-details">
-			<summary>Chart details</summary>
-			<dl>{#each chartDetails as [label, value] (label)}<div><dt>{label}</dt><dd>{value}</dd></div>{/each}</dl>
-		</details>
+		<Collapsible.Root class="chart-details" bind:open={chartDetailsOpen}>
+			<Collapsible.Trigger class="chart-disclosure">
+				<span>Chart details</span>
+				<span class="chart-disclosure-caret" class:open={chartDetailsOpen} aria-hidden="true"><Icon name="chevron-right" size={12} /></span>
+			</Collapsible.Trigger>
+			<Collapsible.Content>
+				<dl>{#each chartDetails as [label, value] (label)}<div><dt>{label}</dt><dd>{value}</dd></div>{/each}</dl>
+			</Collapsible.Content>
+		</Collapsible.Root>
 	{/if}
 
-	<details class="values">
-		<summary>Show exact values</summary>
-		<div class="value-table-wrap">
-			<table class="value-table">
-				<caption class="sr-only">{chartTitle} values</caption>
-				<thead><tr>{#each exactTable.headings as heading, index (`${heading}-${index}`)}<th scope="col">{heading}</th>{/each}</tr></thead>
-				<tbody>{#each exactTable.rows as row, rowIndex (rowIndex)}<tr>{#each row as cell, cellIndex (`${rowIndex}-${cellIndex}`)}{#if cellIndex === 0}<th scope="row">{formatCell(cell)}</th>{:else}<td>{formatCell(cell)}</td>{/if}{/each}</tr>{/each}</tbody>
-			</table>
-		</div>
-	</details>
+	<Collapsible.Root class="values" bind:open={exactValuesOpen}>
+		<Collapsible.Trigger class="chart-disclosure">
+			<span>Show exact values</span>
+			<span class="chart-disclosure-caret" class:open={exactValuesOpen} aria-hidden="true"><Icon name="chevron-right" size={12} /></span>
+		</Collapsible.Trigger>
+		<Collapsible.Content>
+			<div class="value-table-wrap">
+				<table class="value-table">
+					<caption class="sr-only">{chartTitle} values</caption>
+					<thead><tr>{#each exactTable.headings as heading, index (`${heading}-${index}`)}<th scope="col">{heading}</th>{/each}</tr></thead>
+					<tbody>{#each exactTable.rows as row, rowIndex (rowIndex)}<tr>{#each row as cell, cellIndex (`${rowIndex}-${cellIndex}`)}{#if cellIndex === 0}<th scope="row">{formatCell(cell)}</th>{:else}<td>{formatCell(cell)}</td>{/if}{/each}</tr>{/each}</tbody>
+				</table>
+			</div>
+		</Collapsible.Content>
+	</Collapsible.Root>
 </figure>
 
 <style>
@@ -689,18 +703,20 @@
 	.heatmap td { width: 28px; min-width: 28px; padding: 0; }
 	.heat-cell { display: block; width: 26px; height: 22px; border-radius: 4px; background: var(--brand); opacity: var(--heat-opacity); }
 	.heat-cell.empty { border: 1px dashed var(--border-strong); background: transparent; opacity: 1; }
-	.values, .chart-details { margin-top: var(--space-2); font-size: var(--fs-xs); }
-	.values summary, .chart-details summary { width: fit-content; color: var(--text-faint); cursor: pointer; }
-	.values summary:hover, .chart-details summary:hover { color: var(--text-dim); }
+	:global(.values), :global(.chart-details) { margin-top: var(--space-2); font-size: var(--fs-xs); }
+	:global(button.chart-disclosure) { display: inline-flex; align-items: center; gap: var(--space-1); width: fit-content; color: var(--text-faint); cursor: pointer; text-align: left; }
+	:global(button.chart-disclosure:hover) { color: var(--text-dim); }
+	.chart-disclosure-caret { display: inline-flex; }
+	.chart-disclosure-caret.open { transform: rotate(90deg); }
 	.value-table-wrap { margin-top: var(--space-2); overflow-x: auto; }
 	.value-table { min-width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; white-space: nowrap; }
 	.value-table th, .value-table td { padding: 4px 8px; border-bottom: 1px solid var(--border); text-align: right; }
 	.value-table th:first-child, .value-table td:first-child { text-align: left; }
 	.value-table thead th { color: var(--text-dim); font-weight: 500; }
-	.chart-details dl { display: grid; gap: 5px; margin: var(--space-2) 0 0; }
-	.chart-details dl div { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: var(--space-2); }
-	.chart-details dt { color: var(--text-faint); }
-	.chart-details dd { margin: 0; color: var(--text-dim); overflow-wrap: anywhere; }
+	:global(.chart-details dl) { display: grid; gap: 5px; margin: var(--space-2) 0 0; }
+	:global(.chart-details dl div) { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: var(--space-2); }
+	:global(.chart-details dt) { color: var(--text-faint); }
+	:global(.chart-details dd) { margin: 0; color: var(--text-dim); overflow-wrap: anywhere; }
 	@media (max-width: 560px) {
 		.chart-card { padding-inline: var(--space-3); }
 		.row { grid-template-columns: minmax(0, 38%) 1fr; gap: var(--space-2); }

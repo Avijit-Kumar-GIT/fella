@@ -1205,7 +1205,7 @@ test('Companion snapshot recovery uses a shared button and reopens the current s
 	await expect(companion).toContainText('Preview only · this file is not added to the conversation context.');
 });
 
-test('Chart Open beside uses a shared button and preserves the chart in the companion pane', async ({ page }) => {
+test('Chart disclosures use Collapsible and Open beside preserves the chart in the companion pane', async ({ page }) => {
 	await installDesktopMock(page, {
 		chartEvidence: {
 			id: 'fixture-chart',
@@ -1220,7 +1220,14 @@ test('Chart Open beside uses a shared button and preserves the chart in the comp
 				series: [{ name: 'Revenue', values: [12, 18, 15] }],
 				unit: '$',
 				x_label: 'Month',
-				y_label: 'Revenue'
+				y_label: 'Revenue',
+				metadata: {
+					source_label: 'sales.csv',
+					fields: ['month', 'revenue'],
+					aggregation: 'sum',
+					filters: [],
+					part_to_whole: false
+				}
 			}
 		}
 	});
@@ -1230,6 +1237,16 @@ test('Chart Open beside uses a shared button and preserves the chart in the comp
 
 	const chart = page.locator('.chart-card');
 	await expect(chart).toContainText('Monthly revenue');
+	const chartDetails = chart.getByRole('button', { name: 'Chart details' });
+	await expect(chartDetails).toHaveAttribute('aria-expanded', 'false');
+	await chartDetails.click();
+	await expect(chartDetails).toHaveAttribute('aria-expanded', 'true');
+	await expect(chart).toContainText('sales.csv');
+	const exactValues = chart.getByRole('button', { name: 'Show exact values' });
+	await exactValues.click();
+	await expect(exactValues).toHaveAttribute('aria-expanded', 'true');
+	const exactTable = chart.getByRole('table', { name: 'Monthly revenue values' });
+	await expect(exactTable).toContainText('$18');
 	const openBeside = page.getByRole('button', { name: 'Open beside' });
 	await expect(openBeside).toHaveAttribute('data-slot', 'button');
 	await openBeside.click();
