@@ -594,8 +594,9 @@
 								<label class="model-search">
 									<Icon name="search" size={14} />
 									<span class="sr-only">Find a model</span>
-									<input
-										bind:this={modelInput}
+									<Input
+										class="model-search-input"
+										bind:ref={modelInput}
 										bind:value={modelQuery}
 										placeholder="Find a model…"
 										spellcheck="false"
@@ -893,17 +894,25 @@
 		border-color: var(--link);
 		box-shadow: var(--focus-ring);
 	}
-	.model-search input {
+	.model-search :global(.model-search-input) {
 		min-width: 0;
 		width: 100%;
+		min-height: 0;
 		border: 0;
+		border-radius: 0;
 		outline: 0;
+		padding: 0;
 		background: transparent;
 		color: var(--text);
 		font: inherit;
 		font-size: var(--fs-sm);
 	}
-	.model-search input::placeholder {
+	.model-search :global(.model-search-input:focus-visible) {
+		border-color: transparent;
+		outline: 0;
+		box-shadow: none;
+	}
+	.model-search :global(.model-search-input::placeholder) {
 		color: var(--text-faint);
 	}
 	.model-list {

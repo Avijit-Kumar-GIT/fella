@@ -373,6 +373,21 @@ test('Composer source search filters and attaches a workspace source', async ({ 
 	await expect(page.locator('.ref-pill').filter({ hasText: 'sales.csv' })).toBeVisible();
 });
 
+test('Composer model search filters the available models', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+	const modelTrigger = page.locator('.model-trigger');
+	await expect(modelTrigger).toBeVisible();
+	await modelTrigger.click();
+	const search = page.getByRole('textbox', { name: 'Find a model' });
+	await expect(search).toBeFocused();
+	await expect(search).toHaveClass(/fella-ui-input/);
+	await search.fill('no-such-model');
+	await expect(page.getByText('No models available from openai.')).toBeVisible();
+	await search.fill('gpt-4.1-mini');
+	await expect(page.getByRole('option', { name: 'gpt-4.1-mini' })).toBeVisible();
+});
+
 test('environment tabs save different workspace arrangements without leaking panes between them', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');

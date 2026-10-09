@@ -213,6 +213,20 @@ workspace-board test for filtering and attaching a source passes; and
 `pnpm build` succeeds. The build reports a 501.67 KB client chunk above Vite's
 500 KB advisory and the adapter-static fallback-page notice.
 
+#### Slice 3e: Composer model search
+
+Status: implemented.
+
+- Use the shared Input primitive in the model picker while preserving its
+  compact search-row styling, automatic focus, and filtering behavior.
+- Keep model selection and picker dismissal feature-owned.
+
+Validation: `pnpm check`, `node --check tests/e2e/workspace-board.spec.mjs`,
+and `pnpm build` succeed. The focused model-search browser test verifies
+focus, the empty result state, and filtering back to the available model.
+The build reports a 501.69 KB client chunk above Vite's 500 KB advisory and
+the adapter-static fallback-page notice.
+
 #### Remaining in Slice 3
 
 Standardize the remaining Composer and Sidebar controls around shared
