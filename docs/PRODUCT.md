@@ -54,4 +54,6 @@ Web research is **not shipped** and remains on the backburner. Fella does not
 silently send workspace contents to web search. Fella is not a coding agent,
 file manager, shell automation tool, notebook, or general-purpose multi-agent
 orchestrator. See [Architecture](ARCHITECTURE.md) for the implementation and
-[Roadmap](ROADMAP.md) for the current open work.
+[Roadmap](ROADMAP.md) for the current open work. [FellaDB](FELLADB.md) describes
+an exploratory direction for an optional personal-files companion; it is not
+part of the current shipped scope.
