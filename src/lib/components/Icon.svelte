@@ -1,87 +1,115 @@
 <script lang="ts" module>
-	// Hand-picked 24x24 icons, with filled silhouettes for semantic marks that
-	// may use color. Avoid simulating a filled icon by filling outline geometry.
-	export const ICONS = {
-		'chevron-right': 'm9 18 6-6-6-6',
-		x: 'M18 6 6 18M6 6l12 12',
-		plus: 'M5 12h14M12 5v14',
-		'more-horizontal': 'M5 12h.01M12 12h.01M19 12h.01',
-		check: 'M20 6 9 17l-5-5',
-		alert:
-			'm10.24 4.5-8 14A2 2 0 0 0 4 21.5h16a2 2 0 0 0 1.76-3l-8-14a2 2 0 0 0-3.52 0ZM12 9.5v4M12 17.5h.01',
-		'arrow-up-right': 'M7 17 17 7M7 7h10v10',
-		refresh: 'M20 11a8 8 0 1 1-2.34-5.66L20 8M20 4v4h-4',
-		minus: 'M5 12h14',
-		square: 'M5 5h14v14H5z',
-		folder:
-			'M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z',
-		search: 'M11 3a8 8 0 1 0 0 16 8 8 0 0 0 0-16ZM21 21l-4.35-4.35',
-		'corner-down-left': 'M9 10 4 15l5 5M20 4v7a4 4 0 0 1-4 4H4',
-		ask: 'M4 5h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H9l-5 4v-4H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1Z',
-		repository:
-			'M3 7.5A1.5 1.5 0 0 1 4.5 6h5l1.75 2H19.5A1.5 1.5 0 0 1 21 9.5v8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5v-10ZM7 12h10M7 15h6',
-		project: 'M5.5 4h13A1.5 1.5 0 0 1 20 5.5v13a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 18.5v-13A1.5 1.5 0 0 1 5.5 4ZM8 9h8M8 13h5M8 17h3',
-		stop: 'M7 6h10a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1Z',
-		asterisk: 'M12 6v12M17.196 9 6.804 15M6.804 9l10.392 6',
-		info: 'M2 12a10 10 0 1 0 20 0 10 10 0 1 0-20 0M12 16v-4M12 8h.01',
-		sun: 'M12 3v2M12 19v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M3 12h2M19 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42M12 7a5 5 0 1 0 0 10 5 5 0 0 0 0-10Z',
-		moon: 'M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79Z',
-		monitor: 'M4 5h16v11H4zM8 21h8M12 16v5',
-		panel: 'M3 4h18v16H3zM9 4v16',
-		settings:
-			'M10 2.75h4l.55 2.2a8 8 0 0 1 1.6.9l2.1-.7 2 3.5-1.55 1.5a8 8 0 0 1 0 1.8l1.55 1.5-2 3.5-2.1-.7a8 8 0 0 1-1.6.9l-.55 2.2h-4l-.55-2.2a8 8 0 0 1-1.6-.9l-2.1.7-2-3.5 1.55-1.5a8 8 0 0 1 0-1.8l-1.55-1.5 2-3.5 2.1.7a8 8 0 0 1 1.6-.9L10 2.75ZM14.5 12a2.5 2.5 0 1 1-5 0 2.5 2.5 0 0 1 5 0Z',
-		 table: 'M3 5h18v14H3zM3 10h18M9 5v14M16 5v14',
-		file: 'M6 3h8l4 4v14H6zM14 3v5h5M8 12h8M8 16h6',
-		home: 'm3 10 9-7 9 7v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1Z M9 21v-7h6v7',
-		bookmark: 'M6 3h12v18l-6-4-6 4Z',
-		compose:
-			'M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7M18.375 2.625a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4Z',
-		pencil: 'M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z'
-	} as const;
+	export const ICON_NAMES = [
+		'chevron-right',
+		'x',
+		'plus',
+		'more-horizontal',
+		'check',
+		'alert',
+		'arrow-up-right',
+		'refresh',
+		'minus',
+		'square',
+		'folder',
+		'search',
+		'corner-down-left',
+		'ask',
+		'repository',
+		'project',
+		'stop',
+		'asterisk',
+		'info',
+		'sun',
+		'moon',
+		'panel',
+		'settings',
+		'table',
+		'file',
+		'bookmark',
+		'pencil'
+	] as const;
 
-	export type IconName = keyof typeof ICONS;
-	const SOLID_ICONS: Partial<Record<IconName, string>> = {
-		folder: 'M4 6a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.67.9l.81 1.2a2 2 0 0 0 1.66.9H18a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6Z',
-		repository: 'M4.5 6h5.03a2 2 0 0 1 1.42.59L12.36 8h7.14A1.5 1.5 0 0 1 21 9.5v8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5v-10A1.5 1.5 0 0 1 4.5 6ZM7 12h10v1.4H7Zm0 3h6v1.4H7Z',
-		ask: 'M4 5h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H9l-5 4v-4H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1Z',
-		project: 'M5.5 3.5h13A2.5 2.5 0 0 1 21 6v12a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 18V6a2.5 2.5 0 0 1 2.5-2.5ZM7 7.5h10V9H7Zm0 4h10V13H7Zm0 4h6V17H7Z'
-	};
+	export type IconName = (typeof ICON_NAMES)[number];
 	/** 12px metadata, 14px compact controls, 16px standard UI, 20px display. */
 	export type IconSize = 12 | 14 | 16 | 20;
 </script>
 
 <script lang="ts">
-	let {
-		name,
-		size = 16,
-		fill = false,
-		solid = false
-	}: { name: IconName; size?: IconSize; fill?: boolean; solid?: boolean } = $props();
-	let solidPath = $derived(SOLID_ICONS[name]);
-	let useSolid = $derived(solid && solidPath !== undefined);
+	import {
+		Asterisk,
+		ArrowUpRight,
+		Bookmark,
+		Check,
+		ChevronRight,
+		CornerDownLeft,
+		Ellipsis,
+		FileText,
+		Folder,
+		FolderGit2,
+		FolderKanban,
+		Info,
+		MessageSquare,
+		Minus,
+		Moon,
+		PanelLeft,
+		Pencil,
+		Plus,
+		RefreshCw,
+		Search,
+		Settings,
+		Square,
+		SquareStop,
+		Sun,
+		Table,
+		TriangleAlert,
+		X,
+		type LucideIcon
+	} from '@lucide/svelte';
+
+	const ICONS: Record<IconName, LucideIcon> = {
+		'chevron-right': ChevronRight,
+		x: X,
+		plus: Plus,
+		'more-horizontal': Ellipsis,
+		check: Check,
+		alert: TriangleAlert,
+		'arrow-up-right': ArrowUpRight,
+		refresh: RefreshCw,
+		minus: Minus,
+		square: Square,
+		folder: Folder,
+		search: Search,
+		'corner-down-left': CornerDownLeft,
+		ask: MessageSquare,
+		repository: FolderGit2,
+		project: FolderKanban,
+		stop: SquareStop,
+		asterisk: Asterisk,
+		info: Info,
+		sun: Sun,
+		moon: Moon,
+		panel: PanelLeft,
+		settings: Settings,
+		table: Table,
+		file: FileText,
+		bookmark: Bookmark,
+		pencil: Pencil
+	};
+
+	let { name, size = 16 }: { name: IconName; size?: IconSize } = $props();
+	const IconComponent = $derived(ICONS[name]);
 </script>
 
-<svg
+<IconComponent
 	class="icon"
-	width={size}
-	height={size}
-	viewBox="0 0 24 24"
-	fill={useSolid || fill ? 'currentColor' : 'none'}
-	stroke={useSolid ? 'none' : 'currentColor'}
-	stroke-width={size === 12 ? 1.8 : 2}
-	stroke-linecap="round"
-	stroke-linejoin="round"
+	{size}
+	strokeWidth={size === 12 ? 1.8 : 2}
 	aria-hidden="true"
 	focusable="false"
->
-	<path
-		d={useSolid ? (solidPath ?? ICONS[name]) : ICONS[name]}
-		fill-rule={useSolid && (name === 'repository' || name === 'project') ? 'evenodd' : undefined}
-	/>
-</svg>
+/>
 
 <style>
-	.icon {
+	:global(svg.icon) {
 		display: inline-block;
 		flex: none;
 		vertical-align: middle;

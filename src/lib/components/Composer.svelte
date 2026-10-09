@@ -664,7 +664,7 @@
 				</Button>
 			{:else if session.busy}
 				<Button variant="destructive" size="icon" class="act stop" title="Stop (Esc)" aria-label="Stop" onclick={() => stop()}>
-					<Icon name="stop" fill size={16} />
+					<Icon name="stop" size={16} />
 				</Button>
 			{:else if session.mountProgress}
 				<Button variant="ghost" size="icon" class="act mount-wait" disabled title="Preparing workspace" aria-label="Preparing workspace">

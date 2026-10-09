@@ -66,7 +66,7 @@
 					title={`${session.environmentLabel(environment)} · ${environment.panes.length} workspace${environment.panes.length === 1 ? '' : 's'}`}
 				>
 					{#if environment.panes[0]?.workspaceId}
-						<Icon name="repository" size={14} solid />
+						<Icon name="repository" size={14} />
 					{:else if environment.panes.length === 1}
 						<Logo size={14} active={environment.panes.some((pane) => session.conversations.find((item) => item.id === pane.conversationId)?.busy)} />
 					{:else}

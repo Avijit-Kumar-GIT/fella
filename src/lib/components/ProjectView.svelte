@@ -97,7 +97,7 @@
 	<section class="project-page" aria-labelledby="project-title">
 		<header class="project-header">
 			<div class="project-heading">
-				<span class="project-mark"><Icon name="project" size={20} solid /></span>
+				<span class="project-mark"><Icon name="project" size={20} /></span>
 				<div class="project-title-wrap">
 					<Input
 						id="project-title"

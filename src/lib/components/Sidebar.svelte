@@ -299,7 +299,7 @@
 							ondragstart={(event) => beginRepositoryDrag(event, repo)}
 							onclick={() => toggleRepository(repo)}
 						>
-							<span class="row-slot row-icon"><Icon name={repo.path ? 'repository' : 'ask'} size={16} solid={repo.current} /></span>
+							<span class="row-slot row-icon"><Icon name={repo.path ? 'repository' : 'ask'} size={16} /></span>
 							<span class="repository-copy">
 								<span class="repository-name">{repo.name}</span>
 								{#if repo.historyOnly}<span class="history-badge" role="status" aria-label="History only. The folder could not be opened; saved conversations remain available." title="Saved conversations are available; the folder is offline">History</span>{/if}
@@ -380,7 +380,7 @@
 											aria-label={`Open project ${repo.project.name}`}
 											onclick={() => session.openProject(repo.project!.id)}
 										>
-											<span class="row-slot row-icon"><Icon name="project" size={16} solid={session.workspaceView === 'project' && session.activeProjectId === repo.project.id} /></span>
+										<span class="row-slot row-icon"><Icon name="project" size={16} /></span>
 											<span>{repo.project.name}</span>
 										</Button>
 									{:else}

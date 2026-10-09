@@ -33,10 +33,11 @@ focus management independently.
   semantic utilities now map back to those tokens, and its global Preflight
   reset is intentionally not enabled.
 - Tailwind v4, shadcn-svelte configuration, Bits UI, and the `cn` helper are in
-  place. The first copied-source component is the shared Button, now used by
-  the Guide actions. Most of the rest of the interface is still on its existing
-  component-local styles; this is an incremental migration, not a wholesale
-  visual reset.
+  place. The shared UI source now includes Button, Input, Textarea, Select,
+  Dialog, DropdownMenu, Switch, Tabs, Collapsible, Tooltip, Alert, Badge, and
+  Spinner. These are adopted in the feature views where their interaction or
+  repeated control benefits from a common implementation; domain-specific
+  layout remains feature-owned.
 - The large feature components combine Fella-specific behavior with repeated
   buttons, menus, tabs, disclosures, and form controls. Migrate those controls
   without replacing domain-specific composition. The root `+layout.svelte`
@@ -91,7 +92,7 @@ focus management independently.
 | 2 | `Chart.svelte` | Keep the D3 chart renderer and data encodings. Standardize its frame/actions and use shared table primitives for tabular data. |
 | 3 | `DataLoader.svelte` | Removed; loading consumers use the shared, reduced-motion-aware Spinner. |
 | 3 | `Titlebar.svelte` | Preserve OS-specific window controls and draggable regions. Standardize only Fella-level icon buttons, focus, and tooltips. |
-| 2 | `Icon.svelte` | Replace the hand-maintained generic glyph catalog with one consistent icon source and sizing convention. Keep product-specific brand marks separate. |
+| 2 | `Icon.svelte` | Use Lucide Svelte for generic glyphs with a shared size convention. Keep Fella and provider brand marks separate. |
 | Keep | `Logo.svelte` | Retain as Fella's branded orb/mark. |
 | Keep | `ProviderIcon.svelte` | Retain provider-specific marks; do not substitute generic UI icons. |
 
@@ -655,12 +656,11 @@ client-chunk advisory and adapter-static fallback notice.
 
 #### Remaining in Slice 3
 
-Standardize remaining feature actions and controls around shared primitives
-where they improve consistency without obscuring product behavior. Audit the
-Icon component against the shared icon source, then perform the final
-duplicate-style and regression sweep. Keep native window controls, chart
-geometry, and workspace-board composition custom unless a shared primitive
-improves the interaction without changing its semantics.
+All planned shared action migrations and the icon-source audit are implemented.
+The final convergence pass will check remaining native fields and disclosures,
+remove only genuinely duplicated styles, and verify regressions. Keep native
+window controls, chart geometry, and workspace-board composition custom unless
+a shared primitive improves the interaction without changing its semantics.
 
 The combined keyboard test for the repository menu remains unresolved. Its
 second focused run again could not find the “Repository actions” trigger after
@@ -686,11 +686,35 @@ verifies shared Button adoption, palette dismissal and focus return, and
 sidebar collapse/expand. The build reports the existing client-chunk advisory
 and adapter-static fallback notice.
 
+#### Slice 3ai: shared icon source
+
+Status: implemented.
+
+- Replace the hand-authored generic SVG path catalog with maintained Lucide
+  Svelte icons, selected through Fella's existing semantic names and limited
+  to the sizes used by the interface.
+- Use a consistent stroked icon style for repository and project marks; their
+  selected state remains with the surrounding tab or row. Keep Fella's orb and
+  provider-specific marks separate.
+
+Validation: `pnpm check`, four focused workspace-board browser tests covering
+Composer, Sidebar, Titlebar, and CommandPalette icons, and `pnpm build` pass.
+The build reports a 513.85 kB client chunk (152.09 kB gzip) and the existing
+adapter-static fallback notice. The repository-menu keyboard assertion noted
+above was not rerun and remains unresolved.
+
 ### Slice 4: converge and remove duplicates
 
-Replace remaining ad hoc controls, delete unused `.pill`, `.rowbtn`, and
-component-local duplicate styles, then audit the complete desktop UI in light
-and dark themes.
+Status: in progress.
+
+- The raw-button audit finds only the shared Button implementation and the
+  three native Electron minimize, maximize, and close controls.
+- No standalone `.pill` or `.rowbtn` control styles remain; `ref-pill` is a
+  separate inline-reference treatment, not a duplicate button primitive.
+- Remaining candidates are Sidebar's conversation-rename input and native
+  disclosures in Settings, Chart, and Sources. Standardize those where the
+  shared Input and Collapsible preserve their current behavior, then run the
+  final desktop regression/theme sweep.
 
 ## First-slice acceptance criteria
 

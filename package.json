@@ -87,6 +87,7 @@
 		}
 	},
 	"dependencies": {
+		"@lucide/svelte": "^1.53.0",
 		"d3-scale": "^4.0.2",
 		"d3-shape": "^3.2.0",
 		"marked": "^18.0.13"

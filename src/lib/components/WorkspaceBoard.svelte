@@ -190,7 +190,7 @@
 							title={workspace?.path ?? 'Conversations that are not tied to a folder'}
 							onclick={() => session.focusEnvironmentPane(pane.id)}
 						>
-							<Icon name={workspace ? 'repository' : 'ask'} size={16} solid />
+							<Icon name={workspace ? 'repository' : 'ask'} size={16} />
 							<span>{workspaceName(pane.id)}</span>
 						</Button>
 						<Button variant="ghost" size="icon" class="tile-close" aria-label={`Close ${workspaceName(pane.id)} workspace`} title="Remove from this environment" onclick={(event) => closeWorkspace(event, pane.id)}>
