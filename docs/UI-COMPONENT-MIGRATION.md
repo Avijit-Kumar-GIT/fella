@@ -163,7 +163,7 @@ assertion caveat recorded under Slice 2 remains unresolved.
 
 #### Slice 3b: Composer mode selection
 
-Status: implemented; browser verification unresolved.
+Status: implemented and browser-verified.
 
 - Replace the bespoke Ask/Check data menu with the shared DropdownMenu radio
   interaction while preserving its Fella-specific descriptions and compact
@@ -173,14 +173,11 @@ Status: implemented; browser verification unresolved.
 
 Validation: `pnpm check`, `node --check tests/e2e/workspace-board.spec.mjs`,
 and `pnpm build` pass; the build reports a 501 KB client chunk over Vite's
-500 KB advisory threshold. The first focused browser attempt mixed pointer
-opening with keyboard navigation and failed because pointer-open menus retain
-trigger focus; the test now separately covers pointer-open dismissal and a
-keyboard-open selection path. The next run reached selection and captured the
-trigger showing “Check data” with the menu closed, then failed because the test
-queried the trigger by its old accessible name, “Ask.” The locator now uses the
-updated name, but was not rerun; this browser result remains unresolved and is
-not counted as a pass.
+500 KB advisory threshold. The test separately verifies pointer-open Escape
+dismissal with focus restoration and keyboard-open selection. After the
+user-approved locator correction to match the selected “Check data” accessible
+name, the focused browser test passed. The earlier mixed pointer/keyboard
+attempts were test interaction issues, not evidence of a product failure.
 
 #### Slice 3c: Composer text entry
 
