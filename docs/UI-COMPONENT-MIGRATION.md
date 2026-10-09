@@ -711,9 +711,9 @@ Status: in progress.
   three native Electron minimize, maximize, and close controls.
 - No standalone `.pill` or `.rowbtn` control styles remain; `ref-pill` is a
   separate inline-reference treatment, not a duplicate button primitive.
-- The remaining candidates are native disclosures in Settings, Chart, and
-  Sources. Standardize those where the shared Collapsible preserves current
-  behavior, then run the final desktop regression/theme sweep.
+- The remaining candidates are native disclosures in Settings and Chart.
+  Standardize those where the shared Collapsible preserves current behavior,
+  then run the final desktop regression/theme sweep.
 
 #### Slice 4a: Sidebar conversation rename field
 
@@ -726,6 +726,19 @@ Validation: `pnpm check` reports zero errors and warnings, the workspace-board
 test file passes `node --check`, and the focused Sidebar browser test passes.
 It verifies the shared Input slot, initial focus, Escape cancellation, and
 conversation deletion.
+
+#### Slice 4b: Sources skipped-file disclosure
+
+Status: implemented.
+
+- Use shared Collapsible behavior for the skipped-file search and list while
+  keeping its closed-by-default state, filter, and pagination.
+- Scope row styling to skipped-file rows instead of every nested `div`.
+
+Validation: `pnpm check` reports zero errors and warnings, the workspace-board
+test file passes `node --check`, and the focused Sources pagination test passes.
+It covers opening and closing the disclosure, filtering skipped files, and
+retaining pagination boundaries.
 
 ## First-slice acceptance criteria
 

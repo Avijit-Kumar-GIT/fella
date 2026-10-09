@@ -968,8 +968,10 @@ test('Sources pagination uses shared buttons and preserves catalog and skipped-f
 	await expect(sourceNext).toBeDisabled();
 	await expect(page.getByRole('option')).toHaveCount(5);
 
-	const skippedFiles = page.locator('details.skipped');
-	await skippedFiles.locator('summary').click();
+	const skippedFiles = page.locator('.skipped');
+	const skippedToggle = skippedFiles.getByRole('button', { name: '105 skipped files Why?' });
+	await skippedToggle.click();
+	await expect(skippedToggle).toHaveAttribute('aria-expanded', 'true');
 	const skippedFilter = page.getByRole('textbox', { name: 'Filter skipped files' });
 	await expect(skippedFilter).toHaveAttribute('data-slot', 'input');
 	await skippedFilter.fill('unsupported-001');
@@ -989,6 +991,9 @@ test('Sources pagination uses shared buttons and preserves catalog and skipped-f
 	await skippedNext.click();
 	await expect(skippedPages).toContainText('101–105 of 105');
 	await expect(skippedNext).toBeDisabled();
+	await skippedToggle.click();
+	await expect(skippedToggle).toHaveAttribute('aria-expanded', 'false');
+	await expect(skippedFilter).not.toBeVisible();
 });
 
 test('Project title and wiki use shared editing controls and retain saved content', async ({ page }) => {

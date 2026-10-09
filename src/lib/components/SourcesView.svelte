@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { baseName, openFolder } from '$lib/commands';
 	import { Button } from '$lib/components/ui/button';
+	import { Collapsible } from '$lib/components/ui/collapsible';
 	import { Input } from '$lib/components/ui/input';
 	import { session } from '$lib/session.svelte';
 	import type { SourceInfo } from '$lib/types';
@@ -10,6 +11,7 @@
 	let query = $state('');
 	let selectedPath = $state<string | null>(null);
 	let page = $state(0);
+	let skippedOpen = $state(false);
 	let skippedQuery = $state('');
 	let skippedPage = $state(0);
 	const PAGE_SIZE = 100;
@@ -264,32 +266,36 @@
 		{/if}
 
 		{#if skipped.length}
-			<details class="skipped">
-				<summary><span>{skipped.length} skipped file{skipped.length === 1 ? '' : 's'}</span><span>Why?</span></summary>
-				<label class="skipped-search">
-					<Icon name="search" size={16} />
-					<span class="sr-only">Filter skipped files</span>
-					<Input
-						class="skipped-filter-input"
-						bind:value={skippedQuery}
-						placeholder="Filter skipped files…"
-						spellcheck="false"
-					/>
-				</label>
-				<p class="skipped-count">{filteredSkipped.length ? `${skippedPageStart}–${skippedPageEnd} of ` : ''}{filteredSkipped.length} files</p>
-				{#each visibleSkipped as item (item.name)}
-					<div><code>{item.name}</code><span>{item.reason}</span></div>
-				{/each}
-				{#if skippedPageCount > 1}
-					<nav class="pagination" aria-label="Skipped file pages">
-						<span>{skippedPageStart}–{skippedPageEnd} of {filteredSkipped.length}</span>
-						<div>
-							<Button variant="ghost" size="sm" disabled={skippedPage === 0} onclick={() => skippedPage--}>Previous</Button>
-							<Button variant="ghost" size="sm" disabled={skippedPage + 1 >= skippedPageCount} onclick={() => skippedPage++}>Next</Button>
-						</div>
-					</nav>
-				{/if}
-			</details>
+			<Collapsible.Root class="skipped" bind:open={skippedOpen}>
+				<Collapsible.Trigger class="skipped-trigger">
+					<span>{skipped.length} skipped file{skipped.length === 1 ? '' : 's'}</span><span>Why?</span>
+				</Collapsible.Trigger>
+				<Collapsible.Content>
+					<label class="skipped-search">
+						<Icon name="search" size={16} />
+						<span class="sr-only">Filter skipped files</span>
+						<Input
+							class="skipped-filter-input"
+							bind:value={skippedQuery}
+							placeholder="Filter skipped files…"
+							spellcheck="false"
+						/>
+					</label>
+					<p class="skipped-count">{filteredSkipped.length ? `${skippedPageStart}–${skippedPageEnd} of ` : ''}{filteredSkipped.length} files</p>
+					{#each visibleSkipped as item (item.name)}
+						<div class="skipped-row"><code>{item.name}</code><span>{item.reason}</span></div>
+					{/each}
+					{#if skippedPageCount > 1}
+						<nav class="pagination" aria-label="Skipped file pages">
+							<span>{skippedPageStart}–{skippedPageEnd} of {filteredSkipped.length}</span>
+							<div>
+								<Button variant="ghost" size="sm" disabled={skippedPage === 0} onclick={() => skippedPage--}>Previous</Button>
+								<Button variant="ghost" size="sm" disabled={skippedPage + 1 >= skippedPageCount} onclick={() => skippedPage++}>Next</Button>
+							</div>
+						</nav>
+					{/if}
+				</Collapsible.Content>
+			</Collapsible.Root>
 		{/if}
 	{/if}
 </section>
@@ -675,24 +681,21 @@
 	.more {
 		margin: var(--space-2) 0 0;
 	}
-	.skipped {
+	:global(.skipped) {
 		margin-top: var(--space-3);
 		border-top: 1px solid var(--border);
 		color: var(--text-dim);
 		font-size: var(--fs-sm);
 	}
-	.skipped summary {
+	:global(button.skipped-trigger) {
 		display: flex;
 		justify-content: space-between;
+		width: 100%;
 		padding: var(--space-3) 0;
 		color: var(--warn);
 		cursor: pointer;
-		list-style: none;
 	}
-	.skipped summary::-webkit-details-marker {
-		display: none;
-	}
-	.skipped summary span:last-child {
+	:global(button.skipped-trigger span:last-child) {
 		color: var(--text-faint);
 	}
 	.skipped-search {
@@ -730,14 +733,14 @@
 		color: var(--text-faint);
 		font-size: var(--fs-xs);
 	}
-	.skipped div {
+	.skipped-row {
 		display: flex;
 		justify-content: space-between;
 		gap: var(--space-3);
 		padding: var(--space-2) 0;
 		border-top: 1px solid var(--border);
 	}
-	.skipped div span {
+	.skipped-row span {
 		color: var(--text-faint);
 		text-align: right;
 	}
