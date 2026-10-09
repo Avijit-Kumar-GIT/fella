@@ -375,6 +375,20 @@ appears as a new user turn followed by the mock response. The build reports a
 502.34 KB client chunk above Vite's 500 KB advisory and the adapter-static
 fallback-page notice.
 
+#### Slice 3p: Workspace starter prompts
+
+Status: implemented.
+
+- Use shared outline Buttons for the three workspace starter prompts, retaining
+  their compact, left-aligned prompt-chip presentation.
+
+Validation: `pnpm check` reports zero errors and warnings,
+`node --check tests/e2e/workspace-board.spec.mjs`, the focused starter-prompt
+browser test, and `pnpm build` succeed. The test verifies the shared Button
+marker, prompt submission as a user turn, and the corresponding workspace
+response. The build reports a 502.35 KB client chunk above Vite's 500 KB
+advisory and the adapter-static fallback-page notice.
+
 #### Remaining in Slice 3
 
 Standardize the remaining Composer and Sidebar controls around shared

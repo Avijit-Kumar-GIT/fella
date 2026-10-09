@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { dispatch, openFolder, rerunAnalysisTurn } from '$lib/commands';
+	import { Button } from '$lib/components/ui/button';
 	import { session } from '$lib/session.svelte';
 	import { openExternal } from '$lib/ipc';
 	import { fadeQuick } from '$lib/motion';
@@ -144,7 +145,7 @@
 					<p class="egs">Try one:</p>
 					<div class="examples">
 						{#each EXAMPLES as q (q)}
-							<button class="pill example" onclick={() => void dispatch(q)}>{q}</button>
+							<Button variant="outline" class="example" onclick={() => void dispatch(q)}>{q}</Button>
 						{/each}
 					</div>
 				{/if}
@@ -343,8 +344,8 @@
 		gap: var(--space-2);
 		margin: var(--space-1) 0 0;
 	}
-	/* .pill provides the look; the example buttons only need left text. */
-	.example {
+	/* Keep starter prompt labels aligned to the left. */
+	.examples :global(.example) {
 		text-align: left;
 	}
 	.cta {

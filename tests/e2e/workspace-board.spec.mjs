@@ -812,3 +812,22 @@ test('Suggested follow-ups use shared link buttons and submit the selected quest
 	await expect(page.locator('.msg.user').last()).toContainText('What else stands out?');
 	await expect(page.locator('.msg.assistant').last()).toContainText('Scoped to general.');
 });
+
+test('Workspace starter prompts use shared outline buttons and submit the selected prompt', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+	await page.getByRole('button', { name: 'Add repository' }).click();
+	const workspace = page.getByRole('button', { name: 'Open workspace northwind-sales' });
+	await workspace.click();
+	await workspace.hover();
+	await page.getByRole('button', { name: 'New conversation in northwind-sales' }).click();
+
+	const prompts = page.locator('.examples');
+	await expect(prompts).toBeVisible();
+	const prompt = prompts.getByRole('button', { name: 'How did my spending change this year?' });
+	await expect(prompt).toHaveAttribute('data-slot', 'button');
+	await prompt.click();
+
+	await expect(page.locator('.msg.user').last()).toContainText('How did my spending change this year?');
+	await expect(page.locator('.msg.assistant').last()).toContainText('Scoped to C:\\FellaFixture\\northwind-sales.');
+});
