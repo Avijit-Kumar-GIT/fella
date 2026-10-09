@@ -743,6 +743,25 @@ test('Sidebar icon actions use shared compact buttons and Add repository still o
 	await expect(page.getByRole('article', { name: 'northwind-sales workspace' })).toBeVisible();
 });
 
+test('Titlebar Fella actions use shared buttons and remain clickable', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+	const paletteTrigger = page.locator('.titlebar .hint');
+	await expect(paletteTrigger).toHaveAttribute('data-slot', 'button');
+	await paletteTrigger.click();
+	const palette = page.getByRole('dialog', { name: 'Search Fella' });
+	await expect(palette).toBeVisible();
+	await page.keyboard.press('Escape');
+	await expect(palette).toHaveCount(0);
+	await expect(paletteTrigger).toBeFocused();
+
+	await page.getByRole('button', { name: 'Collapse sidebar' }).click();
+	const expandSidebar = page.locator('.titlebar .navbtn');
+	await expect(expandSidebar).toHaveAttribute('data-slot', 'button');
+	await expandSidebar.click();
+	await expect(page.getByRole('button', { name: 'Collapse sidebar' })).toBeVisible();
+});
+
 test('Sidebar workspace tools use shared buttons and preserve source and project actions', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');

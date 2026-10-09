@@ -657,10 +657,10 @@ client-chunk advisory and adapter-static fallback notice.
 
 Standardize remaining feature actions and controls around shared primitives
 where they improve consistency without obscuring product behavior. Audit the
-remaining Fella-owned Titlebar actions, then perform the final duplicate-style
-and regression sweep. Keep native window controls, chart geometry, and
-workspace-board composition custom unless a shared primitive improves the
-interaction without changing its semantics.
+Icon component against the shared icon source, then perform the final
+duplicate-style and regression sweep. Keep native window controls, chart
+geometry, and workspace-board composition custom unless a shared primitive
+improves the interaction without changing its semantics.
 
 The combined keyboard test for the repository menu remains unresolved. Its
 second focused run again could not find the “Repository actions” trigger after
@@ -670,6 +670,21 @@ allow that state, but the evidence does not establish whether the menu trigger
 is failing to render or whether hover synchronization is the cause. Per the
 bounded-test policy, do not rerun this same case without a materially different
 diagnostic or relevant code change; do not count the menu path as verified.
+
+#### Slice 3ah: Fella-owned Titlebar actions
+
+Status: implemented.
+
+- Use shared Buttons for the command-palette shortcut and sidebar expansion
+  action while preserving their titlebar sizing, drag-region behavior, and
+  focus restoration.
+- Keep the platform-specific minimize, maximize, and close controls native.
+
+Validation: `pnpm check`, `node --check tests/e2e/workspace-board.spec.mjs`,
+the focused Titlebar browser test, and `pnpm build` pass. The browser test
+verifies shared Button adoption, palette dismissal and focus return, and
+sidebar collapse/expand. The build reports the existing client-chunk advisory
+and adapter-static fallback notice.
 
 ### Slice 4: converge and remove duplicates
 

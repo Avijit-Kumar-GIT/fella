@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { GENERAL_WORKSPACE_ID, session } from '$lib/session.svelte';
+	import { Button } from '$lib/components/ui/button';
 	import { isDesktop, win } from '$lib/ipc';
 	import EnvironmentTabs from './EnvironmentTabs.svelte';
 	import Icon from './Icon.svelte';
@@ -51,14 +52,16 @@
 
 	{#if !session.focus && session.sidebarCollapsed}
 		<span class="logo"><Logo size={18} active={session.busy} /></span>
-		<button
+		<Button
+			variant="ghost"
+			size="icon"
 			class="navbtn"
 			aria-expanded={!session.sidebarCollapsed}
 			title={`Expand sidebar (${shortcutModifier}+B)`}
 			onclick={() => session.toggleSidebar()}
 		>
 			<Icon name="panel" size={16} />
-		</button>
+		</Button>
 	{/if}
 
 	{#if session.focus}
@@ -79,13 +82,15 @@
 			onclose={oncloseenvironment}
 		/>
 
-		<button
+		<Button
+			variant="ghost"
+			size="sm"
 			class="hint"
 			onclick={onpalette}
 			title={`Search Fella (${shortcutModifier}+K or ${shortcutModifier}+Shift+P)`}
 		>
 			<kbd>{shortcutModifier}</kbd><kbd>K</kbd>
-		</button>
+		</Button>
 	{/if}
 
 	{#if isWindows && isDesktop()}
@@ -118,7 +123,7 @@
 		white-space: nowrap;
 		-webkit-app-region: drag;
 	}
-	.titlebar button {
+	.titlebar :global(button) {
 		-webkit-app-region: no-drag;
 	}
 	.titlebar.mac {
@@ -139,21 +144,25 @@
 		height: 26px;
 		flex: none;
 	}
-	.navbtn {
+	:global(.titlebar .navbtn) {
 		flex: none;
 		display: grid;
 		place-items: center;
 		width: 24px;
+		min-width: 24px;
 		height: 24px;
+		min-height: 24px;
+		padding: 0;
 		border-radius: var(--radius-chip);
+		background: transparent;
 		color: var(--text-faint);
 		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 	}
-	.navbtn:hover:not(:disabled) {
+	:global(.titlebar .navbtn:hover:not(:disabled)) {
 		background: var(--bg-inset);
 		color: var(--text-dim);
 	}
-	.navbtn:disabled {
+	:global(.titlebar .navbtn:disabled) {
 		color: var(--border-strong);
 		cursor: default;
 	}
@@ -185,15 +194,20 @@
 		flex: 1;
 		align-self: stretch;
 	}
-	.hint {
+	:global(.titlebar .hint) {
 		display: inline-flex;
+		align-items: center;
 		gap: 2px;
+		height: auto;
+		min-height: 0;
 		padding: 2px 6px;
-		color: var(--text-faint);
 		border-radius: var(--radius-chip);
+		background: transparent;
+		color: var(--text-faint);
+		font-size: var(--fs-sm);
 		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 	}
-	.hint:hover {
+	:global(.titlebar .hint:hover) {
 		background: var(--bg-inset);
 		color: var(--text-dim);
 	}
