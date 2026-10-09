@@ -2,8 +2,8 @@
 	import { session } from '$lib/session.svelte';
 	import type { Message, RunStep } from '$lib/types';
 	import { Collapsible } from '$lib/components/ui/collapsible';
+	import { Spinner } from '$lib/components/ui/spinner';
 	import Icon from './Icon.svelte';
-	import DataLoader from './DataLoader.svelte';
 
 	let chat = $derived(session.activeChat);
 	let steps = $derived(chat?.runSteps ?? []);
@@ -58,7 +58,7 @@
 			<div class="timeline-head">
 				<div class="run-status">
 					{#if running}
-						<DataLoader size={18} />
+						<Spinner size={18} />
 					{:else}
 						<span class="run-dot" class:error={failed} aria-hidden="true"></span>
 					{/if}

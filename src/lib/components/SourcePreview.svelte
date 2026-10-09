@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { ipc, isDesktop } from '$lib/ipc';
+	import { Spinner } from '$lib/components/ui/spinner';
 	import type { QueryResult, SourceInfo } from '$lib/types';
-	import DataLoader from './DataLoader.svelte';
 
 	let {
 		source,
@@ -66,7 +66,7 @@
 			<span>{preview ? `${preview.rows.length} rows shown` : ''}</span>
 		</div>
 		{#if loading}
-			<div class="preview-loading"><DataLoader size={18} /><span>Loading a few rows…</span></div>
+			<div class="preview-loading"><Spinner size={18} /><span>Loading a few rows…</span></div>
 		{:else if error}
 			<p class="preview-note">{error}</p>
 		{:else if preview?.columns.length}

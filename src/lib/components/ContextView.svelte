@@ -4,9 +4,9 @@
 	import { ipc, isDesktop } from '$lib/ipc';
 	import { session } from '$lib/session.svelte';
 	import { Button } from '$lib/components/ui/button';
+	import { Spinner } from '$lib/components/ui/spinner';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import Icon from './Icon.svelte';
-	import DataLoader from './DataLoader.svelte';
 
 	let contents = $state('');
 	let savedContents = $state('');
@@ -110,7 +110,7 @@
 				</div>
 			</div>
 			{#if loading}
-				<div class="loading"><DataLoader size={28} /><span>Loading your workspace guide…</span></div>
+				<div class="loading"><Spinner size={28} /><span>Loading your workspace guide…</span></div>
 			{:else}
 				<Textarea
 					class="guide-textarea"

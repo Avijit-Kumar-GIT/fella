@@ -76,7 +76,7 @@ focus management independently.
 | 1 | `EnvironmentTabs.svelte` | Adopted shared Tabs behavior for environment switching and roving keyboard focus. Keep titlebar-specific close/new controls, scrolling, and shortcuts feature-owned. |
 | 1 | `WorkspaceView.svelte` | Adopted shared Tabs for Sources and Guide; preserve workspace-pane state and content. |
 | 2 | `RunTimeline.svelte` | Adopted shared Collapsible for run-step disclosure; retain trace ordering and technical detail. |
-| 2 | `ReplayStatus.svelte` | Use shared Alert, Badge, Button, and loading/progress primitives for status and rerun states. |
+| 2 | `ReplayStatus.svelte` | Adopted shared Alert, Badge, Button, and Spinner for status, retry, and rerun states. |
 | 2 | `SourcesView.svelte` | Standardize search, source rows/tables, pagination, disclosures, and statuses. Preserve the catalog/detail information architecture. |
 | 2 | `SourcePreview.svelte` | Use shared table, scrolling, loading, and error primitives; preserve source-specific preview behavior. |
 | 2 | `ContextView.svelte` | Adopted shared Textarea styling for the guide editor while retaining its file-backed workflow and feature-specific presentation. |
@@ -89,7 +89,7 @@ focus management independently.
 | 2 | `EvidenceSummary.svelte` | Use the shared disclosure pattern; consolidate with the evidence component if it has no distinct behavior. |
 | 2 | `PythonCalculationDetails.svelte` | Keep calculation-specific code/details; standardize disclosure, code typography, and status labels. |
 | 2 | `Chart.svelte` | Keep the D3 chart renderer and data encodings. Standardize its frame/actions and use shared table primitives for tabular data. |
-| 3 | `DataLoader.svelte` | Replace the bespoke loader with a shared Spinner unless the branded treatment proves materially useful. |
+| 3 | `DataLoader.svelte` | Removed; loading consumers use the shared, reduced-motion-aware Spinner. |
 | 3 | `Titlebar.svelte` | Preserve OS-specific window controls and draggable regions. Standardize only Fella-level icon buttons, focus, and tooltips. |
 | 2 | `Icon.svelte` | Replace the hand-maintained generic glyph catalog with one consistent icon source and sizing convention. Keep product-specific brand marks separate. |
 | Keep | `Logo.svelte` | Retain as Fella's branded orb/mark. |
@@ -413,6 +413,21 @@ browser test and `node --check tests/e2e/workspace-board.spec.mjs` pass, and
 both pagers' ranges, disabled boundaries, and shared Button markers. The build
 reports a 502.70 KB client chunk above Vite's 500 KB advisory and the
 adapter-static fallback-page notice.
+
+#### Slice 3s: Status and loading primitives
+
+Status: implemented.
+
+- Add token-aware shared Alert, Badge, and Spinner primitives.
+- Use them for replay freshness, retry errors, rerun actions, and existing
+  loading states; remove the one-off DataLoader component.
+
+Validation: `pnpm check` reports zero errors and warnings, the two focused
+ReplayStatus browser tests pass, `node --check tests/e2e/workspace-board.spec.mjs`
+passes, and `pnpm build` succeeds. The browser tests verify warning-state
+freshness and the shared rerun action, plus the accessible error alert and
+retry behavior. The build reports a 504.08 KB client chunk above Vite's 500 KB
+advisory and the adapter-static fallback-page notice.
 
 #### Remaining in Slice 3
 

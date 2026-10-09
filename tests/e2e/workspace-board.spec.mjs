@@ -35,9 +35,14 @@ const folders = [
 
 async function installDesktopMock(
 	page,
-	{ seedUnavailableConversation = false, fixtureFolders = folders } = {}
+	{
+		seedUnavailableConversation = false,
+		fixtureFolders = folders,
+		replayStatus = null,
+		replayStatusError = false
+	} = {}
 ) {
-	await page.addInitScript(({ fixtureFolders, seedUnavailableConversation }) => {
+	await page.addInitScript(({ fixtureFolders, seedUnavailableConversation, replayStatus, replayStatusError }) => {
 		const calls = [];
 		const archivedConversations = new Map();
 		const unavailablePath = 'C:\\FellaFixture\\unavailable-archive';
@@ -75,6 +80,7 @@ async function installDesktopMock(
 		};
 		window.__workspaceAskCalls = calls;
 		window.__workspaceOpenCalls = [];
+		window.__replayStatusCalls = 0;
 		window.fella = {
 			invoke: async (command, args = {}) => {
 				switch (command) {
@@ -110,6 +116,10 @@ async function installDesktopMock(
 						return JSON.stringify(saved);
 					}
 					case 'close_workspace': return null;
+					case 'analysis_turn_replay_status':
+						window.__replayStatusCalls += 1;
+						if (replayStatusError) throw new Error('Replay lookup unavailable.');
+						return replayStatus;
 					case 'run_log_recent': return [];
 					default: return null;
 				}
@@ -123,10 +133,14 @@ async function installDesktopMock(
 			pickFolder: async () => fixtureFolders[pickerIndex++]?.path ?? null,
 			ask: async (params, onEvent) => {
 				calls.push(params);
+				const hasReplayEvidence = replayStatus !== null || replayStatusError;
 				const answer = {
 					text: `Scoped to ${params.workspaceId ?? 'general'}.`,
 					status: 'complete',
-					evidence: [],
+					turn_id: hasReplayEvidence ? 'fixture-turn' : undefined,
+					evidence: hasReplayEvidence
+						? [{ id: 'fixture-replay-step', tool: 'run_sql', args: {}, result_summary: 'One row inspected.', ms: 12 }]
+						: [],
 					verification: [],
 					workspace: params.workspaceId ? { path: params.workspaceId, revision: 'fixture-r1' } : null
 				};
@@ -139,7 +153,7 @@ async function installDesktopMock(
 			windowAction: async () => {},
 			pathForFile: () => ''
 		};
-	}, { fixtureFolders, seedUnavailableConversation });
+	}, { fixtureFolders, seedUnavailableConversation, replayStatus, replayStatusError });
 }
 
 async function dispatchWorkspaceDrag(page, type, workspacePath, { x = 0.5, y = 0.5, existing = false } = {}) {
@@ -841,6 +855,52 @@ test('Analysis details uses the shared button and preserves disclosure state', a
 	await details.click();
 	await expect(details).toHaveAttribute('aria-expanded', 'false');
 	await expect(page.getByText('Source details were not recorded for this archived answer.')).toHaveCount(0);
+});
+
+test('Replay freshness uses shared status badges and rerun buttons', async ({ page }) => {
+	await installDesktopMock(page, {
+		replayStatus: {
+			turn_id: 'fixture-turn',
+			same_workspace: true,
+			revision_changed: true,
+			snapshot_available: true,
+			can_rerun: true,
+			source_changes: [{ name: 'sales.csv', kind: 'changed', details: ['Rows changed'] }]
+		}
+	});
+	await page.goto('/');
+	await page.getByRole('combobox', { name: 'Ask a question' }).fill('Check freshness.');
+	await page.getByRole('button', { name: 'Send' }).click();
+
+	const answer = page.locator('.msg.assistant').last();
+	await expect(answer).toContainText('Scoped to general.');
+	await answer.getByRole('button', { name: 'Analysis details' }).click();
+
+	const freshness = answer.locator('[data-slot="badge"]');
+	await expect(freshness).toHaveAttribute('class', /fella-ui-badge-warning/);
+	await expect(freshness).toContainText('1 source changed since this answer');
+	const rerun = answer.getByRole('button', { name: 'Rerun' });
+	await expect(rerun).toHaveAttribute('data-slot', 'button');
+	await expect(rerun).toBeEnabled();
+});
+
+test('Replay freshness lookup errors use an alert and a working retry action', async ({ page }) => {
+	await installDesktopMock(page, { replayStatusError: true });
+	await page.goto('/');
+	await page.getByRole('combobox', { name: 'Ask a question' }).fill('Check freshness.');
+	await page.getByRole('button', { name: 'Send' }).click();
+
+	const answer = page.locator('.msg.assistant').last();
+	await expect(answer).toContainText('Scoped to general.');
+	await answer.getByRole('button', { name: 'Analysis details' }).click();
+
+	const alert = answer.getByRole('alert');
+	await expect(alert).toContainText("Couldn't check freshness.");
+	await expect(alert).toContainText('Replay lookup unavailable.');
+	const retry = alert.getByRole('button', { name: 'Try again' });
+	await expect(retry).toHaveAttribute('data-slot', 'button');
+	await retry.click();
+	await expect.poll(() => page.evaluate(() => window.__replayStatusCalls)).toBe(2);
 });
 
 test('Sources open-beside action uses the shared button and preserves conversation scope', async ({ page }) => {

@@ -1,5 +1,9 @@
 <script lang="ts">
 	import { ipc } from '$lib/ipc';
+	import { Alert } from '$lib/components/ui/alert';
+	import { Badge } from '$lib/components/ui/badge';
+	import { Button } from '$lib/components/ui/button';
+	import { Spinner } from '$lib/components/ui/spinner';
 	import type { AnalysisTurnReplayStatus } from '$lib/types';
 	import Icon from './Icon.svelte';
 
@@ -54,17 +58,24 @@
 
 <div class="replay-status" aria-live="polite">
 	{#if phase === 'loading'}
-		<span class="replay-muted"><span class="spinner" aria-hidden="true"></span>Checking workspace freshness…</span>
+		<span class="replay-muted"><Spinner size={12} />Checking workspace freshness…</span>
 	{:else if phase === 'error'}
-		<button class="replay-link" type="button" onclick={() => void check()}>
-			<Icon name="refresh" size={12} /> Couldn't check freshness
-		</button>
-		{#if error}<span class="replay-error">{error}</span>{/if}
+		<Alert variant="destructive" class="replay-alert">
+			<Icon name="alert" size={14} />
+			<div class="alert-copy">
+				<span>Couldn't check freshness.</span>
+				{#if error}<span class="replay-error">{error}</span>{/if}
+				<Button variant="link" size="sm" class="retry" onclick={() => void check()}>Try again</Button>
+			</div>
+		</Alert>
 	{:else if status}
 		<div class="replay-row">
-			<span class:changed={status.revision_changed} class="replay-muted">
+			<Badge
+				variant={status.revision_changed ? 'warning' : status.same_workspace && status.snapshot_available ? 'success' : 'default'}
+				class="freshness-badge"
+			>
 				<span class="replay-mark" aria-hidden="true"></span>{summary(status)}
-			</span>
+			</Badge>
 			<div class="replay-actions">
 				{#if status.source_changes.length}
 					<span class="change-list">
@@ -75,16 +86,16 @@
 					</span>
 				{/if}
 				{#if status.can_rerun && onrerun}
-					<button class="rerun" type="button" disabled={rerunning} onclick={() => void rerun()}>
+					<Button variant="secondary" size="sm" class="rerun" disabled={rerunning} onclick={() => void rerun()}>
 						<Icon name="refresh" size={12} /> {rerunning ? 'Rerunning…' : 'Rerun'}
-					</button>
+					</Button>
 				{/if}
 			</div>
 		</div>
 	{:else}
-		<button class="replay-link" type="button" onclick={() => void check()}>
+		<Button variant="ghost" size="sm" class="replay-link" onclick={() => void check()}>
 			<Icon name="refresh" size={12} /> Check workspace freshness
-		</button>
+		</Button>
 	{/if}
 </div>
 
@@ -95,9 +106,7 @@
 	}
 	.replay-row,
 	.replay-actions,
-	.replay-muted,
-	.replay-link,
-	.rerun {
+	.replay-muted {
 		display: inline-flex;
 		align-items: center;
 	}
@@ -110,68 +119,51 @@
 		gap: 6px;
 		color: var(--text-faint);
 	}
-	.replay-muted.changed {
-		color: var(--warn);
-	}
 	.replay-mark {
 		width: 6px;
 		height: 6px;
 		border-radius: 50%;
-		background: var(--ok);
-	}
-	.changed .replay-mark {
-		background: var(--warn);
+		background: currentColor;
 	}
 	.replay-actions {
 		gap: var(--space-2);
 		flex-wrap: wrap;
 	}
-	.change-list,
-	.replay-error {
+	.change-list {
 		color: var(--text-faint);
 	}
+	:global(.replay-alert) { align-items: center; padding: var(--space-2) var(--space-3); }
+	.alert-copy { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); min-width: 0; }
 	.replay-error {
-		display: block;
-		margin-top: 4px;
+		color: var(--text-faint);
 		overflow-wrap: anywhere;
 	}
-	.replay-link,
-	.rerun {
-		gap: 5px;
+	.replay-status :global(.replay-link) {
+		height: auto;
+		min-height: 0;
 		padding: 0;
-		border: 0;
 		border-radius: 0;
-		background: transparent;
 		color: var(--text-faint);
 		font-size: var(--fs-xs);
+		font-weight: 400;
 	}
-	.replay-link:hover,
-	.rerun:hover:not(:disabled) {
+	.replay-status :global(.replay-link:hover) {
 		color: var(--text);
 		text-decoration: underline;
 	}
-	.rerun {
+	.replay-status :global(.rerun) {
+		height: auto;
+		min-height: 0;
 		padding: 2px 6px;
 		border-radius: var(--radius-chip);
-		background: var(--bg-inset);
 		color: var(--text-dim);
+		font-size: var(--fs-xs);
 	}
-	.rerun:hover:not(:disabled) {
+	.replay-status :global(.rerun:hover:not(:disabled)) {
 		text-decoration: none;
 	}
-	.rerun:disabled {
+	.replay-status :global(.rerun:disabled) {
 		cursor: wait;
-		opacity: 0.65;
-	}
-	.spinner {
-		width: 10px;
-		height: 10px;
-		border: 1px solid var(--border-strong);
-		border-top-color: var(--brand);
-		border-radius: 50%;
-		animation: spin 0.8s linear infinite;
-	}
-	@keyframes spin {
-		to { transform: rotate(360deg); }
+		opacity: 0.7;
 	}
 </style>
