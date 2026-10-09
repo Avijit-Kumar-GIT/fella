@@ -711,9 +711,9 @@ Status: in progress.
   three native Electron minimize, maximize, and close controls.
 - No standalone `.pill` or `.rowbtn` control styles remain; `ref-pill` is a
   separate inline-reference treatment, not a duplicate button primitive.
-- The remaining candidate is Settings' run-log disclosure. Standardize it where
-  the shared Collapsible preserves current behavior, then run the final desktop
-  regression/theme sweep.
+- All identified feature-owned raw buttons, the Sidebar rename input, and native
+  disclosure elements now use shared primitives. The final raw-control,
+  regression, and light/dark theme sweep remains.
 
 #### Slice 4a: Sidebar conversation rename field
 
@@ -753,6 +753,17 @@ Validation: `pnpm check` reports zero errors and warnings, the workspace-board
 test file passes `node --check`, and the focused Chart browser test passes. It
 opens metadata and exact values, checks their contents and disclosure state,
 then verifies the companion-pane action.
+
+#### Slice 4d: Settings run-log disclosure
+
+Status: implemented.
+
+- Use shared Collapsible triggers for each local run-log entry, retaining the
+  existing summary grid, per-entry closed state, and detail content.
+
+Validation: `pnpm check` reports zero errors and warnings, the workspace-board
+test file passes `node --check`, and the focused Settings test passes. It uses
+keyboard Enter/Space to open and close a run entry, then checks the tool detail.
 
 ## First-slice acceptance criteria
 

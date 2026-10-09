@@ -5,6 +5,7 @@
 	import { prefs, type Appearance } from '$lib/prefs.svelte';
 	import { session } from '$lib/session.svelte';
 	import { Button } from '$lib/components/ui/button';
+	import { Collapsible } from '$lib/components/ui/collapsible';
 	import { Switch } from '$lib/components/ui/switch';
 	import type { AnalysisCapabilities, RunLogEntry } from '$lib/types';
 	import Icon from './Icon.svelte';
@@ -340,8 +341,8 @@
 			{:else}
 				<div class="run-log-list" role="log" aria-label="Recent Fella runs">
 					{#each runLog as entry (entry.id)}
-						<details class="run-log-entry">
-							<summary>
+						<Collapsible.Root class="run-log-entry">
+							<Collapsible.Trigger class="run-log-trigger">
 								<time datetime={timestampIso(entry.at_ms)}>{formatTimestamp(entry.at_ms)}</time>
 								<span class="run-kind" class:trigger-kind={entry.kind === 'trigger'}>{entry.kind === 'trigger' ? 'Trigger' : modeLabel(entry.mode)}</span>
 								<span class="run-outcome">{entry.kind === 'trigger' ? triggerLabel(entry.trigger) : outcomeLabel(entry.outcome)}</span>
@@ -352,39 +353,41 @@
 										{runCounts(entry)}
 									{/if}
 								</span>
-							</summary>
-							<div class="run-log-detail">
-								{#if entry.kind === 'turn'}
-									<div class="run-log-meta">
-										<span>{entry.model ?? 'Model not recorded'}</span>
-										{#if tokenSummary(entry)}<span>{tokenSummary(entry)}</span>{/if}
-										{#if entry.prior_analysis_count > 0}<span>{entry.prior_analysis_count} earlier {entry.prior_analysis_count === 1 ? 'analysis' : 'analyses'} reused</span>{/if}
-										{#if entry.context_reference_count > 0}<span>{entry.context_reference_count} attached context reference{entry.context_reference_count === 1 ? '' : 's'}</span>{/if}
-										{#if entry.clarification_continuation}<span>Clarification continuation</span>{/if}
-										{#if entry.rerun}<span>Rerun</span>{/if}
-										<code>{entry.id}</code>
-									</div>
-									{#if entry.model_calls.length}
-										<p class="run-log-group-label">Model calls</p>
-										<div class="run-log-operations">
-											{#each entry.model_calls as call, index (`${entry.id}-model-${index}`)}
-												<div><span>Model call · {call.model}</span><small class:call-failed={!call.success}>{formatDuration(call.duration_ms)}{call.success ? '' : ' · failed'}</small></div>
-											{/each}
+							</Collapsible.Trigger>
+							<Collapsible.Content>
+								<div class="run-log-detail">
+									{#if entry.kind === 'turn'}
+										<div class="run-log-meta">
+											<span>{entry.model ?? 'Model not recorded'}</span>
+											{#if tokenSummary(entry)}<span>{tokenSummary(entry)}</span>{/if}
+											{#if entry.prior_analysis_count > 0}<span>{entry.prior_analysis_count} earlier {entry.prior_analysis_count === 1 ? 'analysis' : 'analyses'} reused</span>{/if}
+											{#if entry.context_reference_count > 0}<span>{entry.context_reference_count} attached context reference{entry.context_reference_count === 1 ? '' : 's'}</span>{/if}
+											{#if entry.clarification_continuation}<span>Clarification continuation</span>{/if}
+											{#if entry.rerun}<span>Rerun</span>{/if}
+											<code>{entry.id}</code>
 										</div>
+										{#if entry.model_calls.length}
+											<p class="run-log-group-label">Model calls</p>
+											<div class="run-log-operations">
+												{#each entry.model_calls as call, index (`${entry.id}-model-${index}`)}
+													<div><span>Model call · {call.model}</span><small class:call-failed={!call.success}>{formatDuration(call.duration_ms)}{call.success ? '' : ' · failed'}</small></div>
+												{/each}
+											</div>
+										{/if}
+										{#if entry.operations.length}
+											<p class="run-log-group-label">Tool steps</p>
+											<div class="run-log-operations">
+												{#each entry.operations as operation, index (`${entry.id}-operation-${index}`)}
+													<div><span>{operation.operation}</span><small class:call-failed={!operation.success}>{formatDuration(operation.duration_ms)}{operation.success ? '' : ' · failed'}</small></div>
+												{/each}
+											</div>
+										{:else}<p class="run-log-empty-detail">No local analysis tool calls were recorded for this turn.</p>{/if}
+									{:else}
+										<p class="run-log-empty-detail">{entry.trigger_steps ?? 0} tool steps, {entry.trigger_errors ?? 0} errors. The signal contains no prompt, answer, tool arguments, or file data.</p>
 									{/if}
-									{#if entry.operations.length}
-										<p class="run-log-group-label">Tool steps</p>
-										<div class="run-log-operations">
-											{#each entry.operations as operation, index (`${entry.id}-operation-${index}`)}
-												<div><span>{operation.operation}</span><small class:call-failed={!operation.success}>{formatDuration(operation.duration_ms)}{operation.success ? '' : ' · failed'}</small></div>
-											{/each}
-										</div>
-									{:else}<p class="run-log-empty-detail">No local analysis tool calls were recorded for this turn.</p>{/if}
-								{:else}
-									<p class="run-log-empty-detail">{entry.trigger_steps ?? 0} tool steps, {entry.trigger_errors ?? 0} errors. The signal contains no prompt, answer, tool arguments, or file data.</p>
-								{/if}
-							</div>
-						</details>
+								</div>
+							</Collapsible.Content>
+						</Collapsible.Root>
 					{/each}
 				</div>
 			{/if}
@@ -653,36 +656,34 @@
 		overflow: auto;
 		border-top: 1px solid var(--border);
 	}
-	.run-log-entry {
+	:global(.run-log-entry) {
 		border-bottom: 1px solid var(--border);
 	}
-	.run-log-entry summary {
+	:global(button.run-log-trigger) {
 		display: grid;
 		grid-template-columns: 116px 112px minmax(110px, 1fr) auto;
 		align-items: center;
 		gap: 10px;
+		width: 100%;
 		min-height: 38px;
+		font-weight: inherit;
 		cursor: pointer;
-		list-style: none;
 		color: var(--text-dim);
 		font-size: var(--fs-xs);
 	}
-	.run-log-entry summary::-webkit-details-marker {
-		display: none;
-	}
-	.run-log-entry summary:hover,
-	.run-log-entry[open] summary {
+	:global(button.run-log-trigger:hover),
+	:global(button.run-log-trigger[aria-expanded='true']) {
 		color: var(--text);
 	}
-	.run-log-entry time,
-	.run-log-entry code,
+	:global(.run-log-entry time),
+	:global(.run-log-entry code),
 	.run-counts,
 	.run-log-operations small {
 		font-family: var(--mono);
 		font-size: 10px;
 		font-variant-numeric: tabular-nums;
 	}
-	.run-log-entry time,
+	:global(.run-log-entry time),
 	.run-counts {
 		color: var(--text-faint);
 		white-space: nowrap;
@@ -753,7 +754,7 @@
 		.settings-grid {
 			width: 100%;
 		}
-		.run-log-entry summary {
+		:global(button.run-log-trigger) {
 			grid-template-columns: 94px 76px minmax(60px, 1fr);
 			gap: 6px;
 		}

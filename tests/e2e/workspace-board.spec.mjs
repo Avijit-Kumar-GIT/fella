@@ -44,10 +44,11 @@ async function installDesktopMock(
 		chartEvidence = null,
 		detailEvidence = null,
 		providerList = [],
-		providerHealth = { reachable: true, rejected: false, models: ['gpt-4.1-mini'] }
+		providerHealth = { reachable: true, rejected: false, models: ['gpt-4.1-mini'] },
+		runLogEntries = []
 	} = {}
 ) {
-	await page.addInitScript(({ fixtureFolders, seedUnavailableConversation, replayStatus, replayStatusError, reindexedCatalog, chartEvidence, detailEvidence, providerList, providerHealth }) => {
+	await page.addInitScript(({ fixtureFolders, seedUnavailableConversation, replayStatus, replayStatusError, reindexedCatalog, chartEvidence, detailEvidence, providerList, providerHealth, runLogEntries }) => {
 		const calls = [];
 		const archivedConversations = new Map();
 		const unavailablePath = 'C:\\FellaFixture\\unavailable-archive';
@@ -126,7 +127,7 @@ async function installDesktopMock(
 						if (replayStatusError) throw new Error('Replay lookup unavailable.');
 						return replayStatus;
 					case 'reindex': return reindexedCatalog;
-					case 'run_log_recent': return [];
+					case 'run_log_recent': return runLogEntries;
 					default: return null;
 				}
 			},
@@ -163,7 +164,7 @@ async function installDesktopMock(
 			windowAction: async () => {},
 			pathForFile: () => ''
 		};
-	}, { fixtureFolders, seedUnavailableConversation, replayStatus, replayStatusError, reindexedCatalog, chartEvidence, detailEvidence, providerList, providerHealth });
+	}, { fixtureFolders, seedUnavailableConversation, replayStatus, replayStatusError, reindexedCatalog, chartEvidence, detailEvidence, providerList, providerHealth, runLogEntries });
 }
 
 async function dispatchWorkspaceDrag(page, type, workspacePath, { x = 0.5, y = 0.5, existing = false } = {}) {
@@ -872,6 +873,21 @@ test('empty Sources action uses a shared button and opens the selected folder', 
 
 test('Settings actions use shared buttons and folder selection still works', async ({ page }) => {
 	await installDesktopMock(page, {
+		runLogEntries: [{
+			id: 'run-42',
+			at_ms: 1_700_000_000_000,
+			kind: 'turn',
+			mode: 'workspace_ask',
+			model: 'gpt-4.1-mini',
+			elapsed_ms: 1200,
+			model_calls: [{ model: 'gpt-4.1-mini', duration_ms: 520, success: true }],
+			operations: [{ operation: 'search_files', duration_ms: 38, success: true }],
+			prior_analysis_count: 0,
+			context_reference_count: 0,
+			clarification_continuation: false,
+			rerun: false,
+			outcome: 'complete'
+		}],
 		providerList: [
 			{ id: 'openai', display: 'OpenAI', auth: 'key', base_url: 'https://api.openai.com/v1', get_key_url: '', embeddings: true, authed: true, current: true },
 			{ id: 'anthropic', display: 'Anthropic', auth: 'key', base_url: 'https://api.anthropic.com', get_key_url: '', embeddings: false, authed: false, current: false }
@@ -879,6 +895,18 @@ test('Settings actions use shared buttons and folder selection still works', asy
 	});
 	await page.goto('/');
 	await page.getByRole('button', { name: 'Settings' }).click();
+	const runEntry = page.locator('.run-log-entry');
+	await expect(runEntry).toHaveCount(1);
+	const runEntryToggle = runEntry.getByRole('button');
+	await expect(runEntryToggle).toHaveAttribute('aria-expanded', 'false');
+	await runEntryToggle.focus();
+	await page.keyboard.press('Enter');
+	await expect(runEntryToggle).toHaveAttribute('aria-expanded', 'true');
+	await expect(runEntry).toContainText('Tool steps');
+	await expect(runEntry).toContainText('search_files');
+	await page.keyboard.press('Space');
+	await expect(runEntryToggle).toHaveAttribute('aria-expanded', 'false');
+	await expect(runEntry.locator('.run-log-detail')).not.toBeVisible();
 
 	for (const name of ['Change', 'Choose', 'Privacy and security', 'Refresh connection status', 'Choose a folder', 'Refresh']) {
 		await expect(page.getByRole('button', { name, exact: true })).toHaveAttribute('data-slot', 'button');
