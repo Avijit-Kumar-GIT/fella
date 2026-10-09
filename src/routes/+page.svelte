@@ -2,7 +2,6 @@
 	import { onMount } from 'svelte';
 	import CommandPalette from '$lib/components/CommandPalette.svelte';
 	import CompanionPane from '$lib/components/CompanionPane.svelte';
-	import ConversationTabs from '$lib/components/ConversationTabs.svelte';
 	import Composer from '$lib/components/Composer.svelte';
 	import Icon from '$lib/components/Icon.svelte';
 	import Logo from '$lib/components/Logo.svelte';
@@ -299,9 +298,13 @@
 			<Sidebar onsearch={() => (paletteOpen = true)} onnewproject={openProjectDialog} />
 		{/if}
 	<div class="app" class:focus={session.focus}>
-		<Titlebar onpalette={() => (paletteOpen = true)} />
+		<Titlebar
+			onpalette={() => (paletteOpen = true)}
+			ontabselect={activateConversationTab}
+			onnewconversation={startConversation}
+			onclosetab={closeConversationTab}
+		/>
 		<section class="workspace-window" aria-label="Current workspace">
-			<ConversationTabs onselect={activateConversationTab} onnew={startConversation} onclose={closeConversationTab} />
 			{#if session.mountProgress && session.mountProgress.phase !== 'ready'}
 				<div class="mount-status" aria-hidden="true">
 					<span class="mount-orb"><Logo size={17} active /></span>
@@ -389,7 +392,7 @@
 		display: flex;
 		flex-direction: column;
 		min-width: 0;
-		background: transparent;
+		background: var(--workspace-canvas);
 	}
 	.mount-status {
 		flex: none;
@@ -437,6 +440,7 @@
 		min-width: 0;
 		min-height: 0;
 		display: flex;
+		background: var(--workspace-canvas);
 	}
 	.ask-workbench {
 		position: relative;
@@ -450,7 +454,7 @@
 	.dock {
 		flex: none;
 		padding: 0 var(--space-2) var(--space-3);
-		background: var(--workspace-surface);
+		background: var(--workspace-canvas);
 	}
 	.dropzone {
 		position: fixed;

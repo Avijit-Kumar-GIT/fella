@@ -1084,7 +1084,7 @@ import ProviderIcon from './ProviderIcon.svelte';
 		display: flex;
 		flex-direction: column;
 		gap: var(--space-2);
-		background: var(--workspace-surface);
+		background: var(--workspace-canvas);
 		border: 1px solid var(--border);
 		border-radius: 18px;
 		box-shadow: var(--shadow-sm);

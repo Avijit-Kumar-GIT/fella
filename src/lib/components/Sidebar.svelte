@@ -476,7 +476,7 @@
 		padding: 0 var(--space-2) var(--space-2);
 		--sidebar-hover: color-mix(in srgb, var(--text) 4%, var(--sidebar-surface));
 		--sidebar-selected: color-mix(in srgb, var(--text) 7%, var(--sidebar-surface));
-		/* No top padding: .header is 38px flush against the top edge, to
+		/* No top padding: .header is 42px flush against the top edge, to
 		   match the titlebar's height exactly across the sidebar seam. */
 		background: var(--sidebar-surface);
 		border-right: 1px solid var(--pane-edge);
@@ -487,7 +487,7 @@
 		align-items: center;
 		justify-content: space-between;
 		flex: none;
-		height: 38px;
+		height: 42px;
 		padding: 0 var(--space-2);
 	}
 	.logo {

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { firstActualQuestion, session } from '$lib/session.svelte';
 	import Icon from './Icon.svelte';
+	import Logo from './Logo.svelte';
 
 	let {
 		onselect,
@@ -50,8 +51,12 @@
 					onkeydown={(event) => onTabKeydown(event, index)}
 					onclick={() => void onselect(index)}
 				>
+					{#if conversation.workspaceScope}
+						<Icon name="folder" size={14} solid />
+					{:else}
+						<Logo size={14} active={conversation.busy} />
+					{/if}
 					<span class="tab-title">{title(conversation)}</span>
-					<span class="tab-owner">{owner(conversation)}</span>
 				</button>
 				<button
 					class="tab-close"
@@ -73,89 +78,102 @@
 
 <style>
 	.conversation-tabs-row {
-		flex: none;
-		display: flex;
-		align-items: end;
-		gap: 5px;
+		position: relative;
+		flex: 1 1 0;
+		width: 0;
 		min-width: 0;
-		min-height: 39px;
-		padding: 5px 10px 0;
-		border-bottom: 1px solid var(--pane-edge);
-		background: var(--workspace-surface);
+		display: flex;
+		align-items: center;
+		padding-inline: 8px;
+		-webkit-app-region: no-drag;
 	}
 	.conversation-tabs {
-		flex: 1;
+		position: absolute;
+		left: 50%;
+		transform: translateX(-50%);
+		flex: none;
+		width: max-content;
+		max-width: min(640px, calc(100% - 64px));
 		min-width: 0;
 		display: flex;
-		align-items: end;
-		gap: 3px;
+		align-items: center;
+		justify-content: center;
+		gap: 2px;
+		padding: 2px;
+		border: 1px solid var(--pane-edge);
+		border-radius: 999px;
+		background: color-mix(in srgb, var(--workspace-surface) 42%, var(--app-chrome));
 		overflow-x: auto;
 		scrollbar-width: none;
 	}
 	.conversation-tabs::-webkit-scrollbar { display: none; }
 	.tab-entry {
 		position: relative;
-		flex: 0 1 190px;
-		min-width: 92px;
-		max-width: 220px;
+		flex: 0 1 188px;
+		min-width: 76px;
+		max-width: 210px;
 		display: flex;
 		align-items: center;
-		border-radius: 9px 9px 0 0;
+		border-radius: 999px;
 		color: var(--text-faint);
 	}
-	.tab-entry:hover { background: var(--workspace-canvas); color: var(--text-dim); }
+	.tab-entry:hover { background: color-mix(in srgb, var(--text) 5%, transparent); color: var(--text-dim); }
 	.tab-entry:has(.tab.active) {
-		background: var(--workspace-canvas);
+		background: var(--workspace-surface);
 		color: var(--text);
+		box-shadow: var(--window-shadow);
 	}
 	.tab {
 		flex: 1;
 		min-width: 0;
-		min-height: 33px;
+		height: 27px;
 		display: flex;
-		flex-direction: column;
-		justify-content: center;
-		gap: 1px;
-		padding: 4px 6px 4px 10px;
+		align-items: center;
+		gap: 6px;
+		padding: 0 5px 0 10px;
 		text-align: left;
 		color: inherit;
+		white-space: nowrap;
 	}
-	.tab-title, .tab-owner {
+	.tab-title {
 		min-width: 0;
+		flex: 1;
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+		font-size: var(--fs-xs);
+		font-weight: 540;
 	}
-	.tab-title { font-size: var(--fs-xs); font-weight: 560; }
-	.tab-owner { color: var(--text-faint); font-size: 10px; }
-	.tab.active .tab-owner { color: var(--text-dim); }
+	.tab :global(svg),
+	.tab :global(.logo) { flex: none; }
 	.tab-close {
 		flex: none;
-		width: 22px;
-		height: 22px;
-		margin-right: 4px;
+		width: 19px;
+		height: 19px;
+		margin-right: 5px;
 		display: grid;
 		place-items: center;
-		border-radius: 6px;
+		border-radius: 50%;
 		color: var(--text-faint);
 		opacity: 0;
 	}
 	.tab-entry:hover .tab-close, .tab-close:focus-visible, .tab.active + .tab-close { opacity: 1; }
-	.tab-close:hover:not(:disabled) { background: var(--pane-surface); color: var(--text); }
+	.tab-close:hover:not(:disabled) { background: var(--bg-inset); color: var(--text); }
 	.tab-close:disabled { cursor: not-allowed; }
 	.new-tab {
 		flex: none;
 		width: 27px;
 		height: 27px;
-		margin: 0 0 4px;
+		margin-left: auto;
 		display: grid;
 		place-items: center;
-		border-radius: 7px;
+		border: 1px solid transparent;
+		border-radius: 50%;
 		color: var(--text-faint);
 	}
-	.new-tab:hover { background: var(--workspace-canvas); color: var(--text); }
+	.new-tab:hover { background: var(--workspace-surface); border-color: var(--pane-edge); color: var(--text); }
 	@media (max-width: 620px) {
-		.conversation-tabs-row { padding-inline: 5px; }
+		.conversation-tabs { left: 0; transform: none; width: calc(100% - 40px); justify-content: flex-start; }
 		.tab-entry { flex-basis: 150px; }
 	}
 </style>

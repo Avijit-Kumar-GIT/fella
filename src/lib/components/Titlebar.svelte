@@ -1,10 +1,21 @@
 <script lang="ts">
-	import { firstActualQuestion, GENERAL_WORKSPACE_ID, session } from '$lib/session.svelte';
+	import { GENERAL_WORKSPACE_ID, session } from '$lib/session.svelte';
 	import { isDesktop, win } from '$lib/ipc';
+	import ConversationTabs from './ConversationTabs.svelte';
 	import Icon from './Icon.svelte';
 	import Logo from './Logo.svelte';
 
-	let { onpalette }: { onpalette: () => void } = $props();
+	let {
+		onpalette,
+		ontabselect,
+		onnewconversation,
+		onclosetab
+	}: {
+		onpalette: () => void;
+		ontabselect: (index: number) => void | Promise<void>;
+		onnewconversation: () => void;
+		onclosetab: (id: string) => void | Promise<void>;
+	} = $props();
 
 	let folder = $derived.by(() => {
 		const workspace = session.activeWorkspace;
@@ -13,26 +24,13 @@
 		return workspace.path?.replace(/[/\\]+$/, '').replace(/^.*[/\\]/, '') ?? 'Workspace';
 	});
 
-	// --- the active conversation's own title: a custom name if renamed,
-	// otherwise folder + its first message, not just the raw message -- the
-	// folder is what actually distinguishes two similarly-phrased
-	// conversations from each other.
-	let conversationTitle = $derived.by(() => {
-		if (session.activeChat?.title) return session.activeChat.title;
-		const msgs = session.activeChat?.messages ?? [];
-		const first = firstActualQuestion(msgs);
-		if (!first) return folder || 'New conversation';
-		const t = first.text.trim();
-		const clipped = t.length > 60 ? t.slice(0, 60) + '…' : t;
-		return folder ? `${folder} — ${clipped}` : clipped;
-	});
 	let displayTitle = $derived.by(() => {
-		const prefix = folder || 'Workspace';
+		const prefix = folder || 'Fella';
 		if (session.workspaceView === 'board') return prefix;
 		if (session.workspaceView === 'workspace') return `${prefix} — Workspace`;
 		if (session.workspaceView === 'project') return `${session.activeProject?.name ?? 'Project'} — Project`;
 		if (session.workspaceView === 'settings') return `${prefix} — Settings`;
-		return conversationTitle;
+		return prefix;
 	});
 
 
@@ -75,8 +73,11 @@
 				<span class="wordmark">Fella</span>
 			{/if}
 		</span>
-
-		<span class="spacer"></span>
+		<ConversationTabs
+			onselect={ontabselect}
+			onnew={onnewconversation}
+			onclose={onclosetab}
+		/>
 
 		<button
 			class="hint"
@@ -108,7 +109,7 @@
 		display: flex;
 		align-items: center;
 		gap: var(--space-2);
-		height: 38px;
+		height: 42px;
 		padding: 0 var(--space-2) 0 var(--pad);
 		background: var(--app-chrome);
 		color: var(--text-faint);
@@ -161,6 +162,7 @@
 		align-items: baseline;
 		gap: var(--space-2);
 		min-width: 0;
+		max-width: min(27vw, 280px);
 	}
 	.wordmark {
 		color: var(--text-dim);
@@ -175,6 +177,7 @@
 		text-overflow: ellipsis;
 		min-width: 0;
 	}
+	.titlebar:not(.focus) .id { flex: none; }
 	.folder.faint {
 		color: var(--text-faint);
 	}

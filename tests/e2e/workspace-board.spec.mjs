@@ -162,17 +162,32 @@ test('starts unbound, opens real conversation tabs, groups repository artifacts,
 	await page.goto('/');
 	const tabs = page.getByRole('tablist', { name: 'Conversations' });
 	await expect(tabs).toBeVisible();
+	await expect(page.locator('.titlebar .conversation-tabs')).toBeVisible();
+	await expect(page.locator('.workspace-window > .conversation-tabs-row')).toHaveCount(0);
 	await expect(tabs.getByRole('tab')).toHaveCount(1);
 	await expect(page.getByRole('heading', { name: 'New conversation', level: 1 })).toBeVisible();
 	await expect(page.getByRole('article')).toHaveCount(0);
 	await expect(page.getByRole('button', { name: 'Mount a folder' })).toHaveCount(0);
-	const initialSurfaces = await page.evaluate(() => ({
-		window: getComputedStyle(document.querySelector('.workspace-window')).backgroundColor,
-		dock: getComputedStyle(document.querySelector('.dock')).backgroundColor,
-		composer: getComputedStyle(document.querySelector('.field')).backgroundColor
-	}));
-	expect(initialSurfaces.dock).toBe(initialSurfaces.window);
-	expect(initialSurfaces.composer).toBe(initialSurfaces.window);
+	const surfaceColors = await page.evaluate(() => {
+		const root = document.documentElement;
+		const previous = root.getAttribute('data-color-mode');
+		const measure = () => ({
+			main: getComputedStyle(document.querySelector('main')).backgroundColor,
+			dock: getComputedStyle(document.querySelector('.dock')).backgroundColor,
+			composer: getComputedStyle(document.querySelector('.field')).backgroundColor
+		});
+		root.setAttribute('data-color-mode', 'light');
+		const light = measure();
+		root.setAttribute('data-color-mode', 'dark');
+		const dark = measure();
+		if (previous === null) root.removeAttribute('data-color-mode');
+		else root.setAttribute('data-color-mode', previous);
+		return { light, dark };
+	});
+	for (const surfaces of [surfaceColors.light, surfaceColors.dark]) {
+		expect(surfaces.dock).toBe(surfaces.main);
+		expect(surfaces.composer).toBe(surfaces.main);
+	}
 
 	await page.keyboard.press('Control+t');
 	await expect(tabs.getByRole('tab')).toHaveCount(2);
