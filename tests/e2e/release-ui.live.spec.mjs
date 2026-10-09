@@ -158,8 +158,10 @@ test('G3: Stop retains completed SQL evidence and prevents later streamed text',
 		await composer.press('Enter');
 		const assistant = page.locator('.msg.assistant').last();
 		await expect(assistant.locator('.text.rich')).toContainText('The total is', { timeout: 20_000 });
-		await expect(page.getByRole('button', { name: 'Stop' })).toBeVisible();
-		await page.getByRole('button', { name: 'Stop' }).click();
+		const stopButton = page.getByRole('button', { name: 'Stop' });
+		await expect(stopButton).toBeVisible();
+		await expect(stopButton).toHaveAttribute('data-slot', 'button');
+		await stopButton.click();
 		await expect(assistant.locator('.text.rich')).toContainText('Stopped.', { timeout: 10_000 });
 		await expect(assistant.locator('.text.rich')).not.toContainText('LATE_TOKEN_SHOULD_NOT_APPEAR');
 		await expect.poll(() => slowResponseClosed, { timeout: 5_000 }).toBe(true);
@@ -271,14 +273,18 @@ test('G5: typed clarification replaces the composer, accepts a choice and Other,
 		const clarification = page.locator('.dock .clarification-field');
 		await expect(clarification).toBeVisible({ timeout: 30_000 });
 		await expect(page.getByRole('combobox', { name: /Ask about/ })).toHaveCount(0);
-		await expect(clarification.locator('.clarification-options button')).toHaveCount(2);
+		const clarificationChoices = clarification.locator('.clarification-options button');
+		await expect(clarificationChoices).toHaveCount(2);
+		await expect(clarificationChoices.first()).toHaveAttribute('data-slot', 'button');
 		await expect(clarification.getByRole('textbox', { name: 'Other interpretation' })).toBeVisible();
 		const clarificationScreenshot = test.info().outputPath('clarification-composer.png');
 		await mkdir(dirname(clarificationScreenshot), { recursive: true });
 		await clarification.screenshot({ path: clarificationScreenshot });
 
 		const assistantCountBeforeChoice = await page.locator('.msg.assistant').count();
-		await clarification.getByRole('button', { name: /Rent and utilities/ }).click();
+		const clarificationChoice = clarification.getByRole('button', { name: /Rent and utilities/ });
+		await expect(clarificationChoice).toHaveAttribute('data-slot', 'button');
+		await clarificationChoice.click();
 		await expect(page.locator('.msg.user').last()).toContainText('Rent and utilities');
 		await expect.poll(() => page.locator('.msg.assistant').count(), {
 			timeout: 30_000,
@@ -293,8 +299,12 @@ test('G5: typed clarification replaces the composer, accepts a choice and Other,
 		await composer.press('Enter');
 		await expect(clarification).toBeVisible({ timeout: 30_000 });
 		const other = clarification.getByRole('textbox', { name: 'Other interpretation' });
+		const continueClarification = clarification.getByRole('button', { name: 'Continue with this interpretation' });
+		await expect(continueClarification).toHaveAttribute('data-slot', 'button');
+		await expect(continueClarification).toBeDisabled();
 		await other.fill('Rent only, excluding utilities and repairs.');
-		await clarification.getByRole('button', { name: 'Continue with this interpretation' }).click();
+		await expect(continueClarification).toBeEnabled();
+		await continueClarification.click();
 		await expect(page.locator('.msg.user').last()).toContainText('Rent only, excluding utilities and repairs.');
 		await expect(page.locator('.msg.assistant').last().locator('.text.rich')).toContainText(
 			'Thanks, I will continue with that scope.',

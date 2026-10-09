@@ -385,10 +385,10 @@
 				<div class="context-list">
 					{#each contextSources as source (source.path)}
 						<div class="context-item">
-							<button class="context-main" type="button" onclick={() => addSource(source)}>
+							<Button variant="ghost" class="context-main" type="button" onclick={() => addSource(source)}>
 								<span class="context-icon"><Icon name={source.view ? 'table' : 'file'} size={16} /></span>
 								<span class="context-copy"><strong>{source.name}</strong><small>{sourceDetail(source)}</small></span>
-							</button>
+							</Button>
 						</div>
 					{/each}
 				</div>
@@ -397,10 +397,10 @@
 				<p class="context-heading">Fields</p>
 				<div class="context-list compact-list">
 					{#each contextColumns as item (item.source.path + ':' + item.column.name)}
-						<button class="context-field" type="button" onclick={() => addColumn(item.source, item.column.name, item.column.type)}>
+						<Button variant="ghost" class="context-field" type="button" onclick={() => addColumn(item.source, item.column.name, item.column.type)}>
 							<span class="context-icon"><Icon name="table" size={16} /></span>
 							<span class="context-copy"><strong>{item.source.name}.{item.column.name}</strong><small>{item.column.type}</small></span>
-						</button>
+						</Button>
 					{/each}
 				</div>
 			{/if}
@@ -454,7 +454,8 @@
 			{#if pendingClarification.request.options.length}
 				<div class="clarification-options" role="group" aria-label="Suggested answers">
 					{#each pendingClarification.request.options as option, index (option)}
-						<button
+						<Button
+							variant="ghost"
 							class="clarification-option"
 							type="button"
 							disabled={session.busy}
@@ -462,7 +463,7 @@
 						>
 							<span class="clarification-index">{index + 1}</span>
 							<span>{option}</span>
-						</button>
+						</Button>
 					{/each}
 				</div>
 			{/if}
@@ -479,14 +480,16 @@
 						rows={2}
 						disabled={session.busy}
 					></Textarea>
-					<button
+					<Button
+						variant="default"
+						size="icon"
 						class="clarification-send"
 						type="submit"
 						disabled={!clarificationOther.trim() || session.busy}
 						aria-label="Continue with this interpretation"
 					>
 						<Icon name="corner-down-left" size={16} />
-					</button>
+					</Button>
 				</div>
 			</form>
 		</div>
@@ -579,9 +582,10 @@
 				</div>
 				{#if !pendingInput}
 					<div class="model-wrap">
-						<button
+						<Button
+							variant="ghost"
+							size="sm"
 							class="model-trigger"
-							type="button"
 							aria-expanded={modelOpen}
 							aria-haspopup="dialog"
 							title={currentModel ? `Model: ${currentModel}` : 'Choose a model'}
@@ -590,7 +594,7 @@
 							{#if providerId}<ProviderIcon providerId={providerId} size={14} />{/if}
 							<span class="model-name" class:empty={!currentModel}>{currentModel || 'Choose model'}</span>
 							<Icon name="chevron-right" size={12} />
-						</button>
+						</Button>
 						{#if modelOpen}
 							<div class="model-menu" role="dialog" aria-label="Choose a model" transition:enterUp>
 								<div class="model-menu-head">
@@ -618,17 +622,17 @@
 								{#if modelOptions.length}
 									<div class="model-list" role="listbox" aria-label="Available models">
 										{#each modelOptions as modelOption (modelOption)}
-											<button
-												class="model-option"
-												class:selected={modelOption === currentModel}
-												type="button"
+											<Button
+												variant="ghost"
+												size="sm"
+												class={`model-option${modelOption === currentModel ? ' selected' : ''}`}
 												role="option"
 												aria-selected={modelOption === currentModel}
 												onclick={() => void chooseModel(modelOption)}
 											>
 												<span>{modelOption}</span>
 												{#if modelOption === currentModel}<Icon name="check" size={14} />{/if}
-											</button>
+											</Button>
 										{/each}
 									</div>
 								{:else}
@@ -648,26 +652,28 @@
 				{/if}
 			{/if}
 			{#if answering && value.trim() && !pendingInput && !value.startsWith('/') && !session.mountProgress}
-				<button
+				<Button
+					variant="default"
+					size="icon"
 					class="act send"
 					title="Cancel and re-ask with this (Enter)"
 					aria-label="Cancel and re-ask with this"
 					onclick={() => void submit()}
 				>
-						<Icon name="corner-down-left" size={16} />
-				</button>
-			{:else if session.busy}
-				<button class="act stop" title="Stop (Esc)" aria-label="Stop" onclick={() => stop()}>
-					<Icon name="stop" fill size={16} />
-				</button>
-			{:else if session.mountProgress}
-				<button class="act mount-wait" disabled title="Preparing workspace" aria-label="Preparing workspace">
-					<Logo size={18} active />
-				</button>
-			{:else if value.trim()}
-				<button class="act send" aria-label="Send" onclick={() => void submit()}>
 					<Icon name="corner-down-left" size={16} />
-				</button>
+				</Button>
+			{:else if session.busy}
+				<Button variant="destructive" size="icon" class="act stop" title="Stop (Esc)" aria-label="Stop" onclick={() => stop()}>
+					<Icon name="stop" fill size={16} />
+				</Button>
+			{:else if session.mountProgress}
+				<Button variant="ghost" size="icon" class="act mount-wait" disabled title="Preparing workspace" aria-label="Preparing workspace">
+					<Logo size={18} active />
+				</Button>
+			{:else if value.trim()}
+				<Button variant="default" size="icon" class="act send" aria-label="Send" onclick={() => void submit()}>
+					<Icon name="corner-down-left" size={16} />
+				</Button>
 			{/if}
 		</div>
 	</div>
@@ -842,25 +848,29 @@
 		min-width: 0;
 		flex: none;
 	}
-	.model-trigger {
+	:global(.model-trigger) {
 		display: inline-flex;
 		align-items: center;
+		justify-content: flex-start;
 		gap: 6px;
 		min-width: 0;
+		min-height: 0;
+		height: auto;
 		max-width: min(260px, 32vw);
 		padding: 4px 6px;
 		border-radius: var(--radius-chip);
+		background: transparent;
 		color: var(--text-dim);
 		font-size: var(--fs-xs);
 		font-weight: 500;
 		white-space: nowrap;
 	}
-	.model-trigger:hover,
-	.model-trigger[aria-expanded='true'] {
+	:global(.model-trigger:hover),
+	:global(.model-trigger[aria-expanded='true']) {
 		background: var(--bg-inset);
 		color: var(--text);
 	}
-	.model-trigger > :global(svg) {
+	:global(.model-trigger) > :global(svg) {
 		transform: rotate(90deg);
 		color: var(--text-faint);
 	}
@@ -942,29 +952,34 @@
 		max-height: min(280px, 38vh);
 		overflow: auto;
 	}
-	.model-option {
+	:global(.model-list) :global(.model-option) {
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
 		gap: var(--space-2);
 		width: 100%;
+		min-height: 0;
+		height: auto;
 		padding: 7px 8px;
 		border-radius: var(--radius-chip);
+		background: transparent;
+		color: var(--text-dim);
 		text-align: left;
 		font-family: var(--mono);
 		font-size: var(--fs-xs);
 	}
-	.model-option:hover,
-	.model-option.selected {
+	:global(.model-list) :global(.model-option:hover),
+	:global(.model-list) :global(.model-option.selected) {
 		background: var(--bg-inset);
+		color: var(--text);
 	}
-	.model-option span {
+	:global(.model-option) span {
 		min-width: 0;
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
-	.model-option :global(svg) {
+	:global(.model-option) :global(svg) {
 		flex: none;
 		color: var(--brand);
 	}
@@ -1081,26 +1096,46 @@
 	.context-item:focus-within {
 		background: var(--bg-inset);
 	}
-	.context-main {
+	:global(.context-main) {
 		min-width: 0;
 		display: flex;
 		align-items: center;
+		justify-content: flex-start;
 		gap: 9px;
 		flex: 1;
+		height: auto;
+		min-height: 0;
 		padding: 7px 6px 7px 8px;
+		border-radius: var(--radius-chip);
+		background: transparent;
+		color: var(--text-dim);
+		font-size: var(--fs-xs);
+		white-space: normal;
 		text-align: left;
 	}
-	.context-field {
+	:global(.context-main:hover) {
+		background: transparent;
+		color: var(--text);
+	}
+	:global(.context-field) {
 		width: 100%;
 		display: flex;
 		align-items: center;
+		justify-content: flex-start;
 		gap: 9px;
+		height: auto;
+		min-height: 0;
 		padding: 6px 8px;
 		border-radius: var(--radius-chip);
+		background: transparent;
+		color: var(--text-dim);
+		font-size: var(--fs-xs);
+		white-space: normal;
 		text-align: left;
 	}
-	.context-field:hover {
+	:global(.context-field:hover) {
 		background: var(--bg-inset);
+		color: var(--text);
 	}
 	.context-icon {
 		display: grid;
@@ -1188,11 +1223,13 @@
 		overflow-y: auto;
 		scrollbar-width: thin;
 	}
-	.clarification-option {
+	:global(.clarification-option) {
 		display: flex;
 		align-items: center;
+		justify-content: flex-start;
 		gap: 10px;
 		width: 100%;
+		height: auto;
 		min-height: 44px;
 		padding: 6px 8px;
 		border-bottom: 1px solid var(--border);
@@ -1200,14 +1237,15 @@
 		color: var(--text-dim);
 		background: transparent;
 		font-size: var(--fs-sm);
+		white-space: normal;
 		text-align: left;
 		transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
 	}
-	.clarification-option:hover:not(:disabled) {
+	:global(.clarification-option:hover:not(:disabled)) {
 		color: var(--text);
 		background: var(--bg-inset);
 	}
-	.clarification-option:disabled {
+	:global(.clarification-option:disabled) {
 		cursor: progress;
 		opacity: 0.6;
 	}
@@ -1260,19 +1298,22 @@
 		outline: 2px solid color-mix(in srgb, var(--link) 22%, transparent);
 		outline-offset: 1px;
 	}
-	.clarification-send {
+	:global(.clarification-send) {
 		display: grid;
 		place-items: center;
 		flex: none;
 		width: 30px;
+		min-width: 30px;
 		height: 30px;
+		min-height: 30px;
+		padding: 0;
 		border-radius: 50%;
 		color: var(--on-brand);
 		background: var(--brand);
 		transition: filter var(--dur-fast) var(--ease), opacity var(--dur-fast) var(--ease);
 	}
-	.clarification-send:hover:not(:disabled) { filter: brightness(0.92); }
-	.clarification-send:disabled { opacity: 0.45; cursor: default; }
+	:global(.clarification-send:hover:not(:disabled)) { filter: brightness(0.92); }
+	:global(.clarification-send:disabled) { opacity: 0.45; cursor: default; }
 	.bottom-row {
 		display: flex;
 		align-items: center;
@@ -1309,32 +1350,36 @@
 		font-family: var(--mono);
 	}
 	/* Trailing action send when there's text, stop while a run is live. */
-	.act {
+	:global(.bottom-row .act) {
 		flex: none;
 		margin-left: auto;
 		display: grid;
 		place-items: center;
 		width: 28px;
+		min-width: 28px;
 		height: 28px;
+		min-height: 28px;
+		padding: 0;
 		border-radius: 50%;
 		color: var(--text-faint);
+		background: transparent;
 		transition:
 			background var(--dur-fast) var(--ease),
 			color var(--dur-fast) var(--ease);
 	}
-	.act.send {
+	:global(.bottom-row .act.send) {
 		background: var(--brand);
 		color: var(--on-brand);
 	}
-	.act.send:hover {
+	:global(.bottom-row .act.send:hover) {
 		color: var(--on-brand);
 		background: var(--brand);
 		filter: brightness(0.9);
 	}
-	.act.stop {
+	:global(.bottom-row .act.stop) {
 		color: var(--err);
 	}
-	.act.stop:hover {
+	:global(.bottom-row .act.stop:hover) {
 		background: var(--bg-inset);
 	}
 

@@ -622,14 +622,31 @@ test verifies filter state, shared Button adoption, result selection, and
 palette dismissal. The build reports the existing client-chunk advisory and
 adapter-static fallback notice.
 
+#### Slice 3af: Composer actions and choices
+
+Status: implemented.
+
+- Use shared Buttons for source and field choices, model selection, suggested
+  clarification responses, and the send, stop, and mount-wait states.
+- Preserve the Composer's compact geometry, selected states, labels, and
+  existing submit and selection behavior.
+
+Validation: `pnpm check`, syntax checks for both changed browser-test files,
+three focused workspace-board browser tests, the Electron Stop and
+clarification journeys, and `pnpm build` pass. The initial Electron attempt was
+blocked by the sandbox's loopback-bind restriction; its elevated run used the
+pre-edit static bundle and failed the new primitive assertion. After
+rebuilding, both focused journeys passed against the current bundle. The build
+reports the existing client-chunk advisory and adapter-static fallback notice.
+
 #### Remaining in Slice 3
 
 Standardize remaining feature actions and controls around shared primitives
 where they improve consistency without obscuring product behavior. Audit the
-remaining Composer controls and EnvironmentTabs close/new actions, then perform
-the final duplicate-style and regression sweep. Keep native window controls,
-chart geometry, and workspace-board composition custom unless a shared
-primitive improves the interaction without changing its semantics.
+EnvironmentTabs close/new actions, then perform the final duplicate-style and
+regression sweep. Keep native window controls, chart geometry, and
+workspace-board composition custom unless a shared primitive improves the
+interaction without changing its semantics.
 
 The combined keyboard test for the repository menu remains unresolved. Its
 second focused run again could not find the “Repository actions” trigger after

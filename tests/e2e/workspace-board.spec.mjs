@@ -225,7 +225,9 @@ test('environments compose General and repository panes while conversations reta
 	}
 
 	await page.getByRole('combobox', { name: 'Ask a question' }).fill('What is a useful way to compare trends?');
-	await page.getByRole('button', { name: 'Send' }).click();
+	const initialSend = page.getByRole('button', { name: 'Send' });
+	await expect(initialSend).toHaveAttribute('data-slot', 'button');
+	await initialSend.click();
 	await expect(page.getByText('Scoped to general.')).toBeVisible();
 	const unboundCall = await page.evaluate(() => window.__workspaceAskCalls.at(-1));
 	expect(unboundCall.workspaceId).toBeNull();
@@ -423,6 +425,7 @@ test('Composer source search filters and attaches a workspace source', async ({ 
 	await search.fill('sales.csv');
 	const source = page.locator('.context-main').filter({ hasText: 'sales.csv' });
 	await expect(source).toBeVisible();
+	await expect(source).toHaveAttribute('data-slot', 'button');
 	await source.click();
 	const reference = page.locator('.ref-pill').filter({ hasText: 'sales.csv' });
 	await expect(reference).toBeVisible();
@@ -437,6 +440,7 @@ test('Composer model search filters the available models', async ({ page }) => {
 	await page.goto('/');
 	const modelTrigger = page.locator('.model-trigger');
 	await expect(modelTrigger).toBeVisible();
+	await expect(modelTrigger).toHaveAttribute('data-slot', 'button');
 	await modelTrigger.click();
 	const search = page.getByRole('textbox', { name: 'Find a model' });
 	await expect(search).toBeFocused();
@@ -444,7 +448,12 @@ test('Composer model search filters the available models', async ({ page }) => {
 	await search.fill('no-such-model');
 	await expect(page.getByText('No models available from openai.')).toBeVisible();
 	await search.fill('gpt-4.1-mini');
-	await expect(page.getByRole('option', { name: 'gpt-4.1-mini' })).toBeVisible();
+	const modelOption = page.getByRole('option', { name: 'gpt-4.1-mini' });
+	await expect(modelOption).toBeVisible();
+	await expect(modelOption).toHaveAttribute('data-slot', 'button');
+	await modelOption.click();
+	await expect(page.getByRole('dialog', { name: 'Choose a model' })).toHaveCount(0);
+	await modelTrigger.click();
 	const providerSettings = page.getByRole('button', { name: 'Provider settings' });
 	await expect(providerSettings).toHaveAttribute('data-slot', 'button');
 	await providerSettings.click();
