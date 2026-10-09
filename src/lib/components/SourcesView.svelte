@@ -125,7 +125,7 @@
 			<div class="empty-icon"><Icon name="folder" size={20} /></div>
 			<h2>Your workspace is still empty</h2>
 			<p>Choose a folder and Fella will catalog spreadsheets, documents, and notes without changing them.</p>
-			<button class="pill primary" type="button" onclick={() => void openFolder()}>Choose a folder</button>
+			<Button onclick={() => void openFolder()}>Choose a folder</Button>
 		</div>
 	{:else}
 		<div class="catalog-meta" aria-label="Source summary">
@@ -259,7 +259,7 @@
 				<div class="empty-icon"><Icon name="folder" size={20} /></div>
 				<h2>No readable sources yet</h2>
 				<p>Fella found this folder, but it could not use any files in it yet.</p>
-				<button class="pill ghost" type="button" onclick={() => void openFolder()}>Choose another folder</button>
+				<Button variant="ghost" size="sm" onclick={() => void openFolder()}>Choose another folder</Button>
 			</div>
 		{/if}
 

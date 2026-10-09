@@ -4,6 +4,7 @@
 	import { ipc, isDesktop, openExternal } from '$lib/ipc';
 	import { prefs, type Appearance } from '$lib/prefs.svelte';
 	import { session } from '$lib/session.svelte';
+	import { Button } from '$lib/components/ui/button';
 	import { Switch } from '$lib/components/ui/switch';
 	import type { AnalysisCapabilities, RunLogEntry } from '$lib/types';
 	import Icon from './Icon.svelte';
@@ -200,14 +201,14 @@
 					<span class="label">Current provider</span>
 					<strong>{provider?.display ?? (currentProvider || 'Not connected')}</strong>
 				</div>
-				<button class="pill ghost" type="button" onclick={() => command('/login')}>Change</button>
+				<Button variant="ghost" size="sm" class="settings-action" onclick={() => command('/login')}>Change</Button>
 			</div>
 			<div class="current-row">
 				<div>
 					<span class="label">{session.activeChat?.model.trim() ? 'Conversation model' : 'Default model'}</span>
 					<strong title={currentModel}>{currentModel || 'Choose a model'}</strong>
 				</div>
-				<button class="pill ghost" type="button" onclick={() => command('/model')}>Choose</button>
+				<Button variant="ghost" size="sm" class="settings-action" onclick={() => command('/model')}>Choose</Button>
 			</div>
 			{#if session.providers.length}
 				<div class="provider-list">
@@ -226,16 +227,17 @@
 					{/each}
 				</div>
 			{/if}
-			<button
+			<Button
+				variant="link"
+				size="sm"
 				class="text-button"
-				type="button"
 				onclick={() => void openExternal('https://docs.lilfella.app/developer-platform/using-fella/privacy')}
 			>
 				Privacy and security <Icon name="arrow-up-right" size={12} />
-			</button>
-			<button class="text-button" type="button" onclick={() => void refreshSettings()}>
+			</Button>
+			<Button variant="link" size="sm" class="text-button" onclick={() => void refreshSettings()}>
 				<Icon name="check" size={16} /> Refresh connection status
-			</button>
+			</Button>
 		</section>
 
 		<section class="settings-card" aria-labelledby="appearance-title">
@@ -274,9 +276,9 @@
 			{:else}
 				<p class="muted">No folder mounted yet.</p>
 			{/if}
-			<button class="pill ghost" type="button" onclick={() => void openFolder()}>
-					<Icon name="folder" size={16} /> {workspace ? 'Change folder' : 'Choose a folder'}
-			</button>
+			<Button variant="ghost" size="sm" class="settings-action" onclick={() => void openFolder()}>
+				<Icon name="folder" size={16} /> {workspace ? 'Change folder' : 'Choose a folder'}
+			</Button>
 		</section>
 
 		<section class="settings-card capability-card" aria-labelledby="capability-title">
@@ -504,11 +506,9 @@
 		font-size: var(--fs-sm);
 		font-weight: 600;
 	}
-	.current-row .pill,
-	.workspace-card .pill {
+	.current-row :global(.settings-action),
+	.workspace-card :global(.settings-action) {
 		flex: none;
-		padding: 6px 9px;
-		font-size: var(--fs-xs);
 	}
 	.provider-list,
 	.appearance-list {
@@ -581,15 +581,15 @@
 		color: var(--text-faint);
 		font-size: var(--fs-xs);
 	}
-	.text-button {
+	:global(.text-button) {
 		display: inline-flex;
 		align-items: center;
 		gap: 5px;
 		align-self: flex-start;
-		color: var(--link);
+		padding: 0;
 		font-size: var(--fs-xs);
 	}
-	.text-button:hover {
+	:global(.text-button:hover) {
 		text-decoration: underline;
 	}
 	.appearance-row > span {

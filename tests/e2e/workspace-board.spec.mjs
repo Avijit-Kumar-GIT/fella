@@ -718,6 +718,37 @@ test('Sources catalog filter uses the shared input and preserves source selectio
 	await expect(source).toHaveAttribute('aria-selected', 'true');
 });
 
+test('empty Sources action uses a shared button and opens the selected folder', async ({ page }) => {
+	const emptyFolder = {
+		...folders[0],
+		catalog: { ...folders[0].catalog, revision: 'empty-r1', sources: [] }
+	};
+	await installDesktopMock(page, { fixtureFolders: [emptyFolder, folders[1]] });
+	await page.goto('/');
+	await page.getByRole('button', { name: 'Add repository' }).click();
+	await page.getByRole('button', { name: 'Open sources in northwind-sales' }).click();
+
+	const chooseAnother = page.getByRole('button', { name: 'Choose another folder' });
+	await expect(chooseAnother).toHaveAttribute('data-slot', 'button');
+	await chooseAnother.click();
+	await expect.poll(() => page.evaluate(() => window.__workspaceOpenCalls)).toContain(folders[1].path);
+	await expect(page.getByRole('article', { name: 'health-journal workspace' })).toBeVisible();
+	await expect(page.getByRole('combobox', { name: 'Ask about health-journal' })).toBeVisible();
+});
+
+test('Settings actions use shared buttons and folder selection still works', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+	await page.getByRole('button', { name: 'Settings' }).click();
+
+	for (const name of ['Change', 'Choose', 'Privacy and security', 'Refresh connection status', 'Choose a folder']) {
+		await expect(page.getByRole('button', { name, exact: true })).toHaveAttribute('data-slot', 'button');
+	}
+
+	await page.getByRole('button', { name: 'Choose a folder' }).click();
+	await expect.poll(() => page.evaluate(() => window.__workspaceOpenCalls)).toContain(folders[0].path);
+});
+
 test('Sources pagination uses shared buttons and preserves catalog and skipped-file boundaries', async ({ page }) => {
 	const paginatedFolders = [...folders];
 	const salesFolder = folders[0];

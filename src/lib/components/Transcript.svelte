@@ -133,9 +133,9 @@
 						<code>/files</code> shows what was skipped and why.{/if}
 				</p>
 				<div class="cta">
-					<button class="pill primary" onclick={() => void openFolder()}>
+					<Button class="folder-action" onclick={() => void openFolder()}>
 						<Icon name="folder" size={16} /> Choose a different folder
-					</button>
+					</Button>
 				</div>
 			{:else}
 				<p class="lead">
@@ -157,11 +157,11 @@
 						<!-- Hosted key was refused (HTTP 401/403). -->
 						<p>Your <strong>{providerName}</strong> key was refused.</p>
 						<div class="svc">
-							<button class="pill" onclick={() => void dispatch(`/login ${providerId}`)}>Enter a new key</button>
+							<Button variant="outline" size="sm" onclick={() => void dispatch(`/login ${providerId}`)}>Enter a new key</Button>
 							{#if getKeyUrl}
-								<button class="pill ghost" onclick={() => void openExternal(getKeyUrl)}>
+								<Button variant="ghost" size="sm" onclick={() => void openExternal(getKeyUrl)}>
 									Get a new key <Icon name="arrow-up-right" size={12} />
-								</button>
+								</Button>
 							{/if}
 						</div>
 					{:else if needModelPick}
@@ -170,7 +170,7 @@
 						{#if healthModels.length && healthModels.length <= 12}
 							<div class="svc">
 								{#each healthModels as m (m)}
-									<button class="pill" onclick={() => void dispatch(`/model ${m}`)}>{m}</button>
+									<Button variant="outline" size="sm" onclick={() => void dispatch(`/model ${m}`)}>{m}</Button>
 								{/each}
 							</div>
 						{:else}
@@ -181,7 +181,7 @@
 						{#if services.length}
 							<div class="svc">
 								{#each services as p (p.id)}
-									<button class="pill" onclick={() => connectService(p.id)}>{p.display}</button>
+									<Button variant="outline" size="sm" onclick={() => connectService(p.id)}>{p.display}</Button>
 								{/each}
 							</div>
 						{:else}
@@ -190,9 +190,9 @@
 					{:else}
 						<p>Can't reach <strong>{providerName}</strong>. Check your internet connection or enter a new key.</p>
 						<div class="svc">
-							<button class="pill" onclick={() => void dispatch(`/login ${providerId}`)}>Check key</button>
+							<Button variant="outline" size="sm" onclick={() => void dispatch(`/login ${providerId}`)}>Check key</Button>
 							{#each services.filter((p) => p.id !== providerId) as p (p.id)}
-								<button class="pill ghost" onclick={() => connectService(p.id)}>{p.display}</button>
+								<Button variant="ghost" size="sm" onclick={() => connectService(p.id)}>{p.display}</Button>
 							{/each}
 						</div>
 					{/if}
@@ -357,11 +357,6 @@
 	}
 	.onboard.center .cta {
 		justify-content: center;
-	}
-	.cta .pill {
-		display: inline-flex;
-		align-items: center;
-		gap: var(--space-2);
 	}
 	.egs {
 		color: var(--text-faint);

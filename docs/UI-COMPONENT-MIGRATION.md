@@ -429,6 +429,24 @@ freshness and the shared rerun action, plus the accessible error alert and
 retry behavior. The build reports a 504.08 KB client chunk above Vite's 500 KB
 advisory and the adapter-static fallback-page notice.
 
+#### Slice 3t: Empty-state, onboarding, and Settings actions
+
+Status: implemented.
+
+- Migrate remaining `.pill` actions in Sources, Transcript, and Settings to
+  shared Button variants, including compact provider choices and inline links.
+- Remove the obsolete global `.pill` styles while preserving the separate
+  custom row-action primitive for Composer and Sidebar.
+
+Validation: `pnpm check`, `node --check tests/e2e/workspace-board.spec.mjs`,
+the focused Sources and Settings browser tests, and `pnpm build` pass. The
+Sources test initially expected a source heading after picking a folder, but
+the captured UI showed the existing behavior opens that folder as a workspace
+conversation. With the user's approval, the assertion now checks the opened
+workspace and composer instead. This was a test expectation correction, not a
+product behavior change. The build still reports the existing Vite chunk-size
+advisory and adapter-static notice.
+
 #### Remaining in Slice 3
 
 Standardize the remaining Composer and Sidebar controls around shared

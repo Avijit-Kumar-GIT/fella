@@ -15,7 +15,7 @@
    - Hierarchy comes from type and spacing before borders or fills. Earn a
      border/surface only for selection, grouping, or a raised layer.
    - One focus ring: a soft --link glow (:focus-visible below).
-   - One primary action per screen (.pill.primary, filled with --brand);
+   - One primary action per screen (shared Button, filled with --brand);
      everything else is quieter.
    - Motion is gentle and short, and disappears entirely under
      prefers-reduced-motion. */
@@ -475,50 +475,6 @@ kbd {
 /* --- shared primitives -----------------------------------------------------
    Defined once here so a look isn't re-typed (and quietly drifting) in every
    component. Components add only what's genuinely local. */
-
-/* A bordered, low-emphasis action button (onboarding CTAs, provider chips). */
-.pill {
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	gap: var(--space-2);
-	white-space: nowrap;
-	color: var(--text);
-	background: var(--bg-raised);
-	border: 1px solid var(--border-strong);
-	border-radius: var(--radius-sm);
-	padding: 7px 14px;
-	font: inherit;
-	font-weight: 500;
-	transition:
-		background var(--dur-fast) var(--ease),
-		border-color var(--dur-fast) var(--ease),
-		box-shadow var(--dur-fast) var(--ease),
-		filter var(--dur-fast) var(--ease);
-}
-.pill:hover {
-	background: var(--bg-inset);
-}
-.pill:active {
-	transform: translateY(0.5px);
-}
-.pill.ghost {
-	background: transparent;
-	border-color: var(--border);
-	color: var(--text-dim);
-}
-/* The one primary action on a screen filled with the brand accent, the
-   same hue as the empty-state glyph and the top hairline so "this is the
-   one thing to do here" reads as one consistent color language. */
-.pill.primary {
-	background: var(--brand);
-	color: var(--on-brand);
-	border-color: var(--brand);
-}
-.pill.primary:hover {
-	background: var(--brand);
-	filter: brightness(0.92);
-}
 
 /* A full-width row inside a drop-up / palette list. Selection is marked by the
    caller with .sel or aria-selected. */
