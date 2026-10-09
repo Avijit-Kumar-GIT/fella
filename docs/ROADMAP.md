@@ -35,7 +35,11 @@ individual failed example into a special-case production rule.
    mounted, routes Ask by workspace identity, uses fixed 50/50 layouts, and
    persists/restores open tiles. Next: workspace-owned typed surfaces,
    simultaneous per-repository conversations, provenance-preserving chart and
-   source references, and broader real-shell journeys. See
+   source references, and broader real-shell journeys. Shape Projects as
+   evidence-backed analysis briefs: concise curated findings with embedded
+   visualizations and links to their source conversations, plus open questions.
+   Keep generated updates reviewable and traceable; reserve dashboard-style
+   views for stable, refreshable metrics. See
    [`COMPOSABLE-INTERFACE.md`](COMPOSABLE-INTERFACE.md) for the ownership model,
    current limits, delivery stages, and completion criteria.
 
