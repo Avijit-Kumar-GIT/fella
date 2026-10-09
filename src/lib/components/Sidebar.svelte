@@ -774,6 +774,7 @@
 		width: 100%;
 		display: flex;
 		align-items: center;
+		justify-content: flex-start;
 		gap: var(--space-2);
 		height: auto;
 		min-height: 28px;

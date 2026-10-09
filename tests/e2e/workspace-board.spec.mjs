@@ -708,6 +708,7 @@ test('Sidebar navigation actions use shared buttons and retain compact keyboard 
 
 	for (const action of [newConversation, search, settings]) {
 		await expect(action).toHaveAttribute('data-slot', 'button');
+		expect(await action.evaluate((element) => getComputedStyle(element).justifyContent)).toBe('flex-start');
 		const bounds = await action.boundingBox();
 		expect(bounds).not.toBeNull();
 		expect(bounds.height).toBeLessThanOrEqual(32);

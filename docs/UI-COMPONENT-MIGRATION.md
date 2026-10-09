@@ -779,6 +779,11 @@ than reinterpreted; see Slice 2. The build reports a 515.08 kB client chunk
 fallback notice. This was a source/control and behavioral regression audit,
 not a pixel-level light/dark screenshot review.
 
+Follow-up alignment fix: the shared Button's centered default overrode the
+Sidebar navigation's former native-button alignment. General navigation and
+Settings now explicitly use `justify-content: flex-start`; the focused browser
+test asserts the computed alignment for Ask, Search, and Settings.
+
 ## First-slice acceptance criteria
 
 - `pnpm check` reports no new Svelte or TypeScript errors, and `pnpm build`
