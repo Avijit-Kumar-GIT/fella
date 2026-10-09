@@ -10,6 +10,7 @@
 		stop
 	} from '$lib/commands';
 	import { DropdownMenu } from '$lib/components/ui/dropdown-menu';
+	import { Textarea } from '$lib/components/ui/textarea';
 	import { session } from '$lib/session.svelte';
 	import { enterUp } from '$lib/motion';
 	import type { ContextReference, SourceInfo } from '$lib/types';
@@ -457,15 +458,16 @@
 			<form class="clarification-other" onsubmit={submitOtherClarification}>
 				<label for="clarification-other-input">Other</label>
 				<div class="clarification-other-row">
-					<textarea
+					<Textarea
+						class="clarification-input"
 						id="clarification-other-input"
 						bind:value={clarificationOther}
 						aria-label="Other interpretation"
 						placeholder="Describe what you mean…"
-						maxlength="500"
-						rows="2"
+						maxlength={500}
+						rows={2}
 						disabled={session.busy}
-					></textarea>
+					></Textarea>
 					<button
 						class="clarification-send"
 						type="submit"
@@ -510,10 +512,11 @@
 				</button>
 			</div>
 		{/if}
-		<textarea
-			bind:this={ta}
+		<Textarea
+			class="composer-main-textarea"
+			bind:ref={ta}
 			bind:value
-			rows="1"
+			rows={1}
 			spellcheck="false"
 			autocapitalize="off"
 			autocomplete="off"
@@ -534,7 +537,7 @@
 			oninput={onInput}
 			onkeydown={onKey}
 			onfocus={() => (menuOff = false)}
-		></textarea>
+		></Textarea>
 		<div class="bottom-row">
 			{#if !session.focus}
 				<div class="mode-wrap">
@@ -1176,19 +1179,22 @@
 		align-items: flex-end;
 		gap: var(--space-2);
 	}
-	.clarification-other-row textarea {
+	.clarification-other-row :global(.clarification-input) {
 		min-width: 0;
 		min-height: 42px;
 		max-height: 100px;
+		width: 100%;
 		padding: 7px 9px;
 		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
 		background: var(--bg-inset);
+		color: var(--text);
+		font: inherit;
 		font-size: var(--fs-sm);
 		line-height: 1.4;
 		resize: vertical;
 	}
-	.clarification-other-row textarea:focus-visible {
+	.clarification-other-row :global(.clarification-input:focus-visible) {
 		border-color: var(--link);
 		outline: 2px solid color-mix(in srgb, var(--link) 22%, transparent);
 		outline-offset: 1px;
@@ -1212,10 +1218,12 @@
 		gap: var(--space-2);
 		min-height: 28px;
 	}
-	textarea {
+	.field :global(.composer-main-textarea) {
 		width: 100%;
+		min-height: 0;
 		resize: none;
 		border: none;
+		border-radius: 0;
 		outline: none;
 		background: transparent;
 		color: var(--text);
@@ -1226,19 +1234,16 @@
 		overflow-y: auto;
 		padding: var(--space-1) 0;
 	}
-	.clarification-other-row textarea {
-		width: 100%;
-		font: inherit;
-		color: var(--text);
-	}
-	textarea:focus-visible {
+	.field :global(.composer-main-textarea:focus-visible) {
+		border-color: transparent;
+		outline: none;
 		box-shadow: none;
 	}
-	textarea::placeholder {
+	.field :global(.composer-main-textarea::placeholder) {
 		color: var(--text-faint);
 	}
 	/* API-key entry: mask the characters in the Electron renderer. */
-	.field.secret textarea {
+	.field.secret :global(.composer-main-textarea) {
 		-webkit-text-security: disc;
 		font-family: var(--mono);
 	}

@@ -182,6 +182,23 @@ queried the trigger by its old accessible name, “Ask.” The locator now uses 
 updated name, but was not rerun; this browser result remains unresolved and is
 not counted as a pass.
 
+#### Slice 3c: Composer text entry
+
+Status: implemented.
+
+- Use the shared Textarea primitive for the main prompt and the free-form
+  clarification response, keeping their distinct sizing, focus, and resize
+  behavior in Composer-owned styles.
+- Preserve the main prompt's combobox semantics, autoresize/ref behavior,
+  keyboard handlers, and secret-entry masking.
+
+Validation: `pnpm check` reports zero errors and warnings; the focused
+General-composer workspace-board browser test passes; and `pnpm build`
+succeeds. The build still reports the client-chunk warning at 501.59 KB and
+the adapter-static fallback-page notice. There is no dedicated deterministic
+browser test for the free-form clarification field, so that flow is not
+claimed as browser-verified.
+
 #### Remaining in Slice 3
 
 Standardize the remaining Composer and Sidebar controls around shared
