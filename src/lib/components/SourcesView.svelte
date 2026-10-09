@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { baseName, openFolder } from '$lib/commands';
+	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { session } from '$lib/session.svelte';
 	import type { SourceInfo } from '$lib/types';
@@ -193,13 +194,14 @@
 							<p class="type-label">{kindLabel(selected.kind)}</p>
 							<h2>{selected.name}</h2>
 						</div>
-						<button
+						<Button
+							variant="outline"
+							size="sm"
 							class="open-beside"
-							type="button"
 							title="Return to Ask and open this source beside the conversation"
 							aria-label="Open source preview beside the active conversation"
 							onclick={() => session.openSourcePane(selected)}
-						>Open beside</button>
+						>Open beside</Button>
 					</div>
 					{#if relativePath(selected.path) !== selected.name}
 						<p class="path">{relativePath(selected.path)}</p>
@@ -514,17 +516,20 @@
 		gap: var(--space-3);
 	}
 	.detail-head > div:nth-child(2) { min-width: 0; }
-	.open-beside {
+	.detail-head :global(.open-beside) {
 		flex: none;
 		margin-left: auto;
+		height: auto;
+		min-height: 0;
 		padding: 5px 8px;
-		border: 1px solid var(--border);
+		border-color: var(--border);
 		border-radius: var(--radius-sm);
+		background: transparent;
 		color: var(--text-dim);
 		font-size: var(--fs-xs);
 		font-weight: 600;
 	}
-	.open-beside:hover { background: var(--bg-inset); color: var(--text); }
+	.detail-head :global(.open-beside:hover) { background: var(--bg-inset); color: var(--text); }
 	.detail-icon {
 		width: 30px;
 		height: 30px;

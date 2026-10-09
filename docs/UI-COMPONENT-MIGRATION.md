@@ -347,6 +347,20 @@ evidence body appearing, and the body closing again. The build reports a
 502.27 KB client chunk above Vite's 500 KB advisory and the adapter-static
 fallback-page notice.
 
+#### Slice 3n: Sources preview action
+
+Status: implemented.
+
+- Use the shared outline Button for the selected source's Open beside action,
+  retaining its compact detail-header styling and preview-only behavior.
+
+Validation: `pnpm check`, `node --check tests/e2e/workspace-board.spec.mjs`,
+the focused Sources preview browser test, and `pnpm build` succeed. The test
+verifies the shared Button marker, source preview in the companion pane, and
+that opening the preview does not change the active conversation scope. The
+build reports a 502.31 KB client chunk above Vite's 500 KB advisory and the
+adapter-static fallback-page notice.
+
 #### Remaining in Slice 3
 
 Standardize the remaining Composer and Sidebar controls around shared

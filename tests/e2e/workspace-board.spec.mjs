@@ -779,3 +779,20 @@ test('Analysis details uses the shared button and preserves disclosure state', a
 	await expect(details).toHaveAttribute('aria-expanded', 'false');
 	await expect(page.getByText('Source details were not recorded for this archived answer.')).toHaveCount(0);
 });
+
+test('Sources open-beside action uses the shared button and preserves conversation scope', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+	await page.getByRole('button', { name: 'Add repository' }).click();
+	await page.getByRole('button', { name: 'Open sources in northwind-sales' }).click();
+
+	const openBeside = page.getByRole('button', { name: 'Open source preview beside the active conversation' });
+	await expect(openBeside).toHaveAttribute('data-slot', 'button');
+	await openBeside.click();
+
+	const companion = page.getByRole('complementary', { name: 'Companion pane' });
+	await expect(companion).toBeVisible();
+	await expect(companion.getByRole('heading', { name: 'sales.csv' })).toBeVisible();
+	await expect(companion).toContainText('Preview only · this file is not added to the conversation context.');
+	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
+});
