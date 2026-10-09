@@ -65,6 +65,7 @@ colors are not confused with success or failure.
 - Motion presets: `src/lib/motion.ts`.
 - Component-specific layout: the owning Svelte component, only when the
   pattern is genuinely local.
+- Shared UI migration and component ownership: [UI component migration](UI-COMPONENT-MIGRATION.md).
 
 For architecture or evidence-layout changes, update
 [the architecture reference](ARCHITECTURE.md) as well. The product goal is in

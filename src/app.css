@@ -20,6 +20,44 @@
    - Motion is gentle and short, and disappears entirely under
      prefers-reduced-motion. */
 
+/* Tailwind utilities power the shared shadcn-svelte components. Keep Fella's
+   established base styles and tokens in charge; in particular, do not import
+   Tailwind Preflight into the existing application. */
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
+@custom-variant dark (&:where(:root[data-color-mode='dark'], :root[data-color-mode='dark'] *));
+
+@theme inline {
+	--font-sans: var(--sans);
+	--font-mono: var(--mono);
+	--color-background: var(--bg);
+	--color-foreground: var(--text);
+	--color-card: var(--bg-raised);
+	--color-card-foreground: var(--text);
+	--color-popover: var(--bg-raised);
+	--color-popover-foreground: var(--text);
+	--color-primary: var(--brand);
+	--color-primary-foreground: var(--on-brand);
+	--color-secondary: var(--bg-inset);
+	--color-secondary-foreground: var(--text);
+	--color-muted: var(--bg-inset);
+	--color-muted-foreground: var(--text-dim);
+	--color-accent: var(--bg-inset);
+	--color-accent-foreground: var(--text);
+	--color-destructive: var(--err);
+	--color-border: var(--border);
+	--color-input: var(--border-strong);
+	--color-ring: var(--link);
+	--color-sidebar: var(--sidebar-surface);
+	--color-sidebar-foreground: var(--text);
+	--color-sidebar-accent: var(--bg-inset);
+	--color-sidebar-accent-foreground: var(--text);
+	--color-sidebar-border: var(--border);
+	--color-sidebar-ring: var(--link);
+}
+
 @font-face {
 	font-family: 'Geist';
 	font-weight: 100 900;
@@ -211,14 +249,16 @@ a:hover {
 	text-decoration: underline;
 }
 
-button {
-	font: inherit;
-	font-weight: 500;
-	color: inherit;
-	background: transparent;
-	border: none;
-	padding: 0;
-	cursor: pointer;
+@layer base {
+	button {
+		font: inherit;
+		font-weight: 500;
+		color: inherit;
+		background: transparent;
+		border: none;
+		padding: 0;
+		cursor: pointer;
+	}
 }
 
 /* Keyboard focus must always be visible one soft --link glow. Components that

@@ -3,6 +3,7 @@
 	import { openFolder } from '$lib/commands';
 	import { ipc, isDesktop } from '$lib/ipc';
 	import { session } from '$lib/session.svelte';
+	import { Button } from '$lib/components/ui/button';
 	import Icon from './Icon.svelte';
 	import DataLoader from './DataLoader.svelte';
 
@@ -88,7 +89,7 @@
 			<div class="empty-icon"><Icon name="folder" size={20} /></div>
 			<h2>Mount a workspace to write its guide</h2>
 			<p>Choose a folder and Fella will keep its workspace note beside the files it understands.</p>
-			<button class="pill primary" type="button" onclick={() => void openFolder()}>Choose a folder</button>
+			<Button type="button" onclick={() => void openFolder()}>Choose a folder</Button>
 		</div>
 	{:else}
 		<div class="editor-card">
@@ -99,12 +100,12 @@
 				</div>
 				<div class="editor-actions">
 					{#if contents.trim() === ''}
-						<button class="text-button" type="button" onclick={useTemplate}>Use a template</button>
+						<Button variant="link" size="sm" type="button" onclick={useTemplate}>Use a template</Button>
 					{/if}
-					<button class="pill primary" type="button" disabled={saving || loading || contents === savedContents} onclick={() => void save()}>
+					<Button type="button" disabled={saving || loading || contents === savedContents} onclick={() => void save()}>
 						<Icon name="check" size={16} />
 						{saving ? 'Saving…' : 'Save'}
-					</button>
+					</Button>
 				</div>
 			</div>
 			{#if loading}
@@ -211,21 +212,6 @@
 		align-items: center;
 		gap: var(--space-3);
 		flex: none;
-	}
-	.text-button {
-		color: var(--link);
-		font-size: var(--fs-xs);
-		white-space: nowrap;
-	}
-	.text-button:hover {
-		text-decoration: underline;
-	}
-	.editor-head .pill {
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
-		padding: 6px 10px;
-		font-size: var(--fs-xs);
 	}
 	textarea {
 		display: block;

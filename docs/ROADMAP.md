@@ -42,6 +42,12 @@ individual failed example into a special-case production rule.
    views for stable, refreshable metrics. See
    [`COMPOSABLE-INTERFACE.md`](COMPOSABLE-INTERFACE.md) for the ownership model,
    current limits, delivery stages, and completion criteria.
+7. **Standardize the desktop UI without flattening Fella's product surfaces.**
+   Adopt shared shadcn-svelte components for repeated controls and Bits UI for
+   interaction behavior, while keeping Fella's tokens, workspace composition,
+   evidence views, and chart renderer. See
+   [`UI-COMPONENT-MIGRATION.md`](UI-COMPONENT-MIGRATION.md) for the component
+   audit, migration sequence, and acceptance criteria.
 
 ## Deferred
 
