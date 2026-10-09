@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Button } from '$lib/components/ui/button';
 	import type { Answer, ContextSection, EvidenceItem } from '$lib/types';
 	import Icon from './Icon.svelte';
 	import PythonCalculationDetails from './PythonCalculationDetails.svelte';
@@ -134,13 +135,15 @@
 						{/if}
 					</div>
 					{#if calls.length}
-						<button
+						<Button
+							variant="ghost"
+							size="sm"
 							class="detailtoggle"
 							onclick={() => (showModelCalls = !showModelCalls)}
 							aria-expanded={showModelCalls}
 						>
 							{showModelCalls ? 'hide model timings' : 'show model timings'}
-						</button>
+						</Button>
 						{#if showModelCalls}
 							<ul class="model-calls">
 								{#each calls as call, i (`${i}-${call.model}-${call.duration_ms}`)}
@@ -191,13 +194,15 @@
 						{/if}
 
 						{#if hasDetail}
-							<button
+							<Button
+								variant="ghost"
+								size="sm"
 								class="detailtoggle"
 								onclick={() => toggleDetail(i)}
 								aria-expanded={!!openDetail[i]}
 							>
 								{openDetail[i] ? 'hide' : isPythonExecution(e) ? 'show calculation' : isForecastExecution(e) ? 'show forecast method' : e.sql ? 'show the query' : 'show details'}
-							</button>
+							</Button>
 						{/if}
 
 						{#if openDetail[i] && hasDetail}
@@ -372,15 +377,21 @@
 		margin-top: 2px;
 		font-size: var(--fs-xs);
 	}
-	.detailtoggle {
+	:global(.detailtoggle) {
 		display: block;
+		height: auto;
+		min-height: 0;
+		justify-content: flex-start;
 		margin-top: 3px;
 		padding: 0;
+		border-radius: 0;
 		color: var(--text-faint);
 		font-size: var(--fs-xs);
-		background: transparent;
+		font-weight: 500;
+		text-decoration: none;
 	}
-	.detailtoggle:hover {
+	:global(.detailtoggle:hover) {
+		background: transparent;
 		color: var(--text-dim);
 	}
 	.detail {

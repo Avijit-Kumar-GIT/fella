@@ -507,6 +507,22 @@ the chart title in the companion pane, and the message's linked-chart state.
 The build reports a 505.01 KB client chunk above Vite's 500 KB advisory and
 the adapter-static fallback-page notice.
 
+#### Slice 3y: Evidence detail disclosures
+
+Status: implemented.
+
+- Use shared quiet Buttons for model-timing and per-step evidence disclosures,
+  preserving their changing labels and expanded state.
+
+Validation: `pnpm check` reports zero errors and warnings,
+`node --check tests/e2e/workspace-board.spec.mjs`, the focused evidence
+disclosure browser test, and `pnpm build` succeed. The test verifies that a SQL
+query can be revealed and hidden. Its initial locator used the closed-state
+label after expansion; the captured DOM showed the control correctly changed
+to “hide,” so the locator now follows the stable disclosure element and the
+label/state assertions remain explicit. The build reports a 505.10 KB client
+chunk above Vite's 500 KB advisory and the adapter-static fallback-page notice.
+
 #### Remaining in Slice 3
 
 Standardize remaining feature actions and controls around shared primitives

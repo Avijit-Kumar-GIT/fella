@@ -41,10 +41,11 @@ async function installDesktopMock(
 		replayStatus = null,
 		replayStatusError = false,
 		reindexedCatalog = null,
-		chartEvidence = null
+		chartEvidence = null,
+		detailEvidence = null
 	} = {}
 ) {
-	await page.addInitScript(({ fixtureFolders, seedUnavailableConversation, replayStatus, replayStatusError, reindexedCatalog, chartEvidence }) => {
+	await page.addInitScript(({ fixtureFolders, seedUnavailableConversation, replayStatus, replayStatusError, reindexedCatalog, chartEvidence, detailEvidence }) => {
 		const calls = [];
 		const archivedConversations = new Map();
 		const unavailablePath = 'C:\\FellaFixture\\unavailable-archive';
@@ -145,6 +146,7 @@ async function installDesktopMock(
 						...(hasReplayEvidence
 							? [{ id: 'fixture-replay-step', tool: 'run_sql', args: {}, result_summary: 'One row inspected.', ms: 12 }]
 							: []),
+						...(detailEvidence ? [detailEvidence] : []),
 						...(chartEvidence ? [chartEvidence] : [])
 					],
 					verification: [],
@@ -159,7 +161,7 @@ async function installDesktopMock(
 			windowAction: async () => {},
 			pathForFile: () => ''
 		};
-	}, { fixtureFolders, seedUnavailableConversation, replayStatus, replayStatusError, reindexedCatalog, chartEvidence });
+	}, { fixtureFolders, seedUnavailableConversation, replayStatus, replayStatusError, reindexedCatalog, chartEvidence, detailEvidence });
 }
 
 async function dispatchWorkspaceDrag(page, type, workspacePath, { x = 0.5, y = 0.5, existing = false } = {}) {
@@ -926,6 +928,36 @@ test('Analysis details uses the shared button and preserves disclosure state', a
 	await details.click();
 	await expect(details).toHaveAttribute('aria-expanded', 'false');
 	await expect(page.getByText('Source details were not recorded for this archived answer.')).toHaveCount(0);
+});
+
+test('Evidence query disclosure uses a shared button and preserves expansion behavior', async ({ page }) => {
+	await installDesktopMock(page, {
+		detailEvidence: {
+			id: 'fixture-query',
+			tool: 'run_sql',
+			args: { query: 'SELECT total FROM sales' },
+			sql: 'SELECT total FROM sales',
+			result_summary: 'One row returned.',
+			ms: 8
+		}
+	});
+	await page.goto('/');
+	await page.getByRole('combobox', { name: 'Ask a question' }).fill('Show the evidence.');
+	await page.getByRole('button', { name: 'Send' }).click();
+
+	const answer = page.locator('.msg.assistant').last();
+	await answer.getByRole('button', { name: 'Analysis details' }).click();
+	const reveal = answer.locator('.detailtoggle');
+	await expect(reveal).toHaveAttribute('data-slot', 'button');
+	await expect(reveal).toHaveText('show the query');
+	await expect(reveal).toHaveAttribute('aria-expanded', 'false');
+	await reveal.click();
+	await expect(reveal).toHaveAttribute('aria-expanded', 'true');
+	await expect(reveal).toHaveText('hide');
+	await expect(answer.locator('pre.sql')).toContainText('SELECT total FROM sales');
+	await reveal.click();
+	await expect(reveal).toHaveAttribute('aria-expanded', 'false');
+	await expect(answer.locator('pre.sql')).toHaveCount(0);
 });
 
 test('Replay freshness uses shared status badges and rerun buttons', async ({ page }) => {
