@@ -73,7 +73,7 @@ focus management independently.
 | 1 | `CommandPalette.svelte` | Adopted shared Dialog and Input for modal/focus behavior and search entry. Keep the Fella-specific result list, filters, commands, and ranking; reconsider Command only if it improves that real workflow. |
 | 1 | `ProjectDialog.svelte` | Replaced the hand-built modal shell and adopted shared Dialog, Input, Select, and Button. Form labels, validation, and project creation remain feature-owned. |
 | 1 | `SettingsView.svelte` | Adopted shared Switch controls. Settings rows, choices, disclosures, statuses, and organization remain feature-owned until those patterns have multiple consumers. |
-| 1 | `EnvironmentTabs.svelte` | Adopt shared tab behavior/styles while preserving environment switching, close controls, scrolling, and keyboard shortcuts. |
+| 1 | `EnvironmentTabs.svelte` | Adopted shared Tabs behavior for environment switching and roving keyboard focus. Keep titlebar-specific close/new controls, scrolling, and shortcuts feature-owned. |
 | 1 | `WorkspaceView.svelte` | Adopted shared Tabs for Sources and Guide; preserve workspace-pane state and content. |
 | 2 | `RunTimeline.svelte` | Adopted shared Collapsible for run-step disclosure; retain trace ordering and technical detail. |
 | 2 | `ReplayStatus.svelte` | Use shared Alert, Badge, Button, and loading/progress primitives for status and rerun states. |
@@ -120,7 +120,7 @@ Status: implemented, with one browser-test assertion unresolved.
 
 - Add shared Dialog, DropdownMenu, Input, Select, Switch, Tabs, Textarea, and
   Tooltip components, plus a Collapsible wrapper, all styled from Fella tokens.
-- Adopt them in the command palette, project creation, Settings, workspace
+- Adopt them in the command palette, project creation, Settings, workspace-pane
   tabs, repository actions, run-step disclosure, and guide editing.
 - Keep feature-owned result rendering, settings layout, and domain-specific
   content in their existing components.
@@ -141,7 +141,29 @@ check covers opening, Escape dismissal, and focus restoration.
 
 ### Slice 3: high-complexity product views
 
-Next, standardize Composer and the remaining Sidebar controls around the shared
+Status: in progress. Deliver this broad area in consumer-sized sub-slices, each
+with its own validation and commit.
+
+#### Slice 3a: environment tabs
+
+Status: complete.
+
+- Adopt Bits UI Tabs for environment selection, automatic activation, and
+  roving keyboard focus.
+- Preserve titlebar-specific close/new controls, horizontal overflow and
+  active-tab visibility, existing click focus behavior, and keyboard focus
+  restoration after environment activation.
+
+Validation: `pnpm check` reports zero errors and warnings, `pnpm build`
+succeeds, and all five environment-related workspace-board browser tests pass.
+An initial Playwright invocation forwarded its filter incorrectly and exposed
+a `ref` binding runtime error; the binding was corrected, then the focused test
+and the full environment-related subset passed. The separate repository-menu
+assertion caveat recorded under Slice 2 remains unresolved.
+
+#### Remaining in Slice 3
+
+Standardize Composer and the remaining Sidebar controls around the shared
 primitives. Then migrate source, evidence, transcript, and project views while
 retaining their distinct product layouts. Keep chart geometry and
 workspace-board composition custom.

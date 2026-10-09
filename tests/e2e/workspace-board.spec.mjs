@@ -377,6 +377,24 @@ test('environment tabs save different workspace arrangements without leaking pan
 	await expect(page.getByRole('article', { name: 'northwind-sales workspace' })).toHaveCount(0);
 });
 
+test('environment tabs use shared roving focus for keyboard switching', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+	const tabs = page.getByRole('tablist', { name: 'Environments' });
+	await page.getByRole('button', { name: 'New environment' }).click();
+	const first = tabs.getByRole('tab').first();
+	const second = tabs.getByRole('tab').nth(1);
+
+	await first.focus();
+	await page.keyboard.press('ArrowRight');
+	await expect(second).toBeFocused();
+	await expect(second).toHaveAttribute('aria-selected', 'true');
+
+	await page.keyboard.press('ArrowLeft');
+	await expect(first).toBeFocused();
+	await expect(first).toHaveAttribute('aria-selected', 'true');
+});
+
 test('many environments remain a bounded, scrollable tab strip with the active environment in view', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
