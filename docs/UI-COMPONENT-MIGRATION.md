@@ -403,6 +403,20 @@ marker, 30 px dimensions, pane dismissal, and return to the same workspace
 conversation. The build reports a 502.39 KB client chunk above Vite's 500 KB
 advisory and the adapter-static fallback-page notice.
 
+#### Slice 3r: Sources pagination
+
+Status: implemented.
+
+- Use shared compact ghost Buttons for both source-catalog and skipped-file
+  pagination, preserving page ranges, boundaries, and disabled states.
+
+Validation: `pnpm check` reports zero errors and warnings, the focused pagination
+browser test and `node --check tests/e2e/workspace-board.spec.mjs` pass, and
+`pnpm build` succeeds. The test uses 205 sources and 105 skipped files to check
+both pagers' ranges, disabled boundaries, and shared Button markers. The build
+reports a 502.70 KB client chunk above Vite's 500 KB advisory and the
+adapter-static fallback-page notice.
+
 #### Remaining in Slice 3
 
 Standardize the remaining Composer and Sidebar controls around shared

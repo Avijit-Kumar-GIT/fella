@@ -249,8 +249,8 @@
 			<nav class="pagination" aria-label="Source pages">
 				<span>{pageStart}–{pageEnd} of {filtered.length}</span>
 				<div>
-					<button class="pill ghost" type="button" disabled={page === 0} onclick={() => page--}>Previous</button>
-					<button class="pill ghost" type="button" disabled={page + 1 >= pageCount} onclick={() => page++}>Next</button>
+					<Button variant="ghost" size="sm" disabled={page === 0} onclick={() => page--}>Previous</Button>
+					<Button variant="ghost" size="sm" disabled={page + 1 >= pageCount} onclick={() => page++}>Next</Button>
 				</div>
 			</nav>
 		{/if}
@@ -279,8 +279,8 @@
 					<nav class="pagination" aria-label="Skipped file pages">
 						<span>{skippedPageStart}–{skippedPageEnd} of {filteredSkipped.length}</span>
 						<div>
-							<button class="pill ghost" type="button" disabled={skippedPage === 0} onclick={() => skippedPage--}>Previous</button>
-							<button class="pill ghost" type="button" disabled={skippedPage + 1 >= skippedPageCount} onclick={() => skippedPage++}>Next</button>
+							<Button variant="ghost" size="sm" disabled={skippedPage === 0} onclick={() => skippedPage--}>Previous</Button>
+							<Button variant="ghost" size="sm" disabled={skippedPage + 1 >= skippedPageCount} onclick={() => skippedPage++}>Next</Button>
 						</div>
 					</nav>
 				{/if}

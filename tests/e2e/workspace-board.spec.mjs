@@ -33,7 +33,10 @@ const folders = [
 	}))
 ];
 
-async function installDesktopMock(page, { seedUnavailableConversation = false } = {}) {
+async function installDesktopMock(
+	page,
+	{ seedUnavailableConversation = false, fixtureFolders = folders } = {}
+) {
 	await page.addInitScript(({ fixtureFolders, seedUnavailableConversation }) => {
 		const calls = [];
 		const archivedConversations = new Map();
@@ -136,7 +139,7 @@ async function installDesktopMock(page, { seedUnavailableConversation = false } 
 			windowAction: async () => {},
 			pathForFile: () => ''
 		};
-	}, { fixtureFolders: folders, seedUnavailableConversation });
+	}, { fixtureFolders, seedUnavailableConversation });
 }
 
 async function dispatchWorkspaceDrag(page, type, workspacePath, { x = 0.5, y = 0.5, existing = false } = {}) {
@@ -699,6 +702,66 @@ test('Sources catalog filter uses the shared input and preserves source selectio
 	const source = page.getByRole('option', { name: /sales\.csv/ });
 	await expect(source).toBeVisible();
 	await expect(source).toHaveAttribute('aria-selected', 'true');
+});
+
+test('Sources pagination uses shared buttons and preserves catalog and skipped-file boundaries', async ({ page }) => {
+	const paginatedFolders = [...folders];
+	const salesFolder = folders[0];
+	const paginatedCatalog = {
+		...salesFolder.catalog,
+		sources: Array.from({ length: 205 }, (_, index) => {
+			const number = String(index + 1).padStart(3, '0');
+			return {
+				name: `sales-${number}.csv`,
+				path: `${salesFolder.path}\\sales-${number}.csv`,
+				kind: 'csv',
+				view: `sales_${number}`,
+				row_count: 10,
+				size_bytes: 1024,
+				mtime: 1
+			};
+		}),
+		skipped: Array.from({ length: 105 }, (_, index) => ({
+			name: `unsupported-${String(index + 1).padStart(3, '0')}.bin`,
+			reason: 'Unsupported file type'
+		}))
+	};
+	paginatedFolders[0] = { ...salesFolder, catalog: paginatedCatalog };
+
+	await installDesktopMock(page, { fixtureFolders: paginatedFolders });
+	await page.goto('/');
+	await page.getByRole('button', { name: 'Add repository' }).click();
+	await page.getByRole('button', { name: 'Open sources in northwind-sales' }).click();
+
+	const sourcePages = page.getByRole('navigation', { name: 'Source pages' });
+	const sourcePrevious = sourcePages.getByRole('button', { name: 'Previous' });
+	const sourceNext = sourcePages.getByRole('button', { name: 'Next' });
+	for (const action of [sourcePrevious, sourceNext]) {
+		await expect(action).toHaveAttribute('data-slot', 'button');
+	}
+	await expect(sourcePages).toContainText('1–100 of 205');
+	await expect(sourcePrevious).toBeDisabled();
+	await sourceNext.click();
+	await expect(sourcePages).toContainText('101–200 of 205');
+	await expect(page.getByRole('option').first()).toContainText('sales-101.csv');
+	await sourceNext.click();
+	await expect(sourcePages).toContainText('201–205 of 205');
+	await expect(sourceNext).toBeDisabled();
+	await expect(page.getByRole('option')).toHaveCount(5);
+
+	const skippedFiles = page.locator('details.skipped');
+	await skippedFiles.locator('summary').click();
+	const skippedPages = page.getByRole('navigation', { name: 'Skipped file pages' });
+	const skippedPrevious = skippedPages.getByRole('button', { name: 'Previous' });
+	const skippedNext = skippedPages.getByRole('button', { name: 'Next' });
+	for (const action of [skippedPrevious, skippedNext]) {
+		await expect(action).toHaveAttribute('data-slot', 'button');
+	}
+	await expect(skippedPages).toContainText('1–100 of 105');
+	await expect(skippedPrevious).toBeDisabled();
+	await skippedNext.click();
+	await expect(skippedPages).toContainText('101–105 of 105');
+	await expect(skippedNext).toBeDisabled();
 });
 
 test('Project title and wiki use shared editing controls and retain saved content', async ({ page }) => {
