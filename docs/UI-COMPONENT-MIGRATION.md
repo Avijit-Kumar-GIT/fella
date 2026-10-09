@@ -608,14 +608,28 @@ verifies provider/appearance Button adoption, changing the selected appearance,
 refresh action adoption, and folder selection. The build reports the existing
 client-chunk advisory and adapter-static fallback notice.
 
+#### Slice 3ae: CommandPalette filters and results
+
+Status: implemented.
+
+- Use shared ghost Buttons for search filters and result activation.
+- Preserve filter state, keyboard-driven selection, result grouping, and the
+  palette's compact visual treatment.
+
+Validation: `pnpm check`, `node --check tests/e2e/workspace-board.spec.mjs`,
+the focused CommandPalette browser test, and `pnpm build` succeed. The browser
+test verifies filter state, shared Button adoption, result selection, and
+palette dismissal. The build reports the existing client-chunk advisory and
+adapter-static fallback notice.
+
 #### Remaining in Slice 3
 
 Standardize remaining feature actions and controls around shared primitives
-where they improve consistency without obscuring product behavior. Audit
-CommandPalette result rows and filters, then remaining Composer actions. Keep
-native window controls, chart geometry, and
-workspace-board composition custom unless a shared primitive improves the
-interaction without changing its semantics.
+where they improve consistency without obscuring product behavior. Audit the
+remaining Composer controls and EnvironmentTabs close/new actions, then perform
+the final duplicate-style and regression sweep. Keep native window controls,
+chart geometry, and workspace-board composition custom unless a shared
+primitive improves the interaction without changing its semantics.
 
 The combined keyboard test for the repository menu remains unresolved. Its
 second focused run again could not find the “Repository actions” trigger after

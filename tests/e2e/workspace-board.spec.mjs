@@ -854,6 +854,29 @@ test('Settings actions use shared buttons and folder selection still works', asy
 	await expect.poll(() => page.evaluate(() => window.__workspaceOpenCalls)).toContain(folders[0].path);
 });
 
+test('CommandPalette filters and results use shared buttons without losing search behavior', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+	await page.getByRole('button', { name: 'Add repository' }).click();
+	await page.getByRole('button', { name: 'Search' }).click();
+	const palette = page.getByRole('dialog', { name: 'Search Fella' });
+	const searchInput = page.getByRole('textbox', { name: 'Search Fella' });
+	await searchInput.fill('northwind-sales');
+
+	const repositoryFilter = palette.getByRole('button', { name: 'Repositories', exact: true });
+	await expect(repositoryFilter).toHaveAttribute('data-slot', 'button');
+	await expect(repositoryFilter).toHaveAttribute('aria-pressed', 'false');
+	await repositoryFilter.click();
+	await expect(repositoryFilter).toHaveAttribute('aria-pressed', 'true');
+	const result = palette.locator('.search-result');
+	await expect(result).toHaveCount(1);
+	await expect(result).toHaveAttribute('data-slot', 'button');
+	await expect(result).toContainText('northwind-sales');
+	await result.click();
+	await expect(palette).toHaveCount(0);
+	await expect(page.getByRole('article', { name: 'northwind-sales workspace' })).toBeVisible();
+});
+
 test('Sources pagination uses shared buttons and preserves catalog and skipped-file boundaries', async ({ page }) => {
 	const paginatedFolders = [...folders];
 	const salesFolder = folders[0];

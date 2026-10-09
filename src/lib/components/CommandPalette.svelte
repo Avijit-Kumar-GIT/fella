@@ -10,6 +10,7 @@
 	import { session } from '$lib/session.svelte';
 	import { Dialog } from '$lib/components/ui/dialog';
 	import { Input } from '$lib/components/ui/input';
+	import { Button } from '$lib/components/ui/button';
 	import type { ConversationSummary, Project, SourceInfo } from '$lib/types';
 	import Icon from './Icon.svelte';
 
@@ -291,15 +292,14 @@
 			</div>
 			<div class="filters" aria-label="Search filters" role="group">
 				{#each filters as filter}
-					<button
-						class:active={activeFilter === filter.id}
-						class="filter"
-						type="button"
+					<Button
+						variant="ghost"
+						class={`filter${activeFilter === filter.id ? ' active' : ''}`}
 						aria-pressed={activeFilter === filter.id}
 						onclick={() => setFilter(filter.id)}
 					>
 						{filter.label}
-					</button>
+					</Button>
 				{/each}
 			</div>
 			<ul>
@@ -312,7 +312,7 @@
 						<li class="group-label">{group.label}</li>
 						{#each group.items as result (resultKey(result))}
 							<li class:sel={isSelected(result)}>
-								<button class="search-result" type="button" onclick={() => void select(result)}>
+								<Button variant="ghost" class="search-result" onclick={() => void select(result)}>
 									<span class="result-icon">
 										<Icon name={icon(result)} size={16} />
 									</span>
@@ -320,7 +320,7 @@
 										<strong>{label(result)}</strong>
 										{#if detail(result)}<small>{detail(result)}</small>{/if}
 									</span>
-								</button>
+								</Button>
 							</li>
 						{/each}
 					{/each}
@@ -380,19 +380,23 @@
 		padding: 7px 10px;
 		border-bottom: 1px solid var(--border);
 	}
-	.filter {
+	.filters :global(.filter) {
+		height: auto;
+		min-height: 0;
+		justify-content: flex-start;
 		padding: 5px 10px;
 		border-radius: 5px;
+		background: transparent;
 		color: var(--text-faint);
 		font-size: var(--fs-sm);
 		white-space: nowrap;
 		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 	}
-	.filter:hover {
+	.filters :global(.filter:hover) {
 		color: var(--text);
 		background: var(--bg-inset);
 	}
-	.filter.active {
+	.filters :global(.filter.active) {
 		background: var(--bg-inset);
 		color: var(--text);
 		font-weight: 600;
@@ -404,7 +408,7 @@
 		max-height: 52vh;
 		overflow-y: auto;
 	}
-	li.sel .search-result {
+	li.sel :global(.search-result) {
 		background: color-mix(in srgb, var(--brand) 8%, var(--bg-inset));
 	}
 	.hint {
@@ -427,18 +431,23 @@
 		font-weight: 650;
 		letter-spacing: 0.02em;
 	}
-	.search-result {
+	ul li :global(.search-result) {
 		width: 100%;
 		display: flex;
 		align-items: center;
+		justify-content: flex-start;
 		gap: 10px;
 		min-height: 42px;
+		height: auto;
+		white-space: normal;
 		padding: 6px 10px;
 		border-radius: 6px;
+		background: transparent;
+		color: var(--text);
 		text-align: left;
 		transition: background var(--dur-fast) var(--ease);
 	}
-	.search-result:hover {
+	ul li :global(.search-result:hover) {
 		background: var(--bg-inset);
 	}
 	.result-icon {
