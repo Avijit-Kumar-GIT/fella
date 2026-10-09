@@ -1,7 +1,8 @@
 # Desktop UI component migration
 
-Status: in progress. This is the working audit and sequence for standardizing
-Fella's desktop interface with shadcn-svelte components and Bits UI
+Status: implementation complete. One repository-menu keyboard assertion
+remains unresolved; see Slice 2. This document records the audit and migration
+of Fella's desktop interface to shared shadcn-svelte components and Bits UI
 interactions.
 
 ## Goal and boundaries
@@ -654,13 +655,12 @@ adoption, environment creation and closure, roving keyboard focus, and
 active-tab visibility in a long strip. The build reports the existing
 client-chunk advisory and adapter-static fallback notice.
 
-#### Remaining in Slice 3
+#### Slice 3 migration scope
 
 All planned shared action migrations and the icon-source audit are implemented.
-The final convergence pass will check remaining native fields and disclosures,
-remove only genuinely duplicated styles, and verify regressions. Keep native
-window controls, chart geometry, and workspace-board composition custom unless
-a shared primitive improves the interaction without changing its semantics.
+The convergence pass is recorded under Slice 4. Native window controls, chart
+geometry, and workspace-board composition remain custom because shared
+primitives do not improve those semantics.
 
 The combined keyboard test for the repository menu remains unresolved. Its
 second focused run again could not find the “Repository actions” trigger after
@@ -705,15 +705,15 @@ above was not rerun and remains unresolved.
 
 ### Slice 4: converge and remove duplicates
 
-Status: in progress.
+Status: implementation complete; one prior test assertion remains unresolved.
 
-- The raw-button audit finds only the shared Button implementation and the
-  three native Electron minimize, maximize, and close controls.
+- The full Svelte-source control audit finds only shared primitive internals
+  and the three native Electron minimize, maximize, and close controls.
 - No standalone `.pill` or `.rowbtn` control styles remain; `ref-pill` is a
   separate inline-reference treatment, not a duplicate button primitive.
 - All identified feature-owned raw buttons, the Sidebar rename input, and native
-  disclosure elements now use shared primitives. The final raw-control,
-  regression, and light/dark theme sweep remains.
+  disclosure elements now use shared primitives. Native window controls remain
+  native to preserve their Electron behavior.
 
 #### Slice 4a: Sidebar conversation rename field
 
@@ -764,6 +764,20 @@ Status: implemented.
 Validation: `pnpm check` reports zero errors and warnings, the workspace-board
 test file passes `node --check`, and the focused Settings test passes. It uses
 keyboard Enter/Space to open and close a run entry, then checks the tool detail.
+
+#### Slice 4 final regression
+
+Validation: `pnpm check`, `pnpm build`, `node --check tests/e2e/workspace-board.spec.mjs`,
+and `git diff --check` pass. The workspace-board browser suite reports 34
+passed when run with:
+
+`--grep-invert='shared workspace tabs and modal/menu primitives preserve keyboard interaction'`
+
+That one repository-menu assertion remains unresolved and was excluded rather
+than reinterpreted; see Slice 2. The build reports a 515.08 kB client chunk
+(151.61 kB gzip), the existing large-chunk advisory, and the adapter-static
+fallback notice. This was a source/control and behavioral regression audit,
+not a pixel-level light/dark screenshot review.
 
 ## First-slice acceptance criteria
 
