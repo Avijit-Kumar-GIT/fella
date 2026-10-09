@@ -7,10 +7,23 @@
 	import { Input } from '$lib/components/ui/input';
 	import { Tooltip } from '$lib/components/ui/tooltip';
 	import type { ConversationSummary } from '$lib/types';
+	import EnvironmentSwitcher from './EnvironmentSwitcher.svelte';
 	import Icon from './Icon.svelte';
 	import Logo from './Logo.svelte';
 
-	let { onsearch, onnewproject }: { onsearch?: () => void; onnewproject?: (workspace?: string | null) => void } = $props();
+	let {
+		onsearch,
+		onnewproject,
+		onenvironmentselect,
+		onnewenvironment,
+		oncloseenvironment
+	}: {
+		onsearch?: () => void;
+		onnewproject?: (workspace?: string | null) => void;
+		onenvironmentselect: (id: string) => void | Promise<void>;
+		onnewenvironment: () => void;
+		oncloseenvironment: (id: string) => void | Promise<void>;
+	} = $props();
 
 	type Repository = {
 		key: string;
@@ -229,6 +242,11 @@
 			</Button>
 		</div>
 	</div>
+	<EnvironmentSwitcher
+		onselect={onenvironmentselect}
+		onnew={onnewenvironment}
+		onclose={oncloseenvironment}
+	/>
 	<nav class="nav-section" aria-label="General">
 		<div class="nav-heading">General</div>
 		<Button

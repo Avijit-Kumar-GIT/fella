@@ -75,7 +75,7 @@ focus management independently.
 | 1 | `CommandPalette.svelte` | Adopted shared Dialog and Input for modal/focus behavior and search entry. Keep the Fella-specific result list, filters, commands, and ranking; reconsider Command only if it improves that real workflow. |
 | 1 | `ProjectDialog.svelte` | Replaced the hand-built modal shell and adopted shared Dialog, Input, Select, and Button. Form labels, validation, and project creation remain feature-owned. |
 | 1 | `SettingsView.svelte` | Adopted shared Switch controls. Settings rows, choices, disclosures, statuses, and organization remain feature-owned until those patterns have multiple consumers. |
-| 1 | `EnvironmentTabs.svelte` | Adopted shared Tabs behavior for environment switching and roving keyboard focus. Keep titlebar-specific close/new controls, scrolling, and shortcuts feature-owned. |
+| 1 | `EnvironmentSwitcher.svelte` | Use a shared DropdownMenu radio list behind one pill-shaped top-level environment selector in the sidebar. Preserve create/close actions and global shortcuts; keep a compact selector in the titlebar only while the sidebar is collapsed. |
 | 1 | `WorkspaceView.svelte` | Adopted shared Tabs for Sources and Guide; preserve workspace-pane state and content. |
 | 2 | `RunTimeline.svelte` | Adopted shared Collapsible for run-step disclosure; retain trace ordering and technical detail. |
 | 2 | `ReplayStatus.svelte` | Adopted shared Alert, Badge, Button, and Spinner for status, retry, and rerun states. |
@@ -146,15 +146,12 @@ check covers opening, Escape dismissal, and focus restoration.
 Status: in progress. Deliver this broad area in consumer-sized sub-slices, each
 with its own validation and commit.
 
-#### Slice 3a: environment tabs
+#### Slice 3a: environment tabs (superseded)
 
-Status: complete.
+Status: superseded by Slice 3aj.
 
-- Adopt Bits UI Tabs for environment selection, automatic activation, and
-  roving keyboard focus.
-- Preserve titlebar-specific close/new controls, horizontal overflow and
-  active-tab visibility, existing click focus behavior, and keyboard focus
-  restoration after environment activation.
+- This was the prior tab-strip implementation. Its historical validation is
+  retained below; the active design uses the sidebar environment dropdown.
 
 Validation: `pnpm check` reports zero errors and warnings, `pnpm build`
 succeeds, and all five environment-related workspace-board browser tests pass.
@@ -641,13 +638,12 @@ pre-edit static bundle and failed the new primitive assertion. After
 rebuilding, both focused journeys passed against the current bundle. The build
 reports the existing client-chunk advisory and adapter-static fallback notice.
 
-#### Slice 3ag: EnvironmentTabs actions
+#### Slice 3ag: EnvironmentTabs actions (superseded)
 
-Status: implemented.
+Status: superseded by Slice 3aj.
 
-- Use shared icon Buttons for creating and closing environments.
-- Preserve the tab strip's compact targets, hover-revealed close affordance,
-  disabled close state during analysis, and existing selection behavior.
+- This recorded the prior tab-strip's create and close actions. The current
+  dropdown keeps those operations in its menu and closes the active environment.
 
 Validation: `pnpm check`, `node --check tests/e2e/workspace-board.spec.mjs`,
 three focused browser tests, and `pnpm build` pass. They verify shared Button
@@ -787,6 +783,31 @@ test asserts the computed alignment for Ask, Search, and Settings.
 Follow-up spacing fix: workspace rows reserve the full hover-action rail so
 long names cannot run beneath the new-conversation button. A focused browser
 test checks the title/action bounding boxes with a long workspace name.
+
+#### Slice 3aj: sidebar environment switcher
+
+Status: implemented.
+
+- Replace the centered titlebar tab strip with a single pill-shaped dropdown
+  above General in the sidebar. The menu identifies each environment by its
+  workspace names and exposes selection, creation, and closing the active
+  environment.
+- Keep a compact copy in the titlebar only while the sidebar is collapsed.
+  Preserve `Ctrl/⌘+T`, `Ctrl/⌘+W`, `Ctrl/⌘+[ / ]`, and `Ctrl/⌘+1–9` shortcuts.
+- Use the shared DropdownMenu radio interaction and retain a bounded scroll
+  region when many environments are open.
+
+Validation: `pnpm check`, `node --check tests/e2e/workspace-board.spec.mjs`,
+`git diff --check`, and `pnpm build` pass. The six focused environment tests
+and the broader workspace-board suite's 36 included tests pass. The broader
+run excludes the previously unresolved repository-menu assertion documented
+under Slice 2. On the first focused run, the reload assertion used the
+abbreviated trigger label, which was identical for both `General +1`
+arrangements; it now checks the selected menu option and its workspace detail.
+The first long-list check also exposed the selected environment below the
+visible menu area; opening the menu now scrolls the checked environment into
+view. The focused long-list check passes. The build retains the existing
+large-client-chunk advisory (516.39 kB) and adapter-static fallback notice.
 
 ## First-slice acceptance criteria
 

@@ -196,11 +196,13 @@ function expectSameRenderedBox(actual, expected) {
 test('environments compose General and repository panes while conversations retain their original scope', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
-	const tabs = page.getByRole('tablist', { name: 'Environments' });
-	await expect(tabs).toBeVisible();
-	await expect(page.locator('.titlebar .environment-tabs')).toBeVisible();
-	await expect(tabs.getByRole('tab')).toHaveCount(1);
-	await expect(tabs.getByRole('tab').first()).toContainText('General');
+	const switcher = page.locator('.sidebar .environment-switcher-trigger');
+	await expect(switcher).toBeVisible();
+	await expect(switcher).toContainText('General');
+	await expect(page.locator('.titlebar .environment-switcher-trigger')).toHaveCount(0);
+	await switcher.click();
+	await expect(page.getByRole('menuitemradio')).toHaveCount(1);
+	await page.keyboard.press('Escape');
 	await expect(page.getByRole('heading', { name: 'New conversation', level: 1 })).toBeVisible();
 	await expect(page.getByRole('article')).toHaveCount(0);
 	await expect(page.getByRole('button', { name: 'Mount a folder' })).toHaveCount(0);
@@ -232,28 +234,30 @@ test('environments compose General and repository panes while conversations reta
 	await expect(page.getByText('Scoped to general.')).toBeVisible();
 	const unboundCall = await page.evaluate(() => window.__workspaceAskCalls.at(-1));
 	expect(unboundCall.workspaceId).toBeNull();
-	await expect(tabs.getByRole('tab')).toHaveCount(1);
 
 	await page.keyboard.press('Control+t');
-	await expect(tabs.getByRole('tab')).toHaveCount(2);
-	await expect(tabs.getByRole('tab').nth(1)).toHaveAttribute('aria-selected', 'true');
+	await expect(switcher).toContainText('General 2');
+	await switcher.click();
+	await expect(page.getByRole('menuitemradio')).toHaveCount(2);
+	await expect(page.getByRole('menuitemradio').nth(1)).toHaveAttribute('aria-checked', 'true');
+	await page.keyboard.press('Escape');
 	await expect(page.getByRole('heading', { name: 'New conversation', level: 1 })).toBeVisible();
 	await page.getByRole('combobox', { name: 'Ask a question' }).fill('What does a seasonal pattern look like?');
 	await page.getByRole('button', { name: 'Send' }).click();
 	await expect(page.getByText('Scoped to general.')).toBeVisible();
 	const conversationsAfterQuestion = await page.evaluate(() => window.__workspaceAskCalls.length);
-	await expect(tabs.getByRole('tab')).toHaveCount(2);
 	await page.keyboard.press('Control+[');
-	await expect(tabs.getByRole('tab').nth(0)).toHaveAttribute('aria-selected', 'true');
+	await expect(switcher).toContainText('General');
 	await expect(page.getByText('Scoped to general.')).toBeVisible();
 	await page.keyboard.press('Control+]');
-	await expect(tabs.getByRole('tab').nth(1)).toHaveAttribute('aria-selected', 'true');
+	await expect(switcher).toContainText('General 2');
 	expect(await page.evaluate(() => window.__workspaceAskCalls.length)).toBe(conversationsAfterQuestion);
 	await page.keyboard.press('Control+1');
-	await expect(tabs.getByRole('tab').nth(0)).toHaveAttribute('aria-selected', 'true');
+	await expect(switcher).toContainText('General');
 
 	const workspaceNavigation = page.getByRole('region', { name: 'Workspaces' });
 	await workspaceNavigation.getByRole('button', { name: 'Add repository' }).click();
+	await expect(switcher).toContainText('General +1');
 	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
 	await expect(page.getByRole('article', { name: 'northwind-sales workspace' })).toBeVisible();
 	await expect(page.getByRole('article', { name: 'General workspace' })).toBeVisible();
@@ -282,7 +286,7 @@ test('environments compose General and repository panes while conversations reta
 	await salesWorkspaceRow.click();
 	await salesWorkspaceRow.hover();
 	await page.getByRole('button', { name: 'New conversation in northwind-sales' }).click();
-	await expect(tabs.getByRole('tab')).toHaveCount(2);
+	await expect(switcher).toContainText('General +1');
 	const salesComposer = page.getByRole('combobox', { name: 'Ask about northwind-sales' });
 	await salesComposer.fill('Summarize sales trends');
 	await page.getByRole('button', { name: 'Send' }).click();
@@ -296,7 +300,7 @@ test('environments compose General and repository panes while conversations reta
 	await page.getByRole('button', { name: 'Send' }).click();
 	await expect(page.getByText('Scoped to general.').last()).toBeVisible();
 	expect((await page.evaluate(() => window.__workspaceAskCalls.at(-1))).workspaceId).toBeNull();
-	await expect(tabs.getByRole('tab')).toHaveCount(2);
+	await expect(switcher).toContainText('General +1');
 
 	await salesWorkspaceRow.click();
 
@@ -482,68 +486,98 @@ test('Composer command completion uses shared buttons and keeps keyboard selecti
 	await expect(page.getByRole('listbox', { name: 'completions' })).toHaveCount(0);
 });
 
-test('environment tabs save different workspace arrangements without leaking panes between them', async ({ page }) => {
+test('environment dropdown saves different workspace arrangements without leaking panes between them', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
 	const navigation = page.getByRole('region', { name: 'Workspaces' });
 	await navigation.getByRole('button', { name: 'Add repository' }).click();
 	await expect(page.getByRole('article', { name: 'northwind-sales workspace' })).toBeVisible();
 
-	const tabs = page.getByRole('tablist', { name: 'Environments' });
-	await page.getByRole('button', { name: 'New environment' }).click();
-	await expect(tabs.getByRole('tab')).toHaveCount(2);
+	const switcher = page.locator('.sidebar .environment-switcher-trigger');
+	await switcher.click();
+	await page.getByRole('menuitem', { name: /New environment/ }).click();
+	await expect(switcher).toContainText('General');
 	await navigation.getByRole('button', { name: 'Add repository' }).click();
 	await expect(page.getByRole('article', { name: 'health-journal workspace' })).toBeVisible();
 
-	await tabs.getByRole('tab').first().click();
+	await switcher.click();
+	await page.getByRole('menuitemradio').filter({ hasText: 'northwind-sales' }).click();
 	await expect(page.getByRole('article', { name: 'northwind-sales workspace' })).toBeVisible();
 	await expect(page.getByRole('article', { name: 'health-journal workspace' })).toHaveCount(0);
 	await expect(page.getByRole('article', { name: 'General workspace' })).toBeVisible();
 
-	await tabs.getByRole('tab').nth(1).click();
+	await switcher.click();
+	await page.getByRole('menuitemradio').filter({ hasText: 'health-journal' }).click();
 	await expect(page.getByRole('article', { name: 'health-journal workspace' })).toBeVisible();
 	await expect(page.getByRole('article', { name: 'northwind-sales workspace' })).toHaveCount(0);
 	await expect(page.getByRole('article', { name: 'General workspace' })).toBeVisible();
 
 	await page.reload();
-	await expect(page.getByRole('tablist', { name: 'Environments' }).getByRole('tab')).toHaveCount(2);
+	const restoredSwitcher = page.locator('.sidebar .environment-switcher-trigger');
+	await restoredSwitcher.click();
+	await expect(page.getByRole('menuitemradio').filter({ hasText: 'health-journal' })).toHaveAttribute('aria-checked', 'true');
+	await page.keyboard.press('Escape');
 	await expect(page.getByRole('article', { name: 'health-journal workspace' })).toBeVisible();
 	await expect(page.getByRole('article', { name: 'northwind-sales workspace' })).toHaveCount(0);
 });
 
-test('EnvironmentTabs close and new actions use shared Buttons', async ({ page }) => {
+test('environment dropdown creates and closes the current environment', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
-	const tabs = page.getByRole('tablist', { name: 'Environments' });
-	const newEnvironment = page.getByRole('button', { name: 'New environment' });
-	await expect(newEnvironment).toHaveAttribute('data-slot', 'button');
-	await newEnvironment.click();
-	await expect(tabs.getByRole('tab')).toHaveCount(2);
+	const switcher = page.locator('.sidebar .environment-switcher-trigger');
+	await expect(switcher).toHaveAttribute('aria-haspopup', 'menu');
+	await switcher.click();
+	await page.getByRole('menuitem', { name: /New environment/ }).click();
+	await expect(switcher).toContainText('General 2');
 
-	const closeEnvironment = tabs.locator('.tab-close').first();
-	await expect(closeEnvironment).toHaveAttribute('data-slot', 'button');
-	await closeEnvironment.hover();
-	await closeEnvironment.click();
-	await expect(tabs.getByRole('tab')).toHaveCount(1);
-	await expect(tabs.getByRole('tab')).toHaveAttribute('aria-selected', 'true');
+	await switcher.click();
+	await expect(page.getByRole('menuitemradio')).toHaveCount(2);
+	await page.getByRole('menuitem', { name: /Close current environment/ }).click();
+	await expect(switcher).toContainText('General');
+	await switcher.click();
+	await expect(page.getByRole('menuitemradio')).toHaveCount(1);
+	await expect(page.getByRole('menuitemradio').first()).toHaveAttribute('aria-checked', 'true');
 });
 
-test('environment tabs use shared roving focus for keyboard switching', async ({ page }) => {
+test('environment dropdown supports keyboard selection and focus restoration', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
-	const tabs = page.getByRole('tablist', { name: 'Environments' });
-	await page.getByRole('button', { name: 'New environment' }).click();
-	const first = tabs.getByRole('tab').first();
-	const second = tabs.getByRole('tab').nth(1);
+	const switcher = page.locator('.sidebar .environment-switcher-trigger');
+	await switcher.click();
+	await page.getByRole('menuitem', { name: /New environment/ }).click();
 
-	await first.focus();
-	await page.keyboard.press('ArrowRight');
-	await expect(second).toBeFocused();
-	await expect(second).toHaveAttribute('aria-selected', 'true');
+	await switcher.focus();
+	await page.keyboard.press('Enter');
+	const menu = page.getByRole('menu');
+	await expect(menu).toBeVisible();
+	await page.keyboard.press('Escape');
+	await expect(menu).toHaveCount(0);
+	await expect(switcher).toBeFocused();
 
-	await page.keyboard.press('ArrowLeft');
-	await expect(first).toBeFocused();
-	await expect(first).toHaveAttribute('aria-selected', 'true');
+	await page.keyboard.press('Enter');
+	await page.keyboard.press('Home');
+	const firstEnvironment = page.getByRole('menuitemradio').first();
+	await expect(firstEnvironment).toBeFocused();
+	await page.keyboard.press('Enter');
+	await expect(switcher).toContainText('General');
+	await expect(switcher).toBeFocused();
+});
+
+test('environment dropdown remains available when the sidebar is collapsed', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+	const sidebarSwitcher = page.locator('.sidebar .environment-switcher-trigger');
+	await sidebarSwitcher.click();
+	await page.getByRole('menuitem', { name: /New environment/ }).click();
+	await page.getByRole('button', { name: 'Collapse sidebar' }).click();
+
+	const titlebarSwitcher = page.locator('.titlebar .environment-switcher-trigger');
+	await expect(titlebarSwitcher).toBeVisible();
+	await expect(titlebarSwitcher).toContainText('General 2');
+	await titlebarSwitcher.click();
+	await page.getByRole('menuitemradio').first().click();
+	await expect(titlebarSwitcher.locator('.environment-switcher-label')).toHaveText('General');
+	await expect(page.locator('.sidebar')).toHaveCount(0);
 });
 
 test('Composer mode selection uses the shared radio menu interaction', async ({ page }) => {
@@ -570,53 +604,38 @@ test('Composer mode selection uses the shared radio menu interaction', async ({ 
 	await expect(selectedModeTrigger).toHaveAttribute('aria-expanded', 'false');
 });
 
-test('many environments remain a bounded, scrollable tab strip with the active environment in view', async ({ page }) => {
+test('many environments remain in a bounded, scrollable dropdown', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
-	const tabs = page.getByRole('tablist', { name: 'Environments' });
-	const create = page.getByRole('button', { name: 'New environment' });
-	for (let index = 0; index < 11; index += 1) await create.click();
-	await expect(tabs.getByRole('tab')).toHaveCount(12);
-	await expect(tabs.getByRole('tab').last()).toHaveAttribute('aria-selected', 'true');
+	const switcher = page.locator('.sidebar .environment-switcher-trigger');
+	const create = page.getByRole('menuitem', { name: /New environment/ });
+	for (let index = 0; index < 11; index += 1) {
+		await switcher.click();
+		await create.click();
+	}
+	await switcher.click();
+	const environments = page.getByRole('menuitemradio');
+	await expect(environments).toHaveCount(12);
+	await expect(environments.last()).toHaveAttribute('aria-checked', 'true');
 
 	const metrics = await page.evaluate(() => {
-		const strip = document.querySelector('[role="tablist"][aria-label="Environments"]');
-		const selected = strip?.querySelector('[role="tab"][aria-selected="true"]');
-		if (!(strip instanceof HTMLElement) || !(selected instanceof HTMLElement)) return null;
-		const stripRect = strip.getBoundingClientRect();
+		const menu = document.querySelector('.environment-menu-content');
+		const selected = menu?.querySelector('[aria-checked="true"]');
+		if (!(menu instanceof HTMLElement) || !(selected instanceof HTMLElement)) return null;
+		const menuRect = menu.getBoundingClientRect();
 		const selectedRect = selected.getBoundingClientRect();
 		return {
-			stripWidth: strip.clientWidth,
-			stripScrollWidth: strip.scrollWidth,
-			selectedVisible: selectedRect.left >= stripRect.left - 1 && selectedRect.right <= stripRect.right + 1,
+			menuHeight: menu.clientHeight,
+			menuScrollHeight: menu.scrollHeight,
+			selectedVisible: selectedRect.top >= menuRect.top - 1 && selectedRect.bottom <= menuRect.bottom + 1,
 			pageWidth: document.documentElement.scrollWidth,
 			viewportWidth: window.innerWidth
 		};
 	});
 	expect(metrics).not.toBeNull();
-	expect(metrics.stripScrollWidth).toBeGreaterThan(metrics.stripWidth);
+	expect(metrics.menuScrollHeight).toBeGreaterThan(metrics.menuHeight);
 	expect(metrics.selectedVisible).toBe(true);
 	expect(metrics.pageWidth).toBeLessThanOrEqual(metrics.viewportWidth);
-
-	// Move the strip itself to its older tabs, as a horizontal trackpad/mouse
-	// gesture would; Playwright's click auto-scroll is not the user interaction
-	// being exercised here.
-	await tabs.hover();
-	await page.mouse.wheel(-1200, 0);
-	await expect.poll(() => tabs.evaluate((strip) => strip.scrollLeft)).toBe(0);
-	await expect.poll(async () => {
-		const firstBox = await tabs.getByRole('tab').first().boundingBox();
-		const stripBox = await tabs.boundingBox();
-		return !!firstBox && !!stripBox && firstBox.x >= stripBox.x - 1 && firstBox.x + firstBox.width <= stripBox.x + stripBox.width + 1;
-	}).toBe(true);
-	await tabs.getByRole('tab').first().click();
-	await expect(tabs.getByRole('tab').first()).toHaveAttribute('aria-selected', 'true');
-	await expect.poll(async () => {
-		const selected = tabs.locator('[role="tab"][aria-selected="true"]');
-		const selectedBox = await selected.boundingBox();
-		const stripBox = await tabs.boundingBox();
-		return !!selectedBox && !!stripBox && selectedBox.x >= stripBox.x - 1 && selectedBox.x + selectedBox.width <= stripBox.x + stripBox.width + 1;
-	}).toBe(true);
 });
 
 test('a history-only workspace retries its folder mount and keeps history available when it is still missing', async ({ page }) => {

@@ -312,7 +312,13 @@
 
 	<div class="shell">
 		{#if !session.focus && !session.sidebarCollapsed}
-			<Sidebar onsearch={() => (paletteOpen = true)} onnewproject={openProjectDialog} />
+			<Sidebar
+				onsearch={() => (paletteOpen = true)}
+				onnewproject={openProjectDialog}
+				onenvironmentselect={activateEnvironment}
+				onnewenvironment={createEnvironment}
+				oncloseenvironment={closeEnvironment}
+			/>
 		{/if}
 	<div class="app" class:focus={session.focus}>
 		<Titlebar

@@ -2,7 +2,7 @@
 	import { GENERAL_WORKSPACE_ID, session } from '$lib/session.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { isDesktop, win } from '$lib/ipc';
-	import EnvironmentTabs from './EnvironmentTabs.svelte';
+	import EnvironmentSwitcher from './EnvironmentSwitcher.svelte';
 	import Icon from './Icon.svelte';
 	import Logo from './Logo.svelte';
 
@@ -76,11 +76,15 @@
 				<span class="wordmark">Fella</span>
 			{/if}
 		</span>
-		<EnvironmentTabs
-			onselect={onenvironmentselect}
-			onnew={onnewenvironment}
-			onclose={oncloseenvironment}
-		/>
+		<span class="spacer"></span>
+		{#if session.sidebarCollapsed}
+			<EnvironmentSwitcher
+				compact
+				onselect={onenvironmentselect}
+				onnew={onnewenvironment}
+				onclose={oncloseenvironment}
+			/>
+		{/if}
 
 		<Button
 			variant="ghost"
