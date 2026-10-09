@@ -7,8 +7,9 @@
 		SLASH_COMMANDS
 	} from '$lib/commands';
 	import { ipc, isDesktop } from '$lib/ipc';
-	import { fadeQuick, pop } from '$lib/motion';
 	import { session } from '$lib/session.svelte';
+	import { Dialog } from '$lib/components/ui/dialog';
+	import { Input } from '$lib/components/ui/input';
 	import type { ConversationSummary, Project, SourceInfo } from '$lib/types';
 	import Icon from './Icon.svelte';
 
@@ -18,8 +19,6 @@
 	let query = $state('');
 	let sel = $state(0);
 	let input: HTMLInputElement | undefined = $state();
-	let dialog: HTMLDivElement | undefined = $state();
-	let returnFocus: HTMLElement | null = null;
 	let history = $state<ConversationSummary[]>([]);
 	let activeFilter = $state<SearchFilter>('all');
 	const shortcutModifier =
@@ -133,15 +132,9 @@
 
 	$effect(() => {
 		if (open) {
-			returnFocus = document.activeElement as HTMLElement | null;
 			query = '';
 			sel = 0;
 			activeFilter = 'all';
-			queueMicrotask(() => input?.focus());
-		} else if (returnFocus) {
-			// Put focus back where it was when the palette opened.
-			returnFocus.focus();
-			returnFocus = null;
 		}
 	});
 
@@ -166,10 +159,7 @@
 	}
 
 	function key(e: KeyboardEvent) {
-		if (e.key === 'Escape') {
-			e.stopPropagation();
-			close();
-		} else if ((e.ctrlKey || e.metaKey) && e.key === '[') {
+		if ((e.ctrlKey || e.metaKey) && e.key === '[') {
 			cycleFilter(-1);
 			e.preventDefault();
 		} else if ((e.ctrlKey || e.metaKey) && e.key === ']') {
@@ -274,54 +264,24 @@
 		}
 	}
 
-	// Keep Tab inside the dialog while it's open; Escape closes from anywhere in it.
-	function trap(e: KeyboardEvent) {
-		if (e.key === 'Escape') {
-			e.stopPropagation();
-			close();
-			return;
-		}
-		if (e.key !== 'Tab' || !dialog) return;
-		const focusable = dialog.querySelectorAll<HTMLElement>(
-			'a[href], button:not([disabled]), input, [tabindex]:not([tabindex="-1"])'
-		);
-		if (focusable.length === 0) return;
-		const first = focusable[0];
-		const last = focusable[focusable.length - 1];
-		const active = document.activeElement;
-		if (e.shiftKey && active === first) {
-			e.preventDefault();
-			last.focus();
-		} else if (!e.shiftKey && active === last) {
-			e.preventDefault();
-			first.focus();
-		}
-	}
 </script>
 
-{#if open}
-	<div class="scrim">
-		<button
-			type="button"
-			class="backdrop"
-			aria-label="Close commands"
-			onclick={close}
-			transition:fadeQuick
-		></button>
-		<div
-			class="palette"
-			bind:this={dialog}
-			role="dialog"
-			aria-modal="true"
-			aria-label="Search Fella"
-			tabindex="-1"
-			onkeydown={trap}
-			transition:pop
-		>
+	<Dialog.Root bind:open>
+		<Dialog.Portal>
+			<Dialog.Overlay class="fella-ui-dialog-overlay" />
+			<Dialog.Content
+				class="fella-ui-dialog-content palette"
+				aria-label="Search Fella"
+				onOpenAutoFocus={(event) => {
+					event.preventDefault();
+					queueMicrotask(() => input?.focus());
+				}}
+			>
 			<div class="search">
 				<Icon name="search" size={16} />
-				<input
-					bind:this={input}
+				<Input
+					class="palette-search-input"
+					bind:ref={input}
 					bind:value={query}
 					onkeydown={key}
 					placeholder="Search Fella…"
@@ -329,14 +289,13 @@
 					aria-label="Search Fella"
 				/>
 			</div>
-			<div class="filters" aria-label="Search filters" role="tablist">
+			<div class="filters" aria-label="Search filters" role="group">
 				{#each filters as filter}
 					<button
 						class:active={activeFilter === filter.id}
 						class="filter"
 						type="button"
-						role="tab"
-						aria-selected={activeFilter === filter.id}
+						aria-pressed={activeFilter === filter.id}
 						onclick={() => setFilter(filter.id)}
 					>
 						{filter.label}
@@ -373,35 +332,16 @@
 				<span class="footer-spacer"></span>
 				<span><kbd>{shortcutModifier}+[ / ]</kbd> Change filter</span>
 			</div>
-		</div>
-	</div>
-{/if}
+			</Dialog.Content>
+		</Dialog.Portal>
+	</Dialog.Root>
 
 <style>
-	.scrim {
-		position: fixed;
-		inset: 0;
-		display: flex;
-		justify-content: center;
-		align-items: flex-start;
-		padding-top: 10vh;
-		z-index: 50;
-	}
-	.backdrop {
-		position: fixed;
-		inset: 0;
-		border: none;
-		padding: 0;
-		background: color-mix(in srgb, var(--bg) 55%, transparent);
-		cursor: default;
-	}
-	.palette {
-		position: relative;
+	:global(.palette) {
+		top: 10vh;
+		left: 50%;
+		transform: translateX(-50%);
 		width: min(680px, 92vw);
-		background: var(--bg-raised);
-		border: 1px solid var(--border);
-		border-radius: var(--radius);
-		box-shadow: var(--shadow-pop);
 		overflow: hidden;
 	}
 	.search {
@@ -413,21 +353,25 @@
 		border-bottom: 1px solid var(--border);
 		color: var(--text-faint);
 	}
-	input {
+	:global(.palette-search-input) {
 		flex: 1;
-		border: none;
+		min-width: 0;
+		min-height: 0;
+		padding: 0;
+		border: 0;
+		border-radius: 0;
 		background: transparent;
 		color: var(--text);
 		font: inherit;
 		font-size: 15px;
-		padding: 0;
 		outline: none;
 	}
-	input::placeholder {
+	:global(.palette-search-input::placeholder) {
 		color: var(--text-faint);
 	}
-	input:focus-visible {
+	:global(.palette-search-input:focus-visible) {
 		box-shadow: none;
+		border-color: transparent;
 	}
 	.filters {
 		display: flex;

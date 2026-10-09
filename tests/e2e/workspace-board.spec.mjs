@@ -445,3 +445,57 @@ test('a history-only workspace retries its folder mount and keeps history availa
 	await expect(workspace).toContainText('Saved result from this folder.');
 	await expect(page.getByRole('combobox', { name: 'Workspace unavailable: unavailable-archive' })).toBeDisabled();
 });
+
+test('shared workspace tabs and modal/menu primitives preserve keyboard interaction', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+
+	const search = page.getByRole('button', { name: 'Search' });
+	await search.focus();
+	await page.keyboard.press('Control+k');
+	const palette = page.getByRole('dialog', { name: 'Search Fella' });
+	const searchInput = page.getByRole('textbox', { name: 'Search Fella' });
+	await expect(palette).toBeVisible();
+	await expect(searchInput).toBeFocused();
+	await page.keyboard.press('Escape');
+	await expect(palette).toHaveCount(0);
+	await expect(search).toBeFocused();
+
+	const navigation = page.getByRole('region', { name: 'Workspaces' });
+	await navigation.getByRole('button', { name: 'Add repository' }).click();
+	await expect(page.getByRole('article', { name: 'northwind-sales workspace' })).toBeVisible();
+	await page.getByRole('button', { name: 'Open sources in northwind-sales' }).click();
+
+	const workspaceTabs = page.getByRole('tablist', { name: 'Workspace sections' });
+	const sourcesTab = workspaceTabs.getByRole('tab', { name: 'Sources' });
+	const guideTab = workspaceTabs.getByRole('tab', { name: 'Guide' });
+	await expect(sourcesTab).toHaveAttribute('aria-selected', 'true');
+	await sourcesTab.focus();
+	await page.keyboard.press('ArrowRight');
+	await expect(guideTab).toHaveAttribute('aria-selected', 'true');
+	await expect(page.getByRole('heading', { name: 'Guide', level: 1 })).toBeVisible();
+	await expect(page.getByRole('textbox', { name: 'Workspace guide' })).toBeVisible();
+
+	const createProject = page.getByRole('button', { name: 'Create project for northwind-sales' });
+	await createProject.click();
+	const projectDialog = page.getByRole('dialog', { name: 'Create a project' });
+	const projectName = page.locator('#project-name');
+	await expect(projectDialog).toBeVisible();
+	await expect(projectName).toBeFocused();
+	await page.keyboard.press('Escape');
+	await expect(projectDialog).toHaveCount(0);
+	await expect(createProject).toBeFocused();
+
+	await navigation.getByRole('button', { name: 'Add repository' }).click();
+	await expect(page.getByRole('article', { name: 'health-journal workspace' })).toBeVisible();
+	const priorRepository = page.locator('.repository').filter({ hasText: 'northwind-sales' });
+	await priorRepository.hover();
+	const repositoryActions = priorRepository.getByRole('button', { name: 'Repository actions' });
+	await repositoryActions.click();
+	await expect(repositoryActions).toHaveAttribute('aria-expanded', 'true');
+	const menuItem = page.getByRole('menuitem', { name: 'Hide repository' });
+	await expect(menuItem).toBeVisible();
+	await page.keyboard.press('Escape');
+	await expect(menuItem).toHaveCount(0);
+	await expect(priorRepository.getByRole('button', { name: 'Repository actions' })).toBeFocused();
+});

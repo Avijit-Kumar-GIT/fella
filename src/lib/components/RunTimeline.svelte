@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { session } from '$lib/session.svelte';
 	import type { Message, RunStep } from '$lib/types';
+	import { Collapsible } from '$lib/components/ui/collapsible';
 	import Icon from './Icon.svelte';
 	import DataLoader from './DataLoader.svelte';
 
@@ -53,33 +54,27 @@
 
 {#if steps.length && (running || !hasCompletedAnswer)}
 	<section class="run-timeline" class:active={running} aria-label="Question run">
-		<div class="timeline-head">
-			<div class="run-status">
-				{#if running}
-					<DataLoader size={18} />
-				{:else}
-					<span class="run-dot" class:error={failed} aria-hidden="true"></span>
-				{/if}
-				<strong>{running ? chat?.activity || 'Working through the workspace' : failed ? 'Run needs review' : evidenceSteps ? 'Workspace checked' : 'Question answered'}</strong>
+		<Collapsible.Root bind:open={expanded} class="timeline-collapsible">
+			<div class="timeline-head">
+				<div class="run-status">
+					{#if running}
+						<DataLoader size={18} />
+					{:else}
+						<span class="run-dot" class:error={failed} aria-hidden="true"></span>
+					{/if}
+					<strong>{running ? chat?.activity || 'Working through the workspace' : failed ? 'Run needs review' : evidenceSteps ? 'Workspace checked' : 'Question answered'}</strong>
+				</div>
+				<div class="timeline-tools">
+					<span class="run-meta">
+						{steps.length} step{steps.length === 1 ? '' : 's'}{#if !running && chat?.runDurationMs != null} · {duration(chat.runDurationMs)}{/if}
+					</span>
+					<Collapsible.Trigger class="disclosure" aria-label={expanded ? 'Collapse run details' : 'Show run details'}>
+						<Icon name="chevron-right" size={12} />
+					</Collapsible.Trigger>
+				</div>
 			</div>
-			<div class="timeline-tools">
-				<span class="run-meta">
-					{steps.length} step{steps.length === 1 ? '' : 's'}{#if !running && chat?.runDurationMs != null} · {duration(chat.runDurationMs)}{/if}
-				</span>
-				<button
-					class="disclosure"
-					type="button"
-					aria-label={expanded ? 'Collapse run details' : 'Show run details'}
-					aria-expanded={expanded}
-					onclick={() => (expanded = !expanded)}
-				>
-					<Icon name="chevron-right" size={12} />
-				</button>
-			</div>
-		</div>
 
-		{#if expanded}
-			<div class="steps">
+			<Collapsible.Content class="steps">
 				{#each visibleSteps as step (step.id)}
 					<div class="step">
 						<span class="step-mark" class:running={step.state === 'running'} class:error={step.state === 'error'}>
@@ -100,8 +95,8 @@
 				{#if steps.length > visibleSteps.length}
 					<p class="more-steps">Showing the last {visibleSteps.length} steps</p>
 				{/if}
-			</div>
-		{/if}
+			</Collapsible.Content>
+		</Collapsible.Root>
 	</section>
 {/if}
 
@@ -117,6 +112,9 @@
 		justify-content: space-between;
 		gap: var(--space-3);
 		min-height: 30px;
+	}
+	:global(.timeline-collapsible) {
+		min-width: 0;
 	}
 	.run-status,
 	.timeline-tools,
@@ -154,7 +152,7 @@
 		font-size: var(--fs-xs);
 		white-space: nowrap;
 	}
-	.disclosure {
+	:global(.disclosure) {
 		display: grid;
 		place-items: center;
 		width: 24px;
@@ -163,24 +161,21 @@
 		color: var(--text-faint);
 		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
 	}
-	.disclosure:hover {
+	:global(.disclosure:hover) {
 		background: var(--bg-inset);
 		color: var(--text);
 	}
-	.disclosure :global(svg) {
+	:global(.disclosure svg) {
 		transition: transform var(--dur-fast) var(--ease);
 	}
-	.run-timeline:has(.steps) .disclosure :global(svg) {
+	:global(.disclosure[data-state='open'] svg) {
 		transform: rotate(90deg);
 	}
-	.run-timeline:not(:has(.steps)) .disclosure :global(svg) {
-		transform: rotate(0deg);
-	}
-	.steps {
+	:global(.steps) {
 		position: relative;
 		padding: 2px 0 var(--space-2) 15px;
 	}
-	.steps::before {
+	:global(.steps::before) {
 		content: '';
 		position: absolute;
 		top: 0;

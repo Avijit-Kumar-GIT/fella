@@ -4,6 +4,7 @@
 	import { ipc, isDesktop } from '$lib/ipc';
 	import { session } from '$lib/session.svelte';
 	import { Button } from '$lib/components/ui/button';
+	import { Textarea } from '$lib/components/ui/textarea';
 	import Icon from './Icon.svelte';
 	import DataLoader from './DataLoader.svelte';
 
@@ -111,12 +112,13 @@
 			{#if loading}
 				<div class="loading"><DataLoader size={28} /><span>Loading your workspace guide…</span></div>
 			{:else}
-				<textarea
+				<Textarea
+					class="guide-textarea"
 					bind:value={contents}
 					aria-label="Workspace guide"
 					placeholder="Tell Fella what these files mean, which fields matter, and what it should keep in mind…"
 					oninput={scheduleSave}
-				></textarea>
+				/>
 			{/if}
 			<div class="editor-foot">
 				<span>{error || (saving ? 'Saving to the workspace…' : contents === savedContents ? 'Saved locally in this folder' : 'Unsaved changes')}</span>
@@ -213,7 +215,7 @@
 		gap: var(--space-3);
 		flex: none;
 	}
-	textarea {
+	:global(.guide-textarea) {
 		display: block;
 		width: 100%;
 		min-height: min(56vh, 620px);
@@ -225,10 +227,10 @@
 		color: var(--text);
 		font: 14px/1.65 var(--mono);
 	}
-	textarea:focus {
+	:global(.guide-textarea:focus-visible) {
 		box-shadow: inset 0 0 0 2px var(--link);
 	}
-	textarea::placeholder {
+	:global(.guide-textarea::placeholder) {
 		color: var(--text-faint);
 	}
 	.loading {

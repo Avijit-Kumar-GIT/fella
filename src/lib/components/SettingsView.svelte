@@ -4,6 +4,7 @@
 	import { ipc, isDesktop, openExternal } from '$lib/ipc';
 	import { prefs, type Appearance } from '$lib/prefs.svelte';
 	import { session } from '$lib/session.svelte';
+	import { Switch } from '$lib/components/ui/switch';
 	import type { AnalysisCapabilities, RunLogEntry } from '$lib/types';
 	import Icon from './Icon.svelte';
 	import ProviderIcon from './ProviderIcon.svelte';
@@ -296,18 +297,15 @@
 							<strong>{item.label}</strong>
 							<small>{item.detail}</small>
 						</div>
-						<button
-							class="capability-toggle"
-							class:on={capabilities[item.key]}
-							type="button"
-							role="switch"
-							aria-checked={capabilities[item.key]}
+						<Switch.Root
+							class="fella-ui-switch"
+							checked={capabilities[item.key]}
 							aria-label={`${item.label}: ${capabilities[item.key] ? 'on' : 'off'}`}
 							disabled={!capabilities.table_analysis && item.key === 'visualizations'}
-							onclick={() => void toggleCapability(item.key)}
+							onCheckedChange={() => void toggleCapability(item.key)}
 						>
-							<span></span>
-						</button>
+							<Switch.Thumb class="fella-ui-switch-thumb" />
+						</Switch.Root>
 					</div>
 				{/each}
 			</div>
@@ -552,37 +550,6 @@
 	}
 	.error-note {
 		color: var(--danger, #c15d5d);
-	}
-	.capability-toggle {
-		position: relative;
-		flex: none;
-		width: 38px;
-		height: 22px;
-		padding: 2px;
-		border: 1px solid var(--border-strong, var(--border));
-		border-radius: 999px;
-		background: var(--bg-inset);
-		transition: background 120ms ease, border-color 120ms ease;
-	}
-	.capability-toggle span {
-		display: block;
-		width: 16px;
-		height: 16px;
-		border-radius: 50%;
-		background: var(--text-faint);
-		transition: transform 120ms ease, background 120ms ease;
-	}
-	.capability-toggle.on {
-		border-color: var(--brand);
-		background: var(--brand);
-	}
-	.capability-toggle.on span {
-		background: var(--on-brand, #fff);
-		transform: translateX(16px);
-	}
-	.capability-toggle:disabled {
-		cursor: not-allowed;
-		opacity: 0.45;
 	}
 	.section-label {
 		margin: var(--space-3) 0 var(--space-1);

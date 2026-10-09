@@ -29,6 +29,173 @@
 
 @custom-variant dark (&:where(:root[data-color-mode='dark'], :root[data-color-mode='dark'] *));
 
+@layer components {
+	.fella-ui-input,
+	.fella-ui-select,
+	.fella-ui-textarea {
+		width: 100%;
+		min-width: 0;
+		border: 1px solid var(--border-strong);
+		border-radius: var(--radius-sm);
+		background: var(--bg-raised);
+		color: var(--text);
+		font: inherit;
+	}
+
+	.fella-ui-input,
+	.fella-ui-select {
+		min-height: 36px;
+		padding: 7px 10px;
+	}
+
+	.fella-ui-textarea {
+		min-height: 9rem;
+		padding: 10px;
+		line-height: 1.5;
+		resize: vertical;
+	}
+
+	.fella-ui-input::placeholder,
+	.fella-ui-textarea::placeholder {
+		color: var(--text-faint);
+	}
+
+	.fella-ui-input:focus-visible,
+	.fella-ui-select:focus-visible,
+	.fella-ui-textarea:focus-visible {
+		border-color: var(--link);
+	}
+
+	.fella-ui-input:disabled,
+	.fella-ui-select:disabled,
+	.fella-ui-textarea:disabled {
+		cursor: not-allowed;
+		color: var(--text-faint);
+	}
+
+	.fella-ui-dialog-overlay {
+		position: fixed;
+		inset: 0;
+		z-index: 50;
+		background: color-mix(in srgb, var(--bg) 58%, transparent);
+	}
+
+	.fella-ui-dialog-content {
+		position: fixed;
+		top: 50%;
+		left: 50%;
+		z-index: 51;
+		max-height: calc(100vh - 40px);
+		transform: translate(-50%, -50%);
+		overflow: auto;
+		border: 1px solid var(--border);
+		border-radius: var(--radius);
+		background: var(--bg-raised);
+		box-shadow: var(--shadow-pop);
+		color: var(--text);
+		outline: none;
+	}
+
+	.fella-ui-tabs-list {
+		display: flex;
+		align-items: center;
+	}
+
+	.fella-ui-tabs-trigger {
+		position: relative;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		white-space: nowrap;
+		color: var(--text-faint);
+		transition: color var(--dur-fast) var(--ease);
+	}
+
+	.fella-ui-tabs-trigger:hover,
+	.fella-ui-tabs-trigger[data-state='active'] {
+		color: var(--text);
+	}
+
+	.fella-ui-menu-content {
+		z-index: 80;
+		min-width: 168px;
+		padding: 4px;
+		border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
+		background: var(--bg-raised);
+		box-shadow: var(--shadow-pop);
+		color: var(--text);
+		outline: none;
+	}
+
+	.fella-ui-menu-item {
+		display: flex;
+		align-items: center;
+		width: 100%;
+		min-height: 32px;
+		padding: 6px 9px;
+		border-radius: calc(var(--radius-sm) - 2px);
+		color: var(--text-dim);
+		text-align: left;
+		font-size: var(--fs-sm);
+		cursor: default;
+	}
+
+	.fella-ui-menu-item[data-highlighted],
+	.fella-ui-menu-item:hover {
+		background: var(--bg-inset);
+		color: var(--text);
+	}
+
+	.fella-ui-switch {
+		position: relative;
+		flex: none;
+		width: 38px;
+		height: 22px;
+		padding: 2px;
+		border: 1px solid var(--border-strong);
+		border-radius: 999px;
+		background: var(--bg-inset);
+		transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+	}
+
+	.fella-ui-switch[data-state='checked'] {
+		border-color: var(--brand);
+		background: var(--brand);
+	}
+
+	.fella-ui-switch:disabled {
+		cursor: not-allowed;
+		opacity: 0.55;
+	}
+
+	.fella-ui-switch-thumb {
+		display: block;
+		width: 16px;
+		height: 16px;
+		border-radius: 50%;
+		background: var(--text-faint);
+		transition: transform var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+	}
+
+	.fella-ui-switch[data-state='checked'] .fella-ui-switch-thumb {
+		transform: translateX(16px);
+		background: var(--on-brand);
+	}
+
+	.fella-ui-tooltip-content {
+		z-index: 100;
+		padding: 5px 8px;
+		border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
+		background: var(--bg-raised);
+		box-shadow: var(--window-shadow);
+		color: var(--text);
+		font-size: var(--fs-xs);
+		line-height: 1.3;
+	}
+}
+
 @theme inline {
 	--font-sans: var(--sans);
 	--font-mono: var(--mono);

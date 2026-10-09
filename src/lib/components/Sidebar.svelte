@@ -2,6 +2,8 @@
 	import { ipc, isDesktop } from '$lib/ipc';
 	import { errMsg, openConversation, openFolder, openRepository } from '$lib/commands';
 	import { GENERAL_WORKSPACE_ID, session } from '$lib/session.svelte';
+	import { DropdownMenu } from '$lib/components/ui/dropdown-menu';
+	import { Tooltip } from '$lib/components/ui/tooltip';
 	import type { ConversationSummary } from '$lib/types';
 	import Icon from './Icon.svelte';
 	import Logo from './Logo.svelte';
@@ -21,7 +23,6 @@
 
 	let list = $state<ConversationSummary[]>([]);
 	let expandedRepos = $state<Record<string, boolean>>({});
-	let menuRepository = $state<string | null>(null);
 	const shortcutModifier =
 		typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform || navigator.userAgent)
 			? '⌘'
@@ -103,14 +104,12 @@
 	});
 
 	function newChat(): void {
-		menuRepository = null;
 		if (!session.newConversation()) {
 			session.addSystem('This environment already has four workspaces. Create or switch environments to add another.');
 		}
 	}
 
 	async function newWorkspaceChat(repo: Repository): Promise<void> {
-		menuRepository = null;
 		if (!repo.path) {
 			if (!session.newConversation(null)) session.addSystem('Could not start a new conversation.');
 			return;
@@ -131,7 +130,6 @@
 	}
 
 	async function toggleRepository(repo: Repository): Promise<void> {
-		menuRepository = null;
 		await selectRepository(repo);
 	}
 
@@ -141,7 +139,6 @@
 	}
 
 	async function openRepositoryWorkspace(repo: Repository): Promise<void> {
-		menuRepository = null;
 		expandedRepos = { ...expandedRepos, [repo.key]: true };
 		if (!(await selectRepository(repo))) return;
 		if (!repo.path) return;
@@ -160,9 +157,7 @@
 		await openFolder();
 	}
 
-	function hideRepository(repo: Repository, event: MouseEvent): void {
-		event.stopPropagation();
-		menuRepository = null;
+	function hideRepository(repo: Repository): void {
 		if (repo.path && repo.path !== session.catalog.workspace) session.forgetRepository(repo.path);
 	}
 
@@ -304,31 +299,35 @@
 						</button>
 						<div class="repository-actions">
 							{#if !repo.historyOnly}
-							<button
-								class="repository-action"
-								type="button"
-								aria-label={`New conversation in ${repo.name}`}
-								title={`New conversation in ${repo.name}`}
-								onclick={(event) => { event.stopPropagation(); void newWorkspaceChat(repo); }}
-							>
-								<Icon name="plus" size={14} />
-							</button>
+								<Tooltip.Root>
+									<Tooltip.Trigger
+										class="repository-action"
+										type="button"
+										aria-label={`New conversation in ${repo.name}`}
+										onclick={(event) => { event.stopPropagation(); void newWorkspaceChat(repo); }}
+									>
+										<Icon name="plus" size={14} />
+									</Tooltip.Trigger>
+									<Tooltip.Portal>
+										<Tooltip.Content class="fella-ui-tooltip-content" side="right" sideOffset={8}>
+											New conversation in {repo.name}
+										</Tooltip.Content>
+									</Tooltip.Portal>
+								</Tooltip.Root>
 							{/if}
 							{#if repo.path && !repo.current && !repo.historyOnly}
-								<button
-									class="repository-action"
-									type="button"
-									aria-label="Repository actions"
-									aria-haspopup="menu"
-									aria-expanded={menuRepository === repo.key}
-									title="Repository actions"
-									onclick={(event) => {
-										event.stopPropagation();
-										menuRepository = menuRepository === repo.key ? null : repo.key;
-									}}
-								>
-									<Icon name="more-horizontal" size={14} />
-								</button>
+								<DropdownMenu.Root>
+									<DropdownMenu.Trigger class="repository-action" type="button" aria-label="Repository actions" title="Repository actions">
+										<Icon name="more-horizontal" size={14} />
+									</DropdownMenu.Trigger>
+									<DropdownMenu.Portal>
+										<DropdownMenu.Content class="fella-ui-menu-content" side="bottom" align="end" sideOffset={4}>
+											<DropdownMenu.Item class="fella-ui-menu-item" onSelect={() => hideRepository(repo)}>
+												Hide repository
+											</DropdownMenu.Item>
+										</DropdownMenu.Content>
+									</DropdownMenu.Portal>
+								</DropdownMenu.Root>
 							{/if}
 							{#if repo.path && repo.historyOnly}
 								<button
@@ -342,17 +341,6 @@
 								</button>
 							{/if}
 						</div>
-						{#if menuRepository === repo.key && repo.path && !repo.current}
-							<div class="repository-menu" role="menu">
-								<button
-									type="button"
-									role="menuitem"
-									onclick={(event) => hideRepository(repo, event)}
-								>
-									Hide repository
-								</button>
-							</div>
-						{/if}
 					</div>
 					{#if repo.expanded}
 						<div class="repository-contents">
@@ -691,30 +679,6 @@
 	.repository-action :global(svg) {
 		flex: none;
 		color: inherit;
-	}
-	.repository-menu {
-		position: absolute;
-		top: calc(100% - 2px);
-		right: 4px;
-		z-index: 4;
-		min-width: 136px;
-		padding: 4px;
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		background: var(--bg-raised);
-		box-shadow: var(--shadow-pop);
-	}
-	.repository-menu button {
-		width: 100%;
-		padding: 7px 8px;
-		border-radius: var(--radius-chip);
-		color: var(--text-dim);
-		font-size: var(--fs-sm);
-		text-align: left;
-	}
-	.repository-menu button:hover {
-		background: var(--sidebar-hover);
-		color: var(--text);
 	}
 	.repository-contents {
 		margin: 2px 4px 5px 4px;

@@ -17,6 +17,18 @@
 - Define expected behavior and grading criteria before running the candidate
   implementation. Do not change, delete, weaken, or exclude a failing test
   because of the observed output.
+- Keep test investigation bounded. Do not rerun the same failing case under the
+  same setup and hypothesis more than twice. Every additional attempt must test
+  a stated, materially different hypothesis or verify a relevant code change.
+- After repeated failure, stop and inspect the available evidence once: the
+  assertion, logs, app state, and relevant implementation. Distinguish a
+  demonstrated product failure from a test synchronization, locator,
+  environment, or specification problem. A DOM state or passing assertion is
+  evidence only for what it directly establishes; do not infer more.
+- If the intended behavior may be working but the test cannot establish it,
+  preserve the failing result and report it as unresolved. Use a distinct,
+  proportionate validation method only when it adds evidence; do not keep
+  cycling the same test or alter its assertions merely to obtain a pass.
 - Report failing tests as failures. If a test appears ambiguous, incorrectly
   specified, or poorly graded, preserve its result and flag the concern
   separately for user review; do not silently convert it to a pass.

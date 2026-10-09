@@ -68,18 +68,18 @@ focus management independently.
 | Priority | Component | Planned treatment |
 | --- | --- | --- |
 | 1 | `+page.svelte` app shell | Standardize repeated shell actions and shared interaction states as consumers migrate. Preserve Fella's navigation, keyboard shortcuts, Electron titlebar, and view composition. |
-| 1 | `Sidebar.svelte` | Use shared sidebar, collapsible, tooltip, and menu primitives. Preserve the workspace/repository/conversation hierarchy and its actions. |
+| 1 | `Sidebar.svelte` | Adopted shared Collapsible, Tooltip, and DropdownMenu for repository disclosure, sidebar hints, and repository actions. Preserve the workspace/repository/conversation hierarchy. |
 | 1 | `Composer.svelte` | Standardize textarea, buttons, pickers, popovers, and menus. Split context/model/mode pickers and reference/action controls into focused pieces while preserving composer behavior. |
-| 1 | `CommandPalette.svelte` | Use shared Dialog and Command primitives for results, filters, focus, and keyboard behavior. Keep Fella's commands and ranking. |
-| 1 | `ProjectDialog.svelte` | Replace the hand-built modal shell and form controls with Dialog, Field, Input, Select, and Button primitives. |
-| 1 | `SettingsView.svelte` | Standardize settings rows, switches, choices, disclosures, statuses, and actions. Keep settings organization and semantics specific to Fella. |
+| 1 | `CommandPalette.svelte` | Adopted shared Dialog and Input for modal/focus behavior and search entry. Keep the Fella-specific result list, filters, commands, and ranking; reconsider Command only if it improves that real workflow. |
+| 1 | `ProjectDialog.svelte` | Replaced the hand-built modal shell and adopted shared Dialog, Input, Select, and Button. Form labels, validation, and project creation remain feature-owned. |
+| 1 | `SettingsView.svelte` | Adopted shared Switch controls. Settings rows, choices, disclosures, statuses, and organization remain feature-owned until those patterns have multiple consumers. |
 | 1 | `EnvironmentTabs.svelte` | Adopt shared tab behavior/styles while preserving environment switching, close controls, scrolling, and keyboard shortcuts. |
-| 1 | `WorkspaceView.svelte` | Use shared tabs for Sources and Guide; preserve workspace-pane state and content. |
-| 2 | `RunTimeline.svelte` | Use Collapsible/Accordion for run-step disclosure; retain trace ordering and technical detail. |
+| 1 | `WorkspaceView.svelte` | Adopted shared Tabs for Sources and Guide; preserve workspace-pane state and content. |
+| 2 | `RunTimeline.svelte` | Adopted shared Collapsible for run-step disclosure; retain trace ordering and technical detail. |
 | 2 | `ReplayStatus.svelte` | Use shared Alert, Badge, Button, and loading/progress primitives for status and rerun states. |
 | 2 | `SourcesView.svelte` | Standardize search, source rows/tables, pagination, disclosures, and statuses. Preserve the catalog/detail information architecture. |
 | 2 | `SourcePreview.svelte` | Use shared table, scrolling, loading, and error primitives; preserve source-specific preview behavior. |
-| 2 | `ContextView.svelte` | Use shared Button and Textarea/Field controls. Keep the file-backed guide workflow. |
+| 2 | `ContextView.svelte` | Adopted shared Textarea styling for the guide editor while retaining its file-backed workflow and feature-specific presentation. |
 | 2 | `ProjectView.svelte` | Standardize controls and typography, but keep the project/knowledge view's evidence-led composition bespoke. |
 | 2 | `WorkspaceBoard.svelte` | Preserve the custom multi-pane layout and drag/drop. Standardize pane headers, actions, selected states, and menus. |
 | 2 | `CompanionPane.svelte` | Keep the source/chart companion composition; standardize pane actions, scrolling, and status treatments. |
@@ -116,16 +116,35 @@ workspace state and did not write a guide file.
 
 ### Slice 2: interaction primitives
 
-Add and adopt Tabs, Dialog, DropdownMenu/ContextMenu, Popover/Combobox/Command,
-Collapsible/Accordion, Switch/RadioGroup/Select, Tooltip, ScrollArea, and
-standardized form fields as their first real consumers are migrated. Prioritize
-environment/workspace tabs, project creation, the command palette, and Settings.
+Status: implemented, with one browser-test assertion unresolved.
+
+- Add shared Dialog, DropdownMenu, Input, Select, Switch, Tabs, Textarea, and
+  Tooltip components, plus a Collapsible wrapper, all styled from Fella tokens.
+- Adopt them in the command palette, project creation, Settings, workspace
+  tabs, repository actions, run-step disclosure, and guide editing.
+- Keep feature-owned result rendering, settings layout, and domain-specific
+  content in their existing components.
+- Defer ContextMenu, Popover, Combobox, Command, Accordion, RadioGroup,
+  ScrollArea, and broader Field abstractions until a concrete consumer needs
+  them. A component inventory is not a reason to add unused primitives.
+
+Validation: `pnpm check` passed with zero errors and warnings, `pnpm build`
+passed, and the five pre-existing workspace-board browser tests passed. The
+new combined keyboard test passed its palette, workspace-tab, and project
+dialog checks, then failed when Playwright could no longer resolve the
+repository-action trigger by role after clicking it. A temporary diagnostic
+captured the trigger with `aria-expanded="true"` and an open menu containing
+the expected `role="menuitem"`; this is not evidence of a user-visible menu
+failure, but the browser assertion remains unresolved and is not counted as a
+pass. Do not treat this as verified until a distinct, reliable interaction
+check covers opening, Escape dismissal, and focus restoration.
 
 ### Slice 3: high-complexity product views
 
-Refactor Composer and Sidebar around the shared primitives. Then migrate source,
-evidence, transcript, and project views while retaining their distinct product
-layouts. Keep chart geometry and workspace-board composition custom.
+Next, standardize Composer and the remaining Sidebar controls around the shared
+primitives. Then migrate source, evidence, transcript, and project views while
+retaining their distinct product layouts. Keep chart geometry and
+workspace-board composition custom.
 
 ### Slice 4: converge and remove duplicates
 
