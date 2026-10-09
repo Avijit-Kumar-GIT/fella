@@ -784,6 +784,10 @@ Sidebar navigation's former native-button alignment. General navigation and
 Settings now explicitly use `justify-content: flex-start`; the focused browser
 test asserts the computed alignment for Ask, Search, and Settings.
 
+Follow-up spacing fix: workspace rows reserve the full hover-action rail so
+long names cannot run beneath the new-conversation button. A focused browser
+test checks the title/action bounding boxes with a long workspace name.
+
 ## First-slice acceptance criteria
 
 - `pnpm check` reports no new Svelte or TypeScript errors, and `pnpm build`

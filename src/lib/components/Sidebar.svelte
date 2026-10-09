@@ -597,7 +597,9 @@
 		min-height: 28px;
 		height: auto;
 		justify-content: flex-start;
-		padding: 4px 32px 4px 28px;
+		/* Reserve the full hover-action rail (new conversation and menu) so a
+		   long workspace name never runs beneath the plus button. */
+		padding: 4px 60px 4px 28px;
 		border-radius: var(--radius-sm);
 		background: transparent;
 		color: var(--text-dim);

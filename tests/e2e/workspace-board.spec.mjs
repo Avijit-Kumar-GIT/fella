@@ -798,6 +798,34 @@ test('Sidebar workspace tools use shared buttons and preserve source and project
 	await expect(page.getByRole('button', { name: 'Open project Sales review' })).toBeVisible();
 });
 
+test('Sidebar workspace title stays clear of the hover new-conversation action', async ({ page }) => {
+	const workspaceName = 'quarterly-revenue-analysis-workspace-with-a-long-name';
+	const longFolder = {
+		...folders[0],
+		path: `C:\\FellaFixture\\${workspaceName}`,
+		catalog: {
+			...folders[0].catalog,
+			workspace: `C:\\FellaFixture\\${workspaceName}`
+		}
+	};
+	await installDesktopMock(page, { fixtureFolders: [longFolder, folders[1]] });
+	await page.goto('/');
+	await page.getByRole('button', { name: 'Add repository' }).click();
+	await page.getByRole('button', { name: 'Add repository' }).click();
+
+	const workspace = page.getByRole('button', { name: `Open workspace ${workspaceName}` });
+	const repository = page.locator('.repository').filter({ has: workspace });
+	const title = repository.locator('.repository-name');
+	await workspace.hover();
+
+	const newConversation = repository.getByRole('button', { name: `New conversation in ${workspaceName}` });
+	await expect(newConversation).toBeVisible();
+	const [titleBounds, actionBounds] = await Promise.all([title.boundingBox(), newConversation.boundingBox()]);
+	expect(titleBounds).not.toBeNull();
+	expect(actionBounds).not.toBeNull();
+	expect(titleBounds.x + titleBounds.width + 4).toBeLessThanOrEqual(actionBounds.x);
+});
+
 test('Sidebar conversation actions use shared buttons and Input, cancel rename, and delete history', async ({ page }) => {
 	await installDesktopMock(page, { seedUnavailableConversation: true });
 	await page.goto('/');
