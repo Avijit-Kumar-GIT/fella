@@ -423,12 +423,12 @@
 											<span class="preview">{title(c)}</span>
 										</button>
 										<div class="row-actions">
-											<button class="ren" type="button" aria-label="Rename conversation" title="Rename" onclick={(e) => startRename(c, e)}>
+											<Button variant="ghost" size="icon" class="ren" type="button" aria-label="Rename conversation" title="Rename" onclick={(e) => startRename(c, e)}>
 												<Icon name="pencil" size={14} />
-											</button>
-											<button class="del" type="button" aria-label="Delete conversation" title="Delete" onclick={(e) => remove(c, e)}>
+											</Button>
+											<Button variant="ghost" size="icon" class="del" type="button" aria-label="Delete conversation" title="Delete" onclick={(e) => remove(c, e)}>
 												<Icon name="x" size={14} />
-											</button>
+											</Button>
 										</div>
 									{/if}
 								</div>
@@ -785,7 +785,7 @@
 		width: 100%;
 		min-height: 27px;
 		padding-left: 0;
-		padding-right: 48px;
+		padding-right: 52px;
 		padding-top: 4px;
 		padding-bottom: 4px;
 		border-radius: var(--radius-sm);
@@ -826,26 +826,27 @@
 	}
 	.row-actions {
 		position: absolute;
-		top: 5px;
+		top: 2px;
 		right: 6px;
 		display: none;
 		align-items: center;
 		gap: 2px;
 	}
-	.ren,
-	.del {
+	.row-actions :global(.ren),
+	.row-actions :global(.del) {
 		display: grid;
 		place-items: center;
-		width: 18px;
-		height: 18px;
+		width: 24px;
+		height: 24px;
+		padding: 0;
 		border-radius: var(--radius-chip);
 		color: var(--text-faint);
 	}
-	.del {
+	.row-actions :global(.del) {
 		color: var(--err);
 	}
-	.ren:hover,
-	.del:hover {
+	.row-actions :global(.ren:hover),
+	.row-actions :global(.del:hover) {
 		color: var(--text);
 		background: var(--sidebar-hover);
 	}

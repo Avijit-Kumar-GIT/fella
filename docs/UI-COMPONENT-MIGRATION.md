@@ -271,6 +271,21 @@ verifies shared Button usage, compact row height, source navigation, and the
 create-project flow. The build reports a 502.25 KB client chunk above Vite's
 500 KB advisory and the adapter-static fallback-page notice.
 
+#### Slice 3i: Sidebar conversation actions
+
+Status: implemented.
+
+- Use shared icon Buttons for conversation rename and delete actions, with
+  24 px hit targets and the existing neutral/destructive color treatment.
+- Preserve inline rename, Escape cancellation, and history deletion behavior.
+
+Validation: `pnpm check`, `node --check tests/e2e/workspace-board.spec.mjs`,
+the focused seeded-history browser test, and `pnpm build` succeed. The test
+verifies both actions use the shared primitive, Escape leaves the title
+unchanged, and Delete removes the history row. The build reports a 502.31 KB
+client chunk above Vite's 500 KB advisory and the adapter-static fallback-page
+notice.
+
 #### Remaining in Slice 3
 
 Standardize the remaining Composer and Sidebar controls around shared

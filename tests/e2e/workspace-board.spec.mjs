@@ -650,3 +650,36 @@ test('Sidebar workspace tools use shared buttons and preserve source and project
 	await page.getByRole('button', { name: 'Create project', exact: true }).click();
 	await expect(page.getByRole('button', { name: 'Open project Sales review' })).toBeVisible();
 });
+
+test('Sidebar conversation actions use shared buttons, cancel rename, and delete history', async ({ page }) => {
+	await installDesktopMock(page, { seedUnavailableConversation: true });
+	await page.goto('/');
+	await page.getByRole('button', { name: 'Expand unavailable-archive' }).click();
+	const conversation = page.getByRole('button', {
+		name: 'Open conversation: Summarize the unavailable archive'
+	});
+	await expect(conversation).toBeVisible();
+	await conversation.hover();
+
+	const rename = page.getByRole('button', { name: 'Rename conversation' });
+	const remove = page.getByRole('button', { name: 'Delete conversation' });
+	for (const action of [rename, remove]) {
+		await expect(action).toHaveAttribute('data-slot', 'button');
+		const bounds = await action.boundingBox();
+		expect(bounds).not.toBeNull();
+		expect(bounds.width).toBe(24);
+		expect(bounds.height).toBe(24);
+	}
+
+	await rename.click();
+	const renameInput = page.getByRole('textbox', { name: 'Rename conversation' });
+	await expect(renameInput).toBeFocused();
+	await renameInput.fill('Unsaved title');
+	await page.keyboard.press('Escape');
+	await expect(renameInput).toHaveCount(0);
+	await expect(conversation).toBeVisible();
+
+	await conversation.hover();
+	await page.getByRole('button', { name: 'Delete conversation' }).click();
+	await expect(conversation).toHaveCount(0);
+});
