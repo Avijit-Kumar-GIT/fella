@@ -493,13 +493,27 @@ revision, confirms the stale-snapshot notice and shared Button, then reopens
 the current source version. The build reports a 505.02 KB client chunk above
 Vite's 500 KB advisory and the adapter-static fallback-page notice.
 
+#### Slice 3x: Chart companion action
+
+Status: implemented.
+
+- Use a shared outline Button for opening a rendered chart beside the
+  conversation, preserving the D3 chart and linked conversation reference.
+
+Validation: `pnpm check` reports zero errors and warnings,
+`node --check tests/e2e/workspace-board.spec.mjs`, the focused chart companion
+browser test, and `pnpm build` succeed. The test checks shared Button adoption,
+the chart title in the companion pane, and the message's linked-chart state.
+The build reports a 505.01 KB client chunk above Vite's 500 KB advisory and
+the adapter-static fallback-page notice.
+
 #### Remaining in Slice 3
 
 Standardize remaining feature actions and controls around shared primitives
 where they improve consistency without obscuring product behavior. Continue
-with remaining Composer and Sidebar controls, then migrate companion, evidence,
-transcript, project, and chart actions while retaining their distinct layouts.
-Keep chart geometry and workspace-board composition custom.
+with remaining Composer controls, then migrate evidence, transcript, and
+project actions while retaining their distinct layouts. Keep chart geometry
+and workspace-board composition custom.
 
 ### Slice 4: converge and remove duplicates
 

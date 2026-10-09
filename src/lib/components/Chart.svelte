@@ -8,6 +8,7 @@
 		pie,
 		type PieArcDatum
 	} from 'd3-shape';
+	import { Button } from '$lib/components/ui/button';
 	import type { ChartMetadata, ChartPayload, VisualizationSpec } from '$lib/types';
 
 	let {
@@ -400,7 +401,7 @@
 			{/if}
 		</div>
 		{#if onopen}
-			<button class="open-beside" type="button" onclick={onopen}>Open beside</button>
+			<Button variant="outline" size="sm" class="open-beside" onclick={onopen}>Open beside</Button>
 		{/if}
 	</figcaption>
 	{#if source}<div class="chart-context">{source}</div>{/if}
@@ -629,16 +630,17 @@
 	.chart-header { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); }
 	.chart-header-copy { min-width: 0; }
 	.chart-title { color: var(--text); font-weight: 600; }
-	.open-beside {
+	:global(.open-beside) {
 		flex: none;
+		height: auto;
+		min-height: 0;
 		padding: 4px 8px;
-		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
 		color: var(--text-dim);
 		font-size: var(--fs-xs);
 		font-weight: 600;
 	}
-	.open-beside:hover { color: var(--text); background: var(--bg-inset); }
+	:global(.open-beside:hover) { color: var(--text); background: var(--bg-inset); }
 	.chart-unit, .chart-context { margin-top: 2px; color: var(--text-faint); font-size: var(--fs-xs); }
 	.chart-axis-summary { margin-top: 2px; color: var(--text-dim); font-size: var(--fs-xs); }
 	.chart-context { margin-bottom: var(--space-2); }

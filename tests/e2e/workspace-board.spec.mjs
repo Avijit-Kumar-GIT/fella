@@ -40,10 +40,11 @@ async function installDesktopMock(
 		fixtureFolders = folders,
 		replayStatus = null,
 		replayStatusError = false,
-		reindexedCatalog = null
+		reindexedCatalog = null,
+		chartEvidence = null
 	} = {}
 ) {
-	await page.addInitScript(({ fixtureFolders, seedUnavailableConversation, replayStatus, replayStatusError, reindexedCatalog }) => {
+	await page.addInitScript(({ fixtureFolders, seedUnavailableConversation, replayStatus, replayStatusError, reindexedCatalog, chartEvidence }) => {
 		const calls = [];
 		const archivedConversations = new Map();
 		const unavailablePath = 'C:\\FellaFixture\\unavailable-archive';
@@ -140,9 +141,12 @@ async function installDesktopMock(
 					text: `Scoped to ${params.workspaceId ?? 'general'}.`,
 					status: 'complete',
 					turn_id: hasReplayEvidence ? 'fixture-turn' : undefined,
-					evidence: hasReplayEvidence
-						? [{ id: 'fixture-replay-step', tool: 'run_sql', args: {}, result_summary: 'One row inspected.', ms: 12 }]
-						: [],
+					evidence: [
+						...(hasReplayEvidence
+							? [{ id: 'fixture-replay-step', tool: 'run_sql', args: {}, result_summary: 'One row inspected.', ms: 12 }]
+							: []),
+						...(chartEvidence ? [chartEvidence] : [])
+					],
 					verification: [],
 					workspace: params.workspaceId ? { path: params.workspaceId, revision: 'fixture-r1' } : null
 				};
@@ -155,7 +159,7 @@ async function installDesktopMock(
 			windowAction: async () => {},
 			pathForFile: () => ''
 		};
-	}, { fixtureFolders, seedUnavailableConversation, replayStatus, replayStatusError, reindexedCatalog });
+	}, { fixtureFolders, seedUnavailableConversation, replayStatus, replayStatusError, reindexedCatalog, chartEvidence });
 }
 
 async function dispatchWorkspaceDrag(page, type, workspacePath, { x = 0.5, y = 0.5, existing = false } = {}) {
@@ -1006,6 +1010,40 @@ test('Companion snapshot recovery uses a shared button and reopens the current s
 	await reopen.click();
 	await expect(companion).not.toContainText('The workspace changed after this preview was opened.');
 	await expect(companion).toContainText('Preview only · this file is not added to the conversation context.');
+});
+
+test('Chart Open beside uses a shared button and preserves the chart in the companion pane', async ({ page }) => {
+	await installDesktopMock(page, {
+		chartEvidence: {
+			id: 'fixture-chart',
+			tool: 'make_chart',
+			args: {},
+			result_summary: 'Monthly revenue by month.',
+			ms: 12,
+			chart: {
+				kind: 'line',
+				title: 'Monthly revenue',
+				labels: ['Jan', 'Feb', 'Mar'],
+				series: [{ name: 'Revenue', values: [12, 18, 15] }],
+				unit: '$',
+				x_label: 'Month',
+				y_label: 'Revenue'
+			}
+		}
+	});
+	await page.goto('/');
+	await page.getByRole('combobox', { name: 'Ask a question' }).fill('Show monthly revenue.');
+	await page.getByRole('button', { name: 'Send' }).click();
+
+	const chart = page.locator('.chart-card');
+	await expect(chart).toContainText('Monthly revenue');
+	const openBeside = page.getByRole('button', { name: 'Open beside' });
+	await expect(openBeside).toHaveAttribute('data-slot', 'button');
+	await openBeside.click();
+
+	const companion = page.getByRole('complementary', { name: 'Companion pane' });
+	await expect(companion.getByRole('heading', { name: 'Monthly revenue' })).toBeVisible();
+	await expect(page.getByLabel('Chart open beside conversation')).toContainText('Monthly revenue is open beside the conversation.');
 });
 
 test('Suggested follow-ups use shared link buttons and submit the selected question', async ({ page }) => {
