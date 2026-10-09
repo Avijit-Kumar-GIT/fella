@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { session } from '$lib/session.svelte';
+	import { Button } from '$lib/components/ui/button';
 	import { Tabs } from '$lib/components/ui/tabs';
 	import Icon from './Icon.svelte';
 	import Logo from './Logo.svelte';
@@ -75,24 +76,25 @@
 					{#if environment.panes.length > 1}<span class="pane-count">{environment.panes.length}</span>{/if}
 				</Tabs.Trigger>
 				{#if session.environments.length > 1}
-					<button
+					<Button
+						variant="ghost"
+						size="icon"
 						class="tab-close"
-						type="button"
 						aria-label={`Close environment: ${session.environmentLabel(environment)}`}
 						title={environment.panes.some((pane) => session.conversations.find((item) => item.id === pane.conversationId)?.busy) ? 'An analysis is running in this environment' : 'Close environment'}
 						disabled={environment.panes.some((pane) => session.conversations.find((item) => item.id === pane.conversationId)?.busy)}
 						onclick={() => void onclose(environment.id)}
 					>
 						<Icon name="x" size={14} />
-					</button>
+					</Button>
 				{/if}
 			</div>
 		{/each}
 		</Tabs.List>
 	</Tabs.Root>
-	<button class="new-tab" type="button" aria-label="New environment" title={`New environment (${shortcutModifier}+T)`} onclick={onnew}>
+	<Button variant="ghost" size="icon" class="new-tab" aria-label="New environment" title={`New environment (${shortcutModifier}+T)`} onclick={onnew}>
 		<Icon name="plus" size={16} />
-	</button>
+	</Button>
 </div>
 
 <style>
@@ -154,32 +156,41 @@
 	.tab-title { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-xs); font-weight: 540; }
 	:global(.tab svg), :global(.tab .logo) { flex: none; }
 	.pane-count { flex: none; color: var(--text-faint); font-size: 10px; }
-	.tab-close {
+	:global(.tab-close) {
 		flex: none;
 		width: 18px;
+		min-width: 18px;
 		height: 18px;
+		min-height: 18px;
 		margin-right: 5px;
+		padding: 0;
 		display: grid;
 		place-items: center;
 		border-radius: 50%;
+		background: transparent;
 		color: var(--text-faint);
 		opacity: 0;
 	}
-	.tab-entry:hover .tab-close, .tab-close:focus-visible { opacity: 1; }
-	.tab-close:hover:not(:disabled) { background: var(--bg-inset); color: var(--text); }
-	.tab-close:disabled { cursor: not-allowed; }
-	.new-tab {
+	.tab-entry:hover :global(.tab-close),
+	:global(.tab-close:focus-visible) { opacity: 1; }
+	:global(.tab-close:hover:not(:disabled)) { background: var(--bg-inset); color: var(--text); }
+	:global(.tab-close:disabled) { cursor: not-allowed; }
+	:global(.environment-tabs-row .new-tab) {
 		flex: none;
 		width: 27px;
+		min-width: 27px;
 		height: 27px;
+		min-height: 27px;
 		margin-left: auto;
+		padding: 0;
 		display: grid;
 		place-items: center;
 		border: 1px solid transparent;
 		border-radius: 50%;
+		background: transparent;
 		color: var(--text-faint);
 	}
-	.new-tab:hover { background: var(--workspace-surface); border-color: var(--pane-edge); color: var(--text); }
+	:global(.environment-tabs-row .new-tab:hover) { background: var(--workspace-surface); border-color: var(--pane-edge); color: var(--text); }
 	@media (max-width: 620px) {
 		:global(.environment-tabs) { left: 0; transform: none; width: calc(100% - 40px); justify-content: flex-start; }
 		.tab-entry { flex-basis: 116px; }

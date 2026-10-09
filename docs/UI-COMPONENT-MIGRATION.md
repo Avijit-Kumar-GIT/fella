@@ -639,12 +639,26 @@ pre-edit static bundle and failed the new primitive assertion. After
 rebuilding, both focused journeys passed against the current bundle. The build
 reports the existing client-chunk advisory and adapter-static fallback notice.
 
+#### Slice 3ag: EnvironmentTabs actions
+
+Status: implemented.
+
+- Use shared icon Buttons for creating and closing environments.
+- Preserve the tab strip's compact targets, hover-revealed close affordance,
+  disabled close state during analysis, and existing selection behavior.
+
+Validation: `pnpm check`, `node --check tests/e2e/workspace-board.spec.mjs`,
+three focused browser tests, and `pnpm build` pass. They verify shared Button
+adoption, environment creation and closure, roving keyboard focus, and
+active-tab visibility in a long strip. The build reports the existing
+client-chunk advisory and adapter-static fallback notice.
+
 #### Remaining in Slice 3
 
 Standardize remaining feature actions and controls around shared primitives
 where they improve consistency without obscuring product behavior. Audit the
-EnvironmentTabs close/new actions, then perform the final duplicate-style and
-regression sweep. Keep native window controls, chart geometry, and
+remaining Fella-owned Titlebar actions, then perform the final duplicate-style
+and regression sweep. Keep native window controls, chart geometry, and
 workspace-board composition custom unless a shared primitive improves the
 interaction without changing its semantics.
 

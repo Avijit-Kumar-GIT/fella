@@ -510,6 +510,23 @@ test('environment tabs save different workspace arrangements without leaking pan
 	await expect(page.getByRole('article', { name: 'northwind-sales workspace' })).toHaveCount(0);
 });
 
+test('EnvironmentTabs close and new actions use shared Buttons', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+	const tabs = page.getByRole('tablist', { name: 'Environments' });
+	const newEnvironment = page.getByRole('button', { name: 'New environment' });
+	await expect(newEnvironment).toHaveAttribute('data-slot', 'button');
+	await newEnvironment.click();
+	await expect(tabs.getByRole('tab')).toHaveCount(2);
+
+	const closeEnvironment = tabs.locator('.tab-close').first();
+	await expect(closeEnvironment).toHaveAttribute('data-slot', 'button');
+	await closeEnvironment.hover();
+	await closeEnvironment.click();
+	await expect(tabs.getByRole('tab')).toHaveCount(1);
+	await expect(tabs.getByRole('tab')).toHaveAttribute('aria-selected', 'true');
+});
+
 test('environment tabs use shared roving focus for keyboard switching', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
