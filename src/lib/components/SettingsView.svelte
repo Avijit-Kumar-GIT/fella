@@ -214,16 +214,15 @@
 				<div class="provider-list">
 					<p class="section-label">Available providers</p>
 					{#each session.providers.filter((item) => item.auth === 'key') as item (item.id)}
-						<button
-							class="provider-row"
-							class:current={item.id === currentProvider}
-							type="button"
+						<Button
+							variant="ghost"
+							class={`provider-row${item.id === currentProvider ? ' current' : ''}`}
 							onclick={() => command(`/login ${item.id}`)}
 						>
 							<ProviderIcon providerId={item.id} size={16} />
 							<span>{item.display}</span>
 							<small>{item.id === currentProvider ? 'Current' : item.authed ? 'Connected' : 'Connect'}</small>
-						</button>
+						</Button>
 					{/each}
 				</div>
 			{/if}
@@ -250,15 +249,15 @@
 			</div>
 			<div class="appearance-list">
 				{#each appearances as option (option.id)}
-					<button
-						class="appearance-row"
-						class:selected={prefs.appearance === option.id}
-						type="button"
+					<Button
+						variant="ghost"
+						class={`appearance-row${prefs.appearance === option.id ? ' selected' : ''}`}
+						aria-pressed={prefs.appearance === option.id}
 						onclick={() => prefs.setAppearance(option.id)}
 					>
 						<span><strong>{option.label}</strong><small>{option.detail}</small></span>
 						{#if prefs.appearance === option.id}<Icon name="check" size={16} />{/if}
-					</button>
+					</Button>
 				{/each}
 			</div>
 		</section>
@@ -321,9 +320,9 @@
 					<h2 id="run-log-title">Run log</h2>
 					<p>Recent run timings and tool activity, kept on this computer. This is operational detail, not a correctness score.</p>
 				</div>
-				<button class="text-button refresh-log" type="button" disabled={runLogLoading} onclick={() => void refreshRunLog()}>
+				<Button variant="link" size="sm" class="text-button refresh-log" disabled={runLogLoading} onclick={() => void refreshRunLog()}>
 					<Icon name="refresh" size={16} /> {runLogLoading ? 'Refreshing' : 'Refresh'}
-				</button>
+				</Button>
 			</div>
 			<p class="run-log-note">Transcript and workspace contents aren’t copied into this view. Fella doesn’t transmit this log.</p>
 			{#if runLog.length > 0}
@@ -476,8 +475,8 @@
 		white-space: nowrap;
 	}
 	.current-row,
-	.provider-row,
-	.appearance-row {
+	.provider-list :global(.provider-row),
+	.appearance-list :global(.appearance-row) {
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
@@ -554,30 +553,37 @@
 	.section-label {
 		margin: var(--space-3) 0 var(--space-1);
 	}
-	.provider-row,
-	.appearance-row {
+	.provider-list :global(.provider-row),
+	.appearance-list :global(.appearance-row) {
 		width: 100%;
+		height: auto;
+		min-height: 0;
+		justify-content: space-between;
 		padding: 8px 0;
+		border-radius: 0;
+		background: transparent;
 		color: var(--text-dim);
 		text-align: left;
+		white-space: normal;
 	}
-	.provider-row + .provider-row,
-	.appearance-row + .appearance-row {
+	.provider-list :global(.provider-row + .provider-row),
+	.appearance-list :global(.appearance-row + .appearance-row) {
 		border-top: 1px solid var(--border);
 	}
-	.provider-row:hover,
-	.provider-row.current,
-	.appearance-row:hover,
-	.appearance-row.selected {
+	.provider-list :global(.provider-row:hover),
+	.provider-list :global(.provider-row.current),
+	.appearance-list :global(.appearance-row:hover),
+	.appearance-list :global(.appearance-row.selected) {
+		background: transparent;
 		color: var(--text);
 	}
-	.provider-row > :global(.provider-icon) {
+	.provider-list :global(.provider-row > .provider-icon) {
 		margin-right: 2px;
 	}
-	.provider-row span:not(:global(.provider-icon)) {
+	.provider-list :global(.provider-row span:not(.provider-icon)) {
 		flex: 1;
 	}
-	.provider-row small {
+	.provider-list :global(.provider-row small) {
 		color: var(--text-faint);
 		font-size: var(--fs-xs);
 	}
@@ -592,20 +598,20 @@
 	:global(.text-button:hover) {
 		text-decoration: underline;
 	}
-	.appearance-row > span {
+	.appearance-list :global(.appearance-row > span) {
 		display: flex;
 		flex-direction: column;
 		gap: 2px;
 	}
-	.appearance-row strong {
+	.appearance-list :global(.appearance-row strong) {
 		font-size: var(--fs-sm);
 		font-weight: 600;
 	}
-	.appearance-row small {
+	.appearance-list :global(.appearance-row small) {
 		color: var(--text-faint);
 		font-size: var(--fs-xs);
 	}
-	.appearance-row :global(svg:last-child) {
+	.appearance-list :global(.appearance-row svg:last-child) {
 		color: var(--text-dim);
 	}
 	.workspace-card code {
@@ -634,11 +640,11 @@
 		font-size: 10px;
 		font-variant-numeric: tabular-nums;
 	}
-	.refresh-log {
+	.run-log-card :global(.refresh-log) {
 		flex: none;
 		padding-top: 3px;
 	}
-	.refresh-log:disabled {
+	.run-log-card :global(.refresh-log:disabled) {
 		cursor: wait;
 		opacity: 0.55;
 	}

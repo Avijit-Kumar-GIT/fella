@@ -43,10 +43,11 @@ async function installDesktopMock(
 		reindexedCatalog = null,
 		chartEvidence = null,
 		detailEvidence = null,
+		providerList = [],
 		providerHealth = { reachable: true, rejected: false, models: ['gpt-4.1-mini'] }
 	} = {}
 ) {
-	await page.addInitScript(({ fixtureFolders, seedUnavailableConversation, replayStatus, replayStatusError, reindexedCatalog, chartEvidence, detailEvidence, providerHealth }) => {
+	await page.addInitScript(({ fixtureFolders, seedUnavailableConversation, replayStatus, replayStatusError, reindexedCatalog, chartEvidence, detailEvidence, providerList, providerHealth }) => {
 		const calls = [];
 		const archivedConversations = new Map();
 		const unavailablePath = 'C:\\FellaFixture\\unavailable-archive';
@@ -90,7 +91,7 @@ async function installDesktopMock(
 				switch (command) {
 					case 'app_ready': return 1;
 					case 'get_settings': return settings;
-					case 'list_providers': return [];
+					case 'list_providers': return providerList;
 					case 'provider_health': return providerHealth;
 					case 'get_catalog': return { workspace: null, sources: [] };
 					case 'last_workspace_path': return null;
@@ -162,7 +163,7 @@ async function installDesktopMock(
 			windowAction: async () => {},
 			pathForFile: () => ''
 		};
-	}, { fixtureFolders, seedUnavailableConversation, replayStatus, replayStatusError, reindexedCatalog, chartEvidence, detailEvidence, providerHealth });
+	}, { fixtureFolders, seedUnavailableConversation, replayStatus, replayStatusError, reindexedCatalog, chartEvidence, detailEvidence, providerList, providerHealth });
 }
 
 async function dispatchWorkspaceDrag(page, type, workspacePath, { x = 0.5, y = 0.5, existing = false } = {}) {
@@ -824,13 +825,30 @@ test('empty Sources action uses a shared button and opens the selected folder', 
 });
 
 test('Settings actions use shared buttons and folder selection still works', async ({ page }) => {
-	await installDesktopMock(page);
+	await installDesktopMock(page, {
+		providerList: [
+			{ id: 'openai', display: 'OpenAI', auth: 'key', base_url: 'https://api.openai.com/v1', get_key_url: '', embeddings: true, authed: true, current: true },
+			{ id: 'anthropic', display: 'Anthropic', auth: 'key', base_url: 'https://api.anthropic.com', get_key_url: '', embeddings: false, authed: false, current: false }
+		]
+	});
 	await page.goto('/');
 	await page.getByRole('button', { name: 'Settings' }).click();
 
-	for (const name of ['Change', 'Choose', 'Privacy and security', 'Refresh connection status', 'Choose a folder']) {
+	for (const name of ['Change', 'Choose', 'Privacy and security', 'Refresh connection status', 'Choose a folder', 'Refresh']) {
 		await expect(page.getByRole('button', { name, exact: true })).toHaveAttribute('data-slot', 'button');
 	}
+	const providers = page.locator('.provider-row');
+	await expect(providers).toHaveCount(2);
+	for (const provider of await providers.all()) await expect(provider).toHaveAttribute('data-slot', 'button');
+	await expect(page.getByRole('button', { name: 'Anthropic Connect' })).toHaveAttribute('data-slot', 'button');
+	const appearance = page.locator('.appearance-row');
+	await expect(appearance).toHaveCount(3);
+	for (const option of await appearance.all()) await expect(option).toHaveAttribute('data-slot', 'button');
+	const darkAppearance = appearance.filter({ hasText: 'Dark' });
+	await expect(darkAppearance).toHaveAttribute('aria-pressed', 'false');
+	await darkAppearance.click();
+	await expect(darkAppearance).toHaveAttribute('aria-pressed', 'true');
+	await expect(page.locator('html')).toHaveAttribute('data-appearance', 'dark');
 
 	await page.getByRole('button', { name: 'Choose a folder' }).click();
 	await expect.poll(() => page.evaluate(() => window.__workspaceOpenCalls)).toContain(folders[0].path);
