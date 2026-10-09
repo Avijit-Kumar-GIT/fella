@@ -479,6 +479,20 @@ the page reset after filtering, and existing 105-file pagination boundaries.
 The build reports a 504.90 KB client chunk above Vite's 500 KB advisory and
 the adapter-static fallback-page notice.
 
+#### Slice 3w: Companion snapshot recovery
+
+Status: implemented.
+
+- Use a shared outline Button for reopening a source preview against the
+  current catalog snapshot, preserving the stale-snapshot recovery behavior.
+
+Validation: `pnpm check` reports zero errors and warnings,
+`node --check tests/e2e/workspace-board.spec.mjs`, the focused companion
+recovery browser test, and `pnpm build` succeed. The test reindexes to a newer
+revision, confirms the stale-snapshot notice and shared Button, then reopens
+the current source version. The build reports a 505.02 KB client chunk above
+Vite's 500 KB advisory and the adapter-static fallback-page notice.
+
 #### Remaining in Slice 3
 
 Standardize remaining feature actions and controls around shared primitives

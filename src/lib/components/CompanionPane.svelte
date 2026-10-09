@@ -104,12 +104,12 @@
 				{:else if freshness === 'different-revision'}
 					<p class="snapshot-note">The workspace changed after this preview was opened. Reopen the current source to inspect the new snapshot.</p>
 					{#if source}
-						<button class="reopen" type="button" onclick={reopenCurrentSource}>Open current version</button>
+						<Button variant="outline" size="sm" class="reopen" onclick={reopenCurrentSource}>Open current version</Button>
 					{/if}
 				{:else if freshness === 'unknown'}
 					<p class="snapshot-note">The saved snapshot cannot be confirmed. Open the current source to inspect the mounted version.</p>
 					{#if source}
-						<button class="reopen" type="button" onclick={reopenCurrentSource}>Open current version</button>
+						<Button variant="outline" size="sm" class="reopen" onclick={reopenCurrentSource}>Open current version</Button>
 					{/if}
 				{:else if !source}
 				<p class="snapshot-note">This source is no longer in the mounted folder.</p>
@@ -206,15 +206,15 @@
 		font-size: var(--fs-sm);
 		line-height: 1.5;
 	}
-	.reopen {
+	:global(.reopen) {
+		height: auto;
+		min-height: 0;
 		padding: 6px 10px;
-		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
-		color: var(--text);
 		font-size: var(--fs-sm);
 		font-weight: 600;
 	}
-	.reopen:hover { background: var(--bg-inset); }
+	:global(.reopen:hover) { background: var(--bg-inset); }
 	.empty { color: var(--text-faint); font-size: var(--fs-sm); line-height: 1.5; }
 	.back-label { display: none; }
 	@media (max-width: 860px) {

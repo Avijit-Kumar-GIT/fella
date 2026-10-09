@@ -39,10 +39,11 @@ async function installDesktopMock(
 		seedUnavailableConversation = false,
 		fixtureFolders = folders,
 		replayStatus = null,
-		replayStatusError = false
+		replayStatusError = false,
+		reindexedCatalog = null
 	} = {}
 ) {
-	await page.addInitScript(({ fixtureFolders, seedUnavailableConversation, replayStatus, replayStatusError }) => {
+	await page.addInitScript(({ fixtureFolders, seedUnavailableConversation, replayStatus, replayStatusError, reindexedCatalog }) => {
 		const calls = [];
 		const archivedConversations = new Map();
 		const unavailablePath = 'C:\\FellaFixture\\unavailable-archive';
@@ -120,6 +121,7 @@ async function installDesktopMock(
 						window.__replayStatusCalls += 1;
 						if (replayStatusError) throw new Error('Replay lookup unavailable.');
 						return replayStatus;
+					case 'reindex': return reindexedCatalog;
 					case 'run_log_recent': return [];
 					default: return null;
 				}
@@ -153,7 +155,7 @@ async function installDesktopMock(
 			windowAction: async () => {},
 			pathForFile: () => ''
 		};
-	}, { fixtureFolders, seedUnavailableConversation, replayStatus, replayStatusError });
+	}, { fixtureFolders, seedUnavailableConversation, replayStatus, replayStatusError, reindexedCatalog });
 }
 
 async function dispatchWorkspaceDrag(page, type, workspacePath, { x = 0.5, y = 0.5, existing = false } = {}) {
@@ -983,6 +985,27 @@ test('Sources open-beside action uses the shared button and preserves conversati
 	await expect(companion.getByRole('heading', { name: 'sales.csv' })).toBeVisible();
 	await expect(companion).toContainText('Preview only · this file is not added to the conversation context.');
 	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
+});
+
+test('Companion snapshot recovery uses a shared button and reopens the current source version', async ({ page }) => {
+	await installDesktopMock(page, {
+		reindexedCatalog: { ...folders[0].catalog, revision: 'sales-r2' }
+	});
+	await page.goto('/');
+	await page.getByRole('button', { name: 'Add repository' }).click();
+	await page.getByRole('button', { name: 'Open sources in northwind-sales' }).click();
+	await page.getByRole('button', { name: 'Open source preview beside the active conversation' }).click();
+
+	const companion = page.getByRole('complementary', { name: 'Companion pane' });
+	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill('/reindex');
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(companion).toContainText('The workspace changed after this preview was opened.');
+
+	const reopen = companion.getByRole('button', { name: 'Open current version' });
+	await expect(reopen).toHaveAttribute('data-slot', 'button');
+	await reopen.click();
+	await expect(companion).not.toContainText('The workspace changed after this preview was opened.');
+	await expect(companion).toContainText('Preview only · this file is not added to the conversation context.');
 });
 
 test('Suggested follow-ups use shared link buttons and submit the selected question', async ({ page }) => {
