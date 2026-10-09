@@ -227,6 +227,23 @@ focus, the empty result state, and filtering back to the available model.
 The build reports a 501.69 KB client chunk above Vite's 500 KB advisory and
 the adapter-static fallback-page notice.
 
+#### Slice 3f: Sidebar navigation actions
+
+Status: implemented.
+
+- Use the shared ghost Button for Ask, Search, and Settings while preserving
+  the Sidebar's compact row dimensions, labels, shortcut behavior, and active
+  Settings state.
+- Keep icon-only and workspace-specific actions feature-owned for their
+  distinct hit areas and hover behavior.
+
+Validation: `pnpm check`, `node --check tests/e2e/workspace-board.spec.mjs`,
+the focused Sidebar navigation browser test, and `pnpm build` succeed. The
+test verifies shared Button usage, compact row height, Search keyboard access
+and focus restoration, and the active Settings marker. The build reports a
+501.97 KB client chunk above Vite's 500 KB advisory and the adapter-static
+fallback-page notice.
+
 #### Remaining in Slice 3
 
 Standardize the remaining Composer and Sidebar controls around shared

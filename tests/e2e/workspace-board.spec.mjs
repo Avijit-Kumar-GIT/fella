@@ -581,3 +581,29 @@ test('shared workspace tabs and modal/menu primitives preserve keyboard interact
 	await expect(menuItem).toHaveCount(0);
 	await expect(priorRepository.getByRole('button', { name: 'Repository actions' })).toBeFocused();
 });
+
+test('Sidebar navigation actions use shared buttons and retain compact keyboard access', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+	const newConversation = page.getByRole('button', { name: 'New conversation' });
+	const search = page.getByRole('button', { name: 'Search' });
+	const settings = page.getByRole('button', { name: 'Settings' });
+
+	for (const action of [newConversation, search, settings]) {
+		await expect(action).toHaveAttribute('data-slot', 'button');
+		const bounds = await action.boundingBox();
+		expect(bounds).not.toBeNull();
+		expect(bounds.height).toBeLessThanOrEqual(32);
+	}
+
+	await search.focus();
+	await page.keyboard.press('Control+k');
+	const palette = page.getByRole('dialog', { name: 'Search Fella' });
+	await expect(palette).toBeVisible();
+	await page.keyboard.press('Escape');
+	await expect(palette).toHaveCount(0);
+	await expect(search).toBeFocused();
+
+	await settings.click();
+	await expect(settings).toHaveAttribute('aria-current', 'page');
+});

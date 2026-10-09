@@ -2,6 +2,7 @@
 	import { ipc, isDesktop } from '$lib/ipc';
 	import { errMsg, openConversation, openFolder, openRepository } from '$lib/commands';
 	import { GENERAL_WORKSPACE_ID, session } from '$lib/session.svelte';
+	import { Button } from '$lib/components/ui/button';
 	import { DropdownMenu } from '$lib/components/ui/dropdown-menu';
 	import { Tooltip } from '$lib/components/ui/tooltip';
 	import type { ConversationSummary } from '$lib/types';
@@ -227,7 +228,8 @@
 	</div>
 	<nav class="nav-section" aria-label="General">
 		<div class="nav-heading">General</div>
-		<button
+		<Button
+			variant="ghost"
 			class="nav-row"
 			title={`New conversation (${shortcutModifier}+Shift+A)`}
 			aria-label="New conversation"
@@ -237,8 +239,9 @@
 		>
 			<Icon name="ask" size={16} />
 			<span>Ask</span>
-		</button>
-		<button
+		</Button>
+		<Button
+			variant="ghost"
 			class="nav-row"
 			type="button"
 			title={`Search (${shortcutModifier}+K)`}
@@ -248,7 +251,7 @@
 		>
 			<Icon name="search" size={16} />
 			<span>Search</span>
-		</button>
+		</Button>
 	</nav>
 	<section class="repository-section" aria-labelledby="repositories-heading">
 		<div class="section-head">
@@ -437,19 +440,19 @@
 		</div>
 	</section>
 	<div class="sidebar-footer">
-		<button
-			class="nav-row settings-row"
+		<Button
+			variant="ghost"
+			class={`nav-row settings-row${session.workspaceView === 'settings' ? ' active' : ''}`}
 			title={`Settings (${shortcutModifier}+,)`}
 			aria-label="Settings"
 			aria-keyshortcuts="Control+Comma Meta+Comma"
-			class:active={session.workspaceView === 'settings'}
 			type="button"
 			aria-current={session.workspaceView === 'settings' ? 'page' : undefined}
 			onclick={() => session.setWorkspaceView('settings')}
 		>
 			<Icon name="settings" size={16} />
 			<span>Settings</span>
-		</button>
+		</Button>
 	</div>
 </aside>
 
@@ -733,12 +736,13 @@
 		font-weight: 650;
 		letter-spacing: 0.01em;
 	}
-	.nav-row {
+	.sidebar :global(.nav-row) {
 		position: relative;
 		width: 100%;
 		display: flex;
 		align-items: center;
 		gap: var(--space-2);
+		height: auto;
 		min-height: 28px;
 		padding: 4px var(--space-2);
 		border-radius: var(--radius-sm);
@@ -748,16 +752,16 @@
 		white-space: nowrap;
 		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 	}
-	.nav-row:hover:not(:disabled) {
+	.sidebar :global(.nav-row:hover:not(:disabled)) {
 		background: var(--sidebar-hover);
 		color: var(--text);
 	}
-	.nav-row.active {
+	.sidebar :global(.nav-row.active) {
 		background: var(--sidebar-selected);
 		color: var(--text);
 		font-weight: 500;
 	}
-	.nav-row:disabled {
+	.sidebar :global(.nav-row:disabled) {
 		color: var(--border-strong);
 		cursor: default;
 	}
