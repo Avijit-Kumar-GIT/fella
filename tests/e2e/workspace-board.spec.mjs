@@ -796,7 +796,7 @@ test('Sidebar workspace tools use shared buttons and preserve source and project
 	await expect(page.getByRole('button', { name: 'Open project Sales review' })).toBeVisible();
 });
 
-test('Sidebar conversation actions use shared buttons, cancel rename, and delete history', async ({ page }) => {
+test('Sidebar conversation actions use shared buttons and Input, cancel rename, and delete history', async ({ page }) => {
 	await installDesktopMock(page, { seedUnavailableConversation: true });
 	await page.goto('/');
 	await page.getByRole('button', { name: 'Expand unavailable-archive' }).click();
@@ -822,6 +822,7 @@ test('Sidebar conversation actions use shared buttons, cancel rename, and delete
 
 	await rename.click();
 	const renameInput = page.getByRole('textbox', { name: 'Rename conversation' });
+	await expect(renameInput).toHaveAttribute('data-slot', 'input');
 	await expect(renameInput).toBeFocused();
 	await renameInput.fill('Unsaved title');
 	await page.keyboard.press('Escape');

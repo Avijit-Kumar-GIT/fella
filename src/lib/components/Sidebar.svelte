@@ -4,6 +4,7 @@
 	import { GENERAL_WORKSPACE_ID, session } from '$lib/session.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { DropdownMenu } from '$lib/components/ui/dropdown-menu';
+	import { Input } from '$lib/components/ui/input';
 	import { Tooltip } from '$lib/components/ui/tooltip';
 	import type { ConversationSummary } from '$lib/types';
 	import Icon from './Icon.svelte';
@@ -400,9 +401,9 @@
 							{#each repo.items as c (c.id)}
 								<div class="item-wrap">
 									{#if renamingId === c.id}
-										<input
+										<Input
 											class="rename-input"
-											bind:this={renameInput}
+											bind:ref={renameInput}
 											bind:value={renameValue}
 											onkeydown={(e) => {
 												if (e.key === 'Enter') commitRename(c);
@@ -839,16 +840,11 @@
 	.sidebar :global(.conversation-row.active .preview) {
 		color: var(--text);
 	}
-	.rename-input {
-		width: 100%;
-		padding: var(--space-2) var(--space-3);
-		border: 1px solid var(--border-strong);
+	:global(input.rename-input) {
+		min-height: 30px;
+		padding: 0 8px;
 		border-radius: var(--radius-chip);
-		background: var(--bg-raised);
-		color: var(--text);
-		font: inherit;
 		font-size: var(--fs-sm);
-		outline: none;
 	}
 	.row-actions {
 		position: absolute;

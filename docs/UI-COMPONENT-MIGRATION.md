@@ -711,10 +711,21 @@ Status: in progress.
   three native Electron minimize, maximize, and close controls.
 - No standalone `.pill` or `.rowbtn` control styles remain; `ref-pill` is a
   separate inline-reference treatment, not a duplicate button primitive.
-- Remaining candidates are Sidebar's conversation-rename input and native
-  disclosures in Settings, Chart, and Sources. Standardize those where the
-  shared Input and Collapsible preserve their current behavior, then run the
-  final desktop regression/theme sweep.
+- The remaining candidates are native disclosures in Settings, Chart, and
+  Sources. Standardize those where the shared Collapsible preserves current
+  behavior, then run the final desktop regression/theme sweep.
+
+#### Slice 4a: Sidebar conversation rename field
+
+Status: implemented.
+
+- Use the shared Input while keeping the Sidebar's compact row height and
+  existing focus, selection, Enter, Escape, and blur behavior.
+
+Validation: `pnpm check` reports zero errors and warnings, the workspace-board
+test file passes `node --check`, and the focused Sidebar browser test passes.
+It verifies the shared Input slot, initial focus, Escape cancellation, and
+conversation deletion.
 
 ## First-slice acceptance criteria
 
