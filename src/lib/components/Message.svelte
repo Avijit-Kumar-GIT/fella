@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { Answer, Message } from '$lib/types';
+	import { Button } from '$lib/components/ui/button';
 	import EvidenceBlock from './EvidenceBlock.svelte';
 	import EvidenceSummary from './EvidenceSummary.svelte';
 	import Chart from './Chart.svelte';
@@ -235,7 +236,9 @@
 			<div class="followups" aria-label="Suggested follow-up questions">
 				<span class="followup-label">Continue with</span>
 				{#each followups as next (next)}
-			<button type="button" onclick={() => onfollowup?.(next)}>{next}<Icon name="arrow-up-right" size={12} /></button>
+					<Button variant="link" size="sm" class="followup-action" onclick={() => onfollowup?.(next)}>
+						{next}<Icon name="arrow-up-right" size={12} />
+					</Button>
 				{/each}
 			</div>
 		{/if}
@@ -368,23 +371,24 @@
 		font-size: var(--fs-xs);
 		margin-right: 2px;
 	}
-	.followups button {
+	.followups :global(.followup-action) {
 		display: inline-flex;
 		align-items: center;
 		gap: 5px;
+		height: auto;
+		min-height: 0;
+		flex-shrink: 1;
 		padding: 0;
-		border: 0;
 		border-radius: 0;
-		color: var(--link);
-		background: transparent;
 		font-size: var(--fs-sm);
 		text-align: left;
+		white-space: normal;
 		transition: color var(--dur-fast) var(--ease);
 	}
-	.followups button:hover {
+	.followups :global(.followup-action:hover) {
 		color: var(--text);
-		text-decoration: underline;
 	}
+	.followups :global(.followup-action svg) { width: 12px; height: 12px; }
 	.clarification-transcript-note {
 		margin: 0;
 		color: var(--chat-meta);

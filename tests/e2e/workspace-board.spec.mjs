@@ -796,3 +796,19 @@ test('Sources open-beside action uses the shared button and preserves conversati
 	await expect(companion).toContainText('Preview only · this file is not added to the conversation context.');
 	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
 });
+
+test('Suggested follow-ups use shared link buttons and submit the selected question', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+	await page.getByRole('combobox', { name: 'Ask a question' }).fill('Summarize the workspace.');
+	await page.getByRole('button', { name: 'Send' }).click();
+
+	const firstAnswer = page.locator('.msg.assistant').last();
+	await expect(firstAnswer).toContainText('Scoped to general.');
+	const followup = firstAnswer.getByRole('button', { name: 'What else stands out?' });
+	await expect(followup).toHaveAttribute('data-slot', 'button');
+	await followup.click();
+
+	await expect(page.locator('.msg.user').last()).toContainText('What else stands out?');
+	await expect(page.locator('.msg.assistant').last()).toContainText('Scoped to general.');
+});

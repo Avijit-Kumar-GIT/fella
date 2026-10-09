@@ -361,6 +361,20 @@ that opening the preview does not change the active conversation scope. The
 build reports a 502.31 KB client chunk above Vite's 500 KB advisory and the
 adapter-static fallback-page notice.
 
+#### Slice 3o: Suggested follow-up actions
+
+Status: implemented.
+
+- Use the shared link Button for suggested follow-up questions, preserving the
+  understated inline treatment and direct question submission.
+
+Validation: `pnpm check`, `node --check tests/e2e/workspace-board.spec.mjs`,
+the focused suggested-follow-up browser test, and `pnpm build` succeed. The
+test verifies the shared link Button and confirms the selected follow-up
+appears as a new user turn followed by the mock response. The build reports a
+502.34 KB client chunk above Vite's 500 KB advisory and the adapter-static
+fallback-page notice.
+
 #### Remaining in Slice 3
 
 Standardize the remaining Composer and Sidebar controls around shared
