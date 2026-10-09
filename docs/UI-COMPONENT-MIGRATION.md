@@ -538,6 +538,26 @@ a shared Button and still dispatches the sign-in command. The build reports a
 505.36 KB client chunk above Vite's 500 KB advisory and the adapter-static
 fallback-page notice.
 
+#### Slice 3aa: Composer contextual actions
+
+Status: implemented.
+
+- Use shared Buttons for closing the source picker, adding/removing context
+  references, opening the provider settings view, and reopening an unavailable
+  workspace.
+- Preserve compact picker and reference geometry, existing accessible names,
+  and the unavailable-workspace state.
+
+Validation: `pnpm check` reports zero errors and warnings,
+`node --check tests/e2e/workspace-board.spec.mjs`, the focused Composer source,
+model, and history-only workspace browser tests, and `pnpm build` succeed. The
+first combined test run passed the two Composer tests; the history-only test
+locator was ambiguous between the workspace tile and the exact in-composer
+action, so it was scoped by exact accessible name and passed on rerun. One
+immediate rerun could not start Vite; process inspection showed no leftover
+server, and the next run passed. The build reports a 505.59 KB client chunk
+above Vite's 500 KB advisory and the adapter-static fallback-page notice.
+
 #### Remaining in Slice 3
 
 Standardize remaining feature actions and controls around shared primitives

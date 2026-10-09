@@ -376,7 +376,9 @@
 					placeholder="Find a source or field…"
 					spellcheck="false"
 				/>
-				<button type="button" aria-label="Close context picker" onclick={() => (contextOpen = false)}><Icon name="x" size={16} /></button>
+				<Button variant="ghost" size="icon" class="context-close" aria-label="Close context picker" onclick={() => (contextOpen = false)}>
+					<Icon name="x" size={16} />
+				</Button>
 			</div>
 			{#if contextSources.length}
 				<p class="context-heading">Sources</p>
@@ -497,7 +499,7 @@
 						? `The original folder for this conversation is unavailable. Reopen ${unavailableWorkspaceName} to continue.`
 						: `This workspace is closed. Reopen ${unavailableWorkspaceName} to continue.`}
 				</span>
-				<button type="button" onclick={() => void openRepository(unavailableWorkspacePath!, { reportFailure: true })}>Open workspace</button>
+				<Button variant="ghost" size="sm" class="workspace-reopen" onclick={() => void openRepository(unavailableWorkspacePath!, { reportFailure: true })}>Open workspace</Button>
 			</div>
 		{/if}
 		{#if !pendingInput}
@@ -506,19 +508,22 @@
 					<span class="ref-pill" title={ref.detail ?? ref.label}>
 							<Icon name={ref.kind === 'source' ? 'file' : 'table'} size={12} />
 						<span>{ref.label}</span>
-						<button type="button" aria-label={`Remove ${ref.label} from this question`} onclick={() => removeReference(ref)}><Icon name="x" size={12} /></button>
+						<Button variant="ghost" size="icon" class="remove-ref" aria-label={`Remove ${ref.label} from this question`} onclick={() => removeReference(ref)}>
+							<Icon name="x" size={12} />
+						</Button>
 					</span>
 				{/each}
-				<button
+				<Button
+					variant="ghost"
+					size="sm"
 					class="context-add"
-					type="button"
 					aria-label="Add a source or field to this question"
 					title="Add a source or field to this question"
 					aria-expanded={contextOpen}
 					onclick={() => { contextOpen = !contextOpen; modeOpen = false; modelOpen = false; modelQuery = ''; }}
 				>
 					<Icon name="plus" size={16} /> Add source{#if contextRefs.length} · {contextRefs.length}{/if}
-				</button>
+				</Button>
 			</div>
 		{/if}
 		<Textarea
@@ -629,9 +634,14 @@
 								{:else}
 									<p class="model-empty">No models available from {providerName}. Refresh the connection in Settings.</p>
 								{/if}
-								<button class="model-settings" type="button" onclick={() => { modelOpen = false; session.setWorkspaceView('settings'); }}>
-									<Icon name="settings" size={14} /> Provider settings
-								</button>
+									<Button
+										variant="ghost"
+										size="sm"
+										class="model-settings"
+										onclick={() => { modelOpen = false; session.setWorkspaceView('settings'); }}
+									>
+										<Icon name="settings" size={14} /> Provider settings
+								</Button>
 							</div>
 						{/if}
 					</div>
@@ -685,7 +695,9 @@
 	.workspace-unavailable-note span {
 		min-width: 0;
 	}
-	.workspace-unavailable-note button {
+	:global(.workspace-reopen) {
+		height: auto;
+		min-height: 0;
 		flex: none;
 		padding: 3px 8px;
 		border-radius: var(--radius-chip);
@@ -693,7 +705,8 @@
 		color: var(--text-dim);
 		font-size: var(--fs-xs);
 	}
-	.workspace-unavailable-note button:hover {
+	:global(.workspace-reopen:hover) {
+		background: var(--bg-inset);
 		color: var(--text);
 	}
 	.context-row {
@@ -728,31 +741,40 @@
 	.ref-pill :global(svg) {
 		color: var(--text-faint);
 	}
-	.ref-pill button {
+	.ref-pill :global(.remove-ref) {
 		display: grid;
 		place-items: center;
+		padding: 0;
 		width: 16px;
+		min-width: 16px;
 		height: 16px;
+		min-height: 16px;
 		border-radius: 3px;
 		color: var(--text-faint);
 	}
-	.ref-pill button:hover {
+	.ref-pill :global(.remove-ref:hover) {
 		background: var(--bg-inset);
 		color: var(--text);
 	}
-	.context-add {
+	.ref-pill :global(.remove-ref svg) {
+		width: 12px;
+		height: 12px;
+	}
+	:global(.context-add) {
 		display: inline-flex;
 		align-items: center;
 		gap: 5px;
 		flex: none;
+		height: auto;
+		min-height: 0;
 		padding: 3px 6px;
 		border-radius: var(--radius-chip);
 		color: var(--text-faint);
 		font-size: var(--fs-xs);
 		white-space: nowrap;
 	}
-	.context-add:hover,
-	.context-add[aria-expanded='true'] {
+	:global(.context-add:hover),
+	:global(.context-add[aria-expanded='true']) {
 		background: var(--bg-inset);
 		color: var(--text-dim);
 	}
@@ -951,19 +973,24 @@
 		color: var(--text-faint);
 		font-size: var(--fs-xs);
 	}
-	.model-settings {
+	:global(.model-settings) {
 		display: inline-flex;
 		align-items: center;
 		gap: 6px;
 		width: 100%;
+		height: auto;
+		min-height: 0;
 		margin-top: var(--space-2);
 		padding: var(--space-2);
+		border-radius: 0;
 		border-top: 1px solid var(--border);
 		color: var(--text-faint);
 		font-size: var(--fs-xs);
+		font-weight: 500;
 		text-align: left;
 	}
-	.model-settings:hover {
+	:global(.model-settings:hover) {
+		background: var(--bg-inset);
 		color: var(--text);
 	}
 	.context-menu {
@@ -1014,13 +1041,21 @@
 	.context-search :global(.context-search-input::placeholder) {
 		color: var(--text-faint);
 	}
-	.context-search > button {
+	.context-search :global(.context-close) {
 		display: grid;
 		place-items: center;
 		width: 20px;
+		min-width: 20px;
 		height: 20px;
+		min-height: 20px;
+		padding: 0;
+		border-radius: var(--radius-sm);
 		flex: none;
 		color: var(--text-faint);
+	}
+	.context-search :global(.context-close:hover) {
+		background: var(--bg-inset);
+		color: var(--text);
 	}
 	.context-heading {
 		margin: var(--space-3) var(--space-2) var(--space-1);

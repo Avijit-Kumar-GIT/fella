@@ -388,7 +388,14 @@ test('Composer source search filters and attaches a workspace source', async ({ 
 	await page.getByRole('button', { name: 'New conversation in northwind-sales' }).click();
 	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
 
-	await page.getByRole('button', { name: 'Add a source or field to this question' }).click();
+	const addSource = page.getByRole('button', { name: 'Add a source or field to this question' });
+	await expect(addSource).toHaveAttribute('data-slot', 'button');
+	await addSource.click();
+	const closePicker = page.getByRole('button', { name: 'Close context picker' });
+	await expect(closePicker).toHaveAttribute('data-slot', 'button');
+	await closePicker.click();
+	await expect(page.getByRole('textbox', { name: 'Find a source or field' })).toHaveCount(0);
+	await addSource.click();
 	const search = page.getByRole('textbox', { name: 'Find a source or field' });
 	await expect(search).toBeFocused();
 	await expect(search).toHaveClass(/fella-ui-input/);
@@ -396,7 +403,12 @@ test('Composer source search filters and attaches a workspace source', async ({ 
 	const source = page.locator('.context-main').filter({ hasText: 'sales.csv' });
 	await expect(source).toBeVisible();
 	await source.click();
-	await expect(page.locator('.ref-pill').filter({ hasText: 'sales.csv' })).toBeVisible();
+	const reference = page.locator('.ref-pill').filter({ hasText: 'sales.csv' });
+	await expect(reference).toBeVisible();
+	const removeReference = reference.getByRole('button', { name: 'Remove sales.csv from this question' });
+	await expect(removeReference).toHaveAttribute('data-slot', 'button');
+	await removeReference.click();
+	await expect(reference).toHaveCount(0);
 });
 
 test('Composer model search filters the available models', async ({ page }) => {
@@ -412,6 +424,10 @@ test('Composer model search filters the available models', async ({ page }) => {
 	await expect(page.getByText('No models available from openai.')).toBeVisible();
 	await search.fill('gpt-4.1-mini');
 	await expect(page.getByRole('option', { name: 'gpt-4.1-mini' })).toBeVisible();
+	const providerSettings = page.getByRole('button', { name: 'Provider settings' });
+	await expect(providerSettings).toHaveAttribute('data-slot', 'button');
+	await providerSettings.click();
+	await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();
 });
 
 test('Composer command completion uses shared buttons and keeps keyboard selection', async ({ page }) => {
@@ -572,7 +588,9 @@ test('a history-only workspace retries its folder mount and keeps history availa
 	await expect.poll(() => page.evaluate(() => window.__workspaceOpenCalls.length)).toBe(2);
 	await expect(page.getByText(/Its conversations remain in history only/)).toBeVisible();
 	await expect(workspace).toContainText('Saved result from this folder.');
-	await expect(page.getByRole('combobox', { name: 'Workspace unavailable: unavailable-archive' })).toBeDisabled();
+	const unavailableComposer = page.getByRole('combobox', { name: 'Workspace unavailable: unavailable-archive' });
+	await expect(unavailableComposer).toBeDisabled();
+	await expect(page.getByRole('button', { name: 'Open workspace', exact: true })).toHaveAttribute('data-slot', 'button');
 });
 
 test('shared workspace tabs and modal/menu primitives preserve keyboard interaction', async ({ page }) => {
