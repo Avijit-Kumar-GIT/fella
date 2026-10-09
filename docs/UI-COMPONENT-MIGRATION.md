@@ -99,8 +99,7 @@ focus management independently.
 
 ### Slice 1: foundation and first adoption
 
-Status: implementation landed. The final disabled-state visual check, dark-theme
-check, and keyboard smoke test remain for the desktop shell.
+Status: complete.
 
 - Add Tailwind v4 to the existing Vite pipeline without enabling Tailwind
   Preflight globally; Fella already has its own base styles.
@@ -109,11 +108,11 @@ check, and keyboard smoke test remain for the desktop shell.
 - Add the shared Button with a small, explicit variant/size API.
 - Migrate the Guide view's action buttons as the first consumer.
 
-Validation so far: `pnpm check` reports zero errors and warnings, `pnpm build`
-succeeds. An initial light-mode render confirmed the Button's placement in the
-Guide view; the later disabled-state contrast adjustment has not yet been
-re-rendered. Do not treat the remaining visual or keyboard checks as complete
-until they are verified in the app.
+Validation: `pnpm check` reports zero errors and warnings, `pnpm build`
+succeeds, and the Guide view was inspected in light and dark themes. A keyboard
+smoke test focused “Use a template,” pressed Enter, and confirmed the template
+appeared and Save became enabled. The browser smoke used temporary in-memory
+workspace state and did not write a guide file.
 
 ### Slice 2: interaction primitives
 
