@@ -3,6 +3,7 @@
 	import { errMsg, openConversation, openFolder, openRepository } from '$lib/commands';
 	import { GENERAL_WORKSPACE_ID, session } from '$lib/session.svelte';
 	import { Button } from '$lib/components/ui/button';
+	import { Dialog } from '$lib/components/ui/dialog';
 	import { DropdownMenu } from '$lib/components/ui/dropdown-menu';
 	import { Input } from '$lib/components/ui/input';
 	import { Tooltip } from '$lib/components/ui/tooltip';
@@ -39,6 +40,10 @@
 	let list = $state<ConversationSummary[]>([]);
 	let expandedRepos = $state<Record<string, boolean>>({});
 	let openRepositoryMenuKey = $state<string | null>(null);
+	let workspaceDeleteTarget = $state<Repository | null>(null);
+	let workspaceDeleteDialogOpen = $state(false);
+	let deletingWorkspace = $state(false);
+	let workspaceDeleteError = $state('');
 	const shortcutModifier =
 		typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform || navigator.userAgent)
 			? '⌘'
@@ -187,6 +192,48 @@
 
 	function hideRepository(repo: Repository): void {
 		if (repo.path && repo.path !== session.catalog.workspace) session.forgetRepository(repo.path);
+	}
+
+	function requestWorkspaceDelete(repo: Repository): void {
+		if (!repo.path) return;
+		workspaceDeleteTarget = repo;
+		workspaceDeleteError = '';
+		workspaceDeleteDialogOpen = true;
+	}
+
+	async function deleteWorkspaceAndConversations(): Promise<void> {
+		const target = workspaceDeleteTarget;
+		const path = target?.path;
+		if (!target || !path || deletingWorkspace) return;
+		deletingWorkspace = true;
+		workspaceDeleteError = '';
+		const deletedIds: string[] = [];
+		let prepared = false;
+		try {
+			prepared = await session.beginWorkspaceDeletion(path);
+			if (!prepared) throw new Error('This workspace is already being deleted or still has an active conversation.');
+
+			const archived = await ipc.conversationsList();
+			const ids = [...new Set(archived.filter((conversation) => conversation.workspace === path).map((conversation) => conversation.id))];
+			for (const id of ids) {
+				await ipc.deleteConversation(id);
+				deletedIds.push(id);
+			}
+
+			await session.deleteWorkspaceAndConversations(path);
+			list = list.filter((conversation) => conversation.workspace !== path);
+			workspaceDeleteDialogOpen = false;
+			workspaceDeleteTarget = null;
+		} catch (error) {
+			if (prepared) session.cancelWorkspaceDeletion(path);
+			for (const id of deletedIds) session.removeConversationWithoutArchiving(id);
+			try { list = await ipc.conversationsList(); } catch { /* retain the last-known sidebar history */ }
+			workspaceDeleteError = deletedIds.length
+				? `Deletion stopped after removing ${deletedIds.length} conversation${deletedIds.length === 1 ? '' : 's'}. Try again to remove the rest. ${errMsg(error)}`
+				: errMsg(error);
+		} finally {
+			deletingWorkspace = false;
+		}
 	}
 
 	let renamingId = $state<string | null>(null);
@@ -355,7 +402,7 @@
 									</Tooltip.Portal>
 								</Tooltip.Root>
 							{/if}
-							{#if repo.path && !repo.current && !repo.historyOnly}
+						{#if repo.path}
 								<DropdownMenu.Root
 									open={openRepositoryMenuKey === repo.key}
 									onOpenChange={(open) => setRepositoryMenuOpen(repo.key, open)}
@@ -365,9 +412,14 @@
 									</DropdownMenu.Trigger>
 									<DropdownMenu.Portal>
 										<DropdownMenu.Content class="fella-ui-menu-content" side="bottom" align="end" sideOffset={4}>
+										{#if !repo.current && !repo.historyOnly}
 											<DropdownMenu.Item class="fella-ui-menu-item" onSelect={() => hideRepository(repo)}>
 												Hide repository
 											</DropdownMenu.Item>
+										{/if}
+										<DropdownMenu.Item class="fella-ui-menu-item workspace-delete-menu-item" onSelect={() => requestWorkspaceDelete(repo)}>
+											Delete workspace and conversations
+										</DropdownMenu.Item>
 										</DropdownMenu.Content>
 									</DropdownMenu.Portal>
 								</DropdownMenu.Root>
@@ -502,7 +554,62 @@
 	</div>
 </aside>
 
+<Dialog.Root bind:open={workspaceDeleteDialogOpen}>
+	<Dialog.Portal>
+		<Dialog.Overlay class="fella-ui-dialog-overlay" />
+		<Dialog.Content class="fella-ui-dialog-content workspace-delete-dialog">
+			<div>
+				<Dialog.Title class="workspace-delete-title" level={2}>
+					Delete {workspaceDeleteTarget?.name ?? 'workspace'}?
+				</Dialog.Title>
+				<Dialog.Description class="workspace-delete-description">
+					This permanently removes the workspace and its saved conversations from Fella. The folder, files, and any project notes are kept.
+				</Dialog.Description>
+			</div>
+			{#if workspaceDeleteError}
+				<p class="workspace-delete-error" role="alert">{workspaceDeleteError}</p>
+			{/if}
+			<div class="workspace-delete-actions">
+				<Button variant="ghost" disabled={deletingWorkspace} onclick={() => { workspaceDeleteDialogOpen = false; }}>Cancel</Button>
+				<Button variant="destructive" disabled={deletingWorkspace} onclick={() => void deleteWorkspaceAndConversations()}>
+					{deletingWorkspace ? 'Deleting…' : 'Delete workspace and conversations'}
+				</Button>
+			</div>
+		</Dialog.Content>
+	</Dialog.Portal>
+</Dialog.Root>
+
 <style>
+	:global(.workspace-delete-dialog) {
+		width: min(420px, calc(100vw - 32px));
+		display: grid;
+		gap: 18px;
+		padding: 22px;
+	}
+	:global(.workspace-delete-title) {
+		margin: 0;
+		font-size: 18px;
+		font-weight: 650;
+		letter-spacing: -0.02em;
+	}
+	:global(.workspace-delete-description) {
+		display: block;
+		margin: 8px 0 0;
+		color: var(--text-dim);
+		font-size: var(--fs-sm);
+		line-height: 1.5;
+	}
+	.workspace-delete-error {
+		margin: 0;
+		color: var(--err);
+		font-size: var(--fs-sm);
+		line-height: 1.45;
+	}
+	.workspace-delete-actions {
+		display: flex;
+		justify-content: flex-end;
+		gap: var(--space-2);
+	}
 	.sidebar {
 		flex: none;
 		width: 248px;
@@ -745,6 +852,11 @@
 	.repository-actions :global(.repository-action svg) {
 		flex: none;
 		color: inherit;
+	}
+	:global(.workspace-delete-menu-item) { color: var(--err); }
+	:global(.fella-ui-menu-item.workspace-delete-menu-item[data-highlighted]) {
+		background: color-mix(in srgb, var(--err) 10%, transparent);
+		color: var(--err);
 	}
 	.repository-contents {
 		margin: 2px 4px 5px 4px;

@@ -38,6 +38,7 @@ async function installDesktopMock(
 	page,
 	{
 		seedUnavailableConversation = false,
+		seedDeletionConversations = false,
 		fixtureFolders = folders,
 		replayStatus = null,
 		replayStatusError = false,
@@ -49,9 +50,11 @@ async function installDesktopMock(
 		runLogEntries = []
 	} = {}
 ) {
-	await page.addInitScript(({ fixtureFolders, seedUnavailableConversation, replayStatus, replayStatusError, reindexedCatalog, chartEvidence, detailEvidence, providerList, providerHealth, runLogEntries }) => {
+	await page.addInitScript(({ fixtureFolders, seedUnavailableConversation, seedDeletionConversations, replayStatus, replayStatusError, reindexedCatalog, chartEvidence, detailEvidence, providerList, providerHealth, runLogEntries }) => {
 		const calls = [];
 		const archivedConversations = new Map();
+		const deletedConversationIds = [];
+		const deletedConversationWorkspaces = [];
 		const unavailablePath = 'C:\\FellaFixture\\unavailable-archive';
 		if (seedUnavailableConversation) {
 			const id = 'archived-unavailable-workspace';
@@ -76,6 +79,50 @@ async function installDesktopMock(
 				}
 			});
 		}
+		if (seedDeletionConversations) {
+			const anotherId = 'archived-unavailable-workspace-2';
+			const anotherSaved = {
+				id: anotherId,
+				workspace: unavailablePath,
+				title: null,
+				messages: [
+					{ id: 'archived-user-2', role: 'user', text: 'Review another saved analysis', ts: 3 },
+					{ id: 'archived-assistant-2', role: 'assistant', text: 'Another saved result.', ts: 4 }
+				]
+			};
+			archivedConversations.set(anotherId, {
+				saved: anotherSaved,
+				summary: {
+					id: anotherId,
+					saved_at_ms: 4,
+					workspace: unavailablePath,
+					preview: 'Review another saved analysis',
+					message_count: 2,
+					title: null
+				}
+			});
+			const unrelatedId = 'archived-northwind-sales';
+			const unrelatedSaved = {
+				id: unrelatedId,
+				workspace: fixtureFolders[0].path,
+				title: null,
+				messages: [
+					{ id: 'northwind-user', role: 'user', text: 'Summarize sales', ts: 5 },
+					{ id: 'northwind-assistant', role: 'assistant', text: 'Sales summary.', ts: 6 }
+				]
+			};
+			archivedConversations.set(unrelatedId, {
+				saved: unrelatedSaved,
+				summary: {
+					id: unrelatedId,
+					saved_at_ms: 6,
+					workspace: fixtureFolders[0].path,
+					preview: 'Summarize sales',
+					message_count: 2,
+					title: null
+				}
+			});
+		}
 		let pickerIndex = 0;
 		const settings = {
 			provider: 'openai',
@@ -87,6 +134,9 @@ async function installDesktopMock(
 		};
 		window.__workspaceAskCalls = calls;
 		window.__workspaceOpenCalls = [];
+		window.__deletedConversationIds = deletedConversationIds;
+		window.__deletedConversationWorkspaces = deletedConversationWorkspaces;
+		window.__remainingArchiveIds = () => [...archivedConversations.keys()];
 		window.__replayStatusCalls = 0;
 		window.fella = {
 			invoke: async (command, args = {}) => {
@@ -121,6 +171,14 @@ async function installDesktopMock(
 						const saved = archivedConversations.get(args.id)?.saved;
 						if (!saved) throw new Error(`Unknown archived conversation: ${args.id}`);
 						return JSON.stringify(saved);
+					}
+					case 'delete_conversation': {
+						const archived = archivedConversations.get(args.id);
+						if (!archived) throw new Error(`Unknown archived conversation: ${args.id}`);
+						deletedConversationWorkspaces.push({ id: args.id, workspace: archived.summary.workspace });
+						archivedConversations.delete(args.id);
+						deletedConversationIds.push(args.id);
+						return null;
 					}
 					case 'close_workspace': return null;
 					case 'analysis_turn_replay_status':
@@ -165,7 +223,7 @@ async function installDesktopMock(
 			windowAction: async () => {},
 			pathForFile: () => ''
 		};
-	}, { fixtureFolders, seedUnavailableConversation, replayStatus, replayStatusError, reindexedCatalog, chartEvidence, detailEvidence, providerList, providerHealth, runLogEntries });
+	}, { fixtureFolders, seedUnavailableConversation, seedDeletionConversations, replayStatus, replayStatusError, reindexedCatalog, chartEvidence, detailEvidence, providerList, providerHealth, runLogEntries });
 }
 
 async function dispatchWorkspaceDrag(page, type, workspacePath, { x = 0.5, y = 0.5, existing = false } = {}) {
@@ -669,6 +727,79 @@ test('a history-only workspace retries its folder mount and keeps history availa
 	const unavailableComposer = page.getByRole('combobox', { name: 'Workspace unavailable: unavailable-archive' });
 	await expect(unavailableComposer).toBeDisabled();
 	await expect(page.getByRole('button', { name: 'Open workspace', exact: true })).toHaveAttribute('data-slot', 'button');
+});
+
+test('deleting a history-only workspace confirms and removes all of its saved conversations and environment panes', async ({ page }) => {
+	await installDesktopMock(page, { seedUnavailableConversation: true, seedDeletionConversations: true });
+	await page.goto('/');
+
+	await page.getByRole('button', { name: 'Expand unavailable-archive' }).click();
+	await page.getByRole('button', { name: 'Open conversation: Summarize the unavailable archive' }).click();
+	await expect(page.getByRole('article', { name: 'unavailable-archive workspace' })).toBeVisible();
+
+	await page.locator('.sidebar .environment-switcher-trigger').click();
+	await page.getByRole('menuitem', { name: 'New environment' }).click();
+	const unavailableDisclosure = page.getByRole('button', { name: /^(Expand|Collapse) unavailable-archive$/ });
+	if (await unavailableDisclosure.getAttribute('aria-expanded') === 'false') await unavailableDisclosure.click();
+	await page.getByRole('button', { name: 'Open conversation: Summarize the unavailable archive' }).click();
+	await expect(page.getByRole('article', { name: 'unavailable-archive workspace' })).toBeVisible();
+
+	const repository = page.locator('.repository').filter({ hasText: 'unavailable-archive' });
+	await repository.hover();
+	await repository.getByRole('button', { name: 'Repository actions' }).click();
+	await page.getByRole('menuitem', { name: 'Delete workspace and conversations' }).click();
+	const dialog = page.getByRole('dialog', { name: 'Delete unavailable-archive?' });
+	await expect(dialog).toBeVisible();
+	await expect(dialog).toContainText('permanently removes');
+		await expect(dialog).toContainText('folder, files, and any project notes are kept');
+	await dialog.getByRole('button', { name: 'Cancel' }).click();
+	await expect(dialog).toHaveCount(0);
+	await expect(page.getByRole('article', { name: 'unavailable-archive workspace' })).toBeVisible();
+	expect(await page.evaluate(() => window.__deletedConversationIds)).toEqual([]);
+
+	await repository.hover();
+	await repository.getByRole('button', { name: 'Repository actions' }).click();
+	await page.getByRole('menuitem', { name: 'Delete workspace and conversations' }).click();
+	await dialog.getByRole('button', { name: 'Delete workspace and conversations' }).click();
+	await expect(dialog).toHaveCount(0);
+	await expect(page.getByRole('article', { name: 'unavailable-archive workspace' })).toHaveCount(0);
+	await expect(page.getByRole('button', { name: 'Expand unavailable-archive' })).toHaveCount(0);
+	const deletedHistory = await page.evaluate(() => window.__deletedConversationWorkspaces);
+	expect(deletedHistory.map(({ id }) => id)).toEqual(expect.arrayContaining([
+		'archived-unavailable-workspace',
+		'archived-unavailable-workspace-2'
+	]));
+	expect(deletedHistory.every(({ workspace }) => workspace === 'C:\\FellaFixture\\unavailable-archive')).toBe(true);
+	expect(await page.evaluate(() => [...window.__remainingArchiveIds()].sort())).toEqual(['archived-northwind-sales']);
+	const persistedEnvironments = await page.evaluate(() => JSON.parse(localStorage.getItem('fella:environments')));
+	expect(persistedEnvironments.environments).toHaveLength(2);
+	expect(persistedEnvironments.environments.flatMap((environment) => environment.panes).some((pane) => pane.workspaceId === 'C:\\FellaFixture\\unavailable-archive')).toBe(false);
+});
+
+test('a mounted workspace can be deleted with its saved conversations while its files are kept', async ({ page }) => {
+	await installDesktopMock(page, { seedUnavailableConversation: true, seedDeletionConversations: true });
+	await page.goto('/');
+	await page.getByRole('button', { name: 'Open workspace northwind-sales' }).click();
+	await expect(page.getByRole('article', { name: 'northwind-sales workspace' })).toBeVisible();
+
+	const repository = page.locator('.repository').filter({ hasText: 'northwind-sales' });
+	await repository.hover();
+	await repository.getByRole('button', { name: 'Repository actions' }).click();
+	await page.getByRole('menuitem', { name: 'Delete workspace and conversations' }).click();
+	const dialog = page.getByRole('dialog', { name: 'Delete northwind-sales?' });
+	await expect(dialog).toContainText('folder, files, and any project notes are kept');
+	await dialog.getByRole('button', { name: 'Delete workspace and conversations' }).click();
+
+	await expect(dialog).toHaveCount(0);
+	await expect(page.getByRole('article', { name: 'northwind-sales workspace' })).toHaveCount(0);
+	await expect(page.getByRole('button', { name: 'Open workspace northwind-sales' })).toHaveCount(0);
+	const deletedHistory = await page.evaluate(() => window.__deletedConversationWorkspaces);
+	expect(deletedHistory.map(({ id }) => id)).toContain('archived-northwind-sales');
+	expect(deletedHistory.every(({ workspace }) => workspace === 'C:\\FellaFixture\\northwind-sales')).toBe(true);
+	expect(await page.evaluate(() => [...window.__remainingArchiveIds()].sort())).toEqual([
+		'archived-unavailable-workspace',
+		'archived-unavailable-workspace-2'
+	].sort());
 });
 
 test('shared workspace tabs and modal/menu primitives preserve keyboard interaction', async ({ page }) => {

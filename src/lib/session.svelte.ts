@@ -468,6 +468,8 @@ export type WorkspaceView = 'ask' | 'workspace' | 'board' | 'settings' | 'projec
 export type WorkspacePane = 'sources' | 'context';
 
 class Session {
+	#deletingWorkspacePaths = new Set<string>();
+	#pendingArchivesByWorkspace = new Map<string, Set<Promise<void>>>();
 	catalog = $state<Catalog>({ workspace: null, sources: [] });
 	/** Live repository mounts shared by environments. Panes reference these IDs. */
 	workspaceWindows = $state<WorkspaceWindow[]>([]);
@@ -917,6 +919,84 @@ class Session {
 		this.#writeStringList(HISTORY_ONLY_REPOSITORIES_KEY, this.historyOnlyRepositoryPaths);
 	}
 
+	/** Prevent a workspace's live transcripts from being re-archived while its
+	 *  saved conversations are being deleted. Wait for any archive already in
+	 *  flight before the caller takes its final archive list. */
+	async beginWorkspaceDeletion(path: string): Promise<boolean> {
+		if (this.#deletingWorkspacePaths.has(path)) return false;
+		if (this.conversations.some((conversation) => conversation.workspaceScope === path && conversation.busy)) return false;
+		this.#deletingWorkspacePaths.add(path);
+		await Promise.all(this.#pendingArchivesByWorkspace.get(path) ?? []);
+		return true;
+	}
+
+	cancelWorkspaceDeletion(path: string): void {
+		this.#deletingWorkspacePaths.delete(path);
+	}
+
+	/** Remove a workspace from Fella and clear every pane/conversation reference
+	 *  after its archived conversations have been deleted from the backend. */
+	async deleteWorkspaceAndConversations(path: string): Promise<void> {
+		this.#deletingWorkspacePaths.delete(path);
+		const removed = this.conversations.filter((conversation) => conversation.workspaceScope === path);
+		const removedIds = new Set(removed.map((conversation) => conversation.id));
+		for (const conversation of removed) {
+			conversation.dropSnapshot();
+			if (isDesktop()) void ipc.forgetConversation(conversation.id).catch(() => {});
+		}
+		this.conversations = this.conversations.filter((conversation) => conversation.workspaceScope !== path);
+
+		for (const environment of this.environments) {
+			const panes = environment.panes.filter((pane) => pane.workspaceId !== path);
+			for (const pane of panes) {
+				if (!removedIds.has(pane.conversationId)) continue;
+				let replacement = this.conversations.findLast((conversation) => conversation.workspaceScope === pane.workspaceId);
+				if (!replacement) {
+					replacement = new Conversation();
+					replacement.model = this.model;
+					replacement.workspaceScope = pane.workspaceId;
+					this.conversations.push(replacement);
+				}
+				pane.conversationId = replacement.id;
+			}
+			if (!panes.length) {
+				let general = this.conversations.findLast((conversation) => conversation.workspaceScope === null);
+				if (!general) {
+					general = new Conversation();
+					general.model = this.model;
+					general.workspaceScope = null;
+					this.conversations.push(general);
+				}
+				const pane = { id: `${environment.id}:general`, workspaceId: null, conversationId: general.id };
+				panes.push(pane);
+			}
+			environment.panes = panes;
+			if (!panes.some((pane) => pane.id === environment.activePaneId)) environment.activePaneId = panes[0].id;
+		}
+
+		this.workspaceWindows = this.workspaceWindows.filter((workspace) => workspace.id !== path);
+		this.repositoryPaths = this.repositoryPaths.filter((repository) => repository !== path);
+		if (!this.hiddenRepositoryPaths.includes(path)) this.hiddenRepositoryPaths = [...this.hiddenRepositoryPaths, path];
+		this.historyOnlyRepositoryPaths = this.historyOnlyRepositoryPaths.filter((repository) => repository !== path);
+		this.#writeStringList(REPOSITORIES_KEY, this.repositoryPaths);
+		this.#writeStringList(HIDDEN_REPOSITORIES_KEY, this.hiddenRepositoryPaths);
+		this.#writeStringList(HISTORY_ONLY_REPOSITORIES_KEY, this.historyOnlyRepositoryPaths);
+
+		if (this.catalog.workspace === path) this.catalog = { workspace: null, sources: [] };
+		if (this.activeProject?.workspace === path) {
+			this.activeProjectId = null;
+			this.workspaceView = 'ask';
+		}
+		this.historyVersion++;
+		this.#writeIndex();
+		this.#writeWorkspaceState();
+		const activePane = this.activePane;
+		if (activePane) this.focusEnvironmentPane(activePane.id);
+		if (isDesktop()) {
+			try { await ipc.closeWorkspace(path); } catch (error) { console.warn('workspace close failed after deletion', error); }
+		}
+	}
+
 	get activeProject(): Project | null {
 		return this.projects.find((project) => project.id === this.activeProjectId) ?? null;
 	}
@@ -1346,6 +1426,7 @@ class Session {
 	 *  reflects the real conversation while it continues. */
 	persist(): void {
 		for (const conversation of this.conversations) {
+			if (conversation.workspaceScope && this.#deletingWorkspacePaths.has(conversation.workspaceScope)) continue;
 			conversation.persist();
 			if (!conversation.busy && conversation.messages.length > 0) void this.#archive(conversation);
 		}
@@ -1362,6 +1443,8 @@ class Session {
 
 	async #archive(conversation: Conversation): Promise<void> {
 		if (conversation.messages.length === 0 || !isDesktop()) return;
+		const workspace = conversation.workspaceScope;
+		if (workspace && this.#deletingWorkspacePaths.has(workspace)) return;
 		const body = JSON.stringify({
 			id: conversation.id,
 			saved_at_ms: Date.now(),
@@ -1370,12 +1453,24 @@ class Session {
 			title: conversation.title ?? undefined,
 			companionPane: conversation.companionPane
 		});
-		try {
-			await ipc.archiveConversation(conversation.id, body);
-			this.historyVersion++;
-		} catch (e) {
-			console.warn('archive failed', e);
+		const archive = (async () => {
+			try {
+				await ipc.archiveConversation(conversation.id, body);
+				this.historyVersion++;
+			} catch (e) {
+				console.warn('archive failed', e);
+			}
+		})();
+		if (workspace) {
+			const pending = this.#pendingArchivesByWorkspace.get(workspace) ?? new Set<Promise<void>>();
+			pending.add(archive);
+			this.#pendingArchivesByWorkspace.set(workspace, pending);
+			void archive.then(() => {
+				pending.delete(archive);
+				if (!pending.size) this.#pendingArchivesByWorkspace.delete(workspace);
+			});
 		}
+		await archive;
 	}
 
 	/** Returns true when the blob has been dealt with (archived, or not worth
