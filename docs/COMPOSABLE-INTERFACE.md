@@ -62,6 +62,21 @@ The active interaction coordinates are distinct:
 5. **Surface** — an optional chart, analysis detail, or source reference within
    the active conversation/workspace.
 
+## Product direction: catalog versus contextual source access
+
+The current app-level Sources view is a read-only catalog with filtering,
+metadata, skipped-file details, bounded table previews, and an action to open a
+source beside a conversation. The longer-term product direction is to move
+broad catalog, filesystem search, profiling, and preview work into the proposed
+Fella CLI, with FellaDB as its local search/index capability.
+
+This does not mean removing source access from analysis. A conversation should
+retain scoped source selection, evidence links, and previews tied to the exact
+source and revision that support a result. The CLI and workspace must share
+source identity and provenance without silently sharing or broadening access.
+This is a product direction, not a change to the current interface contract;
+see [`STACK-VISION.md`](STACK-VISION.md).
+
 Changing the environment or focused pane must not rewrite a conversation's
 workspace scope. A General question remains unbound; a repository question
 continues using only its owning repository.

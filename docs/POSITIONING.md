@@ -67,21 +67,24 @@ leadership. See the [FolderQA benchmark](../bench/fqa-bench/README.md).
 
 ## The longer-term possibility
 
-The current product is the analyst. Two separate directions could extend what
-users can do with it:
+The current product is the analyst. Two complementary directions could extend
+what users can do with it:
 
 - **Projects** are currently local, user-authored notes associated with a
   repository. The direction is to make them concise, evidence-backed briefs
   that curate useful findings and visualizations and link back to their source
   conversations.
-- **FellaDB** is a proposed optional companion for broader personal-file
-  search. It is not required by Fella and is not part of the shipped product.
+- **The Fella CLI** is a proposed analyst tool for search, catalog, profile,
+  preview, and read-only query. FellaDB is its proposed persistent local
+  filesystem search capability, not a separate companion app. Neither is part
+  of the shipped product.
 
 Together, these could help users find relevant files and preserve useful
 analysis without turning Fella into a dashboard builder or a general-purpose
 computer-control agent. The
-[roadmap](ROADMAP.md) and [FellaDB vision](FELLADB.md) describe the current
-boundaries.
+[roadmap](ROADMAP.md), [FellaDB and CLI vision](FELLADB.md), and
+[filesystem-to-analysis stack vision](STACK-VISION.md) describe the current
+boundaries and direction.
 
 ## Positioning boundaries
 
@@ -93,7 +96,8 @@ boundaries.
   option, but hosted providers receive the model requests and selected context
   needed for analysis.
 - Do not imply General searches the whole computer. Broad personal-file search
-  belongs to the proposed FellaDB direction, with explicit user-selected scope.
+  belongs to the proposed Fella CLI/FellaDB capability, with explicit
+  user-selected scope.
 - Do not present Projects as an automatically generated wiki today. They are
   currently user-authored local notes.
 - Do not imply enterprise deployment, governance, or broad correctness has

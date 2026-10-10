@@ -41,7 +41,10 @@ individual failed example into a special-case production rule.
    Keep generated updates reviewable and traceable; reserve dashboard-style
    views for stable, refreshable metrics. See
    [`COMPOSABLE-INTERFACE.md`](COMPOSABLE-INTERFACE.md) for the ownership model,
-   current limits, delivery stages, and completion criteria.
+   current limits, delivery stages, and completion criteria. The broader CLI /
+   FellaDB direction and the proposed move of catalog work out of the workspace
+   Sources view are recorded in [`STACK-VISION.md`](STACK-VISION.md); they are
+   not scheduled implementation work yet.
 7. **Standardize the desktop UI without flattening Fella's product surfaces.**
    Adopt shared shadcn-svelte components for repeated controls and Bits UI for
    interaction behavior, while keeping Fella's tokens, workspace composition,

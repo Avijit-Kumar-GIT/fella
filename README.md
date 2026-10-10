@@ -211,8 +211,10 @@ The Electron shell and its line-delimited JSON bridge are described in
 - [Product](docs/PRODUCT.md) — Fella's purpose, analyst loop, and boundaries
 - [Positioning](docs/POSITIONING.md) — investor narrative and product-claim
   boundaries
-- [FellaDB](docs/FELLADB.md) — exploratory vision for an optional
-  personal-files companion
+- [FellaDB and CLI](docs/FELLADB.md) — exploratory vision for CLI-based
+  filesystem search and analyst tooling
+- [Stack vision](docs/STACK-VISION.md) — proposed path from files through
+  model-driven analysis to reusable project knowledge
 - [Architecture](docs/ARCHITECTURE.md) — the Electron shell and Rust analytics runtime
 - [Roadmap](docs/ROADMAP.md) — current quality priorities and deferred work
 - [Development](docs/DEVELOPMENT.md) — setup and contributor conventions

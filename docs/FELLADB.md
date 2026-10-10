@@ -1,74 +1,78 @@
-# FellaDB
+# FellaDB and the Fella CLI
 
-FellaDB is a proposed optional companion app for personal filesystem search.
-It gives Fella's General conversations an explicit way to find and ask about
-files beyond a repository workspace, while leaving Fella's analytics harness
-and its current workspace tools intact.
+FellaDB is a proposed persistent filesystem search capability within a
+Fella-provided CLI, not a separate companion app. The CLI is the analyst-facing
+surface for file search and operations such as catalog, profile, preview, and
+read-only query. This is product direction, not shipped behavior.
 
-This is product direction, not shipped behavior. Fella works fully without
-FellaDB.
+The full product direction, including the analysis workspace, Projects, source
+scope, and the proposed role of the desktop Sources view, is recorded in
+[`STACK-VISION.md`](STACK-VISION.md).
 
 ## Product boundary
 
-FellaDB owns broad personal-file discovery, indexing, and search. Fella remains
-the conversational analytics app. When FellaDB is installed, Fella can use it
-from General to search the user's selected personal-file scope and ground an
-answer in the returned files. Fella can also open the FellaDB app when the user
-wants to manage that scope or its index.
+FellaDB owns the local index/search capability for user-selected personal-file
+locations. It is not a second SQL engine, a full file manager, or a separate
+desktop application. Fella's existing catalog and analytics engine remain
+responsible for supported-format ingestion, profiles, previews, and analysis.
 
-FellaDB is separate from repository workspaces. A General conversation may use
-personal files only when the user explicitly selects that scope. It must not
-inherit the currently focused repository, add personal files to a repository
-catalog, or change the workspace identity of the conversation. Repository
-workspaces continue using Fella's existing catalog and analysis tools.
+The initial search-engine direction is FFF for path, filename, and content
+search. Do not create a competing search index when FFF can provide that
+capability. Embeddings are not required for the initial product; any future
+semantic search would be optional and additive.
 
-The initial search-engine direction is FFF only. FellaDB should use FFF for
-file-name, path, and content search rather than maintaining a competing search
-engine. Embeddings are not required for the initial product to work; any future
-semantic layer would be optional and additive to FFF.
+## CLI capabilities
 
-## Companion discovery and use
+The proposed command surface should help analysts:
 
-Fella should detect an installed FellaDB through a stable installation
-location or registration shared by the FellaDB and Fella installers. Users
-should not have to configure an executable path, edit `PATH`, or manually
-connect the apps. If FellaDB is absent or incompatible, General remains
-available and can explain how to install or update the companion.
+- search selected locations by path, name, and content;
+- catalog supported, skipped, excluded, and inaccessible files;
+- profile data shape and quality;
+- preview a bounded sample;
+- query an explicitly selected analysis scope with read-only SQL.
 
-Fella should communicate with FellaDB through a narrow local interface for
-availability, scope status, search, and source excerpts. FellaDB owns its index
-and indexing lifecycle. Fella may launch or connect to its search process when
-needed, and open its UI for library management; ordinary questions should not
-require the user to switch apps. The exact process model, IPC transport,
-installer ownership, and version-compatibility policy remain implementation
-decisions.
+These are read-oriented analyst tools, not permission to rewrite or reorganize
+the user's source files. Any export or derived-file creation should be a
+separate, explicit operation. Command names and exact output formats are not
+decided.
 
-## Scope, privacy, and evidence
+The CLI should provide both human-readable output and a stable structured
+interface for scripts and desktop integration. Fella's UI must consume typed
+data through a shared core or local interface, not parse terminal-formatted
+text. Whether the CLI and desktop share an in-process Rust library or a local
+service remains open.
 
-- The user chooses the locations FellaDB can search. Selected folders are the
-  starting point; whole-disk search is a deliberate expansion, not a default.
-- Finding the companion must not silently grant filesystem access. FellaDB
-  reports the locations and file types indexed, exclusions, inaccessible
-  areas, and whether the initial scan or updates are still in progress.
-- Search is read-only. Fella receives ranked matches with paths and relevant
-  excerpts, then cites those sources in its General answer. It should not imply
-  that files were searched when their contents were not indexed or accessible.
-- The index stays on the user's device. Local indexing does not make model
-  inference local: excerpts sent from Fella to the user's selected model
-  provider are subject to Fella's existing provider data flow and must be
-  disclosed as such.
-- FellaDB's local library, index, and scope are separate from Fella's
-  repository-scoped catalog, memory, and analysis history.
+## Explicit scope and privacy
 
-## Longer-term direction
+- **Personal library:** the user selects locations for broad discovery. Whole-
+  disk search is opt-in, not the default. The CLI can search this scope; the
+  desktop may explicitly use it for a General conversation.
+- **Analysis workspace:** the user deliberately selects the folder or sources
+  that can be profiled and queried.
+- General remains unbound when it uses a selected personal-library scope: it
+  does not inherit the focused repository or alter that repository's catalog,
+  memory, or analysis history.
+- A search result does not silently become an analysis-workspace source. The
+  user explicitly hands it off when they want to analyze it in a repository
+  workspace.
+- Search and indexing do not grant access to unselected paths. The CLI should
+  report indexed locations, exclusions, unsupported files, inaccessible
+  areas, and index freshness.
+- Local indexing does not make model inference local. A hosted model provider
+  may receive the question and relevant excerpts or analytical results used in
+  an answer, under Fella's existing provider data flow.
+- The personal library remains distinct from repository workspace catalogs,
+  context, memory, and analysis history.
 
-FellaDB may later provide search and read primitives to Fella's existing
-filesystem exploration tools. That would be an implementation option, not a
-prerequisite for the companion or a reason to replace Fella's catalog, SQL,
-Python, or analytical runtime now. Any such integration must preserve explicit
-scope and source provenance.
+## Not shipped and open work
 
-Before implementation, validate FFF for the intended personal-file scopes and
-platforms, including whole-disk access, indexing coverage, resource use, and
-packaged-app discovery. The first supported operating systems, default
-exclusions, update channel, and any semantic-search need are not decided here.
+Fella currently has no user-facing analyst CLI. The Rust sidecar is launched
+by the Electron application using its JSON-lines protocol. The desktop Sources
+view is a read-only catalog and preview surface; it is not FellaDB or a
+general filesystem search tool. Fella works without this proposed CLI
+capability.
+
+Before implementation, validate FFF coverage, resource use, exclusions, and
+packaged behavior on supported operating systems. Define installation and
+desktop discovery, index lifecycle, multiple-location behavior, stable source
+identities, and the boundary between search results and analysis workspaces.

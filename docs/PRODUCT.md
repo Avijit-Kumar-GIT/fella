@@ -51,9 +51,10 @@ search, clarification, conversation continuity, and inspectable analysis
 details are part of the same conversation flow.
 
 Web research is **not shipped** and remains on the backburner. Fella does not
-silently send workspace contents to web search. Fella is not a coding agent,
-file manager, shell automation tool, notebook, or general-purpose multi-agent
-orchestrator. See [Architecture](ARCHITECTURE.md) for the implementation and
-[Roadmap](ROADMAP.md) for the current open work. [FellaDB](FELLADB.md) describes
-an exploratory direction for an optional personal-files companion; it is not
-part of the current shipped scope.
+silently send workspace contents to web search. The desktop app is not a
+general-purpose file manager, shell automation tool, notebook, or multi-agent
+orchestrator. A read-oriented analyst CLI, with FellaDB as its proposed local
+filesystem search capability, is an exploratory direction and is not shipped.
+See [Architecture](ARCHITECTURE.md) for the current implementation,
+[Roadmap](ROADMAP.md) for open work, and [Stack vision](STACK-VISION.md) for
+the proposed path from files to reusable project knowledge.
