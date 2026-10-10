@@ -45,6 +45,16 @@
 		return conversation?.title?.trim() || firstActualQuestion(conversation?.messages ?? [])?.text.trim() || 'Start a conversation';
 	}
 
+	function workspaceAnswerPreview(paneId: string): string {
+		const pane = session.paneAt(paneId);
+		const conversation = pane && session.conversations.find((item) => item.id === pane.conversationId);
+		const answer = conversation?.messages.findLast(
+			(message) => message.role === 'assistant' && !!message.text.trim() && !message.pending
+		)?.text.trim();
+		if (!answer) return '';
+		return answer.length > 240 ? `${answer.slice(0, 237).trimEnd()}…` : answer;
+	}
+
 	function gridPlacement(rect: { x: number; y: number; width: number; height: number }): string {
 		const column = Math.round(rect.x * 4) + 1;
 		const row = Math.round(rect.y * 4) + 1;
@@ -203,15 +213,19 @@
 							{#if session.activeChat.companionPane}<CompanionPane />{/if}
 						</div>
 					{:else}
+						{@const answerPreview = workspaceAnswerPreview(pane.id)}
 						<Button
 							variant="ghost"
 							class="tile-preview"
 							title={workspacePreview(pane.id)}
-							aria-label={`Focus ${workspaceName(pane.id)}: ${workspacePreview(pane.id)}`}
+							aria-label={`Focus ${workspaceName(pane.id)}: ${workspacePreview(pane.id)}${
+								answerPreview ? `. Latest reply: ${answerPreview}` : ''
+							}`}
 							onclick={() => session.focusEnvironmentPane(pane.id)}
 						>
 							<span class="preview-label">Recent conversation</span>
 							<strong>{workspacePreview(pane.id)}</strong>
+							{#if answerPreview}<span class="preview-answer">{answerPreview}</span>{/if}
 						</Button>
 					{/if}
 				</article>
@@ -268,10 +282,13 @@
 		border-radius: var(--radius-window);
 		background: var(--pane-surface);
 		box-shadow: none;
-		transition: border-color 120ms ease, background 120ms ease;
+		transition: border-color 150ms ease, background-color 150ms ease;
+	}
+	.workspace-tile:not(.focused) {
+		background: color-mix(in srgb, var(--pane-surface) 82%, transparent);
 	}
 	.workspace-tile.focused {
-		border-color: var(--pane-edge-active);
+		border: 2px solid var(--brand);
 		background: var(--pane-surface);
 	}
 	.tile-head {
@@ -288,6 +305,9 @@
 	}
 	.workspace-tile.focused .tile-head {
 		background: var(--pane-head);
+	}
+	.workspace-tile:not(.focused) .tile-head {
+		background: color-mix(in srgb, var(--pane-head) 82%, transparent);
 	}
 	.tile-head:active { cursor: grabbing; }
 	.tile-head :global(.tile-focus) {
@@ -347,6 +367,17 @@
 	.workspace-tile :global(.tile-preview:hover) { background: color-mix(in srgb, var(--bg-inset) 36%, transparent); color: var(--text-dim); }
 	.workspace-tile :global(.tile-preview .preview-label) { color: var(--text-faint); font-size: var(--fs-xs); }
 	.workspace-tile :global(.tile-preview strong) { width: 100%; overflow: hidden; color: var(--text-dim); font-size: var(--fs-sm); font-weight: 520; line-height: 1.5; text-overflow: ellipsis; }
+	.workspace-tile :global(.tile-preview .preview-answer) {
+		display: -webkit-box;
+		width: 100%;
+		overflow: hidden;
+		color: var(--text-dim);
+		font-size: var(--fs-sm);
+		line-height: 1.5;
+		line-clamp: 3;
+		-webkit-box-orient: vertical;
+		-webkit-line-clamp: 3;
+	}
 	.empty-board { display: grid; justify-items: center; padding: 24px; text-align: center; }
 	.empty-board p { margin: 0; color: var(--text-faint); font-size: var(--fs-sm); }
 	.placement-preview {
@@ -388,6 +419,9 @@
 		font-size: var(--fs-xs);
 	}
 	.board.dragging .workspace-tile { opacity: .62; }
+	@media (prefers-reduced-motion: reduce) {
+		.workspace-tile { transition: none; }
+	}
 	@media (max-width: 860px) {
 		.board { padding: 8px; }
 		.workspace-tile { border-radius: var(--radius); }

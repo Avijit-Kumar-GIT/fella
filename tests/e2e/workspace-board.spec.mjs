@@ -268,6 +268,9 @@ test('environments compose General and repository panes while conversations reta
 	const salesFocus = salesTile.locator('.tile-focus');
 	const salesClose = salesTile.getByRole('button', { name: 'Close northwind-sales workspace' });
 	const generalPreview = generalWorkspaceTile.locator('.tile-preview');
+	await expect(salesTile).toHaveCSS('border-top-width', '2px');
+	await expect(generalWorkspaceTile).toHaveCSS('border-top-width', '1px');
+	await expect(generalPreview.locator('.preview-answer')).toContainText('Scoped to general.');
 	await expect(salesFocus).toHaveAttribute('data-slot', 'button');
 	await expect(salesClose).toHaveAttribute('data-slot', 'button');
 	await expect(salesClose).toHaveCSS('width', '26px');
@@ -275,6 +278,9 @@ test('environments compose General and repository panes while conversations reta
 	await expect(generalPreview).toHaveAttribute('data-slot', 'button');
 	await generalPreview.click();
 	await expect(generalWorkspaceTile.locator('.tile-focus')).toHaveAttribute('aria-pressed', 'true');
+	await expect(generalWorkspaceTile).toHaveCSS('border-top-width', '2px');
+	await expect(salesTile).toHaveCSS('border-top-width', '1px');
+	await expect(salesTile.locator('.tile-preview')).toBeVisible();
 	await expect(page.getByRole('combobox', { name: 'Ask a question' })).toBeVisible();
 	await salesFocus.click();
 	await expect(salesFocus).toHaveAttribute('aria-pressed', 'true');
