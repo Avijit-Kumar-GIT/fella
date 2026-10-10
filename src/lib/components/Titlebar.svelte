@@ -26,12 +26,13 @@
 	});
 
 	let displayTitle = $derived.by(() => {
-		const prefix = folder || 'Fella';
-		if (session.workspaceView === 'board') return prefix;
-		if (session.workspaceView === 'workspace') return `${prefix} — Workspace`;
-		if (session.workspaceView === 'project') return `${session.activeProject?.name ?? 'Project'} — Project`;
-		if (session.workspaceView === 'settings') return `${prefix} — Settings`;
-		return prefix;
+		if (session.workspaceView === 'board') return folder || 'Workspaces';
+		if (session.workspaceView === 'workspace') {
+			return `${folder || 'Workspace'} · ${session.workspacePane === 'sources' ? 'Sources' : 'Guide'}`;
+		}
+		if (session.workspaceView === 'project') return session.activeProject?.name ?? 'Project';
+		if (session.workspaceView === 'settings') return 'Fella';
+		return folder || 'Ask';
 	});
 
 
@@ -66,16 +67,10 @@
 
 	{#if session.focus}
 		<span class="spacer"></span>
-		{#if folder}<span class="folder faint" title={session.catalog.workspace}>{folder}</span>{/if}
+		<span class="folder faint" title={displayTitle}>{displayTitle}</span>
 		<span class="spacer"></span>
 	{:else}
-		<span class="id">
-			{#if folder}
-				<span class="folder" title={displayTitle}>{displayTitle}</span>
-			{:else}
-				<span class="wordmark">Fella</span>
-			{/if}
-		</span>
+		<span class="id"><span class="folder" title={displayTitle}>{displayTitle}</span></span>
 		<span class="spacer"></span>
 		{#if session.sidebarCollapsed}
 			<EnvironmentSwitcher
@@ -177,15 +172,11 @@
 		min-width: 0;
 		max-width: min(27vw, 280px);
 	}
-	.wordmark {
-		color: var(--text-dim);
-		font-weight: 600;
-		letter-spacing: -0.02em;
-	}
 	.folder {
-		font-family: var(--mono);
-		font-size: var(--fs-xs);
-		color: var(--text-dim);
+		font-family: var(--sans);
+		font-size: var(--fs-sm);
+		font-weight: 550;
+		color: var(--text);
 		overflow: hidden;
 		text-overflow: ellipsis;
 		min-width: 0;

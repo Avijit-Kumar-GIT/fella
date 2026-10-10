@@ -15,6 +15,15 @@ one-off treatments.
   spread it across unrelated icons, borders, and status states.
 - **Build hierarchy with type and spacing.** A border or filled surface should
   clarify selection, grouping, or elevation—not turn each element into a card.
+- **Keep one shared alignment grid.** Navigation, page titles, content, and
+  actions should line up; related controls should share a common edge instead
+  of drifting to arbitrary centers or offsets.
+- **Treat the app canvas as the work surface.** Avoid a second rounded window
+  inside the application window. Reserve raised surfaces for focused tasks,
+  editors, menus, and dialogs that need separation.
+- **Make selection quiet but unmistakable.** Use one restrained neutral surface
+  and a clear label or check for the active item. Avoid both invisible selected
+  states and repeated borders around every row.
 - **Make user and Fella turns distinct.** Use the restrained teal user surface
   and a quieter, text-led Fella response. Keep labels, metadata, and evidence
   subordinate to the content.
@@ -39,10 +48,30 @@ values change.
 | `--link` | `#3a5c8a` | `#8fb0dd` | Links and keyboard focus |
 | `--ok` / `--warn` / `--err` | green / ochre / red | light green / gold / coral | Status only |
 
-The interface uses Geist and Geist Mono, a compact 14px body scale, a 4px
-spacing increment, restrained 8px control radius, and a more curved 18px
-conversation surface. Chart series use dedicated palette tokens so category
+The interface uses Geist and Geist Mono, a 14px body scale, 13px secondary
+text, and 12px metadata. Titles stay compact and consistent rather than
+becoming oversized hero typography. Spacing follows a 4px increment; controls
+use a restrained 6px radius, conversation surfaces 14px, and the main window
+canvas remains flat. Chart series use dedicated palette tokens so category
 colors are not confused with success or failure.
+
+## Application structure
+
+- Keep the titlebar and sidebar quiet: show the current place once, keep
+  environment switching separate from workspace navigation, and remove labels
+  that merely repeat a nearby control.
+- Align each view's title, body, and primary action to the same content width.
+  Use left-aligned editorial layouts for Settings, Projects, and Sources.
+- Empty states should be compact and task-oriented. Let the composer or next
+  action remain the working focal point; do not add a second brand lockup inside
+  the conversation.
+- Keep the composer on the conversation canvas, defined by its outline and
+  spacing rather than an extra bright panel or shadow.
+- Prefer spacing and type to section cards. Use a single divider between real
+  Settings groups, and reserve filled rows for hover or selected states.
+- Keep interactive affordances visible: selected appearance/provider rows,
+  keyboard focus, and primary versus secondary actions must remain legible in
+  both themes.
 
 ## Interaction and accessibility
 

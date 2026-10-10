@@ -402,12 +402,12 @@
 		flex-direction: column;
 		min-width: 0;
 		min-height: 0;
-		margin: 8px 10px 10px;
+		margin: 0;
 		overflow: hidden;
-		border: 1px solid var(--pane-edge);
-		border-radius: var(--radius-window);
+		border: 0;
+		border-radius: 0;
 		background: var(--workspace-surface);
-		box-shadow: var(--window-shadow);
+		box-shadow: none;
 	}
 	main {
 		flex: 1;
@@ -473,10 +473,10 @@
 		min-height: 0;
 	}
 	.ask-workbench > :global(.transcript) { flex: 1; min-width: 0; }
-	/* Keep the composer inside the framed workspace, aligned to its content. */
+	/* Keep the composer aligned to the shared content column. */
 	.dock {
 		flex: none;
-		padding: 0 var(--space-2) var(--space-3);
+		padding: 0 0 var(--space-4);
 		background: var(--workspace-canvas);
 	}
 	.dropzone {

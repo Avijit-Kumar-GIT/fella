@@ -1184,9 +1184,9 @@
 		flex-direction: column;
 		gap: var(--space-2);
 		background: var(--workspace-canvas);
-		border: 1px solid var(--border);
-		border-radius: 18px;
-		box-shadow: var(--shadow-sm);
+		border: 1px solid var(--border-strong);
+		border-radius: 12px;
+		box-shadow: none;
 		padding: var(--space-3) var(--space-3) var(--space-2) var(--space-4);
 		transition:
 			border-color var(--dur-fast) var(--ease),

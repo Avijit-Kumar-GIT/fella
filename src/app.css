@@ -305,9 +305,9 @@
 		Consolas, 'DejaVu Sans Mono', monospace;
 	/* type scale: two small steps for chrome/dense data, two up for headings */
 	--fs: 14px;
-	--fs-sm: 12.5px;
-	--fs-xs: 11.5px;
-	--fs-lg: 15.5px;
+	--fs-sm: 13px;
+	--fs-xs: 12px;
+	--fs-lg: 16px;
 	--fs-xl: 22px;
 	--lh: 1.55;
 
@@ -318,12 +318,12 @@
 	--space-4: 16px;
 	--space-5: 24px;
 	--space-6: 32px;
-	--content-max: 960px;
+	--content-max: 1040px;
 
 	--radius-sm: 6px;
 	--radius-chip: 4px;
-	--radius-conversation: 18px;
-	--radius-window: 16px;
+	--radius-conversation: 14px;
+	--radius-window: 12px;
 
 	/* soft, diffuse, layered the macOS elevation feel */
 	--shadow-sm: 0 1px 2px rgba(20, 20, 26, 0.05), 0 4px 12px rgba(20, 20, 26, 0.06);

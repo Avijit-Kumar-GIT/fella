@@ -97,7 +97,6 @@
 	<section class="project-page" aria-labelledby="project-title">
 		<header class="project-header">
 			<div class="project-heading">
-				<span class="project-mark"><Icon name="project" size={20} /></span>
 				<div class="project-title-wrap">
 					<Input
 						id="project-title"
@@ -109,7 +108,7 @@
 				</div>
 			</div>
 			<div class="project-actions">
-				<Button variant="outline" class="project-button" onclick={() => void askRepository()}>
+				<Button class="project-button primary" onclick={() => void askRepository()}>
 					<Icon name="ask" size={16} /> Ask repository
 				</Button>
 				<Button variant="outline" class="project-button" onclick={() => void openSources()}>
@@ -130,8 +129,6 @@
 
 		<div class="project-location" title={project.workspace}>
 			<Icon name="folder" size={12} />
-			<span>{baseName(project.workspace)}</span>
-			<span class="location-separator">·</span>
 			<span>{project.workspace}</span>
 		</div>
 
@@ -184,7 +181,7 @@
 		min-width: 0;
 		min-height: 0;
 		overflow-y: auto;
-		padding: 42px var(--pad) 56px;
+		padding: var(--space-6) var(--pad) 48px;
 	}
 	.project-page > * {
 		width: min(100%, var(--content-max));
@@ -199,18 +196,8 @@
 	.project-heading {
 		display: flex;
 		align-items: center;
-		gap: var(--space-3);
+		gap: 0;
 		min-width: 0;
-	}
-	.project-mark {
-		display: grid;
-		place-items: center;
-		width: 42px;
-		height: 42px;
-		flex: none;
-		border-radius: var(--radius);
-		background: color-mix(in srgb, var(--brand-icon) 9%, var(--bg-inset));
-		color: var(--brand-icon);
 	}
 	.project-title-wrap {
 		min-width: 0;
@@ -225,7 +212,7 @@
 		background: transparent;
 		color: var(--text);
 		font: inherit;
-		font-size: 24px;
+		font-size: var(--fs-xl);
 		font-weight: 650;
 		letter-spacing: -0.03em;
 		outline: none;
@@ -241,14 +228,17 @@
 	}
 	.project-actions :global(.project-button),
 	.mount-note :global(.project-button) {
-		height: 30px;
+		height: 34px;
 		padding: 6px 10px;
-		border-color: var(--border);
 		border-radius: var(--radius-sm);
+	}
+	.project-actions :global(.project-button:not(.primary)),
+	.mount-note :global(.project-button) {
+		border-color: var(--border);
 		background: transparent;
 		color: var(--text-dim);
 	}
-	.project-actions :global(.project-button:hover),
+	.project-actions :global(.project-button:not(.primary):hover),
 	.mount-note :global(.project-button:hover) {
 		background: var(--bg-inset);
 		color: var(--text);
@@ -284,9 +274,6 @@
 		flex: none;
 		color: var(--text-faint);
 	}
-	.location-separator {
-		color: var(--border-strong);
-	}
 	.mount-note {
 		display: flex;
 		align-items: center;
@@ -318,7 +305,7 @@
 	.project-grid {
 		display: grid;
 		grid-template-columns: minmax(0, 1fr) minmax(220px, 280px);
-		gap: var(--space-6);
+		gap: var(--space-5);
 		margin-top: var(--space-5);
 	}
 	.wiki-card,

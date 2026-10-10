@@ -267,12 +267,12 @@
 		border: 1px solid var(--pane-edge);
 		border-radius: var(--radius-window);
 		background: var(--pane-surface);
-		box-shadow: var(--window-shadow);
+		box-shadow: none;
 		transition: border-color 120ms ease, background 120ms ease;
 	}
 	.workspace-tile.focused {
 		border-color: var(--pane-edge-active);
-		background: color-mix(in srgb, var(--pane-surface) 96%, var(--brand));
+		background: var(--pane-surface);
 	}
 	.tile-head {
 		flex: none;
@@ -287,7 +287,7 @@
 		cursor: grab;
 	}
 	.workspace-tile.focused .tile-head {
-		background: color-mix(in srgb, var(--pane-head) 96%, var(--brand));
+		background: var(--pane-head);
 	}
 	.tile-head:active { cursor: grabbing; }
 	.tile-head :global(.tile-focus) {

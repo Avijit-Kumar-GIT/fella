@@ -5,7 +5,6 @@
 	import { openExternal } from '$lib/ipc';
 	import { fadeQuick } from '$lib/motion';
 	import Icon from './Icon.svelte';
-	import Logo from './Logo.svelte';
 	import Message from './Message.svelte';
 	import RunTimeline from './RunTimeline.svelte';
 
@@ -118,8 +117,6 @@
 	<RunTimeline />
 	{#if session.messages.length === 0}
 		<div class="onboard" class:center={!hasFolder && !showSetup}>
-			<div class="onboard-mark"><Logo size={40} active={session.busy} /></div>
-			<div class="wordmark" aria-label="Fella">Fella</div>
 			<h1 class="hero">{hasFolder ? 'Ask about your own files' : 'New conversation'}</h1>
 
 			{#if !hasFolder}
@@ -292,7 +289,7 @@
 		max-width: 68ch;
 	}
 	.onboard {
-		max-width: 52ch;
+		max-width: 56ch;
 		margin: var(--space-6) auto 0;
 		color: var(--text-dim);
 	}
@@ -307,25 +304,13 @@
 		align-items: center;
 		text-align: center;
 	}
-	.wordmark {
+	.hero {
 		font-size: var(--fs-xl);
 		font-weight: 600;
-		letter-spacing: -0.02em;
+		letter-spacing: -0.035em;
+		text-wrap: balance;
 		color: var(--text);
 		margin: 0 0 var(--space-2);
-	}
-	.onboard-mark {
-		display: flex;
-		justify-content: center;
-		margin: 0 0 var(--space-3);
-	}
-	.hero {
-		font-size: var(--fs-lg);
-		font-weight: 600;
-		letter-spacing: -0.01em;
-		text-wrap: balance;
-		color: var(--text-dim);
-		margin: 0 0 var(--space-3);
 	}
 	.onboard p {
 		margin: 0 0 var(--space-3);

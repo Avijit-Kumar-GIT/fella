@@ -11,10 +11,10 @@
 	import Icon from './Icon.svelte';
 	import ProviderIcon from './ProviderIcon.svelte';
 
-	const appearances: { id: Appearance; label: string; detail: string }[] = [
-		{ id: 'system', label: 'System', detail: 'Follow your computer' },
-		{ id: 'light', label: 'Light', detail: 'Bright workspace' },
-		{ id: 'dark', label: 'Dark', detail: 'Low light workspace' }
+	const appearances: { id: Appearance; label: string }[] = [
+		{ id: 'system', label: 'System' },
+		{ id: 'light', label: 'Light' },
+		{ id: 'dark', label: 'Dark' }
 	];
 	const defaultCapabilities: AnalysisCapabilities = {
 		table_analysis: true,
@@ -195,7 +195,6 @@
 					<h2 id="model-title">Model</h2>
 					<p>Fella reads and computes locally. Your chosen provider receives prompts, relevant context, and tool results—which may include document text or data rows.</p>
 				</div>
-				{#if provider}<ProviderIcon providerId={provider.id} size={20} />{/if}
 			</div>
 			<div class="current-row">
 				<div>
@@ -236,7 +235,7 @@
 				Privacy and security <Icon name="arrow-up-right" size={12} />
 			</Button>
 			<Button variant="link" size="sm" class="text-button" onclick={() => void refreshSettings()}>
-				<Icon name="check" size={16} /> Refresh connection status
+				<Icon name="refresh" size={16} /> Refresh connection status
 			</Button>
 		</section>
 
@@ -246,7 +245,6 @@
 					<h2 id="appearance-title">Appearance</h2>
 					<p>Choose the contrast that feels right for your workspace.</p>
 				</div>
-				<Icon name={prefs.isDark ? 'moon' : 'sun'} size={20} />
 			</div>
 			<div class="appearance-list">
 				{#each appearances as option (option.id)}
@@ -256,8 +254,7 @@
 						aria-pressed={prefs.appearance === option.id}
 						onclick={() => prefs.setAppearance(option.id)}
 					>
-						<span><strong>{option.label}</strong><small>{option.detail}</small></span>
-						{#if prefs.appearance === option.id}<Icon name="check" size={16} />{/if}
+						<strong>{option.label}</strong>
 					</Button>
 				{/each}
 			</div>
@@ -269,7 +266,6 @@
 					<h2 id="folder-title">Workspace</h2>
 					<p>Your mounted folder is the only data source Fella can analyze.</p>
 				</div>
-				<Icon name="folder" size={20} />
 			</div>
 			{#if workspace}
 				<code title={workspace}>{workspace}</code>
@@ -290,7 +286,6 @@
 					</div>
 					<p>Choose which analysis paths the model may use on this computer.</p>
 				</div>
-				<Icon name="settings" size={20} />
 			</div>
 			<div class="capability-list">
 				{#each capabilityOptions as item (item.key)}
@@ -402,7 +397,7 @@
 		width: 100%;
 		max-width: var(--content-max);
 		margin: 0 auto;
-		padding: var(--space-6) var(--pad) var(--space-6);
+		padding: var(--space-5) var(--pad) var(--space-6);
 		overflow: auto;
 	}
 	.page-head {
@@ -410,7 +405,7 @@
 	}
 	h1 {
 		margin: 0;
-		font-size: clamp(24px, 3vw, 32px);
+		font-size: var(--fs-xl);
 		font-weight: 650;
 		letter-spacing: -0.03em;
 	}
@@ -418,13 +413,13 @@
 		display: flex;
 		flex-direction: column;
 		gap: 0;
-		max-width: 760px;
+		max-width: 840px;
 	}
 	.settings-card {
 		min-width: 0;
 		display: flex;
 		flex-direction: column;
-		gap: var(--space-4);
+		gap: var(--space-3);
 		padding: var(--space-5) 0;
 		border: 0;
 		border-top: 1px solid var(--border);
@@ -455,11 +450,11 @@
 		font-weight: 650;
 	}
 	.card-head p {
-		max-width: 42ch;
+		max-width: 58ch;
 		margin: 4px 0 0;
-		color: var(--text-faint);
-		font-size: var(--fs-xs);
-		line-height: 1.45;
+		color: var(--text-dim);
+		font-size: var(--fs-sm);
+		line-height: 1.5;
 	}
 	.title-line {
 		display: flex;
@@ -468,13 +463,9 @@
 		gap: 8px;
 	}
 	.experimental-badge {
-		padding: 3px 7px;
-		border: 1px solid var(--brand);
-		border-radius: 999px;
-		color: var(--brand);
+		color: var(--text-faint);
 		font-size: var(--fs-xs);
-		font-weight: 650;
-		letter-spacing: 0.02em;
+		font-weight: 500;
 		white-space: nowrap;
 	}
 	.current-row,
@@ -486,8 +477,8 @@
 		gap: var(--space-3);
 	}
 	.current-row {
-		padding-top: var(--space-3);
-		border-top: 1px solid var(--border);
+		padding-top: var(--space-1);
+		max-width: 420px;
 	}
 	.current-row > div {
 		min-width: 0;
@@ -512,12 +503,25 @@
 	.workspace-card :global(.settings-action) {
 		flex: none;
 	}
+	.workspace-card :global(.settings-action) {
+		align-self: flex-start;
+	}
 	.provider-list,
 	.appearance-list {
-		border-top: 1px solid var(--border);
+		border-top: 0;
+	}
+	.appearance-list {
+		display: flex;
+		align-self: flex-start;
+		width: fit-content;
+		max-width: 100%;
+		gap: 2px;
+		padding: 3px;
+		border-radius: var(--radius-sm);
+		background: var(--bg-inset);
 	}
 	.capability-list {
-		border-top: 1px solid var(--border);
+		border-top: 0;
 	}
 	.capability-row {
 		display: flex;
@@ -527,7 +531,7 @@
 		padding: 10px 0;
 	}
 	.capability-row + .capability-row {
-		border-top: 1px solid var(--border);
+		border-top: 0;
 	}
 	.capability-copy {
 		min-width: 0;
@@ -562,23 +566,42 @@
 		height: auto;
 		min-height: 0;
 		justify-content: space-between;
-		padding: 8px 0;
-		border-radius: 0;
+		padding: 8px 10px;
+		margin-inline: -10px;
+		border-radius: var(--radius-sm);
 		background: transparent;
 		color: var(--text-dim);
 		text-align: left;
 		white-space: normal;
 	}
+	.appearance-list :global(.appearance-row) {
+		width: auto;
+		min-width: 76px;
+		min-height: 30px;
+		justify-content: center;
+		padding: 4px 11px;
+		margin: 0;
+		border-radius: calc(var(--radius-sm) - 2px);
+	}
 	.provider-list :global(.provider-row + .provider-row),
 	.appearance-list :global(.appearance-row + .appearance-row) {
-		border-top: 1px solid var(--border);
+		border-top: 0;
 	}
 	.provider-list :global(.provider-row:hover),
 	.provider-list :global(.provider-row.current),
-	.appearance-list :global(.appearance-row:hover),
-	.appearance-list :global(.appearance-row.selected) {
-		background: transparent;
+	.appearance-list :global(.appearance-row:hover) {
+		background: color-mix(in srgb, var(--text) 8%, var(--bg-inset));
 		color: var(--text);
+	}
+	.provider-list :global(.provider-row.current) {
+		background: color-mix(in srgb, var(--text) 4%, transparent);
+	}
+	.appearance-list :global(.appearance-row.selected) {
+		background: var(--bg-raised);
+		color: var(--text);
+	}
+	.appearance-list :global(.appearance-row strong) {
+		font-weight: 650;
 	}
 	.provider-list :global(.provider-row > .provider-icon) {
 		margin-right: 2px;
@@ -601,21 +624,9 @@
 	:global(.text-button:hover) {
 		text-decoration: underline;
 	}
-	.appearance-list :global(.appearance-row > span) {
-		display: flex;
-		flex-direction: column;
-		gap: 2px;
-	}
 	.appearance-list :global(.appearance-row strong) {
 		font-size: var(--fs-sm);
-		font-weight: 600;
-	}
-	.appearance-list :global(.appearance-row small) {
-		color: var(--text-faint);
-		font-size: var(--fs-xs);
-	}
-	.appearance-list :global(.appearance-row svg:last-child) {
-		color: var(--text-dim);
+		font-weight: 550;
 	}
 	.workspace-card code {
 		padding: 8px 10px;

@@ -38,6 +38,7 @@
 
 	let list = $state<ConversationSummary[]>([]);
 	let expandedRepos = $state<Record<string, boolean>>({});
+	let openRepositoryMenuKey = $state<string | null>(null);
 	const shortcutModifier =
 		typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform || navigator.userAgent)
 			? '⌘'
@@ -74,6 +75,18 @@
 	function repositoryName(path: string | null): string {
 		if (!path) return 'General';
 		return path.replace(/[/\\]+$/, '').replace(/^.*[/\\]/, '') || path;
+	}
+
+	function setRepositoryMenuOpen(key: string, open: boolean): void {
+		if (open) {
+			openRepositoryMenuKey = key;
+			return;
+		}
+		// Keep the hover actions rendered until the menu primitive restores focus
+		// to its trigger; otherwise the trigger disappears during close.
+		requestAnimationFrame(() => {
+			if (openRepositoryMenuKey === key) openRepositoryMenuKey = null;
+		});
 	}
 
 	let repositories = $derived.by((): Repository[] => {
@@ -248,7 +261,6 @@
 		onclose={oncloseenvironment}
 	/>
 	<nav class="nav-section" aria-label="General">
-		<div class="nav-heading">General</div>
 		<Button
 			variant="ghost"
 			class="nav-row"
@@ -295,6 +307,7 @@
 					class="repository"
 					class:current={repo.current}
 					class:expanded={repo.expanded}
+					class:menu-open={openRepositoryMenuKey === repo.key}
 				>
 					<div class="repository-row-wrap">
 						<Button
@@ -343,7 +356,10 @@
 								</Tooltip.Root>
 							{/if}
 							{#if repo.path && !repo.current && !repo.historyOnly}
-								<DropdownMenu.Root>
+								<DropdownMenu.Root
+									open={openRepositoryMenuKey === repo.key}
+									onOpenChange={(open) => setRepositoryMenuOpen(repo.key, open)}
+								>
 									<DropdownMenu.Trigger class="repository-action" type="button" aria-label="Repository actions" title="Repository actions">
 										<Icon name="more-horizontal" size={14} />
 									</DropdownMenu.Trigger>
@@ -489,7 +505,7 @@
 <style>
 	.sidebar {
 		flex: none;
-		width: 240px;
+		width: 248px;
 		display: flex;
 		flex-direction: column;
 		gap: var(--space-1);
@@ -507,7 +523,7 @@
 		align-items: center;
 		justify-content: space-between;
 		flex: none;
-		height: 42px;
+		height: 44px;
 		padding: 0 var(--space-2);
 	}
 	.logo {
@@ -590,7 +606,7 @@
 	.repository-row-wrap :global(.repository-disclosure) {
 		position: absolute;
 		z-index: 1;
-		top: 4px;
+		top: 6px;
 		left: 4px;
 		display: grid;
 		place-items: center;
@@ -612,7 +628,7 @@
 		align-items: center;
 		gap: 6px;
 		min-width: 0;
-		min-height: 28px;
+		min-height: 32px;
 		height: auto;
 		justify-content: flex-start;
 		/* Reserve the full hover-action rail (new conversation and menu) so a
@@ -705,7 +721,8 @@
 		color: var(--text-faint);
 	}
 	.repository:hover .repository-actions,
-	.repository:focus-within .repository-actions {
+	.repository:focus-within .repository-actions,
+	.repository.menu-open .repository-actions {
 		display: flex;
 		color: var(--text);
 	}
@@ -747,7 +764,7 @@
 		gap: 6px;
 		width: 100%;
 		height: auto;
-		min-height: 27px;
+		min-height: 30px;
 		padding: 4px 4px 4px 0;
 		border-radius: var(--radius-chip);
 		color: var(--text-faint);
@@ -768,7 +785,7 @@
 		justify-content: flex-start;
 		width: 100%;
 		height: auto;
-		min-height: 28px;
+		min-height: 32px;
 		gap: 6px;
 		padding: 7px var(--space-2);
 		border-radius: var(--radius-sm);
@@ -781,13 +798,6 @@
 	.repositories :global(.add-repository:hover) {
 		background: var(--sidebar-hover);
 		color: var(--text);
-	}
-	.nav-heading {
-		padding: 0 var(--space-2) var(--space-1);
-		color: var(--text-faint);
-		font-size: var(--fs-xs);
-		font-weight: 650;
-		letter-spacing: 0.01em;
 	}
 	.sidebar :global(.nav-row) {
 		position: relative;
@@ -830,7 +840,7 @@
 		gap: 6px;
 		width: 100%;
 		height: auto;
-		min-height: 27px;
+		min-height: 30px;
 		padding: 4px 52px 4px 0;
 		border-radius: var(--radius-sm);
 		text-align: left;

@@ -331,7 +331,7 @@
 		letter-spacing: -0.03em;
 	}
 	h1 {
-		font-size: clamp(24px, 3vw, 32px);
+		font-size: var(--fs-xl);
 		line-height: 1.15;
 	}
 	h2 {
