@@ -1,7 +1,11 @@
 # Fella product
 
-Fella is an opinionated analytics harness built around conversation. A person
-can ask a general question without mounting a folder, then use the same
+Fella is an opinionated analytics harness built around conversation. Its core
+job is to help a data analyst move from a question about an explicitly mounted
+folder to an evidence-backed answer. The longer-term product target is to make
+the full investigation—from data discovery and decomposition through QA,
+visualization, and handoff—feel like one steerable workflow. A person can also
+ask a general question without mounting a folder, then use the same
 conversation to inspect and analyze local data when a question depends on it.
 The workspace organizes sources and context; it is not the product's purpose.
 
@@ -55,6 +59,9 @@ silently send workspace contents to web search. The desktop app is not a
 general-purpose file manager, shell automation tool, notebook, or multi-agent
 orchestrator. A read-oriented analyst CLI, with FellaDB as its proposed local
 filesystem search capability, is an exploratory direction and is not shipped.
+See the [analyst workflow audit](ANALYST-WORKFLOW-AUDIT.md) for how the current
+app maps to the full data analyst lifecycle and where the product experience
+still has gaps.
 See [Architecture](ARCHITECTURE.md) for the current implementation,
 [Roadmap](ROADMAP.md) for open work, and [Stack vision](STACK-VISION.md) for
 the proposed path from files to reusable project knowledge.
