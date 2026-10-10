@@ -5,6 +5,7 @@
 	import { openExternal } from '$lib/ipc';
 	import { fadeQuick } from '$lib/motion';
 	import Icon from './Icon.svelte';
+	import Logo from './Logo.svelte';
 	import Message from './Message.svelte';
 	import RunTimeline from './RunTimeline.svelte';
 
@@ -117,6 +118,9 @@
 	<RunTimeline />
 	{#if session.messages.length === 0}
 		<div class="onboard" class:center={!hasFolder && !showSetup}>
+			{#if !hasFolder}
+				<div class="onboard-mark"><Logo size={28} /></div>
+			{/if}
 			<h1 class="hero">{hasFolder ? 'Ask about your own files' : 'New conversation'}</h1>
 
 			{#if !hasFolder}
@@ -303,6 +307,11 @@
 		justify-content: center;
 		align-items: center;
 		text-align: center;
+	}
+	.onboard-mark {
+		display: flex;
+		justify-content: center;
+		margin-bottom: var(--space-2);
 	}
 	.hero {
 		font-size: var(--fs-xl);
