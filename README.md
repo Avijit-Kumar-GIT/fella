@@ -209,6 +209,8 @@ The Electron shell and its line-delimited JSON bridge are described in
 ## Documentation
 
 - [Product](docs/PRODUCT.md) — Fella's purpose, analyst loop, and boundaries
+- [Positioning](docs/POSITIONING.md) — investor narrative and product-claim
+  boundaries
 - [FellaDB](docs/FELLADB.md) — exploratory vision for an optional
   personal-files companion
 - [Architecture](docs/ARCHITECTURE.md) — the Electron shell and Rust analytics runtime
