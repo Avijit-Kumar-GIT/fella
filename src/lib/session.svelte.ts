@@ -15,12 +15,14 @@ import type {
 	ProviderInfo,
 	Project,
 	RunStep,
+	RuntimeTurnState,
 	Settings,
 	SourceInfo,
 	WorkspaceProgress
 } from './types';
 import { isRenderableChartEvidence, parseCompanionPane, type CompanionPane } from './workbench';
 import type { WorkspaceTilePreference } from './workspace-layout';
+import { analystStepForTool, progressStepForState } from './run-progress';
 
 
 function uid(): string {
@@ -40,19 +42,6 @@ export function hasActualQuestion(messages: readonly Message[]): boolean {
 
 export function firstActualQuestion(messages: readonly Message[]): Message | undefined {
 	return messages.find(isActualQuestion);
-}
-
-function humanToolName(tool: string): string {
-	const labels: Record<string, string> = {
-		list_files: 'Looking through the workspace',
-		inspect_file: 'Inspecting a source',
-		read_file: 'Reading a source',
-		search_files: 'Searching the workspace',
-		query: 'Calculating from the data',
-		make_chart: 'Preparing a chart',
-		memory: 'Checking workspace notes'
-	};
-	return labels[tool] ?? tool.replace(/[_-]+/g, ' ').replace(/^./, (c) => c.toUpperCase());
 }
 
 /** The first completed answer is authoritative for a conversation's origin.
@@ -318,6 +307,9 @@ export class Conversation {
 	companionPane = $state<CompanionPane | null>(null);
 	/** The compact, local run trace shown beneath the transcript. */
 	runSteps = $state<RunStep[]>([]);
+	runQuestion = $state('');
+	runQuestionId = $state<string | null>(null);
+	runState = $state<RuntimeTurnState | null>(null);
 	runStartedAt = $state<number | null>(null);
 	runDurationMs = $state<number | null>(null);
 
@@ -367,22 +359,46 @@ export class Conversation {
 		this.contextRefs = [];
 	}
 
-	startRun(): void {
+	startRun(question = '', questionId: string | null = null): void {
 		const now = Date.now();
 		this.runStartedAt = now;
 		this.runDurationMs = null;
+		this.runQuestion = question.trim();
+		this.runQuestionId = questionId;
+		this.runState = 'received';
 		this.runSteps = [
 			{
 				id: uid(),
-				label: 'Planning the question',
+				label: 'Understanding the question',
 				state: 'running',
 				started_at_ms: now
 			}
 		];
 	}
 
-	beginRunStep(tool: string, note?: string): void {
+	updateRunState(state: RuntimeTurnState): void {
+		this.runState = state;
+		const label = progressStepForState(state);
+		if (label) this.beginProgressStep(label);
+	}
+
+	private beginProgressStep(label: string): void {
+		const current = this.runSteps.at(-1);
+		if (current?.state === 'running' && current.label === label) return;
 		const now = Date.now();
+		this.runSteps = [
+			...this.runSteps.map((step) =>
+				step.state === 'running'
+					? { ...step, state: 'complete' as const, finished_at_ms: now }
+					: step
+			),
+			{ id: uid(), label, state: 'running', started_at_ms: now }
+		];
+	}
+
+	beginRunStep(tool: string): string {
+		const now = Date.now();
+		const label = analystStepForTool(tool);
 		const steps = this.runSteps.map((step) =>
 			step.state === 'running' && !step.tool
 				? { ...step, state: 'complete' as const, finished_at_ms: now }
@@ -392,13 +408,13 @@ export class Conversation {
 			...steps,
 			{
 				id: uid(),
-				label: note || humanToolName(tool),
+				label,
 				state: 'running',
 				started_at_ms: now,
-				tool,
-				note
+				tool
 			}
 		];
+		return label;
 	}
 
 	completeRunStep(item: EvidenceItem): void {
@@ -409,7 +425,7 @@ export class Conversation {
 		if (index < 0) return;
 		this.runSteps = this.runSteps.map((step, i) =>
 			i === index
-				? { ...step, state: item.error ? ('error' as const) : ('complete' as const), finished_at_ms: now, evidence: item }
+				? { ...step, state: item.error ? ('error' as const) : ('complete' as const), finished_at_ms: now }
 				: step
 		);
 	}
@@ -421,6 +437,7 @@ export class Conversation {
 				? { ...step, state: error ? ('error' as const) : ('complete' as const), finished_at_ms: now }
 				: step
 		);
+		if (error) this.runState = 'failed';
 		if (this.runStartedAt !== null) this.runDurationMs = Math.max(0, now - this.runStartedAt);
 		this.runStartedAt = null;
 	}

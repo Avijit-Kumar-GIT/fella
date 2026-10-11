@@ -3,14 +3,15 @@
 	import type { Message, RunStep } from '$lib/types';
 	import { Collapsible } from '$lib/components/ui/collapsible';
 	import { Spinner } from '$lib/components/ui/spinner';
+	import { runStateLabel } from '$lib/run-progress';
 	import Icon from './Icon.svelte';
 
 	let chat = $derived(session.activeChat);
 	let steps = $derived(chat?.runSteps ?? []);
 	let running = $derived(chat?.busy ?? false);
 	let failed = $derived(steps.some((step) => step.state === 'error'));
-	let evidenceSteps = $derived(steps.filter((step) => step.evidence).length);
 	let visibleSteps = $derived(steps.slice(-6));
+	let activeStep = $derived([...steps].reverse().find((step) => step.state === 'running'));
 	let expanded = $state(true);
 	let previousChatId = $state('');
 
@@ -38,13 +39,17 @@
 		return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)}s`;
 	}
 
-	function stepResult(step: RunStep): string {
-		if (step.evidence?.error) return step.evidence.error;
-		if (step.evidence?.result_summary) return step.evidence.result_summary;
+	function stepStatus(step: RunStep): string {
 		if (step.state === 'running') return 'In progress';
-		if (step.state === 'error') return 'Could not complete this step';
+		if (step.state === 'error') return 'Needs attention';
 		return 'Complete';
 	}
+
+	let statusLabel = $derived.by(() => {
+		if (running) return activeStep?.label ?? runStateLabel(chat?.runState) ?? 'Working with the data';
+		if (failed) return 'A step needs attention';
+		return runStateLabel(chat?.runState) ?? 'Question answered';
+	});
 
 	let hasCompletedAnswer = $derived.by(() => {
 		const answer = lastAnswer();
@@ -52,8 +57,14 @@
 	});
 </script>
 
+
 {#if steps.length && (running || !hasCompletedAnswer)}
-	<section class="run-timeline" class:active={running} aria-label="Question run">
+	<section
+		class="run-timeline"
+		class:active={running}
+		aria-label="Question run"
+		data-question-id={chat?.runQuestionId ?? undefined}
+	>
 		<Collapsible.Root bind:open={expanded} class="timeline-collapsible">
 			<div class="timeline-head">
 				<div class="run-status">
@@ -62,7 +73,7 @@
 					{:else}
 						<span class="run-dot" class:error={failed} aria-hidden="true"></span>
 					{/if}
-					<strong>{running ? chat?.activity || 'Working through the workspace' : failed ? 'Run needs review' : evidenceSteps ? 'Workspace checked' : 'Question answered'}</strong>
+					<strong>{statusLabel}</strong>
 				</div>
 				<div class="timeline-tools">
 					<span class="run-meta">
@@ -73,6 +84,12 @@
 					</Collapsible.Trigger>
 				</div>
 			</div>
+			{#if chat?.runQuestion}
+				<p class="run-question" title={chat.runQuestion}>
+					<span>Question</span>
+					<strong>{chat.runQuestion}</strong>
+				</p>
+			{/if}
 
 			<Collapsible.Content class="steps">
 				{#each visibleSteps as step (step.id)}
@@ -88,7 +105,7 @@
 						</span>
 						<span class="step-copy">
 							<strong>{step.label}</strong>
-							<small>{stepResult(step)}</small>
+							<small>{stepStatus(step)}</small>
 						</span>
 					</div>
 				{/each}
@@ -146,6 +163,23 @@
 	.timeline-tools {
 		gap: var(--space-2);
 		flex: none;
+	}
+	.run-question {
+		display: flex;
+		gap: var(--space-2);
+		max-width: 76ch;
+		margin: var(--space-1) 0 var(--space-2) 26px;
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+	}
+	.run-question span { flex: none; }
+	.run-question strong {
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		color: var(--text-dim);
+		font-weight: 500;
 	}
 	.run-meta {
 		color: var(--text-faint);

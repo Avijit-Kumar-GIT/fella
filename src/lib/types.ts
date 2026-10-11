@@ -579,8 +579,6 @@ export interface RunStep {
 	started_at_ms: number;
 	finished_at_ms?: number;
 	tool?: string;
-	note?: string;
-	evidence?: EvidenceItem;
 }
 
 export interface Message {

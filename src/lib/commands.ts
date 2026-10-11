@@ -1021,7 +1021,7 @@ async function ask(
 	const analysisQuestion = questionWithInvestigationPlan(question, investigation);
 
 	const msg = conv.addAssistant('');
-	conv.startRun();
+	conv.startRun(question, questionRef?.questionId ?? null);
 	conv.busy = true;
 	conv.activity = 'thinking…';
 
@@ -1044,6 +1044,9 @@ async function ask(
 
 	const onEvent = (e: AskEvent) => {
 		switch (e.kind) {
+			case 'turn_state':
+				conv.updateRunState(e.state);
+				break;
 			case 'assistant_delta':
 				msg.text += e.text;
 				break;
@@ -1054,9 +1057,8 @@ async function ask(
 				// tool_start; later rounds just clear any stray preamble.
 				if (!msg.plan && msg.text.trim()) msg.plan = msg.text.trim();
 				msg.text = '';
-				const note = typeof e.args?.note === 'string' ? e.args.note.trim() : '';
-				conv.beginRunStep(e.tool, note || undefined);
-				conv.activity = note ? `${note}…` : 'working…';
+				const activity = conv.beginRunStep(e.tool);
+				conv.activity = `${activity}…`;
 				break;
 			}
 			case 'tool_end':
@@ -1171,21 +1173,31 @@ export async function rerunAnalysisTurn(message: Message): Promise<void> {
 	await ensureWorkspaceInvestigation(conv);
 
 	const msg = conv.addAssistant('');
-	conv.startRun();
+	const messageIndex = conv.messages.indexOf(message);
+	let runQuestion = '';
+	for (let i = messageIndex - 1; i >= 0; i--) {
+		if (conv.messages[i].role === 'user') {
+			runQuestion = conv.messages[i].text;
+			break;
+		}
+	}
+	conv.startRun(runQuestion);
 	conv.busy = true;
 	conv.activity = 'rechecking the workspace…';
 	let failed = false;
 	const onEvent = (e: AskEvent) => {
 		switch (e.kind) {
+			case 'turn_state':
+				conv.updateRunState(e.state);
+				break;
 			case 'assistant_delta':
 				msg.text += e.text;
 				break;
 			case 'tool_start': {
 				if (!msg.plan && msg.text.trim()) msg.plan = msg.text.trim();
 				msg.text = '';
-				const note = typeof e.args?.note === 'string' ? e.args.note.trim() : '';
-				conv.beginRunStep(e.tool, note || undefined);
-				conv.activity = note ? `${note}…` : 'rechecking…';
+				const activity = conv.beginRunStep(e.tool);
+				conv.activity = `${activity}…`;
 				break;
 			}
 			case 'tool_end':

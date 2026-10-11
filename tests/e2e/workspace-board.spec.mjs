@@ -403,6 +403,28 @@ async function installDesktopMock(
 					}
 				}
 				if (questionTurnId) {
+					onEvent({ kind: 'turn_state', turn_id: questionTurnId, state: 'interpreting' });
+					onEvent({ kind: 'turn_state', turn_id: questionTurnId, state: 'planning' });
+					onEvent({
+						kind: 'tool_start',
+						tool: 'grep_files',
+						args: { note: 'Search the workspace for implementation details' }
+					});
+					onEvent({
+						kind: 'tool_end',
+						item: {
+							id: `fixture-progress-${questionTurnNumber}`,
+							tool: 'grep_files',
+							args: {},
+							result_summary: 'Raw file search details must remain out of the primary timeline.',
+							ms: 4,
+							sources: []
+						}
+					});
+					onEvent({ kind: 'turn_state', turn_id: questionTurnId, state: 'verifying' });
+					if (questionOutcome.delay_ms) {
+						await new Promise((resolve) => setTimeout(resolve, questionOutcome.delay_ms));
+					}
 					const question = questionRecords.get(params.questionId);
 					if (question) {
 						const finished = {
@@ -421,6 +443,10 @@ async function installDesktopMock(
 							}
 						}
 					}
+					const finalState = questionOutcome.status === 'answered'
+						? 'accepted'
+						: questionOutcome.status === 'blocked' ? 'failed' : 'needs_review';
+					onEvent({ kind: 'turn_state', turn_id: questionTurnId, state: finalState });
 				}
 				const hasReplayEvidence = replayStatus !== null || replayStatusError;
 				const answer = {
@@ -816,7 +842,7 @@ test('a Question can narrow its source set and launches a run linked to that Que
 test('Questions show persisted coverage states and explain incomplete, blocked, and outdated answers', async ({ page }) => {
 	await installDesktopMock(page, {
 		questionRunOutcomes: [
-			{ status: 'incomplete', reason: 'The selected files do not cover the full requested period.' },
+			{ status: 'incomplete', reason: 'The selected files do not cover the full requested period.', delay_ms: 800 },
 			{ status: 'blocked', reason: 'The required date field is unavailable.' },
 			{ status: 'answered' }
 		]
@@ -832,10 +858,26 @@ test('Questions show persisted coverage states and explain incomplete, blocked, 
 	const rootQuestion = page.locator('.root-question-item');
 	await expect(rootQuestion.locator('[data-slot="badge"][data-question-status]')).toHaveText('Not started');
 
+	let questionRunCount = 0;
 	const runMainQuestion = async () => {
+		questionRunCount += 1;
 		await page.getByRole('button', { name: 'Analyze main Question' }).click();
 		await page.getByRole('region', { name: 'Review this run' }).getByRole('button', { name: 'Run this Question' }).click();
+		if (questionRunCount === 1) {
+			const timeline = page.getByRole('region', { name: 'Question run' });
+			await expect(timeline).toBeVisible();
+			await expect(timeline).toHaveAttribute('data-question-id', /^q-root-/);
+			await expect(timeline.locator('.run-question')).toContainText('Explain the change in weekly sales');
+			await expect(timeline).toContainText('Checking the result');
+			await expect(timeline).toContainText('Finding relevant passages');
+			await expect(timeline).not.toContainText('grep_files');
+			await expect(timeline).not.toContainText('Search the workspace for implementation details');
+			await expect(timeline).not.toContainText('Raw file search details');
+		}
 		await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.').last()).toBeVisible();
+		if (questionRunCount === 1) {
+			await expect(page.getByRole('region', { name: 'Question run' })).toBeHidden();
+		}
 		await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
 	};
 
