@@ -436,6 +436,8 @@ export interface Investigation {
 	questions?: InvestigationQuestion[];
 	/** Active saved meanings and assumptions for this Investigation. */
 	definitions?: InvestigationDefinition[];
+	/** Durable analyst conclusions, independent from the conversation transcript. */
+	findings?: InvestigationFinding[];
 	/** Current file boundary for subsequent Investigation runs. */
 	source_selection: InvestigationSourceSelection;
 	title: string;
@@ -514,6 +516,24 @@ export interface InvestigationDefinitionSnapshot {
 	revision: number;
 	kind: InvestigationDefinitionKind;
 	text: string;
+}
+
+export interface InvestigationFinding {
+	id: string;
+	investigation_id: string;
+	question_id: string;
+	analysis_turn_id: string;
+	evidence_ids: string[];
+	claim: string;
+	created_at_ms: number;
+	updated_at_ms: number;
+}
+
+export interface InvestigationFindingInput {
+	question_id: string;
+	analysis_turn_id: string;
+	evidence_ids: string[];
+	claim: string;
 }
 
 export interface InvestigationContextSnapshot {

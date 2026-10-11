@@ -17,6 +17,8 @@ import type {
 	Investigation,
 	InvestigationDefinition,
 	InvestigationDefinitionInput,
+	InvestigationFinding,
+	InvestigationFindingInput,
 	InvestigationQuestion,
 	InvestigationQuestionInput,
 	InvestigationSourceSelection,
@@ -170,6 +172,15 @@ export const ipc = {
 		invoke<InvestigationQuestion>('investigation_question_load', { questionId }),
 	investigationDefinitionLoad: (definitionId: string) =>
 		invoke<InvestigationDefinition>('investigation_definition_load', { definitionId }),
+	/** Save a concise conclusion linked to its Question, canonical run, and evidence. */
+	investigationCreateFinding: (investigationId: string, finding: InvestigationFindingInput) =>
+		invoke<Investigation>('investigation_create_finding', { investigationId, finding }),
+	/** Edit only the claim; provenance links are immutable. */
+	investigationUpdateFindingClaim: (investigationId: string, findingId: string, claim: string) =>
+		invoke<Investigation>('investigation_update_finding_claim', { investigationId, findingId, claim }),
+	/** Load one Finding record independently from its Investigation. */
+	investigationFindingLoad: (findingId: string) =>
+		invoke<InvestigationFinding>('investigation_finding_load', { findingId }),
 	investigationProposeQuestions: (investigationId: string, mainQuestion: string) =>
 		invoke<QuestionBreakdownProposal>('investigation_propose_questions', { investigationId, mainQuestion }),
 	/** Associate existing canonical AnalysisTurns by ID; never copy run payloads. */

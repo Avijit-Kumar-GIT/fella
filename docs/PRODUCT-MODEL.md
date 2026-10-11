@@ -325,3 +325,18 @@ measure, method, or conclusion. A run exposes its recorded assumptions apart
 from observed evidence. An analyst may promote one into the editable
 Investigation context, correct it, and save a new revision for later runs;
 the original AnalysisTurn remains an unchanged historical record.
+
+## Implementation checkpoint: durable Findings (#205)
+
+An Investigation can now hold an ordered list of independently persisted
+Findings. Each Finding has a concise claim and immutable references to one
+active Question, one canonical AnalysisTurn, and one or more evidence IDs
+owned by that exact run. Creation rejects a Question or run outside the
+Investigation and evidence IDs absent from the run. Editing changes only the
+claim; the original run and evidence remain inspectable from the Finding.
+
+The Investigation view lists Findings independently of Conversation prose
+and lets the analyst capture one from a saved run. This establishes the
+claim-to-provenance primitive, not the full target contract above: caveat
+management, Finding coverage state, version history, review workflows, and
+linking reusable Artifacts to Findings remain later slices.

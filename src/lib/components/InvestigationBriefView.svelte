@@ -14,6 +14,7 @@
 		Investigation,
 		InvestigationBrief,
 		InvestigationDefinitionInput,
+		InvestigationFinding,
 		InvestigationQuestion,
 		InvestigationQuestionInput,
 		InvestigationQuestionAnswerStatus
@@ -57,6 +58,14 @@
 	let analysisTurnError = $state('');
 	let questionLinksDraft = $state<string[]>([]);
 	let savingQuestionLinks = $state(false);
+	let findingClaimDraft = $state('');
+	let findingQuestionDraft = $state('');
+	let findingEvidenceDraft = $state<string[]>([]);
+	let savingFinding = $state(false);
+	let findingError = $state('');
+	let editingFindingId = $state<string | null>(null);
+	let findingClaimEditDraft = $state('');
+	let updatingFindingId = $state<string | null>(null);
 	let error = $state('');
 	let requestSerial = 0;
 	const syncingInvestigations = new Set<string>();
@@ -526,16 +535,109 @@
 			try {
 				const run = await ipc.analysisTurnLoad(turnId);
 				analysisTurns = { ...analysisTurns, [turnId]: run };
+				prepareFindingDraft(run);
 			} catch (cause) {
 				analysisTurnError = cause instanceof Error ? cause.message : String(cause);
 			} finally {
 				if (analysisTurnLoadingId === turnId) analysisTurnLoadingId = null;
 			}
+		} else {
+			prepareFindingDraft(analysisTurns[turnId]);
 		}
 		await tick();
 		const detail = document.getElementById('saved-analysis-run-detail');
 		detail?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 		detail?.focus({ preventScroll: true });
+	}
+
+	function findingEvidenceOptions(run: AnalysisTurn): { id: string; label: string }[] {
+		const seen = new Set<string>();
+		return run.result.evidence.flatMap((item, index) => {
+			if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
+			const evidence = item as Record<string, unknown>;
+			const id = typeof evidence.id === 'string' ? evidence.id.trim() : '';
+			if (!id || seen.has(id)) return [];
+			seen.add(id);
+			const tool = typeof evidence.tool === 'string' ? evidence.tool : `Evidence ${index + 1}`;
+			const summary = typeof evidence.result_summary === 'string' ? evidence.result_summary : '';
+			return [{ id, label: summary ? `${tool} · ${summary}` : tool }];
+		});
+	}
+
+	function prepareFindingDraft(run: AnalysisTurn): void {
+		const lead = run.result.text.split(/\n\s*\n/).find((part) => part.trim())?.trim() ?? '';
+		findingClaimDraft = lead.slice(0, 500);
+		const activeQuestions = selected?.questions ?? [];
+		const preferredQuestion = questionIdsForRun(run.id)[0]
+			?? run.investigation_context?.question_id
+			?? activeQuestions[0]?.id;
+		findingQuestionDraft = activeQuestions.some((question) => question.id === preferredQuestion)
+			? preferredQuestion
+			: activeQuestions[0]?.id ?? '';
+		findingEvidenceDraft = findingEvidenceOptions(run).slice(0, 100).map((item) => item.id);
+		findingError = '';
+	}
+
+	function toggleFindingEvidence(evidenceId: string, checked: boolean): void {
+		const evidence = new Set(findingEvidenceDraft);
+		if (checked) evidence.add(evidenceId);
+		else evidence.delete(evidenceId);
+		findingEvidenceDraft = [...evidence];
+	}
+
+	async function saveFinding(): Promise<void> {
+		if (!selected || !openAnalysisTurn || savingFinding) return;
+		if (!findingQuestionDraft || !findingEvidenceDraft.length || !findingClaimDraft.trim()) {
+			findingError = 'Add a concise claim, choose a Question, and select supporting evidence.';
+			return;
+		}
+		savingFinding = true;
+		findingError = '';
+		try {
+			const updated = await ipc.investigationCreateFinding(selected.id, {
+				question_id: findingQuestionDraft,
+				analysis_turn_id: openAnalysisTurn.id,
+				evidence_ids: findingEvidenceDraft,
+				claim: findingClaimDraft
+			});
+			acceptInvestigationUpdate(updated);
+			findingError = '';
+		} catch (cause) {
+			findingError = cause instanceof Error ? cause.message : String(cause);
+		} finally {
+			savingFinding = false;
+		}
+	}
+
+	function findingQuestionLabel(finding: InvestigationFinding): string {
+		const question = selected?.questions?.find((item) => item.id === finding.question_id);
+		if (question) return question.text;
+		return analysisTurns[finding.analysis_turn_id]?.investigation_context?.question_text
+			?? `Question ${finding.question_id}`;
+	}
+
+	function editFinding(finding: InvestigationFinding): void {
+		editingFindingId = finding.id;
+		findingClaimEditDraft = finding.claim;
+	}
+
+	async function saveFindingClaim(finding: InvestigationFinding): Promise<void> {
+		if (!selected || updatingFindingId) return;
+		updatingFindingId = finding.id;
+		findingError = '';
+		try {
+			const updated = await ipc.investigationUpdateFindingClaim(
+				selected.id,
+				finding.id,
+				findingClaimEditDraft
+			);
+			acceptInvestigationUpdate(updated);
+			editingFindingId = null;
+		} catch (cause) {
+			findingError = cause instanceof Error ? cause.message : String(cause);
+		} finally {
+			updatingFindingId = null;
+		}
 	}
 
 	function setQuestionRunLink(questionId: string, checked: boolean): void {
@@ -1204,6 +1306,53 @@
 							<Icon name="plus" size={16} />{rootQuestion ? 'Add subquestion' : 'Add main Question'}
 						</Button>
 					</section>
+					<section class="findings" aria-labelledby="findings-title">
+						<header class="findings-heading">
+							<div>
+								<h3 id="findings-title">Findings</h3>
+								<p>Keep the conclusions you’ll reuse, each tied to the Question, run, and evidence that supports it.</p>
+							</div>
+							<span>{selected.findings?.length ?? 0} saved</span>
+						</header>
+						{#if findingError}
+							<p class="finding-error" role="alert">{findingError}</p>
+						{/if}
+						{#if selected.findings?.length}
+							<ol class="finding-list">
+								{#each selected.findings as finding, index (finding.id)}
+									<li class="finding-card">
+										<div class="finding-card-heading">
+											<div>
+												<h4>Finding {index + 1}</h4>
+												{#if editingFindingId !== finding.id}<p>{finding.claim}</p>{/if}
+											</div>
+											{#if editingFindingId !== finding.id}
+												<Button type="button" variant="ghost" disabled={Boolean(updatingFindingId)} onclick={() => editFinding(finding)}>Edit claim</Button>
+											{/if}
+										</div>
+										{#if editingFindingId === finding.id}
+											<Textarea bind:value={findingClaimEditDraft} aria-label="Edit Finding claim" class="finding-edit-field" disabled={updatingFindingId === finding.id} />
+											<div class="finding-edit-actions">
+												<Button type="button" variant="ghost" disabled={updatingFindingId === finding.id} onclick={() => (editingFindingId = null)}>Cancel</Button>
+												<Button type="button" disabled={updatingFindingId === finding.id || !findingClaimEditDraft.trim()} onclick={() => void saveFindingClaim(finding)}>{updatingFindingId === finding.id ? 'Saving…' : 'Save claim'}</Button>
+											</div>
+										{/if}
+										<dl class="finding-provenance">
+											<div><dt>Question</dt><dd>{findingQuestionLabel(finding)}</dd></div>
+											<div>
+												<dt>Analysis run</dt>
+												<dd><button class="finding-run-link" type="button" onclick={() => void openAnalysisRun(finding.analysis_turn_id)}>{analysisRunSummary(finding.analysis_turn_id)} · {finding.analysis_turn_id}</button></dd>
+											</div>
+											<div><dt>Supporting evidence IDs</dt><dd>{#each finding.evidence_ids as evidenceId, evidenceIndex (`${finding.id}-${evidenceId}`)}<code>{evidenceId}</code>{#if evidenceIndex < finding.evidence_ids.length - 1}<span>, </span>{/if}{/each}</dd></div>
+										</dl>
+										<p class="finding-edit-note">Editing the claim never changes its saved Question, run, or evidence links.</p>
+									</li>
+								{/each}
+							</ol>
+						{:else}
+							<p class="findings-empty">No Findings saved yet. Capture a concise conclusion from a reviewed run.</p>
+						{/if}
+					</section>
 					<section class="analysis-runs" aria-labelledby="analysis-runs-title">
 						<header class="analysis-runs-heading">
 							<div>
@@ -1320,6 +1469,35 @@
 											<p>This Investigation has no active Questions to link.</p>
 										{/if}
 									</fieldset>
+					<section class="finding-capture" aria-labelledby="finding-capture-title">
+						<header>
+											<h5 id="finding-capture-title">Save a Finding</h5>
+											<p>Start with the answer’s lead, then choose the Question and evidence that support the conclusion.</p>
+										</header>
+						<label for="finding-claim-{openAnalysisTurn.id}">Claim</label>
+						<Textarea id="finding-claim-{openAnalysisTurn.id}" bind:value={findingClaimDraft} aria-label="Finding claim" class="finding-capture-field" disabled={savingFinding} maxlength={2000} />
+						<label for="finding-question-{openAnalysisTurn.id}">Question this Finding answers</label>
+						<select id="finding-question-{openAnalysisTurn.id}" aria-label="Question for Finding" bind:value={findingQuestionDraft} disabled={savingFinding || questionsDirty || !(selected.questions?.length)}>
+							<option value="">Select a Question</option>
+							{#each selected.questions ?? [] as question (question.id)}
+								<option value={question.id}>{question.text}</option>
+							{/each}
+						</select>
+						<fieldset class="finding-evidence-select" disabled={savingFinding || questionsDirty}>
+							<legend>Supporting evidence from this run</legend>
+							{#if findingEvidenceOptions(openAnalysisTurn).length}
+								{#each findingEvidenceOptions(openAnalysisTurn) as item (item.id)}
+									<label><input type="checkbox" checked={findingEvidenceDraft.includes(item.id)} onchange={(event) => toggleFindingEvidence(item.id, event.currentTarget.checked)} /><span>{item.label}</span></label>
+								{/each}
+							{:else}
+								<p>This run has no identified evidence items to attach.</p>
+							{/if}
+						</fieldset>
+						<div class="finding-capture-actions">
+							<span>{findingEvidenceDraft.length} evidence item{findingEvidenceDraft.length === 1 ? '' : 's'} selected</span>
+							<Button type="button" disabled={savingFinding || questionsDirty || !findingClaimDraft.trim() || !findingQuestionDraft || !findingEvidenceDraft.length} onclick={() => void saveFinding()}>{savingFinding ? 'Saving…' : 'Save Finding'}</Button>
+						</div>
+					</section>
 								{:else}
 									<p role="status">No saved record was returned for this run.</p>
 								{/if}
@@ -1421,6 +1599,27 @@
 	.question-run-links { display: flex; align-items: center; gap: var(--space-1); margin: 0 0 var(--space-2); color: var(--text-faint); font-size: var(--fs-xs); }
 	.question-run-links > span { margin-right: var(--space-1); }
 	.question-run-links :global(button) { min-height: 28px; padding-inline: var(--space-2); }
+	.findings { display: grid; gap: var(--space-3); padding: var(--space-4) 0; margin-top: var(--space-4); border-top: 1px solid var(--border); }
+	.findings-heading, .finding-card-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); }
+	.findings-heading h3, .finding-card h4 { margin: 0; font-size: var(--fs-md); font-weight: 650; }
+	.findings-heading p { margin: var(--space-1) 0 0; color: var(--text-dim); font-size: var(--fs-xs); }
+	.findings-heading > span { color: var(--text-faint); font-size: var(--fs-xs); white-space: nowrap; }
+	.finding-list { display: grid; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+	.finding-card { display: grid; gap: var(--space-2); min-width: 0; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg); }
+	.finding-card-heading > div { min-width: 0; }
+	.finding-card-heading h4 { font-size: var(--fs-sm); }
+	.finding-card-heading p { margin: var(--space-1) 0 0; font-size: var(--fs-sm); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+	.finding-provenance { display: grid; gap: var(--space-2); margin: 0; padding-top: var(--space-2); border-top: 1px solid var(--border); }
+	.finding-provenance > div { display: grid; grid-template-columns: 132px minmax(0, 1fr); gap: var(--space-2); }
+	.finding-provenance dt { color: var(--text-faint); font-size: var(--fs-xs); }
+	.finding-provenance dd { min-width: 0; margin: 0; font-size: var(--fs-xs); overflow-wrap: anywhere; }
+	.finding-provenance code { padding: 1px 4px; border-radius: var(--radius-sm); background: var(--bg-inset); font-size: 11px; }
+	.finding-run-link { padding: 0; border: 0; background: transparent; color: var(--brand); font: inherit; text-align: left; cursor: pointer; overflow-wrap: anywhere; }
+	.finding-run-link:hover { text-decoration: underline; }
+	.finding-edit-note, .findings-empty { margin: 0; color: var(--text-faint); font-size: var(--fs-xs); }
+	:global(.finding-edit-field) { width: 100%; min-height: 72px; resize: vertical; }
+	.finding-edit-actions, .finding-capture-actions { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-2); }
+	.finding-error { margin: 0; color: var(--danger, #b42318); font-size: var(--fs-xs); overflow-wrap: anywhere; }
 	.analysis-runs { display: grid; gap: var(--space-3); padding: var(--space-4) 0; margin-top: var(--space-4); border-top: 1px solid var(--border); }
 	.analysis-runs-heading, .analysis-run-detail > header { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); }
 	.analysis-runs-heading h3, .analysis-run-detail h4 { margin: 0; font-size: var(--fs-md); font-weight: 650; }
@@ -1462,6 +1661,20 @@
 	.analysis-run-question-links label span { display: grid; min-width: 0; gap: 2px; }
 	.analysis-run-question-links label strong { font-size: var(--fs-xs); font-weight: 600; }
 	.analysis-run-question-links label small { color: var(--text-dim); font-size: var(--fs-xs); overflow-wrap: anywhere; }
+	.finding-capture { display: grid; gap: var(--space-2); min-width: 0; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-inset); }
+	.finding-capture header h5 { margin: 0; color: var(--text); font-size: var(--fs-sm); font-weight: 650; }
+	.finding-capture header p { margin: 3px 0 0; color: var(--text-dim); font-size: var(--fs-xs); }
+	.finding-capture > label { margin: var(--space-1) 0 0; color: var(--text-faint); font-size: var(--fs-xs); font-weight: 600; }
+	.finding-capture :global(.finding-capture-field) { width: 100%; min-height: 66px; resize: vertical; }
+	.finding-capture select { width: 100%; min-width: 0; padding: 7px 9px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); color: var(--text); font: inherit; font-size: var(--fs-sm); }
+	.finding-evidence-select { display: grid; gap: var(--space-2); min-width: 0; padding: var(--space-2) var(--space-3); margin: var(--space-1) 0 0; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); }
+	.finding-evidence-select legend { padding: 0 var(--space-1); color: var(--text-faint); font-size: var(--fs-xs); font-weight: 600; }
+	.finding-evidence-select label { display: flex; align-items: flex-start; gap: var(--space-2); margin: 0; font-size: var(--fs-xs); cursor: pointer; }
+	.finding-evidence-select input { flex: none; margin-top: 2px; accent-color: var(--brand); }
+	.finding-evidence-select label span { min-width: 0; overflow-wrap: anywhere; }
+	.finding-evidence-select p { margin: 0; color: var(--text-faint); font-size: var(--fs-xs); }
+	.finding-capture-actions { margin-top: var(--space-1); }
+	.finding-capture-actions > span { margin-right: auto; color: var(--text-faint); font-size: var(--fs-xs); }
 	.analysis-run-error { margin: 0; color: var(--danger, #b42318); font-size: var(--fs-xs); overflow-wrap: anywhere; }
 	.run-preview { display: grid; gap: var(--space-3); padding: var(--space-3); border: 1px solid var(--border); border-left: 3px solid var(--brand); border-radius: var(--radius-md); background: var(--bg-inset); }
 	.run-preview header h4 { margin: 0; font-size: var(--fs-sm); font-weight: 650; }

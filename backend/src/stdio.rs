@@ -16,8 +16,8 @@ use serde_json::Value;
 
 use crate::engine::{
     AskOptions, Catalog, ClarificationReply, ContextReference, EngineError, EngineResult,
-    EngineState, InvestigationDefinitionInput, InvestigationQuestionInput,
-    InvestigationSourceSelection, WorkspaceProgress,
+    EngineState, InvestigationDefinitionInput, InvestigationFindingInput,
+    InvestigationQuestionInput, InvestigationSourceSelection, WorkspaceProgress,
 };
 
 type Output = Arc<Mutex<BufWriter<io::Stdout>>>;
@@ -495,6 +495,25 @@ async fn dispatch(
         "investigation_definition_load" => {
             let definition_id: String = required(&request.params, "definitionId")?;
             value_result(engine.investigation_definition_load(&definition_id))
+        }
+        "investigation_create_finding" => {
+            let investigation_id: String = required(&request.params, "investigationId")?;
+            let finding: InvestigationFindingInput = required(&request.params, "finding")?;
+            value_result(engine.investigation_create_finding(&investigation_id, finding))
+        }
+        "investigation_update_finding_claim" => {
+            let investigation_id: String = required(&request.params, "investigationId")?;
+            let finding_id: String = required(&request.params, "findingId")?;
+            let claim: String = required(&request.params, "claim")?;
+            value_result(engine.investigation_update_finding_claim(
+                &investigation_id,
+                &finding_id,
+                &claim,
+            ))
+        }
+        "investigation_finding_load" => {
+            let finding_id: String = required(&request.params, "findingId")?;
+            value_result(engine.investigation_finding_load(&finding_id))
         }
         "investigation_propose_questions" => {
             let investigation_id: String = required(&request.params, "investigationId")?;

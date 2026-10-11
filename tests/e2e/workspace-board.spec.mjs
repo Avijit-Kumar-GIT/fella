@@ -59,6 +59,7 @@ async function installDesktopMock(
 		const analysisTurns = new Map();
 		const questionRecords = new Map();
 		const definitionRecords = new Map();
+		const findingRecords = new Map();
 		const investigationEnsureCalls = [];
 		const questionProposalCalls = [];
 		const deletedConversationIds = [];
@@ -145,6 +146,7 @@ async function installDesktopMock(
 		window.__workspaceQuestionProposalCalls = questionProposalCalls;
 		window.__workspaceInvestigations = () => [...investigations.values()];
 		window.__workspaceDefinitionRecords = () => [...definitionRecords.values()];
+		window.__workspaceFindingRecords = () => [...findingRecords.values()];
 		window.__workspaceSetRunLinks = (id, runIds) => {
 			for (const [key, record] of investigations) {
 				if (record.id === id) investigations.set(key, { ...record, analysis_turn_ids: [...runIds] });
@@ -189,6 +191,7 @@ async function installDesktopMock(
 								brief: { goal, audience: '', desired_output: '', constraints: [] },
 								questions: rootQuestion ? [rootQuestion] : [],
 								definitions: [],
+								findings: [],
 								source_selection: { mode: 'all_sources', included_paths: [] },
 								brief_source_message_id: args.sourceMessageId,
 								analysis_turn_ids: [],
@@ -328,6 +331,44 @@ async function installDesktopMock(
 						const definition = definitionRecords.get(args.definitionId);
 						if (!definition) throw new Error(`Unknown definition: ${args.definitionId}`);
 						return definition;
+					}
+					case 'investigation_create_finding': {
+						const findingInput = args.finding;
+						const run = analysisTurns.get(findingInput.analysis_turn_id);
+						if (!run) throw new Error(`Unknown analysis turn: ${findingInput.analysis_turn_id}`);
+						const available = new Set(run.result.evidence.map((item) => item?.id).filter(Boolean));
+						if (findingInput.evidence_ids.some((id) => !available.has(id))) throw new Error('Finding evidence must belong to its linked run.');
+						for (const [key, record] of investigations) {
+							if (record.id !== args.investigationId) continue;
+							if (!(record.analysis_turn_ids ?? []).includes(findingInput.analysis_turn_id)) throw new Error('Finding run is not linked to this Investigation.');
+							if (!(record.questions ?? []).some((question) => question.id === findingInput.question_id)) throw new Error('Finding Question is not active in this Investigation.');
+							const now = Date.now();
+							const finding = { id: `finding-${findingRecords.size + 1}`, investigation_id: record.id, ...findingInput, created_at_ms: now, updated_at_ms: now };
+							findingRecords.set(finding.id, finding);
+							const updated = { ...record, findings: [...(record.findings ?? []), finding], updated_at_ms: now };
+							investigations.set(key, updated);
+							return updated;
+						}
+						throw new Error(`Unknown Investigation: ${args.investigationId}`);
+					}
+					case 'investigation_update_finding_claim': {
+						for (const [key, record] of investigations) {
+							if (record.id !== args.investigationId) continue;
+							const finding = findingRecords.get(args.findingId);
+							if (!finding || finding.investigation_id !== record.id) throw new Error('Finding does not belong to this Investigation.');
+							const now = Date.now();
+							const updatedFinding = { ...finding, claim: args.claim, updated_at_ms: now };
+							findingRecords.set(args.findingId, updatedFinding);
+							const updated = { ...record, findings: (record.findings ?? []).map((item) => item.id === args.findingId ? updatedFinding : item), updated_at_ms: now };
+							investigations.set(key, updated);
+							return updated;
+						}
+						throw new Error(`Unknown Investigation: ${args.investigationId}`);
+					}
+					case 'investigation_finding_load': {
+						const finding = findingRecords.get(args.findingId);
+						if (!finding) throw new Error(`Unknown Finding: ${args.findingId}`);
+						return finding;
 					}
 					case 'investigation_propose_questions':
 						questionProposalCalls.push(args);
@@ -1172,6 +1213,70 @@ test('saved Investigation definitions are revisioned, attached to later asks, an
 	const removed = await page.evaluate((id) => window.fella.invoke('investigation_definition_load', { definitionId: id }), definitionId);
 	expect(removed).toMatchObject({ status: 'removed', revision: 3 });
 	expect(removed.history).toHaveLength(2);
+});
+
+test('Findings are saved outside the transcript and claim edits preserve run and evidence links', async ({ page }) => {
+	const supportingEvidence = {
+		id: 'finding-evidence-retention',
+		tool: 'run_sql',
+		result_summary: 'Observed retention by signup cohort across the selected period.',
+		sql: 'SELECT cohort, retention_rate FROM cohort_retention',
+		sources: [{ source: 'sales.csv', table: 'cohort_retention' }]
+	};
+	await installDesktopMock(page, {
+		detailEvidence: supportingEvidence,
+		questionRunOutcomes: [{
+			status: 'answered',
+			answer_text: 'Retention rose by 14% across the observed cohorts.'
+		}]
+	});
+	await page.goto('/');
+	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
+	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
+	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill('Explain retention by signup cohort.');
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	await page.getByRole('button', { name: 'Analyze main Question' }).click();
+	await page.getByRole('region', { name: 'Review this run' }).getByRole('button', { name: 'Run this Question' }).click();
+	await expect(page.getByText('Retention rose by 14% across the observed cohorts.')).toBeVisible();
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	await page.getByRole('button', { name: /Open saved analysis run 1:/ }).click();
+
+	const capture = page.getByRole('region', { name: 'Saved analysis run' }).locator('.finding-capture');
+	await expect(capture.getByRole('textbox', { name: 'Finding claim' })).toHaveValue('Retention rose by 14% across the observed cohorts.');
+	await expect(capture).toContainText('Observed retention by signup cohort across the selected period.');
+	await capture.getByRole('button', { name: 'Save Finding' }).click();
+
+	const findingCard = page.locator('.finding-card');
+	await expect(findingCard).toContainText('Retention rose by 14% across the observed cohorts.');
+	await expect(findingCard).toContainText('Explain retention by signup cohort.');
+	await expect(findingCard).toContainText('finding-evidence-retention');
+	const originalFinding = await page.evaluate(() => window.__workspaceFindingRecords()[0]);
+	expect(originalFinding).toMatchObject({
+		claim: 'Retention rose by 14% across the observed cohorts.',
+		question_id: expect.any(String),
+		analysis_turn_id: 'fixture-question-turn-1',
+		evidence_ids: ['finding-evidence-retention']
+	});
+	await findingCard.getByRole('button', { name: 'Edit claim' }).click();
+	await page.getByRole('textbox', { name: 'Edit Finding claim' }).fill('Retention increased in every observed cohort.');
+	await findingCard.getByRole('button', { name: 'Save claim' }).click();
+	await expect(findingCard).toContainText('Retention increased in every observed cohort.');
+	const editedFinding = await page.evaluate(() => window.__workspaceFindingRecords()[0]);
+	expect(editedFinding).toMatchObject({
+		id: originalFinding.id,
+		claim: 'Retention increased in every observed cohort.',
+		question_id: originalFinding.question_id,
+		analysis_turn_id: originalFinding.analysis_turn_id,
+		evidence_ids: originalFinding.evidence_ids
+	});
+	await page.getByRole('button', { name: 'Open conversation', exact: true }).click();
+	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
+	// Running the saved Question adds a fresh turn; the original request remains first.
+	const originalRequest = page.locator('.msg.user').first().locator('.you-copy');
+	await expect(originalRequest).toHaveText('Explain retention by signup cohort.');
 });
 
 test('suggested Question breakdown stays a draft until saved as durable child records', async ({ page }) => {

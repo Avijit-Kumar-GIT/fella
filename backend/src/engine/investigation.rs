@@ -16,6 +16,7 @@ use crate::engine::error::{EngineError, EngineResult};
 const INVESTIGATIONS_DIR: &str = "investigations";
 const QUESTIONS_DIR: &str = "questions";
 const DEFINITIONS_DIR: &str = "definitions";
+const FINDINGS_DIR: &str = "findings";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -167,6 +168,29 @@ pub struct InvestigationDefinitionSnapshot {
     pub text: String,
 }
 
+/// A concise analyst-authored conclusion, anchored to the Question it answers,
+/// the canonical run that produced it, and exact evidence IDs from that run.
+/// Only `claim` is editable; the provenance links are immutable.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InvestigationFinding {
+    pub id: String,
+    pub investigation_id: String,
+    pub question_id: String,
+    pub analysis_turn_id: String,
+    pub evidence_ids: Vec<String>,
+    pub claim: String,
+    pub created_at_ms: u64,
+    pub updated_at_ms: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InvestigationFindingInput {
+    pub question_id: String,
+    pub analysis_turn_id: String,
+    pub evidence_ids: Vec<String>,
+    pub claim: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InvestigationContextSnapshot {
     pub investigation_id: String,
@@ -302,6 +326,10 @@ pub struct Investigation {
     /// and prior revisions live in `definitions/<id>.json`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub definitions: Option<Vec<InvestigationDefinition>>,
+    /// Durable conclusions listed independently from the conversation. Each
+    /// Finding is stored in `findings/<id>.json` and references canonical runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub findings: Option<Vec<InvestigationFinding>>,
     /// Current analyst-selected files. Each AnalysisTurn separately stores
     /// the immutable selection snapshot it ran with.
     #[serde(default)]
@@ -342,6 +370,8 @@ struct InvestigationRecord {
     questions: Option<Vec<LegacyQuestion>>,
     #[serde(default)]
     definition_ids: Option<Vec<String>>,
+    #[serde(default)]
+    finding_ids: Option<Vec<String>>,
     #[serde(default)]
     source_selection: InvestigationSourceSelection,
     title: String,
@@ -403,6 +433,18 @@ fn definition_path(data_dir: &Path, id: &str) -> EngineResult<PathBuf> {
     Ok(data_dir.join(DEFINITIONS_DIR).join(format!("{id}.json")))
 }
 
+fn finding_path(data_dir: &Path, id: &str) -> EngineResult<PathBuf> {
+    if id.is_empty()
+        || id.chars().count() > 128
+        || !id
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-'))
+    {
+        return Err(EngineError::msg("invalid Investigation Finding id"));
+    }
+    Ok(data_dir.join(FINDINGS_DIR).join(format!("{id}.json")))
+}
+
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -418,6 +460,19 @@ fn new_question_id() -> EngineResult<String> {
         .map_err(|error| EngineError::msg(format!("create question id: {error}")))?;
     Ok(format!(
         "q_{}",
+        random
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    ))
+}
+
+fn new_finding_id() -> EngineResult<String> {
+    let mut random = [0u8; 16];
+    getrandom::fill(&mut random)
+        .map_err(|error| EngineError::msg(format!("create Finding id: {error}")))?;
+    Ok(format!(
+        "f_{}",
         random
             .iter()
             .map(|byte| format!("{byte:02x}"))
@@ -674,6 +729,195 @@ pub fn definition_load(data_dir: &Path, id: &str) -> EngineResult<InvestigationD
     Ok(definition)
 }
 
+fn write_finding_record(data_dir: &Path, finding: &InvestigationFinding) -> EngineResult<()> {
+    let path = finding_path(data_dir, &finding.id)?;
+    let body = serde_json::to_vec_pretty(finding).map_err(EngineError::from)?;
+    write_json_atomic(&path, &finding.id, &body)
+}
+
+pub fn finding_load(data_dir: &Path, id: &str) -> EngineResult<InvestigationFinding> {
+    let path = finding_path(data_dir, id)?;
+    let body = std::fs::read_to_string(&path)
+        .map_err(|error| EngineError::io(format!("read {}", path.display()), error))?;
+    let finding: InvestigationFinding = serde_json::from_str(&body)
+        .map_err(|error| EngineError::msg(format!("Finding {id} is not valid JSON: {error}")))?;
+    if finding.id != id {
+        return Err(EngineError::msg(format!(
+            "Finding file {} contains a mismatched id",
+            path.display()
+        )));
+    }
+    Ok(finding)
+}
+
+/// Save a concise conclusion against an active Question and a canonical
+/// AnalysisTurn already linked to this Investigation. Evidence IDs must exist
+/// in that exact run; evidence payloads are never duplicated here.
+pub fn create_finding(
+    data_dir: &Path,
+    investigation_id: &str,
+    mut input: InvestigationFindingInput,
+) -> EngineResult<Investigation> {
+    const MAX_CLAIM_CHARS: usize = 2_000;
+    const MAX_EVIDENCE_LINKS: usize = 100;
+    const MAX_REFERENCE_CHARS: usize = 256;
+
+    input.claim = input.claim.trim().to_owned();
+    input.question_id = input.question_id.trim().to_owned();
+    input.analysis_turn_id = input.analysis_turn_id.trim().to_owned();
+    if input.claim.is_empty() || input.claim.chars().count() > MAX_CLAIM_CHARS {
+        return Err(EngineError::msg(
+            "a Finding claim must be non-empty and no longer than 2000 characters",
+        ));
+    }
+    if input.question_id.is_empty()
+        || input.question_id.chars().count() > MAX_REFERENCE_CHARS
+        || input.analysis_turn_id.is_empty()
+        || input.analysis_turn_id.chars().count() > MAX_REFERENCE_CHARS
+    {
+        return Err(EngineError::msg(
+            "Finding Question or run reference is invalid",
+        ));
+    }
+    if input.evidence_ids.is_empty() || input.evidence_ids.len() > MAX_EVIDENCE_LINKS {
+        return Err(EngineError::msg(
+            "a Finding must reference between 1 and 100 evidence items",
+        ));
+    }
+    let mut requested_evidence = HashSet::new();
+    for evidence_id in &mut input.evidence_ids {
+        *evidence_id = evidence_id.trim().to_owned();
+        if evidence_id.is_empty()
+            || evidence_id.chars().count() > MAX_REFERENCE_CHARS
+            || evidence_id.chars().any(char::is_control)
+            || !requested_evidence.insert(evidence_id.clone())
+        {
+            return Err(EngineError::msg(
+                "Finding evidence references must be non-empty, unique IDs",
+            ));
+        }
+    }
+
+    let mut record = load(data_dir, investigation_id)?;
+    if !record
+        .questions
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .any(|question| question.id == input.question_id)
+    {
+        return Err(EngineError::msg(
+            "the Finding Question is not active in this Investigation",
+        ));
+    }
+    let run_is_linked = record
+        .analysis_turn_ids
+        .iter()
+        .any(|turn_id| turn_id == &input.analysis_turn_id)
+        || record
+            .questions
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .any(|question| {
+                question
+                    .analysis_turn_ids
+                    .iter()
+                    .any(|turn_id| turn_id == &input.analysis_turn_id)
+            });
+    if !run_is_linked {
+        return Err(EngineError::msg(
+            "the Finding run is not linked to this Investigation",
+        ));
+    }
+    let turn = crate::engine::analysis_store::load(data_dir, &input.analysis_turn_id)?;
+    if turn.workspace.as_deref() != Some(record.workspace_id.as_str()) {
+        return Err(EngineError::msg(
+            "the Finding run belongs to a different workspace",
+        ));
+    }
+    let available_evidence: HashSet<&str> = turn
+        .result
+        .evidence
+        .iter()
+        .filter_map(|item| item.get("id").and_then(serde_json::Value::as_str))
+        .collect();
+    if requested_evidence
+        .iter()
+        .any(|evidence_id| !available_evidence.contains(evidence_id.as_str()))
+    {
+        return Err(EngineError::msg(
+            "every Finding evidence reference must exist in its linked run",
+        ));
+    }
+
+    let mut finding_id = new_finding_id()?;
+    for _ in 0..4 {
+        if !finding_path(data_dir, &finding_id)?.exists() {
+            break;
+        }
+        finding_id = new_finding_id()?;
+    }
+    let path = finding_path(data_dir, &finding_id)?;
+    if path.exists() {
+        return Err(EngineError::msg("could not allocate a unique Finding id"));
+    }
+    let timestamp = now_ms();
+    let finding = InvestigationFinding {
+        id: finding_id,
+        investigation_id: record.id.clone(),
+        question_id: input.question_id,
+        analysis_turn_id: input.analysis_turn_id,
+        evidence_ids: input.evidence_ids,
+        claim: input.claim,
+        created_at_ms: timestamp,
+        updated_at_ms: timestamp,
+    };
+    write_finding_record(data_dir, &finding)?;
+    if !record
+        .analysis_turn_ids
+        .iter()
+        .any(|turn_id| turn_id == &finding.analysis_turn_id)
+    {
+        record
+            .analysis_turn_ids
+            .push(finding.analysis_turn_id.clone());
+    }
+    record.findings.get_or_insert_with(Vec::new).push(finding);
+    record.updated_at_ms = now_ms().max(record.updated_at_ms.saturating_add(1));
+    write_record(data_dir, &record)?;
+    Ok(record)
+}
+
+/// Edit the Finding's prose without changing its Question, canonical run, or
+/// exact evidence references.
+pub fn update_finding_claim(
+    data_dir: &Path,
+    investigation_id: &str,
+    finding_id: &str,
+    claim: &str,
+) -> EngineResult<Investigation> {
+    const MAX_CLAIM_CHARS: usize = 2_000;
+    let claim = claim.trim();
+    if claim.is_empty() || claim.chars().count() > MAX_CLAIM_CHARS {
+        return Err(EngineError::msg(
+            "a Finding claim must be non-empty and no longer than 2000 characters",
+        ));
+    }
+    let mut record = load(data_dir, investigation_id)?;
+    let finding = record
+        .findings
+        .as_mut()
+        .and_then(|findings| findings.iter_mut().find(|finding| finding.id == finding_id))
+        .ok_or_else(|| EngineError::msg("Finding does not belong to this Investigation"))?;
+    finding.claim = claim.to_owned();
+    finding.updated_at_ms = now_ms().max(finding.updated_at_ms.saturating_add(1));
+    write_finding_record(data_dir, finding)?;
+    record.updated_at_ms = now_ms().max(record.updated_at_ms.saturating_add(1));
+    write_record(data_dir, &record)?;
+    Ok(record)
+}
+
 /// Capture the active definition versions from the canonical Investigation.
 /// The returned value is self-contained and suitable for an AnalysisTurn.
 pub fn context_snapshot(data_dir: &Path, id: &str) -> EngineResult<InvestigationContextSnapshot> {
@@ -775,6 +1019,7 @@ fn public_record(
     record: InvestigationRecord,
     questions: Vec<InvestigationQuestion>,
     definitions: Vec<InvestigationDefinition>,
+    findings: Vec<InvestigationFinding>,
 ) -> Investigation {
     Investigation {
         id: record.id,
@@ -782,6 +1027,7 @@ fn public_record(
         conversation_id: record.conversation_id,
         questions: Some(questions),
         definitions: Some(definitions),
+        findings: Some(findings),
         source_selection: record.source_selection,
         title: record.title,
         brief: record.brief,
@@ -813,6 +1059,23 @@ fn read_record(path: &Path, expected_id: &str, data_dir: &Path) -> EngineResult<
         loaded
     } else {
         record.definition_ids = Some(Vec::new());
+        changed = true;
+        Vec::new()
+    };
+    let findings = if let Some(ids) = record.finding_ids.clone() {
+        let mut loaded = Vec::with_capacity(ids.len());
+        for id in ids {
+            let finding = finding_load(data_dir, &id)?;
+            if finding.investigation_id != expected_id {
+                return Err(EngineError::msg(format!(
+                    "Finding {id} does not belong to Investigation {expected_id}"
+                )));
+            }
+            loaded.push(finding);
+        }
+        loaded
+    } else {
+        record.finding_ids = Some(Vec::new());
         changed = true;
         Vec::new()
     };
@@ -890,7 +1153,7 @@ fn read_record(path: &Path, expected_id: &str, data_dir: &Path) -> EngineResult<
     if changed {
         write_raw_record(data_dir, &record)?;
     }
-    Ok(public_record(record, questions, definitions))
+    Ok(public_record(record, questions, definitions, findings))
 }
 
 fn write_raw_record(data_dir: &Path, record: &InvestigationRecord) -> EngineResult<()> {
@@ -916,6 +1179,7 @@ fn persist_new_record(data_dir: &Path, record: &Investigation) -> EngineResult<(
         ),
         questions: None,
         definition_ids: Some(Vec::new()),
+        finding_ids: Some(Vec::new()),
         source_selection: record.source_selection.clone(),
         title: record.title.clone(),
         brief: record.brief.clone(),
@@ -1022,6 +1286,7 @@ pub fn create(
             conversation_id: conversation_id.map(str::to_owned),
             questions: Some(questions.clone()),
             definitions: Some(Vec::new()),
+            findings: Some(Vec::new()),
             source_selection: InvestigationSourceSelection::default(),
             title: title.to_owned(),
             brief: InvestigationBrief {
@@ -1545,6 +1810,15 @@ fn write_record(data_dir: &Path, record: &Investigation) -> EngineResult<()> {
                 .iter()
                 .filter(|definition| definition.status == InvestigationDefinitionStatus::Active)
                 .map(|definition| definition.id.clone())
+                .collect(),
+        ),
+        finding_ids: Some(
+            record
+                .findings
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .map(|finding| finding.id.clone())
                 .collect(),
         ),
         source_selection: record.source_selection.clone(),
@@ -2886,6 +3160,97 @@ mod tests {
     }
 
     #[test]
+    fn findings_keep_canonical_provenance_when_the_claim_is_edited() {
+        let data_dir = scratch();
+        let created = create(
+            &data_dir,
+            "/work/analysis",
+            "Retention",
+            Some("Compare retention by cohort"),
+            Some("message-1"),
+            None,
+        )
+        .unwrap();
+        let question_id = created.questions.as_ref().unwrap()[0].id.clone();
+        let turn: crate::engine::runtime::AnalysisTurn =
+            serde_json::from_value(serde_json::json!({
+                "id": "turn-finding-test",
+                "conversation_id": "conversation-finding-test",
+                "question": "Compare retention by cohort",
+                "workspace": "/work/analysis",
+                "workspace_revision": "revision-1",
+                "state": "accepted",
+                "plan": { "strategy": "direct_tools", "steps": ["run_sql"] },
+                "trace": {
+                    "id": "trace-finding-test",
+                    "turn_id": "turn-finding-test",
+                    "workspace_revision": "revision-1",
+                    "steps": []
+                },
+                "result": {
+                    "text": "Retention rose across the observed cohorts.",
+                    "status": "verified",
+                    "verification": [],
+                    "evidence": [{ "id": "evidence-retention", "tool": "run_sql" }]
+                }
+            }))
+            .unwrap();
+        crate::engine::analysis_store::save(&data_dir, &turn).unwrap();
+        link_analysis_turns(&data_dir, &created.id, &[turn.id.clone()]).unwrap();
+
+        let saved = create_finding(
+            &data_dir,
+            &created.id,
+            InvestigationFindingInput {
+                question_id,
+                analysis_turn_id: turn.id.clone(),
+                evidence_ids: vec!["evidence-retention".to_owned()],
+                claim: "  Retention rose across the observed cohorts.  ".to_owned(),
+            },
+        )
+        .unwrap();
+        let original = saved.findings.as_ref().unwrap()[0].clone();
+        assert_eq!(
+            original.claim,
+            "Retention rose across the observed cohorts."
+        );
+        assert_eq!(original.analysis_turn_id, turn.id);
+        assert_eq!(finding_load(&data_dir, &original.id).unwrap(), original);
+
+        let edited = update_finding_claim(
+            &data_dir,
+            &created.id,
+            &original.id,
+            "Retention increased in each observed cohort.",
+        )
+        .unwrap();
+        let updated = edited.findings.as_ref().unwrap()[0].clone();
+        assert_eq!(
+            updated.claim,
+            "Retention increased in each observed cohort."
+        );
+        assert_eq!(updated.question_id, original.question_id);
+        assert_eq!(updated.analysis_turn_id, original.analysis_turn_id);
+        assert_eq!(updated.evidence_ids, original.evidence_ids);
+        assert!(updated.updated_at_ms >= original.updated_at_ms);
+        assert_eq!(load(&data_dir, &created.id).unwrap(), edited);
+
+        assert!(create_finding(
+            &data_dir,
+            &created.id,
+            InvestigationFindingInput {
+                question_id: updated.question_id.clone(),
+                analysis_turn_id: turn.id.clone(),
+                evidence_ids: vec!["not-in-this-run".to_owned()],
+                claim: "Unsupported evidence should be rejected.".to_owned(),
+            },
+        )
+        .is_err());
+
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
     fn old_records_without_a_brief_load_with_an_empty_brief() {
         let data_dir = scratch();
         let created = create(&data_dir, "/work/analysis", "Legacy", None, None, None).unwrap();
@@ -2901,6 +3266,7 @@ mod tests {
             .remove("brief_reviewed_message_id");
         json.as_object_mut().unwrap().remove("analysis_turn_ids");
         json.as_object_mut().unwrap().remove("conversation_id");
+        json.as_object_mut().unwrap().remove("finding_ids");
         std::fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
 
         assert_eq!(
@@ -2916,6 +3282,11 @@ mod tests {
         assert!(load(&data_dir, &created.id)
             .unwrap()
             .analysis_turn_ids
+            .is_empty());
+        assert!(load(&data_dir, &created.id)
+            .unwrap()
+            .findings
+            .unwrap()
             .is_empty());
         let _ = std::fs::remove_dir_all(data_dir);
     }

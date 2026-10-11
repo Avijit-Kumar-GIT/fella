@@ -19,8 +19,9 @@ use crate::engine::evidence::{Answer, AskEvent, EvidenceItem};
 use crate::engine::ingest::docs;
 use crate::engine::investigation::{
     self, Investigation, InvestigationBrief, InvestigationContextSnapshot, InvestigationDefinition,
-    InvestigationDefinitionInput, InvestigationQuestion, InvestigationQuestionAnswerStatus,
-    InvestigationQuestionInput, InvestigationSourceSelection, QuestionBreakdownProposal,
+    InvestigationDefinitionInput, InvestigationFinding, InvestigationFindingInput,
+    InvestigationQuestion, InvestigationQuestionAnswerStatus, InvestigationQuestionInput,
+    InvestigationSourceSelection, QuestionBreakdownProposal,
 };
 use crate::engine::llm::{LlmClient, ProviderHealth};
 use crate::engine::memory::{self, FolderMemory};
@@ -2274,6 +2275,39 @@ impl EngineState {
     /// Load one Definition record, including its prior analyst-edited values.
     pub fn investigation_definition_load(&self, id: &str) -> EngineResult<InvestigationDefinition> {
         investigation::definition_load(&self.data_dir, id)
+    }
+
+    /// Save a concise conclusion with immutable links to an Investigation
+    /// Question, canonical AnalysisTurn, and exact evidence IDs from that run.
+    pub fn investigation_create_finding(
+        &self,
+        id: &str,
+        input: InvestigationFindingInput,
+    ) -> EngineResult<Investigation> {
+        let _guard = self
+            .question_state_lock
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        investigation::create_finding(&self.data_dir, id, input)
+    }
+
+    /// Change only a Finding's claim text. Its source links remain immutable.
+    pub fn investigation_update_finding_claim(
+        &self,
+        id: &str,
+        finding_id: &str,
+        claim: &str,
+    ) -> EngineResult<Investigation> {
+        let _guard = self
+            .question_state_lock
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        investigation::update_finding_claim(&self.data_dir, id, finding_id, claim)
+    }
+
+    /// Load one Finding independently from its parent Investigation.
+    pub fn investigation_finding_load(&self, id: &str) -> EngineResult<InvestigationFinding> {
+        investigation::finding_load(&self.data_dir, id)
     }
 
     /// Load an independently persisted Question record by stable identity.
