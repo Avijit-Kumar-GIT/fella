@@ -1214,6 +1214,7 @@ test('verification outcomes stay beside their outputs and explain check limits',
 	await installDesktopMock(page, {
 		questionRunOutcomes: [{
 			status: 'incomplete',
+			reason: 'The available result does not support every claim; review the flagged $50 figure.',
 			verification_status: 'needs_review',
 			answer_text: 'Weekly sales were 40.',
 			checks,
@@ -1233,6 +1234,21 @@ test('verification outcomes stay beside their outputs and explain check limits',
 	await expect(page.getByRole('region', { name: 'Question run' })).toBeHidden();
 	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.').last()).toBeVisible();
 	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	// The check leaves this Question partial. Its documented gap may be closed,
+	// but neither the Question nor Investigation may be described as fully answered.
+	const affectedQuestion = page.locator('.root-question-item');
+	await expect(affectedQuestion.locator('[data-slot="badge"][data-question-status]')).toHaveText('Partial answer');
+	await expect(affectedQuestion.locator('.question-status-reason')).toContainText(
+		'The available result does not support every claim; review the flagged $50 figure.'
+	);
+	const coverage = page.getByRole('region', { name: 'Question coverage' });
+	await expect(coverage).toContainText(
+		'Ready to close with 1 documented gap; this does not mean every Question was fully answered.'
+	);
+	await expect(page.getByRole('button', { name: 'Mark complete' })).toBeEnabled();
+	await page.getByRole('button', { name: 'Mark complete' }).click();
+	await expect(coverage).toContainText('Investigation closed with documented gaps. It is not fully answered');
+	await expect(coverage).not.toContainText('Investigation fully answered.');
 	await page.getByRole('button', { name: 'Open saved analysis run 1: Explain weekly sales' }).click();
 
 	const runDetail = page.getByRole('region', { name: 'Saved analysis run' });

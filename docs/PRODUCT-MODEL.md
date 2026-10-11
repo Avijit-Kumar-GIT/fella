@@ -549,3 +549,25 @@ coupling. The #219 end-to-end Investigation/report journey continues to run
 with no Project present, establishing that analysis and handoff do not depend
 on the future consumer. A persistence test confirms that Project edits retain
 the stable links rather than copying Finding or artifact payloads.
+
+## Implementation checkpoint: incomplete coverage and QA status (#222)
+
+An incomplete answer with a flagged verification check remains visibly partial
+on its affected Question, with the run's review reason attached; it is not
+promoted to a complete answer. Acceptance criteria v2, clarified with the user,
+allow an analyst to close an Investigation when every remaining gap is
+explicitly documented, but require the UI to state both before and after
+closure that the Investigation is not fully answered. Blocked, running, and
+outdated Questions remain review work rather than documented data gaps. The
+targeted browser tests cover partial/blocked/outdated states, the failed-check
+to-Question link, documented-gap closure copy, and persisted gap visibility;
+the backend completion test verifies the same distinction. Browser scenarios
+use deterministic IPC outcomes and condition-based assertions rather than
+fixed sleeps, keeping product-state failures distinguishable from timing or
+locator failures.
+
+The first draft of the new failed-check assertion expected the close action to
+be disabled. That assertion failed because a documented incomplete result is
+intentionally closable; this was not treated as a product failure. After the
+user approved the documented-gap contract, the acceptance criteria were
+versioned to v2 and the browser cases were rerun against the revised criteria.
