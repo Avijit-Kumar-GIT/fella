@@ -19,8 +19,8 @@ use crate::engine::evidence::{Answer, AskEvent, EvidenceItem};
 use crate::engine::ingest::docs;
 use crate::engine::investigation::{
     self, Investigation, InvestigationBrief, InvestigationContextSnapshot, InvestigationDefinition,
-    InvestigationDefinitionInput, InvestigationQuestion, InvestigationQuestionInput,
-    InvestigationSourceSelection, QuestionBreakdownProposal,
+    InvestigationDefinitionInput, InvestigationQuestion, InvestigationQuestionAnswerStatus,
+    InvestigationQuestionInput, InvestigationSourceSelection, QuestionBreakdownProposal,
 };
 use crate::engine::llm::{LlmClient, ProviderHealth};
 use crate::engine::memory::{self, FolderMemory};
@@ -72,6 +72,67 @@ struct PersistAnalysisTurn<'a> {
     context_audit: &'a ContextAssemblyAudit,
     catalog: &'a Catalog,
     answer: &'a Answer,
+}
+
+fn question_answer_status(
+    answer: &Answer,
+    cancelled: bool,
+) -> (InvestigationQuestionAnswerStatus, Option<String>) {
+    if cancelled {
+        return (
+            InvestigationQuestionAnswerStatus::Blocked,
+            Some("The run was stopped before a complete answer was verified.".to_owned()),
+        );
+    }
+    if let Some(clarification) = &answer.clarification {
+        let reason = clarification
+            .reason
+            .as_deref()
+            .filter(|reason| !reason.trim().is_empty())
+            .unwrap_or(&clarification.question);
+        return (
+            InvestigationQuestionAnswerStatus::Incomplete,
+            Some(compact_status_reason(reason)),
+        );
+    }
+
+    let check_reason = answer
+        .verification
+        .iter()
+        .find(|check| !check.ok)
+        .and_then(|check| check.detail.as_deref())
+        .filter(|reason| !reason.trim().is_empty());
+    let unresolved_reason = answer
+        .contract
+        .as_ref()
+        .and_then(|contract| contract.unresolved.first())
+        .map(String::as_str);
+    match answer.status {
+        crate::engine::evidence::VerificationStatus::Verified => {
+            (InvestigationQuestionAnswerStatus::Answered, None)
+        }
+        crate::engine::evidence::VerificationStatus::NeedsReview
+        | crate::engine::evidence::VerificationStatus::InsufficientData => (
+            InvestigationQuestionAnswerStatus::Incomplete,
+            Some(compact_status_reason(
+                check_reason
+                    .or(unresolved_reason)
+                    .unwrap_or("The run returned without fully answering this Question."),
+            )),
+        ),
+        crate::engine::evidence::VerificationStatus::Failed => (
+            InvestigationQuestionAnswerStatus::Blocked,
+            Some(compact_status_reason(
+                check_reason
+                    .or(unresolved_reason)
+                    .unwrap_or("The analysis could not be verified."),
+            )),
+        ),
+    }
+}
+
+fn compact_status_reason(reason: &str) -> String {
+    reason.trim().chars().take(240).collect()
 }
 
 #[derive(Default)]
@@ -180,6 +241,9 @@ pub struct EngineState {
     /// Serialize resolve-or-create so two first-turn requests cannot race
     /// into duplicate durable Investigations for one source message.
     investigation_ensure_lock: Mutex<()>,
+    /// Serialize Question status, plan, definition, and scope updates so a
+    /// finishing run cannot overwrite a concurrent analyst edit.
+    question_state_lock: Mutex<()>,
     sqlite: Mutex<rusqlite::Connection>,
     inner: Mutex<Inner>,
     http: reqwest::Client,
@@ -1285,6 +1349,7 @@ mod conversation_context_tests {
                 investigation_context: Some(InvestigationContextSnapshot {
                     investigation_id: "investigation-1".into(),
                     question_id: None,
+                    question_text: None,
                     definitions: Vec::new(),
                     source_selection: selection.clone(),
                 }),
@@ -1724,6 +1789,7 @@ impl EngineState {
             workspace_gate: Arc::new(WorkspaceGate::default()),
             mount_serial: Mutex::new(()),
             investigation_ensure_lock: Mutex::new(()),
+            question_state_lock: Mutex::new(()),
             sqlite: Mutex::new(sqlite),
             inner: Mutex::new(Inner::default()),
             http,
@@ -2170,6 +2236,10 @@ impl EngineState {
         id: &str,
         questions: Vec<InvestigationQuestionInput>,
     ) -> EngineResult<Investigation> {
+        let _guard = self
+            .question_state_lock
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         investigation::update_questions(&self.data_dir, id, questions)
     }
 
@@ -2180,6 +2250,10 @@ impl EngineState {
         id: &str,
         definitions: Vec<InvestigationDefinitionInput>,
     ) -> EngineResult<Investigation> {
+        let _guard = self
+            .question_state_lock
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         investigation::update_definitions(&self.data_dir, id, definitions)
     }
 
@@ -2190,6 +2264,10 @@ impl EngineState {
         id: &str,
         selection: InvestigationSourceSelection,
     ) -> EngineResult<Investigation> {
+        let _guard = self
+            .question_state_lock
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         investigation::update_source_selection(&self.data_dir, id, selection)
     }
 
@@ -2200,6 +2278,10 @@ impl EngineState {
 
     /// Load an independently persisted Question record by stable identity.
     pub fn investigation_question_load(&self, id: &str) -> EngineResult<InvestigationQuestion> {
+        let question = investigation::question_load(&self.data_dir, id)?;
+        if question.answer_status == InvestigationQuestionAnswerStatus::Running {
+            let _ = self.recover_interrupted_question_runs(&question.investigation_id)?;
+        }
         investigation::question_load(&self.data_dir, id)
     }
 
@@ -2269,12 +2351,53 @@ impl EngineState {
 
     /// Load an Investigation independently of the conversation UI.
     pub fn investigation_load(&self, id: &str) -> EngineResult<Investigation> {
-        investigation::load(&self.data_dir, id)
+        self.recover_interrupted_question_runs(id)
     }
 
     /// List durable Investigation records, newest activity first.
     pub fn investigations_list(&self) -> EngineResult<Vec<Investigation>> {
-        investigation::list(&self.data_dir)
+        investigation::list(&self.data_dir)?
+            .into_iter()
+            .map(|item| self.recover_interrupted_question_runs(&item.id))
+            .collect()
+    }
+
+    fn recover_interrupted_question_runs(&self, id: &str) -> EngineResult<Investigation> {
+        let _guard = self
+            .question_state_lock
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let investigation = investigation::load(&self.data_dir, id)?;
+        let conversation_is_running =
+            investigation
+                .conversation_id
+                .as_deref()
+                .is_some_and(|conversation_id| {
+                    self.cancel
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .contains_key(conversation_id)
+                });
+        if conversation_is_running {
+            return Ok(investigation);
+        }
+
+        for question in investigation.questions.as_deref().unwrap_or_default() {
+            if question.answer_status != InvestigationQuestionAnswerStatus::Running {
+                continue;
+            }
+            if let Some(turn_id) = question.latest_analysis_turn_id.as_deref() {
+                investigation::question_run_finished(
+                    &self.data_dir,
+                    &investigation.id,
+                    &question.id,
+                    turn_id,
+                    InvestigationQuestionAnswerStatus::Blocked,
+                    Some("Fella stopped before saving an answer. Run this Question again."),
+                )?;
+            }
+        }
+        investigation::load(&self.data_dir, id)
     }
 
     /// Recent local run metadata for Settings. This is a projection of saved
@@ -4388,13 +4511,49 @@ exactly, character for character, from the list below.";
         // A fresh stop-flag for this run, registered under the conversation id so
         // `cancel_run(id)` can find it.
         let cancel = Arc::new(AtomicBool::new(false));
-        self.cancel
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(conversation_id.to_string(), cancel.clone());
+        let turn_id = crate::engine::runtime::new_turn_id();
+        let question_status_context = investigation_context
+            .as_ref()
+            .filter(|context| context.question_id.is_some());
+        {
+            let _guard = self
+                .question_state_lock
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            self.cancel
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .insert(conversation_id.to_string(), cancel.clone());
+            if let Some(snapshot) = question_status_context {
+                let is_active = investigation::question_load(
+                    &self.data_dir,
+                    snapshot.question_id.as_deref().unwrap_or_default(),
+                )
+                .is_ok_and(|question| {
+                    question.investigation_id == snapshot.investigation_id
+                        && question.status == investigation::InvestigationQuestionStatus::Active
+                });
+                if is_active {
+                    if let Err(error) = investigation::question_run_started(
+                        &self.data_dir,
+                        &snapshot.investigation_id,
+                        snapshot.question_id.as_deref().unwrap_or_default(),
+                        &turn_id,
+                    ) {
+                        let mut flags = self.cancel.lock().unwrap_or_else(|e| e.into_inner());
+                        if flags
+                            .get(conversation_id)
+                            .is_some_and(|flag| Arc::ptr_eq(flag, &cancel))
+                        {
+                            flags.remove(conversation_id);
+                        }
+                        return Err(error);
+                    }
+                }
+            }
+        }
 
         let llm = self.llm_with_model(&effective_model);
-        let turn_id = crate::engine::runtime::new_turn_id();
         emit(crate::engine::evidence::AskEvent::TurnState {
             turn_id: turn_id.clone(),
             state: crate::engine::runtime::TurnState::Received,
@@ -4423,28 +4582,87 @@ exactly, character for character, from the list below.";
             emit: &emit,
         })
         .await;
-        // Drop this run's stop-flag (unless a newer run for the same id already
-        // replaced it).
-        {
-            let mut flags = self.cancel.lock().unwrap_or_else(|e| e.into_inner());
-            if flags
-                .get(conversation_id)
-                .is_some_and(|f| Arc::ptr_eq(f, &cancel))
-            {
-                flags.remove(conversation_id);
+        let answer = match answer {
+            Ok(answer) => {
+                self.persist_analysis_turn(PersistAnalysisTurn {
+                    conversation_id,
+                    question: &analysis_question,
+                    context_refs,
+                    investigation_context: investigation_context.as_ref(),
+                    clarification: clarification.as_ref(),
+                    context_audit: &context.audit,
+                    catalog: &turn_catalog,
+                    answer: &answer,
+                });
+                if let Some(snapshot) = question_status_context {
+                    let question_id = snapshot.question_id.as_deref().unwrap_or_default();
+                    let context_is_current = investigation::context_snapshot_for_question(
+                        &self.data_dir,
+                        &snapshot.investigation_id,
+                        Some(question_id),
+                    )
+                    .is_ok_and(|current| current == *snapshot);
+                    let (status, reason) = if !context_is_current {
+                        (
+                            InvestigationQuestionAnswerStatus::Outdated,
+                            Some("The Question, source scope, or definitions changed during this run. Run the current Question again.".to_owned()),
+                        )
+                    } else {
+                        question_answer_status(&answer, cancel.load(Ordering::Relaxed))
+                    };
+                    let _guard = self
+                        .question_state_lock
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner());
+                    if let Err(error) = investigation::question_run_finished(
+                        &self.data_dir,
+                        &snapshot.investigation_id,
+                        question_id,
+                        &turn_id,
+                        status,
+                        reason.as_deref(),
+                    ) {
+                        log::warn!("could not update Question status for run {turn_id}: {error}");
+                    }
+                }
+                let mut flags = self.cancel.lock().unwrap_or_else(|e| e.into_inner());
+                if flags
+                    .get(conversation_id)
+                    .is_some_and(|flag| Arc::ptr_eq(flag, &cancel))
+                {
+                    flags.remove(conversation_id);
+                }
+                answer
             }
-        }
-        let answer = answer?;
-        self.persist_analysis_turn(PersistAnalysisTurn {
-            conversation_id,
-            question: &analysis_question,
-            context_refs,
-            investigation_context: investigation_context.as_ref(),
-            clarification: clarification.as_ref(),
-            context_audit: &context.audit,
-            catalog: &turn_catalog,
-            answer: &answer,
-        });
+            Err(error) => {
+                if let Some(snapshot) = question_status_context {
+                    let _guard = self
+                        .question_state_lock
+                        .lock()
+                        .unwrap_or_else(|state_error| state_error.into_inner());
+                    if let Some(question_id) = snapshot.question_id.as_deref() {
+                        if let Err(status_error) = investigation::question_run_finished(
+                            &self.data_dir,
+                            &snapshot.investigation_id,
+                            question_id,
+                            &turn_id,
+                            InvestigationQuestionAnswerStatus::Blocked,
+                            Some(&error.to_string()),
+                        ) {
+                            log::warn!("could not update blocked Question status for run {turn_id}: {status_error}");
+                        }
+                    }
+                }
+                let mut flags = self.cancel.lock().unwrap_or_else(|e| e.into_inner());
+                if flags
+                    .get(conversation_id)
+                    .is_some_and(|flag| Arc::ptr_eq(flag, &cancel))
+                {
+                    flags.remove(conversation_id);
+                }
+                return Err(error);
+            }
+        };
 
         // Fold this turn into the folder's learned notes (a correction becomes
         // a vocabulary note; an ordinary question teaches nothing). Needs the

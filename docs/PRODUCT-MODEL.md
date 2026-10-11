@@ -282,3 +282,11 @@ turn repeats that turn's original request and context; to apply corrected
 Question, source, or definition settings, the analyst launches the Question
 again from the Investigation, creating a fresh run without changing engine
 computation logic.
+
+Each Question now carries a durable coverage state for its latest run: not
+started, running, answered, incomplete, blocked, or outdated. Terminal states
+come from the AnalysisTurn's actual clarification and verification outcome,
+not from optimistic UI completion; incomplete and blocked states retain a
+short reason. Editing a Question, source boundary, or saved definition marks
+its previous answer outdated, while the canonical AnalysisTurn remains intact
+as historical evidence.

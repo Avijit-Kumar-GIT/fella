@@ -46,12 +46,13 @@ async function installDesktopMock(
 		chartEvidence = null,
 		detailEvidence = null,
 		savedAnalysisTurn = null,
+		questionRunOutcomes = [],
 		providerList = [],
 		providerHealth = { reachable: true, rejected: false, models: ['gpt-4.1-mini'] },
 		runLogEntries = []
 	} = {}
 ) {
-	await page.addInitScript(({ fixtureFolders, seedUnavailableConversation, seedDeletionConversations, replayStatus, replayStatusError, reindexedCatalog, chartEvidence, detailEvidence, savedAnalysisTurn, providerList, providerHealth, runLogEntries }) => {
+	await page.addInitScript(({ fixtureFolders, seedUnavailableConversation, seedDeletionConversations, replayStatus, replayStatusError, reindexedCatalog, chartEvidence, detailEvidence, savedAnalysisTurn, questionRunOutcomes, providerList, providerHealth, runLogEntries }) => {
 		const calls = [];
 		const archivedConversations = new Map();
 		const investigations = new Map();
@@ -174,6 +175,7 @@ async function installDesktopMock(
 								position: 0,
 								source_selection: null,
 								status: 'active',
+								answer_status: 'not_started',
 								created_at_ms: now,
 								updated_at_ms: now
 							} : null;
@@ -210,6 +212,17 @@ async function installDesktopMock(
 										position,
 										source_selection: item.source_selection ?? null,
 										status: 'active',
+										answer_status: previous?.latest_analysis_turn_id && (
+											previous.text !== item.text ||
+											JSON.stringify(previous.source_selection ?? null) !== JSON.stringify(item.source_selection ?? null) ||
+											previous.parent_id !== (item.parent_id ?? undefined)
+										) ? 'outdated' : (previous?.answer_status ?? 'not_started'),
+										answer_status_reason: previous?.latest_analysis_turn_id && (
+											previous.text !== item.text ||
+											JSON.stringify(previous.source_selection ?? null) !== JSON.stringify(item.source_selection ?? null) ||
+											previous.parent_id !== (item.parent_id ?? undefined)
+										) ? 'The Question or its source scope changed. Run it again to refresh the answer.' : previous?.answer_status_reason,
+										latest_analysis_turn_id: previous?.latest_analysis_turn_id,
 										created_at_ms: previous?.created_at_ms ?? now,
 										updated_at_ms: now
 									};
@@ -365,11 +378,55 @@ async function installDesktopMock(
 			pickFolder: async () => fixtureFolders[pickerIndex++]?.path ?? null,
 			ask: async (params, onEvent) => {
 				calls.push(params);
+				let questionTurnId;
+				const questionTurnNumber = calls.filter((call) => call.questionId).length;
+				const questionOutcome = questionRunOutcomes[questionTurnNumber - 1] ?? { status: 'answered' };
+				if (params.questionId && params.investigationId) {
+					const question = questionRecords.get(params.questionId);
+					questionTurnId = `fixture-question-turn-${questionTurnNumber}`;
+					if (question) {
+						const running = {
+							...question,
+							answer_status: 'running',
+							answer_status_reason: undefined,
+							latest_analysis_turn_id: questionTurnId
+						};
+						questionRecords.set(question.id, running);
+						for (const [key, record] of investigations) {
+							if (record.id === params.investigationId) {
+								investigations.set(key, {
+									...record,
+									questions: (record.questions ?? []).map((item) => item.id === question.id ? running : item)
+								});
+							}
+						}
+					}
+				}
+				if (questionTurnId) {
+					const question = questionRecords.get(params.questionId);
+					if (question) {
+						const finished = {
+							...question,
+							answer_status: questionOutcome.status ?? 'answered',
+							answer_status_reason: questionOutcome.reason,
+							latest_analysis_turn_id: questionTurnId
+						};
+						questionRecords.set(question.id, finished);
+						for (const [key, record] of investigations) {
+							if (record.id === params.investigationId) {
+								investigations.set(key, {
+									...record,
+									questions: (record.questions ?? []).map((item) => item.id === question.id ? finished : item)
+								});
+							}
+						}
+					}
+				}
 				const hasReplayEvidence = replayStatus !== null || replayStatusError;
 				const answer = {
 					text: `Scoped to ${params.workspaceId ?? 'general'}.`,
 					status: 'complete',
-					turn_id: hasReplayEvidence ? 'fixture-turn' : undefined,
+					turn_id: questionTurnId ?? (hasReplayEvidence ? 'fixture-turn' : undefined),
 					evidence: [
 						...(hasReplayEvidence
 							? [{ id: 'fixture-replay-step', tool: 'run_sql', args: {}, result_summary: 'One row inspected.', ms: 12 }]
@@ -389,7 +446,7 @@ async function installDesktopMock(
 			windowAction: async () => {},
 			pathForFile: () => ''
 		};
-	}, { fixtureFolders, seedUnavailableConversation, seedDeletionConversations, replayStatus, replayStatusError, reindexedCatalog, chartEvidence, detailEvidence, savedAnalysisTurn, providerList, providerHealth, runLogEntries });
+	}, { fixtureFolders, seedUnavailableConversation, seedDeletionConversations, replayStatus, replayStatusError, reindexedCatalog, chartEvidence, detailEvidence, savedAnalysisTurn, questionRunOutcomes, providerList, providerHealth, runLogEntries });
 }
 
 async function dispatchWorkspaceDrag(page, type, workspacePath, { x = 0.5, y = 0.5, existing = false } = {}) {
@@ -754,6 +811,50 @@ test('a Question can narrow its source set and launches a run linked to that Que
 	expect(run).toMatchObject({ investigationId: saved.id, questionId: question.id });
 	expect(run.question).toContain('Compare refund rates with sales');
 	await expect(page.locator('.msg.user').last()).toContainText('Compare refund rates with sales');
+});
+
+test('Questions show persisted coverage states and explain incomplete, blocked, and outdated answers', async ({ page }) => {
+	await installDesktopMock(page, {
+		questionRunOutcomes: [
+			{ status: 'incomplete', reason: 'The selected files do not cover the full requested period.' },
+			{ status: 'blocked', reason: 'The required date field is unavailable.' },
+			{ status: 'answered' }
+		]
+	});
+	await page.goto('/');
+	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
+	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
+	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill('Explain the change in weekly sales');
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	const rootQuestion = page.locator('.root-question-item');
+	await expect(rootQuestion.locator('[data-slot="badge"][data-question-status]')).toHaveText('Not started');
+
+	const runMainQuestion = async () => {
+		await page.getByRole('button', { name: 'Analyze main Question' }).click();
+		await page.getByRole('region', { name: 'Review this run' }).getByRole('button', { name: 'Run this Question' }).click();
+		await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.').last()).toBeVisible();
+		await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	};
+
+	await runMainQuestion();
+	await expect(page.locator('.root-question-item [data-slot="badge"][data-question-status]')).toHaveText('Incomplete');
+	await expect(page.locator('.root-question-item .question-status-reason')).toContainText('The selected files do not cover the full requested period.');
+
+	await runMainQuestion();
+	await expect(page.locator('.root-question-item [data-slot="badge"][data-question-status]')).toHaveText('Blocked');
+	await expect(page.locator('.root-question-item .question-status-reason')).toContainText('The required date field is unavailable.');
+
+	await runMainQuestion();
+	await expect(page.locator('.root-question-item [data-slot="badge"][data-question-status]')).toHaveText('Answered');
+	await expect(page.locator('.root-question-item .question-status-reason')).toHaveCount(0);
+
+	await page.getByRole('textbox', { name: 'Main question' }).fill('Explain the change in weekly net sales');
+	await page.getByRole('button', { name: 'Save plan' }).click();
+	await expect(page.locator('.root-question-item [data-slot="badge"][data-question-status]')).toHaveText('Outdated');
+	await expect(page.locator('.root-question-item .question-status-reason')).toContainText('The Question or its source scope changed. Run it again to refresh the answer.');
 });
 
 test('saved Investigation definitions are revisioned, attached to later asks, and removable', async ({ page }) => {

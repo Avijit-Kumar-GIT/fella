@@ -56,6 +56,15 @@ pub struct InvestigationQuestion {
     pub source_selection: Option<InvestigationSourceSelection>,
     #[serde(default)]
     pub status: InvestigationQuestionStatus,
+    /// Persisted projection of the latest run linked to this Question. This
+    /// is separate from `status`, which only describes whether the plan item
+    /// is active or removed.
+    #[serde(default)]
+    pub answer_status: InvestigationQuestionAnswerStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer_status_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_analysis_turn_id: Option<String>,
     pub created_at_ms: u64,
     pub updated_at_ms: u64,
 }
@@ -66,6 +75,21 @@ pub enum InvestigationQuestionStatus {
     #[default]
     Active,
     Removed,
+}
+
+/// Coverage state of the latest AnalysisTurn associated with a Question.
+/// Runtime outcomes are persisted here so the plan remains useful after the
+/// conversation is closed or reloaded.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InvestigationQuestionAnswerStatus {
+    #[default]
+    NotStarted,
+    Running,
+    Answered,
+    Incomplete,
+    Blocked,
+    Outdated,
 }
 
 /// Editable plan input. Position is the input order; the engine assigns the
@@ -145,6 +169,10 @@ pub struct InvestigationContextSnapshot {
     /// The durable Question this run was launched to answer, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub question_id: Option<String>,
+    /// Exact analyst-authored Question text at launch. This makes later edits
+    /// detectable without reconstructing it from the conversation prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub question_text: Option<String>,
     #[serde(default)]
     pub definitions: Vec<InvestigationDefinitionSnapshot>,
     /// The exact source selection used by this turn. Older turns had no
@@ -410,6 +438,9 @@ fn initial_questions(
         position: 0,
         source_selection: None,
         status: InvestigationQuestionStatus::Active,
+        answer_status: InvestigationQuestionAnswerStatus::NotStarted,
+        answer_status_reason: None,
+        latest_analysis_turn_id: None,
         created_at_ms: timestamp,
         updated_at_ms: timestamp,
     }])
@@ -489,6 +520,117 @@ pub fn question_load(data_dir: &Path, id: &str) -> EngineResult<InvestigationQue
         )));
     }
     Ok(question)
+}
+
+/// Persist the start of a Question-specific run before the model is invoked.
+pub fn question_run_started(
+    data_dir: &Path,
+    investigation_id: &str,
+    question_id: &str,
+    turn_id: &str,
+) -> EngineResult<()> {
+    let mut question = question_load(data_dir, question_id)?;
+    if question.investigation_id != investigation_id
+        || question.status != InvestigationQuestionStatus::Active
+    {
+        return Err(EngineError::msg(
+            "the Question is no longer active in this Investigation",
+        ));
+    }
+    if turn_id.is_empty()
+        || turn_id.chars().count() > 256
+        || !turn_id
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+    {
+        return Err(EngineError::msg("invalid analysis turn id"));
+    }
+    question.answer_status = InvestigationQuestionAnswerStatus::Running;
+    question.answer_status_reason = None;
+    question.latest_analysis_turn_id = Some(turn_id.to_owned());
+    question.updated_at_ms = now_ms().max(question.updated_at_ms.saturating_add(1));
+    write_question_record(data_dir, &question)
+}
+
+/// Persist a terminal run state only if this is still the Question's latest
+/// run. A plan edit can mark it outdated while the run is in flight, and an
+/// older completion must not overwrite that newer state.
+pub fn question_run_finished(
+    data_dir: &Path,
+    investigation_id: &str,
+    question_id: &str,
+    turn_id: &str,
+    answer_status: InvestigationQuestionAnswerStatus,
+    reason: Option<&str>,
+) -> EngineResult<bool> {
+    if answer_status == InvestigationQuestionAnswerStatus::Running
+        || answer_status == InvestigationQuestionAnswerStatus::NotStarted
+    {
+        return Err(EngineError::msg(
+            "a completed Question run must have a terminal answer status",
+        ));
+    }
+    let mut question = question_load(data_dir, question_id)?;
+    if question.investigation_id != investigation_id
+        || question.status != InvestigationQuestionStatus::Active
+        || question.latest_analysis_turn_id.as_deref() != Some(turn_id)
+        || question.answer_status != InvestigationQuestionAnswerStatus::Running
+    {
+        return Ok(false);
+    }
+    question.answer_status_reason = normalize_answer_status_reason(answer_status.clone(), reason);
+    question.answer_status = answer_status;
+    question.updated_at_ms = now_ms().max(question.updated_at_ms.saturating_add(1));
+    write_question_record(data_dir, &question)?;
+    Ok(true)
+}
+
+fn normalize_answer_status_reason(
+    status: InvestigationQuestionAnswerStatus,
+    reason: Option<&str>,
+) -> Option<String> {
+    let fallback = match status {
+        InvestigationQuestionAnswerStatus::Incomplete => {
+            Some("The run returned without fully answering this Question.")
+        }
+        InvestigationQuestionAnswerStatus::Blocked => {
+            Some("The run could not complete this Question.")
+        }
+        InvestigationQuestionAnswerStatus::Outdated => {
+            Some("The Question or its analysis context changed after the latest run.")
+        }
+        _ => None,
+    };
+    reason
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .or(fallback)
+        .map(|text| text.chars().take(240).collect())
+}
+
+fn mark_questions_outdated(
+    data_dir: &Path,
+    questions: &mut [InvestigationQuestion],
+    reason: &str,
+) -> EngineResult<bool> {
+    let mut changed = false;
+    for question in questions {
+        if question.status != InvestigationQuestionStatus::Active
+            || question.latest_analysis_turn_id.is_none()
+            || question.answer_status == InvestigationQuestionAnswerStatus::Outdated
+        {
+            continue;
+        }
+        question.answer_status = InvestigationQuestionAnswerStatus::Outdated;
+        question.answer_status_reason = normalize_answer_status_reason(
+            InvestigationQuestionAnswerStatus::Outdated,
+            Some(reason),
+        );
+        question.updated_at_ms = now_ms().max(question.updated_at_ms.saturating_add(1));
+        write_question_record(data_dir, question)?;
+        changed = true;
+    }
+    Ok(changed)
 }
 
 fn write_definition_record(
@@ -580,6 +722,7 @@ pub fn context_snapshot_for_question(
     Ok(InvestigationContextSnapshot {
         investigation_id: investigation.id,
         question_id: question_id.map(str::to_owned),
+        question_text: question.map(|question| question.text.clone()),
         definitions,
         source_selection,
     })
@@ -706,6 +849,9 @@ fn read_record(path: &Path, expected_id: &str, data_dir: &Path) -> EngineResult<
                 position,
                 source_selection: None,
                 status: InvestigationQuestionStatus::Active,
+                answer_status: InvestigationQuestionAnswerStatus::NotStarted,
+                answer_status_reason: None,
+                latest_analysis_turn_id: None,
                 created_at_ms: timestamp,
                 updated_at_ms: timestamp,
             });
@@ -1113,15 +1259,28 @@ pub fn update_questions(
                 position,
                 source_selection: None,
                 status: InvestigationQuestionStatus::Active,
+                answer_status: InvestigationQuestionAnswerStatus::NotStarted,
+                answer_status_reason: None,
+                latest_analysis_turn_id: None,
                 created_at_ms: existing_timestamp,
                 updated_at_ms: existing_timestamp,
             }
         };
-        let changed = question.parent_id != input.parent_id
+        let answer_inputs_changed = question.parent_id != input.parent_id
             || question.text != input.text
-            || question.source_selection != input.source_selection
+            || question.source_selection != input.source_selection;
+        let changed = answer_inputs_changed
             || question.position != position
             || question.status != InvestigationQuestionStatus::Active;
+        if answer_inputs_changed && question.latest_analysis_turn_id.is_some() {
+            question.answer_status = InvestigationQuestionAnswerStatus::Outdated;
+            question.answer_status_reason = normalize_answer_status_reason(
+                InvestigationQuestionAnswerStatus::Outdated,
+                Some(
+                    "The Question or its source scope changed. Run it again to refresh the answer.",
+                ),
+            );
+        }
         question.parent_id = input.parent_id;
         question.text = input.text;
         question.source_selection = input.source_selection;
@@ -1270,6 +1429,13 @@ pub fn update_definitions(
 
     if record.definitions.as_ref() != Some(&next) {
         record.definitions = Some(next);
+        if let Some(questions) = record.questions.as_mut() {
+            mark_questions_outdated(
+                data_dir,
+                questions,
+                "Definitions or assumptions changed. Run this Question again to refresh the answer.",
+            )?;
+        }
         record.updated_at_ms = now_ms().max(record.updated_at_ms.saturating_add(1));
         write_record(data_dir, &record)?;
     }
@@ -1306,6 +1472,13 @@ pub fn update_source_selection(
     let mut record = load(data_dir, id)?;
     if record.source_selection != selection {
         record.source_selection = selection;
+        if let Some(questions) = record.questions.as_mut() {
+            mark_questions_outdated(
+                data_dir,
+                questions,
+                "The Investigation source scope changed. Run this Question again to refresh the answer.",
+            )?;
+        }
         record.updated_at_ms = now_ms().max(record.updated_at_ms.saturating_add(1));
         write_record(data_dir, &record)?;
     }
@@ -1824,6 +1997,230 @@ mod tests {
             }],
         )
         .is_err());
+
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn question_answer_status_is_persisted_and_invalidated_by_analysis_input_edits() {
+        let data_dir = scratch();
+        let created = create(
+            &data_dir,
+            "/work/analysis",
+            "Revenue analysis",
+            Some("Explain revenue movement"),
+            Some("message-root"),
+            Some("conversation-root"),
+        )
+        .unwrap();
+        let question_id = created.questions.as_ref().unwrap()[0].id.clone();
+        assert_eq!(
+            question_load(&data_dir, &question_id)
+                .unwrap()
+                .answer_status,
+            InvestigationQuestionAnswerStatus::NotStarted
+        );
+        assert_eq!(
+            context_snapshot_for_question(&data_dir, &created.id, Some(&question_id))
+                .unwrap()
+                .question_text
+                .as_deref(),
+            Some("Explain revenue movement")
+        );
+
+        question_run_started(&data_dir, &created.id, &question_id, "turn-incomplete").unwrap();
+        let running = question_load(&data_dir, &question_id).unwrap();
+        assert_eq!(
+            running.answer_status,
+            InvestigationQuestionAnswerStatus::Running
+        );
+        assert_eq!(
+            running.latest_analysis_turn_id.as_deref(),
+            Some("turn-incomplete")
+        );
+        assert!(running.answer_status_reason.is_none());
+        assert!(question_run_finished(
+            &data_dir,
+            &created.id,
+            &question_id,
+            "turn-incomplete",
+            InvestigationQuestionAnswerStatus::Incomplete,
+            Some("Only part of the requested period is present."),
+        )
+        .unwrap());
+        let incomplete = question_load(&data_dir, &question_id).unwrap();
+        assert_eq!(
+            incomplete.answer_status,
+            InvestigationQuestionAnswerStatus::Incomplete
+        );
+        assert_eq!(
+            incomplete.answer_status_reason.as_deref(),
+            Some("Only part of the requested period is present.")
+        );
+        assert!(!question_run_finished(
+            &data_dir,
+            &created.id,
+            &question_id,
+            "turn-incomplete",
+            InvestigationQuestionAnswerStatus::Answered,
+            None,
+        )
+        .unwrap());
+
+        question_run_started(&data_dir, &created.id, &question_id, "turn-blocked").unwrap();
+        assert!(question_run_finished(
+            &data_dir,
+            &created.id,
+            &question_id,
+            "turn-blocked",
+            InvestigationQuestionAnswerStatus::Blocked,
+            Some("The required date field is unavailable."),
+        )
+        .unwrap());
+        assert_eq!(
+            question_load(&data_dir, &question_id)
+                .unwrap()
+                .answer_status_reason
+                .as_deref(),
+            Some("The required date field is unavailable.")
+        );
+
+        question_run_started(
+            &data_dir,
+            &created.id,
+            &question_id,
+            "turn-edited-during-run",
+        )
+        .unwrap();
+        update_questions(
+            &data_dir,
+            &created.id,
+            vec![InvestigationQuestionInput {
+                id: question_id.clone(),
+                parent_id: None,
+                text: "Explain net revenue movement".into(),
+                source_selection: None,
+            }],
+        )
+        .unwrap();
+        let outdated = question_load(&data_dir, &question_id).unwrap();
+        assert_eq!(
+            outdated.answer_status,
+            InvestigationQuestionAnswerStatus::Outdated
+        );
+        assert!(outdated
+            .answer_status_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("Question or its source scope changed")));
+        assert!(!question_run_finished(
+            &data_dir,
+            &created.id,
+            &question_id,
+            "turn-edited-during-run",
+            InvestigationQuestionAnswerStatus::Answered,
+            None,
+        )
+        .unwrap());
+        assert_eq!(
+            context_snapshot_for_question(&data_dir, &created.id, Some(&question_id))
+                .unwrap()
+                .question_text
+                .as_deref(),
+            Some("Explain net revenue movement")
+        );
+
+        question_run_started(&data_dir, &created.id, &question_id, "turn-answered").unwrap();
+        question_run_finished(
+            &data_dir,
+            &created.id,
+            &question_id,
+            "turn-answered",
+            InvestigationQuestionAnswerStatus::Answered,
+            None,
+        )
+        .unwrap();
+        update_definitions(
+            &data_dir,
+            &created.id,
+            vec![InvestigationDefinitionInput {
+                id: "definition-revenue".into(),
+                kind: InvestigationDefinitionKind::Definition,
+                text: "Revenue means net recognized revenue.".into(),
+            }],
+        )
+        .unwrap();
+        let outdated_context = question_load(&data_dir, &question_id).unwrap();
+        assert_eq!(
+            outdated_context.answer_status,
+            InvestigationQuestionAnswerStatus::Outdated
+        );
+        assert!(outdated_context
+            .answer_status_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("Definitions or assumptions changed")));
+
+        question_run_started(&data_dir, &created.id, &question_id, "turn-global-scope").unwrap();
+        question_run_finished(
+            &data_dir,
+            &created.id,
+            &question_id,
+            "turn-global-scope",
+            InvestigationQuestionAnswerStatus::Answered,
+            None,
+        )
+        .unwrap();
+        update_source_selection(
+            &data_dir,
+            &created.id,
+            InvestigationSourceSelection {
+                mode: InvestigationSourceSelectionMode::SelectedSources,
+                included_paths: vec!["sales.csv".into()],
+            },
+        )
+        .unwrap();
+        let outdated_global_scope = question_load(&data_dir, &question_id).unwrap();
+        assert_eq!(
+            outdated_global_scope.answer_status,
+            InvestigationQuestionAnswerStatus::Outdated
+        );
+        assert!(outdated_global_scope
+            .answer_status_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("Investigation source scope changed")));
+
+        question_run_started(&data_dir, &created.id, &question_id, "turn-question-scope").unwrap();
+        question_run_finished(
+            &data_dir,
+            &created.id,
+            &question_id,
+            "turn-question-scope",
+            InvestigationQuestionAnswerStatus::Answered,
+            None,
+        )
+        .unwrap();
+        update_questions(
+            &data_dir,
+            &created.id,
+            vec![InvestigationQuestionInput {
+                id: question_id.clone(),
+                parent_id: None,
+                text: "Explain net revenue movement".into(),
+                source_selection: Some(InvestigationSourceSelection {
+                    mode: InvestigationSourceSelectionMode::SelectedSources,
+                    included_paths: vec!["sales.csv".into()],
+                }),
+            }],
+        )
+        .unwrap();
+        let outdated_question_scope = question_load(&data_dir, &question_id).unwrap();
+        assert_eq!(
+            outdated_question_scope.answer_status,
+            InvestigationQuestionAnswerStatus::Outdated
+        );
+        assert!(outdated_question_scope
+            .answer_status_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("Question or its source scope changed")));
 
         let _ = std::fs::remove_dir_all(data_dir);
     }

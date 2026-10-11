@@ -453,9 +453,20 @@ export interface InvestigationQuestion {
 	/** Optional source set that narrows the owning Investigation; absent means inherit. */
 	source_selection?: InvestigationSourceSelection | null;
 	status: 'active' | 'removed';
+	answer_status: InvestigationQuestionAnswerStatus;
+	answer_status_reason?: string;
+	latest_analysis_turn_id?: string;
 	created_at_ms: number;
 	updated_at_ms: number;
 }
+
+export type InvestigationQuestionAnswerStatus =
+	| 'not_started'
+	| 'running'
+	| 'answered'
+	| 'incomplete'
+	| 'blocked'
+	| 'outdated';
 
 export interface InvestigationQuestionInput {
 	id: string;
@@ -502,6 +513,7 @@ export interface InvestigationDefinitionSnapshot {
 export interface InvestigationContextSnapshot {
 	investigation_id: string;
 	question_id?: string;
+	question_text?: string;
 	definitions: InvestigationDefinitionSnapshot[];
 	source_selection: InvestigationSourceSelection;
 }

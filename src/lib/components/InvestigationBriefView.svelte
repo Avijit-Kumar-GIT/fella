@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { firstActualQuestion, session } from '$lib/session.svelte';
 	import { Button } from '$lib/components/ui/button';
+	import { Badge } from '$lib/components/ui/badge';
 	import { analyzeInvestigationQuestion, openConversation } from '$lib/commands';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { ipc, isDesktop } from '$lib/ipc';
@@ -10,7 +11,8 @@
 		Investigation,
 		InvestigationBrief,
 		InvestigationDefinitionInput,
-		InvestigationQuestionInput
+		InvestigationQuestionInput,
+		InvestigationQuestionAnswerStatus
 	} from '$lib/types';
 	import { findBriefProposal, type BriefProposal, type BriefProposalTarget } from '$lib/investigation-brief-proposal';
 	import Icon from './Icon.svelte';
@@ -410,6 +412,32 @@
 		questions = questions.map((question) => question.id === questionId
 			? { ...question, source_selection: sourceSelection }
 			: question);
+	}
+
+	function questionAnswerStatus(questionId: string): InvestigationQuestionAnswerStatus {
+		return selected?.questions?.find((question) => question.id === questionId)?.answer_status ?? 'not_started';
+	}
+
+	function questionAnswerStatusLabel(status: InvestigationQuestionAnswerStatus): string {
+		return {
+			not_started: 'Not started',
+			running: 'Running',
+			answered: 'Answered',
+			incomplete: 'Incomplete',
+			blocked: 'Blocked',
+			outdated: 'Outdated'
+		}[status];
+	}
+
+	function questionAnswerStatusVariant(status: InvestigationQuestionAnswerStatus): 'default' | 'success' | 'warning' | 'destructive' {
+		if (status === 'answered') return 'success';
+		if (status === 'blocked') return 'destructive';
+		if (status === 'incomplete' || status === 'outdated') return 'warning';
+		return 'default';
+	}
+
+	function questionAnswerReason(questionId: string): string | undefined {
+		return selected?.questions?.find((question) => question.id === questionId)?.answer_status_reason;
 	}
 
 	function reviewQuestion(questionId: string): void {
@@ -821,6 +849,11 @@
 									<div class="question-item-heading">
 										<label for="question-{rootQuestion.id}">Main question</label>
 										<span class="question-parent-label">Parent request</span>
+										<Badge
+											variant={questionAnswerStatusVariant(questionAnswerStatus(rootQuestion.id))}
+											aria-label="Main Question status: {questionAnswerStatusLabel(questionAnswerStatus(rootQuestion.id))}"
+											data-question-status={questionAnswerStatus(rootQuestion.id)}
+										>{questionAnswerStatusLabel(questionAnswerStatus(rootQuestion.id))}</Badge>
 										<Button
 											type="button"
 											variant="outline"
@@ -832,6 +865,9 @@
 											Analyze
 										</Button>
 									</div>
+									{#if questionAnswerReason(rootQuestion.id)}
+										<p class="question-status-reason" data-question-status={questionAnswerStatus(rootQuestion.id)} role="status">{questionAnswerReason(rootQuestion.id)}</p>
+									{/if}
 									<Textarea
 										id="question-{rootQuestion.id}"
 										class="question-field"
@@ -856,6 +892,11 @@
 										<li class="question-item">
 											<div class="question-item-heading">
 												<label for="question-{question.id}">Subquestion {index + 1}</label>
+												<Badge
+													variant={questionAnswerStatusVariant(questionAnswerStatus(question.id))}
+													aria-label="Subquestion {index + 1} status: {questionAnswerStatusLabel(questionAnswerStatus(question.id))}"
+													data-question-status={questionAnswerStatus(question.id)}
+												>{questionAnswerStatusLabel(questionAnswerStatus(question.id))}</Badge>
 												<div class="question-item-actions">
 													<Button
 														type="button"
@@ -872,6 +913,9 @@
 													<Button type="button" variant="ghost" aria-label="Remove Subquestion {index + 1}" disabled={saving || proposingQuestions} onclick={() => removeQuestion(question.id)}>Remove</Button>
 												</div>
 											</div>
+											{#if questionAnswerReason(question.id)}
+												<p class="question-status-reason" data-question-status={questionAnswerStatus(question.id)} role="status">{questionAnswerReason(question.id)}</p>
+											{/if}
 											<Textarea
 												id="question-{question.id}"
 												class="question-field"
@@ -1053,6 +1097,8 @@
 	.question-item-heading { margin-bottom: var(--space-2); }
 	.question-item-heading label { margin: 0; font-size: var(--fs-sm); font-weight: 600; }
 	.question-parent-label { color: var(--text-faint); font-size: var(--fs-xs); }
+	.question-status-reason { margin: 0 0 var(--space-2); color: var(--warn); font-size: var(--fs-xs); overflow-wrap: anywhere; }
+	.question-status-reason[data-question-status='blocked'] { color: var(--err); }
 	.question-item-actions { gap: 0; }
 	.question-item-actions :global(button) { min-width: 34px; min-height: 32px; padding: 4px 8px; }
 	.brief-editor :global(.question-field) { width: 100%; min-height: 68px; resize: vertical; }
