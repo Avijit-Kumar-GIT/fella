@@ -279,6 +279,7 @@ mod tests {
                 checks: vec![VerificationCheck {
                     label: "query reruns".into(),
                     ok: true,
+                    outcome: None,
                     detail: None,
                     finding: None,
                 }],

@@ -548,18 +548,20 @@ async function installDesktopMock(
 						...(hasReplayEvidence
 							? [{ id: 'fixture-replay-step', tool: 'run_sql', args: {}, result_summary: 'One row inspected.', ms: 12 }]
 							: []),
+						...(Array.isArray(questionOutcome.evidence) ? questionOutcome.evidence : []),
 						...(detailEvidence ? [detailEvidence] : []),
 						...(Array.isArray(chartEvidence) ? chartEvidence : chartEvidence ? [chartEvidence] : [])
 					],
-					verification: [],
+					verification: questionOutcome.checks ?? [],
 					workspace: params.workspaceId ? { path: params.workspaceId, revision: 'fixture-r1' } : null
 				};
 				if (questionTurnId) {
 					const investigation = [...investigations.values()].find((item) => item.id === params.investigationId);
 					const question = questionRecords.get(params.questionId);
-					const verificationStatus = questionOutcome.status === 'answered'
+					const verificationStatus = questionOutcome.verification_status ?? (questionOutcome.status === 'answered'
 						? 'verified'
-						: questionOutcome.status === 'blocked' ? 'failed' : 'insufficient_data';
+						: questionOutcome.status === 'blocked' ? 'failed' : 'insufficient_data');
+					const verificationChecks = questionOutcome.checks ?? [];
 					analysisTurns.set(questionTurnId, {
 						id: questionTurnId,
 						conversation_id: params.conversationId ?? 'fixture-conversation',
@@ -582,8 +584,8 @@ async function installDesktopMock(
 							workspace_revision: 'fixture-r1',
 							steps: [{ id: `fixture-step-${questionTurnNumber}`, operation: 'run_sql', duration_ms: 4, success: true, sources: ['sales.csv'] }]
 						},
-						verification: { status: verificationStatus, checks: [] },
-						result: { text: answer.text, status: verificationStatus, verification: [], evidence: answer.evidence }
+						verification: { status: verificationStatus, checks: verificationChecks },
+						result: { text: answer.text, status: verificationStatus, verification: verificationChecks, evidence: answer.evidence }
 					});
 				}
 				onEvent({ kind: 'answer_done', answer });
@@ -1084,6 +1086,104 @@ test('coverage links expose every open Question and completion waits for verifie
 	await expect(coverage).toContainText('Investigation complete.');
 	await page.getByRole('button', { name: 'Reopen Investigation' }).click();
 	await expect(coverage).toHaveAttribute('data-investigation-status', 'active');
+});
+
+test('verification outcomes stay beside their outputs and explain check limits', async ({ page }) => {
+	const queryEvidence = {
+		id: 'evidence-weekly-sales',
+		tool: 'run_sql',
+		args: {},
+		note: 'Calculate weekly sales',
+		sql: 'select sum(net_sales) as weekly_sales from sales',
+		result_summary: 'One weekly sales result was recorded.',
+		columns: ['weekly_sales'],
+		rows: [[40]],
+		row_count: 1,
+		ms: 8,
+		sources: [{ source: 'sales.csv', table: 'sales' }]
+	};
+	const checks = [
+		{
+			label: 'the answer mentions 50 not found in any result',
+			ok: false,
+			outcome: 'flagged',
+			detail: 'No recorded result contains 50.',
+			finding: {
+				code: 'unsupported_claim',
+				effect: 'repair',
+				target: 'claim',
+				target_id: '50',
+				evidence_ids: ['evidence-weekly-sales'],
+				guidance: 'recompute or retract this figure'
+			}
+		},
+		{
+			label: 'replayed the recorded query; same result',
+			ok: true,
+			outcome: 'passed',
+			finding: {
+				code: 'replay_match',
+				effect: 'informational',
+				target: 'answer',
+				evidence_ids: []
+			}
+		},
+		{
+			label: 'an expensive query was not re-run',
+			ok: true,
+			outcome: 'not_run',
+			detail: 'The saved result is retained without a replay comparison.'
+		},
+		{
+			label: 'legacy check found an issue without scope metadata',
+			ok: false
+		}
+	];
+	await installDesktopMock(page, {
+		questionRunOutcomes: [{
+			status: 'incomplete',
+			verification_status: 'needs_review',
+			answer_text: 'Weekly sales were 40.',
+			checks,
+			evidence: [queryEvidence]
+		}]
+	});
+	await page.goto('/');
+	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
+	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
+	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill('Explain weekly sales');
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	await page.getByRole('button', { name: 'Analyze main Question' }).click();
+	await page.getByRole('region', { name: 'Review this run' }).getByRole('button', { name: 'Run this Question' }).click();
+	await expect(page.getByRole('region', { name: 'Question run' })).toBeHidden();
+	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.').last()).toBeVisible();
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	await page.getByRole('button', { name: 'Open saved analysis run 1: Explain weekly sales' }).click();
+
+	const runDetail = page.getByRole('region', { name: 'Saved analysis run' });
+	const outputEvidence = runDetail.getByRole('region', { name: 'Query and output evidence' });
+	await expect(outputEvidence.getByRole('region', { name: 'Verification outcome' })).toHaveAttribute('data-verification-status', 'needs_review');
+	const queryStep = outputEvidence.locator('.step').filter({ hasText: 'Calculate weekly sales' });
+	const claimCheck = queryStep.locator('[data-verification-check][data-verification-code="unsupported_claim"]');
+	await expect(claimCheck).toHaveAttribute('data-check-outcome', 'flagged');
+	await expect(claimCheck.locator('.check-outcome')).toHaveText('Flagged');
+	await expect(claimCheck.locator('.check-outcome')).not.toHaveText('Passed');
+	await expect(claimCheck).toContainText('No recorded result contains 50.');
+	await claimCheck.getByText('What this check tests—and does not').click();
+	await expect(claimCheck).toContainText('The named claim was not supported by the recorded evidence');
+	await expect(claimCheck).toContainText('Lack of support does not prove the claim false');
+	await expect(claimCheck).toContainText('recompute or retract this figure');
+
+	const runWide = outputEvidence.getByRole('heading', { name: 'Run-wide checks' }).locator('..');
+	await expect(runWide.locator('[data-check-outcome="passed"]')).toContainText('replayed the recorded query');
+	await expect(runWide.locator('[data-check-outcome="not_run"]')).toContainText('Not run');
+	const legacyCheck = runWide.locator('[data-verification-check]').filter({ hasText: 'legacy check found an issue' });
+	await expect(legacyCheck).toHaveAttribute('data-check-outcome', 'flagged');
+	await legacyCheck.getByText('What this check tests—and does not').click();
+	await expect(legacyCheck).toContainText('no structured scope note was saved');
 });
 
 test('each Question opens its saved answer with explicit partial or complete coverage and run provenance', async ({ page }) => {

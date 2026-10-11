@@ -15,7 +15,7 @@ use crate::engine::analytics::AnalyticsSource;
 use crate::engine::catalog::{source_scope, SourceScope};
 use crate::engine::evidence::{
     EvidenceItem, VerificationCheck, VerificationEffect, VerificationFinding,
-    VerificationFindingCode, VerificationStatus, VerificationTarget,
+    VerificationFindingCode, VerificationOutcome, VerificationStatus, VerificationTarget,
 };
 use crate::engine::grounding::{GroundingReport, ProbeOutcome};
 use crate::engine::risk;
@@ -193,6 +193,7 @@ fn targeted_warning(
     VerificationCheck {
         label: label.into(),
         ok: false,
+        outcome: Some(VerificationOutcome::Flagged),
         detail,
         finding: Some(finding),
     }
@@ -210,6 +211,7 @@ fn successful_replay_check(label: impl Into<String>) -> VerificationCheck {
     VerificationCheck {
         label: label.into(),
         ok: true,
+        outcome: Some(VerificationOutcome::Passed),
         detail: None,
         finding: Some(scoped_finding(
             VerificationFindingCode::ReplayMatch,
@@ -2748,7 +2750,20 @@ fn ok(label: impl Into<String>) -> VerificationCheck {
     VerificationCheck {
         label: label.into(),
         ok: true,
+        outcome: Some(VerificationOutcome::Passed),
         detail: None,
+        finding: None,
+    }
+}
+
+fn not_run(label: impl Into<String>, detail: Option<String>) -> VerificationCheck {
+    VerificationCheck {
+        label: label.into(),
+        // A skipped check is non-blocking, but it is not a pass. Keep `ok`
+        // true for existing acceptance logic and expose the precise outcome.
+        ok: true,
+        outcome: Some(VerificationOutcome::NotRun),
+        detail,
         finding: None,
     }
 }
@@ -2757,6 +2772,7 @@ fn ok_with_detail(label: impl Into<String>, detail: Option<String>) -> Verificat
     VerificationCheck {
         label: label.into(),
         ok: true,
+        outcome: Some(VerificationOutcome::Passed),
         detail,
         finding: None,
     }
@@ -2766,6 +2782,7 @@ fn warn(label: impl Into<String>, detail: Option<String>) -> VerificationCheck {
     VerificationCheck {
         label: label.into(),
         ok: false,
+        outcome: Some(VerificationOutcome::Flagged),
         detail,
         finding: Some(crate::engine::evidence::VerificationFinding {
             code: crate::engine::evidence::VerificationFindingCode::Advisory,
@@ -3171,8 +3188,9 @@ fn rerun_queries(
         ));
     }
     if skipped_cost > 0 {
-        out.push(ok(
-            "an expensive query behind this answer was not re-run  trusting its first result",
+        out.push(not_run(
+            "an expensive query behind this answer was not re-run",
+            Some("The saved result is retained without a replay comparison.".into()),
         ));
     }
 }

@@ -1665,6 +1665,17 @@
 										</section>
 									</section>
 									<div class="analysis-run-result" aria-label="Recorded answer">{openAnalysisTurn.result.text}</div>
+									<section class="analysis-run-evidence" aria-label="Query and output evidence">
+										<header>
+											<h5>Query and output evidence</h5>
+											<p>Inspect the recorded queries, results, and checks beside the run’s Question and source scope.</p>
+										</header>
+										<EvidenceBlock
+											answer={answerForAnalysisRun(openAnalysisTurn)}
+											bodyId={`investigation-run-evidence-${openAnalysisTurn.id}`}
+											expanded={true}
+										/>
+									</section>
 									<details class="analysis-run-trace">
 										<summary>Planned method and recorded execution</summary>
 										{#if openAnalysisTurn.plan.steps.length}
@@ -1681,22 +1692,7 @@
 												</li>
 											{/each}
 										</ol>
-										{#if openAnalysisTurn.verification?.checks.length}
-											<h5>Checks</h5>
-											<ul>{#each openAnalysisTurn.verification.checks as check, index (`${openAnalysisTurn.id}-check-${index}`)}<li>{check.ok ? 'Passed' : 'Needs review'} · {check.label}</li>{/each}</ul>
-										{/if}
 									</details>
-									<section class="analysis-run-evidence" aria-label="Query and output evidence">
-										<header>
-							<h5>Query and output evidence</h5>
-							<p>Inspect the recorded queries and results against the run’s Question, definitions, and source scope.</p>
-										</header>
-										<EvidenceBlock
-											answer={answerForAnalysisRun(openAnalysisTurn)}
-											bodyId={`investigation-run-evidence-${openAnalysisTurn.id}`}
-											expanded={true}
-										/>
-									</section>
 									<fieldset class="analysis-run-question-links" disabled={savingQuestionLinks || questionsDirty}>
 										<legend>Questions this run addresses</legend>
 										{#if selected.questions?.length}
@@ -1934,7 +1930,7 @@
 	.analysis-run-result { max-height: 320px; overflow: auto; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); font-size: var(--fs-sm); line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
 	.analysis-run-trace { color: var(--text-dim); font-size: var(--fs-xs); }
 	.analysis-run-trace summary { width: fit-content; cursor: pointer; }
-	.analysis-run-trace ol, .analysis-run-trace ul { display: grid; gap: var(--space-1); margin: var(--space-2) 0 0; padding-left: var(--space-5); }
+	.analysis-run-trace ol { display: grid; gap: var(--space-1); margin: var(--space-2) 0 0; padding-left: var(--space-5); }
 	.analysis-run-trace h5 { margin: var(--space-3) 0 0; color: var(--text); font-size: var(--fs-xs); }
 	.analysis-run-trace li small { color: var(--text-faint); }
 	.analysis-run-trace li p { margin: 2px 0 0; color: var(--text-dim); }

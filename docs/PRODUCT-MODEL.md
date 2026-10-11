@@ -367,3 +367,19 @@ Question and every active Question has a verified answer. The engine enforces
 this rule in addition to the disabled UI action. Reopening or changing the
 brief, plan, definitions, source scope, a Finding, or starting another run
 returns the Investigation to active work.
+
+## Implementation checkpoint: verification beside outputs (#208)
+
+Each recorded verification item now appears beside the evidence it identifies;
+answer-wide checks remain in a separate group. The saved-run review puts the
+verification outcome next to the answer and query/output record instead of
+reducing checks to a detached Passed/Needs review list. A check exposes its
+recorded detail, target/effect, and review guidance, plus a concise explanation
+of what its typed finding tests and what it cannot establish. Legacy checks
+without structured scope metadata are explicitly marked as unscoped.
+
+Check outcomes distinguish passed, flagged, and not run. The last state matters
+for intentionally skipped replay checks: a retained first result is not called
+a pass. Older records without the outcome field continue to use their historic
+boolean result. Overall verification wording is scoped to Fella's recorded
+checks and does not claim to certify the analyst's business interpretation.

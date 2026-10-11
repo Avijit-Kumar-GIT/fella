@@ -202,12 +202,24 @@ pub struct VerificationFinding {
 pub struct VerificationCheck {
     pub label: String,
     pub ok: bool,
+    /// Distinguishes a check that was skipped from one that passed. Older
+    /// records omit this and retain the historical `ok` interpretation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<VerificationOutcome>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
     /// Optional for compatibility with archived checks written before
     /// verifier authority and scope were explicit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finding: Option<VerificationFinding>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VerificationOutcome {
+    Passed,
+    Flagged,
+    NotRun,
 }
 
 /// Token accounting for one `ask`, summed across every model turn. Populated
@@ -361,6 +373,24 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(check.finding, None);
+        assert_eq!(check.outcome, None);
+    }
+
+    #[test]
+    fn verification_outcome_keeps_a_skipped_check_distinct_from_a_pass() {
+        let check = VerificationCheck {
+            label: "an expensive query was not re-run".into(),
+            ok: true,
+            outcome: Some(VerificationOutcome::NotRun),
+            detail: Some("The saved result is retained without a replay comparison.".into()),
+            finding: None,
+        };
+        let value = serde_json::to_value(&check).unwrap();
+        assert_eq!(value["outcome"], "not_run");
+        assert_eq!(
+            serde_json::from_value::<VerificationCheck>(value).unwrap(),
+            check
+        );
     }
 
     #[test]

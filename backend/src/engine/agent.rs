@@ -1291,6 +1291,7 @@ fn finish_with(
         verification.push(VerificationCheck {
             label: "workspace changed while this answer was running".into(),
             ok: false,
+            outcome: Some(crate::engine::evidence::VerificationOutcome::Flagged),
             detail: Some(
                 "the data changed during this question, so its evidence may not describe the current workspace; ask again"
                     .into(),
@@ -2923,6 +2924,7 @@ mod tests {
         let chart_check = VerificationCheck {
             label: "chart values did not match source query".into(),
             ok: false,
+            outcome: Some(crate::engine::evidence::VerificationOutcome::Flagged),
             detail: Some("plotted values differ from source rows".into()),
             finding: Some(crate::engine::evidence::VerificationFinding {
                 code: crate::engine::evidence::VerificationFindingCode::ChartMismatch,
@@ -2943,6 +2945,7 @@ mod tests {
         let claim_check = VerificationCheck {
             label: "the answer mentions 40 not found in any result".into(),
             ok: false,
+            outcome: Some(crate::engine::evidence::VerificationOutcome::Flagged),
             detail: None,
             finding: Some(crate::engine::evidence::VerificationFinding {
                 code: crate::engine::evidence::VerificationFindingCode::UnsupportedClaim,

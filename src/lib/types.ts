@@ -141,6 +141,8 @@ export interface EvidenceSource {
 export interface VerificationCheck {
 	label: string;
 	ok: boolean;
+	/** Optional for older records; distinguishes checks that were skipped. */
+	outcome?: 'passed' | 'flagged' | 'not_run';
 	detail?: string;
 	finding?: VerificationFinding;
 }

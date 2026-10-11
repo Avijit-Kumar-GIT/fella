@@ -2,9 +2,9 @@
 	import { Button } from '$lib/components/ui/button';
 	import { ipc } from '$lib/ipc';
 	import type { AnalysisTurn, Answer, ContextSection, EvidenceItem } from '$lib/types';
-	import Icon from './Icon.svelte';
 	import PythonCalculationDetails from './PythonCalculationDetails.svelte';
 	import ReplayStatus from './ReplayStatus.svelte';
+	import VerificationChecks from './VerificationChecks.svelte';
 
 	let {
 		answer,
@@ -151,20 +151,22 @@
 		}
 		return JSON.stringify(value);
 	}
-	function findingTargetLabel(check: NonNullable<Answer['verification']>[number]): string | undefined {
+	function checkAppliesToEvidence(check: Answer['verification'][number], evidence: EvidenceItem): boolean {
+		if (!evidence.id || !check.finding) return false;
 		const finding = check.finding;
-		if (!finding) return undefined;
-		const targetId = finding.target_id ? ` ${finding.target_id}` : '';
-		return `${finding.target.replace('_', ' ')}${targetId}`;
+		const linkedEvidence = finding.evidence_ids ?? [];
+		if (finding.target === 'artifact') return finding.target_id === evidence.id;
+		if (finding.target === 'evidence') {
+			return finding.target_id === evidence.id || linkedEvidence.includes(evidence.id);
+		}
+		return finding.target === 'claim' && linkedEvidence.includes(evidence.id);
 	}
-	function findingEffectLabel(check: NonNullable<Answer['verification']>[number]): string | undefined {
-		const effect = check.finding?.effect;
-		if (!effect || effect === 'informational') return undefined;
-		if (effect === 'repair') return 'Repair requested';
-		if (effect === 'exclude_evidence') return 'Evidence excluded';
-		if (effect === 'withhold_artifact') return 'Artifact withheld';
-		return 'Answer blocked';
+	function checksForEvidence(evidence: EvidenceItem): Answer['verification'] {
+		return answer.verification.filter((check) => checkAppliesToEvidence(check, evidence));
 	}
+	let runWideChecks = $derived(
+		answer.verification.filter((check) => !answer.evidence.some((evidence) => checkAppliesToEvidence(check, evidence)))
+	);
 	async function toggleSavedRun(): Promise<void> {
 		if (savedRunOpen) {
 			savedRunOpen = false;
@@ -241,6 +243,11 @@
 					{/if}
 				{/if}
 			</div>
+			<VerificationChecks
+				status={answer.status}
+				checks={runWideChecks}
+				heading={runWideChecks.length ? 'Run-wide checks' : undefined}
+			/>
 			{#if answer.evidence.length}
 			<ol class="steps">
 				{#each answer.evidence as e, i (e.id ?? `evidence-${i}`)}
@@ -273,6 +280,11 @@
 								{e.verifier_disposition.state === 'excluded' ? 'Not used to support this answer' : `${e.verifier_disposition.artifact} withheld`}: {e.verifier_disposition.reason}
 							</div>
 						{/if}
+						<VerificationChecks
+							checks={checksForEvidence(e)}
+							heading="Checks on this output"
+							compact={true}
+						/>
 
 						{#if hasDetail}
 							<Button
@@ -350,30 +362,6 @@
 					</li>
 				{/each}
 			</ol>
-			{/if}
-
-			{#if answer.verification.length}
-				<div class="checks-heading">Checks</div>
-				<div class="verify">
-					{#each answer.verification as v, i (`${v.label}-${i}`)}
-						<div class="check">
-							<span
-								class="mark"
-								class:ok={v.ok}
-								class:bad={!v.ok}
-								role="img"
-								aria-label={v.ok ? 'Passed' : 'Issue'}
-							>
-								<Icon name={v.ok ? 'check' : 'alert'} size={12} />
-							</span>
-							<span>{v.label}</span>
-							{#if v.detail}<span class="detail-note">— {v.detail}</span>{/if}
-							{#if findingEffectLabel(v)}
-								<span class="finding-note">{findingEffectLabel(v)}{#if findingTargetLabel(v)} · {findingTargetLabel(v)}{/if}</span>
-							{/if}
-						</div>
-					{/each}
-				</div>
 			{/if}
 
 			{#if answer.turn_id}
@@ -721,39 +709,5 @@
 	}
 	.detail :global(td) {
 		white-space: nowrap;
-	}
-	.checks-heading {
-		margin-top: var(--space-1);
-		color: var(--text-faint);
-		font-size: var(--fs-xs);
-		font-weight: 600;
-	}
-	.verify {
-		margin-top: 4px;
-		display: flex;
-		flex-direction: column;
-		gap: 2px;
-	}
-	.check {
-		display: flex;
-		gap: var(--space-2);
-		align-items: baseline;
-	}
-	.check .mark {
-		display: inline-flex;
-		align-self: center;
-	}
-	.mark.ok {
-		color: var(--ok);
-	}
-	.mark.bad {
-		color: var(--warn);
-	}
-	.detail-note {
-		color: var(--text-faint);
-	}
-	.finding-note {
-		color: var(--text-faint);
-		font-size: var(--fs-xs);
 	}
 </style>

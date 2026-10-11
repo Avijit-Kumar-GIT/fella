@@ -119,6 +119,7 @@ mod tests {
         VerificationCheck {
             label: label.into(),
             ok: true,
+            outcome: None,
             detail: None,
             finding: None,
         }
@@ -127,6 +128,7 @@ mod tests {
         VerificationCheck {
             label: label.into(),
             ok: false,
+            outcome: None,
             detail: None,
             finding: Some(crate::engine::evidence::VerificationFinding {
                 code: crate::engine::evidence::VerificationFindingCode::WorkspaceStale,
