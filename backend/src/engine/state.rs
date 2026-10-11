@@ -40,6 +40,8 @@ use crate::engine::sqlite::{self, Settings};
 use crate::engine::tools::Registry;
 use crate::engine::workspace_model::WorkspaceModel;
 
+const MAX_ANALYSIS_TURN_LINKS_PER_UPDATE: usize = 500;
+
 // Full-table common-value/null/min/max statistics are useful on tiny mounts,
 // but not worth rescanning many or large tables before the first question.
 // Larger tables keep their full rows and inferred types; inspect_table calls
@@ -686,7 +688,54 @@ mod run_log_tests {
 #[cfg(test)]
 mod investigation_ensure_tests {
     use super::*;
+    use crate::engine::evidence::VerificationStatus;
+    use crate::engine::runtime::ExecutionTrace;
     use std::sync::{Arc, Barrier};
+
+    fn saved_turn(id: &str, conversation_id: &str, workspace: &str) -> AnalysisTurn {
+        AnalysisTurn {
+            id: id.to_owned(),
+            conversation_id: conversation_id.to_owned(),
+            question: "What were the quarterly sales?".into(),
+            context_refs: Vec::new(),
+            prior_turn_refs: Vec::new(),
+            clarification_of: None,
+            clarification_response: None,
+            workspace: Some(workspace.to_owned()),
+            workspace_revision: Some("legacy-r1".into()),
+            workspace_snapshot: None,
+            source_scope: None,
+            investigation_context: None,
+            context_audit: None,
+            provenance: None,
+            rerun_of: None,
+            state: TurnState::Accepted,
+            contract: None,
+            plan: LogicalPlan::default(),
+            trace: ExecutionTrace {
+                id: format!("trace-{id}"),
+                turn_id: id.to_owned(),
+                workspace_revision: Some("legacy-r1".into()),
+                mode: None,
+                model: None,
+                model_calls: Vec::new(),
+                elapsed_ms: None,
+                steps: Vec::new(),
+            },
+            verification: None,
+            result: AnalysisResult {
+                text: "Quarterly sales totaled 1,240.".into(),
+                status: VerificationStatus::Verified,
+                usage: None,
+                verification: Vec::new(),
+                evidence: vec![serde_json::json!({
+                    "id": "legacy-chart-evidence",
+                    "tool": "make_chart",
+                    "output": {"type": "bar", "values": [310, 290, 330, 310]}
+                })],
+            },
+        }
+    }
 
     #[test]
     fn concurrent_first_turns_resolve_to_one_investigation() {
@@ -721,7 +770,175 @@ mod investigation_ensure_tests {
             .map(|worker| worker.join().unwrap())
             .collect();
         assert!(ids.iter().all(|id| id == &ids[0]));
-        assert_eq!(engine.investigations_list().unwrap().len(), 1);
+        let investigations = engine.investigations_list().unwrap();
+        assert_eq!(investigations.len(), 1);
+        assert!(investigations[0].analysis_turn_ids.is_empty());
+
+        drop(engine);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn ensure_migrates_only_matching_archived_runs_without_mutating_history_or_question_coverage() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let data_dir = std::env::temp_dir().join(format!("fella-investigation-history-{nonce}"));
+        let engine = EngineState::new(&data_dir).unwrap();
+        let conversation_id = "legacy-conversation";
+        let workspace_id = "/work/sales";
+
+        let matching = saved_turn("legacy-run", conversation_id, workspace_id);
+        let matching_before = serde_json::to_value(&matching).unwrap();
+        let foreign_conversation = saved_turn(
+            "foreign-conversation-run",
+            "other-conversation",
+            workspace_id,
+        );
+        let foreign_workspace = saved_turn("foreign-workspace-run", conversation_id, "/work/other");
+        let unreferenced = saved_turn("unreferenced-run", conversation_id, workspace_id);
+        for turn in [
+            &matching,
+            &foreign_conversation,
+            &foreign_workspace,
+            &unreferenced,
+        ] {
+            analysis_store::create(&data_dir, turn).unwrap();
+        }
+
+        let transcript = serde_json::json!({
+            "id": conversation_id,
+            "workspace": workspace_id,
+            "messages": [
+                {"id":"first-message", "role":"user", "text":"What were quarterly sales?"},
+                {"id":"legacy-answer", "role":"assistant", "text":"Quarterly sales totaled 1,240.", "answer": {
+                    "turn_id":"legacy-run",
+                    "evidence":[{"id":"legacy-chart-evidence", "tool":"make_chart", "output":{"type":"bar", "values":[310,290,330,310]}}]
+                }},
+                {"role":"assistant", "text":"A repeated archive reference.", "answer":{"turn_id":"legacy-run"}},
+                {"id":"second-message", "role":"user", "text":"What about costs?"},
+                {"role":"assistant", "text":"A different folder's result.", "answer":{"turn_id":"foreign-workspace-run"}},
+                {"role":"assistant", "text":"A different conversation's result.", "answer":{"turn_id":"foreign-conversation-run"}},
+                {"role":"assistant", "text":"An older result without its canonical record.", "answer":{"turn_id":"missing-canonical-run"}}
+            ]
+        });
+        engine
+            .archive_conversation(conversation_id, &transcript.to_string())
+            .unwrap();
+
+        let migrated = engine
+            .investigation_ensure(
+                workspace_id,
+                conversation_id,
+                "What were quarterly sales?",
+                "first-message",
+            )
+            .unwrap();
+        assert_eq!(migrated.analysis_turn_ids, vec!["legacy-run"]);
+        assert_eq!(migrated.brief.goal, "What were quarterly sales?");
+        let root_question = migrated.questions.as_ref().unwrap().first().unwrap();
+        assert_eq!(
+            root_question.answer_status,
+            InvestigationQuestionAnswerStatus::NotStarted
+        );
+        assert!(root_question.analysis_turn_ids.is_empty());
+        assert_eq!(root_question.latest_analysis_turn_id, None);
+
+        let archived_after: serde_json::Value =
+            serde_json::from_str(&engine.conversation_load(conversation_id).unwrap()).unwrap();
+        assert_eq!(
+            archived_after, transcript,
+            "migration must not rewrite transcript messages or chart evidence"
+        );
+        let canonical_after =
+            serde_json::to_value(engine.analysis_turn_load("legacy-run").unwrap()).unwrap();
+        assert_eq!(
+            canonical_after, matching_before,
+            "canonical AnalysisTurn must remain immutable"
+        );
+
+        let repeated = engine
+            .investigation_ensure(
+                workspace_id,
+                conversation_id,
+                "A later request must not replace the original goal",
+                "second-message",
+            )
+            .unwrap();
+        assert_eq!(repeated.id, migrated.id);
+        assert_eq!(repeated.analysis_turn_ids, vec!["legacy-run"]);
+        assert_eq!(repeated.brief.goal, "What were quarterly sales?");
+
+        drop(engine);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn ensure_resumes_archived_run_migration_in_bounded_batches() {
+        const RUN_COUNT: usize = MAX_ANALYSIS_TURN_LINKS_PER_UPDATE + 1;
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let data_dir =
+            std::env::temp_dir().join(format!("fella-investigation-history-batches-{nonce}"));
+        let engine = EngineState::new(&data_dir).unwrap();
+        let conversation_id = "large-legacy-conversation";
+        let workspace_id = "/work/sales";
+
+        let mut messages = vec![serde_json::json!({
+            "id":"first-message",
+            "role":"user",
+            "text":"Summarize all saved runs"
+        })];
+        for index in 0..RUN_COUNT {
+            let turn_id = format!("legacy-run-{index:03}");
+            let turn = saved_turn(&turn_id, conversation_id, workspace_id);
+            analysis_store::create(&data_dir, &turn).unwrap();
+            messages.push(serde_json::json!({
+                "role":"assistant",
+                "text":"Saved analysis result.",
+                "answer":{"turn_id":turn_id}
+            }));
+        }
+        let transcript = serde_json::json!({
+            "id":conversation_id,
+            "workspace":workspace_id,
+            "messages":messages
+        });
+        engine
+            .archive_conversation(conversation_id, &transcript.to_string())
+            .unwrap();
+
+        let migrated = engine
+            .investigation_ensure(
+                workspace_id,
+                conversation_id,
+                "Summarize all saved runs",
+                "first-message",
+            )
+            .unwrap();
+        assert_eq!(migrated.analysis_turn_ids.len(), RUN_COUNT);
+        assert_eq!(
+            migrated.analysis_turn_ids.first().unwrap(),
+            "legacy-run-000"
+        );
+        assert_eq!(
+            migrated.analysis_turn_ids.last().unwrap(),
+            &format!("legacy-run-{:03}", RUN_COUNT - 1)
+        );
+
+        let retried = engine
+            .investigation_ensure(
+                workspace_id,
+                conversation_id,
+                "A later message",
+                "later-message",
+            )
+            .unwrap();
+        assert_eq!(retried.id, migrated.id);
+        assert_eq!(retried.analysis_turn_ids, migrated.analysis_turn_ids);
 
         drop(engine);
         let _ = std::fs::remove_dir_all(data_dir);
@@ -2140,6 +2357,61 @@ impl EngineState {
         ))
     }
 
+    /// Find canonical runs already present in an archived transcript that are
+    /// safe to associate with this workspace's Investigation. The transcript
+    /// supplies order and candidate IDs; the immutable run record supplies
+    /// conversation and workspace identity. Missing or older non-canonical
+    /// runs remain available through the conversation history fallback.
+    fn archived_analysis_turn_ids(&self, conversation_id: &str, workspace_id: &str) -> Vec<String> {
+        let Ok(body) = self.conversation_load(conversation_id) else {
+            return Vec::new();
+        };
+        let Ok(archive) = serde_json::from_str::<serde_json::Value>(&body) else {
+            log::debug!(
+                "could not parse archived conversation {conversation_id} for run migration"
+            );
+            return Vec::new();
+        };
+        if archive.get("id").and_then(serde_json::Value::as_str) != Some(conversation_id) {
+            return Vec::new();
+        }
+
+        let Some(messages) = archive
+            .get("messages")
+            .and_then(serde_json::Value::as_array)
+        else {
+            return Vec::new();
+        };
+        let mut seen = HashSet::new();
+        let mut linked = Vec::new();
+        for message in messages {
+            if message.get("role").and_then(serde_json::Value::as_str) != Some("assistant") {
+                continue;
+            }
+            let Some(turn_id) = message
+                .pointer("/answer/turn_id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|turn_id| !turn_id.is_empty())
+            else {
+                continue;
+            };
+            if !seen.insert(turn_id.to_owned()) {
+                continue;
+            }
+            let Ok(turn) = analysis_store::load(&self.data_dir, turn_id) else {
+                continue;
+            };
+            if turn.id == turn_id
+                && turn.conversation_id == conversation_id
+                && turn.workspace.as_deref() == Some(workspace_id)
+            {
+                linked.push(turn_id.to_owned());
+            }
+        }
+        linked
+    }
+
     /// Remove one archived conversation's file, by the same slug-suffix
     /// lookup `conversation_load` uses. Used by the sidebar's per-row delete.
     pub fn delete_conversation(&self, id: &str) -> EngineResult<()> {
@@ -2248,13 +2520,32 @@ impl EngineState {
             .investigation_ensure_lock
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        investigation::ensure_for_conversation(
+        let investigation = investigation::ensure_for_conversation(
             &self.data_dir,
             workspace_id,
             conversation_id,
             initial_request,
             source_message_id,
-        )
+        )?;
+
+        let archived_turn_ids = self.archived_analysis_turn_ids(conversation_id, workspace_id);
+        let mut linked_investigation = investigation;
+        for batch in archived_turn_ids.chunks(MAX_ANALYSIS_TURN_LINKS_PER_UPDATE) {
+            match self.investigation_link_analysis_turns(&linked_investigation.id, batch) {
+                Ok(updated) => linked_investigation = updated,
+                Err(error) => {
+                    // Migration is opportunistic: keep the Investigation and
+                    // its transcript usable if run-link persistence fails. A
+                    // later ensure call can safely resume from any saved batch.
+                    log::warn!(
+                        "could not associate archived analysis runs with Investigation {}: {error}",
+                        linked_investigation.id
+                    );
+                    break;
+                }
+            }
+        }
+        Ok(linked_investigation)
     }
 
     /// Update the current brief without changing the source Conversation
@@ -2410,8 +2701,7 @@ impl EngineState {
             .question_state_lock
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        const MAX_LINKS_PER_UPDATE: usize = 500;
-        if analysis_turn_ids.len() > MAX_LINKS_PER_UPDATE {
+        if analysis_turn_ids.len() > MAX_ANALYSIS_TURN_LINKS_PER_UPDATE {
             return Err(EngineError::msg("too many analysis runs to link at once"));
         }
 
