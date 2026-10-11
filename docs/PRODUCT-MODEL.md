@@ -183,3 +183,10 @@ ID, explicit Workspace ID, title, lifecycle status, and timestamps, with
 independent create/list/load operations. Later slices add links to the
 existing Conversation and AnalysisTurn records. This sequencing keeps the
 engine’s model-directed execution and its stored run payloads unchanged.
+
+The first shipped slices now also retain the source scope on each completed
+analysis turn and an editable current Brief on an Investigation. The Brief is
+seeded from the original request when available and stores only a message ID
+reference; editing its goal, audience, desired output, or constraints never
+edits the Conversation transcript. Proposal/review history for material
+direction changes remains a later slice.

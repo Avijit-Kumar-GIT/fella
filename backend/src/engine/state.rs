@@ -17,7 +17,7 @@ use crate::engine::context::{ContextAssembler, ContextAssemblyAudit, ContextPack
 use crate::engine::error::{EngineError, EngineResult};
 use crate::engine::evidence::{Answer, AskEvent, EvidenceItem};
 use crate::engine::ingest::docs;
-use crate::engine::investigation::{self, Investigation};
+use crate::engine::investigation::{self, Investigation, InvestigationBrief};
 use crate::engine::llm::{LlmClient, ProviderHealth};
 use crate::engine::memory::{self, FolderMemory};
 use crate::engine::provider::{self, AuthKind, PROVIDERS};
@@ -1832,8 +1832,26 @@ impl EngineState {
         &self,
         workspace_id: &str,
         title: &str,
+        initial_request: Option<&str>,
+        source_message_id: Option<&str>,
     ) -> EngineResult<Investigation> {
-        investigation::create(&self.data_dir, workspace_id, title)
+        investigation::create(
+            &self.data_dir,
+            workspace_id,
+            title,
+            initial_request,
+            source_message_id,
+        )
+    }
+
+    /// Update the current brief without changing the source Conversation
+    /// message or its archived transcript.
+    pub fn investigation_update_brief(
+        &self,
+        id: &str,
+        brief: InvestigationBrief,
+    ) -> EngineResult<Investigation> {
+        investigation::update_brief(&self.data_dir, id, brief)
     }
 
     /// Load an Investigation independently of the conversation UI.

@@ -4,11 +4,12 @@
 	import Icon from './Icon.svelte';
 	import SourcesView from './SourcesView.svelte';
 	import ContextView from './ContextView.svelte';
+	import InvestigationBriefView from './InvestigationBriefView.svelte';
 
 	let pane = $derived(session.workspacePane);
 
 	function changePane(value: string): void {
-		if (value === 'sources' || value === 'context') session.setWorkspacePane(value);
+		if (value === 'sources' || value === 'context' || value === 'investigation') session.setWorkspacePane(value);
 	}
 </script>
 
@@ -23,10 +24,15 @@
 				<Icon name="bookmark" size={16} />
 				<span>Guide</span>
 			</Tabs.Trigger>
+			<Tabs.Trigger value="investigation" class="fella-ui-tabs-trigger workspace-tab">
+				<Icon name="bookmark" size={16} />
+				<span>Investigation</span>
+			</Tabs.Trigger>
 		</Tabs.List>
 
 		<Tabs.Content value="sources" class="workspace-content"><SourcesView /></Tabs.Content>
 		<Tabs.Content value="context" class="workspace-content"><ContextView /></Tabs.Content>
+		<Tabs.Content value="investigation" class="workspace-content"><InvestigationBriefView /></Tabs.Content>
 	</Tabs.Root>
 </section>
 

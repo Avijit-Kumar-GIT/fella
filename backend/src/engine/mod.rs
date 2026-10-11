@@ -35,7 +35,7 @@ pub use capabilities::AnalysisCapabilities;
 pub use catalog::{Catalog, SourceInfo, WorkspaceProgress};
 pub use error::{EngineError, EngineResult};
 pub use evidence::{Answer, AskEvent};
-pub use investigation::{Investigation, InvestigationStatus};
+pub use investigation::{Investigation, InvestigationBrief, InvestigationStatus};
 pub use llm::ProviderHealth;
 pub use provider::{AuthKind, Provider, PROVIDERS};
 pub use runtime::{

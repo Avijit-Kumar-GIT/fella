@@ -465,7 +465,7 @@ export class Conversation {
 
 
 export type WorkspaceView = 'ask' | 'workspace' | 'board' | 'settings' | 'project';
-export type WorkspacePane = 'sources' | 'context';
+export type WorkspacePane = 'sources' | 'context' | 'investigation';
 
 class Session {
 	#deletingWorkspacePaths = new Set<string>();

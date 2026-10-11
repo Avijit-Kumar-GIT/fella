@@ -22,6 +22,21 @@ pub enum InvestigationStatus {
     Archived,
 }
 
+/// The current, analyst-editable statement of intent for an Investigation.
+/// The original request remains owned by its Conversation message; this value
+/// is only a proposed working summary and can be changed independently.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InvestigationBrief {
+    #[serde(default)]
+    pub goal: String,
+    #[serde(default)]
+    pub audience: String,
+    #[serde(default)]
+    pub desired_output: String,
+    #[serde(default)]
+    pub constraints: Vec<String>,
+}
+
 /// Stable, independently loadable identity for an investigation.
 ///
 /// `workspace_id` is the canonical local folder identity, matching the
@@ -33,6 +48,12 @@ pub struct Investigation {
     pub id: String,
     pub workspace_id: String,
     pub title: String,
+    #[serde(default)]
+    pub brief: InvestigationBrief,
+    /// The Conversation message used to draft the brief. The message itself is
+    /// not copied here and remains unchanged when the brief is edited.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brief_source_message_id: Option<String>,
     pub status: InvestigationStatus,
     pub created_at_ms: u64,
     pub updated_at_ms: u64,
@@ -79,7 +100,13 @@ fn read_record(path: &Path, expected_id: &str) -> EngineResult<Investigation> {
     Ok(record)
 }
 
-pub fn create(data_dir: &Path, workspace_id: &str, title: &str) -> EngineResult<Investigation> {
+pub fn create(
+    data_dir: &Path,
+    workspace_id: &str,
+    title: &str,
+    initial_request: Option<&str>,
+    source_message_id: Option<&str>,
+) -> EngineResult<Investigation> {
     let workspace_id = workspace_id.trim();
     if workspace_id.is_empty() {
         return Err(EngineError::msg(
@@ -93,6 +120,12 @@ pub fn create(data_dir: &Path, workspace_id: &str, title: &str) -> EngineResult<
     } else {
         title
     };
+    let goal = initial_request.unwrap_or_default().trim();
+    if goal.chars().count() > 12_000 {
+        return Err(EngineError::msg(
+            "initial request is too long for an investigation brief",
+        ));
+    }
 
     let directory = investigations_dir(data_dir);
     std::fs::create_dir_all(&directory)
@@ -122,6 +155,18 @@ pub fn create(data_dir: &Path, workspace_id: &str, title: &str) -> EngineResult<
             id: id.clone(),
             workspace_id: workspace_id.to_owned(),
             title: title.to_owned(),
+            brief: InvestigationBrief {
+                goal: goal.to_owned(),
+                ..InvestigationBrief::default()
+            },
+            brief_source_message_id: if goal.is_empty() {
+                None
+            } else {
+                source_message_id
+                    .map(str::trim)
+                    .filter(|id| !id.is_empty())
+                    .map(str::to_owned)
+            },
             status: InvestigationStatus::Active,
             created_at_ms: timestamp,
             updated_at_ms: timestamp,
@@ -169,6 +214,81 @@ pub fn create(data_dir: &Path, workspace_id: &str, title: &str) -> EngineResult<
     Err(EngineError::msg(
         "could not allocate a unique investigation id",
     ))
+}
+
+pub fn update_brief(
+    data_dir: &Path,
+    id: &str,
+    mut brief: InvestigationBrief,
+) -> EngineResult<Investigation> {
+    const MAX_FIELD_CHARS: usize = 12_000;
+    const MAX_CONSTRAINTS: usize = 40;
+    const MAX_CONSTRAINT_CHARS: usize = 2_000;
+
+    brief.goal = brief.goal.trim().to_owned();
+    brief.audience = brief.audience.trim().to_owned();
+    brief.desired_output = brief.desired_output.trim().to_owned();
+    if brief.goal.chars().count() > MAX_FIELD_CHARS
+        || brief.audience.chars().count() > MAX_FIELD_CHARS
+        || brief.desired_output.chars().count() > MAX_FIELD_CHARS
+    {
+        return Err(EngineError::msg("investigation brief field is too long"));
+    }
+    if brief.constraints.len() > MAX_CONSTRAINTS {
+        return Err(EngineError::msg(
+            "investigation brief has too many constraints",
+        ));
+    }
+    brief.constraints = brief
+        .constraints
+        .into_iter()
+        .map(|constraint| constraint.trim().to_owned())
+        .filter(|constraint| !constraint.is_empty())
+        .collect();
+    if brief
+        .constraints
+        .iter()
+        .any(|constraint| constraint.chars().count() > MAX_CONSTRAINT_CHARS)
+    {
+        return Err(EngineError::msg("investigation constraint is too long"));
+    }
+
+    let path = record_path(data_dir, id)?;
+    let mut record = read_record(&path, id)?;
+    record.brief = brief;
+    record.updated_at_ms = now_ms().max(record.updated_at_ms.saturating_add(1));
+    let body = serde_json::to_vec_pretty(&record).map_err(EngineError::from)?;
+    let mut random = [0u8; 8];
+    getrandom::fill(&mut random)
+        .map_err(|error| EngineError::msg(format!("create brief update id: {error}")))?;
+    let suffix = random
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let temporary = path.with_file_name(format!(".{}-{suffix}.tmp", record.id));
+    let write_result = (|| {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .map_err(|error| EngineError::io(format!("create {}", temporary.display()), error))?;
+        file.write_all(&body)
+            .map_err(|error| EngineError::io(format!("write {}", temporary.display()), error))?;
+        file.sync_all()
+            .map_err(|error| EngineError::io(format!("sync {}", temporary.display()), error))?;
+        #[cfg(windows)]
+        if path.exists() {
+            std::fs::remove_file(&path)
+                .map_err(|error| EngineError::io(format!("replace {}", path.display()), error))?;
+        }
+        std::fs::rename(&temporary, &path)
+            .map_err(|error| EngineError::io(format!("replace {}", path.display()), error))
+    })();
+    if write_result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    write_result?;
+    Ok(record)
 }
 
 pub fn load(data_dir: &Path, id: &str) -> EngineResult<Investigation> {
@@ -237,11 +357,19 @@ mod tests {
     #[test]
     fn creates_loads_and_lists_independent_records() {
         let data_dir = scratch();
-        let created = create(&data_dir, "/work/analysis", "  Monthly revenue  ").unwrap();
+        let created = create(
+            &data_dir,
+            "/work/analysis",
+            "  Monthly revenue  ",
+            None,
+            None,
+        )
+        .unwrap();
 
         assert!(created.id.starts_with("inv_"));
         assert_eq!(created.workspace_id, "/work/analysis");
         assert_eq!(created.title, "Monthly revenue");
+        assert_eq!(created.brief, InvestigationBrief::default());
         assert_eq!(created.status, InvestigationStatus::Active);
         assert_eq!(created.created_at_ms, created.updated_at_ms);
         assert_eq!(load(&data_dir, &created.id).unwrap(), created);
@@ -253,9 +381,9 @@ mod tests {
     #[test]
     fn defaults_blank_title_and_rejects_missing_scope_or_unsafe_ids() {
         let data_dir = scratch();
-        let created = create(&data_dir, "/work/analysis", "  ").unwrap();
+        let created = create(&data_dir, "/work/analysis", "  ", None, None).unwrap();
         assert_eq!(created.title, "New investigation");
-        assert!(create(&data_dir, "  ", "No scope").is_err());
+        assert!(create(&data_dir, "  ", "No scope", None, None).is_err());
         assert!(load(&data_dir, "../conversation").is_err());
 
         let _ = std::fs::remove_dir_all(data_dir);
@@ -265,5 +393,90 @@ mod tests {
     fn missing_store_lists_as_empty() {
         let data_dir = scratch();
         assert!(list(&data_dir).unwrap().is_empty());
+    }
+
+    #[test]
+    fn initial_request_drafts_an_editable_brief_without_overwriting_its_source_message() {
+        let data_dir = scratch();
+        let original_request = "  Compare retention by signup cohort and prepare a chart.  ";
+        let created = create(
+            &data_dir,
+            "/work/analysis",
+            "Retention",
+            Some(original_request),
+            Some("message-1"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            created.brief.goal,
+            "Compare retention by signup cohort and prepare a chart."
+        );
+        assert_eq!(created.brief.desired_output, "");
+        assert!(created.brief.constraints.is_empty());
+        assert_eq!(
+            created.brief_source_message_id.as_deref(),
+            Some("message-1")
+        );
+
+        let updated = update_brief(
+            &data_dir,
+            &created.id,
+            InvestigationBrief {
+                goal: "Compare 30-day retention by signup cohort".into(),
+                audience: "Product manager".into(),
+                desired_output: "One chart and a short written summary".into(),
+                constraints: vec!["Exclude test accounts".into(), "  ".into()],
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            updated.brief.goal,
+            "Compare 30-day retention by signup cohort"
+        );
+        assert_eq!(updated.brief.audience, "Product manager");
+        assert_eq!(
+            updated.brief.desired_output,
+            "One chart and a short written summary"
+        );
+        assert_eq!(updated.brief.constraints, vec!["Exclude test accounts"]);
+        assert_eq!(
+            updated.brief_source_message_id.as_deref(),
+            Some("message-1")
+        );
+        assert!(updated.updated_at_ms > created.updated_at_ms);
+        assert_eq!(load(&data_dir, &created.id).unwrap(), updated);
+        assert_eq!(
+            original_request.trim(),
+            "Compare retention by signup cohort and prepare a chart."
+        );
+        let too_long = InvestigationBrief {
+            goal: "x".repeat(12_001),
+            ..updated.brief.clone()
+        };
+        assert!(update_brief(&data_dir, &created.id, too_long).is_err());
+        assert_eq!(load(&data_dir, &created.id).unwrap(), updated);
+
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn old_records_without_a_brief_load_with_an_empty_brief() {
+        let data_dir = scratch();
+        let created = create(&data_dir, "/work/analysis", "Legacy", None, None).unwrap();
+        let path = record_path(&data_dir, &created.id).unwrap();
+        let mut json: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        json.as_object_mut().unwrap().remove("brief");
+        json.as_object_mut()
+            .unwrap()
+            .remove("brief_source_message_id");
+        std::fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
+
+        assert_eq!(
+            load(&data_dir, &created.id).unwrap().brief,
+            InvestigationBrief::default()
+        );
+        let _ = std::fs::remove_dir_all(data_dir);
     }
 }

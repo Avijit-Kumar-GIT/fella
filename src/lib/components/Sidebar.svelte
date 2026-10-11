@@ -171,11 +171,11 @@
 		expandedRepos = { ...expandedRepos, [repo.key]: !repo.expanded };
 	}
 
-	async function openRepositoryWorkspace(repo: Repository): Promise<void> {
+	async function openRepositoryWorkspace(repo: Repository, pane: 'sources' | 'investigation' = 'sources'): Promise<void> {
 		expandedRepos = { ...expandedRepos, [repo.key]: true };
 		if (!(await selectRepository(repo))) return;
 		if (!repo.path) return;
-		session.setWorkspacePane('sources');
+		session.setWorkspacePane(pane);
 	}
 
 	function beginRepositoryDrag(event: DragEvent, repo: Repository): void {
@@ -453,6 +453,22 @@
 									>
 										<span class="row-slot row-icon"><Icon name="table" size={16} /></span>
 										<span>Sources</span>
+									</Button>
+								</div>
+							{/if}
+							{#if repo.path && !repo.historyOnly}
+								<div class="repository-tools" aria-label={`${repo.name} analysis tools`}>
+									<Button
+										variant="ghost"
+										class={`repository-tool${repo.current && session.workspaceView === 'workspace' && session.workspacePane === 'investigation' ? ' active' : ''}`}
+										type="button"
+										aria-label={`Open investigation brief in ${repo.name}`}
+										aria-current={repo.current && session.workspaceView === 'workspace' && session.workspacePane === 'investigation' ? 'page' : undefined}
+										title="Open investigation briefs"
+										onclick={() => void openRepositoryWorkspace(repo, 'investigation')}
+									>
+										<span class="row-slot row-icon"><Icon name="bookmark" size={16} /></span>
+										<span>Investigations</span>
 									</Button>
 								</div>
 							{/if}

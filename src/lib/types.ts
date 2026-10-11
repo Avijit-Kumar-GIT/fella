@@ -426,9 +426,18 @@ export interface Investigation {
 	id: string;
 	workspace_id: string;
 	title: string;
+	brief: InvestigationBrief;
+	brief_source_message_id?: string;
 	status: 'active' | 'complete' | 'archived';
 	created_at_ms: number;
 	updated_at_ms: number;
+}
+
+export interface InvestigationBrief {
+	goal: string;
+	audience: string;
+	desired_output: string;
+	constraints: string[];
 }
 
 export type WorkspaceChangeKind = 'added' | 'removed' | 'changed';

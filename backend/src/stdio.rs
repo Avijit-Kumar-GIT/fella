@@ -428,7 +428,22 @@ async fn dispatch(
                 .get("title")
                 .and_then(Value::as_str)
                 .unwrap_or("New investigation");
-            value_result(engine.investigation_create(&workspace_id, title))
+            let initial_request = request.params.get("initialRequest").and_then(Value::as_str);
+            let source_message_id = request
+                .params
+                .get("sourceMessageId")
+                .and_then(Value::as_str);
+            value_result(engine.investigation_create(
+                &workspace_id,
+                title,
+                initial_request,
+                source_message_id,
+            ))
+        }
+        "investigation_update_brief" => {
+            let investigation_id: String = required(&request.params, "investigationId")?;
+            let brief = required(&request.params, "brief")?;
+            value_result(engine.investigation_update_brief(&investigation_id, brief))
         }
         "investigation_load" => {
             let investigation_id: String = required(&request.params, "investigationId")?;

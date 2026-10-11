@@ -133,9 +133,17 @@ export const ipc = {
 	runLogRecent: (limit = 50) => invoke<RunLogEntry[]>('run_log_recent', { limit }),
 	/** Load the canonical backend record for one analytical turn. */
 	analysisTurnLoad: (turnId: string) => invoke<AnalysisTurn>('analysis_turn_load', { turnId }),
-	/** Create a durable workspace-scoped Investigation record. */
-	investigationCreate: (workspaceId: string, title = 'New investigation') =>
-		invoke<Investigation>('investigation_create', { workspaceId, title }),
+	/** Create a durable workspace-scoped Investigation, optionally drafting its
+	 *  brief from the original request without changing that Conversation message. */
+	investigationCreate: (
+		workspaceId: string,
+		title = 'New investigation',
+		initialRequest?: string,
+		sourceMessageId?: string
+	) => invoke<Investigation>('investigation_create', { workspaceId, title, initialRequest, sourceMessageId }),
+	/** Save the analyst-edited current brief on an Investigation. */
+	investigationUpdateBrief: (investigationId: string, brief: Investigation['brief']) =>
+		invoke<Investigation>('investigation_update_brief', { investigationId, brief }),
 	/** Load one Investigation independently of its conversation surface. */
 	investigationLoad: (investigationId: string) =>
 		invoke<Investigation>('investigation_load', { investigationId }),
