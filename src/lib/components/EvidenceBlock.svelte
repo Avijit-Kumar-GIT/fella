@@ -431,6 +431,13 @@
 										{/if}
 									</div>
 								{/if}
+								{#if savedRun.contract?.assumptions.length}
+									<div class="saved-run-section saved-run-assumptions">
+										<h4>Assumptions recorded for this run</h4>
+										<p>These are interpretive choices, not observed facts. To correct one, state the replacement in a follow-up; this saved run remains unchanged.</p>
+										<ul>{#each savedRun.contract.assumptions as assumption, i (`${savedRun.id}-assumption-${i}`)}<li>{assumption}</li>{/each}</ul>
+									</div>
+								{/if}
 								{#if savedRun.plan.steps.length}
 									<div class="saved-run-section">
 										<h4>Planned steps</h4>
@@ -558,6 +565,9 @@
 	.saved-run-definitions li { display: grid; gap: 2px; }
 	.saved-run-definitions li span, .saved-run-definitions p { color: var(--text-dim); white-space: pre-wrap; overflow-wrap: anywhere; }
 	.saved-run-definitions p { margin: 0; }
+	.saved-run-assumptions p { margin: 0 0 var(--space-2); color: var(--text-dim); font-size: var(--fs-xs); }
+	.saved-run-assumptions ul { display: grid; gap: var(--space-1); margin: 0; padding-left: 20px; color: var(--text); font-size: var(--fs-xs); }
+	.saved-run-assumptions li { overflow-wrap: anywhere; }
 	.saved-run-trace { display: flex; flex-direction: column; gap: var(--space-2); }
 	.saved-run-trace li { padding-left: 2px; }
 	.saved-run-step-heading { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-2); }

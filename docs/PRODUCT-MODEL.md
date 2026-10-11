@@ -302,3 +302,12 @@ Questions. Only persisted AnalysisTurns appear in this history; starting a run
 updates live coverage state but does not create a link to a record that has
 not yet been saved. Legacy Questions with only a latest-run pointer continue to
 surface that run in history.
+
+The analyst's ambiguity policy is also explicit: resolve ordinary uncertainty
+from evidence and saved definitions; for a low-impact choice with a reasonable
+default, record the assumption and proceed. Ask the analyst only when multiple
+plausible choices remain and could materially change scope, population,
+measure, method, or conclusion. A run exposes its recorded assumptions apart
+from observed evidence. An analyst may promote one into the editable
+Investigation context, correct it, and save a new revision for later runs;
+the original AnalysisTurn remains an unchanged historical record.

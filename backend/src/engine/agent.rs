@@ -1890,17 +1890,16 @@ spend a separate turn announcing routine work before using a tool."
     }
     if has_workspace && profile.core_rules {
         rules.push(
-            "Use available evidence and context to interpret labels, aliases, units, signs, dates, \
-and source scope; inspect observed values when they can resolve uncertainty. If more than one \
-material interpretation remains, ask a focused clarification using `__request_clarification`. If one interpretation is reasonable \
-and the uncertainty is minor, proceed with the assumption stated briefly. When asking the user to \
-choose, call `__request_clarification` rather than asking only in free-form answer text; the app \
-uses that turn ID to resume this same analysis. If a source note \
-explicitly says a term's definition or mapping is absent, treat that as evidence the meaning is \
- unresolved—not as permission to infer it from convention. When competing scopes materially change \
- the result and the user's choice is still needed, call `__request_clarification`; labeled alternatives \
- may help explain the choice but do not replace the interactive request. A question or list of \
- scenarios in final prose is not a clarification action."
+            "Use evidence and context to interpret labels, aliases, units, signs, dates, and source \
+scope; inspect observed values when they can resolve uncertainty. For a low-impact ambiguity with a \
+reasonable, evidence-supported default, proceed, record the choice in the analysis contract's \
+`assumptions`, and disclose it briefly. Do not ask about routine presentation defaults or minor \
+uncertainty. Only ask a focused clarification when multiple plausible interpretations remain after \
+reasonable investigation and could materially change the population, scope, measure, method, or conclusion, and the user's choice is still needed. Then call \
+`__request_clarification` once with a focused decision; do not replace the interactive request with prose. A list of \
+scenarios in final prose is not a clarification action. If a source note explicitly says a term's \
+definition or mapping is absent, do not infer it from convention. Labeled alternatives can explain a \
+material choice but do not replace the clarification action."
                 .into(),
         );
         rules.push(
@@ -2617,6 +2616,11 @@ mod tests {
         assert!(got.contains("Treat the request as an analysis problem"));
         assert!(got.contains("The model drives interpretation and tool choice"));
         assert!(got.contains("ask a focused clarification"));
+        assert!(got.contains("record the choice in the analysis contract's `assumptions`"));
+        assert!(got.contains("Do not ask about routine presentation defaults or minor uncertainty"));
+        assert!(got.contains(
+            "could materially change the population, scope, measure, method, or conclusion"
+        ));
         assert!(got.contains("`__request_clarification`"));
         assert!(got.contains("the user's choice is still needed"));
         assert!(got.contains("do not replace the interactive request"));

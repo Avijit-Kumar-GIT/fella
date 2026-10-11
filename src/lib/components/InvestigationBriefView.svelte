@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { tick } from 'svelte';
 	import { firstActualQuestion, session } from '$lib/session.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
@@ -684,6 +685,25 @@
 		definitions = [...definitions, { id: `d_${id}`, kind, text: '' }];
 	}
 
+	function runAssumptionInContext(text: string): boolean {
+		const normalized = text.trim().toLowerCase();
+		return Boolean(normalized && definitions.some((definition) =>
+			definition.kind === 'assumption' && definition.text.trim().toLowerCase() === normalized
+		));
+	}
+
+	async function addRunAssumptionToContext(text: string): Promise<void> {
+		const normalized = text.trim();
+		if (!normalized || saving || runAssumptionInContext(normalized)) return;
+		const id = globalThis.crypto?.randomUUID?.().replaceAll('-', '') ?? `${Date.now()}${Math.random().toString(16).slice(2)}`;
+		const definitionId = `d_${id}`;
+		definitions = [...definitions, { id: definitionId, kind: 'assumption', text: normalized }];
+		await tick();
+		const field = document.getElementById(`definition-text-${definitionId}`);
+		field?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+		field?.focus({ preventScroll: true });
+	}
+
 	function removeDefinition(id: string): void {
 		definitions = definitions.filter((definition) => definition.id !== id);
 	}
@@ -915,6 +935,7 @@
 											<option value="assumption">Assumption</option>
 										</select>
 										<Textarea
+											id="definition-text-{definition.id}"
 											class="definition-field"
 											bind:value={definition.text}
 											disabled={saving}
@@ -1202,6 +1223,31 @@
 									<dl class="analysis-run-question-snapshot">
 										<div><dt>Question at run</dt><dd>{openAnalysisTurn.investigation_context?.question_text ?? openAnalysisTurn.question}</dd></div>
 									</dl>
+									{#if openAnalysisTurn.contract?.assumptions.length}
+										<section class="analysis-run-assumptions" aria-label="Assumptions recorded for this run">
+											<div>
+												<h5>Assumptions recorded for this run</h5>
+												<p>Interpretive choices, not observed facts. Add one to editable context to review or correct it for future runs; this saved run stays unchanged.</p>
+											</div>
+											<ul>
+												{#each openAnalysisTurn.contract.assumptions as assumption, index (`${openAnalysisTurn.id}-assumption-${index}`)}
+													<li>
+														<span>{assumption}</span>
+														<Button
+															type="button"
+															variant="outline"
+															size="sm"
+															disabled={saving || runAssumptionInContext(assumption)}
+															aria-label="Add assumption to editable context: {assumption}"
+															onclick={() => void addRunAssumptionToContext(assumption)}
+														>
+															{runAssumptionInContext(assumption) ? 'In context' : 'Add to editable context'}
+														</Button>
+													</li>
+												{/each}
+											</ul>
+										</section>
+									{/if}
 									<div class="analysis-run-result" aria-label="Recorded answer">{openAnalysisTurn.result.text}</div>
 									<details class="analysis-run-trace">
 										<summary>Recorded method and evidence</summary>
@@ -1358,6 +1404,13 @@
 	.analysis-run-facts dd, .analysis-run-question-snapshot dd { margin: 2px 0 0; font-size: var(--fs-sm); overflow-wrap: anywhere; }
 	.analysis-run-facts code { font-size: var(--fs-xs); }
 	.analysis-run-question-snapshot { padding-top: var(--space-2); margin: 0; border-top: 1px solid var(--border); }
+	.analysis-run-assumptions { display: grid; gap: var(--space-2); padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); }
+	.analysis-run-assumptions h5 { margin: 0; color: var(--text); font-size: var(--fs-xs); font-weight: 650; }
+	.analysis-run-assumptions p { margin: 3px 0 0; color: var(--text-dim); font-size: var(--fs-xs); }
+	.analysis-run-assumptions ul { display: grid; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+	.analysis-run-assumptions li { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); }
+	.analysis-run-assumptions li > span { min-width: 0; flex: 1; font-size: var(--fs-sm); overflow-wrap: anywhere; }
+	.analysis-run-assumptions li :global(button) { flex: none; }
 	.analysis-run-result { max-height: 320px; overflow: auto; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); font-size: var(--fs-sm); line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
 	.analysis-run-trace { color: var(--text-dim); font-size: var(--fs-xs); }
 	.analysis-run-trace summary { width: fit-content; cursor: pointer; }

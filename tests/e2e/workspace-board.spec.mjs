@@ -500,11 +500,12 @@ async function installDesktopMock(
 						conversation_id: params.conversationId ?? 'fixture-conversation',
 						question: params.question,
 						workspace: params.workspaceId,
+						contract: questionOutcome.contract,
 						investigation_context: {
 							investigation_id: params.investigationId,
 							question_id: params.questionId,
 							question_text: question?.text ?? params.question,
-							definitions: [],
+							definitions: investigation?.definitions ?? [],
 							source_selection: question?.source_selection ?? investigation?.source_selection ?? { mode: 'all_sources', included_paths: [] }
 						},
 						state: finalState,
@@ -997,6 +998,56 @@ test('saved analysis runs open from an Investigation and link to every Question 
 	await subquestionRunLink.click();
 	await expect(runDetail.locator('.analysis-run-question-snapshot')).toContainText('Explain how refund rates changed');
 	await expect(runDetail.locator('.analysis-run-question-links input[type="checkbox"]').nth(1)).toBeChecked();
+});
+
+test('an analyst can review a run assumption, correct it in Investigation context, and keep the old run intact', async ({ page }) => {
+	const recordedAssumption = 'Treat accounts with no cancellation date as active.';
+	const correctedAssumption = 'Treat accounts with no cancellation date as active only when their last activity is within 90 days.';
+	await installDesktopMock(page, {
+		questionRunOutcomes: [
+			{ status: 'answered', delay_ms: 250, contract: { assumptions: [recordedAssumption] } }
+		]
+	});
+	await page.goto('/');
+	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
+	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
+	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill('Explain weekly account retention');
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	await page.getByRole('button', { name: 'Analyze main Question' }).click();
+	await page.getByRole('region', { name: 'Review this run' }).getByRole('button', { name: 'Run this Question' }).click();
+	await expect(page.getByRole('region', { name: 'Question run' })).toBeHidden();
+	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.').last()).toBeVisible();
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+
+	const runLink = page.getByRole('button', { name: 'Open saved analysis run 1: Explain weekly account retention' });
+	await runLink.click();
+	const runDetail = page.getByRole('region', { name: 'Saved analysis run' });
+	const runAssumptions = runDetail.locator('.analysis-run-assumptions');
+	await expect(runAssumptions).toContainText(recordedAssumption);
+	await expect(runAssumptions).toContainText('not observed facts');
+	await runAssumptions.getByRole('button', { name: `Add assumption to editable context: ${recordedAssumption}` }).click();
+
+	const contextNote = page.getByRole('textbox', { name: 'Context note 1' });
+	await expect(contextNote).toHaveValue(recordedAssumption);
+	await contextNote.fill(correctedAssumption);
+	await page.getByRole('button', { name: 'Save context' }).click();
+	await expect(page.locator('.definition-editor')).toContainText('Context saved');
+	expect((await page.evaluate(() => window.__workspaceInvestigations()[0])).definitions).toMatchObject([
+		{ kind: 'assumption', text: correctedAssumption }
+	]);
+
+	// Correcting future context never rewrites the recorded interpretation of
+	// the historical run currently open beside it.
+	await expect(runAssumptions).toContainText(recordedAssumption);
+	await expect(runAssumptions).not.toContainText(correctedAssumption);
+	await page.getByRole('button', { name: 'Analyze main Question' }).click();
+	const nextRun = page.getByRole('region', { name: 'Review this run' });
+	await expect(nextRun).toContainText(correctedAssumption);
+	await expect(nextRun).not.toContainText(recordedAssumption);
+	await nextRun.getByRole('button', { name: 'Cancel' }).click();
 });
 
 test('saved Investigation definitions are revisioned, attached to later asks, and removable', async ({ page }) => {
@@ -2168,6 +2219,7 @@ test('a saved run keeps its own method and evidence inspectable after a later an
 		workspace: folders[0].path,
 		workspace_revision: 'fixture-r1',
 		state: 'accepted',
+		contract: { assumptions: ['Treat a missing refund date as unknown, not as zero.'] },
 		plan: { strategy: 'compiled_sql', steps: ['run_sql'] },
 		trace: {
 			id: 'fixture-trace',
@@ -2228,6 +2280,8 @@ test('a saved run keeps its own method and evidence inspectable after a later an
 	await expect(savedRunPanel).toContainText('1 selected source');
 	await expect(savedRunPanel).toContainText('Assumption · revision 2');
 	await expect(savedRunPanel).toContainText('A refund counts only when tied to a completed sale.');
+	await expect(savedRunPanel.locator('.saved-run-assumptions')).toContainText('Treat a missing refund date as unknown, not as zero.');
+	await expect(savedRunPanel.locator('.saved-run-assumptions')).toContainText('state the replacement in a follow-up');
 	await expect(savedRunPanel.getByRole('heading', { name: 'Recorded evidence' })).toBeVisible();
 	const recordedEvidence = savedRunPanel.locator('.saved-run-evidence');
 	await expect(recordedEvidence.locator('li')).toHaveCount(1);

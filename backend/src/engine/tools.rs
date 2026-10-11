@@ -542,7 +542,7 @@ fn contract_schema() -> Json {
             "assumptions": {
                 "type": "array",
                 "items": { "type": "string" },
-                "description": "Interpretive choices that affect the result, including semantic mappings and the exact observed labels combined. For a numeric what-if, preserve the user's original value, unit, and direction here (for example, '10% lower'), separately from any transformed multiplier used to calculate it. These are user inputs, not observed facts. Disclose material assumptions in the final answer."
+                "description": "Record interpretive choices used to proceed, including reasonable low-impact defaults, semantic mappings, and the exact observed labels combined. Do not record observed facts as assumptions. For a numeric what-if, preserve the user's original value, unit, and direction here (for example, '10% lower'), separately from any transformed multiplier used to calculate it. Disclose assumptions that could affect interpretation in the final answer."
             },
             "unresolved": { "type": "array", "items": { "type": "string" } }
         },
@@ -2679,6 +2679,12 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .contains("preserve the user's original value, unit, and direction")
+        );
+        assert!(
+            contract_schemas[0].parameters["properties"]["assumptions"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("reasonable low-impact defaults")
         );
         let time_properties = &contract_schemas[0].parameters["properties"]["time"]["properties"];
         assert!(time_properties["range"]["description"]
