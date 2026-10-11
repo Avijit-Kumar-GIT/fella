@@ -4,6 +4,7 @@
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { ipc, isDesktop } from '$lib/ipc';
 	import type { Investigation, InvestigationBrief } from '$lib/types';
+	import { findBriefProposal, type BriefProposal, type BriefProposalTarget } from '$lib/investigation-brief-proposal';
 	import Icon from './Icon.svelte';
 
 	let investigations = $state<Investigation[]>([]);
@@ -15,6 +16,10 @@
 	let desiredOutput = $state('');
 	let constraintsText = $state('');
 	let savedBrief = $state('');
+	let loadedBriefKey = '';
+	let proposalMessageId = $state<string | null>(null);
+	let proposalText = $state('');
+	let proposalTarget = $state<BriefProposalTarget>('goal');
 	let loading = $state(false);
 	let creating = $state(false);
 	let saving = $state(false);
@@ -22,6 +27,16 @@
 	let requestSerial = 0;
 
 	let selected = $derived(investigations.find((item) => item.id === selectedId) ?? null);
+	let pendingProposal: BriefProposal | null = $derived.by(() => {
+		const item = selected;
+		const conversation = session.activeChat;
+		if (!item?.brief_source_message_id || conversation.workspaceScope !== item.workspace_id) return null;
+		return findBriefProposal(
+			conversation.messages,
+			item.brief_source_message_id,
+			item.brief_reviewed_message_id
+		);
+	});
 	let currentBrief: InvestigationBrief = $derived({
 		goal,
 		audience,
@@ -67,6 +82,9 @@
 
 	$effect(() => {
 		const item = selected;
+		const key = item ? `${item.id}:${JSON.stringify(item.brief)}` : '';
+		if (key === loadedBriefKey) return;
+		loadedBriefKey = key;
 		if (!item) {
 			goal = '';
 			audience = '';
@@ -80,6 +98,14 @@
 		desiredOutput = item.brief.desired_output;
 		constraintsText = item.brief.constraints.join('\n');
 		savedBrief = JSON.stringify(item.brief);
+	});
+
+	$effect(() => {
+		const proposal = pendingProposal;
+		if ((proposal?.messageId ?? null) === proposalMessageId) return;
+		proposalMessageId = proposal?.messageId ?? null;
+		proposalText = proposal?.text ?? '';
+		proposalTarget = proposal?.target ?? 'goal';
 	});
 
 	function titleFromRequest(request: string | undefined): string {
@@ -124,6 +150,30 @@
 		} catch (cause) {
 			error = cause instanceof Error ? cause.message : String(cause);
 			return false;
+		} finally {
+			saving = false;
+		}
+	}
+
+	async function reviewProposal(accept: boolean): Promise<void> {
+		const item = selected;
+		const proposal = pendingProposal;
+		if (!item || !proposal || saving || (accept && !proposalText.trim())) return;
+		saving = true;
+		error = '';
+		let nextBrief = item.brief;
+		if (accept) {
+			nextBrief = { ...currentBrief };
+			if (proposalTarget === 'goal') nextBrief.goal = proposalText.trim();
+			else if (proposalTarget === 'desired_output') nextBrief.desired_output = proposalText.trim();
+			else nextBrief.constraints = [...nextBrief.constraints, proposalText.trim()];
+		}
+		try {
+			const updated = await ipc.investigationUpdateBrief(item.id, nextBrief, proposal.messageId);
+			investigations = investigations.map((record) => record.id === updated.id ? updated : record);
+			if (accept) savedBrief = JSON.stringify(updated.brief);
+		} catch (cause) {
+			error = cause instanceof Error ? cause.message : String(cause);
 		} finally {
 			saving = false;
 		}
@@ -200,6 +250,27 @@
 							<Icon name="check" size={16} />{saving ? 'Saving…' : 'Save brief'}
 						</Button>
 					</div>
+					{#if pendingProposal}
+						<section class="brief-proposal" aria-labelledby="brief-proposal-title">
+							<div class="proposal-copy">
+								<h3 id="brief-proposal-title">Possible change to the brief</h3>
+								<p>A message uses explicit revision or source-scope language. Review it before updating the brief.</p>
+							</div>
+							<label for="proposal-target">Apply as</label>
+							<select id="proposal-target" bind:value={proposalTarget} disabled={saving}>
+								<option value="goal">New goal</option>
+								<option value="desired_output">Desired output</option>
+								<option value="constraint">Additional constraint</option>
+							</select>
+							<Textarea id="proposal-text" class="brief-field proposal-field" bind:value={proposalText} disabled={saving} aria-label="Proposed brief update" />
+							<div class="proposal-actions">
+								<Button type="button" disabled={saving || !proposalText.trim()} onclick={() => void reviewProposal(true)}>
+									<Icon name="check" size={16} />{saving ? 'Saving…' : 'Apply update'}
+								</Button>
+								<Button type="button" variant="ghost" disabled={saving} onclick={() => void reviewProposal(false)}>Dismiss</Button>
+							</div>
+						</section>
+					{/if}
 					<label for="investigation-goal">Goal</label>
 					<Textarea id="investigation-goal" class="brief-field goal-field" bind:value={goal} disabled={saving} placeholder="What question should this Investigation answer?" />
 					<label for="investigation-audience">Audience</label>
@@ -254,6 +325,14 @@
 	.error { margin: 0 0 var(--space-3); color: var(--danger, #b42318); font-size: var(--fs-sm); overflow-wrap: anywhere; }
 	.brief-editor { min-width: 0; border-block: 1px solid var(--border); }
 	.editor-heading { padding: var(--space-3) 0; border-bottom: 1px solid var(--border); }
+	.brief-proposal { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--space-3); padding: var(--space-3); margin-top: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-inset); }
+	.proposal-copy { grid-column: 1 / -1; }
+	.proposal-copy h3 { margin: 0; font-size: var(--fs-sm); font-weight: 650; }
+	.proposal-copy p { margin-top: 3px; color: var(--text-dim); font-size: var(--fs-xs); }
+	.brief-proposal label { margin: 0; font-size: var(--fs-xs); }
+	.brief-proposal select { min-width: 190px; padding: 6px 9px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); color: var(--text); font: inherit; }
+	.brief-proposal :global(.proposal-field) { grid-column: 1 / -1; min-height: 78px; }
+	.proposal-actions { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: var(--space-2); }
 	h2 { font-size: var(--fs-lg); font-weight: 650; }
 	.brief-editor label { display: block; margin: var(--space-4) 0 var(--space-2); font-size: var(--fs-sm); font-weight: 600; }
 	.brief-editor :global(.brief-field) { width: 100%; min-height: 74px; resize: vertical; }

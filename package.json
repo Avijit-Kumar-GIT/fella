@@ -32,6 +32,7 @@
 		"test:chart-renderer": "node scripts/test-chart-renderer.mjs",
 		"test:workbench": "node scripts/test-workbench-layout.mjs",
 		"test:workspace-layout": "node scripts/test-workspace-layout.mjs",
+		"test:investigation-brief-proposal": "node scripts/test-investigation-brief-proposal.mjs",
 		"test:release-artifacts": "node --test scripts/test-release-artifacts.mjs",
 		"test:release-config": "node --test scripts/test-release-config.mjs",
 		"prepare": "svelte-kit sync || echo ''",

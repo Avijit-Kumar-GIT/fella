@@ -443,7 +443,15 @@ async fn dispatch(
         "investigation_update_brief" => {
             let investigation_id: String = required(&request.params, "investigationId")?;
             let brief = required(&request.params, "brief")?;
-            value_result(engine.investigation_update_brief(&investigation_id, brief))
+            let reviewed_message_id = request
+                .params
+                .get("reviewedMessageId")
+                .and_then(Value::as_str);
+            value_result(engine.investigation_update_brief(
+                &investigation_id,
+                brief,
+                reviewed_message_id,
+            ))
         }
         "investigation_load" => {
             let investigation_id: String = required(&request.params, "investigationId")?;

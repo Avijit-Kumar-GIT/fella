@@ -1850,8 +1850,9 @@ impl EngineState {
         &self,
         id: &str,
         brief: InvestigationBrief,
+        reviewed_message_id: Option<&str>,
     ) -> EngineResult<Investigation> {
-        investigation::update_brief(&self.data_dir, id, brief)
+        investigation::update_brief(&self.data_dir, id, brief, reviewed_message_id)
     }
 
     /// Load an Investigation independently of the conversation UI.

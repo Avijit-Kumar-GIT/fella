@@ -188,5 +188,8 @@ The first shipped slices now also retain the source scope on each completed
 analysis turn and an editable current Brief on an Investigation. The Brief is
 seeded from the original request when available and stores only a message ID
 reference; editing its goal, audience, desired output, or constraints never
-edits the Conversation transcript. Proposal/review history for material
-direction changes remains a later slice.
+edits the Conversation transcript. Clear revision language and explicit source
+constraints can surface an editable proposal in the Investigation view. The
+analyst applies or dismisses it; neither the brief nor its review cursor changes
+until that choice is saved. Routine follow-up questions are not proposals, and
+the original source message remains immutable.

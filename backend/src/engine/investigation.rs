@@ -54,6 +54,11 @@ pub struct Investigation {
     /// not copied here and remains unchanged when the brief is edited.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub brief_source_message_id: Option<String>,
+    /// Latest conversation message the analyst explicitly accepted or
+    /// dismissed as a possible brief change. This is a cursor, not a copy of
+    /// the message, and prevents reviewed suggestions from resurfacing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brief_reviewed_message_id: Option<String>,
     pub status: InvestigationStatus,
     pub created_at_ms: u64,
     pub updated_at_ms: u64,
@@ -167,6 +172,14 @@ pub fn create(
                     .filter(|id| !id.is_empty())
                     .map(str::to_owned)
             },
+            brief_reviewed_message_id: if goal.is_empty() {
+                None
+            } else {
+                source_message_id
+                    .map(str::trim)
+                    .filter(|id| !id.is_empty())
+                    .map(str::to_owned)
+            },
             status: InvestigationStatus::Active,
             created_at_ms: timestamp,
             updated_at_ms: timestamp,
@@ -220,6 +233,7 @@ pub fn update_brief(
     data_dir: &Path,
     id: &str,
     mut brief: InvestigationBrief,
+    reviewed_message_id: Option<&str>,
 ) -> EngineResult<Investigation> {
     const MAX_FIELD_CHARS: usize = 12_000;
     const MAX_CONSTRAINTS: usize = 40;
@@ -255,6 +269,17 @@ pub fn update_brief(
 
     let path = record_path(data_dir, id)?;
     let mut record = read_record(&path, id)?;
+    if let Some(message_id) = reviewed_message_id
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+    {
+        if message_id.chars().count() > 256 {
+            return Err(EngineError::msg(
+                "reviewed conversation message id is too long",
+            ));
+        }
+        record.brief_reviewed_message_id = Some(message_id.to_owned());
+    }
     record.brief = brief;
     record.updated_at_ms = now_ms().max(record.updated_at_ms.saturating_add(1));
     let body = serde_json::to_vec_pretty(&record).map_err(EngineError::from)?;
@@ -418,6 +443,10 @@ mod tests {
             created.brief_source_message_id.as_deref(),
             Some("message-1")
         );
+        assert_eq!(
+            created.brief_reviewed_message_id.as_deref(),
+            Some("message-1")
+        );
 
         let updated = update_brief(
             &data_dir,
@@ -428,6 +457,7 @@ mod tests {
                 desired_output: "One chart and a short written summary".into(),
                 constraints: vec!["Exclude test accounts".into(), "  ".into()],
             },
+            Some("message-2"),
         )
         .unwrap();
         assert_eq!(
@@ -444,6 +474,10 @@ mod tests {
             updated.brief_source_message_id.as_deref(),
             Some("message-1")
         );
+        assert_eq!(
+            updated.brief_reviewed_message_id.as_deref(),
+            Some("message-2")
+        );
         assert!(updated.updated_at_ms > created.updated_at_ms);
         assert_eq!(load(&data_dir, &created.id).unwrap(), updated);
         assert_eq!(
@@ -454,8 +488,42 @@ mod tests {
             goal: "x".repeat(12_001),
             ..updated.brief.clone()
         };
-        assert!(update_brief(&data_dir, &created.id, too_long).is_err());
+        assert!(update_brief(&data_dir, &created.id, too_long, None).is_err());
         assert_eq!(load(&data_dir, &created.id).unwrap(), updated);
+
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn reviewing_a_proposal_advances_only_the_review_cursor_when_dismissed() {
+        let data_dir = scratch();
+        let created = create(
+            &data_dir,
+            "/work/analysis",
+            "Retention",
+            Some("Compare retention by cohort"),
+            Some("message-1"),
+        )
+        .unwrap();
+
+        let dismissed = update_brief(
+            &data_dir,
+            &created.id,
+            created.brief.clone(),
+            Some("message-2"),
+        )
+        .unwrap();
+
+        assert_eq!(dismissed.brief, created.brief);
+        assert_eq!(
+            dismissed.brief_source_message_id.as_deref(),
+            Some("message-1")
+        );
+        assert_eq!(
+            dismissed.brief_reviewed_message_id.as_deref(),
+            Some("message-2")
+        );
+        assert_eq!(load(&data_dir, &created.id).unwrap(), dismissed);
 
         let _ = std::fs::remove_dir_all(data_dir);
     }
@@ -471,11 +539,20 @@ mod tests {
         json.as_object_mut()
             .unwrap()
             .remove("brief_source_message_id");
+        json.as_object_mut()
+            .unwrap()
+            .remove("brief_reviewed_message_id");
         std::fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
 
         assert_eq!(
             load(&data_dir, &created.id).unwrap().brief,
             InvestigationBrief::default()
+        );
+        assert_eq!(
+            load(&data_dir, &created.id)
+                .unwrap()
+                .brief_reviewed_message_id,
+            None
         );
         let _ = std::fs::remove_dir_all(data_dir);
     }

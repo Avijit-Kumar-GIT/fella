@@ -142,8 +142,11 @@ export const ipc = {
 		sourceMessageId?: string
 	) => invoke<Investigation>('investigation_create', { workspaceId, title, initialRequest, sourceMessageId }),
 	/** Save the analyst-edited current brief on an Investigation. */
-	investigationUpdateBrief: (investigationId: string, brief: Investigation['brief']) =>
-		invoke<Investigation>('investigation_update_brief', { investigationId, brief }),
+	investigationUpdateBrief: (
+		investigationId: string,
+		brief: Investigation['brief'],
+		reviewedMessageId?: string
+	) => invoke<Investigation>('investigation_update_brief', { investigationId, brief, reviewedMessageId }),
 	/** Load one Investigation independently of its conversation surface. */
 	investigationLoad: (investigationId: string) =>
 		invoke<Investigation>('investigation_load', { investigationId }),
