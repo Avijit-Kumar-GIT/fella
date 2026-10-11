@@ -1,5 +1,26 @@
 # Repository guidance for coding agents
 
+## Product UI design style
+
+- Preserve Fella's established desktop visual language: Mac-like curvature and
+  surface treatment, paired with Notion-like clarity and calm information
+  hierarchy. Do not make configurable layouts look like a generic dashboard or
+  a stock component-library demo.
+- Use consistent, restrained corner radii and purposeful surface layering.
+  Curvature should unify windows, panes, controls, and content—not turn every
+  element into a separate rounded card.
+- Favor readable typography, clear left-aligned hierarchy, useful whitespace,
+  quiet chrome, and progressive disclosure. Keep the primary analytical work
+  visually dominant and avoid dense, equal-weight columns that squeeze content.
+- Composable panels and layout presets must use Fella's existing design tokens
+  and component language. Prefer flexible, resizable panes and clear grouping
+  over a fixed grid; customization must not introduce inconsistent spacing,
+  radii, borders, or control treatments.
+- Compact layouts may hide secondary detail, but must keep the active workspace
+  and Investigation scope clear and must not obscure incomplete coverage or
+  required review. Layout changes affect presentation only, never data access,
+  analytical state, or provenance.
+
 ## Branch delivery
 
 - When requested work is complete and proportionate validation has run, commit
