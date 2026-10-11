@@ -1038,6 +1038,7 @@ class Session {
 			name: name.trim() || 'Untitled project',
 			workspace,
 			body: '',
+			references: [],
 			created_at_ms: now,
 			updated_at_ms: now
 		};
@@ -1048,7 +1049,7 @@ class Session {
 		return project;
 	}
 
-	updateProject(id: string, patch: Partial<Pick<Project, 'name' | 'body'>>): void {
+	updateProject(id: string, patch: Partial<Pick<Project, 'name' | 'body' | 'references'>>): void {
 		this.projects = this.projects.map((project) =>
 			project.id === id ? { ...project, ...patch, updated_at_ms: Date.now() } : project
 		);

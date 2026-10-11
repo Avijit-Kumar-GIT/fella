@@ -848,12 +848,33 @@ export interface ConversationSummary {
 	title: string | null;
 }
 
+/** Stable reference from a Project to an Investigation-owned conclusion. */
+export interface ProjectFindingReference {
+	kind: 'finding';
+	investigation_id: string;
+	finding_id: string;
+	/** Pins the exact reviewed interpretation that the Project curated. */
+	finding_revision: number;
+}
+
+/** Stable reference to an artifact carried by a canonical analysis run.
+ *  `evidence_id` is scoped by the run until artifacts have first-class records. */
+export interface ProjectArtifactReference {
+	kind: 'analysis_artifact';
+	analysis_turn_id: string;
+	evidence_id: string;
+}
+
+export type ProjectReference = ProjectFindingReference | ProjectArtifactReference;
+
 /** A user-created local wiki attached to one mounted repository. */
 export interface Project {
 	id: string;
 	name: string;
 	workspace: string;
 	body: string;
+	/** Optional so Projects saved before evidence-backed curation remain valid. */
+	references?: ProjectReference[];
 	created_at_ms: number;
 	updated_at_ms: number;
 }

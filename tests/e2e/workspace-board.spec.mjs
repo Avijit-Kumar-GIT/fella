@@ -3227,6 +3227,41 @@ test('Project title and wiki use shared editing controls and retain saved conten
 	);
 });
 
+test('Projects retain stable Finding and analysis-artifact references without copying their content', async ({ page }) => {
+	const references = [
+		{ kind: 'finding', investigation_id: 'investigation-q221', finding_id: 'finding-q221', finding_revision: 2 },
+		{ kind: 'analysis_artifact', analysis_turn_id: 'analysis-turn-q221', evidence_id: 'chart-evidence-q221' }
+	];
+	const project = {
+		id: 'project-sales-evidence',
+		name: 'Sales evidence',
+		workspace: folders[0].path,
+		body: 'Review selected, evidence-backed material here.',
+		references,
+		created_at_ms: 100,
+		updated_at_ms: 100
+	};
+	await installDesktopMock(page);
+	await page.addInitScript((record) => {
+		localStorage.setItem('fella:projects', JSON.stringify([record]));
+	}, project);
+	await page.goto('/');
+	await page.getByRole('button', { name: 'Add repository' }).click();
+	const projectLink = page.getByRole('button', { name: 'Open project Sales evidence' });
+	await projectLink.click();
+	await page.getByRole('textbox', { name: 'Project wiki' }).fill('Curate by stable Finding and run/evidence IDs.');
+
+	const storedProjects = await page.evaluate(() => JSON.parse(localStorage.getItem('fella:projects') ?? '[]'));
+	expect(storedProjects).toHaveLength(1);
+	expect(storedProjects[0]).toMatchObject({
+		id: project.id,
+		body: 'Curate by stable Finding and run/evidence IDs.',
+		references
+	});
+	expect(storedProjects[0]).not.toHaveProperty('findings');
+	expect(storedProjects[0]).not.toHaveProperty('artifacts');
+});
+
 test('Project actions open Investigation data and retain navigation and delete behavior', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');

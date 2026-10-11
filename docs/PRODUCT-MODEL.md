@@ -535,3 +535,17 @@ lightweight Ask path separately from the more structured Question workflow;
 answer and evidence are deterministic fixtures. The targeted quick-path and
 existing evidence-disclosure Playwright tests both passed, and `pnpm check`
 reported zero errors and warnings.
+
+## Implementation checkpoint: Projects as an optional curator (#221)
+
+Project records can now carry optional, typed references without copying
+Investigation content: a Finding link pins its `finding_id`, owning
+`investigation_id`, and reviewed `finding_revision`; an analysis-artifact link
+uses the canonical `analysis_turn_id` plus its run-scoped `evidence_id`.
+References remain
+optional so existing local Project records without them still load. The model
+does not add reference resolution, curation UI, dashboards, or lifecycle
+coupling. The #219 end-to-end Investigation/report journey continues to run
+with no Project present, establishing that analysis and handoff do not depend
+on the future consumer. A persistence test confirms that Project edits retain
+the stable links rather than copying Finding or artifact payloads.
