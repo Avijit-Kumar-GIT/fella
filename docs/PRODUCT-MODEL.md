@@ -255,3 +255,13 @@ the source covers the requested population or time period. The profile helps
 the analyst notice concrete gaps before planning; a Question-specific semantic
 assessment still needs to identify which fields and coverage the request
 requires, and must cite observed data rather than infer completeness.
+
+Each Question can now inherit the Investigation's file scope or narrow it to
+an explicit source set. The engine intersects that mapping with the current
+Investigation boundary, so a Question can never expand what the Investigation
+allows. An analyst can launch a saved Question directly from the plan; the
+canonical AnalysisTurn snapshots that Question ID and effective source set,
+while its existing evidence-derived source-scope record identifies which files
+the run actually used. Later edits to either mapping do not rewrite earlier
+runs. This makes intended inputs and observed evidence inspectable without
+claiming that selecting a source proves it supports the answer.

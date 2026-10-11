@@ -170,6 +170,7 @@ async function installDesktopMock(
 								parent_id: undefined,
 								text: goal,
 								position: 0,
+								source_selection: null,
 								status: 'active',
 								created_at_ms: now,
 								updated_at_ms: now
@@ -205,6 +206,7 @@ async function installDesktopMock(
 										parent_id: item.parent_id ?? undefined,
 										text: item.text,
 										position,
+										source_selection: item.source_selection ?? null,
 										status: 'active',
 										created_at_ms: previous?.created_at_ms ?? now,
 										updated_at_ms: now
@@ -681,6 +683,55 @@ test('an analyst can edit the main Question and linked subquestions without rewr
 	await expect(transcriptQuestion).not.toContainText('Compare conversion by region');
 	await expect(transcriptQuestion).not.toContainText('Compare conversion over time');
 	await expect(transcriptQuestion).not.toContainText('Compare conversion by device');
+});
+
+test('a Question can narrow its source set and launches a run linked to that Question', async ({ page }) => {
+	const fixtureFolders = folders.map((folder) => folder.path === folders[0].path
+		? {
+			...folder,
+			catalog: {
+				...folder.catalog,
+				sources: [
+					...folder.catalog.sources,
+					{ name: 'refunds.csv', path: `${folder.path}\\refunds.csv`, kind: 'csv', view: 'refunds', row_count: 18, size_bytes: 1024, mtime: 1 }
+				]
+			}
+		}
+		: folder);
+	await installDesktopMock(page, { fixtureFolders });
+	await page.goto('/');
+	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
+	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
+	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	const composer = page.getByRole('combobox', { name: 'Ask about northwind-sales' });
+	await composer.fill('Explain changes in sales and refunds');
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	await expect(page.getByRole('heading', { name: 'Questions', exact: true })).toBeVisible();
+
+	await page.getByRole('button', { name: 'Add subquestion' }).click();
+	await page.getByRole('textbox', { name: 'Subquestion 1' }).fill('Compare refund rates with sales');
+	const questionCard = page.locator('.question-item').filter({ has: page.getByRole('textbox', { name: 'Subquestion 1' }) });
+	await questionCard.getByText(/Source set/).click();
+	await questionCard.getByLabel('Use a specific source set').check();
+	await questionCard.getByLabel('refunds.csv').uncheck();
+	await page.getByRole('button', { name: 'Save plan' }).click();
+	await expect(page.locator('.question-editor .question-save')).toContainText('Plan saved');
+
+	const saved = await page.evaluate(() => window.__workspaceInvestigations()[0]);
+	const question = saved.questions[1];
+	expect(question).toMatchObject({
+		text: 'Compare refund rates with sales',
+		source_selection: { mode: 'selected_sources', included_paths: ['sales.csv'] }
+	});
+
+	await page.getByRole('button', { name: 'Analyze Subquestion 1' }).click();
+	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.').last()).toBeVisible();
+	const run = await page.evaluate(() => window.__workspaceAskCalls.at(-1));
+	expect(run).toMatchObject({ investigationId: saved.id, questionId: question.id });
+	expect(run.question).toContain('Compare refund rates with sales');
+	await expect(page.locator('.msg.user').last()).toContainText('Compare refund rates with sales');
 });
 
 test('saved Investigation definitions are revisioned, attached to later asks, and removable', async ({ page }) => {

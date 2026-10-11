@@ -1002,12 +1002,22 @@ async function runCommand(text: string): Promise<void> {
 async function ask(
 	question: string,
 	conv: Conversation,
-	clarificationTurnId?: string
+	clarificationTurnId?: string,
+	questionRef?: { investigationId: string; questionId: string },
+	knownInvestigation?: Investigation
 ): Promise<void> {
 	if (!requireEngine()) return;
 	conv.busy = true;
 	conv.activity = 'preparing the analysis…';
-	const investigation = await ensureWorkspaceInvestigation(conv);
+	const investigation = knownInvestigation ?? (await ensureWorkspaceInvestigation(conv));
+	if (questionRef && investigation?.id !== questionRef.investigationId) {
+		conv.busy = false;
+		conv.activity = '';
+		conv.addSystem(
+			'This Question is no longer linked to the active workspace Investigation. Reopen the Investigation and try again.'
+		);
+		return;
+	}
 	const analysisQuestion = questionWithInvestigationPlan(question, investigation);
 
 	const msg = conv.addAssistant('');
@@ -1075,11 +1085,12 @@ async function ask(
 			conv.model || undefined,
 			conv.mode,
 			conv.contextRefs,
-		clarificationTurnId
-			? { turn_id: clarificationTurnId, response: question }
-			: undefined,
-		conv.workspaceScope,
-		investigation?.id ?? null
+			clarificationTurnId
+				? { turn_id: clarificationTurnId, response: question }
+				: undefined,
+			conv.workspaceScope,
+			investigation?.id ?? null,
+			questionRef?.questionId ?? null
 		);
 		msg.answer = answer;
 		msg.text = answer.text;
@@ -1108,6 +1119,40 @@ async function ask(
 		conv.activity = '';
 		conv.finishRun(failed);
 	}
+}
+
+/** Launch a saved Investigation Question from its linked conversation. The
+ * Question ID travels with the run so its source scope and actual evidence can
+ * be inspected together in the canonical AnalysisTurn. */
+export async function analyzeInvestigationQuestion(
+	investigationId: string,
+	questionId: string
+): Promise<void> {
+	if (!requireEngine()) return;
+	const conv = session.activeChat;
+	if (conv.busy) return;
+	const investigation = await ensureWorkspaceInvestigation(conv);
+	if (!investigation || investigation.id !== investigationId) {
+		conv.addSystem(
+			'Open the conversation linked to this Investigation before analyzing its Question.'
+		);
+		return;
+	}
+	const question = investigation.questions?.find(
+		(item) => item.id === questionId && item.status === 'active'
+	);
+	if (!question) {
+		conv.addSystem('This Question is no longer active. Refresh the Investigation and try again.');
+		return;
+	}
+	conv.addUser(question.text);
+	await ask(
+		question.text,
+		conv,
+		undefined,
+		{ investigationId, questionId },
+		investigation
+	);
 }
 
 /** Re-execute a persisted analytical turn against the current mount. The

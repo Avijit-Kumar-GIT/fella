@@ -56,6 +56,8 @@ pub struct AskOptions<'a> {
     /// Resolve the current saved context from this canonical Investigation.
     /// Used for ordinary desktop asks; the engine snapshots active revisions.
     pub investigation_id: Option<&'a str>,
+    /// Optional durable Question identity for a Question-specific run.
+    pub question_id: Option<&'a str>,
     /// Immutable context loaded from an existing turn for a faithful rerun or
     /// clarification continuation. It is not refreshed from current records.
     pub investigation_context: Option<InvestigationContextSnapshot>,
@@ -1282,6 +1284,7 @@ mod conversation_context_tests {
                 source_scope: None,
                 investigation_context: Some(InvestigationContextSnapshot {
                     investigation_id: "investigation-1".into(),
+                    question_id: None,
                     definitions: Vec::new(),
                     source_selection: selection.clone(),
                 }),
@@ -2393,6 +2396,7 @@ impl EngineState {
                     context_refs: &original.context_refs,
                     clarification_reply,
                     investigation_id: None,
+                    question_id: None,
                     investigation_context: original.investigation_context.clone(),
                 },
                 emit,
@@ -4250,6 +4254,7 @@ exactly, character for character, from the list below.";
                 context_refs,
                 clarification_reply: None,
                 investigation_id: None,
+                question_id: None,
                 investigation_context: None,
             },
             emit,
@@ -4272,6 +4277,7 @@ exactly, character for character, from the list below.";
             context_refs,
             clarification_reply: reply,
             investigation_id,
+            question_id,
             investigation_context: saved_investigation_context,
         } = options;
         let _workspace_read_permit = self.workspace_gate.read();
@@ -4324,9 +4330,17 @@ exactly, character for character, from the list below.";
                     ));
                 }
                 (
-                    Some(investigation::context_snapshot(&self.data_dir, id)?),
+                    Some(investigation::context_snapshot_for_question(
+                        &self.data_dir,
+                        id,
+                        question_id,
+                    )?),
                     true,
                 )
+            } else if question_id.is_some() {
+                return Err(EngineError::msg(
+                    "a Question-specific run requires its Investigation ID",
+                ));
             } else {
                 (None, false)
             };

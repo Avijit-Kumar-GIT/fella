@@ -576,6 +576,11 @@ async fn dispatch(
                 .get("investigationId")
                 .and_then(Value::as_str)
                 .map(str::to_owned);
+            let question_id = request
+                .params
+                .get("questionId")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
             let events = output.clone();
             let answer = workspace_engine
                 .ask_with_mode_and_context_and_clarification(
@@ -587,6 +592,7 @@ async fn dispatch(
                         context_refs: &context_refs,
                         clarification_reply,
                         investigation_id: investigation_id.as_deref(),
+                        question_id: question_id.as_deref(),
                         investigation_context: None,
                     },
                     move |item| event(&events, id, item),

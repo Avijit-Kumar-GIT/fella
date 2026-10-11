@@ -50,6 +50,10 @@ pub struct InvestigationQuestion {
     pub parent_id: Option<String>,
     pub text: String,
     pub position: usize,
+    /// Optional Question-specific narrowing. `None` inherits the owning
+    /// Investigation's source selection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_selection: Option<InvestigationSourceSelection>,
     #[serde(default)]
     pub status: InvestigationQuestionStatus,
     pub created_at_ms: u64,
@@ -72,6 +76,8 @@ pub struct InvestigationQuestionInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<String>,
     pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_selection: Option<InvestigationSourceSelection>,
 }
 
 /// Analyst-authored meaning or explicit assumption used only inside one
@@ -136,6 +142,9 @@ pub struct InvestigationDefinitionSnapshot {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InvestigationContextSnapshot {
     pub investigation_id: String,
+    /// The durable Question this run was launched to answer, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub question_id: Option<String>,
     #[serde(default)]
     pub definitions: Vec<InvestigationDefinitionSnapshot>,
     /// The exact source selection used by this turn. Older turns had no
@@ -399,6 +408,7 @@ fn initial_questions(
         parent_id: None,
         text: text.to_owned(),
         position: 0,
+        source_selection: None,
         status: InvestigationQuestionStatus::Active,
         created_at_ms: timestamp,
         updated_at_ms: timestamp,
@@ -508,8 +518,54 @@ pub fn definition_load(data_dir: &Path, id: &str) -> EngineResult<InvestigationD
 /// Capture the active definition versions from the canonical Investigation.
 /// The returned value is self-contained and suitable for an AnalysisTurn.
 pub fn context_snapshot(data_dir: &Path, id: &str) -> EngineResult<InvestigationContextSnapshot> {
+    context_snapshot_for_question(data_dir, id, None)
+}
+
+/// Capture Investigation context for a specific durable Question. A Question
+/// may narrow the Investigation's source set, but cannot expand it.
+pub fn context_snapshot_for_question(
+    data_dir: &Path,
+    id: &str,
+    question_id: Option<&str>,
+) -> EngineResult<InvestigationContextSnapshot> {
     let investigation = load(data_dir, id)?;
-    let source_selection = investigation.source_selection.clone();
+    let question = question_id
+        .map(|question_id| {
+            let question = investigation
+                .questions
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .find(|question| question.id == question_id)
+                .ok_or_else(|| {
+                    EngineError::msg("the Question is not part of this Investigation")
+                })?;
+            if question.status != InvestigationQuestionStatus::Active {
+                return Err(EngineError::msg("the Question is no longer active"));
+            }
+            Ok(question)
+        })
+        .transpose()?;
+    let source_selection = match question.and_then(|question| question.source_selection.as_ref()) {
+        Some(question_selection) => {
+            let included_paths: Vec<_> = question_selection
+                .included_paths
+                .iter()
+                .filter(|path| investigation.source_selection.includes_path(path))
+                .cloned()
+                .collect();
+            if included_paths.is_empty() {
+                return Err(EngineError::msg(
+                    "this Question's source set has no files in the Investigation's current source scope",
+                ));
+            }
+            InvestigationSourceSelection {
+                mode: InvestigationSourceSelectionMode::SelectedSources,
+                included_paths,
+            }
+        }
+        None => investigation.source_selection.clone(),
+    };
     let definitions = investigation
         .definitions
         .unwrap_or_default()
@@ -523,6 +579,7 @@ pub fn context_snapshot(data_dir: &Path, id: &str) -> EngineResult<Investigation
         .collect();
     Ok(InvestigationContextSnapshot {
         investigation_id: investigation.id,
+        question_id: question_id.map(str::to_owned),
         definitions,
         source_selection,
     })
@@ -647,6 +704,7 @@ fn read_record(path: &Path, expected_id: &str, data_dir: &Path) -> EngineResult<
                 parent_id: if position == 0 { None } else { root_id.clone() },
                 text,
                 position,
+                source_selection: None,
                 status: InvestigationQuestionStatus::Active,
                 created_at_ms: timestamp,
                 updated_at_ms: timestamp,
@@ -957,6 +1015,9 @@ pub fn update_questions(
     const MAX_ID_CHARS: usize = 128;
     const MAX_TEXT_CHARS: usize = 12_000;
     const MAX_PLAN_CHARS: usize = 24_000;
+    const MAX_SELECTED_PATHS: usize = 10_000;
+
+    let mut record = load(data_dir, id)?;
 
     if questions.len() > MAX_QUESTIONS {
         return Err(EngineError::msg(
@@ -983,6 +1044,23 @@ pub fn update_questions(
             return Err(EngineError::msg(
                 "Investigation Question text must be non-empty and no longer than 12000 characters",
             ));
+        }
+        if let Some(selection) = question.source_selection.as_mut() {
+            if selection.mode != InvestigationSourceSelectionMode::SelectedSources
+                || selection.included_paths.is_empty()
+                || selection.included_paths.len() > MAX_SELECTED_PATHS
+            {
+                return Err(EngineError::msg(
+                    "a Question source set must select between 1 and 10000 files",
+                ));
+            }
+            let mut unique_paths = HashSet::new();
+            for path in &mut selection.included_paths {
+                *path = normalize_workspace_relative_path(path)?;
+                if !unique_paths.insert(path.clone()) {
+                    return Err(EngineError::msg("Question source paths must be unique"));
+                }
+            }
         }
         plan_chars = plan_chars.saturating_add(question.text.chars().count());
         if plan_chars > MAX_PLAN_CHARS {
@@ -1012,7 +1090,6 @@ pub fn update_questions(
         }
     }
 
-    let mut record = load(data_dir, id)?;
     let current = record.questions.clone().unwrap_or_default();
     let existing_timestamp = now_ms();
     let mut next = Vec::with_capacity(questions.len());
@@ -1034,6 +1111,7 @@ pub fn update_questions(
                 parent_id: None,
                 text: String::new(),
                 position,
+                source_selection: None,
                 status: InvestigationQuestionStatus::Active,
                 created_at_ms: existing_timestamp,
                 updated_at_ms: existing_timestamp,
@@ -1041,10 +1119,12 @@ pub fn update_questions(
         };
         let changed = question.parent_id != input.parent_id
             || question.text != input.text
+            || question.source_selection != input.source_selection
             || question.position != position
             || question.status != InvestigationQuestionStatus::Active;
         question.parent_id = input.parent_id;
         question.text = input.text;
+        question.source_selection = input.source_selection;
         question.position = position;
         question.status = InvestigationQuestionStatus::Active;
         if changed || !path.exists() {
@@ -1556,6 +1636,94 @@ mod tests {
     }
 
     #[test]
+    fn question_source_selection_is_snapshotted_and_cannot_widen_investigation_scope() {
+        let data_dir = scratch();
+        let created = create(
+            &data_dir,
+            "/work/analysis",
+            "Revenue investigation",
+            Some("Explain revenue changes"),
+            Some("message-root"),
+            Some("conversation-root"),
+        )
+        .unwrap();
+        let root_id = created.questions.as_ref().unwrap()[0].id.clone();
+        let question_id = "question-revenue-by-channel";
+        let intended = InvestigationSourceSelection {
+            mode: InvestigationSourceSelectionMode::SelectedSources,
+            included_paths: vec!["sales.csv".into(), "refunds.csv".into()],
+        };
+        update_questions(
+            &data_dir,
+            &created.id,
+            vec![
+                InvestigationQuestionInput {
+                    id: root_id,
+                    parent_id: None,
+                    text: "Explain revenue changes".into(),
+                    source_selection: None,
+                },
+                InvestigationQuestionInput {
+                    id: question_id.into(),
+                    parent_id: Some(created.questions.as_ref().unwrap()[0].id.clone()),
+                    text: "Compare revenue by channel".into(),
+                    source_selection: Some(intended.clone()),
+                },
+            ],
+        )
+        .unwrap();
+
+        let inherited = context_snapshot(&data_dir, &created.id).unwrap();
+        assert_eq!(inherited.question_id, None);
+        assert_eq!(
+            inherited.source_selection,
+            InvestigationSourceSelection::default()
+        );
+
+        update_source_selection(
+            &data_dir,
+            &created.id,
+            InvestigationSourceSelection {
+                mode: InvestigationSourceSelectionMode::SelectedSources,
+                included_paths: vec!["sales.csv".into()],
+            },
+        )
+        .unwrap();
+        let scoped =
+            context_snapshot_for_question(&data_dir, &created.id, Some(question_id)).unwrap();
+        assert_eq!(scoped.question_id.as_deref(), Some(question_id));
+        assert_eq!(
+            scoped.source_selection,
+            InvestigationSourceSelection {
+                mode: InvestigationSourceSelectionMode::SelectedSources,
+                included_paths: vec!["sales.csv".into()],
+            },
+            "Question-specific scope must be intersected with the Investigation boundary"
+        );
+        assert_eq!(
+            question_load(&data_dir, question_id).unwrap().source_selection,
+            Some(intended),
+            "the durable Question retains its intended mapping while a run snapshots the effective scope"
+        );
+
+        update_source_selection(
+            &data_dir,
+            &created.id,
+            InvestigationSourceSelection {
+                mode: InvestigationSourceSelectionMode::SelectedSources,
+                included_paths: vec!["other.csv".into()],
+            },
+        )
+        .unwrap();
+        assert!(context_snapshot_for_question(&data_dir, &created.id, Some(question_id)).is_err());
+        assert!(
+            context_snapshot_for_question(&data_dir, &created.id, Some("not-a-question")).is_err()
+        );
+
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
     fn question_plan_is_ordered_editable_and_does_not_rewrite_prior_run_links() {
         let data_dir = scratch();
         let created = create(
@@ -1577,11 +1745,13 @@ mod tests {
                     id: "question-channel".to_owned(),
                     parent_id: None,
                     text: "Compare conversion rates by channel".to_owned(),
+                    source_selection: None,
                 },
                 InvestigationQuestionInput {
                     id: "question-period".to_owned(),
                     parent_id: Some("question-channel".to_owned()),
                     text: "Check whether the pattern changed over time".to_owned(),
+                    source_selection: None,
                 },
             ],
         )
@@ -1619,11 +1789,13 @@ mod tests {
                     id: "duplicate".to_owned(),
                     parent_id: None,
                     text: "First".to_owned(),
+                    source_selection: None,
                 },
                 InvestigationQuestionInput {
                     id: "duplicate".to_owned(),
                     parent_id: None,
                     text: "Second".to_owned(),
+                    source_selection: None,
                 },
             ],
         )
@@ -1636,6 +1808,7 @@ mod tests {
                     id: format!("long-{index}"),
                     parent_id: None,
                     text: "x".repeat(9_000),
+                    source_selection: None,
                 })
                 .collect(),
         )
@@ -1647,6 +1820,7 @@ mod tests {
                 id: "blank".to_owned(),
                 parent_id: None,
                 text: "  ".to_owned(),
+                source_selection: None,
             }],
         )
         .is_err());

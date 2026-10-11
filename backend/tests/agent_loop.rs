@@ -12,7 +12,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use fella_lib::engine::evidence::{EvidenceDisposition, VerificationStatus};
 use fella_lib::engine::{
     AskEvent, AskOptions, ClarificationReply, EngineState, InvestigationDefinitionInput,
-    InvestigationDefinitionKind,
+    InvestigationDefinitionKind, InvestigationQuestionInput, InvestigationSourceSelection,
+    InvestigationSourceSelectionMode,
 };
 
 fn scratch(tag: &str) -> PathBuf {
@@ -212,7 +213,7 @@ async fn agent_calls_a_tool_then_answers() {
 }
 
 #[tokio::test]
-async fn investigation_definitions_reach_the_model_and_are_snapshotted_on_the_run() {
+async fn investigation_definitions_and_question_sources_are_snapshotted_on_the_run() {
     let ws = scratch("investigation-definitions-ws");
     let data = scratch("investigation-definitions-data");
     fs::write(
@@ -256,6 +257,22 @@ async fn investigation_definitions_reach_the_model_and_are_snapshotted_on_the_ru
             Some("investigation-definitions-conversation"),
         )
         .unwrap();
+    let question_id = investigation.questions.as_ref().unwrap()[0].id.clone();
+    let question_source_selection = InvestigationSourceSelection {
+        mode: InvestigationSourceSelectionMode::SelectedSources,
+        included_paths: vec!["customers.csv".into()],
+    };
+    engine
+        .investigation_update_questions(
+            &investigation.id,
+            vec![InvestigationQuestionInput {
+                id: question_id.clone(),
+                parent_id: None,
+                text: "How many active customers are there?".into(),
+                source_selection: Some(question_source_selection.clone()),
+            }],
+        )
+        .unwrap();
     let definition_text = "An active customer has active = yes.";
     engine
         .investigation_update_definitions(
@@ -278,6 +295,7 @@ async fn investigation_definitions_reach_the_model_and_are_snapshotted_on_the_ru
                 context_refs: &[],
                 clarification_reply: None,
                 investigation_id: Some(&investigation.id),
+                question_id: Some(&question_id),
                 investigation_context: None,
             },
             |_| {},
@@ -302,9 +320,15 @@ async fn investigation_definitions_reach_the_model_and_are_snapshotted_on_the_ru
     let turn = engine.analysis_turn_load(&answer.turn_id).unwrap();
     let context = turn.investigation_context.as_ref().unwrap();
     assert_eq!(context.investigation_id, investigation.id);
+    assert_eq!(context.question_id.as_deref(), Some(question_id.as_str()));
+    assert_eq!(context.source_selection, question_source_selection);
     assert_eq!(context.definitions.len(), 1);
     assert_eq!(context.definitions[0].revision, 1);
     assert_eq!(context.definitions[0].text, definition_text);
+    let used_sources = &turn.source_scope.as_ref().unwrap().used_sources;
+    assert_eq!(used_sources.len(), 1);
+    assert_eq!(used_sources[0].source, "customers.csv");
+    assert_eq!(used_sources[0].table.as_deref(), Some("customers"));
 
     engine
         .investigation_update_definitions(
@@ -1737,6 +1761,7 @@ async fn clarification_keeps_safe_candidate_analysis_available() {
                     response: "Alpha".into(),
                 }),
                 investigation_id: None,
+                question_id: None,
                 investigation_context: None,
             },
             |_| {},
@@ -1760,6 +1785,7 @@ async fn clarification_keeps_safe_candidate_analysis_available() {
                     response: "  ".into(),
                 }),
                 investigation_id: None,
+                question_id: None,
                 investigation_context: None,
             },
             |_| {},
@@ -1783,6 +1809,7 @@ async fn clarification_keeps_safe_candidate_analysis_available() {
                     response: "Use the Alpha segment only.".into(),
                 }),
                 investigation_id: None,
+                question_id: None,
                 investigation_context: None,
             },
             |_| {},
@@ -1939,6 +1966,7 @@ async fn clarification_keeps_safe_candidate_analysis_available() {
                     response: "Use the Alpha segment only.".into(),
                 }),
                 investigation_id: None,
+                question_id: None,
                 investigation_context: None,
             },
             |_| {},

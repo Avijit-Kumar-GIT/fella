@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { firstActualQuestion, session } from '$lib/session.svelte';
 	import { Button } from '$lib/components/ui/button';
-	import { openConversation } from '$lib/commands';
+	import { analyzeInvestigationQuestion, openConversation } from '$lib/commands';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { ipc, isDesktop } from '$lib/ipc';
 	import { analysisTurnIdsAfterSourceMessage } from '$lib/investigation-runs';
@@ -15,6 +15,7 @@
 	import { findBriefProposal, type BriefProposal, type BriefProposalTarget } from '$lib/investigation-brief-proposal';
 	import Icon from './Icon.svelte';
 	import InvestigationSourceReadiness from './InvestigationSourceReadiness.svelte';
+	import InvestigationQuestionSourceScope from './InvestigationQuestionSourceScope.svelte';
 
 	let investigations = $state<Investigation[]>([]);
 	let selectedId = $state<string | null>(null);
@@ -201,11 +202,12 @@
 			return;
 		}
 		questions = (item.questions ?? (item.brief.goal.trim()
-			? [{ id: `legacy-${item.id}`, text: item.brief.goal, parent_id: undefined }]
+			? [{ id: `legacy-${item.id}`, text: item.brief.goal, parent_id: undefined, source_selection: undefined }]
 			: [])).map((question) => ({
 			id: question.id,
 			text: question.text,
-			parent_id: question.parent_id
+			parent_id: question.parent_id,
+			source_selection: question.source_selection
 		}));
 		savedQuestions = JSON.stringify(questions);
 	});
@@ -263,12 +265,12 @@
 		}
 	}
 
-	async function openSelectedConversation(): Promise<void> {
+	async function openSelectedConversation(): Promise<boolean> {
 		const item = selected;
-		if (!item || openingConversation || !isDesktop()) return;
+		if (!item || openingConversation || !isDesktop()) return false;
 		if (questionsDirty || definitionsDirty) {
 			error = 'Save or discard the current Question plan and definitions before opening the conversation.';
-			return;
+			return false;
 		}
 		openingConversation = true;
 		error = '';
@@ -307,8 +309,10 @@
 				if (!(await openConversation(summary))) throw new Error('Fella could not open the linked conversation.');
 			}
 			session.setWorkspaceView('ask');
+			return true;
 		} catch (cause) {
 			error = cause instanceof Error ? cause.message : String(cause);
+			return false;
 		} finally {
 			openingConversation = false;
 		}
@@ -345,6 +349,28 @@
 		questions = [...questions, question];
 	}
 
+	function updateQuestionSourceSelection(
+		questionId: string,
+		sourceSelection: InvestigationQuestionInput['source_selection']
+	): void {
+		questions = questions.map((question) => question.id === questionId
+			? { ...question, source_selection: sourceSelection }
+			: question);
+	}
+
+	async function analyzeQuestion(questionId: string): Promise<void> {
+		const item = selected;
+		if (!item || saving || proposingQuestions || openingConversation) return;
+		if (hasBlankQuestion) {
+			error = 'Fill in or remove each blank Question before analyzing the plan.';
+			return;
+		}
+		if (questionsDirty && !(await saveQuestions())) return;
+		if (definitionsDirty && !(await saveDefinitions())) return;
+		if (!(await openSelectedConversation())) return;
+		await analyzeInvestigationQuestion(item.id, questionId);
+	}
+
 	function moveQuestion(index: number, offset: -1 | 1): void {
 		const destination = index + offset;
 		if (destination < 0 || destination >= subquestions.length || !rootQuestion) return;
@@ -362,11 +388,12 @@
 		const item = selected;
 		if (!item || saving || proposingQuestions) return;
 		questions = (item.questions ?? (item.brief.goal.trim()
-			? [{ id: `legacy-${item.id}`, text: item.brief.goal, parent_id: undefined }]
+			? [{ id: `legacy-${item.id}`, text: item.brief.goal, parent_id: undefined, source_selection: undefined }]
 			: [])).map((question) => ({
 			id: question.id,
 			text: question.text,
-			parent_id: question.parent_id
+			parent_id: question.parent_id,
+			source_selection: question.source_selection
 		}));
 		savedQuestions = JSON.stringify(questions);
 		error = '';
@@ -409,14 +436,16 @@
 				questions.map((question) => ({
 					id: question.id,
 					parent_id: question.parent_id,
-					text: question.text.trim()
+					text: question.text.trim(),
+					source_selection: question.source_selection
 				}))
 			);
 			investigations = investigations.map((item) => item.id === updated.id ? updated : item);
 			questions = (updated.questions ?? []).map((question) => ({
 				id: question.id,
 				text: question.text,
-				parent_id: question.parent_id
+				parent_id: question.parent_id,
+				source_selection: question.source_selection
 			}));
 			savedQuestions = JSON.stringify(questions);
 			return true;
@@ -708,6 +737,16 @@
 									<div class="question-item-heading">
 										<label for="question-{rootQuestion.id}">Main question</label>
 										<span class="question-parent-label">Parent request</span>
+										<Button
+											type="button"
+											variant="outline"
+											size="sm"
+											aria-label="Analyze main Question"
+											disabled={saving || proposingQuestions || openingConversation || hasBlankQuestion}
+											onclick={() => void analyzeQuestion(rootQuestion.id)}
+										>
+											Analyze
+										</Button>
 									</div>
 									<Textarea
 										id="question-{rootQuestion.id}"
@@ -715,6 +754,14 @@
 										bind:value={rootQuestion.text}
 										disabled={saving || proposingQuestions}
 										aria-label="Main question"
+									/>
+									<InvestigationQuestionSourceScope
+										workspacePath={selected.workspace_id}
+										investigation={selected}
+										questionId={rootQuestion.id}
+										selection={rootQuestion.source_selection}
+										disabled={saving || proposingQuestions}
+										onChange={(selection) => updateQuestionSourceSelection(rootQuestion.id, selection)}
 									/>
 								</div>
 							{/if}
@@ -726,18 +773,36 @@
 											<div class="question-item-heading">
 												<label for="question-{question.id}">Subquestion {index + 1}</label>
 												<div class="question-item-actions">
+													<Button
+														type="button"
+														variant="outline"
+														size="sm"
+														aria-label="Analyze Subquestion {index + 1}"
+														disabled={saving || proposingQuestions || openingConversation || hasBlankQuestion}
+														onclick={() => void analyzeQuestion(question.id)}
+													>
+														Analyze
+													</Button>
 													<Button type="button" variant="ghost" aria-label="Move Subquestion {index + 1} up" disabled={saving || proposingQuestions || index === 0} onclick={() => moveQuestion(index, -1)}>↑</Button>
 													<Button type="button" variant="ghost" aria-label="Move Subquestion {index + 1} down" disabled={saving || proposingQuestions || index === subquestions.length - 1} onclick={() => moveQuestion(index, 1)}>↓</Button>
 													<Button type="button" variant="ghost" aria-label="Remove Subquestion {index + 1}" disabled={saving || proposingQuestions} onclick={() => removeQuestion(question.id)}>Remove</Button>
 												</div>
 											</div>
 											<Textarea
-											id="question-{question.id}"
-											class="question-field"
-											bind:value={question.text}
-											disabled={saving || proposingQuestions}
-											aria-label="Subquestion {index + 1}"
-										/>
+												id="question-{question.id}"
+												class="question-field"
+												bind:value={question.text}
+												disabled={saving || proposingQuestions}
+												aria-label="Subquestion {index + 1}"
+											/>
+											<InvestigationQuestionSourceScope
+												workspacePath={selected.workspace_id}
+												investigation={selected}
+												questionId={question.id}
+												selection={question.source_selection}
+												disabled={saving || proposingQuestions}
+												onChange={(selection) => updateQuestionSourceSelection(question.id, selection)}
+											/>
 										</li>
 									{/each}
 								</ol>

@@ -217,7 +217,8 @@ export const ipc = {
 		contextRefs?: ContextReference[],
 		clarificationReply?: ClarificationReply,
 		workspaceId?: string | null,
-		investigationId?: string | null
+		investigationId?: string | null,
+		questionId?: string | null
 	): Promise<Answer> {
 		if (!window.fella) throw new Error('Electron preload bridge is unavailable');
 		// Svelte state proxies cannot cross Electron's structured-clone boundary.
@@ -236,8 +237,9 @@ export const ipc = {
 				mode: mode || null,
 				contextRefs: wireContextRefs,
 				clarificationReply: clarificationReply ?? null,
-			workspaceId: workspaceId ?? null,
-			investigationId: investigationId ?? null
+				workspaceId: workspaceId ?? null,
+				investigationId: investigationId ?? null,
+				questionId: questionId ?? null
 			},
 			onEvent
 		);

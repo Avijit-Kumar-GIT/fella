@@ -21,6 +21,7 @@ declare global {
 					clarificationReply?: import('./lib/types').ClarificationReply | null;
 					workspaceId?: string | null;
 					investigationId?: string | null;
+					questionId?: string | null;
 				},
 				onEvent: (event: AskEvent) => void
 			): Promise<import('./lib/types').Answer>;

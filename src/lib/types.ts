@@ -450,6 +450,8 @@ export interface InvestigationQuestion {
 	parent_id?: string;
 	text: string;
 	position: number;
+	/** Optional source set that narrows the owning Investigation; absent means inherit. */
+	source_selection?: InvestigationSourceSelection | null;
 	status: 'active' | 'removed';
 	created_at_ms: number;
 	updated_at_ms: number;
@@ -459,6 +461,7 @@ export interface InvestigationQuestionInput {
 	id: string;
 	parent_id?: string;
 	text: string;
+	source_selection?: InvestigationSourceSelection | null;
 }
 
 export type InvestigationDefinitionKind = 'definition' | 'assumption';
@@ -498,6 +501,7 @@ export interface InvestigationDefinitionSnapshot {
 
 export interface InvestigationContextSnapshot {
 	investigation_id: string;
+	question_id?: string;
 	definitions: InvestigationDefinitionSnapshot[];
 	source_selection: InvestigationSourceSelection;
 }
