@@ -523,3 +523,15 @@ Playwright test passed. Two initial attempts exposed locator mistakes (evidence
 IDs belong to the saved run's source-scope panel, and subquestion text is held
 in input values); those locators were corrected without changing acceptance
 criteria.
+
+## Implementation checkpoint: low-ceremony single-question analysis (#220)
+
+A representative quick workspace question can be answered directly in its
+conversation without opening the Investigation brief, writing a Question plan,
+or confirming a separate run. The analyst can expand Analysis details to inspect
+the source, recorded SQL, result summary, and returned row, then collapse the
+details with the answer and composer still available. This validates the
+lightweight Ask path separately from the more structured Question workflow;
+answer and evidence are deterministic fixtures. The targeted quick-path and
+existing evidence-disclosure Playwright tests both passed, and `pnpm check`
+reported zero errors and warnings.

@@ -45,6 +45,7 @@ async function installDesktopMock(
 		reindexedCatalog = null,
 		chartEvidence = null,
 		detailEvidence = null,
+		directAnswerText = null,
 		savedAnalysisTurn = null,
 		questionRunOutcomes = [],
 		providerList = [],
@@ -52,7 +53,7 @@ async function installDesktopMock(
 		runLogEntries = []
 	} = {}
 ) {
-	await page.addInitScript(({ fixtureFolders, seedUnavailableConversation, seedDeletionConversations, replayStatus, replayStatusError, reindexedCatalog, chartEvidence, detailEvidence, savedAnalysisTurn, questionRunOutcomes, providerList, providerHealth, runLogEntries }) => {
+	await page.addInitScript(({ fixtureFolders, seedUnavailableConversation, seedDeletionConversations, replayStatus, replayStatusError, reindexedCatalog, chartEvidence, detailEvidence, directAnswerText, savedAnalysisTurn, questionRunOutcomes, providerList, providerHealth, runLogEntries }) => {
 		const calls = [];
 		const reviseFinding = (finding, update) => {
 			const now = Math.max(Date.now(), (finding.updated_at_ms ?? 0) + 1);
@@ -549,6 +550,11 @@ async function installDesktopMock(
 						}
 					}
 				}
+				const answerVerificationStatus = questionTurnId
+					? questionOutcome.verification_status ?? (questionOutcome.status === 'answered'
+						? 'verified'
+						: questionOutcome.status === 'blocked' ? 'failed' : 'insufficient_data')
+					: undefined;
 				if (questionTurnId) {
 					onEvent({ kind: 'turn_state', turn_id: questionTurnId, state: 'interpreting' });
 					onEvent({ kind: 'turn_state', turn_id: questionTurnId, state: 'planning' });
@@ -598,8 +604,8 @@ async function installDesktopMock(
 				const answer = {
 					text: questionTurnId && questionOutcome.answer_text
 						? questionOutcome.answer_text
-						: `Scoped to ${params.workspaceId ?? 'general'}.`,
-					status: 'complete',
+						: directAnswerText ?? `Scoped to ${params.workspaceId ?? 'general'}.`,
+					status: answerVerificationStatus,
 					turn_id: questionTurnId ?? (hasReplayEvidence ? 'fixture-turn' : undefined),
 					evidence: [
 						...(hasReplayEvidence
@@ -615,9 +621,7 @@ async function installDesktopMock(
 				if (questionTurnId) {
 					const investigation = [...investigations.values()].find((item) => item.id === params.investigationId);
 					const question = questionRecords.get(params.questionId);
-					const verificationStatus = questionOutcome.verification_status ?? (questionOutcome.status === 'answered'
-						? 'verified'
-						: questionOutcome.status === 'blocked' ? 'failed' : 'insufficient_data');
+					const verificationStatus = answerVerificationStatus ?? 'verified';
 					const verificationChecks = questionOutcome.checks ?? [];
 					analysisTurns.set(questionTurnId, {
 						id: questionTurnId,
@@ -655,7 +659,7 @@ async function installDesktopMock(
 			windowAction: async () => {},
 			pathForFile: () => ''
 		};
-	}, { fixtureFolders, seedUnavailableConversation, seedDeletionConversations, replayStatus, replayStatusError, reindexedCatalog, chartEvidence, detailEvidence, savedAnalysisTurn, questionRunOutcomes, providerList, providerHealth, runLogEntries });
+	}, { fixtureFolders, seedUnavailableConversation, seedDeletionConversations, replayStatus, replayStatusError, reindexedCatalog, chartEvidence, detailEvidence, directAnswerText, savedAnalysisTurn, questionRunOutcomes, providerList, providerHealth, runLogEntries });
 }
 
 async function dispatchWorkspaceDrag(page, type, workspacePath, { x = 0.5, y = 0.5, existing = false } = {}) {
@@ -3293,6 +3297,57 @@ test('General chat stays usable without creating or inheriting a workspace Inves
 	expect(generalAsk.question).toBe(request);
 	expect(await page.evaluate(() => window.__workspaceInvestigationEnsureCalls)).toEqual([]);
 	expect(await page.evaluate(() => window.__workspaceInvestigations())).toEqual([]);
+});
+
+test('a quick workspace question stays low-ceremony while keeping its answer evidence inspectable', async ({ page }) => {
+	const request = 'What were total net sales?';
+	const answerText = 'Net sales totaled $1,240 across 124 rows.';
+	const query = 'SELECT SUM(net_sales) AS net_sales FROM sales';
+	await installDesktopMock(page, {
+		directAnswerText: answerText,
+		detailEvidence: {
+			id: 'quick-sales-evidence',
+			tool: 'run_sql',
+			note: 'Sum net sales',
+			args: { query },
+			sql: query,
+			result_summary: 'Net sales totaled 1240 across 124 rows.',
+			columns: ['net_sales'],
+			rows: [[1240]],
+			row_count: 1,
+			ms: 8,
+			sources: [{ source: 'sales.csv', table: 'sales' }]
+		}
+	});
+	await page.goto('/');
+	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
+	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
+	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	const composer = page.getByRole('combobox', { name: 'Ask about northwind-sales' });
+	await composer.fill(request);
+	await page.getByRole('button', { name: 'Send' }).click();
+
+	const answer = page.locator('.msg.assistant').last();
+	await expect(answer).toContainText(answerText);
+	await expect(composer).toBeVisible();
+	await expect(page.getByRole('region', { name: 'Investigation brief' })).toHaveCount(0);
+	await expect(page.getByRole('region', { name: 'Review this run' })).toHaveCount(0);
+	await expect(page.getByRole('region', { name: 'Question run' })).toHaveCount(0);
+
+	const details = answer.getByRole('button', { name: 'Analysis details' });
+	await details.click();
+	await expect(answer).toContainText('Workspace tool results are linked to the steps below.');
+	await expect(answer).toContainText('from sales.csv (sales)');
+	const queryDisclosure = answer.getByRole('button', { name: 'show the query' });
+	await queryDisclosure.click();
+	await expect(answer.locator('pre.sql')).toContainText(query);
+	await expect(answer.locator('.result')).toContainText('Net sales totaled 1240 across 124 rows.');
+	await expect(answer.locator('.tablewrap')).toContainText('1240');
+	await answer.getByRole('button', { name: 'hide', exact: true }).click();
+	await details.click();
+	await expect(details).toHaveAttribute('aria-expanded', 'false');
+	await expect(answer).toContainText(answerText);
+	await expect(composer).toBeVisible();
 });
 
 test('workspace-scoped analysis still auto-links its Investigation to the conversation', async ({ page }) => {
