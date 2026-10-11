@@ -16,6 +16,8 @@ import type {
 	ConversationSummary,
 	Investigation,
 	InvestigationQuestion,
+	InvestigationQuestionInput,
+	QuestionBreakdownProposal,
 	ProviderHealth,
 	ProviderInfo,
 	QueryResult,
@@ -153,8 +155,12 @@ export const ipc = {
 		reviewedMessageId?: string
 	) => invoke<Investigation>('investigation_update_brief', { investigationId, brief, reviewedMessageId }),
 	/** Replace the current ordered Question plan without rewriting past runs. */
-	investigationUpdateQuestions: (investigationId: string, questions: InvestigationQuestion[]) =>
+	investigationUpdateQuestions: (investigationId: string, questions: InvestigationQuestionInput[]) =>
 		invoke<Investigation>('investigation_update_questions', { investigationId, questions }),
+	investigationQuestionLoad: (questionId: string) =>
+		invoke<InvestigationQuestion>('investigation_question_load', { questionId }),
+	investigationProposeQuestions: (investigationId: string, mainQuestion: string) =>
+		invoke<QuestionBreakdownProposal>('investigation_propose_questions', { investigationId, mainQuestion }),
 	/** Associate existing canonical AnalysisTurns by ID; never copy run payloads. */
 	investigationLinkAnalysisTurns: (investigationId: string, analysisTurnIds: string[]) =>
 		invoke<Investigation>('investigation_link_analysis_turns', { investigationId, analysisTurnIds }),

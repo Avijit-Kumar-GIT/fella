@@ -206,14 +206,21 @@ records can recover that link from the first-question message ID. General
 conversations remain outside this flow.
 
 Each Investigation now stores an ordered, editable Question plan. Analysts can
-add, rename, reorder, and remove Questions without changing the source message
-or prior AnalysisTurns. The next workspace ask receives the latest saved plan
-as context while its transcript message remains exactly what the analyst sent;
-unanswered Questions are explicitly treated as work to do, not established
-findings. Legacy Investigations surface their existing goal as the initial
-Question when upgraded. This first plan is an ordered value on the aggregate;
-independent Question records and run-to-Question associations remain later
-slices.
+edit the main Question and add, rename, reorder, or remove its subquestions
+without changing the source message or prior AnalysisTurns. The next workspace
+ask receives the latest saved plan as context while its transcript message
+remains exactly what the analyst sent; unanswered Questions are explicitly
+treated as work to do, not established findings. Legacy Investigations surface
+their existing goal as the initial Question when upgraded. Each Question now
+has its own stable record in the local Questions store, with an Investigation
+ID, parent ID, order, lifecycle status, and timestamps; the Investigation
+keeps the ordered IDs and presents the root request separately from its child
+Questions. Older flat plans migrate once, using their first item as the root
+and linking the rest to it; an empty legacy plan recovers the root from the
+current brief goal. Fella can ask the configured model for a decomposition,
+but suggestions are editable drafts: only an explicit Save writes child
+records. Removed Questions retain their identity and lifecycle state rather
+than becoming orphaned history.
 
 The Investigation surface now includes a compact view of its workspace's
 current catalog snapshot: queryable tables, readable documents, and files the

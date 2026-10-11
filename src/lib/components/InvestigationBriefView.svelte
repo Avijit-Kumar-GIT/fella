@@ -5,7 +5,12 @@
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { ipc, isDesktop } from '$lib/ipc';
 	import { analysisTurnIdsAfterSourceMessage } from '$lib/investigation-runs';
-	import type { ConversationSummary, Investigation, InvestigationBrief, InvestigationQuestion } from '$lib/types';
+	import type {
+		ConversationSummary,
+		Investigation,
+		InvestigationBrief,
+		InvestigationQuestionInput
+	} from '$lib/types';
 	import { findBriefProposal, type BriefProposal, type BriefProposalTarget } from '$lib/investigation-brief-proposal';
 	import Icon from './Icon.svelte';
 	import InvestigationSourceReadiness from './InvestigationSourceReadiness.svelte';
@@ -19,7 +24,7 @@
 	let audience = $state('');
 	let desiredOutput = $state('');
 	let constraintsText = $state('');
-	let questions = $state<InvestigationQuestion[]>([]);
+	let questions = $state<InvestigationQuestionInput[]>([]);
 	let savedBrief = $state('');
 	let savedQuestions = $state('');
 	let loadedBriefKey = '';
@@ -31,11 +36,16 @@
 	let creating = $state(false);
 	let openingConversation = $state(false);
 	let saving = $state(false);
+	let proposingQuestions = $state(false);
 	let error = $state('');
 	let requestSerial = 0;
 	const syncingInvestigations = new Set<string>();
 
 	let selected = $derived(investigations.find((item) => item.id === selectedId) ?? null);
+	let rootQuestion = $derived(questions.find((question) => !question.parent_id) ?? null);
+	let subquestions = $derived(rootQuestion
+		? questions.filter((question) => question.parent_id === rootQuestion.id)
+		: []);
 	let currentConversationSource = $derived.by(() => {
 		const conversation = session.activeChat;
 		if (!workspacePath || conversation.workspaceScope !== workspacePath) return undefined;
@@ -78,6 +88,7 @@
 	let questionsKey = $derived(JSON.stringify(questions));
 	let questionsDirty = $derived(Boolean(selected && questionsKey !== savedQuestions));
 	let hasBlankQuestion = $derived(questions.some((question) => !question.text.trim()));
+	let canSuggestBreakdown = $derived(Boolean(rootQuestion?.text.trim()) && subquestions.length === 0);
 
 	async function loadWorkspace(path: string): Promise<void> {
 		const serial = ++requestSerial;
@@ -183,8 +194,12 @@
 			return;
 		}
 		questions = (item.questions ?? (item.brief.goal.trim()
-			? [{ id: `legacy-${item.id}`, text: item.brief.goal }]
-			: [])).map((question) => ({ ...question }));
+			? [{ id: `legacy-${item.id}`, text: item.brief.goal, parent_id: undefined }]
+			: [])).map((question) => ({
+			id: question.id,
+			text: question.text,
+			parent_id: question.parent_id
+		}));
 		savedQuestions = JSON.stringify(questions);
 	});
 
@@ -198,6 +213,10 @@
 
 	async function createInvestigation(): Promise<void> {
 		if (!workspacePath || creating || !isDesktop()) return;
+		if (questionsDirty) {
+			error = 'Save or discard the current Question plan before opening another Investigation.';
+			return;
+		}
 		creating = true;
 		error = '';
 		const request = currentConversationSource;
@@ -286,19 +305,62 @@
 
 	function addQuestion(): void {
 		const id = globalThis.crypto?.randomUUID?.().replaceAll('-', '') ?? `${Date.now()}${Math.random().toString(16).slice(2)}`;
-		questions = [...questions, { id: `q_${id}`, text: '' }];
+		const question: InvestigationQuestionInput = {
+			id: `q_${id}`,
+			text: '',
+			parent_id: rootQuestion?.id
+		};
+		questions = [...questions, question];
 	}
 
 	function moveQuestion(index: number, offset: -1 | 1): void {
 		const destination = index + offset;
-		if (destination < 0 || destination >= questions.length) return;
-		const next = [...questions];
+		if (destination < 0 || destination >= subquestions.length || !rootQuestion) return;
+		const next = [...subquestions];
 		[next[index], next[destination]] = [next[destination], next[index]];
-		questions = next;
+		questions = [rootQuestion, ...next];
 	}
 
 	function removeQuestion(id: string): void {
+		if (id === rootQuestion?.id) return;
 		questions = questions.filter((question) => question.id !== id);
+	}
+
+	function discardQuestions(): void {
+		const item = selected;
+		if (!item || saving || proposingQuestions) return;
+		questions = (item.questions ?? (item.brief.goal.trim()
+			? [{ id: `legacy-${item.id}`, text: item.brief.goal, parent_id: undefined }]
+			: [])).map((question) => ({
+			id: question.id,
+			text: question.text,
+			parent_id: question.parent_id
+		}));
+		savedQuestions = JSON.stringify(questions);
+		error = '';
+	}
+
+	async function suggestBreakdown(): Promise<void> {
+		const item = selected;
+		const root = rootQuestion;
+		if (!item || !root || !canSuggestBreakdown || proposingQuestions || saving) return;
+		proposingQuestions = true;
+		error = '';
+		try {
+			const proposal = await ipc.investigationProposeQuestions(item.id, root.text.trim());
+			if (selected?.id !== item.id) return;
+			questions = [
+				{ ...root },
+				...proposal.subquestions.map((text) => {
+					const id = globalThis.crypto?.randomUUID?.().replaceAll('-', '') ?? `${Date.now()}${Math.random().toString(16).slice(2)}`;
+					return { id: `q_${id}`, parent_id: root.id, text };
+				})
+			];
+		} catch (cause) {
+			error = cause instanceof Error ? cause.message : String(cause);
+		} finally {
+			proposingQuestions = false;
+		}
 	}
 
 	async function saveQuestions(): Promise<boolean> {
@@ -312,10 +374,18 @@
 		try {
 			const updated = await ipc.investigationUpdateQuestions(
 				selected.id,
-				questions.map((question) => ({ id: question.id, text: question.text.trim() }))
+				questions.map((question) => ({
+					id: question.id,
+					parent_id: question.parent_id,
+					text: question.text.trim()
+				}))
 			);
 			investigations = investigations.map((item) => item.id === updated.id ? updated : item);
-			questions = (updated.questions ?? []).map((question) => ({ ...question }));
+			questions = (updated.questions ?? []).map((question) => ({
+				id: question.id,
+				text: question.text,
+				parent_id: question.parent_id
+			}));
 			savedQuestions = JSON.stringify(questions);
 			return true;
 		} catch (cause) {
@@ -351,9 +421,12 @@
 	}
 
 	async function selectInvestigation(id: string): Promise<void> {
-		if (id === selectedId || saving) return;
+		if (id === selectedId || saving || proposingQuestions) return;
+		if (questionsDirty) {
+			error = 'Save or discard the current Question plan before switching Investigations.';
+			return;
+		}
 		if (dirty && !(await saveBrief())) return;
-		if (questionsDirty && !(await saveQuestions())) return;
 		selectedId = id;
 	}
 </script>
@@ -463,36 +536,73 @@
 						<header class="question-heading">
 							<div>
 								<h3 id="question-plan-title">Questions</h3>
-								<p>Break the Investigation into answerable steps. The current order guides future workspace asks.</p>
+								<p>The main request is the parent. Its subquestions are durable linked records; suggestions stay drafts until saved.</p>
 							</div>
 							<div class="question-save">
 								<span role={error ? 'alert' : 'status'}>{error || (questionsDirty ? 'Unsaved plan' : 'Plan saved')}</span>
-								<Button type="button" disabled={!questionsDirty || saving || hasBlankQuestion} onclick={() => void saveQuestions()}>
+								{#if questionsDirty}
+									<Button type="button" variant="ghost" disabled={saving || proposingQuestions} onclick={discardQuestions}>Discard plan</Button>
+								{/if}
+								<Button
+									type="button"
+									variant="outline"
+									size="sm"
+									title={subquestions.length ? 'Remove current subquestions before drafting a replacement breakdown.' : undefined}
+									disabled={!canSuggestBreakdown || saving || proposingQuestions}
+									onclick={() => void suggestBreakdown()}
+								>
+									{proposingQuestions ? 'Suggesting…' : 'Suggest breakdown'}
+								</Button>
+								<Button type="button" disabled={!questionsDirty || saving || proposingQuestions || hasBlankQuestion} onclick={() => void saveQuestions()}>
 									<Icon name="check" size={16} />{saving ? 'Saving…' : 'Save plan'}
 								</Button>
 							</div>
 						</header>
 						{#if questions.length}
-							<ol class="question-list">
-								{#each questions as question, index (question.id)}
-									<li class="question-item">
-										<div class="question-item-heading">
-											<label for="question-{question.id}">Question {index + 1}</label>
-											<div class="question-item-actions">
-												<Button type="button" variant="ghost" aria-label="Move Question {index + 1} up" disabled={saving || index === 0} onclick={() => moveQuestion(index, -1)}>↑</Button>
-												<Button type="button" variant="ghost" aria-label="Move Question {index + 1} down" disabled={saving || index === questions.length - 1} onclick={() => moveQuestion(index, 1)}>↓</Button>
-												<Button type="button" variant="ghost" aria-label="Remove Question {index + 1}" disabled={saving} onclick={() => removeQuestion(question.id)}>Remove</Button>
+							{#if rootQuestion}
+								<div class="question-item root-question-item">
+									<div class="question-item-heading">
+										<label for="question-{rootQuestion.id}">Main question</label>
+										<span class="question-parent-label">Parent request</span>
+									</div>
+									<Textarea
+										id="question-{rootQuestion.id}"
+										class="question-field"
+										bind:value={rootQuestion.text}
+										disabled={saving || proposingQuestions}
+										aria-label="Main question"
+									/>
+								</div>
+							{/if}
+							{#if subquestions.length}
+								<h4 class="subquestion-title">Breakdown</h4>
+								<ol class="question-list">
+									{#each subquestions as question, index (question.id)}
+										<li class="question-item">
+											<div class="question-item-heading">
+												<label for="question-{question.id}">Subquestion {index + 1}</label>
+												<div class="question-item-actions">
+													<Button type="button" variant="ghost" aria-label="Move Subquestion {index + 1} up" disabled={saving || proposingQuestions || index === 0} onclick={() => moveQuestion(index, -1)}>↑</Button>
+													<Button type="button" variant="ghost" aria-label="Move Subquestion {index + 1} down" disabled={saving || proposingQuestions || index === subquestions.length - 1} onclick={() => moveQuestion(index, 1)}>↓</Button>
+													<Button type="button" variant="ghost" aria-label="Remove Subquestion {index + 1}" disabled={saving || proposingQuestions} onclick={() => removeQuestion(question.id)}>Remove</Button>
+												</div>
 											</div>
-										</div>
-										<Textarea id="question-{question.id}" class="question-field" bind:value={question.text} disabled={saving} aria-label="Question {index + 1}" />
-									</li>
-								{/each}
-							</ol>
+											<Textarea
+											id="question-{question.id}"
+											class="question-field"
+											bind:value={question.text}
+											disabled={saving || proposingQuestions}
+											aria-label="Subquestion {index + 1}"
+										/>
+										</li>
+									{/each}
+								</ol>
+							{/if}
 						{:else}
 							<p class="question-empty">No Questions in this plan yet.</p>
 						{/if}
-						<Button type="button" variant="outline" disabled={saving} onclick={addQuestion}>
-							<Icon name="plus" size={16} />Add Question
+						<Button type="button" variant="outline" disabled={saving || proposingQuestions} onclick={addQuestion}>
+							<Icon name="plus" size={16} />{rootQuestion ? 'Add subquestion' : 'Add main Question'}
 						</Button>
 					</section>
 					<div class="editor-foot">
@@ -561,12 +671,14 @@
 	.question-heading { align-items: flex-start; gap: var(--space-4); }
 	.question-heading h3 { margin: 0; font-size: var(--fs-md); font-weight: 650; }
 	.question-heading p, .question-empty { margin-top: var(--space-1); color: var(--text-dim); font-size: var(--fs-xs); }
-	.question-save { flex: none; }
+	.question-save { flex: none; flex-wrap: wrap; justify-content: flex-end; }
 	.question-save > span { color: var(--text-faint); font-size: var(--fs-xs); }
+	.subquestion-title { margin: 0; font-size: var(--fs-sm); font-weight: 650; }
 	.question-list { display: grid; gap: var(--space-3); margin: 0; padding: 0; list-style: none; }
 	.question-item { min-width: 0; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); }
 	.question-item-heading { margin-bottom: var(--space-2); }
 	.question-item-heading label { margin: 0; font-size: var(--fs-sm); font-weight: 600; }
+	.question-parent-label { color: var(--text-faint); font-size: var(--fs-xs); }
 	.question-item-actions { gap: 0; }
 	.question-item-actions :global(button) { min-width: 34px; min-height: 32px; padding: 4px 8px; }
 	.brief-editor :global(.question-field) { width: 100%; min-height: 68px; resize: vertical; }

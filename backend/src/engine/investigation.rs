@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::engine::error::{EngineError, EngineResult};
 
 const INVESTIGATIONS_DIR: &str = "investigations";
+const QUESTIONS_DIR: &str = "questions";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -38,11 +39,92 @@ pub struct InvestigationBrief {
     pub constraints: Vec<String>,
 }
 
-/// One analyst-editable item in an Investigation's ordered work plan.
+/// A durable Question record. The root Question represents the Investigation's
+/// main request; decomposed Questions point to it through `parent_id`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InvestigationQuestion {
     pub id: String,
+    pub investigation_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
     pub text: String,
+    pub position: usize,
+    #[serde(default)]
+    pub status: InvestigationQuestionStatus,
+    pub created_at_ms: u64,
+    pub updated_at_ms: u64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InvestigationQuestionStatus {
+    #[default]
+    Active,
+    Removed,
+}
+
+/// Editable plan input. Position is the input order; the engine assigns the
+/// durable record's position and lifecycle timestamps.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InvestigationQuestionInput {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
+    pub text: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuestionBreakdownProposal {
+    pub subquestions: Vec<String>,
+}
+
+/// Validate the model's response before presenting it as an editable draft.
+/// Suggestions are never accepted or persisted by this parser.
+pub fn parse_question_breakdown(
+    response: &str,
+    main_question: &str,
+) -> EngineResult<QuestionBreakdownProposal> {
+    let response = response.trim();
+    let response = if let Some(fenced) = response.strip_prefix("```") {
+        let content = fenced
+            .find('\n')
+            .map(|newline| &fenced[newline + 1..])
+            .unwrap_or(fenced);
+        content.strip_suffix("```").unwrap_or(content).trim()
+    } else {
+        response
+    };
+    let mut proposal: QuestionBreakdownProposal = serde_json::from_str(response)
+        .map_err(|error| EngineError::msg(format!("could not read Question breakdown: {error}")))?;
+    if !(2..=6).contains(&proposal.subquestions.len()) {
+        return Err(EngineError::msg(
+            "the suggested breakdown must contain between 2 and 6 subquestions",
+        ));
+    }
+
+    let main_key = main_question.trim().to_lowercase();
+    let mut seen = HashSet::new();
+    let mut total_chars = 0usize;
+    for question in &mut proposal.subquestions {
+        *question = question.trim().to_owned();
+        let key = question.to_lowercase();
+        if question.is_empty()
+            || question.chars().count() > 12_000
+            || key == main_key
+            || !seen.insert(key)
+        {
+            return Err(EngineError::msg(
+                "the suggested breakdown contains a blank, repeated, or duplicate main Question",
+            ));
+        }
+        total_chars = total_chars.saturating_add(question.chars().count());
+    }
+    if total_chars > 24_000 {
+        return Err(EngineError::msg(
+            "the suggested Question breakdown exceeds the 24000 character limit",
+        ));
+    }
+    Ok(proposal)
 }
 
 /// Stable, independently loadable identity for an investigation.
@@ -82,6 +164,39 @@ pub struct Investigation {
     pub updated_at_ms: u64,
 }
 
+/// On-disk aggregate. Question payloads live in `questions/<id>.json`; the
+/// aggregate retains their ordered IDs and a legacy inline field solely for
+/// one-way migration of records written before Question records existed.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct InvestigationRecord {
+    id: String,
+    workspace_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    conversation_id: Option<String>,
+    #[serde(default)]
+    question_ids: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    questions: Option<Vec<LegacyQuestion>>,
+    title: String,
+    #[serde(default)]
+    brief: InvestigationBrief,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    brief_source_message_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    brief_reviewed_message_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    analysis_turn_ids: Vec<String>,
+    status: InvestigationStatus,
+    created_at_ms: u64,
+    updated_at_ms: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct LegacyQuestion {
+    id: String,
+    text: String,
+}
+
 fn investigations_dir(data_dir: &Path) -> PathBuf {
     data_dir.join(INVESTIGATIONS_DIR)
 }
@@ -95,6 +210,18 @@ fn record_path(data_dir: &Path, id: &str) -> EngineResult<PathBuf> {
         return Err(EngineError::msg("invalid investigation id"));
     }
     Ok(investigations_dir(data_dir).join(format!("{id}.json")))
+}
+
+fn question_path(data_dir: &Path, id: &str) -> EngineResult<PathBuf> {
+    if id.is_empty()
+        || id.chars().count() > 128
+        || !id
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-'))
+    {
+        return Err(EngineError::msg("invalid investigation question id"));
+    }
+    Ok(data_dir.join(QUESTIONS_DIR).join(format!("{id}.json")))
 }
 
 fn now_ms() -> u64 {
@@ -119,21 +246,31 @@ fn new_question_id() -> EngineResult<String> {
     ))
 }
 
-fn initial_questions(request: &str) -> EngineResult<Vec<InvestigationQuestion>> {
+fn initial_questions(
+    investigation_id: &str,
+    request: &str,
+    timestamp: u64,
+) -> EngineResult<Vec<InvestigationQuestion>> {
     let text = request.trim();
     if text.is_empty() {
         return Ok(Vec::new());
     }
     Ok(vec![InvestigationQuestion {
         id: new_question_id()?,
+        investigation_id: investigation_id.to_owned(),
+        parent_id: None,
         text: text.to_owned(),
+        position: 0,
+        status: InvestigationQuestionStatus::Active,
+        created_at_ms: timestamp,
+        updated_at_ms: timestamp,
     }])
 }
 
-fn read_record(path: &Path, expected_id: &str) -> EngineResult<Investigation> {
+fn read_raw_record(path: &Path, expected_id: &str) -> EngineResult<InvestigationRecord> {
     let body = std::fs::read_to_string(path)
         .map_err(|error| EngineError::io(format!("read {}", path.display()), error))?;
-    let record: Investigation = serde_json::from_str(&body).map_err(|error| {
+    let record: InvestigationRecord = serde_json::from_str(&body).map_err(|error| {
         EngineError::msg(format!(
             "investigation {expected_id} is not valid JSON: {error}"
         ))
@@ -145,6 +282,214 @@ fn read_record(path: &Path, expected_id: &str) -> EngineResult<Investigation> {
         )));
     }
     Ok(record)
+}
+
+fn write_json_atomic(path: &Path, key: &str, body: &[u8]) -> EngineResult<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| EngineError::msg("record path has no parent directory"))?;
+    std::fs::create_dir_all(parent)
+        .map_err(|error| EngineError::io(format!("create {}", parent.display()), error))?;
+    let mut random = [0u8; 8];
+    getrandom::fill(&mut random)
+        .map_err(|error| EngineError::msg(format!("create {key} update id: {error}")))?;
+    let suffix = random
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let temporary = path.with_file_name(format!(".{key}-{suffix}.tmp"));
+    let write_result = (|| {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .map_err(|error| EngineError::io(format!("create {}", temporary.display()), error))?;
+        file.write_all(body)
+            .map_err(|error| EngineError::io(format!("write {}", temporary.display()), error))?;
+        file.sync_all()
+            .map_err(|error| EngineError::io(format!("sync {}", temporary.display()), error))?;
+        #[cfg(windows)]
+        if path.exists() {
+            std::fs::remove_file(path)
+                .map_err(|error| EngineError::io(format!("replace {}", path.display()), error))?;
+        }
+        std::fs::rename(&temporary, path)
+            .map_err(|error| EngineError::io(format!("replace {}", path.display()), error))
+    })();
+    if write_result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    write_result
+}
+
+fn write_question_record(data_dir: &Path, question: &InvestigationQuestion) -> EngineResult<()> {
+    let path = question_path(data_dir, &question.id)?;
+    let body = serde_json::to_vec_pretty(question).map_err(EngineError::from)?;
+    write_json_atomic(&path, &question.id, &body)
+}
+
+pub fn question_load(data_dir: &Path, id: &str) -> EngineResult<InvestigationQuestion> {
+    let path = question_path(data_dir, id)?;
+    let body = std::fs::read_to_string(&path)
+        .map_err(|error| EngineError::io(format!("read {}", path.display()), error))?;
+    let question: InvestigationQuestion = serde_json::from_str(&body)
+        .map_err(|error| EngineError::msg(format!("question {id} is not valid JSON: {error}")))?;
+    if question.id != id {
+        return Err(EngineError::msg(format!(
+            "question file {} contains a mismatched id",
+            path.display()
+        )));
+    }
+    Ok(question)
+}
+
+fn public_record(
+    record: InvestigationRecord,
+    questions: Vec<InvestigationQuestion>,
+) -> Investigation {
+    Investigation {
+        id: record.id,
+        workspace_id: record.workspace_id,
+        conversation_id: record.conversation_id,
+        questions: Some(questions),
+        title: record.title,
+        brief: record.brief,
+        brief_source_message_id: record.brief_source_message_id,
+        brief_reviewed_message_id: record.brief_reviewed_message_id,
+        analysis_turn_ids: record.analysis_turn_ids,
+        status: record.status,
+        created_at_ms: record.created_at_ms,
+        updated_at_ms: record.updated_at_ms,
+    }
+}
+
+fn read_record(path: &Path, expected_id: &str, data_dir: &Path) -> EngineResult<Investigation> {
+    let mut record = read_raw_record(path, expected_id)?;
+    let questions = if let Some(ids) = record.question_ids.clone() {
+        let mut loaded = Vec::with_capacity(ids.len());
+        for id in ids {
+            let question = question_load(data_dir, &id)?;
+            if question.investigation_id != expected_id
+                || question.status != InvestigationQuestionStatus::Active
+            {
+                return Err(EngineError::msg(format!(
+                    "question {id} is not an active child of investigation {expected_id}"
+                )));
+            }
+            loaded.push(question);
+        }
+        loaded.sort_by_key(|question| question.position);
+        loaded
+    } else {
+        // Upgrade the former inline plan once. Its first item is the main
+        // request; later items become children of that root Question.
+        let legacy = match record.questions.take() {
+            Some(questions) if !questions.is_empty() => questions,
+            Some(_) if !record.brief.goal.trim().is_empty() => vec![LegacyQuestion {
+                id: new_question_id()?,
+                text: record.brief.goal.clone(),
+            }],
+            Some(questions) => questions,
+            None if !record.brief.goal.trim().is_empty() => vec![LegacyQuestion {
+                id: new_question_id()?,
+                text: record.brief.goal.clone(),
+            }],
+            None => Vec::new(),
+        };
+        let root_id = legacy.first().map(|question| question.id.clone());
+        let mut migrated = Vec::with_capacity(legacy.len());
+        for (position, old) in legacy.into_iter().enumerate() {
+            let id = old.id.trim().to_owned();
+            let text = old.text.trim().to_owned();
+            if id.is_empty() || text.is_empty() {
+                return Err(EngineError::msg(format!(
+                    "legacy question in investigation {expected_id} is blank"
+                )));
+            }
+            let timestamp = record.created_at_ms;
+            migrated.push(InvestigationQuestion {
+                id,
+                investigation_id: expected_id.to_owned(),
+                parent_id: if position == 0 { None } else { root_id.clone() },
+                text,
+                position,
+                status: InvestigationQuestionStatus::Active,
+                created_at_ms: timestamp,
+                updated_at_ms: timestamp,
+            });
+        }
+        for question in &migrated {
+            write_question_record(data_dir, question)?;
+        }
+        record.question_ids = Some(
+            migrated
+                .iter()
+                .map(|question| question.id.clone())
+                .collect(),
+        );
+        record.questions = None;
+        write_raw_record(data_dir, &record)?;
+        migrated
+    };
+    Ok(public_record(record, questions))
+}
+
+fn write_raw_record(data_dir: &Path, record: &InvestigationRecord) -> EngineResult<()> {
+    let path = record_path(data_dir, &record.id)?;
+    let body = serde_json::to_vec_pretty(record).map_err(EngineError::from)?;
+    write_json_atomic(&path, &record.id, &body)
+}
+
+fn persist_new_record(data_dir: &Path, record: &Investigation) -> EngineResult<()> {
+    let path = record_path(data_dir, &record.id)?;
+    let stored = InvestigationRecord {
+        id: record.id.clone(),
+        workspace_id: record.workspace_id.clone(),
+        conversation_id: record.conversation_id.clone(),
+        question_ids: Some(
+            record
+                .questions
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .map(|question| question.id.clone())
+                .collect(),
+        ),
+        questions: None,
+        title: record.title.clone(),
+        brief: record.brief.clone(),
+        brief_source_message_id: record.brief_source_message_id.clone(),
+        brief_reviewed_message_id: record.brief_reviewed_message_id.clone(),
+        analysis_turn_ids: record.analysis_turn_ids.clone(),
+        status: record.status.clone(),
+        created_at_ms: record.created_at_ms,
+        updated_at_ms: record.updated_at_ms,
+    };
+    let body = serde_json::to_vec_pretty(&stored).map_err(EngineError::from)?;
+    let temporary = path.with_extension("json.tmp");
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)
+        .map_err(|error| EngineError::io(format!("create {}", temporary.display()), error))?;
+    if let Err(error) = file.write_all(&body) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(EngineError::io(
+            format!("write {}", temporary.display()),
+            error,
+        ));
+    }
+    drop(file);
+    match std::fs::hard_link(&temporary, &path) {
+        Ok(()) => {
+            let _ = std::fs::remove_file(&temporary);
+            Ok(())
+        }
+        Err(error) => {
+            let _ = std::fs::remove_file(&temporary);
+            Err(EngineError::io(format!("write {}", path.display()), error))
+        }
+    }
 }
 
 pub fn create(
@@ -203,11 +548,18 @@ pub fn create(
         }
 
         let timestamp = now_ms();
+        let questions = initial_questions(&id, goal, timestamp)?;
+        if questions
+            .iter()
+            .any(|question| question_path(data_dir, &question.id).is_ok_and(|path| path.exists()))
+        {
+            continue;
+        }
         let record = Investigation {
             id: id.clone(),
             workspace_id: workspace_id.to_owned(),
             conversation_id: conversation_id.map(str::to_owned),
-            questions: Some(initial_questions(goal)?),
+            questions: Some(questions.clone()),
             title: title.to_owned(),
             brief: InvestigationBrief {
                 goal: goal.to_owned(),
@@ -234,43 +586,10 @@ pub fn create(
             created_at_ms: timestamp,
             updated_at_ms: timestamp,
         };
-        let body = serde_json::to_string_pretty(&record).map_err(EngineError::from)?;
-        let temporary = path.with_extension("json.tmp");
-        let mut file = match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)
-        {
-            Ok(file) => file,
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => {
-                return Err(EngineError::io(
-                    format!("create {}", temporary.display()),
-                    error,
-                ));
-            }
-        };
-        if let Err(error) = file.write_all(body.as_bytes()) {
-            let _ = std::fs::remove_file(&temporary);
-            return Err(EngineError::io(
-                format!("write {}", temporary.display()),
-                error,
-            ));
+        for question in &questions {
+            write_question_record(data_dir, question)?;
         }
-        drop(file);
-        match std::fs::hard_link(&temporary, &path) {
-            Ok(()) => {
-                let _ = std::fs::remove_file(&temporary);
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                let _ = std::fs::remove_file(&temporary);
-                continue;
-            }
-            Err(error) => {
-                let _ = std::fs::remove_file(&temporary);
-                return Err(EngineError::io(format!("write {}", path.display()), error));
-            }
-        }
+        persist_new_record(data_dir, &record)?;
         return Ok(record);
     }
 
@@ -338,15 +657,6 @@ pub fn ensure_for_conversation(
             existing.conversation_id = Some(conversation_id.to_owned());
             changed = true;
         }
-        if existing.questions.is_none() {
-            let seed = if existing.brief.goal.trim().is_empty() {
-                initial_request
-            } else {
-                &existing.brief.goal
-            };
-            existing.questions = Some(initial_questions(seed)?);
-            changed = true;
-        }
         // A manually-created, blank Investigation can be attached to its
         // conversation before the analyst asks the first real question.
         if existing.brief_source_message_id.is_none() {
@@ -356,7 +666,12 @@ pub fn ensure_for_conversation(
                 existing.brief_source_message_id = Some(source_message_id.to_owned());
                 existing.brief_reviewed_message_id = Some(source_message_id.to_owned());
                 if existing.questions.as_ref().is_some_and(Vec::is_empty) {
-                    existing.questions = Some(initial_questions(request)?);
+                    let timestamp = now_ms();
+                    let questions = initial_questions(&existing.id, request, timestamp)?;
+                    for question in &questions {
+                        write_question_record(data_dir, question)?;
+                    }
+                    existing.questions = Some(questions);
                 }
                 changed = true;
             }
@@ -395,7 +710,7 @@ pub fn ensure_for_conversation(
 pub fn update_questions(
     data_dir: &Path,
     id: &str,
-    mut questions: Vec<InvestigationQuestion>,
+    mut questions: Vec<InvestigationQuestionInput>,
 ) -> EngineResult<Investigation> {
     const MAX_QUESTIONS: usize = 100;
     const MAX_ID_CHARS: usize = 128;
@@ -436,9 +751,79 @@ pub fn update_questions(
         }
     }
 
+    if let Some(root) = questions.first() {
+        if root.parent_id.is_some() {
+            return Err(EngineError::msg(
+                "the main Investigation Question cannot have a parent",
+            ));
+        }
+        let root_id = root.id.clone();
+        for child in questions.iter_mut().skip(1) {
+            match child.parent_id.as_deref() {
+                Some(parent_id) if parent_id != root_id => {
+                    return Err(EngineError::msg(
+                        "decomposed Questions must link to the main Investigation Question",
+                    ));
+                }
+                None => child.parent_id = Some(root_id.clone()),
+                _ => {}
+            }
+        }
+    }
+
     let mut record = load(data_dir, id)?;
-    if record.questions.as_ref() != Some(&questions) {
-        record.questions = Some(questions);
+    let current = record.questions.clone().unwrap_or_default();
+    let existing_timestamp = now_ms();
+    let mut next = Vec::with_capacity(questions.len());
+    for (position, input) in questions.into_iter().enumerate() {
+        let path = question_path(data_dir, &input.id)?;
+        let mut question = if path.exists() {
+            let question = question_load(data_dir, &input.id)?;
+            if question.investigation_id != record.id {
+                return Err(EngineError::msg(format!(
+                    "question {} belongs to another investigation",
+                    input.id
+                )));
+            }
+            question
+        } else {
+            InvestigationQuestion {
+                id: input.id.clone(),
+                investigation_id: record.id.clone(),
+                parent_id: None,
+                text: String::new(),
+                position,
+                status: InvestigationQuestionStatus::Active,
+                created_at_ms: existing_timestamp,
+                updated_at_ms: existing_timestamp,
+            }
+        };
+        let changed = question.parent_id != input.parent_id
+            || question.text != input.text
+            || question.position != position
+            || question.status != InvestigationQuestionStatus::Active;
+        question.parent_id = input.parent_id;
+        question.text = input.text;
+        question.position = position;
+        question.status = InvestigationQuestionStatus::Active;
+        if changed || !path.exists() {
+            question.updated_at_ms = now_ms().max(question.updated_at_ms.saturating_add(1));
+            write_question_record(data_dir, &question)?;
+        }
+        next.push(question);
+    }
+
+    let next_ids: HashSet<_> = next.iter().map(|question| question.id.as_str()).collect();
+    let changed = current != next;
+    if changed {
+        for mut question in current {
+            if !next_ids.contains(question.id.as_str()) {
+                question.status = InvestigationQuestionStatus::Removed;
+                question.updated_at_ms = now_ms().max(question.updated_at_ms.saturating_add(1));
+                write_question_record(data_dir, &question)?;
+            }
+        }
+        record.questions = Some(next);
         record.updated_at_ms = now_ms().max(record.updated_at_ms.saturating_add(1));
         write_record(data_dir, &record)?;
     }
@@ -446,38 +831,31 @@ pub fn update_questions(
 }
 
 fn write_record(data_dir: &Path, record: &Investigation) -> EngineResult<()> {
-    let path = record_path(data_dir, &record.id)?;
-    let body = serde_json::to_vec_pretty(record).map_err(EngineError::from)?;
-    let mut random = [0u8; 8];
-    getrandom::fill(&mut random)
-        .map_err(|error| EngineError::msg(format!("create investigation update id: {error}")))?;
-    let suffix = random
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    let temporary = path.with_file_name(format!(".{}-{suffix}.tmp", record.id));
-    let write_result = (|| {
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)
-            .map_err(|error| EngineError::io(format!("create {}", temporary.display()), error))?;
-        file.write_all(&body)
-            .map_err(|error| EngineError::io(format!("write {}", temporary.display()), error))?;
-        file.sync_all()
-            .map_err(|error| EngineError::io(format!("sync {}", temporary.display()), error))?;
-        #[cfg(windows)]
-        if path.exists() {
-            std::fs::remove_file(&path)
-                .map_err(|error| EngineError::io(format!("replace {}", path.display()), error))?;
-        }
-        std::fs::rename(&temporary, &path)
-            .map_err(|error| EngineError::io(format!("replace {}", path.display()), error))
-    })();
-    if write_result.is_err() {
-        let _ = std::fs::remove_file(&temporary);
-    }
-    write_result
+    let stored = InvestigationRecord {
+        id: record.id.clone(),
+        workspace_id: record.workspace_id.clone(),
+        conversation_id: record.conversation_id.clone(),
+        question_ids: Some(
+            record
+                .questions
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .filter(|question| question.status == InvestigationQuestionStatus::Active)
+                .map(|question| question.id.clone())
+                .collect(),
+        ),
+        questions: None,
+        title: record.title.clone(),
+        brief: record.brief.clone(),
+        brief_source_message_id: record.brief_source_message_id.clone(),
+        brief_reviewed_message_id: record.brief_reviewed_message_id.clone(),
+        analysis_turn_ids: record.analysis_turn_ids.clone(),
+        status: record.status.clone(),
+        created_at_ms: record.created_at_ms,
+        updated_at_ms: record.updated_at_ms,
+    };
+    write_raw_record(data_dir, &stored)
 }
 
 pub fn update_brief(
@@ -579,7 +957,7 @@ pub fn link_analysis_turns(
 
 pub fn load(data_dir: &Path, id: &str) -> EngineResult<Investigation> {
     let path = record_path(data_dir, id)?;
-    read_record(&path, id)
+    read_record(&path, id, data_dir)
 }
 
 pub fn list(data_dir: &Path) -> EngineResult<Vec<Investigation>> {
@@ -614,7 +992,7 @@ pub fn list(data_dir: &Path) -> EngineResult<Vec<Investigation>> {
             .and_then(|stem| stem.to_str())
             .ok_or_else(|| EngineError::msg("investigation filename is not valid UTF-8"))?;
         record_path(data_dir, id)?;
-        records.push(read_record(&path, id)?);
+        records.push(read_record(&path, id, data_dir)?);
     }
     records.sort_by(|left, right| {
         right
@@ -685,12 +1063,14 @@ mod tests {
             &data_dir,
             &created.id,
             vec![
-                InvestigationQuestion {
+                InvestigationQuestionInput {
                     id: "question-channel".to_owned(),
+                    parent_id: None,
                     text: "Compare conversion rates by channel".to_owned(),
                 },
-                InvestigationQuestion {
+                InvestigationQuestionInput {
                     id: "question-period".to_owned(),
+                    parent_id: Some("question-channel".to_owned()),
                     text: "Check whether the pattern changed over time".to_owned(),
                 },
             ],
@@ -699,11 +1079,24 @@ mod tests {
 
         assert_eq!(edited.questions.as_ref().unwrap()[0].id, "question-channel");
         assert_eq!(edited.questions.as_ref().unwrap()[1].id, "question-period");
+        assert_eq!(edited.questions.as_ref().unwrap()[0].parent_id, None);
+        assert_eq!(
+            edited.questions.as_ref().unwrap()[1].parent_id.as_deref(),
+            Some("question-channel")
+        );
         assert_eq!(edited.analysis_turn_ids, linked.analysis_turn_ids);
         assert_eq!(load(&data_dir, &created.id).unwrap(), edited);
+        assert_eq!(
+            question_load(&data_dir, "question-period").unwrap(),
+            edited.questions.as_ref().unwrap()[1]
+        );
 
         let deliberately_empty = update_questions(&data_dir, &created.id, Vec::new()).unwrap();
         assert_eq!(deliberately_empty.questions, Some(Vec::new()));
+        assert_eq!(
+            question_load(&data_dir, "question-period").unwrap().status,
+            InvestigationQuestionStatus::Removed
+        );
         assert_eq!(
             update_questions(&data_dir, &created.id, Vec::new()).unwrap(),
             deliberately_empty
@@ -712,12 +1105,14 @@ mod tests {
             &data_dir,
             &created.id,
             vec![
-                InvestigationQuestion {
+                InvestigationQuestionInput {
                     id: "duplicate".to_owned(),
+                    parent_id: None,
                     text: "First".to_owned(),
                 },
-                InvestigationQuestion {
+                InvestigationQuestionInput {
                     id: "duplicate".to_owned(),
+                    parent_id: None,
                     text: "Second".to_owned(),
                 },
             ],
@@ -727,8 +1122,9 @@ mod tests {
             &data_dir,
             &created.id,
             (0..3)
-                .map(|index| InvestigationQuestion {
+                .map(|index| InvestigationQuestionInput {
                     id: format!("long-{index}"),
+                    parent_id: None,
                     text: "x".repeat(9_000),
                 })
                 .collect(),
@@ -737,8 +1133,9 @@ mod tests {
         assert!(update_questions(
             &data_dir,
             &created.id,
-            vec![InvestigationQuestion {
+            vec![InvestigationQuestionInput {
                 id: "blank".to_owned(),
+                parent_id: None,
                 text: "  ".to_owned(),
             }],
         )
@@ -750,7 +1147,7 @@ mod tests {
     #[test]
     fn ensure_upgrades_a_legacy_investigation_with_its_existing_goal_as_a_question() {
         let data_dir = scratch();
-        let mut legacy = create(
+        let legacy = create(
             &data_dir,
             "/work/analysis",
             "Legacy investigation",
@@ -759,8 +1156,29 @@ mod tests {
             None,
         )
         .unwrap();
-        legacy.questions = None;
-        write_record(&data_dir, &legacy).unwrap();
+        let legacy_path = record_path(&data_dir, &legacy.id).unwrap();
+        let old_record = serde_json::json!({
+            "id": legacy.id,
+            "workspace_id": legacy.workspace_id,
+            "conversation_id": null,
+            "questions": [
+                { "id": "legacy-root", "text": "Original analysis goal" },
+                { "id": "legacy-region", "text": "Compare the result by region" }
+            ],
+            "title": legacy.title,
+            "brief": legacy.brief,
+            "brief_source_message_id": legacy.brief_source_message_id,
+            "brief_reviewed_message_id": legacy.brief_reviewed_message_id,
+            "analysis_turn_ids": [],
+            "status": "active",
+            "created_at_ms": legacy.created_at_ms,
+            "updated_at_ms": legacy.updated_at_ms
+        });
+        std::fs::write(
+            &legacy_path,
+            serde_json::to_vec_pretty(&old_record).unwrap(),
+        )
+        .unwrap();
 
         let upgraded = ensure_for_conversation(
             &data_dir,
@@ -775,13 +1193,90 @@ mod tests {
             upgraded.conversation_id.as_deref(),
             Some("conversation-root")
         );
-        assert_eq!(upgraded.questions.as_ref().unwrap().len(), 1);
+        assert_eq!(upgraded.questions.as_ref().unwrap().len(), 2);
         assert_eq!(
             upgraded.questions.as_ref().unwrap()[0].text,
             "Original analysis goal"
         );
+        assert_eq!(upgraded.questions.as_ref().unwrap()[0].parent_id, None);
+        assert_eq!(
+            upgraded.questions.as_ref().unwrap()[1].parent_id.as_deref(),
+            Some("legacy-root")
+        );
+        assert_eq!(
+            question_load(&data_dir, "legacy-region")
+                .unwrap()
+                .investigation_id,
+            upgraded.id
+        );
 
         let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn migration_restores_the_main_question_when_a_legacy_plan_was_empty() {
+        let data_dir = scratch();
+        let created = create(
+            &data_dir,
+            "/work/analysis",
+            "Legacy investigation",
+            Some("Original analysis goal"),
+            Some("message-root"),
+            None,
+        )
+        .unwrap();
+        let legacy_path = record_path(&data_dir, &created.id).unwrap();
+        let old_record = serde_json::json!({
+            "id": created.id,
+            "workspace_id": created.workspace_id,
+            "conversation_id": null,
+            "questions": [],
+            "title": created.title,
+            "brief": created.brief,
+            "brief_source_message_id": created.brief_source_message_id,
+            "brief_reviewed_message_id": created.brief_reviewed_message_id,
+            "analysis_turn_ids": [],
+            "status": "active",
+            "created_at_ms": created.created_at_ms,
+            "updated_at_ms": created.updated_at_ms
+        });
+        std::fs::write(
+            &legacy_path,
+            serde_json::to_vec_pretty(&old_record).unwrap(),
+        )
+        .unwrap();
+
+        let migrated = load(&data_dir, &created.id).unwrap();
+        let questions = migrated.questions.unwrap();
+        assert_eq!(questions.len(), 1);
+        assert_eq!(questions[0].text, "Original analysis goal");
+        assert!(questions[0].parent_id.is_none());
+        assert_eq!(
+            question_load(&data_dir, &questions[0].id).unwrap(),
+            questions[0]
+        );
+
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn validates_model_question_breakdowns_before_showing_them_as_drafts() {
+        let proposal = parse_question_breakdown(
+            "```json\n{\"subquestions\":[\"Compare by channel\",\"Check the trend over time\"]}\n```",
+            "How are sales changing?",
+        )
+        .unwrap();
+        assert_eq!(proposal.subquestions.len(), 2);
+        assert!(parse_question_breakdown(
+            "{\"subquestions\":[\"How are sales changing?\",\"Compare by channel\"]}",
+            "How are sales changing?",
+        )
+        .is_err());
+        assert!(parse_question_breakdown(
+            "{\"subquestions\":[\"Compare by channel\",\"Compare by channel\"]}",
+            "How are sales changing?",
+        )
+        .is_err());
     }
 
     #[test]

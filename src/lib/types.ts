@@ -441,7 +441,23 @@ export interface Investigation {
 
 export interface InvestigationQuestion {
 	id: string;
+	investigation_id: string;
+	parent_id?: string;
 	text: string;
+	position: number;
+	status: 'active' | 'removed';
+	created_at_ms: number;
+	updated_at_ms: number;
+}
+
+export interface InvestigationQuestionInput {
+	id: string;
+	parent_id?: string;
+	text: string;
+}
+
+export interface QuestionBreakdownProposal {
+	subquestions: string[];
 }
 
 export interface InvestigationBrief {

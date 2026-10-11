@@ -18,7 +18,8 @@ use crate::engine::error::{EngineError, EngineResult};
 use crate::engine::evidence::{Answer, AskEvent, EvidenceItem};
 use crate::engine::ingest::docs;
 use crate::engine::investigation::{
-    self, Investigation, InvestigationBrief, InvestigationQuestion,
+    self, Investigation, InvestigationBrief, InvestigationQuestion, InvestigationQuestionInput,
+    QuestionBreakdownProposal,
 };
 use crate::engine::llm::{LlmClient, ProviderHealth};
 use crate::engine::memory::{self, FolderMemory};
@@ -1955,9 +1956,42 @@ impl EngineState {
     pub fn investigation_update_questions(
         &self,
         id: &str,
-        questions: Vec<InvestigationQuestion>,
+        questions: Vec<InvestigationQuestionInput>,
     ) -> EngineResult<Investigation> {
         investigation::update_questions(&self.data_dir, id, questions)
+    }
+
+    /// Load an independently persisted Question record by stable identity.
+    pub fn investigation_question_load(&self, id: &str) -> EngineResult<InvestigationQuestion> {
+        investigation::question_load(&self.data_dir, id)
+    }
+
+    /// Ask the configured model for a draft decomposition without adding a
+    /// Conversation message or persisting the proposal.
+    pub async fn investigation_propose_questions(
+        &self,
+        id: &str,
+        main_question: &str,
+    ) -> EngineResult<QuestionBreakdownProposal> {
+        let investigation = investigation::load(&self.data_dir, id)?;
+        let main_question = main_question.trim();
+        if main_question.is_empty() {
+            return Err(EngineError::msg(
+                "enter a main Question before requesting a breakdown",
+            ));
+        }
+        if main_question.chars().count() > 12_000 {
+            return Err(EngineError::msg("main Question is too long"));
+        }
+        let input = serde_json::json!({
+            "main_question": main_question,
+            "audience": investigation.brief.audience,
+            "desired_output": investigation.brief.desired_output,
+            "constraints": investigation.brief.constraints,
+        });
+        let system = "You are helping a data analyst decompose one main Investigation Question into a small, useful sequence of independently answerable subquestions. Do not answer the question, invent data or findings, or include the main question again. Keep the breakdown grounded in the provided brief, avoid redundant steps, and return only valid JSON with this exact shape: {\"subquestions\":[\"...\"]}. Return between 2 and 6 concise subquestions.";
+        let raw = self.ask_once(None, system, &input.to_string()).await?;
+        investigation::parse_question_breakdown(&raw, main_question)
     }
 
     /// Associate canonical, persisted AnalysisTurns without copying their
@@ -4013,9 +4047,9 @@ exactly, character for character, from the list below.";
         self.llm().health().await
     }
 
-    /// One model call with no tools and no workspace context just a system
-    /// and a user message. Returns the reply text. Used by the eval harness's
-    /// `--judge` scorer; not on any product path.
+    /// One model call with no tools or workspace context, using only a system
+    /// and user message. Returns the reply text for bounded product proposals
+    /// and the eval harness's `--judge` scorer.
     pub async fn ask_once(
         &self,
         model: Option<&str>,

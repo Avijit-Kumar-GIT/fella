@@ -16,7 +16,7 @@ use serde_json::Value;
 
 use crate::engine::{
     AskOptions, Catalog, ClarificationReply, ContextReference, EngineError, EngineResult,
-    EngineState, InvestigationQuestion, WorkspaceProgress,
+    EngineState, InvestigationQuestionInput, WorkspaceProgress,
 };
 
 type Output = Arc<Mutex<BufWriter<io::Stdout>>>;
@@ -469,8 +469,22 @@ async fn dispatch(
         }
         "investigation_update_questions" => {
             let investigation_id: String = required(&request.params, "investigationId")?;
-            let questions: Vec<InvestigationQuestion> = required(&request.params, "questions")?;
+            let questions: Vec<InvestigationQuestionInput> =
+                required(&request.params, "questions")?;
             value_result(engine.investigation_update_questions(&investigation_id, questions))
+        }
+        "investigation_question_load" => {
+            let question_id: String = required(&request.params, "questionId")?;
+            value_result(engine.investigation_question_load(&question_id))
+        }
+        "investigation_propose_questions" => {
+            let investigation_id: String = required(&request.params, "investigationId")?;
+            let main_question: String = required(&request.params, "mainQuestion")?;
+            value_result(
+                engine
+                    .investigation_propose_questions(&investigation_id, &main_question)
+                    .await,
+            )
         }
         "investigation_link_analysis_turns" => {
             let investigation_id: String = required(&request.params, "investigationId")?;

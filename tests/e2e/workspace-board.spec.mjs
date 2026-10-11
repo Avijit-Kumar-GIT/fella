@@ -54,7 +54,9 @@ async function installDesktopMock(
 		const calls = [];
 		const archivedConversations = new Map();
 		const investigations = new Map();
+		const questionRecords = new Map();
 		const investigationEnsureCalls = [];
+		const questionProposalCalls = [];
 		const deletedConversationIds = [];
 		const deletedConversationWorkspaces = [];
 		const unavailablePath = 'C:\\FellaFixture\\unavailable-archive';
@@ -136,6 +138,7 @@ async function installDesktopMock(
 		};
 		window.__workspaceAskCalls = calls;
 		window.__workspaceInvestigationEnsureCalls = investigationEnsureCalls;
+		window.__workspaceQuestionProposalCalls = questionProposalCalls;
 		window.__workspaceInvestigations = () => [...investigations.values()];
 		window.__workspaceSetRunLinks = (id, runIds) => {
 			for (const [key, record] of investigations) {
@@ -159,13 +162,24 @@ async function installDesktopMock(
 							const now = Date.now();
 							const id = `inv-${investigations.size + 1}`;
 							const goal = args.initialRequest.trim();
+							const rootQuestion = goal ? {
+								id: `q-root-${id}`,
+								investigation_id: id,
+								parent_id: undefined,
+								text: goal,
+								position: 0,
+								status: 'active',
+								created_at_ms: now,
+								updated_at_ms: now
+							} : null;
+							if (rootQuestion) questionRecords.set(rootQuestion.id, rootQuestion);
 							investigations.set(key, {
 								id,
 								workspace_id: args.workspaceId,
 								conversation_id: args.conversationId,
 								title: goal.slice(0, 64),
 								brief: { goal, audience: '', desired_output: '', constraints: [] },
-								questions: goal ? [{ id: 'q-root', text: goal }] : [],
+								questions: rootQuestion ? [rootQuestion] : [],
 								brief_source_message_id: args.sourceMessageId,
 								analysis_turn_ids: [],
 								status: 'active',
@@ -178,13 +192,42 @@ async function installDesktopMock(
 					case 'investigation_update_questions': {
 						for (const [key, record] of investigations) {
 							if (record.id === args.investigationId) {
-								const updated = { ...record, questions: args.questions.map((item) => ({ ...item })), updated_at_ms: Date.now() };
+								const now = Date.now();
+								const nextQuestions = args.questions.map((item, position) => {
+									const previous = questionRecords.get(item.id);
+									const question = {
+										id: item.id,
+										investigation_id: record.id,
+										parent_id: item.parent_id ?? undefined,
+										text: item.text,
+										position,
+										status: 'active',
+										created_at_ms: previous?.created_at_ms ?? now,
+										updated_at_ms: now
+									};
+									questionRecords.set(question.id, question);
+									return question;
+								});
+								for (const previous of record.questions ?? []) {
+									if (!nextQuestions.some((item) => item.id === previous.id)) {
+										questionRecords.set(previous.id, { ...previous, status: 'removed', updated_at_ms: now });
+									}
+								}
+								const updated = { ...record, questions: nextQuestions, updated_at_ms: now };
 								investigations.set(key, updated);
 								return updated;
 							}
 						}
 						throw new Error(`Unknown Investigation: ${args.investigationId}`);
 					}
+					case 'investigation_question_load': {
+						const question = questionRecords.get(args.questionId);
+						if (!question) throw new Error(`Unknown Question: ${args.questionId}`);
+						return question;
+					}
+					case 'investigation_propose_questions':
+						questionProposalCalls.push(args);
+						return { subquestions: ['Compare conversion by channel', 'Check the trend over time'] };
 					case 'get_settings': return settings;
 					case 'list_providers': return providerList;
 					case 'provider_health': return providerHealth;
@@ -507,7 +550,7 @@ test('an Investigation opens its canonical workspace conversation', async ({ pag
 	expect(await page.evaluate(() => window.__workspaceAskCalls.length)).toBe(1);
 });
 
-test('an analyst can edit the ordered Question plan and future asks use it', async ({ page }) => {
+test('an analyst can edit the main Question and linked subquestions without rewriting the request', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
 	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
@@ -522,41 +565,119 @@ test('an analyst can edit the ordered Question plan and future asks use it', asy
 	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
 	await expect(page.getByRole('heading', { name: 'Questions', exact: true })).toBeVisible();
 
-	await page.getByRole('textbox', { name: 'Question 1' }).fill('Measure conversion by channel');
-	await page.getByRole('button', { name: 'Add Question' }).click();
-	await page.getByRole('textbox', { name: 'Question 2' }).fill('Compare conversion by device');
-	await page.getByRole('button', { name: 'Add Question' }).click();
-	await page.getByRole('textbox', { name: 'Question 3' }).fill('Compare conversion over time');
-	await page.getByRole('button', { name: 'Move Question 3 up' }).click();
-	await page.getByRole('button', { name: 'Remove Question 1' }).click();
+	await page.getByRole('textbox', { name: 'Main question' }).fill('Measure conversion by channel');
+	await page.getByRole('button', { name: 'Add subquestion' }).click();
+	await page.getByRole('textbox', { name: 'Subquestion 1' }).fill('Compare conversion over time');
+	await page.getByRole('button', { name: 'Add subquestion' }).click();
+	await page.getByRole('textbox', { name: 'Subquestion 2' }).fill('Compare conversion by device');
+	await page.getByRole('button', { name: 'Add subquestion' }).click();
+	await page.getByRole('textbox', { name: 'Subquestion 3' }).fill('Compare conversion by region');
+	await page.getByRole('button', { name: 'Move Subquestion 3 up' }).click();
+	await page.getByRole('button', { name: 'Remove Subquestion 1' }).click();
 	await page.getByRole('button', { name: 'Save plan' }).click();
 	await expect(page.locator('.question-save')).toContainText('Plan saved');
 
 	const saved = await page.evaluate(() => window.__workspaceInvestigations()[0]);
 	expect(saved.questions.map((item) => item.text)).toEqual([
-		'Compare conversion over time',
+		'Measure conversion by channel',
+		'Compare conversion by region',
 		'Compare conversion by device'
 	]);
+	expect(saved.questions[0].parent_id).toBeFalsy();
+	expect(saved.questions.slice(1).every((item) => item.parent_id === saved.questions[0].id)).toBe(true);
 	expect(saved.analysis_turn_ids).toEqual(['prior-analysis-turn']);
+	const independentlyLoaded = await page.evaluate((questionId) =>
+		window.fella.invoke('investigation_question_load', { questionId }), saved.questions[1].id);
+	expect(independentlyLoaded).toMatchObject({
+		id: saved.questions[1].id,
+		investigation_id: saved.id,
+		parent_id: saved.questions[0].id,
+		text: 'Compare conversion by region',
+		status: 'active'
+	});
 
 	await page.getByRole('button', { name: 'Open conversation', exact: true }).click();
 	await expect(composer).toBeVisible();
+	const originalTranscriptQuestion = page.locator('.msg.user').filter({ hasText: 'Understand conversion by channel' });
+	await expect(originalTranscriptQuestion).toHaveCount(1);
+	await expect(originalTranscriptQuestion).not.toContainText('Measure conversion by channel');
 	await composer.fill('Which device has the strongest change?');
 	await page.getByRole('button', { name: 'Send' }).click();
 	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.').last()).toBeVisible();
 	const nextAsk = await page.evaluate(() => window.__workspaceAskCalls.at(-1));
-	expect(nextAsk.question).toContain('Compare conversion over time');
 	expect(nextAsk.question).toContain('Compare conversion by device');
-	expect(nextAsk.question.indexOf('Compare conversion over time')).toBeLessThan(nextAsk.question.indexOf('Compare conversion by device'));
-	expect(nextAsk.question).not.toContain('Measure conversion by channel');
+	expect(nextAsk.question).not.toContain('Compare conversion over time');
+	expect(nextAsk.question.indexOf('Compare conversion by region')).toBeLessThan(nextAsk.question.indexOf('Compare conversion by device'));
+	expect(nextAsk.question).toContain('Main Question: Measure conversion by channel');
 	expect(nextAsk.question).toContain('Which device has the strongest change?');
 	// The message renderer adds a presentation-only "You asked:" prefix. The
 	// actual contract is that the original request remains visible and the
 	// private Investigation-plan context stays out of the transcript.
 	const transcriptQuestion = page.locator('.msg.user').last();
 	await expect(transcriptQuestion).toContainText('Which device has the strongest change?');
+	await expect(transcriptQuestion).not.toContainText('Measure conversion by channel');
+	await expect(transcriptQuestion).not.toContainText('Compare conversion by region');
 	await expect(transcriptQuestion).not.toContainText('Compare conversion over time');
 	await expect(transcriptQuestion).not.toContainText('Compare conversion by device');
+});
+
+test('suggested Question breakdown stays a draft until saved as durable child records', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
+	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
+	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	const composer = page.getByRole('combobox', { name: 'Ask about northwind-sales' });
+	await composer.fill('Understand conversion by channel');
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	await expect(page.getByRole('heading', { name: 'Questions', exact: true })).toBeVisible();
+
+	const askCountBeforeSuggestion = await page.evaluate(() => window.__workspaceAskCalls.length);
+	const originalRequest = await page.evaluate(() => window.__workspaceAskCalls[0].question);
+	await page.getByRole('button', { name: 'Suggest breakdown' }).click();
+	await expect(page.getByRole('textbox', { name: 'Subquestion 1' })).toHaveValue('Compare conversion by channel');
+	await expect(page.getByRole('textbox', { name: 'Subquestion 2' })).toHaveValue('Check the trend over time');
+	await expect(page.locator('.question-save')).toContainText('Unsaved plan');
+	const afterSuggestion = await page.evaluate(() => ({
+		askCount: window.__workspaceAskCalls.length,
+		proposalCalls: window.__workspaceQuestionProposalCalls,
+		questions: window.__workspaceInvestigations()[0].questions
+	}));
+	expect(afterSuggestion.askCount).toBe(askCountBeforeSuggestion);
+	expect(originalRequest).toContain('Understand conversion by channel');
+	expect(afterSuggestion.proposalCalls).toHaveLength(1);
+	expect(afterSuggestion.questions).toHaveLength(1);
+	await expect(page.getByRole('button', { name: 'Open conversation', exact: true })).toBeVisible();
+	await page.getByRole('button', { name: 'Discard plan' }).click();
+	await expect(page.locator('.question-save')).toContainText('Plan saved');
+	expect((await page.evaluate(() => window.__workspaceInvestigations()[0].questions)).map((item) => item.text)).toEqual([
+		'Understand conversion by channel'
+	]);
+	await page.getByRole('button', { name: 'Suggest breakdown' }).click();
+	await expect(page.getByRole('textbox', { name: 'Subquestion 1' })).toHaveValue('Compare conversion by channel');
+
+	await page.getByRole('button', { name: 'Save plan' }).click();
+	await expect(page.locator('.question-save')).toContainText('Plan saved');
+	const saved = await page.evaluate(() => window.__workspaceInvestigations()[0]);
+	expect(saved.questions.map((item) => item.text)).toEqual([
+		'Understand conversion by channel',
+		'Compare conversion by channel',
+		'Check the trend over time'
+	]);
+	expect(saved.questions[0].parent_id).toBeFalsy();
+	expect(saved.questions.slice(1).every((item) => item.parent_id === saved.questions[0].id)).toBe(true);
+	const loadedChild = await page.evaluate((questionId) =>
+		window.fella.invoke('investigation_question_load', { questionId }), saved.questions[2].id);
+	expect(loadedChild).toMatchObject({
+		id: saved.questions[2].id,
+		investigation_id: saved.id,
+		parent_id: saved.questions[0].id,
+		text: 'Check the trend over time',
+		status: 'active'
+	});
+	await expect(page.getByRole('heading', { name: 'Investigation brief' })).toBeVisible();
 });
 
 test('Investigation shows source readiness and opens source details in place', async ({ page }) => {
