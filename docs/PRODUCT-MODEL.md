@@ -442,3 +442,16 @@ with the matching file selected. Opening a preview beside the conversation
 remains available without changing the conversation's analysis scope. The
 workspace guide remains a secondary destination; catalog facts are no longer a
 standalone primary workflow.
+
+## Implementation checkpoint: Investigation report handoff (#214)
+
+An Investigation can be exported as a concise Markdown report for a decision
+maker. The report is assembled from saved records—not the conversation—and
+contains the brief, active Question answers and coverage gaps, saved Findings,
+and each referenced run's method, verification checks, definitions, actual
+source use, workspace revision, and evidence references. Missing run records
+are called out explicitly, and a completed Investigation with documented gaps
+is not labeled fully answered. Export is disabled while the brief, Question
+plan, or definitions have unsaved edits or an active run is still executing.
+Source references remain workspace-relative where possible; paths outside that
+scope are reduced to filenames before export.

@@ -7,6 +7,7 @@
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { ipc, isDesktop } from '$lib/ipc';
 	import { analysisTurnIdsAfterSourceMessage } from '$lib/investigation-runs';
+	import { buildInvestigationReport, investigationReportFilename } from '$lib/investigation-report';
 	import { runStateLabel } from '$lib/run-progress';
 	import type {
 		AnalysisTurn,
@@ -81,6 +82,9 @@
 	let findingComparisonSelection = $state<{ findingId: string; revision: number } | null>(null);
 	let findingHistoryLoadingId = $state<string | null>(null);
 	let findingHistoryError = $state('');
+	let exportingReport = $state(false);
+	let reportExportStatus = $state('');
+	let reportExportFailed = $state(false);
 	let error = $state('');
 	let requestSerial = 0;
 	const syncingInvestigations = new Set<string>();
@@ -211,6 +215,14 @@
 	let hasBlankQuestion = $derived(questions.some((question) => !question.text.trim()));
 	let hasBlankDefinition = $derived(definitions.some((definition) => !definition.text.trim()));
 	let canSuggestBreakdown = $derived(Boolean(rootQuestion?.text.trim()) && subquestions.length === 0);
+	let reportExportDisabledReason = $derived.by(() => {
+		if (!selected) return 'Select an Investigation before exporting.';
+		if (dirty || questionsDirty || definitionsDirty || saving) return 'Save the brief, Question plan, and definitions before exporting.';
+		if (selected.questions?.some((question) => question.status === 'active' && question.answer_status === 'running')) {
+			return 'Wait for active analysis runs to finish before exporting.';
+		}
+		return '';
+	});
 
 	async function loadWorkspace(path: string): Promise<void> {
 		const serial = ++requestSerial;
@@ -582,6 +594,45 @@
 			for (const turnId of questionRunIdsFor(question)) ids.add(turnId);
 		}
 		return [...ids];
+	}
+
+	async function exportInvestigationReport(): Promise<void> {
+		const item = selected;
+		if (!item || exportingReport || reportExportDisabledReason) return;
+		exportingReport = true;
+		reportExportStatus = '';
+		reportExportFailed = false;
+		try {
+			const runIds = new Set<string>();
+			for (const question of item.questions ?? []) {
+				if (question.status === 'active' && question.latest_analysis_turn_id) runIds.add(question.latest_analysis_turn_id);
+			}
+			for (const finding of item.findings ?? []) runIds.add(finding.analysis_turn_id);
+			const loadedRuns = await Promise.all([...runIds].map(async (turnId) => {
+				try {
+					return [turnId, await ipc.analysisTurnLoad(turnId)] as const;
+				} catch {
+					return [turnId, null] as const;
+				}
+			}));
+			const runs = Object.fromEntries(loadedRuns);
+			const report = buildInvestigationReport(item, runs, new Date());
+			const filename = investigationReportFilename(item.title || item.brief.goal);
+			const url = URL.createObjectURL(new Blob([report], { type: 'text/markdown;charset=utf-8' }));
+			const link = document.createElement('a');
+			link.href = url;
+			link.download = filename;
+			document.body.append(link);
+			link.click();
+			link.remove();
+			setTimeout(() => URL.revokeObjectURL(url), 1000);
+			reportExportStatus = `Downloaded ${filename}.`;
+		} catch (cause) {
+			reportExportFailed = true;
+			reportExportStatus = cause instanceof Error ? cause.message : String(cause);
+		} finally {
+			exportingReport = false;
+		}
 	}
 
 	function analysisRunOrdinal(turnId: string): number | undefined {
@@ -1205,11 +1256,27 @@
 			<h1 id="investigation-title">Investigation brief</h1>
 			<p>Keep the goal, audience, deliverable, and constraints clear as the analysis develops.</p>
 		</div>
-		{#if workspacePath}
-			<Button type="button" disabled={loading || creating} onclick={() => void createInvestigation()}>
-				<Icon name="plus" size={16} />{creating ? 'Opening…' : currentConversationInvestigation ? 'Open current Investigation' : currentConversationSource ? 'Start from conversation' : 'New investigation'}
-			</Button>
-		{/if}
+		<div class="page-head-actions">
+			{#if reportExportStatus}
+				<span class="report-export-status" role={reportExportFailed ? 'alert' : 'status'}>{reportExportStatus}</span>
+			{/if}
+			{#if selected}
+				<Button
+					type="button"
+					variant="outline"
+					disabled={exportingReport || Boolean(reportExportDisabledReason)}
+					title={reportExportDisabledReason || undefined}
+					onclick={() => void exportInvestigationReport()}
+				>
+					<Icon name="download" size={16} />{exportingReport ? 'Preparing report…' : 'Export report'}
+				</Button>
+			{/if}
+			{#if workspacePath}
+				<Button type="button" disabled={loading || creating} onclick={() => void createInvestigation()}>
+					<Icon name="plus" size={16} />{creating ? 'Opening…' : currentConversationInvestigation ? 'Open current Investigation' : currentConversationSource ? 'Start from conversation' : 'New investigation'}
+				</Button>
+			{/if}
+		</div>
 	</header>
 	{#if error && !selected}
 		<p class="error" role="alert">{error}</p>
@@ -2109,6 +2176,9 @@
 		gap: var(--space-4);
 	}
 	.page-head { margin-bottom: var(--space-5); }
+	.page-head-actions { display: flex; min-width: 0; align-items: center; justify-content: flex-end; gap: var(--space-2); }
+	.report-export-status { max-width: 300px; color: var(--text-dim); font-size: var(--fs-xs); overflow-wrap: anywhere; }
+	.report-export-status[role='alert'] { color: var(--danger, #b42318); }
 	h1, h2, p { margin: 0; }
 	h1 { font-size: clamp(24px, 3vw, 32px); font-weight: 650; letter-spacing: -0.03em; }
 	.page-head p, .editor-heading p { margin-top: var(--space-1); color: var(--text-dim); }

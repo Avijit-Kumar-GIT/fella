@@ -26,7 +26,8 @@
 		'table',
 		'file',
 		'bookmark',
-		'pencil'
+		'pencil',
+		'download'
 	] as const;
 
 	export type IconName = (typeof ICON_NAMES)[number];
@@ -42,6 +43,7 @@
 		Check,
 		ChevronRight,
 		CornerDownLeft,
+		Download,
 		Ellipsis,
 		FileText,
 		Folder,
@@ -93,7 +95,8 @@
 		table: Table,
 		file: FileText,
 		bookmark: Bookmark,
-		pencil: Pencil
+		pencil: Pencil,
+		download: Download
 	};
 
 	let { name, size = 16 }: { name: IconName; size?: IconSize } = $props();

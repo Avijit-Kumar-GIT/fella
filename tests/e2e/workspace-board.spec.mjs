@@ -226,6 +226,20 @@ async function installDesktopMock(
 						}
 						return investigations.get(key);
 					}
+					case 'investigation_update_brief': {
+						for (const [key, record] of investigations) {
+							if (record.id !== args.investigationId) continue;
+							const updated = {
+								...record,
+								brief: args.brief,
+								brief_reviewed_message_id: args.reviewedMessageId ?? record.brief_reviewed_message_id,
+								updated_at_ms: Date.now()
+							};
+							investigations.set(key, updated);
+							return updated;
+						}
+						throw new Error(`Unknown Investigation: ${args.investigationId}`);
+					}
 					case 'investigation_mark_complete': {
 						for (const [key, record] of investigations) {
 							if (record.id !== args.investigationId) continue;
@@ -1695,6 +1709,94 @@ test('Finding caveats and assumptions are visible, editable, and preserve proven
 	// Running the saved Question adds a fresh turn; the original request remains first.
 	const originalRequest = page.locator('.msg.user').first().locator('.you-copy');
 	await expect(originalRequest).toHaveText('Explain retention by signup cohort.');
+});
+
+test('Investigation report exports saved answers, Findings, QA, and source provenance without chat transcript', async ({ page }) => {
+	const evidence = {
+		id: 'evidence-weekly-sales-export',
+		tool: 'run_sql',
+		result_summary: 'Ten weekly totals from sales.csv.',
+		sql: 'SELECT week, SUM(net_sales) FROM sales GROUP BY week',
+		sources: [{ source: 'sales.csv', table: 'sales' }]
+	};
+	await installDesktopMock(page, {
+		questionRunOutcomes: [{
+			status: 'incomplete',
+			verification_status: 'needs_review',
+			reason: 'Only 10 of the requested 12 weeks are present.',
+			answer_text: 'Weekly sales increased 12% to $40.',
+			plan: { strategy: 'compiled_sql', steps: ['inspect_schema', 'run_sql'] },
+			checks: [{
+				label: 'The full twelve-week window is present',
+				ok: false,
+				outcome: 'flagged',
+				detail: 'Only ten weeks were present.'
+			}],
+			evidence: [evidence],
+			source_scope: {
+				used_sources: [{ source: 'sales.csv', table: 'sales', evidence_ids: [evidence.id] }],
+				skipped_sources: ['legacy.xls']
+			}
+		}]
+	});
+	await page.goto('/');
+	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
+	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
+	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill('Explain weekly sales for finance');
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	await page.getByRole('textbox', { name: 'Audience' }).fill('Finance lead');
+	await page.getByRole('textbox', { name: 'Desired output' }).fill('A concise weekly report');
+	await page.getByRole('button', { name: 'Save brief' }).click();
+	await expect(page.locator('.brief-editor > .editor-foot')).toContainText('Saved locally');
+	await page.getByRole('button', { name: 'Add definition or assumption' }).click();
+	await page.getByRole('textbox', { name: 'Context note 1' }).fill('Net sales exclude refunds.');
+	await page.getByRole('button', { name: 'Save context' }).click();
+	await page.getByRole('button', { name: 'Add subquestion' }).click();
+	await page.getByRole('textbox', { name: 'Subquestion 1' }).fill('Compare sales by region.');
+	await page.getByRole('button', { name: 'Save plan' }).click();
+	await page.getByRole('button', { name: 'Analyze main Question' }).click();
+	await page.getByRole('region', { name: 'Review this run' }).getByRole('button', { name: 'Run this Question' }).click();
+	await expect(page.getByRole('region', { name: 'Question run' })).toBeHidden();
+	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.').last()).toBeVisible();
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	await page.getByRole('button', { name: 'Open saved analysis run 1: Explain weekly sales for finance' }).click();
+	const findingCapture = page.getByRole('region', { name: 'Saved analysis run' }).locator('.finding-capture');
+	await findingCapture.getByRole('textbox', { name: 'Finding claim' }).fill('Weekly sales rose 12% to $40.');
+	await findingCapture.getByRole('textbox', { name: 'Finding caveats' }).fill('Only 10 of 12 weeks are available.');
+	await findingCapture.getByRole('textbox', { name: 'Finding assumptions' }).fill('Test orders are excluded.');
+	await findingCapture.getByRole('button', { name: 'Save Finding' }).click();
+	await expect(page.locator('.finding-card')).toContainText('Weekly sales rose 12% to $40.');
+
+	const downloadPromise = page.waitForEvent('download');
+	await page.getByRole('button', { name: 'Export report' }).click();
+	const download = await downloadPromise;
+	expect(download.suggestedFilename()).toBe('explain-weekly-sales-for-finance-report.md');
+	const report = await readFile(await download.path(), 'utf8');
+	for (const expected of [
+		'# Explain weekly sales for finance',
+		'Finance lead',
+		'A concise weekly report',
+		'Weekly sales increased 12% to $40.',
+		'Compare sales by region.',
+		'Not started',
+		'Weekly sales rose 12% to $40.',
+		'Only 10 of 12 weeks are available.',
+		'compiled sql',
+		'needs review',
+		'Only ten weeks were present.',
+		'sales.csv (sales)',
+		'legacy.xls',
+		'Net sales exclude refunds.',
+		'evidence-weekly-sales-export',
+		'conversation transcript is excluded'
+	]) {
+		expect(report.toLowerCase()).toContain(expected.toLowerCase());
+	}
+	expect(report).not.toContain('Scoped to C:\\FellaFixture\\northwind-sales.');
+	await expect(page.getByRole('status').filter({ hasText: 'Downloaded explain-weekly-sales-for-finance-report.md.' })).toBeVisible();
 });
 
 test('Finding revisions preserve prior versions and compare the supporting run context', async ({ page }) => {
