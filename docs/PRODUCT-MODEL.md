@@ -265,3 +265,9 @@ while its existing evidence-derived source-scope record identifies which files
 the run actually used. Later edits to either mapping do not rewrite earlier
 runs. This makes intended inputs and observed evidence inspectable without
 claiming that selecting a source proves it supports the answer.
+
+An AnalysisTurn's saved-run view now includes the evidence payload it owns, not
+only the conversation's current answer: source/table references, summaries,
+queries or calculation code, and recorded result samples stay attached to the
+run that produced them. This lets an analyst reopen an earlier run after later
+conversation turns without accidentally inspecting the newer turn's evidence.

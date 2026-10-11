@@ -45,12 +45,13 @@ async function installDesktopMock(
 		reindexedCatalog = null,
 		chartEvidence = null,
 		detailEvidence = null,
+		savedAnalysisTurn = null,
 		providerList = [],
 		providerHealth = { reachable: true, rejected: false, models: ['gpt-4.1-mini'] },
 		runLogEntries = []
 	} = {}
 ) {
-	await page.addInitScript(({ fixtureFolders, seedUnavailableConversation, seedDeletionConversations, replayStatus, replayStatusError, reindexedCatalog, chartEvidence, detailEvidence, providerList, providerHealth, runLogEntries }) => {
+	await page.addInitScript(({ fixtureFolders, seedUnavailableConversation, seedDeletionConversations, replayStatus, replayStatusError, reindexedCatalog, chartEvidence, detailEvidence, savedAnalysisTurn, providerList, providerHealth, runLogEntries }) => {
 		const calls = [];
 		const archivedConversations = new Map();
 		const investigations = new Map();
@@ -152,6 +153,7 @@ async function installDesktopMock(
 		window.__deletedConversationWorkspaces = deletedConversationWorkspaces;
 		window.__remainingArchiveIds = () => [...archivedConversations.keys()];
 		window.__replayStatusCalls = 0;
+		window.__analysisTurnLoadCalls = [];
 		window.fella = {
 			invoke: async (command, args = {}) => {
 				switch (command) {
@@ -343,6 +345,12 @@ async function installDesktopMock(
 						window.__replayStatusCalls += 1;
 						if (replayStatusError) throw new Error('Replay lookup unavailable.');
 						return replayStatus;
+					case 'analysis_turn_load':
+						window.__analysisTurnLoadCalls.push(args.turnId);
+						if (!savedAnalysisTurn || savedAnalysisTurn.id !== args.turnId) {
+							throw new Error(`Unknown analysis turn: ${args.turnId}`);
+						}
+						return savedAnalysisTurn;
 					case 'reindex': return reindexedCatalog;
 					case 'run_log_recent': return runLogEntries;
 					default: return null;
@@ -381,7 +389,7 @@ async function installDesktopMock(
 			windowAction: async () => {},
 			pathForFile: () => ''
 		};
-	}, { fixtureFolders, seedUnavailableConversation, seedDeletionConversations, replayStatus, replayStatusError, reindexedCatalog, chartEvidence, detailEvidence, providerList, providerHealth, runLogEntries });
+	}, { fixtureFolders, seedUnavailableConversation, seedDeletionConversations, replayStatus, replayStatusError, reindexedCatalog, chartEvidence, detailEvidence, savedAnalysisTurn, providerList, providerHealth, runLogEntries });
 }
 
 async function dispatchWorkspaceDrag(page, type, workspacePath, { x = 0.5, y = 0.5, existing = false } = {}) {
@@ -1872,6 +1880,98 @@ test('Evidence query disclosure uses a shared button and preserves expansion beh
 	await reveal.click();
 	await expect(reveal).toHaveAttribute('aria-expanded', 'false');
 	await expect(answer.locator('pre.sql')).toHaveCount(0);
+});
+
+test('a saved run keeps its own method and evidence inspectable after a later answer', async ({ page }) => {
+	const transcriptEvidence = {
+		id: 'latest-transcript-evidence',
+		tool: 'run_sql',
+		args: { query: 'SELECT current_total FROM sales' },
+		sql: 'SELECT current_total FROM sales',
+		result_summary: 'Latest transcript-only evidence.',
+		ms: 6
+	};
+	const persistedEvidence = {
+		id: 'original-run-evidence',
+		tool: 'run_sql',
+		note: 'Original run: compare revenue by region.',
+		args: { query: 'SELECT region, SUM(revenue) FROM sales GROUP BY region' },
+		sources: [{ source: 'sales.csv', table: 'sales' }],
+		sql: 'SELECT region, SUM(revenue) FROM sales GROUP BY region',
+		result_summary: 'Original run returned two regions.',
+		columns: ['region', 'revenue'],
+		rows: [['West', 1200], ['East', 950]],
+		row_count: 2,
+		ms: 12
+	};
+	const savedAnalysisTurn = {
+		id: 'fixture-turn',
+		conversation_id: 'fixture-conversation',
+		question: 'Compare revenue by region.',
+		workspace: folders[0].path,
+		workspace_revision: 'fixture-r1',
+		state: 'accepted',
+		plan: { strategy: 'compiled_sql', steps: ['run_sql'] },
+		trace: {
+			id: 'fixture-trace',
+			turn_id: 'fixture-turn',
+			steps: [{ id: 'trace-sql', operation: 'run_sql', duration_ms: 12, success: true, summary: 'Original query completed.', sources: ['sales.csv'] }]
+		},
+		source_scope: { used_sources: [{ source: 'sales.csv', table: 'sales', evidence_ids: ['original-run-evidence'] }], skipped_sources: [] },
+		result: {
+			text: 'Original saved answer.',
+			status: 'verified',
+			verification: [],
+			evidence: [
+				persistedEvidence,
+				{ tool: 'run_sql', sources: 'not-an-array', result_summary: 'Malformed source metadata.' },
+				null
+			]
+		}
+	};
+	await installDesktopMock(page, {
+		detailEvidence: transcriptEvidence,
+		savedAnalysisTurn,
+		replayStatus: {
+			turn_id: 'fixture-turn',
+			same_workspace: true,
+			revision_changed: false,
+			snapshot_available: true,
+			can_rerun: false,
+			source_changes: []
+		}
+	});
+	await page.goto('/');
+	await page.getByRole('button', { name: 'Add repository' }).click();
+	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	const composer = page.getByRole('combobox', { name: 'Ask about northwind-sales' });
+	await composer.fill('Compare revenue by region.');
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(page.locator('.msg.assistant').first()).toContainText('Scoped to C:\\FellaFixture\\northwind-sales.');
+	await composer.fill('Now check the current total.');
+	await page.getByRole('button', { name: 'Send' }).click();
+	const laterAnswer = page.locator('.msg.assistant').nth(1);
+	await expect(laterAnswer).toContainText('Scoped to C:\\FellaFixture\\northwind-sales.');
+	await laterAnswer.getByRole('button', { name: 'Analysis details' }).click();
+	await laterAnswer.getByRole('button', { name: 'show the query' }).click();
+	await expect(laterAnswer).toContainText('Latest transcript-only evidence.');
+
+	const originalAnswer = page.locator('.msg.assistant').first();
+	await originalAnswer.getByRole('button', { name: 'Analysis details' }).click();
+	await originalAnswer.getByRole('button', { name: 'Open saved run record' }).click();
+	const savedRunPanel = originalAnswer.locator('.saved-run-panel');
+	await expect(savedRunPanel).toContainText('compiled sql');
+	await expect(savedRunPanel.getByRole('heading', { name: 'Recorded evidence' })).toBeVisible();
+	const recordedEvidence = savedRunPanel.locator('.saved-run-evidence');
+	await expect(recordedEvidence.locator('li')).toHaveCount(1);
+	await expect(recordedEvidence).toContainText('Original run: compare revenue by region.');
+	await expect(recordedEvidence).toContainText('sales.csv (sales)');
+	await expect(recordedEvidence).not.toContainText('Latest transcript-only evidence.');
+	await recordedEvidence.locator('summary').click();
+	await expect(recordedEvidence.locator('pre.sql')).toContainText('SELECT region, SUM(revenue) FROM sales GROUP BY region');
+	await expect(recordedEvidence).toContainText('Original run returned two regions.');
+	await expect(recordedEvidence).toContainText('West');
+	await expect.poll(() => page.evaluate(() => window.__analysisTurnLoadCalls)).toEqual(['fixture-turn']);
 });
 
 test('Transcript setup links use shared buttons and retain the sign-in action', async ({ page }) => {

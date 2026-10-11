@@ -39,6 +39,9 @@
 	let savedRunLoading = $state(false);
 	let savedRunError = $state('');
 	let savedRun = $state<AnalysisTurn | null>(null);
+	let savedEvidence = $derived(
+		(savedRun?.result.evidence ?? []).filter(isPersistedEvidenceItem)
+	);
 	function toggleDetail(i: number) {
 		openDetail = { ...openDetail, [i]: !openDetail[i] };
 	}
@@ -94,6 +97,59 @@
 	}
 	function sourceLabel(e: EvidenceItem): string {
 		return (e.sources ?? []).map((s) => `${s.source} (${s.table})`).join(', ');
+	}
+	function isPersistedEvidenceItem(value: unknown): value is EvidenceItem {
+		if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+		const item = value as Record<string, unknown>;
+		if (typeof item.tool !== 'string' || typeof item.result_summary !== 'string') return false;
+		for (const key of ['id', 'note', 'sql', 'output', 'error']) {
+			if (item[key] !== undefined && typeof item[key] !== 'string') return false;
+		}
+		if (
+			item.sources !== undefined &&
+			(!Array.isArray(item.sources) ||
+				!item.sources.every(
+					(source) =>
+						source &&
+						typeof source === 'object' &&
+						typeof source.source === 'string' &&
+						typeof source.table === 'string'
+				))
+		) {
+			return false;
+		}
+		if (item.columns !== undefined && (!Array.isArray(item.columns) || !item.columns.every((column) => typeof column === 'string'))) return false;
+		if (item.rows !== undefined && (!Array.isArray(item.rows) || !item.rows.every(Array.isArray))) return false;
+		if (item.row_count !== undefined && typeof item.row_count !== 'number') return false;
+		if (item.args !== undefined && (!item.args || typeof item.args !== 'object' || Array.isArray(item.args))) return false;
+		if (item.python_input_trace !== undefined) {
+			if (!item.python_input_trace || typeof item.python_input_trace !== 'object') return false;
+			const trace = item.python_input_trace as Record<string, unknown>;
+			if (
+				typeof trace.complete !== 'boolean' ||
+				!Array.isArray(trace.queries) ||
+				!trace.queries.every(
+					(query) =>
+						query &&
+						typeof query === 'object' &&
+						typeof query.sql === 'string' &&
+						Array.isArray(query.columns) &&
+						query.columns.every((column: unknown) => typeof column === 'string') &&
+						typeof query.row_count === 'number' &&
+						typeof query.truncated === 'boolean'
+				)
+			) {
+				return false;
+			}
+		}
+		return true;
+	}
+	function evidenceCell(value: unknown): string {
+		if (value == null) return '';
+		if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+			return String(value);
+		}
+		return JSON.stringify(value);
 	}
 	function findingTargetLabel(check: NonNullable<Answer['verification']>[number]): string | undefined {
 		const finding = check.finding;
@@ -387,6 +443,57 @@
 										</ol>
 									</div>
 								{/if}
+								<div class="saved-run-section">
+									<h4>Recorded evidence</h4>
+									{#if savedEvidence.length}
+										<ol class="saved-run-evidence">
+											{#each savedEvidence as evidence, i (`${savedRun.id}-evidence-${evidence.id ?? i}`)}
+												{@const columns = evidence.columns ?? evidence.result_table?.columns}
+												{@const rows = evidence.rows ?? evidence.result_table?.rows}
+												<li>
+													<details>
+														<summary>
+															<strong>{stepLabel(evidence)}</strong>
+															<span>{sourceLabel(evidence) || 'No source reference recorded'}</span>
+														</summary>
+														<p>{evidence.result_summary}</p>
+														{#if evidence.error}<p class="saved-run-evidence-error">Execution error: {evidence.error}</p>{/if}
+														{#if evidence.verifier_disposition}
+															<p class="saved-run-evidence-error">
+																{evidence.verifier_disposition.state === 'excluded' ? 'Excluded from support' : `${evidence.verifier_disposition.artifact} withheld`}: {evidence.verifier_disposition.reason}
+															</p>
+														{/if}
+														{#if evidence.tool === 'run_python' || evidence.tool === 'forecast_analysis'}
+															<PythonCalculationDetails {evidence} />
+														{/if}
+														{#if evidence.sql}<pre class="sql">{evidence.sql}</pre>{/if}
+														{#if evidence.python_input_trace?.queries.length}
+															<div class="saved-run-python-inputs">
+																<strong>Data read by this calculation</strong>
+																{#each evidence.python_input_trace.queries as query, queryIndex (`${i}-input-${queryIndex}`)}
+																	<pre class="sql">{query.sql}</pre>
+																	<span>{query.row_count} rows · {query.columns.join(', ') || 'no columns'}{query.truncated ? ' · result capped' : ''}</span>
+																{/each}
+															</div>
+														{/if}
+														{#if evidence.output}<pre class="output">{evidence.output}</pre>{/if}
+														{#if columns && rows}
+															<div class="saved-run-table-sample">
+																<strong>Recorded result sample</strong>
+																<pre>{JSON.stringify({ columns, rows: rows.slice(0, 20) }, null, 2)}</pre>
+																{#if evidence.row_count != null && rows.length > 20}
+																	<p>Showing 20 of {evidence.row_count} rows.</p>
+																{/if}
+															</div>
+														{/if}
+													</details>
+												</li>
+											{/each}
+										</ol>
+									{:else}
+										<p>No inspectable evidence was stored for this run.</p>
+									{/if}
+								</div>
 							{/if}
 						</section>
 					{/if}
@@ -444,6 +551,15 @@
 	.saved-run-trace li { padding-left: 2px; }
 	.saved-run-step-heading { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-2); }
 	.saved-run-step-heading span, .saved-run-sources { color: var(--text-faint); }
+	.saved-run-evidence { display: flex; flex-direction: column; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+	.saved-run-evidence summary { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-2); cursor: pointer; }
+	.saved-run-evidence summary span, .saved-run-python-inputs span { color: var(--text-faint); }
+	.saved-run-evidence details > p { margin: var(--space-1) 0; color: var(--text-dim); }
+	.saved-run-evidence-error { color: var(--warn) !important; }
+	.saved-run-python-inputs { display: grid; gap: var(--space-1); margin: var(--space-2) 0; }
+	.saved-run-table-sample { margin-top: var(--space-2); }
+	.saved-run-table-sample strong { color: var(--text-faint); font-size: var(--fs-xs); }
+	.saved-run-table-sample pre { max-height: 260px; margin: var(--space-1) 0 0; overflow: auto; font-family: var(--mono); font-size: var(--fs-xs); }
 	.saved-run-section p { margin-top: 2px; }
 	.saved-run-error { color: var(--danger, #b42318); overflow-wrap: anywhere; }
 	.model-calls {
