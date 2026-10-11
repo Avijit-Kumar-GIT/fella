@@ -10,7 +10,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use fella_lib::engine::evidence::{EvidenceDisposition, VerificationStatus};
-use fella_lib::engine::{AskEvent, AskOptions, ClarificationReply, EngineState};
+use fella_lib::engine::{
+    AskEvent, AskOptions, ClarificationReply, EngineState, InvestigationDefinitionInput,
+    InvestigationDefinitionKind,
+};
 
 fn scratch(tag: &str) -> PathBuf {
     // Point-at-a-mock tests: the warm-up ping would steal a scripted response.
@@ -203,6 +206,122 @@ async fn agent_calls_a_tool_then_answers() {
     assert!(kinds.contains(&"tool_start"));
     assert!(kinds.contains(&"tool_end"));
     assert_eq!(kinds.last(), Some(&"answer_done"));
+
+    let _ = fs::remove_dir_all(&ws);
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[tokio::test]
+async fn investigation_definitions_reach_the_model_and_are_snapshotted_on_the_run() {
+    let ws = scratch("investigation-definitions-ws");
+    let data = scratch("investigation-definitions-data");
+    fs::write(
+        ws.join("customers.csv"),
+        "customer_id,active\n1,yes\n2,yes\n3,no\n",
+    )
+    .unwrap();
+
+    let (url, requests, server) = fake_openai_with_requests(vec![
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "I will count customers matching the saved definition.",
+            "tool_calls": [{ "id": "active-count", "type": "function", "function": {
+                "name": "run_sql",
+                "arguments": "{\"sql\":\"SELECT COUNT(*) AS active_count FROM customers WHERE active = 'yes'\"}"
+            } }]
+        })),
+        openai_response(serde_json::json!({
+            "role": "assistant",
+            "content": "There are 2 active customers."
+        })),
+    ]);
+
+    let engine = EngineState::new(&data).unwrap();
+    engine
+        .save_settings(
+            serde_json::json!({ "provider": "custom", "base_url": url, "model": "test" })
+                .as_object()
+                .unwrap(),
+        )
+        .unwrap();
+    engine.set_api_key("custom", "sk-test").unwrap();
+    let catalog = engine.open_workspace(&ws).unwrap();
+    let workspace_id = catalog.workspace.as_deref().unwrap();
+    let investigation = engine
+        .investigation_create(
+            workspace_id,
+            "Active customers",
+            Some("Count active customers"),
+            None,
+            Some("investigation-definitions-conversation"),
+        )
+        .unwrap();
+    let definition_text = "An active customer has active = yes.";
+    engine
+        .investigation_update_definitions(
+            &investigation.id,
+            vec![InvestigationDefinitionInput {
+                id: "definition-active-customer".into(),
+                kind: InvestigationDefinitionKind::Definition,
+                text: definition_text.into(),
+            }],
+        )
+        .unwrap();
+
+    let answer = engine
+        .ask_with_mode_and_context_and_clarification(
+            "investigation-definitions-conversation",
+            "How many active customers are there?",
+            AskOptions {
+                model: None,
+                inspect: false,
+                context_refs: &[],
+                clarification_reply: None,
+                investigation_id: Some(&investigation.id),
+                investigation_context: None,
+            },
+            |_| {},
+        )
+        .await
+        .unwrap();
+    server.join().unwrap();
+
+    assert!(answer.text.contains('2'), "answer: {}", answer.text);
+    let requests = requests.lock().unwrap();
+    let first_user_message = requests[0]["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|message| message["role"] == "user")
+        .and_then(|message| message["content"].as_str())
+        .unwrap();
+    assert!(first_user_message.contains(definition_text));
+    assert!(first_user_message.contains("How many active customers are there?"));
+    drop(requests);
+
+    let turn = engine.analysis_turn_load(&answer.turn_id).unwrap();
+    let context = turn.investigation_context.as_ref().unwrap();
+    assert_eq!(context.investigation_id, investigation.id);
+    assert_eq!(context.definitions.len(), 1);
+    assert_eq!(context.definitions[0].revision, 1);
+    assert_eq!(context.definitions[0].text, definition_text);
+
+    engine
+        .investigation_update_definitions(
+            &investigation.id,
+            vec![InvestigationDefinitionInput {
+                id: "definition-active-customer".into(),
+                kind: InvestigationDefinitionKind::Definition,
+                text: "An active customer has active = yes and is not archived.".into(),
+            }],
+        )
+        .unwrap();
+    let unchanged_run = engine.analysis_turn_load(&answer.turn_id).unwrap();
+    assert_eq!(
+        unchanged_run.investigation_context.unwrap().definitions[0].text,
+        definition_text,
+        "editing Investigation context must not rewrite an earlier run's snapshot"
+    );
 
     let _ = fs::remove_dir_all(&ws);
     let _ = fs::remove_dir_all(&data);
@@ -1617,6 +1736,8 @@ async fn clarification_keeps_safe_candidate_analysis_available() {
                     turn_id: answer.turn_id.clone(),
                     response: "Alpha".into(),
                 }),
+                investigation_id: None,
+                investigation_context: None,
             },
             |_| {},
         )
@@ -1638,6 +1759,8 @@ async fn clarification_keeps_safe_candidate_analysis_available() {
                     turn_id: answer.turn_id.clone(),
                     response: "  ".into(),
                 }),
+                investigation_id: None,
+                investigation_context: None,
             },
             |_| {},
         )
@@ -1659,6 +1782,8 @@ async fn clarification_keeps_safe_candidate_analysis_available() {
                     turn_id: answer.turn_id.clone(),
                     response: "Use the Alpha segment only.".into(),
                 }),
+                investigation_id: None,
+                investigation_context: None,
             },
             |_| {},
         )
@@ -1813,6 +1938,8 @@ async fn clarification_keeps_safe_candidate_analysis_available() {
                     turn_id: answer.turn_id.clone(),
                     response: "Use the Alpha segment only.".into(),
                 }),
+                investigation_id: None,
+                investigation_context: None,
             },
             |_| {},
         )

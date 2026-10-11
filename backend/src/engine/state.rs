@@ -18,7 +18,8 @@ use crate::engine::error::{EngineError, EngineResult};
 use crate::engine::evidence::{Answer, AskEvent, EvidenceItem};
 use crate::engine::ingest::docs;
 use crate::engine::investigation::{
-    self, Investigation, InvestigationBrief, InvestigationQuestion, InvestigationQuestionInput,
+    self, Investigation, InvestigationBrief, InvestigationContextSnapshot, InvestigationDefinition,
+    InvestigationDefinitionInput, InvestigationQuestion, InvestigationQuestionInput,
     QuestionBreakdownProposal,
 };
 use crate::engine::llm::{LlmClient, ProviderHealth};
@@ -52,12 +53,19 @@ pub struct AskOptions<'a> {
     pub inspect: bool,
     pub context_refs: &'a [ContextReference],
     pub clarification_reply: Option<ClarificationReply>,
+    /// Resolve the current saved context from this canonical Investigation.
+    /// Used for ordinary desktop asks; the engine snapshots active revisions.
+    pub investigation_id: Option<&'a str>,
+    /// Immutable context loaded from an existing turn for a faithful rerun or
+    /// clarification continuation. It is not refreshed from current records.
+    pub investigation_context: Option<InvestigationContextSnapshot>,
 }
 
 struct PersistAnalysisTurn<'a> {
     conversation_id: &'a str,
     question: &'a str,
     context_refs: &'a [ContextReference],
+    investigation_context: Option<&'a InvestigationContextSnapshot>,
     clarification: Option<&'a ResolvedClarification>,
     context_audit: &'a ContextAssemblyAudit,
     catalog: &'a Catalog,
@@ -1961,6 +1969,21 @@ impl EngineState {
         investigation::update_questions(&self.data_dir, id, questions)
     }
 
+    /// Replace an Investigation's active Definitions/Assumptions while keeping
+    /// independent records and their revision history.
+    pub fn investigation_update_definitions(
+        &self,
+        id: &str,
+        definitions: Vec<InvestigationDefinitionInput>,
+    ) -> EngineResult<Investigation> {
+        investigation::update_definitions(&self.data_dir, id, definitions)
+    }
+
+    /// Load one Definition record, including its prior analyst-edited values.
+    pub fn investigation_definition_load(&self, id: &str) -> EngineResult<InvestigationDefinition> {
+        investigation::definition_load(&self.data_dir, id)
+    }
+
     /// Load an independently persisted Question record by stable identity.
     pub fn investigation_question_load(&self, id: &str) -> EngineResult<InvestigationQuestion> {
         investigation::question_load(&self.data_dir, id)
@@ -2158,6 +2181,8 @@ impl EngineState {
                     inspect,
                     context_refs: &original.context_refs,
                     clarification_reply,
+                    investigation_id: None,
+                    investigation_context: original.investigation_context.clone(),
                 },
                 emit,
             )
@@ -2255,6 +2280,7 @@ impl EngineState {
             conversation_id,
             question,
             context_refs,
+            investigation_context,
             clarification,
             context_audit,
             catalog,
@@ -2316,6 +2342,7 @@ impl EngineState {
                 .map(|workspace| workspace.revision.clone()),
             workspace_snapshot,
             source_scope,
+            investigation_context: investigation_context.cloned(),
             context_audit: Some(context_audit.clone()),
             provenance: Some(answer.provenance.clone()),
             rerun_of: None,
@@ -3749,6 +3776,8 @@ exactly, character for character, from the list below.";
                 inspect,
                 context_refs,
                 clarification_reply: None,
+                investigation_id: None,
+                investigation_context: None,
             },
             emit,
         )
@@ -3769,6 +3798,8 @@ exactly, character for character, from the list below.";
             inspect,
             context_refs,
             clarification_reply: reply,
+            investigation_id,
+            investigation_context: saved_investigation_context,
         } = options;
         let _workspace_read_permit = self.workspace_gate.read();
         let settings = self.settings();
@@ -3793,11 +3824,49 @@ exactly, character for character, from the list below.";
             .as_ref()
             .map(|reply| self.resolve_clarification_reply(conversation_id, reply, &turn_catalog))
             .transpose()?;
-        let analysis_question = clarification
+        let prior_context = clarification
+            .as_ref()
+            .map(|resolved| self.analysis_turn_load(&resolved.turn_id))
+            .transpose()?
+            .and_then(|turn| turn.investigation_context);
+        let (investigation_context, add_context_to_question) =
+            if let Some(snapshot) = saved_investigation_context {
+                (Some(snapshot), false)
+            } else if let Some(snapshot) = prior_context {
+                (Some(snapshot), false)
+            } else if let Some(id) = investigation_id {
+                let investigation = investigation::load(&self.data_dir, id)?;
+                if turn_catalog.workspace.as_deref() != Some(investigation.workspace_id.as_str()) {
+                    return Err(EngineError::msg(
+                        "the Investigation does not belong to the mounted workspace",
+                    ));
+                }
+                if investigation
+                    .conversation_id
+                    .as_deref()
+                    .is_some_and(|linked| linked != conversation_id)
+                {
+                    return Err(EngineError::msg(
+                        "the Investigation is linked to a different conversation",
+                    ));
+                }
+                (
+                    Some(investigation::context_snapshot(&self.data_dir, id)?),
+                    true,
+                )
+            } else {
+                (None, false)
+            };
+        let request_question = clarification
             .as_ref()
             .map(|reply| reply.original_question.as_str())
             .unwrap_or(question);
-        let context = self.context_packet(analysis_question, conversation_id);
+        let analysis_question = investigation_context
+            .as_ref()
+            .filter(|_| add_context_to_question)
+            .map(|context| investigation::question_with_context(request_question, context))
+            .unwrap_or_else(|| request_question.to_owned());
+        let context = self.context_packet(&analysis_question, conversation_id);
         // Touch this conversation's memory slot (create it, mark it most-recently
         // used) and evict the least-recently-used one if we're over the cap.
         {
@@ -3850,7 +3919,7 @@ exactly, character for character, from the list below.";
             conversation_id,
             model: &effective_model,
             turn_id: &turn_id,
-            question: analysis_question,
+            question: &analysis_question,
             context: &context,
             clarification: clarification.as_ref(),
             inspect,
@@ -3873,8 +3942,9 @@ exactly, character for character, from the list below.";
         let answer = answer?;
         self.persist_analysis_turn(PersistAnalysisTurn {
             conversation_id,
-            question: analysis_question,
+            question: &analysis_question,
             context_refs,
+            investigation_context: investigation_context.as_ref(),
             clarification: clarification.as_ref(),
             context_audit: &context.audit,
             catalog: &turn_catalog,
@@ -3897,7 +3967,7 @@ exactly, character for character, from the list below.";
                     .and_then(|s| s.turns.last())
                     .map(|t| t.question.clone())
             };
-            self.record_turn_memory(prior_q.as_deref(), analysis_question, &answer)
+            self.record_turn_memory(prior_q.as_deref(), &analysis_question, &answer)
                 .await;
         }
 

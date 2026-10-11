@@ -15,6 +15,7 @@ use crate::engine::error::{EngineError, EngineResult};
 
 const INVESTIGATIONS_DIR: &str = "investigations";
 const QUESTIONS_DIR: &str = "questions";
+const DEFINITIONS_DIR: &str = "definitions";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -71,6 +72,72 @@ pub struct InvestigationQuestionInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<String>,
     pub text: String,
+}
+
+/// Analyst-authored meaning or explicit assumption used only inside one
+/// Investigation. The current value is mutable; prior values remain in the
+/// record history and each AnalysisTurn captures the exact revision it used.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InvestigationDefinition {
+    pub id: String,
+    pub investigation_id: String,
+    pub kind: InvestigationDefinitionKind,
+    pub text: String,
+    pub revision: u64,
+    #[serde(default)]
+    pub history: Vec<InvestigationDefinitionRevision>,
+    #[serde(default)]
+    pub status: InvestigationDefinitionStatus,
+    pub created_at_ms: u64,
+    pub updated_at_ms: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InvestigationDefinitionKind {
+    #[default]
+    Definition,
+    Assumption,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InvestigationDefinitionStatus {
+    #[default]
+    Active,
+    Removed,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InvestigationDefinitionRevision {
+    pub revision: u64,
+    pub kind: InvestigationDefinitionKind,
+    pub text: String,
+    pub recorded_at_ms: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InvestigationDefinitionInput {
+    pub id: String,
+    pub kind: InvestigationDefinitionKind,
+    pub text: String,
+}
+
+/// Immutable copy embedded in a canonical AnalysisTurn, so editing or removing
+/// a definition cannot change the context of an older run.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InvestigationDefinitionSnapshot {
+    pub id: String,
+    pub revision: u64,
+    pub kind: InvestigationDefinitionKind,
+    pub text: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InvestigationContextSnapshot {
+    pub investigation_id: String,
+    #[serde(default)]
+    pub definitions: Vec<InvestigationDefinitionSnapshot>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -143,6 +210,10 @@ pub struct Investigation {
     /// `Some(vec![])` is an intentionally empty plan.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub questions: Option<Vec<InvestigationQuestion>>,
+    /// Active definitions in analyst display order. Their independent records
+    /// and prior revisions live in `definitions/<id>.json`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub definitions: Option<Vec<InvestigationDefinition>>,
     pub title: String,
     #[serde(default)]
     pub brief: InvestigationBrief,
@@ -177,6 +248,8 @@ struct InvestigationRecord {
     question_ids: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     questions: Option<Vec<LegacyQuestion>>,
+    #[serde(default)]
+    definition_ids: Option<Vec<String>>,
     title: String,
     #[serde(default)]
     brief: InvestigationBrief,
@@ -222,6 +295,18 @@ fn question_path(data_dir: &Path, id: &str) -> EngineResult<PathBuf> {
         return Err(EngineError::msg("invalid investigation question id"));
     }
     Ok(data_dir.join(QUESTIONS_DIR).join(format!("{id}.json")))
+}
+
+fn definition_path(data_dir: &Path, id: &str) -> EngineResult<PathBuf> {
+    if id.is_empty()
+        || id.chars().count() > 128
+        || !id
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-'))
+    {
+        return Err(EngineError::msg("invalid investigation definition id"));
+    }
+    Ok(data_dir.join(DEFINITIONS_DIR).join(format!("{id}.json")))
 }
 
 fn now_ms() -> u64 {
@@ -343,15 +428,88 @@ pub fn question_load(data_dir: &Path, id: &str) -> EngineResult<InvestigationQue
     Ok(question)
 }
 
+fn write_definition_record(
+    data_dir: &Path,
+    definition: &InvestigationDefinition,
+) -> EngineResult<()> {
+    let path = definition_path(data_dir, &definition.id)?;
+    let body = serde_json::to_vec_pretty(definition).map_err(EngineError::from)?;
+    write_json_atomic(&path, &definition.id, &body)
+}
+
+pub fn definition_load(data_dir: &Path, id: &str) -> EngineResult<InvestigationDefinition> {
+    let path = definition_path(data_dir, id)?;
+    let body = std::fs::read_to_string(&path)
+        .map_err(|error| EngineError::io(format!("read {}", path.display()), error))?;
+    let definition: InvestigationDefinition = serde_json::from_str(&body)
+        .map_err(|error| EngineError::msg(format!("definition {id} is not valid JSON: {error}")))?;
+    if definition.id != id {
+        return Err(EngineError::msg(format!(
+            "definition file {} contains a mismatched id",
+            path.display()
+        )));
+    }
+    Ok(definition)
+}
+
+/// Capture the active definition versions from the canonical Investigation.
+/// The returned value is self-contained and suitable for an AnalysisTurn.
+pub fn context_snapshot(data_dir: &Path, id: &str) -> EngineResult<InvestigationContextSnapshot> {
+    let investigation = load(data_dir, id)?;
+    let definitions = investigation
+        .definitions
+        .unwrap_or_default()
+        .into_iter()
+        .map(|definition| InvestigationDefinitionSnapshot {
+            id: definition.id,
+            revision: definition.revision,
+            kind: definition.kind,
+            text: definition.text,
+        })
+        .collect();
+    Ok(InvestigationContextSnapshot {
+        investigation_id: investigation.id,
+        definitions,
+    })
+}
+
+/// Add only analyst-saved definitions to the prompt. They inform interpretation
+/// but are not evidence and never replace the immediate user request.
+pub fn question_with_context(question: &str, context: &InvestigationContextSnapshot) -> String {
+    if context.definitions.is_empty() {
+        return question.to_owned();
+    }
+    let definitions = context
+        .definitions
+        .iter()
+        .map(|definition| {
+            let kind = match definition.kind {
+                InvestigationDefinitionKind::Definition => "Definition",
+                InvestigationDefinitionKind::Assumption => "Assumption",
+            };
+            format!(
+                "- {kind} (revision {}): {}",
+                definition.revision, definition.text
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "Saved Investigation context (use these meanings when interpreting the request; they are not evidence):\n{definitions}\n\nCurrent analyst request and plan:\n{question}"
+    )
+}
+
 fn public_record(
     record: InvestigationRecord,
     questions: Vec<InvestigationQuestion>,
+    definitions: Vec<InvestigationDefinition>,
 ) -> Investigation {
     Investigation {
         id: record.id,
         workspace_id: record.workspace_id,
         conversation_id: record.conversation_id,
         questions: Some(questions),
+        definitions: Some(definitions),
         title: record.title,
         brief: record.brief,
         brief_source_message_id: record.brief_source_message_id,
@@ -365,6 +523,26 @@ fn public_record(
 
 fn read_record(path: &Path, expected_id: &str, data_dir: &Path) -> EngineResult<Investigation> {
     let mut record = read_raw_record(path, expected_id)?;
+    let mut changed = false;
+    let definitions = if let Some(ids) = record.definition_ids.clone() {
+        let mut loaded = Vec::with_capacity(ids.len());
+        for id in ids {
+            let definition = definition_load(data_dir, &id)?;
+            if definition.investigation_id != expected_id
+                || definition.status != InvestigationDefinitionStatus::Active
+            {
+                return Err(EngineError::msg(format!(
+                    "definition {id} is not active in investigation {expected_id}"
+                )));
+            }
+            loaded.push(definition);
+        }
+        loaded
+    } else {
+        record.definition_ids = Some(Vec::new());
+        changed = true;
+        Vec::new()
+    };
     let questions = if let Some(ids) = record.question_ids.clone() {
         let mut loaded = Vec::with_capacity(ids.len());
         for id in ids {
@@ -428,10 +606,13 @@ fn read_record(path: &Path, expected_id: &str, data_dir: &Path) -> EngineResult<
                 .collect(),
         );
         record.questions = None;
-        write_raw_record(data_dir, &record)?;
+        changed = true;
         migrated
     };
-    Ok(public_record(record, questions))
+    if changed {
+        write_raw_record(data_dir, &record)?;
+    }
+    Ok(public_record(record, questions, definitions))
 }
 
 fn write_raw_record(data_dir: &Path, record: &InvestigationRecord) -> EngineResult<()> {
@@ -456,6 +637,7 @@ fn persist_new_record(data_dir: &Path, record: &Investigation) -> EngineResult<(
                 .collect(),
         ),
         questions: None,
+        definition_ids: Some(Vec::new()),
         title: record.title.clone(),
         brief: record.brief.clone(),
         brief_source_message_id: record.brief_source_message_id.clone(),
@@ -560,6 +742,7 @@ pub fn create(
             workspace_id: workspace_id.to_owned(),
             conversation_id: conversation_id.map(str::to_owned),
             questions: Some(questions.clone()),
+            definitions: Some(Vec::new()),
             title: title.to_owned(),
             brief: InvestigationBrief {
                 goal: goal.to_owned(),
@@ -830,6 +1013,131 @@ pub fn update_questions(
     Ok(record)
 }
 
+/// Replace the ordered active Definition/Assumption set. Content edits append
+/// the previous value to each record's history; removing an entry changes its
+/// lifecycle state instead of orphaning its identity.
+pub fn update_definitions(
+    data_dir: &Path,
+    id: &str,
+    mut inputs: Vec<InvestigationDefinitionInput>,
+) -> EngineResult<Investigation> {
+    const MAX_DEFINITIONS: usize = 100;
+    const MAX_ID_CHARS: usize = 128;
+    const MAX_TEXT_CHARS: usize = 4_000;
+    const MAX_TOTAL_CHARS: usize = 24_000;
+
+    if inputs.len() > MAX_DEFINITIONS {
+        return Err(EngineError::msg(
+            "an Investigation has too many saved definitions and assumptions",
+        ));
+    }
+    let mut ids = HashSet::new();
+    let mut total_chars = 0usize;
+    for input in &mut inputs {
+        input.id = input.id.trim().to_owned();
+        input.text = input.text.trim().to_owned();
+        if input.id.is_empty()
+            || input.id.chars().count() > MAX_ID_CHARS
+            || !input.id.chars().all(|character| {
+                character.is_ascii_alphanumeric() || matches!(character, '_' | '-')
+            })
+            || !ids.insert(input.id.clone())
+        {
+            return Err(EngineError::msg(
+                "invalid or duplicate Investigation definition id",
+            ));
+        }
+        if input.text.is_empty() || input.text.chars().count() > MAX_TEXT_CHARS {
+            return Err(EngineError::msg(
+                "definition or assumption text must be non-empty and no longer than 4000 characters",
+            ));
+        }
+        total_chars = total_chars.saturating_add(input.text.chars().count());
+        if total_chars > MAX_TOTAL_CHARS {
+            return Err(EngineError::msg(
+                "saved definitions and assumptions exceed the 24000 character limit",
+            ));
+        }
+    }
+
+    let mut record = load(data_dir, id)?;
+    let current = record.definitions.clone().unwrap_or_default();
+    let timestamp = now_ms();
+    let mut next = Vec::with_capacity(inputs.len());
+    for input in inputs {
+        let path = definition_path(data_dir, &input.id)?;
+        let mut definition = if path.exists() {
+            let definition = definition_load(data_dir, &input.id)?;
+            if definition.investigation_id != record.id {
+                return Err(EngineError::msg(format!(
+                    "definition {} belongs to another Investigation",
+                    input.id
+                )));
+            }
+            definition
+        } else {
+            InvestigationDefinition {
+                id: input.id.clone(),
+                investigation_id: record.id.clone(),
+                kind: input.kind,
+                text: input.text.clone(),
+                revision: 1,
+                history: Vec::new(),
+                status: InvestigationDefinitionStatus::Active,
+                created_at_ms: timestamp,
+                updated_at_ms: timestamp,
+            }
+        };
+
+        let was_persisted = path.exists();
+        let changed = !was_persisted
+            || definition.kind != input.kind
+            || definition.text != input.text
+            || definition.status != InvestigationDefinitionStatus::Active;
+        if changed {
+            if was_persisted {
+                definition.history.push(InvestigationDefinitionRevision {
+                    revision: definition.revision,
+                    kind: definition.kind,
+                    text: definition.text.clone(),
+                    recorded_at_ms: definition.updated_at_ms,
+                });
+                definition.revision = definition.revision.saturating_add(1);
+                definition.kind = input.kind;
+                definition.text = input.text;
+                definition.status = InvestigationDefinitionStatus::Active;
+                definition.updated_at_ms =
+                    timestamp.max(definition.updated_at_ms.saturating_add(1));
+            }
+            write_definition_record(data_dir, &definition)?;
+        }
+        next.push(definition);
+    }
+
+    let next_ids: HashSet<_> = next.iter().map(|item| item.id.as_str()).collect();
+    for mut definition in current {
+        if !next_ids.contains(definition.id.as_str()) {
+            definition.history.push(InvestigationDefinitionRevision {
+                revision: definition.revision,
+                kind: definition.kind,
+                text: definition.text.clone(),
+                recorded_at_ms: definition.updated_at_ms,
+            });
+            definition.revision = definition.revision.saturating_add(1);
+            definition.status = InvestigationDefinitionStatus::Removed;
+            definition.updated_at_ms = timestamp.max(definition.updated_at_ms.saturating_add(1));
+            write_definition_record(data_dir, &definition)?;
+        }
+    }
+
+    if record.definitions.as_ref() != Some(&next) {
+        record.definitions = Some(next);
+        record.updated_at_ms = now_ms().max(record.updated_at_ms.saturating_add(1));
+        write_record(data_dir, &record)?;
+    }
+    Ok(record)
+}
+
 fn write_record(data_dir: &Path, record: &Investigation) -> EngineResult<()> {
     let stored = InvestigationRecord {
         id: record.id.clone(),
@@ -846,6 +1154,16 @@ fn write_record(data_dir: &Path, record: &Investigation) -> EngineResult<()> {
                 .collect(),
         ),
         questions: None,
+        definition_ids: Some(
+            record
+                .definitions
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .filter(|definition| definition.status == InvestigationDefinitionStatus::Active)
+                .map(|definition| definition.id.clone())
+                .collect(),
+        ),
         title: record.title.clone(),
         brief: record.brief.clone(),
         brief_source_message_id: record.brief_source_message_id.clone(),
@@ -1137,6 +1455,146 @@ mod tests {
                 id: "blank".to_owned(),
                 parent_id: None,
                 text: "  ".to_owned(),
+            }],
+        )
+        .is_err());
+
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn definitions_are_independent_versioned_and_removed_from_future_context() {
+        let data_dir = scratch();
+        let created = create(
+            &data_dir,
+            "/work/analysis",
+            "Revenue analysis",
+            Some("Explain revenue movement"),
+            Some("message-root"),
+            Some("conversation-root"),
+        )
+        .unwrap();
+        let other = create(
+            &data_dir,
+            "/work/analysis",
+            "Another investigation",
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let saved = update_definitions(
+            &data_dir,
+            &created.id,
+            vec![
+                InvestigationDefinitionInput {
+                    id: "definition-active-customer".into(),
+                    kind: InvestigationDefinitionKind::Definition,
+                    text: "An active customer ordered in the last 90 days.".into(),
+                },
+                InvestigationDefinitionInput {
+                    id: "assumption-missing-cancel".into(),
+                    kind: InvestigationDefinitionKind::Assumption,
+                    text: "A missing cancellation date means the account is still active.".into(),
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(saved.definitions.as_ref().unwrap().len(), 2);
+        assert_eq!(load(&data_dir, &created.id).unwrap(), saved);
+        let original = definition_load(&data_dir, "definition-active-customer").unwrap();
+        assert_eq!(original.revision, 1);
+        assert!(original.history.is_empty());
+
+        let snapshot = context_snapshot(&data_dir, &created.id).unwrap();
+        assert_eq!(snapshot.investigation_id, created.id);
+        assert_eq!(snapshot.definitions.len(), 2);
+        assert!(question_with_context("Calculate revenue", &snapshot)
+            .contains("active customer ordered in the last 90 days"));
+
+        let edited = update_definitions(
+            &data_dir,
+            &created.id,
+            vec![
+                InvestigationDefinitionInput {
+                    id: "definition-active-customer".into(),
+                    kind: InvestigationDefinitionKind::Definition,
+                    text: "An active customer placed a paid order in the last 60 days.".into(),
+                },
+                InvestigationDefinitionInput {
+                    id: "assumption-missing-cancel".into(),
+                    kind: InvestigationDefinitionKind::Assumption,
+                    text: "A missing cancellation date means the account is still active.".into(),
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(edited.definitions.as_ref().unwrap().len(), 2);
+        let revised = definition_load(&data_dir, "definition-active-customer").unwrap();
+        assert_eq!(revised.revision, 2);
+        assert_eq!(revised.history.len(), 1);
+        assert_eq!(revised.history[0].revision, 1);
+        assert_eq!(
+            revised.history[0].text,
+            "An active customer ordered in the last 90 days."
+        );
+        assert_eq!(
+            context_snapshot(&data_dir, &created.id)
+                .unwrap()
+                .definitions[0]
+                .revision,
+            2
+        );
+
+        let removed = update_definitions(&data_dir, &created.id, Vec::new()).unwrap();
+        assert_eq!(removed.definitions, Some(Vec::new()));
+        assert_eq!(
+            definition_load(&data_dir, "definition-active-customer")
+                .unwrap()
+                .status,
+            InvestigationDefinitionStatus::Removed
+        );
+        assert_eq!(
+            context_snapshot(&data_dir, &created.id)
+                .unwrap()
+                .definitions,
+            Vec::new()
+        );
+        assert!(update_definitions(
+            &data_dir,
+            &other.id,
+            vec![InvestigationDefinitionInput {
+                id: "definition-active-customer".into(),
+                kind: InvestigationDefinitionKind::Definition,
+                text: "Must not cross Investigation ownership.".into(),
+            }],
+        )
+        .is_err());
+        assert!(update_definitions(
+            &data_dir,
+            &created.id,
+            vec![
+                InvestigationDefinitionInput {
+                    id: "duplicate".into(),
+                    kind: InvestigationDefinitionKind::Definition,
+                    text: "First meaning".into(),
+                },
+                InvestigationDefinitionInput {
+                    id: "duplicate".into(),
+                    kind: InvestigationDefinitionKind::Assumption,
+                    text: "Second meaning".into(),
+                },
+            ],
+        )
+        .is_err());
+        assert!(update_definitions(
+            &data_dir,
+            &created.id,
+            vec![InvestigationDefinitionInput {
+                id: "blank".into(),
+                kind: InvestigationDefinitionKind::Definition,
+                text: "  ".into(),
             }],
         )
         .is_err());

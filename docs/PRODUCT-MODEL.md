@@ -222,6 +222,17 @@ but suggestions are editable drafts: only an explicit Save writes child
 records. Removed Questions retain their identity and lifecycle state rather
 than becoming orphaned history.
 
+Investigation Definitions and Assumptions are now independently persisted,
+analyst-authored context rather than transcript text or folder-wide semantic
+memory. Each entry has a stable ID, an explicit kind, an active/removed state,
+and revision history; edits and removal never rewrite prior AnalysisTurns. The
+active set is passed to later workspace runs as interpretive guidance, clearly
+separated from evidence and the immediate request. Every Investigation-bound
+run stores a self-contained snapshot of the exact entries and revisions it
+received, including an explicit empty snapshot, so the run view can show what
+context was used after the Investigation changes. Unscoped General asks do not
+inherit this context.
+
 The Investigation surface now includes a compact view of its workspace's
 current catalog snapshot: queryable tables, readable documents, and files the
 catalog skipped. Skipped entries distinguish unsupported formats from files

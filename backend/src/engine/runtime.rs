@@ -13,6 +13,7 @@ use serde_json::Value as Json;
 
 use crate::engine::context::ContextAssemblyAudit;
 use crate::engine::evidence::{AnswerProvenance, Usage, VerificationCheck, VerificationStatus};
+use crate::engine::investigation::InvestigationContextSnapshot;
 
 /// A stable identifier for one analytical question, distinct from the
 /// conversation/tab that contains it.
@@ -899,6 +900,11 @@ pub struct AnalysisTurn {
     /// catalog-skipped inputs at the same workspace revision.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_scope: Option<AnalysisSourceScope>,
+    /// Exact Investigation definitions and assumptions supplied to this run.
+    /// The snapshot survives later edits/removals and remains optional for old
+    /// turns and unscoped conversations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub investigation_context: Option<InvestigationContextSnapshot>,
     /// Length-only audit of bounded model context; text is never copied here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_audit: Option<ContextAssemblyAudit>,

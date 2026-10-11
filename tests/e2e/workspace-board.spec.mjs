@@ -55,6 +55,7 @@ async function installDesktopMock(
 		const archivedConversations = new Map();
 		const investigations = new Map();
 		const questionRecords = new Map();
+		const definitionRecords = new Map();
 		const investigationEnsureCalls = [];
 		const questionProposalCalls = [];
 		const deletedConversationIds = [];
@@ -140,6 +141,7 @@ async function installDesktopMock(
 		window.__workspaceInvestigationEnsureCalls = investigationEnsureCalls;
 		window.__workspaceQuestionProposalCalls = questionProposalCalls;
 		window.__workspaceInvestigations = () => [...investigations.values()];
+		window.__workspaceDefinitionRecords = () => [...definitionRecords.values()];
 		window.__workspaceSetRunLinks = (id, runIds) => {
 			for (const [key, record] of investigations) {
 				if (record.id === id) investigations.set(key, { ...record, analysis_turn_ids: [...runIds] });
@@ -180,6 +182,7 @@ async function installDesktopMock(
 								title: goal.slice(0, 64),
 								brief: { goal, audience: '', desired_output: '', constraints: [] },
 								questions: rootQuestion ? [rootQuestion] : [],
+								definitions: [],
 								brief_source_message_id: args.sourceMessageId,
 								analysis_turn_ids: [],
 								status: 'active',
@@ -224,6 +227,51 @@ async function installDesktopMock(
 						const question = questionRecords.get(args.questionId);
 						if (!question) throw new Error(`Unknown Question: ${args.questionId}`);
 						return question;
+					}
+					case 'investigation_update_definitions': {
+						for (const [key, record] of investigations) {
+							if (record.id !== args.investigationId) continue;
+							const now = Date.now();
+							const next = args.definitions.map((item) => {
+								const previous = definitionRecords.get(item.id);
+								const changed = previous && (previous.kind !== item.kind || previous.text !== item.text || previous.status !== 'active');
+								const history = [...(previous?.history ?? [])];
+								if (changed) history.push({ revision: previous.revision, kind: previous.kind, text: previous.text, recorded_at_ms: previous.updated_at_ms });
+								const definition = {
+									id: item.id,
+									investigation_id: record.id,
+									kind: item.kind,
+									text: item.text,
+									revision: previous ? previous.revision + (changed ? 1 : 0) : 1,
+									history,
+									status: 'active',
+									created_at_ms: previous?.created_at_ms ?? now,
+									updated_at_ms: changed ? now : (previous?.updated_at_ms ?? now)
+								};
+								definitionRecords.set(item.id, definition);
+								return definition;
+							});
+							for (const previous of record.definitions ?? []) {
+								if (next.some((item) => item.id === previous.id)) continue;
+								const removed = {
+									...previous,
+									status: 'removed',
+									revision: previous.revision + 1,
+									history: [...(previous.history ?? []), { revision: previous.revision, kind: previous.kind, text: previous.text, recorded_at_ms: previous.updated_at_ms }],
+									updated_at_ms: now
+								};
+								definitionRecords.set(previous.id, removed);
+							}
+							const updated = { ...record, definitions: next, updated_at_ms: now };
+							investigations.set(key, updated);
+							return updated;
+						}
+						throw new Error(`Unknown Investigation: ${args.investigationId}`);
+					}
+					case 'investigation_definition_load': {
+						const definition = definitionRecords.get(args.definitionId);
+						if (!definition) throw new Error(`Unknown definition: ${args.definitionId}`);
+						return definition;
 					}
 					case 'investigation_propose_questions':
 						questionProposalCalls.push(args);
@@ -619,6 +667,71 @@ test('an analyst can edit the main Question and linked subquestions without rewr
 	await expect(transcriptQuestion).not.toContainText('Compare conversion by region');
 	await expect(transcriptQuestion).not.toContainText('Compare conversion over time');
 	await expect(transcriptQuestion).not.toContainText('Compare conversion by device');
+});
+
+test('saved Investigation definitions are revisioned, attached to later asks, and removable', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
+	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
+	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	const composer = page.getByRole('combobox', { name: 'Ask about northwind-sales' });
+	await composer.fill('Explain the change in weekly sales');
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	await expect(page.getByRole('heading', { name: 'Definitions & assumptions' })).toBeVisible();
+
+	await page.getByRole('button', { name: 'Add definition or assumption' }).click();
+	await page.getByRole('combobox', { name: 'Context type 1' }).selectOption('assumption');
+	const note = page.getByRole('textbox', { name: 'Context note 1' });
+	await note.fill('A missing cancellation date means the account is still active.');
+	await page.getByRole('button', { name: 'Save context' }).click();
+	await expect(page.locator('.definition-editor')).toContainText('Context saved');
+
+	let saved = await page.evaluate(() => window.__workspaceInvestigations()[0]);
+	expect(saved.definitions).toHaveLength(1);
+	expect(saved.definitions[0]).toMatchObject({
+		kind: 'assumption',
+		text: 'A missing cancellation date means the account is still active.',
+		revision: 1,
+		status: 'active'
+	});
+	const definitionId = saved.definitions[0].id;
+	const firstRecord = await page.evaluate((id) => window.fella.invoke('investigation_definition_load', { definitionId: id }), definitionId);
+	expect(firstRecord).toMatchObject({ id: definitionId, investigation_id: saved.id, revision: 1, history: [] });
+
+	await note.fill('A missing cancellation date is not sufficient evidence of an active account.');
+	await page.getByRole('button', { name: 'Save context' }).click();
+	await expect(page.locator('.definition-item')).toContainText('Saved revision 2');
+	saved = await page.evaluate(() => window.__workspaceInvestigations()[0]);
+	const revised = await page.evaluate((id) => window.fella.invoke('investigation_definition_load', { definitionId: id }), definitionId);
+	expect(revised).toMatchObject({ revision: 2, text: 'A missing cancellation date is not sufficient evidence of an active account.' });
+	expect(revised.history).toHaveLength(1);
+	expect(revised.history[0]).toMatchObject({ revision: 1, text: 'A missing cancellation date means the account is still active.' });
+
+	await page.getByRole('button', { name: 'Open conversation', exact: true }).click();
+	await expect(composer).toBeVisible();
+	await composer.fill('Check whether this assumption changes the result.');
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.').last()).toBeVisible();
+	const nextAsk = await page.evaluate(() => window.__workspaceAskCalls.at(-1));
+	expect(nextAsk.investigationId).toBe(saved.id);
+	expect(nextAsk.question).toContain('Check whether this assumption changes the result.');
+	const transcript = page.locator('.msg.user').last();
+	await expect(transcript).toContainText('Check whether this assumption changes the result.');
+	await expect(transcript).not.toContainText('missing cancellation date is not sufficient evidence');
+
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	await expect(page.getByRole('heading', { name: 'Definitions & assumptions' })).toBeVisible();
+	await page.getByRole('button', { name: 'Remove context note 1' }).click();
+	await page.getByRole('button', { name: 'Save context' }).click();
+	await expect(page.locator('.definition-empty')).toContainText('No saved definitions or assumptions');
+	saved = await page.evaluate(() => window.__workspaceInvestigations()[0]);
+	expect(saved.definitions).toEqual([]);
+	const removed = await page.evaluate((id) => window.fella.invoke('investigation_definition_load', { definitionId: id }), definitionId);
+	expect(removed).toMatchObject({ status: 'removed', revision: 3 });
+	expect(removed.history).toHaveLength(2);
 });
 
 test('suggested Question breakdown stays a draft until saved as durable child records', async ({ page }) => {

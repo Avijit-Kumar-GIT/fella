@@ -350,6 +350,20 @@
 									{#if savedRun.workspace_revision}<div><dt>Workspace revision</dt><dd><code>{savedRun.workspace_revision}</code></dd></div>{/if}
 									{#if savedRun.source_scope}<div><dt>Source scope</dt><dd>{savedRun.source_scope.used_sources.length} used · {savedRun.source_scope.skipped_sources.length} skipped</dd></div>{/if}
 								</dl>
+								{#if savedRun.investigation_context}
+									<div class="saved-run-section saved-run-definitions">
+										<h4>Investigation context used</h4>
+										{#if savedRun.investigation_context.definitions.length}
+											<ul>
+												{#each savedRun.investigation_context.definitions as definition (definition.id)}
+													<li><strong>{definition.kind === 'definition' ? 'Definition' : 'Assumption'} · revision {definition.revision}</strong><span>{definition.text}</span></li>
+												{/each}
+											</ul>
+										{:else}
+											<p>No saved definitions or assumptions were active for this run.</p>
+										{/if}
+									</div>
+								{/if}
 								{#if savedRun.plan.steps.length}
 									<div class="saved-run-section">
 										<h4>Planned steps</h4>
@@ -422,6 +436,10 @@
 	.saved-run-section { margin-top: var(--space-3); }
 	.saved-run-section h4 { margin: 0 0 var(--space-1); color: var(--text-faint); font-size: var(--fs-xs); font-weight: 600; }
 	.saved-run-section ol { margin: 0; padding-left: 20px; color: var(--text); font-size: var(--fs-xs); }
+	.saved-run-definitions ul { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+	.saved-run-definitions li { display: grid; gap: 2px; }
+	.saved-run-definitions li span, .saved-run-definitions p { color: var(--text-dim); white-space: pre-wrap; overflow-wrap: anywhere; }
+	.saved-run-definitions p { margin: 0; }
 	.saved-run-trace { display: flex; flex-direction: column; gap: var(--space-2); }
 	.saved-run-trace li { padding-left: 2px; }
 	.saved-run-step-heading { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-2); }

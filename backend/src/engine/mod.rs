@@ -36,8 +36,11 @@ pub use catalog::{Catalog, SourceInfo, WorkspaceProgress};
 pub use error::{EngineError, EngineResult};
 pub use evidence::{Answer, AskEvent};
 pub use investigation::{
-    Investigation, InvestigationBrief, InvestigationQuestion, InvestigationQuestionInput,
-    InvestigationQuestionStatus, InvestigationStatus, QuestionBreakdownProposal,
+    Investigation, InvestigationBrief, InvestigationContextSnapshot, InvestigationDefinition,
+    InvestigationDefinitionInput, InvestigationDefinitionKind, InvestigationDefinitionRevision,
+    InvestigationDefinitionSnapshot, InvestigationDefinitionStatus, InvestigationQuestion,
+    InvestigationQuestionInput, InvestigationQuestionStatus, InvestigationStatus,
+    QuestionBreakdownProposal,
 };
 pub use llm::ProviderHealth;
 pub use provider::{AuthKind, Provider, PROVIDERS};

@@ -1078,7 +1078,8 @@ async function ask(
 		clarificationTurnId
 			? { turn_id: clarificationTurnId, response: question }
 			: undefined,
-		conv.workspaceScope
+		conv.workspaceScope,
+		investigation?.id ?? null
 		);
 		msg.answer = answer;
 		msg.text = answer.text;

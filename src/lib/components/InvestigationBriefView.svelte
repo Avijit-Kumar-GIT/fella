@@ -9,6 +9,7 @@
 		ConversationSummary,
 		Investigation,
 		InvestigationBrief,
+		InvestigationDefinitionInput,
 		InvestigationQuestionInput
 	} from '$lib/types';
 	import { findBriefProposal, type BriefProposal, type BriefProposalTarget } from '$lib/investigation-brief-proposal';
@@ -25,10 +26,13 @@
 	let desiredOutput = $state('');
 	let constraintsText = $state('');
 	let questions = $state<InvestigationQuestionInput[]>([]);
+	let definitions = $state<InvestigationDefinitionInput[]>([]);
 	let savedBrief = $state('');
 	let savedQuestions = $state('');
+	let savedDefinitions = $state('');
 	let loadedBriefKey = '';
 	let loadedQuestionsKey = '';
+	let loadedDefinitionsKey = '';
 	let proposalMessageId = $state<string | null>(null);
 	let proposalText = $state('');
 	let proposalTarget = $state<BriefProposalTarget>('goal');
@@ -87,7 +91,10 @@
 	let dirty = $derived(Boolean(selected && briefKey !== savedBrief));
 	let questionsKey = $derived(JSON.stringify(questions));
 	let questionsDirty = $derived(Boolean(selected && questionsKey !== savedQuestions));
+	let definitionsKey = $derived(JSON.stringify(definitions));
+	let definitionsDirty = $derived(Boolean(selected && definitionsKey !== savedDefinitions));
 	let hasBlankQuestion = $derived(questions.some((question) => !question.text.trim()));
+	let hasBlankDefinition = $derived(definitions.some((definition) => !definition.text.trim()));
 	let canSuggestBreakdown = $derived(Boolean(rootQuestion?.text.trim()) && subquestions.length === 0);
 
 	async function loadWorkspace(path: string): Promise<void> {
@@ -204,6 +211,19 @@
 	});
 
 	$effect(() => {
+		const item = selected;
+		const key = item ? `${item.id}:${JSON.stringify(item.definitions ?? null)}` : '';
+		if (key === loadedDefinitionsKey) return;
+		loadedDefinitionsKey = key;
+		definitions = (item?.definitions ?? []).map((definition) => ({
+			id: definition.id,
+			kind: definition.kind,
+			text: definition.text
+		}));
+		savedDefinitions = JSON.stringify(definitions);
+	});
+
+	$effect(() => {
 		const proposal = pendingProposal;
 		if ((proposal?.messageId ?? null) === proposalMessageId) return;
 		proposalMessageId = proposal?.messageId ?? null;
@@ -215,6 +235,10 @@
 		if (!workspacePath || creating || !isDesktop()) return;
 		if (questionsDirty) {
 			error = 'Save or discard the current Question plan before opening another Investigation.';
+			return;
+		}
+		if (definitionsDirty) {
+			error = 'Save or discard the current definitions before opening another Investigation.';
 			return;
 		}
 		creating = true;
@@ -242,6 +266,10 @@
 	async function openSelectedConversation(): Promise<void> {
 		const item = selected;
 		if (!item || openingConversation || !isDesktop()) return;
+		if (questionsDirty || definitionsDirty) {
+			error = 'Save or discard the current Question plan and definitions before opening the conversation.';
+			return;
+		}
 		openingConversation = true;
 		error = '';
 		try {
@@ -396,6 +424,60 @@
 		}
 	}
 
+	function addDefinition(kind: InvestigationDefinitionInput['kind'] = 'definition'): void {
+		const id = globalThis.crypto?.randomUUID?.().replaceAll('-', '') ?? `${Date.now()}${Math.random().toString(16).slice(2)}`;
+		definitions = [...definitions, { id: `d_${id}`, kind, text: '' }];
+	}
+
+	function removeDefinition(id: string): void {
+		definitions = definitions.filter((definition) => definition.id !== id);
+	}
+
+	function discardDefinitions(): void {
+		const item = selected;
+		if (!item || saving) return;
+		definitions = (item.definitions ?? []).map((definition) => ({
+			id: definition.id,
+			kind: definition.kind,
+			text: definition.text
+		}));
+		savedDefinitions = JSON.stringify(definitions);
+		error = '';
+	}
+
+	async function saveDefinitions(): Promise<boolean> {
+		if (!selected || saving || !definitionsDirty) return !definitionsDirty;
+		if (hasBlankDefinition) {
+			error = 'Fill in or remove each blank definition before saving.';
+			return false;
+		}
+		saving = true;
+		error = '';
+		try {
+			const updated = await ipc.investigationUpdateDefinitions(
+				selected.id,
+				definitions.map((definition) => ({
+					id: definition.id,
+					kind: definition.kind,
+					text: definition.text.trim()
+				}))
+			);
+			investigations = investigations.map((item) => item.id === updated.id ? updated : item);
+			definitions = (updated.definitions ?? []).map((definition) => ({
+				id: definition.id,
+				kind: definition.kind,
+				text: definition.text
+			}));
+			savedDefinitions = JSON.stringify(definitions);
+			return true;
+		} catch (cause) {
+			error = cause instanceof Error ? cause.message : String(cause);
+			return false;
+		} finally {
+			saving = false;
+		}
+	}
+
 	async function reviewProposal(accept: boolean): Promise<void> {
 		const item = selected;
 		const proposal = pendingProposal;
@@ -424,6 +506,10 @@
 		if (id === selectedId || saving || proposingQuestions) return;
 		if (questionsDirty) {
 			error = 'Save or discard the current Question plan before switching Investigations.';
+			return;
+		}
+		if (definitionsDirty) {
+			error = 'Save or discard the current definitions before switching Investigations.';
 			return;
 		}
 		if (dirty && !(await saveBrief())) return;
@@ -532,6 +618,56 @@
 					<Textarea id="investigation-output" class="brief-field" bind:value={desiredOutput} disabled={saving} placeholder="What should the analyst deliver?" />
 					<label for="investigation-constraints">Constraints</label>
 					<Textarea id="investigation-constraints" class="brief-field constraints-field" bind:value={constraintsText} disabled={saving} placeholder="One constraint per line" />
+					<section class="definition-editor" aria-labelledby="definition-context-title">
+						<header class="question-heading">
+							<div>
+								<h3 id="definition-context-title">Definitions &amp; assumptions</h3>
+								<p>Save business meanings that should guide future runs. Each run keeps the exact versions it used.</p>
+							</div>
+							<div class="question-save">
+								<span role={error && definitionsDirty ? 'alert' : 'status'}>{error && definitionsDirty ? error : definitionsDirty ? 'Unsaved context' : 'Context saved'}</span>
+								{#if definitionsDirty}
+									<Button type="button" variant="ghost" disabled={saving} onclick={discardDefinitions}>Discard</Button>
+								{/if}
+								<Button type="button" disabled={!definitionsDirty || saving || hasBlankDefinition} onclick={() => void saveDefinitions()}>
+									<Icon name="check" size={16} />{saving ? 'Saving…' : 'Save context'}
+								</Button>
+							</div>
+						</header>
+						{#if definitions.length}
+							<ol class="definition-list">
+								{#each definitions as definition, index (definition.id)}
+									<li class="definition-item">
+										<div class="definition-item-heading">
+											<label for="definition-kind-{definition.id}">Context type</label>
+											<div class="definition-item-meta">
+												{#if selected?.definitions?.find((saved) => saved.id === definition.id)}
+													<span>Saved revision {selected.definitions.find((saved) => saved.id === definition.id)?.revision}</span>
+												{/if}
+												<Button type="button" variant="ghost" aria-label="Remove context note {index + 1}" disabled={saving} onclick={() => removeDefinition(definition.id)}>Remove</Button>
+											</div>
+										</div>
+										<select id="definition-kind-{definition.id}" aria-label="Context type {index + 1}" bind:value={definition.kind} disabled={saving}>
+											<option value="definition">Definition</option>
+											<option value="assumption">Assumption</option>
+										</select>
+										<Textarea
+											class="definition-field"
+											bind:value={definition.text}
+											disabled={saving}
+											aria-label="Context note {index + 1}"
+											placeholder={definition.kind === 'definition' ? 'e.g. An active customer has placed a paid order in the past 90 days.' : 'e.g. Treat missing cancellation dates as still active.'}
+										/>
+									</li>
+								{/each}
+							</ol>
+						{:else}
+							<p class="definition-empty">No saved definitions or assumptions. Runs use no Investigation-specific semantic context.</p>
+						{/if}
+						<Button type="button" variant="outline" disabled={saving} onclick={() => addDefinition()}>
+							<Icon name="plus" size={16} />Add definition or assumption
+						</Button>
+					</section>
 					<section class="question-editor" aria-labelledby="question-plan-title">
 						<header class="question-heading">
 							<div>
@@ -666,6 +802,18 @@
 	.brief-editor :global(.brief-field) { width: 100%; min-height: 74px; resize: vertical; }
 	.brief-editor :global(.goal-field) { min-height: 112px; }
 	.brief-editor :global(.constraints-field) { min-height: 96px; }
+	.definition-editor { display: grid; gap: var(--space-3); padding: var(--space-4) 0; margin-top: var(--space-4); border-top: 1px solid var(--border); }
+	.definition-editor h3 { margin: 0; font-size: var(--fs-md); font-weight: 650; }
+	.definition-editor .question-heading p, .definition-empty { margin-top: var(--space-1); color: var(--text-dim); font-size: var(--fs-xs); }
+	.definition-list { display: grid; gap: var(--space-3); margin: 0; padding: 0; list-style: none; }
+	.definition-item { display: grid; gap: var(--space-2); min-width: 0; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); }
+	.definition-item-heading, .definition-item-meta { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
+	.definition-item-heading label { margin: 0; font-size: var(--fs-sm); font-weight: 600; }
+	.definition-item-meta { color: var(--text-faint); font-size: var(--fs-xs); }
+	.definition-item-meta :global(button) { min-height: 30px; }
+	.definition-item select { width: max-content; min-width: 140px; padding: 6px 9px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); color: var(--text); font: inherit; }
+	.brief-editor :global(.definition-field) { width: 100%; min-height: 68px; resize: vertical; }
+	.definition-empty { margin: 0; }
 	.question-editor { display: grid; gap: var(--space-3); padding: var(--space-4) 0; margin-top: var(--space-4); border-top: 1px solid var(--border); }
 	.question-heading, .question-save, .question-item-heading, .question-item-actions { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
 	.question-heading { align-items: flex-start; gap: var(--space-4); }

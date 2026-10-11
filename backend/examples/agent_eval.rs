@@ -238,6 +238,8 @@ async fn run_case_with_clarification(
                 inspect: false,
                 context_refs: &[],
                 clarification_reply,
+                investigation_id: None,
+                investigation_context: None,
             },
             move |e: AskEvent| {
                 let kind = match &e {

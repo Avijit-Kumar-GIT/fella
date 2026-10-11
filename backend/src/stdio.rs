@@ -16,7 +16,7 @@ use serde_json::Value;
 
 use crate::engine::{
     AskOptions, Catalog, ClarificationReply, ContextReference, EngineError, EngineResult,
-    EngineState, InvestigationQuestionInput, WorkspaceProgress,
+    EngineState, InvestigationDefinitionInput, InvestigationQuestionInput, WorkspaceProgress,
 };
 
 type Output = Arc<Mutex<BufWriter<io::Stdout>>>;
@@ -473,9 +473,19 @@ async fn dispatch(
                 required(&request.params, "questions")?;
             value_result(engine.investigation_update_questions(&investigation_id, questions))
         }
+        "investigation_update_definitions" => {
+            let investigation_id: String = required(&request.params, "investigationId")?;
+            let definitions: Vec<InvestigationDefinitionInput> =
+                required(&request.params, "definitions")?;
+            value_result(engine.investigation_update_definitions(&investigation_id, definitions))
+        }
         "investigation_question_load" => {
             let question_id: String = required(&request.params, "questionId")?;
             value_result(engine.investigation_question_load(&question_id))
+        }
+        "investigation_definition_load" => {
+            let definition_id: String = required(&request.params, "definitionId")?;
+            value_result(engine.investigation_definition_load(&definition_id))
         }
         "investigation_propose_questions" => {
             let investigation_id: String = required(&request.params, "investigationId")?;
@@ -552,6 +562,11 @@ async fn dispatch(
                 .filter(|value| !value.is_null())
                 .map(serde_json::from_value::<ClarificationReply>)
                 .transpose()?;
+            let investigation_id = request
+                .params
+                .get("investigationId")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
             let events = output.clone();
             let answer = workspace_engine
                 .ask_with_mode_and_context_and_clarification(
@@ -562,6 +577,8 @@ async fn dispatch(
                         inspect,
                         context_refs: &context_refs,
                         clarification_reply,
+                        investigation_id: investigation_id.as_deref(),
+                        investigation_context: None,
                     },
                     move |item| event(&events, id, item),
                 )

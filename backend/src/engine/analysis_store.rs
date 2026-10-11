@@ -242,6 +242,7 @@ mod tests {
             workspace_revision: Some("revision-1".into()),
             workspace_snapshot: None,
             source_scope: None,
+            investigation_context: None,
             context_audit: None,
             provenance: Some(AnswerProvenance {
                 evidence_ids: vec!["evidence-1".into()],

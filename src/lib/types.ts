@@ -393,6 +393,7 @@ export interface AnalysisTurn {
 	workspace_revision?: string;
 	workspace_snapshot?: WorkspaceRevisionSnapshot;
 	source_scope?: AnalysisSourceScope;
+	investigation_context?: InvestigationContextSnapshot;
 	context_audit?: ContextAssemblyAudit;
 	provenance?: AnswerProvenance;
 	rerun_of?: string;
@@ -429,6 +430,8 @@ export interface Investigation {
 	conversation_id?: string;
 	/** Current analyst-authored work plan. `undefined` is a legacy record. */
 	questions?: InvestigationQuestion[];
+	/** Active saved meanings and assumptions for this Investigation. */
+	definitions?: InvestigationDefinition[];
 	title: string;
 	brief: InvestigationBrief;
 	brief_source_message_id?: string;
@@ -454,6 +457,46 @@ export interface InvestigationQuestionInput {
 	id: string;
 	parent_id?: string;
 	text: string;
+}
+
+export type InvestigationDefinitionKind = 'definition' | 'assumption';
+export type InvestigationDefinitionStatus = 'active' | 'removed';
+
+export interface InvestigationDefinitionRevision {
+	revision: number;
+	kind: InvestigationDefinitionKind;
+	text: string;
+	recorded_at_ms: number;
+}
+
+export interface InvestigationDefinition {
+	id: string;
+	investigation_id: string;
+	kind: InvestigationDefinitionKind;
+	text: string;
+	revision: number;
+	history: InvestigationDefinitionRevision[];
+	status: InvestigationDefinitionStatus;
+	created_at_ms: number;
+	updated_at_ms: number;
+}
+
+export interface InvestigationDefinitionInput {
+	id: string;
+	kind: InvestigationDefinitionKind;
+	text: string;
+}
+
+export interface InvestigationDefinitionSnapshot {
+	id: string;
+	revision: number;
+	kind: InvestigationDefinitionKind;
+	text: string;
+}
+
+export interface InvestigationContextSnapshot {
+	investigation_id: string;
+	definitions: InvestigationDefinitionSnapshot[];
 }
 
 export interface QuestionBreakdownProposal {
