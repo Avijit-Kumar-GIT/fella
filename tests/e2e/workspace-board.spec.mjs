@@ -762,10 +762,10 @@ test('environments compose General and repository panes while conversations reta
 	await expect(salesFocus).toHaveAttribute('aria-pressed', 'true');
 	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
 	const salesWorkspaceRow = page.getByRole('button', { name: 'Open workspace northwind-sales' });
-	await expect(page.getByRole('button', { name: 'Open sources in northwind-sales' })).toBeVisible();
+	await expect(page.getByRole('button', { name: 'Open investigation brief in northwind-sales' })).toBeVisible();
 	await expect(page.getByRole('button', { name: 'Create project for northwind-sales' })).toBeVisible();
-	await page.getByRole('button', { name: 'Open sources in northwind-sales' }).click();
-	await expect(page.getByRole('heading', { name: 'sales.csv' })).toBeVisible();
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	await expect(page.getByTestId('investigation-data-readiness').getByRole('button', { name: /sales\.csv/ })).toBeVisible();
 	await salesWorkspaceRow.click();
 	await salesWorkspaceRow.hover();
 	await page.getByRole('button', { name: 'New conversation in northwind-sales' }).click();
@@ -818,7 +818,7 @@ test('environments compose General and repository panes while conversations reta
 	const health = page.getByRole('article', { name: 'health-journal workspace' });
 	await expect(sales).toBeVisible();
 	await expect(health).toBeVisible();
-	await expect(page.getByRole('button', { name: 'Open sources in health-journal' })).toBeVisible();
+	await expect(page.getByRole('button', { name: 'Open investigation brief in health-journal' })).toBeVisible();
 	await expect(page.getByRole('article')).toHaveCount(3);
 	await expect(page.getByRole('combobox', { name: 'Workspace arrangement' })).toHaveCount(0);
 	const healthBox = await health.boundingBox();
@@ -2055,8 +2055,8 @@ test('Composer source search filters and attaches a workspace source', async ({ 
 	const workspaceNavigation = page.getByRole('region', { name: 'Workspaces' });
 	await workspaceNavigation.getByRole('button', { name: 'Add repository' }).click();
 	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
-	await page.getByRole('button', { name: 'Open sources in northwind-sales' }).click();
-	await expect(page.getByRole('heading', { name: 'sales.csv' })).toBeVisible();
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	await expect(page.getByTestId('investigation-data-readiness').getByRole('button', { name: /sales\.csv/ })).toBeVisible();
 	const salesWorkspaceRow = page.getByRole('button', { name: 'Open workspace northwind-sales' });
 	await salesWorkspaceRow.click();
 	await salesWorkspaceRow.hover();
@@ -2402,13 +2402,14 @@ test('shared workspace tabs and modal/menu primitives preserve keyboard interact
 	const navigation = page.getByRole('region', { name: 'Workspaces' });
 	await navigation.getByRole('button', { name: 'Add repository' }).click();
 	await expect(page.getByRole('article', { name: 'northwind-sales workspace' })).toBeVisible();
-	await page.getByRole('button', { name: 'Open sources in northwind-sales' }).click();
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
 
 	const workspaceTabs = page.getByRole('tablist', { name: 'Workspace sections' });
-	const sourcesTab = workspaceTabs.getByRole('tab', { name: 'Sources' });
+	const investigationTab = workspaceTabs.getByRole('tab', { name: 'Investigation' });
 	const guideTab = workspaceTabs.getByRole('tab', { name: 'Guide' });
-	await expect(sourcesTab).toHaveAttribute('aria-selected', 'true');
-	await sourcesTab.focus();
+	await expect(investigationTab).toHaveAttribute('aria-selected', 'true');
+	await expect(workspaceTabs.getByRole('tab', { name: 'Sources' })).toHaveCount(0);
+	await investigationTab.focus();
 	await page.keyboard.press('ArrowRight');
 	await expect(guideTab).toHaveAttribute('aria-selected', 'true');
 	await expect(page.getByRole('heading', { name: 'Guide', level: 1 })).toBeVisible();
@@ -2503,7 +2504,7 @@ test('Titlebar Fella actions use shared buttons and remain clickable', async ({ 
 	await expect(page.getByRole('button', { name: 'Collapse sidebar' })).toBeVisible();
 });
 
-test('Sidebar workspace tools use shared buttons and preserve source and project actions', async ({ page }) => {
+test('Sidebar workspace tools use shared buttons and preserve Investigation and project actions', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
 	await page.getByRole('button', { name: 'Add repository' }).click();
@@ -2515,21 +2516,22 @@ test('Sidebar workspace tools use shared buttons and preserve source and project
 	await collapseWorkspace.click();
 	const expandWorkspace = page.getByRole('button', { name: 'Expand northwind-sales' });
 	await expect(expandWorkspace).toHaveAttribute('data-slot', 'button');
-	await expect(page.getByRole('button', { name: 'Open sources in northwind-sales' })).toHaveCount(0);
+	await expect(page.getByRole('button', { name: 'Open investigation brief in northwind-sales' })).toHaveCount(0);
 	await expandWorkspace.click();
-	await expect(page.getByRole('button', { name: 'Open sources in northwind-sales' })).toBeVisible();
+	await expect(page.getByRole('button', { name: 'Open investigation brief in northwind-sales' })).toBeVisible();
 
-	const sources = page.getByRole('button', { name: 'Open sources in northwind-sales' });
+	const investigation = page.getByRole('button', { name: 'Open investigation brief in northwind-sales' });
 	const createProject = page.getByRole('button', { name: 'Create project for northwind-sales' });
-	for (const action of [sources, createProject]) {
+	for (const action of [investigation, createProject]) {
 		await expect(action).toHaveAttribute('data-slot', 'button');
 		const bounds = await action.boundingBox();
 		expect(bounds).not.toBeNull();
 		expect(bounds.height).toBeLessThanOrEqual(32);
 	}
 
-	await sources.click();
-	await expect(page.getByRole('heading', { name: 'sales.csv' })).toBeVisible();
+	await investigation.click();
+	await expect(page.getByRole('heading', { name: 'Data available' })).toBeVisible();
+	await expect(page.getByRole('heading', { name: 'Investigation brief' })).toBeVisible();
 	await createProject.click();
 	await expect(page.getByRole('heading', { name: 'Create a project' })).toBeVisible();
 	await page.getByRole('textbox', { name: 'Name' }).fill('Sales review');
@@ -2603,25 +2605,63 @@ test('Sidebar conversation actions use shared buttons and Input, cancel rename, 
 	await expect(conversation).toHaveCount(0);
 });
 
-test('Sources catalog filter uses the shared input and preserves source selection', async ({ page }) => {
+test('Investigation data catalog filters sources and opens contextual profiles', async ({ page }) => {
+	const profiledFolder = {
+		...folders[0],
+		catalog: {
+			...folders[0].catalog,
+			sources: folders[0].catalog.sources.map((source) => ({
+				...source,
+				columns: [
+					{ name: 'order_id', type: 'BIGINT', distinct: 124, null_fraction: 0, min: '1', max: '124' },
+					{ name: 'amount', type: 'REAL', distinct: 83, null_fraction: 0, min: '0', max: '95000' }
+				]
+			}))
+		}
+	};
+	await installDesktopMock(page, { fixtureFolders: [profiledFolder, ...folders.slice(1)] });
+	await page.goto('/');
+	await page.getByRole('button', { name: 'Add repository' }).click();
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	const readiness = page.getByTestId('investigation-data-readiness');
+	await expect(readiness.getByRole('heading', { name: 'Data available' })).toBeVisible();
+
+	const filter = page.getByRole('textbox', { name: 'Find a source or field' });
+	await expect(filter).toHaveClass(/fella-ui-input/);
+	await filter.fill('no-such-source');
+	await expect(readiness.getByText('No sources or fields match “no-such-source”.')).toBeVisible();
+	await filter.fill('sales.csv');
+	const source = readiness.getByRole('button', { name: /sales\.csv/ });
+	await expect(source).toBeVisible();
+	await expect(source).toHaveAttribute('aria-expanded', 'false');
+	await source.click();
+	await expect(source).toHaveAttribute('aria-expanded', 'true');
+	await expect(readiness.locator('#investigation-source-detail')).toBeVisible();
+	const fieldProfile = readiness.locator('.field-profile');
+	await fieldProfile.locator('summary').click();
+	await expect(readiness.getByRole('table', { name: 'Observed field profile for sales.csv' })).toBeVisible();
+});
+
+test('global file search opens the matching source inside Investigation data', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
 	await page.getByRole('button', { name: 'Add repository' }).click();
-	await page.getByRole('button', { name: 'Open sources in northwind-sales' }).click();
-	await expect(page.getByRole('heading', { name: 'sales.csv' })).toBeVisible();
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	await page.getByRole('button', { name: 'Search' }).click();
 
-	const filter = page.getByRole('textbox', { name: 'Filter sources' });
-	await expect(filter).toHaveClass(/fella-ui-input/);
-	await filter.fill('no-such-source');
-	await expect(page.getByText('No sources match “no-such-source”.')).toBeVisible();
-	await filter.fill('sales.csv');
-	const source = page.getByRole('option', { name: /sales\.csv/ });
-	await expect(source).toBeVisible();
-	await expect(source).toHaveAttribute('data-slot', 'button');
-	await expect(source).toHaveAttribute('aria-selected', 'true');
+	const palette = page.getByRole('dialog', { name: 'Search Fella' });
+	await palette.getByRole('textbox', { name: 'Search Fella' }).fill('sales.csv');
+	const sourceResult = palette.locator('.search-result').filter({ hasText: 'sales.csv' });
+	await expect(sourceResult).toHaveCount(1);
+	await sourceResult.click();
+
+	const readiness = page.getByTestId('investigation-data-readiness');
+	await expect(palette).toHaveCount(0);
+	await expect(readiness.locator('#investigation-source-detail')).toContainText('sales.csv');
+	await expect(readiness.getByRole('button', { name: /sales\.csv/ })).toHaveAttribute('aria-expanded', 'true');
 });
 
-test('empty Sources action uses a shared button and opens the selected folder', async ({ page }) => {
+test('empty Investigation catalog offers a contextual folder replacement action', async ({ page }) => {
 	const emptyFolder = {
 		...folders[0],
 		catalog: { ...folders[0].catalog, revision: 'empty-r1', sources: [] }
@@ -2629,7 +2669,8 @@ test('empty Sources action uses a shared button and opens the selected folder', 
 	await installDesktopMock(page, { fixtureFolders: [emptyFolder, folders[1]] });
 	await page.goto('/');
 	await page.getByRole('button', { name: 'Add repository' }).click();
-	await page.getByRole('button', { name: 'Open sources in northwind-sales' }).click();
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	await expect(page.getByTestId('investigation-data-readiness')).toContainText('Fella could not load any usable sources');
 
 	const chooseAnother = page.getByRole('button', { name: 'Choose another folder' });
 	await expect(chooseAnother).toHaveAttribute('data-slot', 'button');
@@ -2719,7 +2760,7 @@ test('CommandPalette filters and results use shared buttons without losing searc
 	await expect(page.getByRole('article', { name: 'northwind-sales workspace' })).toBeVisible();
 });
 
-test('Sources pagination uses shared buttons and preserves catalog and skipped-file boundaries', async ({ page }) => {
+test('Investigation data catalog searches and expands large source and unavailable-file lists', async ({ page }) => {
 	const paginatedFolders = [...folders];
 	const salesFolder = folders[0];
 	const paginatedCatalog = {
@@ -2746,50 +2787,30 @@ test('Sources pagination uses shared buttons and preserves catalog and skipped-f
 	await installDesktopMock(page, { fixtureFolders: paginatedFolders });
 	await page.goto('/');
 	await page.getByRole('button', { name: 'Add repository' }).click();
-	await page.getByRole('button', { name: 'Open sources in northwind-sales' }).click();
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
 
-	const sourcePages = page.getByRole('navigation', { name: 'Source pages' });
-	const sourcePrevious = sourcePages.getByRole('button', { name: 'Previous' });
-	const sourceNext = sourcePages.getByRole('button', { name: 'Next' });
-	for (const action of [sourcePrevious, sourceNext]) {
-		await expect(action).toHaveAttribute('data-slot', 'button');
-	}
-	await expect(sourcePages).toContainText('1–100 of 205');
-	await expect(sourcePrevious).toBeDisabled();
-	await sourceNext.click();
-	await expect(sourcePages).toContainText('101–200 of 205');
-	await expect(page.getByRole('option').first()).toContainText('sales-101.csv');
-	await sourceNext.click();
-	await expect(sourcePages).toContainText('201–205 of 205');
-	await expect(sourceNext).toBeDisabled();
-	await expect(page.getByRole('option')).toHaveCount(5);
+	const readiness = page.getByTestId('investigation-data-readiness');
+	const sourceList = readiness.getByRole('list', { name: 'Available data sources' });
+	await expect(sourceList.locator('li')).toHaveCount(5);
+	await readiness.getByRole('button', { name: 'Show all 205 matching sources' }).click();
+	await expect(sourceList.locator('li')).toHaveCount(205);
+	const sourceFilter = readiness.getByRole('textbox', { name: 'Find a source or field' });
+	await sourceFilter.fill('sales-101.csv');
+	await expect(sourceList.locator('li')).toHaveCount(1);
+	await expect(sourceList).toContainText('sales-101.csv');
 
-	const skippedFiles = page.locator('.skipped');
-	const skippedToggle = skippedFiles.getByRole('button', { name: '105 skipped files Why?' });
-	await skippedToggle.click();
-	await expect(skippedToggle).toHaveAttribute('aria-expanded', 'true');
-	const skippedFilter = page.getByRole('textbox', { name: 'Filter skipped files' });
+	const skippedFiles = readiness.locator('.skipped-sources');
+	const skippedSummary = skippedFiles.locator('summary');
+	await skippedSummary.click();
+	await expect(skippedSummary).toContainText('105');
+	const skippedFilter = skippedFiles.getByRole('textbox', { name: 'Filter unavailable files' });
 	await expect(skippedFilter).toHaveAttribute('data-slot', 'input');
 	await skippedFilter.fill('unsupported-001');
-	await expect(skippedFiles.locator('.skipped-count')).toHaveText('1–1 of 1 files');
+	await expect(skippedFiles).toContainText('1 matching file');
 	await expect(skippedFiles.getByText('unsupported-001.bin')).toBeVisible();
 	await skippedFilter.fill('');
-	await expect(skippedFiles.locator('.skipped-count')).toHaveText('1–100 of 105 files');
-
-	const skippedPages = page.getByRole('navigation', { name: 'Skipped file pages' });
-	const skippedPrevious = skippedPages.getByRole('button', { name: 'Previous' });
-	const skippedNext = skippedPages.getByRole('button', { name: 'Next' });
-	for (const action of [skippedPrevious, skippedNext]) {
-		await expect(action).toHaveAttribute('data-slot', 'button');
-	}
-	await expect(skippedPages).toContainText('1–100 of 105');
-	await expect(skippedPrevious).toBeDisabled();
-	await skippedNext.click();
-	await expect(skippedPages).toContainText('101–105 of 105');
-	await expect(skippedNext).toBeDisabled();
-	await skippedToggle.click();
-	await expect(skippedToggle).toHaveAttribute('aria-expanded', 'false');
-	await expect(skippedFilter).not.toBeVisible();
+	await skippedFiles.getByRole('button', { name: 'Show all 105 files' }).click();
+	await expect(skippedFiles.locator('li')).toHaveCount(105);
 });
 
 test('Project title and wiki use shared editing controls and retain saved content', async ({ page }) => {
@@ -2810,14 +2831,14 @@ test('Project title and wiki use shared editing controls and retain saved conten
 	await expect(page.getByRole('button', { name: 'Open project Sales field guide' })).toBeVisible();
 
 	await wiki.fill('Net revenue excludes refunds and chargebacks.');
-	await page.getByRole('button', { name: 'Open sources in northwind-sales' }).click();
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
 	await page.getByRole('button', { name: 'Open project Sales field guide' }).click();
 	await expect(page.getByRole('textbox', { name: 'Project wiki' })).toHaveValue(
 		'Net revenue excludes refunds and chargebacks.'
 	);
 });
 
-test('Project actions use shared buttons and retain their navigation and delete behavior', async ({ page }) => {
+test('Project actions open Investigation data and retain navigation and delete behavior', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
 	await page.getByRole('button', { name: 'Add repository' }).click();
@@ -2828,14 +2849,14 @@ test('Project actions use shared buttons and retain their navigation and delete 
 	await openProject.click();
 
 	const askRepository = page.getByRole('button', { name: 'Ask repository' });
-	const sources = page.getByRole('button', { name: 'Sources', exact: true });
+	const investigations = page.getByRole('button', { name: 'Investigations', exact: true });
 	const deleteProject = page.getByRole('button', { name: 'Delete project' });
-	for (const action of [askRepository, sources, deleteProject]) {
+	for (const action of [askRepository, investigations, deleteProject]) {
 		await expect(action).toHaveAttribute('data-slot', 'button');
 	}
 
-	await sources.click();
-	await expect(page.getByRole('heading', { name: 'sales.csv' })).toBeVisible();
+	await investigations.click();
+	await expect(page.getByRole('heading', { name: 'Data available' })).toBeVisible();
 	await openProject.click();
 	await askRepository.click();
 	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
@@ -3069,11 +3090,13 @@ test('Replay freshness lookup errors use an alert and a working retry action', a
 	await expect.poll(() => page.evaluate(() => window.__replayStatusCalls)).toBe(2);
 });
 
-test('Sources open-beside action uses the shared button and preserves conversation scope', async ({ page }) => {
+test('Investigation source details open beside without changing conversation scope', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
 	await page.getByRole('button', { name: 'Add repository' }).click();
-	await page.getByRole('button', { name: 'Open sources in northwind-sales' }).click();
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	const readiness = page.getByTestId('investigation-data-readiness');
+	await readiness.getByRole('button', { name: /sales\.csv/ }).click();
 
 	const openBeside = page.getByRole('button', { name: 'Open source preview beside the active conversation' });
 	await expect(openBeside).toHaveAttribute('data-slot', 'button');
@@ -3092,7 +3115,8 @@ test('Companion snapshot recovery uses a shared button and reopens the current s
 	});
 	await page.goto('/');
 	await page.getByRole('button', { name: 'Add repository' }).click();
-	await page.getByRole('button', { name: 'Open sources in northwind-sales' }).click();
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	await page.getByTestId('investigation-data-readiness').getByRole('button', { name: /sales\.csv/ }).click();
 	await page.getByRole('button', { name: 'Open source preview beside the active conversation' }).click();
 
 	const companion = page.getByRole('complementary', { name: 'Companion pane' });
@@ -3262,7 +3286,8 @@ test('Companion pane close uses a shared compact button and returns to the works
 	await installDesktopMock(page);
 	await page.goto('/');
 	await page.getByRole('button', { name: 'Add repository' }).click();
-	await page.getByRole('button', { name: 'Open sources in northwind-sales' }).click();
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	await page.getByTestId('investigation-data-readiness').getByRole('button', { name: /sales\.csv/ }).click();
 	await page.getByRole('button', { name: 'Open source preview beside the active conversation' }).click();
 
 	const companion = page.getByRole('complementary', { name: 'Companion pane' });

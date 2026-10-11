@@ -171,11 +171,11 @@
 		expandedRepos = { ...expandedRepos, [repo.key]: !repo.expanded };
 	}
 
-	async function openRepositoryWorkspace(repo: Repository, pane: 'sources' | 'investigation' = 'sources'): Promise<void> {
+	async function openRepositoryWorkspace(repo: Repository): Promise<void> {
 		expandedRepos = { ...expandedRepos, [repo.key]: true };
 		if (!(await selectRepository(repo))) return;
 		if (!repo.path) return;
-		session.setWorkspacePane(pane);
+		session.setWorkspacePane('investigation');
 	}
 
 	function beginRepositoryDrag(event: DragEvent, repo: Repository): void {
@@ -441,22 +441,6 @@
 					{#if repo.expanded}
 						<div class="repository-contents">
 							{#if repo.path && !repo.historyOnly}
-								<div class="repository-tools" aria-label={`${repo.name} tools`}>
-									<Button
-										variant="ghost"
-										class={`repository-tool${repo.current && session.workspaceView === 'workspace' ? ' active' : ''}`}
-										type="button"
-										aria-label={`Open sources in ${repo.name}`}
-										aria-current={repo.current && session.workspaceView === 'workspace' ? 'page' : undefined}
-										title={`Open sources (${shortcutModifier}+Shift+S)`}
-										onclick={() => void openRepositoryWorkspace(repo)}
-									>
-										<span class="row-slot row-icon"><Icon name="table" size={16} /></span>
-										<span>Sources</span>
-									</Button>
-								</div>
-							{/if}
-							{#if repo.path && !repo.historyOnly}
 								<div class="repository-tools" aria-label={`${repo.name} analysis tools`}>
 									<Button
 										variant="ghost"
@@ -465,7 +449,7 @@
 										aria-label={`Open investigation brief in ${repo.name}`}
 										aria-current={repo.current && session.workspaceView === 'workspace' && session.workspacePane === 'investigation' ? 'page' : undefined}
 										title="Open investigation briefs"
-										onclick={() => void openRepositoryWorkspace(repo, 'investigation')}
+										onclick={() => void openRepositoryWorkspace(repo)}
 									>
 										<span class="row-slot row-icon"><Icon name="bookmark" size={16} /></span>
 										<span>Investigations</span>

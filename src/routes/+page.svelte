@@ -184,7 +184,7 @@
 			startConversation();
 		} else if (commandKey && e.shiftKey && key === 's') {
 			e.preventDefault();
-			session.setWorkspacePane('sources');
+			session.setWorkspacePane('investigation');
 		} else if (commandKey && e.shiftKey && key === 'c') {
 			e.preventDefault();
 			session.setWorkspacePane('context');

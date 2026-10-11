@@ -257,7 +257,7 @@
 				return;
 			case 'source':
 				session.selectSource(result.source.path);
-				session.setWorkspacePane('sources');
+				session.setWorkspacePane('investigation');
 				return;
 			case 'project':
 				session.openProject(result.project.id);

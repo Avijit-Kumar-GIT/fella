@@ -482,7 +482,7 @@ export class Conversation {
 
 
 export type WorkspaceView = 'ask' | 'workspace' | 'board' | 'settings' | 'project';
-export type WorkspacePane = 'sources' | 'context' | 'investigation';
+export type WorkspacePane = 'context' | 'investigation';
 
 class Session {
 	#deletingWorkspacePaths = new Set<string>();
@@ -500,7 +500,7 @@ class Session {
 	/** The app-level page; an unbound conversation is the initial destination. */
 	workspaceView = $state<WorkspaceView>('ask');
 	/** The active pane inside Workspace. */
-	workspacePane = $state<WorkspacePane>('sources');
+	workspacePane = $state<WorkspacePane>('investigation');
 	settings = $state<Settings | null>(null);
 	health = $state<ProviderHealth | null>(null);
 	/** Built-in providers from the engine, cached so the composer can hint
@@ -520,7 +520,7 @@ class Session {
 	historyVersion = $state<number>(0);
 	/** Bumped when the ask path automatically creates/resolves an Investigation. */
 	investigationsVersion = $state<number>(0);
-	/** Source selected by global search for the Sources master/detail view. */
+	/** Source selected by global search for the contextual Investigation catalog. */
 	selectedSourcePath = $state<string | null>(null);
 	/** Repositories shown in the local sidebar, in user-defined order. */
 	repositoryPaths = $state<string[]>(readStringList(REPOSITORIES_KEY));

@@ -430,3 +430,15 @@ removed Questions do not block closure. The UI distinguishes “fully answered�
 from “closed with documented gaps,” and keeps the affected Questions and their
 reasons visible after closure. Reopening returns the Investigation to active
 work so a documented gap can be analyzed again.
+
+## Implementation checkpoint: source readiness in the analyst workflow (#213)
+
+The separate Sources destination was removed from workspace and project
+navigation. Workspace entry now opens Investigation, where the Data available
+panel provides source search, inclusion scope, readiness, observed profiles,
+small table previews, skipped-file reasons, and a path to choose another folder
+when nothing is readable. Global source search opens that same contextual panel
+with the matching file selected. Opening a preview beside the conversation
+remains available without changing the conversation's analysis scope. The
+workspace guide remains a secondary destination; catalog facts are no longer a
+standalone primary workflow.

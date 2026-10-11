@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import { openFolder } from '$lib/commands';
 	import { ipc } from '$lib/ipc';
 	import { session } from '$lib/session.svelte';
 	import type {
@@ -29,6 +30,7 @@
 	let showAllSkipped = $state(false);
 	let showAllColumns = $state(false);
 	let sourceQuery = $state('');
+	let skippedQuery = $state('');
 	let catalogIdentity = '';
 	const SOURCE_LIMIT = 5;
 	const SKIPPED_LIMIT = 5;
@@ -63,7 +65,13 @@
 	let visibleSources = $derived(
 		showAllSources ? matchingSources : matchingSources.slice(0, SOURCE_LIMIT)
 	);
-	let visibleSkipped = $derived(showAllSkipped ? skipped : skipped.slice(0, SKIPPED_LIMIT));
+	let matchingSkipped = $derived.by(() => {
+		const query = skippedQuery.trim().toLowerCase();
+		return query
+			? skipped.filter((file) => `${file.name} ${file.reason}`.toLowerCase().includes(query))
+			: skipped;
+	});
+	let visibleSkipped = $derived(showAllSkipped ? matchingSkipped : matchingSkipped.slice(0, SKIPPED_LIMIT));
 	let selected = $derived(sources.find((source) => sourceKey(source) === selectedKey) ?? null);
 	let matchingFields = $derived.by(() => {
 		const query = sourceQuery.trim().toLowerCase();
@@ -99,6 +107,7 @@
 		showAllSources = false;
 		showAllSkipped = false;
 		sourceQuery = '';
+		skippedQuery = '';
 	});
 
 	$effect(() => {
@@ -108,6 +117,13 @@
 			selectedKey = null;
 		}
 		showAllSources = false;
+	});
+
+	$effect(() => {
+		const path = session.selectedSourcePath;
+		if (!path) return;
+		const source = sources.find((item) => item.path === path);
+		if (source) selectedKey = sourceKey(source);
 	});
 
 	function sourceKey(source: SourceInfo): string {
@@ -139,7 +155,13 @@
 	function toggleSource(source: SourceInfo): void {
 		const key = sourceKey(source);
 		selectedKey = selectedKey === key ? null : key;
+		session.selectSource(selectedKey ? source.path : null);
 		showAllColumns = false;
+	}
+
+	function closeSourceDetails(): void {
+		selectedKey = null;
+		session.selectSource(null);
 	}
 
 	function missingCoverage(column: ColumnInfo, rowCount: number | undefined): string {
@@ -382,7 +404,10 @@
 						<h4>{selected.name}</h4>
 						<p>{relativePath(selected.path)}</p>
 					</div>
-					<Button variant="ghost" size="sm" type="button" aria-label="Close source details" onclick={() => selectedKey = null}>Close</Button>
+					<div class="detail-actions">
+						<Button variant="outline" size="sm" type="button" aria-label="Open source preview beside the active conversation" onclick={() => session.openSourcePane(selected)}>Open beside</Button>
+						<Button variant="ghost" size="sm" type="button" aria-label="Close source details" onclick={closeSourceDetails}>Close</Button>
+					</div>
 				</header>
 				<div class="source-facts">
 					<span><small>Type</small><strong>{kindLabel(selected)}</strong></span>
@@ -465,11 +490,25 @@
 		{/if}
 	{:else if catalog}
 		<p class="empty-sources">Fella could not load any usable sources from this workspace.</p>
+		<Button class="show-more" variant="outline" size="sm" type="button" onclick={() => void openFolder()}>
+			Choose another folder
+		</Button>
 	{/if}
 
 	{#if catalog && skipped.length}
 		<details class="skipped-sources">
 			<summary>Files not available to Fella ({skipped.length})</summary>
+			<label class="skipped-search">
+				<Icon name="search" size={16} />
+				<Input
+					class="skipped-filter-input"
+					aria-label="Filter unavailable files"
+					bind:value={skippedQuery}
+					placeholder="Find an unavailable file…"
+					spellcheck="false"
+				/>
+			</label>
+			<p class="skipped-count">{matchingSkipped.length} matching file{matchingSkipped.length === 1 ? '' : 's'}</p>
 			<ul>
 				{#each visibleSkipped as file (file.name)}
 					<li>
@@ -479,9 +518,9 @@
 					</li>
 				{/each}
 			</ul>
-			{#if skipped.length > SKIPPED_LIMIT}
+			{#if matchingSkipped.length > SKIPPED_LIMIT}
 				<Button class="show-more" variant="ghost" size="sm" type="button" onclick={() => showAllSkipped = !showAllSkipped}>
-					{showAllSkipped ? 'Show fewer files' : `Show all ${skipped.length} files`}
+					{showAllSkipped ? 'Show fewer files' : `Show all ${matchingSkipped.length} files`}
 				</Button>
 			{/if}
 		</details>
@@ -522,6 +561,7 @@
 	:global(.show-more) { margin-top: var(--space-2); }
 	.source-detail { margin-top: var(--space-3); padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-inset); }
 	.detail-heading { align-items: center; }
+	.detail-actions { display: flex; flex: none; align-items: center; gap: var(--space-1); }
 	.detail-heading h4 { margin: 0; overflow-wrap: anywhere; font-size: var(--fs-sm); font-weight: 650; }
 	.detail-heading p { overflow-wrap: anywhere; }
 	.source-facts { display: flex; flex-wrap: wrap; gap: var(--space-4); margin-top: var(--space-3); }
@@ -541,6 +581,9 @@
 	.profile-table-wrap td[data-missing='true'] { color: var(--warning, #9b6500); }
 	.skipped-sources { margin-top: var(--space-3); color: var(--text-dim); font-size: var(--fs-xs); }
 	.skipped-sources summary { width: fit-content; cursor: pointer; }
+	.skipped-search { display: flex; align-items: center; gap: var(--space-2); max-width: 520px; margin-top: var(--space-2); color: var(--text-faint); }
+	.skipped-search :global(input) { min-width: 0; }
+	.skipped-count { margin: var(--space-2) 0 0; color: var(--text-faint); font-size: 11px; }
 	.skipped-sources ul { display: grid; gap: var(--space-2); margin: var(--space-2) 0 0; padding: 0; list-style: none; }
 	.skipped-sources li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px var(--space-3); padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
 	.skipped-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }

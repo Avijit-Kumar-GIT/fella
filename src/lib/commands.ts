@@ -101,7 +101,7 @@ showing the exact steps it took. You never need these commands, but here they ar
 
 keys  Enter send · Shift+Enter new line · Ctrl/Cmd+K or Ctrl/Cmd+Shift+P search Fella
       Ctrl/Cmd+N new conversation · Ctrl/Cmd+Shift+A new conversation
-      Ctrl/Cmd+Shift+S Sources · Ctrl/Cmd+Shift+C Context
+      Ctrl/Cmd+Shift+S Investigation data · Ctrl/Cmd+Shift+C Context
       Ctrl/Cmd+, settings · Ctrl/Cmd+O open folder · Ctrl/Cmd+B sidebar · Ctrl/Cmd+L clear
       Ctrl/Cmd+Shift+F focus mode · Esc stop a run / hide details`;
 

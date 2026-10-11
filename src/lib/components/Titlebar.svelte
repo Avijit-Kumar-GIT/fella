@@ -28,7 +28,7 @@
 	let displayTitle = $derived.by(() => {
 		if (session.workspaceView === 'board') return folder || 'Workspaces';
 		if (session.workspaceView === 'workspace') {
-			return `${folder || 'Workspace'} · ${session.workspacePane === 'sources' ? 'Sources' : 'Guide'}`;
+			return `${folder || 'Workspace'} · ${session.workspacePane === 'investigation' ? 'Investigation' : 'Guide'}`;
 		}
 		if (session.workspaceView === 'project') return session.activeProject?.name ?? 'Project';
 		if (session.workspaceView === 'settings') return 'Fella';

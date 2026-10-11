@@ -77,10 +77,10 @@
 		session.newConversation(project?.workspace);
 	}
 
-	async function openSources(): Promise<void> {
+	async function openInvestigations(): Promise<void> {
 		if (!mounted) await mountRepository();
 		if (!session.catalog.workspace || session.catalog.workspace !== project?.workspace) return;
-		session.setWorkspacePane('sources');
+		session.setWorkspacePane('investigation');
 	}
 
 	function deleteProject(): void {
@@ -111,8 +111,8 @@
 				<Button class="project-button primary" onclick={() => void askRepository()}>
 					<Icon name="ask" size={16} /> Ask repository
 				</Button>
-				<Button variant="outline" class="project-button" onclick={() => void openSources()}>
-					<Icon name="table" size={16} /> Sources
+				<Button variant="outline" class="project-button" onclick={() => void openInvestigations()}>
+					<Icon name="bookmark" size={16} /> Investigations
 				</Button>
 				<Button
 					variant="ghost"
