@@ -4325,6 +4325,51 @@ mod tests {
     }
 
     #[test]
+    fn skipped_expensive_query_replay_is_not_reported_as_a_pass() {
+        struct ReplayMustNotRun;
+
+        impl AnalyticsSource for ReplayMustNotRun {
+            fn catalog(&self) -> crate::engine::catalog::Catalog {
+                crate::engine::catalog::Catalog::default()
+            }
+
+            fn run_sql(
+                &self,
+                _sql: &str,
+            ) -> crate::engine::error::EngineResult<crate::engine::state::QueryResult> {
+                panic!("an expensive saved query must not be replayed")
+            }
+
+            fn run_sql_with_limit(
+                &self,
+                sql: &str,
+                _max_rows: usize,
+            ) -> crate::engine::error::EngineResult<crate::engine::state::QueryResult> {
+                self.run_sql(sql)
+            }
+        }
+
+        let mut evidence = run_sql_ev(
+            "SELECT SUM(amount) AS total FROM sales",
+            &["total"],
+            vec![vec![Json::from(450)]],
+        );
+        evidence.ms = 501;
+
+        let mut checks = Vec::new();
+        rerun_queries(&ReplayMustNotRun, &[evidence], &mut checks);
+
+        assert_eq!(checks.len(), 1, "the skipped replay has one explicit check");
+        assert!(checks[0].ok, "skipping replay remains non-blocking");
+        assert_eq!(checks[0].outcome, Some(VerificationOutcome::NotRun));
+        assert_eq!(
+            checks[0].detail.as_deref(),
+            Some("The saved result is retained without a replay comparison.")
+        );
+        assert!(checks[0].finding.is_none());
+    }
+
+    #[test]
     fn chart_source_replay_uses_the_chart_row_limit() {
         struct ReplaySource;
 

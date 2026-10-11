@@ -489,3 +489,22 @@ substitute for the Rust workspace engine.
 The built-in local-folder provider remains the desktop default and requires no
 optional tool installation. No plugin API, CLI integration, or analytics-engine
 change is implemented by this checkpoint.
+
+## Implementation checkpoint: analytics-engine regression gate (#218)
+
+The product-layer work deliberately changed three engine-adjacent behaviors in
+their own slices: selected-source Investigations enforce the source set at SQL
+and Python read boundaries; saved chart metadata carries its producing run and
+lead snapshot; and an expensive query that is intentionally not replayed is
+reported as `NotRun`, not as a replay pass. These changes are bounded to scope
+enforcement, provenance, and honest verification status. Regression coverage
+includes source-scope denial for SQL/Python, verified agent-loop answers,
+currency normalization and exact totals, structured chart output, and replay
+outcomes. A targeted verifier test now also asserts that the expensive-query
+path is not executed and cannot be mistaken for a pass.
+
+After the product-model slices, `cargo test --manifest-path backend/Cargo.toml --locked`
+completed with 505 passed, 0 failed, and 2 ignored. The ignored cases are an
+interpreter timing test in debug mode and a manual 5,000-file performance/coverage
+probe. `pnpm check` completed with zero errors and warnings. No test expectation
+was weakened or changed for this gate.
