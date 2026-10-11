@@ -1855,6 +1855,42 @@ impl EngineState {
         investigation::update_brief(&self.data_dir, id, brief, reviewed_message_id)
     }
 
+    /// Associate canonical, persisted AnalysisTurns without copying their
+    /// questions, results, or evidence into the Investigation.
+    pub fn investigation_link_analysis_turns(
+        &self,
+        id: &str,
+        analysis_turn_ids: &[String],
+    ) -> EngineResult<Investigation> {
+        const MAX_LINKS_PER_UPDATE: usize = 500;
+        if analysis_turn_ids.len() > MAX_LINKS_PER_UPDATE {
+            return Err(EngineError::msg("too many analysis runs to link at once"));
+        }
+
+        let investigation = investigation::load(&self.data_dir, id)?;
+        let mut seen = HashSet::new();
+        let mut new_ids = Vec::new();
+        for turn_id in analysis_turn_ids {
+            let turn_id = turn_id.trim();
+            if investigation
+                .analysis_turn_ids
+                .iter()
+                .any(|linked| linked == turn_id)
+                || !seen.insert(turn_id.to_owned())
+            {
+                continue;
+            }
+            let turn = analysis_store::load(&self.data_dir, turn_id)?;
+            if turn.workspace.as_deref() != Some(investigation.workspace_id.as_str()) {
+                return Err(EngineError::msg(format!(
+                    "analysis turn {turn_id} belongs to a different workspace"
+                )));
+            }
+            new_ids.push(turn_id.to_owned());
+        }
+        investigation::link_analysis_turns(&self.data_dir, id, &new_ids)
+    }
+
     /// Load an Investigation independently of the conversation UI.
     pub fn investigation_load(&self, id: &str) -> EngineResult<Investigation> {
         investigation::load(&self.data_dir, id)

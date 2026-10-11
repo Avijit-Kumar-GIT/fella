@@ -147,6 +147,9 @@ export const ipc = {
 		brief: Investigation['brief'],
 		reviewedMessageId?: string
 	) => invoke<Investigation>('investigation_update_brief', { investigationId, brief, reviewedMessageId }),
+	/** Associate existing canonical AnalysisTurns by ID; never copy run payloads. */
+	investigationLinkAnalysisTurns: (investigationId: string, analysisTurnIds: string[]) =>
+		invoke<Investigation>('investigation_link_analysis_turns', { investigationId, analysisTurnIds }),
 	/** Load one Investigation independently of its conversation surface. */
 	investigationLoad: (investigationId: string) =>
 		invoke<Investigation>('investigation_load', { investigationId }),

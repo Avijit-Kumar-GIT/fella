@@ -429,6 +429,7 @@ export interface Investigation {
 	brief: InvestigationBrief;
 	brief_source_message_id?: string;
 	brief_reviewed_message_id?: string;
+	analysis_turn_ids?: string[];
 	status: 'active' | 'complete' | 'archived';
 	created_at_ms: number;
 	updated_at_ms: number;

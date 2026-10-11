@@ -59,6 +59,10 @@ pub struct Investigation {
     /// the message, and prevents reviewed suggestions from resurfacing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub brief_reviewed_message_id: Option<String>,
+    /// IDs of canonical AnalysisTurn records associated with this work. The
+    /// run payload and Conversation messages remain owned by their stores.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub analysis_turn_ids: Vec<String>,
     pub status: InvestigationStatus,
     pub created_at_ms: u64,
     pub updated_at_ms: u64,
@@ -180,6 +184,7 @@ pub fn create(
                     .filter(|id| !id.is_empty())
                     .map(str::to_owned)
             },
+            analysis_turn_ids: Vec::new(),
             status: InvestigationStatus::Active,
             created_at_ms: timestamp,
             updated_at_ms: timestamp,
@@ -229,6 +234,41 @@ pub fn create(
     ))
 }
 
+fn write_record(data_dir: &Path, record: &Investigation) -> EngineResult<()> {
+    let path = record_path(data_dir, &record.id)?;
+    let body = serde_json::to_vec_pretty(record).map_err(EngineError::from)?;
+    let mut random = [0u8; 8];
+    getrandom::fill(&mut random)
+        .map_err(|error| EngineError::msg(format!("create investigation update id: {error}")))?;
+    let suffix = random
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let temporary = path.with_file_name(format!(".{}-{suffix}.tmp", record.id));
+    let write_result = (|| {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .map_err(|error| EngineError::io(format!("create {}", temporary.display()), error))?;
+        file.write_all(&body)
+            .map_err(|error| EngineError::io(format!("write {}", temporary.display()), error))?;
+        file.sync_all()
+            .map_err(|error| EngineError::io(format!("sync {}", temporary.display()), error))?;
+        #[cfg(windows)]
+        if path.exists() {
+            std::fs::remove_file(&path)
+                .map_err(|error| EngineError::io(format!("replace {}", path.display()), error))?;
+        }
+        std::fs::rename(&temporary, &path)
+            .map_err(|error| EngineError::io(format!("replace {}", path.display()), error))
+    })();
+    if write_result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    write_result
+}
+
 pub fn update_brief(
     data_dir: &Path,
     id: &str,
@@ -267,8 +307,7 @@ pub fn update_brief(
         return Err(EngineError::msg("investigation constraint is too long"));
     }
 
-    let path = record_path(data_dir, id)?;
-    let mut record = read_record(&path, id)?;
+    let mut record = load(data_dir, id)?;
     if let Some(message_id) = reviewed_message_id
         .map(str::trim)
         .filter(|id| !id.is_empty())
@@ -282,37 +321,48 @@ pub fn update_brief(
     }
     record.brief = brief;
     record.updated_at_ms = now_ms().max(record.updated_at_ms.saturating_add(1));
-    let body = serde_json::to_vec_pretty(&record).map_err(EngineError::from)?;
-    let mut random = [0u8; 8];
-    getrandom::fill(&mut random)
-        .map_err(|error| EngineError::msg(format!("create brief update id: {error}")))?;
-    let suffix = random
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    let temporary = path.with_file_name(format!(".{}-{suffix}.tmp", record.id));
-    let write_result = (|| {
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)
-            .map_err(|error| EngineError::io(format!("create {}", temporary.display()), error))?;
-        file.write_all(&body)
-            .map_err(|error| EngineError::io(format!("write {}", temporary.display()), error))?;
-        file.sync_all()
-            .map_err(|error| EngineError::io(format!("sync {}", temporary.display()), error))?;
-        #[cfg(windows)]
-        if path.exists() {
-            std::fs::remove_file(&path)
-                .map_err(|error| EngineError::io(format!("replace {}", path.display()), error))?;
-        }
-        std::fs::rename(&temporary, &path)
-            .map_err(|error| EngineError::io(format!("replace {}", path.display()), error))
-    })();
-    if write_result.is_err() {
-        let _ = std::fs::remove_file(&temporary);
+    write_record(data_dir, &record)?;
+    Ok(record)
+}
+
+/// Append references to canonical run records without copying their payloads.
+/// Duplicate links are ignored so conversation rehydration is idempotent.
+pub fn link_analysis_turns(
+    data_dir: &Path,
+    id: &str,
+    analysis_turn_ids: &[String],
+) -> EngineResult<Investigation> {
+    const MAX_LINKS_PER_UPDATE: usize = 500;
+    const MAX_TURN_ID_CHARS: usize = 256;
+
+    if analysis_turn_ids.len() > MAX_LINKS_PER_UPDATE {
+        return Err(EngineError::msg("too many analysis runs to link at once"));
     }
-    write_result?;
+    let mut record = load(data_dir, id)?;
+    let mut changed = false;
+    for turn_id in analysis_turn_ids {
+        let turn_id = turn_id.trim();
+        if turn_id.is_empty()
+            || turn_id.chars().count() > MAX_TURN_ID_CHARS
+            || !turn_id.chars().all(|character| {
+                character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
+            })
+        {
+            return Err(EngineError::msg("invalid analysis turn id"));
+        }
+        if !record
+            .analysis_turn_ids
+            .iter()
+            .any(|existing| existing == turn_id)
+        {
+            record.analysis_turn_ids.push(turn_id.to_owned());
+            changed = true;
+        }
+    }
+    if changed {
+        record.updated_at_ms = now_ms().max(record.updated_at_ms.saturating_add(1));
+        write_record(data_dir, &record)?;
+    }
     Ok(record)
 }
 
@@ -395,6 +445,7 @@ mod tests {
         assert_eq!(created.workspace_id, "/work/analysis");
         assert_eq!(created.title, "Monthly revenue");
         assert_eq!(created.brief, InvestigationBrief::default());
+        assert!(created.analysis_turn_ids.is_empty());
         assert_eq!(created.status, InvestigationStatus::Active);
         assert_eq!(created.created_at_ms, created.updated_at_ms);
         assert_eq!(load(&data_dir, &created.id).unwrap(), created);
@@ -529,6 +580,38 @@ mod tests {
     }
 
     #[test]
+    fn analysis_turn_links_are_references_and_idempotent() {
+        let data_dir = scratch();
+        let created = create(
+            &data_dir,
+            "/work/analysis",
+            "Retention",
+            Some("Compare retention by cohort"),
+            Some("message-1"),
+        )
+        .unwrap();
+        let turn_ids = vec!["turn-one".to_string(), "turn-two".to_string()];
+
+        let linked = link_analysis_turns(&data_dir, &created.id, &turn_ids).unwrap();
+        assert_eq!(linked.analysis_turn_ids, turn_ids);
+        assert_eq!(linked.brief, created.brief);
+        assert_eq!(
+            linked.brief_source_message_id,
+            created.brief_source_message_id
+        );
+        assert!(linked.updated_at_ms > created.updated_at_ms);
+
+        let linked_again =
+            link_analysis_turns(&data_dir, &created.id, &["turn-one".to_string()]).unwrap();
+        assert_eq!(linked_again.analysis_turn_ids, turn_ids);
+        assert_eq!(linked_again.updated_at_ms, linked.updated_at_ms);
+        assert_eq!(load(&data_dir, &created.id).unwrap(), linked);
+        assert!(link_analysis_turns(&data_dir, &created.id, &["../outside".to_string()]).is_err());
+
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
     fn old_records_without_a_brief_load_with_an_empty_brief() {
         let data_dir = scratch();
         let created = create(&data_dir, "/work/analysis", "Legacy", None, None).unwrap();
@@ -542,6 +625,7 @@ mod tests {
         json.as_object_mut()
             .unwrap()
             .remove("brief_reviewed_message_id");
+        json.as_object_mut().unwrap().remove("analysis_turn_ids");
         std::fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
 
         assert_eq!(
@@ -554,6 +638,10 @@ mod tests {
                 .brief_reviewed_message_id,
             None
         );
+        assert!(load(&data_dir, &created.id)
+            .unwrap()
+            .analysis_turn_ids
+            .is_empty());
         let _ = std::fs::remove_dir_all(data_dir);
     }
 }

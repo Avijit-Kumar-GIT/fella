@@ -227,6 +227,7 @@ mod tests {
         AnalysisResult, ContextReference, ExecutionTrace, InteractionMode, LogicalPlan,
         ModelCallTrace, PlanStrategy, TraceStep, TurnState, VerificationReport,
     };
+    use crate::engine::state::EngineState;
 
     fn turn() -> AnalysisTurn {
         AnalysisTurn {
@@ -316,6 +317,66 @@ mod tests {
         json.as_object_mut().unwrap().remove("provenance");
         let loaded: AnalysisTurn = serde_json::from_value(json).unwrap();
         assert!(loaded.provenance.is_none());
+    }
+
+    #[test]
+    fn investigations_link_existing_turns_from_their_own_workspace_only() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("fella-investigation-runs-{nonce}"));
+        let engine = EngineState::new(&dir).unwrap();
+        let canonical_turn = turn();
+        save(&dir, &canonical_turn).unwrap();
+
+        let mut foreign_turn = turn();
+        foreign_turn.id = "turn-foreign".into();
+        foreign_turn.trace.turn_id = foreign_turn.id.clone();
+        foreign_turn.workspace = Some("/tmp/another-workspace".into());
+        save(&dir, &foreign_turn).unwrap();
+
+        let investigation = engine
+            .investigation_create(
+                "/tmp/workspace",
+                "Revenue",
+                Some("What were total sales?"),
+                Some("message-1"),
+            )
+            .unwrap();
+        let mixed_ids = ["turn-test-1", "turn-foreign"].map(str::to_owned);
+        let error = engine
+            .investigation_link_analysis_turns(&investigation.id, &mixed_ids)
+            .unwrap_err();
+        assert!(error.to_string().contains("different workspace"));
+        assert!(engine
+            .investigation_load(&investigation.id)
+            .unwrap()
+            .analysis_turn_ids
+            .is_empty());
+
+        assert!(engine
+            .investigation_link_analysis_turns(&investigation.id, &["missing-turn".to_string()])
+            .is_err());
+        let linked = engine
+            .investigation_link_analysis_turns(
+                &investigation.id,
+                &["turn-test-1".to_string(), "turn-test-1".to_string()],
+            )
+            .unwrap();
+        assert_eq!(linked.analysis_turn_ids, vec!["turn-test-1".to_string()]);
+        assert_eq!(
+            load(&dir, "turn-test-1").unwrap().result.text,
+            canonical_turn.result.text,
+            "linking stores only the ID and leaves the canonical run unchanged"
+        );
+        let linked_again = engine
+            .investigation_link_analysis_turns(&investigation.id, &["turn-test-1".to_string()])
+            .unwrap();
+        assert_eq!(linked_again, linked);
+
+        drop(engine);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

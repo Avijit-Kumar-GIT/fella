@@ -60,7 +60,7 @@ product decision.
 | **Workspace** | Identifies the explicit local analysis boundary and its current catalog, context, and revision. | Stable folder identity; not a window, environment, or pane. Every data-backed operation names its workspace. |
 | **Source** | Identifies a cataloged file, sheet, or supported document within a Workspace. | Use workspace-relative identity plus source kind/sheet as needed; a display name alone is not identity. The source is a reference to user data, not a copy. |
 | **Source revision** | Records what was observed about a Source at a specific workspace revision. | Immutable run-time reference to the relevant source identity, file revision/profile, and observed schema/coverage. A changed file creates new observed state; it never rewrites old run lineage. |
-| **Investigation** | Owns the identity and lifecycle of one bounded analyst effort. | Durable aggregate with an ID, one Workspace, title, status, timestamps, and links to its Conversation, brief, questions, decisions, turns, findings, and handoff. It indexes linked records; it does not duplicate their payloads. |
+| **Investigation** | Owns the identity and lifecycle of one bounded analyst effort. | Durable aggregate with an ID, one Workspace, title, status, timestamps, and links to its Conversation, brief, questions, decisions, turns, findings, and handoff. It indexes linked records by ID; it does not duplicate their payloads. |
 | **Brief** | Keeps the goal, audience, desired output, and constraints legible. | Versioned value owned by an Investigation. It may be model-proposed and analyst-edited; changing it never changes the original message or rewrites prior runs. |
 | **Source scope** | Says which cataloged sources are intended for this Investigation or Question. | Explicit include/exclude choices. Every Analysis turn records an immutable source-scope snapshot of what it actually used, including relevant exclusions. Selecting a source is not itself evidence that it was read. |
 | **Question** | Represents the root request or one answerable part of it. | Durable Investigation child with parent/dependency links only when useful, editable text, order, relevant source mapping, and separate work/coverage state. A model proposal is editable, not an accepted plan by default. |
@@ -137,7 +137,7 @@ the implementation slice; this map is the shared conceptual contract.
 | [#183 Source scope per run](https://github.com/Avijit-Kumar-GIT/fella/issues/183) | Preserve the immutable source set and exclusions actually used by each run. |
 | [#184 Editable brief](https://github.com/Avijit-Kumar-GIT/fella/issues/184) | Give each Investigation a compact, editable goal/outcome/constraint value. |
 | [#185 Brief updates](https://github.com/Avijit-Kumar-GIT/fella/issues/185) | Propose and review a new brief version when direction materially changes. |
-| [#186 Separate messages and runs](https://github.com/Avijit-Kumar-GIT/fella/issues/186) | Keep interaction and execution as distinct records joined by references. |
+| [#186 Separate messages and runs](https://github.com/Avijit-Kumar-GIT/fella/issues/186) | Link canonical AnalysisTurn IDs from an Investigation and open the run record from its transcript message. |
 | [#187 Automatic Investigation](https://github.com/Avijit-Kumar-GIT/fella/issues/187) | Resolve/create the one workspace Investigation without extra setup. |
 | [#188 Conversation association](https://github.com/Avijit-Kumar-GIT/fella/issues/188) | Make the workspace conversation link stable and navigable from either side. |
 | [#189 Editable Question plan](https://github.com/Avijit-Kumar-GIT/fella/issues/189) | Let analysts edit Question text and ordering without rewriting history. |
@@ -192,4 +192,6 @@ edits the Conversation transcript. Clear revision language and explicit source
 constraints can surface an editable proposal in the Investigation view. The
 analyst applies or dismisses it; neither the brief nor its review cursor changes
 until that choice is saved. Routine follow-up questions are not proposals, and
-the original source message remains immutable.
+the original source message remains immutable. Investigations now retain only
+IDs for their linked AnalysisTurns; conversation messages remain unchanged and
+open the canonical execution record by its existing turn ID.

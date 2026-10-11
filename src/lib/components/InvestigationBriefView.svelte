@@ -3,6 +3,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { ipc, isDesktop } from '$lib/ipc';
+	import { analysisTurnIdsAfterSourceMessage } from '$lib/investigation-runs';
 	import type { Investigation, InvestigationBrief } from '$lib/types';
 	import { findBriefProposal, type BriefProposal, type BriefProposalTarget } from '$lib/investigation-brief-proposal';
 	import Icon from './Icon.svelte';
@@ -25,8 +26,20 @@
 	let saving = $state(false);
 	let error = $state('');
 	let requestSerial = 0;
+	const syncingInvestigations = new Set<string>();
 
 	let selected = $derived(investigations.find((item) => item.id === selectedId) ?? null);
+	let unlinkedAnalysisTurnIds = $derived.by(() => {
+		const item = selected;
+		const conversation = session.activeChat;
+		if (!item || conversation.workspaceScope !== item.workspace_id) return [];
+		const linked = new Set(item.analysis_turn_ids ?? []);
+		return analysisTurnIdsAfterSourceMessage(
+			conversation.messages,
+			item.brief_source_message_id,
+			item.workspace_id
+		).filter((turnId) => !linked.has(turnId));
+	});
 	let pendingProposal: BriefProposal | null = $derived.by(() => {
 		const item = selected;
 		const conversation = session.activeChat;
@@ -64,6 +77,36 @@
 		}
 	}
 
+	async function syncAnalysisTurns(investigationId: string): Promise<void> {
+		if (syncingInvestigations.has(investigationId)) return;
+		syncingInvestigations.add(investigationId);
+		try {
+			while (true) {
+				const item = investigations.find((record) => record.id === investigationId);
+				const conversation = session.activeChat;
+				if (!item || conversation.workspaceScope !== item.workspace_id) return;
+				const linked = new Set(item.analysis_turn_ids ?? []);
+				const missing = analysisTurnIdsAfterSourceMessage(
+					conversation.messages,
+					item.brief_source_message_id,
+					item.workspace_id
+				).filter((turnId) => !linked.has(turnId));
+				if (!missing.length) return;
+				const updated = await ipc.investigationLinkAnalysisTurns(item.id, missing);
+				const confirmed = new Set(updated.analysis_turn_ids ?? []);
+				if (missing.some((turnId) => !confirmed.has(turnId))) {
+					error = 'The saved analysis-run links could not be confirmed. Reopen this Investigation to try again.';
+					return;
+				}
+				investigations = investigations.map((record) => record.id === updated.id ? updated : record);
+			}
+		} catch (cause) {
+			error = cause instanceof Error ? cause.message : String(cause);
+		} finally {
+			syncingInvestigations.delete(investigationId);
+		}
+	}
+
 	$effect(() => {
 		const path = session.catalog.workspace;
 		workspacePath = path;
@@ -78,6 +121,12 @@
 		if (path === loadedWorkspace) return;
 		loadedWorkspace = path;
 		void loadWorkspace(path);
+	});
+
+	$effect(() => {
+		const item = selected;
+		const missing = unlinkedAnalysisTurnIds;
+		if (item && missing.length && isDesktop()) void syncAnalysisTurns(item.id);
 	});
 
 	$effect(() => {
@@ -282,6 +331,7 @@
 					<div class="editor-foot">
 						<span role={error ? 'alert' : 'status'}>{error || (saving ? 'Saving…' : dirty ? 'Unsaved changes' : 'Saved locally')}</span>
 						{#if selected.brief_source_message_id}<span>Original request preserved</span>{/if}
+						<span>{selected.analysis_turn_ids?.length ?? 0} saved run{(selected.analysis_turn_ids?.length ?? 0) === 1 ? '' : 's'} linked</span>
 					</div>
 				</div>
 			{/if}

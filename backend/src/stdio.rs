@@ -453,6 +453,13 @@ async fn dispatch(
                 reviewed_message_id,
             ))
         }
+        "investigation_link_analysis_turns" => {
+            let investigation_id: String = required(&request.params, "investigationId")?;
+            let analysis_turn_ids: Vec<String> = required(&request.params, "analysisTurnIds")?;
+            value_result(
+                engine.investigation_link_analysis_turns(&investigation_id, &analysis_turn_ids),
+            )
+        }
         "investigation_load" => {
             let investigation_id: String = required(&request.params, "investigationId")?;
             value_result(engine.investigation_load(&investigation_id))

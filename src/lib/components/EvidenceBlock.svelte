@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Button } from '$lib/components/ui/button';
-	import type { Answer, ContextSection, EvidenceItem } from '$lib/types';
+	import { ipc } from '$lib/ipc';
+	import type { AnalysisTurn, Answer, ContextSection, EvidenceItem } from '$lib/types';
 	import Icon from './Icon.svelte';
 	import PythonCalculationDetails from './PythonCalculationDetails.svelte';
 	import ReplayStatus from './ReplayStatus.svelte';
@@ -34,6 +35,10 @@
 	// Which steps have their raw detail (SQL, table, output) revealed.
 	let openDetail = $state<Record<number, boolean>>({});
 	let showModelCalls = $state(false);
+	let savedRunOpen = $state(false);
+	let savedRunLoading = $state(false);
+	let savedRunError = $state('');
+	let savedRun = $state<AnalysisTurn | null>(null);
 	function toggleDetail(i: number) {
 		openDetail = { ...openDetail, [i]: !openDetail[i] };
 	}
@@ -103,6 +108,26 @@
 		if (effect === 'exclude_evidence') return 'Evidence excluded';
 		if (effect === 'withhold_artifact') return 'Artifact withheld';
 		return 'Answer blocked';
+	}
+	async function toggleSavedRun(): Promise<void> {
+		if (savedRunOpen) {
+			savedRunOpen = false;
+			return;
+		}
+		savedRunOpen = true;
+		if (!answer.turn_id || savedRun || savedRunLoading) return;
+		savedRunLoading = true;
+		savedRunError = '';
+		try {
+			savedRun = await ipc.analysisTurnLoad(answer.turn_id);
+		} catch (cause) {
+			savedRunError = cause instanceof Error ? cause.message : String(cause);
+		} finally {
+			savedRunLoading = false;
+		}
+	}
+	function runStateLabel(state: AnalysisTurn['state']): string {
+		return state.replaceAll('_', ' ');
 	}
 
 </script>
@@ -295,6 +320,65 @@
 				</div>
 			{/if}
 
+			{#if answer.turn_id}
+				<div class="saved-run">
+					<Button
+						variant="ghost"
+						size="sm"
+						class="detailtoggle"
+						aria-expanded={savedRunOpen}
+						aria-controls={`saved-run-${bodyId}`}
+						onclick={() => void toggleSavedRun()}
+					>
+						{savedRunOpen ? 'Hide saved run record' : 'Open saved run record'}
+					</Button>
+					{#if savedRunOpen}
+						<section class="saved-run-panel" id={`saved-run-${bodyId}`} aria-label="Saved analysis run">
+							{#if savedRunLoading}
+								<p role="status">Loading the saved run…</p>
+							{:else if savedRunError}
+								<p class="saved-run-error" role="alert">Couldn't load the saved run: {savedRunError}</p>
+							{:else if savedRun}
+								<div class="saved-run-heading">
+									<strong>Canonical analysis run</strong>
+									<code>{savedRun.id}</code>
+								</div>
+								<dl class="saved-run-facts">
+									<div><dt>State</dt><dd>{runStateLabel(savedRun.state)}</dd></div>
+									<div><dt>Method</dt><dd>{savedRun.plan.strategy.replaceAll('_', ' ')}</dd></div>
+									<div><dt>Execution steps</dt><dd>{savedRun.trace.steps.length}</dd></div>
+									{#if savedRun.workspace_revision}<div><dt>Workspace revision</dt><dd><code>{savedRun.workspace_revision}</code></dd></div>{/if}
+									{#if savedRun.source_scope}<div><dt>Source scope</dt><dd>{savedRun.source_scope.used_sources.length} used · {savedRun.source_scope.skipped_sources.length} skipped</dd></div>{/if}
+								</dl>
+								{#if savedRun.plan.steps.length}
+									<div class="saved-run-section">
+										<h4>Planned steps</h4>
+										<ol>{#each savedRun.plan.steps as step, i (`${savedRun.id}-plan-${i}`)}<li>{step.replaceAll('_', ' ')}</li>{/each}</ol>
+									</div>
+								{/if}
+								{#if savedRun.trace.steps.length}
+									<div class="saved-run-section">
+										<h4>Recorded execution</h4>
+										<ol class="saved-run-trace">
+											{#each savedRun.trace.steps as step (step.id)}
+												<li>
+													<div class="saved-run-step-heading">
+														<strong>{step.operation.replaceAll('_', ' ')}</strong>
+														<span>{step.success ? 'Succeeded' : 'Failed'} · {formatDuration(step.duration_ms)}</span>
+													</div>
+													{#if step.summary}<p>{step.summary}</p>{/if}
+													{#if step.sources.length}<p class="saved-run-sources">Sources: {step.sources.join(', ')}</p>{/if}
+												</li>
+											{/each}
+										</ol>
+									</div>
+								{/if}
+							{/if}
+						</section>
+					{/if}
+				</div>
+			{/if}
+
 			{#if answer.turn_id && answer.evidence.length}
 				<ReplayStatus turnId={answer.turn_id} workspaceId={answer.workspace?.path ?? null} {onrerun} />
 			{/if}
@@ -326,6 +410,24 @@
 		color: var(--text-faint);
 		font-size: var(--fs-xs);
 	}
+	.saved-run { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-2); }
+	.saved-run-panel { width: min(100%, 620px); padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-inset); color: var(--text-dim); }
+	.saved-run-panel p { margin: 0; }
+	.saved-run-heading { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); color: var(--text); font-size: var(--fs-xs); }
+	.saved-run-heading code, .saved-run-facts code { overflow-wrap: anywhere; font-family: var(--mono); }
+	.saved-run-facts { display: flex; flex-wrap: wrap; gap: var(--space-3) var(--space-5); margin: var(--space-2) 0 0; font-size: var(--fs-xs); }
+	.saved-run-facts div { min-width: 100px; }
+	.saved-run-facts dt { color: var(--text-faint); }
+	.saved-run-facts dd { margin: 2px 0 0; color: var(--text); }
+	.saved-run-section { margin-top: var(--space-3); }
+	.saved-run-section h4 { margin: 0 0 var(--space-1); color: var(--text-faint); font-size: var(--fs-xs); font-weight: 600; }
+	.saved-run-section ol { margin: 0; padding-left: 20px; color: var(--text); font-size: var(--fs-xs); }
+	.saved-run-trace { display: flex; flex-direction: column; gap: var(--space-2); }
+	.saved-run-trace li { padding-left: 2px; }
+	.saved-run-step-heading { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-2); }
+	.saved-run-step-heading span, .saved-run-sources { color: var(--text-faint); }
+	.saved-run-section p { margin-top: 2px; }
+	.saved-run-error { color: var(--danger, #b42318); overflow-wrap: anywhere; }
 	.model-calls {
 		margin: 4px 0 2px;
 		padding-left: 16px;
