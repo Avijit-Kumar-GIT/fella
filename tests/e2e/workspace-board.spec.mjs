@@ -724,18 +724,32 @@ test('a Question can narrow its source set and launches a run linked to that Que
 	await questionCard.getByText(/Source set/).click();
 	await questionCard.getByLabel('Use a specific source set').check();
 	await questionCard.getByLabel('refunds.csv').uncheck();
-	await page.getByRole('button', { name: 'Save plan' }).click();
-	await expect(page.locator('.question-editor .question-save')).toContainText('Plan saved');
+	await page.getByRole('button', { name: 'Add definition or assumption' }).click();
+	await page.getByRole('textbox', { name: 'Context note 1' }).fill('Count a refund only when it is linked to a completed sale.');
 
+	await page.getByRole('button', { name: 'Analyze Subquestion 1' }).click();
+	const setupPreview = page.getByRole('region', { name: 'Review this run' });
+	await expect(setupPreview).toContainText('Compare refund rates with sales');
+	await expect(setupPreview).toContainText('Question-specific scope · 1 file');
+	await expect(setupPreview).toContainText('Your unsaved Question and context edits will be saved before this run starts.');
+	await setupPreview.locator('details.run-preview-files > summary').click();
+	await expect(setupPreview).toContainText('sales.csv');
+	await expect(setupPreview).toContainText('Count a refund only when it is linked to a completed sale.');
+	expect(await page.evaluate(() => window.__workspaceAskCalls.length)).toBe(1);
+	const beforeConfirmation = await page.evaluate(() => window.__workspaceInvestigations()[0]);
+	expect(beforeConfirmation.questions.map((item) => item.text)).toEqual(['Explain changes in sales and refunds']);
+	expect(beforeConfirmation.definitions).toEqual([]);
+	await setupPreview.getByRole('button', { name: 'Save changes and run' }).click();
+	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.').last()).toBeVisible();
 	const saved = await page.evaluate(() => window.__workspaceInvestigations()[0]);
 	const question = saved.questions[1];
 	expect(question).toMatchObject({
 		text: 'Compare refund rates with sales',
 		source_selection: { mode: 'selected_sources', included_paths: ['sales.csv'] }
 	});
-
-	await page.getByRole('button', { name: 'Analyze Subquestion 1' }).click();
-	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.').last()).toBeVisible();
+	expect(saved.definitions).toMatchObject([
+		{ kind: 'definition', text: 'Count a refund only when it is linked to a completed sale.' }
+	]);
 	const run = await page.evaluate(() => window.__workspaceAskCalls.at(-1));
 	expect(run).toMatchObject({ investigationId: saved.id, questionId: question.id });
 	expect(run.question).toContain('Compare refund rates with sales');
@@ -1918,6 +1932,12 @@ test('a saved run keeps its own method and evidence inspectable after a later an
 			steps: [{ id: 'trace-sql', operation: 'run_sql', duration_ms: 12, success: true, summary: 'Original query completed.', sources: ['sales.csv'] }]
 		},
 		source_scope: { used_sources: [{ source: 'sales.csv', table: 'sales', evidence_ids: ['original-run-evidence'] }], skipped_sources: [] },
+		investigation_context: {
+			investigation_id: 'fixture-investigation',
+			question_id: 'fixture-question',
+			source_selection: { mode: 'selected_sources', included_paths: ['sales.csv'] },
+			definitions: [{ id: 'definition-1', revision: 2, kind: 'assumption', text: 'A refund counts only when tied to a completed sale.' }]
+		},
 		result: {
 			text: 'Original saved answer.',
 			status: 'verified',
@@ -1961,6 +1981,10 @@ test('a saved run keeps its own method and evidence inspectable after a later an
 	await originalAnswer.getByRole('button', { name: 'Open saved run record' }).click();
 	const savedRunPanel = originalAnswer.locator('.saved-run-panel');
 	await expect(savedRunPanel).toContainText('compiled sql');
+	await expect(savedRunPanel).toContainText('Requested source scope');
+	await expect(savedRunPanel).toContainText('1 selected source');
+	await expect(savedRunPanel).toContainText('Assumption · revision 2');
+	await expect(savedRunPanel).toContainText('A refund counts only when tied to a completed sale.');
 	await expect(savedRunPanel.getByRole('heading', { name: 'Recorded evidence' })).toBeVisible();
 	const recordedEvidence = savedRunPanel.locator('.saved-run-evidence');
 	await expect(recordedEvidence.locator('li')).toHaveCount(1);
@@ -2015,6 +2039,7 @@ test('Replay freshness uses shared status badges and rerun buttons', async ({ pa
 	const rerun = answer.getByRole('button', { name: 'Rerun' });
 	await expect(rerun).toHaveAttribute('data-slot', 'button');
 	await expect(rerun).toBeEnabled();
+	await expect(answer).toContainText('Rerun repeats this saved request and its recorded context.');
 });
 
 test('Replay freshness lookup errors use an alert and a working retry action', async ({ page }) => {

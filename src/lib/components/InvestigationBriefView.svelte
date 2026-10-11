@@ -37,17 +37,62 @@
 	let proposalMessageId = $state<string | null>(null);
 	let proposalText = $state('');
 	let proposalTarget = $state<BriefProposalTarget>('goal');
+	let pendingAnalysisQuestionId = $state<string | null>(null);
 	let loading = $state(false);
 	let creating = $state(false);
 	let openingConversation = $state(false);
 	let saving = $state(false);
 	let proposingQuestions = $state(false);
+	let startingQuestionAnalysis = $state(false);
 	let error = $state('');
 	let requestSerial = 0;
 	const syncingInvestigations = new Set<string>();
 
 	let selected = $derived(investigations.find((item) => item.id === selectedId) ?? null);
 	let rootQuestion = $derived(questions.find((question) => !question.parent_id) ?? null);
+	let pendingAnalysisQuestion = $derived(
+		questions.find((question) => question.id === pendingAnalysisQuestionId) ?? null
+	);
+	let analysisSetupCatalogAvailable = $derived(
+		Boolean(selected && session.catalog.workspace === selected.workspace_id)
+	);
+	let analysisSetupIsNarrowed = $derived(
+		Boolean(pendingAnalysisQuestion?.source_selection || selected?.source_selection.mode === 'selected_sources')
+	);
+	let analysisSetupSourcePaths = $derived.by(() => {
+		const item = selected;
+		const question = pendingAnalysisQuestion;
+		if (!item || !question || !analysisSetupCatalogAvailable) return [];
+		const paths = [...new Set(session.catalog.sources.map((source) => relativeSourcePath(source.path, item.workspace_id)))];
+		const investigationPaths = item.source_selection.mode === 'all_sources'
+			? paths
+			: paths.filter((path) => item.source_selection.included_paths.includes(path));
+		if (!question.source_selection) return investigationPaths;
+		const allowed = new Set(investigationPaths);
+		return question.source_selection.included_paths.filter((path) => allowed.has(path));
+	});
+	let analysisSetupExcludedPaths = $derived.by(() => {
+		const question = pendingAnalysisQuestion;
+		if (!question?.source_selection) return [];
+		const effective = new Set(analysisSetupSourcePaths);
+		return question.source_selection.included_paths.filter((path) => !effective.has(path));
+	});
+	let analysisSetupScopeLabel = $derived.by(() => {
+		const item = selected;
+		const question = pendingAnalysisQuestion;
+		if (!item || !question) return '';
+		if (!analysisSetupCatalogAvailable) return 'Current workspace catalog is not loaded';
+		if (question.source_selection) {
+			const count = analysisSetupSourcePaths.length;
+			return analysisSetupExcludedPaths.length
+				? `Question-specific scope · ${count} effective of ${question.source_selection.included_paths.length} mapped files`
+				: `Question-specific scope · ${count} file${count === 1 ? '' : 's'}`;
+		}
+		if (item.source_selection.mode === 'all_sources') {
+			return `Inherit Investigation · all ${analysisSetupSourcePaths.length} available file${analysisSetupSourcePaths.length === 1 ? '' : 's'}`;
+		}
+		return `Inherit Investigation · ${analysisSetupSourcePaths.length} selected file${analysisSetupSourcePaths.length === 1 ? '' : 's'}`;
+	});
 	let subquestions = $derived(rootQuestion
 		? questions.filter((question) => question.parent_id === rootQuestion.id)
 		: []);
@@ -339,6 +384,15 @@
 		investigations = investigations.map((item) => item.id === updated.id ? updated : item);
 	}
 
+	function relativeSourcePath(path: string, rootPath: string): string {
+		const root = rootPath.replace(/[/\\]+$/, '');
+		if (path === root) return path;
+		if (path.startsWith(`${root}/`) || path.startsWith(`${root}\\`)) {
+			return path.slice(root.length + 1).replace(/\\/g, '/');
+		}
+		return path.replace(/\\/g, '/');
+	}
+
 	function addQuestion(): void {
 		const id = globalThis.crypto?.randomUUID?.().replaceAll('-', '') ?? `${Date.now()}${Math.random().toString(16).slice(2)}`;
 		const question: InvestigationQuestionInput = {
@@ -358,17 +412,44 @@
 			: question);
 	}
 
-	async function analyzeQuestion(questionId: string): Promise<void> {
-		const item = selected;
-		if (!item || saving || proposingQuestions || openingConversation) return;
+	function reviewQuestion(questionId: string): void {
+		if (!selected || saving || proposingQuestions || openingConversation || session.activeChat.busy) return;
 		if (hasBlankQuestion) {
 			error = 'Fill in or remove each blank Question before analyzing the plan.';
 			return;
 		}
-		if (questionsDirty && !(await saveQuestions())) return;
-		if (definitionsDirty && !(await saveDefinitions())) return;
-		if (!(await openSelectedConversation())) return;
-		await analyzeInvestigationQuestion(item.id, questionId);
+		pendingAnalysisQuestionId = questionId;
+		error = '';
+	}
+
+	async function analyzeQuestion(questionId: string): Promise<void> {
+		const item = selected;
+		if (
+			!item ||
+			pendingAnalysisQuestionId !== questionId ||
+			saving ||
+			proposingQuestions ||
+			openingConversation ||
+			startingQuestionAnalysis
+		) return;
+		if (hasBlankQuestion) {
+			error = 'Fill in or remove each blank Question before analyzing the plan.';
+			return;
+		}
+		if (hasBlankDefinition) {
+			error = 'Complete or remove each blank definition before running this Question.';
+			return;
+		}
+		startingQuestionAnalysis = true;
+		try {
+			if (questionsDirty && !(await saveQuestions())) return;
+			if (definitionsDirty && !(await saveDefinitions())) return;
+			if (!(await openSelectedConversation())) return;
+			pendingAnalysisQuestionId = null;
+			await analyzeInvestigationQuestion(item.id, questionId);
+		} finally {
+			startingQuestionAnalysis = false;
+		}
 	}
 
 	function moveQuestion(index: number, offset: -1 | 1): void {
@@ -382,6 +463,7 @@
 	function removeQuestion(id: string): void {
 		if (id === rootQuestion?.id) return;
 		questions = questions.filter((question) => question.id !== id);
+		if (pendingAnalysisQuestionId === id) pendingAnalysisQuestionId = null;
 	}
 
 	function discardQuestions(): void {
@@ -396,6 +478,7 @@
 			source_selection: question.source_selection
 		}));
 		savedQuestions = JSON.stringify(questions);
+		pendingAnalysisQuestionId = null;
 		error = '';
 	}
 
@@ -546,6 +629,7 @@
 			return;
 		}
 		if (dirty && !(await saveBrief())) return;
+		pendingAnalysisQuestionId = null;
 		selectedId = id;
 	}
 </script>
@@ -742,8 +826,8 @@
 											variant="outline"
 											size="sm"
 											aria-label="Analyze main Question"
-											disabled={saving || proposingQuestions || openingConversation || hasBlankQuestion}
-											onclick={() => void analyzeQuestion(rootQuestion.id)}
+											disabled={saving || proposingQuestions || openingConversation || session.activeChat.busy || hasBlankQuestion}
+											onclick={() => reviewQuestion(rootQuestion.id)}
 										>
 											Analyze
 										</Button>
@@ -778,8 +862,8 @@
 														variant="outline"
 														size="sm"
 														aria-label="Analyze Subquestion {index + 1}"
-														disabled={saving || proposingQuestions || openingConversation || hasBlankQuestion}
-														onclick={() => void analyzeQuestion(question.id)}
+													disabled={saving || proposingQuestions || openingConversation || session.activeChat.busy || hasBlankQuestion}
+													onclick={() => reviewQuestion(question.id)}
 													>
 														Analyze
 													</Button>
@@ -809,6 +893,75 @@
 							{/if}
 						{:else}
 							<p class="question-empty">No Questions in this plan yet.</p>
+						{/if}
+						{#if pendingAnalysisQuestion}
+							<section class="run-preview" aria-labelledby="run-preview-title">
+								<header>
+									<h4 id="run-preview-title">Review this run</h4>
+									<p>No analysis has started. Confirm the Question, source scope, and definitions Fella will use.</p>
+								</header>
+								<dl class="run-preview-facts">
+									<div><dt>Question</dt><dd>{pendingAnalysisQuestion.text.trim() || 'No Question text'}</dd></div>
+									<div><dt>Source scope</dt><dd>{analysisSetupScopeLabel}</dd></div>
+								</dl>
+								<details class="run-preview-plan">
+									<summary>Review the broader Question plan ({questions.length})</summary>
+									<p>Fella receives this current plan as context alongside the Question above.</p>
+									<ol>
+										{#each questions as question (question.id)}
+											<li>
+												{question.text}
+												{#if question.id === pendingAnalysisQuestion.id}<span> · running now</span>{/if}
+											</li>
+										{/each}
+									</ol>
+								</details>
+								{#if analysisSetupExcludedPaths.length}
+									<p class="run-preview-warning" role="status">
+										{analysisSetupExcludedPaths.length} mapped file{analysisSetupExcludedPaths.length === 1 ? ' is' : 's are'} outside the Investigation scope and will not be used: {analysisSetupExcludedPaths.join(', ')}.
+									</p>
+								{/if}
+								{#if analysisSetupCatalogAvailable && analysisSetupSourcePaths.length}
+									<details class="run-preview-files">
+										<summary>Review included files ({analysisSetupSourcePaths.length})</summary>
+										<ul>{#each analysisSetupSourcePaths as path (path)}<li>{path}</li>{/each}</ul>
+									</details>
+								{:else if analysisSetupCatalogAvailable && analysisSetupIsNarrowed}
+									<p class="run-preview-warning" role="alert">No files are included in this Question's effective source scope. Adjust the source set before running.</p>
+								{:else if analysisSetupCatalogAvailable}
+									<p class="run-preview-empty">No sources are currently cataloged; Fella will use all files available to this Investigation.</p>
+								{:else}
+									<p class="run-preview-warning" role="status">The workspace catalog is not loaded, so the included file list cannot be previewed.</p>
+								{/if}
+								<div class="run-preview-definitions">
+									<strong>Definitions and assumptions</strong>
+									{#if definitions.length}
+										<ul>
+											{#each definitions as definition (definition.id)}
+												<li><span>{definition.kind === 'definition' ? 'Definition' : 'Assumption'}</span>{definition.text.trim() || 'Text is blank'}</li>
+											{/each}
+										</ul>
+									{:else}
+										<p>No Investigation-specific definitions or assumptions will be applied.</p>
+									{/if}
+								</div>
+								{#if hasBlankDefinition}
+									<p class="run-preview-warning" role="alert">Complete or remove each blank definition before running this Question.</p>
+								{/if}
+								{#if questionsDirty || definitionsDirty}
+									<p class="run-preview-dirty">Your unsaved Question and context edits will be saved before this run starts.</p>
+								{/if}
+								<div class="run-preview-actions">
+									<Button type="button" variant="ghost" disabled={startingQuestionAnalysis} onclick={() => (pendingAnalysisQuestionId = null)}>Cancel</Button>
+									<Button
+										type="button"
+										disabled={saving || proposingQuestions || openingConversation || startingQuestionAnalysis || session.activeChat.busy || hasBlankQuestion || hasBlankDefinition || (analysisSetupCatalogAvailable && analysisSetupIsNarrowed && !analysisSetupSourcePaths.length)}
+										onclick={() => void analyzeQuestion(pendingAnalysisQuestion.id)}
+									>
+										{startingQuestionAnalysis ? 'Preparing run…' : questionsDirty || definitionsDirty ? 'Save changes and run' : 'Run this Question'}
+									</Button>
+								</div>
+							</section>
 						{/if}
 						<Button type="button" variant="outline" disabled={saving || proposingQuestions} onclick={addQuestion}>
 							<Icon name="plus" size={16} />{rootQuestion ? 'Add subquestion' : 'Add main Question'}
@@ -904,6 +1057,28 @@
 	.question-item-actions :global(button) { min-width: 34px; min-height: 32px; padding: 4px 8px; }
 	.brief-editor :global(.question-field) { width: 100%; min-height: 68px; resize: vertical; }
 	.question-empty { margin: 0; }
+	.run-preview { display: grid; gap: var(--space-3); padding: var(--space-3); border: 1px solid var(--border); border-left: 3px solid var(--brand); border-radius: var(--radius-md); background: var(--bg-inset); }
+	.run-preview header h4 { margin: 0; font-size: var(--fs-sm); font-weight: 650; }
+	.run-preview header p, .run-preview-definitions p { margin: 3px 0 0; color: var(--text-dim); font-size: var(--fs-xs); }
+	.run-preview-facts { display: grid; gap: var(--space-2); margin: 0; }
+	.run-preview-facts > div { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: var(--space-2); }
+	.run-preview-facts dt, .run-preview-definitions strong { color: var(--text-faint); font-size: var(--fs-xs); font-weight: 600; }
+	.run-preview-facts dd { min-width: 0; margin: 0; font-size: var(--fs-sm); overflow-wrap: anywhere; }
+	.run-preview-files { color: var(--text-dim); font-size: var(--fs-xs); }
+	.run-preview-files summary { width: fit-content; cursor: pointer; }
+	.run-preview-plan { color: var(--text-dim); font-size: var(--fs-xs); }
+	.run-preview-plan summary { width: fit-content; cursor: pointer; }
+	.run-preview-plan p { margin: var(--space-1) 0; color: var(--text-faint); }
+	.run-preview-plan ol { display: grid; gap: var(--space-1); margin: 0; padding-left: var(--space-5); }
+	.run-preview-plan li span { color: var(--brand); font-weight: 600; }
+	.run-preview-files ul, .run-preview-definitions ul { display: grid; gap: var(--space-1); margin: var(--space-2) 0 0; padding-left: var(--space-5); }
+	.run-preview-files li { overflow-wrap: anywhere; }
+	.run-preview-definitions li { display: flex; gap: var(--space-2); font-size: var(--fs-xs); overflow-wrap: anywhere; }
+	.run-preview-definitions li span { flex: none; color: var(--text-faint); }
+	.run-preview-warning { margin: 0; color: var(--warn); font-size: var(--fs-xs); overflow-wrap: anywhere; }
+	.run-preview-empty { margin: 0; color: var(--text-faint); font-size: var(--fs-xs); }
+	.run-preview-dirty { margin: 0; color: var(--text-faint); font-size: var(--fs-xs); }
+	.run-preview-actions { display: flex; justify-content: flex-end; gap: var(--space-2); }
 	.editor-foot { padding: var(--space-3) 0; }
 	.empty-state { max-width: 48ch; margin: 12vh auto 0; display: grid; justify-items: center; gap: var(--space-3); text-align: center; }
 	.empty-state > :global(svg) { color: var(--text-faint); }

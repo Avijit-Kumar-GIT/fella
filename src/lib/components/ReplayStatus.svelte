@@ -92,6 +92,9 @@
 				{/if}
 			</div>
 		</div>
+		{#if status.can_rerun && onrerun}
+			<p class="rerun-note">Rerun repeats this saved request and its recorded context. To apply changed Investigation settings, run the Question from the Investigation.</p>
+		{/if}
 		{#if status.source_scope}
 			<details class="scope-details">
 				<summary>
@@ -156,6 +159,7 @@
 	.change-list {
 		color: var(--text-faint);
 	}
+	.rerun-note { margin: var(--space-1) 0 0; color: var(--text-faint); font-size: var(--fs-xs); }
 	.scope-details {
 		margin-top: var(--space-2);
 		color: var(--text-faint);

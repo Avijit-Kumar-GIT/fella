@@ -409,6 +409,17 @@
 								{#if savedRun.investigation_context}
 									<div class="saved-run-section saved-run-definitions">
 										<h4>Investigation context used</h4>
+										<div class="saved-run-context-scope">
+											<strong>Requested source scope</strong>
+											<p>{savedRun.investigation_context.source_selection.mode === 'all_sources'
+												? 'All sources in the Investigation scope'
+												: `${savedRun.investigation_context.source_selection.included_paths.length} selected source${savedRun.investigation_context.source_selection.included_paths.length === 1 ? '' : 's'}`}</p>
+											{#if savedRun.investigation_context.source_selection.mode === 'selected_sources' && savedRun.investigation_context.source_selection.included_paths.length}
+												<ul>
+													{#each savedRun.investigation_context.source_selection.included_paths as path (path)}<li>{path}</li>{/each}
+												</ul>
+											{/if}
+										</div>
 										{#if savedRun.investigation_context.definitions.length}
 											<ul>
 												{#each savedRun.investigation_context.definitions as definition (definition.id)}
@@ -561,6 +572,10 @@
 	.saved-run-table-sample strong { color: var(--text-faint); font-size: var(--fs-xs); }
 	.saved-run-table-sample pre { max-height: 260px; margin: var(--space-1) 0 0; overflow: auto; font-family: var(--mono); font-size: var(--fs-xs); }
 	.saved-run-section p { margin-top: 2px; }
+	.saved-run-context-scope strong { color: var(--text-faint); font-size: var(--fs-xs); }
+	.saved-run-context-scope p { margin: 2px 0 0; color: var(--text-dim); }
+	.saved-run-context-scope ul { margin: var(--space-1) 0 0; padding-left: var(--space-5); color: var(--text-dim); }
+	.saved-run-context-scope li { overflow-wrap: anywhere; }
 	.saved-run-error { color: var(--danger, #b42318); overflow-wrap: anywhere; }
 	.model-calls {
 		margin: 4px 0 2px;

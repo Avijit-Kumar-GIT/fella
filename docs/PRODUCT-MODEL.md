@@ -271,3 +271,14 @@ only the conversation's current answer: source/table references, summaries,
 queries or calculation code, and recorded result samples stay attached to the
 run that produced them. This lets an analyst reopen an earlier run after later
 conversation turns without accidentally inspecting the newer turn's evidence.
+
+Question analysis now has an explicit pre-run review. Before any execution, the
+analyst can verify the exact Question, broader plan context, effective source
+scope and files, and active definitions/assumptions; unsaved Question or
+context edits are saved only after confirming the run. The saved AnalysisTurn
+continues to expose its intended source-selection snapshot and definition
+revisions alongside the evidence of what was actually read. “Rerun” on an old
+turn repeats that turn's original request and context; to apply corrected
+Question, source, or definition settings, the analyst launches the Question
+again from the Investigation, creating a fresh run without changing engine
+computation logic.
