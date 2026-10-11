@@ -477,3 +477,15 @@ not fully answered retain their persisted status and reason, including in a
 completed Investigation. The view does not summarize or depend on the chat
 transcript; unsaved brief, Question, or definition edits are disclosed rather
 than presented as part of the saved results.
+
+## Implementation checkpoint: optional source-provider boundary (#217)
+
+The [provider-neutral source contract](SOURCE-PROVIDER-CONTRACT.md) documents
+structured catalog, search, profile, bounded preview, refresh, source identity,
+revisions, scope, and error semantics independently of any CLI or FellaDB
+implementation. It explicitly keeps discovery separate from analysis
+execution: a search/catalog result does not grant conversation access or
+substitute for the Rust workspace engine.
+The built-in local-folder provider remains the desktop default and requires no
+optional tool installation. No plugin API, CLI integration, or analytics-engine
+change is implemented by this checkpoint.

@@ -66,6 +66,9 @@ for scripts and Fella's desktop integration. The desktop should consume a
 typed local interface or shared core rather than parse terminal presentation.
 The current Rust process is an Electron-managed JSON-lines sidecar, not a
 user-facing CLI; making it independently usable is future work.
+The proposed source/discovery exchange and its limits are captured in the
+[source-provider contract](SOURCE-PROVIDER-CONTRACT.md); it does not replace
+the desktop's built-in local workspace provider or analytics engine.
 
 ## Fella analysis workspace
 

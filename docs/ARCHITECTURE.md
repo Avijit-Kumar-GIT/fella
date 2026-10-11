@@ -41,6 +41,12 @@ catalog and bounded operations. The selected model provider receives the
 prompt and any context or tool results used in the answer; Fella does not
 proxy that request through a Fella service.
 
+The provider-neutral boundary proposed for future filesystem discovery tools
+is recorded in [Source-provider contract](SOURCE-PROVIDER-CONTRACT.md). It is
+not a current plugin API: the built-in Rust workspace engine remains sufficient
+for desktop catalog, profile, preview, refresh, and analysis without an
+optional CLI/FellaDB installation.
+
 ## The analytical turn
 
 Fella is one model-directed loop, not a deterministic router followed by a
