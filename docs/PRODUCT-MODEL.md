@@ -242,3 +242,12 @@ a small table preview inline without leaving the Investigation. This is
 readiness context only: it does not select a source scope or claim that a
 source has already been used in an Analysis turn; explicit Question-level
 source scope and run provenance remain separate primitives.
+
+The readiness view now exposes each tabular source's observed field profile:
+type, missing-row count/percentage, distinct count, observed minimum/maximum,
+and ingest caveats, alongside the sample preview and skipped-file reasons.
+These are facts from the currently loaded catalog snapshot, not a verdict that
+the source covers the requested population or time period. The profile helps
+the analyst notice concrete gaps before planning; a Question-specific semantic
+assessment still needs to identify which fields and coverage the request
+requires, and must cite observed data rather than infer completeness.

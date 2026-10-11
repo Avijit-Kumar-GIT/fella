@@ -801,12 +801,30 @@ test('Investigation shows source readiness and opens source details in place', a
 			...folders[0].catalog,
 			sources: [
 				{
-					name: 'sales.csv', path: `${workspacePath}\\sales.csv`, kind: 'csv', view: 'sales',
-					row_count: 124, columns: [{ name: 'order_id', type: 'BIGINT', distinct: 124 }],
+						name: 'sales.csv',
+						path: `${workspacePath}\\sales.csv`,
+						kind: 'csv',
+						view: 'sales',
+					row_count: 124, columns: [
+							{
+								name: 'order_id', type: 'BIGINT', distinct: 124, null_fraction: 0,
+								min: '1', max: '124'
+							},
+							{
+								name: 'ordered_at', type: 'TEXT', distinct: 124, null_fraction: 0.25,
+								min: '2025-01-03', max: '2025-12-29'
+							},
+							{
+								name: 'amount', type: 'REAL', distinct: 83, null_fraction: 0,
+								min: '0', max: '95000'
+							}
+					],
 					size_bytes: 4096, mtime: 1
 				},
 				{
-					name: 'quarterly-notes.txt', path: `${workspacePath}\\quarterly-notes.txt`, kind: 'text',
+					name: 'quarterly-notes.txt',
+					path: `${workspacePath}\\quarterly-notes.txt`,
+					kind: 'text',
 					synopsis: 'Regional launches moved two weeks later.', size_bytes: 2048, mtime: 1
 				}
 			],
@@ -843,6 +861,11 @@ test('Investigation shows source readiness and opens source details in place', a
 	await expect(details).toBeVisible();
 	await expect(details).toContainText('124');
 	await expect(details.getByRole('table')).toContainText('North');
+	const fieldProfile = details.locator('.field-profile');
+	await fieldProfile.locator('summary').click();
+	await expect(fieldProfile).toContainText('31 missing · 25%');
+	await expect(fieldProfile).toContainText('2025-01-03 – 2025-12-29');
+	await expect(fieldProfile).toContainText('measured from the loaded rows only');
 	await expect(page.getByRole('heading', { name: 'Investigation brief' })).toBeVisible();
 });
 
