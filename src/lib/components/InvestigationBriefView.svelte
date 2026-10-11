@@ -6,11 +6,14 @@
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { ipc, isDesktop } from '$lib/ipc';
 	import { analysisTurnIdsAfterSourceMessage } from '$lib/investigation-runs';
+	import { runStateLabel } from '$lib/run-progress';
 	import type {
+		AnalysisTurn,
 		ConversationSummary,
 		Investigation,
 		InvestigationBrief,
 		InvestigationDefinitionInput,
+		InvestigationQuestion,
 		InvestigationQuestionInput,
 		InvestigationQuestionAnswerStatus
 	} from '$lib/types';
@@ -46,11 +49,23 @@
 	let saving = $state(false);
 	let proposingQuestions = $state(false);
 	let startingQuestionAnalysis = $state(false);
+	let analysisTurns = $state<Record<string, AnalysisTurn>>({});
+	let openAnalysisTurnId = $state<string | null>(null);
+	let analysisTurnLoadingId = $state<string | null>(null);
+	let analysisTurnError = $state('');
+	let questionLinksDraft = $state<string[]>([]);
+	let savingQuestionLinks = $state(false);
 	let error = $state('');
 	let requestSerial = 0;
 	const syncingInvestigations = new Set<string>();
 
 	let selected = $derived(investigations.find((item) => item.id === selectedId) ?? null);
+	let openAnalysisTurn = $derived(openAnalysisTurnId ? analysisTurns[openAnalysisTurnId] ?? null : null);
+	let questionLinksDirty = $derived.by(() => {
+		if (!openAnalysisTurnId) return false;
+		const saved = questionIdsForRun(openAnalysisTurnId, selected).sort();
+		return JSON.stringify([...questionLinksDraft].sort()) !== JSON.stringify(saved);
+	});
 	let rootQuestion = $derived(questions.find((question) => !question.parent_id) ?? null);
 	let pendingAnalysisQuestion = $derived(
 		questions.find((question) => question.id === pendingAnalysisQuestionId) ?? null
@@ -151,6 +166,9 @@
 		error = '';
 		investigations = [];
 		selectedId = null;
+		analysisTurns = {};
+		openAnalysisTurnId = null;
+		questionLinksDraft = [];
 		try {
 			const all = await ipc.investigationsList();
 			if (serial !== requestSerial) return;
@@ -440,6 +458,99 @@
 		return selected?.questions?.find((question) => question.id === questionId)?.answer_status_reason;
 	}
 
+	function questionRunIdsFor(question: InvestigationQuestion): string[] {
+		return [...new Set(question.analysis_turn_ids ?? [])];
+	}
+
+	function questionRunIds(questionId: string): string[] {
+		const question = selected?.questions?.find((item) => item.id === questionId);
+		return question ? questionRunIdsFor(question) : [];
+	}
+
+	function analysisRunIds(investigation: Investigation | null = selected): string[] {
+		if (!investigation) return [];
+		const ids = new Set(investigation.analysis_turn_ids ?? []);
+		for (const question of investigation.questions ?? []) {
+			for (const turnId of questionRunIdsFor(question)) ids.add(turnId);
+		}
+		return [...ids].reverse();
+	}
+
+	function questionIdsForRun(
+		turnId: string,
+		investigation: Investigation | null = selected
+	): string[] {
+		return (investigation?.questions ?? [])
+			.filter((question) => questionRunIdsFor(question).includes(turnId))
+			.map((question) => question.id);
+	}
+
+	function linkedQuestionsForRun(turnId: string): InvestigationQuestion[] {
+		const ids = new Set(questionIdsForRun(turnId));
+		return (selected?.questions ?? []).filter((question) => ids.has(question.id));
+	}
+
+	function questionHeading(questionId: string): string {
+		const investigation = selected;
+		const question = investigation?.questions?.find((item) => item.id === questionId);
+		if (!question) return 'Question';
+		if (!question.parent_id) return 'Main Question';
+		const siblings = (investigation?.questions ?? []).filter((item) => item.parent_id === question.parent_id);
+		const index = siblings.findIndex((item) => item.id === questionId);
+		return `Subquestion ${index + 1}`;
+	}
+
+	function analysisRunSummary(turnId: string): string {
+		const linked = linkedQuestionsForRun(turnId)
+			.map((question) => question.text.trim())
+			.filter(Boolean);
+		if (linked.length) return linked.join(' · ');
+		const run = analysisTurns[turnId];
+		return run?.investigation_context?.question_text ?? run?.question ?? 'Conversation analysis';
+	}
+
+	async function openAnalysisRun(turnId: string): Promise<void> {
+		openAnalysisTurnId = turnId;
+		analysisTurnError = '';
+		questionLinksDraft = questionIdsForRun(turnId);
+		if (analysisTurns[turnId]) return;
+		analysisTurnLoadingId = turnId;
+		try {
+			const run = await ipc.analysisTurnLoad(turnId);
+			analysisTurns = { ...analysisTurns, [turnId]: run };
+		} catch (cause) {
+			analysisTurnError = cause instanceof Error ? cause.message : String(cause);
+		} finally {
+			if (analysisTurnLoadingId === turnId) analysisTurnLoadingId = null;
+		}
+	}
+
+	function setQuestionRunLink(questionId: string, checked: boolean): void {
+		const links = new Set(questionLinksDraft);
+		if (checked) links.add(questionId);
+		else links.delete(questionId);
+		questionLinksDraft = [...links];
+	}
+
+	async function saveAnalysisRunQuestions(): Promise<void> {
+		if (!selected || !openAnalysisTurnId || savingQuestionLinks || !questionLinksDirty) return;
+		savingQuestionLinks = true;
+		analysisTurnError = '';
+		try {
+			const updated = await ipc.investigationSetAnalysisTurnQuestions(
+				selected.id,
+				openAnalysisTurnId,
+				questionLinksDraft
+			);
+			investigations = investigations.map((item) => item.id === updated.id ? updated : item);
+			questionLinksDraft = questionIdsForRun(openAnalysisTurnId, updated);
+		} catch (cause) {
+			analysisTurnError = cause instanceof Error ? cause.message : String(cause);
+		} finally {
+			savingQuestionLinks = false;
+		}
+	}
+
 	function reviewQuestion(questionId: string): void {
 		if (!selected || saving || proposingQuestions || openingConversation || session.activeChat.busy) return;
 		if (hasBlankQuestion) {
@@ -658,6 +769,9 @@
 		}
 		if (dirty && !(await saveBrief())) return;
 		pendingAnalysisQuestionId = null;
+		analysisTurnError = '';
+		openAnalysisTurnId = null;
+		questionLinksDraft = [];
 		selectedId = id;
 	}
 </script>
@@ -868,6 +982,16 @@
 									{#if questionAnswerReason(rootQuestion.id)}
 										<p class="question-status-reason" data-question-status={questionAnswerStatus(rootQuestion.id)} role="status">{questionAnswerReason(rootQuestion.id)}</p>
 									{/if}
+									{#if questionRunIds(rootQuestion.id).length}
+										<div class="question-run-links" role="group" aria-label="Analysis runs linked to Main Question">
+											<span>Runs</span>
+											{#each questionRunIds(rootQuestion.id) as turnId, index (turnId)}
+												<Button type="button" variant="ghost" size="sm" aria-label="Open analysis run {index + 1} for Main Question" onclick={() => void openAnalysisRun(turnId)}>
+													Run {index + 1}
+												</Button>
+											{/each}
+										</div>
+									{/if}
 									<Textarea
 										id="question-{rootQuestion.id}"
 										class="question-field"
@@ -915,6 +1039,16 @@
 											</div>
 											{#if questionAnswerReason(question.id)}
 												<p class="question-status-reason" data-question-status={questionAnswerStatus(question.id)} role="status">{questionAnswerReason(question.id)}</p>
+											{/if}
+											{#if questionRunIds(question.id).length}
+												<div class="question-run-links" role="group" aria-label="Analysis runs linked to Subquestion {index + 1}">
+													<span>Runs</span>
+													{#each questionRunIds(question.id) as turnId, runIndex (turnId)}
+														<Button type="button" variant="ghost" size="sm" aria-label="Open analysis run {runIndex + 1} for Subquestion {index + 1}" onclick={() => void openAnalysisRun(turnId)}>
+															Run {runIndex + 1}
+														</Button>
+													{/each}
+												</div>
 											{/if}
 											<Textarea
 												id="question-{question.id}"
@@ -1011,6 +1145,103 @@
 							<Icon name="plus" size={16} />{rootQuestion ? 'Add subquestion' : 'Add main Question'}
 						</Button>
 					</section>
+					<section class="analysis-runs" aria-labelledby="analysis-runs-title">
+						<header class="analysis-runs-heading">
+							<div>
+								<h3 id="analysis-runs-title">Analysis runs</h3>
+								<p>Canonical run records linked to this Investigation and its Questions.</p>
+							</div>
+							<span>{analysisRunIds(selected).length} linked</span>
+						</header>
+						{#if analysisRunIds(selected).length}
+							<ol class="analysis-run-list">
+								{#each analysisRunIds(selected) as turnId, index (turnId)}
+									<li>
+										<button
+											class="analysis-run-link"
+											type="button"
+											aria-label="Open saved analysis run {index + 1}: {analysisRunSummary(turnId)}"
+											aria-current={openAnalysisTurnId === turnId ? 'true' : undefined}
+											onclick={() => void openAnalysisRun(turnId)}
+										>
+											<span class="analysis-run-number">Run {index + 1}</span>
+											<span class="analysis-run-copy">
+												<strong>{analysisRunSummary(turnId)}</strong>
+												<small>{analysisTurns[turnId] ? runStateLabel(analysisTurns[turnId].state) : 'Open saved record'}</small>
+											</span>
+											<Icon name="chevron-right" size={14} />
+										</button>
+									</li>
+								{/each}
+							</ol>
+						{:else}
+							<p class="analysis-runs-empty">No saved analysis runs are linked yet.</p>
+						{/if}
+
+						{#if openAnalysisTurnId}
+							<section class="analysis-run-detail" aria-label="Saved analysis run">
+								<header>
+									<div>
+										<h4>Saved analysis run</h4>
+										<p>{analysisRunSummary(openAnalysisTurnId)}</p>
+									</div>
+									<Button type="button" variant="ghost" aria-label="Close saved analysis run" onclick={() => (openAnalysisTurnId = null)}>Close</Button>
+								</header>
+								{#if analysisTurnLoadingId === openAnalysisTurnId}
+									<p role="status">Loading the saved run…</p>
+								{:else if analysisTurnError}
+									<p class="analysis-run-error" role="alert">Couldn't load or update this run: {analysisTurnError}</p>
+								{:else if openAnalysisTurn}
+									<dl class="analysis-run-facts">
+										<div><dt>State</dt><dd>{runStateLabel(openAnalysisTurn.state)}</dd></div>
+										<div><dt>Method</dt><dd>{openAnalysisTurn.plan.strategy.replaceAll('_', ' ')}</dd></div>
+										<div><dt>Execution steps</dt><dd>{openAnalysisTurn.trace.steps.length}</dd></div>
+										<div><dt>Recorded evidence</dt><dd>{openAnalysisTurn.result.evidence.length} items</dd></div>
+										<div><dt>Run ID</dt><dd><code>{openAnalysisTurn.id}</code></dd></div>
+									</dl>
+									<dl class="analysis-run-question-snapshot">
+										<div><dt>Question at run</dt><dd>{openAnalysisTurn.investigation_context?.question_text ?? openAnalysisTurn.question}</dd></div>
+									</dl>
+									<div class="analysis-run-result" aria-label="Recorded answer">{openAnalysisTurn.result.text}</div>
+									<details class="analysis-run-trace">
+										<summary>Recorded method and evidence</summary>
+										<ol>
+											{#each openAnalysisTurn.trace.steps as step, index (`${openAnalysisTurn.id}-${index}`)}
+												<li>{step.operation}{#if step.duration_ms != null}<small> · {step.duration_ms} ms</small>{/if}</li>
+											{/each}
+										</ol>
+										{#if openAnalysisTurn.verification?.checks.length}
+											<h5>Checks</h5>
+											<ul>{#each openAnalysisTurn.verification.checks as check, index (`${openAnalysisTurn.id}-check-${index}`)}<li>{check.ok ? 'Passed' : 'Needs review'} · {check.label}</li>{/each}</ul>
+										{/if}
+									</details>
+									<fieldset class="analysis-run-question-links" disabled={savingQuestionLinks || questionsDirty}>
+										<legend>Questions this run addresses</legend>
+										{#if selected.questions?.length}
+											{#each selected.questions as question (question.id)}
+												<label>
+													<input
+														type="checkbox"
+														checked={questionLinksDraft.includes(question.id)}
+														disabled={savingQuestionLinks || questionsDirty || question.latest_analysis_turn_id === openAnalysisTurn.id}
+														onchange={(event) => setQuestionRunLink(question.id, event.currentTarget.checked)}
+													/>
+													<span><strong>{questionHeading(question.id)}</strong><small>{question.text}</small></span>
+												</label>
+											{/each}
+											<Button type="button" variant="outline" size="sm" disabled={!questionLinksDirty || savingQuestionLinks || questionsDirty} onclick={() => void saveAnalysisRunQuestions()}>
+												{savingQuestionLinks ? 'Saving links…' : 'Save Question links'}
+											</Button>
+										{:else}
+											<p>This Investigation has no active Questions to link.</p>
+										{/if}
+									</fieldset>
+								{:else}
+									<p role="status">No saved record was returned for this run.</p>
+								{/if}
+							</section>
+						{/if}
+					</section>
 					<div class="editor-foot">
 						<span role={error ? 'alert' : 'status'}>{error || (saving ? 'Saving…' : dirty ? 'Unsaved changes' : 'Saved locally')}</span>
 						{#if selected.brief_source_message_id}<span>Original request preserved</span>{/if}
@@ -1103,6 +1334,44 @@
 	.question-item-actions :global(button) { min-width: 34px; min-height: 32px; padding: 4px 8px; }
 	.brief-editor :global(.question-field) { width: 100%; min-height: 68px; resize: vertical; }
 	.question-empty { margin: 0; }
+	.question-run-links { display: flex; align-items: center; gap: var(--space-1); margin: 0 0 var(--space-2); color: var(--text-faint); font-size: var(--fs-xs); }
+	.question-run-links > span { margin-right: var(--space-1); }
+	.question-run-links :global(button) { min-height: 28px; padding-inline: var(--space-2); }
+	.analysis-runs { display: grid; gap: var(--space-3); padding: var(--space-4) 0; margin-top: var(--space-4); border-top: 1px solid var(--border); }
+	.analysis-runs-heading, .analysis-run-detail > header { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); }
+	.analysis-runs-heading h3, .analysis-run-detail h4 { margin: 0; font-size: var(--fs-md); font-weight: 650; }
+	.analysis-runs-heading p, .analysis-run-detail > header p { margin: var(--space-1) 0 0; color: var(--text-dim); font-size: var(--fs-xs); }
+	.analysis-runs-heading > span { color: var(--text-faint); font-size: var(--fs-xs); white-space: nowrap; }
+	.analysis-run-list { display: grid; gap: var(--space-1); margin: 0; padding: 0; list-style: none; }
+	.analysis-run-link { display: flex; width: 100%; min-width: 0; align-items: center; gap: var(--space-3); padding: var(--space-2) var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg); color: var(--text); text-align: left; cursor: pointer; }
+	.analysis-run-link:hover, .analysis-run-link[aria-current='true'] { background: var(--bg-inset); }
+	.analysis-run-number { flex: none; color: var(--text-faint); font-size: var(--fs-xs); }
+	.analysis-run-copy { display: grid; min-width: 0; flex: 1; gap: 2px; }
+	.analysis-run-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-sm); font-weight: 600; }
+	.analysis-run-copy small { color: var(--text-faint); font-size: var(--fs-xs); }
+	.analysis-run-link > :global(svg) { flex: none; color: var(--text-faint); }
+	.analysis-runs-empty { margin: 0; color: var(--text-faint); font-size: var(--fs-xs); }
+	.analysis-run-detail { display: grid; gap: var(--space-3); min-width: 0; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-inset); }
+	.analysis-run-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2) var(--space-4); margin: 0; }
+	.analysis-run-facts > div, .analysis-run-question-snapshot > div { min-width: 0; }
+	.analysis-run-facts dt, .analysis-run-question-snapshot dt { color: var(--text-faint); font-size: var(--fs-xs); }
+	.analysis-run-facts dd, .analysis-run-question-snapshot dd { margin: 2px 0 0; font-size: var(--fs-sm); overflow-wrap: anywhere; }
+	.analysis-run-facts code { font-size: var(--fs-xs); }
+	.analysis-run-question-snapshot { padding-top: var(--space-2); margin: 0; border-top: 1px solid var(--border); }
+	.analysis-run-result { max-height: 320px; overflow: auto; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); font-size: var(--fs-sm); line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+	.analysis-run-trace { color: var(--text-dim); font-size: var(--fs-xs); }
+	.analysis-run-trace summary { width: fit-content; cursor: pointer; }
+	.analysis-run-trace ol, .analysis-run-trace ul { display: grid; gap: var(--space-1); margin: var(--space-2) 0 0; padding-left: var(--space-5); }
+	.analysis-run-trace h5 { margin: var(--space-3) 0 0; color: var(--text); font-size: var(--fs-xs); }
+	.analysis-run-trace li small { color: var(--text-faint); }
+	.analysis-run-question-links { display: grid; gap: var(--space-2); min-width: 0; padding: var(--space-3); margin: 0; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+	.analysis-run-question-links legend { padding: 0 var(--space-1); color: var(--text-faint); font-size: var(--fs-xs); font-weight: 600; }
+	.analysis-run-question-links label { display: flex; align-items: flex-start; gap: var(--space-2); margin: 0; font-size: var(--fs-sm); cursor: pointer; }
+	.analysis-run-question-links input { flex: none; margin-top: 3px; accent-color: var(--brand); }
+	.analysis-run-question-links label span { display: grid; min-width: 0; gap: 2px; }
+	.analysis-run-question-links label strong { font-size: var(--fs-xs); font-weight: 600; }
+	.analysis-run-question-links label small { color: var(--text-dim); font-size: var(--fs-xs); overflow-wrap: anywhere; }
+	.analysis-run-error { margin: 0; color: var(--danger, #b42318); font-size: var(--fs-xs); overflow-wrap: anywhere; }
 	.run-preview { display: grid; gap: var(--space-3); padding: var(--space-3); border: 1px solid var(--border); border-left: 3px solid var(--brand); border-radius: var(--radius-md); background: var(--bg-inset); }
 	.run-preview header h4 { margin: 0; font-size: var(--fs-sm); font-weight: 650; }
 	.run-preview header p, .run-preview-definitions p { margin: 3px 0 0; color: var(--text-dim); font-size: var(--fs-xs); }

@@ -65,6 +65,10 @@ pub struct InvestigationQuestion {
     pub answer_status_reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub latest_analysis_turn_id: Option<String>,
+    /// Canonical runs associated with this Question, including historical
+    /// attempts. The latest pointer above remains the coverage-state owner.
+    #[serde(default)]
+    pub analysis_turn_ids: Vec<String>,
     pub created_at_ms: u64,
     pub updated_at_ms: u64,
 }
@@ -441,6 +445,7 @@ fn initial_questions(
         answer_status: InvestigationQuestionAnswerStatus::NotStarted,
         answer_status_reason: None,
         latest_analysis_turn_id: None,
+        analysis_turn_ids: Vec::new(),
         created_at_ms: timestamp,
         updated_at_ms: timestamp,
     }])
@@ -511,13 +516,24 @@ pub fn question_load(data_dir: &Path, id: &str) -> EngineResult<InvestigationQue
     let path = question_path(data_dir, id)?;
     let body = std::fs::read_to_string(&path)
         .map_err(|error| EngineError::io(format!("read {}", path.display()), error))?;
-    let question: InvestigationQuestion = serde_json::from_str(&body)
+    let mut question: InvestigationQuestion = serde_json::from_str(&body)
         .map_err(|error| EngineError::msg(format!("question {id} is not valid JSON: {error}")))?;
     if question.id != id {
         return Err(EngineError::msg(format!(
             "question file {} contains a mismatched id",
             path.display()
         )));
+    }
+    // Older Question records only retained the latest-run pointer. Preserve
+    // that existing association when reading them through the new history view.
+    if question.analysis_turn_ids.is_empty() {
+        if let Some(turn_id) = question
+            .latest_analysis_turn_id
+            .as_ref()
+            .filter(|turn_id| crate::engine::analysis_store::exists(data_dir, turn_id))
+        {
+            question.analysis_turn_ids.push(turn_id.clone());
+        }
     }
     Ok(question)
 }
@@ -549,7 +565,8 @@ pub fn question_run_started(
     question.answer_status_reason = None;
     question.latest_analysis_turn_id = Some(turn_id.to_owned());
     question.updated_at_ms = now_ms().max(question.updated_at_ms.saturating_add(1));
-    write_question_record(data_dir, &question)
+    write_question_record(data_dir, &question)?;
+    Ok(())
 }
 
 /// Persist a terminal run state only if this is still the Question's latest
@@ -852,6 +869,7 @@ fn read_record(path: &Path, expected_id: &str, data_dir: &Path) -> EngineResult<
                 answer_status: InvestigationQuestionAnswerStatus::NotStarted,
                 answer_status_reason: None,
                 latest_analysis_turn_id: None,
+                analysis_turn_ids: Vec::new(),
                 created_at_ms: timestamp,
                 updated_at_ms: timestamp,
             });
@@ -1262,6 +1280,7 @@ pub fn update_questions(
                 answer_status: InvestigationQuestionAnswerStatus::NotStarted,
                 answer_status_reason: None,
                 latest_analysis_turn_id: None,
+                analysis_turn_ids: Vec::new(),
                 created_at_ms: existing_timestamp,
                 updated_at_ms: existing_timestamp,
             }
@@ -1636,6 +1655,115 @@ pub fn link_analysis_turns(
         write_record(data_dir, &record)?;
     }
     Ok(record)
+}
+
+/// Set the Question links for one canonical run. A Question's latest run is
+/// always retained as a link because its coverage state is based on that run.
+pub fn set_analysis_turn_questions(
+    data_dir: &Path,
+    id: &str,
+    turn_id: &str,
+    question_ids: &[String],
+) -> EngineResult<Investigation> {
+    const MAX_QUESTIONS_PER_RUN: usize = 100;
+    if question_ids.len() > MAX_QUESTIONS_PER_RUN {
+        return Err(EngineError::msg(
+            "too many Questions linked to one analysis run",
+        ));
+    }
+    if turn_id.is_empty()
+        || turn_id.chars().count() > 256
+        || !turn_id
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+    {
+        return Err(EngineError::msg("invalid analysis turn id"));
+    }
+
+    let mut record = load(data_dir, id)?;
+    let available: HashSet<String> = record
+        .questions
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .map(|question| question.id.clone())
+        .collect();
+    let mut desired = HashSet::new();
+    for question_id in question_ids {
+        if !available.contains(question_id) || !desired.insert(question_id.clone()) {
+            return Err(EngineError::msg(format!(
+                "Question {question_id} is not an active child of Investigation {id}"
+            )));
+        }
+    }
+
+    let mut changed = false;
+    if let Some(questions) = record.questions.as_mut() {
+        for question in questions {
+            let is_latest = question.latest_analysis_turn_id.as_deref() == Some(turn_id);
+            let should_link = desired.contains(&question.id) || is_latest;
+            let has_link = question
+                .analysis_turn_ids
+                .iter()
+                .any(|linked| linked == turn_id);
+            if should_link == has_link {
+                continue;
+            }
+            if should_link {
+                question.analysis_turn_ids.push(turn_id.to_owned());
+            } else {
+                question
+                    .analysis_turn_ids
+                    .retain(|linked| linked != turn_id);
+            }
+            question.updated_at_ms = now_ms().max(question.updated_at_ms.saturating_add(1));
+            write_question_record(data_dir, question)?;
+            changed = true;
+        }
+    }
+
+    if !record
+        .analysis_turn_ids
+        .iter()
+        .any(|linked| linked == turn_id)
+    {
+        record.analysis_turn_ids.push(turn_id.to_owned());
+        changed = true;
+    }
+    if changed {
+        record.updated_at_ms = now_ms().max(record.updated_at_ms.saturating_add(1));
+        write_record(data_dir, &record)?;
+    }
+    Ok(record)
+}
+
+/// Add Question links without disturbing links already attached to the run.
+pub fn link_analysis_turn_questions(
+    data_dir: &Path,
+    id: &str,
+    turn_id: &str,
+    question_ids: &[String],
+) -> EngineResult<Investigation> {
+    let record = load(data_dir, id)?;
+    let mut linked: Vec<String> = record
+        .questions
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .filter(|question| {
+            question
+                .analysis_turn_ids
+                .iter()
+                .any(|linked| linked == turn_id)
+        })
+        .map(|question| question.id.clone())
+        .collect();
+    for question_id in question_ids {
+        if !linked.iter().any(|linked| linked == question_id) {
+            linked.push(question_id.clone());
+        }
+    }
+    set_analysis_turn_questions(data_dir, id, turn_id, &linked)
 }
 
 pub fn load(data_dir: &Path, id: &str) -> EngineResult<Investigation> {
@@ -2038,6 +2166,11 @@ mod tests {
             running.latest_analysis_turn_id.as_deref(),
             Some("turn-incomplete")
         );
+        assert!(running.analysis_turn_ids.is_empty());
+        assert!(load(&data_dir, &created.id)
+            .unwrap()
+            .analysis_turn_ids
+            .is_empty());
         assert!(running.answer_status_reason.is_none());
         assert!(question_run_finished(
             &data_dir,

@@ -290,3 +290,15 @@ not from optimistic UI completion; incomplete and blocked states retain a
 short reason. Editing a Question, source boundary, or saved definition marks
 its previous answer outdated, while the canonical AnalysisTurn remains intact
 as historical evidence.
+
+Canonical AnalysisTurns are now indexed from both sides of the analyst's work:
+an Investigation links its saved runs, and each Question keeps the runs that
+address it while retaining a separate latest-run pointer for coverage status.
+The Investigation view can reopen a run from its run list or from a Question,
+inspect its saved answer, method, trace, and checks, and add or remove links to
+other active Questions. A run launched from one Question keeps that original
+Question and context snapshot even if it is later linked to additional
+Questions. Only persisted AnalysisTurns appear in this history; starting a run
+updates live coverage state but does not create a link to a record that has
+not yet been saved. Legacy Questions with only a latest-run pointer continue to
+surface that run in history.

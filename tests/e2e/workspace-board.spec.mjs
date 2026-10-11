@@ -56,6 +56,7 @@ async function installDesktopMock(
 		const calls = [];
 		const archivedConversations = new Map();
 		const investigations = new Map();
+		const analysisTurns = new Map();
 		const questionRecords = new Map();
 		const definitionRecords = new Map();
 		const investigationEnsureCalls = [];
@@ -223,6 +224,7 @@ async function installDesktopMock(
 											previous.parent_id !== (item.parent_id ?? undefined)
 										) ? 'The Question or its source scope changed. Run it again to refresh the answer.' : previous?.answer_status_reason,
 										latest_analysis_turn_id: previous?.latest_analysis_turn_id,
+										analysis_turn_ids: previous?.analysis_turn_ids ?? [],
 										created_at_ms: previous?.created_at_ms ?? now,
 										updated_at_ms: now
 									};
@@ -238,6 +240,29 @@ async function installDesktopMock(
 								investigations.set(key, updated);
 								return updated;
 							}
+						}
+						throw new Error(`Unknown Investigation: ${args.investigationId}`);
+					}
+					case 'investigation_set_analysis_turn_questions': {
+						const run = analysisTurns.get(args.analysisTurnId);
+						if (!run) throw new Error(`Unknown analysis turn: ${args.analysisTurnId}`);
+						for (const [key, record] of investigations) {
+							if (record.id !== args.investigationId) continue;
+							const desired = new Set(args.questionIds);
+							const now = Date.now();
+							const nextQuestions = (record.questions ?? []).map((question) => {
+								const links = new Set(question.analysis_turn_ids ?? []);
+								if (desired.has(question.id) || question.latest_analysis_turn_id === args.analysisTurnId) links.add(args.analysisTurnId);
+								else links.delete(args.analysisTurnId);
+								const updated = { ...question, analysis_turn_ids: [...links], updated_at_ms: now };
+								questionRecords.set(updated.id, updated);
+								return updated;
+							});
+							const runIds = new Set(record.analysis_turn_ids ?? []);
+							runIds.add(args.analysisTurnId);
+							const updated = { ...record, questions: nextQuestions, analysis_turn_ids: [...runIds], updated_at_ms: now };
+							investigations.set(key, updated);
+							return updated;
 						}
 						throw new Error(`Unknown Investigation: ${args.investigationId}`);
 					}
@@ -360,10 +385,9 @@ async function installDesktopMock(
 						return replayStatus;
 					case 'analysis_turn_load':
 						window.__analysisTurnLoadCalls.push(args.turnId);
-						if (!savedAnalysisTurn || savedAnalysisTurn.id !== args.turnId) {
-							throw new Error(`Unknown analysis turn: ${args.turnId}`);
-						}
-						return savedAnalysisTurn;
+						if (savedAnalysisTurn?.id === args.turnId) return savedAnalysisTurn;
+						if (analysisTurns.has(args.turnId)) return analysisTurns.get(args.turnId);
+						throw new Error(`Unknown analysis turn: ${args.turnId}`);
 					case 'reindex': return reindexedCatalog;
 					case 'run_log_recent': return runLogEntries;
 					default: return null;
@@ -381,6 +405,9 @@ async function installDesktopMock(
 				let questionTurnId;
 				const questionTurnNumber = calls.filter((call) => call.questionId).length;
 				const questionOutcome = questionRunOutcomes[questionTurnNumber - 1] ?? { status: 'answered' };
+				const finalState = questionOutcome.status === 'answered'
+					? 'accepted'
+					: questionOutcome.status === 'blocked' ? 'failed' : 'needs_review';
 				if (params.questionId && params.investigationId) {
 					const question = questionRecords.get(params.questionId);
 					questionTurnId = `fixture-question-turn-${questionTurnNumber}`;
@@ -431,21 +458,20 @@ async function installDesktopMock(
 							...question,
 							answer_status: questionOutcome.status ?? 'answered',
 							answer_status_reason: questionOutcome.reason,
-							latest_analysis_turn_id: questionTurnId
+							latest_analysis_turn_id: questionTurnId,
+							analysis_turn_ids: [...new Set([...(question.analysis_turn_ids ?? []), questionTurnId])]
 						};
 						questionRecords.set(question.id, finished);
 						for (const [key, record] of investigations) {
 							if (record.id === params.investigationId) {
 								investigations.set(key, {
 									...record,
+									analysis_turn_ids: [...new Set([...(record.analysis_turn_ids ?? []), questionTurnId])],
 									questions: (record.questions ?? []).map((item) => item.id === question.id ? finished : item)
 								});
 							}
 						}
 					}
-					const finalState = questionOutcome.status === 'answered'
-						? 'accepted'
-						: questionOutcome.status === 'blocked' ? 'failed' : 'needs_review';
 					onEvent({ kind: 'turn_state', turn_id: questionTurnId, state: finalState });
 				}
 				const hasReplayEvidence = replayStatus !== null || replayStatusError;
@@ -463,6 +489,36 @@ async function installDesktopMock(
 					verification: [],
 					workspace: params.workspaceId ? { path: params.workspaceId, revision: 'fixture-r1' } : null
 				};
+				if (questionTurnId) {
+					const investigation = [...investigations.values()].find((item) => item.id === params.investigationId);
+					const question = questionRecords.get(params.questionId);
+					const verificationStatus = questionOutcome.status === 'answered'
+						? 'verified'
+						: questionOutcome.status === 'blocked' ? 'failed' : 'insufficient_data';
+					analysisTurns.set(questionTurnId, {
+						id: questionTurnId,
+						conversation_id: params.conversationId ?? 'fixture-conversation',
+						question: params.question,
+						workspace: params.workspaceId,
+						investigation_context: {
+							investigation_id: params.investigationId,
+							question_id: params.questionId,
+							question_text: question?.text ?? params.question,
+							definitions: [],
+							source_selection: question?.source_selection ?? investigation?.source_selection ?? { mode: 'all_sources', included_paths: [] }
+						},
+						state: finalState,
+						plan: { strategy: 'direct_tools', steps: ['run_sql'] },
+						trace: {
+							id: `fixture-trace-${questionTurnNumber}`,
+							turn_id: questionTurnId,
+							workspace_revision: 'fixture-r1',
+							steps: [{ id: `fixture-step-${questionTurnNumber}`, operation: 'run_sql', duration_ms: 4, success: true, sources: ['sales.csv'] }]
+						},
+						verification: { status: verificationStatus, checks: [] },
+						result: { text: answer.text, status: verificationStatus, verification: [], evidence: answer.evidence }
+					});
+				}
 				onEvent({ kind: 'answer_done', answer });
 				return answer;
 			},
@@ -897,6 +953,50 @@ test('Questions show persisted coverage states and explain incomplete, blocked, 
 	await page.getByRole('button', { name: 'Save plan' }).click();
 	await expect(page.locator('.root-question-item [data-slot="badge"][data-question-status]')).toHaveText('Outdated');
 	await expect(page.locator('.root-question-item .question-status-reason')).toContainText('The Question or its source scope changed. Run it again to refresh the answer.');
+});
+
+test('saved analysis runs open from an Investigation and link to every Question they address', async ({ page }) => {
+	await installDesktopMock(page, { questionRunOutcomes: [{ status: 'answered', delay_ms: 250 }] });
+	await page.goto('/');
+	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
+	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
+	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill('Explain how refund rates changed');
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	await page.getByRole('button', { name: 'Analyze main Question' }).click();
+	await page.getByRole('region', { name: 'Review this run' }).getByRole('button', { name: 'Run this Question' }).click();
+	const questionRun = page.getByRole('region', { name: 'Question run' });
+	await expect(questionRun).toBeVisible();
+	await expect(questionRun).toHaveAttribute('data-question-id', /^q-root-/);
+	await expect(questionRun).toBeHidden();
+	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.').last()).toBeVisible();
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+
+	const savedRunLink = page.getByRole('button', { name: 'Open saved analysis run 1: Explain how refund rates changed' });
+	await expect(savedRunLink).toBeVisible();
+	await savedRunLink.click();
+	const runDetail = page.getByRole('region', { name: 'Saved analysis run' });
+	await expect(runDetail).toBeVisible();
+	await expect(runDetail.locator('.analysis-run-question-snapshot')).toContainText('Explain how refund rates changed');
+	await runDetail.getByRole('button', { name: 'Close saved analysis run' }).click();
+	await page.getByRole('button', { name: 'Open analysis run 1 for Main Question' }).click();
+	await expect(runDetail).toBeVisible();
+	await runDetail.getByRole('button', { name: 'Close saved analysis run' }).click();
+
+	await page.getByRole('button', { name: 'Add subquestion' }).click();
+	await page.getByRole('textbox', { name: 'Subquestion 1' }).fill('Compare refunds by sales channel');
+	await page.getByRole('button', { name: 'Save plan' }).click();
+	await savedRunLink.click();
+	await runDetail.locator('.analysis-run-question-links input[type="checkbox"]').nth(1).check();
+	await runDetail.getByRole('button', { name: 'Save Question links' }).click();
+
+	const subquestionRunLink = page.getByRole('button', { name: 'Open analysis run 1 for Subquestion 1' });
+	await expect(subquestionRunLink).toBeVisible();
+	await subquestionRunLink.click();
+	await expect(runDetail.locator('.analysis-run-question-snapshot')).toContainText('Explain how refund rates changed');
+	await expect(runDetail.locator('.analysis-run-question-links input[type="checkbox"]').nth(1)).toBeChecked();
 });
 
 test('saved Investigation definitions are revisioned, attached to later asks, and removable', async ({ page }) => {

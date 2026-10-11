@@ -2320,6 +2320,10 @@ impl EngineState {
         id: &str,
         analysis_turn_ids: &[String],
     ) -> EngineResult<Investigation> {
+        let _guard = self
+            .question_state_lock
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         const MAX_LINKS_PER_UPDATE: usize = 500;
         if analysis_turn_ids.len() > MAX_LINKS_PER_UPDATE {
             return Err(EngineError::msg("too many analysis runs to link at once"));
@@ -2347,6 +2351,35 @@ impl EngineState {
             new_ids.push(turn_id.to_owned());
         }
         investigation::link_analysis_turns(&self.data_dir, id, &new_ids)
+    }
+
+    /// Attach one saved run to the Questions it addresses. The AnalysisTurn
+    /// remains canonical and immutable; only Investigation-side references
+    /// change.
+    pub fn investigation_set_analysis_turn_questions(
+        &self,
+        id: &str,
+        turn_id: &str,
+        question_ids: &[String],
+    ) -> EngineResult<Investigation> {
+        let _guard = self
+            .question_state_lock
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        const MAX_QUESTIONS_PER_RUN: usize = 100;
+        if question_ids.len() > MAX_QUESTIONS_PER_RUN {
+            return Err(EngineError::msg(
+                "too many Questions linked to one analysis run",
+            ));
+        }
+        let investigation = investigation::load(&self.data_dir, id)?;
+        let turn = analysis_store::load(&self.data_dir, turn_id)?;
+        if turn.workspace.as_deref() != Some(investigation.workspace_id.as_str()) {
+            return Err(EngineError::msg(format!(
+                "analysis turn {turn_id} belongs to a different workspace"
+            )));
+        }
+        investigation::set_analysis_turn_questions(&self.data_dir, id, turn_id, question_ids)
     }
 
     /// Load an Investigation independently of the conversation UI.
@@ -2799,6 +2832,37 @@ impl EngineState {
                 "analysis turn {} was not persisted: {error}",
                 answer.turn_id
             );
+        } else if let Some(context) = investigation_context {
+            let _guard = self
+                .question_state_lock
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            let turn_ids = [answer.turn_id.clone()];
+            if let Err(error) = investigation::link_analysis_turns(
+                &self.data_dir,
+                &context.investigation_id,
+                &turn_ids,
+            ) {
+                log::warn!(
+                    "analysis turn {} was saved but not linked to Investigation {}: {error}",
+                    answer.turn_id,
+                    context.investigation_id
+                );
+            }
+            if let Some(question_id) = context.question_id.as_ref() {
+                if let Err(error) = investigation::link_analysis_turn_questions(
+                    &self.data_dir,
+                    &context.investigation_id,
+                    &answer.turn_id,
+                    std::slice::from_ref(question_id),
+                ) {
+                    log::warn!(
+                        "analysis turn {} was saved but not linked to Question {}: {error}",
+                        answer.turn_id,
+                        question_id
+                    );
+                }
+            }
         }
     }
 

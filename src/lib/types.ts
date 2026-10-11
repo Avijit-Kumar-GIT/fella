@@ -456,6 +456,8 @@ export interface InvestigationQuestion {
 	answer_status: InvestigationQuestionAnswerStatus;
 	answer_status_reason?: string;
 	latest_analysis_turn_id?: string;
+	/** Canonical run history for this Question; older records may omit it. */
+	analysis_turn_ids?: string[];
 	created_at_ms: number;
 	updated_at_ms: number;
 }

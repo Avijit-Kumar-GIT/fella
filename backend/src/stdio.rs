@@ -512,6 +512,16 @@ async fn dispatch(
                 engine.investigation_link_analysis_turns(&investigation_id, &analysis_turn_ids),
             )
         }
+        "investigation_set_analysis_turn_questions" => {
+            let investigation_id: String = required(&request.params, "investigationId")?;
+            let analysis_turn_id: String = required(&request.params, "analysisTurnId")?;
+            let question_ids: Vec<String> = required(&request.params, "questionIds")?;
+            value_result(engine.investigation_set_analysis_turn_questions(
+                &investigation_id,
+                &analysis_turn_id,
+                &question_ids,
+            ))
+        }
         "investigation_load" => {
             let investigation_id: String = required(&request.params, "investigationId")?;
             value_result(engine.investigation_load(&investigation_id))

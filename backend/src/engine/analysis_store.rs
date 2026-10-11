@@ -223,6 +223,7 @@ mod tests {
     use super::*;
     use crate::engine::context::ContextSection;
     use crate::engine::evidence::{AnswerProvenance, VerificationCheck, VerificationStatus};
+    use crate::engine::investigation::{InvestigationContextSnapshot, InvestigationQuestionInput};
     use crate::engine::runtime::{
         AnalysisResult, ContextReference, ExecutionTrace, InteractionMode, LogicalPlan,
         ModelCallTrace, PlanStrategy, TraceStep, TurnState, VerificationReport,
@@ -376,6 +377,128 @@ mod tests {
             .investigation_link_analysis_turns(&investigation.id, &["turn-test-1".to_string()])
             .unwrap();
         assert_eq!(linked_again, linked);
+
+        drop(engine);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn saved_runs_link_to_multiple_questions_without_changing_the_canonical_turn() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("fella-investigation-question-runs-{nonce}"));
+        let engine = EngineState::new(&dir).unwrap();
+        let investigation = engine
+            .investigation_create(
+                "/tmp/workspace",
+                "Refund analysis",
+                Some("Explain refund rates"),
+                Some("message-refunds"),
+                Some("conversation-1"),
+            )
+            .unwrap();
+        let root = investigation.questions.as_ref().unwrap()[0].clone();
+        let investigation = engine
+            .investigation_update_questions(
+                &investigation.id,
+                vec![
+                    InvestigationQuestionInput {
+                        id: root.id.clone(),
+                        parent_id: None,
+                        text: root.text.clone(),
+                        source_selection: None,
+                    },
+                    InvestigationQuestionInput {
+                        id: "question-channel".into(),
+                        parent_id: Some(root.id.clone()),
+                        text: "Compare refunds by channel".into(),
+                        source_selection: None,
+                    },
+                ],
+            )
+            .unwrap();
+        let mut canonical_turn = turn();
+        canonical_turn.investigation_context = Some(InvestigationContextSnapshot {
+            investigation_id: investigation.id.clone(),
+            question_id: Some(root.id.clone()),
+            question_text: Some(root.text),
+            definitions: Vec::new(),
+            source_selection: Default::default(),
+        });
+        save(&dir, &canonical_turn).unwrap();
+
+        let linked = engine
+            .investigation_set_analysis_turn_questions(
+                &investigation.id,
+                &canonical_turn.id,
+                &[root.id.clone(), "question-channel".into()],
+            )
+            .unwrap();
+        assert_eq!(linked.analysis_turn_ids, vec![canonical_turn.id.clone()]);
+        for question in linked.questions.as_ref().unwrap() {
+            assert_eq!(question.analysis_turn_ids, vec![canonical_turn.id.clone()]);
+        }
+        let persisted_turn = load(&dir, &canonical_turn.id).unwrap();
+        assert_eq!(persisted_turn.question, canonical_turn.question);
+        assert_eq!(
+            persisted_turn.investigation_context.unwrap().question_id,
+            Some(root.id.clone())
+        );
+
+        crate::engine::investigation::question_run_started(
+            &dir,
+            &investigation.id,
+            &root.id,
+            &canonical_turn.id,
+        )
+        .unwrap();
+        let unlinked = engine
+            .investigation_set_analysis_turn_questions(&investigation.id, &canonical_turn.id, &[])
+            .unwrap();
+        let root_after = unlinked
+            .questions
+            .as_ref()
+            .unwrap()
+            .iter()
+            .find(|q| q.id == root.id)
+            .unwrap();
+        let child_after = unlinked
+            .questions
+            .as_ref()
+            .unwrap()
+            .iter()
+            .find(|q| q.id == "question-channel")
+            .unwrap();
+        assert_eq!(
+            root_after.analysis_turn_ids,
+            vec![canonical_turn.id.clone()]
+        );
+        assert!(child_after.analysis_turn_ids.is_empty());
+        assert_eq!(unlinked.analysis_turn_ids, vec![canonical_turn.id.clone()]);
+
+        let mut foreign_turn = turn();
+        foreign_turn.id = "turn-foreign-question-link".into();
+        foreign_turn.trace.turn_id = foreign_turn.id.clone();
+        foreign_turn.workspace = Some("/tmp/another-workspace".into());
+        save(&dir, &foreign_turn).unwrap();
+        assert!(engine
+            .investigation_set_analysis_turn_questions(
+                &investigation.id,
+                &foreign_turn.id,
+                &["question-channel".into()],
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("different workspace"));
+        assert!(engine
+            .investigation_set_analysis_turn_questions(
+                &investigation.id,
+                &canonical_turn.id,
+                &["not-an-active-question".into()],
+            )
+            .is_err());
 
         drop(engine);
         let _ = std::fs::remove_dir_all(dir);

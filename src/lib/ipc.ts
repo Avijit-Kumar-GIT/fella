@@ -175,6 +175,12 @@ export const ipc = {
 	/** Associate existing canonical AnalysisTurns by ID; never copy run payloads. */
 	investigationLinkAnalysisTurns: (investigationId: string, analysisTurnIds: string[]) =>
 		invoke<Investigation>('investigation_link_analysis_turns', { investigationId, analysisTurnIds }),
+	/** Set the Question links for one canonical run without changing its payload. */
+	investigationSetAnalysisTurnQuestions: (
+		investigationId: string,
+		analysisTurnId: string,
+		questionIds: string[]
+	) => invoke<Investigation>('investigation_set_analysis_turn_questions', { investigationId, analysisTurnId, questionIds }),
 	/** Load one Investigation independently of its conversation surface. */
 	investigationLoad: (investigationId: string) =>
 		invoke<Investigation>('investigation_load', { investigationId }),
