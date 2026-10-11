@@ -6,9 +6,39 @@ import type {
 	AskEvent,
 	ConversationSummary,
 	Message,
+	Investigation,
 	ProviderHealth,
 	ProviderInfo
 } from './types';
+
+const ensuredInvestigations = new Map<string, Promise<Investigation>>();
+
+/** Workspace bookkeeping is automatic but must never prevent an analysis. The
+ * first actual user-message ID is stable in an archived conversation and is
+ * the backend's idempotency key until explicit Conversation links land. */
+async function ensureWorkspaceInvestigation(conv: Conversation): Promise<void> {
+	if (!isDesktop() || !conv.workspaceScope) return;
+	const workspace = session.workspaceAt(conv.workspaceScope);
+	if (!workspace || workspace.historyOnly) return;
+	const source = conv.messages.find(isActualQuestion);
+	if (!source) return;
+
+	const key = JSON.stringify([conv.workspaceScope, source.id]);
+	let pending = ensuredInvestigations.get(key);
+	const ownsRequest = !pending;
+	if (!pending) {
+		pending = ipc.investigationEnsure(conv.workspaceScope, source.text, source.id);
+		ensuredInvestigations.set(key, pending);
+	}
+
+	try {
+		await pending;
+		if (ownsRequest) session.investigationsVersion += 1;
+	} catch (cause) {
+		if (ensuredInvestigations.get(key) === pending) ensuredInvestigations.delete(key);
+		conv.addSystem(`Couldn't save this workspace Investigation: ${errMsg(cause)}. The analysis will continue.`);
+	}
+}
 
 const HELP = `Ask a question in plain language and Fella answers from your files,
 showing the exact steps it took. You never need these commands, but here they are:
@@ -945,6 +975,9 @@ async function ask(
 	clarificationTurnId?: string
 ): Promise<void> {
 	if (!requireEngine()) return;
+	conv.busy = true;
+	conv.activity = 'preparing the analysis…';
+	await ensureWorkspaceInvestigation(conv);
 
 	const msg = conv.addAssistant('');
 	conv.startRun();
@@ -1056,6 +1089,9 @@ export async function rerunAnalysisTurn(message: Message): Promise<void> {
 		conv.addSystem('Finish the current question before rerunning this answer.');
 		return;
 	}
+	conv.busy = true;
+	conv.activity = 'preparing the analysis…';
+	await ensureWorkspaceInvestigation(conv);
 
 	const msg = conv.addAssistant('');
 	conv.startRun();

@@ -234,6 +234,59 @@ pub fn create(
     ))
 }
 
+/// Resolve the Investigation already seeded by this conversation's first
+/// user message, or create it without requiring a separate setup action.
+pub fn ensure_for_source_message(
+    data_dir: &Path,
+    workspace_id: &str,
+    initial_request: &str,
+    source_message_id: &str,
+) -> EngineResult<Investigation> {
+    const MAX_SOURCE_MESSAGE_ID_CHARS: usize = 256;
+
+    let workspace_id = workspace_id.trim();
+    let source_message_id = source_message_id.trim();
+    if workspace_id.is_empty() {
+        return Err(EngineError::msg(
+            "an investigation requires an explicit workspace id",
+        ));
+    }
+    if source_message_id.is_empty()
+        || source_message_id.chars().count() > MAX_SOURCE_MESSAGE_ID_CHARS
+    {
+        return Err(EngineError::msg(
+            "an investigation requires a valid source conversation message id",
+        ));
+    }
+
+    if let Some(existing) = list(data_dir)?.into_iter().find(|record| {
+        record.workspace_id == workspace_id
+            && record.brief_source_message_id.as_deref() == Some(source_message_id)
+    }) {
+        return Ok(existing);
+    }
+
+    let title_text = initial_request
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let title: String = title_text.chars().take(64).collect();
+    let title = if title_text.chars().count() > 64 {
+        format!("{}…", title.chars().take(61).collect::<String>().trim_end())
+    } else if title.is_empty() {
+        "New investigation".to_owned()
+    } else {
+        title
+    };
+    create(
+        data_dir,
+        workspace_id,
+        &title,
+        Some(initial_request),
+        Some(source_message_id),
+    )
+}
+
 fn write_record(data_dir: &Path, record: &Investigation) -> EngineResult<()> {
     let path = record_path(data_dir, &record.id)?;
     let body = serde_json::to_vec_pretty(record).map_err(EngineError::from)?;
@@ -450,6 +503,72 @@ mod tests {
         assert_eq!(created.created_at_ms, created.updated_at_ms);
         assert_eq!(load(&data_dir, &created.id).unwrap(), created);
         assert_eq!(list(&data_dir).unwrap(), vec![created.clone()]);
+
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn ensure_reuses_the_investigation_seeded_by_the_first_message() {
+        let data_dir = scratch();
+        let first = ensure_for_source_message(
+            &data_dir,
+            "/work/sales",
+            "  Summarize   sales trends  ",
+            "message-first",
+        )
+        .unwrap();
+        assert_eq!(first.title, "Summarize sales trends");
+        assert_eq!(first.brief.goal, "Summarize   sales trends");
+        assert_eq!(
+            first.brief_source_message_id.as_deref(),
+            Some("message-first")
+        );
+
+        let reopened = ensure_for_source_message(
+            &data_dir,
+            "/work/sales",
+            "A follow-up should not replace the original request",
+            "message-first",
+        )
+        .unwrap();
+        assert_eq!(reopened, first);
+
+        let manually_created = create(
+            &data_dir,
+            "/work/sales",
+            "Analyst-selected title",
+            Some("Original manual brief"),
+            Some("message-manual"),
+        )
+        .unwrap();
+        let resolved_manual = ensure_for_source_message(
+            &data_dir,
+            "/work/sales",
+            "Do not replace the existing Investigation brief",
+            "message-manual",
+        )
+        .unwrap();
+        assert_eq!(resolved_manual, manually_created);
+
+        let another_conversation = ensure_for_source_message(
+            &data_dir,
+            "/work/sales",
+            "Compare sales by channel",
+            "message-second",
+        )
+        .unwrap();
+        assert_ne!(another_conversation.id, first.id);
+
+        let same_message_in_another_workspace = ensure_for_source_message(
+            &data_dir,
+            "/work/other",
+            "Analyze the other folder",
+            "message-first",
+        )
+        .unwrap();
+        assert_ne!(same_message_in_another_workspace.id, first.id);
+        assert_eq!(list(&data_dir).unwrap().len(), 4);
+        assert!(ensure_for_source_message(&data_dir, "/work/sales", "Question", "  ").is_err());
 
         let _ = std::fs::remove_dir_all(data_dir);
     }

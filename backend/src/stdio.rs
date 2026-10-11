@@ -440,6 +440,16 @@ async fn dispatch(
                 source_message_id,
             ))
         }
+        "investigation_ensure" => {
+            let workspace_id: String = required(&request.params, "workspaceId")?;
+            let initial_request: String = required(&request.params, "initialRequest")?;
+            let source_message_id: String = required(&request.params, "sourceMessageId")?;
+            value_result(engine.investigation_ensure(
+                &workspace_id,
+                &initial_request,
+                &source_message_id,
+            ))
+        }
         "investigation_update_brief" => {
             let investigation_id: String = required(&request.params, "investigationId")?;
             let brief = required(&request.params, "brief")?;

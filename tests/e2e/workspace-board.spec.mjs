@@ -53,6 +53,8 @@ async function installDesktopMock(
 	await page.addInitScript(({ fixtureFolders, seedUnavailableConversation, seedDeletionConversations, replayStatus, replayStatusError, reindexedCatalog, chartEvidence, detailEvidence, providerList, providerHealth, runLogEntries }) => {
 		const calls = [];
 		const archivedConversations = new Map();
+		const investigations = new Map();
+		const investigationEnsureCalls = [];
 		const deletedConversationIds = [];
 		const deletedConversationWorkspaces = [];
 		const unavailablePath = 'C:\\FellaFixture\\unavailable-archive';
@@ -133,6 +135,8 @@ async function installDesktopMock(
 			capabilities: { table_analysis: true, document_analysis: true, python_analysis: true, visualizations: true }
 		};
 		window.__workspaceAskCalls = calls;
+		window.__workspaceInvestigationEnsureCalls = investigationEnsureCalls;
+		window.__workspaceInvestigations = () => [...investigations.values()];
 		window.__workspaceOpenCalls = [];
 		window.__deletedConversationIds = deletedConversationIds;
 		window.__deletedConversationWorkspaces = deletedConversationWorkspaces;
@@ -142,6 +146,28 @@ async function installDesktopMock(
 			invoke: async (command, args = {}) => {
 				switch (command) {
 					case 'app_ready': return 1;
+					case 'investigations_list': return [...investigations.values()];
+					case 'investigation_ensure': {
+						investigationEnsureCalls.push(args);
+						const key = JSON.stringify([args.workspaceId, args.sourceMessageId]);
+						if (!investigations.has(key)) {
+							const now = Date.now();
+							const id = `inv-${investigations.size + 1}`;
+							const goal = args.initialRequest.trim();
+							investigations.set(key, {
+								id,
+								workspace_id: args.workspaceId,
+								title: goal.slice(0, 64),
+								brief: { goal, audience: '', desired_output: '', constraints: [] },
+								brief_source_message_id: args.sourceMessageId,
+								analysis_turn_ids: [],
+								status: 'active',
+								created_at_ms: now,
+								updated_at_ms: now
+							});
+						}
+						return investigations.get(key);
+					}
 					case 'get_settings': return settings;
 					case 'list_providers': return providerList;
 					case 'provider_health': return providerHealth;
@@ -358,6 +384,15 @@ test('environments compose General and repository panes while conversations reta
 	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
 	const salesCall = await page.evaluate(() => window.__workspaceAskCalls.at(-1));
 	expect(salesCall.workspaceId).toBe(folders[0].path);
+	const automaticInvestigation = await page.evaluate(() => ({
+		calls: window.__workspaceInvestigationEnsureCalls,
+		records: window.__workspaceInvestigations()
+	}));
+	expect(automaticInvestigation.calls).toHaveLength(1);
+	expect(automaticInvestigation.calls[0].workspaceId).toBe(folders[0].path);
+	expect(automaticInvestigation.calls[0].initialRequest).toBe('Summarize sales trends');
+	expect(automaticInvestigation.records).toHaveLength(1);
+	expect(automaticInvestigation.records[0].brief.goal).toBe('Summarize sales trends');
 
 	const generalTile = page.getByRole('article', { name: 'General workspace' });
 	await generalTile.locator('.tile-focus').click();
@@ -365,6 +400,7 @@ test('environments compose General and repository panes while conversations reta
 	await page.getByRole('button', { name: 'Send' }).click();
 	await expect(page.getByText('Scoped to general.').last()).toBeVisible();
 	expect((await page.evaluate(() => window.__workspaceAskCalls.at(-1))).workspaceId).toBeNull();
+	expect(await page.evaluate(() => window.__workspaceInvestigationEnsureCalls.length)).toBe(1);
 	await expect(switcher).toContainText('General +1');
 
 	await salesWorkspaceRow.click();

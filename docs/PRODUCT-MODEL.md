@@ -138,7 +138,7 @@ the implementation slice; this map is the shared conceptual contract.
 | [#184 Editable brief](https://github.com/Avijit-Kumar-GIT/fella/issues/184) | Give each Investigation a compact, editable goal/outcome/constraint value. |
 | [#185 Brief updates](https://github.com/Avijit-Kumar-GIT/fella/issues/185) | Propose and review a new brief version when direction materially changes. |
 | [#186 Separate messages and runs](https://github.com/Avijit-Kumar-GIT/fella/issues/186) | Link canonical AnalysisTurn IDs from an Investigation and open the run record from its transcript message. |
-| [#187 Automatic Investigation](https://github.com/Avijit-Kumar-GIT/fella/issues/187) | Resolve/create the one workspace Investigation without extra setup. |
+| [#187 Automatic Investigation](https://github.com/Avijit-Kumar-GIT/fella/issues/187) | Automatically resolve/create one Investigation per workspace conversation, keyed by its first user message. |
 | [#188 Conversation association](https://github.com/Avijit-Kumar-GIT/fella/issues/188) | Make the workspace conversation link stable and navigable from either side. |
 | [#189 Editable Question plan](https://github.com/Avijit-Kumar-GIT/fella/issues/189) | Let analysts edit Question text and ordering without rewriting history. |
 | [#190 Usable sources in context](https://github.com/Avijit-Kumar-GIT/fella/issues/190) | Show catalog availability/readiness inside the Investigation workflow. |
@@ -180,9 +180,12 @@ the implementation slice; this map is the shared conceptual contract.
 
 The first slice adds only the durable Investigation record: generated stable
 ID, explicit Workspace ID, title, lifecycle status, and timestamps, with
-independent create/list/load operations. Later slices add links to the
-existing Conversation and AnalysisTurn records. This sequencing keeps the
-engine’s model-directed execution and its stored run payloads unchanged.
+independent create/list/load operations. Workspace analysis now automatically
+resolves or creates that record using the first user message ID as an
+idempotency key; ordinary asks require no setup step. A later Conversation
+association slice will make the link explicit and navigable. This sequencing
+keeps the engine’s model-directed execution and its stored run payloads
+unchanged.
 
 The first shipped slices now also retain the source scope on each completed
 analysis turn and an editable current Brief on an Investigation. The Brief is
@@ -194,4 +197,7 @@ analyst applies or dismisses it; neither the brief nor its review cursor changes
 until that choice is saved. Routine follow-up questions are not proposals, and
 the original source message remains immutable. Investigations now retain only
 IDs for their linked AnalysisTurns; conversation messages remain unchanged and
-open the canonical execution record by its existing turn ID.
+open the canonical execution record by its existing turn ID. Workspace asks
+automatically ensure their Investigation from the conversation's first real
+question; reopening that same transcript resolves the existing record rather
+than creating another one. General conversations remain outside this flow.

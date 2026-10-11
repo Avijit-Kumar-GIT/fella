@@ -501,6 +501,8 @@ class Session {
 	/** Bumped whenever a conversation is archived, so the sidebar's list
 	 *  knows to refetch without polling. */
 	historyVersion = $state<number>(0);
+	/** Bumped when the ask path automatically creates/resolves an Investigation. */
+	investigationsVersion = $state<number>(0);
 	/** Source selected by global search for the Sources master/detail view. */
 	selectedSourcePath = $state<string | null>(null);
 	/** Repositories shown in the local sidebar, in user-defined order. */

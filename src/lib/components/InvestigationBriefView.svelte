@@ -12,6 +12,7 @@
 	let selectedId = $state<string | null>(null);
 	let workspacePath = $state<string | null>(null);
 	let loadedWorkspace = $state<string | null>(null);
+	let loadedInvestigationsVersion = -1;
 	let goal = $state('');
 	let audience = $state('');
 	let desiredOutput = $state('');
@@ -29,6 +30,16 @@
 	const syncingInvestigations = new Set<string>();
 
 	let selected = $derived(investigations.find((item) => item.id === selectedId) ?? null);
+	let currentConversationSource = $derived.by(() => {
+		const conversation = session.activeChat;
+		if (!workspacePath || conversation.workspaceScope !== workspacePath) return undefined;
+		return firstActualQuestion(conversation.messages);
+	});
+	let currentConversationInvestigation = $derived(
+		currentConversationSource
+			? investigations.find((item) => item.workspace_id === workspacePath && item.brief_source_message_id === currentConversationSource?.id) ?? null
+			: null
+	);
 	let unlinkedAnalysisTurnIds = $derived.by(() => {
 		const item = selected;
 		const conversation = session.activeChat;
@@ -109,17 +120,20 @@
 
 	$effect(() => {
 		const path = session.catalog.workspace;
+		const version = session.investigationsVersion;
 		workspacePath = path;
 		if (!path) {
 			requestSerial += 1;
 			loadedWorkspace = null;
+			loadedInvestigationsVersion = version;
 			investigations = [];
 			selectedId = null;
 			loading = false;
 			return;
 		}
-		if (path === loadedWorkspace) return;
+		if (path === loadedWorkspace && version === loadedInvestigationsVersion) return;
 		loadedWorkspace = path;
+		loadedInvestigationsVersion = version;
 		void loadWorkspace(path);
 	});
 
@@ -157,29 +171,17 @@
 		proposalTarget = proposal?.target ?? 'goal';
 	});
 
-	function titleFromRequest(request: string | undefined): string {
-		if (!request) return 'New investigation';
-		const singleLine = request.replace(/\s+/g, ' ').trim();
-		return singleLine.length > 64 ? `${singleLine.slice(0, 61).trimEnd()}…` : singleLine;
-	}
-
 	async function createInvestigation(): Promise<void> {
 		if (!workspacePath || creating || !isDesktop()) return;
 		creating = true;
 		error = '';
-		const conversation = session.activeChat;
-		const request = conversation.workspaceScope === workspacePath
-			? firstActualQuestion(conversation.messages)
-			: undefined;
+		const request = currentConversationSource;
 		try {
-			const created = await ipc.investigationCreate(
-				workspacePath,
-				titleFromRequest(request?.text),
-				request?.text,
-				request?.id
-			);
-			investigations = [created, ...investigations];
-			selectedId = created.id;
+			const record = request
+				? await ipc.investigationEnsure(workspacePath, request.text, request.id)
+				: await ipc.investigationCreate(workspacePath);
+			investigations = [record, ...investigations.filter((item) => item.id !== record.id)];
+			selectedId = record.id;
 		} catch (cause) {
 			error = cause instanceof Error ? cause.message : String(cause);
 		} finally {
@@ -243,7 +245,7 @@
 		</div>
 		{#if workspacePath}
 			<Button type="button" disabled={loading || creating} onclick={() => void createInvestigation()}>
-				<Icon name="plus" size={16} />{creating ? 'Starting…' : 'New investigation'}
+				<Icon name="plus" size={16} />{creating ? 'Opening…' : currentConversationInvestigation ? 'Open current Investigation' : currentConversationSource ? 'Start from conversation' : 'New investigation'}
 			</Button>
 		{/if}
 	</header>
@@ -263,9 +265,9 @@
 		<div class="empty-state">
 			<Icon name="bookmark" size={20} />
 			<h2>No investigations yet</h2>
-			<p>Start one from this workspace. If the current conversation has a question, its wording seeds the goal.</p>
+			<p>Workspace questions start an Investigation automatically. You can also create one here before beginning.</p>
 			<Button type="button" disabled={creating} onclick={() => void createInvestigation()}>
-				<Icon name="plus" size={16} />{creating ? 'Starting…' : 'Start from this workspace'}
+				<Icon name="plus" size={16} />{creating ? 'Opening…' : currentConversationSource ? 'Start from conversation' : 'Start from this workspace'}
 			</Button>
 		</div>
 	{:else}

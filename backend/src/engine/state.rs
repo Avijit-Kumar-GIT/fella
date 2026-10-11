@@ -164,6 +164,9 @@ pub struct EngineState {
     workspace: Mutex<WorkspaceState>,
     workspace_gate: Arc<WorkspaceGate>,
     mount_serial: Mutex<()>,
+    /// Serialize resolve-or-create so two first-turn requests cannot race
+    /// into duplicate durable Investigations for one source message.
+    investigation_ensure_lock: Mutex<()>,
     sqlite: Mutex<rusqlite::Connection>,
     inner: Mutex<Inner>,
     http: reqwest::Client,
@@ -574,6 +577,50 @@ mod run_log_tests {
         assert_eq!(entries[0].trigger.as_deref(), Some("repeated_tool_errors"));
         assert_eq!(entries[0].trigger_steps, Some(3));
         assert_eq!(entries[0].trigger_errors, Some(2));
+
+        drop(engine);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+}
+
+#[cfg(test)]
+mod investigation_ensure_tests {
+    use super::*;
+    use std::sync::{Arc, Barrier};
+
+    #[test]
+    fn concurrent_first_turns_resolve_to_one_investigation() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let data_dir = std::env::temp_dir().join(format!("fella-investigation-ensure-{nonce}"));
+        let engine = Arc::new(EngineState::new(&data_dir).unwrap());
+        let barrier = Arc::new(Barrier::new(8));
+        let workers: Vec<_> = (0..8)
+            .map(|_| {
+                let engine = Arc::clone(&engine);
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    engine
+                        .investigation_ensure(
+                            "/work/sales",
+                            "Summarize sales trends",
+                            "message-first",
+                        )
+                        .unwrap()
+                        .id
+                })
+            })
+            .collect();
+
+        let ids: Vec<_> = workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap())
+            .collect();
+        assert!(ids.iter().all(|id| id == &ids[0]));
+        assert_eq!(engine.investigations_list().unwrap().len(), 1);
 
         drop(engine);
         let _ = std::fs::remove_dir_all(data_dir);
@@ -1461,6 +1508,7 @@ impl EngineState {
             workspace: Mutex::new(WorkspaceState::new(data, None)),
             workspace_gate: Arc::new(WorkspaceGate::default()),
             mount_serial: Mutex::new(()),
+            investigation_ensure_lock: Mutex::new(()),
             sqlite: Mutex::new(sqlite),
             inner: Mutex::new(Inner::default()),
             http,
@@ -1839,6 +1887,26 @@ impl EngineState {
             &self.data_dir,
             workspace_id,
             title,
+            initial_request,
+            source_message_id,
+        )
+    }
+
+    /// Resolve or create the Investigation seeded by the conversation's
+    /// original message. Repeated calls for a reopened conversation are safe.
+    pub fn investigation_ensure(
+        &self,
+        workspace_id: &str,
+        initial_request: &str,
+        source_message_id: &str,
+    ) -> EngineResult<Investigation> {
+        let _guard = self
+            .investigation_ensure_lock
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        investigation::ensure_for_source_message(
+            &self.data_dir,
+            workspace_id,
             initial_request,
             source_message_id,
         )
