@@ -5,7 +5,9 @@
 //! it from streamed messages, and so future replay/rerun code has a stable
 //! object to load.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::UNIX_EPOCH;
 
 use crate::engine::error::{EngineError, EngineResult};
@@ -14,6 +16,7 @@ use crate::engine::runtime::{
 };
 
 const MAX_RECENT_TURNS: usize = 100;
+static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 fn turns_dir(data_dir: &Path) -> PathBuf {
     data_dir.join("analysis").join("turns")
@@ -30,18 +33,53 @@ fn turn_path(data_dir: &Path, turn_id: &str) -> EngineResult<PathBuf> {
     Ok(turns_dir(data_dir).join(format!("{turn_id}.json")))
 }
 
-pub fn save(data_dir: &Path, turn: &AnalysisTurn) -> EngineResult<String> {
+/// Create one canonical run record without replacing an earlier attempt.
+/// The temporary file is linked into place only if the destination is absent,
+/// so duplicate IDs fail atomically instead of silently erasing history.
+pub fn create(data_dir: &Path, turn: &AnalysisTurn) -> EngineResult<String> {
     let path = turn_path(data_dir, &turn.id)?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|error| EngineError::io(format!("create {}", parent.display()), error))?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| EngineError::msg("analysis turn path has no parent directory"))?;
+    std::fs::create_dir_all(parent)
+        .map_err(|error| EngineError::io(format!("create {}", parent.display()), error))?;
+    let body = serde_json::to_vec_pretty(turn).map_err(EngineError::from)?;
+    let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let temporary = parent.join(format!(
+        ".{}.{}.{sequence}.tmp",
+        turn.id,
+        std::process::id()
+    ));
+    let write_result: EngineResult<()> = (|| {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .map_err(|error| EngineError::io(format!("create {}", temporary.display()), error))?;
+        file.write_all(&body)
+            .map_err(|error| EngineError::io(format!("write {}", temporary.display()), error))?;
+        file.sync_all()
+            .map_err(|error| EngineError::io(format!("sync {}", temporary.display()), error))?;
+        drop(file);
+        std::fs::hard_link(&temporary, &path).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::AlreadyExists {
+                EngineError::msg(format!("analysis turn {} already exists", turn.id))
+            } else {
+                EngineError::io(format!("create {}", path.display()), error)
+            }
+        })?;
+        Ok(())
+    })();
+    let cleanup_result = std::fs::remove_file(&temporary);
+    if let Err(error) = cleanup_result {
+        if write_result.is_ok() {
+            log::warn!(
+                "could not remove temporary analysis record {}: {error}",
+                temporary.display()
+            );
+        }
     }
-    let body = serde_json::to_string_pretty(turn).map_err(EngineError::from)?;
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, body)
-        .map_err(|error| EngineError::io(format!("write {}", tmp.display()), error))?;
-    std::fs::rename(&tmp, &path)
-        .map_err(|error| EngineError::io(format!("replace {}", path.display()), error))?;
+    write_result?;
     Ok(path.display().to_string())
 }
 
@@ -295,10 +333,10 @@ mod tests {
     }
 
     #[test]
-    fn saves_and_loads_a_typed_turn_record() {
+    fn creates_and_loads_a_typed_turn_record() {
         let dir = std::env::temp_dir().join(format!("fella-analysis-store-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let path = save(&dir, &turn()).unwrap();
+        let path = create(&dir, &turn()).unwrap();
         assert!(path.ends_with("turn-test-1.json"));
         assert!(exists(&dir, "turn-test-1"));
         assert!(!exists(&dir, "missing-turn"));
@@ -312,6 +350,103 @@ mod tests {
             vec!["evidence-1"]
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn creating_a_duplicate_turn_id_does_not_replace_the_original_attempt() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("fella-analysis-immutable-{nonce}"));
+        let original = turn();
+        create(&dir, &original).unwrap();
+
+        let mut conflicting = original.clone();
+        conflicting.question = "a different question".into();
+        conflicting.result.text = "a replacement answer".into();
+        let error = create(&dir, &conflicting).unwrap_err();
+
+        assert!(error.to_string().contains("already exists"));
+        let loaded = load(&dir, &original.id).unwrap();
+        assert_eq!(loaded.question, original.question);
+        assert_eq!(loaded.result.text, original.result.text);
+        assert_eq!(
+            loaded.trace.steps[0].operation,
+            original.trace.steps[0].operation
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn distinct_attempts_keep_their_own_context_method_and_outputs() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("fella-analysis-attempts-{nonce}"));
+        let mut first = turn();
+        first.source_scope = Some(serde_json::from_value(serde_json::json!({
+            "used_sources": [{ "source": "sales.csv", "table": "sales", "evidence_ids": ["evidence-1"] }],
+            "skipped_sources": []
+        })).unwrap());
+        first.investigation_context = Some(serde_json::from_value(serde_json::json!({
+            "investigation_id": "investigation-1",
+            "question_id": "question-1",
+            "question_text": "Compare sales",
+            "definitions": [{ "id": "definition-1", "revision": 1, "kind": "definition", "text": "Sales are net of refunds." }],
+            "source_selection": { "mode": "selected_sources", "included_paths": ["sales.csv"] }
+        })).unwrap());
+        create(&dir, &first).unwrap();
+
+        let mut second = first.clone();
+        second.id = "turn-test-2".into();
+        second.trace.id = "trace-test-2".into();
+        second.trace.turn_id = second.id.clone();
+        second.question = "Compare sales by month".into();
+        second.rerun_of = Some(first.id.clone());
+        second.plan.strategy = PlanStrategy::CompiledSql;
+        second.source_scope.as_mut().unwrap().used_sources[0].source = "monthly-sales.csv".into();
+        second.investigation_context.as_mut().unwrap().definitions[0].revision = 2;
+        second.investigation_context.as_mut().unwrap().definitions[0].text =
+            "Sales are gross of refunds.".into();
+        second.result.text = "The monthly total is 120.".into();
+        create(&dir, &second).unwrap();
+
+        let loaded_first = load(&dir, &first.id).unwrap();
+        let loaded_second = load(&dir, &second.id).unwrap();
+        assert_eq!(
+            loaded_first.source_scope.as_ref().unwrap().used_sources[0].source,
+            "sales.csv"
+        );
+        assert_eq!(
+            loaded_first
+                .investigation_context
+                .as_ref()
+                .unwrap()
+                .definitions[0]
+                .revision,
+            1
+        );
+        assert_eq!(loaded_first.plan.strategy, PlanStrategy::DirectTools);
+        assert_eq!(loaded_first.result.text, "100");
+        assert_eq!(loaded_second.rerun_of.as_deref(), Some(first.id.as_str()));
+        assert_eq!(
+            loaded_second.source_scope.as_ref().unwrap().used_sources[0].source,
+            "monthly-sales.csv"
+        );
+        assert_eq!(
+            loaded_second
+                .investigation_context
+                .as_ref()
+                .unwrap()
+                .definitions[0]
+                .revision,
+            2
+        );
+        assert_eq!(loaded_second.plan.strategy, PlanStrategy::CompiledSql);
+        assert_eq!(loaded_second.result.text, "The monthly total is 120.");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
@@ -331,13 +466,13 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("fella-investigation-runs-{nonce}"));
         let engine = EngineState::new(&dir).unwrap();
         let canonical_turn = turn();
-        save(&dir, &canonical_turn).unwrap();
+        create(&dir, &canonical_turn).unwrap();
 
         let mut foreign_turn = turn();
         foreign_turn.id = "turn-foreign".into();
         foreign_turn.trace.turn_id = foreign_turn.id.clone();
         foreign_turn.workspace = Some("/tmp/another-workspace".into());
-        save(&dir, &foreign_turn).unwrap();
+        create(&dir, &foreign_turn).unwrap();
 
         let investigation = engine
             .investigation_create(
@@ -428,7 +563,7 @@ mod tests {
             definitions: Vec::new(),
             source_selection: Default::default(),
         });
-        save(&dir, &canonical_turn).unwrap();
+        create(&dir, &canonical_turn).unwrap();
 
         let linked = engine
             .investigation_set_analysis_turn_questions(
@@ -483,7 +618,7 @@ mod tests {
         foreign_turn.id = "turn-foreign-question-link".into();
         foreign_turn.trace.turn_id = foreign_turn.id.clone();
         foreign_turn.workspace = Some("/tmp/another-workspace".into());
-        save(&dir, &foreign_turn).unwrap();
+        create(&dir, &foreign_turn).unwrap();
         assert!(engine
             .investigation_set_analysis_turn_questions(
                 &investigation.id,
@@ -531,7 +666,7 @@ mod tests {
         }];
         private_turn.clarification_of = Some("private-parent-turn-id".into());
         private_turn.rerun_of = Some("private-rerun-parent-id".into());
-        save(&dir, &private_turn).unwrap();
+        create(&dir, &private_turn).unwrap();
 
         let entries = recent(&dir, 50);
         assert_eq!(entries.len(), 1);

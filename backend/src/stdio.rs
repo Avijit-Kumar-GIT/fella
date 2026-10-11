@@ -631,6 +631,7 @@ async fn dispatch(
                         investigation_id: investigation_id.as_deref(),
                         question_id: question_id.as_deref(),
                         investigation_context: None,
+                        rerun_of: None,
                     },
                     move |item| event(&events, id, item),
                 )

@@ -600,7 +600,7 @@ pub fn question_run_started(
     investigation_id: &str,
     question_id: &str,
     turn_id: &str,
-) -> EngineResult<()> {
+) -> EngineResult<Option<String>> {
     let mut question = question_load(data_dir, question_id)?;
     if question.investigation_id != investigation_id
         || question.status != InvestigationQuestionStatus::Active
@@ -623,12 +623,13 @@ pub fn question_run_started(
     if was_completed {
         write_record(data_dir, &investigation)?;
     }
+    let previous_turn_id = question.latest_analysis_turn_id.clone();
     question.answer_status = InvestigationQuestionAnswerStatus::Running;
     question.answer_status_reason = None;
     question.latest_analysis_turn_id = Some(turn_id.to_owned());
     question.updated_at_ms = now_ms().max(question.updated_at_ms.saturating_add(1));
     write_question_record(data_dir, &question)?;
-    Ok(())
+    Ok(previous_turn_id)
 }
 
 /// Persist a terminal run state only if this is still the Question's latest
@@ -2492,7 +2493,10 @@ mod tests {
             Some("Explain revenue movement")
         );
 
-        question_run_started(&data_dir, &created.id, &question_id, "turn-incomplete").unwrap();
+        assert_eq!(
+            question_run_started(&data_dir, &created.id, &question_id, "turn-incomplete").unwrap(),
+            None
+        );
         let running = question_load(&data_dir, &question_id).unwrap();
         assert_eq!(
             running.answer_status,
@@ -2536,7 +2540,10 @@ mod tests {
         )
         .unwrap());
 
-        question_run_started(&data_dir, &created.id, &question_id, "turn-blocked").unwrap();
+        assert_eq!(
+            question_run_started(&data_dir, &created.id, &question_id, "turn-blocked").unwrap(),
+            Some("turn-incomplete".into())
+        );
         assert!(question_run_finished(
             &data_dir,
             &created.id,
@@ -2554,13 +2561,16 @@ mod tests {
             Some("The required date field is unavailable.")
         );
 
-        question_run_started(
-            &data_dir,
-            &created.id,
-            &question_id,
-            "turn-edited-during-run",
-        )
-        .unwrap();
+        assert_eq!(
+            question_run_started(
+                &data_dir,
+                &created.id,
+                &question_id,
+                "turn-edited-during-run",
+            )
+            .unwrap(),
+            Some("turn-blocked".into())
+        );
         update_questions(
             &data_dir,
             &created.id,
@@ -3257,7 +3267,7 @@ mod tests {
                 }
             }))
             .unwrap();
-        crate::engine::analysis_store::save(&data_dir, &turn).unwrap();
+        crate::engine::analysis_store::create(&data_dir, &turn).unwrap();
         link_analysis_turns(&data_dir, &created.id, &[turn.id.clone()]).unwrap();
 
         let saved = create_finding(

@@ -2380,7 +2380,7 @@ mod tests {
             }
         }))
         .unwrap();
-        crate::engine::analysis_store::save(&data, &turn).unwrap();
+        crate::engine::analysis_store::create(&data, &turn).unwrap();
 
         let registry = Registry::standard_with_history(AnalysisCapabilities::default(), true);
         assert!(registry.has_tool("read_prior_analysis"));

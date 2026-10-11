@@ -62,6 +62,9 @@ pub struct AskOptions<'a> {
     /// Immutable context loaded from an existing turn for a faithful rerun or
     /// clarification continuation. It is not refreshed from current records.
     pub investigation_context: Option<InvestigationContextSnapshot>,
+    /// Explicit parent for replayed attempts. Question runs otherwise capture
+    /// the latest saved attempt as their parent.
+    pub rerun_of: Option<&'a str>,
 }
 
 struct PersistAnalysisTurn<'a> {
@@ -73,6 +76,7 @@ struct PersistAnalysisTurn<'a> {
     context_audit: &'a ContextAssemblyAudit,
     catalog: &'a Catalog,
     answer: &'a Answer,
+    rerun_of: Option<&'a str>,
 }
 
 fn question_answer_status(
@@ -1348,7 +1352,7 @@ mod conversation_context_tests {
             included_paths: vec!["sales.csv".into()],
         };
         let turn_id = "turn-investigation-scope";
-        analysis_store::save(
+        analysis_store::create(
             &data_dir,
             &crate::engine::runtime::AnalysisTurn {
                 id: turn_id.into(),
@@ -2622,25 +2626,11 @@ impl EngineState {
                     investigation_id: None,
                     question_id: None,
                     investigation_context: original.investigation_context.clone(),
+                    rerun_of: Some(&original.id),
                 },
                 emit,
             )
             .await?;
-        match analysis_store::load(&self.data_dir, &answer.turn_id) {
-            Ok(mut rerun) => {
-                rerun.rerun_of = Some(original.id);
-                if let Err(error) = analysis_store::save(&self.data_dir, &rerun) {
-                    log::warn!(
-                        "analysis rerun {} was saved without lineage: {error}",
-                        answer.turn_id
-                    );
-                }
-            }
-            Err(error) => log::warn!(
-                "analysis rerun {} could not attach lineage: {error}",
-                answer.turn_id
-            ),
-        }
         Ok(answer)
     }
 
@@ -2810,6 +2800,7 @@ impl EngineState {
             context_audit,
             catalog,
             answer,
+            rerun_of,
         } = turn;
         let deleted = self
             .deleted_conversations
@@ -2870,7 +2861,7 @@ impl EngineState {
             investigation_context: investigation_context.cloned(),
             context_audit: Some(context_audit.clone()),
             provenance: Some(answer.provenance.clone()),
-            rerun_of: None,
+            rerun_of: rerun_of.map(str::to_owned),
             state,
             contract: answer.contract.clone(),
             plan: answer.plan.clone().unwrap_or_else(|| LogicalPlan {
@@ -2895,7 +2886,7 @@ impl EngineState {
                 evidence,
             },
         };
-        if let Err(error) = analysis_store::save(&self.data_dir, &record) {
+        if let Err(error) = analysis_store::create(&self.data_dir, &record) {
             log::warn!(
                 "analysis turn {} was not persisted: {error}",
                 answer.turn_id
@@ -4511,6 +4502,7 @@ exactly, character for character, from the list below.";
                 investigation_id: None,
                 question_id: None,
                 investigation_context: None,
+                rerun_of: None,
             },
             emit,
         )
@@ -4534,6 +4526,7 @@ exactly, character for character, from the list below.";
             investigation_id,
             question_id,
             investigation_context: saved_investigation_context,
+            rerun_of,
         } = options;
         let _workspace_read_permit = self.workspace_gate.read();
         let settings = self.settings();
@@ -4647,6 +4640,7 @@ exactly, character for character, from the list below.";
         let question_status_context = investigation_context
             .as_ref()
             .filter(|context| context.question_id.is_some());
+        let mut previous_question_turn = None;
         {
             let _guard = self
                 .question_state_lock
@@ -4666,20 +4660,23 @@ exactly, character for character, from the list below.";
                         && question.status == investigation::InvestigationQuestionStatus::Active
                 });
                 if is_active {
-                    if let Err(error) = investigation::question_run_started(
+                    match investigation::question_run_started(
                         &self.data_dir,
                         &snapshot.investigation_id,
                         snapshot.question_id.as_deref().unwrap_or_default(),
                         &turn_id,
                     ) {
-                        let mut flags = self.cancel.lock().unwrap_or_else(|e| e.into_inner());
-                        if flags
-                            .get(conversation_id)
-                            .is_some_and(|flag| Arc::ptr_eq(flag, &cancel))
-                        {
-                            flags.remove(conversation_id);
+                        Ok(previous_turn_id) => previous_question_turn = previous_turn_id,
+                        Err(error) => {
+                            let mut flags = self.cancel.lock().unwrap_or_else(|e| e.into_inner());
+                            if flags
+                                .get(conversation_id)
+                                .is_some_and(|flag| Arc::ptr_eq(flag, &cancel))
+                            {
+                                flags.remove(conversation_id);
+                            }
+                            return Err(error);
                         }
-                        return Err(error);
                     }
                 }
             }
@@ -4725,6 +4722,7 @@ exactly, character for character, from the list below.";
                     context_audit: &context.audit,
                     catalog: &turn_catalog,
                     answer: &answer,
+                    rerun_of: rerun_of.or(previous_question_turn.as_deref()),
                 });
                 if let Some(snapshot) = question_status_context {
                     let question_id = snapshot.question_id.as_deref().unwrap_or_default();

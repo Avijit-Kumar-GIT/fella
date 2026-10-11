@@ -297,6 +297,7 @@ async fn investigation_definitions_and_question_sources_are_snapshotted_on_the_r
                 investigation_id: Some(&investigation.id),
                 question_id: Some(&question_id),
                 investigation_context: None,
+                rerun_of: None,
             },
             |_| {},
         )
@@ -1763,6 +1764,7 @@ async fn clarification_keeps_safe_candidate_analysis_available() {
                 investigation_id: None,
                 question_id: None,
                 investigation_context: None,
+                rerun_of: None,
             },
             |_| {},
         )
@@ -1787,6 +1789,7 @@ async fn clarification_keeps_safe_candidate_analysis_available() {
                 investigation_id: None,
                 question_id: None,
                 investigation_context: None,
+                rerun_of: None,
             },
             |_| {},
         )
@@ -1811,6 +1814,7 @@ async fn clarification_keeps_safe_candidate_analysis_available() {
                 investigation_id: None,
                 question_id: None,
                 investigation_context: None,
+                rerun_of: None,
             },
             |_| {},
         )
@@ -1968,6 +1972,7 @@ async fn clarification_keeps_safe_candidate_analysis_available() {
                 investigation_id: None,
                 question_id: None,
                 investigation_context: None,
+                rerun_of: None,
             },
             |_| {},
         )

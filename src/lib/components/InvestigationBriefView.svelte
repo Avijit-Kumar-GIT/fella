@@ -564,7 +564,22 @@
 		for (const question of investigation.questions ?? []) {
 			for (const turnId of questionRunIdsFor(question)) ids.add(turnId);
 		}
-		return [...ids].reverse();
+		return [...ids];
+	}
+
+	function analysisRunOrdinal(turnId: string): number | undefined {
+		const index = analysisRunIds().indexOf(turnId);
+		return index < 0 ? undefined : index + 1;
+	}
+
+	function analysisRunStatusLine(turnId: string): string {
+		const run = analysisTurns[turnId];
+		if (!run) return 'Open saved record';
+		const state = runStateLabel(run.state) ?? 'Unknown state';
+		const parentId = run.rerun_of;
+		if (typeof parentId !== 'string' || !parentId) return state;
+		const parentOrdinal = analysisRunOrdinal(parentId);
+		return `${state} · rerun of ${parentOrdinal ? `Run ${parentOrdinal}` : 'saved run'}`;
 	}
 
 	function questionIdsForRun(
@@ -592,12 +607,14 @@
 	}
 
 	function analysisRunSummary(turnId: string): string {
+		const run = analysisTurns[turnId];
+		const savedQuestion = run?.investigation_context?.question_text?.trim();
+		if (savedQuestion) return savedQuestion;
 		const linked = linkedQuestionsForRun(turnId)
 			.map((question) => question.text.trim())
 			.filter(Boolean);
 		if (linked.length) return linked.join(' · ');
-		const run = analysisTurns[turnId];
-		return run?.investigation_context?.question_text ?? run?.question ?? 'Conversation analysis';
+		return run?.question ?? 'Conversation analysis';
 	}
 
 	function answerForAnalysisRun(run: AnalysisTurn): Answer {
@@ -1530,7 +1547,7 @@
 											<span class="analysis-run-number">Run {index + 1}</span>
 											<span class="analysis-run-copy">
 												<strong>{analysisRunSummary(turnId)}</strong>
-												<small>{analysisTurns[turnId] ? runStateLabel(analysisTurns[turnId].state) : 'Open saved record'}</small>
+								<small>{analysisRunStatusLine(turnId)}</small>
 											</span>
 											<Icon name="chevron-right" size={14} />
 										</button>
@@ -1561,6 +1578,30 @@
 										<div><dt>Execution steps</dt><dd>{openAnalysisTurn.trace.steps.length}</dd></div>
 										<div><dt>Recorded evidence</dt><dd>{openAnalysisTurn.result.evidence.length} items</dd></div>
 										<div><dt>Run ID</dt><dd><code>{openAnalysisTurn.id}</code></dd></div>
+										<div>
+											<dt>Attempt</dt>
+											<dd>
+												{#if openAnalysisTurn.rerun_of}
+													{@const parentOrdinal = analysisRunOrdinal(openAnalysisTurn.rerun_of)}
+													{#if parentOrdinal}
+														<Button
+															type="button"
+															variant="ghost"
+															size="sm"
+															class="analysis-run-parent-link"
+															aria-label="Open parent run {parentOrdinal}"
+															onclick={() => void openAnalysisRun(openAnalysisTurn.rerun_of!)}
+														>
+															Rerun of Run {parentOrdinal}
+														</Button>
+													{:else}
+														Rerun of saved run <code>{openAnalysisTurn.rerun_of}</code>
+													{/if}
+												{:else}
+													Original saved attempt
+												{/if}
+											</dd>
+										</div>
 									</dl>
 									<dl class="analysis-run-question-snapshot">
 										<div><dt>Question at run</dt><dd>{openAnalysisTurn.investigation_context?.question_text ?? openAnalysisTurn.question}</dd></div>
@@ -1903,6 +1944,7 @@
 	.analysis-run-facts dt, .analysis-run-question-snapshot dt { color: var(--text-faint); font-size: var(--fs-xs); }
 	.analysis-run-facts dd, .analysis-run-question-snapshot dd { margin: 2px 0 0; font-size: var(--fs-sm); overflow-wrap: anywhere; }
 	.analysis-run-facts code { font-size: var(--fs-xs); }
+	.analysis-run-facts :global(.analysis-run-parent-link) { min-height: 0; padding: 0; font-size: var(--fs-xs); }
 	.analysis-run-question-snapshot { padding-top: var(--space-2); margin: 0; border-top: 1px solid var(--border); }
 	.analysis-run-context { display: grid; gap: var(--space-2); padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); }
 	.analysis-run-context > header h5, .analysis-run-context-definitions h6, .analysis-run-evidence h5 { margin: 0; color: var(--text); font-size: var(--fs-sm); font-weight: 650; }

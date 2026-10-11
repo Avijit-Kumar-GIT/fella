@@ -383,3 +383,14 @@ for intentionally skipped replay checks: a retained first result is not called
 a pass. Older records without the outcome field continue to use their historic
 boolean result. Overall verification wording is scoped to Fella's recorded
 checks and does not claim to certify the analyst's business interpretation.
+
+## Implementation checkpoint: preserve analysis attempts (#209)
+
+Canonical AnalysisTurn records are now create-only: a duplicate turn ID fails
+instead of replacing an earlier attempt. Question reruns capture the preceding
+attempt as their parent; an explicit replay records the selected source attempt
+in the same initial write. The Investigation run list is chronological, and a
+saved attempt exposes a link to its parent when that run belongs to the same
+history. Each record continues to carry its own source scope, Investigation
+definition snapshot, method, and outputs, so later context edits do not rewrite
+the earlier attempt.

@@ -466,6 +466,7 @@ async function installDesktopMock(
 			ask: async (params, onEvent) => {
 				calls.push(params);
 				let questionTurnId;
+				let questionParentTurnId;
 				const questionTurnNumber = calls.filter((call) => call.questionId).length;
 				const questionOutcome = questionRunOutcomes[questionTurnNumber - 1] ?? { status: 'answered' };
 				const finalState = questionOutcome.status === 'answered'
@@ -473,6 +474,7 @@ async function installDesktopMock(
 					: questionOutcome.status === 'blocked' ? 'failed' : 'needs_review';
 				if (params.questionId && params.investigationId) {
 					const question = questionRecords.get(params.questionId);
+					questionParentTurnId = question?.latest_analysis_turn_id;
 					questionTurnId = `fixture-question-turn-${questionTurnNumber}`;
 					if (question) {
 						const running = {
@@ -576,8 +578,9 @@ async function installDesktopMock(
 							definitions: investigation?.definitions ?? [],
 							source_selection: question?.source_selection ?? investigation?.source_selection ?? { mode: 'all_sources', included_paths: [] }
 						},
+						rerun_of: questionOutcome.rerun_of ?? questionParentTurnId,
 						state: finalState,
-						plan: { strategy: 'direct_tools', steps: ['run_sql'] },
+						plan: questionOutcome.plan ?? { strategy: 'direct_tools', steps: ['run_sql'] },
 						trace: {
 							id: `fixture-trace-${questionTurnNumber}`,
 							turn_id: questionTurnId,
@@ -1464,6 +1467,107 @@ test('saved run review exposes its method, query output, definitions, and actual
 	await expect(evidenceReview).toContainText(query);
 	await expect(evidenceReview).toContainText('Three monthly cohorts were returned; retention ranged from 42% to 51%.');
 	await expect(evidenceReview).toContainText('2026-03');
+});
+
+test('repeated Question runs stay chronological and preserve each attempt context', async ({ page }) => {
+	const firstEvidence = {
+		id: 'attempt-one-evidence',
+		tool: 'run_sql',
+		note: 'First attempt query',
+		sql: 'SELECT SUM(net_sales) FROM sales',
+		result_summary: 'First attempt returned 120.',
+		columns: ['net_sales'],
+		rows: [[120]],
+		row_count: 1,
+		sources: [{ source: 'sales.csv', table: 'sales' }]
+	};
+	const secondEvidence = {
+		id: 'attempt-two-evidence',
+		tool: 'run_sql',
+		note: 'Second attempt query',
+		sql: 'SELECT SUM(refunds) FROM returns',
+		result_summary: 'Second attempt returned 18.',
+		columns: ['refunds'],
+		rows: [[18]],
+		row_count: 1,
+		sources: [{ source: 'returns.csv', table: 'refunds' }]
+	};
+	await installDesktopMock(page, {
+		questionRunOutcomes: [
+			{
+				status: 'incomplete',
+				answer_text: 'Attempt one: net sales were 120.',
+				plan: { strategy: 'compiled_sql', steps: ['inspect_sales', 'run_sql'] },
+				evidence: [firstEvidence],
+				source_scope: {
+					used_sources: [{ source: 'sales.csv', table: 'sales', evidence_ids: [firstEvidence.id] }],
+					skipped_sources: []
+				}
+			},
+			{
+				status: 'answered',
+				answer_text: 'Attempt two: refunds were 18.',
+				plan: { strategy: 'python_fallback', steps: ['inspect_returns', 'run_python'] },
+				evidence: [secondEvidence],
+				source_scope: {
+					used_sources: [{ source: 'returns.csv', table: 'refunds', evidence_ids: [secondEvidence.id] }],
+					skipped_sources: []
+				}
+			}
+		]
+	});
+	await page.goto('/');
+	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
+	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
+	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill('Explain weekly sales');
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	await page.getByRole('button', { name: 'Add definition or assumption' }).click();
+	const savedDefinition = page.getByRole('textbox', { name: 'Context note 1' });
+	await savedDefinition.fill('Net sales exclude refunds.');
+	await page.getByRole('button', { name: 'Save context' }).click();
+	await expect(page.locator('.definition-editor')).toContainText('Context saved');
+
+	const runQuestion = async () => {
+		await page.getByRole('button', { name: 'Analyze main Question' }).click();
+		await page.getByRole('region', { name: 'Review this run' }).getByRole('button', { name: 'Run this Question' }).click();
+		await expect(page.getByRole('region', { name: 'Question run' })).toBeHidden();
+		await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	};
+	await runQuestion();
+	await savedDefinition.fill('Net sales include refunds.');
+	await page.getByRole('button', { name: 'Save context' }).click();
+	await expect(page.locator('.definition-item')).toContainText('Saved revision 2');
+	await runQuestion();
+
+	const history = page.locator('.analysis-runs');
+	const attempts = history.locator('.analysis-run-link');
+	await expect(attempts).toHaveCount(2);
+	await expect(attempts.nth(0)).toHaveAttribute('aria-label', 'Open saved analysis run 1: Explain weekly sales');
+	await expect(attempts.nth(1)).toHaveAttribute('aria-label', 'Open saved analysis run 2: Explain weekly sales');
+
+	await attempts.nth(0).click();
+	const runDetail = page.getByRole('region', { name: 'Saved analysis run' });
+	await expect(runDetail.locator('.analysis-run-facts')).toContainText('compiled sql');
+	await expect(runDetail.locator('.analysis-run-facts')).toContainText('Original saved attempt');
+	await expect(runDetail.locator('.analysis-run-result')).toContainText('Attempt one: net sales were 120.');
+	await expect(runDetail.getByRole('region', { name: 'Definitions and source scope used' })).toContainText('Definition · revision 1');
+	await expect(runDetail.getByRole('region', { name: 'Definitions and source scope used' })).toContainText('Net sales exclude refunds.');
+	await expect(runDetail.getByRole('region', { name: 'Definitions and source scope used' })).toContainText('sales.csv · sales');
+	await runDetail.getByRole('button', { name: 'Close saved analysis run' }).click();
+
+	await attempts.nth(1).click();
+	await expect(attempts.nth(1)).toContainText('rerun of Run 1');
+	await expect(runDetail.locator('.analysis-run-facts')).toContainText('python fallback');
+	await expect(runDetail.getByRole('button', { name: 'Open parent run 1' })).toBeVisible();
+	await expect(runDetail.locator('.analysis-run-result')).toContainText('Attempt two: refunds were 18.');
+	await expect(runDetail.getByRole('region', { name: 'Definitions and source scope used' })).toContainText('Definition · revision 2');
+	await expect(runDetail.getByRole('region', { name: 'Definitions and source scope used' })).toContainText('Net sales include refunds.');
+	await expect(runDetail.getByRole('region', { name: 'Definitions and source scope used' })).toContainText('returns.csv · refunds');
+	await runDetail.getByRole('button', { name: 'Open parent run 1' }).click();
+	await expect(runDetail.locator('.analysis-run-result')).toContainText('Attempt one: net sales were 120.');
 });
 
 test('Findings are saved outside the transcript and claim edits preserve run and evidence links', async ({ page }) => {
