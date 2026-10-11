@@ -230,8 +230,11 @@ async function installDesktopMock(
 						for (const [key, record] of investigations) {
 							if (record.id !== args.investigationId) continue;
 						const questions = (record.questions ?? []).filter((question) => question.status === 'active');
-						if (!questions.length || questions.some((question) => question.answer_status !== 'answered')) {
-							throw new Error('Every active Question needs a complete answer before this Investigation can be completed.');
+						const hasRecordedGap = (question) =>
+							['incomplete', 'unsupported'].includes(question.answer_status)
+							&& Boolean(question.answer_status_reason?.trim());
+						if (!questions.length || questions.some((question) => question.answer_status !== 'answered' && !hasRecordedGap(question))) {
+							throw new Error('Every active Question needs an answer, a documented data gap, or review before this Investigation can be completed.');
 						}
 						const updated = { ...record, status: 'complete', updated_at_ms: Date.now() };
 						investigations.set(key, updated);
@@ -1065,7 +1068,7 @@ test('Questions show persisted coverage states and explain incomplete, blocked, 
 	await expect(page.locator('.root-question-item .question-status-reason')).toContainText('The Question or its source scope changed. Run it again to refresh the answer.');
 });
 
-test('coverage links expose every open Question and completion waits for verified answers', async ({ page }) => {
+test('completion follows Question coverage and keeps documented gaps visible', async ({ page }) => {
 	await installDesktopMock(page, {
 		questionRunOutcomes: [
 			{ status: 'incomplete', reason: 'Only 10 of the requested 12 weeks are present.' },
@@ -1113,9 +1116,19 @@ test('coverage links expose every open Question and completion waits for verifie
 	await coverage.getByRole('button', { name: 'Review Unsupported Question: Compare refund rates with sales' }).click();
 	await expect(page.getByRole('textbox', { name: 'Subquestion 1' })).toBeFocused();
 
+	await runQuestion('Analyze Subquestion 3');
+	await expect(coverage.locator('[data-coverage="unanswered"] dd')).toHaveText('0');
+	const closeWithGaps = page.getByRole('button', { name: 'Mark complete' });
+	await expect(closeWithGaps).toBeEnabled();
+	await closeWithGaps.click();
+	await expect(coverage).toHaveAttribute('data-investigation-status', 'complete');
+	await expect(coverage).toContainText('Investigation closed with documented gaps. It is not fully answered');
+	await expect(coverage.locator('.question-coverage-review')).toContainText('Only 10 of the requested 12 weeks are present.');
+	await expect(coverage.locator('.question-coverage-review')).toContainText('The available files do not include cohort dates.');
+	await page.getByRole('button', { name: 'Reopen Investigation' }).click();
+
 	await runQuestion('Analyze main Question');
 	await runQuestion('Analyze Subquestion 1');
-	await runQuestion('Analyze Subquestion 3');
 	await expect(coverage.locator('[data-coverage="answered"] dd')).toHaveText('4');
 	await expect(coverage.locator('[data-coverage="partial"] dd')).toHaveText('0');
 	await expect(coverage.locator('[data-coverage="unanswered"] dd')).toHaveText('0');
@@ -1124,7 +1137,7 @@ test('coverage links expose every open Question and completion waits for verifie
 	await expect(markComplete).toBeEnabled();
 	await markComplete.click();
 	await expect(coverage).toHaveAttribute('data-investigation-status', 'complete');
-	await expect(coverage).toContainText('Investigation complete.');
+	await expect(coverage).toContainText('Investigation fully answered.');
 	await page.getByRole('button', { name: 'Reopen Investigation' }).click();
 	await expect(coverage).toHaveAttribute('data-investigation-status', 'active');
 });

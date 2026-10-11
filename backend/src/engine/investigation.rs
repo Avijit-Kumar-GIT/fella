@@ -2373,24 +2373,45 @@ pub fn link_analysis_turn_questions(
     set_analysis_turn_questions(data_dir, id, turn_id, &linked)
 }
 
-/// Complete an Investigation only after every active Question has a fully
-/// verified answer. Partial, unsupported, unanswered, running, blocked, and
-/// outdated Questions all remain open analyst work.
+fn question_has_documented_gap(question: &InvestigationQuestion) -> bool {
+    matches!(
+        &question.answer_status,
+        InvestigationQuestionAnswerStatus::Incomplete
+            | InvestigationQuestionAnswerStatus::Unsupported
+    ) && question
+        .answer_status_reason
+        .as_deref()
+        .is_some_and(|reason| !reason.trim().is_empty())
+}
+
+/// Close an Investigation when every active Question has either a verified
+/// answer or a persisted reason that its data coverage is incomplete or
+/// unsupported. Runtime failures, stale results, and unfinished runs remain
+/// open work rather than being silently accepted as data gaps.
 pub fn mark_complete(data_dir: &Path, id: &str) -> EngineResult<Investigation> {
     let mut record = load(data_dir, id)?;
-    let questions = record.questions.as_deref().unwrap_or_default();
+    let questions: Vec<_> = record
+        .questions
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .filter(|question| question.status == InvestigationQuestionStatus::Active)
+        .collect();
     if questions.is_empty() {
         return Err(EngineError::msg(
-            "add at least one Question before completing this Investigation",
+            "add at least one active Question before completing this Investigation",
         ));
     }
     let remaining = questions
         .iter()
-        .filter(|question| question.answer_status != InvestigationQuestionAnswerStatus::Answered)
+        .filter(|question| {
+            question.answer_status != InvestigationQuestionAnswerStatus::Answered
+                && !question_has_documented_gap(question)
+        })
         .count();
     if remaining > 0 {
         return Err(EngineError::msg(format!(
-			"cannot complete this Investigation: {remaining} active Question(s) still need an answer or review"
+			"cannot complete this Investigation: {remaining} active Question(s) still need an answer, a documented data gap, or review"
 		)));
     }
     if record.status != InvestigationStatus::Complete {
@@ -3829,6 +3850,20 @@ mod tests {
             unsupported.answer_status_reason.as_deref(),
             Some("Cohort dates are absent from the available files.")
         );
+        let completed_with_gap = mark_complete(&data_dir, &created.id).unwrap();
+        assert_eq!(completed_with_gap.status, InvestigationStatus::Complete);
+
+        reopen(&data_dir, &created.id).unwrap();
+        question_run_started(&data_dir, &created.id, child_id, "turn-child-blocked").unwrap();
+        question_run_finished(
+            &data_dir,
+            &created.id,
+            child_id,
+            "turn-child-blocked",
+            InvestigationQuestionAnswerStatus::Blocked,
+            Some("The analysis runtime could not load the source."),
+        )
+        .unwrap();
         assert!(mark_complete(&data_dir, &created.id)
             .unwrap_err()
             .to_string()

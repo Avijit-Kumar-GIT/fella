@@ -188,15 +188,20 @@
 		const partial = activeQuestions.filter((question) => question.answer_status === 'incomplete').length;
 		const unsupported = activeQuestions.filter((question) => question.answer_status === 'unsupported').length;
 		const unanswered = activeQuestions.length - answered - partial - unsupported;
+		const documentedGaps = activeQuestions.filter((question) =>
+			(question.answer_status === 'incomplete' || question.answer_status === 'unsupported')
+			&& Boolean(question.answer_status_reason?.trim())
+		);
 		return {
 			activeQuestions,
 			answered,
 			partial,
 			unsupported,
 			unanswered,
+			documentedGaps,
 			needsReview: activeQuestions.filter((question) => question.answer_status !== 'answered'),
 			canComplete: activeQuestions.length > 0
-				&& answered === activeQuestions.length
+				&& answered + documentedGaps.length === activeQuestions.length
 				&& !dirty
 				&& !questionsDirty
 				&& !definitionsDirty
@@ -1367,7 +1372,7 @@
 										type="button"
 										variant="outline"
 										disabled={!coverage.canComplete || saving}
-										title="Answer every active Question and save current edits before completing."
+						title="Answer each active Question or record a reason for an incomplete or unsupported result; save current edits before completing."
 										onclick={() => void markInvestigationComplete()}
 									>
 										Mark complete
@@ -1395,7 +1400,7 @@
 							<header>
 								<div>
 									<h4>Coverage</h4>
-									<p>Every active Question needs a complete, current answer before this Investigation is complete.</p>
+									<p>Answer each active Question or record a data-coverage gap. Runtime failures and outdated results still need review.</p>
 								</div>
 								<dl class="question-coverage-counts">
 									<div data-coverage="answered"><dt>Answered</dt><dd>{coverage.answered}</dd></div>
@@ -1405,10 +1410,29 @@
 								</dl>
 							</header>
 							{#if selected.status === 'complete'}
-								<p class="question-coverage-message" role="status">Investigation complete. Reopen it to continue editing or analysis.</p>
+								{#if coverage.documentedGaps.length}
+									<p class="question-coverage-message" role="status">Investigation closed with documented gaps. It is not fully answered; reopen it to continue analysis.</p>
+									<details class="question-coverage-review" open>
+										<summary>{coverage.documentedGaps.length} documented Question gap{coverage.documentedGaps.length === 1 ? '' : 's'}</summary>
+										<ul>
+											{#each coverage.documentedGaps as question (question.id)}
+												<li>
+													<span class="coverage-question-status" data-question-status={question.answer_status}>{questionAnswerStatusLabel(question.answer_status)}</span>
+													<strong>{question.text}</strong>
+													<small>{questionCoverageReason(question)}</small>
+												</li>
+											{/each}
+										</ul>
+									</details>
+								{:else}
+									<p class="question-coverage-message" role="status">Investigation fully answered. Reopen it to continue editing or analysis.</p>
+								{/if}
 							{:else if !coverage.activeQuestions.length}
 								<p class="question-coverage-message">Add at least one Question before completing this Investigation.</p>
 							{:else if coverage.needsReview.length}
+								{#if coverage.canComplete && coverage.documentedGaps.length}
+									<p class="question-coverage-message" role="status">Ready to close with {coverage.documentedGaps.length} documented gap{coverage.documentedGaps.length === 1 ? '' : 's'}; this does not mean every Question was fully answered.</p>
+								{/if}
 								<details class="question-coverage-review" open>
 									<summary>{coverage.needsReview.length} Question{coverage.needsReview.length === 1 ? '' : 's'} need an answer or review</summary>
 									<ul>
@@ -1426,7 +1450,7 @@
 							{:else if dirty || questionsDirty || definitionsDirty}
 								<p class="question-coverage-message">Save your current brief, Question plan, and definitions before completing.</p>
 							{:else}
-								<p class="question-coverage-message" role="status">All active Questions have complete answers and are ready to close.</p>
+								<p class="question-coverage-message" role="status">All active Questions have complete, current answers and are ready to close.</p>
 							{/if}
 						</section>
 						{#if questions.length}

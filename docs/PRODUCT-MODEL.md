@@ -364,11 +364,12 @@ analysis contract says available data or tools cannot support the request;
 blocked, running, not-started, and outdated Questions remain in the unanswered
 count while retaining their more specific per-Question state.
 
-An Investigation can be marked complete only when it has at least one active
-Question and every active Question has a verified answer. The engine enforces
-this rule in addition to the disabled UI action. Reopening or changing the
-brief, plan, definitions, source scope, a Finding, or starting another run
-returns the Investigation to active work.
+At this checkpoint, an Investigation could be marked complete only when it
+had at least one active Question and every active Question had a verified
+answer. The engine enforced this rule in addition to the disabled UI action.
+The later lifecycle checkpoint (#212) preserves that distinction while also
+allowing explicitly documented data-coverage gaps to be closed without calling
+the result fully answered.
 
 ## Implementation checkpoint: verification beside outputs (#208)
 
@@ -419,3 +420,13 @@ sources, and run-time definition revisions. A concise change summary calls out
 which of those changed. Legacy Findings deserialize as revision 1 with no prior
 history, and ordinary interpretation edits continue to retain their existing
 provenance.
+
+## Implementation checkpoint: completion by Question coverage (#212)
+
+An Investigation can be closed when every active Question is either answered
+or has a persisted reason for an incomplete or unsupported data-coverage
+result. Not-started, running, blocked, and outdated Questions remain open work;
+removed Questions do not block closure. The UI distinguishes “fully answered”
+from “closed with documented gaps,” and keeps the affected Questions and their
+reasons visible after closure. Reopening returns the Investigation to active
+work so a documented gap can be analyzed again.
