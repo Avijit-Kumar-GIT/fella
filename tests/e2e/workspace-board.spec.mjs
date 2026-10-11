@@ -476,7 +476,9 @@ async function installDesktopMock(
 				}
 				const hasReplayEvidence = replayStatus !== null || replayStatusError;
 				const answer = {
-					text: `Scoped to ${params.workspaceId ?? 'general'}.`,
+					text: questionTurnId && questionOutcome.answer_text
+						? questionOutcome.answer_text
+						: `Scoped to ${params.workspaceId ?? 'general'}.`,
 					status: 'complete',
 					turn_id: questionTurnId ?? (hasReplayEvidence ? 'fixture-turn' : undefined),
 					evidence: [
@@ -939,7 +941,7 @@ test('Questions show persisted coverage states and explain incomplete, blocked, 
 	};
 
 	await runMainQuestion();
-	await expect(page.locator('.root-question-item [data-slot="badge"][data-question-status]')).toHaveText('Incomplete');
+	await expect(page.locator('.root-question-item [data-slot="badge"][data-question-status]')).toHaveText('Partial answer');
 	await expect(page.locator('.root-question-item .question-status-reason')).toContainText('The selected files do not cover the full requested period.');
 
 	await runMainQuestion();
@@ -947,13 +949,68 @@ test('Questions show persisted coverage states and explain incomplete, blocked, 
 	await expect(page.locator('.root-question-item .question-status-reason')).toContainText('The required date field is unavailable.');
 
 	await runMainQuestion();
-	await expect(page.locator('.root-question-item [data-slot="badge"][data-question-status]')).toHaveText('Answered');
+	await expect(page.locator('.root-question-item [data-slot="badge"][data-question-status]')).toHaveText('Complete answer');
 	await expect(page.locator('.root-question-item .question-status-reason')).toHaveCount(0);
 
 	await page.getByRole('textbox', { name: 'Main question' }).fill('Explain the change in weekly net sales');
 	await page.getByRole('button', { name: 'Save plan' }).click();
 	await expect(page.locator('.root-question-item [data-slot="badge"][data-question-status]')).toHaveText('Outdated');
 	await expect(page.locator('.root-question-item .question-status-reason')).toContainText('The Question or its source scope changed. Run it again to refresh the answer.');
+});
+
+test('each Question opens its saved answer with explicit partial or complete coverage and run provenance', async ({ page }) => {
+	await installDesktopMock(page, {
+		questionRunOutcomes: [
+			{
+				status: 'incomplete',
+				reason: 'Only 10 of the requested 12 weeks are present.',
+				answer_text: 'Partial result: signups rose 8% across the 10 available weeks.'
+			},
+			{
+				status: 'answered',
+				answer_text: 'Refunds were highest in the online channel.'
+			}
+		]
+	});
+	await page.goto('/');
+	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
+	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
+	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill('Explain weekly signup and refund patterns');
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	await page.getByRole('button', { name: 'Analyze main Question' }).click();
+	await page.getByRole('region', { name: 'Review this run' }).getByRole('button', { name: 'Run this Question' }).click();
+	await expect(page.getByRole('region', { name: 'Question run' })).toBeHidden();
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+
+	const mainQuestion = page.locator('.root-question-item');
+	await expect(mainQuestion.locator('[data-slot="badge"][data-question-status]')).toHaveText('Partial answer');
+	await mainQuestion.getByRole('button', { name: 'View partial answer for Main Question' }).click();
+	const partialPreview = mainQuestion.getByRole('region', { name: 'Latest answer for Main Question' });
+	await expect(partialPreview).toContainText('Partial result: signups rose 8% across the 10 available weeks.');
+	await expect(partialPreview).toContainText('fixture-question-turn-1');
+	await partialPreview.getByRole('button', { name: 'Open run details' }).click();
+	const runDetail = page.getByRole('region', { name: 'Saved analysis run' });
+	await expect(runDetail.locator('.analysis-run-result')).toContainText('Partial result: signups rose 8% across the 10 available weeks.');
+	await expect(runDetail.locator('.analysis-run-question-snapshot')).toContainText('Explain weekly signup and refund patterns');
+	await runDetail.getByRole('button', { name: 'Close saved analysis run' }).click();
+
+	await page.getByRole('button', { name: 'Add subquestion' }).click();
+	await page.getByRole('textbox', { name: 'Subquestion 1' }).fill('Compare refund patterns by channel');
+	await page.getByRole('button', { name: 'Save plan' }).click();
+	await page.getByRole('button', { name: 'Analyze Subquestion 1' }).click();
+	await page.getByRole('region', { name: 'Review this run' }).getByRole('button', { name: 'Run this Question' }).click();
+	await expect(page.getByRole('region', { name: 'Question run' })).toBeHidden();
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+
+	const subquestion = page.locator('.question-list .question-item').first();
+	await expect(subquestion.locator('[data-slot="badge"][data-question-status]')).toHaveText('Complete answer');
+	await subquestion.getByRole('button', { name: 'View complete answer for Subquestion 1' }).click();
+	const completePreview = subquestion.getByRole('region', { name: 'Latest answer for Subquestion 1' });
+	await expect(completePreview).toContainText('Refunds were highest in the online channel.');
+	await expect(completePreview).toContainText('fixture-question-turn-2');
 });
 
 test('saved analysis runs open from an Investigation and link to every Question they address', async ({ page }) => {
@@ -982,7 +1039,9 @@ test('saved analysis runs open from an Investigation and link to every Question 
 	await expect(runDetail).toBeVisible();
 	await expect(runDetail.locator('.analysis-run-question-snapshot')).toContainText('Explain how refund rates changed');
 	await runDetail.getByRole('button', { name: 'Close saved analysis run' }).click();
-	await page.getByRole('button', { name: 'Open analysis run 1 for Main Question' }).click();
+	const mainQuestion = page.locator('.root-question-item');
+	await mainQuestion.getByRole('button', { name: 'View complete answer for Main Question' }).click();
+	await mainQuestion.getByRole('button', { name: 'Open run details' }).click();
 	await expect(runDetail).toBeVisible();
 	await runDetail.getByRole('button', { name: 'Close saved analysis run' }).click();
 
@@ -993,7 +1052,7 @@ test('saved analysis runs open from an Investigation and link to every Question 
 	await runDetail.locator('.analysis-run-question-links input[type="checkbox"]').nth(1).check();
 	await runDetail.getByRole('button', { name: 'Save Question links' }).click();
 
-	const subquestionRunLink = page.getByRole('button', { name: 'Open analysis run 1 for Subquestion 1' });
+	const subquestionRunLink = page.getByRole('button', { name: 'Open linked analysis run 1 for Subquestion 1' });
 	await expect(subquestionRunLink).toBeVisible();
 	await subquestionRunLink.click();
 	await expect(runDetail.locator('.analysis-run-question-snapshot')).toContainText('Explain how refund rates changed');

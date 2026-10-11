@@ -22,6 +22,7 @@
 	import Icon from './Icon.svelte';
 	import InvestigationSourceReadiness from './InvestigationSourceReadiness.svelte';
 	import InvestigationQuestionSourceScope from './InvestigationQuestionSourceScope.svelte';
+	import QuestionAnswerPreview from './QuestionAnswerPreview.svelte';
 
 	let investigations = $state<Investigation[]>([]);
 	let selectedId = $state<string | null>(null);
@@ -441,11 +442,15 @@
 		return {
 			not_started: 'Not started',
 			running: 'Running',
-			answered: 'Answered',
-			incomplete: 'Incomplete',
+			answered: 'Complete answer',
+			incomplete: 'Partial answer',
 			blocked: 'Blocked',
 			outdated: 'Outdated'
 		}[status];
+	}
+
+	function savedQuestion(questionId: string): InvestigationQuestion | undefined {
+		return selected?.questions?.find((question) => question.id === questionId);
 	}
 
 	function questionAnswerStatusVariant(status: InvestigationQuestionAnswerStatus): 'default' | 'success' | 'warning' | 'destructive' {
@@ -463,9 +468,11 @@
 		return [...new Set(question.analysis_turn_ids ?? [])];
 	}
 
-	function questionRunIds(questionId: string): string[] {
+	function questionHistoricalRunIds(questionId: string): string[] {
 		const question = selected?.questions?.find((item) => item.id === questionId);
-		return question ? questionRunIdsFor(question) : [];
+		return question
+			? questionRunIdsFor(question).filter((turnId) => turnId !== question.latest_analysis_turn_id)
+			: [];
 	}
 
 	function analysisRunIds(investigation: Investigation | null = selected): string[] {
@@ -514,16 +521,21 @@
 		openAnalysisTurnId = turnId;
 		analysisTurnError = '';
 		questionLinksDraft = questionIdsForRun(turnId);
-		if (analysisTurns[turnId]) return;
-		analysisTurnLoadingId = turnId;
-		try {
-			const run = await ipc.analysisTurnLoad(turnId);
-			analysisTurns = { ...analysisTurns, [turnId]: run };
-		} catch (cause) {
-			analysisTurnError = cause instanceof Error ? cause.message : String(cause);
-		} finally {
-			if (analysisTurnLoadingId === turnId) analysisTurnLoadingId = null;
+		if (!analysisTurns[turnId]) {
+			analysisTurnLoadingId = turnId;
+			try {
+				const run = await ipc.analysisTurnLoad(turnId);
+				analysisTurns = { ...analysisTurns, [turnId]: run };
+			} catch (cause) {
+				analysisTurnError = cause instanceof Error ? cause.message : String(cause);
+			} finally {
+				if (analysisTurnLoadingId === turnId) analysisTurnLoadingId = null;
+			}
 		}
+		await tick();
+		const detail = document.getElementById('saved-analysis-run-detail');
+		detail?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+		detail?.focus({ preventScroll: true });
 	}
 
 	function setQuestionRunLink(questionId: string, checked: boolean): void {
@@ -1003,11 +1015,24 @@
 									{#if questionAnswerReason(rootQuestion.id)}
 										<p class="question-status-reason" data-question-status={questionAnswerStatus(rootQuestion.id)} role="status">{questionAnswerReason(rootQuestion.id)}</p>
 									{/if}
-									{#if questionRunIds(rootQuestion.id).length}
-										<div class="question-run-links" role="group" aria-label="Analysis runs linked to Main Question">
-											<span>Runs</span>
-											{#each questionRunIds(rootQuestion.id) as turnId, index (turnId)}
-												<Button type="button" variant="ghost" size="sm" aria-label="Open analysis run {index + 1} for Main Question" onclick={() => void openAnalysisRun(turnId)}>
+									{#if savedQuestion(rootQuestion.id)}
+										<QuestionAnswerPreview
+											question={savedQuestion(rootQuestion.id)!}
+											questionLabel="Main Question"
+											onopenrun={openAnalysisRun}
+										/>
+									{/if}
+									{#if questionHistoricalRunIds(rootQuestion.id).length}
+										<div class="question-run-links" role="group" aria-label="Earlier linked analysis runs for Main Question">
+											<span>Earlier runs</span>
+											{#each questionHistoricalRunIds(rootQuestion.id) as turnId, index (turnId)}
+												<Button
+													type="button"
+													variant="ghost"
+													size="sm"
+													aria-label="Open earlier analysis run {index + 1} for Main Question"
+													onclick={() => void openAnalysisRun(turnId)}
+												>
 													Run {index + 1}
 												</Button>
 											{/each}
@@ -1061,11 +1086,24 @@
 											{#if questionAnswerReason(question.id)}
 												<p class="question-status-reason" data-question-status={questionAnswerStatus(question.id)} role="status">{questionAnswerReason(question.id)}</p>
 											{/if}
-											{#if questionRunIds(question.id).length}
-												<div class="question-run-links" role="group" aria-label="Analysis runs linked to Subquestion {index + 1}">
-													<span>Runs</span>
-													{#each questionRunIds(question.id) as turnId, runIndex (turnId)}
-														<Button type="button" variant="ghost" size="sm" aria-label="Open analysis run {runIndex + 1} for Subquestion {index + 1}" onclick={() => void openAnalysisRun(turnId)}>
+											{#if savedQuestion(question.id)}
+												<QuestionAnswerPreview
+													question={savedQuestion(question.id)!}
+													questionLabel="Subquestion {index + 1}"
+													onopenrun={openAnalysisRun}
+												/>
+											{/if}
+											{#if questionHistoricalRunIds(question.id).length}
+												<div class="question-run-links" role="group" aria-label="Linked analysis runs for Subquestion {index + 1}">
+													<span>Linked runs</span>
+													{#each questionHistoricalRunIds(question.id) as turnId, runIndex (turnId)}
+														<Button
+															type="button"
+															variant="ghost"
+															size="sm"
+															aria-label="Open linked analysis run {runIndex + 1} for Subquestion {index + 1}"
+															onclick={() => void openAnalysisRun(turnId)}
+														>
 															Run {runIndex + 1}
 														</Button>
 													{/each}
@@ -1200,7 +1238,7 @@
 						{/if}
 
 						{#if openAnalysisTurnId}
-							<section class="analysis-run-detail" aria-label="Saved analysis run">
+							<section id="saved-analysis-run-detail" class="analysis-run-detail" aria-label="Saved analysis run" tabindex="-1">
 								<header>
 									<div>
 										<h4>Saved analysis run</h4>

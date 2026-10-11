@@ -303,6 +303,13 @@ updates live coverage state but does not create a link to a record that has
 not yet been saved. Legacy Questions with only a latest-run pointer continue to
 surface that run in history.
 
+Each Question now offers an on-demand preview of the response from its latest
+saved AnalysisTurn, with a direct link to the full run record and its provenance.
+The answer text is read from the canonical run rather than copied into a second
+Question-owned store. Complete and partial outcomes are labeled separately;
+partial responses retain their review reason, and outdated responses remain
+available as history without being presented as current.
+
 The analyst's ambiguity policy is also explicit: resolve ordinary uncertainty
 from evidence and saved definitions; for a low-impact choice with a reasonable
 default, record the assumption and proceed. Ask the analyst only when multiple
