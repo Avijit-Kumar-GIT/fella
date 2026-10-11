@@ -1,5 +1,9 @@
 # Fella product
 
+See [Product vision](PRODUCT-VISION.md) for the north-star story, analyst
+workflow, foundational primitives, trust model, and target experience. This
+document remains the reference for current shipped scope.
+
 Fella is an opinionated analytics harness built around conversation. Its core
 job is to help a data analyst move from a question about an explicitly mounted
 folder to an evidence-backed answer. The longer-term product target is to make
