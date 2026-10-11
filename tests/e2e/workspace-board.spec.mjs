@@ -149,7 +149,7 @@ async function installDesktopMock(
 					case 'investigations_list': return [...investigations.values()];
 					case 'investigation_ensure': {
 						investigationEnsureCalls.push(args);
-						const key = JSON.stringify([args.workspaceId, args.sourceMessageId]);
+						const key = JSON.stringify([args.workspaceId, args.conversationId]);
 						if (!investigations.has(key)) {
 							const now = Date.now();
 							const id = `inv-${investigations.size + 1}`;
@@ -157,6 +157,7 @@ async function installDesktopMock(
 							investigations.set(key, {
 								id,
 								workspace_id: args.workspaceId,
+								conversation_id: args.conversationId,
 								title: goal.slice(0, 64),
 								brief: { goal, audience: '', desired_output: '', constraints: [] },
 								brief_source_message_id: args.sourceMessageId,
@@ -186,6 +187,7 @@ async function installDesktopMock(
 								id: args.id,
 								saved_at_ms: saved.saved_at_ms,
 								workspace: saved.workspace ?? null,
+								first_question_message_id: firstQuestion?.id,
 								preview: firstQuestion?.text ?? 'New conversation',
 								message_count: saved.messages?.length ?? 0,
 								title: saved.title ?? null
@@ -390,8 +392,10 @@ test('environments compose General and repository panes while conversations reta
 	}));
 	expect(automaticInvestigation.calls).toHaveLength(1);
 	expect(automaticInvestigation.calls[0].workspaceId).toBe(folders[0].path);
+	expect(automaticInvestigation.calls[0].conversationId).toBe(salesCall.conversationId);
 	expect(automaticInvestigation.calls[0].initialRequest).toBe('Summarize sales trends');
 	expect(automaticInvestigation.records).toHaveLength(1);
+	expect(automaticInvestigation.records[0].conversation_id).toBe(salesCall.conversationId);
 	expect(automaticInvestigation.records[0].brief.goal).toBe('Summarize sales trends');
 
 	const generalTile = page.getByRole('article', { name: 'General workspace' });
@@ -454,6 +458,30 @@ test('environments compose General and repository panes while conversations reta
 	await dispatchWorkspaceDrag(page, 'drop', folders[0].path, { x: 0.1, y: 0.1, existing: true });
 	const movedSalesBox = await sales.boundingBox();
 	expectSameRenderedBox(movedSalesBox, salesTargetBox);
+});
+
+test('an Investigation opens its canonical workspace conversation', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+	await expect(page.getByRole('button', { name: /Switch environment/ })).toBeVisible();
+	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
+	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
+	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	const composer = page.getByRole('combobox', { name: 'Ask about northwind-sales' });
+	await composer.fill('Summarize cohort retention');
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
+	const askCall = await page.evaluate(() => window.__workspaceAskCalls.at(-1));
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	await expect(page.getByRole('heading', { name: 'Investigation brief' })).toBeVisible();
+	const openConversation = page.getByRole('button', { name: 'Open conversation', exact: true });
+	await expect(openConversation).toBeVisible();
+	const linked = await page.evaluate(() => window.__workspaceInvestigations()[0]);
+	expect(linked.conversation_id).toBe(askCall.conversationId);
+	await openConversation.click();
+	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
+	await expect(page.locator('.msg.user').filter({ hasText: 'Summarize cohort retention' })).toHaveCount(1);
+	expect(await page.evaluate(() => window.__workspaceAskCalls.length)).toBe(1);
 });
 
 test('the four-pane limit is scoped to one environment and closing a pane frees its slot', async ({ page }) => {

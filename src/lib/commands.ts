@@ -13,9 +13,9 @@ import type {
 
 const ensuredInvestigations = new Map<string, Promise<Investigation>>();
 
-/** Workspace bookkeeping is automatic but must never prevent an analysis. The
- * first actual user-message ID is stable in an archived conversation and is
- * the backend's idempotency key until explicit Conversation links land. */
+/** Workspace bookkeeping is automatic but must never prevent an analysis.
+ * The Conversation ID is stable across archive/reopen and is also persisted
+ * as the Investigation's direct navigation link. */
 async function ensureWorkspaceInvestigation(conv: Conversation): Promise<void> {
 	if (!isDesktop() || !conv.workspaceScope) return;
 	const workspace = session.workspaceAt(conv.workspaceScope);
@@ -23,11 +23,11 @@ async function ensureWorkspaceInvestigation(conv: Conversation): Promise<void> {
 	const source = conv.messages.find(isActualQuestion);
 	if (!source) return;
 
-	const key = JSON.stringify([conv.workspaceScope, source.id]);
+	const key = JSON.stringify([conv.workspaceScope, conv.id]);
 	let pending = ensuredInvestigations.get(key);
 	const ownsRequest = !pending;
 	if (!pending) {
-		pending = ipc.investigationEnsure(conv.workspaceScope, source.text, source.id);
+		pending = ipc.investigationEnsure(conv.workspaceScope, conv.id, source.text, source.id);
 		ensuredInvestigations.set(key, pending);
 	}
 

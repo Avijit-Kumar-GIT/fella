@@ -1,10 +1,11 @@
 <script lang="ts">
 	import { firstActualQuestion, session } from '$lib/session.svelte';
 	import { Button } from '$lib/components/ui/button';
+	import { openConversation } from '$lib/commands';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { ipc, isDesktop } from '$lib/ipc';
 	import { analysisTurnIdsAfterSourceMessage } from '$lib/investigation-runs';
-	import type { Investigation, InvestigationBrief } from '$lib/types';
+	import type { ConversationSummary, Investigation, InvestigationBrief } from '$lib/types';
 	import { findBriefProposal, type BriefProposal, type BriefProposalTarget } from '$lib/investigation-brief-proposal';
 	import Icon from './Icon.svelte';
 
@@ -24,6 +25,7 @@
 	let proposalTarget = $state<BriefProposalTarget>('goal');
 	let loading = $state(false);
 	let creating = $state(false);
+	let openingConversation = $state(false);
 	let saving = $state(false);
 	let error = $state('');
 	let requestSerial = 0;
@@ -37,7 +39,7 @@
 	});
 	let currentConversationInvestigation = $derived(
 		currentConversationSource
-			? investigations.find((item) => item.workspace_id === workspacePath && item.brief_source_message_id === currentConversationSource?.id) ?? null
+			? investigations.find((item) => item.workspace_id === workspacePath && (item.conversation_id === session.activeChat.id || item.brief_source_message_id === currentConversationSource?.id)) ?? null
 			: null
 	);
 	let unlinkedAnalysisTurnIds = $derived.by(() => {
@@ -178,7 +180,7 @@
 		const request = currentConversationSource;
 		try {
 			const record = request
-				? await ipc.investigationEnsure(workspacePath, request.text, request.id)
+				? await ipc.investigationEnsure(workspacePath, session.activeChat.id, request.text, request.id)
 				: await ipc.investigationCreate(workspacePath);
 			investigations = [record, ...investigations.filter((item) => item.id !== record.id)];
 			selectedId = record.id;
@@ -186,6 +188,53 @@
 			error = cause instanceof Error ? cause.message : String(cause);
 		} finally {
 			creating = false;
+		}
+	}
+
+	async function openSelectedConversation(): Promise<void> {
+		const item = selected;
+		if (!item || openingConversation || !isDesktop()) return;
+		openingConversation = true;
+		error = '';
+		try {
+			let conversationId = item.conversation_id;
+			let summary: ConversationSummary | null = null;
+			if (!conversationId && item.brief_source_message_id) {
+				const summaries = await ipc.conversationsList();
+				summary = summaries.find((candidate) =>
+					candidate.workspace === item.workspace_id &&
+					candidate.first_question_message_id === item.brief_source_message_id
+				) ?? null;
+				conversationId = summary?.id;
+				if (conversationId) {
+					const linked = await ipc.investigationEnsure(
+						item.workspace_id,
+						conversationId,
+						item.brief.goal,
+						item.brief_source_message_id
+					);
+					investigations = investigations.map((record) => record.id === linked.id ? linked : record);
+				}
+			}
+			if (!conversationId) throw new Error('The source conversation is not available in local history.');
+
+			const loadedIndex = session.conversations.findIndex((conversation) =>
+				conversation.id === conversationId && conversation.workspaceScope === item.workspace_id
+			);
+			if (loadedIndex >= 0) {
+				if (!session.activateConversation(loadedIndex)) throw new Error('Fella could not focus the linked conversation.');
+			} else {
+				summary ??= (await ipc.conversationsList()).find((candidate) =>
+					candidate.id === conversationId && candidate.workspace === item.workspace_id
+				) ?? null;
+				if (!summary) throw new Error('The linked conversation is not available in local history.');
+				if (!(await openConversation(summary))) throw new Error('Fella could not open the linked conversation.');
+			}
+			session.setWorkspaceView('ask');
+		} catch (cause) {
+			error = cause instanceof Error ? cause.message : String(cause);
+		} finally {
+			openingConversation = false;
 		}
 	}
 
@@ -297,9 +346,14 @@
 								<p>Goal seeded from the conversation’s first request. Editing this brief does not change that message.</p>
 							{/if}
 						</div>
-						<Button type="button" disabled={!dirty || saving} onclick={() => void saveBrief()}>
-							<Icon name="check" size={16} />{saving ? 'Saving…' : 'Save brief'}
-						</Button>
+						<div class="editor-actions">
+							<Button type="button" variant="outline" disabled={openingConversation || (!selected.conversation_id && !selected.brief_source_message_id)} onclick={() => void openSelectedConversation()}>
+								<Icon name="ask" size={16} />{openingConversation ? 'Opening…' : 'Open conversation'}
+							</Button>
+							<Button type="button" disabled={!dirty || saving} onclick={() => void saveBrief()}>
+								<Icon name="check" size={16} />{saving ? 'Saving…' : 'Save brief'}
+							</Button>
+						</div>
 					</div>
 					{#if pendingProposal}
 						<section class="brief-proposal" aria-labelledby="brief-proposal-title">
@@ -376,7 +430,8 @@
 	.investigation-choice small, .status, .editor-foot { color: var(--text-faint); font-size: var(--fs-xs); }
 	.error { margin: 0 0 var(--space-3); color: var(--danger, #b42318); font-size: var(--fs-sm); overflow-wrap: anywhere; }
 	.brief-editor { min-width: 0; border-block: 1px solid var(--border); }
-	.editor-heading { padding: var(--space-3) 0; border-bottom: 1px solid var(--border); }
+	.editor-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); padding: var(--space-3) 0; border-bottom: 1px solid var(--border); }
+	.editor-actions { display: flex; flex: none; align-items: center; gap: var(--space-2); }
 	.brief-proposal { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--space-3); padding: var(--space-3); margin-top: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-inset); }
 	.proposal-copy { grid-column: 1 / -1; }
 	.proposal-copy h3 { margin: 0; font-size: var(--fs-sm); font-weight: 650; }

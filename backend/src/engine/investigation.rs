@@ -41,12 +41,14 @@ pub struct InvestigationBrief {
 ///
 /// `workspace_id` is the canonical local folder identity, matching the
 /// desktop's existing workspace contract. Conversation and run associations
-/// are intentionally not copied into this initial record; subsequent product
-/// slices add links without changing ownership of those records.
+/// are IDs only; their records remain owned by the existing stores.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Investigation {
     pub id: String,
     pub workspace_id: String,
+    /// Stable link to the canonical archived Conversation transcript.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<String>,
     pub title: String,
     #[serde(default)]
     pub brief: InvestigationBrief,
@@ -115,6 +117,7 @@ pub fn create(
     title: &str,
     initial_request: Option<&str>,
     source_message_id: Option<&str>,
+    conversation_id: Option<&str>,
 ) -> EngineResult<Investigation> {
     let workspace_id = workspace_id.trim();
     if workspace_id.is_empty() {
@@ -134,6 +137,10 @@ pub fn create(
         return Err(EngineError::msg(
             "initial request is too long for an investigation brief",
         ));
+    }
+    let conversation_id = conversation_id.map(str::trim).filter(|id| !id.is_empty());
+    if conversation_id.is_some_and(|id| id.chars().count() > 256) {
+        return Err(EngineError::msg("conversation id is too long"));
     }
 
     let directory = investigations_dir(data_dir);
@@ -163,6 +170,7 @@ pub fn create(
         let record = Investigation {
             id: id.clone(),
             workspace_id: workspace_id.to_owned(),
+            conversation_id: conversation_id.map(str::to_owned),
             title: title.to_owned(),
             brief: InvestigationBrief {
                 goal: goal.to_owned(),
@@ -236,19 +244,26 @@ pub fn create(
 
 /// Resolve the Investigation already seeded by this conversation's first
 /// user message, or create it without requiring a separate setup action.
-pub fn ensure_for_source_message(
+pub fn ensure_for_conversation(
     data_dir: &Path,
     workspace_id: &str,
+    conversation_id: &str,
     initial_request: &str,
     source_message_id: &str,
 ) -> EngineResult<Investigation> {
     const MAX_SOURCE_MESSAGE_ID_CHARS: usize = 256;
 
     let workspace_id = workspace_id.trim();
+    let conversation_id = conversation_id.trim();
     let source_message_id = source_message_id.trim();
     if workspace_id.is_empty() {
         return Err(EngineError::msg(
             "an investigation requires an explicit workspace id",
+        ));
+    }
+    if conversation_id.is_empty() || conversation_id.chars().count() > MAX_SOURCE_MESSAGE_ID_CHARS {
+        return Err(EngineError::msg(
+            "an investigation requires a valid conversation id",
         ));
     }
     if source_message_id.is_empty()
@@ -259,10 +274,33 @@ pub fn ensure_for_source_message(
         ));
     }
 
-    if let Some(existing) = list(data_dir)?.into_iter().find(|record| {
-        record.workspace_id == workspace_id
-            && record.brief_source_message_id.as_deref() == Some(source_message_id)
-    }) {
+    let records = list(data_dir)?;
+    let mut existing = records
+        .iter()
+        .find(|record| {
+            record.workspace_id == workspace_id
+                && record.conversation_id.as_deref() == Some(conversation_id)
+        })
+        .cloned()
+        .or_else(|| {
+            records.into_iter().find(|record| {
+                record.workspace_id == workspace_id
+                    && record.brief_source_message_id.as_deref() == Some(source_message_id)
+            })
+        });
+    if let Some(mut existing) = existing.take() {
+        if let Some(linked_id) = existing.conversation_id.as_deref() {
+            if linked_id != conversation_id {
+                return Err(EngineError::msg(
+                    "the source message is already linked to another conversation",
+                ));
+            }
+        } else {
+            // Upgrade records created before Conversation IDs were explicit.
+            existing.conversation_id = Some(conversation_id.to_owned());
+            existing.updated_at_ms = now_ms();
+            write_record(data_dir, &existing)?;
+        }
         return Ok(existing);
     }
 
@@ -284,6 +322,7 @@ pub fn ensure_for_source_message(
         &title,
         Some(initial_request),
         Some(source_message_id),
+        Some(conversation_id),
     )
 }
 
@@ -491,6 +530,7 @@ mod tests {
             "  Monthly revenue  ",
             None,
             None,
+            None,
         )
         .unwrap();
 
@@ -510,23 +550,26 @@ mod tests {
     #[test]
     fn ensure_reuses_the_investigation_seeded_by_the_first_message() {
         let data_dir = scratch();
-        let first = ensure_for_source_message(
+        let first = ensure_for_conversation(
             &data_dir,
             "/work/sales",
+            "conversation-first",
             "  Summarize   sales trends  ",
             "message-first",
         )
         .unwrap();
         assert_eq!(first.title, "Summarize sales trends");
         assert_eq!(first.brief.goal, "Summarize   sales trends");
+        assert_eq!(first.conversation_id.as_deref(), Some("conversation-first"));
         assert_eq!(
             first.brief_source_message_id.as_deref(),
             Some("message-first")
         );
 
-        let reopened = ensure_for_source_message(
+        let reopened = ensure_for_conversation(
             &data_dir,
             "/work/sales",
+            "conversation-first",
             "A follow-up should not replace the original request",
             "message-first",
         )
@@ -539,36 +582,59 @@ mod tests {
             "Analyst-selected title",
             Some("Original manual brief"),
             Some("message-manual"),
+            None,
         )
         .unwrap();
-        let resolved_manual = ensure_for_source_message(
+        let resolved_manual = ensure_for_conversation(
             &data_dir,
             "/work/sales",
+            "conversation-manual",
             "Do not replace the existing Investigation brief",
             "message-manual",
         )
         .unwrap();
-        assert_eq!(resolved_manual, manually_created);
+        assert_eq!(resolved_manual.id, manually_created.id);
+        assert_eq!(
+            resolved_manual.conversation_id.as_deref(),
+            Some("conversation-manual")
+        );
 
-        let another_conversation = ensure_for_source_message(
+        let another_conversation = ensure_for_conversation(
             &data_dir,
             "/work/sales",
+            "conversation-second",
             "Compare sales by channel",
             "message-second",
         )
         .unwrap();
         assert_ne!(another_conversation.id, first.id);
 
-        let same_message_in_another_workspace = ensure_for_source_message(
+        let same_message_in_another_workspace = ensure_for_conversation(
             &data_dir,
             "/work/other",
+            "conversation-first",
             "Analyze the other folder",
             "message-first",
         )
         .unwrap();
         assert_ne!(same_message_in_another_workspace.id, first.id);
         assert_eq!(list(&data_dir).unwrap().len(), 4);
-        assert!(ensure_for_source_message(&data_dir, "/work/sales", "Question", "  ").is_err());
+        assert!(ensure_for_conversation(
+            &data_dir,
+            "/work/sales",
+            "  ",
+            "Question",
+            "message-invalid"
+        )
+        .is_err());
+        assert!(ensure_for_conversation(
+            &data_dir,
+            "/work/sales",
+            "conversation-conflict",
+            "Question",
+            "message-manual"
+        )
+        .is_err());
 
         let _ = std::fs::remove_dir_all(data_dir);
     }
@@ -576,9 +642,9 @@ mod tests {
     #[test]
     fn defaults_blank_title_and_rejects_missing_scope_or_unsafe_ids() {
         let data_dir = scratch();
-        let created = create(&data_dir, "/work/analysis", "  ", None, None).unwrap();
+        let created = create(&data_dir, "/work/analysis", "  ", None, None, None).unwrap();
         assert_eq!(created.title, "New investigation");
-        assert!(create(&data_dir, "  ", "No scope", None, None).is_err());
+        assert!(create(&data_dir, "  ", "No scope", None, None, None).is_err());
         assert!(load(&data_dir, "../conversation").is_err());
 
         let _ = std::fs::remove_dir_all(data_dir);
@@ -600,6 +666,7 @@ mod tests {
             "Retention",
             Some(original_request),
             Some("message-1"),
+            None,
         )
         .unwrap();
 
@@ -673,6 +740,7 @@ mod tests {
             "Retention",
             Some("Compare retention by cohort"),
             Some("message-1"),
+            None,
         )
         .unwrap();
 
@@ -707,6 +775,7 @@ mod tests {
             "Retention",
             Some("Compare retention by cohort"),
             Some("message-1"),
+            None,
         )
         .unwrap();
         let turn_ids = vec!["turn-one".to_string(), "turn-two".to_string()];
@@ -733,7 +802,7 @@ mod tests {
     #[test]
     fn old_records_without_a_brief_load_with_an_empty_brief() {
         let data_dir = scratch();
-        let created = create(&data_dir, "/work/analysis", "Legacy", None, None).unwrap();
+        let created = create(&data_dir, "/work/analysis", "Legacy", None, None, None).unwrap();
         let path = record_path(&data_dir, &created.id).unwrap();
         let mut json: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
@@ -745,6 +814,7 @@ mod tests {
             .unwrap()
             .remove("brief_reviewed_message_id");
         json.as_object_mut().unwrap().remove("analysis_turn_ids");
+        json.as_object_mut().unwrap().remove("conversation_id");
         std::fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
 
         assert_eq!(

@@ -433,19 +433,23 @@ async fn dispatch(
                 .params
                 .get("sourceMessageId")
                 .and_then(Value::as_str);
+            let conversation_id = request.params.get("conversationId").and_then(Value::as_str);
             value_result(engine.investigation_create(
                 &workspace_id,
                 title,
                 initial_request,
                 source_message_id,
+                conversation_id,
             ))
         }
         "investigation_ensure" => {
             let workspace_id: String = required(&request.params, "workspaceId")?;
+            let conversation_id: String = required(&request.params, "conversationId")?;
             let initial_request: String = required(&request.params, "initialRequest")?;
             let source_message_id: String = required(&request.params, "sourceMessageId")?;
             value_result(engine.investigation_ensure(
                 &workspace_id,
+                &conversation_id,
                 &initial_request,
                 &source_message_id,
             ))

@@ -425,6 +425,8 @@ export interface AnalysisSourceScope {
 export interface Investigation {
 	id: string;
 	workspace_id: string;
+	/** Stable ID of the canonical archived Conversation transcript. */
+	conversation_id?: string;
 	title: string;
 	brief: InvestigationBrief;
 	brief_source_message_id?: string;
@@ -689,6 +691,8 @@ export interface ConversationSummary {
 	id: string;
 	saved_at_ms: number;
 	workspace: string | null;
+	/** First real user message ID, for upgrading older Investigation links. */
+	first_question_message_id?: string;
 	preview: string;
 	message_count: number;
 	/** A user-given name, if this conversation was renamed. */

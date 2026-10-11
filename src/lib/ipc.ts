@@ -139,11 +139,12 @@ export const ipc = {
 		workspaceId: string,
 		title = 'New investigation',
 		initialRequest?: string,
-		sourceMessageId?: string
-	) => invoke<Investigation>('investigation_create', { workspaceId, title, initialRequest, sourceMessageId }),
-	/** Resolve or create the Investigation keyed by a conversation's first question. */
-	investigationEnsure: (workspaceId: string, initialRequest: string, sourceMessageId: string) =>
-		invoke<Investigation>('investigation_ensure', { workspaceId, initialRequest, sourceMessageId }),
+		sourceMessageId?: string,
+		conversationId?: string
+	) => invoke<Investigation>('investigation_create', { workspaceId, title, initialRequest, sourceMessageId, conversationId }),
+	/** Resolve or create the Investigation associated with this stable Conversation. */
+	investigationEnsure: (workspaceId: string, conversationId: string, initialRequest: string, sourceMessageId: string) =>
+		invoke<Investigation>('investigation_ensure', { workspaceId, conversationId, initialRequest, sourceMessageId }),
 	/** Save the analyst-edited current brief on an Investigation. */
 	investigationUpdateBrief: (
 		investigationId: string,

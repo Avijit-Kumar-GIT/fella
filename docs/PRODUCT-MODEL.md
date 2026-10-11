@@ -139,7 +139,7 @@ the implementation slice; this map is the shared conceptual contract.
 | [#185 Brief updates](https://github.com/Avijit-Kumar-GIT/fella/issues/185) | Propose and review a new brief version when direction materially changes. |
 | [#186 Separate messages and runs](https://github.com/Avijit-Kumar-GIT/fella/issues/186) | Link canonical AnalysisTurn IDs from an Investigation and open the run record from its transcript message. |
 | [#187 Automatic Investigation](https://github.com/Avijit-Kumar-GIT/fella/issues/187) | Automatically resolve/create one Investigation per workspace conversation, keyed by its first user message. |
-| [#188 Conversation association](https://github.com/Avijit-Kumar-GIT/fella/issues/188) | Make the workspace conversation link stable and navigable from either side. |
+| [#188 Conversation association](https://github.com/Avijit-Kumar-GIT/fella/issues/188) | Store the stable Conversation ID on its Investigation and navigate back to the canonical transcript. |
 | [#189 Editable Question plan](https://github.com/Avijit-Kumar-GIT/fella/issues/189) | Let analysts edit Question text and ordering without rewriting history. |
 | [#190 Usable sources in context](https://github.com/Avijit-Kumar-GIT/fella/issues/190) | Show catalog availability/readiness inside the Investigation workflow. |
 | [#191 Durable Question records](https://github.com/Avijit-Kumar-GIT/fella/issues/191) | Persist root and decomposed Questions independently of messages. |
@@ -200,4 +200,7 @@ IDs for their linked AnalysisTurns; conversation messages remain unchanged and
 open the canonical execution record by its existing turn ID. Workspace asks
 automatically ensure their Investigation from the conversation's first real
 question; reopening that same transcript resolves the existing record rather
-than creating another one. General conversations remain outside this flow.
+than creating another one. The Investigation stores the stable Conversation ID
+and links back to its existing transcript instead of copying messages. Older
+records can recover that link from the first-question message ID. General
+conversations remain outside this flow.

@@ -265,6 +265,9 @@ pub struct ConversationSummary {
     pub id: String,
     pub saved_at_ms: i64,
     pub workspace: Option<String>,
+    /// ID of the first real user message, used to upgrade older Investigation links.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_question_message_id: Option<String>,
     pub preview: String,
     pub message_count: usize,
     /// A user-given name, if this conversation was renamed. Absent for the
@@ -606,6 +609,7 @@ mod investigation_ensure_tests {
                     engine
                         .investigation_ensure(
                             "/work/sales",
+                            "conversation-first",
                             "Summarize sales trends",
                             "message-first",
                         )
@@ -1164,7 +1168,7 @@ mod conversation_context_tests {
             "saved_at_ms": 2,
             "workspace": "/later/repository",
             "messages": [
-                {"role":"user", "text":"What is the total?"},
+                {"id":"message-repo-origin", "role":"user", "text":"What is the total?"},
                 {"role":"assistant", "text":"The total is 12.", "answer": {
                     "text":"The total is 12.",
                     "workspace":{"path":"/original/repository", "revision":"revision-1"},
@@ -1199,6 +1203,15 @@ mod conversation_context_tests {
                 .as_deref(),
             Some("/original/repository"),
             "the first answer's repository is more reliable than a later archive snapshot"
+        );
+        assert_eq!(
+            conversations
+                .iter()
+                .find(|item| item.id == "repo-origin")
+                .unwrap()
+                .first_question_message_id
+                .as_deref(),
+            Some("message-repo-origin")
         );
 
         drop(engine);
@@ -1770,19 +1783,27 @@ impl EngineState {
             let Some(messages) = v.get("messages").and_then(|value| value.as_array()) else {
                 continue;
             };
-            let Some(preview) = messages
+            let Some(first_question) = messages
                 .iter()
                 .find(|message| is_actual_question_message(message))
-                .and_then(|message| message.get("text").and_then(|text| text.as_str()))
-                .map(|s| cap_chars(s, 80))
             else {
                 continue;
             };
+            let preview = first_question
+                .get("text")
+                .and_then(|text| text.as_str())
+                .map(|text| cap_chars(text, 80))
+                .unwrap_or_default();
+            let first_question_message_id = first_question
+                .get("id")
+                .and_then(|value| value.as_str())
+                .map(str::to_owned);
             let title = v.get("title").and_then(|x| x.as_str()).map(str::to_string);
             out.push(ConversationSummary {
                 id,
                 saved_at_ms,
                 workspace,
+                first_question_message_id,
                 preview,
                 message_count: conversational_message_count(messages),
                 title,
@@ -1882,6 +1903,7 @@ impl EngineState {
         title: &str,
         initial_request: Option<&str>,
         source_message_id: Option<&str>,
+        conversation_id: Option<&str>,
     ) -> EngineResult<Investigation> {
         investigation::create(
             &self.data_dir,
@@ -1889,6 +1911,7 @@ impl EngineState {
             title,
             initial_request,
             source_message_id,
+            conversation_id,
         )
     }
 
@@ -1897,6 +1920,7 @@ impl EngineState {
     pub fn investigation_ensure(
         &self,
         workspace_id: &str,
+        conversation_id: &str,
         initial_request: &str,
         source_message_id: &str,
     ) -> EngineResult<Investigation> {
@@ -1904,9 +1928,10 @@ impl EngineState {
             .investigation_ensure_lock
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        investigation::ensure_for_source_message(
+        investigation::ensure_for_conversation(
             &self.data_dir,
             workspace_id,
+            conversation_id,
             initial_request,
             source_message_id,
         )

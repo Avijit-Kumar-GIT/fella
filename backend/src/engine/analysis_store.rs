@@ -342,6 +342,7 @@ mod tests {
                 "Revenue",
                 Some("What were total sales?"),
                 Some("message-1"),
+                None,
             )
             .unwrap();
         let mixed_ids = ["turn-test-1", "turn-foreign"].map(str::to_owned);
