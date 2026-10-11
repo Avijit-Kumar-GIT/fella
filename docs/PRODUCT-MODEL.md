@@ -204,3 +204,13 @@ than creating another one. The Investigation stores the stable Conversation ID
 and links back to its existing transcript instead of copying messages. Older
 records can recover that link from the first-question message ID. General
 conversations remain outside this flow.
+
+Each Investigation now stores an ordered, editable Question plan. Analysts can
+add, rename, reorder, and remove Questions without changing the source message
+or prior AnalysisTurns. The next workspace ask receives the latest saved plan
+as context while its transcript message remains exactly what the analyst sent;
+unanswered Questions are explicitly treated as work to do, not established
+findings. Legacy Investigations surface their existing goal as the initial
+Question when upgraded. This first plan is an ordered value on the aggregate;
+independent Question records and run-to-Question associations remain later
+slices.

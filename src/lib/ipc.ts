@@ -15,6 +15,7 @@ import type {
 	ContextReference,
 	ConversationSummary,
 	Investigation,
+	InvestigationQuestion,
 	ProviderHealth,
 	ProviderInfo,
 	QueryResult,
@@ -151,6 +152,9 @@ export const ipc = {
 		brief: Investigation['brief'],
 		reviewedMessageId?: string
 	) => invoke<Investigation>('investigation_update_brief', { investigationId, brief, reviewedMessageId }),
+	/** Replace the current ordered Question plan without rewriting past runs. */
+	investigationUpdateQuestions: (investigationId: string, questions: InvestigationQuestion[]) =>
+		invoke<Investigation>('investigation_update_questions', { investigationId, questions }),
 	/** Associate existing canonical AnalysisTurns by ID; never copy run payloads. */
 	investigationLinkAnalysisTurns: (investigationId: string, analysisTurnIds: string[]) =>
 		invoke<Investigation>('investigation_link_analysis_turns', { investigationId, analysisTurnIds }),

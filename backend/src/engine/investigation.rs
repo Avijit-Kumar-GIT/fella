@@ -4,6 +4,7 @@
 //! analysis-turn payloads. Those records remain owned by their existing
 //! stores and are linked in later product-model slices.
 
+use std::collections::HashSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -37,6 +38,13 @@ pub struct InvestigationBrief {
     pub constraints: Vec<String>,
 }
 
+/// One analyst-editable item in an Investigation's ordered work plan.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InvestigationQuestion {
+    pub id: String,
+    pub text: String,
+}
+
 /// Stable, independently loadable identity for an investigation.
 ///
 /// `workspace_id` is the canonical local folder identity, matching the
@@ -49,6 +57,10 @@ pub struct Investigation {
     /// Stable link to the canonical archived Conversation transcript.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conversation_id: Option<String>,
+    /// Ordered plan value. `None` identifies a pre-plan legacy record;
+    /// `Some(vec![])` is an intentionally empty plan.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub questions: Option<Vec<InvestigationQuestion>>,
     pub title: String,
     #[serde(default)]
     pub brief: InvestigationBrief,
@@ -92,6 +104,30 @@ fn now_ms() -> u64 {
         .as_millis()
         .try_into()
         .unwrap_or(u64::MAX)
+}
+
+fn new_question_id() -> EngineResult<String> {
+    let mut random = [0u8; 16];
+    getrandom::fill(&mut random)
+        .map_err(|error| EngineError::msg(format!("create question id: {error}")))?;
+    Ok(format!(
+        "q_{}",
+        random
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    ))
+}
+
+fn initial_questions(request: &str) -> EngineResult<Vec<InvestigationQuestion>> {
+    let text = request.trim();
+    if text.is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(vec![InvestigationQuestion {
+        id: new_question_id()?,
+        text: text.to_owned(),
+    }])
 }
 
 fn read_record(path: &Path, expected_id: &str) -> EngineResult<Investigation> {
@@ -171,6 +207,7 @@ pub fn create(
             id: id.clone(),
             workspace_id: workspace_id.to_owned(),
             conversation_id: conversation_id.map(str::to_owned),
+            questions: Some(initial_questions(goal)?),
             title: title.to_owned(),
             brief: InvestigationBrief {
                 goal: goal.to_owned(),
@@ -289,6 +326,7 @@ pub fn ensure_for_conversation(
             })
         });
     if let Some(mut existing) = existing.take() {
+        let mut changed = false;
         if let Some(linked_id) = existing.conversation_id.as_deref() {
             if linked_id != conversation_id {
                 return Err(EngineError::msg(
@@ -298,7 +336,33 @@ pub fn ensure_for_conversation(
         } else {
             // Upgrade records created before Conversation IDs were explicit.
             existing.conversation_id = Some(conversation_id.to_owned());
-            existing.updated_at_ms = now_ms();
+            changed = true;
+        }
+        if existing.questions.is_none() {
+            let seed = if existing.brief.goal.trim().is_empty() {
+                initial_request
+            } else {
+                &existing.brief.goal
+            };
+            existing.questions = Some(initial_questions(seed)?);
+            changed = true;
+        }
+        // A manually-created, blank Investigation can be attached to its
+        // conversation before the analyst asks the first real question.
+        if existing.brief_source_message_id.is_none() {
+            let request = initial_request.trim();
+            if !request.is_empty() {
+                existing.brief.goal = request.to_owned();
+                existing.brief_source_message_id = Some(source_message_id.to_owned());
+                existing.brief_reviewed_message_id = Some(source_message_id.to_owned());
+                if existing.questions.as_ref().is_some_and(Vec::is_empty) {
+                    existing.questions = Some(initial_questions(request)?);
+                }
+                changed = true;
+            }
+        }
+        if changed {
+            existing.updated_at_ms = now_ms().max(existing.updated_at_ms.saturating_add(1));
             write_record(data_dir, &existing)?;
         }
         return Ok(existing);
@@ -324,6 +388,61 @@ pub fn ensure_for_conversation(
         Some(source_message_id),
         Some(conversation_id),
     )
+}
+
+/// Replace the current ordered Question plan. Prior AnalysisTurns are separate
+/// immutable records and are intentionally not rewritten by this operation.
+pub fn update_questions(
+    data_dir: &Path,
+    id: &str,
+    mut questions: Vec<InvestigationQuestion>,
+) -> EngineResult<Investigation> {
+    const MAX_QUESTIONS: usize = 100;
+    const MAX_ID_CHARS: usize = 128;
+    const MAX_TEXT_CHARS: usize = 12_000;
+    const MAX_PLAN_CHARS: usize = 24_000;
+
+    if questions.len() > MAX_QUESTIONS {
+        return Err(EngineError::msg(
+            "an investigation plan has too many questions",
+        ));
+    }
+    let mut ids = HashSet::new();
+    let mut plan_chars = 0usize;
+    for question in &mut questions {
+        question.id = question.id.trim().to_owned();
+        question.text = question.text.trim().to_owned();
+        if question.id.is_empty()
+            || question.id.chars().count() > MAX_ID_CHARS
+            || !question.id.chars().all(|character| {
+                character.is_ascii_alphanumeric() || matches!(character, '_' | '-')
+            })
+            || !ids.insert(question.id.clone())
+        {
+            return Err(EngineError::msg(
+                "invalid or duplicate Investigation Question id",
+            ));
+        }
+        if question.text.is_empty() || question.text.chars().count() > MAX_TEXT_CHARS {
+            return Err(EngineError::msg(
+                "Investigation Question text must be non-empty and no longer than 12000 characters",
+            ));
+        }
+        plan_chars = plan_chars.saturating_add(question.text.chars().count());
+        if plan_chars > MAX_PLAN_CHARS {
+            return Err(EngineError::msg(
+                "Investigation Question plan exceeds the 24000 character limit",
+            ));
+        }
+    }
+
+    let mut record = load(data_dir, id)?;
+    if record.questions.as_ref() != Some(&questions) {
+        record.questions = Some(questions);
+        record.updated_at_ms = now_ms().max(record.updated_at_ms.saturating_add(1));
+        write_record(data_dir, &record)?;
+    }
+    Ok(record)
 }
 
 fn write_record(data_dir: &Path, record: &Investigation) -> EngineResult<()> {
@@ -538,11 +657,129 @@ mod tests {
         assert_eq!(created.workspace_id, "/work/analysis");
         assert_eq!(created.title, "Monthly revenue");
         assert_eq!(created.brief, InvestigationBrief::default());
+        assert_eq!(created.questions, Some(Vec::new()));
         assert!(created.analysis_turn_ids.is_empty());
         assert_eq!(created.status, InvestigationStatus::Active);
         assert_eq!(created.created_at_ms, created.updated_at_ms);
         assert_eq!(load(&data_dir, &created.id).unwrap(), created);
         assert_eq!(list(&data_dir).unwrap(), vec![created.clone()]);
+
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn question_plan_is_ordered_editable_and_does_not_rewrite_prior_run_links() {
+        let data_dir = scratch();
+        let created = create(
+            &data_dir,
+            "/work/analysis",
+            "Conversion analysis",
+            Some("Understand conversion by channel"),
+            Some("message-root"),
+            Some("conversation-root"),
+        )
+        .unwrap();
+        let linked =
+            link_analysis_turns(&data_dir, &created.id, &["turn-prior".to_owned()]).unwrap();
+        let edited = update_questions(
+            &data_dir,
+            &created.id,
+            vec![
+                InvestigationQuestion {
+                    id: "question-channel".to_owned(),
+                    text: "Compare conversion rates by channel".to_owned(),
+                },
+                InvestigationQuestion {
+                    id: "question-period".to_owned(),
+                    text: "Check whether the pattern changed over time".to_owned(),
+                },
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(edited.questions.as_ref().unwrap()[0].id, "question-channel");
+        assert_eq!(edited.questions.as_ref().unwrap()[1].id, "question-period");
+        assert_eq!(edited.analysis_turn_ids, linked.analysis_turn_ids);
+        assert_eq!(load(&data_dir, &created.id).unwrap(), edited);
+
+        let deliberately_empty = update_questions(&data_dir, &created.id, Vec::new()).unwrap();
+        assert_eq!(deliberately_empty.questions, Some(Vec::new()));
+        assert_eq!(
+            update_questions(&data_dir, &created.id, Vec::new()).unwrap(),
+            deliberately_empty
+        );
+        assert!(update_questions(
+            &data_dir,
+            &created.id,
+            vec![
+                InvestigationQuestion {
+                    id: "duplicate".to_owned(),
+                    text: "First".to_owned(),
+                },
+                InvestigationQuestion {
+                    id: "duplicate".to_owned(),
+                    text: "Second".to_owned(),
+                },
+            ],
+        )
+        .is_err());
+        assert!(update_questions(
+            &data_dir,
+            &created.id,
+            (0..3)
+                .map(|index| InvestigationQuestion {
+                    id: format!("long-{index}"),
+                    text: "x".repeat(9_000),
+                })
+                .collect(),
+        )
+        .is_err());
+        assert!(update_questions(
+            &data_dir,
+            &created.id,
+            vec![InvestigationQuestion {
+                id: "blank".to_owned(),
+                text: "  ".to_owned(),
+            }],
+        )
+        .is_err());
+
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn ensure_upgrades_a_legacy_investigation_with_its_existing_goal_as_a_question() {
+        let data_dir = scratch();
+        let mut legacy = create(
+            &data_dir,
+            "/work/analysis",
+            "Legacy investigation",
+            Some("Original analysis goal"),
+            Some("message-root"),
+            None,
+        )
+        .unwrap();
+        legacy.questions = None;
+        write_record(&data_dir, &legacy).unwrap();
+
+        let upgraded = ensure_for_conversation(
+            &data_dir,
+            "/work/analysis",
+            "conversation-root",
+            "A later follow-up request",
+            "message-root",
+        )
+        .unwrap();
+        assert_eq!(upgraded.brief.goal, "Original analysis goal");
+        assert_eq!(
+            upgraded.conversation_id.as_deref(),
+            Some("conversation-root")
+        );
+        assert_eq!(upgraded.questions.as_ref().unwrap().len(), 1);
+        assert_eq!(
+            upgraded.questions.as_ref().unwrap()[0].text,
+            "Original analysis goal"
+        );
 
         let _ = std::fs::remove_dir_all(data_dir);
     }

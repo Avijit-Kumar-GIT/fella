@@ -17,7 +17,9 @@ use crate::engine::context::{ContextAssembler, ContextAssemblyAudit, ContextPack
 use crate::engine::error::{EngineError, EngineResult};
 use crate::engine::evidence::{Answer, AskEvent, EvidenceItem};
 use crate::engine::ingest::docs;
-use crate::engine::investigation::{self, Investigation, InvestigationBrief};
+use crate::engine::investigation::{
+    self, Investigation, InvestigationBrief, InvestigationQuestion,
+};
 use crate::engine::llm::{LlmClient, ProviderHealth};
 use crate::engine::memory::{self, FolderMemory};
 use crate::engine::provider::{self, AuthKind, PROVIDERS};
@@ -1946,6 +1948,16 @@ impl EngineState {
         reviewed_message_id: Option<&str>,
     ) -> EngineResult<Investigation> {
         investigation::update_brief(&self.data_dir, id, brief, reviewed_message_id)
+    }
+
+    /// Replace the ordered, analyst-editable Question plan. Existing run
+    /// records are independent and remain unchanged.
+    pub fn investigation_update_questions(
+        &self,
+        id: &str,
+        questions: Vec<InvestigationQuestion>,
+    ) -> EngineResult<Investigation> {
+        investigation::update_questions(&self.data_dir, id, questions)
     }
 
     /// Associate canonical, persisted AnalysisTurns without copying their

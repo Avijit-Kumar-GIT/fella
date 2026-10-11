@@ -5,7 +5,7 @@
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { ipc, isDesktop } from '$lib/ipc';
 	import { analysisTurnIdsAfterSourceMessage } from '$lib/investigation-runs';
-	import type { ConversationSummary, Investigation, InvestigationBrief } from '$lib/types';
+	import type { ConversationSummary, Investigation, InvestigationBrief, InvestigationQuestion } from '$lib/types';
 	import { findBriefProposal, type BriefProposal, type BriefProposalTarget } from '$lib/investigation-brief-proposal';
 	import Icon from './Icon.svelte';
 
@@ -18,8 +18,11 @@
 	let audience = $state('');
 	let desiredOutput = $state('');
 	let constraintsText = $state('');
+	let questions = $state<InvestigationQuestion[]>([]);
 	let savedBrief = $state('');
+	let savedQuestions = $state('');
 	let loadedBriefKey = '';
+	let loadedQuestionsKey = '';
 	let proposalMessageId = $state<string | null>(null);
 	let proposalText = $state('');
 	let proposalTarget = $state<BriefProposalTarget>('goal');
@@ -71,6 +74,9 @@
 	});
 	let briefKey = $derived(JSON.stringify(currentBrief));
 	let dirty = $derived(Boolean(selected && briefKey !== savedBrief));
+	let questionsKey = $derived(JSON.stringify(questions));
+	let questionsDirty = $derived(Boolean(selected && questionsKey !== savedQuestions));
+	let hasBlankQuestion = $derived(questions.some((question) => !question.text.trim()));
 
 	async function loadWorkspace(path: string): Promise<void> {
 		const serial = ++requestSerial;
@@ -166,6 +172,22 @@
 	});
 
 	$effect(() => {
+		const item = selected;
+		const key = item ? `${item.id}:${JSON.stringify(item.questions ?? null)}` : '';
+		if (key === loadedQuestionsKey) return;
+		loadedQuestionsKey = key;
+		if (!item) {
+			questions = [];
+			savedQuestions = '';
+			return;
+		}
+		questions = (item.questions ?? (item.brief.goal.trim()
+			? [{ id: `legacy-${item.id}`, text: item.brief.goal }]
+			: [])).map((question) => ({ ...question }));
+		savedQuestions = JSON.stringify(questions);
+	});
+
+	$effect(() => {
 		const proposal = pendingProposal;
 		if ((proposal?.messageId ?? null) === proposalMessageId) return;
 		proposalMessageId = proposal?.messageId ?? null;
@@ -181,7 +203,13 @@
 		try {
 			const record = request
 				? await ipc.investigationEnsure(workspacePath, session.activeChat.id, request.text, request.id)
-				: await ipc.investigationCreate(workspacePath);
+			: await ipc.investigationCreate(
+					workspacePath,
+					'New investigation',
+					undefined,
+					undefined,
+					session.activeChat.workspaceScope === workspacePath ? session.activeChat.id : undefined
+				);
 			investigations = [record, ...investigations.filter((item) => item.id !== record.id)];
 			selectedId = record.id;
 		} catch (cause) {
@@ -255,6 +283,48 @@
 		}
 	}
 
+	function addQuestion(): void {
+		const id = globalThis.crypto?.randomUUID?.().replaceAll('-', '') ?? `${Date.now()}${Math.random().toString(16).slice(2)}`;
+		questions = [...questions, { id: `q_${id}`, text: '' }];
+	}
+
+	function moveQuestion(index: number, offset: -1 | 1): void {
+		const destination = index + offset;
+		if (destination < 0 || destination >= questions.length) return;
+		const next = [...questions];
+		[next[index], next[destination]] = [next[destination], next[index]];
+		questions = next;
+	}
+
+	function removeQuestion(id: string): void {
+		questions = questions.filter((question) => question.id !== id);
+	}
+
+	async function saveQuestions(): Promise<boolean> {
+		if (!selected || saving || !questionsDirty) return !questionsDirty;
+		if (hasBlankQuestion) {
+			error = 'Fill in or remove each blank Question before saving the plan.';
+			return false;
+		}
+		saving = true;
+		error = '';
+		try {
+			const updated = await ipc.investigationUpdateQuestions(
+				selected.id,
+				questions.map((question) => ({ id: question.id, text: question.text.trim() }))
+			);
+			investigations = investigations.map((item) => item.id === updated.id ? updated : item);
+			questions = (updated.questions ?? []).map((question) => ({ ...question }));
+			savedQuestions = JSON.stringify(questions);
+			return true;
+		} catch (cause) {
+			error = cause instanceof Error ? cause.message : String(cause);
+			return false;
+		} finally {
+			saving = false;
+		}
+	}
+
 	async function reviewProposal(accept: boolean): Promise<void> {
 		const item = selected;
 		const proposal = pendingProposal;
@@ -282,6 +352,7 @@
 	async function selectInvestigation(id: string): Promise<void> {
 		if (id === selectedId || saving) return;
 		if (dirty && !(await saveBrief())) return;
+		if (questionsDirty && !(await saveQuestions())) return;
 		selectedId = id;
 	}
 </script>
@@ -384,6 +455,42 @@
 					<Textarea id="investigation-output" class="brief-field" bind:value={desiredOutput} disabled={saving} placeholder="What should the analyst deliver?" />
 					<label for="investigation-constraints">Constraints</label>
 					<Textarea id="investigation-constraints" class="brief-field constraints-field" bind:value={constraintsText} disabled={saving} placeholder="One constraint per line" />
+					<section class="question-editor" aria-labelledby="question-plan-title">
+						<header class="question-heading">
+							<div>
+								<h3 id="question-plan-title">Questions</h3>
+								<p>Break the Investigation into answerable steps. The current order guides future workspace asks.</p>
+							</div>
+							<div class="question-save">
+								<span role={error ? 'alert' : 'status'}>{error || (questionsDirty ? 'Unsaved plan' : 'Plan saved')}</span>
+								<Button type="button" disabled={!questionsDirty || saving || hasBlankQuestion} onclick={() => void saveQuestions()}>
+									<Icon name="check" size={16} />{saving ? 'Saving…' : 'Save plan'}
+								</Button>
+							</div>
+						</header>
+						{#if questions.length}
+							<ol class="question-list">
+								{#each questions as question, index (question.id)}
+									<li class="question-item">
+										<div class="question-item-heading">
+											<label for="question-{question.id}">Question {index + 1}</label>
+											<div class="question-item-actions">
+												<Button type="button" variant="ghost" aria-label="Move Question {index + 1} up" disabled={saving || index === 0} onclick={() => moveQuestion(index, -1)}>↑</Button>
+												<Button type="button" variant="ghost" aria-label="Move Question {index + 1} down" disabled={saving || index === questions.length - 1} onclick={() => moveQuestion(index, 1)}>↓</Button>
+												<Button type="button" variant="ghost" aria-label="Remove Question {index + 1}" disabled={saving} onclick={() => removeQuestion(question.id)}>Remove</Button>
+											</div>
+										</div>
+										<Textarea id="question-{question.id}" class="question-field" bind:value={question.text} disabled={saving} aria-label="Question {index + 1}" />
+									</li>
+								{/each}
+							</ol>
+						{:else}
+							<p class="question-empty">No Questions in this plan yet.</p>
+						{/if}
+						<Button type="button" variant="outline" disabled={saving} onclick={addQuestion}>
+							<Icon name="plus" size={16} />Add Question
+						</Button>
+					</section>
 					<div class="editor-foot">
 						<span role={error ? 'alert' : 'status'}>{error || (saving ? 'Saving…' : dirty ? 'Unsaved changes' : 'Saved locally')}</span>
 						{#if selected.brief_source_message_id}<span>Original request preserved</span>{/if}
@@ -445,6 +552,21 @@
 	.brief-editor :global(.brief-field) { width: 100%; min-height: 74px; resize: vertical; }
 	.brief-editor :global(.goal-field) { min-height: 112px; }
 	.brief-editor :global(.constraints-field) { min-height: 96px; }
+	.question-editor { display: grid; gap: var(--space-3); padding: var(--space-4) 0; margin-top: var(--space-4); border-top: 1px solid var(--border); }
+	.question-heading, .question-save, .question-item-heading, .question-item-actions { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
+	.question-heading { align-items: flex-start; gap: var(--space-4); }
+	.question-heading h3 { margin: 0; font-size: var(--fs-md); font-weight: 650; }
+	.question-heading p, .question-empty { margin-top: var(--space-1); color: var(--text-dim); font-size: var(--fs-xs); }
+	.question-save { flex: none; }
+	.question-save > span { color: var(--text-faint); font-size: var(--fs-xs); }
+	.question-list { display: grid; gap: var(--space-3); margin: 0; padding: 0; list-style: none; }
+	.question-item { min-width: 0; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); }
+	.question-item-heading { margin-bottom: var(--space-2); }
+	.question-item-heading label { margin: 0; font-size: var(--fs-sm); font-weight: 600; }
+	.question-item-actions { gap: 0; }
+	.question-item-actions :global(button) { min-width: 34px; min-height: 32px; padding: 4px 8px; }
+	.brief-editor :global(.question-field) { width: 100%; min-height: 68px; resize: vertical; }
+	.question-empty { margin: 0; }
 	.editor-foot { padding: var(--space-3) 0; }
 	.empty-state { max-width: 48ch; margin: 12vh auto 0; display: grid; justify-items: center; gap: var(--space-3); text-align: center; }
 	.empty-state > :global(svg) { color: var(--text-faint); }

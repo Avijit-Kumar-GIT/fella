@@ -7,6 +7,7 @@ import type {
 	ConversationSummary,
 	Message,
 	Investigation,
+	InvestigationQuestion,
 	ProviderHealth,
 	ProviderInfo
 } from './types';
@@ -16,7 +17,7 @@ const ensuredInvestigations = new Map<string, Promise<Investigation>>();
 /** Workspace bookkeeping is automatic but must never prevent an analysis.
  * The Conversation ID is stable across archive/reopen and is also persisted
  * as the Investigation's direct navigation link. */
-async function ensureWorkspaceInvestigation(conv: Conversation): Promise<void> {
+async function ensureWorkspaceInvestigation(conv: Conversation): Promise<Investigation | undefined> {
 	if (!isDesktop() || !conv.workspaceScope) return;
 	const workspace = session.workspaceAt(conv.workspaceScope);
 	if (!workspace || workspace.historyOnly) return;
@@ -32,12 +33,33 @@ async function ensureWorkspaceInvestigation(conv: Conversation): Promise<void> {
 	}
 
 	try {
-		await pending;
+		const investigation = await pending;
 		if (ownsRequest) session.investigationsVersion += 1;
+		return investigation;
 	} catch (cause) {
-		if (ensuredInvestigations.get(key) === pending) ensuredInvestigations.delete(key);
 		conv.addSystem(`Couldn't save this workspace Investigation: ${errMsg(cause)}. The analysis will continue.`);
+		return undefined;
+	} finally {
+		// Deduplicate only concurrent setup calls. A later turn must fetch the
+		// current saved Question plan rather than reuse a stale resolved record.
+		if (ensuredInvestigations.get(key) === pending) ensuredInvestigations.delete(key);
 	}
+}
+
+function questionWithInvestigationPlan(
+	question: string,
+	investigation: Investigation | undefined
+): string {
+	const questions: InvestigationQuestion[] = investigation?.questions?.filter((item) => item.text.trim()) ?? [];
+	if (!questions.length) return question;
+	const plan = questions.map((item, index) => `${index + 1}. ${item.text.trim()}`).join('\n');
+	return [
+		'Use this current analyst-edited Question plan as context for the request below. Keep the immediate request primary, use the plan to understand the broader Investigation, and do not present unanswered Questions as findings.',
+		'Current Question plan:',
+		plan,
+		'Immediate request:',
+		question
+	].join('\n\n');
 }
 
 const HELP = `Ask a question in plain language and Fella answers from your files,
@@ -977,7 +999,8 @@ async function ask(
 	if (!requireEngine()) return;
 	conv.busy = true;
 	conv.activity = 'preparing the analysis…';
-	await ensureWorkspaceInvestigation(conv);
+	const investigation = await ensureWorkspaceInvestigation(conv);
+	const analysisQuestion = questionWithInvestigationPlan(question, investigation);
 
 	const msg = conv.addAssistant('');
 	conv.startRun();
@@ -1039,7 +1062,7 @@ async function ask(
 	try {
 		const answer = await ipc.ask(
 			conv.id,
-			question,
+			analysisQuestion,
 			onEvent,
 			conv.model || undefined,
 			conv.mode,

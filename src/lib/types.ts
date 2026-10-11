@@ -427,6 +427,8 @@ export interface Investigation {
 	workspace_id: string;
 	/** Stable ID of the canonical archived Conversation transcript. */
 	conversation_id?: string;
+	/** Current analyst-authored work plan. `undefined` is a legacy record. */
+	questions?: InvestigationQuestion[];
 	title: string;
 	brief: InvestigationBrief;
 	brief_source_message_id?: string;
@@ -435,6 +437,11 @@ export interface Investigation {
 	status: 'active' | 'complete' | 'archived';
 	created_at_ms: number;
 	updated_at_ms: number;
+}
+
+export interface InvestigationQuestion {
+	id: string;
+	text: string;
 }
 
 export interface InvestigationBrief {

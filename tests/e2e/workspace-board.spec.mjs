@@ -137,6 +137,11 @@ async function installDesktopMock(
 		window.__workspaceAskCalls = calls;
 		window.__workspaceInvestigationEnsureCalls = investigationEnsureCalls;
 		window.__workspaceInvestigations = () => [...investigations.values()];
+		window.__workspaceSetRunLinks = (id, runIds) => {
+			for (const [key, record] of investigations) {
+				if (record.id === id) investigations.set(key, { ...record, analysis_turn_ids: [...runIds] });
+			}
+		};
 		window.__workspaceOpenCalls = [];
 		window.__deletedConversationIds = deletedConversationIds;
 		window.__deletedConversationWorkspaces = deletedConversationWorkspaces;
@@ -160,6 +165,7 @@ async function installDesktopMock(
 								conversation_id: args.conversationId,
 								title: goal.slice(0, 64),
 								brief: { goal, audience: '', desired_output: '', constraints: [] },
+								questions: goal ? [{ id: 'q-root', text: goal }] : [],
 								brief_source_message_id: args.sourceMessageId,
 								analysis_turn_ids: [],
 								status: 'active',
@@ -168,6 +174,16 @@ async function installDesktopMock(
 							});
 						}
 						return investigations.get(key);
+					}
+					case 'investigation_update_questions': {
+						for (const [key, record] of investigations) {
+							if (record.id === args.investigationId) {
+								const updated = { ...record, questions: args.questions.map((item) => ({ ...item })), updated_at_ms: Date.now() };
+								investigations.set(key, updated);
+								return updated;
+							}
+						}
+						throw new Error(`Unknown Investigation: ${args.investigationId}`);
 					}
 					case 'get_settings': return settings;
 					case 'list_providers': return providerList;
@@ -482,6 +498,58 @@ test('an Investigation opens its canonical workspace conversation', async ({ pag
 	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
 	await expect(page.locator('.msg.user').filter({ hasText: 'Summarize cohort retention' })).toHaveCount(1);
 	expect(await page.evaluate(() => window.__workspaceAskCalls.length)).toBe(1);
+});
+
+test('an analyst can edit the ordered Question plan and future asks use it', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
+	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
+	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	const composer = page.getByRole('combobox', { name: 'Ask about northwind-sales' });
+	await composer.fill('Understand conversion by channel');
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
+	const investigationId = await page.evaluate(() => window.__workspaceInvestigations()[0].id);
+	await page.evaluate((id) => window.__workspaceSetRunLinks(id, ['prior-analysis-turn']), investigationId);
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	await expect(page.getByRole('heading', { name: 'Questions', exact: true })).toBeVisible();
+
+	await page.getByRole('textbox', { name: 'Question 1' }).fill('Measure conversion by channel');
+	await page.getByRole('button', { name: 'Add Question' }).click();
+	await page.getByRole('textbox', { name: 'Question 2' }).fill('Compare conversion by device');
+	await page.getByRole('button', { name: 'Add Question' }).click();
+	await page.getByRole('textbox', { name: 'Question 3' }).fill('Compare conversion over time');
+	await page.getByRole('button', { name: 'Move Question 3 up' }).click();
+	await page.getByRole('button', { name: 'Remove Question 1' }).click();
+	await page.getByRole('button', { name: 'Save plan' }).click();
+	await expect(page.locator('.question-save')).toContainText('Plan saved');
+
+	const saved = await page.evaluate(() => window.__workspaceInvestigations()[0]);
+	expect(saved.questions.map((item) => item.text)).toEqual([
+		'Compare conversion over time',
+		'Compare conversion by device'
+	]);
+	expect(saved.analysis_turn_ids).toEqual(['prior-analysis-turn']);
+
+	await page.getByRole('button', { name: 'Open conversation', exact: true }).click();
+	await expect(composer).toBeVisible();
+	await composer.fill('Which device has the strongest change?');
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.').last()).toBeVisible();
+	const nextAsk = await page.evaluate(() => window.__workspaceAskCalls.at(-1));
+	expect(nextAsk.question).toContain('Compare conversion over time');
+	expect(nextAsk.question).toContain('Compare conversion by device');
+	expect(nextAsk.question.indexOf('Compare conversion over time')).toBeLessThan(nextAsk.question.indexOf('Compare conversion by device'));
+	expect(nextAsk.question).not.toContain('Measure conversion by channel');
+	expect(nextAsk.question).toContain('Which device has the strongest change?');
+	// The message renderer adds a presentation-only "You asked:" prefix. The
+	// actual contract is that the original request remains visible and the
+	// private Investigation-plan context stays out of the transcript.
+	const transcriptQuestion = page.locator('.msg.user').last();
+	await expect(transcriptQuestion).toContainText('Which device has the strongest change?');
+	await expect(transcriptQuestion).not.toContainText('Compare conversion over time');
+	await expect(transcriptQuestion).not.toContainText('Compare conversion by device');
 });
 
 test('the four-pane limit is scoped to one environment and closing a pane frees its slot', async ({ page }) => {
