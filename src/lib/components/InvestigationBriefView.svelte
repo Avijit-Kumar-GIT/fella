@@ -239,7 +239,13 @@
 			const all = await ipc.investigationsList();
 			if (serial !== requestSerial) return;
 			investigations = all.filter((item) => item.workspace_id === path);
-			selectedId = investigations[0]?.id ?? null;
+			const activeConversation = session.activeChat;
+			const activeQuestion = firstActualQuestion(activeConversation.messages);
+			const linkedToConversation = investigations.find((item) =>
+				item.conversation_id === activeConversation.id ||
+				(!!activeQuestion && item.brief_source_message_id === activeQuestion.id)
+			);
+			selectedId = linkedToConversation?.id ?? investigations[0]?.id ?? null;
 		} catch (cause) {
 			if (serial === requestSerial) error = cause instanceof Error ? cause.message : String(cause);
 		} finally {

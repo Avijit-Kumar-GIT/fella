@@ -12,6 +12,7 @@
 	import Titlebar from '$lib/components/Titlebar.svelte';
 	import Transcript from '$lib/components/Transcript.svelte';
 	import WorkspaceBoard from '$lib/components/WorkspaceBoard.svelte';
+	import WorkspaceContextBar from '$lib/components/WorkspaceContextBar.svelte';
 	import WorkspaceView from '$lib/components/WorkspaceView.svelte';
 	import { dispatch, loadStartupCatalog, openFolder, openRepository, stop } from '$lib/commands';
 	import { ipc, isDesktop } from '$lib/ipc';
@@ -343,6 +344,7 @@
 				</div>
 			{/if}
 			<main>
+				<WorkspaceContextBar />
 				<div class="main-row">
 					{#if activeView === 'board'}
 						<WorkspaceBoard bind:transcript />

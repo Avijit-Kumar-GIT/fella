@@ -776,9 +776,11 @@ test('environments compose General and repository panes while conversations reta
 	await expect(salesTile).toHaveCSS('border-top-width', '1px');
 	await expect(salesTile.locator('.tile-preview')).toBeVisible();
 	await expect(page.getByRole('combobox', { name: 'Ask a question' })).toBeVisible();
+	await expect(page.locator('.workspace-context-bar')).toHaveCount(0);
 	await salesFocus.click();
 	await expect(salesFocus).toHaveAttribute('aria-pressed', 'true');
 	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
+	await expect(page.locator('.workspace-context-bar')).toContainText('northwind-sales');
 	const salesWorkspaceRow = page.getByRole('button', { name: 'Open workspace northwind-sales' });
 	await expect(page.getByRole('button', { name: 'Open investigation brief in northwind-sales' })).toBeVisible();
 	await expect(page.getByRole('button', { name: 'Create project for northwind-sales' })).toBeVisible();
@@ -880,8 +882,14 @@ test('an Investigation opens its canonical workspace conversation', async ({ pag
 	await page.getByRole('button', { name: 'Send' }).click();
 	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
 	const askCall = await page.evaluate(() => window.__workspaceAskCalls.at(-1));
-	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	const workspaceContext = page.locator('.workspace-context-bar');
+	await expect(workspaceContext).toContainText('Workspace');
+	await expect(workspaceContext).toContainText('northwind-sales');
+	await expect(page.getByRole('button', { name: 'Open investigation brief in northwind-sales' })).toBeVisible();
+	await page.getByRole('button', { name: 'Open Investigation', exact: true }).click();
 	await expect(page.getByRole('heading', { name: 'Investigation brief' })).toBeVisible();
+	await expect(workspaceContext).toContainText('northwind-sales');
+	await expect(page.locator('.editor-heading h2')).toHaveText('Summarize cohort retention');
 	const openConversation = page.getByRole('button', { name: 'Open conversation', exact: true });
 	await expect(openConversation).toBeVisible();
 	const linked = await page.evaluate(() => window.__workspaceInvestigations()[0]);
@@ -889,6 +897,10 @@ test('an Investigation opens its canonical workspace conversation', async ({ pag
 	await openConversation.click();
 	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
 	await expect(page.locator('.msg.user').filter({ hasText: 'Summarize cohort retention' })).toHaveCount(1);
+	expect(await page.evaluate(() => window.__workspaceAskCalls.length)).toBe(1);
+	await expect(page.getByRole('button', { name: 'Open Investigation', exact: true })).toBeVisible();
+	await page.getByRole('button', { name: 'Open Investigation', exact: true }).click();
+	await expect(page.locator('.editor-heading h2')).toHaveText('Summarize cohort retention');
 	expect(await page.evaluate(() => window.__workspaceAskCalls.length)).toBe(1);
 });
 
