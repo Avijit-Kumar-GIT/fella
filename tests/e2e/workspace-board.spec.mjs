@@ -899,6 +899,14 @@ test('Investigation shows source readiness and opens source details in place', a
 	await expect(skipped).toContainText('Unsupported');
 	await expect(skipped).toContainText('Unavailable');
 
+	const sourceFieldSearch = page.getByRole('textbox', { name: 'Find a source or field' });
+	await sourceFieldSearch.fill('ordered_at');
+	await expect(page.getByRole('button', { name: /sales\.csv.*Queryable/ })).toBeVisible();
+	await expect(documentSource).not.toBeVisible();
+	await expect.poll(() => page.evaluate(() => window.__workspaceInvestigations()[0].source_selection)).toEqual({
+		mode: 'all_sources',
+		included_paths: []
+	});
 	await page.getByRole('button', { name: /sales\.csv.*Queryable/ }).click();
 	const details = page.getByRole('region', { name: 'Details for sales.csv' });
 	await expect(details).toBeVisible();
@@ -906,9 +914,13 @@ test('Investigation shows source readiness and opens source details in place', a
 	await expect(details.getByRole('table')).toContainText('North');
 	const fieldProfile = details.locator('.field-profile');
 	await fieldProfile.locator('summary').click();
+	await expect(fieldProfile.locator('tbody tr')).toHaveCount(1);
+	await expect(fieldProfile.getByRole('table')).toContainText('ordered_at');
 	await expect(fieldProfile).toContainText('31 missing · 25%');
 	await expect(fieldProfile).toContainText('2025-01-03 – 2025-12-29');
 	await expect(fieldProfile).toContainText('measured from the loaded rows only');
+	await sourceFieldSearch.fill('');
+	await expect(fieldProfile.locator('tbody tr')).toHaveCount(3);
 	await expect(page.getByRole('heading', { name: 'Investigation brief' })).toBeVisible();
 });
 

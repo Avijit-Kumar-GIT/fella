@@ -246,6 +246,10 @@ source scope and run provenance remain separate primitives.
 The readiness view now exposes each tabular source's observed field profile:
 type, missing-row count/percentage, distinct count, observed minimum/maximum,
 and ingest caveats, alongside the sample preview and skipped-file reasons.
+An Investigation-level filter searches source names and paths as well as field
+names, types, common values, and ingest notes; matching fields are brought
+forward in the selected source's profile. This is a view-only focus, separate
+from the persisted source-selection controls.
 These are facts from the currently loaded catalog snapshot, not a verdict that
 the source covers the requested population or time period. The profile helps
 the analyst notice concrete gaps before planning; a Question-specific semantic

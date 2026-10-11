@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { Button } from '$lib/components/ui/button';
+	import { Input } from '$lib/components/ui/input';
 	import { ipc } from '$lib/ipc';
 	import { session } from '$lib/session.svelte';
 	import type {
@@ -27,6 +28,7 @@
 	let showAllSources = $state(false);
 	let showAllSkipped = $state(false);
 	let showAllColumns = $state(false);
+	let sourceQuery = $state('');
 	let catalogIdentity = '';
 	const SOURCE_LIMIT = 5;
 	const SKIPPED_LIMIT = 5;
@@ -35,22 +37,77 @@
 	let catalog = $derived(session.catalog.workspace === workspacePath ? session.catalog : null);
 	let sources = $derived(catalog?.sources ?? []);
 	let skipped = $derived(catalog?.skipped ?? []);
-	let visibleSources = $derived(showAllSources ? sources : sources.slice(0, SOURCE_LIMIT));
+	let matchingSources = $derived.by(() => {
+		const query = sourceQuery.trim().toLowerCase();
+		if (!query) return sources;
+		return sources.filter((source) => {
+			const columns = (source.columns ?? []).flatMap((column) => [
+				column.name,
+				column.type,
+				column.note,
+				column.min,
+				column.max,
+				...(column.common_values ?? [])
+			]);
+			const haystack = [
+				source.name,
+				relativePath(source.path),
+				source.kind,
+				source.note,
+				source.synopsis,
+				...columns
+			].filter(Boolean).join(' ').toLowerCase();
+			return haystack.includes(query);
+		});
+	});
+	let visibleSources = $derived(
+		showAllSources ? matchingSources : matchingSources.slice(0, SOURCE_LIMIT)
+	);
 	let visibleSkipped = $derived(showAllSkipped ? skipped : skipped.slice(0, SKIPPED_LIMIT));
 	let selected = $derived(sources.find((source) => sourceKey(source) === selectedKey) ?? null);
+	let matchingFields = $derived.by(() => {
+		const query = sourceQuery.trim().toLowerCase();
+		if (!query || !selected) return [];
+		return (selected.columns ?? []).filter((column) =>
+			[
+				column.name,
+				column.type,
+				column.note,
+				column.min,
+				column.max,
+				...(column.common_values ?? [])
+			]
+				.filter(Boolean).join(' ').toLowerCase().includes(query)
+		);
+	});
+	let profileColumns = $derived(
+		sourceQuery.trim() && matchingFields.length ? matchingFields : selected?.columns ?? []
+	);
 	let visibleColumns = $derived(
-		showAllColumns ? selected?.columns ?? [] : (selected?.columns ?? []).slice(0, FIELD_LIMIT)
+		showAllColumns || (sourceQuery.trim() && matchingFields.length > 0)
+			? profileColumns
+			: profileColumns.slice(0, FIELD_LIMIT)
 	);
 	let readyTables = $derived(sources.filter((source) => source.view && isReady(source)).length);
 	let readyDocuments = $derived(sources.filter((source) => !source.view && isReady(source)).length);
 
 	$effect(() => {
-		const identity = `${workspacePath}\u0000${catalog?.revision ?? ''}`;
+		const identity = `${workspacePath}\u0000${catalog?.revision ?? ''}\u0000${investigation?.id ?? ''}`;
 		if (identity === catalogIdentity) return;
 		catalogIdentity = identity;
 		selectedKey = null;
 		showAllSources = false;
 		showAllSkipped = false;
+		sourceQuery = '';
+	});
+
+	$effect(() => {
+		const query = sourceQuery;
+		if (!query.trim()) return;
+		if (selectedKey && !matchingSources.some((source) => sourceKey(source) === selectedKey)) {
+			selectedKey = null;
+		}
+		showAllSources = false;
 	});
 
 	function sourceKey(source: SourceInfo): string {
@@ -260,6 +317,19 @@
 	{/if}
 
 	{#if catalog && sources.length}
+		<div class="source-search">
+			<Icon name="search" size={16} />
+			<Input
+				class="source-search-input"
+				aria-label="Find a source or field"
+				bind:value={sourceQuery}
+				placeholder="Find a source or field…"
+				spellcheck="false"
+			/>
+			{#if sourceQuery.trim()}
+				<span class="source-search-count">{matchingSources.length} match{matchingSources.length === 1 ? '' : 'es'}</span>
+			{/if}
+		</div>
 		<ul class="source-list" aria-label="Available data sources">
 			{#each visibleSources as source (sourceKey(source))}
 				<li>
@@ -297,10 +367,13 @@
 				</li>
 			{/each}
 		</ul>
-		{#if sources.length > SOURCE_LIMIT}
+		{#if matchingSources.length > SOURCE_LIMIT}
 			<Button class="show-more" variant="ghost" size="sm" type="button" onclick={() => showAllSources = !showAllSources}>
-				{showAllSources ? 'Show fewer sources' : `Show all ${sources.length} sources`}
+				{showAllSources ? 'Show fewer sources' : `Show all ${matchingSources.length} matching sources`}
 			</Button>
+		{/if}
+		{#if !matchingSources.length}
+			<p class="empty-sources">No sources or fields match “{sourceQuery}”.</p>
 		{/if}
 		{#if selected}
 			<section id="investigation-source-detail" class="source-detail" aria-label={`Details for ${selected.name}`}>
@@ -324,7 +397,14 @@
 				{/if}
 				{#if selected.view && selected.columns?.length}
 					<details class="field-profile">
-						<summary>Observed field profile ({selected.columns.length} columns)</summary>
+						<summary>
+							Observed field profile
+							{#if sourceQuery.trim() && matchingFields.length}
+								({matchingFields.length} matching of {selected.columns.length} fields)
+							{:else}
+								({selected.columns.length} fields)
+							{/if}
+						</summary>
 						<p class="profile-caveat">
 							Missingness and minimum/maximum values are measured from the loaded rows only. Compare them with the Question’s population and time period; they do not establish complete coverage.
 						</p>
@@ -358,7 +438,7 @@
 								</tbody>
 							</table>
 						</div>
-						{#if selected.columns.length > FIELD_LIMIT}
+						{#if selected.columns.length > FIELD_LIMIT && !(sourceQuery.trim() && matchingFields.length)}
 							<Button
 								class="show-more"
 								variant="ghost"
@@ -423,6 +503,9 @@
 	.scope-error { margin: var(--space-2) 0 0; color: var(--warning, #9b6500); font-size: var(--fs-xs); }
 	.indexed-at { flex: none; color: var(--text-faint); font-size: var(--fs-xs); }
 	.source-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr)); gap: var(--space-2); margin: var(--space-3) 0 0; padding: 0; list-style: none; }
+	.source-search { display: flex; align-items: center; gap: var(--space-2); max-width: 520px; margin-top: var(--space-3); color: var(--text-faint); }
+	.source-search :global(input) { min-width: 0; }
+	.source-search-count { flex: none; font-size: var(--fs-xs); }
 	.source-row { display: flex; min-width: 0; align-items: center; gap: var(--space-2); }
 	.source-scope-toggle { flex: none; padding: 8px 2px; }
 	.source-option { display: flex; flex: 1; width: 100%; min-width: 0; align-items: center; gap: var(--space-2); padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-md); background: transparent; color: var(--text); text-align: left; cursor: pointer; }
