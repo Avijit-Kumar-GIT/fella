@@ -528,6 +528,8 @@ export interface InvestigationFinding {
 	analysis_turn_id: string;
 	evidence_ids: string[];
 	claim: string;
+	caveats: string[];
+	assumptions: string[];
 	created_at_ms: number;
 	updated_at_ms: number;
 }
@@ -537,6 +539,14 @@ export interface InvestigationFindingInput {
 	analysis_turn_id: string;
 	evidence_ids: string[];
 	claim: string;
+	caveats: string[];
+	assumptions: string[];
+}
+
+export interface InvestigationFindingUpdate {
+	claim: string;
+	caveats: string[];
+	assumptions: string[];
 }
 
 export interface InvestigationContextSnapshot {

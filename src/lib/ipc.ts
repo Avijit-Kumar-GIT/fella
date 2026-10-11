@@ -19,6 +19,7 @@ import type {
 	InvestigationDefinitionInput,
 	InvestigationFinding,
 	InvestigationFindingInput,
+	InvestigationFindingUpdate,
 	InvestigationQuestion,
 	InvestigationQuestionInput,
 	InvestigationSourceSelection,
@@ -184,6 +185,9 @@ export const ipc = {
 	/** Edit only the claim; provenance links are immutable. */
 	investigationUpdateFindingClaim: (investigationId: string, findingId: string, claim: string) =>
 		invoke<Investigation>('investigation_update_finding_claim', { investigationId, findingId, claim }),
+	/** Edit a Finding's claim, caveats, and assumptions without changing provenance. */
+	investigationUpdateFinding: (investigationId: string, findingId: string, update: InvestigationFindingUpdate) =>
+		invoke<Investigation>('investigation_update_finding', { investigationId, findingId, update }),
 	/** Load one Finding record independently from its Investigation. */
 	investigationFindingLoad: (findingId: string) =>
 		invoke<InvestigationFinding>('investigation_finding_load', { findingId }),

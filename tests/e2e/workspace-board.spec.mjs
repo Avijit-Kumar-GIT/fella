@@ -365,7 +365,7 @@ async function installDesktopMock(
 							if (!(record.analysis_turn_ids ?? []).includes(findingInput.analysis_turn_id)) throw new Error('Finding run is not linked to this Investigation.');
 							if (!(record.questions ?? []).some((question) => question.id === findingInput.question_id)) throw new Error('Finding Question is not active in this Investigation.');
 							const now = Date.now();
-							const finding = { id: `finding-${findingRecords.size + 1}`, investigation_id: record.id, ...findingInput, created_at_ms: now, updated_at_ms: now };
+							const finding = { id: `finding-${findingRecords.size + 1}`, investigation_id: record.id, caveats: [], assumptions: [], ...findingInput, created_at_ms: now, updated_at_ms: now };
 							findingRecords.set(finding.id, finding);
 							const updated = { ...record, findings: [...(record.findings ?? []), finding], updated_at_ms: now };
 							investigations.set(key, updated);
@@ -380,6 +380,20 @@ async function installDesktopMock(
 							if (!finding || finding.investigation_id !== record.id) throw new Error('Finding does not belong to this Investigation.');
 							const now = Date.now();
 							const updatedFinding = { ...finding, claim: args.claim, updated_at_ms: now };
+							findingRecords.set(args.findingId, updatedFinding);
+							const updated = { ...record, findings: (record.findings ?? []).map((item) => item.id === args.findingId ? updatedFinding : item), updated_at_ms: now };
+							investigations.set(key, updated);
+							return updated;
+						}
+						throw new Error(`Unknown Investigation: ${args.investigationId}`);
+					}
+					case 'investigation_update_finding': {
+						for (const [key, record] of investigations) {
+							if (record.id !== args.investigationId) continue;
+							const finding = findingRecords.get(args.findingId);
+							if (!finding || finding.investigation_id !== record.id) throw new Error('Finding does not belong to this Investigation.');
+							const now = Date.now();
+							const updatedFinding = { ...finding, ...args.update, updated_at_ms: now };
 							findingRecords.set(args.findingId, updatedFinding);
 							const updated = { ...record, findings: (record.findings ?? []).map((item) => item.id === args.findingId ? updatedFinding : item), updated_at_ms: now };
 							investigations.set(key, updated);
@@ -1570,7 +1584,7 @@ test('repeated Question runs stay chronological and preserve each attempt contex
 	await expect(runDetail.locator('.analysis-run-result')).toContainText('Attempt one: net sales were 120.');
 });
 
-test('Findings are saved outside the transcript and claim edits preserve run and evidence links', async ({ page }) => {
+test('Finding caveats and assumptions are visible, editable, and preserve provenance', async ({ page }) => {
 	const supportingEvidence = {
 		id: 'finding-evidence-retention',
 		tool: 'run_sql',
@@ -1601,6 +1615,8 @@ test('Findings are saved outside the transcript and claim edits preserve run and
 
 	const capture = page.getByRole('region', { name: 'Saved analysis run' }).locator('.finding-capture');
 	await expect(capture.getByRole('textbox', { name: 'Finding claim' })).toHaveValue('Retention rose by 14% across the observed cohorts.');
+	await capture.getByRole('textbox', { name: 'Finding caveats' }).fill('The latest cohort is incomplete.');
+	await capture.getByRole('textbox', { name: 'Finding assumptions' }).fill('Each account is counted once per cohort.');
 	await expect(capture).toContainText('Observed retention by signup cohort across the selected period.');
 	await capture.getByRole('button', { name: 'Save Finding' }).click();
 
@@ -1611,18 +1627,28 @@ test('Findings are saved outside the transcript and claim edits preserve run and
 	const originalFinding = await page.evaluate(() => window.__workspaceFindingRecords()[0]);
 	expect(originalFinding).toMatchObject({
 		claim: 'Retention rose by 14% across the observed cohorts.',
+		caveats: ['The latest cohort is incomplete.'],
+		assumptions: ['Each account is counted once per cohort.'],
 		question_id: expect.any(String),
 		analysis_turn_id: 'fixture-question-turn-1',
 		evidence_ids: ['finding-evidence-retention']
 	});
-	await findingCard.getByRole('button', { name: 'Edit claim' }).click();
+	await expect(findingCard.getByRole('region', { name: 'Interpretation caveats' })).toContainText('The latest cohort is incomplete.');
+	await expect(findingCard.getByRole('region', { name: 'Assumptions' })).toContainText('Each account is counted once per cohort.');
+	await findingCard.getByRole('button', { name: 'Edit finding' }).click();
 	await page.getByRole('textbox', { name: 'Edit Finding claim' }).fill('Retention increased in every observed cohort.');
-	await findingCard.getByRole('button', { name: 'Save claim' }).click();
+	await page.getByRole('textbox', { name: 'Edit Finding caveats' }).fill('The latest cohort is incomplete.\nRefunds are not included in this export.');
+	await page.getByRole('textbox', { name: 'Edit Finding assumptions' }).fill('Each account is counted once per cohort.');
+	await findingCard.getByRole('button', { name: 'Save finding' }).click();
 	await expect(findingCard).toContainText('Retention increased in every observed cohort.');
+	await expect(findingCard.getByRole('region', { name: 'Interpretation caveats' })).toContainText('Refunds are not included in this export.');
+	await expect(findingCard.getByRole('region', { name: 'Assumptions' })).toContainText('Each account is counted once per cohort.');
 	const editedFinding = await page.evaluate(() => window.__workspaceFindingRecords()[0]);
 	expect(editedFinding).toMatchObject({
 		id: originalFinding.id,
 		claim: 'Retention increased in every observed cohort.',
+		caveats: ['The latest cohort is incomplete.', 'Refunds are not included in this export.'],
+		assumptions: ['Each account is counted once per cohort.'],
 		question_id: originalFinding.question_id,
 		analysis_turn_id: originalFinding.analysis_turn_id,
 		evidence_ids: originalFinding.evidence_ids

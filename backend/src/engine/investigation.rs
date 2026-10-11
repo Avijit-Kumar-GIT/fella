@@ -169,9 +169,9 @@ pub struct InvestigationDefinitionSnapshot {
     pub text: String,
 }
 
-/// A concise analyst-authored conclusion, anchored to the Question it answers,
-/// the canonical run that produced it, and exact evidence IDs from that run.
-/// Only `claim` is editable; the provenance links are immutable.
+/// An analyst-authored conclusion with explicit interpretation context,
+/// anchored to its Question, canonical run, and exact evidence IDs. The claim,
+/// caveats, and assumptions are editable; provenance links are immutable.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InvestigationFinding {
     pub id: String,
@@ -180,6 +180,12 @@ pub struct InvestigationFinding {
     pub analysis_turn_id: String,
     pub evidence_ids: Vec<String>,
     pub claim: String,
+    /// Limits that materially affect how the conclusion should be interpreted.
+    #[serde(default)]
+    pub caveats: Vec<String>,
+    /// Conditions accepted for this conclusion that are not established facts.
+    #[serde(default)]
+    pub assumptions: Vec<String>,
     pub created_at_ms: u64,
     pub updated_at_ms: u64,
 }
@@ -190,6 +196,19 @@ pub struct InvestigationFindingInput {
     pub analysis_turn_id: String,
     pub evidence_ids: Vec<String>,
     pub claim: String,
+    #[serde(default)]
+    pub caveats: Vec<String>,
+    #[serde(default)]
+    pub assumptions: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InvestigationFindingUpdate {
+    pub claim: String,
+    #[serde(default)]
+    pub caveats: Vec<String>,
+    #[serde(default)]
+    pub assumptions: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -777,6 +796,8 @@ pub fn create_finding(
     mut input: InvestigationFindingInput,
 ) -> EngineResult<Investigation> {
     const MAX_CLAIM_CHARS: usize = 2_000;
+    const MAX_INTERPRETATION_ITEMS: usize = 20;
+    const MAX_INTERPRETATION_CHARS: usize = 1_000;
     const MAX_EVIDENCE_LINKS: usize = 100;
     const MAX_REFERENCE_CHARS: usize = 256;
 
@@ -788,6 +809,18 @@ pub fn create_finding(
             "a Finding claim must be non-empty and no longer than 2000 characters",
         ));
     }
+    input.caveats = normalize_finding_notes(
+        input.caveats,
+        "caveats",
+        MAX_INTERPRETATION_ITEMS,
+        MAX_INTERPRETATION_CHARS,
+    )?;
+    input.assumptions = normalize_finding_notes(
+        input.assumptions,
+        "assumptions",
+        MAX_INTERPRETATION_ITEMS,
+        MAX_INTERPRETATION_CHARS,
+    )?;
     if input.question_id.is_empty()
         || input.question_id.chars().count() > MAX_REFERENCE_CHARS
         || input.analysis_turn_id.is_empty()
@@ -889,6 +922,8 @@ pub fn create_finding(
         analysis_turn_id: input.analysis_turn_id,
         evidence_ids: input.evidence_ids,
         claim: input.claim,
+        caveats: input.caveats,
+        assumptions: input.assumptions,
         created_at_ms: timestamp,
         updated_at_ms: timestamp,
     };
@@ -906,6 +941,61 @@ pub fn create_finding(
     record.updated_at_ms = now_ms().max(record.updated_at_ms.saturating_add(1));
     write_record(data_dir, &record)?;
     Ok(record)
+}
+
+fn normalize_finding_notes(
+    notes: Vec<String>,
+    label: &str,
+    max_items: usize,
+    max_chars: usize,
+) -> EngineResult<Vec<String>> {
+    let mut normalized = Vec::new();
+    for note in notes {
+        let note = note.trim();
+        if note.is_empty() {
+            continue;
+        }
+        if note.chars().count() > max_chars || note.chars().any(char::is_control) {
+            return Err(EngineError::msg(format!(
+                "each Finding {label} item must be no longer than {max_chars} characters and contain no control characters"
+            )));
+        }
+        if normalized.len() >= max_items {
+            return Err(EngineError::msg(format!(
+                "a Finding may contain no more than {max_items} {label} items"
+            )));
+        }
+        normalized.push(note.to_owned());
+    }
+    Ok(normalized)
+}
+
+#[cfg(test)]
+mod finding_interpretation_tests {
+    use super::normalize_finding_notes;
+
+    #[test]
+    fn finding_notes_are_trimmed_and_bounded() {
+        assert_eq!(
+            normalize_finding_notes(
+                vec!["  latest cohort is incomplete  ".into(), " ".into()],
+                "caveats",
+                2,
+                40,
+            )
+            .unwrap(),
+            vec!["latest cohort is incomplete"]
+        );
+        assert!(normalize_finding_notes(vec!["too long".into()], "caveats", 2, 4).is_err());
+        assert!(normalize_finding_notes(
+            vec!["first".into(), "second".into()],
+            "assumptions",
+            1,
+            10,
+        )
+        .is_err());
+        assert!(normalize_finding_notes(vec!["two\nlines".into()], "caveats", 2, 20,).is_err());
+    }
 }
 
 /// Edit the Finding's prose without changing its Question, canonical run, or
@@ -931,6 +1021,54 @@ pub fn update_finding_claim(
         .and_then(|findings| findings.iter_mut().find(|finding| finding.id == finding_id))
         .ok_or_else(|| EngineError::msg("Finding does not belong to this Investigation"))?;
     finding.claim = claim.to_owned();
+    finding.updated_at_ms = now_ms().max(finding.updated_at_ms.saturating_add(1));
+    write_finding_record(data_dir, finding)?;
+    record.updated_at_ms = now_ms().max(record.updated_at_ms.saturating_add(1));
+    write_record(data_dir, &record)?;
+    Ok(record)
+}
+
+/// Edit a Finding's claim and interpretation notes without changing its
+/// Question, canonical run, or exact evidence references.
+pub fn update_finding(
+    data_dir: &Path,
+    investigation_id: &str,
+    finding_id: &str,
+    mut update: InvestigationFindingUpdate,
+) -> EngineResult<Investigation> {
+    const MAX_CLAIM_CHARS: usize = 2_000;
+    const MAX_INTERPRETATION_ITEMS: usize = 20;
+    const MAX_INTERPRETATION_CHARS: usize = 1_000;
+
+    update.claim = update.claim.trim().to_owned();
+    if update.claim.is_empty() || update.claim.chars().count() > MAX_CLAIM_CHARS {
+        return Err(EngineError::msg(
+            "a Finding claim must be non-empty and no longer than 2000 characters",
+        ));
+    }
+    update.caveats = normalize_finding_notes(
+        update.caveats,
+        "caveats",
+        MAX_INTERPRETATION_ITEMS,
+        MAX_INTERPRETATION_CHARS,
+    )?;
+    update.assumptions = normalize_finding_notes(
+        update.assumptions,
+        "assumptions",
+        MAX_INTERPRETATION_ITEMS,
+        MAX_INTERPRETATION_CHARS,
+    )?;
+
+    let mut record = load(data_dir, investigation_id)?;
+    reopen_completed(&mut record);
+    let finding = record
+        .findings
+        .as_mut()
+        .and_then(|findings| findings.iter_mut().find(|finding| finding.id == finding_id))
+        .ok_or_else(|| EngineError::msg("Finding does not belong to this Investigation"))?;
+    finding.claim = update.claim;
+    finding.caveats = update.caveats;
+    finding.assumptions = update.assumptions;
     finding.updated_at_ms = now_ms().max(finding.updated_at_ms.saturating_add(1));
     write_finding_record(data_dir, finding)?;
     record.updated_at_ms = now_ms().max(record.updated_at_ms.saturating_add(1));
@@ -3232,7 +3370,7 @@ mod tests {
     }
 
     #[test]
-    fn findings_keep_canonical_provenance_when_the_claim_is_edited() {
+    fn findings_keep_canonical_provenance_when_interpretation_notes_are_edited() {
         let data_dir = scratch();
         let created = create(
             &data_dir,
@@ -3278,6 +3416,11 @@ mod tests {
                 analysis_turn_id: turn.id.clone(),
                 evidence_ids: vec!["evidence-retention".to_owned()],
                 claim: "  Retention rose across the observed cohorts.  ".to_owned(),
+                caveats: vec![
+                    "  The latest cohort is incomplete.  ".to_owned(),
+                    " ".to_owned(),
+                ],
+                assumptions: vec!["Each account is counted once per cohort.".to_owned()],
             },
         )
         .unwrap();
@@ -3286,14 +3429,23 @@ mod tests {
             original.claim,
             "Retention rose across the observed cohorts."
         );
+        assert_eq!(original.caveats, vec!["The latest cohort is incomplete."]);
+        assert_eq!(
+            original.assumptions,
+            vec!["Each account is counted once per cohort."]
+        );
         assert_eq!(original.analysis_turn_id, turn.id);
         assert_eq!(finding_load(&data_dir, &original.id).unwrap(), original);
 
-        let edited = update_finding_claim(
+        let edited = update_finding(
             &data_dir,
             &created.id,
             &original.id,
-            "Retention increased in each observed cohort.",
+            InvestigationFindingUpdate {
+                claim: "Retention increased in each observed cohort.".to_owned(),
+                caveats: vec!["Refunds were excluded from the source export.".to_owned()],
+                assumptions: vec!["Signup dates use the account's first paid month.".to_owned()],
+            },
         )
         .unwrap();
         let updated = edited.findings.as_ref().unwrap()[0].clone();
@@ -3301,11 +3453,38 @@ mod tests {
             updated.claim,
             "Retention increased in each observed cohort."
         );
+        assert_eq!(
+            updated.caveats,
+            vec!["Refunds were excluded from the source export."]
+        );
+        assert_eq!(
+            updated.assumptions,
+            vec!["Signup dates use the account's first paid month."]
+        );
         assert_eq!(updated.question_id, original.question_id);
         assert_eq!(updated.analysis_turn_id, original.analysis_turn_id);
         assert_eq!(updated.evidence_ids, original.evidence_ids);
         assert!(updated.updated_at_ms >= original.updated_at_ms);
         assert_eq!(load(&data_dir, &created.id).unwrap(), edited);
+
+        let claim_only_edit = update_finding_claim(
+            &data_dir,
+            &created.id,
+            &original.id,
+            "Retention rose in all observed cohorts.",
+        )
+        .unwrap();
+        let claim_only = claim_only_edit.findings.as_ref().unwrap()[0].clone();
+        assert_eq!(claim_only.claim, "Retention rose in all observed cohorts.");
+        assert_eq!(claim_only.caveats, updated.caveats);
+        assert_eq!(claim_only.assumptions, updated.assumptions);
+
+        let mut legacy = serde_json::to_value(&claim_only).unwrap();
+        legacy.as_object_mut().unwrap().remove("caveats");
+        legacy.as_object_mut().unwrap().remove("assumptions");
+        let legacy: InvestigationFinding = serde_json::from_value(legacy).unwrap();
+        assert!(legacy.caveats.is_empty());
+        assert!(legacy.assumptions.is_empty());
 
         assert!(create_finding(
             &data_dir,
@@ -3315,6 +3494,8 @@ mod tests {
                 analysis_turn_id: turn.id.clone(),
                 evidence_ids: vec!["not-in-this-run".to_owned()],
                 claim: "Unsupported evidence should be rejected.".to_owned(),
+                caveats: Vec::new(),
+                assumptions: Vec::new(),
             },
         )
         .is_err());

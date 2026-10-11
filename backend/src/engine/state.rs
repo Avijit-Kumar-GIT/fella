@@ -20,8 +20,8 @@ use crate::engine::ingest::docs;
 use crate::engine::investigation::{
     self, Investigation, InvestigationBrief, InvestigationContextSnapshot, InvestigationDefinition,
     InvestigationDefinitionInput, InvestigationFinding, InvestigationFindingInput,
-    InvestigationQuestion, InvestigationQuestionAnswerStatus, InvestigationQuestionInput,
-    InvestigationSourceSelection, QuestionBreakdownProposal,
+    InvestigationFindingUpdate, InvestigationQuestion, InvestigationQuestionAnswerStatus,
+    InvestigationQuestionInput, InvestigationSourceSelection, QuestionBreakdownProposal,
 };
 use crate::engine::llm::{LlmClient, ProviderHealth};
 use crate::engine::memory::{self, FolderMemory};
@@ -2341,6 +2341,20 @@ impl EngineState {
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         investigation::update_finding_claim(&self.data_dir, id, finding_id, claim)
+    }
+
+    /// Edit a Finding's interpretation while preserving its provenance links.
+    pub fn investigation_update_finding(
+        &self,
+        id: &str,
+        finding_id: &str,
+        update: InvestigationFindingUpdate,
+    ) -> EngineResult<Investigation> {
+        let _guard = self
+            .question_state_lock
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        investigation::update_finding(&self.data_dir, id, finding_id, update)
     }
 
     /// Load one Finding independently from its parent Investigation.

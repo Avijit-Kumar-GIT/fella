@@ -16,6 +16,7 @@
 		InvestigationBrief,
 		InvestigationDefinitionInput,
 		InvestigationFinding,
+		InvestigationFindingUpdate,
 		InvestigationQuestion,
 		InvestigationQuestionInput,
 		InvestigationQuestionAnswerStatus,
@@ -62,12 +63,16 @@
 	let questionLinksDraft = $state<string[]>([]);
 	let savingQuestionLinks = $state(false);
 	let findingClaimDraft = $state('');
+	let findingCaveatsDraft = $state('');
+	let findingAssumptionsDraft = $state('');
 	let findingQuestionDraft = $state('');
 	let findingEvidenceDraft = $state<string[]>([]);
 	let savingFinding = $state(false);
 	let findingError = $state('');
 	let editingFindingId = $state<string | null>(null);
 	let findingClaimEditDraft = $state('');
+	let findingCaveatsEditDraft = $state('');
+	let findingAssumptionsEditDraft = $state('');
 	let updatingFindingId = $state<string | null>(null);
 	let error = $state('');
 	let requestSerial = 0;
@@ -681,6 +686,8 @@
 	function prepareFindingDraft(run: AnalysisTurn): void {
 		const lead = run.result.text.split(/\n\s*\n/).find((part) => part.trim())?.trim() ?? '';
 		findingClaimDraft = lead.slice(0, 500);
+		findingCaveatsDraft = '';
+		findingAssumptionsDraft = '';
 		const activeQuestions = selected?.questions ?? [];
 		const preferredQuestion = questionIdsForRun(run.id)[0]
 			?? run.investigation_context?.question_id
@@ -690,6 +697,10 @@
 			: activeQuestions[0]?.id ?? '';
 		findingEvidenceDraft = findingEvidenceOptions(run).slice(0, 100).map((item) => item.id);
 		findingError = '';
+	}
+
+	function findingNotesFromDraft(draft: string): string[] {
+		return draft.split(/\r?\n/).map((note) => note.trim()).filter(Boolean);
 	}
 
 	function toggleFindingEvidence(evidenceId: string, checked: boolean): void {
@@ -712,7 +723,9 @@
 				question_id: findingQuestionDraft,
 				analysis_turn_id: openAnalysisTurn.id,
 				evidence_ids: findingEvidenceDraft,
-				claim: findingClaimDraft
+				claim: findingClaimDraft,
+				caveats: findingNotesFromDraft(findingCaveatsDraft),
+				assumptions: findingNotesFromDraft(findingAssumptionsDraft)
 			});
 			acceptInvestigationUpdate(updated);
 			findingError = '';
@@ -733,17 +746,24 @@
 	function editFinding(finding: InvestigationFinding): void {
 		editingFindingId = finding.id;
 		findingClaimEditDraft = finding.claim;
+		findingCaveatsEditDraft = (finding.caveats ?? []).join('\n');
+		findingAssumptionsEditDraft = (finding.assumptions ?? []).join('\n');
 	}
 
-	async function saveFindingClaim(finding: InvestigationFinding): Promise<void> {
+	async function saveFindingEdit(finding: InvestigationFinding): Promise<void> {
 		if (!selected || updatingFindingId) return;
 		updatingFindingId = finding.id;
 		findingError = '';
 		try {
-			const updated = await ipc.investigationUpdateFindingClaim(
+			const update: InvestigationFindingUpdate = {
+				claim: findingClaimEditDraft,
+				caveats: findingNotesFromDraft(findingCaveatsEditDraft),
+				assumptions: findingNotesFromDraft(findingAssumptionsEditDraft)
+			};
+			const updated = await ipc.investigationUpdateFinding(
 				selected.id,
 				finding.id,
-				findingClaimEditDraft
+				update
 			);
 			acceptInvestigationUpdate(updated);
 			editingFindingId = null;
@@ -1499,15 +1519,32 @@
 												{#if editingFindingId !== finding.id}<p>{finding.claim}</p>{/if}
 											</div>
 											{#if editingFindingId !== finding.id}
-												<Button type="button" variant="ghost" disabled={Boolean(updatingFindingId)} onclick={() => editFinding(finding)}>Edit claim</Button>
+												<Button type="button" variant="ghost" disabled={Boolean(updatingFindingId)} onclick={() => editFinding(finding)}>Edit finding</Button>
 											{/if}
 										</div>
 										{#if editingFindingId === finding.id}
-											<Textarea bind:value={findingClaimEditDraft} aria-label="Edit Finding claim" class="finding-edit-field" disabled={updatingFindingId === finding.id} />
+											<label for="finding-claim-edit-{finding.id}">Claim</label>
+											<Textarea id="finding-claim-edit-{finding.id}" bind:value={findingClaimEditDraft} aria-label="Edit Finding claim" class="finding-edit-field" disabled={updatingFindingId === finding.id} />
+											<label for="finding-caveats-edit-{finding.id}">Material caveats <span>(one per line)</span></label>
+											<Textarea id="finding-caveats-edit-{finding.id}" bind:value={findingCaveatsEditDraft} aria-label="Edit Finding caveats" class="finding-edit-field" disabled={updatingFindingId === finding.id} />
+											<label for="finding-assumptions-edit-{finding.id}">Assumptions <span>(one per line)</span></label>
+											<Textarea id="finding-assumptions-edit-{finding.id}" bind:value={findingAssumptionsEditDraft} aria-label="Edit Finding assumptions" class="finding-edit-field" disabled={updatingFindingId === finding.id} />
 											<div class="finding-edit-actions">
 												<Button type="button" variant="ghost" disabled={updatingFindingId === finding.id} onclick={() => (editingFindingId = null)}>Cancel</Button>
-												<Button type="button" disabled={updatingFindingId === finding.id || !findingClaimEditDraft.trim()} onclick={() => void saveFindingClaim(finding)}>{updatingFindingId === finding.id ? 'Saving…' : 'Save claim'}</Button>
+												<Button type="button" disabled={updatingFindingId === finding.id || !findingClaimEditDraft.trim()} onclick={() => void saveFindingEdit(finding)}>{updatingFindingId === finding.id ? 'Saving…' : 'Save finding'}</Button>
 											</div>
+										{/if}
+										{#if editingFindingId !== finding.id && finding.assumptions?.length}
+											<section class="finding-interpretation" aria-label="Assumptions">
+												<h5>Assumptions</h5>
+												<ul>{#each finding.assumptions as assumption (`${finding.id}-assumption-${assumption}`)}<li>{assumption}</li>{/each}</ul>
+											</section>
+										{/if}
+										{#if editingFindingId !== finding.id && finding.caveats?.length}
+											<section class="finding-interpretation finding-caveats" aria-label="Interpretation caveats">
+												<h5>Interpretation caveats</h5>
+												<ul>{#each finding.caveats as caveat (`${finding.id}-caveat-${caveat}`)}<li>{caveat}</li>{/each}</ul>
+											</section>
 										{/if}
 										<dl class="finding-provenance">
 											<div><dt>Question</dt><dd>{findingQuestionLabel(finding)}</dd></div>
@@ -1517,7 +1554,7 @@
 											</div>
 											<div><dt>Supporting evidence IDs</dt><dd>{#each finding.evidence_ids as evidenceId, evidenceIndex (`${finding.id}-${evidenceId}`)}<code>{evidenceId}</code>{#if evidenceIndex < finding.evidence_ids.length - 1}<span>, </span>{/if}{/each}</dd></div>
 										</dl>
-										<p class="finding-edit-note">Editing the claim never changes its saved Question, run, or evidence links.</p>
+										<p class="finding-edit-note">Editing interpretation never changes the saved Question, run, or evidence links.</p>
 									</li>
 								{/each}
 							</ol>
@@ -1757,11 +1794,15 @@
 									</fieldset>
 					<section class="finding-capture" aria-labelledby="finding-capture-title">
 						<header>
-											<h5 id="finding-capture-title">Save a Finding</h5>
-											<p>Start with the answer’s lead, then choose the Question and evidence that support the conclusion.</p>
-										</header>
+							<h5 id="finding-capture-title">Save a Finding</h5>
+							<p>Capture material limits and assumptions so the conclusion stays interpretable when shared.</p>
+						</header>
 						<label for="finding-claim-{openAnalysisTurn.id}">Claim</label>
 						<Textarea id="finding-claim-{openAnalysisTurn.id}" bind:value={findingClaimDraft} aria-label="Finding claim" class="finding-capture-field" disabled={savingFinding} maxlength={2000} />
+						<label for="finding-caveats-{openAnalysisTurn.id}">Material caveats <span>(optional, one per line)</span></label>
+						<Textarea id="finding-caveats-{openAnalysisTurn.id}" bind:value={findingCaveatsDraft} aria-label="Finding caveats" class="finding-capture-field finding-notes-field" disabled={savingFinding} />
+						<label for="finding-assumptions-{openAnalysisTurn.id}">Assumptions <span>(optional, one per line)</span></label>
+						<Textarea id="finding-assumptions-{openAnalysisTurn.id}" bind:value={findingAssumptionsDraft} aria-label="Finding assumptions" class="finding-capture-field finding-notes-field" disabled={savingFinding} />
 						<label for="finding-question-{openAnalysisTurn.id}">Question this Finding answers</label>
 						<select id="finding-question-{openAnalysisTurn.id}" aria-label="Question for Finding" bind:value={findingQuestionDraft} disabled={savingFinding || questionsDirty || !(selected.questions?.length)}>
 							<option value="">Select a Question</option>
@@ -1913,6 +1954,13 @@
 	.finding-card-heading > div { min-width: 0; }
 	.finding-card-heading h4 { font-size: var(--fs-sm); }
 	.finding-card-heading p { margin: var(--space-1) 0 0; font-size: var(--fs-sm); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+	.finding-card > label { margin: var(--space-1) 0 0; color: var(--text-faint); font-size: var(--fs-xs); font-weight: 600; }
+	.finding-card > label span, .finding-capture > label span { color: var(--text-faint); font-weight: 400; }
+	.finding-interpretation { display: grid; gap: var(--space-1); padding: var(--space-2) var(--space-3); border-left: 2px solid var(--border-strong, var(--border)); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; background: var(--bg-inset); }
+	.finding-interpretation h5 { margin: 0; font-size: var(--fs-xs); font-weight: 650; }
+	.finding-interpretation ul { display: grid; gap: 2px; margin: 0; padding-left: 1.1rem; color: var(--text-dim); font-size: var(--fs-xs); line-height: 1.45; }
+	.finding-caveats { border-left-color: var(--warning, #9b6500); }
+	.finding-caveats h5 { color: var(--warning, #9b6500); }
 	.finding-provenance { display: grid; gap: var(--space-2); margin: 0; padding-top: var(--space-2); border-top: 1px solid var(--border); }
 	.finding-provenance > div { display: grid; grid-template-columns: 132px minmax(0, 1fr); gap: var(--space-2); }
 	.finding-provenance dt { color: var(--text-faint); font-size: var(--fs-xs); }
@@ -1988,6 +2036,7 @@
 	.finding-capture header p { margin: 3px 0 0; color: var(--text-dim); font-size: var(--fs-xs); }
 	.finding-capture > label { margin: var(--space-1) 0 0; color: var(--text-faint); font-size: var(--fs-xs); font-weight: 600; }
 	.finding-capture :global(.finding-capture-field) { width: 100%; min-height: 66px; resize: vertical; }
+	.finding-capture :global(.finding-notes-field) { min-height: 52px; }
 	.finding-capture select { width: 100%; min-width: 0; padding: 7px 9px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); color: var(--text); font: inherit; font-size: var(--fs-sm); }
 	.finding-evidence-select { display: grid; gap: var(--space-2); min-width: 0; padding: var(--space-2) var(--space-3); margin: var(--space-1) 0 0; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); }
 	.finding-evidence-select legend { padding: 0 var(--space-1); color: var(--text-faint); font-size: var(--fs-xs); font-weight: 600; }

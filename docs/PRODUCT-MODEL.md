@@ -394,3 +394,12 @@ saved attempt exposes a link to its parent when that run belongs to the same
 history. Each record continues to carry its own source scope, Investigation
 definition snapshot, method, and outputs, so later context edits do not rewrite
 the earlier attempt.
+
+## Implementation checkpoint: Finding caveats and assumptions (#210)
+
+Findings now preserve analyst-authored caveats and assumptions alongside the
+claim and immutable Question/run/evidence provenance. Analysts can add these
+notes when saving a Finding and edit them later; the Investigation handoff view
+shows saved assumptions and visually distinguishes interpretation caveats.
+Older Finding records load with empty note lists, and backend validation bounds
+the number and length of each note.
