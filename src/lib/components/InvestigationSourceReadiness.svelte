@@ -1,12 +1,29 @@
 <script lang="ts">
 	import { Button } from '$lib/components/ui/button';
+	import { ipc } from '$lib/ipc';
 	import { session } from '$lib/session.svelte';
-	import type { ColumnInfo, SkippedFile, SourceInfo } from '$lib/types';
+	import type {
+		ColumnInfo,
+		Investigation,
+		InvestigationSourceSelection,
+		SkippedFile,
+		SourceInfo
+	} from '$lib/types';
 	import Icon from './Icon.svelte';
 	import SourcePreview from './SourcePreview.svelte';
 
-	let { workspacePath }: { workspacePath: string } = $props();
+	let {
+		workspacePath,
+		investigation = null,
+		onUpdated
+	}: {
+		workspacePath: string;
+		investigation?: Investigation | null;
+		onUpdated?: (investigation: Investigation) => void;
+	} = $props();
 	let selectedKey = $state<string | null>(null);
+	let selectionSaving = $state(false);
+	let selectionError = $state('');
 	let showAllSources = $state(false);
 	let showAllSkipped = $state(false);
 	let showAllColumns = $state(false);
@@ -113,6 +130,70 @@
 		}
 		return `${amount < 10 ? amount.toFixed(1) : Math.round(amount)} ${unit}`;
 	}
+
+	function isSourceIncluded(source: SourceInfo): boolean {
+		const selection = investigation?.source_selection;
+		return !selection || selection.mode === 'all_sources' ||
+			selection.included_paths.includes(relativePath(source.path));
+	}
+
+	function uniqueSourcePaths(): string[] {
+		return [...new Set(sources.map((source) => relativePath(source.path)))];
+	}
+
+	function isFirstSourceForPath(source: SourceInfo): boolean {
+		const path = relativePath(source.path);
+		return sources.find((item) => relativePath(item.path) === path) === source;
+	}
+
+	function selectedFileCount(): number {
+		const included = new Set(
+			sources.filter(isSourceIncluded).map((source) => relativePath(source.path))
+		);
+		return included.size;
+	}
+
+	async function saveSourceSelection(sourceSelection: InvestigationSourceSelection): Promise<void> {
+		if (!investigation || selectionSaving) return;
+		selectionSaving = true;
+		selectionError = '';
+		try {
+			const updated = await ipc.investigationUpdateSourceSelection(investigation.id, sourceSelection);
+			onUpdated?.(updated);
+		} catch (cause) {
+			selectionError = cause instanceof Error ? cause.message : String(cause);
+		} finally {
+			selectionSaving = false;
+		}
+	}
+
+	function chooseAllSources(): void {
+		void saveSourceSelection({ mode: 'all_sources', included_paths: [] });
+	}
+
+	function chooseSpecificSources(): void {
+		if (!investigation) return;
+		const includedPaths = investigation.source_selection.mode === 'all_sources'
+			? uniqueSourcePaths()
+			: investigation.source_selection.included_paths;
+		void saveSourceSelection({ mode: 'selected_sources', included_paths: includedPaths });
+	}
+
+	function setSourceIncluded(source: SourceInfo, included: boolean): void {
+		if (!investigation) return;
+		const path = relativePath(source.path);
+		const selectedPaths = new Set(
+			investigation.source_selection.mode === 'all_sources'
+				? uniqueSourcePaths()
+				: investigation.source_selection.included_paths
+		);
+		if (included) selectedPaths.add(path);
+		else selectedPaths.delete(path);
+		void saveSourceSelection({
+			mode: 'selected_sources',
+			included_paths: [...selectedPaths]
+		});
+	}
 </script>
 
 <section
@@ -145,27 +226,74 @@
 			These observations describe loaded files and their profiled rows; they do not confirm that a source answers the Investigation.
 		</p>
 	{/if}
+	{#if catalog && investigation}
+		<fieldset class="scope-controls" disabled={selectionSaving}>
+			<legend>Files for this Investigation</legend>
+			<label>
+				<input
+					type="radio"
+					name={`source-scope-${investigation.id}`}
+					checked={investigation.source_selection.mode === 'all_sources'}
+					onchange={chooseAllSources}
+				/>
+				All sources
+			</label>
+			<label>
+				<input
+					type="radio"
+					name={`source-scope-${investigation.id}`}
+					checked={investigation.source_selection.mode === 'selected_sources'}
+					onchange={chooseSpecificSources}
+				/>
+				Choose files
+			</label>
+			<span class="scope-count">
+				{investigation.source_selection.mode === 'all_sources'
+					? `${uniqueSourcePaths().length} available`
+					: `${selectedFileCount()} selected`}
+			</span>
+			<small>Changes apply to future runs; previous runs keep their original file scope.</small>
+		</fieldset>
+		{#if selectionError}
+			<p class="scope-error" role="alert">{selectionError}</p>
+		{/if}
+	{/if}
 
 	{#if catalog && sources.length}
 		<ul class="source-list" aria-label="Available data sources">
 			{#each visibleSources as source (sourceKey(source))}
 				<li>
-					<button
-						class="source-option"
-						class:selected={selectedKey === sourceKey(source)}
-						class:disabled={!isReady(source)}
-						type="button"
-						aria-expanded={selectedKey === sourceKey(source)}
-						aria-controls={selectedKey === sourceKey(source) ? 'investigation-source-detail' : undefined}
-						onclick={() => toggleSource(source)}
-					>
-						<span class="source-mark" aria-hidden="true"><Icon name={source.view ? 'table' : 'file'} size={16} /></span>
-						<span class="source-main">
-							<strong>{source.name}</strong>
-							<small>{kindLabel(source)}{source.view && source.row_count != null ? ` · ${formatCount(source.row_count)} rows` : ''}</small>
-						</span>
-						<span class="source-readiness-label" data-state={isReady(source) ? 'ready' : 'disabled'}>{readinessLabel(source)}</span>
-					</button>
+					<div class="source-row">
+						{#if investigation && isFirstSourceForPath(source)}
+							<label class="source-scope-toggle">
+								<input
+									type="checkbox"
+									checked={isSourceIncluded(source)}
+									disabled={selectionSaving}
+									aria-label={`Include ${relativePath(source.path)} in this Investigation`}
+									onchange={(event) => setSourceIncluded(source, event.currentTarget.checked)}
+								/>
+							</label>
+						{:else if investigation}
+							<span class="source-scope-toggle source-scope-toggle-spacer" aria-hidden="true"></span>
+						{/if}
+						<button
+							class="source-option"
+							class:selected={selectedKey === sourceKey(source)}
+							class:disabled={!isReady(source)}
+							type="button"
+							aria-expanded={selectedKey === sourceKey(source)}
+							aria-controls={selectedKey === sourceKey(source) ? 'investigation-source-detail' : undefined}
+							onclick={() => toggleSource(source)}
+						>
+							<span class="source-mark" aria-hidden="true"><Icon name={source.view ? 'table' : 'file'} size={16} /></span>
+							<span class="source-main">
+								<strong>{source.name}</strong>
+								<small>{kindLabel(source)}{source.view && source.row_count != null ? ` · ${formatCount(source.row_count)} rows` : ''}</small>
+							</span>
+							<span class="source-readiness-label" data-state={isReady(source) ? 'ready' : 'disabled'}>{readinessLabel(source)}</span>
+						</button>
+					</div>
 				</li>
 			{/each}
 		</ul>
@@ -286,9 +414,18 @@
 	.readiness-heading h3 { margin: 0; font-size: var(--fs-md); font-weight: 650; }
 	.readiness-heading p, .detail-heading p { margin: 3px 0 0; color: var(--text-dim); font-size: var(--fs-xs); }
 	.readiness-caveat, .profile-caveat { margin: var(--space-2) 0 0; color: var(--text-faint); font-size: var(--fs-xs); line-height: 1.45; }
+	.scope-controls { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2) var(--space-4); margin: var(--space-3) 0 0; padding: 0; border: 0; color: var(--text-dim); font-size: var(--fs-xs); }
+	.scope-controls legend { width: 100%; margin-bottom: var(--space-1); color: var(--text); font-size: var(--fs-xs); font-weight: 600; }
+	.scope-controls label, .source-scope-toggle { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+	.scope-controls input, .source-scope-toggle input { margin: 0; accent-color: var(--brand); }
+	.scope-controls small { color: var(--text-faint); }
+	.scope-count { color: var(--text-faint); }
+	.scope-error { margin: var(--space-2) 0 0; color: var(--warning, #9b6500); font-size: var(--fs-xs); }
 	.indexed-at { flex: none; color: var(--text-faint); font-size: var(--fs-xs); }
-	.source-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: var(--space-2); margin: var(--space-3) 0 0; padding: 0; list-style: none; }
-	.source-option { display: flex; width: 100%; min-width: 0; align-items: center; gap: var(--space-2); padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-md); background: transparent; color: var(--text); text-align: left; cursor: pointer; }
+	.source-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr)); gap: var(--space-2); margin: var(--space-3) 0 0; padding: 0; list-style: none; }
+	.source-row { display: flex; min-width: 0; align-items: center; gap: var(--space-2); }
+	.source-scope-toggle { flex: none; padding: 8px 2px; }
+	.source-option { display: flex; flex: 1; width: 100%; min-width: 0; align-items: center; gap: var(--space-2); padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-md); background: transparent; color: var(--text); text-align: left; cursor: pointer; }
 	.source-option:hover, .source-option.selected { background: var(--bg-inset); }
 	.source-option.selected { border-color: var(--brand); }
 	.source-option.disabled { opacity: .72; }
@@ -327,6 +464,7 @@
 	.skipped-sources li small { grid-column: 1 / -1; color: var(--text-faint); overflow-wrap: anywhere; }
 	@media (max-width: 620px) {
 		.readiness-heading { flex-direction: column; }
+		.scope-controls { align-items: flex-start; flex-direction: column; }
 		.source-option { align-items: flex-start; flex-wrap: wrap; }
 		.source-readiness-label { margin-left: 23px; }
 	}

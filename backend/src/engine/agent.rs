@@ -13,6 +13,7 @@ use crate::engine::evidence::{
     Answer, AnswerProvenance, AskEvent, EvidenceItem, PythonInputTrace, PythonQueryReference,
     Usage, VerificationCheck, VerificationFinding, WorkspaceSnapshot,
 };
+use crate::engine::investigation::InvestigationSourceSelection;
 use crate::engine::llm::{ChatMessage, LlmClient, ToolCall};
 use crate::engine::runtime::{
     self, AnalysisContract, ContextReference, ExecutionTrace, InteractionMode, LogicalPlan,
@@ -106,6 +107,7 @@ pub(crate) struct RunRequest<'a> {
     pub(crate) clarification: Option<&'a ResolvedClarification>,
     pub(crate) inspect: bool,
     pub(crate) context_refs: &'a [ContextReference],
+    pub(crate) source_selection: Option<&'a InvestigationSourceSelection>,
     pub(crate) cancel: Arc<AtomicBool>,
     pub(crate) emit: &'a (dyn Fn(AskEvent) + Send + Sync + 'a),
 }
@@ -279,6 +281,7 @@ pub(crate) async fn run(request: RunRequest<'_>) -> EngineResult<Answer> {
         clarification,
         inspect,
         context_refs,
+        source_selection,
         cancel,
         emit,
     } = request;
@@ -926,6 +929,7 @@ the requested measure, filters, and scope. State just the number(s); don't round
                     &ids.conversation_id,
                     &planned_call,
                     &evidence,
+                    source_selection,
                     cancel.clone(),
                 )
                 .await;
@@ -1036,6 +1040,7 @@ run again. Use the previous result, refine the call, or answer now.\n\n{prev}",
                 &ids.conversation_id,
                 &resp.tool_calls[i],
                 &evidence,
+                source_selection,
                 cancel.clone(),
             )
         }))
@@ -1566,6 +1571,7 @@ async fn run_tool_call(
     conversation_id: &str,
     call: &ToolCall,
     prior_evidence: &[EvidenceItem],
+    source_selection: Option<&InvestigationSourceSelection>,
     cancel: Arc<AtomicBool>,
 ) -> (EvidenceItem, String) {
     let started = Instant::now();
@@ -1580,6 +1586,7 @@ async fn run_tool_call(
     let tool_context = crate::engine::tools::ToolContext {
         prior_evidence,
         conversation_id: Some(conversation_id),
+        source_selection,
     };
     let result = registry
         .run_with_context_cancel(engine, &call.name, &call.arguments, &tool_context, cancel)

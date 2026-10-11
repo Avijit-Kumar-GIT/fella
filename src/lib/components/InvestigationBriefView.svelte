@@ -331,6 +331,10 @@
 		}
 	}
 
+	function acceptInvestigationUpdate(updated: Investigation): void {
+		investigations = investigations.map((item) => item.id === updated.id ? updated : item);
+	}
+
 	function addQuestion(): void {
 		const id = globalThis.crypto?.randomUUID?.().replaceAll('-', '') ?? `${Date.now()}${Math.random().toString(16).slice(2)}`;
 		const question: InvestigationQuestionInput = {
@@ -533,7 +537,11 @@
 		<p class="error" role="alert">{error}</p>
 	{/if}
 	{#if workspacePath && !loading}
-		<InvestigationSourceReadiness {workspacePath} />
+		<InvestigationSourceReadiness
+			{workspacePath}
+			investigation={selected}
+			onUpdated={acceptInvestigationUpdate}
+		/>
 	{/if}
 
 	{#if !workspacePath}

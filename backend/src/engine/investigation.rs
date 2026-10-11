@@ -138,6 +138,53 @@ pub struct InvestigationContextSnapshot {
     pub investigation_id: String,
     #[serde(default)]
     pub definitions: Vec<InvestigationDefinitionSnapshot>,
+    /// The exact source selection used by this turn. Older turns had no
+    /// selection and therefore retain the historical all-sources behavior.
+    #[serde(default)]
+    pub source_selection: InvestigationSourceSelection,
+}
+
+/// Analyst-selected input boundary for one Investigation. Paths are
+/// workspace-relative so duplicate filenames remain distinct and snapshots
+/// do not depend on the machine's absolute mount path.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct InvestigationSourceSelection {
+    pub mode: InvestigationSourceSelectionMode,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub included_paths: Vec<String>,
+}
+
+impl Default for InvestigationSourceSelection {
+    fn default() -> Self {
+        Self {
+            mode: InvestigationSourceSelectionMode::AllSources,
+            included_paths: Vec::new(),
+        }
+    }
+}
+
+impl InvestigationSourceSelection {
+    pub fn includes_path(&self, path: &str) -> bool {
+        match self.mode {
+            InvestigationSourceSelectionMode::AllSources => true,
+            InvestigationSourceSelectionMode::SelectedSources => {
+                self.included_paths.iter().any(|included| included == path)
+            }
+        }
+    }
+
+    pub fn is_all_sources(&self) -> bool {
+        self.mode == InvestigationSourceSelectionMode::AllSources
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InvestigationSourceSelectionMode {
+    #[default]
+    AllSources,
+    SelectedSources,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -214,6 +261,10 @@ pub struct Investigation {
     /// and prior revisions live in `definitions/<id>.json`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub definitions: Option<Vec<InvestigationDefinition>>,
+    /// Current analyst-selected files. Each AnalysisTurn separately stores
+    /// the immutable selection snapshot it ran with.
+    #[serde(default)]
+    pub source_selection: InvestigationSourceSelection,
     pub title: String,
     #[serde(default)]
     pub brief: InvestigationBrief,
@@ -250,6 +301,8 @@ struct InvestigationRecord {
     questions: Option<Vec<LegacyQuestion>>,
     #[serde(default)]
     definition_ids: Option<Vec<String>>,
+    #[serde(default)]
+    source_selection: InvestigationSourceSelection,
     title: String,
     #[serde(default)]
     brief: InvestigationBrief,
@@ -456,6 +509,7 @@ pub fn definition_load(data_dir: &Path, id: &str) -> EngineResult<InvestigationD
 /// The returned value is self-contained and suitable for an AnalysisTurn.
 pub fn context_snapshot(data_dir: &Path, id: &str) -> EngineResult<InvestigationContextSnapshot> {
     let investigation = load(data_dir, id)?;
+    let source_selection = investigation.source_selection.clone();
     let definitions = investigation
         .definitions
         .unwrap_or_default()
@@ -470,6 +524,7 @@ pub fn context_snapshot(data_dir: &Path, id: &str) -> EngineResult<Investigation
     Ok(InvestigationContextSnapshot {
         investigation_id: investigation.id,
         definitions,
+        source_selection,
     })
 }
 
@@ -510,6 +565,7 @@ fn public_record(
         conversation_id: record.conversation_id,
         questions: Some(questions),
         definitions: Some(definitions),
+        source_selection: record.source_selection,
         title: record.title,
         brief: record.brief,
         brief_source_message_id: record.brief_source_message_id,
@@ -638,6 +694,7 @@ fn persist_new_record(data_dir: &Path, record: &Investigation) -> EngineResult<(
         ),
         questions: None,
         definition_ids: Some(Vec::new()),
+        source_selection: record.source_selection.clone(),
         title: record.title.clone(),
         brief: record.brief.clone(),
         brief_source_message_id: record.brief_source_message_id.clone(),
@@ -743,6 +800,7 @@ pub fn create(
             conversation_id: conversation_id.map(str::to_owned),
             questions: Some(questions.clone()),
             definitions: Some(Vec::new()),
+            source_selection: InvestigationSourceSelection::default(),
             title: title.to_owned(),
             brief: InvestigationBrief {
                 goal: goal.to_owned(),
@@ -1138,6 +1196,59 @@ pub fn update_definitions(
     Ok(record)
 }
 
+/// Replace the file selection used by subsequent runs. The selection is
+/// stored on the Investigation; completed AnalysisTurns already contain an
+/// immutable context snapshot and are therefore unaffected.
+pub fn update_source_selection(
+    data_dir: &Path,
+    id: &str,
+    mut selection: InvestigationSourceSelection,
+) -> EngineResult<Investigation> {
+    const MAX_SELECTED_PATHS: usize = 10_000;
+    if selection.included_paths.len() > MAX_SELECTED_PATHS {
+        return Err(EngineError::msg(
+            "an Investigation cannot select more than 10000 source files",
+        ));
+    }
+    let mut unique = HashSet::new();
+    for path in &mut selection.included_paths {
+        *path = normalize_workspace_relative_path(path)?;
+        if !unique.insert(path.clone()) {
+            return Err(EngineError::msg(
+                "Investigation source paths must be unique",
+            ));
+        }
+    }
+    if selection.mode == InvestigationSourceSelectionMode::AllSources {
+        selection.included_paths.clear();
+    }
+
+    let mut record = load(data_dir, id)?;
+    if record.source_selection != selection {
+        record.source_selection = selection;
+        record.updated_at_ms = now_ms().max(record.updated_at_ms.saturating_add(1));
+        write_record(data_dir, &record)?;
+    }
+    Ok(record)
+}
+
+fn normalize_workspace_relative_path(path: &str) -> EngineResult<String> {
+    let path = path.trim().replace('\\', "/");
+    let components: Vec<_> = path.split('/').collect();
+    if path.is_empty()
+        || path.starts_with('/')
+        || path.contains(':')
+        || components
+            .iter()
+            .any(|component| component.is_empty() || *component == "." || *component == "..")
+    {
+        return Err(EngineError::msg(
+            "source selection paths must be normalized workspace-relative paths",
+        ));
+    }
+    Ok(components.join("/"))
+}
+
 fn write_record(data_dir: &Path, record: &Investigation) -> EngineResult<()> {
     let stored = InvestigationRecord {
         id: record.id.clone(),
@@ -1164,6 +1275,7 @@ fn write_record(data_dir: &Path, record: &Investigation) -> EngineResult<()> {
                 .map(|definition| definition.id.clone())
                 .collect(),
         ),
+        source_selection: record.source_selection.clone(),
         title: record.title.clone(),
         brief: record.brief.clone(),
         brief_source_message_id: record.brief_source_message_id.clone(),
@@ -1360,6 +1472,86 @@ mod tests {
         assert_eq!(load(&data_dir, &created.id).unwrap(), created);
         assert_eq!(list(&data_dir).unwrap(), vec![created.clone()]);
 
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn source_selection_is_persisted_and_previous_snapshots_stay_unchanged() {
+        let data_dir = scratch();
+        let created = create(
+            &data_dir,
+            "/work/analysis",
+            "Revenue investigation",
+            Some("Explain revenue changes"),
+            Some("message-root"),
+            Some("conversation-root"),
+        )
+        .unwrap();
+        let original_snapshot = context_snapshot(&data_dir, &created.id).unwrap();
+        assert_eq!(
+            original_snapshot.source_selection,
+            InvestigationSourceSelection::default()
+        );
+
+        let updated = update_source_selection(
+            &data_dir,
+            &created.id,
+            InvestigationSourceSelection {
+                mode: InvestigationSourceSelectionMode::SelectedSources,
+                included_paths: vec![r"exports\sales.csv".into()],
+            },
+        )
+        .unwrap();
+        let expected = InvestigationSourceSelection {
+            mode: InvestigationSourceSelectionMode::SelectedSources,
+            included_paths: vec!["exports/sales.csv".into()],
+        };
+        assert_eq!(updated.source_selection, expected);
+        assert_eq!(load(&data_dir, &created.id).unwrap(), updated);
+        assert_eq!(
+            context_snapshot(&data_dir, &created.id)
+                .unwrap()
+                .source_selection,
+            expected
+        );
+        assert_eq!(
+            original_snapshot.source_selection,
+            InvestigationSourceSelection::default(),
+            "an already-captured run context is an immutable value"
+        );
+
+        assert!(update_source_selection(
+            &data_dir,
+            &created.id,
+            InvestigationSourceSelection {
+                mode: InvestigationSourceSelectionMode::SelectedSources,
+                included_paths: vec!["../outside.csv".into()],
+            },
+        )
+        .is_err());
+        assert!(update_source_selection(
+            &data_dir,
+            &created.id,
+            InvestigationSourceSelection {
+                mode: InvestigationSourceSelectionMode::SelectedSources,
+                included_paths: vec!["sales.csv".into(), "sales.csv".into()],
+            },
+        )
+        .is_err());
+
+        let all_sources = update_source_selection(
+            &data_dir,
+            &created.id,
+            InvestigationSourceSelection {
+                mode: InvestigationSourceSelectionMode::AllSources,
+                included_paths: vec!["ignored.csv".into()],
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            all_sources.source_selection,
+            InvestigationSourceSelection::default()
+        );
         let _ = std::fs::remove_dir_all(data_dir);
     }
 

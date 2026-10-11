@@ -183,6 +183,7 @@ async function installDesktopMock(
 								brief: { goal, audience: '', desired_output: '', constraints: [] },
 								questions: rootQuestion ? [rootQuestion] : [],
 								definitions: [],
+								source_selection: { mode: 'all_sources', included_paths: [] },
 								brief_source_message_id: args.sourceMessageId,
 								analysis_turn_ids: [],
 								status: 'active',
@@ -263,6 +264,19 @@ async function installDesktopMock(
 								definitionRecords.set(previous.id, removed);
 							}
 							const updated = { ...record, definitions: next, updated_at_ms: now };
+							investigations.set(key, updated);
+							return updated;
+						}
+						throw new Error(`Unknown Investigation: ${args.investigationId}`);
+					}
+					case 'investigation_update_source_selection': {
+						for (const [key, record] of investigations) {
+							if (record.id !== args.investigationId) continue;
+							const updated = {
+								...record,
+								source_selection: args.sourceSelection,
+								updated_at_ms: Date.now()
+							};
 							investigations.set(key, updated);
 							return updated;
 						}
@@ -826,6 +840,18 @@ test('Investigation shows source readiness and opens source details in place', a
 					path: `${workspacePath}\\quarterly-notes.txt`,
 					kind: 'text',
 					synopsis: 'Regional launches moved two weeks later.', size_bytes: 2048, mtime: 1
+				},
+				{
+					name: 'quarterly.xlsx · East',
+					path: `${workspacePath}\\quarterly.xlsx`,
+					kind: 'xlsx', view: 'quarterly_east', row_count: 12, columns: [],
+					size_bytes: 4096, mtime: 1
+				},
+				{
+					name: 'quarterly.xlsx · West',
+					path: `${workspacePath}\\quarterly.xlsx`,
+					kind: 'xlsx', view: 'quarterly_west', row_count: 10, columns: [],
+					size_bytes: 4096, mtime: 1
 				}
 			],
 			skipped: [
@@ -845,6 +871,23 @@ test('Investigation shows source readiness and opens source details in place', a
 	await expect(page.getByText(`Scoped to ${workspacePath}.`)).toBeVisible();
 	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
 	await expect(page.getByRole('heading', { name: 'Data available' })).toBeVisible();
+	await page.getByLabel('Choose files').check();
+	await page.getByRole('checkbox', { name: 'Include quarterly-notes.txt in this Investigation' }).uncheck();
+	await expect.poll(() => page.evaluate(() => window.__workspaceInvestigations()[0].source_selection)).toEqual({
+		mode: 'selected_sources',
+		included_paths: ['sales.csv', 'quarterly.xlsx']
+	});
+	await expect(page.getByRole('checkbox', { name: 'Include quarterly.xlsx in this Investigation' })).toHaveCount(1);
+	await page.getByRole('checkbox', { name: 'Include quarterly.xlsx in this Investigation' }).uncheck();
+	await expect.poll(() => page.evaluate(() => window.__workspaceInvestigations()[0].source_selection)).toEqual({
+		mode: 'selected_sources',
+		included_paths: ['sales.csv']
+	});
+	await page.getByLabel('All sources').check();
+	await expect.poll(() => page.evaluate(() => window.__workspaceInvestigations()[0].source_selection)).toEqual({
+		mode: 'all_sources',
+		included_paths: []
+	});
 	await expect(page.getByRole('button', { name: /sales\.csv.*Queryable/ })).toBeVisible();
 	const documentSource = page.getByRole('button', { name: /quarterly-notes\.txt.*Readable/ });
 	await expect(documentSource).toBeVisible();

@@ -98,6 +98,7 @@ async fn make_chart_reuses_a_python_result_without_rerunning_or_copying_source_r
     let context = ToolContext {
         prior_evidence: &prior,
         conversation_id: None,
+        source_selection: None,
     };
     let chart = registry
         .run_with_context_cancel(
@@ -145,6 +146,7 @@ async fn make_chart_reuses_a_python_result_without_rerunning_or_copying_source_r
     let preview_context = ToolContext {
         prior_evidence: &preview,
         conversation_id: None,
+        source_selection: None,
     };
     let preview_result = registry
         .run_with_context_cancel(
@@ -204,6 +206,7 @@ async fn make_chart_rejects_inspection_samples_as_incomplete_chart_sources() {
     let context = ToolContext {
         prior_evidence: &prior,
         conversation_id: None,
+        source_selection: None,
     };
 
     let result = registry

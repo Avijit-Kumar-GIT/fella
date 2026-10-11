@@ -115,6 +115,50 @@ async fn python_sql_bridge_returns_workspace_rows() {
 }
 
 #[tokio::test]
+async fn python_sql_bridge_obeys_investigation_source_selection() {
+    use fella_lib::engine::investigation::{
+        InvestigationSourceSelection, InvestigationSourceSelectionMode,
+    };
+
+    let data = scratch("py-scoped-sql-data");
+    let workspace = scratch("py-scoped-sql-workspace");
+    fs::write(workspace.join("sales.csv"), "amount\n10\n20\n").unwrap();
+    fs::write(workspace.join("costs.csv"), "amount\n3\n4\n").unwrap();
+    let engine = EngineState::new(&data).unwrap();
+    engine.open_workspace(&workspace).unwrap();
+    let selection = InvestigationSourceSelection {
+        mode: InvestigationSourceSelectionMode::SelectedSources,
+        included_paths: vec!["sales.csv".into()],
+    };
+
+    let result = engine
+        .run_python_cancellable_with_source_selection(
+            r#"print(sql('SELECT SUM(amount) AS total FROM sales')[0]['total'])
+try:
+    sql('SELECT SUM(amount) FROM costs')
+except Exception:
+    print('excluded source blocked')"#,
+            Arc::new(AtomicBool::new(false)),
+            Some(&selection),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(result.exit_code, Some(0), "stderr: {}", result.stderr);
+    assert!(result.stdout.contains("30"), "stdout: {}", result.stdout);
+    assert!(
+        result.stdout.contains("excluded source blocked"),
+        "stdout: {}",
+        result.stdout
+    );
+    assert_eq!(result.queries.len(), 1);
+    assert_eq!(result.queries[0].row_count, 1);
+
+    let _ = fs::remove_dir_all(&data);
+    let _ = fs::remove_dir_all(&workspace);
+}
+
+#[tokio::test]
 async fn python_can_publish_a_typed_chartable_result_without_leaking_wire_data() {
     let data = scratch("py-published-table");
     let engine = EngineState::new(&data).unwrap();

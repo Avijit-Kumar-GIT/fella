@@ -432,6 +432,8 @@ export interface Investigation {
 	questions?: InvestigationQuestion[];
 	/** Active saved meanings and assumptions for this Investigation. */
 	definitions?: InvestigationDefinition[];
+	/** Current file boundary for subsequent Investigation runs. */
+	source_selection: InvestigationSourceSelection;
 	title: string;
 	brief: InvestigationBrief;
 	brief_source_message_id?: string;
@@ -497,6 +499,14 @@ export interface InvestigationDefinitionSnapshot {
 export interface InvestigationContextSnapshot {
 	investigation_id: string;
 	definitions: InvestigationDefinitionSnapshot[];
+	source_selection: InvestigationSourceSelection;
+}
+
+export type InvestigationSourceSelectionMode = 'all_sources' | 'selected_sources';
+
+export interface InvestigationSourceSelection {
+	mode: InvestigationSourceSelectionMode;
+	included_paths: string[];
 }
 
 export interface QuestionBreakdownProposal {

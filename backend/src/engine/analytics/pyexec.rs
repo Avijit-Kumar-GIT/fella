@@ -563,8 +563,25 @@ fn query_bridge(
             }
             None => data::sqlite::query_read_only(path, sql, SQL_ROW_CAP),
         },
+        PythonBridge::ScopedSqliteFile {
+            path,
+            allowed_sources,
+        } => match cancel {
+            Some(cancel) => data::sqlite::query_read_only_scoped_cancellable(
+                path,
+                sql,
+                SQL_ROW_CAP,
+                allowed_sources,
+                cancel,
+            ),
+            None => data::sqlite::query_read_only_scoped(path, sql, SQL_ROW_CAP, allowed_sources),
+        },
         #[cfg(feature = "duckdb")]
         PythonBridge::DuckReaders(readers) => {
+            data::duck::query_read_only(readers, sql, SQL_ROW_CAP)
+        }
+        #[cfg(feature = "duckdb")]
+        PythonBridge::ScopedDuckReaders(readers) => {
             data::duck::query_read_only(readers, sql, SQL_ROW_CAP)
         }
     }

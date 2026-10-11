@@ -39,8 +39,8 @@ pub use investigation::{
     Investigation, InvestigationBrief, InvestigationContextSnapshot, InvestigationDefinition,
     InvestigationDefinitionInput, InvestigationDefinitionKind, InvestigationDefinitionRevision,
     InvestigationDefinitionSnapshot, InvestigationDefinitionStatus, InvestigationQuestion,
-    InvestigationQuestionInput, InvestigationQuestionStatus, InvestigationStatus,
-    QuestionBreakdownProposal,
+    InvestigationQuestionInput, InvestigationQuestionStatus, InvestigationSourceSelection,
+    InvestigationSourceSelectionMode, InvestigationStatus, QuestionBreakdownProposal,
 };
 pub use llm::ProviderHealth;
 pub use provider::{AuthKind, Provider, PROVIDERS};

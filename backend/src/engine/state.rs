@@ -20,7 +20,7 @@ use crate::engine::ingest::docs;
 use crate::engine::investigation::{
     self, Investigation, InvestigationBrief, InvestigationContextSnapshot, InvestigationDefinition,
     InvestigationDefinitionInput, InvestigationQuestion, InvestigationQuestionInput,
-    QuestionBreakdownProposal,
+    InvestigationSourceSelection, QuestionBreakdownProposal,
 };
 use crate::engine::llm::{LlmClient, ProviderHealth};
 use crate::engine::memory::{self, FolderMemory};
@@ -711,6 +711,7 @@ struct TurnDigest {
     question: String,
     headline: String,
     workspace: TurnWorkspace,
+    source_selection: Option<InvestigationSourceSelection>,
     frame: Option<String>,
     queries: Vec<String>,
 }
@@ -920,6 +921,12 @@ fn archived_turns(value: &serde_json::Value) -> Vec<TurnDigest> {
             .and_then(|answer| answer.get("contract"))
             .and_then(|contract| serde_json::from_value::<AnalysisContract>(contract.clone()).ok())
             .and_then(|contract| contract_frame(&contract));
+        let source_selection = answer
+            .and_then(|answer| answer.get("investigation_context"))
+            .and_then(|context| context.get("source_selection"))
+            .and_then(|selection| {
+                serde_json::from_value::<InvestigationSourceSelection>(selection.clone()).ok()
+            });
         turns.push(TurnDigest {
             turn_id,
             question: message
@@ -929,6 +936,7 @@ fn archived_turns(value: &serde_json::Value) -> Vec<TurnDigest> {
                 .unwrap_or_default(),
             headline,
             workspace: archived_turn_workspace(answer, transcript_workspace),
+            source_selection,
             frame,
             queries,
         });
@@ -942,6 +950,7 @@ fn archived_turns(value: &serde_json::Value) -> Vec<TurnDigest> {
 #[cfg(test)]
 mod conversation_context_tests {
     use super::*;
+    use crate::engine::investigation::InvestigationSourceSelectionMode;
 
     fn scratch(tag: &str) -> PathBuf {
         let nonce = std::time::SystemTime::now()
@@ -970,6 +979,7 @@ mod conversation_context_tests {
                     question: "What does variance mean?".into(),
                     headline: "Variance measures spread around a mean.".into(),
                     workspace: TurnWorkspace::NoWorkspace,
+                    source_selection: None,
                     frame: None,
                     queries: Vec::new(),
                 }],
@@ -995,6 +1005,7 @@ mod conversation_context_tests {
                     path: first_workspace.display().to_string(),
                     revision: first_revision,
                 },
+                source_selection: None,
                 frame: Some("measure=value; population=all rows".into()),
                 queries: vec!["SELECT SUM(value) FROM values".into()],
             });
@@ -1152,6 +1163,183 @@ mod conversation_context_tests {
         assert!(prompt_context.contains("What is a median?"));
         assert!(prompt_context.contains("The median is the middle value."));
         assert!(prompt_context.contains("general turn; no local evidence"));
+
+        drop(engine);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn investigation_context_hides_prior_turns_from_other_source_scopes() {
+        let data_dir = scratch("investigation-source-scope-memory");
+        let engine = EngineState::new(&data_dir).unwrap();
+        let sales_scope = InvestigationSourceSelection {
+            mode: InvestigationSourceSelectionMode::SelectedSources,
+            included_paths: vec!["sales.csv".into()],
+        };
+        let costs_scope = InvestigationSourceSelection {
+            mode: InvestigationSourceSelectionMode::SelectedSources,
+            included_paths: vec!["costs.csv".into()],
+        };
+        engine.inner.lock().unwrap().sessions.insert(
+            "investigation-source-scope".into(),
+            SessionMemory {
+                turns: vec![
+                    TurnDigest {
+                        turn_id: Some("turn-sales".into()),
+                        question: "What are the sales?".into(),
+                        headline: "Sales total 30.".into(),
+                        workspace: TurnWorkspace::NoWorkspace,
+                        source_selection: Some(sales_scope.clone()),
+                        frame: None,
+                        queries: vec!["SELECT SUM(amount) FROM sales".into()],
+                    },
+                    TurnDigest {
+                        turn_id: Some("turn-costs".into()),
+                        question: "What are the costs?".into(),
+                        headline: "Costs total 7.".into(),
+                        workspace: TurnWorkspace::NoWorkspace,
+                        source_selection: Some(costs_scope),
+                        frame: None,
+                        queries: vec!["SELECT SUM(amount) FROM costs".into()],
+                    },
+                    TurnDigest {
+                        turn_id: Some("turn-general".into()),
+                        question: "What is a median?".into(),
+                        headline: "The median is the middle value.".into(),
+                        workspace: TurnWorkspace::NoWorkspace,
+                        source_selection: None,
+                        frame: None,
+                        queries: Vec::new(),
+                    },
+                ],
+                last_used: 1,
+            },
+        );
+
+        let context = engine
+            .session_block_for_source_selection("investigation-source-scope", Some(&sales_scope))
+            .expect("session has earlier turns");
+        assert!(context.contains("What are the sales?"));
+        assert!(context.contains("SELECT SUM(amount) FROM sales"));
+        assert!(!context.contains("What are the costs?"));
+        assert!(!context.contains("SELECT SUM(amount) FROM costs"));
+        assert!(!context.contains("What is a median?"));
+
+        drop(engine);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn selected_source_context_omits_workspace_wide_learned_notes() {
+        let data_dir = scratch("investigation-selected-source-notes");
+        let engine = EngineState::new(&data_dir).unwrap();
+        let memory_path = data_dir.join("workspace-memory.md");
+        std::fs::write(
+            &memory_path,
+            "# Learned notes\n\n## Preferences\n- Excluded source fact: confidential cost center is 42\n",
+        )
+        .unwrap();
+        engine.workspace.lock().unwrap().memory_path = Some(memory_path);
+
+        let selection = InvestigationSourceSelection {
+            mode: InvestigationSourceSelectionMode::SelectedSources,
+            included_paths: vec!["sales.csv".into()],
+        };
+        let context = engine.context_packet_for_source_selection(
+            "Summarize sales",
+            "investigation-selected-source-notes",
+            Some(&selection),
+        );
+
+        assert!(context.learned.is_none());
+
+        drop(engine);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn archive_hydration_recovers_investigation_scope_from_saved_run() {
+        let data_dir = scratch("investigation-source-archive");
+        let engine = EngineState::new(&data_dir).unwrap();
+        let selection = InvestigationSourceSelection {
+            mode: InvestigationSourceSelectionMode::SelectedSources,
+            included_paths: vec!["sales.csv".into()],
+        };
+        let turn_id = "turn-investigation-scope";
+        analysis_store::save(
+            &data_dir,
+            &crate::engine::runtime::AnalysisTurn {
+                id: turn_id.into(),
+                conversation_id: "investigation-archive".into(),
+                question: "What are the sales?".into(),
+                context_refs: Vec::new(),
+                prior_turn_refs: Vec::new(),
+                clarification_of: None,
+                clarification_response: None,
+                workspace: Some("/workspace".into()),
+                workspace_revision: Some("revision-1".into()),
+                workspace_snapshot: None,
+                source_scope: None,
+                investigation_context: Some(InvestigationContextSnapshot {
+                    investigation_id: "investigation-1".into(),
+                    definitions: Vec::new(),
+                    source_selection: selection.clone(),
+                }),
+                context_audit: None,
+                provenance: None,
+                rerun_of: None,
+                state: TurnState::Accepted,
+                contract: None,
+                plan: crate::engine::runtime::LogicalPlan::default(),
+                trace: crate::engine::runtime::ExecutionTrace {
+                    id: "trace-1".into(),
+                    turn_id: turn_id.into(),
+                    workspace_revision: Some("revision-1".into()),
+                    mode: None,
+                    model: None,
+                    model_calls: Vec::new(),
+                    elapsed_ms: None,
+                    steps: Vec::new(),
+                },
+                verification: None,
+                result: crate::engine::runtime::AnalysisResult {
+                    text: "Sales total 30.".into(),
+                    status: crate::engine::evidence::VerificationStatus::Verified,
+                    usage: None,
+                    verification: Vec::new(),
+                    evidence: Vec::new(),
+                },
+            },
+        )
+        .unwrap();
+
+        let transcript = serde_json::json!({
+            "id": "investigation-archive",
+            "workspace": "/workspace",
+            "messages": [
+                {"role":"user", "text":"What are the sales?"},
+                {"role":"assistant", "text":"Sales total 30.", "answer": {
+                    "turn_id": turn_id,
+                    "workspace":{"path":"/workspace", "revision":"revision-1"},
+                    "evidence":[]
+                }}
+            ]
+        });
+        engine
+            .archive_conversation("investigation-archive", &transcript.to_string())
+            .unwrap();
+        engine.hydrate_session_from_archive("investigation-archive");
+
+        {
+            let inner = engine.inner.lock().unwrap();
+            let turns = &inner.sessions.get("investigation-archive").unwrap().turns;
+            assert_eq!(turns.len(), 1);
+            assert_eq!(turns[0].source_selection.as_ref(), Some(&selection));
+        }
+        let selected_context = engine
+            .session_block_for_source_selection("investigation-archive", Some(&selection))
+            .expect("saved conversation should hydrate");
+        assert!(selected_context.contains("What are the sales?"));
 
         drop(engine);
         let _ = std::fs::remove_dir_all(data_dir);
@@ -1602,7 +1790,20 @@ impl EngineState {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(&body) else {
             return;
         };
-        let turns = archived_turns(&value);
+        let mut turns = archived_turns(&value);
+        // The transcript is a UI projection and does not necessarily embed the
+        // canonical Investigation snapshot. Recover the exact selection from
+        // the saved run record so a restarted thread retains its source scope.
+        for turn in &mut turns {
+            if turn.source_selection.is_none() {
+                turn.source_selection = turn
+                    .turn_id
+                    .as_deref()
+                    .and_then(|turn_id| analysis_store::load(&self.data_dir, turn_id).ok())
+                    .and_then(|record| record.investigation_context)
+                    .map(|context| context.source_selection);
+            }
+        }
         if turns.is_empty() {
             return;
         }
@@ -1979,6 +2180,16 @@ impl EngineState {
         investigation::update_definitions(&self.data_dir, id, definitions)
     }
 
+    /// Update the current source selection for one Investigation. Completed
+    /// turns retain their own immutable context snapshot.
+    pub fn investigation_update_source_selection(
+        &self,
+        id: &str,
+        selection: InvestigationSourceSelection,
+    ) -> EngineResult<Investigation> {
+        investigation::update_source_selection(&self.data_dir, id, selection)
+    }
+
     /// Load one Definition record, including its prior analyst-edited values.
     pub fn investigation_definition_load(&self, id: &str) -> EngineResult<InvestigationDefinition> {
         investigation::definition_load(&self.data_dir, id)
@@ -2245,6 +2456,92 @@ impl EngineState {
         ))
     }
 
+    /// Build the same bounded inventory page, limited to the files selected
+    /// by an Investigation when it is in selected-sources mode.
+    pub fn list_files_page_for_selection(
+        &self,
+        filter: catalog::FileListFilter,
+        query: Option<&str>,
+        offset: usize,
+        limit: usize,
+        selection: Option<&InvestigationSourceSelection>,
+    ) -> EngineResult<catalog::FileListPage> {
+        if selection.is_none_or(InvestigationSourceSelection::is_all_sources) {
+            return self.list_files_page(filter, query, offset, limit);
+        }
+        let selection = selection.expect("selected mode was checked");
+        let workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
+        let root = workspace
+            .workspace
+            .as_deref()
+            .ok_or(EngineError::NoWorkspace)?;
+        let sources: Vec<SourceInfo> = workspace
+            .sources
+            .iter()
+            .filter(|source| {
+                selection.includes_path(&catalog::workspace_relative_path(
+                    root,
+                    Path::new(&source.path),
+                ))
+            })
+            .cloned()
+            .collect();
+        let skipped: Vec<_> = workspace
+            .skipped
+            .iter()
+            .filter(|file| selection.includes_path(&file.name.replace('\\', "/")))
+            .cloned()
+            .collect();
+        Ok(catalog::list_files_page(
+            root, &sources, &skipped, filter, query, offset, limit,
+        ))
+    }
+
+    /// Resolve a source's workspace-relative path before exposing it to an
+    /// Investigation-scoped tool.
+    pub fn source_selection_allows_name(
+        &self,
+        selection: Option<&InvestigationSourceSelection>,
+        name: &str,
+    ) -> bool {
+        let Some(selection) = selection.filter(|selection| !selection.is_all_sources()) else {
+            return true;
+        };
+        let workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(root) = workspace.workspace.as_deref() else {
+            return false;
+        };
+        workspace.sources.iter().any(|source| {
+            let path = catalog::workspace_relative_path(root, Path::new(&source.path));
+            (source.name == name || source.view.as_deref() == Some(name) || path == name)
+                && selection.includes_path(&path)
+        })
+    }
+
+    fn source_selection_allowed_tables(
+        &self,
+        selection: &InvestigationSourceSelection,
+    ) -> HashSet<String> {
+        let workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(root) = workspace.workspace.as_deref() else {
+            return HashSet::new();
+        };
+        workspace
+            .sources
+            .iter()
+            .filter(|source| {
+                source.view.is_some()
+                    && selection.includes_path(&catalog::workspace_relative_path(
+                        root,
+                        Path::new(&source.path),
+                    ))
+            })
+            .flat_map(|source| [Some(source.name.as_str()), source.view.as_deref()])
+            .flatten()
+            .map(str::to_ascii_lowercase)
+            .collect()
+    }
+
     /// Return the semantic projection for the current workspace. `None` means
     /// there is no mounted workspace or no valid revision yet.
     pub fn workspace_model(&self) -> Option<WorkspaceModel> {
@@ -2410,17 +2707,46 @@ impl EngineState {
     /// budget it lists every column with its type and any ingest note, and a few
     /// sample rows for a small workspace; a large/messy folder falls back to
     /// names + shape only (keeps the prompt small).
+    #[cfg(test)]
     pub(crate) fn schema_block(&self) -> String {
+        self.schema_block_for_source_selection(None)
+    }
+
+    fn schema_block_for_source_selection(
+        &self,
+        selection: Option<&InvestigationSourceSelection>,
+    ) -> String {
         let capabilities = self.settings().capabilities;
         let mut workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(cached) = &workspace.schema_cache {
-            return cached.clone();
+        let selected_only = selection.is_some_and(|selection| !selection.is_all_sources());
+        if !selected_only {
+            if let Some(cached) = &workspace.schema_cache {
+                return cached.clone();
+            }
         }
-        let sources = &workspace.sources;
         let workspace_root = workspace.workspace.clone();
-        let inspected = workspace.inspected_tables.clone();
+        let selected_sources: Vec<&SourceInfo> = workspace
+            .sources
+            .iter()
+            .filter(|source| {
+                selection.is_none_or(|selection| {
+                    workspace_root.as_deref().is_none_or(|root| {
+                        selection.includes_path(&catalog::workspace_relative_path(
+                            root,
+                            Path::new(&source.path),
+                        ))
+                    })
+                })
+            })
+            .collect();
+        let sources = &selected_sources;
+        let inspected = &workspace.inspected_tables;
         let tables: Vec<&SourceInfo> = if capabilities.table_analysis {
-            sources.iter().filter(|s| s.view.is_some()).collect()
+            sources
+                .iter()
+                .copied()
+                .filter(|s| s.view.is_some())
+                .collect()
         } else {
             Vec::new()
         };
@@ -2429,19 +2755,18 @@ impl EngineState {
             .map(|s| s.columns.as_ref().map(|c| c.len()).unwrap_or(0))
             .sum();
         let full = tables.len() <= 12 && total_cols <= 60;
-        // Small/typical folders (<=4 tables) see no change: samples for every
-        // table, as before. Above that, a table's samples only enter the
-        // digest once the model has actually called inspect_table on it -
-        // just-in-time instead of eagerly sampling every table upfront.
         let small = tables.len() <= 4;
 
         let mut p = String::new();
+        if selected_only {
+            p.push_str("Investigation source selection is active. Only the files listed below are available to this run; do not use files outside this selection.\n");
+        }
         if !capabilities.table_analysis {
             p.push_str(
                 "Table analysis is disabled by the current experimental capability policy.\n",
             );
         } else if tables.is_empty() {
-            p.push_str("No tables were detected.\n");
+            p.push_str("No tables were detected in the selected sources.\n");
         } else if full {
             p.push_str("Tables (columns and types shown; use inspect_table for values):\n");
             for s in &tables {
@@ -2555,7 +2880,11 @@ impl EngineState {
             }
         }
 
-        let docs: Vec<&SourceInfo> = sources.iter().filter(|s| s.view.is_none()).collect();
+        let docs: Vec<&SourceInfo> = sources
+            .iter()
+            .copied()
+            .filter(|s| s.view.is_none())
+            .collect();
         if !capabilities.document_analysis {
             p.push_str(
                 "Document analysis is disabled by the current experimental capability policy.\n",
@@ -2573,19 +2902,39 @@ impl EngineState {
                 }
             }
         }
-        workspace.schema_cache = Some(p.clone());
+        if !selected_only {
+            workspace.schema_cache = Some(p.clone());
+        }
         p
     }
 
     /// Assemble one bounded, prompt-ready projection of the current
     /// workspace context. Keeping this policy in the engine gives both
     /// desktop shells the same context budget and provenance behavior.
+    #[cfg(test)]
     pub(crate) fn context_packet(&self, question: &str, conversation_id: &str) -> ContextPacket {
+        self.context_packet_for_source_selection(question, conversation_id, None)
+    }
+
+    fn context_packet_for_source_selection(
+        &self,
+        question: &str,
+        conversation_id: &str,
+        selection: Option<&InvestigationSourceSelection>,
+    ) -> ContextPacket {
         let user_context = self.user_context();
-        let schema = self.schema_block();
-        let recent = self.session_block(conversation_id);
-        let learned = self.folder_memory_block();
-        let semantic_model = self.workspace_model_prompt_block();
+        let schema = self.schema_block_for_source_selection(selection);
+        let recent = self.session_block_for_source_selection(conversation_id, selection);
+        let selected_only = selection.is_some_and(|selection| !selection.is_all_sources());
+        // Learned notes describe the entire folder, not just the sources
+        // selected for this Investigation. They may contain facts from an
+        // excluded source, so keep them out of selected-source runs.
+        let learned = (!selected_only)
+            .then(|| self.folder_memory_block())
+            .flatten();
+        let semantic_model = (!selected_only)
+            .then(|| self.workspace_model_prompt_block())
+            .flatten();
         ContextAssembler::default().assemble(
             question,
             &user_context,
@@ -2598,7 +2947,16 @@ impl EngineState {
 
     /// The "Earlier in this conversation" block for `conversation_id`, or `None`
     /// on that conversation's first turn.
+    #[cfg(test)]
     pub(crate) fn session_block(&self, conversation_id: &str) -> Option<String> {
+        self.session_block_for_source_selection(conversation_id, None)
+    }
+
+    fn session_block_for_source_selection(
+        &self,
+        conversation_id: &str,
+        source_selection: Option<&InvestigationSourceSelection>,
+    ) -> Option<String> {
         let catalog = self.catalog();
         let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let turns = match inner.sessions.get(conversation_id) {
@@ -2609,6 +2967,11 @@ impl EngineState {
             "Earlier in this conversation (for reference resolution only; assistant wording and result values are not evidence):\n",
         );
         for t in turns {
+            if source_selection
+                .is_some_and(|selection| t.source_selection.as_ref() != Some(selection))
+            {
+                continue;
+            }
             let current_context = turn_context_matches(&t.workspace, &catalog);
             let scope = match (&t.workspace, current_context) {
                 (TurnWorkspace::NoWorkspace, _) => "general turn; no local evidence",
@@ -3621,6 +3984,25 @@ exactly, character for character, from the list below.";
         )
     }
 
+    /// Run a query within the selected files for one Investigation. The
+    /// backend enforces the table allowlist at execution time.
+    pub fn run_sql_with_source_selection(
+        &self,
+        sql: &str,
+        selection: Option<&InvestigationSourceSelection>,
+    ) -> EngineResult<QueryResult> {
+        let Some(selection) = selection.filter(|selection| !selection.is_all_sources()) else {
+            return self.run_sql(sql);
+        };
+        require_capability(
+            self.settings().capabilities.table_analysis,
+            "Table analysis",
+        )?;
+        let allowed = self.source_selection_allowed_tables(selection);
+        let workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
+        query_workspace_scoped(&*workspace.data, sql, DEFAULT_ROW_CAP, &allowed)
+    }
+
     /// Run SQL while preserving the stop flag all the way into an interruptible
     /// backend query. This is separate from `run_sql` so command-style callers
     /// keep their small synchronous API.
@@ -3635,6 +4017,24 @@ exactly, character for character, from the list below.";
         )?;
         let workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
         query_workspace_cancellable(&*workspace.data, sql, DEFAULT_ROW_CAP, cancel)
+    }
+
+    pub fn run_sql_cancellable_with_source_selection(
+        &self,
+        sql: &str,
+        cancel: Arc<AtomicBool>,
+        selection: Option<&InvestigationSourceSelection>,
+    ) -> EngineResult<QueryResult> {
+        let Some(selection) = selection.filter(|selection| !selection.is_all_sources()) else {
+            return self.run_sql_cancellable(sql, cancel);
+        };
+        require_capability(
+            self.settings().capabilities.table_analysis,
+            "Table analysis",
+        )?;
+        let allowed = self.source_selection_allowed_tables(selection);
+        let workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
+        query_workspace_cancellable_scoped(&*workspace.data, sql, DEFAULT_ROW_CAP, &allowed, cancel)
     }
 
     /// Chart queries have a larger bounded source allowance than model-facing
@@ -3658,6 +4058,34 @@ exactly, character for character, from the list below.";
                 DEFAULT_ROW_CAP,
                 crate::engine::analytics::chart::MAX_SOURCE_ROWS,
             ),
+            cancel,
+        )
+    }
+
+    pub fn run_chart_sql_cancellable_with_source_selection(
+        &self,
+        sql: &str,
+        cancel: Arc<AtomicBool>,
+        max_rows: usize,
+        selection: Option<&InvestigationSourceSelection>,
+    ) -> EngineResult<QueryResult> {
+        let Some(selection) = selection.filter(|selection| !selection.is_all_sources()) else {
+            return self.run_chart_sql_cancellable(sql, cancel, max_rows);
+        };
+        require_capability(
+            self.settings().capabilities.table_analysis,
+            "Table analysis",
+        )?;
+        let allowed = self.source_selection_allowed_tables(selection);
+        let workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
+        query_workspace_cancellable_scoped(
+            &*workspace.data,
+            sql,
+            max_rows.clamp(
+                DEFAULT_ROW_CAP,
+                crate::engine::analytics::chart::MAX_SOURCE_ROWS,
+            ),
+            &allowed,
             cancel,
         )
     }
@@ -3709,6 +4137,51 @@ exactly, character for character, from the list below.";
             let workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
             (
                 workspace.data.python_bridge(),
+                workspace.scratch.as_ref().map(WorkspaceScratch::lease),
+            )
+        };
+        let code = code.to_string();
+        tokio::task::spawn_blocking(move || {
+            let _scratch_lease = scratch_lease;
+            pyexec::run(&code, bridge, Some(cancel))
+        })
+        .await
+        .map_err(|e| EngineError::msg(format!("python task panicked: {e}")))?
+    }
+
+    pub async fn run_python_cancellable_with_source_selection(
+        &self,
+        code: &str,
+        cancel: Arc<AtomicBool>,
+        selection: Option<&InvestigationSourceSelection>,
+    ) -> EngineResult<pyexec::PyResult> {
+        let Some(selection) = selection.filter(|selection| !selection.is_all_sources()) else {
+            return self.run_python_cancellable(code, cancel).await;
+        };
+        require_capability(
+            self.settings().capabilities.python_analysis,
+            "Python analysis",
+        )?;
+        let (bridge, scratch_lease) = {
+            let workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
+            let allowed = workspace
+                .sources
+                .iter()
+                .filter(|source| {
+                    source.view.is_some()
+                        && workspace.workspace.as_deref().is_some_and(|root| {
+                            selection.includes_path(&catalog::workspace_relative_path(
+                                root,
+                                Path::new(&source.path),
+                            ))
+                        })
+                })
+                .flat_map(|source| [Some(source.name.as_str()), source.view.as_deref()])
+                .flatten()
+                .map(str::to_owned)
+                .collect::<HashSet<_>>();
+            (
+                workspace.data.python_bridge().scoped(&allowed),
                 workspace.scratch.as_ref().map(WorkspaceScratch::lease),
             )
         };
@@ -3866,7 +4339,14 @@ exactly, character for character, from the list below.";
             .filter(|_| add_context_to_question)
             .map(|context| investigation::question_with_context(request_question, context))
             .unwrap_or_else(|| request_question.to_owned());
-        let context = self.context_packet(&analysis_question, conversation_id);
+        let source_selection = investigation_context
+            .as_ref()
+            .map(|context| &context.source_selection);
+        let context = self.context_packet_for_source_selection(
+            &analysis_question,
+            conversation_id,
+            source_selection,
+        );
         // Touch this conversation's memory slot (create it, mark it most-recently
         // used) and evict the least-recently-used one if we're over the cap.
         {
@@ -3924,6 +4404,7 @@ exactly, character for character, from the list below.";
             clarification: clarification.as_ref(),
             inspect,
             context_refs,
+            source_selection,
             cancel: cancel.clone(),
             emit: &emit,
         })
@@ -4046,6 +4527,9 @@ exactly, character for character, from the list below.";
                                 revision: snapshot.revision.clone(),
                             })
                             .unwrap_or(TurnWorkspace::NoWorkspace),
+                        source_selection: investigation_context
+                            .as_ref()
+                            .map(|context| context.source_selection.clone()),
                         frame: frame.map(|frame| cap_chars(&frame, 600)),
                         queries,
                     });
@@ -4194,9 +4678,10 @@ exactly, character for character, from the list below.";
         }
     }
 
-    /// Catalogued documents (text/PDF, not tables SQL already covers those),
-    /// as (name, path, kind), for the `grep_files`/`read_file` tools.
-    fn documents(&self) -> Vec<(String, String, SourceKind)> {
+    fn documents_for_selection(
+        &self,
+        selection: Option<&InvestigationSourceSelection>,
+    ) -> Vec<(String, String, SourceKind)> {
         let workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
         let Some(root) = workspace.workspace.as_deref() else {
             return Vec::new();
@@ -4205,6 +4690,12 @@ exactly, character for character, from the list below.";
             .sources
             .iter()
             .filter(|s| s.view.is_none())
+            .filter(|s| {
+                selection.is_none_or(|selection| {
+                    selection
+                        .includes_path(&catalog::workspace_relative_path(root, Path::new(&s.path)))
+                })
+            })
             .map(|s| {
                 (
                     catalog::workspace_relative_path(root, Path::new(&s.path)),
@@ -4220,6 +4711,15 @@ exactly, character for character, from the list below.";
     /// nearby line context. The two-pass scan is bounded;
     /// callers must preserve the `incomplete` signal when reporting no hits.
     pub fn search_files(&self, query: &str, max_hits: usize) -> EngineResult<GrepResults> {
+        self.search_files_for_selection(query, max_hits, None)
+    }
+
+    pub fn search_files_for_selection(
+        &self,
+        query: &str,
+        max_hits: usize,
+        selection: Option<&InvestigationSourceSelection>,
+    ) -> EngineResult<GrepResults> {
         require_capability(
             self.settings().capabilities.document_analysis,
             "Document analysis",
@@ -4234,7 +4734,7 @@ exactly, character for character, from the list below.";
             !has_search_operators(query) && document_search_tokens(query).len() > 1;
         let max_hits = max_hits.clamp(1, 50);
         let candidate_cap = max_hits.saturating_mul(16).clamp(48, 800);
-        let documents = self.documents();
+        let documents = self.documents_for_selection(selection);
 
         // First pass computes workspace-wide document frequency and average
         // passage length for BM25. Text stays streamed and is never persisted.
@@ -4357,6 +4857,15 @@ exactly, character for character, from the list below.";
     /// Exact case-insensitive regex lookup retained for callers that need
     /// grep-like line semantics. The agent-facing tool uses `search_files`.
     pub fn grep_files(&self, pattern: &str, max_hits: usize) -> EngineResult<Vec<GrepHit>> {
+        self.grep_files_for_selection(pattern, max_hits, None)
+    }
+
+    pub fn grep_files_for_selection(
+        &self,
+        pattern: &str,
+        max_hits: usize,
+        selection: Option<&InvestigationSourceSelection>,
+    ) -> EngineResult<Vec<GrepHit>> {
         require_capability(
             self.settings().capabilities.document_analysis,
             "Document analysis",
@@ -4366,7 +4875,7 @@ exactly, character for character, from the list below.";
             .build()
             .map_err(|e| EngineError::msg(format!("bad pattern: {e}")))?;
         let mut hits = Vec::new();
-        for (name, path, kind) in self.documents() {
+        for (name, path, kind) in self.documents_for_selection(selection) {
             if kind == SourceKind::Pdf {
                 let Ok(text) = self.pdf_text(&path) else {
                     continue;
@@ -4409,12 +4918,20 @@ exactly, character for character, from the list below.";
     /// document can't blow the context window `grep_files` can find a spot
     /// in a bigger file first.
     pub fn read_file(&self, name: &str) -> EngineResult<(String, bool)> {
+        self.read_file_for_selection(name, None)
+    }
+
+    pub fn read_file_for_selection(
+        &self,
+        name: &str,
+        selection: Option<&InvestigationSourceSelection>,
+    ) -> EngineResult<(String, bool)> {
         require_capability(
             self.settings().capabilities.document_analysis,
             "Document analysis",
         )?;
         let (path, kind) = self
-            .documents()
+            .documents_for_selection(selection)
             .into_iter()
             .find(|(n, _, _)| n == name)
             .map(|(_, p, k)| (p, k))
@@ -4731,6 +5248,43 @@ fn query_workspace_cancellable(
     data::ensure_read_only(sql)?;
     let started = Instant::now();
     let out = data.query_with_cancel(sql, max_rows, cancel)?;
+    Ok(QueryResult {
+        columns: out.columns,
+        rows: out.rows,
+        row_count: out.row_count,
+        ms: started.elapsed().as_millis() as u64,
+        truncated: out.truncated,
+    })
+}
+
+fn query_workspace_scoped(
+    data: &dyn DataEngine,
+    sql: &str,
+    max_rows: usize,
+    allowed_sources: &HashSet<String>,
+) -> EngineResult<QueryResult> {
+    data::ensure_read_only(sql)?;
+    let started = Instant::now();
+    let out = data.query_scoped(sql, max_rows, allowed_sources)?;
+    Ok(QueryResult {
+        columns: out.columns,
+        rows: out.rows,
+        row_count: out.row_count,
+        ms: started.elapsed().as_millis() as u64,
+        truncated: out.truncated,
+    })
+}
+
+fn query_workspace_cancellable_scoped(
+    data: &dyn DataEngine,
+    sql: &str,
+    max_rows: usize,
+    allowed_sources: &HashSet<String>,
+    cancel: Arc<AtomicBool>,
+) -> EngineResult<QueryResult> {
+    data::ensure_read_only(sql)?;
+    let started = Instant::now();
+    let out = data.query_with_cancel_scoped(sql, max_rows, allowed_sources, cancel)?;
     Ok(QueryResult {
         columns: out.columns,
         rows: out.rows,

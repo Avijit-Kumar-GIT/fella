@@ -7,7 +7,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use fella_lib::engine::{
     grounding, planner, AnalysisContract, ComparisonKind, ContractComparison, ContractFilter,
-    ContractJoin, ContractMeasure, EngineState, FieldRole, InterpretationStatus, JoinKind,
+    ContractJoin, ContractMeasure, EngineState, FieldRole, InterpretationStatus,
+    InvestigationSourceSelection, InvestigationSourceSelectionMode, JoinKind,
 };
 
 fn scratch(tag: &str) -> PathBuf {
@@ -248,6 +249,49 @@ fn scans_queries_and_guards_a_workspace() {
 
     let _ = fs::remove_dir_all(&ws);
     let _ = fs::remove_dir_all(&data);
+}
+
+#[test]
+fn investigation_source_selection_enforces_sql_and_document_boundaries() {
+    let ws = scratch("investigation-source-scope-ws");
+    let data = scratch("investigation-source-scope-data");
+    fs::write(ws.join("sales.csv"), "amount\n10\n20\n").unwrap();
+    fs::write(ws.join("costs.csv"), "amount\n3\n4\n").unwrap();
+    fs::write(ws.join("notes.md"), "sales context\ncost context\n").unwrap();
+
+    let engine = EngineState::new(&data).unwrap();
+    engine.open_workspace(&ws).unwrap();
+    let selection = InvestigationSourceSelection {
+        mode: InvestigationSourceSelectionMode::SelectedSources,
+        included_paths: vec!["sales.csv".into(), "notes.md".into()],
+    };
+
+    let sales = engine
+        .run_sql_with_source_selection("SELECT SUM(amount) AS total FROM sales", Some(&selection))
+        .unwrap();
+    assert_eq!(sales.rows[0][0], serde_json::json!(30));
+    assert!(engine
+        .run_sql_with_source_selection("SELECT SUM(amount) FROM costs", Some(&selection))
+        .is_err());
+
+    let included_document = engine
+        .read_file_for_selection("notes.md", Some(&selection))
+        .unwrap();
+    assert!(included_document.0.contains("sales context"));
+    assert!(engine
+        .read_file_for_selection("costs.csv", Some(&selection))
+        .is_err());
+
+    let all_sources = engine
+        .run_sql_with_source_selection(
+            "SELECT SUM(amount) FROM costs",
+            Some(&InvestigationSourceSelection::default()),
+        )
+        .unwrap();
+    assert_eq!(all_sources.rows[0][0], serde_json::json!(7));
+
+    let _ = fs::remove_dir_all(ws);
+    let _ = fs::remove_dir_all(data);
 }
 
 #[test]

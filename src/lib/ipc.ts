@@ -19,6 +19,7 @@ import type {
 	InvestigationDefinitionInput,
 	InvestigationQuestion,
 	InvestigationQuestionInput,
+	InvestigationSourceSelection,
 	QuestionBreakdownProposal,
 	ProviderHealth,
 	ProviderInfo,
@@ -162,6 +163,9 @@ export const ipc = {
 	/** Save the active analyst-authored meanings and assumptions for one Investigation. */
 	investigationUpdateDefinitions: (investigationId: string, definitions: InvestigationDefinitionInput[]) =>
 		invoke<Investigation>('investigation_update_definitions', { investigationId, definitions }),
+	/** Set the files available to subsequent runs without changing old run snapshots. */
+	investigationUpdateSourceSelection: (investigationId: string, sourceSelection: InvestigationSourceSelection) =>
+		invoke<Investigation>('investigation_update_source_selection', { investigationId, sourceSelection }),
 	investigationQuestionLoad: (questionId: string) =>
 		invoke<InvestigationQuestion>('investigation_question_load', { questionId }),
 	investigationDefinitionLoad: (definitionId: string) =>

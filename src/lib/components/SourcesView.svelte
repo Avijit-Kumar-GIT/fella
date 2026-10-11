@@ -162,7 +162,7 @@
 		{#if sources.length}
 		<div class="source-layout">
 			<div class="source-list" role="listbox" aria-label="Workspace sources">
-				{#each visibleSources as source (source.path)}
+				{#each visibleSources as source (`${source.path}\u0000${source.view ?? source.name}`)}
 					<Button
 						variant="ghost"
 						class={selectedPath === source.path ? 'source-row selected' : 'source-row'}

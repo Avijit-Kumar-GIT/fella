@@ -2,6 +2,8 @@
 //! original `engine/duck.rs`; the connection-taking helpers are unchanged and
 //! `DuckEngine` wraps them behind the `DataEngine` trait.
 
+use std::collections::HashSet;
+
 use duckdb::types::{TimeUnit, Value};
 use duckdb::Connection;
 use serde_json::Value as Json;
@@ -94,6 +96,15 @@ impl DataEngine for DuckEngine {
         query(&self.conn, sql, max_rows)
     }
 
+    fn query_scoped(
+        &self,
+        sql: &str,
+        max_rows: usize,
+        allowed_sources: &HashSet<String>,
+    ) -> EngineResult<QueryOutcome> {
+        query_read_only_scoped(&self.readers, sql, max_rows, allowed_sources)
+    }
+
     fn python_bridge(&self) -> PythonBridge {
         PythonBridge::DuckReaders(self.readers.clone())
     }
@@ -109,6 +120,26 @@ pub(crate) fn query_read_only(
 ) -> EngineResult<QueryOutcome> {
     let conn = Connection::open_in_memory()?;
     for (name, reader) in readers {
+        conn.execute_batch(&format!(
+            "CREATE VIEW {} AS SELECT * FROM {reader};",
+            quote_ident(name)
+        ))?;
+    }
+    query(&conn, sql, max_rows)
+}
+
+pub(crate) fn query_read_only_scoped(
+    readers: &[(String, String)],
+    sql: &str,
+    max_rows: usize,
+    allowed_sources: &HashSet<String>,
+) -> EngineResult<QueryOutcome> {
+    let conn = Connection::open_in_memory()?;
+    for (name, reader) in readers.iter().filter(|(name, _)| {
+        allowed_sources
+            .iter()
+            .any(|source| source.eq_ignore_ascii_case(name))
+    }) {
         conn.execute_batch(&format!(
             "CREATE VIEW {} AS SELECT * FROM {reader};",
             quote_ident(name)
