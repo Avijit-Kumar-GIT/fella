@@ -9,6 +9,11 @@
 	import SourcePreview from './SourcePreview.svelte';
 
 	let pane = $derived(session.activeChat.companionPane);
+	let chartMessage = $derived.by(() =>
+		pane?.kind === 'chart'
+			? session.activeChat.messages.find((item) => item.id === pane.messageId) ?? null
+			: null
+	);
 	let source = $derived.by(() =>
 		pane?.kind === 'source'
 			? session.catalog.sources.find((item) => item.path === pane.path) ?? null
@@ -16,7 +21,7 @@
 	);
 	let chartEvidence = $derived.by((): EvidenceItem | null => {
 		if (pane?.kind !== 'chart') return null;
-		const message = session.activeChat.messages.find((item) => item.id === pane.messageId);
+		const message = chartMessage;
 		const item = message?.answer?.evidence[pane.evidenceIndex];
 		if (
 			!item ||
@@ -26,10 +31,17 @@
 		) return null;
 		return item;
 	});
+	let chartSourceEvidence = $derived.by(() => {
+		const sourceId = chartEvidence?.chart?.metadata?.source_evidence_id;
+		if (!sourceId) return chartEvidence;
+		return chartMessage?.answer?.evidence.find((item) => item.id === sourceId) ?? chartEvidence;
+	});
 	let chartSource = $derived.by(() => {
-		const names = [...new Set((chartEvidence?.sources ?? [])
+		const evidenceNames = (chartEvidence?.sources ?? [])
 			.map((item) => item.source.trim())
-			.filter(Boolean))];
+			.filter(Boolean);
+		const metadataName = chartEvidence?.chart?.metadata?.source_label?.trim();
+		const names = [...new Set(evidenceNames.length ? evidenceNames : metadataName ? [metadataName] : [])];
 		if (names.length === 1) return `Based on ${names[0]}`;
 		if (names.length > 1) return `Based on ${names.length} sources`;
 		return 'Based on this analysis';
@@ -94,7 +106,12 @@
 				<p class="snapshot-note">This chart is from an earlier workspace snapshot. It remains the result produced for that analysis.</p>
 			{/if}
 			{#if chartEvidence?.chart}
-				<Chart spec={chartEvidence.chart} source={chartSource} />
+				<Chart
+					spec={chartEvidence.chart}
+					source={chartSource}
+					sourceEvidence={chartSourceEvidence}
+					sourceRunId={chartMessage?.answer?.turn_id}
+				/>
 			{:else}
 				<p class="empty">This chart is no longer available in the saved conversation.</p>
 			{/if}

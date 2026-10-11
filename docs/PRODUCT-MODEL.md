@@ -272,6 +272,13 @@ queries or calculation code, and recorded result samples stay attached to the
 run that produced them. This lets an analyst reopen an earlier run after later
 conversation turns without accidentally inspecting the newer turn's evidence.
 
+Each saved visualization carries the source AnalysisTurn ID and a snapshot of
+the answer's visible lead conclusion. Its chart details resolve the linked
+source evidence to the original result, data-file names, and SQL or Python input
+queries, in both the conversation and companion pane. The conclusion is
+immutable run provenance, not yet a durable editable Finding; future edits to a
+Finding must not rewrite the chart or evidence saved with an earlier run.
+
 Question analysis now has an explicit pre-run review. Before any execution, the
 analyst can verify the exact Question, broader plan context, effective source
 scope and files, and active definitions/assumptions; unsaved Question or

@@ -116,6 +116,13 @@ pub struct BoxSummary {
 pub struct ChartMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_evidence_id: Option<String>,
+    /// Immutable AnalysisTurn that produced this visualization.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_run_id: Option<String>,
+    /// The answer's visible lead conclusion when this run was saved. This is a
+    /// run-scoped snapshot, not an editable Investigation Finding.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finding_snapshot: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_label: Option<String>,
     #[serde(default)]

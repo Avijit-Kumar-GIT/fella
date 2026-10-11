@@ -13,14 +13,24 @@
 	import { Collapsible } from '$lib/components/ui/collapsible';
 	import { DropdownMenu } from '$lib/components/ui/dropdown-menu';
 	import { chartExportFilename, serializeDelimited } from '$lib/chart-export';
-	import type { ChartMetadata, ChartPayload, VisualizationSpec } from '$lib/types';
+	import type { ChartMetadata, ChartPayload, EvidenceItem, VisualizationSpec } from '$lib/types';
 	import Icon from './Icon.svelte';
 
 	let {
 		spec,
 		source = '',
+		sourceEvidence = null,
+		sourceRunId,
+		findingSnapshot,
 		onopen
-	}: { spec: VisualizationSpec; source?: string; onopen?: () => void } = $props();
+	}: {
+		spec: VisualizationSpec;
+		source?: string;
+		sourceEvidence?: EvidenceItem | null;
+		sourceRunId?: string;
+		findingSnapshot?: string;
+		onopen?: () => void;
+	} = $props();
 	let chartDetailsOpen = $state(false);
 	let exactValuesOpen = $state(false);
 	let exportNode = $state<HTMLElement | null>(null);
@@ -481,21 +491,41 @@
 		reportExport('Chart data downloaded.', true);
 	}
 
-	function metadataEntries(metadata: ChartMetadata) {
-		const fields = metadata.fields ?? [];
-		const filters = metadata.filters ?? [];
+	function metadataEntries(metadata?: ChartMetadata) {
+		const fields = metadata?.fields ?? [];
+		const filters = metadata?.filters ?? [];
 		return [
-			metadata.source_label ? ['Source', metadata.source_label] : null,
-			metadata.source_evidence_id ? ['Result', metadata.source_evidence_id] : null,
+			metadata?.source_label ? ['Source', metadata.source_label] : null,
+			(metadata?.source_evidence_id || sourceEvidence?.id)
+				? ['Source evidence', metadata?.source_evidence_id ?? sourceEvidence?.id ?? '']
+				: null,
+			(metadata?.source_run_id || sourceRunId)
+				? ['Source run', metadata?.source_run_id ?? sourceRunId ?? '']
+				: null,
 			fields.length ? ['Fields', fields.join(', ')] : null,
-			metadata.aggregation ? ['Aggregation', metadata.aggregation] : null,
+			metadata?.aggregation ? ['Aggregation', metadata.aggregation] : null,
 			filters.length ? ['Filters', filters.join('; ')] : null,
-			metadata.time_range ? ['Period', metadata.time_range] : null,
-			metadata.denominator ? ['Whole', metadata.denominator] : null,
-			metadata.missing_treatment ? ['Missing values', metadata.missing_treatment] : null
+			metadata?.time_range ? ['Period', metadata.time_range] : null,
+			metadata?.denominator ? ['Whole', metadata.denominator] : null,
+			metadata?.missing_treatment ? ['Missing values', metadata.missing_treatment] : null
 		].filter((entry): entry is [string, string] => entry !== null);
 	}
-	let chartDetails = $derived(spec.metadata ? metadataEntries(spec.metadata) : []);
+	let chartDetails = $derived(metadataEntries(spec.metadata));
+	let savedFinding = $derived(
+		spec.metadata?.finding_snapshot?.trim() || findingSnapshot?.trim() || ''
+	);
+	let sourceQueries = $derived.by(() => {
+		if (!sourceEvidence) return [];
+		if (sourceEvidence.sql?.trim()) {
+			return [{ label: 'Executed SQL', sql: sourceEvidence.sql.trim() }];
+		}
+		return (sourceEvidence.python_input_trace?.queries ?? [])
+			.filter((query) => query.sql.trim())
+			.map((query, index) => ({ label: `Python input ${index + 1}`, sql: query.sql.trim() }));
+	});
+	let hasChartDetails = $derived(
+		chartDetails.length > 0 || Boolean(savedFinding) || Boolean(sourceEvidence)
+	);
 </script>
 
 <figure class="chart-card" bind:this={exportNode}>
@@ -738,14 +768,40 @@
 		</div>
 	{/if}
 
-	{#if chartDetails.length > 0}
+	{#if hasChartDetails}
 		<Collapsible.Root class="chart-details" bind:open={chartDetailsOpen} data-chart-export-ignore>
 			<Collapsible.Trigger class="chart-disclosure">
 				<span>Chart details</span>
 				<span class="chart-disclosure-caret" class:open={chartDetailsOpen} aria-hidden="true"><Icon name="chevron-right" size={12} /></span>
 			</Collapsible.Trigger>
 			<Collapsible.Content>
-				<dl>{#each chartDetails as [label, value] (label)}<div><dt>{label}</dt><dd>{value}</dd></div>{/each}</dl>
+				{#if chartDetails.length > 0}
+					<dl>{#each chartDetails as [label, value] (label)}<div><dt>{label}</dt><dd>{value}</dd></div>{/each}</dl>
+				{/if}
+				{#if savedFinding}
+					<div class="chart-finding">
+						<div class="chart-finding-label">Conclusion in this run</div>
+						<p>{savedFinding}</p>
+					</div>
+				{/if}
+				{#if sourceEvidence}
+					<dl class="chart-source-result">
+						{#if sourceEvidence.result_summary}<div><dt>Result</dt><dd>{sourceEvidence.result_summary}</dd></div>{/if}
+						{#if sourceEvidence.sources?.length}<div><dt>Data files</dt><dd>{[...new Set(sourceEvidence.sources.map((item) => item.source).filter(Boolean))].join(', ')}</dd></div>{/if}
+						{#if sourceEvidence.columns?.length}<div><dt>Columns</dt><dd>{sourceEvidence.columns.join(', ')}</dd></div>{/if}
+						{#if sourceEvidence.row_count !== undefined}<div><dt>Rows</dt><dd>{sourceEvidence.row_count.toLocaleString()}</dd></div>{/if}
+					</dl>
+				{/if}
+				{#if sourceQueries.length > 0}
+					<div class="chart-query-list" aria-label="Underlying query">
+						{#each sourceQueries as query (query.label)}
+							<div class="chart-query">
+								<div class="chart-finding-label">{query.label}</div>
+								<pre><code>{query.sql}</code></pre>
+							</div>
+						{/each}
+					</div>
+				{/if}
 			</Collapsible.Content>
 		</Collapsible.Root>
 	{/if}
@@ -873,6 +929,10 @@
 	:global(.chart-details dl div) { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: var(--space-2); }
 	:global(.chart-details dt) { color: var(--text-faint); }
 	:global(.chart-details dd) { margin: 0; color: var(--text-dim); overflow-wrap: anywhere; }
+	.chart-finding, .chart-query { margin-top: var(--space-2); }
+	.chart-finding-label { color: var(--text-faint); }
+	.chart-finding p { margin: 4px 0 0; color: var(--text-dim); white-space: pre-wrap; overflow-wrap: anywhere; }
+	.chart-query pre { max-height: 240px; margin: 4px 0 0; padding: var(--space-2); overflow: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); color: var(--text-dim); white-space: pre-wrap; overflow-wrap: anywhere; }
 	@media (max-width: 560px) {
 		.chart-card { padding-inline: var(--space-3); }
 		.row { grid-template-columns: minmax(0, 38%) 1fr; gap: var(--space-2); }

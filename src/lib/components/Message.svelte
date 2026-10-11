@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { Answer, Message } from '$lib/types';
+	import type { Answer, EvidenceItem, Message } from '$lib/types';
 	import { Button } from '$lib/components/ui/button';
 	import EvidenceBlock from './EvidenceBlock.svelte';
 	import EvidenceSummary from './EvidenceSummary.svelte';
@@ -95,6 +95,12 @@
 			return true;
 		});
 	});
+	function sourceEvidenceForChart(chartEvidence: EvidenceItem): EvidenceItem {
+		const sourceId = chartEvidence.chart?.metadata?.source_evidence_id;
+		return sourceId
+			? message.answer?.evidence.find((item) => item.id === sourceId) ?? chartEvidence
+			: chartEvidence;
+	}
 	let hasVisualAnswer = $derived(chartItems.length > 0 && !message.pending);
 
 	// Keep the useful trust signal close to the finding. This deliberately uses
@@ -194,6 +200,7 @@
 				{#each chartItems as e, i (e.id ?? `chart-${i}`)}
 					{#if e.chart}
 						{@const evidenceIndex = message.answer?.evidence.indexOf(e) ?? i}
+						{@const sourceEvidence = sourceEvidenceForChart(e)}
 						{#if openChartIndex === evidenceIndex}
 							<div class="chart-reference" aria-label="Chart open beside conversation">
 								<span>{e.chart.title?.trim() || 'Chart'} is open beside the conversation.</span>
@@ -203,6 +210,9 @@
 							<Chart
 								spec={e.chart}
 								source={scopeLabel}
+								sourceEvidence={sourceEvidence}
+								sourceRunId={message.answer?.turn_id}
+								findingSnapshot={composition.lead}
 								onopen={onopenchart ? () => onopenchart(message.id, evidenceIndex) : undefined}
 							/>
 						{/if}

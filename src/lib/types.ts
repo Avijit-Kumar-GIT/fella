@@ -24,6 +24,10 @@ export type ChartKind =
 
 export interface ChartMetadata {
 	source_evidence_id?: string;
+	/** Immutable AnalysisTurn that produced this visualization. */
+	source_run_id?: string;
+	/** The answer's visible lead conclusion when this run was saved. */
+	finding_snapshot?: string;
 	source_label?: string;
 	fields: string[];
 	aggregation?: string;

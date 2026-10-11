@@ -486,7 +486,7 @@ async function installDesktopMock(
 							? [{ id: 'fixture-replay-step', tool: 'run_sql', args: {}, result_summary: 'One row inspected.', ms: 12 }]
 							: []),
 						...(detailEvidence ? [detailEvidence] : []),
-						...(chartEvidence ? [chartEvidence] : [])
+						...(Array.isArray(chartEvidence) ? chartEvidence : chartEvidence ? [chartEvidence] : [])
 					],
 					verification: [],
 					workspace: params.workspaceId ? { path: params.workspaceId, revision: 'fixture-r1' } : null
@@ -2458,29 +2458,48 @@ test('Companion snapshot recovery uses a shared button and reopens the current s
 test('Chart disclosures use Collapsible and Open beside preserves the chart in the companion pane', async ({ page }) => {
 	await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: 'http://127.0.0.1:1421' });
 	await installDesktopMock(page, {
-		chartEvidence: {
-			id: 'fixture-chart',
-			tool: 'make_chart',
-			args: {},
-			result_summary: 'Monthly revenue by month.',
-			ms: 12,
-			chart: {
-				kind: 'line',
-				title: 'Monthly revenue',
-				labels: ['Jan', 'Feb', 'Mar'],
-				series: [{ name: 'Revenue', values: [12, 18, 15] }],
-				unit: '$',
-				x_label: 'Month',
-				y_label: 'Revenue',
-				metadata: {
-					source_label: 'sales.csv',
-					fields: ['month', 'revenue'],
-					aggregation: 'sum',
-					filters: [],
-					part_to_whole: false
+		chartEvidence: [
+			// The source result and chart are separate evidence objects, linked by
+			// the stable evidence ID the engine stores in chart metadata.
+			{
+				id: 'fixture-source-result',
+				tool: 'run_sql',
+				args: { sql: 'SELECT month, SUM(revenue) AS revenue FROM sales GROUP BY month ORDER BY month' },
+				sql: 'SELECT month, SUM(revenue) AS revenue FROM sales GROUP BY month ORDER BY month',
+				result_summary: 'Three monthly revenue rows from sales.csv.',
+				sources: [{ table: 'sales', source: 'sales.csv' }],
+				columns: ['month', 'revenue'],
+				rows: [['Jan', 12], ['Feb', 18], ['Mar', 15]],
+				row_count: 3,
+				ms: 6
+			},
+			{
+				id: 'fixture-chart',
+				tool: 'make_chart',
+				args: {},
+				result_summary: 'Monthly revenue chart, 3 plotted items.',
+				ms: 12,
+				chart: {
+					kind: 'line',
+					title: 'Monthly revenue',
+					labels: ['Jan', 'Feb', 'Mar'],
+					series: [{ name: 'Revenue', values: [12, 18, 15] }],
+					unit: '$',
+					x_label: 'Month',
+					y_label: 'Revenue',
+					metadata: {
+						source_label: 'sales.csv',
+						source_evidence_id: 'fixture-source-result',
+						source_run_id: 'fixture-chart-run',
+						finding_snapshot: 'Monthly revenue rose from January to February.',
+						fields: ['month', 'revenue'],
+						aggregation: 'sum',
+						filters: [],
+						part_to_whole: false
+					}
 				}
 			}
-		}
+		],
 	});
 	await page.goto('/');
 	const composer = page.getByRole('combobox', { name: 'Ask a question' });
@@ -2494,6 +2513,11 @@ test('Chart disclosures use Collapsible and Open beside preserves the chart in t
 	await chartDetails.click();
 	await expect(chartDetails).toHaveAttribute('aria-expanded', 'true');
 	await expect(chart).toContainText('sales.csv');
+	await expect(chart).toContainText('fixture-chart-run');
+	await expect(chart).toContainText('fixture-source-result');
+	await expect(chart).toContainText('Monthly revenue rose from January to February.');
+	await expect(chart).toContainText('Three monthly revenue rows from sales.csv.');
+	await expect(chart).toContainText('SELECT month, SUM(revenue) AS revenue FROM sales');
 	const exactValues = chart.getByRole('button', { name: 'Show exact values' });
 	await exactValues.click();
 	await expect(exactValues).toHaveAttribute('aria-expanded', 'true');
@@ -2539,6 +2563,11 @@ test('Chart disclosures use Collapsible and Open beside preserves the chart in t
 
 	const companion = page.getByRole('complementary', { name: 'Companion pane' });
 	await expect(companion.getByRole('heading', { name: 'Monthly revenue' })).toBeVisible();
+	const companionDetails = companion.getByRole('button', { name: 'Chart details' });
+	await companionDetails.click();
+	await expect(companion).toContainText('fixture-chart-run');
+	await expect(companion).toContainText('Monthly revenue rose from January to February.');
+	await expect(companion).toContainText('SELECT month, SUM(revenue) AS revenue FROM sales');
 	await expect(page.getByLabel('Chart open beside conversation')).toContainText('Monthly revenue is open beside the conversation.');
 });
 

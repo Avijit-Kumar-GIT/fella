@@ -1277,10 +1277,16 @@ fn finish_with(
     context: FinishContext<'_>,
     question: &str,
     text: String,
-    evidence: Vec<EvidenceItem>,
+    mut evidence: Vec<EvidenceItem>,
     usage: Option<Usage>,
     mut verification: Vec<VerificationCheck>,
 ) -> Answer {
+    let finding_snapshot = chart_finding_snapshot(&text);
+    stamp_chart_provenance(
+        &mut evidence,
+        &context.ids.turn_id,
+        finding_snapshot.as_deref(),
+    );
     if !workspace_matches(context.engine, context.workspace) {
         verification.push(VerificationCheck {
             label: "workspace changed while this answer was running".into(),
@@ -1395,6 +1401,59 @@ fn finish_with(
         answer: Box::new(answer.clone()),
     });
     answer
+}
+
+/// Keep chart provenance aligned with the lead conclusion rendered above the
+/// visualization in Message.svelte. The copy is stored on the run's chart so
+/// later Investigation edits cannot rewrite the historical visualization.
+fn chart_finding_snapshot(answer: &str) -> Option<String> {
+    let body = answer
+        .split('\n')
+        .skip_while(|line| line.trim_start().starts_with("Background:"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let body = body.trim();
+    if body.is_empty() {
+        return None;
+    }
+
+    let lead = body
+        .split_once("\n\n")
+        .map_or(body, |(lead, _)| lead)
+        .trim();
+    let first_line = lead.lines().next().unwrap_or_default().trim_start();
+    let heading_depth = first_line
+        .chars()
+        .take_while(|character| *character == '#')
+        .count();
+    let heading = (1..=6).contains(&heading_depth)
+        && first_line[heading_depth..]
+            .chars()
+            .next()
+            .is_some_and(char::is_whitespace);
+    let structured_lead = heading
+        || ["- ", "* ", "+ ", "> ", "```"]
+            .iter()
+            .any(|prefix| first_line.starts_with(prefix));
+    let snapshot = if structured_lead { body } else { lead };
+    Some(snapshot.to_string())
+}
+
+fn stamp_chart_provenance(
+    evidence: &mut [EvidenceItem],
+    run_id: &str,
+    finding_snapshot: Option<&str>,
+) {
+    for item in evidence {
+        let Some(chart) = item.chart.as_mut() else {
+            continue;
+        };
+        let metadata = chart
+            .metadata
+            .get_or_insert_with(crate::engine::analytics::chart::ChartMetadata::default);
+        metadata.source_run_id = Some(run_id.to_string());
+        metadata.finding_snapshot = finding_snapshot.map(str::to_string);
+    }
 }
 
 /// A typed contract is valuable when interpretation needs explicit grounding,
@@ -2193,6 +2252,63 @@ mod tests {
             error: None,
             verifier_disposition: None,
         }
+    }
+
+    #[test]
+    fn chart_provenance_is_saved_with_the_run_and_uses_its_visible_lead() {
+        let mut chart = evidence_item("make_chart");
+        chart.chart = Some(crate::engine::analytics::chart::VisualizationSpec {
+            kind: crate::engine::analytics::chart::ChartKind::Line,
+            title: Some("Monthly revenue".into()),
+            labels: vec!["Jan".into(), "Feb".into()],
+            series: Vec::new(),
+            unit: None,
+            x_label: None,
+            y_label: None,
+            payload: None,
+            metadata: Some(crate::engine::analytics::chart::ChartMetadata {
+                source_evidence_id: Some("query-1".into()),
+                ..Default::default()
+            }),
+        });
+        let source = evidence_item("run_sql");
+        let mut evidence = vec![source, chart];
+        let snapshot = chart_finding_snapshot(
+            "Background: general context\n\nRevenue rose 12% in February.\n\nThe increase was concentrated in the west region.",
+        );
+
+        stamp_chart_provenance(&mut evidence, "run-204", snapshot.as_deref());
+
+        let metadata = evidence[1]
+            .chart
+            .as_ref()
+            .unwrap()
+            .metadata
+            .as_ref()
+            .unwrap();
+        assert_eq!(metadata.source_run_id.as_deref(), Some("run-204"));
+        assert_eq!(
+            metadata.finding_snapshot.as_deref(),
+            Some("Revenue rose 12% in February.")
+        );
+        assert_eq!(metadata.source_evidence_id.as_deref(), Some("query-1"));
+        let saved = serde_json::to_value(&evidence[1]).unwrap();
+        assert_eq!(saved["chart"]["metadata"]["source_run_id"], "run-204");
+        assert_eq!(
+            saved["chart"]["metadata"]["finding_snapshot"],
+            "Revenue rose 12% in February."
+        );
+        assert!(
+            evidence[0].chart.is_none(),
+            "source evidence is not rewritten"
+        );
+    }
+
+    #[test]
+    fn chart_finding_snapshot_keeps_structured_leads_together() {
+        let answer = "## Revenue\n\n- January: $12\n- February: $18";
+        assert_eq!(chart_finding_snapshot(answer).as_deref(), Some(answer));
+        assert_eq!(chart_finding_snapshot("  \n  "), None);
     }
 
     #[test]
