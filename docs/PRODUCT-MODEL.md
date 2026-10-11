@@ -464,3 +464,16 @@ requires an explicit workspace scope, and the backend rejects the reserved
 `general` scope for both manual creation and automatic association. Any future
 disk-level search or analysis must define its own scope before it can use these
 workspace primitives.
+
+## Implementation checkpoint: concise Investigation results (#216)
+
+The Investigation now has a Results view alongside its editable Brief. Results
+are assembled from the persisted brief, active Question states, current saved
+Findings, and the latest saved run for each active Question plus runs supporting
+Findings. Analyst-reviewed Findings lead; caveats, assumptions, evidence IDs,
+run details, and full saved answers remain available on demand. Renderable charts
+reuse their source evidence and immutable run provenance. Questions that are
+not fully answered retain their persisted status and reason, including in a
+completed Investigation. The view does not summarize or depend on the chat
+transcript; unsaved brief, Question, or definition edits are disclosed rather
+than presented as part of the saved results.

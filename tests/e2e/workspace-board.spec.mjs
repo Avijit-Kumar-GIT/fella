@@ -1711,6 +1711,105 @@ test('Finding caveats and assumptions are visible, editable, and preserve proven
 	await expect(originalRequest).toHaveText('Explain retention by signup cohort.');
 });
 
+test('Investigation results summarize saved work, render linked charts, and keep open Questions visible', async ({ page }) => {
+	const chartSource = {
+		id: 'results-source-evidence',
+		tool: 'run_sql',
+		args: { sql: 'SELECT month, SUM(net_sales) AS net_sales FROM sales GROUP BY month ORDER BY month' },
+		sql: 'SELECT month, SUM(net_sales) AS net_sales FROM sales GROUP BY month ORDER BY month',
+		result_summary: 'Three monthly net sales totals from sales.csv.',
+		sources: [{ source: 'sales.csv', table: 'sales' }],
+		columns: ['month', 'net_sales'],
+		rows: [['Jan', 120], ['Feb', 146], ['Mar', 139]],
+		row_count: 3,
+		ms: 6
+	};
+	const chart = {
+		id: 'results-chart-evidence',
+		tool: 'make_chart',
+		args: {},
+		result_summary: 'Monthly net sales chart, three months.',
+		ms: 8,
+		chart: {
+			kind: 'line',
+			title: 'Monthly net sales',
+			labels: ['Jan', 'Feb', 'Mar'],
+			series: [{ name: 'Net sales', values: [120, 146, 139] }],
+			unit: '$',
+			x_label: 'Month',
+			y_label: 'Net sales',
+			metadata: {
+				source_label: 'sales.csv',
+				source_evidence_id: 'results-source-evidence',
+				source_run_id: 'fixture-question-turn-1',
+				finding_snapshot: 'Net sales rose from January to February.',
+				fields: ['month', 'net_sales'],
+				aggregation: 'sum',
+				filters: [],
+				part_to_whole: false
+			}
+		}
+	};
+	await installDesktopMock(page, {
+		chartEvidence: [chartSource, chart],
+		questionRunOutcomes: [{ status: 'answered', answer_text: 'Net sales rose 22% from January to February, then eased slightly in March.' }]
+	});
+	await page.goto('/');
+	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
+	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
+	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill('Explain the monthly net sales trend.');
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	await page.getByRole('textbox', { name: 'Audience' }).fill('Finance lead');
+	await page.getByRole('textbox', { name: 'Desired output' }).fill('A concise monthly trend summary');
+	await page.getByRole('button', { name: 'Save brief' }).click();
+	await page.getByRole('button', { name: 'Add subquestion' }).click();
+	await page.getByRole('textbox', { name: 'Subquestion 1' }).fill('Check whether discounts explain the March dip.');
+	await page.getByRole('button', { name: 'Save plan' }).click();
+	await page.getByRole('button', { name: 'Analyze main Question' }).click();
+	await page.getByRole('region', { name: 'Review this run' }).getByRole('button', { name: 'Run this Question' }).click();
+	await expect(page.getByText('Net sales rose 22% from January to February, then eased slightly in March.')).toBeVisible();
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	await page.getByRole('button', { name: /Open saved analysis run 1:/ }).click();
+	const capture = page.getByRole('region', { name: 'Saved analysis run' }).locator('.finding-capture');
+	await capture.getByRole('textbox', { name: 'Finding caveats' }).fill('March results include only the first three weeks.');
+	await capture.getByRole('button', { name: 'Save Finding' }).click();
+	await expect(page.locator('.finding-card')).toContainText('Net sales rose 22% from January to February');
+
+	await page.getByRole('button', { name: 'Results' }).click();
+	const results = page.getByRole('region', { name: 'Current Investigation results' });
+	await expect(page.getByRole('heading', { name: 'Investigation results' })).toBeVisible();
+	await expect(results.locator('#results-goal-title')).toHaveText('Explain the monthly net sales trend.');
+	await expect(results).toContainText('Finance lead');
+	await expect(results).toContainText('A concise monthly trend summary');
+	await expect(results).toContainText('1/2 Questions answered');
+	await expect(results.locator('.results-finding')).toContainText('Net sales rose 22% from January to February');
+	await expect(results.locator('.results-finding')).toContainText('Answers: Explain the monthly net sales trend.');
+	const findingDetails = results.locator('.results-finding details');
+	await findingDetails.locator('summary').click();
+	await expect(findingDetails).toContainText('March results include only the first three weeks.');
+	await expect(findingDetails).toContainText('results-chart-evidence');
+	await expect(findingDetails).toContainText('fixture-question-turn-1');
+	const resultChart = results.locator('.chart-card');
+	await expect(resultChart).toContainText('Monthly net sales');
+	await expect(resultChart).toContainText('sales.csv');
+	const openQuestion = results.locator('.results-question').filter({ hasText: 'Check whether discounts explain the March dip.' });
+	await expect(openQuestion).toContainText('Not answered');
+	await expect(openQuestion).toContainText('No analysis run is linked to this Question yet.');
+	const answers = results.locator('.results-answer-index');
+	await answers.locator(':scope > details > summary').click();
+	const savedAnswer = answers.getByText('Net sales rose 22% from January to February, then eased slightly in March.');
+	await expect(savedAnswer).toHaveCount(1);
+	await expect(savedAnswer).toBeHidden();
+	await answers.locator('details details > summary').click();
+	await expect(savedAnswer).toBeVisible();
+	await results.locator('.results-chart').getByRole('button', { name: 'Open analysis record' }).click();
+	await expect(page.getByRole('button', { name: 'Brief', exact: true })).toHaveAttribute('aria-pressed', 'true');
+	await expect(page.getByRole('region', { name: 'Saved analysis run' })).toBeVisible();
+});
+
 test('Investigation report exports saved answers, Findings, QA, and source provenance without chat transcript', async ({ page }) => {
 	const evidence = {
 		id: 'evidence-weekly-sales-export',

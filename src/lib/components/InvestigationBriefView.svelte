@@ -30,9 +30,11 @@
 	import InvestigationSourceReadiness from './InvestigationSourceReadiness.svelte';
 	import InvestigationQuestionSourceScope from './InvestigationQuestionSourceScope.svelte';
 	import QuestionAnswerPreview from './QuestionAnswerPreview.svelte';
+	import InvestigationResultsView from './InvestigationResultsView.svelte';
 
 	let investigations = $state<Investigation[]>([]);
 	let selectedId = $state<string | null>(null);
+	let activeView = $state<'brief' | 'results'>('brief');
 	let workspacePath = $state<string | null>(null);
 	let loadedWorkspace = $state<string | null>(null);
 	let loadedInvestigationsVersion = -1;
@@ -732,6 +734,18 @@
 		detail?.focus({ preventScroll: true });
 	}
 
+	async function openRunFromResults(turnId: string): Promise<void> {
+		activeView = 'brief';
+		await tick();
+		await openAnalysisRun(turnId);
+	}
+
+	async function reviewQuestionFromResults(questionId: string): Promise<void> {
+		activeView = 'brief';
+		await tick();
+		focusQuestion(questionId);
+	}
+
 	function findingEvidenceOptions(run: AnalysisTurn): { id: string; label: string }[] {
 		const seen = new Set<string>();
 		return run.result.evidence.flatMap((item, index) => {
@@ -1253,8 +1267,8 @@
 <section class="investigation-page" aria-labelledby="investigation-title">
 	<header class="page-head">
 		<div>
-			<h1 id="investigation-title">Investigation brief</h1>
-			<p>Keep the goal, audience, deliverable, and constraints clear as the analysis develops.</p>
+				<h1 id="investigation-title">{activeView === 'results' ? 'Investigation results' : 'Investigation brief'}</h1>
+				<p>{activeView === 'results' ? 'Review current conclusions, visual evidence, and Questions that still need attention.' : 'Keep the goal, audience, deliverable, and constraints clear as the analysis develops.'}</p>
 		</div>
 		<div class="page-head-actions">
 			{#if reportExportStatus}
@@ -1337,11 +1351,25 @@
 							<Button type="button" variant="outline" disabled={openingConversation || (!selected.conversation_id && !selected.brief_source_message_id)} onclick={() => void openSelectedConversation()}>
 								<Icon name="ask" size={16} />{openingConversation ? 'Opening…' : 'Open conversation'}
 							</Button>
-							<Button type="button" disabled={!dirty || saving} onclick={() => void saveBrief()}>
-								<Icon name="check" size={16} />{saving ? 'Saving…' : 'Save brief'}
-							</Button>
+							{#if activeView === 'brief'}
+								<Button type="button" disabled={!dirty || saving} onclick={() => void saveBrief()}>
+									<Icon name="check" size={16} />{saving ? 'Saving…' : 'Save brief'}
+								</Button>
+							{/if}
 						</div>
 					</div>
+					<div class="investigation-view-switch" role="group" aria-label="Investigation view">
+						<Button type="button" variant={activeView === 'brief' ? 'secondary' : 'ghost'} size="sm" aria-pressed={activeView === 'brief'} onclick={() => (activeView = 'brief')}>Brief</Button>
+						<Button type="button" variant={activeView === 'results' ? 'secondary' : 'ghost'} size="sm" aria-pressed={activeView === 'results'} onclick={() => (activeView = 'results')}>Results</Button>
+					</div>
+					{#if activeView === 'results'}
+						<InvestigationResultsView
+							investigation={selected}
+							hasUnsavedEdits={dirty || questionsDirty || definitionsDirty}
+							onopenrun={openRunFromResults}
+							onreviewquestion={reviewQuestionFromResults}
+						/>
+					{:else}
 					{#if pendingProposal}
 						<section class="brief-proposal" aria-labelledby="brief-proposal-title">
 							<div class="proposal-copy">
@@ -2151,6 +2179,7 @@
 						{#if selected.brief_source_message_id}<span>Original request preserved</span>{/if}
 						<span>{selected.analysis_turn_ids?.length ?? 0} saved run{(selected.analysis_turn_ids?.length ?? 0) === 1 ? '' : 's'} linked</span>
 					</div>
+					{/if}
 				</div>
 			{/if}
 		</div>
@@ -2197,6 +2226,8 @@
 	.brief-editor { min-width: 0; border-block: 1px solid var(--border); }
 	.editor-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); padding: var(--space-3) 0; border-bottom: 1px solid var(--border); }
 	.editor-actions { display: flex; flex: none; align-items: center; gap: var(--space-2); }
+	.investigation-view-switch { display: flex; width: fit-content; align-items: center; gap: 2px; padding: 3px; margin-top: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-inset); }
+	.investigation-view-switch :global(button[aria-pressed='true']) { box-shadow: 0 0 0 1px var(--border-strong, var(--border)); }
 	.brief-proposal { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--space-3); padding: var(--space-3); margin-top: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-inset); }
 	.proposal-copy { grid-column: 1 / -1; }
 	.proposal-copy h3 { margin: 0; font-size: var(--fs-sm); font-weight: 650; }
