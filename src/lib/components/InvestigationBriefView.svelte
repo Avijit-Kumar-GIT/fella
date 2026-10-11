@@ -8,6 +8,7 @@
 	import type { ConversationSummary, Investigation, InvestigationBrief, InvestigationQuestion } from '$lib/types';
 	import { findBriefProposal, type BriefProposal, type BriefProposalTarget } from '$lib/investigation-brief-proposal';
 	import Icon from './Icon.svelte';
+	import InvestigationSourceReadiness from './InvestigationSourceReadiness.svelte';
 
 	let investigations = $state<Investigation[]>([]);
 	let selectedId = $state<string | null>(null);
@@ -371,6 +372,9 @@
 	</header>
 	{#if error && !selected}
 		<p class="error" role="alert">{error}</p>
+	{/if}
+	{#if workspacePath && !loading}
+		<InvestigationSourceReadiness {workspacePath} />
 	{/if}
 
 	{#if !workspacePath}

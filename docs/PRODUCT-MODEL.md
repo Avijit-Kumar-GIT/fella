@@ -214,3 +214,13 @@ findings. Legacy Investigations surface their existing goal as the initial
 Question when upgraded. This first plan is an ordered value on the aggregate;
 independent Question records and run-to-Question associations remain later
 slices.
+
+The Investigation surface now includes a compact view of its workspace's
+current catalog snapshot: queryable tables, readable documents, and files the
+catalog skipped. Skipped entries distinguish unsupported formats from files
+that could not be read or loaded, using the catalog's recorded reason. An
+analyst can inspect a source's type, shape, ingest notes, document synopsis, or
+a small table preview inline without leaving the Investigation. This is
+readiness context only: it does not select a source scope or claim that a
+source has already been used in an Analysis turn; explicit Question-level
+source scope and run provenance remain separate primitives.

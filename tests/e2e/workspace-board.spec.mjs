@@ -189,6 +189,13 @@ async function installDesktopMock(
 					case 'list_providers': return providerList;
 					case 'provider_health': return providerHealth;
 					case 'get_catalog': return { workspace: null, sources: [] };
+					case 'sample_source': return {
+						columns: ['order_id', 'region'],
+						rows: [[101, 'North'], [102, 'South']],
+						row_count: 2,
+						ms: 1,
+						truncated: false
+					};
 					case 'last_workspace_path': return null;
 					case 'conversations_list':
 						return [...archivedConversations.values()].map(({ summary }) => summary);
@@ -550,6 +557,59 @@ test('an analyst can edit the ordered Question plan and future asks use it', asy
 	await expect(transcriptQuestion).toContainText('Which device has the strongest change?');
 	await expect(transcriptQuestion).not.toContainText('Compare conversion over time');
 	await expect(transcriptQuestion).not.toContainText('Compare conversion by device');
+});
+
+test('Investigation shows source readiness and opens source details in place', async ({ page }) => {
+	const workspacePath = folders[0].path;
+	const fixtureFolders = [{
+		...folders[0],
+		catalog: {
+			...folders[0].catalog,
+			sources: [
+				{
+					name: 'sales.csv', path: `${workspacePath}\\sales.csv`, kind: 'csv', view: 'sales',
+					row_count: 124, columns: [{ name: 'order_id', type: 'BIGINT', distinct: 124 }],
+					size_bytes: 4096, mtime: 1
+				},
+				{
+					name: 'quarterly-notes.txt', path: `${workspacePath}\\quarterly-notes.txt`, kind: 'text',
+					synopsis: 'Regional launches moved two weeks later.', size_bytes: 2048, mtime: 1
+				}
+			],
+			skipped: [
+				{ name: 'old-report.docx', reason: "Fella can't read this file type yet" },
+				{ name: 'locked.csv', reason: "couldn't be read (permission, or open in another app)" }
+			]
+		}
+	}];
+	await installDesktopMock(page, { fixtureFolders });
+	await page.goto('/');
+	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
+	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
+	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	const composer = page.getByRole('combobox', { name: 'Ask about northwind-sales' });
+	await composer.fill('Compare sales and regional notes');
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(page.getByText(`Scoped to ${workspacePath}.`)).toBeVisible();
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	await expect(page.getByRole('heading', { name: 'Data available' })).toBeVisible();
+	await expect(page.getByRole('button', { name: /sales\.csv.*Queryable/ })).toBeVisible();
+	const documentSource = page.getByRole('button', { name: /quarterly-notes\.txt.*Readable/ });
+	await expect(documentSource).toBeVisible();
+	await documentSource.click();
+	await expect(page.getByRole('region', { name: 'Details for quarterly-notes.txt' })).toContainText('Regional launches moved two weeks later.');
+
+	const skipped = page.locator('.skipped-sources');
+	await skipped.locator('summary').click();
+	await expect(skipped).toContainText('Unsupported');
+	await expect(skipped).toContainText('Unavailable');
+
+	await page.getByRole('button', { name: /sales\.csv.*Queryable/ }).click();
+	const details = page.getByRole('region', { name: 'Details for sales.csv' });
+	await expect(details).toBeVisible();
+	await expect(details).toContainText('124');
+	await expect(details.getByRole('table')).toContainText('North');
+	await expect(page.getByRole('heading', { name: 'Investigation brief' })).toBeVisible();
 });
 
 test('the four-pane limit is scoped to one environment and closing a pane frees its slot', async ({ page }) => {
