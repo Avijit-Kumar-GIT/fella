@@ -150,6 +150,12 @@ export const ipc = {
 		sourceMessageId?: string,
 		conversationId?: string
 	) => invoke<Investigation>('investigation_create', { workspaceId, title, initialRequest, sourceMessageId, conversationId }),
+	/** Mark complete only if every active Investigation Question is fully answered. */
+	investigationMarkComplete: (investigationId: string) =>
+		invoke<Investigation>('investigation_mark_complete', { investigationId }),
+	/** Reopen a completed Investigation for further edits or analysis. */
+	investigationReopen: (investigationId: string) =>
+		invoke<Investigation>('investigation_reopen', { investigationId }),
 	/** Resolve or create the Investigation associated with this stable Conversation. */
 	investigationEnsure: (workspaceId: string, conversationId: string, initialRequest: string, sourceMessageId: string) =>
 		invoke<Investigation>('investigation_ensure', { workspaceId, conversationId, initialRequest, sourceMessageId }),

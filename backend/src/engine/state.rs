@@ -85,6 +85,21 @@ fn question_answer_status(
             Some("The run was stopped before a complete answer was verified.".to_owned()),
         );
     }
+    if answer.contract.as_ref().is_some_and(|contract| {
+        contract.interpretation == crate::engine::runtime::InterpretationStatus::Unsupported
+    }) {
+        let reason = answer
+            .contract
+            .as_ref()
+            .and_then(|contract| contract.unresolved.first())
+            .map(String::as_str)
+            .filter(|reason| !reason.trim().is_empty())
+            .unwrap_or("The available data or analysis tools do not support this Question.");
+        return (
+            InvestigationQuestionAnswerStatus::Unsupported,
+            Some(compact_status_reason(reason)),
+        );
+    }
     if let Some(clarification) = &answer.clarification {
         let reason = clarification
             .reason
@@ -2195,6 +2210,25 @@ impl EngineState {
             source_message_id,
             conversation_id,
         )
+    }
+
+    /// Mark an Investigation complete only when every active Question is fully
+    /// answered; serialized with Question run-state updates.
+    pub fn investigation_mark_complete(&self, id: &str) -> EngineResult<Investigation> {
+        let _guard = self
+            .question_state_lock
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        investigation::mark_complete(&self.data_dir, id)
+    }
+
+    /// Return a completed Investigation to active analyst work.
+    pub fn investigation_reopen(&self, id: &str) -> EngineResult<Investigation> {
+        let _guard = self
+            .question_state_lock
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        investigation::reopen(&self.data_dir, id)
     }
 
     /// Resolve or create the Investigation seeded by the conversation's
@@ -6110,5 +6144,55 @@ mod workspace_swap_tests {
         let _ = std::fs::remove_dir_all(old_workspace);
         let _ = std::fs::remove_dir_all(new_workspace);
         let _ = std::fs::remove_dir_all(data_dir);
+    }
+}
+
+#[cfg(test)]
+mod investigation_answer_status_tests {
+    use super::*;
+
+    #[test]
+    fn unsupported_interpretation_is_a_distinct_coverage_outcome() {
+        let answer = Answer {
+            turn_id: "turn-unsupported".to_owned(),
+            trace: crate::engine::runtime::ExecutionTrace {
+                id: "trace-unsupported".to_owned(),
+                turn_id: "turn-unsupported".to_owned(),
+                workspace_revision: None,
+                mode: None,
+                model: None,
+                model_calls: Vec::new(),
+                elapsed_ms: None,
+                steps: Vec::new(),
+            },
+            plan: None,
+            contract: Some(crate::engine::runtime::AnalysisContract {
+                interpretation: crate::engine::runtime::InterpretationStatus::Unsupported,
+                unresolved: vec!["The files do not contain cohort dates.".to_owned()],
+                ..Default::default()
+            }),
+            grounding: None,
+            text: "This cannot be answered from these files.".to_owned(),
+            provenance: crate::engine::evidence::AnswerProvenance::default(),
+            evidence: Vec::new(),
+            verification: Vec::new(),
+            status: crate::engine::evidence::VerificationStatus::Failed,
+            clarification: None,
+            workspace: None,
+            usage: None,
+        };
+
+        assert_eq!(
+            question_answer_status(&answer, false),
+            (
+                InvestigationQuestionAnswerStatus::Unsupported,
+                Some("The files do not contain cohort dates.".to_owned())
+            )
+        );
+        assert_eq!(
+            question_answer_status(&answer, true).0,
+            InvestigationQuestionAnswerStatus::Blocked,
+            "explicit cancellation takes precedence over the model's interpretation"
+        );
     }
 }

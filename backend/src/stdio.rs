@@ -443,6 +443,14 @@ async fn dispatch(
                 conversation_id,
             ))
         }
+        "investigation_mark_complete" => {
+            let investigation_id: String = required(&request.params, "investigationId")?;
+            value_result(engine.investigation_mark_complete(&investigation_id))
+        }
+        "investigation_reopen" => {
+            let investigation_id: String = required(&request.params, "investigationId")?;
+            value_result(engine.investigation_reopen(&investigation_id))
+        }
         "investigation_ensure" => {
             let workspace_id: String = required(&request.params, "workspaceId")?;
             let conversation_id: String = required(&request.params, "conversationId")?;

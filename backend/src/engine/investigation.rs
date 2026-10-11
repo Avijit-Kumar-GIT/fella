@@ -93,6 +93,7 @@ pub enum InvestigationQuestionAnswerStatus {
     Running,
     Answered,
     Incomplete,
+    Unsupported,
     Blocked,
     Outdated,
 }
@@ -616,6 +617,12 @@ pub fn question_run_started(
     {
         return Err(EngineError::msg("invalid analysis turn id"));
     }
+    let mut investigation = load(data_dir, investigation_id)?;
+    let was_completed = investigation.status == InvestigationStatus::Complete;
+    reopen_completed(&mut investigation);
+    if was_completed {
+        write_record(data_dir, &investigation)?;
+    }
     question.answer_status = InvestigationQuestionAnswerStatus::Running;
     question.answer_status_reason = None;
     question.latest_analysis_turn_id = Some(turn_id.to_owned());
@@ -665,6 +672,9 @@ fn normalize_answer_status_reason(
         InvestigationQuestionAnswerStatus::Incomplete => {
             Some("The run returned without fully answering this Question.")
         }
+        InvestigationQuestionAnswerStatus::Unsupported => {
+            Some("The available data or analysis tools do not support this Question.")
+        }
         InvestigationQuestionAnswerStatus::Blocked => {
             Some("The run could not complete this Question.")
         }
@@ -678,6 +688,13 @@ fn normalize_answer_status_reason(
         .filter(|text| !text.is_empty())
         .or(fallback)
         .map(|text| text.chars().take(240).collect())
+}
+
+fn reopen_completed(record: &mut Investigation) {
+    if record.status == InvestigationStatus::Complete {
+        record.status = InvestigationStatus::Active;
+        record.updated_at_ms = now_ms().max(record.updated_at_ms.saturating_add(1));
+    }
 }
 
 fn mark_questions_outdated(
@@ -799,6 +816,7 @@ pub fn create_finding(
     }
 
     let mut record = load(data_dir, investigation_id)?;
+    reopen_completed(&mut record);
     if !record
         .questions
         .as_deref()
@@ -905,6 +923,7 @@ pub fn update_finding_claim(
         ));
     }
     let mut record = load(data_dir, investigation_id)?;
+    reopen_completed(&mut record);
     let finding = record
         .findings
         .as_mut()
@@ -1588,6 +1607,7 @@ pub fn update_questions(
             }
         }
         record.questions = Some(next);
+        reopen_completed(&mut record);
         record.updated_at_ms = now_ms().max(record.updated_at_ms.saturating_add(1));
         write_record(data_dir, &record)?;
     }
@@ -1713,6 +1733,7 @@ pub fn update_definitions(
 
     if record.definitions.as_ref() != Some(&next) {
         record.definitions = Some(next);
+        reopen_completed(&mut record);
         if let Some(questions) = record.questions.as_mut() {
             mark_questions_outdated(
                 data_dir,
@@ -1756,6 +1777,7 @@ pub fn update_source_selection(
     let mut record = load(data_dir, id)?;
     if record.source_selection != selection {
         record.source_selection = selection;
+        reopen_completed(&mut record);
         if let Some(questions) = record.questions.as_mut() {
             mark_questions_outdated(
                 data_dir,
@@ -1873,6 +1895,7 @@ pub fn update_brief(
     }
 
     let mut record = load(data_dir, id)?;
+    reopen_completed(&mut record);
     if let Some(message_id) = reviewed_message_id
         .map(str::trim)
         .filter(|id| !id.is_empty())
@@ -2038,6 +2061,45 @@ pub fn link_analysis_turn_questions(
         }
     }
     set_analysis_turn_questions(data_dir, id, turn_id, &linked)
+}
+
+/// Complete an Investigation only after every active Question has a fully
+/// verified answer. Partial, unsupported, unanswered, running, blocked, and
+/// outdated Questions all remain open analyst work.
+pub fn mark_complete(data_dir: &Path, id: &str) -> EngineResult<Investigation> {
+    let mut record = load(data_dir, id)?;
+    let questions = record.questions.as_deref().unwrap_or_default();
+    if questions.is_empty() {
+        return Err(EngineError::msg(
+            "add at least one Question before completing this Investigation",
+        ));
+    }
+    let remaining = questions
+        .iter()
+        .filter(|question| question.answer_status != InvestigationQuestionAnswerStatus::Answered)
+        .count();
+    if remaining > 0 {
+        return Err(EngineError::msg(format!(
+			"cannot complete this Investigation: {remaining} active Question(s) still need an answer or review"
+		)));
+    }
+    if record.status != InvestigationStatus::Complete {
+        record.status = InvestigationStatus::Complete;
+        record.updated_at_ms = now_ms().max(record.updated_at_ms.saturating_add(1));
+        write_record(data_dir, &record)?;
+    }
+    Ok(record)
+}
+
+/// Reopen a completed Investigation so its plan or analysis can continue.
+pub fn reopen(data_dir: &Path, id: &str) -> EngineResult<Investigation> {
+    let mut record = load(data_dir, id)?;
+    if record.status == InvestigationStatus::Complete {
+        record.status = InvestigationStatus::Active;
+        record.updated_at_ms = now_ms().max(record.updated_at_ms.saturating_add(1));
+        write_record(data_dir, &record)?;
+    }
+    Ok(record)
 }
 
 pub fn load(data_dir: &Path, id: &str) -> EngineResult<Investigation> {
@@ -3247,6 +3309,97 @@ mod tests {
         )
         .is_err());
 
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn investigation_completion_requires_all_active_questions_and_can_be_reopened() {
+        let data_dir = scratch();
+        let created = create(
+            &data_dir,
+            "/work/analysis",
+            "Retention",
+            Some("Explain cohort retention"),
+            Some("message-root"),
+            Some("conversation-root"),
+        )
+        .unwrap();
+        let root = created.questions.as_ref().unwrap()[0].clone();
+        let child_id = "q_retention_trend";
+        update_questions(
+            &data_dir,
+            &created.id,
+            vec![
+                InvestigationQuestionInput {
+                    id: root.id.clone(),
+                    parent_id: None,
+                    text: root.text.clone(),
+                    source_selection: None,
+                },
+                InvestigationQuestionInput {
+                    id: child_id.to_owned(),
+                    parent_id: Some(root.id.clone()),
+                    text: "How did retention change by cohort?".to_owned(),
+                    source_selection: None,
+                },
+            ],
+        )
+        .unwrap();
+
+        assert!(mark_complete(&data_dir, &created.id)
+            .unwrap_err()
+            .to_string()
+            .contains("2 active Question(s)"));
+
+        question_run_started(&data_dir, &created.id, &root.id, "turn-root-answer").unwrap();
+        question_run_finished(
+            &data_dir,
+            &created.id,
+            &root.id,
+            "turn-root-answer",
+            InvestigationQuestionAnswerStatus::Answered,
+            None,
+        )
+        .unwrap();
+        question_run_started(&data_dir, &created.id, child_id, "turn-child-unsupported").unwrap();
+        question_run_finished(
+            &data_dir,
+            &created.id,
+            child_id,
+            "turn-child-unsupported",
+            InvestigationQuestionAnswerStatus::Unsupported,
+            Some("Cohort dates are absent from the available files."),
+        )
+        .unwrap();
+        let unsupported = question_load(&data_dir, child_id).unwrap();
+        assert_eq!(
+            unsupported.answer_status,
+            InvestigationQuestionAnswerStatus::Unsupported
+        );
+        assert_eq!(
+            unsupported.answer_status_reason.as_deref(),
+            Some("Cohort dates are absent from the available files.")
+        );
+        assert!(mark_complete(&data_dir, &created.id)
+            .unwrap_err()
+            .to_string()
+            .contains("1 active Question(s)"));
+
+        question_run_started(&data_dir, &created.id, child_id, "turn-child-answer").unwrap();
+        question_run_finished(
+            &data_dir,
+            &created.id,
+            child_id,
+            "turn-child-answer",
+            InvestigationQuestionAnswerStatus::Answered,
+            None,
+        )
+        .unwrap();
+        let completed = mark_complete(&data_dir, &created.id).unwrap();
+        assert_eq!(completed.status, InvestigationStatus::Complete);
+
+        let reopened = reopen(&data_dir, &created.id).unwrap();
+        assert_eq!(reopened.status, InvestigationStatus::Active);
         let _ = std::fs::remove_dir_all(data_dir);
     }
 

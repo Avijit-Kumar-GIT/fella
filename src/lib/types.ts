@@ -473,6 +473,7 @@ export type InvestigationQuestionAnswerStatus =
 	| 'running'
 	| 'answered'
 	| 'incomplete'
+	| 'unsupported'
 	| 'blocked'
 	| 'outdated';
 

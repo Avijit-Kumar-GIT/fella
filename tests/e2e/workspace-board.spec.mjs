@@ -202,6 +202,28 @@ async function installDesktopMock(
 						}
 						return investigations.get(key);
 					}
+					case 'investigation_mark_complete': {
+						for (const [key, record] of investigations) {
+							if (record.id !== args.investigationId) continue;
+						const questions = (record.questions ?? []).filter((question) => question.status === 'active');
+						if (!questions.length || questions.some((question) => question.answer_status !== 'answered')) {
+							throw new Error('Every active Question needs a complete answer before this Investigation can be completed.');
+						}
+						const updated = { ...record, status: 'complete', updated_at_ms: Date.now() };
+						investigations.set(key, updated);
+						return updated;
+						}
+						throw new Error(`Unknown Investigation: ${args.investigationId}`);
+					}
+					case 'investigation_reopen': {
+						for (const [key, record] of investigations) {
+							if (record.id !== args.investigationId) continue;
+						const updated = { ...record, status: 'active', updated_at_ms: Date.now() };
+						investigations.set(key, updated);
+						return updated;
+						}
+						throw new Error(`Unknown Investigation: ${args.investigationId}`);
+					}
 					case 'investigation_update_questions': {
 						for (const [key, record] of investigations) {
 							if (record.id === args.investigationId) {
@@ -998,6 +1020,70 @@ test('Questions show persisted coverage states and explain incomplete, blocked, 
 	await page.getByRole('button', { name: 'Save plan' }).click();
 	await expect(page.locator('.root-question-item [data-slot="badge"][data-question-status]')).toHaveText('Outdated');
 	await expect(page.locator('.root-question-item .question-status-reason')).toContainText('The Question or its source scope changed. Run it again to refresh the answer.');
+});
+
+test('coverage links expose every open Question and completion waits for verified answers', async ({ page }) => {
+	await installDesktopMock(page, {
+		questionRunOutcomes: [
+			{ status: 'incomplete', reason: 'Only 10 of the requested 12 weeks are present.' },
+			{ status: 'unsupported', reason: 'The available files do not include cohort dates.' },
+			{ status: 'answered' }
+		]
+	});
+	await page.goto('/');
+	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
+	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
+	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill('Explain weekly sales and refunds');
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+
+	await page.getByRole('button', { name: 'Add subquestion' }).click();
+	await page.getByRole('textbox', { name: 'Subquestion 1' }).fill('Compare refund rates with sales');
+	await page.getByRole('button', { name: 'Add subquestion' }).click();
+	await page.getByRole('textbox', { name: 'Subquestion 2' }).fill('Check the seasonal pattern');
+	await page.getByRole('button', { name: 'Add subquestion' }).click();
+	await page.getByRole('textbox', { name: 'Subquestion 3' }).fill('Inspect returns by region');
+	await page.getByRole('button', { name: 'Save plan' }).click();
+
+	const runQuestion = async (buttonName) => {
+		await page.getByRole('button', { name: buttonName }).click();
+		await page.getByRole('region', { name: 'Review this run' }).getByRole('button', { name: 'Run this Question' }).click();
+		await expect(page.getByRole('region', { name: 'Question run' })).toBeHidden();
+		await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	};
+	await runQuestion('Analyze main Question');
+	await runQuestion('Analyze Subquestion 1');
+	await runQuestion('Analyze Subquestion 2');
+
+	const coverage = page.getByRole('region', { name: 'Question coverage' });
+	await expect(coverage.locator('[data-coverage="answered"] dd')).toHaveText('1');
+	await expect(coverage.locator('[data-coverage="partial"] dd')).toHaveText('1');
+	await expect(coverage.locator('[data-coverage="unanswered"] dd')).toHaveText('1');
+	await expect(coverage.locator('[data-coverage="unsupported"] dd')).toHaveText('1');
+	await expect(coverage).toContainText('Only 10 of the requested 12 weeks are present.');
+	await expect(coverage).toContainText('The available files do not include cohort dates.');
+	const blockedCompletion = page.getByRole('button', { name: 'Mark complete' });
+	await expect(blockedCompletion).toBeDisabled();
+
+	await coverage.getByRole('button', { name: 'Review Unsupported Question: Compare refund rates with sales' }).click();
+	await expect(page.getByRole('textbox', { name: 'Subquestion 1' })).toBeFocused();
+
+	await runQuestion('Analyze main Question');
+	await runQuestion('Analyze Subquestion 1');
+	await runQuestion('Analyze Subquestion 3');
+	await expect(coverage.locator('[data-coverage="answered"] dd')).toHaveText('4');
+	await expect(coverage.locator('[data-coverage="partial"] dd')).toHaveText('0');
+	await expect(coverage.locator('[data-coverage="unanswered"] dd')).toHaveText('0');
+	await expect(coverage.locator('[data-coverage="unsupported"] dd')).toHaveText('0');
+	const markComplete = page.getByRole('button', { name: 'Mark complete' });
+	await expect(markComplete).toBeEnabled();
+	await markComplete.click();
+	await expect(coverage).toHaveAttribute('data-investigation-status', 'complete');
+	await expect(coverage).toContainText('Investigation complete.');
+	await page.getByRole('button', { name: 'Reopen Investigation' }).click();
+	await expect(coverage).toHaveAttribute('data-investigation-status', 'active');
 });
 
 test('each Question opens its saved answer with explicit partial or complete coverage and run provenance', async ({ page }) => {

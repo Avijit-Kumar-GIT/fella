@@ -170,6 +170,27 @@
 	let questionsDirty = $derived(Boolean(selected && questionsKey !== savedQuestions));
 	let definitionsKey = $derived(JSON.stringify(definitions));
 	let definitionsDirty = $derived(Boolean(selected && definitionsKey !== savedDefinitions));
+	let coverage = $derived.by(() => {
+		const activeQuestions = (selected?.questions ?? []).filter((question) => question.status === 'active');
+		const answered = activeQuestions.filter((question) => question.answer_status === 'answered').length;
+		const partial = activeQuestions.filter((question) => question.answer_status === 'incomplete').length;
+		const unsupported = activeQuestions.filter((question) => question.answer_status === 'unsupported').length;
+		const unanswered = activeQuestions.length - answered - partial - unsupported;
+		return {
+			activeQuestions,
+			answered,
+			partial,
+			unsupported,
+			unanswered,
+			needsReview: activeQuestions.filter((question) => question.answer_status !== 'answered'),
+			canComplete: activeQuestions.length > 0
+				&& answered === activeQuestions.length
+				&& !dirty
+				&& !questionsDirty
+				&& !definitionsDirty
+				&& !saving
+		};
+	});
 	let hasBlankQuestion = $derived(questions.some((question) => !question.text.trim()));
 	let hasBlankDefinition = $derived(definitions.some((definition) => !definition.text.trim()));
 	let canSuggestBreakdown = $derived(Boolean(rootQuestion?.text.trim()) && subquestions.length === 0);
@@ -414,6 +435,36 @@
 		}
 	}
 
+	async function markInvestigationComplete(): Promise<void> {
+		const item = selected;
+		if (!item || saving || !coverage.canComplete) return;
+		saving = true;
+		error = '';
+		try {
+			const updated = await ipc.investigationMarkComplete(item.id);
+			acceptInvestigationUpdate(updated);
+		} catch (cause) {
+			error = cause instanceof Error ? cause.message : String(cause);
+		} finally {
+			saving = false;
+		}
+	}
+
+	async function reopenInvestigation(): Promise<void> {
+		const item = selected;
+		if (!item || saving || item.status !== 'complete') return;
+		saving = true;
+		error = '';
+		try {
+			const updated = await ipc.investigationReopen(item.id);
+			acceptInvestigationUpdate(updated);
+		} catch (cause) {
+			error = cause instanceof Error ? cause.message : String(cause);
+		} finally {
+			saving = false;
+		}
+	}
+
 	function acceptInvestigationUpdate(updated: Investigation): void {
 		investigations = investigations.map((item) => item.id === updated.id ? updated : item);
 	}
@@ -456,6 +507,7 @@
 			running: 'Running',
 			answered: 'Complete answer',
 			incomplete: 'Partial answer',
+			unsupported: 'Unsupported',
 			blocked: 'Blocked',
 			outdated: 'Outdated'
 		}[status];
@@ -468,8 +520,27 @@
 	function questionAnswerStatusVariant(status: InvestigationQuestionAnswerStatus): 'default' | 'success' | 'warning' | 'destructive' {
 		if (status === 'answered') return 'success';
 		if (status === 'blocked') return 'destructive';
-		if (status === 'incomplete' || status === 'outdated') return 'warning';
+		if (status === 'incomplete' || status === 'unsupported' || status === 'outdated') return 'warning';
 		return 'default';
+	}
+
+	function questionCoverageReason(question: InvestigationQuestion): string {
+		if (question.answer_status_reason) return question.answer_status_reason;
+		return {
+			not_started: 'No analysis run is linked to this Question yet.',
+			running: 'Analysis is still running.',
+			answered: 'This Question has a complete answer.',
+			incomplete: 'The latest run returned a partial answer.',
+			unsupported: 'The available data or analysis tools do not support this Question.',
+			blocked: 'The latest run could not produce a complete answer.',
+			outdated: 'The Question or its analysis context changed after the latest run.'
+		}[question.answer_status];
+	}
+
+	function focusQuestion(questionId: string): void {
+		const field = document.getElementById(`question-${questionId}`);
+		field?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+		field?.focus({ preventScroll: true });
 	}
 
 	function questionAnswerReason(questionId: string): string | undefined {
@@ -722,11 +793,16 @@
 		}
 		startingQuestionAnalysis = true;
 		try {
+			if (item.status === 'complete') {
+				acceptInvestigationUpdate(await ipc.investigationReopen(item.id));
+			}
 			if (questionsDirty && !(await saveQuestions())) return;
 			if (definitionsDirty && !(await saveDefinitions())) return;
 			if (!(await openSelectedConversation())) return;
 			pendingAnalysisQuestionId = null;
 			await analyzeInvestigationQuestion(item.id, questionId);
+		} catch (cause) {
+			error = cause instanceof Error ? cause.message : String(cause);
 		} finally {
 			startingQuestionAnalysis = false;
 		}
@@ -1100,6 +1176,21 @@
 							</div>
 							<div class="question-save">
 								<span role={error ? 'alert' : 'status'}>{error || (questionsDirty ? 'Unsaved plan' : 'Plan saved')}</span>
+								{#if selected.status === 'complete'}
+									<Button type="button" variant="outline" disabled={saving} onclick={() => void reopenInvestigation()}>
+										Reopen Investigation
+									</Button>
+								{:else}
+									<Button
+										type="button"
+										variant="outline"
+										disabled={!coverage.canComplete || saving}
+										title="Answer every active Question and save current edits before completing."
+										onclick={() => void markInvestigationComplete()}
+									>
+										Mark complete
+									</Button>
+								{/if}
 								{#if questionsDirty}
 									<Button type="button" variant="ghost" disabled={saving || proposingQuestions} onclick={discardQuestions}>Discard plan</Button>
 								{/if}
@@ -1118,6 +1209,44 @@
 								</Button>
 							</div>
 						</header>
+						<section class="question-coverage" aria-label="Question coverage" data-investigation-status={selected.status}>
+							<header>
+								<div>
+									<h4>Coverage</h4>
+									<p>Every active Question needs a complete, current answer before this Investigation is complete.</p>
+								</div>
+								<dl class="question-coverage-counts">
+									<div data-coverage="answered"><dt>Answered</dt><dd>{coverage.answered}</dd></div>
+									<div data-coverage="partial"><dt>Partial</dt><dd>{coverage.partial}</dd></div>
+									<div data-coverage="unanswered"><dt>Unanswered</dt><dd>{coverage.unanswered}</dd></div>
+									<div data-coverage="unsupported"><dt>Unsupported</dt><dd>{coverage.unsupported}</dd></div>
+								</dl>
+							</header>
+							{#if selected.status === 'complete'}
+								<p class="question-coverage-message" role="status">Investigation complete. Reopen it to continue editing or analysis.</p>
+							{:else if !coverage.activeQuestions.length}
+								<p class="question-coverage-message">Add at least one Question before completing this Investigation.</p>
+							{:else if coverage.needsReview.length}
+								<details class="question-coverage-review" open>
+									<summary>{coverage.needsReview.length} Question{coverage.needsReview.length === 1 ? '' : 's'} need an answer or review</summary>
+									<ul>
+										{#each coverage.needsReview as question (question.id)}
+											<li>
+												<button type="button" aria-label="Review {questionAnswerStatusLabel(question.answer_status)} Question: {question.text}" onclick={() => focusQuestion(question.id)}>
+													<span class="coverage-question-status" data-question-status={question.answer_status}>{questionAnswerStatusLabel(question.answer_status)}</span>
+													<strong>{question.text}</strong>
+													<small>{questionCoverageReason(question)}</small>
+												</button>
+											</li>
+										{/each}
+									</ul>
+								</details>
+							{:else if dirty || questionsDirty || definitionsDirty}
+								<p class="question-coverage-message">Save your current brief, Question plan, and definitions before completing.</p>
+							{:else}
+								<p class="question-coverage-message" role="status">All active Questions have complete answers and are ready to close.</p>
+							{/if}
+						</section>
 						{#if questions.length}
 							{#if rootQuestion}
 								<div class="question-item root-question-item">
@@ -1704,6 +1833,24 @@
 	.question-heading p, .question-empty { margin-top: var(--space-1); color: var(--text-dim); font-size: var(--fs-xs); }
 	.question-save { flex: none; flex-wrap: wrap; justify-content: flex-end; }
 	.question-save > span { color: var(--text-faint); font-size: var(--fs-xs); }
+	.question-coverage { display: grid; gap: var(--space-3); padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-inset); }
+	.question-coverage > header { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-4); }
+	.question-coverage h4 { margin: 0; font-size: var(--fs-sm); font-weight: 650; }
+	.question-coverage > header p, .question-coverage-message { margin: 3px 0 0; color: var(--text-dim); font-size: var(--fs-xs); }
+	.question-coverage-counts { display: grid; grid-template-columns: repeat(4, minmax(64px, auto)); gap: var(--space-2); margin: 0; }
+	.question-coverage-counts > div { display: grid; gap: 2px; }
+	.question-coverage-counts dt { color: var(--text-faint); font-size: 10px; }
+	.question-coverage-counts dd { margin: 0; font-size: var(--fs-sm); font-weight: 650; font-variant-numeric: tabular-nums; }
+	.question-coverage-message { margin: 0; }
+	.question-coverage-review { min-width: 0; }
+	.question-coverage-review > summary { width: fit-content; color: var(--text-dim); font-size: var(--fs-xs); cursor: pointer; }
+	.question-coverage-review ul { display: grid; max-height: 240px; gap: var(--space-1); overflow: auto; margin: var(--space-2) 0 0; padding: 0; list-style: none; }
+	.question-coverage-review button { display: grid; width: 100%; min-width: 0; justify-items: start; gap: 2px; padding: var(--space-2); border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent; color: var(--text); text-align: left; cursor: pointer; }
+	.question-coverage-review button:hover { border-color: var(--border); background: var(--bg); }
+	.coverage-question-status { color: var(--warn); font-size: 10px; font-weight: 650; }
+	.coverage-question-status[data-question-status='unsupported'], .coverage-question-status[data-question-status='blocked'] { color: var(--err); }
+	.question-coverage-review strong { min-width: 0; font-size: var(--fs-xs); font-weight: 600; overflow-wrap: anywhere; }
+	.question-coverage-review small { color: var(--text-faint); font-size: 11px; overflow-wrap: anywhere; }
 	.subquestion-title { margin: 0; font-size: var(--fs-sm); font-weight: 650; }
 	.question-list { display: grid; gap: var(--space-3); margin: 0; padding: 0; list-style: none; }
 	.question-item { min-width: 0; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); }
@@ -1843,5 +1990,7 @@
 	@media (max-width: 720px) {
 		.investigation-layout { grid-template-columns: 1fr; gap: var(--space-4); }
 		.investigation-list { max-height: 180px; overflow: auto; }
+		.question-coverage > header { flex-direction: column; }
+		.question-coverage-counts { width: 100%; grid-template-columns: repeat(4, minmax(0, 1fr)); }
 	}
 </style>

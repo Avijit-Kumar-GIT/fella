@@ -29,6 +29,7 @@
 			running: 'Running',
 			answered: 'Complete answer',
 			incomplete: 'Partial answer · needs review',
+			unsupported: 'Unsupported by available data',
 			blocked: 'No complete answer',
 			outdated: 'Previous answer · outdated'
 		}[status];
@@ -40,6 +41,7 @@
 			running: 'View answer',
 			answered: 'View complete answer',
 			incomplete: 'View partial answer',
+			unsupported: 'View run response',
 			blocked: 'View run response',
 			outdated: 'View previous answer'
 		}[status];

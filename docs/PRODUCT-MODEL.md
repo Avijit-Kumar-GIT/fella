@@ -351,3 +351,19 @@ evidence and catalog-skipped inputs. These are immutable snapshots, so later
 scope or definition edits do not rewrite the historical run. The surface
 makes method review possible; it does not claim to certify grain, filters,
 joins, or business interpretation on the analyst's behalf.
+
+## Implementation checkpoint: explicit Question coverage (#207)
+
+The Investigation now summarizes active Question coverage as answered,
+partial, unanswered, and unsupported. Every non-answered Question appears in a
+review list with its persisted reason or limitation and a direct focus link to
+the Question itself. Unsupported is a distinct terminal outcome when the
+analysis contract says available data or tools cannot support the request;
+blocked, running, not-started, and outdated Questions remain in the unanswered
+count while retaining their more specific per-Question state.
+
+An Investigation can be marked complete only when it has at least one active
+Question and every active Question has a verified answer. The engine enforces
+this rule in addition to the disabled UI action. Reopening or changing the
+brief, plan, definitions, source scope, a Finding, or starting another run
+returns the Investigation to active work.
