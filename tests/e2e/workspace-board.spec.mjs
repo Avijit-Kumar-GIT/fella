@@ -54,6 +54,30 @@ async function installDesktopMock(
 ) {
 	await page.addInitScript(({ fixtureFolders, seedUnavailableConversation, seedDeletionConversations, replayStatus, replayStatusError, reindexedCatalog, chartEvidence, detailEvidence, savedAnalysisTurn, questionRunOutcomes, providerList, providerHealth, runLogEntries }) => {
 		const calls = [];
+		const reviseFinding = (finding, update) => {
+			const now = Math.max(Date.now(), (finding.updated_at_ms ?? 0) + 1);
+			const revision = finding.revision ?? 1;
+			const previous = {
+				revision,
+				question_id: finding.question_id,
+				analysis_turn_id: finding.analysis_turn_id,
+				evidence_ids: finding.evidence_ids,
+				claim: finding.claim,
+				caveats: finding.caveats ?? [],
+				assumptions: finding.assumptions ?? [],
+				revision_note: finding.revision_note ?? '',
+				created_at_ms: finding.updated_at_ms,
+				updated_at_ms: finding.updated_at_ms
+			};
+			return {
+				...finding,
+				...update,
+				revision: revision + 1,
+				revision_note: update.revision_note ?? finding.revision_note ?? '',
+				revisions: [...(finding.revisions ?? []), previous],
+				updated_at_ms: now
+			};
+		};
 		const archivedConversations = new Map();
 		const investigations = new Map();
 		const analysisTurns = new Map();
@@ -365,7 +389,7 @@ async function installDesktopMock(
 							if (!(record.analysis_turn_ids ?? []).includes(findingInput.analysis_turn_id)) throw new Error('Finding run is not linked to this Investigation.');
 							if (!(record.questions ?? []).some((question) => question.id === findingInput.question_id)) throw new Error('Finding Question is not active in this Investigation.');
 							const now = Date.now();
-							const finding = { id: `finding-${findingRecords.size + 1}`, investigation_id: record.id, caveats: [], assumptions: [], ...findingInput, created_at_ms: now, updated_at_ms: now };
+							const finding = { id: `finding-${findingRecords.size + 1}`, investigation_id: record.id, caveats: [], assumptions: [], ...findingInput, revision: 1, revision_note: '', revisions: [], created_at_ms: now, updated_at_ms: now };
 							findingRecords.set(finding.id, finding);
 							const updated = { ...record, findings: [...(record.findings ?? []), finding], updated_at_ms: now };
 							investigations.set(key, updated);
@@ -378,8 +402,8 @@ async function installDesktopMock(
 							if (record.id !== args.investigationId) continue;
 							const finding = findingRecords.get(args.findingId);
 							if (!finding || finding.investigation_id !== record.id) throw new Error('Finding does not belong to this Investigation.');
-							const now = Date.now();
-							const updatedFinding = { ...finding, claim: args.claim, updated_at_ms: now };
+							const updatedFinding = reviseFinding(finding, { claim: args.claim });
+							const now = updatedFinding.updated_at_ms;
 							findingRecords.set(args.findingId, updatedFinding);
 							const updated = { ...record, findings: (record.findings ?? []).map((item) => item.id === args.findingId ? updatedFinding : item), updated_at_ms: now };
 							investigations.set(key, updated);
@@ -392,8 +416,8 @@ async function installDesktopMock(
 							if (record.id !== args.investigationId) continue;
 							const finding = findingRecords.get(args.findingId);
 							if (!finding || finding.investigation_id !== record.id) throw new Error('Finding does not belong to this Investigation.');
-							const now = Date.now();
-							const updatedFinding = { ...finding, ...args.update, updated_at_ms: now };
+							const updatedFinding = reviseFinding(finding, args.update);
+							const now = updatedFinding.updated_at_ms;
 							findingRecords.set(args.findingId, updatedFinding);
 							const updated = { ...record, findings: (record.findings ?? []).map((item) => item.id === args.findingId ? updatedFinding : item), updated_at_ms: now };
 							investigations.set(key, updated);
@@ -1658,6 +1682,135 @@ test('Finding caveats and assumptions are visible, editable, and preserve proven
 	// Running the saved Question adds a fresh turn; the original request remains first.
 	const originalRequest = page.locator('.msg.user').first().locator('.you-copy');
 	await expect(originalRequest).toHaveText('Explain retention by signup cohort.');
+});
+
+test('Finding revisions preserve prior versions and compare the supporting run context', async ({ page }) => {
+	const firstEvidence = {
+		id: 'finding-net-sales-before-refunds',
+		tool: 'run_sql',
+		result_summary: 'The sales export reports $120 before refunds.',
+		sql: 'SELECT SUM(net_sales) FROM sales',
+		sources: [{ source: 'sales.csv', table: 'sales' }]
+	};
+	const secondEvidence = {
+		id: 'finding-net-sales-after-refunds',
+		tool: 'run_python',
+		result_summary: 'The refreshed export reports $102 after refunds.',
+		sources: [{ source: 'returns.csv', table: 'refunds' }]
+	};
+	await installDesktopMock(page, {
+		questionRunOutcomes: [
+			{
+				status: 'answered',
+				answer_text: 'Net sales were $120 before refunds.',
+				plan: { strategy: 'compiled_sql', steps: ['inspect_sales', 'run_sql'] },
+				evidence: [firstEvidence],
+				source_scope: {
+					used_sources: [{ source: 'sales.csv', table: 'sales', evidence_ids: [firstEvidence.id] }],
+					skipped_sources: []
+				}
+			},
+			{
+				status: 'answered',
+				answer_text: 'Net sales were $102 after refunds.',
+				plan: { strategy: 'python_fallback', steps: ['inspect_returns', 'run_python'] },
+				evidence: [secondEvidence],
+				source_scope: {
+					used_sources: [{ source: 'returns.csv', table: 'refunds', evidence_ids: [secondEvidence.id] }],
+					skipped_sources: []
+				}
+			}
+		]
+	});
+	await page.goto('/');
+	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
+	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
+	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill('Explain weekly net sales.');
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	await page.getByRole('button', { name: 'Add definition or assumption' }).click();
+	const contextNote = page.getByRole('textbox', { name: 'Context note 1' });
+	await contextNote.fill('Net sales exclude refunds.');
+	await page.getByRole('button', { name: 'Save context' }).click();
+	await expect(page.locator('.definition-editor')).toContainText('Context saved');
+
+	const runQuestion = async () => {
+		await page.getByRole('button', { name: 'Analyze main Question' }).click();
+		await page.getByRole('region', { name: 'Review this run' }).getByRole('button', { name: 'Run this Question' }).click();
+		await expect(page.getByRole('region', { name: 'Question run' })).toBeHidden();
+		await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	};
+	await runQuestion();
+	await page.locator('.analysis-runs .analysis-run-link').nth(0).click();
+	const firstCapture = page.getByRole('region', { name: 'Saved analysis run' }).locator('.finding-capture');
+	await firstCapture.getByRole('textbox', { name: 'Finding caveats' }).fill('The export is before refund adjustments.');
+	await firstCapture.getByRole('textbox', { name: 'Finding assumptions' }).fill('Each order appears once.');
+	await firstCapture.getByRole('button', { name: 'Save Finding' }).click();
+	const findingId = await page.evaluate(() => window.__workspaceFindingRecords()[0].id);
+	await page.getByRole('button', { name: 'Close saved analysis run' }).click();
+
+	await contextNote.fill('Net sales include refund adjustments.');
+	await page.getByRole('button', { name: 'Save context' }).click();
+	await expect(page.locator('.definition-item')).toContainText('Saved revision 2');
+	await runQuestion();
+	const attempts = page.locator('.analysis-runs .analysis-run-link');
+	await expect(attempts).toHaveCount(2);
+	await attempts.nth(1).click();
+	const secondCapture = page.getByRole('region', { name: 'Saved analysis run' }).locator('.finding-capture');
+	await secondCapture.getByRole('combobox', { name: 'Revise existing Finding' }).selectOption(findingId);
+	await secondCapture.getByRole('textbox', { name: 'Finding claim' }).fill('Net sales were $102 after refund adjustments.');
+	await secondCapture.getByRole('textbox', { name: 'Finding caveats' }).fill('The refreshed export includes refund adjustments.');
+	await secondCapture.getByRole('textbox', { name: 'Finding assumptions' }).fill('Order IDs remain stable across exports.');
+	await secondCapture.getByRole('textbox', { name: 'Finding revision note' }).fill('Revised after reconciling the returns export.');
+	const refreshedEvidence = secondCapture.locator('.finding-evidence-select label')
+		.filter({ hasText: 'run_python · The refreshed export reports $102 after refunds.' })
+		.locator('input');
+	await refreshedEvidence.check();
+	await secondCapture.getByRole('button', { name: 'Save Finding revision' }).click();
+	const savedFinding = await page.evaluate(() => window.__workspaceFindingRecords()[0]);
+	expect(savedFinding).toMatchObject({
+		id: findingId,
+		revision: 2,
+		claim: 'Net sales were $102 after refund adjustments.',
+		analysis_turn_id: 'fixture-question-turn-2',
+		evidence_ids: [secondEvidence.id],
+		revision_note: 'Revised after reconciling the returns export.',
+		revisions: [{
+			revision: 1,
+			claim: 'Net sales were $120 before refunds.',
+			analysis_turn_id: 'fixture-question-turn-1',
+			evidence_ids: [firstEvidence.id],
+			caveats: ['The export is before refund adjustments.'],
+			assumptions: ['Each order appears once.']
+		}]
+	});
+	await page.getByRole('button', { name: 'Close saved analysis run' }).click();
+	const findingCard = page.locator('.finding-card');
+	await expect(findingCard).toContainText('Revision 2');
+	await findingCard.getByRole('button', { name: 'Compare revision 1 with current' }).click();
+	const comparison = page.getByRole('region', { name: 'Finding revision comparison' });
+	await expect(comparison).toContainText('Claim changed.');
+	await expect(comparison).toContainText('Supporting evidence changed.');
+	await expect(comparison).toContainText('Analysis method changed.');
+	await expect(comparison).toContainText('Source scope changed.');
+	await expect(comparison).toContainText('Definitions or assumptions changed.');
+	await expect(comparison).toContainText('Revised after reconciling the returns export.');
+	const priorVersion = comparison.getByRole('article', { name: 'Previous Finding version' });
+	await expect(priorVersion).toContainText('Net sales were $120 before refunds.');
+	await expect(priorVersion).toContainText('fixture-question-turn-1');
+	await expect(priorVersion).toContainText('compiled sql');
+	await expect(priorVersion).toContainText('sales.csv');
+	await expect(priorVersion).toContainText('Net sales exclude refunds.');
+	await expect(priorVersion).toContainText('The export is before refund adjustments.');
+	const currentVersion = comparison.getByRole('article', { name: 'Current Finding version' });
+	await expect(currentVersion).toContainText('Net sales were $102 after refund adjustments.');
+	await expect(currentVersion).toContainText('fixture-question-turn-2');
+	await expect(currentVersion).toContainText('python fallback');
+	await expect(currentVersion).toContainText('returns.csv');
+	await expect(currentVersion).toContainText('Net sales include refund adjustments.');
+	await expect(currentVersion).toContainText('The refreshed export includes refund adjustments.');
 });
 
 test('suggested Question breakdown stays a draft until saved as durable child records', async ({ page }) => {

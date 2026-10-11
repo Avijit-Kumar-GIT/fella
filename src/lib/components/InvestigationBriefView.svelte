@@ -16,6 +16,7 @@
 		InvestigationBrief,
 		InvestigationDefinitionInput,
 		InvestigationFinding,
+		InvestigationFindingRevision,
 		InvestigationFindingUpdate,
 		InvestigationQuestion,
 		InvestigationQuestionInput,
@@ -65,6 +66,8 @@
 	let findingClaimDraft = $state('');
 	let findingCaveatsDraft = $state('');
 	let findingAssumptionsDraft = $state('');
+	let findingRevisionTargetDraft = $state('');
+	let findingRevisionNoteDraft = $state('');
 	let findingQuestionDraft = $state('');
 	let findingEvidenceDraft = $state<string[]>([]);
 	let savingFinding = $state(false);
@@ -73,7 +76,11 @@
 	let findingClaimEditDraft = $state('');
 	let findingCaveatsEditDraft = $state('');
 	let findingAssumptionsEditDraft = $state('');
+	let findingRevisionNoteEditDraft = $state('');
 	let updatingFindingId = $state<string | null>(null);
+	let findingComparisonSelection = $state<{ findingId: string; revision: number } | null>(null);
+	let findingHistoryLoadingId = $state<string | null>(null);
+	let findingHistoryError = $state('');
 	let error = $state('');
 	let requestSerial = 0;
 	const syncingInvestigations = new Set<string>();
@@ -688,6 +695,8 @@
 		findingClaimDraft = lead.slice(0, 500);
 		findingCaveatsDraft = '';
 		findingAssumptionsDraft = '';
+		findingRevisionTargetDraft = '';
+		findingRevisionNoteDraft = '';
 		const activeQuestions = selected?.questions ?? [];
 		const preferredQuestion = questionIdsForRun(run.id)[0]
 			?? run.investigation_context?.question_id
@@ -701,6 +710,19 @@
 
 	function findingNotesFromDraft(draft: string): string[] {
 		return draft.split(/\r?\n/).map((note) => note.trim()).filter(Boolean);
+	}
+
+	function selectFindingRevisionTarget(findingId: string): void {
+		findingRevisionTargetDraft = findingId;
+		findingRevisionNoteDraft = '';
+		const finding = selected?.findings?.find((item) => item.id === findingId);
+		if (!finding || !openAnalysisTurn) return;
+		findingQuestionDraft = finding.question_id;
+		findingClaimDraft = finding.claim;
+		findingCaveatsDraft = (finding.caveats ?? []).join('\n');
+		findingAssumptionsDraft = (finding.assumptions ?? []).join('\n');
+		const currentEvidence = new Set(findingEvidenceOptions(openAnalysisTurn).map((item) => item.id));
+		findingEvidenceDraft = finding.evidence_ids.filter((id) => currentEvidence.has(id));
 	}
 
 	function toggleFindingEvidence(evidenceId: string, checked: boolean): void {
@@ -719,15 +741,34 @@
 		savingFinding = true;
 		findingError = '';
 		try {
-			const updated = await ipc.investigationCreateFinding(selected.id, {
-				question_id: findingQuestionDraft,
-				analysis_turn_id: openAnalysisTurn.id,
-				evidence_ids: findingEvidenceDraft,
-				claim: findingClaimDraft,
-				caveats: findingNotesFromDraft(findingCaveatsDraft),
-				assumptions: findingNotesFromDraft(findingAssumptionsDraft)
-			});
+			const caveats = findingNotesFromDraft(findingCaveatsDraft);
+			const assumptions = findingNotesFromDraft(findingAssumptionsDraft);
+			const target = selected.findings?.find((item) => item.id === findingRevisionTargetDraft);
+			if (findingRevisionTargetDraft && !target) {
+				throw new Error('The Finding selected for revision is no longer available.');
+			}
+			const updated = target
+				? await ipc.investigationUpdateFinding(selected.id, target.id, {
+						question_id: findingQuestionDraft,
+						analysis_turn_id: openAnalysisTurn.id,
+						evidence_ids: findingEvidenceDraft,
+						claim: findingClaimDraft,
+						caveats,
+						assumptions,
+						revision_note: findingRevisionNoteDraft
+					})
+				: await ipc.investigationCreateFinding(selected.id, {
+						question_id: findingQuestionDraft,
+						analysis_turn_id: openAnalysisTurn.id,
+						evidence_ids: findingEvidenceDraft,
+						claim: findingClaimDraft,
+						caveats,
+						assumptions
+					});
 			acceptInvestigationUpdate(updated);
+			findingRevisionTargetDraft = '';
+			findingRevisionNoteDraft = '';
+			findingComparisonSelection = null;
 			findingError = '';
 		} catch (cause) {
 			findingError = cause instanceof Error ? cause.message : String(cause);
@@ -748,6 +789,7 @@
 		findingClaimEditDraft = finding.claim;
 		findingCaveatsEditDraft = (finding.caveats ?? []).join('\n');
 		findingAssumptionsEditDraft = (finding.assumptions ?? []).join('\n');
+		findingRevisionNoteEditDraft = '';
 	}
 
 	async function saveFindingEdit(finding: InvestigationFinding): Promise<void> {
@@ -756,9 +798,13 @@
 		findingError = '';
 		try {
 			const update: InvestigationFindingUpdate = {
+				question_id: finding.question_id,
+				analysis_turn_id: finding.analysis_turn_id,
+				evidence_ids: finding.evidence_ids,
 				claim: findingClaimEditDraft,
 				caveats: findingNotesFromDraft(findingCaveatsEditDraft),
-				assumptions: findingNotesFromDraft(findingAssumptionsEditDraft)
+				assumptions: findingNotesFromDraft(findingAssumptionsEditDraft),
+				revision_note: findingRevisionNoteEditDraft
 			};
 			const updated = await ipc.investigationUpdateFinding(
 				selected.id,
@@ -767,10 +813,109 @@
 			);
 			acceptInvestigationUpdate(updated);
 			editingFindingId = null;
+			findingComparisonSelection = null;
 		} catch (cause) {
 			findingError = cause instanceof Error ? cause.message : String(cause);
 		} finally {
 			updatingFindingId = null;
+		}
+	}
+
+	function findingRunMethod(run: AnalysisTurn | undefined): string {
+		if (!run) return 'Method not recorded';
+		const strategy = run.plan.strategy.replaceAll('_', ' ');
+		return run.plan.steps.length ? `${strategy} · ${run.plan.steps.join(' → ')}` : strategy;
+	}
+
+	function findingRunScope(run: AnalysisTurn | undefined): string {
+		if (!run) return 'Source scope not recorded';
+		const selection = run.investigation_context?.source_selection;
+		const selectionText = !selection || selection.mode === 'all_sources'
+			? 'All available sources'
+			: `Selected: ${selection.included_paths.join(', ') || 'none'}`;
+		const used = run.source_scope?.used_sources.map((source) =>
+			`${source.source}${source.table ? ` · ${source.table}` : ''}`
+		) ?? [];
+		return `${selectionText} · Used: ${used.length ? used.join(', ') : run.source_scope ? 'none' : 'not recorded'}`;
+	}
+
+	function findingRunDefinitions(run: AnalysisTurn | undefined): string {
+		if (!run?.investigation_context) return 'Definitions not recorded';
+		const definitions = run.investigation_context.definitions ?? [];
+		if (!definitions.length) return 'None recorded';
+		return definitions.map((definition) =>
+			`${definition.kind} rev ${definition.revision}: ${definition.text}`
+		).join(' · ');
+	}
+
+	function findingRevisionChanges(
+		previous: InvestigationFindingRevision,
+		current: InvestigationFinding
+	): string[] {
+		const changes: string[] = [];
+		if (previous.claim !== current.claim) changes.push('Claim changed.');
+		if (previous.question_id !== current.question_id) changes.push('Question changed.');
+		if (JSON.stringify(previous.evidence_ids) !== JSON.stringify(current.evidence_ids)) {
+			changes.push('Supporting evidence changed.');
+		}
+		if (previous.analysis_turn_id !== current.analysis_turn_id) changes.push('Supporting run changed.');
+		if (JSON.stringify(previous.caveats) !== JSON.stringify(current.caveats)
+			|| JSON.stringify(previous.assumptions) !== JSON.stringify(current.assumptions)) {
+			changes.push('Caveats or assumptions changed.');
+		}
+		if (previous.revision_note !== current.revision_note) changes.push('Revision note changed.');
+		const previousRun = analysisTurns[previous.analysis_turn_id];
+		const currentRun = analysisTurns[current.analysis_turn_id];
+		if (previousRun && currentRun) {
+			if (findingRunMethod(previousRun) !== findingRunMethod(currentRun)) changes.push('Analysis method changed.');
+			if (findingRunScopeSignature(previousRun) !== findingRunScopeSignature(currentRun)) changes.push('Source scope changed.');
+			if (findingRunDefinitionSignature(previousRun) !== findingRunDefinitionSignature(currentRun)) changes.push('Definitions or assumptions changed.');
+		} else {
+			changes.push('Run context comparison is incomplete because a saved run could not be loaded.');
+		}
+		return changes.length ? changes : ['No recorded claim, Question, evidence, method, source-scope, or definition changes.'];
+	}
+
+	function findingRunScopeSignature(run: AnalysisTurn): string {
+		const selection = run.investigation_context?.source_selection;
+		const used = run.source_scope?.used_sources.map((source) => `${source.source}\t${source.table ?? ''}`).sort() ?? null;
+		const skipped = run.source_scope?.skipped_sources.slice().sort() ?? null;
+		return JSON.stringify({
+			selection: selection ? { mode: selection.mode, paths: [...selection.included_paths].sort() } : null,
+			used,
+			skipped
+		});
+	}
+
+	function findingRunDefinitionSignature(run: AnalysisTurn): string {
+		const context = run.investigation_context;
+		return JSON.stringify(context
+			? context.definitions.map((definition) => ({
+				id: definition.id,
+				revision: definition.revision,
+				kind: definition.kind,
+				text: definition.text
+			})).sort((left, right) => left.id.localeCompare(right.id))
+			: null);
+	}
+
+	async function compareFindingRevision(
+		finding: InvestigationFinding,
+		revision: InvestigationFindingRevision
+	): Promise<void> {
+		findingComparisonSelection = { findingId: finding.id, revision: revision.revision };
+		findingHistoryError = '';
+		findingHistoryLoadingId = finding.id;
+		try {
+			for (const turnId of new Set([revision.analysis_turn_id, finding.analysis_turn_id])) {
+				if (analysisTurns[turnId]) continue;
+				const run = await ipc.analysisTurnLoad(turnId);
+				analysisTurns = { ...analysisTurns, [turnId]: run };
+			}
+		} catch (cause) {
+			findingHistoryError = cause instanceof Error ? cause.message : String(cause);
+		} finally {
+			findingHistoryLoadingId = null;
 		}
 	}
 
@@ -1515,7 +1660,7 @@
 									<li class="finding-card">
 										<div class="finding-card-heading">
 											<div>
-												<h4>Finding {index + 1}</h4>
+												<h4>Finding {index + 1} · Revision {finding.revision ?? 1}</h4>
 												{#if editingFindingId !== finding.id}<p>{finding.claim}</p>{/if}
 											</div>
 											{#if editingFindingId !== finding.id}
@@ -1529,6 +1674,8 @@
 											<Textarea id="finding-caveats-edit-{finding.id}" bind:value={findingCaveatsEditDraft} aria-label="Edit Finding caveats" class="finding-edit-field" disabled={updatingFindingId === finding.id} />
 											<label for="finding-assumptions-edit-{finding.id}">Assumptions <span>(one per line)</span></label>
 											<Textarea id="finding-assumptions-edit-{finding.id}" bind:value={findingAssumptionsEditDraft} aria-label="Edit Finding assumptions" class="finding-edit-field" disabled={updatingFindingId === finding.id} />
+												<label for="finding-revision-note-edit-{finding.id}">Why this changed <span>(optional)</span></label>
+												<Textarea id="finding-revision-note-edit-{finding.id}" bind:value={findingRevisionNoteEditDraft} aria-label="Edit Finding revision note" class="finding-edit-field finding-revision-note" disabled={updatingFindingId === finding.id} />
 											<div class="finding-edit-actions">
 												<Button type="button" variant="ghost" disabled={updatingFindingId === finding.id} onclick={() => (editingFindingId = null)}>Cancel</Button>
 												<Button type="button" disabled={updatingFindingId === finding.id || !findingClaimEditDraft.trim()} onclick={() => void saveFindingEdit(finding)}>{updatingFindingId === finding.id ? 'Saving…' : 'Save finding'}</Button>
@@ -1554,7 +1701,65 @@
 											</div>
 											<div><dt>Supporting evidence IDs</dt><dd>{#each finding.evidence_ids as evidenceId, evidenceIndex (`${finding.id}-${evidenceId}`)}<code>{evidenceId}</code>{#if evidenceIndex < finding.evidence_ids.length - 1}<span>, </span>{/if}{/each}</dd></div>
 										</dl>
-										<p class="finding-edit-note">Editing interpretation never changes the saved Question, run, or evidence links.</p>
+										<p class="finding-edit-note">This edit keeps the linked Question, run, and evidence fixed. Use “Revise an existing Finding” from a new run to update its provenance.</p>
+										{#if finding.revisions?.length}
+											<section class="finding-history" aria-label="Finding revision history">
+												<header><h5>History</h5><span>{finding.revisions.length} prior version{finding.revisions.length === 1 ? '' : 's'}</span></header>
+												<ol>
+													{#each finding.revisions as revision (`${finding.id}-revision-${revision.revision}`)}
+														<li>
+															<span>Revision {revision.revision}</span>
+															<Button type="button" variant="ghost" size="sm" aria-label="Compare revision {revision.revision} with current" onclick={() => void compareFindingRevision(finding, revision)}>Compare</Button>
+														</li>
+													{/each}
+												</ol>
+												{#if findingComparisonSelection?.findingId === finding.id}
+													{@const comparedRevision = finding.revisions.find((item) => item.revision === findingComparisonSelection?.revision)}
+													{#if comparedRevision}
+														<div class="finding-comparison" role="region" aria-label="Finding revision comparison">
+															<header>
+																<div><h6>Revision {comparedRevision.revision} → Revision {finding.revision ?? 1}</h6><p>Why this changed: {finding.revision_note || 'No reason recorded.'}</p></div>
+																<Button type="button" variant="ghost" size="sm" aria-label="Close Finding comparison" onclick={() => (findingComparisonSelection = null)}>Close</Button>
+															</header>
+															{#if findingHistoryLoadingId === finding.id}
+																<p role="status">Loading saved run context…</p>
+															{:else}
+																{#if findingHistoryError}<p class="finding-error" role="alert">{findingHistoryError}</p>{/if}
+																<ul class="finding-change-list">{#each findingRevisionChanges(comparedRevision, finding) as change (`${finding.id}-${comparedRevision.revision}-${change}`)}<li>{change}</li>{/each}</ul>
+																<div class="finding-comparison-grid">
+																	<article aria-label="Previous Finding version">
+																		<h6>Revision {comparedRevision.revision}</h6><p class="finding-comparison-claim">{comparedRevision.claim}</p>
+																		<dl>
+																			<div><dt>Caveats</dt><dd>{comparedRevision.caveats.join('; ') || 'None recorded'}</dd></div>
+																			<div><dt>Assumptions</dt><dd>{comparedRevision.assumptions.join('; ') || 'None recorded'}</dd></div>
+																			<div><dt>Revision note</dt><dd>{comparedRevision.revision_note || 'None recorded'}</dd></div>
+																			<div><dt>Supporting run</dt><dd>{analysisRunSummary(comparedRevision.analysis_turn_id)} · {comparedRevision.analysis_turn_id}</dd></div>
+																			<div><dt>Evidence</dt><dd>{comparedRevision.evidence_ids.join(', ')}</dd></div>
+																			<div><dt>Method</dt><dd>{findingRunMethod(analysisTurns[comparedRevision.analysis_turn_id])}</dd></div>
+																			<div><dt>Source scope</dt><dd>{findingRunScope(analysisTurns[comparedRevision.analysis_turn_id])}</dd></div>
+																			<div><dt>Definitions</dt><dd>{findingRunDefinitions(analysisTurns[comparedRevision.analysis_turn_id])}</dd></div>
+																		</dl>
+																	</article>
+																	<article aria-label="Current Finding version">
+																		<h6>Revision {finding.revision ?? 1}</h6><p class="finding-comparison-claim">{finding.claim}</p>
+																		<dl>
+																			<div><dt>Caveats</dt><dd>{finding.caveats.join('; ') || 'None recorded'}</dd></div>
+																			<div><dt>Assumptions</dt><dd>{finding.assumptions.join('; ') || 'None recorded'}</dd></div>
+																			<div><dt>Revision note</dt><dd>{finding.revision_note || 'None recorded'}</dd></div>
+																			<div><dt>Supporting run</dt><dd>{analysisRunSummary(finding.analysis_turn_id)} · {finding.analysis_turn_id}</dd></div>
+																			<div><dt>Evidence</dt><dd>{finding.evidence_ids.join(', ')}</dd></div>
+																			<div><dt>Method</dt><dd>{findingRunMethod(analysisTurns[finding.analysis_turn_id])}</dd></div>
+																			<div><dt>Source scope</dt><dd>{findingRunScope(analysisTurns[finding.analysis_turn_id])}</dd></div>
+																			<div><dt>Definitions</dt><dd>{findingRunDefinitions(analysisTurns[finding.analysis_turn_id])}</dd></div>
+																		</dl>
+																	</article>
+																</div>
+														{/if}
+													</div>
+												{/if}
+										{/if}
+											</section>
+										{/if}
 									</li>
 								{/each}
 							</ol>
@@ -1794,7 +1999,7 @@
 									</fieldset>
 					<section class="finding-capture" aria-labelledby="finding-capture-title">
 						<header>
-							<h5 id="finding-capture-title">Save a Finding</h5>
+							<h5 id="finding-capture-title">Save or revise a Finding</h5>
 							<p>Capture material limits and assumptions so the conclusion stays interpretable when shared.</p>
 						</header>
 						<label for="finding-claim-{openAnalysisTurn.id}">Claim</label>
@@ -1804,12 +2009,31 @@
 						<label for="finding-assumptions-{openAnalysisTurn.id}">Assumptions <span>(optional, one per line)</span></label>
 						<Textarea id="finding-assumptions-{openAnalysisTurn.id}" bind:value={findingAssumptionsDraft} aria-label="Finding assumptions" class="finding-capture-field finding-notes-field" disabled={savingFinding} />
 						<label for="finding-question-{openAnalysisTurn.id}">Question this Finding answers</label>
-						<select id="finding-question-{openAnalysisTurn.id}" aria-label="Question for Finding" bind:value={findingQuestionDraft} disabled={savingFinding || questionsDirty || !(selected.questions?.length)}>
+						<select id="finding-question-{openAnalysisTurn.id}" aria-label="Question for Finding" bind:value={findingQuestionDraft} onchange={() => { findingRevisionTargetDraft = ''; findingRevisionNoteDraft = ''; }} disabled={savingFinding || questionsDirty || !(selected.questions?.length)}>
 							<option value="">Select a Question</option>
 							{#each selected.questions ?? [] as question (question.id)}
 								<option value={question.id}>{question.text}</option>
 							{/each}
 						</select>
+						{#if (selected.findings ?? []).some((finding) => finding.question_id === findingQuestionDraft)}
+							<label for="finding-revision-target-{openAnalysisTurn.id}">Revise an existing Finding <span>(optional)</span></label>
+							<select
+								id="finding-revision-target-{openAnalysisTurn.id}"
+								aria-label="Revise existing Finding"
+								value={findingRevisionTargetDraft}
+								onchange={(event) => selectFindingRevisionTarget(event.currentTarget.value)}
+								disabled={savingFinding || questionsDirty}
+							>
+								<option value="">Save as a new Finding</option>
+								{#each (selected.findings ?? []).filter((finding) => finding.question_id === findingQuestionDraft) as finding (finding.id)}
+									<option value={finding.id}>Finding {finding.revision ?? 1} · {finding.claim.slice(0, 90)}</option>
+								{/each}
+							</select>
+						{/if}
+						{#if findingRevisionTargetDraft}
+							<label for="finding-revision-note-{openAnalysisTurn.id}">Why this changed <span>(optional)</span></label>
+							<Textarea id="finding-revision-note-{openAnalysisTurn.id}" bind:value={findingRevisionNoteDraft} aria-label="Finding revision note" class="finding-capture-field finding-notes-field" disabled={savingFinding} />
+						{/if}
 						<fieldset class="finding-evidence-select" disabled={savingFinding || questionsDirty}>
 							<legend>Supporting evidence from this run</legend>
 							{#if findingEvidenceOptions(openAnalysisTurn).length}
@@ -1822,7 +2046,7 @@
 						</fieldset>
 						<div class="finding-capture-actions">
 							<span>{findingEvidenceDraft.length} evidence item{findingEvidenceDraft.length === 1 ? '' : 's'} selected</span>
-							<Button type="button" disabled={savingFinding || questionsDirty || !findingClaimDraft.trim() || !findingQuestionDraft || !findingEvidenceDraft.length} onclick={() => void saveFinding()}>{savingFinding ? 'Saving…' : 'Save Finding'}</Button>
+							<Button type="button" disabled={savingFinding || questionsDirty || !findingClaimDraft.trim() || !findingQuestionDraft || !findingEvidenceDraft.length} onclick={() => void saveFinding()}>{savingFinding ? 'Saving…' : findingRevisionTargetDraft ? 'Save Finding revision' : 'Save Finding'}</Button>
 						</div>
 					</section>
 								{:else}
@@ -1961,6 +2185,26 @@
 	.finding-interpretation ul { display: grid; gap: 2px; margin: 0; padding-left: 1.1rem; color: var(--text-dim); font-size: var(--fs-xs); line-height: 1.45; }
 	.finding-caveats { border-left-color: var(--warning, #9b6500); }
 	.finding-caveats h5 { color: var(--warning, #9b6500); }
+	.finding-history { display: grid; gap: var(--space-2); padding-top: var(--space-2); border-top: 1px solid var(--border); }
+	.finding-history > header, .finding-comparison > header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
+	.finding-history > header h5, .finding-comparison h6 { margin: 0; font-size: var(--fs-xs); font-weight: 650; }
+	.finding-history > header span { color: var(--text-faint); font-size: var(--fs-xs); }
+	.finding-history ol { display: grid; gap: var(--space-1); margin: 0; padding: 0; list-style: none; }
+	.finding-history ol li { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); color: var(--text-dim); font-size: var(--fs-xs); }
+	.finding-history ol :global(button) { min-height: 26px; padding-inline: var(--space-2); }
+	.finding-comparison { display: grid; gap: var(--space-2); padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-inset); }
+	.finding-comparison > header > div { min-width: 0; }
+	.finding-comparison > header p { margin: 3px 0 0; color: var(--text-dim); font-size: var(--fs-xs); }
+	.finding-change-list { display: flex; flex-wrap: wrap; gap: var(--space-1); margin: 0; padding: 0; list-style: none; }
+	.finding-change-list li { padding: 2px var(--space-2); border: 1px solid var(--border); border-radius: 999px; color: var(--text-dim); font-size: var(--fs-xs); }
+	.finding-comparison-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2); }
+	.finding-comparison-grid article { display: grid; align-content: start; gap: var(--space-2); min-width: 0; padding: var(--space-2); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); }
+	.finding-comparison-grid article h6 { font-size: var(--fs-xs); }
+	.finding-comparison-claim { margin: 0; font-size: var(--fs-sm); line-height: 1.45; overflow-wrap: anywhere; }
+	.finding-comparison-grid dl { display: grid; gap: var(--space-2); margin: 0; }
+	.finding-comparison-grid dl > div { display: grid; gap: 2px; min-width: 0; }
+	.finding-comparison-grid dt { color: var(--text-faint); font-size: var(--fs-xs); }
+	.finding-comparison-grid dd { margin: 0; font-size: var(--fs-xs); overflow-wrap: anywhere; }
 	.finding-provenance { display: grid; gap: var(--space-2); margin: 0; padding-top: var(--space-2); border-top: 1px solid var(--border); }
 	.finding-provenance > div { display: grid; grid-template-columns: 132px minmax(0, 1fr); gap: var(--space-2); }
 	.finding-provenance dt { color: var(--text-faint); font-size: var(--fs-xs); }
@@ -2037,6 +2281,7 @@
 	.finding-capture > label { margin: var(--space-1) 0 0; color: var(--text-faint); font-size: var(--fs-xs); font-weight: 600; }
 	.finding-capture :global(.finding-capture-field) { width: 100%; min-height: 66px; resize: vertical; }
 	.finding-capture :global(.finding-notes-field) { min-height: 52px; }
+	.finding-card :global(.finding-revision-note) { min-height: 52px; }
 	.finding-capture select { width: 100%; min-width: 0; padding: 7px 9px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); color: var(--text); font: inherit; font-size: var(--fs-sm); }
 	.finding-evidence-select { display: grid; gap: var(--space-2); min-width: 0; padding: var(--space-2) var(--space-3); margin: var(--space-1) 0 0; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); }
 	.finding-evidence-select legend { padding: 0 var(--space-1); color: var(--text-faint); font-size: var(--fs-xs); font-weight: 600; }

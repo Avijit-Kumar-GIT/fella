@@ -39,10 +39,10 @@ pub use investigation::{
     Investigation, InvestigationBrief, InvestigationContextSnapshot, InvestigationDefinition,
     InvestigationDefinitionInput, InvestigationDefinitionKind, InvestigationDefinitionRevision,
     InvestigationDefinitionSnapshot, InvestigationDefinitionStatus, InvestigationFinding,
-    InvestigationFindingInput, InvestigationFindingUpdate, InvestigationQuestion,
-    InvestigationQuestionAnswerStatus, InvestigationQuestionInput, InvestigationQuestionStatus,
-    InvestigationSourceSelection, InvestigationSourceSelectionMode, InvestigationStatus,
-    QuestionBreakdownProposal,
+    InvestigationFindingInput, InvestigationFindingRevision, InvestigationFindingUpdate,
+    InvestigationQuestion, InvestigationQuestionAnswerStatus, InvestigationQuestionInput,
+    InvestigationQuestionStatus, InvestigationSourceSelection, InvestigationSourceSelectionMode,
+    InvestigationStatus, QuestionBreakdownProposal,
 };
 pub use llm::ProviderHealth;
 pub use provider::{AuthKind, Provider, PROVIDERS};

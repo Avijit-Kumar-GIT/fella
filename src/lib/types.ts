@@ -530,6 +530,22 @@ export interface InvestigationFinding {
 	claim: string;
 	caveats: string[];
 	assumptions: string[];
+	revision: number;
+	revision_note: string;
+	revisions: InvestigationFindingRevision[];
+	created_at_ms: number;
+	updated_at_ms: number;
+}
+
+export interface InvestigationFindingRevision {
+	revision: number;
+	question_id: string;
+	analysis_turn_id: string;
+	evidence_ids: string[];
+	claim: string;
+	caveats: string[];
+	assumptions: string[];
+	revision_note: string;
 	created_at_ms: number;
 	updated_at_ms: number;
 }
@@ -544,9 +560,13 @@ export interface InvestigationFindingInput {
 }
 
 export interface InvestigationFindingUpdate {
+	question_id: string;
+	analysis_turn_id: string;
+	evidence_ids: string[];
 	claim: string;
 	caveats: string[];
 	assumptions: string[];
+	revision_note: string;
 }
 
 export interface InvestigationContextSnapshot {

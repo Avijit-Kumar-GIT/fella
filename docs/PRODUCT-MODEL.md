@@ -332,14 +332,16 @@ An Investigation can now hold an ordered list of independently persisted
 Findings. Each Finding has a concise claim and immutable references to one
 active Question, one canonical AnalysisTurn, and one or more evidence IDs
 owned by that exact run. Creation rejects a Question or run outside the
-Investigation and evidence IDs absent from the run. Editing changes only the
-claim; the original run and evidence remain inspectable from the Finding.
+Investigation and evidence IDs absent from the run. Ordinary interpretation
+edits preserve provenance; an explicit revision can attach a newly reviewed
+run and its evidence while retaining the prior snapshot (#211).
 
-The Investigation view lists Findings independently of Conversation prose
-and lets the analyst capture one from a saved run. This establishes the
-claim-to-provenance primitive, not the full target contract above: caveat
-management, Finding coverage state, version history, review workflows, and
-linking reusable Artifacts to Findings remain later slices.
+At this checkpoint, the Investigation view listed Findings independently of
+Conversation prose and let the analyst capture one from a saved run. Caveats,
+assumptions, and revision history were still future work at that point; see the
+later checkpoints below for their implementation. Finding coverage state,
+review workflows, and linking reusable Artifacts to Findings remain later
+slices.
 
 ## Implementation checkpoint: focused run review (#206)
 
@@ -403,3 +405,17 @@ notes when saving a Finding and edit them later; the Investigation handoff view
 shows saved assumptions and visually distinguishes interpretation caveats.
 Older Finding records load with empty note lists, and backend validation bounds
 the number and length of each note.
+
+## Implementation checkpoint: version and compare Findings (#211)
+
+Changing a Finding now creates an immutable prior-version snapshot containing
+its claim, caveats, assumptions, Question, canonical run, and evidence IDs.
+An analyst can revise an existing Finding from a newly reviewed run instead of
+creating a duplicate; the new version points to that run and its evidence, and
+an optional reason records why the interpretation changed. The Investigation
+view compares a selected prior version with the current one, including the
+claim, interpretation notes, supporting run, recorded method, used/selected
+sources, and run-time definition revisions. A concise change summary calls out
+which of those changed. Legacy Findings deserialize as revision 1 with no prior
+history, and ordinary interpretation edits continue to retain their existing
+provenance.

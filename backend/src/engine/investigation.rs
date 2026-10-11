@@ -169,9 +169,27 @@ pub struct InvestigationDefinitionSnapshot {
     pub text: String,
 }
 
-/// An analyst-authored conclusion with explicit interpretation context,
-/// anchored to its Question, canonical run, and exact evidence IDs. The claim,
-/// caveats, and assumptions are editable; provenance links are immutable.
+/// An analyst-authored conclusion with explicit interpretation context.
+/// Ordinary edits retain provenance; an explicit revision may attach a new
+/// Question/run/evidence set after preserving the previous snapshot.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InvestigationFindingRevision {
+    pub revision: u64,
+    pub question_id: String,
+    pub analysis_turn_id: String,
+    pub evidence_ids: Vec<String>,
+    pub claim: String,
+    pub caveats: Vec<String>,
+    pub assumptions: Vec<String>,
+    pub revision_note: String,
+    pub created_at_ms: u64,
+    pub updated_at_ms: u64,
+}
+
+fn initial_finding_revision() -> u64 {
+    1
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InvestigationFinding {
     pub id: String,
@@ -186,6 +204,12 @@ pub struct InvestigationFinding {
     /// Conditions accepted for this conclusion that are not established facts.
     #[serde(default)]
     pub assumptions: Vec<String>,
+    #[serde(default = "initial_finding_revision")]
+    pub revision: u64,
+    #[serde(default)]
+    pub revision_note: String,
+    #[serde(default)]
+    pub revisions: Vec<InvestigationFindingRevision>,
     pub created_at_ms: u64,
     pub updated_at_ms: u64,
 }
@@ -204,11 +228,16 @@ pub struct InvestigationFindingInput {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InvestigationFindingUpdate {
+    pub question_id: String,
+    pub analysis_turn_id: String,
+    pub evidence_ids: Vec<String>,
     pub claim: String,
     #[serde(default)]
     pub caveats: Vec<String>,
     #[serde(default)]
     pub assumptions: Vec<String>,
+    #[serde(default)]
+    pub revision_note: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -924,6 +953,9 @@ pub fn create_finding(
         claim: input.claim,
         caveats: input.caveats,
         assumptions: input.assumptions,
+        revision: initial_finding_revision(),
+        revision_note: String::new(),
+        revisions: Vec::new(),
         created_at_ms: timestamp,
         updated_at_ms: timestamp,
     };
@@ -998,38 +1030,38 @@ mod finding_interpretation_tests {
     }
 }
 
-/// Edit the Finding's prose without changing its Question, canonical run, or
-/// exact evidence references.
+/// Edit the Finding's interpretation without changing its Question, canonical
+/// run, or exact evidence references. The prior version is retained in history.
 pub fn update_finding_claim(
     data_dir: &Path,
     investigation_id: &str,
     finding_id: &str,
     claim: &str,
 ) -> EngineResult<Investigation> {
-    const MAX_CLAIM_CHARS: usize = 2_000;
-    let claim = claim.trim();
-    if claim.is_empty() || claim.chars().count() > MAX_CLAIM_CHARS {
+    let finding = finding_load(data_dir, finding_id)?;
+    if finding.investigation_id != investigation_id {
         return Err(EngineError::msg(
-            "a Finding claim must be non-empty and no longer than 2000 characters",
+            "Finding does not belong to this Investigation",
         ));
     }
-    let mut record = load(data_dir, investigation_id)?;
-    reopen_completed(&mut record);
-    let finding = record
-        .findings
-        .as_mut()
-        .and_then(|findings| findings.iter_mut().find(|finding| finding.id == finding_id))
-        .ok_or_else(|| EngineError::msg("Finding does not belong to this Investigation"))?;
-    finding.claim = claim.to_owned();
-    finding.updated_at_ms = now_ms().max(finding.updated_at_ms.saturating_add(1));
-    write_finding_record(data_dir, finding)?;
-    record.updated_at_ms = now_ms().max(record.updated_at_ms.saturating_add(1));
-    write_record(data_dir, &record)?;
-    Ok(record)
+    update_finding(
+        data_dir,
+        investigation_id,
+        finding_id,
+        InvestigationFindingUpdate {
+            question_id: finding.question_id,
+            analysis_turn_id: finding.analysis_turn_id,
+            evidence_ids: finding.evidence_ids,
+            claim: claim.to_owned(),
+            caveats: finding.caveats,
+            assumptions: finding.assumptions,
+            revision_note: String::new(),
+        },
+    )
 }
 
-/// Edit a Finding's claim and interpretation notes without changing its
-/// Question, canonical run, or exact evidence references.
+/// Create a new Finding revision. Previous content and provenance are copied
+/// into the history before the current version is advanced.
 pub fn update_finding(
     data_dir: &Path,
     investigation_id: &str,
@@ -1039,12 +1071,39 @@ pub fn update_finding(
     const MAX_CLAIM_CHARS: usize = 2_000;
     const MAX_INTERPRETATION_ITEMS: usize = 20;
     const MAX_INTERPRETATION_CHARS: usize = 1_000;
+    const MAX_EVIDENCE_LINKS: usize = 100;
+    const MAX_REFERENCE_CHARS: usize = 256;
+    const MAX_REVISION_NOTE_CHARS: usize = 1_000;
 
+    update.question_id = update.question_id.trim().to_owned();
+    update.analysis_turn_id = update.analysis_turn_id.trim().to_owned();
     update.claim = update.claim.trim().to_owned();
+    update.revision_note = update.revision_note.trim().to_owned();
     if update.claim.is_empty() || update.claim.chars().count() > MAX_CLAIM_CHARS {
         return Err(EngineError::msg(
             "a Finding claim must be non-empty and no longer than 2000 characters",
         ));
+    }
+    if update.question_id.is_empty()
+        || update.question_id.chars().count() > MAX_REFERENCE_CHARS
+        || update.analysis_turn_id.is_empty()
+        || update.analysis_turn_id.chars().count() > MAX_REFERENCE_CHARS
+    {
+        return Err(EngineError::msg(
+            "Finding Question or run reference is invalid",
+        ));
+    }
+    if update.evidence_ids.is_empty() || update.evidence_ids.len() > MAX_EVIDENCE_LINKS {
+        return Err(EngineError::msg(
+            "a Finding must reference between 1 and 100 evidence items",
+        ));
+    }
+    if update.revision_note.chars().count() > MAX_REVISION_NOTE_CHARS
+        || update.revision_note.chars().any(char::is_control)
+    {
+        return Err(EngineError::msg(format!(
+            "a Finding revision note must be no longer than {MAX_REVISION_NOTE_CHARS} characters and contain no control characters"
+        )));
     }
     update.caveats = normalize_finding_notes(
         update.caveats,
@@ -1058,18 +1117,130 @@ pub fn update_finding(
         MAX_INTERPRETATION_ITEMS,
         MAX_INTERPRETATION_CHARS,
     )?;
+    let mut requested_evidence = HashSet::new();
+    for evidence_id in &mut update.evidence_ids {
+        *evidence_id = evidence_id.trim().to_owned();
+        if evidence_id.is_empty()
+            || evidence_id.chars().count() > MAX_REFERENCE_CHARS
+            || evidence_id.chars().any(char::is_control)
+            || !requested_evidence.insert(evidence_id.clone())
+        {
+            return Err(EngineError::msg(
+                "Finding evidence references must be non-empty, unique IDs",
+            ));
+        }
+    }
 
     let mut record = load(data_dir, investigation_id)?;
     reopen_completed(&mut record);
+    let current = record
+        .findings
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .find(|finding| finding.id == finding_id)
+        .cloned()
+        .ok_or_else(|| EngineError::msg("Finding does not belong to this Investigation"))?;
+
+    if !record
+        .questions
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .any(|question| question.id == update.question_id)
+    {
+        return Err(EngineError::msg(
+            "the Finding Question is not active in this Investigation",
+        ));
+    }
+    let run_is_linked = record
+        .analysis_turn_ids
+        .iter()
+        .any(|turn_id| turn_id == &update.analysis_turn_id)
+        || record
+            .questions
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .any(|question| {
+                question
+                    .analysis_turn_ids
+                    .iter()
+                    .any(|turn_id| turn_id == &update.analysis_turn_id)
+            });
+    if !run_is_linked {
+        return Err(EngineError::msg(
+            "the Finding run is not linked to this Investigation",
+        ));
+    }
+    let turn = crate::engine::analysis_store::load(data_dir, &update.analysis_turn_id)?;
+    if turn.workspace.as_deref() != Some(record.workspace_id.as_str()) {
+        return Err(EngineError::msg(
+            "the Finding run belongs to a different workspace",
+        ));
+    }
+    let available_evidence: HashSet<&str> = turn
+        .result
+        .evidence
+        .iter()
+        .filter_map(|item| item.get("id").and_then(serde_json::Value::as_str))
+        .collect();
+    if requested_evidence
+        .iter()
+        .any(|evidence_id| !available_evidence.contains(evidence_id.as_str()))
+    {
+        return Err(EngineError::msg(
+            "every Finding evidence reference must exist in its linked run",
+        ));
+    }
+
+    let content_changed = current.question_id != update.question_id
+        || current.analysis_turn_id != update.analysis_turn_id
+        || current.evidence_ids != update.evidence_ids
+        || current.claim != update.claim
+        || current.caveats != update.caveats
+        || current.assumptions != update.assumptions
+        || current.revision_note != update.revision_note;
+    if !content_changed {
+        return Ok(record);
+    }
+
+    let current_revision = current.revision.max(1);
+    let next_revision = current_revision
+        .checked_add(1)
+        .ok_or_else(|| EngineError::msg("Finding revision counter is exhausted"))?;
+    let finding_history = InvestigationFindingRevision {
+        revision: current_revision,
+        question_id: current.question_id.clone(),
+        analysis_turn_id: current.analysis_turn_id.clone(),
+        evidence_ids: current.evidence_ids.clone(),
+        claim: current.claim.clone(),
+        caveats: current.caveats.clone(),
+        assumptions: current.assumptions.clone(),
+        revision_note: current.revision_note.clone(),
+        // Each update creates a new version, so the current version began at
+        // its latest update timestamp (the initial version uses its creation).
+        created_at_ms: current.updated_at_ms,
+        updated_at_ms: current.updated_at_ms,
+    };
+    // Older records may not have had revision metadata; their initial state is
+    // still revision 1 and remains available as the first snapshot.
+    let updated_at_ms = now_ms().max(current.updated_at_ms.saturating_add(1));
     let finding = record
         .findings
         .as_mut()
         .and_then(|findings| findings.iter_mut().find(|finding| finding.id == finding_id))
         .ok_or_else(|| EngineError::msg("Finding does not belong to this Investigation"))?;
+    finding.revisions.push(finding_history);
     finding.claim = update.claim;
     finding.caveats = update.caveats;
     finding.assumptions = update.assumptions;
-    finding.updated_at_ms = now_ms().max(finding.updated_at_ms.saturating_add(1));
+    finding.question_id = update.question_id;
+    finding.analysis_turn_id = update.analysis_turn_id;
+    finding.evidence_ids = update.evidence_ids;
+    finding.revision = next_revision;
+    finding.revision_note = update.revision_note;
+    finding.updated_at_ms = updated_at_ms;
     write_finding_record(data_dir, finding)?;
     record.updated_at_ms = now_ms().max(record.updated_at_ms.saturating_add(1));
     write_record(data_dir, &record)?;
@@ -3435,6 +3606,8 @@ mod tests {
             vec!["Each account is counted once per cohort."]
         );
         assert_eq!(original.analysis_turn_id, turn.id);
+        assert_eq!(original.revision, 1);
+        assert!(original.revisions.is_empty());
         assert_eq!(finding_load(&data_dir, &original.id).unwrap(), original);
 
         let edited = update_finding(
@@ -3442,9 +3615,14 @@ mod tests {
             &created.id,
             &original.id,
             InvestigationFindingUpdate {
+                question_id: original.question_id.clone(),
+                analysis_turn_id: original.analysis_turn_id.clone(),
+                evidence_ids: original.evidence_ids.clone(),
                 claim: "Retention increased in each observed cohort.".to_owned(),
                 caveats: vec!["Refunds were excluded from the source export.".to_owned()],
                 assumptions: vec!["Signup dates use the account's first paid month.".to_owned()],
+                revision_note: "Added refund handling after reviewing the source export."
+                    .to_owned(),
             },
         )
         .unwrap();
@@ -3461,11 +3639,77 @@ mod tests {
             updated.assumptions,
             vec!["Signup dates use the account's first paid month."]
         );
+        assert_eq!(updated.revision, 2);
+        assert_eq!(
+            updated.revision_note,
+            "Added refund handling after reviewing the source export."
+        );
+        assert_eq!(updated.revisions.len(), 1);
+        assert_eq!(updated.revisions[0].revision, 1);
+        assert_eq!(
+            updated.revisions[0].claim,
+            "Retention rose across the observed cohorts."
+        );
+        assert_eq!(updated.revisions[0].created_at_ms, original.created_at_ms);
+        assert_eq!(updated.revisions[0].updated_at_ms, original.updated_at_ms);
+        assert_eq!(
+            updated.revisions[0].analysis_turn_id,
+            original.analysis_turn_id
+        );
+        assert_eq!(updated.revisions[0].evidence_ids, original.evidence_ids);
         assert_eq!(updated.question_id, original.question_id);
         assert_eq!(updated.analysis_turn_id, original.analysis_turn_id);
         assert_eq!(updated.evidence_ids, original.evidence_ids);
         assert!(updated.updated_at_ms >= original.updated_at_ms);
         assert_eq!(load(&data_dir, &created.id).unwrap(), edited);
+
+        let mut rerun = turn.clone();
+        rerun.id = "turn-finding-rerun".into();
+        rerun.trace.id = "trace-finding-rerun".into();
+        rerun.trace.turn_id = rerun.id.clone();
+        rerun.plan.strategy = crate::engine::runtime::PlanStrategy::CompiledSql;
+        rerun.result.text = "Retention rose after the source refresh.".into();
+        rerun.result.evidence[0]["id"] = serde_json::json!("evidence-retention-rerun");
+        rerun.source_scope = Some(crate::engine::runtime::AnalysisSourceScope {
+            used_sources: vec![crate::engine::runtime::AnalysisSourceReference {
+                source: "retention-refresh.csv".into(),
+                table: Some("cohort_retention".into()),
+                evidence_ids: vec!["evidence-retention-rerun".into()],
+            }],
+            skipped_sources: Vec::new(),
+        });
+        crate::engine::analysis_store::create(&data_dir, &rerun).unwrap();
+        link_analysis_turns(&data_dir, &created.id, &[rerun.id.clone()]).unwrap();
+        let revised = update_finding(
+            &data_dir,
+            &created.id,
+            &original.id,
+            InvestigationFindingUpdate {
+                question_id: original.question_id.clone(),
+                analysis_turn_id: rerun.id.clone(),
+                evidence_ids: vec!["evidence-retention-rerun".into()],
+                claim: "Retention rose after the source refresh.".into(),
+                caveats: vec!["The refreshed export begins in March.".into()],
+                assumptions: vec!["Account identity is stable across exports.".into()],
+                revision_note: "Revised after refreshing the source export.".into(),
+            },
+        )
+        .unwrap();
+        let rerun_finding = revised.findings.as_ref().unwrap()[0].clone();
+        assert_eq!(rerun_finding.revision, 3);
+        assert_eq!(rerun_finding.analysis_turn_id, rerun.id);
+        assert_eq!(rerun_finding.evidence_ids, vec!["evidence-retention-rerun"]);
+        assert_eq!(rerun_finding.revisions.len(), 2);
+        assert_eq!(rerun_finding.revisions[1].revision, 2);
+        assert_eq!(rerun_finding.revisions[1].analysis_turn_id, turn.id);
+        assert_eq!(
+            rerun_finding.revisions[1].created_at_ms,
+            updated.updated_at_ms
+        );
+        assert_eq!(
+            rerun_finding.revisions[1].evidence_ids,
+            original.evidence_ids
+        );
 
         let claim_only_edit = update_finding_claim(
             &data_dir,
@@ -3476,15 +3720,29 @@ mod tests {
         .unwrap();
         let claim_only = claim_only_edit.findings.as_ref().unwrap()[0].clone();
         assert_eq!(claim_only.claim, "Retention rose in all observed cohorts.");
-        assert_eq!(claim_only.caveats, updated.caveats);
-        assert_eq!(claim_only.assumptions, updated.assumptions);
+        assert_eq!(claim_only.caveats, rerun_finding.caveats);
+        assert_eq!(claim_only.assumptions, rerun_finding.assumptions);
+        assert_eq!(claim_only.revision, 4);
+        assert_eq!(claim_only.revisions.len(), 3);
+        assert_eq!(claim_only.revisions[2].revision, 3);
+        assert_eq!(
+            claim_only.revisions[2].revision_note,
+            "Revised after refreshing the source export."
+        );
+        assert!(claim_only.revision_note.is_empty());
 
         let mut legacy = serde_json::to_value(&claim_only).unwrap();
         legacy.as_object_mut().unwrap().remove("caveats");
         legacy.as_object_mut().unwrap().remove("assumptions");
+        legacy.as_object_mut().unwrap().remove("revision");
+        legacy.as_object_mut().unwrap().remove("revision_note");
+        legacy.as_object_mut().unwrap().remove("revisions");
         let legacy: InvestigationFinding = serde_json::from_value(legacy).unwrap();
         assert!(legacy.caveats.is_empty());
         assert!(legacy.assumptions.is_empty());
+        assert_eq!(legacy.revision, 1);
+        assert!(legacy.revision_note.is_empty());
+        assert!(legacy.revisions.is_empty());
 
         assert!(create_finding(
             &data_dir,
