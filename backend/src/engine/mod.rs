@@ -39,10 +39,11 @@ pub use investigation::{Investigation, InvestigationStatus};
 pub use llm::ProviderHealth;
 pub use provider::{AuthKind, Provider, PROVIDERS};
 pub use runtime::{
-    AnalysisContract, AnalysisTurn, AnalysisTurnReplayStatus, ClarificationReply, ComparisonKind,
-    ContextReference, ContractComparison, ContractDerivedMetric, ContractFilter, ContractJoin,
-    ContractMeasure, ContractOrder, DerivedMetricKind, InterpretationStatus, JoinKind, RunLogEntry,
-    RunLogKind, RunLogModelCall, RunLogOperation, SortDirection, TimeBucket,
+    AnalysisContract, AnalysisSourceReference, AnalysisSourceScope, AnalysisTurn,
+    AnalysisTurnReplayStatus, ClarificationReply, ComparisonKind, ContextReference,
+    ContractComparison, ContractDerivedMetric, ContractFilter, ContractJoin, ContractMeasure,
+    ContractOrder, DerivedMetricKind, InterpretationStatus, JoinKind, RunLogEntry, RunLogKind,
+    RunLogModelCall, RunLogOperation, SortDirection, TimeBucket,
 };
 pub use sqlite::Settings;
 pub use state::{

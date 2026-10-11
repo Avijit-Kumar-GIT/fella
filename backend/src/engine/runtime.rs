@@ -726,6 +726,119 @@ pub struct AnalysisTurnReplayStatus {
     pub can_rerun: bool,
     #[serde(default)]
     pub source_changes: Vec<WorkspaceSourceChange>,
+    /// Immutable scope summary captured when this turn was persisted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_scope: Option<AnalysisSourceScope>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AnalysisSourceReference {
+    /// Workspace-relative file or document identity.
+    pub source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub table: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence_ids: Vec<String>,
+}
+
+/// The source references observed in a turn's evidence, plus files the
+/// workspace catalog explicitly skipped at the same revision. This is a
+/// historical snapshot; later catalog or scope changes cannot rewrite it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AnalysisSourceScope {
+    #[serde(default)]
+    pub used_sources: Vec<AnalysisSourceReference>,
+    #[serde(default)]
+    pub skipped_sources: Vec<String>,
+}
+
+impl AnalysisSourceScope {
+    pub fn from_evidence(
+        evidence: &[crate::engine::evidence::EvidenceItem],
+        skipped_sources: &[String],
+    ) -> Self {
+        let mut used_sources = Vec::new();
+        for item in evidence {
+            if item.error.is_some() {
+                continue;
+            }
+            for source in &item.sources {
+                remember_source(
+                    &mut used_sources,
+                    &source.source,
+                    Some(&source.table),
+                    &item.id,
+                );
+            }
+
+            // Document tools expose file names in their structured arguments
+            // or result rows rather than `EvidenceItem.sources`.
+            match item.tool.as_str() {
+                "read_file" => {
+                    let args = &item.args;
+                    if let Some(names) = args.get("names").and_then(serde_json::Value::as_array) {
+                        for name in names.iter().filter_map(serde_json::Value::as_str) {
+                            remember_source(&mut used_sources, name, None, &item.id);
+                        }
+                    } else if let Some(name) = args.get("name").and_then(serde_json::Value::as_str)
+                    {
+                        remember_source(&mut used_sources, name, None, &item.id);
+                    }
+                }
+                "grep_files" => {
+                    let source_column = item
+                        .columns
+                        .as_ref()
+                        .and_then(|columns| columns.iter().position(|column| column == "source"));
+                    if let (Some(column), Some(rows)) = (source_column, item.rows.as_ref()) {
+                        for name in rows
+                            .iter()
+                            .filter_map(|row| row.get(column))
+                            .filter_map(serde_json::Value::as_str)
+                        {
+                            remember_source(&mut used_sources, name, None, &item.id);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        Self {
+            used_sources,
+            skipped_sources: skipped_sources.to_vec(),
+        }
+    }
+}
+
+fn remember_source(
+    sources: &mut Vec<AnalysisSourceReference>,
+    source: &str,
+    table: Option<&str>,
+    evidence_id: &str,
+) {
+    if source.trim().is_empty() {
+        return;
+    }
+    let table = table.filter(|table| !table.is_empty());
+    if let Some(existing) = sources
+        .iter_mut()
+        .find(|existing| existing.source == source && existing.table.as_deref() == table)
+    {
+        if !evidence_id.is_empty() && !existing.evidence_ids.iter().any(|id| id == evidence_id) {
+            existing.evidence_ids.push(evidence_id.to_owned());
+        }
+        return;
+    }
+    sources.push(AnalysisSourceReference {
+        source: source.to_owned(),
+        table: table.map(str::to_owned),
+        evidence_ids: if evidence_id.is_empty() {
+            Vec::new()
+        } else {
+            vec![evidence_id.to_owned()]
+        },
+    });
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -782,6 +895,10 @@ pub struct AnalysisTurn {
     /// Optional so records written before revision-aware replay remain valid.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_snapshot: Option<WorkspaceRevisionSnapshot>,
+    /// Source identities actually referenced by this run's evidence and the
+    /// catalog-skipped inputs at the same workspace revision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_scope: Option<AnalysisSourceScope>,
     /// Length-only audit of bounded model context; text is never copied here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_audit: Option<ContextAssemblyAudit>,
@@ -1196,5 +1313,100 @@ mod tests {
             .details
             .iter()
             .any(|detail| detail == "file metadata changed"));
+    }
+
+    #[test]
+    fn source_scope_collects_tabular_and_document_evidence_without_listing_inventory_as_used() {
+        use crate::engine::evidence::{EvidenceItem, EvidenceSource};
+        use serde_json::json;
+
+        let item = |id: &str,
+                    tool: &str,
+                    args: serde_json::Value,
+                    sources: Vec<EvidenceSource>,
+                    columns: Option<Vec<String>>,
+                    rows: Option<Vec<Vec<serde_json::Value>>>| EvidenceItem {
+            id: id.into(),
+            tool: tool.into(),
+            sources,
+            args,
+            note: None,
+            sql: None,
+            result_summary: String::new(),
+            columns,
+            rows,
+            row_count: None,
+            output: None,
+            chart: None,
+            result_table: None,
+            python_input_trace: None,
+            python_queries: None,
+            python_queries_complete: None,
+            ms: 0,
+            error: None,
+            verifier_disposition: None,
+        };
+        let evidence = vec![
+            item(
+                "evidence-sql",
+                "run_sql",
+                json!({}),
+                vec![EvidenceSource {
+                    source: "sales.csv".into(),
+                    table: "sales".into(),
+                    note: None,
+                }],
+                None,
+                None,
+            ),
+            item(
+                "evidence-read",
+                "read_file",
+                json!({"names": ["notes/brief.md", "notes/method.md"]}),
+                Vec::new(),
+                None,
+                None,
+            ),
+            item(
+                "evidence-search",
+                "grep_files",
+                json!({"pattern": "retention"}),
+                Vec::new(),
+                Some(vec!["rank".into(), "source".into()]),
+                Some(vec![vec![json!(1), json!("notes/brief.md")]]),
+            ),
+            item(
+                "evidence-inventory",
+                "list_files",
+                json!({}),
+                Vec::new(),
+                Some(vec!["source".into()]),
+                Some(vec![vec![json!("unused.csv")]]),
+            ),
+        ];
+
+        let scope =
+            AnalysisSourceScope::from_evidence(&evidence, &["unsupported.xlsx: encrypted".into()]);
+        assert_eq!(
+            scope.used_sources,
+            vec![
+                AnalysisSourceReference {
+                    source: "sales.csv".into(),
+                    table: Some("sales".into()),
+                    evidence_ids: vec!["evidence-sql".into()],
+                },
+                AnalysisSourceReference {
+                    source: "notes/brief.md".into(),
+                    table: None,
+                    evidence_ids: vec!["evidence-read".into(), "evidence-search".into()],
+                },
+                AnalysisSourceReference {
+                    source: "notes/method.md".into(),
+                    table: None,
+                    evidence_ids: vec!["evidence-read".into()],
+                },
+            ]
+        );
+        assert_eq!(scope.skipped_sources, vec!["unsupported.xlsx: encrypted"]);
     }
 }

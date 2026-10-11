@@ -22,10 +22,10 @@ use crate::engine::llm::{LlmClient, ProviderHealth};
 use crate::engine::memory::{self, FolderMemory};
 use crate::engine::provider::{self, AuthKind, PROVIDERS};
 use crate::engine::runtime::{
-    AnalysisContract, AnalysisResult, AnalysisTurn, AnalysisTurnReplayStatus, ClarificationReply,
-    ContextReference, InterpretationStatus, LogicalPlan, PlanStrategy, ResolvedClarification,
-    RunLogEntry, RunLogKind, TurnState, VerificationReport, WorkspaceColumnSnapshot,
-    WorkspaceRevisionSnapshot, WorkspaceSourceSnapshot,
+    AnalysisContract, AnalysisResult, AnalysisSourceScope, AnalysisTurn, AnalysisTurnReplayStatus,
+    ClarificationReply, ContextReference, InterpretationStatus, LogicalPlan, PlanStrategy,
+    ResolvedClarification, RunLogEntry, RunLogKind, TurnState, VerificationReport,
+    WorkspaceColumnSnapshot, WorkspaceRevisionSnapshot, WorkspaceSourceSnapshot,
 };
 use crate::engine::secrets::Secrets;
 use crate::engine::semantic_memory::{
@@ -1919,6 +1919,7 @@ impl EngineState {
                 && current_snapshot.is_some(),
             can_rerun: same_workspace && current.workspace.is_some(),
             source_changes,
+            source_scope: original.source_scope,
         })
     }
 
@@ -2100,6 +2101,9 @@ impl EngineState {
                 snapshot.path == workspace.path && snapshot.revision == workspace.revision
             })
         });
+        let source_scope = workspace_snapshot.as_ref().map(|snapshot| {
+            AnalysisSourceScope::from_evidence(&answer.evidence, &snapshot.skipped)
+        });
         let record = AnalysisTurn {
             id: answer.turn_id.clone(),
             conversation_id: conversation_id.to_string(),
@@ -2117,6 +2121,7 @@ impl EngineState {
                 .as_ref()
                 .map(|workspace| workspace.revision.clone()),
             workspace_snapshot,
+            source_scope,
             context_audit: Some(context_audit.clone()),
             provenance: Some(answer.provenance.clone()),
             rerun_of: None,

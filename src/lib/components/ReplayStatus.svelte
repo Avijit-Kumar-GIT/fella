@@ -92,6 +92,30 @@
 				{/if}
 			</div>
 		</div>
+		{#if status.source_scope}
+			<details class="scope-details">
+				<summary>
+					Run data scope · {status.source_scope.used_sources.length} source{status.source_scope.used_sources.length === 1 ? '' : 's'} used
+				</summary>
+				{#if status.source_scope.used_sources.length}
+					<ul>
+						{#each status.source_scope.used_sources as source (`${source.source}:${source.table ?? ''}`)}
+							<li>{source.source}{#if source.table} <span>({source.table})</span>{/if}</li>
+						{/each}
+					</ul>
+				{:else}
+					<p>No source-backed evidence was recorded for this run.</p>
+				{/if}
+				{#if status.source_scope.skipped_sources.length}
+					<p class="scope-caption">Skipped by the workspace catalog at run time</p>
+					<ul>
+						{#each status.source_scope.skipped_sources as skipped (skipped)}
+							<li>{skipped}</li>
+						{/each}
+					</ul>
+				{/if}
+			</details>
+		{/if}
 	{:else}
 		<Button variant="ghost" size="sm" class="replay-link" onclick={() => void check()}>
 			<Icon name="refresh" size={12} /> Check workspace freshness
@@ -131,6 +155,29 @@
 	}
 	.change-list {
 		color: var(--text-faint);
+	}
+	.scope-details {
+		margin-top: var(--space-2);
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+	}
+	.scope-details summary {
+		width: fit-content;
+		cursor: pointer;
+		color: var(--text-dim);
+	}
+	.scope-details ul {
+		margin: 4px 0 0;
+		padding-left: 18px;
+	}
+	.scope-details li {
+		overflow-wrap: anywhere;
+	}
+	.scope-details p {
+		margin: 5px 0 0;
+	}
+	.scope-caption {
+		color: var(--text-dim);
 	}
 	:global(.replay-alert) { align-items: center; padding: var(--space-2) var(--space-3); }
 	.alert-copy { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); min-width: 0; }

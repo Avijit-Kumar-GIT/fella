@@ -392,6 +392,7 @@ export interface AnalysisTurn {
 	workspace?: string;
 	workspace_revision?: string;
 	workspace_snapshot?: WorkspaceRevisionSnapshot;
+	source_scope?: AnalysisSourceScope;
 	context_audit?: ContextAssemblyAudit;
 	provenance?: AnswerProvenance;
 	rerun_of?: string;
@@ -407,6 +408,17 @@ export interface AnalysisTurn {
 		verification: VerificationCheck[];
 		evidence: unknown[];
 	};
+}
+
+export interface AnalysisSourceReference {
+	source: string;
+	table?: string;
+	evidence_ids: string[];
+}
+
+export interface AnalysisSourceScope {
+	used_sources: AnalysisSourceReference[];
+	skipped_sources: string[];
 }
 
 /** Durable parent record for workspace-scoped analyst work. */
@@ -438,6 +450,7 @@ export interface AnalysisTurnReplayStatus {
 	snapshot_available: boolean;
 	can_rerun: boolean;
 	source_changes: WorkspaceSourceChange[];
+	source_scope?: AnalysisSourceScope;
 }
 
 /** The two user-facing ways to work with a mounted workspace. Ask is the
