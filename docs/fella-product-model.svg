@@ -1,0 +1,237 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1800 1320" role="img" aria-labelledby="title desc">
+  <title id="title">Fella product model: current desktop and north-star desktop</title>
+  <desc id="desc">A before-and-after comparison. Today, Fella has a capable model-directed analytics harness organized around conversations and persisted analysis turns, with source and project views alongside it. The target keeps that harness and organizes sustained analytical work as an Investigation inside an explicitly scoped Workspace. An Investigation connects a brief, questions, decisions, conversations, existing analysis turns, evidence, verification, findings, and reusable artifacts. Projects curate selected results; an optional CLI and FellaDB support explicit filesystem discovery.</desc>
+
+  <defs>
+    <linearGradient id="mark" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#b8adff"/>
+      <stop offset="0.55" stop-color="#54d8cc"/>
+      <stop offset="1" stop-color="#0b7782"/>
+    </linearGradient>
+    <marker id="arrow-muted" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 10 5 0 10z" fill="#82969a"/>
+    </marker>
+    <marker id="arrow-teal" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 10 5 0 10z" fill="#42d6cb"/>
+    </marker>
+    <marker id="arrow-violet" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 10 5 0 10z" fill="#ad9eff"/>
+    </marker>
+    <style>
+      text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif; }
+      .title { fill: #f4f8f8; font-size: 34px; font-weight: 700; letter-spacing: -.7px; }
+      .subtitle { fill: #a8b8bb; font-size: 17px; }
+      .panel { fill: #121a1e; stroke: #2b3a3e; stroke-width: 1.5; }
+      .panel-target { fill: #121a1e; stroke: #327c79; stroke-width: 1.8; }
+      .eyebrow { fill: #8ea3a7; font-size: 11px; font-weight: 700; letter-spacing: 1.5px; }
+      .eyebrow-teal { fill: #62d8cf; font-size: 11px; font-weight: 700; letter-spacing: 1.35px; }
+      .eyebrow-amber { fill: #e4c47b; font-size: 11px; font-weight: 700; letter-spacing: 1.3px; }
+      .panel-title { fill: #eff6f6; font-size: 22px; font-weight: 650; letter-spacing: -.25px; }
+      .heading { fill: #eef6f5; font-size: 16px; font-weight: 650; }
+      .body { fill: #c1ced0; font-size: 13px; }
+      .small { fill: #91a5a8; font-size: 11.5px; }
+      .card { fill: #182226; stroke: #35474c; stroke-width: 1.3; }
+      .card-muted { fill: #171f23; stroke: #344247; stroke-width: 1.3; }
+      .card-teal { fill: #152321; stroke: #42b9b1; stroke-width: 1.5; }
+      .card-violet { fill: #1d1b2a; stroke: #887bd1; stroke-width: 1.4; }
+      .card-blue { fill: #17212a; stroke: #648bb2; stroke-width: 1.3; }
+      .card-amber { fill: #241f17; stroke: #a98b4f; stroke-width: 1.4; }
+      .optional { fill: #151e21; stroke: #76888b; stroke-width: 1.3; stroke-dasharray: 7 6; }
+      .shell { fill: #1a2226; stroke: #405156; stroke-width: 1.3; }
+      .workspace { fill: #14201f; stroke: #397d79; stroke-width: 1.3; }
+      .investigation { fill: #111d1d; stroke: #42b9b1; stroke-width: 2; }
+      .arrow { fill: none; stroke: #82969a; stroke-width: 1.8; marker-end: url(#arrow-muted); }
+      .arrow-teal { fill: none; stroke: #42d6cb; stroke-width: 2; marker-end: url(#arrow-teal); }
+      .arrow-violet { fill: none; stroke: #ad9eff; stroke-width: 1.7; stroke-dasharray: 6 6; marker-end: url(#arrow-violet); }
+      .divider { stroke: #2a393d; stroke-width: 1; }
+      .pill { fill: #202a2e; stroke: #3b4c50; stroke-width: 1; }
+      .pill-teal { fill: #173330; stroke: #397d79; stroke-width: 1; }
+      .pill-text { fill: #b8c7c9; font-size: 10.5px; font-weight: 600; }
+      .pill-text-teal { fill: #80e2d9; font-size: 10.5px; font-weight: 650; }
+    </style>
+  </defs>
+
+  <rect width="1800" height="1320" rx="28" fill="#0d1417"/>
+  <circle cx="79" cy="65" r="17" fill="url(#mark)"/>
+  <circle cx="73" cy="59" r="7" fill="#fff" opacity=".2"/>
+  <text x="111" y="68" class="title">Fella’s product model</text>
+  <text x="111" y="99" class="subtitle">Before: capable analysis, organized around turns.  After: the same harness, organized around an analyst’s investigation.</text>
+  <rect x="1460" y="53" width="276" height="34" rx="17" class="pill-teal"/>
+  <text x="1598" y="75" text-anchor="middle" class="pill-text-teal">NORTH STAR · NOT A REDESIGN SPEC</text>
+
+  <!-- Current desktop -->
+  <rect x="55" y="145" width="820" height="1035" rx="22" class="panel"/>
+  <text x="85" y="183" class="eyebrow-amber">BEFORE · CURRENT DESKTOP</text>
+  <text x="85" y="218" class="panel-title">A strong harness, a turn-shaped experience</text>
+  <rect x="694" y="169" width="149" height="28" rx="14" class="pill"/>
+  <text x="768" y="188" text-anchor="middle" class="pill-text">SHIPPED BASELINE</text>
+
+  <rect x="85" y="245" width="760" height="67" rx="13" class="shell"/>
+  <text x="106" y="270" class="eyebrow">DESKTOP SHELL</text>
+  <text x="106" y="293" class="body">Electron + Svelte · sidebar · environments and workspace panes</text>
+  <text x="824" y="293" text-anchor="end" class="small">layout does not grant data access</text>
+
+  <rect x="85" y="340" width="210" height="110" rx="13" class="card-muted"/>
+  <text x="105" y="366" class="eyebrow">SCOPE</text>
+  <text x="105" y="392" class="heading">Workspace</text>
+  <text x="105" y="416" class="body">General or mounted folder</text>
+  <text x="105" y="436" class="small">catalog · context · revision</text>
+
+  <path d="M299 395h25" class="arrow"/>
+  <text x="311" y="381" text-anchor="middle" class="small">scoped</text>
+  <rect x="330" y="340" width="230" height="110" rx="13" class="card-muted"/>
+  <text x="350" y="366" class="eyebrow">INTERACTION</text>
+  <text x="350" y="392" class="heading">Conversation</text>
+  <text x="350" y="416" class="body">Ask · clarify · follow up</text>
+  <text x="350" y="436" class="small">primary visible work surface</text>
+
+  <path d="M564 395h24" class="arrow"/>
+  <rect x="595" y="340" width="250" height="110" rx="13" class="card-violet"/>
+  <text x="615" y="366" class="eyebrow">EXECUTION RECORD</text>
+  <text x="615" y="392" class="heading">Analysis turn</text>
+  <text x="615" y="416" class="body">One question · one model-led run</text>
+  <text x="615" y="436" class="small">persisted plan, trace, result</text>
+
+  <path d="M720 452v31" class="arrow-violet"/>
+  <rect x="85" y="490" width="760" height="225" rx="16" class="card-violet"/>
+  <text x="108" y="520" class="eyebrow">THE ANALYTICS HARNESS · ALREADY SUBSTANTIVE</text>
+  <text x="108" y="548" class="heading">The model directs an adaptive loop; Fella owns the boundaries.</text>
+
+  <rect x="108" y="570" width="205" height="111" rx="11" class="card-muted"/>
+  <text x="126" y="595" class="eyebrow">MODEL</text>
+  <text x="126" y="621" class="body">Interpret · decompose</text>
+  <text x="126" y="643" class="body">choose tools · synthesize</text>
+  <text x="126" y="665" class="small">clarify when meaning matters</text>
+
+  <path d="M317 625h20" class="arrow-violet"/>
+  <rect x="344" y="570" width="218" height="111" rx="11" class="card-blue"/>
+  <text x="362" y="595" class="eyebrow">RUST RUNTIME</text>
+  <text x="362" y="621" class="body">Scope · limits · persistence</text>
+  <text x="362" y="643" class="body">safe execution · verification</text>
+  <text x="362" y="665" class="small">read-only workspace operations</text>
+
+  <path d="M566 625h20" class="arrow"/>
+  <rect x="593" y="570" width="228" height="111" rx="11" class="card-muted"/>
+  <text x="611" y="595" class="eyebrow">TOOLS + ENGINE</text>
+  <text x="611" y="621" class="body">Inspect · SQL · Python</text>
+  <text x="611" y="643" class="body">documents · structured charts</text>
+  <text x="611" y="665" class="small">bounded local computation</text>
+
+  <path d="M465 717v26" class="arrow"/>
+  <rect x="85" y="750" width="230" height="107" rx="13" class="card-muted"/>
+  <text x="105" y="777" class="eyebrow">USER SEES</text>
+  <text x="105" y="803" class="heading">Answer + charts</text>
+  <text x="105" y="827" class="body">Copy / download results</text>
+  <text x="105" y="846" class="small">in the conversation</text>
+
+  <rect x="330" y="750" width="270" height="107" rx="13" class="card-muted"/>
+  <text x="350" y="777" class="eyebrow">ATTACHED TO THE TURN</text>
+  <text x="350" y="803" class="heading">Evidence + verification</text>
+  <text x="350" y="827" class="body">Sources · queries · checks</text>
+  <text x="350" y="846" class="small">inspectable, but not the main canvas</text>
+
+  <rect x="615" y="750" width="230" height="107" rx="13" class="card-muted"/>
+  <text x="635" y="777" class="eyebrow">OTHER SURFACES</text>
+  <text x="635" y="803" class="heading">Sources · Projects</text>
+  <text x="635" y="827" class="body">catalog / user-authored notes</text>
+  <text x="635" y="846" class="small">separate from the analysis thread</text>
+
+  <rect x="85" y="882" width="365" height="92" rx="13" class="card-muted"/>
+  <text x="105" y="909" class="eyebrow">SOURCES TODAY</text>
+  <text x="105" y="935" class="body">Catalog, profile, preview, skipped-file reasons</text>
+  <text x="105" y="956" class="small">broad filesystem search is not implied</text>
+
+  <rect x="465" y="882" width="380" height="92" rx="13" class="card-muted"/>
+  <text x="485" y="909" class="eyebrow">PROJECTS TODAY</text>
+  <text x="485" y="935" class="body">Local, user-authored notes</text>
+  <text x="485" y="956" class="small">not an automatically generated knowledge base</text>
+
+  <rect x="85" y="995" width="760" height="145" rx="15" class="card-amber"/>
+  <text x="109" y="1027" class="eyebrow-amber">THE PRODUCT GAP · NOT A MISSING ANALYTICS ENGINE</text>
+  <text x="109" y="1061" class="heading">The investigation is implicit.</text>
+  <text x="109" y="1088" class="body">The brief, subquestions, decisions, coverage, open work, and handoff</text>
+  <text x="109" y="1111" class="body">are scattered across conversation prose, turns, and detail views.</text>
+
+  <!-- Target desktop -->
+  <rect x="925" y="145" width="820" height="1035" rx="22" class="panel-target"/>
+  <text x="955" y="183" class="eyebrow-teal">AFTER · PRODUCT MODEL</text>
+  <text x="955" y="218" class="panel-title">An investigation-centered desktop</text>
+  <rect x="1532" y="169" width="181" height="28" rx="14" class="pill-teal"/>
+  <text x="1622" y="188" text-anchor="middle" class="pill-text-teal">SAME HARNESS · NEW MODEL</text>
+
+  <rect x="955" y="245" width="760" height="67" rx="13" class="shell"/>
+  <text x="976" y="270" class="eyebrow">APP SHELL + ENVIRONMENTS</text>
+  <text x="976" y="293" class="body">Navigation and saved layouts reference work; they never change its scope.</text>
+
+  <rect x="955" y="326" width="760" height="76" rx="13" class="workspace"/>
+  <text x="976" y="352" class="eyebrow-teal">WORKSPACE · EXPLICIT DATA BOUNDARY</text>
+  <text x="976" y="379" class="body">General stays unbound, or select a folder with its catalog, context, and source revision.</text>
+
+  <path d="M1335 404v20" class="arrow-teal"/>
+  <rect x="975" y="428" width="720" height="574" rx="18" class="investigation"/>
+  <text x="1000" y="460" class="eyebrow-teal">INVESTIGATION · DURABLE UNIT OF ANALYST WORK</text>
+  <text x="1000" y="488" class="heading">A lightweight work container around the existing conversation and turns</text>
+
+  <rect x="998" y="508" width="300" height="83" rx="11" class="card-teal"/>
+  <text x="1016" y="532" class="eyebrow-teal">BRIEF</text>
+  <text x="1016" y="556" class="body">Problem · audience · outcome</text>
+  <text x="1016" y="578" class="small">what would make this useful?</text>
+
+  <rect x="1311" y="508" width="361" height="83" rx="11" class="card-teal"/>
+  <text x="1329" y="532" class="eyebrow-teal">QUESTIONS + COVERAGE</text>
+  <text x="1329" y="556" class="body">Big question → answerable questions</text>
+  <text x="1329" y="578" class="small">answered · open · unsupported</text>
+
+  <rect x="998" y="604" width="300" height="73" rx="11" class="card-muted"/>
+  <text x="1016" y="629" class="eyebrow">CONVERSATION</text>
+  <text x="1016" y="654" class="body">Analyst directs, steers, clarifies</text>
+  <rect x="1311" y="604" width="361" height="73" rx="11" class="card-muted"/>
+  <text x="1329" y="629" class="eyebrow">DEFINITIONS + DECISIONS</text>
+  <text x="1329" y="654" class="body">Proposed or user-confirmed meaning</text>
+
+  <path d="M1130 679v17" class="arrow-teal"/>
+  <path d="M1491 679v17" class="arrow-teal"/>
+  <rect x="998" y="699" width="674" height="138" rx="12" class="card-violet"/>
+  <text x="1018" y="726" class="eyebrow">ANALYSIS TURNS · EXISTING EXECUTION RECORD</text>
+  <text x="1018" y="751" class="small">Each turn keeps the current model-directed loop and workspace snapshot.</text>
+
+  <rect x="1018" y="769" width="185" height="48" rx="9" class="card-muted"/>
+  <text x="1031" y="789" class="eyebrow">MODEL LOOP</text>
+  <text x="1031" y="807" class="small">interpret · choose · adapt</text>
+  <path d="M1207 793h19" class="arrow-violet"/>
+  <rect x="1233" y="769" width="203" height="48" rx="9" class="card-blue"/>
+  <text x="1246" y="789" class="eyebrow">BOUNDED TOOLS</text>
+  <text x="1246" y="807" class="small">SQL · Python · docs · charts</text>
+  <path d="M1440 793h19" class="arrow"/>
+  <rect x="1466" y="769" width="186" height="48" rx="9" class="card-muted"/>
+  <text x="1479" y="789" class="eyebrow">RECORDED WORK</text>
+  <text x="1479" y="807" class="small">steps · trace · reruns</text>
+
+  <path d="M1335 839v16" class="arrow-teal"/>
+  <rect x="998" y="858" width="674" height="82" rx="11" class="card-muted"/>
+  <text x="1018" y="884" class="eyebrow">EVIDENCE + TARGETED CHECKS</text>
+  <text x="1018" y="911" class="body">Source lineage and verification support each finding; neither pretends to settle business meaning.</text>
+
+  <path d="M1335 942v15" class="arrow-teal"/>
+  <rect x="998" y="960" width="674" height="25" rx="12" class="pill-teal"/>
+  <text x="1335" y="977" text-anchor="middle" class="pill-text-teal">FINDINGS → REUSABLE ARTIFACTS → REVIEWABLE HANDOFF · RETURN AND CONTINUE</text>
+
+  <path d="M1165 1004v17" class="arrow-teal"/>
+  <rect x="955" y="1022" width="355" height="112" rx="13" class="card-teal"/>
+  <text x="976" y="1049" class="eyebrow-teal">PROJECTS · CURATION LAYER</text>
+  <text x="976" y="1076" class="body">Select findings, visuals, definitions,</text>
+  <text x="976" y="1098" class="body">and open questions for reuse.</text>
+  <text x="976" y="1119" class="small">not the investigation’s execution log</text>
+
+  <rect x="1325" y="1022" width="390" height="112" rx="13" class="optional"/>
+  <text x="1346" y="1049" class="eyebrow">OPTIONAL CLI + FELLADB</text>
+  <text x="1346" y="1076" class="body">Find · catalog · profile · preview</text>
+  <text x="1346" y="1098" class="body">Analyst explicitly selects sources</text>
+  <text x="1346" y="1119" class="small">never a prerequisite or silent scope expansion</text>
+
+  <!-- Shared product invariant -->
+  <rect x="55" y="1200" width="1690" height="91" rx="17" fill="#15201f" stroke="#397d79" stroke-width="1.4"/>
+  <text x="82" y="1235" class="eyebrow-teal">WHAT STAYS THE SAME</text>
+  <text x="82" y="1263" class="heading">The model-directed harness, local read-only execution, workspace isolation, persisted turns, evidence, and verification.</text>
+  <text x="1715" y="1263" text-anchor="end" class="small">Add an Investigation layer; don’t replace the engine.</text>
+</svg>

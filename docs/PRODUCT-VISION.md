@@ -92,6 +92,12 @@ The product’s memorable promise is not “analytics by chat.” It is **a mode
 that can do analytical work inside a purpose-built harness, while the analyst
 can see and steer the work**.
 
+The diagram summarizes the current desktop and the target model. The target
+adds a durable Investigation layer around the existing conversation and
+analysis-turn machinery; it does not replace the analytics harness.
+
+![Before and north-star product model for the Fella desktop](fella-product-model.svg)
+
 ## Product identity and boundaries
 
 ### Fella is
