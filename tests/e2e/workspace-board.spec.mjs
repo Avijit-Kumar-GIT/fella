@@ -1309,6 +1309,190 @@ test('each Question opens its saved answer with explicit partial or complete cov
 	await expect(completePreview).toContainText('fixture-question-turn-2');
 });
 
+test('a multi-question Investigation carries coverage, QA, and run links into its report', async ({ page }) => {
+	const rootEvidence = {
+		id: 'evidence-q219-root-sales',
+		tool: 'run_sql',
+		args: { sql: 'SELECT SUM(net_sales) FROM sales' },
+		sql: 'SELECT SUM(net_sales) FROM sales',
+		result_summary: 'Observed regional sales for ten available weeks.',
+		columns: ['net_sales'],
+		rows: [[1400]],
+		row_count: 1,
+		ms: 12,
+		sources: [{ source: 'sales.csv', table: 'sales' }]
+	};
+	const regionEvidence = {
+		id: 'evidence-q219-region-sales',
+		tool: 'run_sql',
+		args: { sql: 'SELECT region, SUM(net_sales) FROM sales GROUP BY region' },
+		sql: 'SELECT region, SUM(net_sales) FROM sales GROUP BY region',
+		result_summary: 'West had the largest observed sales increase.',
+		columns: ['region', 'net_sales'],
+		rows: [['West', 21]],
+		row_count: 1,
+		ms: 9,
+		sources: [{ source: 'sales.csv', table: 'sales' }]
+	};
+	const refundEvidence = {
+		id: 'evidence-q219-refunds',
+		tool: 'run_sql',
+		args: { sql: 'SELECT region, SUM(refunds) FROM refunds GROUP BY region' },
+		sql: 'SELECT region, SUM(refunds) FROM refunds GROUP BY region',
+		result_summary: 'Refunds offset part of the West increase.',
+		columns: ['region', 'refunds'],
+		rows: [['West', 8]],
+		row_count: 1,
+		ms: 7,
+		sources: [{ source: 'refunds.csv', table: 'refunds' }]
+	};
+	const rootQuestion = 'Assess second-quarter sales and returns across regions.';
+	const regionalQuestion = 'Compare net sales growth across regions.';
+	const refundQuestion = 'Check whether refunds offset the strongest regional increase.';
+	const rootAnswer = 'Regional sales increased 14% over the 10 available weeks.';
+	const regionalAnswer = 'The West led net sales growth at 21%.';
+	const refundAnswer = 'Refunds offset 38% of the West increase.';
+	await installDesktopMock(page, {
+		questionRunOutcomes: [
+			{
+				status: 'incomplete',
+				verification_status: 'needs_review',
+				reason: 'Only 10 of the requested 12 weeks are present.',
+				answer_text: rootAnswer,
+				checks: [{
+					label: 'The full twelve-week window is present',
+					ok: false,
+					outcome: 'flagged',
+					detail: 'Only ten weeks were present.'
+				}],
+				evidence: [rootEvidence],
+				source_scope: {
+					used_sources: [{ source: 'sales.csv', table: 'sales', evidence_ids: [rootEvidence.id] }],
+					skipped_sources: ['legacy-sales.csv']
+				}
+			},
+			{
+				status: 'answered',
+				verification_status: 'verified',
+				answer_text: regionalAnswer,
+				evidence: [regionEvidence],
+				source_scope: {
+					used_sources: [{ source: 'sales.csv', table: 'sales', evidence_ids: [regionEvidence.id] }],
+					skipped_sources: []
+				}
+			},
+			{
+				status: 'answered',
+				verification_status: 'verified',
+				answer_text: refundAnswer,
+				evidence: [refundEvidence],
+				source_scope: {
+					used_sources: [{ source: 'refunds.csv', table: 'refunds', evidence_ids: [refundEvidence.id] }],
+					skipped_sources: []
+				}
+			}
+		]
+	});
+
+	await page.goto('/');
+	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
+	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
+	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill(rootQuestion);
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	await page.getByRole('textbox', { name: 'Audience' }).fill('Regional manager');
+	await page.getByRole('textbox', { name: 'Desired output' }).fill('A decision-ready regional summary');
+	await page.getByRole('button', { name: 'Save brief' }).click();
+	await page.getByRole('button', { name: 'Add subquestion' }).click();
+	await page.getByRole('textbox', { name: 'Subquestion 1' }).fill(regionalQuestion);
+	await page.getByRole('button', { name: 'Add subquestion' }).click();
+	await page.getByRole('textbox', { name: 'Subquestion 2' }).fill(refundQuestion);
+	await page.getByRole('button', { name: 'Save plan' }).click();
+
+	const runQuestion = async (label) => {
+		await page.getByRole('button', { name: `Analyze ${label}` }).click();
+		await page.getByRole('region', { name: 'Review this run' }).getByRole('button', { name: 'Run this Question' }).click();
+		await expect(page.getByRole('region', { name: 'Question run' })).toBeHidden();
+		await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	};
+	await runQuestion('main Question');
+
+	const mainQuestion = page.locator('.root-question-item');
+	await expect(mainQuestion.locator('[data-slot="badge"][data-question-status]')).toHaveText('Partial answer');
+	await mainQuestion.getByRole('button', { name: 'View partial answer for Main Question' }).click();
+	const mainPreview = mainQuestion.getByRole('region', { name: 'Latest answer for Main Question' });
+	await expect(mainPreview).toContainText(rootAnswer);
+	await expect(mainPreview).toContainText('fixture-question-turn-1');
+	await mainPreview.getByRole('button', { name: 'Open run details' }).click();
+	const runDetail = page.getByRole('region', { name: 'Saved analysis run' });
+	await expect(runDetail.locator('.analysis-run-question-snapshot')).toContainText(rootQuestion);
+	const rootRunContext = runDetail.getByRole('region', { name: 'Definitions and source scope used' });
+	await expect(rootRunContext).toContainText(rootEvidence.id);
+	const rootOutput = runDetail.getByRole('region', { name: 'Query and output evidence' });
+	await expect(rootOutput.getByRole('region', { name: 'Verification outcome' })).toHaveAttribute('data-verification-status', 'needs_review');
+	await expect(rootOutput.locator('[data-check-outcome="flagged"]')).toContainText('Only ten weeks were present.');
+	await runDetail.getByRole('button', { name: 'Close saved analysis run' }).click();
+
+	await runQuestion('Subquestion 1');
+	const regionalItem = page.locator('.question-list .question-item').nth(0);
+	await expect(regionalItem.getByRole('textbox', { name: 'Subquestion 1' })).toHaveValue(regionalQuestion);
+	await expect(regionalItem.locator('[data-slot="badge"][data-question-status]')).toHaveText('Complete answer');
+	await regionalItem.getByRole('button', { name: 'View complete answer for Subquestion 1' }).click();
+	const regionalPreview = regionalItem.getByRole('region', { name: 'Latest answer for Subquestion 1' });
+	await expect(regionalPreview).toContainText(regionalAnswer);
+	await expect(regionalPreview).toContainText('fixture-question-turn-2');
+	await regionalPreview.getByRole('button', { name: 'Open run details' }).click();
+	await expect(runDetail.locator('.analysis-run-question-snapshot')).toContainText(regionalQuestion);
+	await expect(runDetail.getByRole('region', { name: 'Definitions and source scope used' })).toContainText(regionEvidence.id);
+	await runDetail.getByRole('button', { name: 'Close saved analysis run' }).click();
+
+	await runQuestion('Subquestion 2');
+	const refundItem = page.locator('.question-list .question-item').nth(1);
+	await expect(refundItem.getByRole('textbox', { name: 'Subquestion 2' })).toHaveValue(refundQuestion);
+	await expect(refundItem.locator('[data-slot="badge"][data-question-status]')).toHaveText('Complete answer');
+	await refundItem.getByRole('button', { name: 'View complete answer for Subquestion 2' }).click();
+	const refundPreview = refundItem.getByRole('region', { name: 'Latest answer for Subquestion 2' });
+	await expect(refundPreview).toContainText(refundAnswer);
+	await expect(refundPreview).toContainText('fixture-question-turn-3');
+	await refundPreview.getByRole('button', { name: 'Open run details' }).click();
+	await expect(runDetail.locator('.analysis-run-question-snapshot')).toContainText(refundQuestion);
+	await expect(runDetail.getByRole('region', { name: 'Definitions and source scope used' })).toContainText(refundEvidence.id);
+	await runDetail.getByRole('button', { name: 'Close saved analysis run' }).click();
+
+	const downloadPromise = page.waitForEvent('download');
+	await page.getByRole('button', { name: 'Export report' }).click();
+	const download = await downloadPromise;
+	expect(download.suggestedFilename()).toBe('assess-second-quarter-sales-and-returns-across-regions-report.md');
+	const report = await readFile(await download.path(), 'utf8');
+	for (const expected of [
+		'Assess second-quarter sales and returns across regions.',
+		'Regional manager',
+		'A decision-ready regional summary',
+		'Partial answer',
+		'Only 10 of the requested 12 weeks are present.',
+		rootAnswer,
+		regionalQuestion,
+		regionalAnswer,
+		refundQuestion,
+		refundAnswer,
+		'needs review',
+		'flagged: The full twelve-week window is present',
+		'sales.csv (sales)',
+		'refunds.csv (refunds)',
+		'legacy-sales.csv',
+		rootEvidence.id,
+		regionEvidence.id,
+		refundEvidence.id,
+		'conversation transcript is excluded'
+	]) {
+		expect(report.toLowerCase()).toContain(expected.toLowerCase());
+	}
+	expect(report.indexOf(`Subquestion 1: ${regionalQuestion}`)).toBeLessThan(report.indexOf(`Subquestion 2: ${refundQuestion}`));
+	expect(report).not.toContain('Scoped to C:\\FellaFixture\\northwind-sales.');
+});
+
 test('saved analysis runs open from an Investigation and link to every Question they address', async ({ page }) => {
 	await installDesktopMock(page, { questionRunOutcomes: [{ status: 'answered', delay_ms: 250 }] });
 	await page.goto('/');

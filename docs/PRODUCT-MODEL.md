@@ -508,3 +508,18 @@ completed with 505 passed, 0 failed, and 2 ignored. The ignored cases are an
 interpreter timing test in debug mode and a manual 5,000-file performance/coverage
 probe. `pnpm check` completed with zero errors and warnings. No test expectation
 was weakened or changed for this gate.
+
+## Implementation checkpoint: multi-question Investigation validation (#219)
+
+A deterministic end-to-end journey now carries a main Question and two saved
+subquestions through separate runs. It verifies the main result remains
+explicitly partial with a flagged twelve-week coverage check; each subquestion
+opens its own answer and canonical run with the matching Question snapshot and
+source/evidence provenance; and the exported handoff includes audience,
+deliverable, answer coverage, QA, used/skipped sources, and evidence references
+without leaking the conversation transcript. The fixture fixes all answer and
+QA outputs, so the validation does not grade model wording. The targeted
+Playwright test passed. Two initial attempts exposed locator mistakes (evidence
+IDs belong to the saved run's source-scope panel, and subquestion text is held
+in input values); those locators were corrected without changing acceptance
+criteria.
