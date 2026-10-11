@@ -544,6 +544,7 @@ async function installDesktopMock(
 						question: params.question,
 						workspace: params.workspaceId,
 						contract: questionOutcome.contract,
+						source_scope: questionOutcome.source_scope,
 						investigation_context: {
 							investigation_id: params.investigationId,
 							question_id: params.questionId,
@@ -1213,6 +1214,70 @@ test('saved Investigation definitions are revisioned, attached to later asks, an
 	const removed = await page.evaluate((id) => window.fella.invoke('investigation_definition_load', { definitionId: id }), definitionId);
 	expect(removed).toMatchObject({ status: 'removed', revision: 3 });
 	expect(removed.history).toHaveLength(2);
+});
+
+test('saved run review exposes its method, query output, definitions, and actual source scope in the Investigation', async ({ page }) => {
+	const query = 'SELECT cohort_month, retained / cohort_size AS retention FROM cohort_retention ORDER BY cohort_month';
+	const evidence = {
+		id: 'review-cohort-query',
+		tool: 'run_sql',
+		note: 'Calculate retention by cohort',
+		sql: query,
+		result_summary: 'Three monthly cohorts were returned; retention ranged from 42% to 51%.',
+		columns: ['cohort_month', 'retention'],
+		rows: [['2026-01', 0.42], ['2026-02', 0.47], ['2026-03', 0.51]],
+		row_count: 3,
+		sources: [{ source: 'sales.csv', table: 'cohort_retention' }]
+	};
+	await installDesktopMock(page, {
+		detailEvidence: evidence,
+		questionRunOutcomes: [{
+			status: 'answered',
+			answer_text: 'Retention increased across the three monthly cohorts.',
+			source_scope: {
+				used_sources: [{ source: 'sales.csv', table: 'cohort_retention', evidence_ids: [evidence.id] }],
+				skipped_sources: ['legacy-retention.xlsx: encrypted workbook']
+			}
+		}]
+	});
+	await page.goto('/');
+	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
+	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
+	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill('Compare monthly retention by signup cohort');
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	await page.getByRole('button', { name: 'Add definition or assumption' }).click();
+	await page.getByRole('textbox', { name: 'Context note 1' }).fill('One row represents one signup-month cohort; retention is retained accounts divided by cohort accounts.');
+	await page.getByRole('button', { name: 'Save context' }).click();
+	await expect(page.locator('.definition-editor')).toContainText('Context saved');
+	await page.getByRole('button', { name: 'Analyze main Question' }).click();
+	await page.getByRole('region', { name: 'Review this run' }).getByRole('button', { name: 'Run this Question' }).click();
+	await expect(page.getByRole('region', { name: 'Question run' })).toBeHidden();
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+
+	const runLink = page.getByRole('button', { name: 'Open saved analysis run 1: Compare monthly retention by signup cohort' });
+	await runLink.click();
+	const runDetail = page.getByRole('region', { name: 'Saved analysis run' });
+	await expect(runDetail.locator('.analysis-run-question-snapshot')).toContainText('Compare monthly retention by signup cohort');
+	const runContext = runDetail.getByRole('region', { name: 'Definitions and source scope used' });
+	await expect(runContext).toContainText('All sources in the Question’s Investigation scope');
+	await expect(runContext).toContainText('sales.csv · cohort_retention');
+	await expect(runContext).toContainText(evidence.id);
+	await expect(runContext).toContainText('legacy-retention.xlsx: encrypted workbook');
+	await expect(runContext).toContainText('Definition · revision 1');
+	await expect(runContext).toContainText('One row represents one signup-month cohort; retention is retained accounts divided by cohort accounts.');
+
+	await runDetail.locator('.analysis-run-trace > summary').click();
+	await expect(runDetail.locator('.analysis-run-trace')).toContainText('run sql');
+	await expect(runDetail.locator('.analysis-run-trace')).toContainText('Succeeded');
+	const evidenceReview = runDetail.getByRole('region', { name: 'Query and output evidence' });
+	await expect(evidenceReview).toContainText('Calculate retention by cohort');
+	await evidenceReview.getByRole('button', { name: 'show the query' }).click();
+	await expect(evidenceReview).toContainText(query);
+	await expect(evidenceReview).toContainText('Three monthly cohorts were returned; retention ranged from 42% to 51%.');
+	await expect(evidenceReview).toContainText('2026-03');
 });
 
 test('Findings are saved outside the transcript and claim edits preserve run and evidence links', async ({ page }) => {

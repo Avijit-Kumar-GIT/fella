@@ -340,3 +340,14 @@ and lets the analyst capture one from a saved run. This establishes the
 claim-to-provenance primitive, not the full target contract above: caveat
 management, Finding coverage state, version history, review workflows, and
 linking reusable Artifacts to Findings remain later slices.
+
+## Implementation checkpoint: focused run review (#206)
+
+An analyst can open a saved run directly from its Investigation and inspect
+the Question, planned steps, recorded execution, answer, verification checks,
+and expandable query/output evidence. The same view shows the run-time source
+selection and definition revisions alongside sources actually referenced by
+evidence and catalog-skipped inputs. These are immutable snapshots, so later
+scope or definition edits do not rewrite the historical run. The surface
+makes method review possible; it does not claim to certify grain, filters,
+joins, or business interpretation on the analyst's behalf.

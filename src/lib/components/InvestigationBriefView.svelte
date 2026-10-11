@@ -10,6 +10,7 @@
 	import { runStateLabel } from '$lib/run-progress';
 	import type {
 		AnalysisTurn,
+		Answer,
 		ConversationSummary,
 		Investigation,
 		InvestigationBrief,
@@ -17,10 +18,12 @@
 		InvestigationFinding,
 		InvestigationQuestion,
 		InvestigationQuestionInput,
-		InvestigationQuestionAnswerStatus
+		InvestigationQuestionAnswerStatus,
+		InvestigationSourceSelection
 	} from '$lib/types';
 	import { findBriefProposal, type BriefProposal, type BriefProposalTarget } from '$lib/investigation-brief-proposal';
 	import Icon from './Icon.svelte';
+	import EvidenceBlock from './EvidenceBlock.svelte';
 	import InvestigationSourceReadiness from './InvestigationSourceReadiness.svelte';
 	import InvestigationQuestionSourceScope from './InvestigationQuestionSourceScope.svelte';
 	import QuestionAnswerPreview from './QuestionAnswerPreview.svelte';
@@ -524,6 +527,29 @@
 		if (linked.length) return linked.join(' · ');
 		const run = analysisTurns[turnId];
 		return run?.investigation_context?.question_text ?? run?.question ?? 'Conversation analysis';
+	}
+
+	function answerForAnalysisRun(run: AnalysisTurn): Answer {
+		return {
+			text: run.result.text,
+			evidence: run.result.evidence as Answer['evidence'],
+			verification: run.verification?.checks ?? run.result.verification,
+			trace: run.trace,
+			plan: run.plan,
+			contract: run.contract,
+			provenance: run.provenance,
+			status: run.result.status,
+			workspace: run.workspace && run.workspace_revision
+				? { path: run.workspace, revision: run.workspace_revision }
+				: undefined,
+			usage: run.result.usage
+		};
+	}
+
+	function sourceSelectionSummary(selection: InvestigationSourceSelection | undefined): string {
+		if (!selection) return 'No source-scope snapshot was recorded for this run.';
+		if (selection.mode === 'all_sources') return 'All sources in the Question’s Investigation scope';
+		return `${selection.included_paths.length} selected source${selection.included_paths.length === 1 ? '' : 's'}`;
 	}
 
 	async function openAnalysisRun(turnId: string): Promise<void> {
@@ -1435,12 +1461,95 @@
 											</ul>
 										</section>
 									{/if}
+									<section class="analysis-run-context" aria-label="Definitions and source scope used">
+										<header>
+							<h5>Inputs captured for this run</h5>
+							<p>This snapshot stays fixed even if the Investigation changes later.</p>
+										</header>
+										<dl class="analysis-run-context-facts">
+											<div>
+												<dt>Requested source scope</dt>
+												<dd>{sourceSelectionSummary(openAnalysisTurn.investigation_context?.source_selection)}</dd>
+											</div>
+							{#if openAnalysisTurn.investigation_context?.source_selection?.mode === 'selected_sources'}
+												<div>
+													<dt>Selected paths</dt>
+									<dd>{openAnalysisTurn.investigation_context.source_selection?.included_paths.join(', ') || 'None'}</dd>
+												</div>
+											{/if}
+											<div>
+												<dt>Sources actually used</dt>
+												<dd>
+													{#if openAnalysisTurn.source_scope}
+														{#if openAnalysisTurn.source_scope.used_sources.length}
+															<ul class="analysis-run-context-list">
+																{#each openAnalysisTurn.source_scope.used_sources as source (`${source.source}-${source.table ?? ''}`)}
+																	<li>
+													<span>{source.source}{#if source.table}{' · '}{source.table}{/if}</span>
+																		{#if source.evidence_ids.length}<small>Evidence: {source.evidence_ids.join(', ')}</small>{/if}
+																	</li>
+										{/each}
+															</ul>
+														{:else}
+															No source was linked to the recorded evidence.
+														{/if}
+													{:else}
+														Not recorded for this run.
+													{/if}
+												</dd>
+											</div>
+											<div>
+												<dt>Skipped sources</dt>
+												<dd>
+													{#if openAnalysisTurn.source_scope}
+														{#if openAnalysisTurn.source_scope.skipped_sources.length}
+															<ul class="analysis-run-context-list">
+																{#each openAnalysisTurn.source_scope.skipped_sources as source (source)}<li>{source}</li>{/each}
+															</ul>
+														{:else}
+															None recorded.
+														{/if}
+													{:else}
+														Not recorded for this run.
+													{/if}
+												</dd>
+											</div>
+										</dl>
+										<section class="analysis-run-context-definitions" aria-label="Definitions and assumptions at run time">
+											<h6>Definitions and assumptions</h6>
+											{#if openAnalysisTurn.investigation_context}
+												{#if openAnalysisTurn.investigation_context.definitions.length}
+													<ul>
+														{#each openAnalysisTurn.investigation_context.definitions as definition (definition.id)}
+															<li>
+																<strong>{definition.kind === 'definition' ? 'Definition' : 'Assumption'} · revision {definition.revision}</strong>
+																<span>{definition.text}</span>
+															</li>
+														{/each}
+													</ul>
+												{:else}
+													<p>No saved Investigation definitions or assumptions were active.</p>
+												{/if}
+											{:else}
+												<p>No Investigation context snapshot was recorded.</p>
+											{/if}
+										</section>
+									</section>
 									<div class="analysis-run-result" aria-label="Recorded answer">{openAnalysisTurn.result.text}</div>
 									<details class="analysis-run-trace">
-										<summary>Recorded method and evidence</summary>
+										<summary>Planned method and recorded execution</summary>
+										{#if openAnalysisTurn.plan.steps.length}
+											<h5>Planned steps</h5>
+											<ol>{#each openAnalysisTurn.plan.steps as step, index (`${openAnalysisTurn.id}-planned-${index}`)}<li>{step.replaceAll('_', ' ')}</li>{/each}</ol>
+										{/if}
 										<ol>
 											{#each openAnalysisTurn.trace.steps as step, index (`${openAnalysisTurn.id}-${index}`)}
-												<li>{step.operation}{#if step.duration_ms != null}<small> · {step.duration_ms} ms</small>{/if}</li>
+												<li>
+													<strong>{step.operation.replaceAll('_', ' ')}</strong>
+													<small>{step.success ? 'Succeeded' : 'Failed'}{#if step.duration_ms != null} · {step.duration_ms} ms{/if}</small>
+													{#if step.summary}<p>{step.summary}</p>{/if}
+													{#if step.sources.length}<p>Sources: {step.sources.join(', ')}</p>{/if}
+												</li>
 											{/each}
 										</ol>
 										{#if openAnalysisTurn.verification?.checks.length}
@@ -1448,6 +1557,17 @@
 											<ul>{#each openAnalysisTurn.verification.checks as check, index (`${openAnalysisTurn.id}-check-${index}`)}<li>{check.ok ? 'Passed' : 'Needs review'} · {check.label}</li>{/each}</ul>
 										{/if}
 									</details>
+									<section class="analysis-run-evidence" aria-label="Query and output evidence">
+										<header>
+							<h5>Query and output evidence</h5>
+							<p>Inspect the recorded queries and results against the run’s Question, definitions, and source scope.</p>
+										</header>
+										<EvidenceBlock
+											answer={answerForAnalysisRun(openAnalysisTurn)}
+											bodyId={`investigation-run-evidence-${openAnalysisTurn.id}`}
+											expanded={true}
+										/>
+									</section>
 									<fieldset class="analysis-run-question-links" disabled={savingQuestionLinks || questionsDirty}>
 										<legend>Questions this run addresses</legend>
 										{#if selected.questions?.length}
@@ -1641,6 +1761,22 @@
 	.analysis-run-facts dd, .analysis-run-question-snapshot dd { margin: 2px 0 0; font-size: var(--fs-sm); overflow-wrap: anywhere; }
 	.analysis-run-facts code { font-size: var(--fs-xs); }
 	.analysis-run-question-snapshot { padding-top: var(--space-2); margin: 0; border-top: 1px solid var(--border); }
+	.analysis-run-context { display: grid; gap: var(--space-2); padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); }
+	.analysis-run-context > header h5, .analysis-run-context-definitions h6, .analysis-run-evidence h5 { margin: 0; color: var(--text); font-size: var(--fs-sm); font-weight: 650; }
+	.analysis-run-context > header p, .analysis-run-evidence header p { margin: 3px 0 0; color: var(--text-dim); font-size: var(--fs-xs); }
+	.analysis-run-context-facts { display: grid; gap: var(--space-2); margin: 0; }
+	.analysis-run-context-facts > div { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: var(--space-2); }
+	.analysis-run-context-facts dt { color: var(--text-faint); font-size: var(--fs-xs); }
+	.analysis-run-context-facts dd { min-width: 0; margin: 0; font-size: var(--fs-xs); overflow-wrap: anywhere; }
+	.analysis-run-context-list, .analysis-run-context-definitions ul { display: grid; gap: var(--space-1); margin: 0; padding-left: var(--space-4); }
+	.analysis-run-context-list li { display: grid; gap: 2px; }
+	.analysis-run-context-list small { color: var(--text-faint); font-size: 11px; }
+	.analysis-run-context-definitions { display: grid; gap: var(--space-2); padding-top: var(--space-2); border-top: 1px solid var(--border); }
+	.analysis-run-context-definitions li { display: grid; gap: 2px; }
+	.analysis-run-context-definitions strong { font-size: var(--fs-xs); font-weight: 600; }
+	.analysis-run-context-definitions li span, .analysis-run-context-definitions p { margin: 0; color: var(--text-dim); font-size: var(--fs-xs); white-space: pre-wrap; overflow-wrap: anywhere; }
+	.analysis-run-evidence { display: grid; gap: var(--space-2); min-width: 0; }
+	.analysis-run-evidence :global(.evidence-body) { margin-top: 0; }
 	.analysis-run-assumptions { display: grid; gap: var(--space-2); padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); }
 	.analysis-run-assumptions h5 { margin: 0; color: var(--text); font-size: var(--fs-xs); font-weight: 650; }
 	.analysis-run-assumptions p { margin: 3px 0 0; color: var(--text-dim); font-size: var(--fs-xs); }
@@ -1654,6 +1790,7 @@
 	.analysis-run-trace ol, .analysis-run-trace ul { display: grid; gap: var(--space-1); margin: var(--space-2) 0 0; padding-left: var(--space-5); }
 	.analysis-run-trace h5 { margin: var(--space-3) 0 0; color: var(--text); font-size: var(--fs-xs); }
 	.analysis-run-trace li small { color: var(--text-faint); }
+	.analysis-run-trace li p { margin: 2px 0 0; color: var(--text-dim); }
 	.analysis-run-question-links { display: grid; gap: var(--space-2); min-width: 0; padding: var(--space-3); margin: 0; border: 1px solid var(--border); border-radius: var(--radius-sm); }
 	.analysis-run-question-links legend { padding: 0 var(--space-1); color: var(--text-faint); font-size: var(--fs-xs); font-weight: 600; }
 	.analysis-run-question-links label { display: flex; align-items: flex-start; gap: var(--space-2); margin: 0; font-size: var(--fs-sm); cursor: pointer; }
