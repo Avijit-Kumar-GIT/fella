@@ -17,6 +17,7 @@ use crate::engine::context::{ContextAssembler, ContextAssemblyAudit, ContextPack
 use crate::engine::error::{EngineError, EngineResult};
 use crate::engine::evidence::{Answer, AskEvent, EvidenceItem};
 use crate::engine::ingest::docs;
+use crate::engine::investigation::{self, Investigation};
 use crate::engine::llm::{LlmClient, ProviderHealth};
 use crate::engine::memory::{self, FolderMemory};
 use crate::engine::provider::{self, AuthKind, PROVIDERS};
@@ -1822,6 +1823,27 @@ impl EngineState {
     /// contract/plan/trace/result used by future replay and rerun features.
     pub fn analysis_turn_load(&self, turn_id: &str) -> EngineResult<AnalysisTurn> {
         analysis_store::load(&self.data_dir, turn_id)
+    }
+
+    /// Create one durable Investigation record without coupling it to a
+    /// transcript or execution record. Automatic conversation association is
+    /// handled by the product layer, not by the analytics loop.
+    pub fn investigation_create(
+        &self,
+        workspace_id: &str,
+        title: &str,
+    ) -> EngineResult<Investigation> {
+        investigation::create(&self.data_dir, workspace_id, title)
+    }
+
+    /// Load an Investigation independently of the conversation UI.
+    pub fn investigation_load(&self, id: &str) -> EngineResult<Investigation> {
+        investigation::load(&self.data_dir, id)
+    }
+
+    /// List durable Investigation records, newest activity first.
+    pub fn investigations_list(&self) -> EngineResult<Vec<Investigation>> {
+        investigation::list(&self.data_dir)
     }
 
     /// Recent local run metadata for Settings. This is a projection of saved

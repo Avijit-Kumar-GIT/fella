@@ -14,6 +14,7 @@ import type {
 	ClarificationReply,
 	ContextReference,
 	ConversationSummary,
+	Investigation,
 	ProviderHealth,
 	ProviderInfo,
 	QueryResult,
@@ -132,6 +133,14 @@ export const ipc = {
 	runLogRecent: (limit = 50) => invoke<RunLogEntry[]>('run_log_recent', { limit }),
 	/** Load the canonical backend record for one analytical turn. */
 	analysisTurnLoad: (turnId: string) => invoke<AnalysisTurn>('analysis_turn_load', { turnId }),
+	/** Create a durable workspace-scoped Investigation record. */
+	investigationCreate: (workspaceId: string, title = 'New investigation') =>
+		invoke<Investigation>('investigation_create', { workspaceId, title }),
+	/** Load one Investigation independently of its conversation surface. */
+	investigationLoad: (investigationId: string) =>
+		invoke<Investigation>('investigation_load', { investigationId }),
+	/** List durable Investigations, most recently updated first. */
+	investigationsList: () => invoke<Investigation[]>('investigations_list'),
 	/** Compare a stored turn's source snapshot with the mounted workspace. */
 	analysisTurnReplayStatus: (turnId: string, workspaceId?: string | null) =>
 		invoke<AnalysisTurnReplayStatus>('analysis_turn_replay_status', { turnId, ...workspaceArgs(workspaceId) }),

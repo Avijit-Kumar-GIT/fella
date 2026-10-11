@@ -409,6 +409,16 @@ export interface AnalysisTurn {
 	};
 }
 
+/** Durable parent record for workspace-scoped analyst work. */
+export interface Investigation {
+	id: string;
+	workspace_id: string;
+	title: string;
+	status: 'active' | 'complete' | 'archived';
+	created_at_ms: number;
+	updated_at_ms: number;
+}
+
 export type WorkspaceChangeKind = 'added' | 'removed' | 'changed';
 
 export interface WorkspaceSourceChange {

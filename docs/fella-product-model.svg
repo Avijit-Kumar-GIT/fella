@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1800 1320" role="img" aria-labelledby="title desc">
   <title id="title">Fella product model: current desktop and north-star desktop</title>
-  <desc id="desc">A before-and-after comparison. Today, Fella has a capable model-directed analytics harness organized around conversations and persisted analysis turns, with source and project views alongside it. The target keeps that harness and organizes sustained analytical work as an Investigation inside an explicitly scoped Workspace. An Investigation connects a brief, questions, decisions, conversations, existing analysis turns, evidence, verification, findings, and reusable artifacts. Projects curate selected results; an optional CLI and FellaDB support explicit filesystem discovery.</desc>
+  <desc id="desc">A before-and-after comparison. Today, Fella has a capable model-directed analytics harness organized around conversations and persisted analysis turns, with source and project views alongside it. The target keeps that harness and automatically gives each workspace-scoped conversation one durable Investigation inside its explicitly scoped Workspace. The Investigation links, without duplicating, a brief, questions, decisions, the conversation, existing analysis turns, evidence, verification, findings, and reusable artifacts. Projects curate selected results; an optional CLI and FellaDB support explicit filesystem discovery.</desc>
 
   <defs>
     <linearGradient id="mark" x1="0" y1="0" x2="1" y2="1">
@@ -170,7 +170,7 @@
   <path d="M1335 404v20" class="arrow-teal"/>
   <rect x="975" y="428" width="720" height="574" rx="18" class="investigation"/>
   <text x="1000" y="460" class="eyebrow-teal">INVESTIGATION · DURABLE UNIT OF ANALYST WORK</text>
-  <text x="1000" y="488" class="heading">A lightweight work container around the existing conversation and turns</text>
+  <text x="1000" y="488" class="heading">One per workspace conversation; grows only as the work needs it</text>
 
   <rect x="998" y="508" width="300" height="83" rx="11" class="card-teal"/>
   <text x="1016" y="532" class="eyebrow-teal">BRIEF</text>

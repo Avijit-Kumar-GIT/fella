@@ -96,6 +96,9 @@ The diagram summarizes the current desktop and the target model. The target
 adds a durable Investigation layer around the existing conversation and
 analysis-turn machinery; it does not replace the analytics harness.
 
+The canonical definitions, ownership rules, lifecycle semantics, and mapping
+to the 42 implementation issues live in the [Fella product model](PRODUCT-MODEL.md).
+
 ![Before and north-star product model for the Fella desktop](fella-product-model.svg)
 
 ## Product identity and boundaries
@@ -140,9 +143,9 @@ primitives**; they must not be conflated.
 | --- | --- | --- |
 | **Workspace** | An explicit analysis boundary: General or a mounted folder. It owns the applicable catalog, context, memory, conversations, and workspace identity. It is not an environment tab or pane arrangement. | Workspace identity, catalog, revisions, and scoped state exist. |
 | **Source** | A cataloged file, workbook sheet, or document available within a workspace. Its useful identity includes its workspace-relative identity and the revision/profile used for analysis, not just a display name. | Catalog entries and source profiles exist; supported and skipped inputs are represented. |
-| **Investigation** | The durable unit of analyst work. It owns the problem brief, intended outcome, scope history, questions, material decisions, progress, findings, unresolved work, and handoff state across sessions. | **Missing as a first-class object.** Today this work is mostly implicit in conversation prose and separate turns. |
+| **Investigation** | The durable aggregate for one workspace-scoped analytical conversation. It owns the identity and lifecycle of that work and links its brief, source-scope choices, Questions, decisions, analysis turns, Findings, unresolved work, and handoff state. It references those records rather than copying transcripts, execution traces, or evidence payloads into itself. | **Missing as a first-class object.** Today this work is split between a conversation archive and separate turn records. |
 | **Question** | The original request or a decomposed question that contributes to resolving it. Questions can be open, active, answered, blocked, or awaiting a decision; dependencies should be recorded only when they help the analyst. | A turn has a question string and the model may decompose work, but there is no durable question tree or coverage state. |
-| **Conversation** | The interaction thread for asking, clarifying, directing, and reviewing. It has one stable workspace scope. A conversation can be associated with an investigation, but not every general chat needs to become one. | Persistent conversations and clarification continuity exist. |
+| **Conversation** | The interaction thread for asking, clarifying, directing, and reviewing. It has one stable workspace scope. In the initial model, each workspace-scoped analytical conversation has exactly one Investigation; General conversations remain unbound unless the user explicitly selects a source or scope. | Persistent conversations and clarification continuity exist. |
 | **Analysis turn** | One bounded execution of a question: its input, workspace snapshot, interpretation/contract where present, plan, tool activity, result, evidence, verification, and rerun lineage. This is the unit to inspect and replay. | A canonical persisted turn already exists. It is currently the closest thing Fella has to a durable work object. |
 | **Step** | A meaningful operation within a turn—such as inspecting a source, querying, calculating, checking, or producing a chart. A step should show its purpose, relevant inputs, result, and status without exposing private model reasoning. | Tool traces and evidence approximate steps, but they are not yet a durable, analyst-operable work surface. |
 | **Definition / decision** | A scoped semantic choice: for example, what counts as an active customer, which date defines a month, or how missing values are handled. It records its authority—observed, model-proposed, user-confirmed—and where it applies. | Per-turn analysis contracts and workspace semantic memory provide partial support; case-specific decisions are not a first-class investigation record. |
@@ -166,43 +169,79 @@ truth for their current interaction rules.
 ```text
 Workspace ──contains──> Sources and workspace-scoped definitions
     │
-    └──> Investigation
-           ├── brief and Questions
+    └──> Investigation (one per workspace-scoped conversation)
+           ├── brief, source-scope choices, Questions
            ├── Decisions and unresolved choices
-           ├── Conversation(s)
-           ├── Analysis turns
-           │      └── Steps ──produce──> Evidence
-           └── Findings ──render as──> Artifacts
+           ├── one Conversation ──contains──> Messages
+           ├── Analysis turns (one conversation may span many turns)
+           │      └── Steps ──produce──> Evidence and verification
+           └── Findings ──supported by──> Evidence
+                    └── render as──> Artifacts
 
 Project ──curates selected──> Findings, Artifacts, Definitions
 Environment / Pane / Surface ──reference existing objects; own no analysis
 ```
 
+### Investigation record contract
+
+For the initial desktop model, an Investigation is the durable anchor for one
+workspace-scoped analytical conversation—not a container that duplicates all
+of its data. Its minimum identity is:
+
+- **`id`** — stable for the lifetime of the Investigation; never derived from
+  its editable title or its position in the UI.
+- **`workspace_ref`** — points to exactly one Workspace. The Investigation
+  cannot silently move to another workspace; work in a different workspace
+  starts a separate Investigation.
+- **`conversation_ref`** — points to exactly one Conversation in the initial
+  model. That conversation can continue across sessions and contain many
+  turns. This association is created automatically for workspace analysis;
+  General remains unbound unless the user explicitly scopes it.
+- **`title`** — a compact, user-editable label for finding the work again; it
+  is not the source of identity or analytical meaning.
+- **`status`, `created_at`, `updated_at`** — minimal lifecycle metadata. The
+  lifecycle issue defines what each status means; a status must not be inferred
+  merely from whether the latest run finished.
+
+The Investigation owns its identity, workspace boundary, conversation link,
+and overall lifecycle. Brief, Questions, source-scope decisions, analysis
+turns, Findings, and Artifacts remain their own concepts and are linked to the
+Investigation as their definitions are established. Transcript messages,
+execution traces, evidence payloads, and verification details remain owned by
+their existing records. The Investigation may summarize or index them, but it
+must not become a second source of truth for their contents.
+
 The intended distinction is: **Investigation is the unit of work;
 Conversation is the unit of interaction; Analysis turn is the unit of
-execution; Evidence is the unit of support; Finding is the unit of conclusion;
-Artifact is the unit of reuse.**
+execution; Step is the unit of inspectable activity; Evidence is the unit of
+support; Finding is the unit of conclusion; Artifact is the unit of reuse.**
 
 This is a shift in emphasis, not a replacement of conversation. The current
-app makes the conversation the durable interaction unit. The vision makes the
-investigation the durable domain unit while keeping conversation as the natural
-way to direct and discuss the work. A quick, self-contained answer need not
-create an investigation; a continuing or multi-part job should be promotable
-without losing its conversation or turn history.
+app makes the conversation the durable interaction unit. The target makes the
+Investigation the durable domain unit while keeping conversation as the
+natural way to direct and discuss the work. Every workspace-scoped analytical
+conversation receives a lightweight Investigation automatically, including a
+quick one-question exchange. Its record stays small until the work needs more
+structure; Questions, decisions, Findings, and handoff details accumulate as
+the analyst uses them. This adds no creation ceremony and avoids a disruptive
+promotion step. General remains outside this association unless explicitly
+scoped by the user.
 
 For an initial investigation model, keep one explicit workspace scope at a
-time. If the analyst changes the folder or source revision, make that change
-visible and preserve which revision each turn used. A future multi-workspace
-investigation should be an explicit product decision, not an accidental side
-effect of arranging panes.
+time and make that scope stable for the Investigation's lifetime. A different
+workspace starts a different Investigation; a changed source revision within
+the same workspace is made visible and recorded on the affected turn. A future
+multi-workspace investigation should be an explicit product decision, not an
+accidental side effect of arranging panes.
 
 ## The target analyst experience
 
 The analyst should be able to enter through a simple question or **Check
-data**, then move into more structure only when the work warrants it. A small
-question should still feel lightweight. A multi-part, consequential, or
-long-running request should grow into an investigation without forcing the
-user to rebuild context.
+data**. Every workspace-scoped analytical conversation gets a lightweight
+Investigation record automatically, while the interface reveals more structure
+only when the work warrants it. A small question should still feel lightweight;
+a multi-part, consequential, or long-running request should accumulate useful
+Questions, decisions, and Findings without forcing the user to rebuild context.
 
 An investigation should make the following legible and steerable:
 
@@ -396,10 +435,11 @@ implementation after seeing its output.
 
 ### 2. Give long-running work a home
 
-Introduce the lightest useful Investigation and Question objects. Let a user
-start casually, then make a multi-part or continuing job resumable. Preserve
-the brief, scope, question progress, decisions, linked turns, and open items.
-Do not require every simple chat answer to become an investigation.
+Introduce the lightest useful Investigation and Question objects. Create one
+automatically for each workspace-scoped analytical conversation, then let its
+structure grow only as needed. Preserve the brief, scope, question progress,
+decisions, linked turns, and open items without adding a setup step to simple
+analysis.
 
 ### 3. Make the analytical method steerable
 
@@ -454,8 +494,8 @@ multi-session analyst work, not only short prompt/answer demonstrations.
 The vision sets direction while leaving a few interaction choices open for
 prototyping and evaluation:
 
-- What signals should promote a lightweight conversation into an
-  Investigation, and how can the user do that explicitly?
+- What additional structure should appear by default, and what should remain
+  implicit until the analyst needs it?
 - Which parts of a decomposition are directly editable, and which are better
   corrected through conversation?
 - What is the right granularity for a visible Step so the work is transparent
