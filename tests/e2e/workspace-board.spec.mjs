@@ -2994,6 +2994,46 @@ test('Analysis details uses the shared button and preserves disclosure state', a
 	await expect(page.getByText('Source details were not recorded for this archived answer.')).toHaveCount(0);
 });
 
+test('General chat stays usable without creating or inheriting a workspace Investigation', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+	const request = 'What is a useful way to compare two trend lines?';
+	await page.getByRole('combobox', { name: 'Ask a question' }).fill(request);
+	await page.getByRole('button', { name: 'Send' }).click();
+
+	const answer = page.locator('.msg.assistant').last();
+	await expect(answer).toContainText('Scoped to general.');
+	const generalAsk = await page.evaluate(() => window.__workspaceAskCalls.at(-1));
+	expect(generalAsk.workspaceId).toBeNull();
+	expect(generalAsk.investigationId).toBeNull();
+	expect(generalAsk.questionId).toBeNull();
+	expect(generalAsk.question).toBe(request);
+	expect(await page.evaluate(() => window.__workspaceInvestigationEnsureCalls)).toEqual([]);
+	expect(await page.evaluate(() => window.__workspaceInvestigations())).toEqual([]);
+});
+
+test('workspace-scoped analysis still auto-links its Investigation to the conversation', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
+	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill('Summarize sales trends');
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
+
+	const result = await page.evaluate(() => ({
+		ask: window.__workspaceAskCalls.at(-1),
+		ensureCalls: window.__workspaceInvestigationEnsureCalls,
+		investigations: window.__workspaceInvestigations()
+	}));
+	expect(result.ask.workspaceId).toBe(folders[0].path);
+	expect(result.ensureCalls).toHaveLength(1);
+	expect(result.ensureCalls[0].workspaceId).toBe(folders[0].path);
+	expect(result.ensureCalls[0].conversationId).toBe(result.ask.conversationId);
+	expect(result.investigations).toHaveLength(1);
+	expect(result.investigations[0].conversation_id).toBe(result.ask.conversationId);
+});
+
 test('Evidence query disclosure uses a shared button and preserves expansion behavior', async ({ page }) => {
 	await installDesktopMock(page, {
 		detailEvidence: {

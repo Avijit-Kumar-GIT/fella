@@ -17,6 +17,22 @@ const INVESTIGATIONS_DIR: &str = "investigations";
 const QUESTIONS_DIR: &str = "questions";
 const DEFINITIONS_DIR: &str = "definitions";
 const FINDINGS_DIR: &str = "findings";
+const GENERAL_WORKSPACE_SENTINEL: &str = "general";
+
+fn validate_workspace_id(workspace_id: &str) -> EngineResult<&str> {
+    let workspace_id = workspace_id.trim();
+    if workspace_id.is_empty() {
+        return Err(EngineError::msg(
+            "an investigation requires an explicit workspace id",
+        ));
+    }
+    if workspace_id == GENERAL_WORKSPACE_SENTINEL {
+        return Err(EngineError::msg(
+            "General conversations cannot own workspace Investigations",
+        ));
+    }
+    Ok(workspace_id)
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -1554,12 +1570,7 @@ pub fn create(
     source_message_id: Option<&str>,
     conversation_id: Option<&str>,
 ) -> EngineResult<Investigation> {
-    let workspace_id = workspace_id.trim();
-    if workspace_id.is_empty() {
-        return Err(EngineError::msg(
-            "an investigation requires an explicit workspace id",
-        ));
-    }
+    let workspace_id = validate_workspace_id(workspace_id)?;
 
     let title = title.trim();
     let title = if title.is_empty() {
@@ -1666,14 +1677,9 @@ pub fn ensure_for_conversation(
 ) -> EngineResult<Investigation> {
     const MAX_SOURCE_MESSAGE_ID_CHARS: usize = 256;
 
-    let workspace_id = workspace_id.trim();
+    let workspace_id = validate_workspace_id(workspace_id)?;
     let conversation_id = conversation_id.trim();
     let source_message_id = source_message_id.trim();
-    if workspace_id.is_empty() {
-        return Err(EngineError::msg(
-            "an investigation requires an explicit workspace id",
-        ));
-    }
     if conversation_id.is_empty() || conversation_id.chars().count() > MAX_SOURCE_MESSAGE_ID_CHARS {
         return Err(EngineError::msg(
             "an investigation requires a valid conversation id",
@@ -3408,6 +3414,31 @@ mod tests {
         assert_eq!(created.title, "New investigation");
         assert!(create(&data_dir, "  ", "No scope", None, None, None).is_err());
         assert!(load(&data_dir, "../conversation").is_err());
+
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn general_workspace_sentinel_cannot_create_or_ensure_an_investigation() {
+        let data_dir = scratch();
+        let create_error = create(&data_dir, "general", "General chat", None, None, None)
+            .expect_err("General is not a workspace scope");
+        assert!(create_error
+            .to_string()
+            .contains("General conversations cannot own workspace Investigations"));
+
+        let ensure_error = ensure_for_conversation(
+            &data_dir,
+            "general",
+            "general-conversation",
+            "What is a median?",
+            "message-general",
+        )
+        .expect_err("General conversations cannot be auto-associated");
+        assert!(ensure_error
+            .to_string()
+            .contains("General conversations cannot own workspace Investigations"));
+        assert!(list(&data_dir).unwrap().is_empty());
 
         let _ = std::fs::remove_dir_all(data_dir);
     }

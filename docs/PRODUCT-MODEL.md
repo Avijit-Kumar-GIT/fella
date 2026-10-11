@@ -455,3 +455,12 @@ is not labeled fully answered. Export is disabled while the brief, Question
 plan, or definitions have unsaved edits or an active run is still executing.
 Source references remain workspace-relative where possible; paths outside that
 scope are reduced to filenames before export.
+
+## Implementation checkpoint: General stays outside workspace Investigations (#215)
+
+General conversations continue to use the ordinary answer path with no
+workspace, Question, or Investigation context. Automatic Investigation setup
+requires an explicit workspace scope, and the backend rejects the reserved
+`general` scope for both manual creation and automatic association. Any future
+disk-level search or analysis must define its own scope before it can use these
+workspace primitives.
