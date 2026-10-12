@@ -591,6 +591,9 @@ async function installDesktopMock(
 			sampleWorkspacePath: async () => sampleWorkspacePath,
 			ask: async (params, onEvent) => {
 				calls.push(params);
+				if (window.__workspaceAskDelayMs > 0) {
+					await new Promise((resolve) => setTimeout(resolve, window.__workspaceAskDelayMs));
+				}
 				let questionTurnId;
 				let questionParentTurnId;
 				const questionTurnNumber = calls.filter((call) => call.questionId).length;
@@ -816,6 +819,53 @@ test('a question entered before folder selection remains targeted to the chosen 
 	const ask = await page.evaluate(() => window.__workspaceAskCalls[0]);
 	expect(ask.workspaceId).toBe(folders[0].path);
 	expect(ask.investigationId).toBeTruthy();
+});
+
+test('workspace board labels its message target and keeps in-flight work in its original Workspace', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
+
+	const board = page.getByRole('region', { name: 'Workspace board' });
+	await expect(board.getByRole('heading', { name: 'Open workspaces' })).toBeVisible();
+	await expect(board).toContainText('Select a pane to set the message target.');
+	await expect(board).toContainText('Workspaces stay separate.');
+	const salesTile = page.getByRole('article', { name: 'northwind-sales workspace' });
+	const generalTile = page.getByRole('article', { name: 'General workspace' });
+	await salesTile.locator('.tile-focus').click();
+	await expect(salesTile.locator('.pane-state')).toHaveText('Active');
+	await expect(salesTile.locator('.tile-investigation-summary')).toContainText('Investigation');
+	const salesComposer = page.getByRole('combobox', { name: 'Ask about northwind-sales' });
+	await expect(salesComposer).toBeVisible();
+	await expect(page.getByTestId('composer-scope-target')).toHaveText('Message target northwind-sales');
+
+	await page.evaluate(() => { window.__workspaceAskDelayMs = 1500; });
+	await salesComposer.fill('Summarize sales trends');
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(salesTile.locator('.tile-investigation-summary')).toContainText(
+		'Analysis in progress · remains in this Workspace'
+	);
+
+	await generalTile.locator('.tile-preview').click();
+	await expect(generalTile.locator('.pane-state')).toHaveText('Active');
+	await expect(salesTile.locator('.pane-state')).toHaveText('Inactive');
+	await expect(salesTile.locator('.tile-preview')).toContainText('Inactive preview · select to open');
+	await expect(salesTile.locator('.tile-investigation-summary')).toContainText(
+		'Analysis in progress · remains in this Workspace'
+	);
+	await expect(page.getByRole('combobox', { name: 'Ask a question' })).toBeVisible();
+	await expect(page.getByTestId('composer-scope-target')).toHaveText('Message target General (unbound)');
+	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toHaveCount(0);
+	await expect(page.getByRole('log', { name: 'conversation' }).getByText('Scoped to C:\\FellaFixture\\northwind-sales.', { exact: true })).toHaveCount(0);
+
+	await expect(salesTile.locator('.tile-preview')).toContainText('Scoped to C:\\FellaFixture\\northwind-sales.');
+	const call = await page.evaluate(() => window.__workspaceAskCalls.at(-1));
+	expect(call.workspaceId).toBe(folders[0].path);
+	await salesTile.locator('.tile-preview').click();
+	await expect(salesTile.locator('.pane-state')).toHaveText('Active');
+	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
+	await expect(page.getByTestId('composer-scope-target')).toHaveText('Message target northwind-sales');
+	await expect(page.getByRole('log', { name: 'conversation' }).getByText('Scoped to C:\\FellaFixture\\northwind-sales.', { exact: true })).toBeVisible();
 });
 
 test('environments compose General and repository panes while conversations retain their original scope', async ({ page }) => {

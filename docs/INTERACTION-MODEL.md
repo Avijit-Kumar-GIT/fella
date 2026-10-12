@@ -128,6 +128,27 @@ empty/loading states belong to the relevant panel. The composer continues to
 target the active Workspace; it is not an independent panel or a way to combine
 Workspace data.
 
+### Environment and Workspace scope
+
+An Environment is a saved arrangement of open panes, not a shared analysis
+scope. The Workspace board is the access point for the panes open in that
+Environment; the Workspaces sidebar remains the way to open another folder.
+General may appear beside folder Workspaces, but it remains an unbound
+conversation rather than a data source.
+
+- Exactly one pane is active at a time. Its header marks it **Active**, and the
+  composer names its current message target immediately above the input.
+- Inactive panes are previews, not second live work surfaces. They identify the
+  Workspace, its associated Investigation and coverage/status, and the recent
+  conversation; selecting one makes its own conversation active.
+- Switching panes changes which Conversation receives a new message. It does
+  not move an existing request, transcript, Investigation, or source scope. If
+  a request is still running after a switch, its original Workspace preview
+  continues to show that work as in progress.
+- A multi-pane Environment does not combine sources or authorize
+  cross-Workspace analysis. Any future comparison across Workspaces must be an
+  explicit capability with a separately defined scope and user action.
+
 ## How the views relate
 
 - A user can ask in Focus without choosing a view first. Fella creates or

@@ -44,6 +44,11 @@
 	let unavailableWorkspaceName = $derived(
 		unavailableWorkspacePath?.replace(/[/\\]+$/, '').replace(/^.*[/\\]/, '') ?? ''
 	);
+	let boardComposerTarget = $derived(
+		unavailableWorkspacePath
+			? `${unavailableWorkspaceName} (unavailable)`
+			: folderName || 'General (unbound)'
+	);
 	let placeholder = $derived(
 		session.pendingKey
 			? `Paste your ${session.pendingKey.display} API key…`
@@ -505,6 +510,12 @@
 				<Button variant="ghost" size="sm" class="workspace-reopen" onclick={() => void openRepository(unavailableWorkspacePath!, { reportFailure: true })}>Open workspace</Button>
 			</div>
 		{/if}
+		{#if session.workspaceView === 'board' && !pendingInput}
+			<div class="composer-scope-note" data-testid="composer-scope-target" aria-label={`Message target: ${boardComposerTarget}`}>
+				<span>Message target</span>
+				<strong>{boardComposerTarget}</strong>
+			</div>
+		{/if}
 		{#if !pendingInput}
 			<div class="context-row">
 				{#each contextRefs as ref (ref.kind + ':' + ref.key)}
@@ -723,6 +734,23 @@
 		min-height: 18px;
 		overflow-x: auto;
 		scrollbar-width: none;
+	}
+	.composer-scope-note {
+		display: flex;
+		align-items: baseline;
+		gap: 6px;
+		min-width: 0;
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+		line-height: 1.35;
+	}
+	.composer-scope-note strong {
+		min-width: 0;
+		overflow: hidden;
+		color: var(--text-dim);
+		font-weight: 600;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 	.context-row::-webkit-scrollbar {
 		display: none;

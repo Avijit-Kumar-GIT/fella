@@ -1,9 +1,11 @@
 <script lang="ts">
 	import { openRepository } from '$lib/commands';
 	import { Button } from '$lib/components/ui/button';
+	import { ipc } from '$lib/ipc';
 	import { firstActualQuestion, session } from '$lib/session.svelte';
 	import { resolveWorkspaceTileLayout } from '$lib/workspace-layout';
 	import type { WorkspaceTilePreference } from '$lib/workspace-layout';
+	import type { Investigation } from '$lib/types';
 	import type Transcript from './Transcript.svelte';
 	import CompanionPane from './CompanionPane.svelte';
 	import Icon from './Icon.svelte';
@@ -14,6 +16,9 @@
 	let dragPreference = $state<WorkspaceTilePreference>({ ...session.workspaceLayout });
 	let dragTargetIndex = $state(0);
 	let dragAddsPane = $state(false);
+	let investigationRecords = $state<Investigation[] | null>(null);
+	let investigationLoadFailed = $state(false);
+	let investigationRequest = 0;
 
 	let tiles = $derived(
 		resolveWorkspaceTileLayout(session.activeEnvironmentPanes.map((pane) => pane.id), session.workspaceLayout)
@@ -54,6 +59,89 @@
 		if (!answer) return '';
 		return answer.length > 240 ? `${answer.slice(0, 237).trimEnd()}…` : answer;
 	}
+
+	function conversationForPane(paneId: string) {
+		const pane = session.paneAt(paneId);
+		return pane && session.conversations.find((item) => item.id === pane.conversationId);
+	}
+
+	function investigationForPane(paneId: string): Investigation | null {
+		if (!investigationRecords) return null;
+		const pane = session.paneAt(paneId);
+		if (!pane?.workspaceId) return null;
+		const question = firstActualQuestion(conversationForPane(paneId)?.messages ?? []);
+		return investigationRecords.find((item) =>
+			item.conversation_id === pane.conversationId ||
+			(Boolean(question) && item.brief_source_message_id === question?.id)
+		) ?? null;
+	}
+
+	function investigationTitle(paneId: string): string {
+		const pane = session.paneAt(paneId);
+		if (!pane?.workspaceId) return 'General';
+		const investigation = investigationForPane(paneId);
+		if (investigation) return investigation.title.trim() || investigation.brief.goal.trim() || 'Investigation';
+		if (investigationRecords === null) return 'Loading Investigation…';
+		if (investigationLoadFailed) return 'Investigation status unavailable';
+		return 'No Investigation yet';
+	}
+
+	function investigationStatus(paneId: string): string {
+		const pane = session.paneAt(paneId);
+		if (!pane?.workspaceId) return 'Unbound · separate from Workspace data';
+		if (conversationForPane(paneId)?.busy) return 'Analysis in progress · remains in this Workspace';
+		const investigation = investigationForPane(paneId);
+		if (investigation) {
+			const questions = (investigation.questions ?? []).filter((question) => question.status === 'active');
+			const answered = questions.filter((question) => question.answer_status === 'answered').length;
+			const needsAttention = questions.length - answered;
+			if (investigation.status === 'archived') return `Archived · ${answered}/${questions.length} answered`;
+			if (investigation.status === 'complete') {
+				return needsAttention
+					? `Closed with gaps · ${needsAttention} need attention`
+					: `Complete · ${answered}/${questions.length} answered`;
+			}
+			if (!questions.length) return 'Active · no Questions yet';
+			return needsAttention
+				? `Active · ${answered}/${questions.length} answered · ${needsAttention} need attention`
+				: `Active · ${answered}/${questions.length} answered`;
+		}
+		if (investigationRecords === null) return 'Loading status…';
+		if (investigationLoadFailed) return 'Investigation status unavailable';
+		const workspace = session.workspaceAt(pane.workspaceId);
+		if (workspace?.historyOnly || session.historyOnlyRepositoryPaths.includes(pane.workspaceId)) {
+			return 'History only · reconnect to continue';
+		}
+		return 'No saved Investigation';
+	}
+
+	$effect(() => {
+		const environment = session.activeEnvironment;
+		const paneSignature = (environment?.panes ?? []).map((pane) => {
+			const conversation = session.conversations.find((item) => item.id === pane.conversationId);
+			return `${pane.id}:${pane.workspaceId ?? 'general'}:${pane.conversationId}:${conversation?.messages.length ?? 0}`;
+		}).join('|');
+		const investigationsVersion = session.investigationsVersion;
+		void paneSignature;
+		void investigationsVersion;
+
+		const request = ++investigationRequest;
+		investigationRecords = null;
+		investigationLoadFailed = false;
+		if (!(environment?.panes ?? []).some((pane) => pane.workspaceId)) {
+			investigationRecords = [];
+			return;
+		}
+
+		void ipc.investigationsList().then((records) => {
+			if (request !== investigationRequest) return;
+			investigationRecords = records;
+		}).catch(() => {
+			if (request !== investigationRequest) return;
+			investigationRecords = [];
+			investigationLoadFailed = true;
+		});
+	});
 
 	function gridPlacement(rect: { x: number; y: number; width: number; height: number }): string {
 		const column = Math.round(rect.x * 4) + 1;
@@ -175,6 +263,13 @@
 	ondragleave={onDragLeave}
 	ondrop={(event) => void onDrop(event)}
 >
+	<div class="board-heading">
+		<div>
+			<h2>Open workspaces</h2>
+			<p>Select a pane to set the message target. Workspaces stay separate.</p>
+		</div>
+		<span>{session.activeEnvironmentPanes.length} open</span>
+	</div>
 	<div class="tile-grid" class:empty={tiles.length === 0}>
 		{#each tiles as tile (tile.id)}
 			{@const pane = session.paneAt(tile.id)}
@@ -189,23 +284,33 @@
 					<header
 						class="tile-head"
 						role="group"
-						aria-label={`Drag ${workspaceName(pane.id)} to rearrange workspaces`}
+						aria-label={`${workspaceName(pane.id)} workspace. ${session.activeEnvironment?.activePaneId === pane.id ? 'Active message target.' : 'Inactive preview.'} Drag to rearrange workspaces.`}
 						draggable="true"
 						ondragstart={(event) => startWorkspaceDrag(event, pane.id)}
 					>
-						<Button
-							variant="ghost"
-							class="tile-focus"
-							aria-pressed={session.activeEnvironment?.activePaneId === pane.id}
-							title={workspace?.path ?? 'Conversations that are not tied to a folder'}
-							onclick={() => session.focusEnvironmentPane(pane.id)}
-						>
-							<Icon name={workspace ? 'repository' : 'ask'} size={16} />
-							<span>{workspaceName(pane.id)}</span>
-						</Button>
-						<Button variant="ghost" size="icon" class="tile-close" aria-label={`Close ${workspaceName(pane.id)} workspace`} title="Remove from this environment" onclick={(event) => closeWorkspace(event, pane.id)}>
-							<Icon name="x" size={14} />
-						</Button>
+						<div class="tile-head-row">
+							<Button
+								variant="ghost"
+								class="tile-focus"
+								aria-pressed={session.activeEnvironment?.activePaneId === pane.id}
+								title={workspace?.path ?? 'Conversations that are not tied to a folder'}
+								onclick={() => session.focusEnvironmentPane(pane.id)}
+							>
+								<Icon name={workspace ? 'repository' : 'ask'} size={16} />
+								<span>{workspaceName(pane.id)}</span>
+							</Button>
+							<span class="pane-state" class:active={session.activeEnvironment?.activePaneId === pane.id}>
+								{session.activeEnvironment?.activePaneId === pane.id ? 'Active' : 'Inactive'}
+							</span>
+							<Button variant="ghost" size="icon" class="tile-close" aria-label={`Close ${workspaceName(pane.id)} workspace`} title="Remove from this environment" onclick={(event) => closeWorkspace(event, pane.id)}>
+								<Icon name="x" size={14} />
+							</Button>
+						</div>
+						<div class="tile-investigation-summary" data-testid="workspace-pane-summary" title={`${investigationTitle(pane.id)} · ${investigationStatus(pane.id)}`}>
+							<span class="summary-kind">{workspace ? 'Investigation' : 'Conversation'}</span>
+							<strong>{investigationTitle(pane.id)}</strong>
+							<span class="summary-status">{investigationStatus(pane.id)}</span>
+						</div>
 					</header>
 					{#if session.activeEnvironment?.activePaneId === pane.id}
 						<div class="tile-chat">
@@ -220,10 +325,11 @@
 							title={workspacePreview(pane.id)}
 							aria-label={`Focus ${workspaceName(pane.id)}: ${workspacePreview(pane.id)}${
 								answerPreview ? `. Latest reply: ${answerPreview}` : ''
-							}`}
+							}. ${investigationTitle(pane.id)}. ${investigationStatus(pane.id)}`}
 							onclick={() => session.focusEnvironmentPane(pane.id)}
 						>
-							<span class="preview-label">Recent conversation</span>
+							<span class="preview-label">Inactive preview · select to open</span>
+							<span class="preview-conversation-label">Recent conversation</span>
 							<strong>{workspacePreview(pane.id)}</strong>
 							{#if answerPreview}<span class="preview-answer">{answerPreview}</span>{/if}
 						</Button>
@@ -261,6 +367,18 @@
 		padding: 14px;
 		background: var(--workspace-canvas);
 	}
+	.board-heading {
+		flex: none;
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 14px;
+		min-height: 42px;
+		margin-bottom: 10px;
+	}
+	.board-heading h2 { margin: 0; color: var(--text); font-size: var(--fs-sm); font-weight: 600; }
+	.board-heading p { margin: 3px 0 0; color: var(--text-faint); font-size: var(--fs-xs); line-height: 1.4; }
+	.board-heading > span { flex: none; color: var(--text-faint); font-size: var(--fs-xs); }
 	.tile-grid {
 		position: relative;
 		flex: 1;
@@ -294,15 +412,22 @@
 	.tile-head {
 		flex: none;
 		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 6px;
-		min-height: 39px;
-		padding: 0 9px 0 12px;
+		flex-direction: column;
+		gap: 3px;
+		min-height: 58px;
+		padding: 5px 9px 6px 12px;
 		border-bottom: 1px solid var(--pane-edge);
 		background: var(--pane-head);
 		cursor: grab;
 	}
+	.tile-head-row { display: flex; align-items: center; gap: 6px; min-width: 0; min-height: 25px; }
+	.pane-state { flex: none; padding: 2px 6px; border-radius: 999px; background: var(--bg-inset); color: var(--text-faint); font-size: 10px; line-height: 1.2; white-space: nowrap; }
+	.pane-state.active { background: color-mix(in srgb, var(--brand) 11%, var(--pane-head)); color: var(--brand); font-weight: 600; }
+	.tile-investigation-summary { display: flex; align-items: baseline; gap: 5px; min-width: 0; overflow: hidden; color: var(--text-faint); font-size: 10px; line-height: 1.25; white-space: nowrap; }
+	.tile-investigation-summary .summary-kind { flex: none; }
+	.tile-investigation-summary strong { min-width: 0; overflow: hidden; color: var(--text-dim); font-size: inherit; font-weight: 550; text-overflow: ellipsis; }
+	.tile-investigation-summary .summary-status { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+	.tile-investigation-summary .summary-status::before { content: '·'; margin-right: 5px; }
 	.workspace-tile.focused .tile-head {
 		background: var(--pane-head);
 	}
@@ -311,6 +436,7 @@
 	}
 	.tile-head:active { cursor: grabbing; }
 	.tile-head :global(.tile-focus) {
+		flex: 1;
 		min-width: 0;
 		display: flex;
 		align-items: center;
@@ -356,8 +482,8 @@
 		flex-direction: column;
 		align-items: flex-start;
 		justify-content: flex-start;
-		gap: 8px;
-		padding: 18px;
+		gap: 7px;
+		padding: 14px;
 		border-radius: 0;
 		background: transparent;
 		color: var(--text-faint);
@@ -366,6 +492,7 @@
 	}
 	.workspace-tile :global(.tile-preview:hover) { background: color-mix(in srgb, var(--bg-inset) 36%, transparent); color: var(--text-dim); }
 	.workspace-tile :global(.tile-preview .preview-label) { color: var(--text-faint); font-size: var(--fs-xs); }
+	.workspace-tile :global(.tile-preview .preview-conversation-label) { margin-top: 3px; color: var(--text-faint); font-size: 10px; }
 	.workspace-tile :global(.tile-preview strong) { width: 100%; overflow: hidden; color: var(--text-dim); font-size: var(--fs-sm); font-weight: 520; line-height: 1.5; text-overflow: ellipsis; }
 	.workspace-tile :global(.tile-preview .preview-answer) {
 		display: -webkit-box;
