@@ -1,8 +1,16 @@
 <script lang="ts">
 	import { Button } from '$lib/components/ui/button';
-	import { session } from '$lib/session.svelte';
+	import { firstActualQuestion, session } from '$lib/session.svelte';
 	import { openRepository } from '$lib/commands';
+	import { ipc } from '$lib/ipc';
+	import type { Investigation } from '$lib/types';
 	import Icon from './Icon.svelte';
+
+	const presets = [
+		{ id: 'focus', label: 'Focus', description: 'Conversation and current result' },
+		{ id: 'investigation', label: 'Investigation', description: 'Brief, Questions, and coverage' },
+		{ id: 'workbench', label: 'Workbench', description: 'Conversation beside the Investigation' }
+	] as const;
 
 	let workspacePath = $derived(session.activeChat.workspaceScope);
 	let workspaceName = $derived(
@@ -17,6 +25,75 @@
 		session.workspaceView === 'board' ||
 		session.workspaceView === 'workspace'
 	);
+	let investigations = $state<Investigation[]>([]);
+	let summaryLoadFailed = $state(false);
+	let summaryRequest = 0;
+	let currentInvestigation = $derived.by(() => {
+		const firstQuestion = firstActualQuestion(session.activeChat.messages);
+		return investigations.find((item) =>
+			item.conversation_id === session.activeChat.id ||
+			(Boolean(firstQuestion) && item.brief_source_message_id === firstQuestion?.id)
+		) ?? null;
+	});
+	let coverageSummary = $derived.by(() => {
+		if (summaryLoadFailed) return 'Coverage unavailable';
+		if (!currentInvestigation) return 'No Investigation yet';
+		const active = (currentInvestigation.questions ?? []).filter((question) => question.status === 'active');
+		if (!active.length) return currentInvestigation.status === 'complete' ? 'Complete · no active Questions' : 'No Questions yet';
+		const answered = active.filter((question) => question.answer_status === 'answered').length;
+		const needsAttention = active.filter((question) => question.answer_status !== 'answered').length;
+		if (currentInvestigation.status === 'archived') return `Archived · ${answered}/${active.length} answered`;
+		if (currentInvestigation.status === 'complete') {
+			return needsAttention
+				? `Closed with gaps · ${needsAttention} need review`
+				: `Complete · ${answered}/${active.length} answered`;
+		}
+		return needsAttention
+			? `${answered}/${active.length} answered · ${needsAttention} need attention`
+			: `${answered}/${active.length} answered · Ready to close`;
+	});
+	let selectedPresetDescription = $derived(
+		presets.find((preset) => preset.id === session.workspaceLayoutPreset)?.description ?? ''
+	);
+
+	function isPresetSelected(preset: (typeof presets)[number]['id']): boolean {
+		if (preset === 'focus') return session.workspaceView === 'ask' && session.workspaceLayoutPreset === 'focus';
+		return session.workspaceView === 'workspace' && session.workspaceLayoutPreset === preset;
+	}
+
+	async function refreshInvestigationSummary(path: string, conversationId: string): Promise<void> {
+		const request = ++summaryRequest;
+		summaryLoadFailed = false;
+		try {
+			const records = await ipc.investigationsList();
+			if (request !== summaryRequest || path !== workspacePath || conversationId !== session.activeChat.id) return;
+			investigations = records.filter((item) => item.workspace_id === path);
+		} catch {
+			if (request === summaryRequest) {
+				investigations = [];
+				summaryLoadFailed = true;
+			}
+		}
+	}
+
+	function choosePreset(preset: (typeof presets)[number]['id']): void {
+		session.setWorkspaceLayoutPreset(preset);
+		if (workspacePath && workspaceAvailable) void refreshInvestigationSummary(workspacePath, session.activeChat.id);
+	}
+
+	$effect(() => {
+		const path = workspacePath;
+		const conversationId = session.activeChat.id;
+		const messageCount = session.activeChat.messages.length;
+		const available = workspaceAvailable;
+		void messageCount;
+		if (!path || !available) {
+			summaryRequest += 1;
+			investigations = [];
+			return;
+		}
+		void refreshInvestigationSummary(path, conversationId);
+	});
 </script>
 
 {#if workspacePath && isWorkspaceView}
@@ -28,15 +105,30 @@
 			<strong class="workspace-name" title={workspacePath}>{workspaceName}</strong>
 		</div>
 
-		{#if (session.workspaceView === 'ask' || session.workspaceView === 'board') && workspaceAvailable}
-			<Button
-				variant="outline"
-				size="sm"
-				class="workspace-open-investigation"
-				onclick={() => session.setWorkspacePane('investigation')}
-			>
-				<Icon name="bookmark" size={14} />Open Investigation
-			</Button>
+		{#if (session.workspaceView === 'ask' || session.workspaceView === 'workspace' || session.workspaceView === 'board') && workspaceAvailable}
+			<div class="workspace-preset-actions">
+				{#if session.workspaceView === 'ask' && session.workspaceLayoutPreset === 'focus'}
+					<span
+						class="workspace-investigation-summary"
+						role="status"
+						aria-label={`Investigation coverage: ${coverageSummary}`}
+						data-testid="workspace-investigation-summary"
+					>{coverageSummary}</span>
+				{/if}
+				<div class="workspace-preset-control" role="group" aria-label="Workspace layout">
+					{#each presets as preset (preset.id)}
+						<button
+							type="button"
+							class:active={isPresetSelected(preset.id)}
+							aria-label={`${preset.label}: ${preset.description}`}
+							aria-pressed={isPresetSelected(preset.id)}
+							title={preset.description}
+							onclick={() => choosePreset(preset.id)}
+						>{preset.label}</button>
+					{/each}
+				</div>
+				<span class="workspace-preset-description" aria-live="polite">{selectedPresetDescription}</span>
+			</div>
 		{:else if (session.workspaceView === 'ask' || session.workspaceView === 'board') && historyOnly}
 			<div class="workspace-history-action">
 				<span class="workspace-history-label" role="status">History only</span>
@@ -76,6 +168,9 @@
 		background: var(--workspace-canvas);
 	}
 	.workspace-identity {
+		flex: 1;
+	}
+	.workspace-identity {
 		display: flex;
 		align-items: center;
 		gap: 8px;
@@ -108,6 +203,66 @@
 		color: var(--text-faint);
 		font-size: var(--fs-xs);
 	}
+	.workspace-preset-actions {
+		display: flex;
+		align-items: center;
+		justify-content: flex-end;
+		gap: var(--space-3);
+		min-width: 0;
+	}
+	.workspace-investigation-summary {
+		max-width: 280px;
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+		text-align: right;
+		white-space: nowrap;
+	}
+	.workspace-preset-control {
+		display: inline-flex;
+		flex: none;
+		align-items: center;
+		gap: 2px;
+		padding: 3px;
+		border: 1px solid var(--border);
+		border-radius: 10px;
+		background: var(--bg);
+	}
+	.workspace-preset-control button {
+		min-height: 30px;
+		padding: 0 10px;
+		border: 1px solid transparent;
+		border-radius: 7px;
+		background: transparent;
+		color: var(--text-dim);
+		font: inherit;
+		font-size: var(--fs-xs);
+		font-weight: 550;
+		white-space: nowrap;
+		cursor: pointer;
+		transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease;
+	}
+	.workspace-preset-control button:hover {
+		background: var(--bg-raised);
+		color: var(--text);
+	}
+	.workspace-preset-control button.active {
+		border-color: var(--border);
+		background: var(--bg-raised);
+		color: var(--text);
+		box-shadow: var(--shadow-xs);
+	}
+	.workspace-preset-control button:focus-visible {
+		outline: 2px solid var(--brand);
+		outline-offset: 2px;
+	}
+	.workspace-preset-description {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		overflow: hidden;
+		clip: rect(0, 0, 0, 0);
+		white-space: nowrap;
+	}
 	:global(.workspace-open-investigation) {
 		flex: none;
 		min-height: 30px;
@@ -123,6 +278,15 @@
 		.workspace-identity-label,
 		.workspace-identity-separator {
 			display: none;
+		}
+		.workspace-preset-actions {
+			gap: var(--space-1);
+		}
+		.workspace-investigation-summary {
+			display: none;
+		}
+		.workspace-preset-control button {
+			padding-inline: 6px;
 		}
 	}
 </style>

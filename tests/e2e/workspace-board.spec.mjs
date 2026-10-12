@@ -34,6 +34,9 @@ const folders = [
 	}))
 ];
 
+const workspacePresetButton = (page, name) =>
+	page.locator('.workspace-preset-control').getByRole('button', { name: new RegExp(`^${name}:`) });
+
 async function installDesktopMock(
 	page,
 	{
@@ -328,6 +331,19 @@ async function installDesktopMock(
 							const runIds = new Set(record.analysis_turn_ids ?? []);
 							runIds.add(args.analysisTurnId);
 							const updated = { ...record, questions: nextQuestions, analysis_turn_ids: [...runIds], updated_at_ms: now };
+							investigations.set(key, updated);
+							return updated;
+						}
+						throw new Error(`Unknown Investigation: ${args.investigationId}`);
+					}
+					case 'investigation_link_analysis_turns': {
+						for (const [key, record] of investigations) {
+							if (record.id !== args.investigationId) continue;
+							const updated = {
+								...record,
+								analysis_turn_ids: [...new Set([...(record.analysis_turn_ids ?? []), ...args.analysisTurnIds])],
+								updated_at_ms: Date.now()
+							};
 							investigations.set(key, updated);
 							return updated;
 						}
@@ -886,7 +902,7 @@ test('an Investigation opens its canonical workspace conversation', async ({ pag
 	await expect(workspaceContext).toContainText('Workspace');
 	await expect(workspaceContext).toContainText('northwind-sales');
 	await expect(page.getByRole('button', { name: 'Open investigation brief in northwind-sales' })).toBeVisible();
-	await page.getByRole('button', { name: 'Open Investigation', exact: true }).click();
+	await workspacePresetButton(page, 'Investigation').click();
 	await expect(page.getByRole('heading', { name: 'Investigation brief' })).toBeVisible();
 	await expect(workspaceContext).toContainText('northwind-sales');
 	await expect(page.locator('.editor-heading h2')).toHaveText('Summarize cohort retention');
@@ -898,8 +914,8 @@ test('an Investigation opens its canonical workspace conversation', async ({ pag
 	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
 	await expect(page.locator('.msg.user').filter({ hasText: 'Summarize cohort retention' })).toHaveCount(1);
 	expect(await page.evaluate(() => window.__workspaceAskCalls.length)).toBe(1);
-	await expect(page.getByRole('button', { name: 'Open Investigation', exact: true })).toBeVisible();
-	await page.getByRole('button', { name: 'Open Investigation', exact: true }).click();
+	await expect(workspacePresetButton(page, 'Investigation')).toBeVisible();
+	await workspacePresetButton(page, 'Investigation').click();
 	await expect(page.locator('.editor-heading h2')).toHaveText('Summarize cohort retention');
 	expect(await page.evaluate(() => window.__workspaceAskCalls.length)).toBe(1);
 });
@@ -947,7 +963,7 @@ test('Investigation index summarizes work and resumes the same completed record'
 	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill('Second return-to-work question');
 	await page.getByRole('button', { name: 'Send' }).click();
 	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
-	await page.locator('.workspace-context-bar').getByRole('button', { name: 'Open Investigation' }).click();
+	await workspacePresetButton(page, 'Investigation').click();
 	const choices = page.locator('.investigation-choice');
 	await expect(choices).toHaveCount(2);
 	const firstChoice = choices.filter({ hasText: 'First return-to-work question' });
@@ -960,11 +976,11 @@ test('Investigation index summarizes work and resumes the same completed record'
 	const openConversation = page.getByRole('button', { name: 'Open conversation', exact: true });
 	await openConversation.click();
 	await expect(page.locator('.msg.user').filter({ hasText: 'First return-to-work question' })).toHaveCount(1);
-	await page.locator('.workspace-context-bar').getByRole('button', { name: 'Open Investigation' }).click();
+	await workspacePresetButton(page, 'Investigation').click();
 	await page.getByRole('button', { name: 'Analyze main Question' }).click();
 	await page.getByRole('region', { name: 'Review this run' }).getByRole('button', { name: 'Run this Question' }).click();
 	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.').last()).toBeVisible();
-	await page.locator('.workspace-context-bar').getByRole('button', { name: 'Open Investigation' }).click();
+	await workspacePresetButton(page, 'Investigation').click();
 	await page.getByRole('button', { name: 'Mark complete' }).click();
 	await expect(choices.filter({ hasText: 'First return-to-work question' })).toContainText('Complete');
 	const completedId = await page.evaluate(() => window.__workspaceInvestigations().find((item) => item.title === 'First return-to-work question').id);
@@ -974,6 +990,78 @@ test('Investigation index summarizes work and resumes the same completed record'
 	const resumed = await page.evaluate((id) => window.__workspaceInvestigations().find((item) => item.id === id), firstId);
 	expect(resumed.questions[0].text).toBe('First return-to-work question');
 	expect(resumed.questions[0].answer_status).toBe('answered');
+});
+
+test('workspace layout presets preserve the same Investigation, transcript, and unsaved plan', async ({ page }) => {
+	await installDesktopMock(page, {
+		questionRunOutcomes: [{ status: 'answered', answer_text: 'Weekly sales rose 12%.' }]
+	});
+	await page.goto('/');
+	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
+	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	const originalRequest = 'Explain weekly sales in northwind-sales';
+	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill(originalRequest);
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
+	const presets = page.locator('.workspace-preset-control');
+	const preset = (name) => presets.getByRole('button', { name: new RegExp(`^${name}:`) });
+	await expect(preset('Focus')).toHaveAttribute('aria-pressed', 'false');
+	await preset('Focus').click();
+	await expect(preset('Focus')).toHaveAttribute('aria-pressed', 'true');
+	await expect(page.getByTestId('workspace-investigation-summary')).toContainText('0/1 answered');
+	await expect(page.getByTestId('workspace-investigation-summary')).toContainText('need attention');
+
+	const initial = await page.evaluate(() => {
+		const investigation = window.__workspaceInvestigations()[0];
+		return { id: investigation.id, questionId: investigation.questions[0].id };
+	});
+	await preset('Investigation').click();
+	await expect(page.getByRole('heading', { name: 'Investigation brief' })).toBeVisible();
+	const mainQuestion = page.getByRole('textbox', { name: 'Main question' });
+	await mainQuestion.fill('Measure weekly net sales');
+
+	await preset('Focus').click();
+	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
+	await expect(page.locator('.msg.user').filter({ hasText: originalRequest })).toHaveCount(1);
+	await preset('Workbench').click();
+	await expect(page.locator('.workspace-preset-layout')).toHaveAttribute('data-workspace-preset', 'workbench');
+	await expect(preset('Workbench')).toHaveAttribute('aria-pressed', 'true');
+	await expect(preset('Focus')).toHaveAttribute('aria-pressed', 'false');
+	const workbenchColumns = await page.locator('.workspace-preset-layout').evaluate((element) =>
+		getComputedStyle(element).gridTemplateColumns.trim().split(/\s+/).length
+	);
+	expect(workbenchColumns).toBe(1);
+	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
+	await expect(page.getByRole('textbox', { name: 'Main question' })).toHaveValue('Measure weekly net sales');
+	await expect(page.getByRole('button', { name: 'Ask', exact: true })).toBeVisible();
+	await preset('Investigation').click();
+	await expect(page.getByRole('textbox', { name: 'Main question' })).toHaveValue('Measure weekly net sales');
+	const afterLayoutChanges = await page.evaluate(() => ({
+		investigations: window.__workspaceInvestigations(),
+		ensureCalls: window.__workspaceInvestigationEnsureCalls.length
+	}));
+	expect(afterLayoutChanges.investigations).toHaveLength(1);
+	expect(afterLayoutChanges.investigations[0].id).toBe(initial.id);
+	expect(afterLayoutChanges.ensureCalls).toBe(1);
+	await page.getByRole('button', { name: 'Save plan' }).click();
+	await expect(page.getByRole('region', { name: 'Questions' }).locator('.question-save')).toContainText('Plan saved');
+
+	await page.getByRole('button', { name: 'Analyze main Question' }).click();
+	await page.getByRole('region', { name: 'Review this run' }).getByRole('button', { name: 'Run this Question' }).click();
+	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.').last()).toBeVisible();
+	await expect(page.getByTestId('workspace-investigation-summary')).toContainText('1/1 answered');
+
+	const finalState = await page.evaluate(() => ({
+		investigations: window.__workspaceInvestigations(),
+		askCalls: window.__workspaceAskCalls.length
+	}));
+	expect(finalState.investigations).toHaveLength(1);
+	expect(finalState.investigations[0].id).toBe(initial.id);
+	expect(finalState.investigations[0].questions[0].id).toBe(initial.questionId);
+	expect(finalState.investigations[0].questions[0].text).toBe('Measure weekly net sales');
+	expect(finalState.investigations[0].questions[0].answer_status).toBe('answered');
+	expect(finalState.investigations[0].analysis_turn_ids).toContain('fixture-question-turn-1');
+	expect(finalState.askCalls).toBe(2);
 });
 
 test('an analyst can edit the main Question and linked subquestions without rewriting the request', async ({ page }) => {

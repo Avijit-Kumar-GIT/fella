@@ -28,6 +28,9 @@
 	let dragging = $state(false);
 
 	let activeView = $derived(session.workspaceView);
+	let scopedWorkspaceActive = $derived(
+		Boolean(session.activeChat.workspaceScope && session.catalog.workspace === session.activeChat.workspaceScope)
+	);
 
 	function mountStatusLabel(progress: NonNullable<typeof session.mountProgress>): string {
 		const count = (value: number) => new Intl.NumberFormat().format(value);
@@ -348,12 +351,24 @@
 				<div class="main-row">
 					{#if activeView === 'board'}
 						<WorkspaceBoard bind:transcript />
-					{:else if activeView === 'workspace'}
-						<WorkspaceView />
 					{:else if activeView === 'project'}
 						<ProjectView />
 					{:else if activeView === 'settings'}
 						<SettingsView />
+					{:else if scopedWorkspaceActive}
+						<div class="workspace-preset-layout" data-workspace-preset={session.workspaceLayoutPreset}>
+							<div class="workspace-preset-conversation">
+								<div class="ask-workbench">
+									<Transcript bind:this={transcript} />
+									{#if session.activeChat.companionPane}
+										<CompanionPane />
+									{/if}
+								</div>
+							</div>
+							<div class="workspace-preset-investigation">
+								<WorkspaceView />
+							</div>
+						</div>
 					{:else}
 						<div class="ask-workbench">
 							<Transcript bind:this={transcript} />
@@ -365,7 +380,7 @@
 				</div>
 			</main>
 			<div class="dock">
-				{#if activeView === 'ask' || activeView === 'board'}
+				{#if activeView === 'ask' || activeView === 'board' || (activeView === 'workspace' && session.workspaceLayoutPreset === 'workbench')}
 					<Composer bind:this={composer} onafterrun={refreshHealth} />
 				{/if}
 			</div>
@@ -465,7 +480,41 @@
 		min-width: 0;
 		min-height: 0;
 		display: flex;
+		container-name: workspace-area;
+		container-type: inline-size;
 		background: var(--workspace-canvas);
+	}
+	.workspace-preset-layout {
+		position: relative;
+		display: grid;
+		flex: 1;
+		min-width: 0;
+		min-height: 0;
+		grid-template-columns: minmax(0, 1fr);
+		background: var(--workspace-canvas);
+	}
+	.workspace-preset-conversation,
+	.workspace-preset-investigation {
+		min-width: 0;
+		min-height: 0;
+		overflow: hidden;
+	}
+	.workspace-preset-layout[data-workspace-preset='focus'] .workspace-preset-investigation,
+	.workspace-preset-layout[data-workspace-preset='investigation'] .workspace-preset-conversation {
+		display: none;
+	}
+	.workspace-preset-layout[data-workspace-preset='workbench'] {
+		grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr);
+	}
+	.workspace-preset-layout[data-workspace-preset='workbench'] .workspace-preset-conversation {
+		border-right: 1px solid var(--border);
+	}
+	.workspace-preset-layout[data-workspace-preset='workbench'] .ask-workbench {
+		border-right: 0;
+	}
+	.workspace-preset-investigation :global(.workspace) {
+		width: 100%;
+		height: 100%;
 	}
 	.ask-workbench {
 		position: relative;
@@ -475,6 +524,16 @@
 		min-height: 0;
 	}
 	.ask-workbench > :global(.transcript) { flex: 1; min-width: 0; }
+	@container workspace-area (max-width: 1120px) {
+		.workspace-preset-layout[data-workspace-preset='workbench'] {
+			grid-template-columns: minmax(0, 1fr);
+			grid-template-rows: minmax(0, 0.8fr) minmax(0, 1.2fr);
+		}
+		.workspace-preset-layout[data-workspace-preset='workbench'] .workspace-preset-conversation {
+			border-right: 0;
+			border-bottom: 1px solid var(--border);
+		}
+	}
 	/* Keep the composer aligned to the shared content column. */
 	.dock {
 		flex: none;

@@ -483,6 +483,7 @@ export class Conversation {
 
 export type WorkspaceView = 'ask' | 'workspace' | 'board' | 'settings' | 'project';
 export type WorkspacePane = 'context' | 'investigation';
+export type WorkspaceLayoutPreset = 'focus' | 'investigation' | 'workbench';
 
 export interface InvestigationNavigationTarget {
 	workspaceId: string;
@@ -512,6 +513,8 @@ class Session {
 	workspaceView = $state<WorkspaceView>('ask');
 	/** The active pane inside Workspace. */
 	workspacePane = $state<WorkspacePane>('investigation');
+	/** Arrangement of the same scoped conversation and Investigation surfaces. */
+	workspaceLayoutPreset = $state<WorkspaceLayoutPreset>('focus');
 	/** Ephemeral cross-navigation between a transcript answer and its canonical run. */
 	investigationNavigationTarget = $state<InvestigationNavigationTarget | null>(null);
 	conversationAnalysisFocus = $state<ConversationAnalysisFocus | null>(null);
@@ -701,6 +704,7 @@ class Session {
 		this.activeConversationIndex = this.conversations.length - 1;
 		this.catalog = { workspace: null, sources: [] };
 		this.workspaceView = 'ask';
+		this.workspaceLayoutPreset = 'focus';
 		this.#writeIndex();
 		this.#writeWorkspaceState();
 		return true;
@@ -713,7 +717,10 @@ class Session {
 		this.workspaceLayout = { ...environment.layout };
 		const pane = environment.panes.find((item) => item.id === environment.activePaneId) ?? environment.panes[0];
 		if (pane) this.focusEnvironmentPane(pane.id);
-		else this.workspaceView = 'ask';
+		else {
+			this.workspaceView = 'ask';
+			this.workspaceLayoutPreset = 'focus';
+		}
 		this.#writeWorkspaceState();
 		return true;
 	}
@@ -762,6 +769,7 @@ class Session {
 		this.activeWorkspaceId = scope;
 		this.catalog = workspace && !workspace.historyOnly ? workspace.catalog : { workspace: null, sources: [] };
 		this.workspaceView = scope || environment.panes.length > 1 ? 'board' : 'ask';
+		this.workspaceLayoutPreset = 'focus';
 		this.#writeWorkspaceState();
 		return true;
 	}
@@ -1097,19 +1105,38 @@ class Session {
 	setWorkspaceView(view: WorkspaceView): void {
 		if (view === 'workspace' && !this.catalog.workspace) {
 			this.workspaceView = 'ask';
+			this.workspaceLayoutPreset = 'focus';
 			return;
 		}
 		if (view === 'board' && !this.activeEnvironmentPanes.length) {
 			this.workspaceView = 'ask';
+			this.workspaceLayoutPreset = 'focus';
 			return;
 		}
 		this.workspaceView = view;
+		if (view === 'ask') this.workspaceLayoutPreset = 'focus';
+		else if (view === 'workspace') this.workspaceLayoutPreset = 'investigation';
+	}
+
+	setWorkspaceLayoutPreset(preset: WorkspaceLayoutPreset): void {
+		if (preset !== 'focus' && !this.catalog.workspace) return;
+		this.workspaceLayoutPreset = preset;
+		if (preset === 'focus') {
+			this.workspaceView = 'ask';
+			return;
+		}
+		this.workspacePane = 'investigation';
+		this.workspaceView = 'workspace';
 	}
 
 	setWorkspacePane(pane: WorkspacePane): void {
 		if (!this.catalog.workspace) {
 			this.workspaceView = 'ask';
+			this.workspaceLayoutPreset = 'focus';
 			return;
+		}
+		if (this.workspaceView !== 'workspace' || this.workspaceLayoutPreset === 'focus') {
+			this.workspaceLayoutPreset = 'investigation';
 		}
 		this.workspacePane = pane;
 		this.workspaceView = 'workspace';
@@ -1124,7 +1151,9 @@ class Session {
 			conversationId: conversation.id,
 			turnId
 		};
-		this.setWorkspacePane('investigation');
+		this.workspaceLayoutPreset = 'investigation';
+		this.workspacePane = 'investigation';
+		this.workspaceView = 'workspace';
 		return this.workspaceView === 'workspace';
 	}
 
@@ -1157,6 +1186,7 @@ class Session {
 			revision: this.catalog.revision ?? null
 		};
 		this.workspaceView = 'ask';
+		this.workspaceLayoutPreset = 'focus';
 		this.persist();
 	}
 
@@ -1179,6 +1209,7 @@ class Session {
 			revision: message.answer?.workspace?.revision ?? null
 		};
 		this.workspaceView = 'ask';
+		this.workspaceLayoutPreset = 'focus';
 		this.persist();
 	}
 
