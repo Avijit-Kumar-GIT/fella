@@ -2457,6 +2457,51 @@ test('Investigation results summarize saved work, render linked charts, and keep
 	await expect(page.getByRole('region', { name: 'Saved analysis run' })).toBeVisible();
 });
 
+test('Investigation Results keep transcript-only historical work outside current Question coverage', async ({ page }) => {
+	await installDesktopMock(page, {
+		directAnswerText: 'The initial scan found four relevant files and no single source of truth.',
+		questionRunOutcomes: [{ status: 'answered', answer_text: 'The weekly total increased by 12%.' }],
+		replayStatus: {
+			turn_id: 'fixture-turn',
+			same_workspace: true,
+			revision_changed: false,
+			snapshot_available: true,
+			can_rerun: false,
+			source_changes: []
+		}
+	});
+	await page.goto('/');
+	await page.getByRole('button', { name: 'Add repository' }).click();
+	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	const composer = page.getByRole('combobox', { name: 'Ask about northwind-sales' });
+	await composer.fill('What do the weekly sales files show?');
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(page.locator('.msg.assistant').first()).toContainText('The initial scan found four relevant files');
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	await page.getByRole('button', { name: 'Analyze main Question' }).click();
+	await page.getByRole('region', { name: 'Review this run' }).getByRole('button', { name: 'Run this Question' }).click();
+	await expect(page.getByText('The weekly total increased by 12%.')).toBeVisible();
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	await page.getByRole('button', { name: 'Results' }).click();
+
+	const results = page.getByRole('region', { name: 'Current Investigation results' });
+	const historical = results.getByRole('region', { name: 'Historical and unassigned analysis' });
+	await expect(results).toContainText('1/1 Questions answered');
+	await expect(results.locator('.results-finding')).toHaveCount(0);
+	await expect(historical.locator('.results-historical-run')).toHaveCount(1);
+	await expect(historical).toContainText('Transcript fallback');
+	await expect(historical).toContainText('What do the weekly sales files show?');
+	await expect(historical).toContainText('The initial scan found four relevant files and no single source of truth.');
+	await expect(historical).toContainText('Not linked to a current Question');
+	await expect(historical).toContainText('not counted toward coverage or Findings');
+	await expect(historical).not.toContainText('Answers: What do the weekly sales files show?');
+
+	await historical.getByRole('button', { name: 'Open transcript answer' }).click();
+	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
+	await expect(page.locator('.msg.user').first().locator('.you-copy')).toHaveText('What do the weekly sales files show?');
+	await expect(page.locator('.msg.assistant[data-analysis-turn-id="fixture-turn"]')).toContainText('The initial scan found four relevant files and no single source of truth.');
+});
+
 test('Finding Results connect partial coverage, scoped checks, provenance, and exact evidence', async ({ page }) => {
 	const evidence = {
 		id: 'finding-weekly-sales-evidence',

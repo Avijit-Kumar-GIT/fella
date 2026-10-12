@@ -9,8 +9,10 @@
 		InvestigationFinding,
 		InvestigationFindingRevision,
 		InvestigationQuestion,
+		Message,
 		VerificationCheck
 	} from '$lib/types';
+	import { runStateLabel } from '$lib/run-progress';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import Chart from './Chart.svelte';
@@ -18,25 +20,38 @@
 
 	let {
 		investigation,
+		conversationMessages = [],
 		hasUnsavedEdits = false,
 		onopenrun,
+		onopenlegacy,
 		onreviewquestion
 	}: {
 		investigation: Investigation;
+		conversationMessages?: Message[];
 		hasUnsavedEdits?: boolean;
 		onopenrun: (turnId: string, evidenceId?: string) => void;
+		onopenlegacy: (turnId?: string) => void;
 		onreviewquestion: (questionId: string) => void;
 	} = $props();
 
 	let runs = $state<Record<string, AnalysisTurn>>({});
 	let loadingRunIds = $state<string[]>([]);
 	let runErrors = $state<Record<string, string>>({});
+	let archivedConversationId = $state('');
+	let archivedConversationMessages = $state<Message[]>([]);
 	let loadedInvestigationId = '';
 	let generation = 0;
+	let transcriptMessages = $derived(
+		conversationMessages.length
+			? conversationMessages
+			: archivedConversationId === investigation.conversation_id
+				? archivedConversationMessages
+				: []
+	);
 
 	let activeQuestions = $derived((investigation.questions ?? []).filter((question) => question.status === 'active'));
 	let unresolvedQuestions = $derived(activeQuestions.filter((question) => question.answer_status !== 'answered'));
-	let runIds = $derived.by(() => {
+	let primaryRunIds = $derived.by(() => {
 		const ids = new Set<string>();
 		for (const question of activeQuestions) {
 			if (question.latest_analysis_turn_id) ids.add(question.latest_analysis_turn_id);
@@ -44,8 +59,65 @@
 		for (const finding of investigation.findings ?? []) ids.add(finding.analysis_turn_id);
 		return [...ids];
 	});
+
+	$effect(() => {
+		const conversationId = investigation.conversation_id;
+		if (!conversationId || conversationMessages.length || archivedConversationId === conversationId) return;
+		archivedConversationId = conversationId;
+		void ipc.conversationLoad(conversationId).then((raw) => {
+			if (investigation.conversation_id !== conversationId) return;
+			const saved: { messages?: unknown } = JSON.parse(raw);
+			archivedConversationMessages = Array.isArray(saved.messages) ? saved.messages as Message[] : [];
+		}).catch(() => {
+			// The current Results view can still provide its loaded conversation messages.
+			if (investigation.conversation_id === conversationId) archivedConversationMessages = [];
+		});
+	});
+
+	let transcriptRuns = $derived.by(() => {
+		const messages = transcriptMessages;
+		const sourceId = investigation.brief_source_message_id;
+		if (!sourceId) return [];
+		const sourceIndex = messages.findIndex((message) => message.id === sourceId);
+		if (sourceIndex < 0) return [];
+		let prompt = messages[sourceIndex].role === 'user' ? messages[sourceIndex].text : '';
+		const seen = new Set<string>();
+		const runs: { turnId: string; prompt: string; answer: string }[] = [];
+		for (const message of messages.slice(sourceIndex + 1)) {
+			if (message.role === 'user') {
+				prompt = message.text;
+				continue;
+			}
+			if (message.role !== 'assistant') continue;
+			const turnId = message.answer?.turn_id?.trim();
+			if (!turnId || seen.has(turnId)) continue;
+			if (message.answer?.workspace?.path !== investigation.workspace_id) continue;
+			seen.add(turnId);
+			runs.push({
+				turnId,
+				prompt,
+				answer: message.answer?.text || message.text
+			});
+		}
+		return runs;
+	});
+	let runIds = $derived.by(() => {
+		const ids = new Set(investigation.analysis_turn_ids ?? []);
+		for (const question of investigation.questions ?? []) {
+			if (question.latest_analysis_turn_id) ids.add(question.latest_analysis_turn_id);
+			for (const turnId of question.analysis_turn_ids ?? []) ids.add(turnId);
+		}
+		for (const finding of investigation.findings ?? []) ids.add(finding.analysis_turn_id);
+		return [...ids];
+	});
+	let historicalRunIds = $derived.by(() => {
+		const current = new Set(primaryRunIds);
+		const ids = new Set(runIds);
+		for (const transcript of transcriptRuns) ids.add(transcript.turnId);
+		return [...ids].filter((turnId) => !current.has(turnId));
+	});
 	let answeredCount = $derived(activeQuestions.filter((question) => question.answer_status === 'answered').length);
-	let unavailableRunIds = $derived(runIds.filter((turnId) => runErrors[turnId]));
+	let unavailableRunIds = $derived(runIds.filter((turnId) => runErrors[turnId] && !transcriptRunFor(turnId)));
 	let chartCards = $derived.by(() => {
 		const cards: {
 			key: string;
@@ -54,7 +126,7 @@
 			sourceEvidence: EvidenceItem | null;
 			question: InvestigationQuestion | undefined;
 		}[] = [];
-		for (const turnId of runIds) {
+		for (const turnId of primaryRunIds) {
 			const run = runs[turnId];
 			if (!run) continue;
 			const evidence = run.result.evidence.filter(isEvidenceItem);
@@ -95,6 +167,36 @@
 		return typeof item.tool === 'string'
 			&& Boolean(item.args && typeof item.args === 'object' && !Array.isArray(item.args))
 			&& typeof item.result_summary === 'string';
+	}
+
+	function transcriptRunFor(turnId: string) {
+		return transcriptRuns.find((run) => run.turnId === turnId);
+	}
+
+	function historicalChartEvidence(run: AnalysisTurn): EvidenceItem[] {
+		return run.result.evidence
+			.filter(isEvidenceItem)
+			.filter((item) => isRenderableChartEvidence(item, run.verification?.checks ?? run.result.verification));
+	}
+
+	function historicalRunTitle(run: AnalysisTurn | undefined, transcript: ReturnType<typeof transcriptRunFor>, turnId: string): string {
+		return run?.question?.trim() || transcript?.prompt?.trim() || `Analysis run ${turnId}`;
+	}
+
+	function historicalRunOutcome(run: AnalysisTurn): string {
+		const status = run.verification?.status ?? run.result.status;
+		return {
+			verified: 'Checked',
+			needs_review: 'Needs review',
+			insufficient_data: 'Insufficient data',
+			failed: 'Run failed'
+		}[status] ?? runStateLabel(run.state) ?? 'Outcome not recorded';
+	}
+
+	function chartSourceEvidence(run: AnalysisTurn, chart: EvidenceItem): EvidenceItem | null {
+		const sourceId = chart.chart?.metadata?.source_evidence_id;
+		if (!sourceId) return null;
+		return run.result.evidence.filter(isEvidenceItem).find((item) => item.id === sourceId) ?? null;
 	}
 
 	async function loadMissingRuns(investigationId: string, ids: string[], requestGeneration: number): Promise<void> {
@@ -362,6 +464,109 @@
 		{/if}
 	</section>
 
+	{#if historicalRunIds.length}
+		<section class="results-section results-historical" aria-labelledby="results-historical-title">
+			<header class="results-section-heading">
+				<div>
+					<h3 id="results-historical-title">Historical and unassigned analysis</h3>
+					<p>Earlier runs stay available for context; they do not change current Question coverage or the Findings count.</p>
+				</div>
+				<span>{historicalRunIds.length}</span>
+			</header>
+			<div class="results-historical-list">
+				{#each historicalRunIds as turnId (turnId)}
+					{@const run = runs[turnId]}
+					{@const transcript = transcriptRunFor(turnId)}
+					{@const evidence = run?.result.evidence.filter(isEvidenceItem) ?? []}
+					{@const charts = run ? historicalChartEvidence(run) : []}
+					<article class="results-historical-run" data-run-id={turnId}>
+						<header class="results-historical-heading">
+							<div>
+								<Badge>{run ? 'Historical saved run' : transcript ? 'Transcript fallback' : 'Saved run'}</Badge>
+								<h4>{historicalRunTitle(run, transcript, turnId)}</h4>
+							</div>
+							{#if run}<span class="results-historical-outcome">{historicalRunOutcome(run)}</span>{/if}
+						</header>
+						{#if run}
+							<p class="results-historical-answer-preview">{run.result.text}</p>
+							<details class="results-supporting">
+								<summary>Review saved answer, evidence &amp; provenance</summary>
+								<div class="results-historical-detail">
+									<h5>Recorded answer</h5>
+									<p class="results-historical-answer">{run.result.text || 'No answer text was recorded.'}</p>
+									<h5>Run provenance</h5>
+									<dl class="results-historical-provenance">
+										<div><dt>Workspace</dt><dd>{run.workspace || investigation.workspace_id}</dd></div>
+										{#if run.workspace_revision}<div><dt>Data revision</dt><dd><code>{run.workspace_revision}</code></dd></div>{/if}
+										{#if run.investigation_context?.question_text}<div><dt>Question context at the time</dt><dd>{run.investigation_context.question_text}</dd></div>{/if}
+										{#if run.source_scope?.used_sources?.length}<div><dt>Sources used</dt><dd>{run.source_scope.used_sources.map((source) => source.table ? `${source.source} · ${source.table}` : source.source).join(', ')}</dd></div>{/if}
+										{#if run.source_scope?.skipped_sources?.length}<div><dt>Skipped sources</dt><dd>{run.source_scope.skipped_sources.join(', ')}</dd></div>{/if}
+									</dl>
+									<div class="results-historical-evidence">
+										<h5>Evidence · {evidence.length}</h5>
+										{#if evidence.length}
+											<ul>
+												{#each evidence as item, index (`${turnId}-evidence-${item.id ?? index}`)}
+													<li>
+														{#if item.id}<Button type="button" variant="ghost" size="sm" onclick={() => onopenrun(turnId, item.id)}>{item.result_summary || item.id}</Button>
+														{:else}<span>{item.result_summary || item.tool}</span>{/if}
+														<small>{evidenceSourceLabel(item)}</small>
+													</li>
+												{/each}
+											</ul>
+										{:else}<p>No evidence was recorded for this run.</p>{/if}
+									</div>
+									{#if charts.length}
+										<div class="results-historical-charts" aria-label="Historical visualizations">
+											<h5>Historical visualizations · {charts.length}</h5>
+											{#each charts as chartEvidence, index (`${turnId}-chart-${chartEvidence.id ?? index}`)}
+												<article class="results-chart" aria-label="Historical visualization from {run.question}">
+													<p class="results-chart-question">Historical visualization · {run.question}</p>
+													<Chart
+														spec={chartEvidence.chart!}
+														source={sourceLabel(chartEvidence)}
+														sourceEvidence={chartSourceEvidence(run, chartEvidence)}
+														sourceRunId={run.id}
+														findingSnapshot={chartEvidence.chart?.metadata?.finding_snapshot}
+													/>
+													<Button type="button" variant="ghost" size="sm" onclick={() => onopenrun(run.id, chartEvidence.id)}>Open source run</Button>
+												</article>
+											{/each}
+										</div>
+									{/if}
+									<p><code>{turnId}</code> · <Button type="button" variant="ghost" size="sm" onclick={() => onopenrun(turnId)}>Open saved analysis run</Button></p>
+								</div>
+							</details>
+						{:else if transcript}
+							{#if loadingRunIds.includes(turnId)}
+								<p class="results-historical-note" role="status">Checking for a saved run. This transcript copy is not canonical evidence.</p>
+							{:else if runErrors[turnId]}
+								<p class="results-historical-note" role="status">Saved run unavailable; showing the original transcript only. It is not canonical evidence.</p>
+								<Button type="button" variant="ghost" size="sm" onclick={() => retryRun(turnId)}>Retry saved run</Button>
+							{/if}
+							<p class="results-historical-note">Not linked to a current Question · not counted toward coverage or Findings.</p>
+							<details class="results-supporting">
+								<summary>Read transcript answer</summary>
+								<div class="results-historical-detail">
+									<h5>Original request</h5><p>{transcript.prompt || 'Request text is not available in the loaded transcript.'}</p>
+									<h5>Transcript answer</h5><p class="results-historical-answer">{transcript.answer || 'Answer text is not available in the loaded transcript.'}</p>
+								</div>
+							</details>
+							<Button type="button" variant="ghost" size="sm" onclick={() => onopenlegacy(turnId)}>Open transcript answer</Button>
+						{:else if loadingRunIds.includes(turnId)}
+							<p class="results-historical-note" role="status">Loading historical run {turnId}…</p>
+						{:else if runErrors[turnId]}
+							<p class="results-historical-note" role="alert">Historical run unavailable: {runErrors[turnId]}</p>
+							<Button type="button" variant="ghost" size="sm" onclick={() => retryRun(turnId)}>Retry loading run</Button>
+						{:else}
+							<p class="results-historical-note" role="status">Loading saved run {turnId}…</p>
+						{/if}
+					</article>
+				{/each}
+			</div>
+		</section>
+	{/if}
+
 	<section class="results-section" aria-labelledby="results-questions-title">
 		<header class="results-section-heading"><div><h3 id="results-questions-title">Questions to resolve</h3><p>Open Questions and answers that need review remain visible, even when the Investigation is closed.</p></div><span>{unresolvedQuestions.length}</span></header>
 		{#if unresolvedQuestions.length}
@@ -374,7 +579,11 @@
 							{#if question.latest_analysis_turn_id && loadingRunIds.includes(question.latest_analysis_turn_id)}
 								<span role="status">Loading saved answer…</span>
 							{:else if question.latest_analysis_turn_id && runErrors[question.latest_analysis_turn_id]}
-								<span role="alert">Saved answer unavailable: {runErrors[question.latest_analysis_turn_id]}</span>
+								{#if transcriptRunFor(question.latest_analysis_turn_id)}
+									{@const transcript = transcriptRunFor(question.latest_analysis_turn_id)!}
+									<span role="status">Canonical run unavailable. Transcript copy only; evidence and verification are unavailable.</span>
+									<details class="results-answer-detail"><summary>Read transcript copy (not canonical)</summary><div>{transcript.answer}</div><Button type="button" variant="ghost" size="sm" onclick={() => onopenlegacy(question.latest_analysis_turn_id)}>Open transcript answer</Button></details>
+								{:else}<span role="alert">Saved answer unavailable: {runErrors[question.latest_analysis_turn_id]}</span>{/if}
 								<Button type="button" variant="ghost" size="sm" onclick={() => retryRun(question.latest_analysis_turn_id!)}>Retry</Button>
 							{:else if question.latest_analysis_turn_id && runs[question.latest_analysis_turn_id]}
 								<details class="results-answer-detail">
@@ -404,6 +613,7 @@
 						<strong>{question.text}</strong>
 						<span>{questionStatusLabel(question)}</span>
 						{#if loadingRunIds.includes(question.latest_analysis_turn_id!)}<p role="status">Loading saved answer…</p>
+						{:else if runErrors[question.latest_analysis_turn_id!] && transcriptRunFor(question.latest_analysis_turn_id!)}{@const transcript = transcriptRunFor(question.latest_analysis_turn_id!)!}<p role="status">Canonical run unavailable; transcript copy only.</p><details><summary>Read transcript copy</summary><div>{transcript.answer}</div><Button type="button" variant="ghost" size="sm" onclick={() => onopenlegacy(question.latest_analysis_turn_id)}>Open transcript answer</Button></details><Button type="button" variant="ghost" size="sm" onclick={() => retryRun(question.latest_analysis_turn_id!)}>Retry saved run</Button>
 						{:else if runErrors[question.latest_analysis_turn_id!]}<p role="alert">Saved answer unavailable: {runErrors[question.latest_analysis_turn_id!]}</p><Button type="button" variant="ghost" size="sm" onclick={() => retryRun(question.latest_analysis_turn_id!)}>Retry</Button>
 						{:else if runs[question.latest_analysis_turn_id!]}<details><summary>Read answer</summary><div>{runs[question.latest_analysis_turn_id!].result.text}</div><Button type="button" variant="ghost" size="sm" onclick={() => onopenrun(question.latest_analysis_turn_id!)}>Open analysis record</Button></details>{/if}
 					</li>
@@ -476,6 +686,29 @@
 	.results-chart { display: grid; min-width: 0; gap: var(--space-2); align-content: start; }
 	.results-chart-question { margin: 0; color: var(--text-dim); font-size: var(--fs-xs); }
 	.results-chart :global(.chart-card) { width: 100%; min-width: 0; }
+	.results-historical { padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-inset); }
+	.results-historical-list { display: grid; gap: var(--space-2); }
+	.results-historical-run { display: grid; min-width: 0; gap: var(--space-2); padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); }
+	.results-historical-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); }
+	.results-historical-heading > div { display: grid; min-width: 0; justify-items: start; gap: var(--space-1); }
+	.results-historical-heading h4 { margin: 0; font-size: var(--fs-sm); font-weight: 600; overflow-wrap: anywhere; }
+	.results-historical-outcome, .results-historical-note { color: var(--text-faint); font-size: var(--fs-xs); }
+	.results-historical-answer-preview { display: -webkit-box; overflow: hidden; margin: 0; color: var(--text-dim); font-size: var(--fs-xs); line-height: 1.5; overflow-wrap: anywhere; -webkit-box-orient: vertical; line-clamp: 3; -webkit-line-clamp: 3; }
+	.results-historical-note { margin: 0; }
+	.results-historical-detail { display: grid; gap: var(--space-2); margin-top: var(--space-2); }
+	.results-historical-detail h5 { margin: var(--space-2) 0 0; color: var(--text-faint); font-size: var(--fs-xs); font-weight: 650; }
+	.results-historical-detail > p { margin: 0; overflow-wrap: anywhere; }
+	.results-historical-answer { max-height: 280px; overflow: auto; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-inset); color: var(--text); white-space: pre-wrap; line-height: 1.5; }
+	.results-historical-provenance { display: grid; gap: var(--space-1); margin: 0; }
+	.results-historical-provenance > div { display: grid; grid-template-columns: minmax(110px, auto) minmax(0, 1fr); gap: var(--space-2); }
+	.results-historical-provenance dt { color: var(--text-faint); }
+	.results-historical-provenance dd { min-width: 0; margin: 0; color: var(--text-dim); overflow-wrap: anywhere; }
+	.results-historical-evidence { display: grid; gap: var(--space-1); }
+	.results-historical-evidence ul { display: grid; gap: var(--space-1); margin: 0; padding: 0; list-style: none; }
+	.results-historical-evidence li { display: grid; justify-items: start; min-width: 0; }
+	.results-historical-evidence li :global(button) { max-width: 100%; justify-content: flex-start; text-align: left; }
+	.results-historical-evidence small { padding-left: var(--space-2); color: var(--text-faint); overflow-wrap: anywhere; }
+	.results-historical-charts { display: grid; gap: var(--space-2); }
 	.results-question[data-question-status='blocked'] { border-color: var(--danger, #b42318); }
 	.results-question-heading { align-items: center; justify-content: flex-start; }
 	.results-question-heading strong { min-width: 0; font-size: var(--fs-sm); overflow-wrap: anywhere; }

@@ -96,6 +96,12 @@
 	const syncingInvestigations = new Set<string>();
 
 	let selected = $derived(investigations.find((item) => item.id === selectedId) ?? null);
+	let investigationConversationMessages = $derived.by(() => {
+		if (!selected?.conversation_id) return [];
+		return session.conversations.find((conversation) =>
+			conversation.id === selected.conversation_id && conversation.workspaceScope === selected.workspace_id
+		)?.messages ?? [];
+	});
 	let disclosureInvestigationId = '';
 	$effect(() => {
 		const id = selected?.id ?? '';
@@ -835,6 +841,12 @@
 		target?.focus({ preventScroll: true });
 	}
 
+	async function openLegacyRunFromResults(turnId?: string): Promise<void> {
+		activeView = 'brief';
+		await tick();
+		await openSelectedConversation(turnId);
+	}
+
 	async function reviewQuestionFromResults(questionId: string): Promise<void> {
 		activeView = 'brief';
 		await tick();
@@ -1462,8 +1474,10 @@
 					{#if activeView === 'results'}
 						<InvestigationResultsView
 							investigation={selected}
+							conversationMessages={investigationConversationMessages}
 							hasUnsavedEdits={dirty || questionsDirty || definitionsDirty}
 							onopenrun={openRunFromResults}
+							onopenlegacy={openLegacyRunFromResults}
 							onreviewquestion={reviewQuestionFromResults}
 						/>
 					{:else}
