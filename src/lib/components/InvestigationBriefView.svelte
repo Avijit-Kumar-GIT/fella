@@ -54,7 +54,6 @@
 
 	let investigations = $state<Investigation[]>([]);
 	let selectedId = $state<string | null>(null);
-	let activeView = $state<'brief' | 'results'>('brief');
 	let workspacePath = $state<string | null>(null);
 	let loadedWorkspace = $state<string | null>(null);
 	let loadedInvestigationsVersion = -1;
@@ -926,8 +925,6 @@
 	}
 
 	async function openRunFromResults(turnId: string, evidenceId?: string): Promise<void> {
-		activeView = 'brief';
-		await tick();
 		await openAnalysisRun(turnId);
 		if (!evidenceId) return;
 		await tick();
@@ -939,14 +936,10 @@
 	}
 
 	async function openLegacyRunFromResults(turnId?: string): Promise<void> {
-		activeView = 'brief';
-		await tick();
 		await openSelectedConversation(turnId);
 	}
 
 	async function reviewQuestionFromResults(questionId: string): Promise<void> {
-		activeView = 'brief';
-		await tick();
 		focusQuestion(questionId);
 	}
 
@@ -1478,24 +1471,10 @@
 <section class="investigation-page" aria-labelledby="investigation-title">
 	<header class="page-head">
 		<div>
-				<h1 id="investigation-title">{activeView === 'results' ? 'Investigation results' : 'Investigation'}</h1>
-				<p>{activeView === 'results' ? 'Review current conclusions, visual evidence, and Questions that still need attention.' : 'Set the goal, break it into Questions, and keep the analysis grounded in its sources.'}</p>
+			<h1 id="investigation-title">Investigation</h1>
+			<p>Set a goal, understand the available data, and follow the analysis through to its findings.</p>
 		</div>
 		<div class="page-head-actions">
-			{#if reportExportStatus}
-				<span class="report-export-status" role={reportExportFailed ? 'alert' : 'status'}>{reportExportStatus}</span>
-			{/if}
-			{#if selected}
-				<Button
-					type="button"
-					variant="outline"
-					disabled={exportingReport || Boolean(reportExportDisabledReason)}
-					title={reportExportDisabledReason || undefined}
-					onclick={() => void reviewInvestigationHandoff()}
-				>
-					<Icon name="file" size={16} />{exportingReport ? 'Preparing preview…' : 'Review handoff'}
-				</Button>
-			{/if}
 			{#if workspacePath}
 				<Button type="button" disabled={loading || creating} onclick={() => void createInvestigation()}>
 					<Icon name="plus" size={16} />{creating ? 'Opening…' : currentConversationInvestigation ? 'Open current Investigation' : currentConversationSource ? 'Start from conversation' : 'New investigation'}
@@ -1506,12 +1485,17 @@
 	{#if error && !selected}
 		<p class="error" role="alert">{error}</p>
 	{/if}
-	{#if workspacePath && !loading}
-		<InvestigationSourceReadiness
-			{workspacePath}
-			investigation={selected}
-			onUpdated={acceptInvestigationUpdate}
-		/>
+	{#if workspacePath && !loading && !selected}
+		<section class="investigation-document-section investigation-data-section" aria-labelledby="investigation-data-empty-heading">
+			<header class="investigation-document-heading">
+				<div><h2 id="investigation-data-empty-heading">Data</h2><p>Review the files available in this workspace before starting an Investigation.</p></div>
+			</header>
+			<InvestigationSourceReadiness
+				{workspacePath}
+				investigation={selected}
+				onUpdated={acceptInvestigationUpdate}
+			/>
+		</section>
 	{/if}
 
 	{#if !workspacePath}
@@ -1565,24 +1549,10 @@
 							</Button>
 						</div>
 					</div>
-					<div class="investigation-view-switch" role="group" aria-label="Investigation view">
-						<Button type="button" variant={activeView === 'brief' ? 'secondary' : 'ghost'} size="sm" aria-pressed={activeView === 'brief'} onclick={() => (activeView = 'brief')}>Work plan</Button>
-						<Button type="button" variant={activeView === 'results' ? 'secondary' : 'ghost'} size="sm" aria-pressed={activeView === 'results'} onclick={() => (activeView = 'results')}>Results</Button>
-					</div>
-					{#if activeView === 'results'}
-						<InvestigationResultsView
-							investigation={selected}
-							conversationMessages={investigationConversationMessages}
-							hasUnsavedEdits={dirty || questionsDirty || definitionsDirty}
-							onopenrun={openRunFromResults}
-							onopenlegacy={openLegacyRunFromResults}
-							onreviewquestion={reviewQuestionFromResults}
-						/>
-					{:else}
 					<section class="brief-summary" aria-labelledby="brief-summary-title">
 						<header>
 							<div>
-								<h3 id="brief-summary-title">Brief</h3>
+								<h3 id="brief-summary-title">Goal</h3>
 								<p>The purpose and shape of the analysis.</p>
 							</div>
 							<Button type="button" variant="outline" disabled={saving} onclick={() => (briefEditing = true)}>
@@ -1639,11 +1609,21 @@
 						</div>
 						</section>
 					{/if}
+					<section class="investigation-document-section investigation-data-section" aria-labelledby="investigation-data-heading">
+						<header class="investigation-document-heading">
+							<div><h3 id="investigation-data-heading">Data</h3><p>Check what is available and choose the sources eligible for future Questions.</p></div>
+						</header>
+						<InvestigationSourceReadiness
+							{workspacePath}
+							investigation={selected}
+							onUpdated={acceptInvestigationUpdate}
+						/>
+					</section>
 					<section class="analyst-work-plan" aria-labelledby="work-plan-title">
 						<header class="work-plan-heading">
 							<div>
-								<h3 id="work-plan-title">Analyst work plan</h3>
-								<p>Break the goal into answerable Questions and make the source scope explicit.</p>
+								<h3 id="work-plan-title">Questions</h3>
+								<p>Add, revise, or run the Questions that make sense for this Investigation. A breakdown is optional and can change as you learn more.</p>
 							</div>
 						</header>
 						<div class="optional-context-heading">
@@ -1708,8 +1688,8 @@
 					<section class="question-editor" aria-labelledby="question-plan-title">
 						<header class="question-heading">
 							<div>
-								<h3 id="question-plan-title">Questions</h3>
-								<p>The main request is the parent. Its subquestions are durable linked records; suggestions stay drafts until saved.</p>
+								<h3 id="question-plan-title">Question plan</h3>
+								<p>The main request is the parent. Its subquestions are linked records; suggestions stay drafts until saved.</p>
 							</div>
 							<div class="question-save">
 								<span role={error ? 'alert' : 'status'}>{error || (questionsDirty ? 'Unsaved plan' : 'Plan saved')}</span>
@@ -2023,9 +2003,16 @@
 						</Button>
 					</section>
 					</section>
+					<section class="investigation-document-section investigation-analysis-section" aria-labelledby="investigation-analysis-heading">
+						<header class="investigation-document-heading">
+							<div>
+								<h3 id="investigation-analysis-heading">Analysis</h3>
+								<p>Review the work in the order it happened. Each run can use the method and checks its question requires.</p>
+							</div>
+						</header>
 					<details class="investigation-history" bind:open={historyOpen}>
 						<summary>
-							<span>Findings &amp; analysis history</span>
+							<span>Analysis history and Finding maintenance</span>
 							<small>{selected.findings?.length ?? 0} findings · {analysisRunIds(selected).length} runs</small>
 						</summary>
 						<div class="investigation-history-content">
@@ -2464,7 +2451,37 @@
 					</section>
 						</div>
 					</details>
-					{/if}
+					</section>
+					<section class="investigation-document-section investigation-results-section" aria-labelledby="investigation-results-heading">
+						<header class="investigation-document-heading">
+							<div><h3 id="investigation-results-heading">Results</h3><p>Review the current answers, saved Findings, visualizations, and any remaining gaps.</p></div>
+						</header>
+						<InvestigationResultsView
+							investigation={selected}
+							conversationMessages={investigationConversationMessages}
+							hasUnsavedEdits={dirty || questionsDirty || definitionsDirty}
+							onopenrun={openRunFromResults}
+							onopenlegacy={openLegacyRunFromResults}
+							onreviewquestion={reviewQuestionFromResults}
+						/>
+					</section>
+					<section class="investigation-document-section investigation-share-section" aria-labelledby="investigation-share-heading">
+						<header class="investigation-document-heading">
+							<div><h3 id="investigation-share-heading">Share</h3><p>Review the saved work and its limitations before creating a handoff.</p></div>
+							<Button
+								type="button"
+								variant="outline"
+								disabled={exportingReport || Boolean(reportExportDisabledReason)}
+								title={reportExportDisabledReason || undefined}
+								onclick={() => void reviewInvestigationHandoff()}
+							>
+								<Icon name="file" size={16} />{exportingReport ? 'Preparing preview…' : 'Review handoff'}
+							</Button>
+						</header>
+						{#if reportExportStatus}
+							<p class="report-export-status" role={reportExportFailed ? 'alert' : 'status'}>{reportExportStatus}</p>
+						{/if}
+					</section>
 				</div>
 			{/if}
 		</div>
@@ -2658,8 +2675,16 @@
 	.brief-editor { min-width: 0; border-block: 1px solid var(--border); }
 	.editor-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); padding: var(--space-3) 0; border-bottom: 1px solid var(--border); }
 	.editor-actions { display: flex; flex: none; align-items: center; gap: var(--space-2); }
-	.investigation-view-switch { display: flex; width: fit-content; align-items: center; gap: 2px; padding: 3px; margin-top: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-inset); }
-	.investigation-view-switch :global(button[aria-pressed='true']) { box-shadow: 0 0 0 1px var(--border-strong, var(--border)); }
+	.investigation-document-section { display: grid; min-width: 0; gap: var(--space-3); padding: var(--space-4) 0; border-top: 1px solid var(--border); }
+	.investigation-document-heading { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: var(--space-4); }
+	.investigation-document-heading > div { display: grid; min-width: 0; gap: 3px; }
+	.investigation-document-heading h2, .investigation-document-heading h3 { margin: 0; font-size: var(--fs-md); font-weight: 650; }
+	.investigation-document-heading p { color: var(--text-dim); font-size: var(--fs-xs); line-height: 1.45; }
+	.investigation-data-section :global(.source-readiness) { padding: var(--space-2) 0 0; border-bottom: 0; }
+	.investigation-analysis-section { scroll-margin-top: var(--space-4); }
+	.investigation-results-section :global(.results-view) { padding: 0; }
+	.investigation-share-section { margin-bottom: var(--space-5); }
+	.investigation-share-section .report-export-status { max-width: none; }
 	.brief-summary { display: grid; gap: var(--space-3); padding: var(--space-4); margin-top: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg); }
 	.brief-summary > header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
 	.brief-summary h3, .work-plan-heading h3 { margin: 0; font-size: var(--fs-md); font-weight: 650; }
@@ -2892,7 +2917,7 @@
 	.run-preview-empty { margin: 0; color: var(--text-faint); font-size: var(--fs-xs); }
 	.run-preview-dirty { margin: 0; color: var(--text-faint); font-size: var(--fs-xs); }
 	.run-preview-actions { display: flex; justify-content: flex-end; gap: var(--space-2); }
-	.investigation-history { margin-bottom: var(--space-5); }
+	.investigation-history { margin-bottom: 0; }
 	.investigation-history-content { display: grid; gap: var(--space-3); padding: 0 var(--space-3) var(--space-3); }
 	.empty-state { max-width: 48ch; margin: 12vh auto 0; display: grid; justify-items: center; gap: var(--space-3); text-align: center; }
 	.empty-state > :global(svg) { color: var(--text-faint); }
@@ -2911,6 +2936,7 @@
 		.investigation-page { padding: var(--space-5) var(--space-4); }
 		.page-head { align-items: flex-start; flex-direction: column; }
 		.page-head-actions { width: 100%; justify-content: flex-start; flex-wrap: wrap; }
+		.investigation-document-heading { align-items: flex-start; flex-direction: column; }
 		.investigation-layout { grid-template-columns: minmax(0, 1fr); gap: var(--space-4); }
 		.investigation-list { max-height: 160px; overflow: auto; }
 	}

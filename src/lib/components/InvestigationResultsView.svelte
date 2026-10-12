@@ -117,7 +117,6 @@
 		for (const transcript of transcriptRuns) ids.add(transcript.turnId);
 		return [...ids].filter((turnId) => !current.has(turnId));
 	});
-	let answeredCount = $derived(activeQuestions.filter((question) => question.answer_status === 'answered').length);
 	let unavailableRunIds = $derived(runIds.filter((turnId) => runErrors[turnId] && !transcriptRunFor(turnId)));
 	let chartCards = $derived.by(() => {
 		const cards: {
@@ -345,32 +344,6 @@
 			{#each unavailableRunIds as turnId (turnId)}<Button type="button" variant="ghost" size="sm" onclick={() => retryRun(turnId)}>Retry {turnId}</Button>{/each}
 		</div>
 	{/if}
-	<section class="results-overview" aria-labelledby="results-goal-title">
-		<div class="results-overview-heading">
-			<div>
-				<p class="results-eyebrow">{investigation.status === 'complete' ? 'Completed Investigation' : 'Current Investigation'}</p>
-				<h3 id="results-goal-title">{investigation.brief.goal || investigation.title}</h3>
-			</div>
-			<Badge variant={unresolvedQuestions.length ? 'warning' : 'success'}>
-				{activeQuestions.length ? `${answeredCount}/${activeQuestions.length} Questions answered` : 'No active Questions'}
-			</Badge>
-		</div>
-		<dl class="results-brief-facts">
-			{#if investigation.brief.audience.trim()}
-				<div><dt>For</dt><dd>{investigation.brief.audience}</dd></div>
-			{/if}
-			{#if investigation.brief.desired_output.trim()}
-				<div><dt>Deliverable</dt><dd>{investigation.brief.desired_output}</dd></div>
-			{/if}
-		</dl>
-		{#if investigation.brief.constraints.length}
-			<details class="results-supporting">
-				<summary>Constraints and scope</summary>
-				<ul>{#each investigation.brief.constraints as constraint (constraint)}<li>{constraint}</li>{/each}</ul>
-			</details>
-		{/if}
-	</section>
-
 	<section class="results-section" aria-labelledby="results-findings-title">
 		<header class="results-section-heading">
 			<div><h3 id="results-findings-title">Key Findings</h3><p>Analyst-reviewed conclusions, linked to their Question and evidence.</p></div>
@@ -712,14 +685,8 @@
 	.results-warning :global(svg) { flex: none; }
 	.results-run-errors { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3); border: 1px solid var(--danger, #b42318); border-radius: var(--radius-sm); color: var(--danger, #b42318); font-size: var(--fs-xs); }
 	.results-run-errors p { flex: 1 1 100%; margin: 0; }
-	.results-overview { display: grid; gap: var(--space-3); padding: var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-inset); }
-	.results-overview-heading, .results-section-heading, .results-finding-heading, .results-question-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); }
-	.results-overview-heading h3 { max-width: 850px; margin: 2px 0 0; font-size: clamp(var(--fs-md), 2vw, var(--fs-xl)); font-weight: 650; line-height: 1.3; overflow-wrap: anywhere; }
-	.results-eyebrow { margin: 0; color: var(--text-faint); font-size: var(--fs-xs); font-weight: 650; text-transform: uppercase; letter-spacing: .06em; }
-	.results-brief-facts { display: flex; flex-wrap: wrap; gap: var(--space-4); margin: 0; }
-	.results-brief-facts > div { display: grid; min-width: min(280px, 100%); gap: 3px; }
-	.results-brief-facts dt, .results-supporting h4 { color: var(--text-faint); font-size: var(--fs-xs); font-weight: 650; }
-	.results-brief-facts dd { margin: 0; font-size: var(--fs-sm); overflow-wrap: anywhere; }
+	.results-section-heading, .results-finding-heading, .results-question-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); }
+	.results-supporting h4 { color: var(--text-faint); font-size: var(--fs-xs); font-weight: 650; }
 	.results-section { display: grid; min-width: 0; gap: var(--space-3); padding-top: var(--space-4); border-top: 1px solid var(--border); }
 	.results-section-heading { align-items: center; }
 	.results-section-heading h3 { margin: 0; font-size: var(--fs-md); font-weight: 650; }
