@@ -67,11 +67,9 @@
 
 <details class="question-source-scope">
 	<summary>
-		Source set · {selection
+		Sources · {selection
 			? `${selection.included_paths.length} selected`
-			: investigation.source_selection.mode === 'all_sources'
-				? 'inherit Investigation'
-				: 'inherit Investigation'}
+			: 'inherit Investigation set'}
 	</summary>
 	<div class="question-source-panel">
 		<label class="question-source-choice">

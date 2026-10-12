@@ -42,8 +42,11 @@
 	let audience = $state('');
 	let desiredOutput = $state('');
 	let constraintsText = $state('');
+	let briefEditing = $state(false);
 	let questions = $state<InvestigationQuestionInput[]>([]);
 	let definitions = $state<InvestigationDefinitionInput[]>([]);
+	let definitionsOpen = $state(false);
+	let historyOpen = $state(false);
 	let savedBrief = $state('');
 	let savedQuestions = $state('');
 	let savedDefinitions = $state('');
@@ -92,6 +95,14 @@
 	const syncingInvestigations = new Set<string>();
 
 	let selected = $derived(investigations.find((item) => item.id === selectedId) ?? null);
+	let disclosureInvestigationId = '';
+	$effect(() => {
+		const id = selected?.id ?? '';
+		if (id === disclosureInvestigationId) return;
+		disclosureInvestigationId = id;
+		definitionsOpen = false;
+		historyOpen = false;
+	});
 	let openAnalysisTurn = $derived(openAnalysisTurnId ? analysisTurns[openAnalysisTurnId] ?? null : null);
 	let questionLinksDirty = $derived.by(() => {
 		if (!openAnalysisTurnId) return false;
@@ -330,6 +341,7 @@
 		const key = item ? `${item.id}:${JSON.stringify(item.brief)}` : '';
 		if (key === loadedBriefKey) return;
 		loadedBriefKey = key;
+		briefEditing = false;
 		if (!item) {
 			goal = '';
 			audience = '';
@@ -481,6 +493,7 @@
 			const updated = await ipc.investigationUpdateBrief(selected.id, currentBrief);
 			investigations = investigations.map((item) => item.id === updated.id ? updated : item);
 			savedBrief = JSON.stringify(updated.brief);
+			briefEditing = false;
 			return true;
 		} catch (cause) {
 			error = cause instanceof Error ? cause.message : String(cause);
@@ -488,6 +501,18 @@
 		} finally {
 			saving = false;
 		}
+	}
+
+	function discardBrief(): void {
+		const item = selected;
+		if (!item || saving) return;
+		goal = item.brief.goal;
+		audience = item.brief.audience;
+		desiredOutput = item.brief.desired_output;
+		constraintsText = item.brief.constraints.join('\n');
+		savedBrief = JSON.stringify(item.brief);
+		briefEditing = false;
+		error = '';
 	}
 
 	async function markInvestigationComplete(): Promise<void> {
@@ -758,6 +783,7 @@
 	}
 
 	async function openAnalysisRun(turnId: string): Promise<void> {
+		historyOpen = true;
 		openAnalysisTurnId = turnId;
 		analysisTurnError = '';
 		questionLinksDraft = questionIdsForRun(turnId);
@@ -1200,6 +1226,11 @@
 		definitions = [...definitions, { id: `d_${id}`, kind, text: '' }];
 	}
 
+	function startDefinition(): void {
+		definitionsOpen = true;
+		addDefinition();
+	}
+
 	function runAssumptionInContext(text: string): boolean {
 		const normalized = text.trim().toLowerCase();
 		return Boolean(normalized && definitions.some((definition) =>
@@ -1212,6 +1243,7 @@
 		if (!normalized || saving || runAssumptionInContext(normalized)) return;
 		const id = globalThis.crypto?.randomUUID?.().replaceAll('-', '') ?? `${Date.now()}${Math.random().toString(16).slice(2)}`;
 		const definitionId = `d_${id}`;
+		definitionsOpen = true;
 		definitions = [...definitions, { id: definitionId, kind: 'assumption', text: normalized }];
 		await tick();
 		const field = document.getElementById(`definition-text-${definitionId}`);
@@ -1314,8 +1346,8 @@
 <section class="investigation-page" aria-labelledby="investigation-title">
 	<header class="page-head">
 		<div>
-				<h1 id="investigation-title">{activeView === 'results' ? 'Investigation results' : 'Investigation brief'}</h1>
-				<p>{activeView === 'results' ? 'Review current conclusions, visual evidence, and Questions that still need attention.' : 'Keep the goal, audience, deliverable, and constraints clear as the analysis develops.'}</p>
+				<h1 id="investigation-title">{activeView === 'results' ? 'Investigation results' : 'Investigation'}</h1>
+				<p>{activeView === 'results' ? 'Review current conclusions, visual evidence, and Questions that still need attention.' : 'Set the goal, break it into Questions, and keep the analysis grounded in its sources.'}</p>
 		</div>
 		<div class="page-head-actions">
 			{#if reportExportStatus}
@@ -1394,23 +1426,15 @@
 					<div class="editor-heading">
 						<div>
 							<h2>{selected.title}</h2>
-							{#if selected.brief_source_message_id}
-								<p>Goal seeded from the conversation’s first request. Editing this brief does not change that message.</p>
-							{/if}
 						</div>
 						<div class="editor-actions">
 							<Button type="button" variant="outline" disabled={openingConversation || (!selected.conversation_id && !selected.brief_source_message_id)} onclick={() => void openSelectedConversation()}>
 								<Icon name="ask" size={16} />{openingConversation ? 'Opening…' : 'Open conversation'}
 							</Button>
-							{#if activeView === 'brief'}
-								<Button type="button" disabled={!dirty || saving} onclick={() => void saveBrief()}>
-									<Icon name="check" size={16} />{saving ? 'Saving…' : 'Save brief'}
-								</Button>
-							{/if}
 						</div>
 					</div>
 					<div class="investigation-view-switch" role="group" aria-label="Investigation view">
-						<Button type="button" variant={activeView === 'brief' ? 'secondary' : 'ghost'} size="sm" aria-pressed={activeView === 'brief'} onclick={() => (activeView = 'brief')}>Brief</Button>
+						<Button type="button" variant={activeView === 'brief' ? 'secondary' : 'ghost'} size="sm" aria-pressed={activeView === 'brief'} onclick={() => (activeView = 'brief')}>Work plan</Button>
 						<Button type="button" variant={activeView === 'results' ? 'secondary' : 'ghost'} size="sm" aria-pressed={activeView === 'results'} onclick={() => (activeView = 'results')}>Results</Button>
 					</div>
 					{#if activeView === 'results'}
@@ -1421,6 +1445,26 @@
 							onreviewquestion={reviewQuestionFromResults}
 						/>
 					{:else}
+					<section class="brief-summary" aria-labelledby="brief-summary-title">
+						<header>
+							<div>
+								<h3 id="brief-summary-title">Brief</h3>
+								<p>The purpose and shape of the analysis.</p>
+							</div>
+							<Button type="button" variant="outline" disabled={saving} onclick={() => (briefEditing = true)}>
+								<Icon name="pencil" size={16} />Edit brief
+							</Button>
+						</header>
+						<dl>
+							<div><dt>Goal</dt><dd>{goal.trim() || rootQuestion?.text.trim() || 'Not set'}</dd></div>
+							<div><dt>Audience</dt><dd>{audience.trim() || 'Not specified'}</dd></div>
+							<div><dt>Deliverable</dt><dd>{desiredOutput.trim() || 'Not specified'}</dd></div>
+							<div><dt>Constraints</dt><dd>{constraintsText.split('\n').map((line) => line.trim()).filter(Boolean).join(' · ') || 'None specified'}</dd></div>
+						</dl>
+						{#if selected.brief_source_message_id}
+							<p class="brief-source-note">The original request is preserved in the conversation. Editing this brief does not change it.</p>
+						{/if}
+					</section>
 					{#if pendingProposal}
 						<section class="brief-proposal" aria-labelledby="brief-proposal-title">
 							<div class="proposal-copy">
@@ -1442,6 +1486,8 @@
 							</div>
 						</section>
 					{/if}
+					{#if briefEditing}
+						<section class="brief-edit-panel" aria-label="Edit Investigation brief">
 					<label for="investigation-goal">Goal</label>
 					<Textarea id="investigation-goal" class="brief-field goal-field" bind:value={goal} disabled={saving} placeholder="What question should this Investigation answer?" />
 					<label for="investigation-audience">Audience</label>
@@ -1450,10 +1496,36 @@
 					<Textarea id="investigation-output" class="brief-field" bind:value={desiredOutput} disabled={saving} placeholder="What should the analyst deliver?" />
 					<label for="investigation-constraints">Constraints</label>
 					<Textarea id="investigation-constraints" class="brief-field constraints-field" bind:value={constraintsText} disabled={saving} placeholder="One constraint per line" />
+						<div class="brief-edit-actions">
+							<span role={error ? 'alert' : 'status'}>{error || (saving ? 'Saving…' : dirty ? 'Unsaved changes' : 'Brief saved')}</span>
+							<Button type="button" variant="ghost" disabled={saving} onclick={discardBrief}>{dirty ? 'Discard changes' : 'Done'}</Button>
+							<Button type="button" disabled={!dirty || saving} onclick={() => void saveBrief()}>
+								<Icon name="check" size={16} />{saving ? 'Saving…' : 'Save brief'}
+							</Button>
+						</div>
+						</section>
+					{/if}
+					<section class="analyst-work-plan" aria-labelledby="work-plan-title">
+						<header class="work-plan-heading">
+							<div>
+								<h3 id="work-plan-title">Analyst work plan</h3>
+								<p>Break the goal into answerable Questions and make the source scope explicit.</p>
+							</div>
+						</header>
+						<div class="optional-context-heading">
+							<p>Optional semantic context</p>
+							<Button type="button" variant="ghost" size="sm" disabled={saving} onclick={startDefinition}>
+								<Icon name="plus" size={14} />Add definition or assumption
+							</Button>
+						</div>
+						<details class="definition-disclosure" bind:open={definitionsOpen}>
+							<summary>
+				<span id="definition-context-title">Definitions &amp; assumptions</span>
+								<small>{definitions.length ? `${definitions.length} context note${definitions.length === 1 ? '' : 's'}` : 'None saved'}</small>
+							</summary>
 					<section class="definition-editor" aria-labelledby="definition-context-title">
 						<header class="question-heading">
 							<div>
-								<h3 id="definition-context-title">Definitions &amp; assumptions</h3>
 								<p>Save business meanings that should guide future runs. Each run keeps the exact versions it used.</p>
 							</div>
 							<div class="question-save">
@@ -1497,10 +1569,8 @@
 						{:else}
 							<p class="definition-empty">No saved definitions or assumptions. Runs use no Investigation-specific semantic context.</p>
 						{/if}
-						<Button type="button" variant="outline" disabled={saving} onclick={() => addDefinition()}>
-							<Icon name="plus" size={16} />Add definition or assumption
-						</Button>
 					</section>
+						</details>
 					<section class="question-editor" aria-labelledby="question-plan-title">
 						<header class="question-heading">
 							<div>
@@ -1813,6 +1883,13 @@
 							<Icon name="plus" size={16} />{rootQuestion ? 'Add subquestion' : 'Add main Question'}
 						</Button>
 					</section>
+					</section>
+					<details class="investigation-history" bind:open={historyOpen}>
+						<summary>
+							<span>Findings &amp; analysis history</span>
+							<small>{selected.findings?.length ?? 0} findings · {analysisRunIds(selected).length} runs</small>
+						</summary>
+						<div class="investigation-history-content">
 					<section class="findings" aria-labelledby="findings-title">
 						<header class="findings-heading">
 							<div>
@@ -2238,11 +2315,8 @@
 							</section>
 						{/if}
 					</section>
-					<div class="editor-foot">
-						<span role={error ? 'alert' : 'status'}>{error || (saving ? 'Saving…' : dirty ? 'Unsaved changes' : 'Saved locally')}</span>
-						{#if selected.brief_source_message_id}<span>Original request preserved</span>{/if}
-						<span>{selected.analysis_turn_ids?.length ?? 0} saved run{(selected.analysis_turn_ids?.length ?? 0) === 1 ? '' : 's'} linked</span>
-					</div>
+						</div>
+					</details>
 					{/if}
 				</div>
 			{/if}
@@ -2261,8 +2335,7 @@
 		overflow: auto;
 	}
 	.page-head,
-	.editor-heading,
-	.editor-foot {
+	.editor-heading {
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
@@ -2274,7 +2347,7 @@
 	.report-export-status[role='alert'] { color: var(--danger, #b42318); }
 	h1, h2, p { margin: 0; }
 	h1 { font-size: clamp(24px, 3vw, 32px); font-weight: 650; letter-spacing: -0.03em; }
-	.page-head p, .editor-heading p { margin-top: var(--space-1); color: var(--text-dim); }
+	.page-head p { margin-top: var(--space-1); color: var(--text-dim); }
 	.investigation-layout { display: grid; grid-template-columns: minmax(180px, 240px) minmax(0, 1fr); gap: var(--space-6); }
 	.investigation-list { display: flex; flex-direction: column; gap: 4px; }
 	.investigation-choice {
@@ -2289,7 +2362,7 @@
 	.investigation-status { flex: none; padding: 2px 6px; border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-dim); font-size: 10px; font-weight: 600; line-height: 1.3; }
 	.investigation-status[data-status='complete'] { border-color: color-mix(in srgb, var(--success, #16803c) 28%, var(--border)); color: var(--success, #16803c); }
 	.investigation-status[data-status='archived'] { color: var(--text-faint); }
-	.investigation-choice small, .status, .editor-foot { color: var(--text-faint); font-size: var(--fs-xs); }
+	.investigation-choice small, .status { color: var(--text-faint); font-size: var(--fs-xs); }
 	.investigation-coverage { white-space: normal; line-height: 1.35; }
 	.error { margin: 0 0 var(--space-3); color: var(--danger, #b42318); font-size: var(--fs-sm); overflow-wrap: anywhere; }
 	.brief-editor { min-width: 0; border-block: 1px solid var(--border); }
@@ -2297,6 +2370,19 @@
 	.editor-actions { display: flex; flex: none; align-items: center; gap: var(--space-2); }
 	.investigation-view-switch { display: flex; width: fit-content; align-items: center; gap: 2px; padding: 3px; margin-top: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-inset); }
 	.investigation-view-switch :global(button[aria-pressed='true']) { box-shadow: 0 0 0 1px var(--border-strong, var(--border)); }
+	.brief-summary { display: grid; gap: var(--space-3); padding: var(--space-4); margin-top: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg); }
+	.brief-summary > header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+	.brief-summary h3, .work-plan-heading h3 { margin: 0; font-size: var(--fs-md); font-weight: 650; }
+	.brief-summary > header p, .work-plan-heading p { margin-top: 2px; color: var(--text-dim); font-size: var(--fs-xs); }
+	.brief-summary dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3) var(--space-6); margin: 0; }
+	.brief-summary dl > div { display: grid; min-width: 0; gap: 2px; }
+	.brief-summary dt { color: var(--text-faint); font-size: var(--fs-xs); }
+	.brief-summary dd { min-width: 0; margin: 0; color: var(--text); font-size: var(--fs-sm); line-height: 1.45; overflow-wrap: anywhere; }
+	.brief-source-note { padding-top: var(--space-2); border-top: 1px solid var(--border); color: var(--text-faint); font-size: var(--fs-xs); }
+	.brief-edit-panel { display: grid; gap: var(--space-1); padding: var(--space-4); margin-top: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-inset); }
+	.brief-edit-actions { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-2); padding-top: var(--space-3); margin-top: var(--space-2); border-top: 1px solid var(--border); }
+	.brief-edit-actions > span { flex: 1; color: var(--text-faint); font-size: var(--fs-xs); }
+	.brief-edit-actions > span[role='alert'] { color: var(--danger, #b42318); }
 	.brief-proposal { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--space-3); padding: var(--space-3); margin-top: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-inset); }
 	.proposal-copy { grid-column: 1 / -1; }
 	.proposal-copy h3 { margin: 0; font-size: var(--fs-sm); font-weight: 650; }
@@ -2310,8 +2396,18 @@
 	.brief-editor :global(.brief-field) { width: 100%; min-height: 74px; resize: vertical; }
 	.brief-editor :global(.goal-field) { min-height: 112px; }
 	.brief-editor :global(.constraints-field) { min-height: 96px; }
-	.definition-editor { display: grid; gap: var(--space-3); padding: var(--space-4) 0; margin-top: var(--space-4); border-top: 1px solid var(--border); }
-	.definition-editor h3 { margin: 0; font-size: var(--fs-md); font-weight: 650; }
+	.analyst-work-plan { display: grid; gap: var(--space-3); padding: var(--space-5) 0; }
+	.work-plan-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); }
+	.optional-context-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); color: var(--text-faint); font-size: var(--fs-xs); }
+	.optional-context-heading > p { font-weight: 600; }
+	.definition-disclosure, .investigation-history { min-width: 0; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg); }
+	.definition-disclosure > summary, .investigation-history > summary { display: flex; min-height: 42px; align-items: center; justify-content: space-between; gap: var(--space-3); padding: 0 var(--space-3); color: var(--text); font-size: var(--fs-sm); font-weight: 600; cursor: pointer; list-style: none; }
+	.definition-disclosure > summary::-webkit-details-marker, .investigation-history > summary::-webkit-details-marker { display: none; }
+	.definition-disclosure > summary::before, .investigation-history > summary::before { content: '›'; flex: 0 0 auto; color: var(--text-faint); font-size: 1.2em; font-weight: 400; line-height: 1; transition: transform 120ms ease; }
+	.definition-disclosure[open] > summary::before, .investigation-history[open] > summary::before { transform: rotate(90deg); }
+	.definition-disclosure > summary > span, .investigation-history > summary > span { flex: 1; }
+	.definition-disclosure > summary small, .investigation-history > summary small { color: var(--text-faint); font-size: var(--fs-xs); font-weight: 400; }
+	.definition-editor { display: grid; gap: var(--space-3); padding: 0 var(--space-3) var(--space-3); }
 	.definition-editor .question-heading p, .definition-empty { margin-top: var(--space-1); color: var(--text-dim); font-size: var(--fs-xs); }
 	.definition-list { display: grid; gap: var(--space-3); margin: 0; padding: 0; list-style: none; }
 	.definition-item { display: grid; gap: var(--space-2); min-width: 0; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); }
@@ -2322,7 +2418,7 @@
 	.definition-item select { width: max-content; min-width: 140px; padding: 6px 9px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); color: var(--text); font: inherit; }
 	.brief-editor :global(.definition-field) { width: 100%; min-height: 68px; resize: vertical; }
 	.definition-empty { margin: 0; }
-	.question-editor { display: grid; gap: var(--space-3); padding: var(--space-4) 0; margin-top: var(--space-4); border-top: 1px solid var(--border); }
+	.question-editor { display: grid; gap: var(--space-3); padding: var(--space-4) 0; margin-top: var(--space-2); border-top: 1px solid var(--border); }
 	.question-heading, .question-save, .question-item-heading, .question-item-actions { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
 	.question-heading { align-items: flex-start; gap: var(--space-4); }
 	.question-heading h3 { margin: 0; font-size: var(--fs-md); font-weight: 650; }
@@ -2508,7 +2604,8 @@
 	.run-preview-empty { margin: 0; color: var(--text-faint); font-size: var(--fs-xs); }
 	.run-preview-dirty { margin: 0; color: var(--text-faint); font-size: var(--fs-xs); }
 	.run-preview-actions { display: flex; justify-content: flex-end; gap: var(--space-2); }
-	.editor-foot { padding: var(--space-3) 0; }
+	.investigation-history { margin-bottom: var(--space-5); }
+	.investigation-history-content { display: grid; gap: var(--space-3); padding: 0 var(--space-3) var(--space-3); }
 	.empty-state { max-width: 48ch; margin: 12vh auto 0; display: grid; justify-items: center; gap: var(--space-3); text-align: center; }
 	.empty-state > :global(svg) { color: var(--text-faint); }
 	.empty-state h2 { font-size: var(--fs-lg); }
@@ -2516,6 +2613,7 @@
 	@media (max-width: 720px) {
 		.investigation-layout { grid-template-columns: 1fr; gap: var(--space-4); }
 		.investigation-list { max-height: 180px; overflow: auto; }
+		.brief-summary dl { grid-template-columns: 1fr; }
 		.question-coverage > header { flex-direction: column; }
 		.question-coverage-counts { width: 100%; grid-template-columns: repeat(4, minmax(0, 1fr)); }
 	}

@@ -37,6 +37,20 @@ const folders = [
 const workspacePresetButton = (page, name) =>
 	page.locator('.workspace-preset-control').getByRole('button', { name: new RegExp(`^${name}:`) });
 
+async function expandInvestigationHistory(page) {
+	const history = page.locator('.investigation-history');
+	if (!(await history.evaluate((element) => element.open))) {
+		await history.locator(':scope > summary').click();
+	}
+}
+
+async function expandInvestigationDefinitions(page) {
+	const definitions = page.locator('.definition-disclosure');
+	if (!(await definitions.evaluate((element) => element.open))) {
+		await definitions.locator(':scope > summary').click();
+	}
+}
+
 async function installDesktopMock(
 	page,
 	{
@@ -903,7 +917,7 @@ test('an Investigation opens its canonical workspace conversation', async ({ pag
 	await expect(workspaceContext).toContainText('northwind-sales');
 	await expect(page.getByRole('button', { name: 'Open investigation brief in northwind-sales' })).toBeVisible();
 	await workspacePresetButton(page, 'Investigation').click();
-	await expect(page.getByRole('heading', { name: 'Investigation brief' })).toBeVisible();
+	await expect(page.getByRole('heading', { name: 'Investigation', exact: true })).toBeVisible();
 	await expect(workspaceContext).toContainText('northwind-sales');
 	await expect(page.locator('.editor-heading h2')).toHaveText('Summarize cohort retention');
 	const openConversation = page.getByRole('button', { name: 'Open conversation', exact: true });
@@ -917,6 +931,47 @@ test('an Investigation opens its canonical workspace conversation', async ({ pag
 	await expect(workspacePresetButton(page, 'Investigation')).toBeVisible();
 	await workspacePresetButton(page, 'Investigation').click();
 	await expect(page.locator('.editor-heading h2')).toHaveText('Summarize cohort retention');
+	expect(await page.evaluate(() => window.__workspaceAskCalls.length)).toBe(1);
+});
+
+test('Investigation work plan keeps the brief concise and opens editing and history on demand', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
+	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	const originalRequest = 'Explain weekly sales for the finance team';
+	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill(originalRequest);
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+
+	const brief = page.getByRole('region', { name: 'Brief', exact: true });
+	const definitions = page.locator('.definition-disclosure');
+	const history = page.locator('.investigation-history');
+	await expect(brief).toContainText(originalRequest);
+	await expect(brief).toContainText('Audience');
+	await expect(brief).toContainText('Deliverable');
+	await expect(page.getByRole('button', { name: 'Edit brief' })).toBeVisible();
+	await expect(page.getByRole('heading', { name: 'Questions', exact: true })).toBeVisible();
+	await expect(page.getByRole('textbox', { name: 'Audience' })).toHaveCount(0);
+	expect(await definitions.evaluate((element) => element.open)).toBe(false);
+	expect(await history.evaluate((element) => element.open)).toBe(false);
+
+	await page.getByRole('button', { name: 'Edit brief' }).click();
+	await page.getByRole('textbox', { name: 'Audience' }).fill('Finance lead');
+	await page.getByRole('button', { name: 'Discard changes' }).click();
+	await expect(page.getByRole('textbox', { name: 'Audience' })).toHaveCount(0);
+	await expect(brief).toContainText('Not specified');
+
+	await page.getByRole('button', { name: 'Edit brief' }).click();
+	await page.getByRole('textbox', { name: 'Audience' }).fill('Finance lead');
+	await page.getByRole('textbox', { name: 'Desired output' }).fill('A concise weekly sales report');
+	await page.getByRole('button', { name: 'Save brief' }).click();
+	await expect(brief).toContainText('Finance lead');
+	await expect(brief).toContainText('A concise weekly sales report');
+
+	await page.getByRole('button', { name: 'Open conversation', exact: true }).click();
+	await expect(page.locator('.msg.user').filter({ hasText: originalRequest })).toHaveCount(1);
 	expect(await page.evaluate(() => window.__workspaceAskCalls.length)).toBe(1);
 });
 
@@ -1016,7 +1071,7 @@ test('workspace layout presets preserve the same Investigation, transcript, and 
 		return { id: investigation.id, questionId: investigation.questions[0].id };
 	});
 	await preset('Investigation').click();
-	await expect(page.getByRole('heading', { name: 'Investigation brief' })).toBeVisible();
+	await expect(page.getByRole('heading', { name: 'Investigation', exact: true })).toBeVisible();
 	const mainQuestion = page.getByRole('textbox', { name: 'Main question' });
 	await mainQuestion.fill('Measure weekly net sales');
 
@@ -1280,7 +1335,7 @@ test('a Question can narrow its source set and launches a run linked to that Que
 	await page.getByRole('button', { name: 'Add subquestion' }).click();
 	await page.getByRole('textbox', { name: 'Subquestion 1' }).fill('Compare refund rates with sales');
 	const questionCard = page.locator('.question-item').filter({ has: page.getByRole('textbox', { name: 'Subquestion 1' }) });
-	await questionCard.getByText(/Source set/).click();
+	await questionCard.getByText(/Sources/).click();
 	await questionCard.getByLabel('Use a specific source set').check();
 	await questionCard.getByLabel('refunds.csv').uncheck();
 	await page.getByRole('button', { name: 'Add definition or assumption' }).click();
@@ -1538,6 +1593,7 @@ test('verification outcomes stay beside their outputs and explain check limits',
 	await page.getByRole('button', { name: 'Mark complete' }).click();
 	await expect(coverage).toContainText('Investigation closed with documented gaps. It is not fully answered');
 	await expect(coverage).not.toContainText('Investigation fully answered.');
+	await expandInvestigationHistory(page);
 	await page.getByRole('button', { name: 'Open saved analysis run 1: Explain weekly sales' }).click();
 
 	const runDetail = page.getByRole('region', { name: 'Saved analysis run' });
@@ -1711,6 +1767,7 @@ test('a multi-question Investigation carries coverage, QA, and run links into it
 	await page.getByRole('button', { name: 'Send' }).click();
 	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
 	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	await page.getByRole('button', { name: 'Edit brief' }).click();
 	await page.getByRole('textbox', { name: 'Audience' }).fill('Regional manager');
 	await page.getByRole('textbox', { name: 'Desired output' }).fill('A decision-ready regional summary');
 	await page.getByRole('button', { name: 'Save brief' }).click();
@@ -1821,6 +1878,7 @@ test('saved analysis runs open from an Investigation and link to every Question 
 	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.').last()).toBeVisible();
 	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
 
+	await expandInvestigationHistory(page);
 	const savedRunLink = page.getByRole('button', { name: 'Open saved analysis run 1: Explain how refund rates changed' });
 	await expect(savedRunLink).toBeVisible();
 	await savedRunLink.click();
@@ -1870,6 +1928,7 @@ test('an analyst can review a run assumption, correct it in Investigation contex
 	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.').last()).toBeVisible();
 	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
 
+	await expandInvestigationHistory(page);
 	const runLink = page.getByRole('button', { name: 'Open saved analysis run 1: Explain weekly account retention' });
 	await runLink.click();
 	const runDetail = page.getByRole('region', { name: 'Saved analysis run' });
@@ -1909,7 +1968,9 @@ test('saved Investigation definitions are revisioned, attached to later asks, an
 	await page.getByRole('button', { name: 'Send' }).click();
 	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
 	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
-	await expect(page.getByRole('heading', { name: 'Definitions & assumptions' })).toBeVisible();
+	expect(await page.locator('.definition-disclosure').evaluate((element) => element.open)).toBe(false);
+	await expandInvestigationDefinitions(page);
+	await expect(page.locator('.definition-disclosure > summary')).toContainText('Definitions & assumptions');
 
 	await page.getByRole('button', { name: 'Add definition or assumption' }).click();
 	await page.getByRole('combobox', { name: 'Context type 1' }).selectOption('assumption');
@@ -1952,7 +2013,8 @@ test('saved Investigation definitions are revisioned, attached to later asks, an
 	await expect(transcript).not.toContainText('missing cancellation date is not sufficient evidence');
 
 	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
-	await expect(page.getByRole('heading', { name: 'Definitions & assumptions' })).toBeVisible();
+	await expandInvestigationDefinitions(page);
+	await expect(page.locator('.definition-disclosure > summary')).toContainText('Definitions & assumptions');
 	await page.getByRole('button', { name: 'Remove context note 1' }).click();
 	await page.getByRole('button', { name: 'Save context' }).click();
 	await expect(page.locator('.definition-empty')).toContainText('No saved definitions or assumptions');
@@ -2004,6 +2066,7 @@ test('saved run review exposes its method, query output, definitions, and actual
 	await expect(page.getByRole('region', { name: 'Question run' })).toBeHidden();
 	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
 
+	await expandInvestigationHistory(page);
 	const runLink = page.getByRole('button', { name: 'Open saved analysis run 1: Compare monthly retention by signup cohort' });
 	await runLink.click();
 	const runDetail = page.getByRole('region', { name: 'Saved analysis run' });
@@ -2095,12 +2158,14 @@ test('repeated Question runs stay chronological and preserve each attempt contex
 		await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
 	};
 	await runQuestion();
+	await expandInvestigationDefinitions(page);
 	await savedDefinition.fill('Net sales include refunds.');
 	await page.getByRole('button', { name: 'Save context' }).click();
 	await expect(page.locator('.definition-item')).toContainText('Saved revision 2');
 	await runQuestion();
 
 	const history = page.locator('.analysis-runs');
+	await expandInvestigationHistory(page);
 	const attempts = history.locator('.analysis-run-link');
 	await expect(attempts).toHaveCount(2);
 	await expect(attempts.nth(0)).toHaveAttribute('aria-label', 'Open saved analysis run 1: Explain weekly sales');
@@ -2155,6 +2220,7 @@ test('Finding caveats and assumptions are visible, editable, and preserve proven
 	await page.getByRole('region', { name: 'Review this run' }).getByRole('button', { name: 'Run this Question' }).click();
 	await expect(page.getByText('Retention rose by 14% across the observed cohorts.')).toBeVisible();
 	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	await expandInvestigationHistory(page);
 	await page.getByRole('button', { name: /Open saved analysis run 1:/ }).click();
 
 	const capture = page.getByRole('region', { name: 'Saved analysis run' }).locator('.finding-capture');
@@ -2255,6 +2321,7 @@ test('Investigation results summarize saved work, render linked charts, and keep
 	await page.getByRole('button', { name: 'Send' }).click();
 	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
 	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	await page.getByRole('button', { name: 'Edit brief' }).click();
 	await page.getByRole('textbox', { name: 'Audience' }).fill('Finance lead');
 	await page.getByRole('textbox', { name: 'Desired output' }).fill('A concise monthly trend summary');
 	await page.getByRole('button', { name: 'Save brief' }).click();
@@ -2265,6 +2332,7 @@ test('Investigation results summarize saved work, render linked charts, and keep
 	await page.getByRole('region', { name: 'Review this run' }).getByRole('button', { name: 'Run this Question' }).click();
 	await expect(page.getByText('Net sales rose 22% from January to February, then eased slightly in March.')).toBeVisible();
 	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	await expandInvestigationHistory(page);
 	await page.getByRole('button', { name: /Open saved analysis run 1:/ }).click();
 	const capture = page.getByRole('region', { name: 'Saved analysis run' }).locator('.finding-capture');
 	await capture.getByRole('textbox', { name: 'Finding caveats' }).fill('March results include only the first three weeks.');
@@ -2299,7 +2367,7 @@ test('Investigation results summarize saved work, render linked charts, and keep
 	await answers.locator('details details > summary').click();
 	await expect(savedAnswer).toBeVisible();
 	await results.locator('.results-chart').getByRole('button', { name: 'Open analysis record' }).click();
-	await expect(page.getByRole('button', { name: 'Brief', exact: true })).toHaveAttribute('aria-pressed', 'true');
+	await expect(page.getByRole('button', { name: 'Work plan', exact: true })).toHaveAttribute('aria-pressed', 'true');
 	await expect(page.getByRole('region', { name: 'Saved analysis run' })).toBeVisible();
 });
 
@@ -2339,10 +2407,12 @@ test('Investigation report exports saved answers, Findings, QA, and source prove
 	await page.getByRole('button', { name: 'Send' }).click();
 	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
 	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	await page.getByRole('button', { name: 'Edit brief' }).click();
 	await page.getByRole('textbox', { name: 'Audience' }).fill('Finance lead');
 	await page.getByRole('textbox', { name: 'Desired output' }).fill('A concise weekly report');
 	await page.getByRole('button', { name: 'Save brief' }).click();
-	await expect(page.locator('.brief-editor > .editor-foot')).toContainText('Saved locally');
+	await expect(page.locator('.brief-summary')).toContainText('Finance lead');
+	await expect(page.locator('.brief-summary')).toContainText('A concise weekly report');
 	await page.getByRole('button', { name: 'Add definition or assumption' }).click();
 	await page.getByRole('textbox', { name: 'Context note 1' }).fill('Net sales exclude refunds.');
 	await page.getByRole('button', { name: 'Save context' }).click();
@@ -2354,6 +2424,7 @@ test('Investigation report exports saved answers, Findings, QA, and source prove
 	await expect(page.getByRole('region', { name: 'Question run' })).toBeHidden();
 	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.').last()).toBeVisible();
 	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	await expandInvestigationHistory(page);
 	await page.getByRole('button', { name: 'Open saved analysis run 1: Explain weekly sales for finance' }).click();
 	const findingCapture = page.getByRole('region', { name: 'Saved analysis run' }).locator('.finding-capture');
 	await findingCapture.getByRole('textbox', { name: 'Finding claim' }).fill('Weekly sales rose 12% to $40.');
@@ -2450,6 +2521,7 @@ test('Finding revisions preserve prior versions and compare the supporting run c
 		await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
 	};
 	await runQuestion();
+	await expandInvestigationHistory(page);
 	await page.locator('.analysis-runs .analysis-run-link').nth(0).click();
 	const firstCapture = page.getByRole('region', { name: 'Saved analysis run' }).locator('.finding-capture');
 	await firstCapture.getByRole('textbox', { name: 'Finding caveats' }).fill('The export is before refund adjustments.');
@@ -2458,10 +2530,12 @@ test('Finding revisions preserve prior versions and compare the supporting run c
 	const findingId = await page.evaluate(() => window.__workspaceFindingRecords()[0].id);
 	await page.getByRole('button', { name: 'Close saved analysis run' }).click();
 
+	await expandInvestigationDefinitions(page);
 	await contextNote.fill('Net sales include refund adjustments.');
 	await page.getByRole('button', { name: 'Save context' }).click();
 	await expect(page.locator('.definition-item')).toContainText('Saved revision 2');
 	await runQuestion();
+	await expandInvestigationHistory(page);
 	const attempts = page.locator('.analysis-runs .analysis-run-link');
 	await expect(attempts).toHaveCount(2);
 	await attempts.nth(1).click();
@@ -2576,7 +2650,7 @@ test('suggested Question breakdown stays a draft until saved as durable child re
 		text: 'Check the trend over time',
 		status: 'active'
 	});
-	await expect(page.getByRole('heading', { name: 'Investigation brief' })).toBeVisible();
+	await expect(page.getByRole('heading', { name: 'Investigation', exact: true })).toBeVisible();
 });
 
 test('Investigation shows source readiness and opens source details in place', async ({ page }) => {
@@ -2693,7 +2767,7 @@ test('Investigation shows source readiness and opens source details in place', a
 	await expect(fieldProfile).toContainText('measured from the loaded rows only');
 	await sourceFieldSearch.fill('');
 	await expect(fieldProfile.locator('tbody tr')).toHaveCount(3);
-	await expect(page.getByRole('heading', { name: 'Investigation brief' })).toBeVisible();
+	await expect(page.getByRole('heading', { name: 'Investigation', exact: true })).toBeVisible();
 });
 
 test('the four-pane limit is scoped to one environment and closing a pane frees its slot', async ({ page }) => {
@@ -3234,7 +3308,7 @@ test('Sidebar workspace tools use shared buttons and preserve Investigation and 
 
 	await investigation.click();
 	await expect(page.getByRole('heading', { name: 'Data available' })).toBeVisible();
-	await expect(page.getByRole('heading', { name: 'Investigation brief' })).toBeVisible();
+	await expect(page.getByRole('heading', { name: 'Investigation', exact: true })).toBeVisible();
 	await createProject.click();
 	await expect(page.getByRole('heading', { name: 'Create a project' })).toBeVisible();
 	await page.getByRole('textbox', { name: 'Name' }).fill('Sales review');
@@ -3679,7 +3753,7 @@ test('a quick workspace question stays low-ceremony while keeping its answer evi
 	const answer = page.locator('.msg.assistant').last();
 	await expect(answer).toContainText(answerText);
 	await expect(composer).toBeVisible();
-	await expect(page.getByRole('region', { name: 'Investigation brief' })).toHaveCount(0);
+	await expect(page.getByRole('region', { name: 'Investigation', exact: true })).toHaveCount(0);
 	await expect(page.getByRole('region', { name: 'Review this run' })).toHaveCount(0);
 	await expect(page.getByRole('region', { name: 'Question run' })).toHaveCount(0);
 
