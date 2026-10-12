@@ -52,6 +52,13 @@ async function addSalesWorkspace(page) {
 	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
 }
 
+async function expectSidebarConversationFocused(page, title, workspace = 'northwind-sales') {
+	await page.getByRole('button', { name: `Open conversation: ${title}` }).click();
+	await expect(page.locator('.workspace-preset-layout')).toHaveAttribute('data-workspace-preset', 'focus');
+	await expect(page.getByRole('combobox', { name: `Ask about ${workspace}` })).toBeVisible();
+	await expect(page.locator('.msg.user').filter({ hasText: title })).toHaveCount(1);
+}
+
 async function composeEnvironment(page, name, workspaceNames) {
 	const switcher = page.locator('.sidebar .environment-switcher-trigger');
 	await switcher.click();
@@ -952,6 +959,71 @@ test('workspace overview opens only from the environment dropdown and preserves 
 	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
 	await expect(page.getByTestId('composer-scope-target')).toHaveText('Message target northwind-sales');
 	await expect(page.getByRole('log', { name: 'conversation' }).getByText('Scoped to C:\\FellaFixture\\northwind-sales.', { exact: true })).toBeVisible();
+});
+
+test('sidebar conversation links open Focus from Investigation, Data & context, Workbench, and Settings', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+	await addSalesWorkspace(page);
+
+	const firstQuestion = 'Review weekly sales';
+	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill(firstQuestion);
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
+
+	await page.getByRole('button', { name: 'Open workspace northwind-sales' }).hover();
+	await page.getByRole('button', { name: 'New conversation in northwind-sales' }).click();
+	const secondQuestion = 'Compare sales by region';
+	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill(secondQuestion);
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
+	await expect(page.getByRole('button', { name: `Open conversation: ${firstQuestion}` })).toBeVisible();
+	await expect(page.getByRole('button', { name: `Open conversation: ${secondQuestion}` })).toBeVisible();
+
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	await expect(page.getByRole('heading', { name: 'Investigation', exact: true })).toBeVisible();
+	await expectSidebarConversationFocused(page, firstQuestion);
+
+	await workspacePresetButton(page, 'Investigation').click();
+	await page.getByRole('tablist', { name: 'Workspace sections' }).getByRole('tab', { name: 'Data & context' }).click();
+	await expect(page.getByRole('tab', { name: 'Data & context' })).toHaveAttribute('aria-selected', 'true');
+	await expectSidebarConversationFocused(page, secondQuestion);
+
+	await workspacePresetButton(page, 'Workbench').click();
+	await expect(page.locator('.workspace-preset-layout[data-workspace-preset="workbench"]')).toBeVisible();
+	await expectSidebarConversationFocused(page, firstQuestion);
+
+	await page.getByRole('button', { name: 'Settings' }).click();
+	await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();
+	await expectSidebarConversationFocused(page, secondQuestion);
+	expect(await page.evaluate(() => window.__workspaceAskCalls.length)).toBe(2);
+});
+
+test('sidebar conversation links switch workspace and open its saved conversation in Focus', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+	await addSalesWorkspace(page);
+	const salesQuestion = 'Review sales by week';
+	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill(salesQuestion);
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
+
+	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
+	await expect(page.getByRole('combobox', { name: 'Ask about health-journal' })).toBeVisible();
+	const healthQuestion = 'Summarize sleep duration';
+	await page.getByRole('combobox', { name: 'Ask about health-journal' }).fill(healthQuestion);
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(page.getByText('Scoped to C:\\FellaFixture\\health-journal.')).toBeVisible();
+
+	const salesRepository = page.locator('.repository').filter({
+		has: page.getByRole('button', { name: 'Open workspace northwind-sales' })
+	});
+	const salesDisclosure = salesRepository.getByRole('button', { name: /^(Expand|Collapse) northwind-sales$/ });
+	if (await salesDisclosure.getAttribute('aria-expanded') === 'false') await salesDisclosure.click();
+	await expectSidebarConversationFocused(page, salesQuestion);
+	await expect(page.locator('.msg.user').filter({ hasText: salesQuestion })).toHaveCount(1);
+	await expect(page.locator('.msg.user').filter({ hasText: healthQuestion })).toHaveCount(0);
+	expect(await page.evaluate(() => window.__workspaceAskCalls.length)).toBe(2);
 });
 
 test('long Investigation content remains reachable by keyboard and pointer scrolling', async ({ page }) => {

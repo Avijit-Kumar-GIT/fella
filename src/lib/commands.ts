@@ -371,6 +371,10 @@ export async function openConversation(summary: ConversationSummary): Promise<bo
 			? session.focusWorkspace(workspaceId, summary.id)
 			: session.activateConversation(session.conversations.findIndex((conversation) => conversation.id === summary.id));
 		if (!focused) return false;
+		// Opening a saved conversation is an explicit navigation action. Do not
+		// restore the workspace's previous Investigation/Workbench pane here: the
+		// user expects to land on the conversation they selected.
+		session.setWorkspaceLayoutPreset('focus');
 		return true;
 	} catch (e) {
 		session.addSystem(`error: ${errMsg(e)}`);
