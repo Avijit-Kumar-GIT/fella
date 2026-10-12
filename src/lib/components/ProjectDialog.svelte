@@ -38,7 +38,7 @@
 
 	function create(): void {
 		if (!name.trim() || !workspace || !repositories.some((repository) => repository.path === workspace)) return;
-		session.createProject(name, workspace);
+		if (!session.createProject(name, workspace)) return;
 		close();
 	}
 

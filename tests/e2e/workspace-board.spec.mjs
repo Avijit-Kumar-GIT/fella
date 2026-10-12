@@ -252,7 +252,15 @@ async function installDesktopMock(
 			invoke: async (command, args = {}) => {
 				switch (command) {
 					case 'app_ready': return 1;
-					case 'investigations_list': return [...investigations.values()];
+					case 'context_file':
+						if (window.__workspaceContextLoadFailure) throw new Error('Fixture context load failure');
+						return null;
+					case 'investigations_list':
+						if (window.__workspaceInvestigationListFailure) throw new Error('Fixture investigation list unavailable');
+						return [...investigations.values()];
+					case 'save_context':
+						if (window.__workspaceContextSaveFailure) throw new Error('Fixture context save failure');
+						return null;
 					case 'investigation_ensure': {
 						investigationEnsureCalls.push(args);
 						const key = JSON.stringify([args.workspaceId, args.conversationId]);
@@ -1340,6 +1348,10 @@ test('workspace layout presets preserve the same Investigation, source scope, Qu
 		mode: 'selected_sources',
 		included_paths: ['sales.csv']
 	});
+	// Resolve the edited Question before switching views; navigation now protects unsaved plan drafts.
+	await page.getByRole('button', { name: 'Save plan' }).click();
+	await expect(page.getByRole('region', { name: 'Question plan' }).locator('.question-save')).toContainText('Plan saved');
+	await expect.poll(() => page.evaluate(() => window.__workspaceInvestigations()[0].questions[0].text)).toBe('Measure weekly net sales');
 
 	await preset('Focus').click();
 	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
@@ -1372,8 +1384,6 @@ test('workspace layout presets preserve the same Investigation, source scope, Qu
 		included_paths: ['sales.csv']
 	});
 	expect(afterLayoutChanges.ensureCalls).toBe(1);
-	await page.getByRole('button', { name: 'Save plan' }).click();
-	await expect(page.getByRole('region', { name: 'Question plan' }).locator('.question-save')).toContainText('Plan saved');
 
 	await page.getByRole('button', { name: 'Analyze main Question' }).click();
 	await page.getByRole('region', { name: 'Review this run' }).getByRole('button', { name: 'Run this Question' }).click();
@@ -4043,6 +4053,111 @@ test('Sidebar navigation actions use shared buttons and retain compact keyboard 
 
 	await settings.click();
 	await expect(settings).toHaveAttribute('aria-current', 'page');
+});
+
+test('Investigation list failures stay distinct from empty state and can be retried', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
+	await page.evaluate(() => { window.__workspaceInvestigationListFailure = true; });
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+
+	const alert = page.getByRole('alert');
+	await expect(alert.getByRole('heading', { name: "Couldn't load investigations" })).toBeVisible();
+	await expect(alert).toContainText('Fixture investigation list unavailable');
+	await expect(page.getByRole('heading', { name: 'No investigations yet' })).toHaveCount(0);
+
+	await page.evaluate(() => { window.__workspaceInvestigationListFailure = false; });
+	await alert.getByRole('button', { name: 'Retry' }).click();
+	await expect(page.getByRole('heading', { name: 'No investigations yet' })).toBeVisible();
+	await expect(page.getByRole('heading', { name: "Couldn't load investigations" })).toHaveCount(0);
+});
+
+test('unsaved workspace context stays on cancel and is discarded only after confirmation', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	const tabs = page.getByRole('tablist', { name: 'Workspace sections' });
+	await tabs.getByRole('tab', { name: 'Data & context' }).click();
+	const guide = page.getByRole('textbox', { name: 'Workspace guide' });
+	await page.evaluate(() => { window.__workspaceContextSaveFailure = true; });
+	await guide.fill('Unsaved analyst context');
+
+	const stayPrompt = page.waitForEvent('dialog');
+	const stayClick = workspacePresetButton(page, 'Focus').click();
+	const stayDialog = await stayPrompt;
+	expect(stayDialog.type()).toBe('confirm');
+	expect(stayDialog.message()).toContain('Data & context');
+	await stayDialog.dismiss();
+	await stayClick;
+	await expect(tabs.getByRole('tab', { name: 'Data & context' })).toHaveAttribute('aria-selected', 'true');
+	await expect(guide).toHaveValue('Unsaved analyst context');
+
+	const discardPrompt = page.waitForEvent('dialog');
+	const discardClick = workspacePresetButton(page, 'Focus').click();
+	const discardDialog = await discardPrompt;
+	expect(discardDialog.type()).toBe('confirm');
+	await discardDialog.accept();
+	await discardClick;
+	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
+
+	await workspacePresetButton(page, 'Investigation').click();
+	await page.getByRole('tablist', { name: 'Workspace sections' }).getByRole('tab', { name: 'Data & context' }).click();
+	await expect(page.getByRole('textbox', { name: 'Workspace guide' })).toHaveValue('');
+});
+
+test('unsaved Question plan stays on cancel and reverts only after confirmation', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
+	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	const originalRequest = 'Explain weekly sales in northwind-sales';
+	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill(originalRequest);
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(page.getByRole('button', { name: 'Open investigation brief in northwind-sales' })).toBeVisible();
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	const mainQuestion = page.getByRole('textbox', { name: 'Main question' });
+	await expect(mainQuestion).toHaveValue(originalRequest);
+	await mainQuestion.fill('Measure weekly net sales');
+
+	const stayPrompt = page.waitForEvent('dialog');
+	const stayClick = workspacePresetButton(page, 'Focus').click();
+	const stayDialog = await stayPrompt;
+	expect(stayDialog.type()).toBe('confirm');
+	expect(stayDialog.message()).toContain('Investigation');
+	await stayDialog.dismiss();
+	await stayClick;
+	await expect(mainQuestion).toHaveValue('Measure weekly net sales');
+
+	const discardPrompt = page.waitForEvent('dialog');
+	const discardClick = workspacePresetButton(page, 'Focus').click();
+	const discardDialog = await discardPrompt;
+	await discardDialog.accept();
+	await discardClick;
+	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
+	await workspacePresetButton(page, 'Investigation').click();
+	await expect(page.getByRole('textbox', { name: 'Main question' })).toHaveValue(originalRequest);
+	expect((await page.evaluate(() => window.__workspaceInvestigations()[0].questions))[0].text).toBe(originalRequest);
+});
+
+test('workspace context read failures stay distinct from a blank note and can be retried', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+	await page.evaluate(() => { window.__workspaceContextLoadFailure = true; });
+	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	const tabs = page.getByRole('tablist', { name: 'Workspace sections' });
+	await tabs.getByRole('tab', { name: 'Data & context' }).click();
+	const alert = page.getByRole('alert');
+	await expect(alert).toContainText('Fixture context load failure');
+	await expect(alert.getByRole('button', { name: 'Retry' })).toBeVisible();
+	await expect(page.getByRole('textbox', { name: 'Workspace guide' })).toHaveCount(0);
+
+	await page.evaluate(() => { window.__workspaceContextLoadFailure = false; });
+	await alert.getByRole('button', { name: 'Retry' }).click();
+	await expect(page.getByRole('textbox', { name: 'Workspace guide' })).toBeVisible();
+	await expect(page.getByRole('alert')).toHaveCount(0);
 });
 
 test('Sidebar icon actions use shared compact buttons and Add repository still opens the board', async ({ page }) => {

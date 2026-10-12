@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { tick } from 'svelte';
+	import { onDestroy, tick } from 'svelte';
 	import { firstActualQuestion, session } from '$lib/session.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
@@ -115,6 +115,7 @@
 	let reportPreview = $state<HandoffPreview | null>(null);
 	let error = $state('');
 	let requestSerial = 0;
+	let discardVersion = 0;
 	const syncingInvestigations = new Set<string>();
 
 	let selected = $derived(investigations.find((item) => item.id === selectedId) ?? null);
@@ -241,6 +242,59 @@
 	let questionsDirty = $derived(Boolean(selected && questionsKey !== savedQuestions));
 	let definitionsKey = $derived(JSON.stringify(definitions));
 	let definitionsDirty = $derived(Boolean(selected && definitionsKey !== savedDefinitions));
+	let unsavedEditor = $derived.by(() => {
+		const proposalEdited = Boolean(pendingProposal && (
+			proposalText !== pendingProposal.text || proposalTarget !== pendingProposal.target
+		));
+		const findingDraftOpen = Boolean(
+			findingClaimDraft.trim() || findingCaveatsDraft.trim() || findingAssumptionsDraft.trim()
+			|| findingRevisionNoteDraft.trim() || findingRevisionTargetDraft || findingQuestionDraft
+			|| findingEvidenceDraft.length
+		);
+		return dirty || questionsDirty || definitionsDirty || questionLinksDirty || proposalEdited
+			|| Boolean(editingFindingId) || findingDraftOpen;
+	});
+	let savingDraft = $derived(
+		saving || proposingQuestions || savingQuestionLinks || savingFinding || Boolean(updatingFindingId)
+	);
+
+	$effect(() => {
+		const item = selected;
+		if (!item) return;
+		const key = `investigation:${item.id}`;
+		const label = unsavedEditor || savingDraft ? `Investigation “${item.title}”` : null;
+		session.setUnsavedDraft(key, label, savingDraft);
+		return () => session.setUnsavedDraft(key, null);
+	});
+
+	$effect(() => {
+		const version = session.discardUnsavedDraftVersion;
+		if (version === discardVersion) return;
+		discardVersion = version;
+		discardBrief();
+		discardQuestions();
+		discardDefinitions();
+		questionLinksDraft = openAnalysisTurnId ? questionIdsForRun(openAnalysisTurnId, selected) : [];
+		proposalText = pendingProposal?.text ?? '';
+		proposalTarget = pendingProposal?.target ?? 'goal';
+		editingFindingId = null;
+		findingClaimDraft = '';
+		findingCaveatsDraft = '';
+		findingAssumptionsDraft = '';
+		findingRevisionTargetDraft = '';
+		findingRevisionNoteDraft = '';
+		findingQuestionDraft = '';
+		findingEvidenceDraft = [];
+		findingClaimEditDraft = '';
+		findingCaveatsEditDraft = '';
+		findingAssumptionsEditDraft = '';
+		findingRevisionNoteEditDraft = '';
+		findingError = '';
+	});
+
+	onDestroy(() => {
+		if (selected) session.setUnsavedDraft(`investigation:${selected.id}`, null);
+	});
 	let coverage = $derived.by(() => {
 		const activeQuestions = (selected?.questions ?? []).filter((question) => question.status === 'active');
 		const answered = activeQuestions.filter((question) => question.answer_status === 'answered').length;
@@ -304,7 +358,11 @@
 				item.conversation_id === activeConversation.id ||
 				(!!activeQuestion && item.brief_source_message_id === activeQuestion.id)
 			);
-			selectedId = navigationInvestigation?.id ?? linkedToConversation?.id ?? investigations[0]?.id ?? null;
+			const rememberedInvestigation = investigations.find((item) =>
+				item.id === session.activeInvestigationId && item.workspace_id === path
+			);
+			selectedId = navigationInvestigation?.id ?? rememberedInvestigation?.id ?? linkedToConversation?.id ?? investigations[0]?.id ?? null;
+			session.setActiveInvestigation(selectedId);
 		} catch (cause) {
 			if (serial === requestSerial) error = cause instanceof Error ? cause.message : String(cause);
 		} finally {
@@ -370,7 +428,8 @@
 			session.workspaceLayoutPreset === 'focus'
 		) return;
 		const current = selected;
-		session.activeInvestigationId = current?.workspace_id === path ? current.id : null;
+		const id = current?.workspace_id === path ? current.id : null;
+		if (session.activeInvestigationId !== id) session.setActiveInvestigation(id);
 	});
 
 	$effect(() => {
@@ -455,14 +514,7 @@
 
 	async function createInvestigation(): Promise<void> {
 		if (!workspacePath || creating || !isDesktop()) return;
-		if (questionsDirty) {
-			error = 'Save or discard the current Question plan before opening another Investigation.';
-			return;
-		}
-		if (definitionsDirty) {
-			error = 'Save or discard the current definitions before opening another Investigation.';
-			return;
-		}
+		if (!session.confirmUnsavedChanges()) return;
 		creating = true;
 		error = '';
 		const request = currentConversationSource;
@@ -488,10 +540,7 @@
 	async function openSelectedConversation(focusTurnId?: string): Promise<boolean> {
 		const item = selected;
 		if (!item || openingConversation || !isDesktop()) return false;
-		if (questionsDirty || definitionsDirty) {
-			error = 'Save or discard the current Question plan and definitions before opening the conversation.';
-			return false;
-		}
+		if (!session.confirmUnsavedChanges()) return false;
 		openingConversation = true;
 		error = '';
 		try {
@@ -1494,21 +1543,13 @@
 
 	async function selectInvestigation(id: string): Promise<void> {
 		if (id === selectedId || saving || proposingQuestions) return;
-		if (questionsDirty) {
-			error = 'Save or discard the current Question plan before switching Investigations.';
-			return;
-		}
-		if (definitionsDirty) {
-			error = 'Save or discard the current definitions before switching Investigations.';
-			return;
-		}
-		if (dirty && !(await saveBrief())) return;
+		if (!session.confirmUnsavedChanges()) return;
 		pendingAnalysisQuestionId = null;
 		analysisTurnError = '';
 		openAnalysisTurnId = null;
 		questionLinksDraft = [];
 		selectedId = id;
-		session.activeInvestigationId = id;
+		session.setActiveInvestigation(id);
 	}
 </script>
 
@@ -1527,10 +1568,7 @@
 			{/if}
 		</div>
 	</header>
-	{#if error && !selected}
-		<p class="error" role="alert">{error}</p>
-	{/if}
-	{#if workspacePath && !loading && !selected}
+	{#if workspacePath && !loading && !error && !selected}
 		<section class="investigation-document-section investigation-data-section" aria-labelledby="investigation-data-empty-heading">
 			<header class="investigation-document-heading">
 				<div><h2 id="investigation-data-empty-heading">Data</h2><p>Review the files available in this workspace before starting an Investigation.</p></div>
@@ -1551,6 +1589,13 @@
 		</div>
 	{:else if loading}
 		<p class="status" role="status">Loading investigations…</p>
+	{:else if error}
+		<div class="empty-state" role="alert">
+			<Icon name="alert" size={20} />
+			<h2>Couldn't load investigations</h2>
+			<p>{error}</p>
+			<Button type="button" onclick={() => workspacePath && void loadWorkspace(workspacePath)}>Retry</Button>
+		</div>
 	{:else if !investigations.length}
 		<div class="empty-state">
 			<Icon name="bookmark" size={20} />
@@ -2750,7 +2795,6 @@
 	.investigation-choice small, .status { color: var(--text-faint); font-size: var(--fs-xs); }
 	.investigation-coverage { white-space: normal; line-height: 1.35; }
 	.investigation-list-hint { display: none; margin: 2px 10px 6px; color: var(--text-faint); font-size: 10px; }
-	.error { margin: 0 0 var(--space-3); color: var(--danger, #b42318); font-size: var(--fs-sm); overflow-wrap: anywhere; }
 	.brief-editor { min-width: 0; border-block: 1px solid var(--border); }
 	.editor-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); padding: var(--space-3) 0; border-bottom: 1px solid var(--border); }
 	.editor-actions { display: flex; flex: none; align-items: center; gap: var(--space-2); }

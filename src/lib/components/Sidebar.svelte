@@ -211,7 +211,7 @@
 		let prepared = false;
 		try {
 			prepared = await session.beginWorkspaceDeletion(path);
-			if (!prepared) throw new Error('This workspace is already being deleted or still has an active conversation.');
+			if (!prepared) throw new Error('Deletion could not continue: a conversation is active, a save is in progress, or you chose to keep unsaved edits.');
 
 			const archived = await ipc.conversationsList();
 			const ids = [...new Set(archived.filter((conversation) => conversation.workspace === path).map((conversation) => conversation.id))];

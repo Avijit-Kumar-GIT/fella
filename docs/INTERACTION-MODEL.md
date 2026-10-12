@@ -1,6 +1,6 @@
 # Fella interaction model
 
-**Status:** UX architecture contract for [#240](https://github.com/Avijit-Kumar-GIT/fella/issues/240). This defines product direction and terminology; it does not claim every view or behavior is implemented.
+**Status:** UX architecture contract for [#240](https://github.com/Avijit-Kumar-GIT/fella/issues/240) and [#250](https://github.com/Avijit-Kumar-GIT/fella/issues/250). This defines product direction and terminology; it does not claim every view or behavior is implemented.
 
 Fella has one central unit of analytical work: the **Investigation**. **Focus**, **Investigation**, and **Workbench** are three ways to work with or inspect that same Investigation—not separate products, separate conversations, or different data permissions.
 
@@ -127,6 +127,94 @@ The Workspace and Investigation summary remain visible in the context bar, and
 empty/loading states belong to the relevant panel. The composer continues to
 target the active Workspace; it is not an independent panel or a way to combine
 Workspace data.
+
+## State and recovery contract
+
+Use the same state distinctions in every view:
+
+- **Empty** means the relevant request completed successfully and returned no
+  records or content. Say what is absent and offer the action that creates or
+  supplies it. A failed request must never be presented as an empty result.
+- **Loading** identifies the operation in progress. Keep the active Workspace,
+  Conversation, and any already-saved content visible where possible; prevent
+  duplicate submissions and announce completion or failure.
+- **Success** identifies what was loaded or completed. Do not imply that a
+  successful tool call proves the business interpretation is correct.
+- **Partial** preserves the supported answer and labels the remaining coverage
+  gap. **Unsupported** says which input, format, or operation is unsupported and
+  what the user can change. Neither state should be relabeled as a generic
+  failure or hide a useful result.
+- **Offline / unavailable** distinguishes an unreachable model/runtime from a
+  folder that cannot be mounted. Keep saved history available; do not borrow a
+  different Workspace's catalog or imply that old results were refreshed.
+- **Error** names the action that failed, preserves saved content and editable
+  drafts, and offers a relevant retry or recovery route. Do not show an empty
+  state beside an error for the same failed load.
+
+| Surface | Empty / not started | Loading and success | Partial or unsupported | Offline / error and next action |
+| --- | --- | --- | --- | --- |
+| **Focus** | General can answer without a folder. For file analysis, explain that no Workspace is in scope and offer **Choose a folder** or sample data. | Keep the active target visible while a run is in progress; when an answer lands, link to its Investigation and evidence. | Keep the best-supported answer visible; state which sources or checks were unavailable and offer a scoped follow-up. | Keep the Conversation and prior saved answers. For a provider/runtime issue, show the failed action and retry or Settings; for an unavailable folder, offer reconnect and history-only access. |
+| **Investigation** | Without a Workspace, explain the scope requirement. With a Workspace and zero Investigations, offer to start from the current Conversation or create one. | Identify whether records or a particular run are loading; show the saved Investigation when available. | Keep Question coverage, answer status, and the reason for each gap visible. A documented gap may be closed as incomplete, but must not be labeled fully answered. | A failed list/run load is an error, not “No investigations yet.” Preserve the selected Investigation and offer retry; do not replace existing records with an empty placeholder. |
+| **Workbench** | An optional companion that has not been opened is simply absent; explain when a requested preview or detail is unavailable. | Show progress in the affected panel; on success, retain its link to the Investigation, run, and source. | Keep other panels usable and identify the specific unsupported artifact, skipped step, or failed check. | Show error and retry state inside the affected panel. Do not clear the Conversation or Investigation because one detail panel failed. |
+| **Data & context** | A successful empty catalog or absent `fella.md` is distinct from a failed read. Explain what is available and how to add context. | Distinguish scanning/loading from a completed inventory or loaded context note. | Identify skipped or unsupported files and keep the available inventory and context visible. | On a failed read, preserve existing text and do not present an empty editable document that could overwrite it. Offer retry; on save failure, keep the draft and make retry available. |
+| **Projects and history** | Explain that no Project or saved Conversation exists in this Workspace and offer the relevant create/open action. | Indicate which list is loading; after success, retain Workspace ownership and saved links. | Keep existing curation and history visible even if one linked record is unavailable. | A missing folder is history-only, not deleted history. Keep saved Conversations and Project records reachable and offer reconnect; a failed list load must not be shown as a successful empty list. |
+
+### Unsaved changes
+
+Changing Focus/Investigation/Workbench, switching the Workspace pane, selecting
+another Workspace or Environment, opening a different Conversation, closing a
+Workspace/Environment, or deleting a Workspace must not silently discard an
+editable draft. Before leaving, the user can save in the editor; otherwise a
+platform confirmation offers **Discard** or **Stay**. Staying keeps the draft.
+Choosing Discard reverts it to the last persisted version. A failed save keeps
+the draft and exposes retry; navigation is blocked while a save is in flight.
+A successfully saved or autosaved draft needs no confirmation. Running analysis
+is separate from a draft: switching views must not cancel it; cancellation
+requires an explicit stop action. OS-level quit protection is not covered by
+the current in-app navigation guard.
+
+The policy applies to the Investigation brief, Question plan, definitions,
+Finding edits, workspace context, and any other editable form. An autosaving
+surface must flush a pending save before leaving or use the same confirmation
+when it cannot. A saved report only reflects saved records; it must disclose
+unsaved edits rather than implying they are included.
+
+### Migration and restoration
+
+The navigation change is a non-destructive remapping of access, not a rewrite
+of analytical records:
+
+| Existing surface | Destination | Preservation rule |
+| --- | --- | --- |
+| Ask and its Conversations | Focus | Keep Conversation IDs, messages, Workspace scope, and run links unchanged. |
+| Work plan and Results | Sections of the Investigation | Keep Investigation, Question, answer, Finding, run, evidence, and report records; do not create parallel copies. |
+| Sources and Guide | Data & context | Keep source identity and the existing Workspace-local `fella.md`; do not change folder contents during navigation migration. |
+| Workspace board and environment controls | Environment composition and Workspace selection | Preserve Environment, pane membership/order, and each pane's Conversation association. Layout must not merge Workspace data. |
+| Conversation history | The owning Workspace's history | Keep unavailable-folder history accessible and label it history-only until reconnect. |
+| Projects | The same Workspace's optional curation | Preserve Project IDs and links to their selected Investigation records. |
+
+On first launch, open an unbound General Conversation in Focus. On return,
+restore the saved Environment, active Workspace pane, and its Conversation.
+Restore the last analytical view (Focus, Investigation, or Workbench),
+Workspace subview, and selected Investigation for that pane when those records
+still exist in that Workspace. If a saved Investigation no longer exists, select
+the Investigation linked to the active Conversation; otherwise select the
+most recently updated active Investigation. If there is none, show the normal
+empty state. If the saved Workspace is unavailable, retain its Conversation
+history, show the reconnect action, and do not restore a catalog-dependent
+view. Settings, Project curation, and the multi-Workspace board are utility or
+composition destinations; reopening the app returns to the saved analytical
+view rather than unexpectedly reopening one of them.
+
+These are target interaction rules, not a claim that every screen already
+implements them. The session store now persists each pane's last analytical
+view, Workspace subview, selected Investigation, and Conversation association.
+Navigation guards protect drafts in Data & context and the Investigation brief,
+Question plan, definitions, Finding forms, and editable proposal; an in-flight
+save blocks navigation. Investigation-list and context-file read failures show
+retry states instead of successful empty/editor states. Other surfaces still
+need to adopt this shared state contract, and the restoration behavior needs
+visual verification in the desktop app.
 
 ### Environment and Workspace scope
 

@@ -12,42 +12,53 @@
 	let savedContents = $state('');
 	let path = $state<string | null>(null);
 	let loading = $state(false);
+	let loadFailed = $state(false);
 	let saving = $state(false);
 	let error = $state('');
 	let loadedWorkspace = $state<string | null>(null);
 	let saveTimer: ReturnType<typeof setTimeout> | undefined;
+	let loadRequest = 0;
+	let discardVersion = 0;
 
-	async function load(): Promise<void> {
-		if (!isDesktop() || !session.catalog.workspace) return;
+	async function load(workspace = loadedWorkspace): Promise<void> {
+		if (!isDesktop() || !workspace) return;
+		const request = ++loadRequest;
 		loading = true;
+		loadFailed = false;
 		error = '';
 		try {
-			const result = await ipc.contextFile(session.activeRepositoryPath ?? undefined);
+			const result = await ipc.contextFile(workspace);
+			if (request !== loadRequest || workspace !== loadedWorkspace) return;
 			path = result?.[0] ?? null;
 			contents = result?.[1] ?? '';
 			savedContents = contents;
 		} catch (e) {
+			if (request !== loadRequest || workspace !== loadedWorkspace) return;
+			loadFailed = true;
 			error = e instanceof Error ? e.message : String(e);
 		} finally {
-			loading = false;
+			if (request === loadRequest) loading = false;
 		}
 	}
 
 	async function save(): Promise<void> {
-		if (!isDesktop() || !session.catalog.workspace || contents === savedContents) return;
+		const workspace = loadedWorkspace;
+		const value = contents;
+		if (!isDesktop() || !workspace || value === savedContents || loadFailed || saving) return;
 		saving = true;
 		error = '';
 		try {
-			await ipc.saveContext(contents, session.activeRepositoryPath ?? undefined);
-			savedContents = contents;
+			await ipc.saveContext(value, workspace);
+			if (workspace === loadedWorkspace && value === contents) savedContents = value;
 			if (!path) {
-				const result = await ipc.contextFile(session.activeRepositoryPath ?? undefined);
-				path = result?.[0] ?? null;
+				const result = await ipc.contextFile(workspace);
+				if (workspace === loadedWorkspace) path = result?.[0] ?? null;
 			}
 		} catch (e) {
-			error = e instanceof Error ? e.message : String(e);
+			if (workspace === loadedWorkspace) error = e instanceof Error ? e.message : String(e);
 		} finally {
 			saving = false;
+			if (workspace === loadedWorkspace && contents !== savedContents && !loadFailed) scheduleSave();
 		}
 	}
 
@@ -64,17 +75,38 @@
 
 	$effect(() => {
 		const workspace = session.catalog.workspace;
-		if (!workspace || workspace === loadedWorkspace) return;
+		if (workspace === loadedWorkspace) return;
+		loadRequest += 1;
+		loading = false;
 		clearTimeout(saveTimer);
 		contents = '';
 		savedContents = '';
 		path = null;
+		loadFailed = false;
 		loadedWorkspace = workspace;
-		void load();
+		if (workspace) void load(workspace);
+	});
+
+	$effect(() => {
+		const workspace = loadedWorkspace;
+		const isSaving = saving;
+		const dirty = Boolean(workspace && !loading && contents !== savedContents);
+		const name = workspace?.replace(/[/\\]+$/, '').split(/[\\/]/).at(-1) ?? 'workspace';
+		session.setUnsavedDraft(`context:${workspace ?? ''}`, dirty || isSaving ? `Data & context for ${name}` : null, isSaving);
+	});
+
+	$effect(() => {
+		const version = session.discardUnsavedDraftVersion;
+		if (version === discardVersion) return;
+		discardVersion = version;
+		clearTimeout(saveTimer);
+		contents = savedContents;
+		error = '';
 	});
 
 	onDestroy(() => {
 		clearTimeout(saveTimer);
+		session.setUnsavedDraft(`context:${loadedWorkspace ?? ''}`, null);
 	});
 </script>
 
@@ -92,6 +124,11 @@
 			<p>Choose a folder and Fella will keep its workspace note beside the files it understands.</p>
 			<Button type="button" onclick={() => void openFolder()}>Choose a folder</Button>
 		</div>
+	{:else if loadFailed}
+		<div class="load-error" role="alert">
+			<p>Couldn't load the workspace context: {error}</p>
+			<Button type="button" onclick={() => void load(loadedWorkspace)}>Retry</Button>
+		</div>
 	{:else}
 		<div class="editor-card">
 			<div class="editor-head">
@@ -105,7 +142,7 @@
 					{/if}
 					<Button type="button" disabled={saving || loading || contents === savedContents} onclick={() => void save()}>
 						<Icon name="check" size={16} />
-						{saving ? 'Saving…' : 'Save'}
+						{saving ? 'Saving…' : error && contents !== savedContents ? 'Retry save' : 'Save'}
 					</Button>
 				</div>
 			</div>
@@ -157,6 +194,17 @@
 		margin: 10vh auto 0;
 		text-align: center;
 	}
+	.load-error {
+		display: grid;
+		justify-items: start;
+		gap: var(--space-3);
+		max-width: 48ch;
+		padding: var(--space-5);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-lg);
+		background: var(--panel);
+	}
+	.load-error p { margin: 0; color: var(--danger, #b42318); overflow-wrap: anywhere; }
 	.empty-icon {
 		display: grid;
 		place-items: center;
