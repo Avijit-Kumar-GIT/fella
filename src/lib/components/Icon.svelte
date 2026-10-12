@@ -1,6 +1,9 @@
 <script lang="ts" module>
 	export const ICON_NAMES = [
 		'chevron-right',
+		'chevron-up',
+		'chevron-down',
+		'sliders',
 		'x',
 		'plus',
 		'more-horizontal',
@@ -42,6 +45,8 @@
 		Bookmark,
 		Check,
 		ChevronRight,
+		ChevronUp,
+		ChevronDown,
 		CornerDownLeft,
 		Download,
 		Ellipsis,
@@ -58,6 +63,7 @@
 		Plus,
 		RefreshCw,
 		Search,
+		SlidersHorizontal,
 		Settings,
 		Square,
 		SquareStop,
@@ -70,6 +76,9 @@
 
 	const ICONS: Record<IconName, LucideIcon> = {
 		'chevron-right': ChevronRight,
+		'chevron-up': ChevronUp,
+		'chevron-down': ChevronDown,
+		sliders: SlidersHorizontal,
 		x: X,
 		plus: Plus,
 		'more-horizontal': Ellipsis,

@@ -4,6 +4,7 @@
 	import { openRepository } from '$lib/commands';
 	import { ipc } from '$lib/ipc';
 	import type { Investigation } from '$lib/types';
+	import WorkbenchPanelPicker from './WorkbenchPanelPicker.svelte';
 	import Icon from './Icon.svelte';
 
 	const presets = [
@@ -55,6 +56,7 @@
 	let selectedPresetDescription = $derived(
 		presets.find((preset) => preset.id === session.workspaceLayoutPreset)?.description ?? ''
 	);
+	let currentInvestigationLabel = $derived(currentInvestigation?.title?.trim() || 'No Investigation yet');
 
 	function isPresetSelected(preset: (typeof presets)[number]['id']): boolean {
 		if (preset === 'focus') return session.workspaceView === 'ask' && session.workspaceLayoutPreset === 'focus';
@@ -107,13 +109,13 @@
 
 		{#if (session.workspaceView === 'ask' || session.workspaceView === 'workspace' || session.workspaceView === 'board') && workspaceAvailable}
 			<div class="workspace-preset-actions">
-				{#if session.workspaceView === 'ask' && session.workspaceLayoutPreset === 'focus'}
+				{#if (session.workspaceView === 'ask' && session.workspaceLayoutPreset === 'focus') || (session.workspaceView === 'workspace' && session.workspaceLayoutPreset === 'workbench')}
 					<span
 						class="workspace-investigation-summary"
 						role="status"
-						aria-label={`Investigation coverage: ${coverageSummary}`}
+						aria-label={`Investigation ${currentInvestigationLabel}. Coverage: ${coverageSummary}`}
 						data-testid="workspace-investigation-summary"
-					>{coverageSummary}</span>
+					><strong title={currentInvestigationLabel}>{currentInvestigationLabel}</strong><span class="workspace-investigation-coverage">{coverageSummary}</span></span>
 				{/if}
 				<div class="workspace-preset-control" role="group" aria-label="Workspace layout">
 					{#each presets as preset (preset.id)}
@@ -127,6 +129,9 @@
 						>{preset.label}</button>
 					{/each}
 				</div>
+				{#if session.workspaceView === 'workspace' && session.workspaceLayoutPreset === 'workbench'}
+					<WorkbenchPanelPicker />
+				{/if}
 				<span class="workspace-preset-description" aria-live="polite">{selectedPresetDescription}</span>
 			</div>
 		{:else if (session.workspaceView === 'ask' || session.workspaceView === 'board') && historyOnly}
@@ -211,11 +216,30 @@
 		min-width: 0;
 	}
 	.workspace-investigation-summary {
-		max-width: 280px;
+		display: flex;
+		flex: 0 1 360px;
+		align-items: center;
+		gap: 6px;
+		min-width: 0;
+		max-width: 360px;
 		color: var(--text-faint);
 		font-size: var(--fs-xs);
 		text-align: right;
 		white-space: nowrap;
+	}
+	.workspace-investigation-summary strong {
+		flex: 0 1 140px;
+		min-width: 50px;
+		overflow: hidden;
+		color: var(--text-dim);
+		font-weight: 550;
+		text-overflow: ellipsis;
+	}
+	.workspace-investigation-coverage {
+		flex: 1 1 auto;
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
 	}
 	.workspace-preset-control {
 		display: inline-flex;
@@ -272,6 +296,7 @@
 	}
 	@media (max-width: 620px) {
 		.workspace-context-bar {
+			flex-wrap: wrap;
 			gap: var(--space-2);
 			padding-inline: var(--space-2);
 		}
@@ -280,10 +305,13 @@
 			display: none;
 		}
 		.workspace-preset-actions {
+			flex: 1 1 auto;
+			flex-wrap: wrap;
 			gap: var(--space-1);
 		}
 		.workspace-investigation-summary {
-			display: none;
+			flex: 1 1 120px;
+			max-width: none;
 		}
 		.workspace-preset-control button {
 			padding-inline: 6px;

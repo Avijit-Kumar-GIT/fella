@@ -19,6 +19,7 @@
 	import { fadeQuick } from '$lib/motion';
 	import { prefs } from '$lib/prefs.svelte';
 	import { session } from '$lib/session.svelte';
+	import { workbenchLayout, WORKBENCH_GROUPS, WORKBENCH_PANELS } from '$lib/workbench-layout.svelte';
 
 	let transcript = $state<Transcript | undefined>();
 	let composer = $state<Composer | undefined>();
@@ -356,18 +357,49 @@
 					{:else if activeView === 'settings'}
 						<SettingsView />
 					{:else if scopedWorkspaceActive}
-						<div class="workspace-preset-layout" data-workspace-preset={session.workspaceLayoutPreset}>
-							<div class="workspace-preset-conversation">
-								<div class="ask-workbench">
-									<Transcript bind:this={transcript} />
-									{#if session.activeChat.companionPane}
-										<CompanionPane />
+						{@const hasCompanion = Boolean(session.activeChat.companionPane)}
+						<div
+							class="workspace-preset-layout"
+							data-workspace-preset={session.workspaceLayoutPreset}
+							data-has-companion={hasCompanion}
+							data-workbench-visible-count={workbenchLayout.visibleCount(hasCompanion)}
+							data-workbench-group-count={workbenchLayout.visibleGroupCount(hasCompanion)}
+							style={`--workbench-row-count:${workbenchLayout.rowCount(hasCompanion)};--workbench-visible-count:${workbenchLayout.visibleCount(hasCompanion)}`}
+						>
+							{#each workbenchLayout.placements(hasCompanion) as panel (panel.id)}
+								{@const panelDefinition = WORKBENCH_PANELS.find((item) => item.id === panel.id)!}
+								{@const visible = session.workspaceLayoutPreset === 'focus'
+									? panel.id === 'conversation' || (panel.id === 'companion' && hasCompanion)
+									: session.workspaceLayoutPreset === 'investigation'
+										? panel.id === 'investigation'
+										: panel.visibleNow}
+								{@const groupLabel = WORKBENCH_GROUPS.find((group) => group.id === panel.group)?.label ?? 'Workspace'}
+								<section
+									class="workspace-preset-panel"
+									class:workspace-preset-conversation={panel.id === 'conversation'}
+									class:workspace-preset-investigation={panel.id === 'investigation'}
+									class:workspace-preset-companion={panel.id === 'companion'}
+									data-panel-id={panel.id}
+									data-panel-group={panel.group}
+									data-visible={visible}
+									aria-label={panelDefinition.label}
+									hidden={!visible}
+									style={`--panel-column:${workbenchLayout.gridColumn(panel.group, hasCompanion)};--panel-row:${panel.groupPosition};--panel-rowspan:${panel.groupRowSpan};--panel-stack-row:${panel.stackPosition}`}
+								>
+									{#if session.workspaceLayoutPreset === 'workbench' && panel.firstInGroup}
+										<div class="workspace-panel-group">{groupLabel}</div>
 									{/if}
-								</div>
-							</div>
-							<div class="workspace-preset-investigation">
-								<WorkspaceView />
-							</div>
+									<div class="workspace-panel-body">
+										{#if panel.id === 'conversation'}
+											<Transcript bind:this={transcript} />
+										{:else if panel.id === 'investigation'}
+											<WorkspaceView />
+										{:else}
+											<CompanionPane />
+										{/if}
+									</div>
+								</section>
+							{/each}
 						</div>
 					{:else}
 						<div class="ask-workbench">
@@ -491,28 +523,81 @@
 		min-width: 0;
 		min-height: 0;
 		grid-template-columns: minmax(0, 1fr);
+		grid-template-rows: minmax(0, 1fr);
+		grid-auto-flow: row;
+		overflow: hidden;
 		background: var(--workspace-canvas);
 	}
-	.workspace-preset-conversation,
-	.workspace-preset-investigation {
+	.workspace-preset-panel {
+		position: relative;
+		display: flex;
+		flex-direction: column;
 		min-width: 0;
 		min-height: 0;
 		overflow: hidden;
 	}
-	.workspace-preset-layout[data-workspace-preset='focus'] .workspace-preset-investigation,
-	.workspace-preset-layout[data-workspace-preset='investigation'] .workspace-preset-conversation {
-		display: none;
+	.workspace-preset-panel[hidden] {
+		display: none !important;
+	}
+	.workspace-preset-layout[data-workspace-preset='focus'] .workspace-preset-panel {
+		grid-row: 1;
+	}
+	.workspace-preset-layout[data-workspace-preset='focus'] .workspace-preset-conversation,
+	.workspace-preset-layout[data-workspace-preset='investigation'] .workspace-preset-investigation {
+		grid-column: 1;
+	}
+	.workspace-preset-layout[data-workspace-preset='focus'][data-has-companion='true'] {
+		grid-template-columns: minmax(0, 1fr) minmax(280px, 0.42fr);
+	}
+	.workspace-preset-layout[data-workspace-preset='focus'][data-has-companion='true'] .workspace-preset-companion {
+		grid-column: 2;
+	}
+	.workspace-preset-layout[data-workspace-preset='focus'][data-has-companion='true'] .workspace-preset-conversation {
+		border-right: 1px solid var(--border);
 	}
 	.workspace-preset-layout[data-workspace-preset='workbench'] {
 		grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr);
+		grid-template-rows: repeat(var(--workbench-row-count), minmax(0, 1fr));
+	}
+	.workspace-preset-layout[data-workspace-preset='workbench'][data-workbench-group-count='1'] {
+		grid-template-columns: minmax(0, 1fr);
+	}
+	.workspace-preset-layout[data-workspace-preset='workbench'] .workspace-preset-panel {
+		grid-column: var(--panel-column);
+		grid-row: var(--panel-row) / span var(--panel-rowspan);
 	}
 	.workspace-preset-layout[data-workspace-preset='workbench'] .workspace-preset-conversation {
 		border-right: 1px solid var(--border);
 	}
-	.workspace-preset-layout[data-workspace-preset='workbench'] .ask-workbench {
-		border-right: 0;
+	.workspace-panel-group {
+		flex: none;
+		min-height: 30px;
+		padding: 7px var(--pad) 5px;
+		border-bottom: 1px solid var(--border);
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+		font-weight: 600;
+		letter-spacing: 0.01em;
+	}
+	.workspace-panel-body {
+		display: flex;
+		flex: 1;
+		min-width: 0;
+		min-height: 0;
+		overflow: hidden;
+	}
+	.workspace-preset-conversation .workspace-panel-body > :global(.transcript) {
+		flex: 1;
+		min-width: 0;
+	}
+	.workspace-preset-companion :global(.companion) {
+		flex: 1;
+		width: 100%;
+		min-width: 0;
+		border-left: 0;
 	}
 	.workspace-preset-investigation :global(.workspace) {
+		flex: 1;
 		width: 100%;
 		height: 100%;
 	}
@@ -527,7 +612,19 @@
 	@container workspace-area (max-width: 1120px) {
 		.workspace-preset-layout[data-workspace-preset='workbench'] {
 			grid-template-columns: minmax(0, 1fr);
+		}
+		.workspace-preset-layout[data-workspace-preset='workbench'][data-workbench-visible-count='1'] {
+			grid-template-rows: minmax(0, 1fr);
+		}
+		.workspace-preset-layout[data-workspace-preset='workbench'][data-workbench-visible-count='2'] {
 			grid-template-rows: minmax(0, 0.8fr) minmax(0, 1.2fr);
+		}
+		.workspace-preset-layout[data-workspace-preset='workbench'][data-workbench-visible-count='3'] {
+			grid-template-rows: repeat(3, minmax(0, 1fr));
+		}
+		.workspace-preset-layout[data-workspace-preset='workbench'] .workspace-preset-panel {
+			grid-column: 1;
+			grid-row: var(--panel-stack-row) / span 1;
 		}
 		.workspace-preset-layout[data-workspace-preset='workbench'] .workspace-preset-conversation {
 			border-right: 0;
