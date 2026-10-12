@@ -13,6 +13,12 @@ test('universal macOS packaging preserves both Rust sidecar slices as resources'
 	));
 });
 
+test('desktop packages the fictional first-analysis workspace as a readable resource', () => {
+	assert.ok(packageManifest.build.extraResources.some((resource) =>
+		resource.from === 'electron/fella-sample-data' && resource.to === 'fella-sample-data'
+	));
+});
+
 test('platform artifact validation expands the release tag on every runner', () => {
 	const step = releaseWorkflow.match(
 		/      - name: Validate platform installers\n([\s\S]*?)(?=\n      - name: Preserve platform installers)/

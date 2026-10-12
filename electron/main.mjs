@@ -231,6 +231,11 @@ app.whenReady().then(() => {
 			});
 			return result.canceled ? null : result.filePaths[0] ?? null;
 		});
+		ipcMain.handle('fella:sample-workspace-path', () =>
+			app.isPackaged
+				? join(process.resourcesPath, 'fella-sample-data')
+				: join(here, 'fella-sample-data')
+		);
 		ipcMain.handle('fella:open-external', (_event, url) => openExternal(url));
 		ipcMain.handle('fella:window-action', (event, action) => {
 			const owner = BrowserWindow.fromWebContents(event.sender);

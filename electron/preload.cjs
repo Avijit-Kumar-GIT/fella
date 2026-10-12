@@ -43,6 +43,10 @@ contextBridge.exposeInMainWorld('fella', {
 		return ipcRenderer.invoke('fella:pick-folder');
 	},
 
+	sampleWorkspacePath() {
+		return ipcRenderer.invoke('fella:sample-workspace-path');
+	},
+
 	openExternal(url) {
 		return ipcRenderer.invoke('fella:open-external', url);
 	},

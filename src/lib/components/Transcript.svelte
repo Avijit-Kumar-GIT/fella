@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { tick } from 'svelte';
-	import { dispatch, openFolder, rerunAnalysisTurn } from '$lib/commands';
+	import { dispatch, openFolder, openSampleWorkspace, rerunAnalysisTurn } from '$lib/commands';
 	import { Button } from '$lib/components/ui/button';
 	import { session } from '$lib/session.svelte';
 	import { openExternal } from '$lib/ipc';
@@ -46,17 +46,28 @@
 	}
 
 	let hasFolder = $derived(!!session.catalog.workspace);
+	let hasConversationTurn = $derived(session.messages.some((message) => message.role !== 'system'));
 	let folderName = $derived(
 		session.catalog.workspace?.replace(/[/\\]+$/, '').replace(/^.*[/\\]/, '') ?? ''
 	);
 	let fileCount = $derived(session.catalog.sources.length);
 	let skipped = $derived(session.catalog.skipped ?? []);
+	let sampleWorkspace = $derived(
+		session.catalog.workspace?.replace(/[/\\]+$/, '').toLowerCase().endsWith('fella-sample-data') ?? false
+	);
 
-	const EXAMPLES = [
-		'How did my spending change this year?',
-		'What stands out in my workout log?',
-		"Summarise what's in these files"
+	const OVERVIEW_PROMPT = 'Summarize these files and suggest questions I can answer.';
+	const GENERAL_EXAMPLES = [
+		OVERVIEW_PROMPT,
+		'What changed over time in these files?',
+		'Compare the main categories in these files.'
 	];
+	const SAMPLE_EXAMPLES = [
+		OVERVIEW_PROMPT,
+		'Which channel had the largest absolute increase in signups from January to December 2025?',
+		'How did marketing spend change alongside signups?'
+	];
+	let examples = $derived(sampleWorkspace ? SAMPLE_EXAMPLES : GENERAL_EXAMPLES);
 
 	let scroller: HTMLDivElement;
 	let expanded = $state<Record<string, boolean>>({});
@@ -129,7 +140,7 @@
 	aria-label="conversation"
 	aria-live="off"
 >
-	{#if session.messages.length === 0}
+	{#if !hasConversationTurn}
 		<div class="onboard" class:center={!hasFolder && !showSetup}>
 			{#if !hasFolder}
 				<div class="onboard-mark"><Logo size={28} /></div>
@@ -138,7 +149,21 @@
 
 			{#if !hasFolder}
 				<p class="lead">
-					Ask anything. Open a workspace when you want Fella to analyze local files.
+					Choose a folder to analyze your files, or try the sample workspace. You can type a question below first.
+				</p>
+				<div class="cta first-run-actions">
+					<Button class="folder-action" onclick={() => void openFolder(undefined, { focusAfterOpen: true })}>
+						<Icon name="folder" size={16} /> Choose a folder
+					</Button>
+					<Button variant="outline" onclick={() => void openSampleWorkspace()}>
+						Try sample data
+					</Button>
+				</div>
+				<p class="first-run-privacy">
+				Only the folder you choose is in scope. Fella reads and computes locally without modifying source files. Your chosen model provider receives prompts and relevant context or tool results, which may include document text or data rows.
+					<Button variant="link" size="sm" class="privacy-link" onclick={() => void openExternal('https://docs.lilfella.app/developer-platform/using-fella/privacy')}>
+						Privacy and security <Icon name="arrow-up-right" size={12} />
+					</Button>
 				</p>
 			{:else if fileCount === 0}
 				<p class="lead"><strong>{folderName}</strong> is open, but nothing in it is readable yet.</p>
@@ -153,16 +178,40 @@
 				</div>
 			{:else}
 				<p class="lead">
-					<strong>{folderName}</strong> · {fileCount} file{fileCount === 1 ? '' : 's'} ready.
+					<strong>{folderName}</strong> · {fileCount} readable source{fileCount === 1 ? '' : 's'} available.
 				</p>
 				{#if showExamples}
-					<p class="egs">Try one:</p>
+					<p class="egs">Not sure what to ask? Start here:</p>
 					<div class="examples">
-						{#each EXAMPLES as q (q)}
+						{#each examples as q (q)}
 							<Button variant="outline" class="example" onclick={() => void dispatch(q)}>{q}</Button>
 						{/each}
 					</div>
 				{/if}
+			{/if}
+
+			{#if hasFolder}
+				<section class="file-inventory" aria-label="File inventory">
+					{#if fileCount}
+						<p class="inventory-label">Available sources</p>
+						<ul>
+							{#each session.catalog.sources.slice(0, 3) as source (`available:${source.path}:${source.name}`)}
+								<li><span>{source.name}</span></li>
+							{/each}
+						</ul>
+					{/if}
+					{#if skipped.length}
+						<p class="inventory-label">Not loaded · {skipped.length}</p>
+						<ul class="inventory-skipped">
+							{#each skipped.slice(0, 3) as file (`skipped:${file.name}`)}
+								<li><span>{file.name}</span><span>{file.reason}</span></li>
+							{/each}
+						</ul>
+					{/if}
+					{#if fileCount > 3 || skipped.length > 3}
+						<Button variant="link" size="sm" class="inventory-more" onclick={() => void dispatch('/files')}>Review all files</Button>
+					{/if}
+				</section>
 			{/if}
 
 			{#if showSetup}
@@ -219,8 +268,9 @@
 				</p>
 			{/if}
 		</div>
-	{:else}
-		{#if showSetup}
+	{/if}
+	{#if session.messages.length > 0}
+		{#if showSetup && hasConversationTurn}
 			<!-- The full onboarding panel only shows on the empty screen. If the
 			     model stops working mid-session, keep a compact version in view so
 			     the user isn't left with just a red dot and bare error lines. -->
@@ -356,6 +406,57 @@
 	}
 	.onboard .lead strong {
 		font-weight: 600;
+	}
+	.first-run-actions {
+		justify-content: center;
+	}
+	.first-run-privacy {
+		max-width: 62ch;
+		margin: var(--space-4) 0 0 !important;
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+		line-height: 1.55;
+	}
+	.first-run-privacy :global(.privacy-link) {
+		display: inline;
+		min-height: 0;
+		height: auto;
+		padding: 0;
+		font-size: inherit;
+		vertical-align: baseline;
+	}
+	.file-inventory {
+		width: 100%;
+		margin: var(--space-4) 0 var(--space-2);
+		padding-top: var(--space-3);
+		border-top: 1px solid var(--border);
+		text-align: left;
+	}
+	.inventory-label {
+		margin: 0 0 var(--space-1) !important;
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+		font-weight: 600;
+	}
+	.file-inventory ul {
+		margin: 0 0 var(--space-3);
+		padding: 0;
+		list-style: none;
+		color: var(--text-dim);
+		font-size: var(--fs-sm);
+	}
+	.file-inventory li {
+		display: flex;
+		flex-wrap: wrap;
+		gap: var(--space-1) var(--space-2);
+		padding: 2px 0;
+		overflow-wrap: anywhere;
+	}
+	.inventory-skipped li span:last-child {
+		color: var(--text-faint);
+	}
+	.file-inventory :global(.inventory-more) {
+		padding: 0;
 	}
 	.examples {
 		display: flex;

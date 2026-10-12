@@ -68,7 +68,10 @@
 		"asar": true,
 		"artifactName": "Fella_${version}_${arch}.${ext}",
 		"files": ["build/**/*", "electron/**/*", "!electron/engine/**/*", "package.json"],
-		"extraResources": [{ "from": "electron/engine", "to": "fella-engine", "filter": ["fella-engine-*"] }],
+		"extraResources": [
+			{ "from": "electron/engine", "to": "fella-engine", "filter": ["fella-engine-*"] },
+			{ "from": "electron/fella-sample-data", "to": "fella-sample-data" }
+		],
 		"directories": { "output": "dist-electron" },
 		"mac": {
 			"icon": "electron/icons/icon.icns",

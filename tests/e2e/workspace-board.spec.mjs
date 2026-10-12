@@ -34,6 +34,16 @@ const folders = [
 	}))
 ];
 
+const SAMPLE_WORKSPACE_PATH = 'C:\\FellaFixture\\fella-sample-data';
+const sampleCatalog = {
+	workspace: SAMPLE_WORKSPACE_PATH,
+	revision: 'sample-r1',
+	sources: [
+		{ name: 'monthly_signups.csv', path: `${SAMPLE_WORKSPACE_PATH}\\monthly_signups.csv`, kind: 'csv', view: 'monthly_signups', row_count: 36, size_bytes: 2048, mtime: 1 }
+	],
+	skipped: [{ name: 'draft.tmp', reason: 'Unsupported file type' }]
+};
+
 const workspacePresetButton = (page, name) =>
 	page.locator('.workspace-preset-control').getByRole('button', { name: new RegExp(`^${name}:`) });
 
@@ -86,10 +96,11 @@ async function installDesktopMock(
 		questionRunOutcomes = [],
 		providerList = [],
 		providerHealth = { reachable: true, rejected: false, models: ['gpt-4.1-mini'] },
-		runLogEntries = []
+		runLogEntries = [],
+		sampleWorkspacePath = SAMPLE_WORKSPACE_PATH
 	} = {}
 ) {
-	await page.addInitScript(({ fixtureFolders, seedUnavailableConversation, seedDeletionConversations, replayStatus, replayStatusError, reindexedCatalog, chartEvidence, detailEvidence, directAnswerText, savedAnalysisTurn, projectInvestigationRecords, projectAnalysisTurns, questionRunOutcomes, providerList, providerHealth, runLogEntries }) => {
+	await page.addInitScript(({ fixtureFolders, seedUnavailableConversation, seedDeletionConversations, replayStatus, replayStatusError, reindexedCatalog, chartEvidence, detailEvidence, directAnswerText, savedAnalysisTurn, projectInvestigationRecords, projectAnalysisTurns, questionRunOutcomes, providerList, providerHealth, runLogEntries, sampleWorkspacePath, sampleCatalog }) => {
 		const calls = [];
 		const reviseFinding = (finding, update) => {
 			const now = Math.max(Date.now(), (finding.updated_at_ms ?? 0) + 1);
@@ -571,11 +582,13 @@ async function installDesktopMock(
 			},
 			openWorkspace: async (path) => {
 				window.__workspaceOpenCalls.push(path);
-				const folder = fixtureFolders.find((entry) => entry.path === path);
+				const folder = fixtureFolders.find((entry) => entry.path === path)
+					?? (path === sampleWorkspacePath ? { path, catalog: { ...sampleCatalog, workspace: path } } : undefined);
 				if (!folder) throw new Error(`Unexpected fixture folder: ${path}`);
 				return folder.catalog;
 			},
 			pickFolder: async () => fixtureFolders[pickerIndex++]?.path ?? null,
+			sampleWorkspacePath: async () => sampleWorkspacePath,
 			ask: async (params, onEvent) => {
 				calls.push(params);
 				let questionTurnId;
@@ -732,7 +745,7 @@ async function installDesktopMock(
 			windowAction: async () => {},
 			pathForFile: () => ''
 		};
-	}, { fixtureFolders, seedUnavailableConversation, seedDeletionConversations, replayStatus, replayStatusError, reindexedCatalog, chartEvidence, detailEvidence, directAnswerText, savedAnalysisTurn, projectInvestigationRecords, projectAnalysisTurns, questionRunOutcomes, providerList, providerHealth, runLogEntries });
+	}, { fixtureFolders, seedUnavailableConversation, seedDeletionConversations, replayStatus, replayStatusError, reindexedCatalog, chartEvidence, detailEvidence, directAnswerText, savedAnalysisTurn, projectInvestigationRecords, projectAnalysisTurns, questionRunOutcomes, providerList, providerHealth, runLogEntries, sampleWorkspacePath, sampleCatalog });
 }
 
 async function dispatchWorkspaceDrag(page, type, workspacePath, { x = 0.5, y = 0.5, existing = false } = {}) {
@@ -760,6 +773,49 @@ function expectSameRenderedBox(actual, expected) {
 		expect(Math.abs(actual[edge] - expected[edge])).toBeLessThanOrEqual(1);
 	}
 }
+
+test('first launch offers a clear folder or sample path and discloses provider data flow', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+
+	await expect(page.getByRole('heading', { name: 'New conversation', level: 1 })).toBeVisible();
+	await expect(page.getByRole('button', { name: 'Choose a folder' })).toBeVisible();
+	await expect(page.getByRole('button', { name: 'Try sample data' })).toBeVisible();
+	await expect(page.getByText(/Only the folder you choose is in scope/)).toBeVisible();
+	await expect(page.getByText(/Your chosen model provider receives prompts and relevant context or tool results/)).toBeVisible();
+
+	await page.getByRole('button', { name: 'Try sample data' }).click();
+	await expect(page.getByRole('combobox', { name: 'Ask about fella-sample-data' })).toBeVisible();
+	const inventory = page.getByRole('region', { name: 'File inventory' });
+	await expect(inventory.getByText('monthly_signups.csv', { exact: true })).toBeVisible();
+	await expect(inventory.getByText('draft.tmp', { exact: true })).toBeVisible();
+
+	const sampleQuestion = 'Which channel had the largest absolute increase in signups from January to December 2025?';
+	await page.getByRole('button', { name: sampleQuestion }).click();
+	await expect.poll(() => page.evaluate(() => window.__workspaceAskCalls.length)).toBe(1);
+	const ask = await page.evaluate(() => window.__workspaceAskCalls[0]);
+	expect(ask.workspaceId).toBe(SAMPLE_WORKSPACE_PATH);
+	expect(ask.investigationId).toBeTruthy();
+	const ensured = await page.evaluate(() => window.__workspaceInvestigationEnsureCalls[0]);
+	expect(ensured.workspaceId).toBe(SAMPLE_WORKSPACE_PATH);
+});
+
+test('a question entered before folder selection remains targeted to the chosen workspace', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+
+	const composer = page.getByRole('combobox', { name: 'Ask a question' });
+	await composer.fill('Which source contains the most recent records?');
+	await page.getByRole('button', { name: 'Choose a folder' }).click();
+	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toHaveValue(
+		'Which source contains the most recent records?'
+	);
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect.poll(() => page.evaluate(() => window.__workspaceAskCalls.length)).toBe(1);
+	const ask = await page.evaluate(() => window.__workspaceAskCalls[0]);
+	expect(ask.workspaceId).toBe(folders[0].path);
+	expect(ask.investigationId).toBeTruthy();
+});
 
 test('environments compose General and repository panes while conversations retain their original scope', async ({ page }) => {
 	await installDesktopMock(page);

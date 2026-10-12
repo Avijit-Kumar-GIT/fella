@@ -1,6 +1,6 @@
 // Slash-command parsing and input dispatch for the REPL.
 
-import { ipc, isDesktop, isElectron, pickFolder } from './ipc';
+import { ipc, isDesktop, isElectron, pickFolder, sampleWorkspacePath } from './ipc';
 import { Conversation, isActualQuestion, session } from './session.svelte';
 import type {
 	AskEvent,
@@ -215,7 +215,7 @@ export function completionsFor(input: string): string[] {
 /** Open a folder as the workspace. With no path, shows the native picker. */
 export async function openFolder(
 	path?: string,
-	options: { reportError?: boolean } = {}
+	options: { reportError?: boolean; focusAfterOpen?: boolean } = {}
 ): Promise<boolean> {
 	if (session.mountProgress) return false;
 	if (!isDesktop()) {
@@ -233,7 +233,13 @@ export async function openFolder(
 	if (!chosen) return false;
 	const alreadyOpen = session.workspaceWindows.find((workspace) => workspace.path === chosen);
 	if (alreadyOpen && !alreadyOpen.historyOnly) {
-		if (session.focusWorkspace(alreadyOpen.id)) return true;
+		if (session.focusWorkspace(alreadyOpen.id)) {
+			if (options.focusAfterOpen) {
+				session.setWorkspaceView('ask');
+				session.setWorkspaceLayoutPreset('focus');
+			}
+			return true;
+		}
 		if (options.reportError !== false) session.addSystem('This environment already has four workspaces. Create or switch environments to add another.');
 		return false;
 	}
@@ -257,6 +263,10 @@ export async function openFolder(
 		if (!session.registerWorkspace(catalog)) {
 			throw new Error('This environment already contains four workspace panes. Switch environments to add another workspace.');
 		}
+		if (options.focusAfterOpen) {
+			session.setWorkspaceView('ask');
+			session.setWorkspaceLayoutPreset('focus');
+		}
 		session.addSystem(summarizeCatalog());
 		return true;
 	} catch (e) {
@@ -264,6 +274,21 @@ export async function openFolder(
 		return false;
 	} finally {
 		session.mountProgress = null;
+	}
+}
+
+/** Open the bundled fictional dataset without changing the user's files. */
+export async function openSampleWorkspace(): Promise<boolean> {
+	try {
+		const path = await sampleWorkspacePath();
+		if (!path) {
+			session.addSystem('Sample data is available in the Fella desktop app. You can choose a folder here instead.');
+			return false;
+		}
+		return await openFolder(path, { focusAfterOpen: true });
+	} catch (error) {
+		session.addSystem(`Couldn't locate the sample workspace: ${errMsg(error)}. You can choose a folder instead.`);
+		return false;
 	}
 }
 

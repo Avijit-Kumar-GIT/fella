@@ -48,6 +48,11 @@ export async function pickFolder(): Promise<string | null> {
 	return isElectron() ? window.fella?.pickFolder() ?? null : null;
 }
 
+/** Path to the bundled, fictional sample workspace, when running in Electron. */
+export async function sampleWorkspacePath(): Promise<string | null> {
+	return isElectron() ? window.fella?.sampleWorkspacePath() ?? null : null;
+}
+
 /** Open an https URL in the user's default browser. No-op outside the app. */
 export async function openExternal(url: string): Promise<void> {
 	if (isElectron()) await window.fella?.openExternal(url);

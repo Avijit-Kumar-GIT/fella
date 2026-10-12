@@ -35,6 +35,7 @@ declare global {
 				onEvent: (event: AskEvent) => void
 			): Promise<import('./lib/types').Answer>;
 			pickFolder(): Promise<string | null>;
+			sampleWorkspacePath(): Promise<string | null>;
 			openExternal(url: string): Promise<void>;
 			setWindowAppearance(dark: boolean): Promise<void>;
 			pathForFile(file: File): string;
