@@ -618,6 +618,11 @@ async function installDesktopMock(
 						questionProposalCalls.push(args);
 						return { subquestions: ['Compare conversion by channel', 'Check the trend over time'] };
 					case 'get_settings': return settings;
+					case 'set_settings': {
+						const updated = { ...settings, ...(args.settings ?? {}) };
+						Object.assign(settings, updated);
+						return updated;
+					}
 					case 'list_providers': return providerList;
 					case 'provider_health': return providerHealth;
 					case 'get_catalog': return { workspace: null, sources: [] };
@@ -4660,6 +4665,49 @@ test('empty Investigation catalog offers a contextual folder replacement action'
 	await chooseAnother.click();
 	await expect.poll(() => page.evaluate(() => window.__workspaceOpenCalls)).toContain(folders[1].path);
 	await expect(page.getByRole('combobox', { name: 'Ask about health-journal' })).toBeVisible();
+});
+
+test('Analysis capabilities describe current tools and preserve the table dependency', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+	await page.getByRole('button', { name: 'Settings' }).click();
+
+	const capabilities = page.locator('.capability-card');
+	await expect(capabilities.getByRole('heading', { name: 'Analysis capabilities' })).toBeVisible();
+	await expect(capabilities.getByRole('switch')).toHaveCount(4);
+	await expect(capabilities).toContainText('Inspect schemas and field profiles');
+	await expect(capabilities).toContainText('read-only SQL, including joins and grouped totals');
+	await expect(capabilities).toContainText('catalogued text and PDFs');
+	await expect(capabilities).toContainText('read data through Fella’s read-only SQL bridge');
+	await expect(capabilities).toContainText('validated charts from table results');
+	await expect(capabilities.getByText('Always included')).toBeVisible();
+	await expect(capabilities).toContainText('Investigation Questions, definitions, and source scope');
+	await expect(capabilities).toContainText('saved Findings');
+	await expect(capabilities).toContainText('verification, and freshness checks');
+
+	const advancedDetails = capabilities.locator('.capability-details');
+	await expect(advancedDetails).not.toHaveAttribute('open', '');
+	await advancedDetails.locator('summary').click();
+	await expect(advancedDetails).toContainText('median, standard deviation, quantiles, correlation, regression, and distribution checks');
+	await expect(advancedDetails).toContainText('r only (no p-value)');
+	await expect(advancedDetails).toContainText('no filesystem or network access');
+	await expect(advancedDetails).toContainText('naive, mean, drift, linear-trend, or seasonal-naive');
+	await expect(advancedDetails).toContainText('rolling-origin MAE/RMSE');
+	await expect(advancedDetails).toContainText('enough varied holdout errors');
+	await expect(advancedDetails).toContainText('bar, line, area, stacked area, pie, donut, scatter, histogram, box plot, heatmap, and forecast');
+
+	await capabilities.getByRole('switch', { name: 'Table analysis: on' }).click();
+	const tableOff = capabilities.getByRole('switch', { name: 'Table analysis: off' });
+	await expect(tableOff).toHaveAttribute('aria-checked', 'false');
+	const visualizationsOff = capabilities.getByRole('switch', { name: 'Visualizations: off' });
+	await expect(visualizationsOff).toBeDisabled();
+
+	await tableOff.click();
+	await expect(capabilities.getByRole('switch', { name: 'Table analysis: on' })).toHaveAttribute('aria-checked', 'true');
+	const visualizationsAvailable = capabilities.getByRole('switch', { name: 'Visualizations: off' });
+	await expect(visualizationsAvailable).toBeEnabled();
+	await visualizationsAvailable.click();
+	await expect(capabilities.getByRole('switch', { name: 'Visualizations: on' })).toHaveAttribute('aria-checked', 'true');
 });
 
 test('Settings actions use shared buttons and folder selection still works', async ({ page }) => {

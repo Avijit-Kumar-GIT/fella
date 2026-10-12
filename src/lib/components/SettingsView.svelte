@@ -27,10 +27,10 @@
 		label: string;
 		detail: string;
 	}[] = [
-		{ key: 'table_analysis', label: 'Table analysis', detail: 'Schemas, samples, and SQL queries' },
-		{ key: 'document_analysis', label: 'Document analysis', detail: 'Search and read text and PDF files' },
-		{ key: 'python_analysis', label: 'Python calculations', detail: 'Sandboxed calculations for advanced statistics' },
-		{ key: 'visualizations', label: 'Visualizations', detail: 'Validated charts from table queries' }
+		{ key: 'table_analysis', label: 'Table analysis', detail: 'Inspect schemas and field profiles; query with read-only SQL, including joins and grouped totals.' },
+		{ key: 'document_analysis', label: 'Document analysis', detail: 'Search and read catalogued text and PDFs, with passages tied to their source.' },
+		{ key: 'python_analysis', label: 'Python calculations', detail: 'Run sandboxed statistics and calculations; read data through Fella’s read-only SQL bridge.' },
+		{ key: 'visualizations', label: 'Visualizations', detail: 'Create validated charts from table results, with source lineage.' }
 	];
 
 	let currentProvider = $derived(session.settings?.provider ?? '');
@@ -280,11 +280,8 @@
 		<section class="settings-card capability-card" aria-labelledby="capability-title">
 			<div class="card-head">
 				<div>
-					<div class="title-line">
-						<h2 id="capability-title">Analysis capabilities</h2>
-						<span class="experimental-badge">Experimental</span>
-					</div>
-					<p>Choose which analysis paths the model may use on this computer.</p>
+					<h2 id="capability-title">Analysis capabilities</h2>
+					<p>Choose which tools Fella can use when working with your data.</p>
 				</div>
 			</div>
 			<div class="capability-list">
@@ -306,7 +303,16 @@
 					</div>
 				{/each}
 			</div>
-			<p class="capability-note">Evidence, verification, and the read-only boundary always stay on.</p>
+			<details class="capability-details">
+				<summary>Statistics, forecasting, and chart types</summary>
+				<p>Python helpers include median, standard deviation, quantiles, correlation, regression, and distribution checks. Correlation returns r only (no p-value); pandas, NumPy, and SciPy are not available. The sandbox has no filesystem or network access.</p>
+				<p>Forecast regular numeric series with naive, mean, drift, linear-trend, or seasonal-naive methods. Fella compares a forecast with a baseline and reports rolling-origin MAE/RMSE when the history supports it; error bands appear only when there are enough varied holdout errors. Forecasting needs Table analysis and runs in Ask.</p>
+				<p>Charts include bar, line, area, stacked area, pie, donut, scatter, histogram, box plot, heatmap, and forecast. Missing values are explicitly rejected, excluded, or shown as gaps—not silently changed to zero.</p>
+			</details>
+			<div class="capability-core">
+				<strong>Always included</strong>
+				<p>Workspace inventory and field profiles; Investigation Questions, definitions, and source scope, plus saved Findings; recorded evidence, verification, and freshness checks; read-only access to mounted data.</p>
+			</div>
 			{#if capabilityError}<p class="error-note">{capabilityError}</p>{/if}
 		</section>
 
@@ -456,18 +462,6 @@
 		font-size: var(--fs-sm);
 		line-height: 1.5;
 	}
-	.title-line {
-		display: flex;
-		align-items: center;
-		flex-wrap: wrap;
-		gap: 8px;
-	}
-	.experimental-badge {
-		color: var(--text-faint);
-		font-size: var(--fs-xs);
-		font-weight: 500;
-		white-space: nowrap;
-	}
 	.current-row,
 	.provider-list :global(.provider-row),
 	.appearance-list :global(.appearance-row) {
@@ -544,15 +538,44 @@
 		font-weight: 600;
 	}
 	.capability-copy small,
-	.capability-note,
 	.error-note {
 		color: var(--text-faint);
 		font-size: var(--fs-xs);
 		line-height: 1.45;
 	}
-	.capability-note,
+	.capability-details {
+		padding: var(--space-3);
+		border-radius: var(--radius-md);
+		background: var(--bg-inset);
+		color: var(--text-dim);
+		font-size: var(--fs-xs);
+		line-height: 1.5;
+	}
+	.capability-details summary {
+		color: var(--text-primary);
+		font-weight: 600;
+		cursor: pointer;
+	}
+	.capability-details p {
+		margin: var(--space-2) 0 0;
+	}
+	.capability-core {
+		display: grid;
+		gap: 3px;
+		padding-top: var(--space-1);
+	}
+	.capability-core strong {
+		font-size: var(--fs-xs);
+		font-weight: 600;
+	}
+	.capability-core p,
 	.error-note {
 		margin: 0;
+	}
+	.capability-core p {
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+		line-height: 1.45;
 	}
 	.error-note {
 		color: var(--danger, #c15d5d);
