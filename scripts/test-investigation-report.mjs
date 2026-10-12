@@ -131,6 +131,34 @@ try {
 	);
 	assert.ok(completionReport.includes('Complete with 1 open Question; not fully answered'));
 	assert.ok(!completionReport.includes('Investigation fully answered'));
+	const latestRun = {
+		...run,
+		id: 'run-sales-current',
+		trace: { ...run.trace, id: 'trace-sales-current', turn_id: 'run-sales-current' },
+		result: { ...run.result, text: 'The current saved answer uses the refreshed export.' }
+	};
+	const staleFindingInvestigation = {
+		...investigation,
+		questions: investigation.questions.map((question) => question.id === 'question-main'
+			? { ...question, latest_analysis_turn_id: latestRun.id, analysis_turn_ids: [run.id, latestRun.id] }
+			: question)
+	};
+	const staleFindingReport = buildInvestigationReport(
+		staleFindingInvestigation,
+		{ 'run-sales': run, [latestRun.id]: latestRun },
+		new Date('2026-10-11T12:00:00.000Z')
+	);
+	assert.ok(staleFindingReport.includes('Linked to an earlier run; latest Question run is `run-sales-current`. Review before treating this Finding as current.'));
+	assert.ok(staleFindingReport.includes('Earlier than the linked Question’s latest answer (run `run-sales-current`).'));
+	const noStepsRun = {
+		...run,
+		trace: { ...run.trace, steps: [] },
+		verification: { ...run.verification, checks: [] },
+		result: { ...run.result, verification: [] }
+	};
+	const noStepsReport = buildInvestigationReport(investigation, { 'run-sales': noStepsRun });
+	assert.ok(noStepsReport.includes('Recorded execution:** No execution steps were recorded for this run.'));
+	assert.ok(noStepsReport.includes('no checks recorded'));
 	const noDefinitionsReport = buildInvestigationReport({ ...investigation, definitions: [] }, { 'run-sales': run });
 	assert.ok(noDefinitionsReport.includes('No active definitions or assumptions are recorded.'));
 	assert.equal(investigationReportFilename('Weekly sales / review'), 'weekly-sales-review-report.md');

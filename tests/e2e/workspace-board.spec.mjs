@@ -2033,8 +2033,14 @@ test('a multi-question Investigation carries coverage, QA, and run links into it
 	await expect(runDetail.getByRole('region', { name: 'Definitions and source scope used' })).toContainText(refundEvidence.id);
 	await runDetail.getByRole('button', { name: 'Close saved analysis run' }).click();
 
+	await page.getByRole('button', { name: 'Review report' }).click();
+	const reportDialog = page.getByRole('dialog', { name: 'Review report' });
+	await expect(reportDialog).toBeVisible();
+	const markdownPreview = reportDialog.getByRole('region', { name: 'Markdown report preview' });
+	await expect(markdownPreview).toContainText(rootAnswer);
+	await expect(markdownPreview).toContainText('Only 10 of the requested 12 weeks are present.');
 	const downloadPromise = page.waitForEvent('download');
-	await page.getByRole('button', { name: 'Export report' }).click();
+	await reportDialog.getByRole('button', { name: 'Export report' }).click();
 	const download = await downloadPromise;
 	expect(download.suggestedFilename()).toBe('assess-second-quarter-sales-and-returns-across-regions-report.md');
 	const report = await readFile(await download.path(), 'utf8');
@@ -2754,6 +2760,19 @@ test('Finding and chart lineage flag artifacts from an earlier Question run', as
 	await lineage.locator('summary').click();
 	await expect(lineage).toContainText('Source catalog revision');
 	await expect(lineage).toContainText('sales-r1');
+
+	await page.getByRole('button', { name: 'Review report' }).click();
+	const reportDialog = page.getByRole('dialog', { name: 'Review report' });
+	await expect(reportDialog).toBeVisible();
+	const reportMarkdown = reportDialog.getByRole('region', { name: 'Markdown report preview' });
+	await expect(reportMarkdown).toContainText('Earlier than the linked Question’s latest answer');
+	await expect(reportMarkdown).toContainText('Workspace revision: sales-r1');
+	const reportRecords = reportDialog.getByRole('region', { name: 'Supporting records in Fella' });
+	await expect(reportRecords.locator('.handoff-freshness-warning')).toContainText('Earlier than the Question’s latest run');
+	await expect(reportRecords).toContainText('Source catalog revision sales-r1');
+	const reportVisualizations = reportDialog.getByRole('region', { name: 'Visualization previews included in the report' });
+	await expect(reportVisualizations.locator('.handoff-freshness-warning')).toContainText('Earlier than the Question’s latest run');
+	await expect(reportVisualizations).toContainText('Source catalog revision sales-r1');
 });
 
 test('Investigation Results keep transcript-only historical work outside current Question coverage', async ({ page }) => {
@@ -3002,16 +3021,17 @@ test('Investigation report exports saved answers, Findings, QA, and source prove
 
 	let downloadObservedBeforeReview = false;
 	page.on('download', () => { downloadObservedBeforeReview = true; });
-	await page.getByRole('button', { name: 'Review handoff' }).click();
-	const handoffDialog = page.getByRole('dialog', { name: 'Review before sharing' });
+	await page.getByRole('button', { name: 'Review report' }).click();
+	const handoffDialog = page.getByRole('dialog', { name: 'Review report' });
 	await expect(handoffDialog).toBeVisible();
 	await expect(handoffDialog).toContainText('2 unresolved Questions');
 	await expect(handoffDialog).not.toContainText('Fully answered');
-	await expect(handoffDialog.getByRole('region', { name: 'Markdown handoff preview' })).toContainText('Weekly net sales');
-	await expect(handoffDialog.getByRole('region', { name: 'Markdown handoff preview' })).toContainText('No reason was recorded for this unresolved status.');
-	await expect(handoffDialog.getByRole('region', { name: 'Markdown handoff preview' })).toContainText('Weekly sales rose to $40.');
-	await expect(handoffDialog.getByRole('region', { name: 'Visualization previews included in the handoff' })).toContainText('Model-produced visualization');
-	await expect(handoffDialog.getByRole('region', { name: 'Visualization previews included in the handoff' })).toContainText('Weekly net sales');
+	await expect(handoffDialog.getByRole('region', { name: 'Markdown report preview' })).toContainText('Weekly net sales');
+	await expect(handoffDialog.getByRole('region', { name: 'Markdown report preview' })).toContainText('No reason was recorded for this unresolved status.');
+	await expect(handoffDialog.getByRole('region', { name: 'Markdown report preview' })).toContainText('Weekly sales rose to $40.');
+	await expect(handoffDialog.getByRole('region', { name: 'Visualization previews included in the report' })).toContainText('Model-produced visualization');
+	await expect(handoffDialog.getByRole('region', { name: 'Visualization previews included in the report' })).toContainText('Weekly net sales');
+	await expect(handoffDialog.locator('.handoff-preview-filename')).toContainText('explain-weekly-sales-for-finance-report.md');
 	await expect(handoffDialog.getByRole('button', { name: 'Open evidence · evidence-weekly-sales-export' })).toBeVisible();
 	await expect(handoffDialog.getByRole('button', { name: 'Open chart evidence' })).toBeVisible();
 	expect(downloadObservedBeforeReview).toBe(false);
@@ -3019,11 +3039,25 @@ test('Investigation report exports saved answers, Findings, QA, and source prove
 	await expect(page.getByRole('region', { name: 'Saved analysis run' })).toBeVisible();
 	const exactEvidenceTarget = page.getByRole('region', { name: 'Query and output evidence' }).locator('[data-evidence-id="evidence-weekly-sales-export"]');
 	await expect(exactEvidenceTarget).toBeFocused();
-	await page.getByRole('button', { name: 'Review handoff' }).click();
-	const reviewedDialog = page.getByRole('dialog', { name: 'Review before sharing' });
+	await page.getByRole('button', { name: 'Review report' }).click();
+	const reviewedDialog = page.getByRole('dialog', { name: 'Review report' });
 	await expect(reviewedDialog).toBeVisible();
+	await page.evaluate(() => {
+		const original = URL.createObjectURL.bind(URL);
+		Object.defineProperty(window, '__originalCreateObjectURL', { configurable: true, value: original });
+		URL.createObjectURL = () => { throw new Error('Simulated export failure.'); };
+	});
+	await reviewedDialog.getByRole('button', { name: 'Export report' }).click();
+	await expect(reviewedDialog).toBeVisible();
+	await expect(reviewedDialog.getByRole('alert')).toHaveText('Simulated export failure.');
+	await expect(reviewedDialog.getByRole('region', { name: 'Markdown report preview' })).toContainText('Weekly sales rose 12% to $40.');
+	await expect(reviewedDialog.locator('.handoff-preview-filename')).toContainText('explain-weekly-sales-for-finance-report.md');
+	await page.evaluate(() => {
+		URL.createObjectURL = window.__originalCreateObjectURL;
+		delete window.__originalCreateObjectURL;
+	});
 	const downloadPromise = page.waitForEvent('download');
-	await reviewedDialog.getByRole('button', { name: 'Download Markdown' }).click();
+	await reviewedDialog.getByRole('button', { name: 'Export report' }).click();
 	const download = await downloadPromise;
 	expect(download.suggestedFilename()).toBe('explain-weekly-sales-for-finance-report.md');
 	const report = await readFile(await download.path(), 'utf8');

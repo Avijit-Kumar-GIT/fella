@@ -187,6 +187,14 @@ function evidenceSummary(run: AnalysisTurn): string[] {
 
 function findingSection(finding: InvestigationFinding, index: number, investigation: Investigation): string[] {
 	const question = investigation.questions?.find((item) => item.id === finding.question_id);
+	const latestRunId = question?.latest_analysis_turn_id;
+	const freshness = !question
+		? 'Question record is unavailable; freshness could not be checked.'
+		: !latestRunId
+			? 'No latest run is recorded for the linked Question; freshness could not be checked.'
+			: latestRunId === finding.analysis_turn_id
+				? 'Linked to the Question’s latest run.'
+				: `Linked to an earlier run; latest Question run is \`${latestRunId}\`. Review before treating this Finding as current.`;
 	return [
 		`### Finding ${index + 1} · Revision ${finding.revision ?? 1}`,
 		'',
@@ -194,6 +202,7 @@ function findingSection(finding: InvestigationFinding, index: number, investigat
 		'',
 		`- Question: ${question?.text ?? `Question ${finding.question_id}`}`,
 		`- Supporting run: \`${finding.analysis_turn_id}\``,
+		`- Freshness: ${freshness}`,
 		`- Evidence IDs: ${finding.evidence_ids.length ? finding.evidence_ids.map((id) => `\`${id}\``).join(', ') : 'None recorded'}`,
 		`- Caveats: ${finding.caveats.length ? finding.caveats.join('; ') : 'None recorded'}`,
 		`- Assumptions: ${finding.assumptions.length ? finding.assumptions.join('; ') : 'None recorded'}`,
@@ -201,7 +210,7 @@ function findingSection(finding: InvestigationFinding, index: number, investigat
 	];
 }
 
-function runSection(runId: string, run: AnalysisTurn | null | undefined): string[] {
+function runSection(runId: string, run: AnalysisTurn | null | undefined, investigation: Investigation): string[] {
 	if (!run) {
 		return [
 			`### Run \`${runId}\``,
@@ -218,10 +227,23 @@ function runSection(runId: string, run: AnalysisTurn | null | undefined): string
 	const skippedSources = run.source_scope?.skipped_sources;
 	const workspace = run.workspace ?? run.workspace_snapshot?.path;
 	const execution = run.trace.steps;
+	const linkedQuestion = investigation.questions?.find((question) =>
+		question.id === run.investigation_context?.question_id
+		|| question.latest_analysis_turn_id === runId
+		|| question.analysis_turn_ids?.includes(runId)
+	);
+	const questionFreshness = linkedQuestion
+		? !linkedQuestion.latest_analysis_turn_id
+			? 'No latest run is recorded for the linked Question; currentness could not be checked.'
+			: linkedQuestion.latest_analysis_turn_id === runId
+				? 'Latest saved run for the linked Question.'
+				: `Earlier than the linked Question’s latest answer (run \`${linkedQuestion.latest_analysis_turn_id}\`).`
+		: 'Question linkage was not recorded; currentness could not be checked.';
 	const lines = [
 		`### Run \`${run.id}\``,
 		'',
 		`- Run state: ${run.state.replaceAll('_', ' ')}`,
+		`- Question freshness: ${questionFreshness}`,
 		`- Method: ${run.plan.strategy.replaceAll('_', ' ')}${run.plan.steps.length ? ` · planned steps: ${run.plan.steps.map((step) => step.replaceAll('_', ' ')).join(' → ')}` : ''}`,
 		`- Verification: ${verificationStatus.replaceAll('_', ' ')}${checks.length ? ` · ${checks.length} check${checks.length === 1 ? '' : 's'}` : ' · no checks recorded'}`,
 		`- Requested source scope: ${requestedSourceScope(run)}`,
@@ -243,6 +265,8 @@ function runSection(runId: string, run: AnalysisTurn | null | undefined): string
 	}
 	if (execution.length) {
 		lines.push('', `**Recorded execution:** ${execution.map((step) => `${step.operation.replaceAll('_', ' ')} (${step.success ? 'succeeded' : 'failed'})`).join('; ')}`);
+	} else {
+		lines.push('', '**Recorded execution:** No execution steps were recorded for this run.');
 	}
 	if (run.result.evidence.length) {
 		lines.push('', '**Evidence references**', ...evidenceSummary(run));
@@ -342,7 +366,7 @@ export function buildInvestigationReport(
 	if (!runIds.size) {
 		lines.push('No saved analysis runs are linked to the active Questions or Findings.', '');
 	} else {
-		for (const runId of runIds) lines.push(...runSection(runId, runs[runId]), '');
+		for (const runId of runIds) lines.push(...runSection(runId, runs[runId], investigation), '');
 	}
 
 	return `${lines.join('\n').trimEnd()}\n`;

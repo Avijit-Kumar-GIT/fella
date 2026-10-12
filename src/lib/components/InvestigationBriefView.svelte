@@ -707,6 +707,23 @@
 		return [...new Set(question.analysis_turn_ids ?? [])];
 	}
 
+	function questionForRun(investigation: Investigation, run: AnalysisTurn): InvestigationQuestion | undefined {
+		const questionId = run.investigation_context?.question_id;
+		return investigation.questions?.find((question) => question.id === questionId)
+			?? investigation.questions?.find((question) => question.latest_analysis_turn_id === run.id || questionRunIdsFor(question).includes(run.id));
+	}
+
+	function runFreshness(question: InvestigationQuestion | undefined, runId: string): string {
+		if (!question) return 'Question linkage unavailable; freshness could not be checked.';
+		if (!question.latest_analysis_turn_id) return 'No latest Question run is recorded; freshness could not be checked.';
+		if (question.latest_analysis_turn_id === runId) return 'Linked to the Question’s latest run.';
+		return `Earlier than the Question’s latest run (${question.latest_analysis_turn_id}); review before treating as current.`;
+	}
+
+	function runRevision(run: AnalysisTurn | null | undefined): string {
+		return run?.workspace_revision ?? run?.trace.workspace_revision ?? run?.workspace_snapshot?.revision ?? 'Not recorded for this run';
+	}
+
 	function questionHistoricalRunIds(questionId: string): string[] {
 		const question = selected?.questions?.find((item) => item.id === questionId);
 		return question
@@ -789,7 +806,7 @@
 				charts: handoffCharts(snapshot, runs)
 			};
 			reportPreviewOpen = true;
-			reportExportStatus = 'Saved-state handoff preview ready.';
+			reportExportStatus = 'Report preview ready.';
 		} catch (cause) {
 			reportExportFailed = true;
 			reportExportStatus = cause instanceof Error ? cause.message : String(cause);
@@ -2501,7 +2518,7 @@
 					</section>
 					<section class="investigation-document-section investigation-share-section" aria-labelledby="investigation-share-heading">
 						<header class="investigation-document-heading">
-							<div><h3 id="investigation-share-heading">Share</h3><p>Review the saved work and its limitations before creating a handoff.</p></div>
+							<div><h3 id="investigation-share-heading">Share</h3><p>Review the saved analysis and its limitations before exporting a report.</p></div>
 							<Button
 								type="button"
 								variant="outline"
@@ -2509,9 +2526,10 @@
 								title={reportExportDisabledReason || undefined}
 								onclick={() => void reviewInvestigationHandoff()}
 							>
-								<Icon name="file" size={16} />{exportingReport ? 'Preparing preview…' : 'Review handoff'}
+								<Icon name="file" size={16} />{exportingReport ? 'Preparing preview…' : 'Review report'}
 							</Button>
 						</header>
+						{#if reportExportDisabledReason}<p class="report-export-disabled-reason">{reportExportDisabledReason}</p>{/if}
 						{#if reportExportStatus}
 							<p class="report-export-status" role={reportExportFailed ? 'alert' : 'status'}>{reportExportStatus}</p>
 						{/if}
@@ -2524,24 +2542,24 @@
 	<Dialog.Root bind:open={reportPreviewOpen}>
 		<Dialog.Portal>
 			<Dialog.Overlay class="fella-ui-dialog-overlay" />
-			<Dialog.Content class="fella-ui-dialog-content handoff-preview-dialog" aria-label="Review Investigation handoff">
+			<Dialog.Content class="fella-ui-dialog-content handoff-preview-dialog" aria-label="Review report">
 				{#if reportPreview}
 					<header class="handoff-preview-header">
 						<div>
-							<p class="handoff-preview-eyebrow">Investigation handoff</p>
-							<Dialog.Title class="handoff-preview-title" level={2}>Review before sharing</Dialog.Title>
+							<p class="handoff-preview-eyebrow">Investigation report</p>
+							<Dialog.Title class="handoff-preview-title" level={2}>Review report</Dialog.Title>
 							<Dialog.Description class="handoff-preview-description">
-								A read-only package generated from the saved brief, Questions, Findings, and analysis runs.
+								Review the exact Markdown export generated from the saved brief, Questions, Findings, and analysis runs.
 							</Dialog.Description>
 						</div>
-						<Dialog.Close class="handoff-preview-close" type="button" aria-label="Close handoff preview" title="Close">
+						<Dialog.Close class="handoff-preview-close" type="button" aria-label="Close report preview" title="Close">
 							<Icon name="x" size={16} />
 						</Dialog.Close>
 					</header>
 					{@const activeHandoffQuestions = (reportPreview.investigation.questions ?? []).filter((question) => question.status === 'active')}
 					{@const unresolvedHandoffQuestions = activeHandoffQuestions.filter((question) => question.answer_status !== 'answered')}
 					<div class="handoff-preview-body">
-						<section class="handoff-coverage" aria-label="Handoff coverage status">
+						<section class="handoff-coverage" aria-label="Report coverage status">
 							{#if reportPreview.investigation.status === 'complete' && unresolvedHandoffQuestions.length}
 								<Badge variant="warning">Closed with unresolved Questions · not fully answered</Badge>
 							{:else if unresolvedHandoffQuestions.length}
@@ -2559,8 +2577,16 @@
 							{#if (reportPreview.investigation.findings ?? []).length}
 								<ul>
 									{#each reportPreview.investigation.findings ?? [] as finding (finding.id)}
+										{@const findingQuestion = reportPreview.investigation.questions?.find((question) => question.id === finding.question_id)}
+										{@const findingFreshness = runFreshness(findingQuestion, finding.analysis_turn_id)}
 										<li>
-											<div><strong>{finding.claim}</strong><small>Finding revision {finding.revision ?? 1} · run {finding.analysis_turn_id}</small></div>
+											<div>
+												<strong>{finding.claim}</strong>
+												<small>Finding revision {finding.revision ?? 1} · run {finding.analysis_turn_id} · Source catalog revision {runRevision(reportPreview.runs[finding.analysis_turn_id])}</small>
+												{#if findingFreshness.startsWith('Earlier') || findingFreshness.startsWith('Question linkage') || findingFreshness.startsWith('No latest')}
+													<small class="handoff-freshness-warning">{findingFreshness}</small>
+												{/if}
+												</div>
 											<div class="handoff-record-actions">
 												{#each finding.evidence_ids as evidenceId (evidenceId)}
 													<Button type="button" variant="ghost" size="sm" onclick={() => void openHandoffReference(finding.analysis_turn_id, evidenceId)}>Open evidence · {evidenceId}</Button>
@@ -2587,13 +2613,19 @@
 						</section>
 
 						{#if reportPreview.charts.length}
-							<section class="handoff-visualizations" aria-label="Visualization previews included in the handoff">
+							<section class="handoff-visualizations" aria-label="Visualization previews included in the report">
 								<header><h3>Visualizations</h3><p>Model-produced artifacts, not analyst-reviewed Findings.</p></header>
 								{#each reportPreview.charts as chart (chart.key)}
+									{@const chartQuestion = questionForRun(reportPreview.investigation, chart.run)}
+									{@const chartFreshness = runFreshness(chartQuestion, chart.run.id)}
 									<article class="handoff-chart-card">
 										<Chart spec={chart.evidence.chart!} source={chart.sourceEvidence?.result_summary ?? chart.evidence.chart?.metadata?.source_label ?? ''} sourceEvidence={chart.sourceEvidence} sourceRunId={chart.run.id} findingSnapshot={chart.evidence.chart?.metadata?.finding_snapshot} originLabel="Model-produced visualization" />
 										<div class="handoff-chart-lineage">
 											<span>Run <code>{chart.run.id}</code></span>
+											<span>Source catalog revision {runRevision(chart.run)}</span>
+											{#if chartFreshness.startsWith('Earlier') || chartFreshness.startsWith('Question linkage') || chartFreshness.startsWith('No latest')}
+												<span class="handoff-freshness-warning">{chartFreshness}</span>
+											{/if}
 											{#if chart.evidence.id}<Button type="button" variant="ghost" size="sm" onclick={() => void openHandoffReference(chart.run.id, chart.evidence.id)}>Open chart evidence</Button>{/if}
 											{#if chart.sourceEvidence?.id}<Button type="button" variant="ghost" size="sm" onclick={() => void openHandoffReference(chart.run.id, chart.sourceEvidence!.id)}>Open source evidence</Button>{/if}
 										</div>
@@ -2602,15 +2634,15 @@
 							</section>
 						{/if}
 
-						<section class="handoff-markdown" aria-label="Markdown handoff preview">
-							<header><h3>Markdown handoff</h3><p>Unavailable run records, missing coverage, source omissions, and excluded transcript material are disclosed in the exported text.</p></header>
+						<section class="handoff-markdown" aria-label="Markdown report preview">
+							<header><h3>Markdown report</h3><p>Unavailable run records, missing coverage, source omissions, and excluded transcript material are disclosed in the exported text.</p></header>
 							<article class="handoff-markdown-content">{@html renderMarkdown(reportPreview.markdown)}</article>
 						</section>
 					</div>
 
 					<footer class="handoff-preview-footer">
 						{#if reportExportStatus}<span role={reportExportFailed ? 'alert' : 'status'}>{reportExportStatus}</span>{/if}
-						<div><Dialog.Close class="handoff-preview-secondary" type="button">Back</Dialog.Close><Button type="button" onclick={downloadInvestigationHandoff} disabled={exportingReport}><Icon name="download" size={16} />{exportingReport ? 'Preparing…' : 'Download Markdown'}</Button></div>
+						<div class="handoff-preview-actions"><span class="handoff-preview-filename">Markdown file · <code>{reportPreview.filename}</code></span><Dialog.Close class="handoff-preview-secondary" type="button">Back</Dialog.Close><Button type="button" onclick={downloadInvestigationHandoff} disabled={exportingReport}><Icon name="download" size={16} />{exportingReport ? 'Preparing…' : 'Export report'}</Button></div>
 					</footer>
 				{/if}
 			</Dialog.Content>
@@ -2639,6 +2671,7 @@
 	.page-head-actions { display: flex; min-width: 0; align-items: center; justify-content: flex-end; gap: var(--space-2); }
 	.report-export-status { max-width: 300px; color: var(--text-dim); font-size: var(--fs-xs); overflow-wrap: anywhere; }
 	.report-export-status[role='alert'] { color: var(--danger, #b42318); }
+	.report-export-disabled-reason { margin: var(--space-2) 0 0; color: var(--text-faint); font-size: var(--fs-xs); }
 	:global(.handoff-preview-dialog) {
 		display: grid;
 		grid-template-rows: auto minmax(0, 1fr) auto;
@@ -2665,6 +2698,7 @@
 	.handoff-records li > div:first-child { display: grid; min-width: 0; gap: 3px; }
 	.handoff-records li strong { font-size: var(--fs-xs); font-weight: 600; overflow-wrap: anywhere; }
 	.handoff-records li small, .handoff-record-empty { color: var(--text-faint); font-size: 11px; overflow-wrap: anywhere; }
+	.handoff-freshness-warning { color: var(--warning, #8a5a00) !important; }
 	.handoff-record-actions { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 2px; }
 	.handoff-open-questions { border-top: 1px solid var(--border); padding-top: var(--space-2) !important; }
 	.handoff-chart-card { min-width: 0; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg); }
@@ -2684,6 +2718,9 @@
 	.handoff-preview-footer > span { min-width: 0; color: var(--text-dim); font-size: var(--fs-xs); overflow-wrap: anywhere; }
 	.handoff-preview-footer > span[role='alert'] { color: var(--danger, #b42318); }
 	.handoff-preview-footer > div { display: flex; flex: none; align-items: center; gap: var(--space-2); }
+	.handoff-preview-footer .handoff-preview-actions { min-width: 0; }
+	.handoff-preview-filename { margin-right: var(--space-2); color: var(--text-faint); font-size: var(--fs-xs); overflow-wrap: anywhere; }
+	.handoff-preview-filename code { color: var(--text-dim); }
 	:global(.handoff-preview-secondary) { min-height: 36px; padding: 0 var(--space-3); border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent; color: var(--text-dim); font: inherit; cursor: pointer; }
 	:global(.handoff-preview-secondary:hover) { border-color: var(--border); background: var(--bg-inset); color: var(--text); }
 	h1, h2, p { margin: 0; }
