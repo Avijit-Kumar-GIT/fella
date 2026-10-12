@@ -307,7 +307,7 @@
 		onnew={onnewenvironment}
 		onclose={oncloseenvironment}
 	/>
-	<nav class="nav-section" aria-label="General">
+	<nav class="nav-section" aria-label="Conversation">
 		<Button
 			variant="ghost"
 			class="nav-row"
@@ -318,19 +318,7 @@
 			onclick={newChat}
 		>
 			<Icon name="ask" size={16} />
-			<span>Ask</span>
-		</Button>
-		<Button
-			variant="ghost"
-			class="nav-row"
-			type="button"
-			title={`Search (${shortcutModifier}+K)`}
-			aria-keyshortcuts="Control+K Meta+K"
-			aria-haspopup="dialog"
-			onclick={() => onsearch?.()}
-		>
-			<Icon name="search" size={16} />
-			<span>Search</span>
+			<span>New conversation</span>
 		</Button>
 	</nav>
 	<section class="repository-section" aria-labelledby="repositories-heading">
@@ -540,7 +528,20 @@
 	<div class="sidebar-footer">
 		<Button
 			variant="ghost"
-			class={`nav-row settings-row${session.workspaceView === 'settings' ? ' active' : ''}`}
+			class="nav-row utility-row"
+			type="button"
+			title={`Search (${shortcutModifier}+K)`}
+			aria-label="Search"
+			aria-keyshortcuts="Control+K Meta+K"
+			aria-haspopup="dialog"
+			onclick={() => onsearch?.()}
+		>
+			<Icon name="search" size={16} />
+			<span>Search</span>
+		</Button>
+		<Button
+			variant="ghost"
+			class={`nav-row utility-row settings-row${session.workspaceView === 'settings' ? ' active' : ''}`}
 			title={`Settings (${shortcutModifier}+,)`}
 			aria-label="Settings"
 			aria-keyshortcuts="Control+Comma Meta+Comma"
@@ -1017,8 +1018,8 @@
 	}
 	.sidebar-footer {
 		flex: none;
-		display: flex;
-		justify-content: flex-start;
-		padding: var(--space-1) var(--space-1) 0;
+		display: grid;
+		gap: 1px;
+		padding: var(--space-1) var(--space-1) var(--space-2);
 	}
 </style>

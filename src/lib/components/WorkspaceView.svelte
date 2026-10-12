@@ -20,8 +20,8 @@
 				<span>Investigation</span>
 			</Tabs.Trigger>
 			<Tabs.Trigger value="context" class="fella-ui-tabs-trigger workspace-tab">
-				<Icon name="bookmark" size={16} />
-				<span>Guide</span>
+				<Icon name="table" size={16} />
+				<span>Data &amp; context</span>
 			</Tabs.Trigger>
 		</Tabs.List>
 

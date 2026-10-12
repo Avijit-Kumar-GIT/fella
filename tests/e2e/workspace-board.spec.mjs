@@ -1195,11 +1195,12 @@ test('workspace layout presets preserve the same Investigation, source scope, Qu
 	expect(workbenchColumns).toBe(1);
 	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
 	await expect(page.getByRole('textbox', { name: 'Main question' })).toHaveValue('Measure weekly net sales');
-	await expect(page.getByRole('button', { name: 'Ask', exact: true })).toBeVisible();
+	await expect(page.getByRole('button', { name: 'New conversation', exact: true })).toBeVisible();
 	// The header identifies the Investigation by its original goal; its editable Main Question is separate.
 	await expect(page.getByTestId('workspace-investigation-summary')).toContainText(originalRequest);
 	await preset('Investigation').click();
 	await expect(page.getByRole('textbox', { name: 'Main question' })).toHaveValue('Measure weekly net sales');
+	await expect(page.getByTestId('workspace-investigation-summary')).toContainText(originalRequest);
 	const afterLayoutChanges = await page.evaluate(() => ({
 		investigations: window.__workspaceInvestigations(),
 		ensureCalls: window.__workspaceInvestigationEnsureCalls.length
@@ -1316,7 +1317,7 @@ test('Workbench composes curated panels while keeping Investigation scope and co
 	await expect(investigation).toBeVisible();
 	await expect(page.getByRole('checkbox', { name: 'Show Investigation panel' })).toBeDisabled();
 	await expect(coverage).toContainText(investigationTitle);
-	await expect(page.getByRole('button', { name: 'Ask', exact: true })).toBeVisible();
+	await expect(page.getByRole('button', { name: 'New conversation', exact: true })).toBeVisible();
 
 	const settings = page.locator('.panel-picker-popover');
 	await settings.getByRole('button', { name: 'Reset' }).click();
@@ -3649,13 +3650,13 @@ test('shared workspace tabs and modal/menu primitives preserve keyboard interact
 
 	const workspaceTabs = page.getByRole('tablist', { name: 'Workspace sections' });
 	const investigationTab = workspaceTabs.getByRole('tab', { name: 'Investigation' });
-	const guideTab = workspaceTabs.getByRole('tab', { name: 'Guide' });
+	const dataContextTab = workspaceTabs.getByRole('tab', { name: 'Data & context' });
 	await expect(investigationTab).toHaveAttribute('aria-selected', 'true');
 	await expect(workspaceTabs.getByRole('tab', { name: 'Sources' })).toHaveCount(0);
 	await investigationTab.focus();
 	await page.keyboard.press('ArrowRight');
-	await expect(guideTab).toHaveAttribute('aria-selected', 'true');
-	await expect(page.getByRole('heading', { name: 'Guide', level: 1 })).toBeVisible();
+	await expect(dataContextTab).toHaveAttribute('aria-selected', 'true');
+	await expect(page.getByRole('heading', { name: 'Data & context', level: 1 })).toBeVisible();
 	await expect(page.getByRole('textbox', { name: 'Workspace guide' })).toBeVisible();
 
 	const createProject = page.getByRole('button', { name: 'Create project for northwind-sales' });

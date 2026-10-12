@@ -28,11 +28,11 @@
 	let displayTitle = $derived.by(() => {
 		if (session.workspaceView === 'board') return folder || 'Workspaces';
 		if (session.workspaceView === 'workspace') {
-			return `${folder || 'Workspace'} · ${session.workspacePane === 'investigation' ? 'Investigation' : 'Guide'}`;
+			return `${folder || 'Workspace'} · ${session.workspacePane === 'investigation' ? 'Investigation' : 'Data & context'}`;
 		}
 		if (session.workspaceView === 'project') return session.activeProject?.name ?? 'Project';
 		if (session.workspaceView === 'settings') return 'Fella';
-		return folder || 'Ask';
+		return folder || 'Focus';
 	});
 
 

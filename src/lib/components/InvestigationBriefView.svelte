@@ -361,6 +361,18 @@
 	});
 
 	$effect(() => {
+		const path = session.catalog.workspace;
+		if (
+			!path ||
+			session.workspaceView !== 'workspace' ||
+			session.workspacePane !== 'investigation' ||
+			session.workspaceLayoutPreset === 'focus'
+		) return;
+		const current = selected;
+		session.activeInvestigationId = current?.workspace_id === path ? current.id : null;
+	});
+
+	$effect(() => {
 		const item = selected;
 		const missing = unlinkedAnalysisTurnIds;
 		if (item && missing.length && isDesktop()) void syncAnalysisTurns(item.id);
@@ -1459,6 +1471,7 @@
 		openAnalysisTurnId = null;
 		questionLinksDraft = [];
 		selectedId = id;
+		session.activeInvestigationId = id;
 	}
 </script>
 

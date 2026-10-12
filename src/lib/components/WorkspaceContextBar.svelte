@@ -30,6 +30,14 @@
 	let summaryLoadFailed = $state(false);
 	let summaryRequest = 0;
 	let currentInvestigation = $derived.by(() => {
+		if (
+			session.workspaceView === 'workspace' &&
+			session.workspacePane === 'investigation' &&
+			session.activeInvestigationId
+		) {
+			const selected = investigations.find((item) => item.id === session.activeInvestigationId);
+			if (selected) return selected;
+		}
 		const firstQuestion = firstActualQuestion(session.activeChat.messages);
 		return investigations.find((item) =>
 			item.conversation_id === session.activeChat.id ||
@@ -87,8 +95,10 @@
 		const path = workspacePath;
 		const conversationId = session.activeChat.id;
 		const messageCount = session.activeChat.messages.length;
+		const investigationsVersion = session.investigationsVersion;
 		const available = workspaceAvailable;
 		void messageCount;
+		void investigationsVersion;
 		if (!path || !available) {
 			summaryRequest += 1;
 			investigations = [];
@@ -109,7 +119,7 @@
 
 		{#if (session.workspaceView === 'ask' || session.workspaceView === 'workspace' || session.workspaceView === 'board') && workspaceAvailable}
 			<div class="workspace-preset-actions">
-				{#if (session.workspaceView === 'ask' && session.workspaceLayoutPreset === 'focus') || (session.workspaceView === 'workspace' && session.workspaceLayoutPreset === 'workbench')}
+				{#if workspaceAvailable}
 					<span
 						class="workspace-investigation-summary"
 						role="status"

@@ -564,6 +564,8 @@ class Session {
 	historyVersion = $state<number>(0);
 	/** Bumped when the ask path automatically creates/resolves an Investigation. */
 	investigationsVersion = $state<number>(0);
+	/** Investigation currently selected in the Investigation view, scoped to the active Workspace. */
+	activeInvestigationId = $state<string | null>(null);
 	/** Source selected by global search for the contextual Investigation catalog. */
 	selectedSourcePath = $state<string | null>(null);
 	/** Repositories shown in the local sidebar, in user-defined order. */
@@ -794,6 +796,7 @@ class Session {
 		if (workspace) workspace.conversationId = pane.conversationId;
 		this.activeConversationIndex = conversationIndex;
 		this.activeWorkspaceId = scope;
+		this.activeInvestigationId = null;
 		this.catalog = workspace && !workspace.historyOnly ? workspace.catalog : { workspace: null, sources: [] };
 		this.workspaceView = scope || environment.panes.length > 1 ? 'board' : 'ask';
 		this.workspaceLayoutPreset = 'focus';

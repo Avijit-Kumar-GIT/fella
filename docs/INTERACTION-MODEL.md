@@ -141,6 +141,36 @@ to [#242](https://github.com/Avijit-Kumar-GIT/fella/issues/242).
 | Projects | Optional curation of selected Findings and artifacts, separate from the execution history of an Investigation. |
 | Search and Settings | App-level utilities, not core analytical views. |
 
+## Navigation and return behavior
+
+The sidebar is organized around starting a conversation and selecting a data
+scope. **New conversation** creates a thread in the currently selected scope;
+it does not create an Investigation until the user submits a workspace
+question. Workspace rows show which Workspace is active, keep its saved
+conversations grouped with it, and provide access to its Investigations and
+optional Project outputs. An unavailable folder keeps its saved history
+available and offers a reconnect action.
+
+For a fresh install, Fella opens an unbound **General** conversation. The user
+can type a question first, choose a folder, or try the sample workspace. Choosing
+a folder enters Focus for that Workspace and shows the readable and skipped
+files. Submitting a Workspace question creates or associates its Investigation
+automatically; the user does not have to create an Investigation object or
+choose a view first.
+
+For returning users, Fella restores the saved active Environment, pane, and
+Conversation. The selected Workspace and current Investigation are identified
+in the Workspace context bar. Switching an Environment changes the selected
+layout; selecting a different Workspace changes the analysis scope. Neither
+action combines Workspace data. Focus, Investigation, and Workbench are view
+choices for that scoped work, while **Data & context** remains supporting
+Workspace information. Search and Settings remain available in the sidebar's
+utility area. Project curation stays attached to its Workspace, and saved
+conversation history stays grouped with the Workspace that owns it.
+
+These navigation changes reorganize access only: they do not delete or rewrite
+saved Conversations, Investigations, Findings, reports, Projects, or layouts.
+
 ## Terminology and UI language
 
 The [product model](PRODUCT-MODEL.md) is canonical for domain-object
