@@ -1127,14 +1127,13 @@ async function ask(
  * Question ID travels with the run so its source scope and actual evidence can
  * be inspected together in the canonical AnalysisTurn. */
 export async function analyzeInvestigationQuestion(
-	investigationId: string,
+	investigation: Investigation,
 	questionId: string
 ): Promise<void> {
 	if (!requireEngine()) return;
 	const conv = session.activeChat;
 	if (conv.busy) return;
-	const investigation = await ensureWorkspaceInvestigation(conv);
-	if (!investigation || investigation.id !== investigationId) {
+	if (investigation.workspace_id !== conv.workspaceScope || investigation.conversation_id !== conv.id) {
 		conv.addSystem(
 			'Open the conversation linked to this Investigation before analyzing its Question.'
 		);
@@ -1152,7 +1151,7 @@ export async function analyzeInvestigationQuestion(
 		question.text,
 		conv,
 		undefined,
-		{ investigationId, questionId },
+		{ investigationId: investigation.id, questionId },
 		investigation
 	);
 }

@@ -539,14 +539,15 @@
 		}
 	}
 
-	async function openSelectedConversation(focusTurnId?: string): Promise<boolean> {
+	async function openSelectedConversation(focusTurnId?: string): Promise<Investigation | null> {
 		const item = selected;
-		if (!item || openingConversation || !isDesktop()) return false;
+		if (!item || openingConversation || !isDesktop()) return null;
 		void saveEditableDrafts(item.id);
 		openingConversation = true;
 		error = '';
 		try {
 			let conversationId = item.conversation_id;
+			let linkedInvestigation = item;
 			let summary: ConversationSummary | null = null;
 			if (!conversationId && item.brief_source_message_id) {
 				const summaries = await ipc.conversationsList();
@@ -556,13 +557,13 @@
 				) ?? null;
 				conversationId = summary?.id;
 				if (conversationId) {
-					const linked = await ipc.investigationEnsure(
+					linkedInvestigation = await ipc.investigationEnsure(
 						item.workspace_id,
 						conversationId,
 						item.brief.goal,
 						item.brief_source_message_id
 					);
-					investigations = investigations.map((record) => record.id === linked.id ? linked : record);
+					investigations = investigations.map((record) => record.id === linkedInvestigation.id ? linkedInvestigation : record);
 				}
 			}
 			if (!conversationId) throw new Error('The source conversation is not available in local history.');
@@ -581,10 +582,10 @@
 			}
 			session.setWorkspaceView('ask');
 			if (focusTurnId) session.focusConversationAnalysis(conversationId, focusTurnId);
-			return true;
+			return linkedInvestigation;
 		} catch (cause) {
 			error = cause instanceof Error ? cause.message : String(cause);
-			return false;
+			return null;
 		} finally {
 			openingConversation = false;
 		}
@@ -1356,9 +1357,10 @@
 			}
 			if (questionsDirty && !(await saveQuestions())) return;
 			if (definitionsDirty && !(await saveDefinitions())) return;
-			if (!(await openSelectedConversation())) return;
+			const linkedInvestigation = await openSelectedConversation();
+			if (!linkedInvestigation) return;
 			pendingAnalysisQuestionId = null;
-			await analyzeInvestigationQuestion(item.id, questionId);
+			await analyzeInvestigationQuestion(linkedInvestigation, questionId);
 		} catch (cause) {
 			error = cause instanceof Error ? cause.message : String(cause);
 		} finally {

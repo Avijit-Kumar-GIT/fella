@@ -340,6 +340,42 @@ async function installDesktopMock(
 						if (window.__workspaceContextSaveFailure) throw new Error('Fixture context save failure');
 						workspaceContextFiles.set(args.workspaceId, args.contents);
 						return null;
+					case 'investigation_create': {
+						const now = Date.now();
+						const id = `inv-${investigations.size + 1}`;
+						const goal = (args.initialRequest ?? '').trim();
+						const rootQuestion = goal ? {
+							id: `q-root-${id}`,
+							investigation_id: id,
+							parent_id: undefined,
+							text: goal,
+							position: 0,
+							source_selection: null,
+							status: 'active',
+							answer_status: 'not_started',
+							created_at_ms: now,
+							updated_at_ms: now
+						} : null;
+						if (rootQuestion) questionRecords.set(rootQuestion.id, rootQuestion);
+						const record = {
+							id,
+							workspace_id: args.workspaceId,
+							conversation_id: args.conversationId,
+							title: args.title || 'New investigation',
+							brief: { goal, audience: '', desired_output: '', constraints: [] },
+							questions: rootQuestion ? [rootQuestion] : [],
+							definitions: [],
+							findings: [],
+							source_selection: { mode: 'all_sources', included_paths: [] },
+							brief_source_message_id: args.sourceMessageId,
+							analysis_turn_ids: [],
+							status: 'active',
+							created_at_ms: now,
+							updated_at_ms: now
+						};
+						investigations.set(JSON.stringify([args.workspaceId, args.conversationId ?? null]), record);
+						return record;
+					}
 					case 'investigation_ensure': {
 						investigationEnsureCalls.push(args);
 						const key = JSON.stringify([args.workspaceId, args.conversationId]);
@@ -1467,6 +1503,54 @@ test('a saved answer opens its canonical run and returns to the same conversatio
 	await expect(answer).toBeVisible();
 	await expect(answer).toContainText('Weekly sales rose 12% in the saved analysis.');
 	expect(await page.evaluate(() => window.__workspaceAskCalls.length)).toBe(2);
+});
+
+test('a Question runs in its linked conversation even when it has no original chat prompt', async ({ page }) => {
+	await installDesktopMock(page, {
+		questionRunOutcomes: [{ status: 'answered', answer_text: 'There are 124 sales rows in the available file.' }]
+	});
+	await page.goto('/');
+	await addSalesWorkspace(page);
+	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill('Seed an earlier Investigation');
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
+
+	await page.getByRole('button', { name: 'Open workspace northwind-sales' }).hover();
+	await page.getByRole('button', { name: 'New conversation in northwind-sales' }).click();
+	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
+	await workspacePresetButton(page, 'Investigation').click();
+	await page.getByRole('button', { name: 'New investigation', exact: true }).click();
+	await openInvestigationSection(page, 'Questions');
+	await page.getByRole('button', { name: 'Add main Question' }).click();
+	await page.getByRole('textbox', { name: 'Main question' }).fill('How many sales rows are available?');
+	await waitForQuestionPlanSaved(page);
+	await page.getByRole('button', { name: 'Open conversation', exact: true }).click();
+	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
+	await expect(page.locator('.msg.user')).toHaveCount(0);
+	await workspacePresetButton(page, 'Investigation').click();
+	await openInvestigationSection(page, 'Questions');
+
+	await page.getByRole('button', { name: 'Analyze main Question' }).click();
+	await page.getByRole('region', { name: 'Review this run' }).getByRole('button', { name: 'Run this Question' }).click();
+
+	const answer = page.locator('.msg.assistant').last();
+	await expect(answer).toContainText('There are 124 sales rows in the available file.');
+	await expect(answer).not.toContainText('Open the conversation linked to this Investigation');
+	const state = await page.evaluate(() => ({
+		investigations: window.__workspaceInvestigations(),
+		analysisTurns: window.__workspaceAnalysisTurns(),
+		askCalls: window.__workspaceAskCalls
+	}));
+	const investigation = state.investigations.find((item) => item.title === 'New investigation');
+	const question = investigation.questions[0];
+	expect(investigation.conversation_id).toBeTruthy();
+	expect(state.analysisTurns).toHaveLength(1);
+	expect(state.analysisTurns[0].investigation_context.investigation_id).toBe(investigation.id);
+	expect(state.analysisTurns[0].investigation_context.question_id).toBe(question.id);
+	expect(state.askCalls.at(-1)).toMatchObject({
+		investigationId: investigation.id,
+		questionId: question.id
+	});
 });
 
 test('Investigation index summarizes work and resumes the same completed record', async ({ page }) => {
