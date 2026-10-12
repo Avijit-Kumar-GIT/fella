@@ -340,20 +340,20 @@
 		{#if tiles.length === 0}
 			<div class="empty-board"><p>This environment is empty.</p></div>
 		{/if}
+		{#if draggingWorkspace}
+			<div class="placement-preview" aria-live="polite">
+				{#if previewTiles.length}
+					{#each previewTiles as preview, index (preview.id)}
+						<div class="preview-slot" class:target={index === dragTargetIndex} style={gridPlacement(preview)}>
+							{index === dragTargetIndex ? 'Drop to place' : preview.id === '__fella-drop-workspace__' ? 'Workspace' : workspaceName(preview.id)}
+						</div>
+					{/each}
+				{:else}
+					<div class="full-notice">Close a workspace to add another.</div>
+				{/if}
+			</div>
+		{/if}
 	</div>
-	{#if draggingWorkspace}
-		<div class="placement-preview" aria-live="polite">
-			{#if previewTiles.length}
-				{#each previewTiles as preview, index (preview.id)}
-					<div class="preview-slot" class:target={index === dragTargetIndex} style={gridPlacement(preview)}>
-						{index === dragTargetIndex ? 'Drop to place' : preview.id === '__fella-drop-workspace__' ? 'Workspace' : workspaceName(preview.id)}
-					</div>
-				{/each}
-			{:else}
-				<div class="full-notice">Close a workspace to add another.</div>
-			{/if}
-		</div>
-	{/if}
 </section>
 
 <style>
@@ -509,7 +509,7 @@
 	.empty-board p { margin: 0; color: var(--text-faint); font-size: var(--fs-sm); }
 	.placement-preview {
 		position: absolute;
-		inset: 14px;
+		inset: 0;
 		z-index: 4;
 		display: grid;
 		grid-template-columns: repeat(4, minmax(0, 1fr));

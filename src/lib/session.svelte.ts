@@ -1223,6 +1223,12 @@ class Session {
 			return;
 		}
 		this.workspaceView = view;
+		if (view === 'board') {
+			const pane = this.activePane;
+			if (pane) pane.layoutPreset = undefined;
+			this.#writeWorkspaceState();
+			return;
+		}
 		if (view === 'ask') this.workspaceLayoutPreset = 'focus';
 		else if (view === 'workspace') this.workspaceLayoutPreset = 'investigation';
 		if (view === 'ask' || view === 'workspace') {
@@ -1476,6 +1482,9 @@ class Session {
 		conversation.workspaceScope = scope;
 		this.conversations.push(conversation);
 		pane.conversationId = conversation.id;
+		// A deliberate New conversation action should land in the composer,
+		// regardless of the analytical view previously open in this pane.
+		pane.layoutPreset = 'focus';
 		this.focusEnvironmentPane(pane.id);
 		this.#writeIndex();
 		this.#writeWorkspaceState();

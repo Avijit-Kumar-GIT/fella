@@ -1088,6 +1088,7 @@ test('environments compose General and repository panes while conversations reta
 	await page.getByRole('button', { name: 'New conversation in northwind-sales' }).click();
 	await expect(switcher).toContainText('General +1');
 	const salesComposer = page.getByRole('combobox', { name: 'Ask about northwind-sales' });
+	await expect(salesComposer).toBeVisible();
 	await salesComposer.fill('Summarize sales trends');
 	await page.getByRole('button', { name: 'Send' }).click();
 	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
@@ -1105,11 +1106,15 @@ test('environments compose General and repository panes while conversations reta
 	expect(automaticInvestigation.records[0].conversation_id).toBe(salesCall.conversationId);
 	expect(automaticInvestigation.records[0].brief.goal).toBe('Summarize sales trends');
 
-	const generalTile = page.getByRole('article', { name: 'General workspace' });
-	await generalTile.locator('.tile-focus').click();
+	// Starting a new conversation intentionally returns this pane to Focus.
+	// Switch the target from the sidebar rather than assuming the multi-pane
+	// board remains visible over the conversation composer.
+	await workspaceNavigation.getByRole('button', { name: 'General', exact: true }).click();
 	await page.getByRole('combobox', { name: 'Ask a question' }).fill('How should I compare two trend lines?');
 	await page.getByRole('button', { name: 'Send' }).click();
-	await expect(page.getByRole('log', { name: 'conversation' }).getByText('Scoped to general.', { exact: true })).toBeVisible();
+	await expect(
+		page.getByRole('log', { name: 'conversation' }).locator('.msg.assistant').last().getByText('Scoped to general.', { exact: true })
+	).toBeVisible();
 	expect((await page.evaluate(() => window.__workspaceAskCalls.at(-1))).workspaceId).toBeNull();
 	expect(await page.evaluate(() => window.__workspaceInvestigationEnsureCalls.length)).toBe(1);
 	await expect(switcher).toContainText('General +1');
@@ -1124,6 +1129,8 @@ test('environments compose General and repository panes while conversations reta
 	await expect(page.getByRole('button', { name: 'Open project Sales review' })).toBeVisible();
 
 	await salesWorkspaceRow.click();
+	await workspaceNavigation.getByRole('button', { name: 'Open workspace board' }).click();
+	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
 
 	await dispatchWorkspaceDrag(page, 'dragover', folders[1].path, { x: 0.9, y: 0.5 });
 	await expect(page.locator('.placement-preview .preview-slot')).toHaveCount(3);
@@ -1165,6 +1172,25 @@ test('environments compose General and repository panes while conversations reta
 	await dispatchWorkspaceDrag(page, 'drop', folders[0].path, { x: 0.1, y: 0.1, existing: true });
 	const movedSalesBox = await sales.boundingBox();
 	expectSameRenderedBox(movedSalesBox, salesTargetBox);
+});
+
+test('Workspace board can be reopened from Focus and restores after reload', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
+	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
+
+	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await workspacePresetButton(page, 'Focus').click();
+	await expect(page.getByRole('region', { name: 'Focus' })).toBeVisible();
+
+	const openBoard = page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Open workspace board' });
+	await expect(openBoard).toBeVisible();
+	await openBoard.click();
+	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
+
+	await page.reload();
+	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
 });
 
 test('an Investigation opens its canonical workspace conversation', async ({ page }) => {
@@ -1559,9 +1585,9 @@ test('Workbench panes resize accessibly, respect minimum widths, persist, and re
 	await page.reload();
 	const restored = await page.evaluate(() => JSON.parse(localStorage.getItem('fella:workbench-layout:v1')));
 	expect(restored.conversationShare).toBe(60);
-	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
-	await workspacePresetButton(page, 'Workbench').click();
-	await expect(page.getByRole('separator', { name: 'Resize Conversation and Analysis panes' })).toHaveAttribute('aria-valuenow', '60');
+	// Reload restores the active Workbench; the board is now an explicit view,
+	// not an implicit stop on the way back into this workspace.
+	await expect(splitter).toHaveAttribute('aria-valuenow', '60');
 	await page.locator('.workbench-panel-picker > summary').click();
 	await page.locator('.panel-picker-popover').getByRole('button', { name: 'Reset' }).click();
 	const reset = await page.evaluate(() => JSON.parse(localStorage.getItem('fella:workbench-layout:v1')));
@@ -4451,7 +4477,8 @@ test('CommandPalette filters and results use shared buttons without losing searc
 	await expect(result).toContainText('northwind-sales');
 	await result.click();
 	await expect(palette).toHaveCount(0);
-	await expect(page.getByRole('article', { name: 'northwind-sales workspace' })).toBeVisible();
+	await expect(page.getByRole('region', { name: 'Focus' })).toBeVisible();
+	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
 });
 
 test('Investigation data catalog searches and expands large source and unavailable-file lists', async ({ page }) => {
@@ -5237,11 +5264,11 @@ test('Workspace starter prompts use shared outline buttons and submit the select
 
 	const prompts = page.locator('.examples');
 	await expect(prompts).toBeVisible();
-	const prompt = prompts.getByRole('button', { name: 'How did my spending change this year?' });
+	const prompt = prompts.getByRole('button', { name: 'What changed over time in these files?' });
 	await expect(prompt).toHaveAttribute('data-slot', 'button');
 	await prompt.click();
 
-	await expect(page.locator('.msg.user').last()).toContainText('How did my spending change this year?');
+	await expect(page.locator('.msg.user').last()).toContainText('What changed over time in these files?');
 	await expect(page.locator('.msg.assistant').last()).toContainText('Scoped to C:\\FellaFixture\\northwind-sales.');
 });
 

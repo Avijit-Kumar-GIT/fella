@@ -97,6 +97,7 @@
 	let findingRevisionNoteDraft = $state('');
 	let findingQuestionDraft = $state('');
 	let findingEvidenceDraft = $state<string[]>([]);
+	let findingDraftTouched = $state(false);
 	let savingFinding = $state(false);
 	let findingError = $state('');
 	let editingFindingId = $state<string | null>(null);
@@ -246,11 +247,7 @@
 		const proposalEdited = Boolean(pendingProposal && (
 			proposalText !== pendingProposal.text || proposalTarget !== pendingProposal.target
 		));
-		const findingDraftOpen = Boolean(
-			findingClaimDraft.trim() || findingCaveatsDraft.trim() || findingAssumptionsDraft.trim()
-			|| findingRevisionNoteDraft.trim() || findingRevisionTargetDraft || findingQuestionDraft
-			|| findingEvidenceDraft.length
-		);
+		const findingDraftOpen = findingDraftTouched;
 		return dirty || questionsDirty || definitionsDirty || questionLinksDirty || proposalEdited
 			|| Boolean(editingFindingId) || findingDraftOpen;
 	});
@@ -285,6 +282,7 @@
 		findingRevisionNoteDraft = '';
 		findingQuestionDraft = '';
 		findingEvidenceDraft = [];
+		findingDraftTouched = false;
 		findingClaimEditDraft = '';
 		findingCaveatsEditDraft = '';
 		findingAssumptionsEditDraft = '';
@@ -1065,6 +1063,7 @@
 			? preferredQuestion
 			: activeQuestions[0]?.id ?? '';
 		findingEvidenceDraft = findingEvidenceOptions(run).slice(0, 100).map((item) => item.id);
+		findingDraftTouched = false;
 		findingError = '';
 	}
 
@@ -1073,6 +1072,7 @@
 	}
 
 	function selectFindingRevisionTarget(findingId: string): void {
+		findingDraftTouched = true;
 		findingRevisionTargetDraft = findingId;
 		findingRevisionNoteDraft = '';
 		const finding = selected?.findings?.find((item) => item.id === findingId);
@@ -1086,6 +1086,7 @@
 	}
 
 	function toggleFindingEvidence(evidenceId: string, checked: boolean): void {
+		findingDraftTouched = true;
 		const evidence = new Set(findingEvidenceDraft);
 		if (checked) evidence.add(evidenceId);
 		else evidence.delete(evidenceId);
@@ -1128,6 +1129,7 @@
 			acceptInvestigationUpdate(updated);
 			findingRevisionTargetDraft = '';
 			findingRevisionNoteDraft = '';
+			findingDraftTouched = false;
 			findingComparisonSelection = null;
 			findingError = '';
 		} catch (cause) {
@@ -2499,13 +2501,13 @@
 							<p>Capture material limits and assumptions so the conclusion stays interpretable when shared.</p>
 						</header>
 						<label for="finding-claim-{openAnalysisTurn.id}">Claim</label>
-						<Textarea id="finding-claim-{openAnalysisTurn.id}" bind:value={findingClaimDraft} aria-label="Finding claim" class="finding-capture-field" disabled={savingFinding} maxlength={2000} />
+						<Textarea id="finding-claim-{openAnalysisTurn.id}" bind:value={findingClaimDraft} oninput={() => (findingDraftTouched = true)} aria-label="Finding claim" class="finding-capture-field" disabled={savingFinding} maxlength={2000} />
 						<label for="finding-caveats-{openAnalysisTurn.id}">Material caveats <span>(optional, one per line)</span></label>
-						<Textarea id="finding-caveats-{openAnalysisTurn.id}" bind:value={findingCaveatsDraft} aria-label="Finding caveats" class="finding-capture-field finding-notes-field" disabled={savingFinding} />
+						<Textarea id="finding-caveats-{openAnalysisTurn.id}" bind:value={findingCaveatsDraft} oninput={() => (findingDraftTouched = true)} aria-label="Finding caveats" class="finding-capture-field finding-notes-field" disabled={savingFinding} />
 						<label for="finding-assumptions-{openAnalysisTurn.id}">Assumptions <span>(optional, one per line)</span></label>
-						<Textarea id="finding-assumptions-{openAnalysisTurn.id}" bind:value={findingAssumptionsDraft} aria-label="Finding assumptions" class="finding-capture-field finding-notes-field" disabled={savingFinding} />
+						<Textarea id="finding-assumptions-{openAnalysisTurn.id}" bind:value={findingAssumptionsDraft} oninput={() => (findingDraftTouched = true)} aria-label="Finding assumptions" class="finding-capture-field finding-notes-field" disabled={savingFinding} />
 						<label for="finding-question-{openAnalysisTurn.id}">Question this Finding answers</label>
-						<select id="finding-question-{openAnalysisTurn.id}" aria-label="Question for Finding" bind:value={findingQuestionDraft} onchange={() => { findingRevisionTargetDraft = ''; findingRevisionNoteDraft = ''; }} disabled={savingFinding || questionsDirty || !(selected.questions?.length)}>
+						<select id="finding-question-{openAnalysisTurn.id}" aria-label="Question for Finding" bind:value={findingQuestionDraft} onchange={() => { findingDraftTouched = true; findingRevisionTargetDraft = ''; findingRevisionNoteDraft = ''; }} disabled={savingFinding || questionsDirty || !(selected.questions?.length)}>
 							<option value="">Select a Question</option>
 							{#each selected.questions ?? [] as question (question.id)}
 								<option value={question.id}>{question.text}</option>
@@ -2528,7 +2530,7 @@
 						{/if}
 						{#if findingRevisionTargetDraft}
 							<label for="finding-revision-note-{openAnalysisTurn.id}">Why this changed <span>(optional)</span></label>
-							<Textarea id="finding-revision-note-{openAnalysisTurn.id}" bind:value={findingRevisionNoteDraft} aria-label="Finding revision note" class="finding-capture-field finding-notes-field" disabled={savingFinding} />
+							<Textarea id="finding-revision-note-{openAnalysisTurn.id}" bind:value={findingRevisionNoteDraft} oninput={() => (findingDraftTouched = true)} aria-label="Finding revision note" class="finding-capture-field finding-notes-field" disabled={savingFinding} />
 						{/if}
 						<fieldset class="finding-evidence-select" disabled={savingFinding || questionsDirty}>
 							<legend>Supporting evidence from this run</legend>

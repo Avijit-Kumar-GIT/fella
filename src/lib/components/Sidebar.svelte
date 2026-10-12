@@ -324,6 +324,20 @@
 	<section class="repository-section" aria-labelledby="repositories-heading">
 		<div class="section-head">
 			<div class="nav-heading" id="repositories-heading">Workspaces</div>
+			{#if session.activeEnvironmentPanes.length > 1}
+				<Button
+					variant="ghost"
+					size="icon"
+					class="section-action"
+					type="button"
+					aria-label="Open workspace board"
+					aria-pressed={session.workspaceView === 'board'}
+					title="Open workspace board"
+					onclick={() => session.setWorkspaceView('board')}
+				>
+					<Icon name="layout-grid" size={16} />
+				</Button>
+			{/if}
 			<Button
 				variant="ghost"
 				size="icon"
@@ -693,6 +707,10 @@
 	}
 	.section-head :global(.section-action:hover) {
 		background: var(--sidebar-hover);
+		color: var(--text);
+	}
+	.section-head :global(.section-action[aria-pressed='true']) {
+		background: var(--sidebar-selected);
 		color: var(--text);
 	}
 	.repositories {
