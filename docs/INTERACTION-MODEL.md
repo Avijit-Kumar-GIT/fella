@@ -151,6 +151,25 @@ conversation rather than a data source.
 
 ## How the views relate
 
+### Scroll ownership and long content
+
+- Focus owns one keyboard-focusable conversation scroll region. In Workbench,
+  each visible panel scrolls independently; scrolling a result or Investigation
+  must not move another panel.
+- The full Investigation view owns one main vertical scroll region. Dense,
+  bounded lists (for example, a Question's source set) may scroll internally
+  when their item count warrants it; those lists remain keyboard-scrollable,
+  expose a count or continuation cue, and wrap full source names and paths.
+- Long Investigation, run, and source titles wrap instead of disappearing
+  behind ellipses. Large query/output blocks and wide result tables may have
+  their own focusable scroll region where needed. A shortened inactive-pane
+  preview is clearly identified as a preview and opens the complete content
+  when selected.
+
+These rules keep ordinary reading in one predictable scroll area while making
+large, dense data inspectable without clipping or forcing unrelated panes to
+move together.
+
 - A user can ask in Focus without choosing a view first. Fella creates or
   associates the appropriate workspace-scoped Investigation as part of the
   analysis flow. In General, the conversation remains unbound unless the user

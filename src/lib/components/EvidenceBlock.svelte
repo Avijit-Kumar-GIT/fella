@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Button } from '$lib/components/ui/button';
 	import { ipc } from '$lib/ipc';
+	import { handleScrollRegionKeydown } from '$lib/scroll-region';
 	import type { AnalysisTurn, Answer, ContextSection, EvidenceItem } from '$lib/types';
 	import PythonCalculationDetails from './PythonCalculationDetails.svelte';
 	import ReplayStatus from './ReplayStatus.svelte';
@@ -314,7 +315,10 @@
 									<PythonCalculationDetails evidence={e} />
 								{/if}
 								{#if e.sql}
-									{#if !sqlIsAlreadyInInputTrace}<pre class="sql">{e.sql}</pre>{/if}
+									{#if !sqlIsAlreadyInInputTrace}
+										<!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+										<pre class="sql" tabindex="0" onkeydown={handleScrollRegionKeydown}>{e.sql}</pre>
+									{/if}
 								{:else if Object.keys(shownArgs).length > 0}
 									<dl class="args">
 										{#each Object.entries(shownArgs) as [k, v] (k)}
@@ -326,14 +330,15 @@
 								{#if e.python_input_trace}
 									<div class="python-inputs">
 										<div class="input-heading">Data read by this calculation</div>
-						{#if !e.python_input_trace.complete}
-							<div class="input-warning">Input trace is incomplete; not all reads may be inspectable or replayable.</div>
-						{/if}
-						{#if !e.python_input_trace.queries.length}
-							<div class="input-warning">No SQL input was recorded for this calculation.</div>
-						{/if}
+										{#if !e.python_input_trace.complete}
+											<div class="input-warning">Input trace is incomplete; not all reads may be inspectable or replayable.</div>
+										{/if}
+										{#if !e.python_input_trace.queries.length}
+											<div class="input-warning">No SQL input was recorded for this calculation.</div>
+										{/if}
 										{#each e.python_input_trace.queries as query, qi (qi)}
-											<pre class="sql">{query.sql}</pre>
+											<!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+											<pre class="sql" tabindex="0" onkeydown={handleScrollRegionKeydown}>{query.sql}</pre>
 											<div class="input-meta">
 												{query.row_count} rows · {query.columns.join(', ') || 'no columns'}{query.truncated ? ' · result capped' : ''}
 											</div>
@@ -343,10 +348,12 @@
 								{#if !e.error}
 									<div class="result">{e.result_summary}</div>
 									{#if e.output}
-										<pre class="output">{e.output}</pre>
+										<!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+										<pre class="output" tabindex="0" onkeydown={handleScrollRegionKeydown}>{e.output}</pre>
 									{/if}
 									{#if e.columns && e.rows}
-										<div class="tablewrap">
+										<!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+										<div class="tablewrap" role="region" aria-label="Analysis result table. Scroll horizontally to inspect all columns." tabindex="0" onkeydown={handleScrollRegionKeydown}>
 											<table>
 												<thead>
 													<tr>{#each e.columns as c (c)}<th>{c}</th>{/each}</tr>
@@ -478,21 +485,29 @@
 														{#if evidence.tool === 'run_python' || evidence.tool === 'forecast_analysis'}
 															<PythonCalculationDetails {evidence} />
 														{/if}
-														{#if evidence.sql}<pre class="sql">{evidence.sql}</pre>{/if}
+														{#if evidence.sql}
+									<!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+									<pre class="sql" tabindex="0" onkeydown={handleScrollRegionKeydown}>{evidence.sql}</pre>
+														{/if}
 														{#if evidence.python_input_trace?.queries.length}
 															<div class="saved-run-python-inputs">
 																<strong>Data read by this calculation</strong>
 																{#each evidence.python_input_trace.queries as query, queryIndex (`${i}-input-${queryIndex}`)}
-																	<pre class="sql">{query.sql}</pre>
+											<!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+											<pre class="sql" tabindex="0" onkeydown={handleScrollRegionKeydown}>{query.sql}</pre>
 																	<span>{query.row_count} rows · {query.columns.join(', ') || 'no columns'}{query.truncated ? ' · result capped' : ''}</span>
 																{/each}
 															</div>
 														{/if}
-														{#if evidence.output}<pre class="output">{evidence.output}</pre>{/if}
+														{#if evidence.output}
+										<!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+										<pre class="output" tabindex="0" onkeydown={handleScrollRegionKeydown}>{evidence.output}</pre>
+														{/if}
 														{#if columns && rows}
 															<div class="saved-run-table-sample">
 																<strong>Recorded result sample</strong>
-																<pre>{JSON.stringify({ columns, rows: rows.slice(0, 20) }, null, 2)}</pre>
+										<!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+										<pre tabindex="0" onkeydown={handleScrollRegionKeydown}>{JSON.stringify({ columns, rows: rows.slice(0, 20) }, null, 2)}</pre>
 																{#if evidence.row_count != null && rows.length > 20}
 																	<p>Showing 20 of {evidence.row_count} rows.</p>
 																{/if}
@@ -694,11 +709,13 @@
 	   only these overrides are local. */
 	.detail :global(pre.sql) {
 		color: var(--text);
+		overscroll-behavior: contain;
 	}
 	.detail :global(pre.output) {
 		color: var(--text-dim);
 		max-height: 260px;
 		overflow: auto;
+		overscroll-behavior: contain;
 	}
 	.result {
 		color: var(--text-dim);
@@ -706,6 +723,7 @@
 	}
 	.tablewrap {
 		overflow-x: auto;
+		overscroll-behavior: contain;
 		margin-top: 4px;
 	}
 	.table-note {

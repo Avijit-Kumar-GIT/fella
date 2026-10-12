@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Button } from '$lib/components/ui/button';
 	import { session } from '$lib/session.svelte';
+	import { handleScrollRegionKeydown } from '$lib/scroll-region';
 	import type { Investigation, InvestigationSourceSelection } from '$lib/types';
 
 	let {
@@ -116,7 +117,8 @@
 			<p class="question-source-status" role="status">
 				{missingPaths.length} Investigation-selected path{missingPaths.length === 1 ? ' is' : 's are'} not present in the current catalog and cannot be used until cataloged.
 			</p>
-			<ul class="question-source-paths" aria-label="Investigation paths missing from the current catalog">
+			<!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+			<ul class="question-source-paths" aria-label="Investigation paths missing from the current catalog" tabindex="0" onkeydown={handleScrollRegionKeydown}>
 				{#each missingPaths as path (path)}<li>{path}</li>{/each}
 			</ul>
 		{/if}
@@ -125,7 +127,8 @@
 				<p class="question-source-status" role="status">
 					{missingPaths.length} selected path{missingPaths.length === 1 ? ' is' : 's are'} not present in the current catalog and cannot be used until cataloged. Check unavailable-file details for a skip reason.
 				</p>
-				<ul class="question-source-paths" aria-label="Question paths missing from the current catalog">
+				<!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+				<ul class="question-source-paths" aria-label="Question paths missing from the current catalog" tabindex="0" onkeydown={handleScrollRegionKeydown}>
 					{#each missingPaths as path (path)}<li>{path}</li>{/each}
 				</ul>
 			{/if}
@@ -133,7 +136,8 @@
 				<p class="question-source-status" role="status">
 					{outOfScopePaths.length} selected source{outOfScopePaths.length === 1 ? ' is' : 's are'} in the catalog but outside this Investigation’s scope.
 				</p>
-				<ul class="question-source-paths" aria-label="Question sources outside the Investigation scope">
+				<!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+				<ul class="question-source-paths" aria-label="Question sources outside the Investigation scope" tabindex="0" onkeydown={handleScrollRegionKeydown}>
 					{#each outOfScopePaths as path (path)}<li>{path}</li>{/each}
 				</ul>
 			{/if}
@@ -143,7 +147,11 @@
 				</Button>
 			{/if}
 			{#if availablePaths.length}
-				<ul class="question-source-list" aria-label={`Sources for Question ${questionId}`}>
+				{#if availablePaths.length > 5}
+					<p class="question-source-list-hint">{availablePaths.length} sources · scroll this list to review them all</p>
+				{/if}
+				<!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+				<ul class="question-source-list" aria-label={`Sources for Question ${questionId}`} tabindex="0" onkeydown={handleScrollRegionKeydown}>
 					{#each availablePaths as path (path)}
 						<li>
 							<label>
@@ -174,10 +182,11 @@
 	.question-source-scope summary { width: fit-content; cursor: pointer; }
 	.question-source-panel { display: grid; gap: var(--space-2); margin-top: var(--space-2); padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); }
 	.question-source-choice, .question-source-list label { display: flex; align-items: center; gap: var(--space-2); }
-	.question-source-list { display: grid; gap: var(--space-1); max-height: 180px; overflow: auto; margin: 0; padding: 0 0 0 var(--space-5); list-style: none; }
+	.question-source-list { display: grid; gap: var(--space-1); max-height: 180px; overflow: auto; overscroll-behavior: contain; margin: 0; padding: 0 0 0 var(--space-5); list-style: none; }
 	.question-source-list label { min-width: 0; }
-	.question-source-list span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.question-source-list label > span { min-width: 0; overflow-wrap: anywhere; }
+	.question-source-list-hint { margin: 0; color: var(--text-faint); font-size: 10px; }
 	.question-source-note { margin: 0; }
 	.question-source-status { margin: 0; color: var(--text-dim); line-height: 1.45; }
-	.question-source-paths { display: grid; gap: var(--space-1); max-height: 120px; overflow: auto; margin: calc(var(--space-2) * -1) 0 0; padding-left: var(--space-5); color: var(--text-faint); overflow-wrap: anywhere; }
+	.question-source-paths { display: grid; gap: var(--space-1); max-height: 120px; overflow: auto; overscroll-behavior: contain; margin: calc(var(--space-2) * -1) 0 0; padding-left: var(--space-5); color: var(--text-faint); overflow-wrap: anywhere; }
 </style>

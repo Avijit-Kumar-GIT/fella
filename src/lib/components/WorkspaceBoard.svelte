@@ -420,13 +420,13 @@
 		background: var(--pane-head);
 		cursor: grab;
 	}
-	.tile-head-row { display: flex; align-items: center; gap: 6px; min-width: 0; min-height: 25px; }
+	.tile-head-row { display: flex; align-items: flex-start; gap: 6px; min-width: 0; min-height: 25px; }
 	.pane-state { flex: none; padding: 2px 6px; border-radius: 999px; background: var(--bg-inset); color: var(--text-faint); font-size: 10px; line-height: 1.2; white-space: nowrap; }
 	.pane-state.active { background: color-mix(in srgb, var(--brand) 11%, var(--pane-head)); color: var(--brand); font-weight: 600; }
-	.tile-investigation-summary { display: flex; align-items: baseline; gap: 5px; min-width: 0; overflow: hidden; color: var(--text-faint); font-size: 10px; line-height: 1.25; white-space: nowrap; }
+	.tile-investigation-summary { display: flex; align-items: baseline; flex-wrap: wrap; gap: 3px 5px; min-width: 0; color: var(--text-faint); font-size: 10px; line-height: 1.25; }
 	.tile-investigation-summary .summary-kind { flex: none; }
-	.tile-investigation-summary strong { min-width: 0; overflow: hidden; color: var(--text-dim); font-size: inherit; font-weight: 550; text-overflow: ellipsis; }
-	.tile-investigation-summary .summary-status { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+	.tile-investigation-summary strong { min-width: 0; color: var(--text-dim); font-size: inherit; font-weight: 550; overflow-wrap: anywhere; }
+	.tile-investigation-summary .summary-status { min-width: 0; overflow-wrap: anywhere; }
 	.tile-investigation-summary .summary-status::before { content: '·'; margin-right: 5px; }
 	.workspace-tile.focused .tile-head {
 		background: var(--pane-head);
@@ -454,7 +454,7 @@
 		white-space: normal;
 	}
 	.workspace-tile.focused .tile-head :global(.tile-focus) { color: var(--text); }
-	.tile-head :global(.tile-focus > span) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.tile-head :global(.tile-focus > span) { min-width: 0; overflow-wrap: anywhere; }
 	.tile-head :global(.tile-focus > svg) { flex: none; color: var(--text-faint); }
 	.workspace-tile.focused .tile-head :global(.tile-focus > svg) { color: var(--brand-icon); }
 	.tile-head :global(.tile-close) {

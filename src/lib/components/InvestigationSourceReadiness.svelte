@@ -571,7 +571,7 @@
 	.source-option.disabled { opacity: .72; }
 	.source-mark { display: inline-flex; flex: none; color: var(--text-dim); }
 	.source-main { display: grid; min-width: 0; flex: 1; gap: 2px; }
-	.source-main strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-xs); font-weight: 600; }
+	.source-main strong { font-size: var(--fs-xs); font-weight: 600; overflow-wrap: anywhere; }
 	.source-main small { color: var(--text-faint); font-size: 11px; }
 	.source-readiness-label, .skipped-status { flex: none; color: var(--text-dim); font-size: 11px; }
 	.source-readiness-label[data-state='ready'] { color: var(--success, #27845a); }
@@ -604,7 +604,7 @@
 	.skipped-count { margin: var(--space-2) 0 0; color: var(--text-faint); font-size: 11px; }
 	.skipped-sources ul { display: grid; gap: var(--space-2); margin: var(--space-2) 0 0; padding: 0; list-style: none; }
 	.skipped-sources li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px var(--space-3); padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
-	.skipped-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+	.skipped-name { min-width: 0; color: var(--text); overflow-wrap: anywhere; }
 	.skipped-sources li small { grid-column: 1 / -1; color: var(--text-faint); overflow-wrap: anywhere; }
 	@media (max-width: 620px) {
 		.readiness-heading { flex-direction: column; }

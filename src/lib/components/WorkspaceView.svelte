@@ -69,8 +69,13 @@
 		color: var(--text-faint);
 	}
 	:global(.workspace-content) {
+		display: flex;
+		flex-direction: column;
 		flex: 1;
 		min-width: 0;
 		min-height: 0;
+	}
+	:global(.workspace-content[hidden]) {
+		display: none;
 	}
 </style>

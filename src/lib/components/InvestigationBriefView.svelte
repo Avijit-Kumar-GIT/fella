@@ -10,6 +10,7 @@
 	import { analysisTurnIdsAfterSourceMessage } from '$lib/investigation-runs';
 	import { buildInvestigationReport, investigationReportFilename, type InvestigationReportRuns } from '$lib/investigation-report';
 	import { renderMarkdown } from '$lib/markdown';
+	import { handleScrollRegionKeydown } from '$lib/scroll-region';
 	import { runStateLabel } from '$lib/run-progress';
 	import { isRenderableChartEvidence } from '$lib/workbench';
 	import type {
@@ -1511,7 +1512,8 @@
 	}
 </script>
 
-<section class="investigation-page" aria-labelledby="investigation-title">
+<!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+<section class="investigation-page" aria-labelledby="investigation-title" tabindex="0" onkeydown={handleScrollRegionKeydown}>
 	<header class="page-head">
 		<div>
 			<h1 id="investigation-title">Investigation</h1>
@@ -1560,7 +1562,8 @@
 		</div>
 	{:else}
 		<div class="investigation-layout">
-			<nav class="investigation-list" aria-label="Workspace investigations">
+			<!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+			<nav class="investigation-list" aria-label="Workspace investigations" tabindex="0" onkeydown={handleScrollRegionKeydown}>
 				{#each investigations as item (item.id)}
 					<button
 						class="investigation-choice"
@@ -1578,6 +1581,9 @@
 						<small class="investigation-coverage" data-investigation-coverage={item.id}>{investigationCoverageSummary(item)}</small>
 					</button>
 				{/each}
+				{#if investigations.length > 2}
+					<p class="investigation-list-hint">Scroll to browse all {investigations.length} Investigations.</p>
+				{/if}
 			</nav>
 
 			{#if selected}
@@ -2659,6 +2665,7 @@
 		margin: 0 auto;
 		padding: var(--space-6) var(--pad);
 		overflow: auto;
+		overscroll-behavior: contain;
 	}
 	.page-head,
 	.editor-heading {
@@ -2735,13 +2742,14 @@
 	}
 	.investigation-choice:hover { background: var(--bg-inset); }
 	.investigation-choice.selected { border-color: var(--border); background: var(--bg-inset); }
-	.investigation-choice-heading { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: var(--space-2); }
-	.investigation-choice-title { min-width: 0; overflow: hidden; color: var(--text); text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-sm); font-weight: 600; }
+	.investigation-choice-heading { display: flex; min-width: 0; align-items: flex-start; justify-content: space-between; gap: var(--space-2); }
+	.investigation-choice-title { min-width: 0; color: var(--text); overflow-wrap: anywhere; font-size: var(--fs-sm); font-weight: 600; }
 	.investigation-status { flex: none; padding: 2px 6px; border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-dim); font-size: 10px; font-weight: 600; line-height: 1.3; }
 	.investigation-status[data-status='complete'] { border-color: color-mix(in srgb, var(--success, #16803c) 28%, var(--border)); color: var(--success, #16803c); }
 	.investigation-status[data-status='archived'] { color: var(--text-faint); }
 	.investigation-choice small, .status { color: var(--text-faint); font-size: var(--fs-xs); }
 	.investigation-coverage { white-space: normal; line-height: 1.35; }
+	.investigation-list-hint { display: none; margin: 2px 10px 6px; color: var(--text-faint); font-size: 10px; }
 	.error { margin: 0 0 var(--space-3); color: var(--danger, #b42318); font-size: var(--fs-sm); overflow-wrap: anywhere; }
 	.brief-editor { min-width: 0; border-block: 1px solid var(--border); }
 	.editor-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); padding: var(--space-3) 0; border-bottom: 1px solid var(--border); }
@@ -2822,7 +2830,7 @@
 	.question-coverage-message { margin: 0; }
 	.question-coverage-review { min-width: 0; }
 	.question-coverage-review > summary { width: fit-content; color: var(--text-dim); font-size: var(--fs-xs); cursor: pointer; }
-	.question-coverage-review ul { display: grid; max-height: 240px; gap: var(--space-1); overflow: auto; margin: var(--space-2) 0 0; padding: 0; list-style: none; }
+	.question-coverage-review ul { display: grid; max-height: 240px; gap: var(--space-1); overflow: auto; overscroll-behavior: contain; margin: var(--space-2) 0 0; padding: 0; list-style: none; }
 	.question-coverage-review button { display: grid; width: 100%; min-width: 0; justify-items: start; gap: 2px; padding: var(--space-2); border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent; color: var(--text); text-align: left; cursor: pointer; }
 	.question-coverage-review button:hover { border-color: var(--border); background: var(--bg); }
 	.coverage-question-status { color: var(--warn); font-size: 10px; font-weight: 650; }
@@ -2898,13 +2906,13 @@
 	.analysis-runs-heading p, .analysis-run-detail > header p { margin: var(--space-1) 0 0; color: var(--text-dim); font-size: var(--fs-xs); }
 	.analysis-runs-heading > span { color: var(--text-faint); font-size: var(--fs-xs); white-space: nowrap; }
 	.analysis-run-list { display: grid; gap: var(--space-1); margin: 0; padding: 0; list-style: none; }
-	.analysis-run-link { display: flex; width: 100%; min-width: 0; align-items: center; gap: var(--space-3); padding: var(--space-2) var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg); color: var(--text); text-align: left; cursor: pointer; }
+	.analysis-run-link { display: flex; width: 100%; min-width: 0; align-items: flex-start; gap: var(--space-3); padding: var(--space-2) var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg); color: var(--text); text-align: left; cursor: pointer; }
 	.analysis-run-link:hover, .analysis-run-link[aria-current='true'] { background: var(--bg-inset); }
 	.analysis-run-number { flex: none; color: var(--text-faint); font-size: var(--fs-xs); }
 	.analysis-run-copy { display: grid; min-width: 0; flex: 1; gap: 2px; }
-	.analysis-run-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-sm); font-weight: 600; }
+	.analysis-run-copy strong { font-size: var(--fs-sm); font-weight: 600; overflow-wrap: anywhere; }
 	.analysis-run-copy small { color: var(--text-faint); font-size: var(--fs-xs); }
-	.analysis-run-link > :global(svg) { flex: none; color: var(--text-faint); }
+	.analysis-run-link > :global(svg) { flex: none; margin-top: 3px; color: var(--text-faint); }
 	.analysis-runs-empty { margin: 0; color: var(--text-faint); font-size: var(--fs-xs); }
 	.analysis-run-detail { display: grid; gap: var(--space-3); min-width: 0; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-inset); }
 	.analysis-run-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2) var(--space-4); margin: 0; }
@@ -2999,7 +3007,8 @@
 	.empty-state p { color: var(--text-dim); }
 	@media (max-width: 720px) {
 		.investigation-layout { grid-template-columns: 1fr; gap: var(--space-4); }
-		.investigation-list { max-height: 180px; overflow: auto; }
+		.investigation-list { max-height: 180px; overflow: auto; overscroll-behavior: contain; }
+		.investigation-list-hint { display: block; }
 		.brief-summary dl { grid-template-columns: 1fr; }
 		.analysis-run-source-provenance { grid-template-columns: 1fr; }
 		.analysis-run-source-state .analysis-run-context-facts > div { grid-template-columns: 1fr; gap: 2px; }
@@ -3012,6 +3021,7 @@
 		.page-head-actions { width: 100%; justify-content: flex-start; flex-wrap: wrap; }
 		.investigation-document-heading { align-items: flex-start; flex-direction: column; }
 		.investigation-layout { grid-template-columns: minmax(0, 1fr); gap: var(--space-4); }
-		.investigation-list { max-height: 160px; overflow: auto; }
+		.investigation-list { max-height: 160px; overflow: auto; overscroll-behavior: contain; }
+		.investigation-list-hint { display: block; }
 	}
 </style>

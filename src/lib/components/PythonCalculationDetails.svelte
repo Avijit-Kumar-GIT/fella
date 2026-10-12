@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { handleScrollRegionKeydown } from '$lib/scroll-region';
 	import type { EvidenceItem } from '$lib/types';
 
 	let { evidence }: { evidence: EvidenceItem } = $props();
@@ -36,7 +37,8 @@
 	</div>
 	{#if code}
 		<div class="code-caption">Calculation code</div>
-		<pre class="python-code">{code}</pre>
+		<!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+		<pre class="python-code" tabindex="0" onkeydown={handleScrollRegionKeydown}>{code}</pre>
 	{:else if evidence.tool === 'forecast_analysis'}
 		<div class="python-calls">
 			{#each forecastCalls(evidence) as call (call)}<code>{call}</code>{/each}
@@ -73,6 +75,7 @@
 		margin: 4px 0 0;
 		padding: 8px 10px;
 		overflow: auto;
+		overscroll-behavior: contain;
 		color: var(--text);
 		font-family: var(--mono);
 		font-size: var(--fs-xs);

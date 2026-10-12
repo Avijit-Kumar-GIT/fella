@@ -5,6 +5,7 @@
 	import { session } from '$lib/session.svelte';
 	import { openExternal } from '$lib/ipc';
 	import { fadeQuick } from '$lib/motion';
+	import { handleScrollRegionKeydown } from '$lib/scroll-region';
 	import Icon from './Icon.svelte';
 	import Logo from './Logo.svelte';
 	import Message from './Message.svelte';
@@ -131,10 +132,13 @@
 <!-- role="log" for structure, but not a live region the answer streams in
      token by token, which would make a screen reader read every fragment. The
      visually-hidden status line in +page.svelte does the announcing instead. -->
+<!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
 <div
 	class="transcript"
 	class:focus={session.focus}
 	bind:this={scroller}
+	tabindex="0"
+	onkeydown={handleScrollRegionKeydown}
 	onscroll={onScroll}
 	role="log"
 	aria-label="conversation"
@@ -350,6 +354,7 @@
 	.transcript {
 		flex: 1;
 		overflow-y: auto;
+		overscroll-behavior: contain;
 		padding: var(--space-6) var(--pad) var(--space-6);
 		min-height: 0;
 		transition: padding var(--dur) var(--ease);

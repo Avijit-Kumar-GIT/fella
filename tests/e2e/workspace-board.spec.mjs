@@ -232,6 +232,16 @@ async function installDesktopMock(
 				if (record.id === id) investigations.set(key, { ...record, analysis_turn_ids: [...runIds] });
 			}
 		};
+		window.__workspaceUpdateInvestigation = (id, update) => {
+			for (const [key, record] of investigations) {
+				if (record.id !== id) continue;
+				const updated = { ...record, ...update };
+				investigations.set(key, updated);
+				for (const finding of updated.findings ?? []) findingRecords.set(finding.id, finding);
+				return updated;
+			}
+			throw new Error(`Unknown Investigation: ${id}`);
+		};
 		window.__workspaceOpenCalls = [];
 		window.__deletedConversationIds = deletedConversationIds;
 		window.__deletedConversationWorkspaces = deletedConversationWorkspaces;
@@ -866,6 +876,105 @@ test('workspace board labels its message target and keeps in-flight work in its 
 	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
 	await expect(page.getByTestId('composer-scope-target')).toHaveText('Message target northwind-sales');
 	await expect(page.getByRole('log', { name: 'conversation' }).getByText('Scoped to C:\\FellaFixture\\northwind-sales.', { exact: true })).toBeVisible();
+});
+
+test('long Investigation content remains reachable by keyboard and pointer scrolling', async ({ page }) => {
+	const workspacePath = folders[0].path;
+	const longSources = Array.from({ length: 12 }, (_, index) => {
+		const name = `regional_sales_customer_cohort_retention_and_conversion_snapshot_2026_q4_segment_${String(index + 1).padStart(2, '0')}.csv`;
+		return { name, path: `${workspacePath}\\${name}`, kind: 'csv', view: `sales_segment_${index + 1}`, row_count: 24, size_bytes: 2048, mtime: 1 };
+	});
+	const fixtureFolders = folders.map((folder) => folder.path === workspacePath
+		? { ...folder, catalog: { ...folder.catalog, sources: [...folder.catalog.sources, ...longSources] } }
+		: folder);
+	const findings = Array.from({ length: 18 }, (_, index) => ({
+		id: `finding-long-${index + 1}`,
+		question_id: 'placeholder',
+		analysis_turn_id: 'fixture-long-run',
+		evidence_ids: [],
+		claim: `Finding ${index + 1}: The regional customer cohort analysis retains its complete descriptive claim and supporting context when the Investigation contains many results.`,
+		caveats: [],
+		assumptions: [],
+		revision: 1,
+		revisions: []
+	}));
+	const longTitle = 'Regional sales, retention, and conversion analysis across customer cohorts';
+	await installDesktopMock(page, { fixtureFolders });
+	await page.setViewportSize({ width: 1120, height: 760 });
+	await page.goto('/');
+	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
+	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill('Explain regional retention and conversion');
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
+	const investigationId = await page.evaluate(() => window.__workspaceInvestigations()[0].id);
+	const rootQuestionId = await page.evaluate(() => window.__workspaceInvestigations()[0].questions[0].id);
+	await page.evaluate(({ id, rootQuestionId, longTitle, findings }) => {
+		window.__workspaceUpdateInvestigation(id, {
+			title: longTitle,
+			findings: findings.map((finding) => ({ ...finding, question_id: rootQuestionId }))
+		});
+	}, { id: investigationId, rootQuestionId, longTitle, findings });
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	await expect(page.locator('.editor-heading h2')).toHaveText(longTitle);
+
+	const scrollRegion = page.locator('.investigation-page');
+	// Scope to the visible Key Findings inventory; the claim is also repeated in collapsed analysis history.
+	const resultsInventory = page.getByRole('region', { name: 'Current Investigation results' }).getByRole('region', { name: 'Key Findings' });
+	const lastFinding = resultsInventory.getByRole('article', { name: `Finding ${findings.length}` }).getByText(findings.at(-1).claim, { exact: true });
+	const pageScrollBefore = await scrollRegion.evaluate((element) => element.scrollHeight - element.clientHeight);
+	expect(pageScrollBefore).toBeGreaterThan(0);
+	await scrollRegion.focus();
+	await scrollRegion.press('End');
+	const pageScrollAfterEnd = await scrollRegion.evaluate((element) => ({
+		position: element.scrollTop,
+		maximum: element.scrollHeight - element.clientHeight,
+		bottom: element.getBoundingClientRect().bottom,
+		lastFindingBottom: element.querySelector('.results-findings .results-finding:last-child').getBoundingClientRect().bottom
+	}));
+	expect(pageScrollAfterEnd.position).toBeGreaterThan(0);
+	expect(pageScrollAfterEnd.position).toBeGreaterThanOrEqual(pageScrollAfterEnd.maximum - 2);
+	expect(pageScrollAfterEnd.lastFindingBottom).toBeLessThanOrEqual(pageScrollAfterEnd.bottom);
+	await expect(lastFinding).toBeVisible();
+	await scrollRegion.press('Home');
+	const pageScrollAtTop = await scrollRegion.evaluate((element) => element.scrollTop);
+	const scrollBounds = await scrollRegion.boundingBox();
+	expect(scrollBounds).not.toBeNull();
+	await page.mouse.move(scrollBounds.x + scrollBounds.width / 2, scrollBounds.y + scrollBounds.height / 2);
+	await page.mouse.wheel(0, 400);
+	await expect.poll(() => scrollRegion.evaluate((element) => element.scrollTop)).toBeGreaterThan(pageScrollAtTop);
+
+	await workspacePresetButton(page, 'Workbench').click();
+	const workbenchScrollRegion = page.locator('.workspace-preset-panel[data-panel-id="investigation"] .investigation-page');
+	await expect(workbenchScrollRegion).toBeVisible();
+	const workbenchScrollExtent = await workbenchScrollRegion.evaluate((element) => element.scrollHeight - element.clientHeight);
+	expect(workbenchScrollExtent).toBeGreaterThan(0);
+	await workbenchScrollRegion.focus();
+	await workbenchScrollRegion.press('End');
+	await expect.poll(() => workbenchScrollRegion.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+	const workbenchResults = workbenchScrollRegion.getByRole('region', { name: 'Current Investigation results' }).getByRole('region', { name: 'Key Findings' });
+	await expect(workbenchResults.getByRole('article', { name: `Finding ${findings.length}` }).getByText(findings.at(-1).claim, { exact: true })).toBeVisible();
+
+	const questionCard = page.locator('.question-item').first();
+	await questionCard.locator('.question-source-scope > summary').click();
+	await questionCard.getByLabel('Use a specific source set').check();
+	const sourceList = questionCard.locator('.question-source-list');
+	await expect(sourceList).toBeVisible();
+	await expect(questionCard).toContainText('13 sources · scroll this list to review them all');
+	const finalSourceName = longSources.at(-1).name;
+	await sourceList.focus();
+	await sourceList.press('End');
+	const sourceListPosition = await sourceList.evaluate((element) => ({
+		position: element.scrollTop,
+		maximum: element.scrollHeight - element.clientHeight,
+		bottom: element.getBoundingClientRect().bottom,
+		lastItemBottom: element.lastElementChild.getBoundingClientRect().bottom
+	}));
+	expect(sourceListPosition.position).toBeGreaterThan(0);
+	expect(sourceListPosition.position).toBeGreaterThanOrEqual(sourceListPosition.maximum - 2);
+	expect(sourceListPosition.lastItemBottom).toBeLessThanOrEqual(sourceListPosition.bottom);
+	await expect(sourceList.getByText(finalSourceName, { exact: true })).toBeVisible();
+	expect(await sourceList.getByText(finalSourceName, { exact: true }).evaluate((element) => getComputedStyle(element).whiteSpace)).not.toBe('nowrap');
 });
 
 test('environments compose General and repository panes while conversations retain their original scope', async ({ page }) => {
