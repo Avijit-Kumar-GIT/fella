@@ -1123,6 +1123,64 @@ test('Workbench composes curated panels while keeping Investigation scope and co
 	expect(resetLayout.panels.find(({ id }) => id === 'companion')).toMatchObject({ visible: null, group: 'analysis', order: 1 });
 });
 
+test('Workbench panes resize accessibly, respect minimum widths, persist, and reset independently of analysis', async ({ page }) => {
+	await page.setViewportSize({ width: 1720, height: 960 });
+	await installDesktopMock(page);
+	await page.goto('/');
+	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
+	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill('Review weekly sales performance');
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
+	const investigationId = await page.evaluate(() => window.__workspaceInvestigations()[0].id);
+	await workspacePresetButton(page, 'Workbench').click();
+
+	const splitter = page.getByRole('separator', { name: 'Resize Conversation and Analysis panes' });
+	await expect(splitter).toBeVisible();
+	await expect(splitter).toHaveAttribute('aria-valuemin', '32');
+	await expect(splitter).toHaveAttribute('aria-valuemax', '60');
+	const conversation = page.locator('[data-panel-id="conversation"]');
+	const analysis = page.locator('[data-panel-id="investigation"]');
+	const initialWidth = (await conversation.boundingBox()).width;
+	const initialShare = Number(await splitter.getAttribute('aria-valuenow'));
+
+	await splitter.focus();
+	await splitter.press('ArrowRight');
+	await expect(splitter).toHaveAttribute('aria-valuenow', String(initialShare + 2));
+	await expect.poll(async () => (await conversation.boundingBox()).width).toBeGreaterThan(initialWidth);
+	await expect.poll(async () => {
+		const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('fella:workbench-layout:v1')));
+		return saved.conversationShare;
+	}).toBe(initialShare + 2);
+
+	const handle = await splitter.boundingBox();
+	await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
+	await page.mouse.down();
+	await page.mouse.move(handle.x + handle.width / 2 + 72, handle.y + handle.height / 2, { steps: 4 });
+	await page.mouse.up();
+	await expect.poll(async () => Number(await splitter.getAttribute('aria-valuenow'))).toBeGreaterThan(initialShare + 2);
+	await splitter.press('End');
+	await expect(splitter).toHaveAttribute('aria-valuenow', '60');
+	const conversationWidth = (await conversation.boundingBox()).width;
+	const analysisWidth = (await analysis.boundingBox()).width;
+	expect(conversationWidth).toBeGreaterThanOrEqual(320);
+	expect(analysisWidth).toBeGreaterThanOrEqual(420);
+	const afterResize = await page.evaluate(() => window.__workspaceInvestigations()[0].id);
+	expect(afterResize).toBe(investigationId);
+
+	await page.reload();
+	const restored = await page.evaluate(() => JSON.parse(localStorage.getItem('fella:workbench-layout:v1')));
+	expect(restored.conversationShare).toBe(60);
+	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await workspacePresetButton(page, 'Workbench').click();
+	await expect(page.getByRole('separator', { name: 'Resize Conversation and Analysis panes' })).toHaveAttribute('aria-valuenow', '60');
+	await page.locator('.workbench-panel-picker > summary').click();
+	await page.locator('.panel-picker-popover').getByRole('button', { name: 'Reset' }).click();
+	const reset = await page.evaluate(() => JSON.parse(localStorage.getItem('fella:workbench-layout:v1')));
+	expect(reset.conversationShare).toBe(46);
+	await expect(page.getByRole('separator', { name: 'Resize Conversation and Analysis panes' })).toHaveAttribute('aria-valuenow', '46');
+});
+
 test('an analyst can edit the main Question and linked subquestions without rewriting the request', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');

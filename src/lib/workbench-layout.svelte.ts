@@ -18,6 +18,9 @@ export interface WorkbenchPanelPlacement extends WorkbenchPanelPreference {
 }
 
 const STORAGE_KEY = 'fella:workbench-layout:v1';
+const DEFAULT_CONVERSATION_SHARE = 46;
+const MIN_CONVERSATION_SHARE = 32;
+const MAX_CONVERSATION_SHARE = 60;
 
 export const WORKBENCH_GROUPS: { id: WorkbenchPanelGroup; label: string }[] = [
 	{ id: 'conversation', label: 'Conversation' },
@@ -78,6 +81,19 @@ function readLayout(): WorkbenchPanelPreference[] {
 	}
 }
 
+function readConversationShare(): number {
+	if (typeof localStorage === 'undefined') return DEFAULT_CONVERSATION_SHARE;
+	try {
+		const parsed: unknown = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? 'null');
+		if (!parsed || typeof parsed !== 'object') return DEFAULT_CONVERSATION_SHARE;
+		const value = (parsed as { conversationShare?: unknown }).conversationShare;
+		if (typeof value !== 'number' || !Number.isFinite(value)) return DEFAULT_CONVERSATION_SHARE;
+		return Math.max(MIN_CONVERSATION_SHARE, Math.min(MAX_CONVERSATION_SHARE, value));
+	} catch {
+		return DEFAULT_CONVERSATION_SHARE;
+	}
+}
+
 function panelIsVisible(panel: WorkbenchPanelPreference, hasCompanion: boolean): boolean {
 	return panel.visible ?? (panel.id === 'companion' && hasCompanion);
 }
@@ -102,6 +118,7 @@ function normalizeLayout(preferences: WorkbenchPanelPreference[]): WorkbenchPane
 
 class WorkbenchLayout {
 	panels = $state<WorkbenchPanelPreference[]>(readLayout());
+	conversationShare = $state<number>(readConversationShare());
 
 	placements(hasCompanion: boolean): WorkbenchPanelPlacement[] {
 		const sorted = [...this.panels].sort((a, b) =>
@@ -134,7 +151,7 @@ class WorkbenchLayout {
 
 	gridColumn(group: WorkbenchPanelGroup, hasCompanion: boolean): number {
 		if (group === 'conversation') return 1;
-		return this.panels.some((panel) => panel.group === 'conversation' && panelIsVisible(panel, hasCompanion)) ? 2 : 1;
+		return this.panels.some((panel) => panel.group === 'conversation' && panelIsVisible(panel, hasCompanion)) ? 3 : 1;
 	}
 
 	rowCount(hasCompanion: boolean): number {
@@ -192,7 +209,14 @@ class WorkbenchLayout {
 
 	reset(): void {
 		this.panels = copyDefaults();
+		this.conversationShare = DEFAULT_CONVERSATION_SHARE;
 		this.persist();
+	}
+
+	setConversationShare(value: number, persist = true): void {
+		if (!Number.isFinite(value)) return;
+		this.conversationShare = Math.max(MIN_CONVERSATION_SHARE, Math.min(MAX_CONVERSATION_SHARE, value));
+		if (persist) this.persist();
 	}
 
 	private update(id: WorkbenchPanelId, patch: Partial<WorkbenchPanelPreference>): void {
@@ -202,7 +226,11 @@ class WorkbenchLayout {
 
 	private persist(): void {
 		try {
-			localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 1, panels: this.panels }));
+			localStorage.setItem(STORAGE_KEY, JSON.stringify({
+				version: 1,
+				panels: this.panels,
+				conversationShare: this.conversationShare
+			}));
 		} catch {
 			/* The layout remains usable for this session if storage is unavailable. */
 		}

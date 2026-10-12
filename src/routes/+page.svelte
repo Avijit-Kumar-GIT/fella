@@ -13,6 +13,7 @@
 	import Transcript from '$lib/components/Transcript.svelte';
 	import WorkspaceBoard from '$lib/components/WorkspaceBoard.svelte';
 	import WorkspaceContextBar from '$lib/components/WorkspaceContextBar.svelte';
+	import WorkbenchPaneSplitter from '$lib/components/WorkbenchPaneSplitter.svelte';
 	import WorkspaceView from '$lib/components/WorkspaceView.svelte';
 	import { dispatch, loadStartupCatalog, openFolder, openRepository, stop } from '$lib/commands';
 	import { ipc, isDesktop } from '$lib/ipc';
@@ -364,7 +365,7 @@
 							data-has-companion={hasCompanion}
 							data-workbench-visible-count={workbenchLayout.visibleCount(hasCompanion)}
 							data-workbench-group-count={workbenchLayout.visibleGroupCount(hasCompanion)}
-							style={`--workbench-row-count:${workbenchLayout.rowCount(hasCompanion)};--workbench-visible-count:${workbenchLayout.visibleCount(hasCompanion)}`}
+							style={`--workbench-row-count:${workbenchLayout.rowCount(hasCompanion)};--workbench-visible-count:${workbenchLayout.visibleCount(hasCompanion)};--workbench-conversation-share:${workbenchLayout.conversationShare}%`}
 						>
 							{#each workbenchLayout.placements(hasCompanion) as panel (panel.id)}
 								{@const panelDefinition = WORKBENCH_PANELS.find((item) => item.id === panel.id)!}
@@ -400,6 +401,12 @@
 									</div>
 								</section>
 							{/each}
+							{#if session.workspaceLayoutPreset === 'workbench' && workbenchLayout.visibleGroupCount(hasCompanion) > 1}
+								<WorkbenchPaneSplitter
+									bind:value={workbenchLayout.conversationShare}
+									oncommit={(value) => workbenchLayout.setConversationShare(value)}
+								/>
+							{/if}
 						</div>
 					{:else}
 						<div class="ask-workbench">
@@ -556,7 +563,7 @@
 		border-right: 1px solid var(--border);
 	}
 	.workspace-preset-layout[data-workspace-preset='workbench'] {
-		grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr);
+		grid-template-columns: minmax(320px, min(var(--workbench-conversation-share), 60%)) 10px minmax(420px, 1fr);
 		grid-template-rows: repeat(var(--workbench-row-count), minmax(0, 1fr));
 	}
 	.workspace-preset-layout[data-workspace-preset='workbench'][data-workbench-group-count='1'] {
@@ -565,9 +572,6 @@
 	.workspace-preset-layout[data-workspace-preset='workbench'] .workspace-preset-panel {
 		grid-column: var(--panel-column);
 		grid-row: var(--panel-row) / span var(--panel-rowspan);
-	}
-	.workspace-preset-layout[data-workspace-preset='workbench'] .workspace-preset-conversation {
-		border-right: 1px solid var(--border);
 	}
 	.workspace-panel-group {
 		flex: none;
@@ -612,6 +616,9 @@
 	@container workspace-area (max-width: 1120px) {
 		.workspace-preset-layout[data-workspace-preset='workbench'] {
 			grid-template-columns: minmax(0, 1fr);
+		}
+		.workspace-preset-layout[data-workspace-preset='workbench'] :global(.workbench-pane-splitter) {
+			display: none;
 		}
 		.workspace-preset-layout[data-workspace-preset='workbench'][data-workbench-visible-count='1'] {
 			grid-template-rows: minmax(0, 1fr);
