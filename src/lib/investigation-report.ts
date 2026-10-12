@@ -1,9 +1,12 @@
 import type {
 	AnalysisTurn,
+	EvidenceItem,
 	Investigation,
 	InvestigationFinding,
-	InvestigationQuestion
+	InvestigationQuestion,
+	VisualizationSpec
 } from '$lib/types';
+import { isRenderableChartEvidence } from '$lib/workbench';
 
 export type InvestigationReportRuns = Record<string, AnalysisTurn | null | undefined>;
 
@@ -74,6 +77,99 @@ function requestedSourceScope(run: AnalysisTurn): string {
 	if (selection.mode === 'all_sources') return 'All sources in the Investigation scope.';
 	const count = selection.included_paths.length;
 	return `${count} selected source${count === 1 ? '' : 's'} in the Question scope.`;
+}
+
+function isEvidenceItem(value: unknown): value is EvidenceItem {
+	if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+	const item = value as Record<string, unknown>;
+	return typeof item.tool === 'string'
+		&& Boolean(item.args && typeof item.args === 'object' && !Array.isArray(item.args))
+		&& typeof item.result_summary === 'string';
+}
+
+function markdownCell(value: unknown): string {
+	const text = value === null || value === undefined ? '—' : String(value);
+	return text.replace(/\\/g, '\\\\').replace(/[\r\n]+/g, ' ').replace(/\|/g, '\\|')
+		.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/`/g, '\\`');
+}
+
+function chartDataTable(chart: VisualizationSpec): string[] {
+	if (chart.series.length) {
+		const headers = ['Category', ...chart.series.map((series) => series.name)];
+		const rows = chart.labels.map((label, index) => [label, ...chart.series.map((series) => series.values[index] ?? null)]);
+		return [
+			`| ${headers.map(markdownCell).join(' | ')} |`,
+			`| ${headers.map(() => '---').join(' | ')} |`,
+			...rows.map((row) => `| ${row.map(markdownCell).join(' | ')} |`)
+		];
+	}
+
+	const payload = chart.payload;
+	if (!payload) return ['No exact plotted values were recorded for this visualization.'];
+	if (payload.type === 'scatter') {
+		const headers = ['Point', 'X', 'Y', 'Group'];
+		return [
+			`| ${headers.join(' | ')} |`, `| ${headers.map(() => '---').join(' | ')} |`,
+			...payload.points.map((point) => `| ${[point.label, point.x, point.y, point.group ?? '—'].map(markdownCell).join(' | ')} |`)
+		];
+	}
+	if (payload.type === 'box_plot') {
+		const headers = ['Group', 'Low whisker', 'Q1', 'Median', 'Q3', 'High whisker', 'N', 'Outliers'];
+		return [
+			`| ${headers.join(' | ')} |`, `| ${headers.map(() => '---').join(' | ')} |`,
+			...payload.groups.map((group) => `| ${[
+				group.label, group.low_whisker, group.q1, group.median, group.q3,
+				group.high_whisker, group.n, group.outliers.join(', ')
+			].map(markdownCell).join(' | ')} |`)
+		];
+	}
+	if (payload.type === 'heatmap') {
+		const headers = ['Row', ...payload.x_labels];
+		return [
+			`| ${headers.map(markdownCell).join(' | ')} |`, `| ${headers.map(() => '---').join(' | ')} |`,
+			...payload.y_labels.map((label, index) => `| ${[label, ...(payload.values[index] ?? [])].map(markdownCell).join(' | ')} |`)
+		];
+	}
+	if (payload.type === 'forecast') {
+		const headers = ['Period', 'Observed', 'Forecast', 'Lower bound', 'Upper bound'];
+		const length = Math.max(chart.labels.length, payload.observed.length, payload.forecast.length, payload.lower.length, payload.upper.length);
+		return [
+			`| ${headers.join(' | ')} |`, `| ${headers.map(() => '---').join(' | ')} |`,
+			...Array.from({ length }, (_, index) => `| ${[
+				chart.labels[index] ?? `Point ${index + 1}`, payload.observed[index], payload.forecast[index],
+				payload.lower[index], payload.upper[index]
+			].map(markdownCell).join(' | ')} |`),
+			...(payload.uncertainty_note ? ['', `Uncertainty: ${payload.uncertainty_note}`] : [])
+		];
+	}
+	return ['No exact plotted values were recorded for this visualization.'];
+}
+
+function visualizationSections(run: AnalysisTurn): string[] {
+	const evidence = run.result.evidence.filter(isEvidenceItem);
+	const charts = evidence.filter((item) => isRenderableChartEvidence(item, run.verification?.checks ?? run.result.verification));
+	if (!charts.length) return ['No renderable visualization was recorded for this run.'];
+	const lines: string[] = [];
+	for (const [index, item] of charts.entries()) {
+		const chart = item.chart!;
+		lines.push(
+			`### ${chart.title || `Visualization ${index + 1}`}`,
+			'',
+			'**Model-produced visualization · not an analyst-reviewed Finding**',
+			'',
+			`- Chart type: ${chart.kind}`,
+			`- Supporting run: \`${run.id}\``,
+			`- Chart evidence: ${item.id ? `\`${item.id}\`` : 'ID not recorded'}`,
+			`- Source evidence: ${chart.metadata?.source_evidence_id ? `\`${chart.metadata.source_evidence_id}\`` : 'Not recorded'}`,
+			`- Interpretation: ${oneLine(chart.metadata?.finding_snapshot) || 'No model interpretation was recorded.'}`,
+			'',
+			'**Plotted values**',
+			'',
+			...chartDataTable(chart),
+			''
+		);
+	}
+	return lines;
 }
 
 function evidenceSummary(run: AnalysisTurn): string[] {
@@ -151,6 +247,7 @@ function runSection(runId: string, run: AnalysisTurn | null | undefined): string
 	if (run.result.evidence.length) {
 		lines.push('', '**Evidence references**', ...evidenceSummary(run));
 	}
+	lines.push('', '**Visualizations**', '', ...visualizationSections(run));
 	return lines;
 }
 
@@ -185,6 +282,21 @@ export function buildInvestigationReport(
 			? [`- Constraints: ${investigation.brief.constraints.join('; ')}`]
 			: ['- Constraints: None recorded']),
 		'',
+		'## Investigation scope',
+		'',
+		...(investigation.source_selection.mode === 'all_sources'
+			? ['All sources in this workspace were in scope.']
+			: investigation.source_selection.included_paths.length
+				? investigation.source_selection.included_paths.map((path) => `- ${reportPathLabel(path, investigation.workspace_id)}`)
+				: ['Selected-source scope is empty; no files were selected.']),
+		'',
+		'## Definitions and assumptions',
+		'',
+		...((investigation.definitions ?? []).filter((definition) => definition.status === 'active').length
+			? (investigation.definitions ?? []).filter((definition) => definition.status === 'active')
+				.map((definition) => `- **${definition.kind} · revision ${definition.revision}:** ${definition.text}`)
+			: ['No active definitions or assumptions are recorded.']),
+		'',
 		'## Findings',
 		''
 	];
@@ -208,6 +320,14 @@ export function buildInvestigationReport(
 				''
 			);
 			if (question.answer_status_reason) lines.push(`**Coverage note:** ${question.answer_status_reason}`, '');
+			else if (question.answer_status !== 'answered') lines.push('**Coverage note:** No reason was recorded for this unresolved status.', '');
+			if (question.source_selection) {
+				lines.push(`**Question source scope:** ${question.source_selection.mode === 'all_sources'
+					? 'All Investigation sources.'
+					: question.source_selection.included_paths.length
+						? question.source_selection.included_paths.map((path) => reportPathLabel(path, investigation.workspace_id)).join(', ')
+						: 'No sources selected.'}`, '');
+			}
 			if (run) {
 				lines.push('**Saved answer**', '', run.result.text || 'The saved run has no answer text.', '', `Run: \`${run.id}\`.`, '');
 			} else if (question.latest_analysis_turn_id) {

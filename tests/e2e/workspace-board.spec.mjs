@@ -2615,9 +2615,36 @@ test('Investigation report exports saved answers, Findings, QA, and source prove
 	const evidence = {
 		id: 'evidence-weekly-sales-export',
 		tool: 'run_sql',
+		args: {},
 		result_summary: 'Ten weekly totals from sales.csv.',
 		sql: 'SELECT week, SUM(net_sales) FROM sales GROUP BY week',
 		sources: [{ source: 'sales.csv', table: 'sales' }]
+	};
+	const chartEvidence = {
+		id: 'evidence-weekly-sales-chart',
+		tool: 'make_chart',
+		args: {},
+		result_summary: 'Weekly net sales visualization.',
+		ms: 8,
+		chart: {
+			kind: 'line',
+			title: 'Weekly net sales',
+			labels: ['W1', 'W2'],
+			series: [{ name: 'Net sales', values: [31, 40] }],
+			unit: '$',
+			x_label: 'Week',
+			y_label: 'Net sales',
+			metadata: {
+				source_label: 'sales.csv',
+				source_evidence_id: evidence.id,
+				source_run_id: 'fixture-question-turn-1',
+				finding_snapshot: 'Weekly sales rose to $40.',
+				fields: ['week', 'net_sales'],
+				aggregation: 'sum',
+				filters: [],
+				part_to_whole: false
+			}
+		}
 	};
 	await installDesktopMock(page, {
 		questionRunOutcomes: [{
@@ -2632,7 +2659,7 @@ test('Investigation report exports saved answers, Findings, QA, and source prove
 				outcome: 'flagged',
 				detail: 'Only ten weeks were present.'
 			}],
-			evidence: [evidence],
+			evidence: [evidence, chartEvidence],
 			source_scope: {
 				used_sources: [{ source: 'sales.csv', table: 'sales', evidence_ids: [evidence.id] }],
 				skipped_sources: ['legacy.xls']
@@ -2673,8 +2700,30 @@ test('Investigation report exports saved answers, Findings, QA, and source prove
 	await findingCapture.getByRole('button', { name: 'Save Finding' }).click();
 	await expect(page.locator('.finding-card')).toContainText('Weekly sales rose 12% to $40.');
 
+	let downloadObservedBeforeReview = false;
+	page.on('download', () => { downloadObservedBeforeReview = true; });
+	await page.getByRole('button', { name: 'Review handoff' }).click();
+	const handoffDialog = page.getByRole('dialog', { name: 'Review before sharing' });
+	await expect(handoffDialog).toBeVisible();
+	await expect(handoffDialog).toContainText('2 unresolved Questions');
+	await expect(handoffDialog).not.toContainText('Fully answered');
+	await expect(handoffDialog.getByRole('region', { name: 'Markdown handoff preview' })).toContainText('Weekly net sales');
+	await expect(handoffDialog.getByRole('region', { name: 'Markdown handoff preview' })).toContainText('No reason was recorded for this unresolved status.');
+	await expect(handoffDialog.getByRole('region', { name: 'Markdown handoff preview' })).toContainText('Weekly sales rose to $40.');
+	await expect(handoffDialog.getByRole('region', { name: 'Visualization previews included in the handoff' })).toContainText('Model-produced visualization');
+	await expect(handoffDialog.getByRole('region', { name: 'Visualization previews included in the handoff' })).toContainText('Weekly net sales');
+	await expect(handoffDialog.getByRole('button', { name: 'Open evidence · evidence-weekly-sales-export' })).toBeVisible();
+	await expect(handoffDialog.getByRole('button', { name: 'Open chart evidence' })).toBeVisible();
+	expect(downloadObservedBeforeReview).toBe(false);
+	await handoffDialog.getByRole('button', { name: 'Open evidence · evidence-weekly-sales-export' }).click();
+	await expect(page.getByRole('region', { name: 'Saved analysis run' })).toBeVisible();
+	const exactEvidenceTarget = page.getByRole('region', { name: 'Query and output evidence' }).locator('[data-evidence-id="evidence-weekly-sales-export"]');
+	await expect(exactEvidenceTarget).toBeFocused();
+	await page.getByRole('button', { name: 'Review handoff' }).click();
+	const reviewedDialog = page.getByRole('dialog', { name: 'Review before sharing' });
+	await expect(reviewedDialog).toBeVisible();
 	const downloadPromise = page.waitForEvent('download');
-	await page.getByRole('button', { name: 'Export report' }).click();
+	await reviewedDialog.getByRole('button', { name: 'Download Markdown' }).click();
 	const download = await downloadPromise;
 	expect(download.suggestedFilename()).toBe('explain-weekly-sales-for-finance-report.md');
 	const report = await readFile(await download.path(), 'utf8');
@@ -2693,13 +2742,17 @@ test('Investigation report exports saved answers, Findings, QA, and source prove
 		'sales.csv (sales)',
 		'legacy.xls',
 		'Net sales exclude refunds.',
+		'Weekly net sales',
+		'Weekly sales rose to $40.',
+		'evidence-weekly-sales-chart',
+		'| W2 | 40 |',
 		'evidence-weekly-sales-export',
 		'conversation transcript is excluded'
 	]) {
 		expect(report.toLowerCase()).toContain(expected.toLowerCase());
 	}
 	expect(report).not.toContain('Scoped to C:\\FellaFixture\\northwind-sales.');
-	await expect(page.getByRole('status').filter({ hasText: 'Downloaded explain-weekly-sales-for-finance-report.md.' })).toBeVisible();
+	await expect(reviewedDialog.getByRole('status').filter({ hasText: 'Downloaded explain-weekly-sales-for-finance-report.md.' })).toBeVisible();
 });
 
 test('Finding revisions preserve prior versions and compare the supporting run context', async ({ page }) => {

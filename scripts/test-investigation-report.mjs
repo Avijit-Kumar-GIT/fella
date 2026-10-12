@@ -47,8 +47,11 @@ try {
 				caveats: [], assumptions: [], revision: 1, revision_note: '', revisions: [], created_at_ms: 1, updated_at_ms: 2
 			}
 		],
-		definitions: [],
-		source_selection: { mode: 'all_sources', included_paths: [] },
+		definitions: [
+			{ id: 'definition-net', investigation_id: 'investigation-sales', kind: 'definition', text: 'Revenue is net of discounts.', revision: 2, history: [], status: 'active', created_at_ms: 1, updated_at_ms: 2 },
+			{ id: 'definition-old', investigation_id: 'investigation-sales', kind: 'assumption', text: 'Removed assumptions must stay out.', revision: 1, history: [], status: 'removed', created_at_ms: 1, updated_at_ms: 2 }
+		],
+		source_selection: { mode: 'selected_sources', included_paths: ['sales.csv'] },
 		analysis_turn_ids: ['run-sales'], status: 'active', created_at_ms: 1, updated_at_ms: 2
 	};
 	investigation.transcript_only_text = 'Transcript-only private context should not appear.';
@@ -68,7 +71,18 @@ try {
 			text: 'Sales rose 12% to $40.',
 			status: 'needs_review',
 			verification: [],
-			evidence: [{ id: 'evidence-weekly-sales', tool: 'run_sql', result_summary: 'Ten weekly totals from sales.csv.' }]
+			evidence: [
+				{ id: 'evidence-weekly-sales', tool: 'run_sql', result_summary: 'Ten weekly totals from sales.csv.' },
+				{
+					id: 'evidence-weekly-sales-chart', tool: 'make_chart', args: {},
+					result_summary: 'Weekly sales visualization.', ms: 2,
+					chart: {
+						kind: 'line', title: 'Weekly net sales', labels: ['W1', 'W2'],
+						series: [{ name: 'Net sales', values: [31, 40] }],
+						metadata: { source_evidence_id: 'evidence-weekly-sales', finding_snapshot: 'Weekly sales rose to $40.', fields: ['week', 'net_sales'], filters: [], part_to_whole: false }
+					}
+				}
+			]
 		},
 		source_scope: {
 			used_sources: [{ source: 'sales.csv', table: 'sales', evidence_ids: ['evidence-weekly-sales'] }],
@@ -95,8 +109,13 @@ try {
 		'needs review',
 		'Only ten weeks were available.',
 		'sales.csv (sales)',
+		'Weekly net sales',
+		'not an analyst-reviewed Finding',
+		'evidence-weekly-sales-chart',
+		'| W2 | 40 |',
 		'legacy.xls',
 		'Net sales exclude refunds.',
+		'Revenue is net of discounts.',
 		'evidence-weekly-sales',
 		'Saved run record could not be loaded',
 		'conversation transcript is excluded'
@@ -104,12 +123,16 @@ try {
 		assert.ok(report.toLowerCase().includes(expected.toLowerCase()), `Report should include: ${expected}`);
 	}
 	assert.ok(!report.includes('Transcript-only private context should not appear.'));
+	assert.ok(!report.includes('Removed assumptions must stay out.'));
 	const completionReport = buildInvestigationReport(
 		{ ...investigation, status: 'complete' },
 		{ 'run-sales': run },
 		new Date('2026-10-11T12:00:00.000Z')
 	);
 	assert.ok(completionReport.includes('Complete with 1 open Question; not fully answered'));
+	assert.ok(!completionReport.includes('Investigation fully answered'));
+	const noDefinitionsReport = buildInvestigationReport({ ...investigation, definitions: [] }, { 'run-sales': run });
+	assert.ok(noDefinitionsReport.includes('No active definitions or assumptions are recorded.'));
 	assert.equal(investigationReportFilename('Weekly sales / review'), 'weekly-sales-review-report.md');
 	assert.equal(investigationReportFilename('🌿'), 'fella-investigation-report.md');
 	const pathReport = buildInvestigationReport(investigation, {

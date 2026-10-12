@@ -3,16 +3,20 @@
 	import { firstActualQuestion, session } from '$lib/session.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
+	import { Dialog } from '$lib/components/ui/dialog';
 	import { analyzeInvestigationQuestion, openConversation } from '$lib/commands';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { ipc, isDesktop } from '$lib/ipc';
 	import { analysisTurnIdsAfterSourceMessage } from '$lib/investigation-runs';
-	import { buildInvestigationReport, investigationReportFilename } from '$lib/investigation-report';
+	import { buildInvestigationReport, investigationReportFilename, type InvestigationReportRuns } from '$lib/investigation-report';
+	import { renderMarkdown } from '$lib/markdown';
 	import { runStateLabel } from '$lib/run-progress';
+	import { isRenderableChartEvidence } from '$lib/workbench';
 	import type {
 		AnalysisTurn,
 		Answer,
 		ConversationSummary,
+		EvidenceItem,
 		Investigation,
 		InvestigationBrief,
 		InvestigationDefinitionInput,
@@ -32,6 +36,21 @@
 	import InvestigationQuestionSourceScope from './InvestigationQuestionSourceScope.svelte';
 	import QuestionAnswerPreview from './QuestionAnswerPreview.svelte';
 	import InvestigationResultsView from './InvestigationResultsView.svelte';
+	import Chart from './Chart.svelte';
+
+	type HandoffChart = {
+		key: string;
+		run: AnalysisTurn;
+		evidence: EvidenceItem;
+		sourceEvidence: EvidenceItem | null;
+	};
+	type HandoffPreview = {
+		investigation: Investigation;
+		runs: InvestigationReportRuns;
+		markdown: string;
+		filename: string;
+		charts: HandoffChart[];
+	};
 
 	let investigations = $state<Investigation[]>([]);
 	let selectedId = $state<string | null>(null);
@@ -91,6 +110,8 @@
 	let exportingReport = $state(false);
 	let reportExportStatus = $state('');
 	let reportExportFailed = $state(false);
+	let reportPreviewOpen = $state(false);
+	let reportPreview = $state<HandoffPreview | null>(null);
 	let error = $state('');
 	let requestSerial = 0;
 	const syncingInvestigations = new Set<string>();
@@ -690,18 +711,54 @@
 		return [...ids];
 	}
 
-	async function exportInvestigationReport(): Promise<void> {
+	function isHandoffEvidence(value: unknown): value is EvidenceItem {
+		if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+		const item = value as Record<string, unknown>;
+		return typeof item.tool === 'string'
+			&& Boolean(item.args && typeof item.args === 'object' && !Array.isArray(item.args))
+			&& typeof item.result_summary === 'string';
+	}
+
+	function handoffCharts(investigation: Investigation, runs: InvestigationReportRuns): HandoffChart[] {
+		const runIds = new Set<string>();
+		for (const question of investigation.questions ?? []) {
+			if (question.status === 'active' && question.latest_analysis_turn_id) runIds.add(question.latest_analysis_turn_id);
+		}
+		for (const finding of investigation.findings ?? []) runIds.add(finding.analysis_turn_id);
+		const charts: HandoffChart[] = [];
+		for (const runId of runIds) {
+			const run = runs[runId];
+			if (!run) continue;
+			const evidence = run.result.evidence.filter(isHandoffEvidence);
+			for (const [index, item] of evidence.entries()) {
+				if (!isRenderableChartEvidence(item, run.verification?.checks ?? run.result.verification)) continue;
+				const sourceId = item.chart?.metadata?.source_evidence_id;
+				charts.push({
+					key: `${run.id}:${item.id ?? index}`,
+					run,
+					evidence: item,
+					sourceEvidence: sourceId ? evidence.find((candidate) => candidate.id === sourceId) ?? null : null
+				});
+			}
+		}
+		return charts;
+	}
+
+	async function reviewInvestigationHandoff(): Promise<void> {
 		const item = selected;
 		if (!item || exportingReport || reportExportDisabledReason) return;
+		// `selected` is a Svelte reactive proxy; serialize the canonical record
+		// into an immutable plain-data snapshot before loading its linked runs.
+		const snapshot = JSON.parse(JSON.stringify(item)) as Investigation;
 		exportingReport = true;
 		reportExportStatus = '';
 		reportExportFailed = false;
 		try {
 			const runIds = new Set<string>();
-			for (const question of item.questions ?? []) {
+			for (const question of snapshot.questions ?? []) {
 				if (question.status === 'active' && question.latest_analysis_turn_id) runIds.add(question.latest_analysis_turn_id);
 			}
-			for (const finding of item.findings ?? []) runIds.add(finding.analysis_turn_id);
+			for (const finding of snapshot.findings ?? []) runIds.add(finding.analysis_turn_id);
 			const loadedRuns = await Promise.all([...runIds].map(async (turnId) => {
 				try {
 					return [turnId, await ipc.analysisTurnLoad(turnId)] as const;
@@ -710,23 +767,51 @@
 				}
 			}));
 			const runs = Object.fromEntries(loadedRuns);
-			const report = buildInvestigationReport(item, runs, new Date());
-			const filename = investigationReportFilename(item.title || item.brief.goal);
-			const url = URL.createObjectURL(new Blob([report], { type: 'text/markdown;charset=utf-8' }));
-			const link = document.createElement('a');
-			link.href = url;
-			link.download = filename;
-			document.body.append(link);
-			link.click();
-			link.remove();
-			setTimeout(() => URL.revokeObjectURL(url), 1000);
-			reportExportStatus = `Downloaded ${filename}.`;
+			if (selectedId !== snapshot.id) return;
+			const report = buildInvestigationReport(snapshot, runs, new Date());
+			reportPreview = {
+				investigation: snapshot,
+				runs,
+				markdown: report,
+				filename: investigationReportFilename(snapshot.title || snapshot.brief.goal),
+				charts: handoffCharts(snapshot, runs)
+			};
+			reportPreviewOpen = true;
+			reportExportStatus = 'Saved-state handoff preview ready.';
 		} catch (cause) {
 			reportExportFailed = true;
 			reportExportStatus = cause instanceof Error ? cause.message : String(cause);
 		} finally {
 			exportingReport = false;
 		}
+	}
+
+	function downloadInvestigationHandoff(): void {
+		const preview = reportPreview;
+		if (!preview || exportingReport) return;
+		exportingReport = true;
+		reportExportStatus = '';
+		reportExportFailed = false;
+		try {
+			const url = URL.createObjectURL(new Blob([preview.markdown], { type: 'text/markdown;charset=utf-8' }));
+			const link = document.createElement('a');
+			link.href = url;
+			link.download = preview.filename;
+			document.body.append(link);
+			link.click();
+			link.remove();
+			setTimeout(() => URL.revokeObjectURL(url), 1000);
+			reportExportStatus = `Downloaded ${preview.filename}.`;
+		} catch (cause) {
+			reportExportFailed = true;
+			reportExportStatus = cause instanceof Error ? cause.message : String(cause);
+		} finally { exportingReport = false; }
+	}
+
+	async function openHandoffReference(turnId: string, evidenceId?: string): Promise<void> {
+		reportPreviewOpen = false;
+		await tick();
+		await openRunFromResults(turnId, evidenceId);
 	}
 
 	function analysisRunOrdinal(turnId: string): number | undefined {
@@ -1393,9 +1478,9 @@
 					variant="outline"
 					disabled={exportingReport || Boolean(reportExportDisabledReason)}
 					title={reportExportDisabledReason || undefined}
-					onclick={() => void exportInvestigationReport()}
+					onclick={() => void reviewInvestigationHandoff()}
 				>
-					<Icon name="download" size={16} />{exportingReport ? 'Preparing report…' : 'Export report'}
+					<Icon name="file" size={16} />{exportingReport ? 'Preparing preview…' : 'Review handoff'}
 				</Button>
 			{/if}
 			{#if workspacePath}
@@ -2371,6 +2456,102 @@
 			{/if}
 		</div>
 	{/if}
+
+	<Dialog.Root bind:open={reportPreviewOpen}>
+		<Dialog.Portal>
+			<Dialog.Overlay class="fella-ui-dialog-overlay" />
+			<Dialog.Content class="fella-ui-dialog-content handoff-preview-dialog" aria-label="Review Investigation handoff">
+				{#if reportPreview}
+					<header class="handoff-preview-header">
+						<div>
+							<p class="handoff-preview-eyebrow">Investigation handoff</p>
+							<Dialog.Title class="handoff-preview-title" level={2}>Review before sharing</Dialog.Title>
+							<Dialog.Description class="handoff-preview-description">
+								A read-only package generated from the saved brief, Questions, Findings, and analysis runs.
+							</Dialog.Description>
+						</div>
+						<Dialog.Close class="handoff-preview-close" type="button" aria-label="Close handoff preview" title="Close">
+							<Icon name="x" size={16} />
+						</Dialog.Close>
+					</header>
+					{@const activeHandoffQuestions = (reportPreview.investigation.questions ?? []).filter((question) => question.status === 'active')}
+					{@const unresolvedHandoffQuestions = activeHandoffQuestions.filter((question) => question.answer_status !== 'answered')}
+					<div class="handoff-preview-body">
+						<section class="handoff-coverage" aria-label="Handoff coverage status">
+							{#if reportPreview.investigation.status === 'complete' && unresolvedHandoffQuestions.length}
+								<Badge variant="warning">Closed with unresolved Questions · not fully answered</Badge>
+							{:else if unresolvedHandoffQuestions.length}
+								<Badge variant="warning">{unresolvedHandoffQuestions.length} unresolved Question{unresolvedHandoffQuestions.length === 1 ? '' : 's'}</Badge>
+							{:else if activeHandoffQuestions.length}
+								<Badge variant="success">All active Questions answered</Badge>
+							{:else}
+								<Badge>No active Questions recorded</Badge>
+							{/if}
+							<span>{activeHandoffQuestions.length} active Question{activeHandoffQuestions.length === 1 ? '' : 's'} · {reportPreview.investigation.findings?.length ?? 0} saved Finding{(reportPreview.investigation.findings?.length ?? 0) === 1 ? '' : 's'} · {reportPreview.charts.length} visualization{reportPreview.charts.length === 1 ? '' : 's'}</span>
+						</section>
+
+						<section class="handoff-records" aria-label="Supporting records in Fella">
+							<header><h3>Supporting records in Fella</h3><p>Jump from a conclusion to its saved run and exact evidence.</p></header>
+							{#if (reportPreview.investigation.findings ?? []).length}
+								<ul>
+									{#each reportPreview.investigation.findings ?? [] as finding (finding.id)}
+										<li>
+											<div><strong>{finding.claim}</strong><small>Finding revision {finding.revision ?? 1} · run {finding.analysis_turn_id}</small></div>
+											<div class="handoff-record-actions">
+												{#each finding.evidence_ids as evidenceId (evidenceId)}
+													<Button type="button" variant="ghost" size="sm" onclick={() => void openHandoffReference(finding.analysis_turn_id, evidenceId)}>Open evidence · {evidenceId}</Button>
+												{/each}
+												<Button type="button" variant="outline" size="sm" onclick={() => void openHandoffReference(finding.analysis_turn_id)}>Open run</Button>
+												{#if !finding.evidence_ids.length}<small>No stable evidence IDs recorded.</small>{/if}
+												</div>
+										</li>
+									{/each}
+								</ul>
+							{:else}
+								<p class="handoff-record-empty">No reviewed Findings are saved. Model-generated answers and charts remain labeled separately below.</p>
+							{/if}
+							{#if unresolvedHandoffQuestions.length}
+								<ul class="handoff-open-questions" aria-label="Unresolved Question links">
+									{#each unresolvedHandoffQuestions as question (question.id)}
+										<li>
+											<div><strong>{question.text}</strong><small>{question.answer_status.replaceAll('_', ' ')}{question.answer_status_reason ? ` · ${question.answer_status_reason}` : ' · no reason recorded'}</small></div>
+											{#if question.latest_analysis_turn_id}<Button type="button" variant="ghost" size="sm" onclick={() => void openHandoffReference(question.latest_analysis_turn_id!)}>Open supporting run</Button>{/if}
+										</li>
+									{/each}
+								</ul>
+							{/if}
+						</section>
+
+						{#if reportPreview.charts.length}
+							<section class="handoff-visualizations" aria-label="Visualization previews included in the handoff">
+								<header><h3>Visualizations</h3><p>Model-produced artifacts, not analyst-reviewed Findings.</p></header>
+								{#each reportPreview.charts as chart (chart.key)}
+									<article class="handoff-chart-card">
+										<Chart spec={chart.evidence.chart!} source={chart.sourceEvidence?.result_summary ?? chart.evidence.chart?.metadata?.source_label ?? ''} sourceEvidence={chart.sourceEvidence} sourceRunId={chart.run.id} findingSnapshot={chart.evidence.chart?.metadata?.finding_snapshot} originLabel="Model-produced visualization" />
+										<div class="handoff-chart-lineage">
+											<span>Run <code>{chart.run.id}</code></span>
+											{#if chart.evidence.id}<Button type="button" variant="ghost" size="sm" onclick={() => void openHandoffReference(chart.run.id, chart.evidence.id)}>Open chart evidence</Button>{/if}
+											{#if chart.sourceEvidence?.id}<Button type="button" variant="ghost" size="sm" onclick={() => void openHandoffReference(chart.run.id, chart.sourceEvidence!.id)}>Open source evidence</Button>{/if}
+										</div>
+									</article>
+								{/each}
+							</section>
+						{/if}
+
+						<section class="handoff-markdown" aria-label="Markdown handoff preview">
+							<header><h3>Markdown handoff</h3><p>Unavailable run records, missing coverage, source omissions, and excluded transcript material are disclosed in the exported text.</p></header>
+							<article class="handoff-markdown-content">{@html renderMarkdown(reportPreview.markdown)}</article>
+						</section>
+					</div>
+
+					<footer class="handoff-preview-footer">
+						{#if reportExportStatus}<span role={reportExportFailed ? 'alert' : 'status'}>{reportExportStatus}</span>{/if}
+						<div><Dialog.Close class="handoff-preview-secondary" type="button">Back</Dialog.Close><Button type="button" onclick={downloadInvestigationHandoff} disabled={exportingReport}><Icon name="download" size={16} />{exportingReport ? 'Preparing…' : 'Download Markdown'}</Button></div>
+					</footer>
+				{/if}
+			</Dialog.Content>
+		</Dialog.Portal>
+	</Dialog.Root>
 </section>
 
 <style>
@@ -2394,6 +2575,53 @@
 	.page-head-actions { display: flex; min-width: 0; align-items: center; justify-content: flex-end; gap: var(--space-2); }
 	.report-export-status { max-width: 300px; color: var(--text-dim); font-size: var(--fs-xs); overflow-wrap: anywhere; }
 	.report-export-status[role='alert'] { color: var(--danger, #b42318); }
+	:global(.handoff-preview-dialog) {
+		display: grid;
+		grid-template-rows: auto minmax(0, 1fr) auto;
+		width: min(1040px, calc(100vw - 40px));
+		height: min(900px, calc(100vh - 40px));
+		padding: 0;
+		overflow: hidden;
+	}
+	.handoff-preview-header, .handoff-preview-footer { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); padding: var(--space-4) var(--space-5); }
+	.handoff-preview-header { border-bottom: 1px solid var(--border); }
+	.handoff-preview-eyebrow { margin: 0 0 3px; color: var(--text-faint); font-size: var(--fs-xs); font-weight: 650; letter-spacing: .04em; text-transform: uppercase; }
+	:global(.handoff-preview-title) { margin: 0; font-size: var(--fs-lg); font-weight: 650; letter-spacing: -.02em; }
+	:global(.handoff-preview-description) { margin: 3px 0 0; color: var(--text-dim); font-size: var(--fs-sm); }
+	:global(.handoff-preview-close) { display: grid; width: 32px; height: 32px; flex: none; place-items: center; border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent; color: var(--text-dim); cursor: pointer; }
+	:global(.handoff-preview-close:hover) { border-color: var(--border); background: var(--bg-inset); color: var(--text); }
+	.handoff-preview-body { display: grid; align-content: start; gap: var(--space-4); min-height: 0; overflow: auto; padding: var(--space-4) var(--space-5); }
+	.handoff-coverage { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); color: var(--text-dim); font-size: var(--fs-xs); }
+	.handoff-records, .handoff-visualizations, .handoff-markdown { display: grid; gap: var(--space-2); min-width: 0; }
+	.handoff-records > header, .handoff-visualizations > header, .handoff-markdown > header { display: grid; gap: 2px; }
+	.handoff-records h3, .handoff-visualizations h3, .handoff-markdown h3 { margin: 0; font-size: var(--fs-sm); font-weight: 650; }
+	.handoff-records > header p, .handoff-visualizations > header p, .handoff-markdown > header p { margin: 0; color: var(--text-dim); font-size: var(--fs-xs); }
+	.handoff-records > ul { display: grid; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+	.handoff-records > ul > li { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding: var(--space-2) var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg); }
+	.handoff-records li > div:first-child { display: grid; min-width: 0; gap: 3px; }
+	.handoff-records li strong { font-size: var(--fs-xs); font-weight: 600; overflow-wrap: anywhere; }
+	.handoff-records li small, .handoff-record-empty { color: var(--text-faint); font-size: 11px; overflow-wrap: anywhere; }
+	.handoff-record-actions { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 2px; }
+	.handoff-open-questions { border-top: 1px solid var(--border); padding-top: var(--space-2) !important; }
+	.handoff-chart-card { min-width: 0; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg); }
+	.handoff-chart-card :global(.chart-card) { max-width: 680px; margin-inline: auto; }
+	.handoff-chart-lineage { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); padding-top: var(--space-2); border-top: 1px solid var(--border); color: var(--text-dim); font-size: var(--fs-xs); }
+	.handoff-markdown-content { min-width: 0; padding: var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg); font-size: var(--fs-sm); line-height: 1.55; overflow-wrap: anywhere; }
+	.handoff-markdown-content :global(h1) { margin: 0 0 var(--space-2); font-size: var(--fs-lg); }
+	.handoff-markdown-content :global(h2) { margin: var(--space-4) 0 var(--space-2); padding-top: var(--space-2); border-top: 1px solid var(--border); font-size: var(--fs-md); }
+	.handoff-markdown-content :global(h3) { margin: var(--space-3) 0 var(--space-1); font-size: var(--fs-sm); }
+	.handoff-markdown-content :global(p), .handoff-markdown-content :global(ul) { margin: var(--space-1) 0; }
+	.handoff-markdown-content :global(ul) { padding-left: 1.25rem; }
+	.handoff-markdown-content :global(table) { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; font-size: var(--fs-xs); font-variant-numeric: tabular-nums; }
+	.handoff-markdown-content :global(th), .handoff-markdown-content :global(td) { padding: 5px 8px; border: 1px solid var(--border); text-align: left; }
+	.handoff-markdown-content :global(th) { background: var(--bg-inset); }
+	.handoff-markdown-content :global(code) { padding: 1px 4px; border-radius: var(--radius-xs); background: var(--bg-inset); font-size: .92em; }
+	.handoff-preview-footer { border-top: 1px solid var(--border); }
+	.handoff-preview-footer > span { min-width: 0; color: var(--text-dim); font-size: var(--fs-xs); overflow-wrap: anywhere; }
+	.handoff-preview-footer > span[role='alert'] { color: var(--danger, #b42318); }
+	.handoff-preview-footer > div { display: flex; flex: none; align-items: center; gap: var(--space-2); }
+	:global(.handoff-preview-secondary) { min-height: 36px; padding: 0 var(--space-3); border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent; color: var(--text-dim); font: inherit; cursor: pointer; }
+	:global(.handoff-preview-secondary:hover) { border-color: var(--border); background: var(--bg-inset); color: var(--text); }
 	h1, h2, p { margin: 0; }
 	h1 { font-size: clamp(24px, 3vw, 32px); font-weight: 650; letter-spacing: -0.03em; }
 	.page-head p { margin-top: var(--space-1); color: var(--text-dim); }
