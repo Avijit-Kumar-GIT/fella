@@ -26,7 +26,8 @@
 		InvestigationQuestion,
 		InvestigationQuestionInput,
 		InvestigationQuestionAnswerStatus,
-		InvestigationSourceSelection
+		InvestigationSourceSelection,
+		Message
 	} from '$lib/types';
 	import { findBriefProposal, type BriefProposal, type BriefProposalTarget } from '$lib/investigation-brief-proposal';
 	import Icon from './Icon.svelte';
@@ -832,12 +833,37 @@
 
 	function analysisRunStatusLine(turnId: string): string {
 		const run = analysisTurns[turnId];
-		if (!run) return 'Open saved record';
-		const state = runStateLabel(run.state) ?? 'Unknown state';
-		const parentId = run.rerun_of;
-		if (typeof parentId !== 'string' || !parentId) return state;
-		const parentOrdinal = analysisRunOrdinal(parentId);
-		return `${state} · rerun of ${parentOrdinal ? `Run ${parentOrdinal}` : 'saved run'}`;
+		const message = analysisRunMessage(turnId);
+		const state = runStateLabel(run?.state ?? message?.run_state) ?? (run ? 'Unknown state' : 'Saved run');
+		const parentId = run?.rerun_of ?? message?.rerun_of;
+		const details = [state];
+		const elapsedMs = run?.trace.elapsed_ms ?? message?.answer?.trace?.elapsed_ms ?? message?.run_duration_ms;
+		if (typeof elapsedMs === 'number' && Number.isFinite(elapsedMs) && elapsedMs >= 0) {
+			details.push(`${formatAnalysisRunDuration(elapsedMs)} total`);
+		}
+		if (typeof parentId === 'string' && parentId) {
+			const parentOrdinal = analysisRunOrdinal(parentId);
+			details.push(`rerun of ${parentOrdinal ? `Run ${parentOrdinal}` : 'saved run'}`);
+		}
+		return details.join(' · ');
+	}
+
+	function analysisRunMessage(turnId: string): Message | undefined {
+		return investigationConversationMessages.find((message) => message.answer?.turn_id === turnId);
+	}
+
+	function analysisRunTimestamp(turnId: string): number | undefined {
+		const timestamp = analysisRunMessage(turnId)?.ts;
+		return typeof timestamp === 'number' && Number.isFinite(timestamp) ? timestamp : undefined;
+	}
+
+	function formatAnalysisRunTimestamp(timestamp: number): string {
+		return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(timestamp);
+	}
+
+	function formatAnalysisRunDuration(ms: number): string {
+		if (ms < 1000) return `${ms} ms`;
+		return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)} s`;
 	}
 
 	function questionIdsForRun(
@@ -2012,8 +2038,8 @@
 						</header>
 					<details class="investigation-history" bind:open={historyOpen}>
 						<summary>
-							<span>Analysis history and Finding maintenance</span>
-							<small>{selected.findings?.length ?? 0} findings · {analysisRunIds(selected).length} runs</small>
+							<span>Analysis history &amp; Findings</span>
+							<small>{analysisRunIds(selected).length} saved run{analysisRunIds(selected).length === 1 ? '' : 's'} · {selected.findings?.length ?? 0} Finding{selected.findings?.length === 1 ? '' : 's'}</small>
 						</summary>
 						<div class="investigation-history-content">
 					<section class="findings" aria-labelledby="findings-title">
@@ -2151,6 +2177,7 @@
 						{#if analysisRunIds(selected).length}
 							<ol class="analysis-run-list">
 								{#each analysisRunIds(selected) as turnId, index (turnId)}
+									{@const timestamp = analysisRunTimestamp(turnId)}
 									<li>
 										<button
 											class="analysis-run-link"
@@ -2162,7 +2189,10 @@
 											<span class="analysis-run-number">Run {index + 1}</span>
 											<span class="analysis-run-copy">
 												<strong>{analysisRunSummary(turnId)}</strong>
-								<small>{analysisRunStatusLine(turnId)}</small>
+												<small>{analysisRunStatusLine(turnId)}</small>
+												{#if timestamp}
+													<small class="analysis-run-time">Started <time datetime={new Date(timestamp).toISOString()}>{formatAnalysisRunTimestamp(timestamp)}</time></small>
+												{/if}
 											</span>
 											<Icon name="chevron-right" size={14} />
 										</button>
@@ -2353,7 +2383,11 @@
 											{/if}
 										</section>
 									</section>
-									<div class="analysis-run-result" aria-label="Recorded answer">{openAnalysisTurn.result.text}</div>
+									<section class="analysis-run-answer" aria-label="Recorded answer">
+										<h5>Recorded answer</h5>
+										<p class="analysis-run-result">{openAnalysisTurn.result.text}</p>
+										<small>This is the answer saved with this run. Analyst-reviewed Findings are identified separately.</small>
+									</section>
 									<RunTimeline
 									turn={openAnalysisTurn}
 									question={analysisRunSummary(openAnalysisTurn.id)}
@@ -2870,7 +2904,10 @@
 	.analysis-run-assumptions li { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); }
 	.analysis-run-assumptions li > span { min-width: 0; flex: 1; font-size: var(--fs-sm); overflow-wrap: anywhere; }
 	.analysis-run-assumptions li :global(button) { flex: none; }
-	.analysis-run-result { max-height: 320px; overflow: auto; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); font-size: var(--fs-sm); line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+	.analysis-run-answer { display: grid; gap: var(--space-2); padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); }
+	.analysis-run-answer h5 { margin: 0; font-size: var(--fs-sm); font-weight: 650; }
+	.analysis-run-answer p { max-height: 320px; overflow: auto; margin: 0; font-size: var(--fs-sm); line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+	.analysis-run-answer small { color: var(--text-faint); font-size: var(--fs-xs); }
 	.analysis-run-question-links { display: grid; gap: var(--space-2); min-width: 0; padding: var(--space-3); margin: 0; border: 1px solid var(--border); border-radius: var(--radius-sm); }
 	.analysis-run-question-links legend { padding: 0 var(--space-1); color: var(--text-faint); font-size: var(--fs-xs); font-weight: 600; }
 	.analysis-run-question-links label { display: flex; align-items: flex-start; gap: var(--space-2); margin: 0; font-size: var(--fs-sm); cursor: pointer; }

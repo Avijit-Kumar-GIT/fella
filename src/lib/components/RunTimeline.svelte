@@ -242,12 +242,13 @@
 				{/if}
 				{#if answer?.plan?.steps.length}
 					<details class="planned-steps">
-						<summary>Planned approach · {answer.plan.steps.length} step{answer.plan.steps.length === 1 ? '' : 's'}</summary>
+						<summary>Planned approach · {answer.plan.steps.length} step{answer.plan.steps.length === 1 ? '' : 's'} (not execution evidence)</summary>
 						<ol>
 							{#each answer.plan.steps as planStep, index (`${turn?.id ?? message?.id ?? 'run'}-plan-${index}`)}
 								<li>{analystStepForTool(planStep)}</li>
 							{/each}
 						</ol>
+						<p class="planned-note">Recorded work appears separately below; the run may have skipped or changed parts of this plan.</p>
 					</details>
 				{/if}
 				{#if answer?.clarification}
@@ -256,40 +257,47 @@
 						<span>{answer.clarification.question}</span>
 					</div>
 				{/if}
-				<ol class="run-step-list">
-					{#each steps as step, index (step.id)}
-						<li class="run-step" data-step-state={step.state}>
-							<span class="step-mark" class:running={step.state === 'running'} class:error={step.state === 'error'} aria-hidden="true">
-								{#if step.state === 'complete'}
-									<Icon name="check" size={12} />
-								{:else if step.state === 'error'}
-									<Icon name="alert" size={12} />
-								{:else}
-									<span class="mini-thinking"></span>
-								{/if}
-							</span>
-							<div class="step-content">
-								<div class="step-heading">
-									<strong>{step.label}</strong>
-									<small>{step.state === 'running' ? 'In progress' : step.state === 'error' ? 'Failed' : 'Complete'}{#if step.durationMs != null} · {duration(step.durationMs)}{/if}</small>
+				{#if steps.length}
+					<h4 class="recorded-steps-heading">Recorded steps</h4>
+					<ol class="run-step-list" aria-label="Recorded steps">
+						{#each steps as step, index (step.id)}
+							<li class="run-step" data-step-state={step.state}>
+								<span class="step-mark" class:running={step.state === 'running'} class:error={step.state === 'error'} aria-hidden="true">
+									{#if step.state === 'complete'}
+										<Icon name="check" size={12} />
+									{:else if step.state === 'error'}
+										<Icon name="alert" size={12} />
+									{:else}
+										<span class="mini-thinking"></span>
+									{/if}
+								</span>
+								<div class="step-content">
+									<div class="step-heading">
+										<strong>{step.label}</strong>
+										<small>{step.state === 'running' ? 'In progress' : step.state === 'error' ? 'Failed' : 'Complete'}{#if step.durationMs != null} · {duration(step.durationMs)}{/if}</small>
+									</div>
+									{#if step.summary}<p class="step-summary"><strong>Recorded output</strong> · {step.summary}</p>{/if}
+									{#if step.sources.length}<p class="step-sources"><strong>Source inputs</strong> · {step.sources.join(', ')}</p>{/if}
+									{#if step.evidenceIndex !== undefined && step.evidenceIndex >= 0}
+										<button type="button" class="evidence-link" onclick={() => void inspectEvidence(`${bodyId}-step-${step.evidenceIndex}`)}>
+											{step.state === 'error' ? 'Inspect failure details' : 'Inspect output'}
+										</button>
+									{/if}
 								</div>
-								{#if step.summary}<p class="step-summary">{step.summary}</p>{/if}
-								{#if step.sources.length}<p class="step-sources">Sources · {step.sources.join(', ')}</p>{/if}
-								{#if step.evidenceIndex !== undefined && step.evidenceIndex >= 0}
-									<button type="button" class="evidence-link" onclick={() => void inspectEvidence(`${bodyId}-step-${step.evidenceIndex}`)}>
-										{step.state === 'error' ? 'Inspect failure details' : 'Inspect output'}
-									</button>
-								{/if}
-							</div>
-						</li>
-					{/each}
-				</ol>
+							</li>
+						{/each}
+					</ol>
+				{:else if running}
+					<p class="recorded-steps-empty">Recorded steps will appear here as the analysis runs.</p>
+				{:else if answer}
+					<p class="recorded-steps-empty">No execution steps were recorded for this run.</p>
+				{/if}
 				{#if verificationSummary}
 					<div class="verification-summary">
 						<span><strong>Quality checks</strong> · {verificationSummary}</span>
 						<button type="button" class="evidence-link" onclick={() => void inspectEvidence(bodyId)}>Review checks and evidence</button>
 					</div>
-				{:else if answer && steps.length}
+				{:else if answer}
 					<p class="verification-summary">No verification checks were recorded for this run.</p>
 				{/if}
 			</Collapsible.Content>
@@ -337,10 +345,13 @@
 	.planned-steps { margin: 0 0 var(--space-2); color: var(--text-faint); font-size: var(--fs-xs); }
 	.planned-steps summary { width: fit-content; cursor: pointer; }
 	.planned-steps ol { display: grid; gap: 3px; margin: var(--space-1) 0 0; padding-left: var(--space-5); }
+	.planned-note { margin: var(--space-1) 0 0; color: var(--text-faint); font-size: var(--fs-xs); }
 	.clarification-note { display: grid; gap: 2px; margin: var(--space-2) 0; font-size: var(--fs-xs); }
 	.clarification-note strong { color: var(--text); }
 	.clarification-note span { color: var(--text-dim); }
 	.run-step-list { display: grid; gap: var(--space-1); margin: 0; padding: 0; list-style: none; }
+	.recorded-steps-heading { margin: var(--space-2) 0 var(--space-1); color: var(--text-faint); font-size: var(--fs-xs); font-weight: 600; }
+	.recorded-steps-empty { margin: 0; color: var(--text-faint); font-size: var(--fs-xs); }
 	.run-step { position: relative; display: grid; grid-template-columns: 10px minmax(0, 1fr); gap: var(--space-2); padding: 3px 0; }
 	.step-mark { position: relative; z-index: 1; display: grid; place-items: center; width: 9px; height: 9px; margin-top: 4px; margin-left: -16px; border: 1px solid var(--border-strong); border-radius: 50%; background: var(--bg-raised); color: var(--ok); }
 	.step-mark.running { border-color: var(--brand); color: var(--brand); }
@@ -351,6 +362,7 @@
 	.step-heading small { color: var(--text-faint); font-size: var(--fs-xs); }
 	.step-summary,
 	.step-sources { margin: 3px 0 0; color: var(--text-faint); font-size: var(--fs-xs); line-height: 1.45; }
+	.step-summary strong, .step-sources strong { color: var(--text-dim); font-weight: 600; }
 	.step-sources { overflow-wrap: anywhere; }
 	.evidence-link { display: inline-flex; margin: 4px 0 0; padding: 0; border: 0; background: transparent; color: var(--brand); font: inherit; font-size: var(--fs-xs); cursor: pointer; }
 	.evidence-link:hover { color: var(--text); text-decoration: underline; }

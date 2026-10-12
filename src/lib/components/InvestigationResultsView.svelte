@@ -355,6 +355,7 @@
 					{@const question = questionForFinding(finding.question_id)}
 					{@const run = runs[finding.analysis_turn_id]}
 					{@const checks = findingChecks(finding)}
+					{@const fromEarlierRun = Boolean(question && question.latest_analysis_turn_id !== finding.analysis_turn_id)}
 					<article class="results-finding" id="finding-{finding.id}" aria-label="Finding {index + 1}" data-artifact-kind="reviewed-finding">
 						<div class="results-finding-heading">
 							<span>Analyst-reviewed Finding · Revision {finding.revision}</span>
@@ -362,6 +363,7 @@
 						</div>
 						{#if findingCopyStatus[finding.id]}<span class="results-artifact-status" role="status">{findingCopyStatus[finding.id]}</span>{/if}
 						<p class="results-finding-claim">{finding.claim}</p>
+						{#if fromEarlierRun}<p class="results-freshness-warning" role="status">Based on an earlier run than this Question’s latest answer. Review its source revision before treating this Finding as current.</p>{/if}
 						{#if question}
 							<div class="results-finding-question-row">
 								<p class="results-finding-question">Answers: {question.text}</p>
@@ -374,6 +376,7 @@
 							{#if finding.assumptions.length}<div><h4>Assumptions</h4><ul>{#each finding.assumptions as assumption (assumption)}<li>{assumption}</li>{/each}</ul></div>{/if}
 							<section class="results-finding-context" aria-label="Finding coverage and run status">
 								<div><span>Question coverage</span><strong>{question ? questionStatusLabel(question) : 'Question unavailable'}</strong></div>
+								{#if run}<div><span>Source catalog revision</span><strong>{run.workspace_revision ?? 'Not recorded for this run'}</strong></div>{/if}
 								{#if question?.answer_status_reason}<p>{question.answer_status_reason}</p>{/if}
 								{#if question && question.latest_analysis_turn_id !== finding.analysis_turn_id}
 									<p>This Finding is linked to a run other than the Question’s latest answer. Review its run before treating it as current.</p>
@@ -449,7 +452,9 @@
 			<div class="results-charts">
 				{#each chartCards as card (card.key)}
 					{@const linkedFindings = findingsForChart(card)}
+					{@const fromEarlierRun = Boolean(card.question?.latest_analysis_turn_id && card.question.latest_analysis_turn_id !== card.run.id)}
 					<article class="results-chart" aria-label="Visualization artifact from {card.question?.text ?? 'saved analysis'}" data-artifact-kind="model-visualization">
+						{#if fromEarlierRun}<p class="results-freshness-warning" role="status">From an earlier run than the Question’s latest answer · Source catalog revision {card.run.workspace_revision ?? 'not recorded'}.</p>{/if}
 						<Chart
 							spec={card.evidence.chart!}
 							source={sourceLabel(card.evidence)}
@@ -478,6 +483,7 @@
 										{:else}Source scope not recorded{/if}
 									</dd>
 								</div>
+								<div><dt>Source catalog revision</dt><dd>{card.run.workspace_revision ?? 'Not recorded for this run'}</dd></div>
 								{#if card.run.source_scope?.skipped_sources?.length}
 									<div><dt>Sources skipped</dt><dd>{card.run.source_scope.skipped_sources.join(', ')}</dd></div>
 								{/if}
@@ -740,6 +746,7 @@
 	.results-artifact-lineage { font-size: var(--fs-xs); }
 	.results-artifact-lineage > summary { width: fit-content; color: var(--text-faint); cursor: pointer; }
 	.results-artifact-lineage > summary:hover { color: var(--text-dim); }
+	.results-freshness-warning { margin: var(--space-2) 0; padding: var(--space-2) var(--space-3); border-left: 2px solid var(--warn); background: var(--bg-inset); color: var(--text-dim); font-size: var(--fs-xs); line-height: 1.45; }
 	.results-artifact-lineage dl { display: grid; gap: var(--space-2); margin: var(--space-2) 0 0; }
 	.results-artifact-lineage dl > div { display: grid; grid-template-columns: minmax(120px, auto) minmax(0, 1fr); align-items: start; gap: var(--space-2); }
 	.results-artifact-lineage dt { color: var(--text-faint); }

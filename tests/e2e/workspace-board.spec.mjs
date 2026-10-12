@@ -686,6 +686,7 @@ async function installDesktopMock(
 				const answerTrace = {
 					id: `fixture-trace-${questionTurnNumber || calls.length}`,
 					turn_id: questionTurnId ?? (hasReplayEvidence ? 'fixture-turn' : `fixture-ask-${calls.length}`),
+					...(questionOutcome.elapsed_ms == null ? {} : { elapsed_ms: questionOutcome.elapsed_ms }),
 					steps: evidence.filter((item) => item.id).map((item) => ({
 						id: item.id,
 						operation: item.tool,
@@ -2305,7 +2306,15 @@ test('saved run review exposes its method, query output, definitions, and actual
 	const runTimeline = runDetail.getByRole('region', { name: 'Question run' });
 	await expect(runTimeline).toBeVisible();
 	await expect(runTimeline).toContainText('Calculating from the data');
+	const plannedApproach = runTimeline.locator('.planned-steps');
+	await expect(plannedApproach.locator('summary')).toContainText('not execution evidence');
+	await plannedApproach.locator('summary').click();
+	await expect(plannedApproach).toContainText('Recorded work appears separately below');
+	await expect(runTimeline.getByRole('heading', { name: 'Recorded steps' })).toBeVisible();
 	await expect(runTimeline).toContainText('Three monthly cohorts were returned; retention ranged from 42% to 51%.');
+	await expect(runTimeline).toContainText('Recorded output');
+	await expect(runTimeline).toContainText('Source inputs');
+	await expect(runTimeline).toContainText('No verification checks were recorded for this run.');
 	const queryTimelineStep = runTimeline.locator('.run-step').filter({
 		hasText: 'Three monthly cohorts were returned; retention ranged from 42% to 51%.'
 	});
@@ -2345,6 +2354,7 @@ test('repeated Question runs stay chronological and preserve each attempt contex
 		questionRunOutcomes: [
 			{
 				status: 'incomplete',
+				elapsed_ms: 1420,
 				answer_text: 'Attempt one: net sales were 120.',
 				plan: { strategy: 'compiled_sql', steps: ['inspect_sales', 'run_sql'] },
 				evidence: [firstEvidence],
@@ -2355,6 +2365,7 @@ test('repeated Question runs stay chronological and preserve each attempt contex
 			},
 			{
 				status: 'answered',
+				elapsed_ms: 2100,
 				answer_text: 'Attempt two: refunds were 18.',
 				plan: { strategy: 'python_fallback', steps: ['inspect_returns', 'run_python'] },
 				evidence: [secondEvidence],
@@ -2398,6 +2409,13 @@ test('repeated Question runs stay chronological and preserve each attempt contex
 	await expect(attempts).toHaveCount(2);
 	await expect(attempts.nth(0)).toHaveAttribute('aria-label', 'Open saved analysis run 1: Explain weekly sales');
 	await expect(attempts.nth(1)).toHaveAttribute('aria-label', 'Open saved analysis run 2: Explain weekly sales');
+	await expect(attempts.nth(0)).toContainText('1.4 s total');
+	await expect(attempts.nth(1)).toContainText('2.1 s total');
+	const firstStartedAt = attempts.nth(0).locator('time');
+	await expect(firstStartedAt).toHaveCount(1);
+	const firstStartedAtIso = await firstStartedAt.getAttribute('datetime');
+	expect(firstStartedAtIso).not.toBeNull();
+	expect(Number.isNaN(Date.parse(firstStartedAtIso))).toBe(false);
 
 	await attempts.nth(0).click();
 	const runDetail = page.getByRole('region', { name: 'Saved analysis run' });
@@ -2614,6 +2632,8 @@ test('Investigation results summarize saved work, render linked charts, and keep
 	const lineage = artifact.locator('.results-artifact-lineage');
 	await lineage.locator('summary').click();
 	await expect(lineage).toContainText('sales.csv · sales');
+	await expect(lineage).toContainText('Source catalog revision');
+	await expect(lineage).toContainText('sales-r1');
 	await expect(lineage).toContainText('legacy_sales.csv');
 	await expect(lineage).toContainText('results-chart-evidence');
 	await expect(lineage).toContainText('results-source-evidence');
@@ -2637,6 +2657,103 @@ test('Investigation results summarize saved work, render linked charts, and keep
 	await results.locator('.results-chart').getByRole('button', { name: 'Open analysis record' }).click();
 	await expect(page.getByRole('heading', { name: 'Results', exact: true })).toBeVisible();
 	await expect(page.getByRole('region', { name: 'Saved analysis run' })).toBeVisible();
+});
+
+test('Finding and chart lineage flag artifacts from an earlier Question run', async ({ page }) => {
+	const source = {
+		id: 'stale-chart-source',
+		tool: 'run_sql',
+		args: {},
+		result_summary: 'Monthly sales from January through March.',
+		columns: ['month', 'net_sales'],
+		rows: [['Jan', 120], ['Feb', 146], ['Mar', 139]],
+		row_count: 3,
+		sources: [{ source: 'sales.csv', table: 'sales' }]
+	};
+	const chart = {
+		id: 'stale-chart-evidence',
+		tool: 'make_chart',
+		args: {},
+		result_summary: 'Monthly net sales chart.',
+		ms: 8,
+		chart: {
+			kind: 'line',
+			title: 'Monthly net sales',
+			labels: ['Jan', 'Feb', 'Mar'],
+			series: [{ name: 'Net sales', values: [120, 146, 139] }],
+			unit: '$',
+			x_label: 'Month',
+			y_label: 'Net sales',
+			metadata: {
+				source_label: 'sales.csv',
+				source_evidence_id: source.id,
+				source_run_id: 'fixture-question-turn-1',
+				finding_snapshot: 'Net sales rose from January to February.',
+				fields: ['month', 'net_sales'],
+				aggregation: 'sum',
+				filters: [],
+				part_to_whole: false
+			}
+		}
+	};
+	await installDesktopMock(page, {
+		questionRunOutcomes: [
+			{
+				status: 'answered',
+				answer_text: 'Net sales rose from January to February, then eased in March.',
+				workspace_revision: 'sales-r1',
+				evidence: [source, chart]
+			},
+			{
+				status: 'answered',
+				answer_text: 'The refreshed data shows a different trend.',
+				workspace_revision: 'sales-r2'
+			}
+		]
+	});
+	await page.goto('/');
+	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
+	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
+	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill('Explain the monthly net sales trend.');
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	await page.getByRole('button', { name: 'Analyze main Question' }).click();
+	await page.getByRole('region', { name: 'Review this run' }).getByRole('button', { name: 'Run this Question' }).click();
+	await expectQuestionRunSettled(page);
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	await expandInvestigationHistory(page);
+	await page.getByRole('button', { name: 'Open saved analysis run 1: Explain the monthly net sales trend.' }).click();
+	const firstRun = page.getByRole('region', { name: 'Saved analysis run' });
+	const capture = firstRun.locator('.finding-capture');
+	await capture.getByRole('textbox', { name: 'Finding claim' }).fill('Net sales rose in the first run.');
+	await capture.getByRole('button', { name: 'Save Finding' }).click();
+	await expect(page.locator('.finding-card')).toContainText('Net sales rose in the first run.');
+	await firstRun.getByRole('button', { name: 'Close saved analysis run' }).click();
+
+	await page.getByRole('button', { name: 'Analyze main Question' }).click();
+	await page.getByRole('region', { name: 'Review this run' }).getByRole('button', { name: 'Run this Question' }).click();
+	await expectQuestionRunSettled(page);
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+
+	const results = page.getByRole('region', { name: 'Current Investigation results' });
+	const finding = results.getByRole('article', { name: 'Finding 1' });
+	await expect(finding.getByRole('status')).toContainText('Based on an earlier run than this Question’s latest answer.');
+	const findingSupport = finding.locator('details.results-supporting');
+	await findingSupport.locator('summary').click();
+	await expect(findingSupport).toContainText('This Finding is linked to a run other than the Question’s latest answer.');
+	await expect(findingSupport).toContainText('Source catalog revision');
+	await expect(findingSupport).toContainText('sales-r1');
+
+	const artifact = results.getByRole('article', { name: 'Visualization artifact from Explain the monthly net sales trend.' });
+	const freshnessWarning = artifact.locator('.results-freshness-warning');
+	await expect(freshnessWarning).toContainText('From an earlier run than the Question’s latest answer');
+	await expect(freshnessWarning).toContainText('sales-r1');
+	const lineage = artifact.locator('.results-artifact-lineage');
+	await lineage.locator('summary').click();
+	await expect(lineage).toContainText('Source catalog revision');
+	await expect(lineage).toContainText('sales-r1');
 });
 
 test('Investigation Results keep transcript-only historical work outside current Question coverage', async ({ page }) => {
