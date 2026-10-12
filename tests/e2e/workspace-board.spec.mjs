@@ -59,6 +59,14 @@ async function expectSidebarConversationFocused(page, title, workspace = 'northw
 	await expect(page.locator('.msg.user').filter({ hasText: title })).toHaveCount(1);
 }
 
+async function focusedWorkspaceConversationId(page, workspaceId) {
+	return page.evaluate((id) => {
+		const state = JSON.parse(localStorage.getItem('fella:environments') || '{}');
+		const environment = state.environments?.find((item) => item.id === state.active);
+		return environment?.panes.find((pane) => pane.workspaceId === id)?.conversationId ?? null;
+	}, workspaceId);
+}
+
 async function composeEnvironment(page, name, workspaceNames) {
 	const switcher = page.locator('.sidebar .environment-switcher-trigger');
 	await switcher.click();
@@ -1551,6 +1559,81 @@ test('a Question runs in its linked conversation even when it has no original ch
 		investigationId: investigation.id,
 		questionId: question.id
 	});
+});
+
+test('an Investigation restores its canonical empty conversation and Analyze opens Workbench', async ({ page }) => {
+	const workspaceId = folders[0].path;
+	const conversationId = 'investigation-canonical-empty-conversation';
+	const investigation = {
+		id: 'investigation-canonical-empty',
+		workspace_id: workspaceId,
+		conversation_id: conversationId,
+		title: 'Weekly sales investigation',
+		brief: { goal: 'Understand weekly sales performance', audience: '', desired_output: '', constraints: [] },
+		questions: [],
+		definitions: [],
+		findings: [],
+		source_selection: { mode: 'all_sources', included_paths: [] },
+		analysis_turn_ids: [],
+		status: 'active',
+		created_at_ms: 1,
+		updated_at_ms: 1
+	};
+	await installDesktopMock(page, {
+		projectInvestigationRecords: [investigation],
+		questionRunOutcomes: [{ status: 'answered', answer_text: 'Weekly sales rose 12%.' }]
+	});
+	await page.addInitScript(({ workspaceId: path, investigationId }) => {
+		const paneId = 'environment-restored:workspace-pane';
+		localStorage.setItem('fella:environments', JSON.stringify({
+			active: 'environment-restored',
+			environments: [{
+				id: 'environment-restored',
+				panes: [{
+					id: paneId,
+					workspaceId: path,
+					conversationId: 'discarded-empty-conversation',
+					layoutPreset: 'focus',
+					workspacePane: 'investigation',
+					investigationId
+				}],
+				activePaneId: paneId,
+				layout: {}
+			}]
+		}));
+	}, { workspaceId, investigationId: investigation.id });
+	await page.goto('/');
+	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
+	await expect.poll(() => focusedWorkspaceConversationId(page, workspaceId)).toBe(conversationId);
+	await workspacePresetButton(page, 'Investigation').click();
+	await expect(page.locator('.editor-heading h2')).toHaveText('Weekly sales investigation');
+
+	// This record has a durable canonical conversation ID but no archived chat,
+	// matching an Investigation created on an empty Focus chat before restart.
+	await page.getByRole('button', { name: 'Open conversation', exact: true }).click();
+	await expect(page.locator('.workspace-preset-layout')).toHaveAttribute('data-workspace-preset', 'focus');
+	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
+	await expect(page.locator('.msg.user')).toHaveCount(0);
+
+	await workspacePresetButton(page, 'Investigation').click();
+	await openInvestigationSection(page, 'Questions');
+	await page.getByRole('button', { name: 'Add main Question' }).click();
+	await page.getByRole('textbox', { name: 'Main question' }).fill('How did weekly sales change?');
+	await waitForQuestionPlanSaved(page);
+	await page.getByRole('button', { name: 'Analyze main Question' }).click();
+	await page.getByRole('region', { name: 'Review this run' }).getByRole('button', { name: 'Run this Question' }).click();
+
+	const answer = page.locator('.msg.assistant').last();
+	await expect(answer).toContainText('Weekly sales rose 12%.');
+	await expect(page.locator('.workspace-preset-layout')).toHaveAttribute('data-workspace-preset', 'workbench');
+	await expect(page.locator('.workspace-preset-panel[data-panel-id="conversation"]')).toBeVisible();
+	await expect(page.locator('.workspace-preset-panel[data-panel-id="investigation"]')).toBeVisible();
+	const askCall = await page.evaluate(() => window.__workspaceAskCalls.at(-1));
+	expect(askCall.conversationId).toBe(conversationId);
+
+	await workspacePresetButton(page, 'Focus').click();
+	await expect(page.locator('.workspace-preset-layout')).toHaveAttribute('data-workspace-preset', 'focus');
+	await expect(page.locator('.msg.assistant').last()).toContainText('Weekly sales rose 12%.');
 });
 
 test('Investigation index summarizes work and resumes the same completed record', async ({ page }) => {

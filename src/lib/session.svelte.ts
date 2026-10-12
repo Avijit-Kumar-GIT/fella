@@ -1509,6 +1509,8 @@ class Session {
 		conversation.workspaceScope = scope;
 		this.conversations.push(conversation);
 		pane.conversationId = conversation.id;
+		pane.investigationId = null;
+		this.activeInvestigationId = null;
 		// A deliberate New conversation action should land in the composer,
 		// regardless of the analytical view previously open in this pane.
 		pane.layoutPreset = 'focus';

@@ -1,10 +1,10 @@
 <script lang="ts">
 	import { onDestroy, tick } from 'svelte';
-	import { firstActualQuestion, session } from '$lib/session.svelte';
+	import { firstActualQuestion, session, type WorkspaceLayoutPreset } from '$lib/session.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Dialog } from '$lib/components/ui/dialog';
-	import { analyzeInvestigationQuestion, openConversation } from '$lib/commands';
+	import { analyzeInvestigationQuestion } from '$lib/commands';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { ipc, isDesktop } from '$lib/ipc';
 	import { analysisTurnIdsAfterSourceMessage } from '$lib/investigation-runs';
@@ -126,10 +126,13 @@
 	let reportPreviewOpen = $state(false);
 	let reportPreview = $state<HandoffPreview | null>(null);
 	let error = $state('');
+	let investigationLoadError = $state('');
+	let conversationError = $state('');
 	let autosaveError = $state('');
 	let requestSerial = 0;
 	let autosaveTimer: ReturnType<typeof setTimeout> | undefined;
 	let autosaveInProgress: Promise<void> | null = null;
+	let investigationPaneWasVisible = false;
 	const syncingInvestigations = new Set<string>();
 
 	let selected = $derived(investigations.find((item) => item.id === selectedId) ?? null);
@@ -320,10 +323,101 @@
 		return '';
 	});
 
-	async function loadWorkspace(path: string): Promise<void> {
+	async function focusInvestigationConversation(
+		item: Investigation,
+		layout: WorkspaceLayoutPreset | 'preserve' = 'preserve',
+		focusTurnId?: string,
+		isCurrent: () => boolean = () => true
+	): Promise<Investigation | null> {
+		let conversationId = item.conversation_id;
+		let linkedInvestigation = item;
+		let summary: ConversationSummary | null = null;
+
+		if (!conversationId && item.brief_source_message_id) {
+			const summaries = await ipc.conversationsList();
+			if (!isCurrent()) return null;
+			summary = summaries.find((candidate) =>
+				candidate.workspace === item.workspace_id &&
+				candidate.first_question_message_id === item.brief_source_message_id
+			) ?? null;
+			conversationId = summary?.id;
+			if (conversationId) {
+				linkedInvestigation = await ipc.investigationEnsure(
+					item.workspace_id,
+					conversationId,
+					item.brief.goal,
+					item.brief_source_message_id
+				);
+				if (!isCurrent()) return null;
+				investigations = investigations.map((record) => record.id === linkedInvestigation.id ? linkedInvestigation : record);
+			}
+		}
+		if (!conversationId) throw new Error('This Investigation has no linked conversation yet.');
+
+		const existingConversation = session.conversations.find((conversation) => conversation.id === conversationId);
+		if (existingConversation && existingConversation.workspaceScope !== item.workspace_id) {
+			throw new Error('The linked conversation belongs to a different workspace.');
+		}
+		const loadedIndex = session.conversations.findIndex((conversation) =>
+			conversation.id === conversationId && conversation.workspaceScope === item.workspace_id
+		);
+		if (loadedIndex < 0) {
+			summary ??= (await ipc.conversationsList()).find((candidate) =>
+				candidate.id === conversationId && candidate.workspace === item.workspace_id
+			) ?? null;
+			if (!isCurrent()) return null;
+			if (summary) {
+				const saved = JSON.parse(await ipc.conversationLoad(conversationId)) as {
+					workspace?: string | null;
+					messages?: unknown;
+					title?: string | null;
+					companionPane?: unknown;
+				};
+				if (!isCurrent()) return null;
+				if (saved.workspace && saved.workspace !== item.workspace_id) {
+					throw new Error('The linked conversation belongs to a different workspace.');
+				}
+				const messages = Array.isArray(saved.messages) ? saved.messages as Message[] : [];
+				session.loadConversation(conversationId, messages, saved.title ?? null, item.workspace_id, saved.companionPane);
+			} else {
+				const hasRecordedAnalysis = Boolean(
+					item.brief_source_message_id ||
+					item.analysis_turn_ids?.length ||
+					item.findings?.length ||
+					item.questions?.some((question) => question.latest_analysis_turn_id || question.analysis_turn_ids?.length)
+				);
+				if (hasRecordedAnalysis) throw new Error('The linked conversation is missing from local history.');
+				// Empty chats are intentionally omitted from conversation history. The
+				// durable Investigation still owns this ID, so restore that same blank
+				// conversation rather than creating a different one in Focus.
+				session.loadConversation(conversationId, [], null, item.workspace_id);
+			}
+		}
+
+		if (!isCurrent()) return null;
+		if (!session.focusWorkspace(item.workspace_id, conversationId)) {
+			throw new Error('Fella could not focus the linked conversation.');
+		}
+		const restorePreset = layout === 'preserve' ? session.workspaceLayoutPreset : layout;
+		session.setWorkspaceLayoutPreset(restorePreset);
+		session.setActiveInvestigation(linkedInvestigation.id);
+		if (focusTurnId) session.focusConversationAnalysis(conversationId, focusTurnId);
+		return linkedInvestigation;
+	}
+
+	async function loadWorkspace(path: string, preserveDrafts = false): Promise<void> {
 		const serial = ++requestSerial;
+		const draft = preserveDrafts ? selected : null;
+		if (draft && (dirty || questionsDirty || definitionsDirty)) {
+			clearTimeout(autosaveTimer);
+			await saveEditableDrafts(draft.id);
+			if (serial !== requestSerial) return;
+			if (selected?.id === draft.id && (dirty || questionsDirty || definitionsDirty)) return;
+		}
 		loading = true;
 		error = '';
+		investigationLoadError = '';
+		conversationError = '';
 		investigations = [];
 		selectedId = null;
 		analysisTurns = {};
@@ -348,10 +442,26 @@
 			const rememberedInvestigation = investigations.find((item) =>
 				item.id === session.activeInvestigationId && item.workspace_id === path
 			);
-			selectedId = navigationInvestigation?.id ?? rememberedInvestigation?.id ?? linkedToConversation?.id ?? investigations[0]?.id ?? null;
-			session.setActiveInvestigation(selectedId);
+			const conversationInvestigation = navigationInvestigation ?? rememberedInvestigation ?? linkedToConversation;
+			selectedId = conversationInvestigation?.id ?? investigations[0]?.id ?? null;
+			const selectedInvestigation = investigations.find((item) => item.id === selectedId);
+			if (isDesktop() && conversationInvestigation && selectedInvestigation && (selectedInvestigation.conversation_id || selectedInvestigation.brief_source_message_id)) {
+				try {
+					const linked = await focusInvestigationConversation(
+						selectedInvestigation,
+						'preserve',
+						undefined,
+						() => serial === requestSerial && path === session.catalog.workspace && selectedId === selectedInvestigation.id
+					);
+					if (serial !== requestSerial) return;
+					if (linked) selectedId = linked.id;
+				} catch (cause) {
+					if (serial === requestSerial) conversationError = cause instanceof Error ? cause.message : String(cause);
+				}
+			}
+			if (serial === requestSerial) session.setActiveInvestigation(conversationInvestigation ? selectedId : null);
 		} catch (cause) {
-			if (serial === requestSerial) error = cause instanceof Error ? cause.message : String(cause);
+			if (serial === requestSerial) investigationLoadError = cause instanceof Error ? cause.message : String(cause);
 		} finally {
 			if (serial === requestSerial) loading = false;
 		}
@@ -390,6 +500,12 @@
 	$effect(() => {
 		const path = session.catalog.workspace;
 		const version = session.investigationsVersion;
+		const paneVisible = session.workspaceView === 'workspace'
+			&& session.workspacePane === 'investigation'
+			&& session.workspaceLayoutPreset !== 'focus';
+		const enteredPane = paneVisible && !investigationPaneWasVisible;
+		investigationPaneWasVisible = paneVisible;
+		const sameWorkspace = path === loadedWorkspace;
 		if (path !== loadedWorkspace) investigationSection = 'brief';
 		if (path !== loadedWorkspace && selected && (dirty || questionsDirty || definitionsDirty)) {
 			void saveEditableDrafts(selected.id);
@@ -405,23 +521,10 @@
 			loading = false;
 			return;
 		}
-		if (path === loadedWorkspace && version === loadedInvestigationsVersion) return;
+		if (path === loadedWorkspace && version === loadedInvestigationsVersion && !enteredPane) return;
 		loadedWorkspace = path;
 		loadedInvestigationsVersion = version;
-		void loadWorkspace(path);
-	});
-
-	$effect(() => {
-		const path = session.catalog.workspace;
-		if (
-			!path ||
-			session.workspaceView !== 'workspace' ||
-			session.workspacePane !== 'investigation' ||
-			session.workspaceLayoutPreset === 'focus'
-		) return;
-		const current = selected;
-		const id = current?.workspace_id === path ? current.id : null;
-		if (session.activeInvestigationId !== id) session.setActiveInvestigation(id);
+		void loadWorkspace(path, sameWorkspace);
 	});
 
 	$effect(() => {
@@ -519,19 +622,28 @@
 		if (selected) void saveEditableDrafts(selected.id);
 		creating = true;
 		error = '';
+		conversationError = '';
 		const request = currentConversationSource;
 		try {
+			if (session.activeChat.workspaceScope !== workspacePath && !session.focusWorkspace(workspacePath)) {
+				throw new Error('Fella could not open a conversation in this workspace.');
+			}
+			const conversation = session.activeChat;
+			if (conversation.workspaceScope !== workspacePath) {
+				throw new Error('The active conversation belongs to a different workspace.');
+			}
 			const record = request
-				? await ipc.investigationEnsure(workspacePath, session.activeChat.id, request.text, request.id)
+				? await ipc.investigationEnsure(workspacePath, conversation.id, request.text, request.id)
 			: await ipc.investigationCreate(
 					workspacePath,
 					'New investigation',
 					undefined,
 					undefined,
-					session.activeChat.workspaceScope === workspacePath ? session.activeChat.id : undefined
+					conversation.id
 				);
 			investigations = [record, ...investigations.filter((item) => item.id !== record.id)];
 			selectedId = record.id;
+			session.setActiveInvestigation(record.id);
 		} catch (cause) {
 			error = cause instanceof Error ? cause.message : String(cause);
 		} finally {
@@ -539,52 +651,24 @@
 		}
 	}
 
-	async function openSelectedConversation(focusTurnId?: string): Promise<Investigation | null> {
+	async function openSelectedConversation(
+		focusTurnId?: string,
+		layout: WorkspaceLayoutPreset = 'focus'
+	): Promise<Investigation | null> {
 		const item = selected;
 		if (!item || openingConversation || !isDesktop()) return null;
 		void saveEditableDrafts(item.id);
 		openingConversation = true;
-		error = '';
+		conversationError = '';
 		try {
-			let conversationId = item.conversation_id;
-			let linkedInvestigation = item;
-			let summary: ConversationSummary | null = null;
-			if (!conversationId && item.brief_source_message_id) {
-				const summaries = await ipc.conversationsList();
-				summary = summaries.find((candidate) =>
-					candidate.workspace === item.workspace_id &&
-					candidate.first_question_message_id === item.brief_source_message_id
-				) ?? null;
-				conversationId = summary?.id;
-				if (conversationId) {
-					linkedInvestigation = await ipc.investigationEnsure(
-						item.workspace_id,
-						conversationId,
-						item.brief.goal,
-						item.brief_source_message_id
-					);
-					investigations = investigations.map((record) => record.id === linkedInvestigation.id ? linkedInvestigation : record);
-				}
-			}
-			if (!conversationId) throw new Error('The source conversation is not available in local history.');
-
-			const loadedIndex = session.conversations.findIndex((conversation) =>
-				conversation.id === conversationId && conversation.workspaceScope === item.workspace_id
+			return await focusInvestigationConversation(
+				item,
+				layout,
+				focusTurnId,
+				() => selectedId === item.id && session.catalog.workspace === item.workspace_id
 			);
-			if (loadedIndex >= 0) {
-				if (!session.activateConversation(loadedIndex)) throw new Error('Fella could not focus the linked conversation.');
-			} else {
-				summary ??= (await ipc.conversationsList()).find((candidate) =>
-					candidate.id === conversationId && candidate.workspace === item.workspace_id
-				) ?? null;
-				if (!summary) throw new Error('The linked conversation is not available in local history.');
-				if (!(await openConversation(summary))) throw new Error('Fella could not open the linked conversation.');
-			}
-			session.setWorkspaceView('ask');
-			if (focusTurnId) session.focusConversationAnalysis(conversationId, focusTurnId);
-			return linkedInvestigation;
 		} catch (cause) {
-			error = cause instanceof Error ? cause.message : String(cause);
+			conversationError = cause instanceof Error ? cause.message : String(cause);
 			return null;
 		} finally {
 			openingConversation = false;
@@ -1357,7 +1441,7 @@
 			}
 			if (questionsDirty && !(await saveQuestions())) return;
 			if (definitionsDirty && !(await saveDefinitions())) return;
-			const linkedInvestigation = await openSelectedConversation();
+			const linkedInvestigation = await openSelectedConversation(undefined, 'workbench');
 			if (!linkedInvestigation) return;
 			pendingAnalysisQuestionId = null;
 			await analyzeInvestigationQuestion(linkedInvestigation, questionId);
@@ -1646,16 +1730,36 @@
 	}
 
 	async function selectInvestigation(id: string): Promise<void> {
-		if (id === selectedId) return;
+		const wasSelected = id === selectedId;
+		if (wasSelected && session.activeInvestigationId === id) return;
 		const previousId = selectedId;
-		if (previousId) void saveEditableDrafts(previousId);
-		pendingAnalysisQuestionId = null;
-		analysisTurnError = '';
-		openAnalysisTurnId = null;
-		questionLinksDraft = [];
-		investigationSection = 'brief';
-		selectedId = id;
-		session.setActiveInvestigation(id);
+		if (!wasSelected) {
+			if (previousId) void saveEditableDrafts(previousId);
+			pendingAnalysisQuestionId = null;
+			analysisTurnError = '';
+			openAnalysisTurnId = null;
+			questionLinksDraft = [];
+			investigationSection = 'brief';
+			selectedId = id;
+		}
+		conversationError = '';
+		const item = investigations.find((record) => record.id === id);
+		if (isDesktop() && item && (item.conversation_id || item.brief_source_message_id)) {
+			try {
+				const linked = await focusInvestigationConversation(
+					item,
+					'preserve',
+					undefined,
+					() => selectedId === id && session.catalog.workspace === item.workspace_id
+				);
+				if (linked && selectedId === id) selectedId = linked.id;
+			} catch (cause) {
+				conversationError = cause instanceof Error ? cause.message : String(cause);
+				session.setActiveInvestigation(id);
+			}
+		} else {
+			session.setActiveInvestigation(id);
+		}
 	}
 
 	function handleInvestigationTabsKeydown(event: KeyboardEvent): void {
@@ -1694,7 +1798,7 @@
 			{/if}
 		</div>
 	</header>
-	{#if workspacePath && !loading && !error && !selected}
+	{#if workspacePath && !loading && !investigationLoadError && !selected}
 		<section class="investigation-document-section investigation-data-section" aria-labelledby="investigation-data-empty-heading">
 			<header class="investigation-document-heading">
 				<div><h2 id="investigation-data-empty-heading">Data</h2><p>See which files are available to analyze.</p></div>
@@ -1715,11 +1819,11 @@
 		</div>
 	{:else if loading}
 		<p class="status" role="status">Loading investigations…</p>
-	{:else if error}
+	{:else if investigationLoadError}
 		<div class="empty-state" role="alert">
 			<Icon name="alert" size={20} />
 			<h2>Couldn't load investigations</h2>
-			<p>{error}</p>
+			<p>{investigationLoadError}</p>
 			<Button type="button" onclick={() => workspacePath && void loadWorkspace(workspacePath)}>Retry</Button>
 		</div>
 	{:else if !investigations.length}
@@ -1727,6 +1831,7 @@
 			<Icon name="bookmark" size={20} />
 			<h2>No investigations yet</h2>
 			<p>Ask about this workspace to start one, or create an Investigation now.</p>
+			{#if error}<p class="analysis-run-error" role="alert">{error}</p>{/if}
 			<Button type="button" disabled={creating} onclick={() => void createInvestigation()}>
 				<Icon name="plus" size={16} />{creating ? 'Opening…' : currentConversationSource ? 'Start from conversation' : 'Start from this workspace'}
 			</Button>
@@ -1769,6 +1874,9 @@
 							</Button>
 						</div>
 					</div>
+					{#if conversationError}
+						<p class="analysis-run-error" role="alert">{conversationError}</p>
+					{/if}
 					<div class="investigation-nav fella-pill-nav" role="tablist" aria-label="Investigation sections" tabindex="-1" onkeydown={handleInvestigationTabsKeydown}>
 						{#each investigationSections as section (section.id)}
 							<button
