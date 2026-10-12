@@ -166,7 +166,7 @@ test('G3: Stop retains completed SQL evidence and prevents later streamed text',
 		await expect(assistant.locator('.text.rich')).not.toContainText('LATE_TOKEN_SHOULD_NOT_APPEAR');
 		await expect.poll(() => slowResponseClosed, { timeout: 5_000 }).toBe(true);
 
-		const details = assistant.getByRole('button', { name: 'Analysis details' });
+		const details = assistant.getByRole('button', { name: 'How this was analyzed' });
 		await expect(details).toBeVisible();
 		await details.click();
 		await expect(assistant).toContainText('sales.csv');
@@ -524,7 +524,7 @@ test('G7 forecast: live forecast completes and exposes its method and source det
 		await expect(forecastAnswer.locator('.thinking')).toHaveCount(0);
 		assert.ok((await answerText.innerText()).trim(), 'the forecast request should produce a settled response');
 
-		const analysisDetails = forecastAnswer.getByRole('button', { name: 'Analysis details' });
+		const analysisDetails = forecastAnswer.getByRole('button', { name: 'How this was analyzed' });
 		await expect(analysisDetails).toBeVisible();
 		await analysisDetails.click();
 		await expect(analysisDetails).toHaveAttribute('aria-expanded', 'true');

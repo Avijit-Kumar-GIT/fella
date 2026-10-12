@@ -162,7 +162,28 @@
 			case 'workspace_inspect':
 				return 'Inspection details';
 			default:
-				return 'Analysis details';
+				return 'How this was analyzed';
+		}
+	});
+	let answerCaveat = $derived.by(() => {
+		switch (message.answer?.status) {
+			case 'needs_review':
+				return {
+					title: 'Result needs review',
+					body: 'A check raised a concern. The answer remains available; review the flagged details before relying on it.'
+				};
+			case 'insufficient_data':
+				return {
+					title: 'Evidence is incomplete',
+					body: 'There is not enough accepted evidence to verify this result. The answer remains available, but treat it as incomplete.'
+				};
+			case 'failed':
+				return {
+					title: 'Verification failed',
+					body: 'A blocking verification check failed. The answer remains available, but it is not verified; review the details before relying on it.'
+				};
+			default:
+				return null;
 		}
 	});
 </script>
@@ -233,6 +254,20 @@
 		{/if}
 	{:else}
 		<div class="text">{message.text}</div>
+	{/if}
+	{#if message.answer && answerCaveat}
+		<div
+			class="answer-caveat"
+			role="status"
+			aria-label="Answer limitation"
+			data-answer-status={message.answer.status}
+		>
+			<Icon name="alert" size={14} />
+			<div>
+				<strong>{answerCaveat.title}</strong>
+				<p>{answerCaveat.body}</p>
+			</div>
+		</div>
 	{/if}
 	{#if message.answer}
 		<EvidenceBlock
@@ -360,6 +395,19 @@
 	.answer-visuals {
 		margin-top: var(--space-3);
 	}
+	.answer-caveat {
+		display: flex;
+		align-items: flex-start;
+		gap: var(--space-2);
+		margin: var(--space-3) 0;
+		padding: var(--space-2) var(--space-3);
+		border-left: 2px solid var(--warn);
+		background: var(--bg-inset);
+		color: var(--warn);
+	}
+	.answer-caveat :global(svg) { flex: none; margin-top: 2px; }
+	.answer-caveat strong { color: var(--text); font-size: var(--fs-sm); font-weight: 600; }
+	.answer-caveat p { margin: 2px 0 0; color: var(--text-dim); font-size: var(--fs-xs); line-height: 1.45; }
 	.answer-visuals :global(.chart-card) {
 		margin-top: 0;
 	}

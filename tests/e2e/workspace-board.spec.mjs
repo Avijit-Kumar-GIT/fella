@@ -1595,7 +1595,16 @@ test('Questions show persisted coverage states and explain incomplete, blocked, 
 		await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.').last()).toBeVisible();
 		const timeline = await expectQuestionRunSettled(page);
 		if (questionRunCount === 1) {
-			await expect(page.locator('.msg.assistant').last()).not.toContainText('Private model scratch');
+			const answer = page.locator('.msg.assistant').last();
+			await expect(answer).not.toContainText('Private model scratch');
+			await expect(answer).toContainText('Scoped to C:\\FellaFixture\\northwind-sales.');
+			const limitation = answer.getByRole('status', { name: 'Answer limitation' });
+			await expect(limitation).toHaveAttribute('data-answer-status', 'insufficient_data');
+			await expect(limitation).toContainText('The answer remains available, but treat it as incomplete.');
+			const analyzed = answer.getByRole('button', { name: 'How this was analyzed' });
+			await expect(analyzed).toHaveAttribute('aria-expanded', 'false');
+			await analyzed.click();
+			await expect(answer).toContainText('Insufficient evidence');
 			await expect(timeline).toContainText('Found relevant passages in the available documents.');
 			await expect(timeline).toContainText('Quality checks');
 			await expect(timeline).toContainText('1 flagged');
@@ -4255,7 +4264,7 @@ test('Project actions open Investigation data and retain navigation and delete b
 	await expect(openProject).toHaveCount(0);
 });
 
-test('Analysis details uses the shared button and preserves disclosure state', async ({ page }) => {
+test('How this was analyzed uses the shared button and preserves disclosure state', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
 	await page.getByRole('combobox', { name: 'Ask a question' }).fill('Summarize the workspace.');
@@ -4263,7 +4272,7 @@ test('Analysis details uses the shared button and preserves disclosure state', a
 
 	const answer = page.locator('.msg.assistant').last();
 	await expect(answer).toContainText('Scoped to general.');
-	const details = answer.getByRole('button', { name: 'Analysis details' });
+	const details = answer.getByRole('button', { name: 'How this was analyzed' });
 	await expect(details).toHaveAttribute('data-slot', 'button');
 	await expect(details).toHaveAttribute('aria-expanded', 'false');
 
@@ -4329,7 +4338,7 @@ test('a quick workspace question stays low-ceremony while keeping its answer evi
 	await expect(page.getByRole('region', { name: 'Review this run' })).toHaveCount(0);
 	await expect(page.getByRole('region', { name: 'Question run' }).last()).toBeVisible();
 
-	const details = answer.getByRole('button', { name: 'Analysis details' });
+	const details = answer.getByRole('button', { name: 'How this was analyzed' });
 	await details.click();
 	await expect(answer).toContainText('Workspace tool results are linked to the steps below.');
 	await expect(answer).toContainText('from sales.csv (sales)');
@@ -4383,7 +4392,7 @@ test('Evidence query disclosure uses a shared button and preserves expansion beh
 	await page.getByRole('button', { name: 'Send' }).click();
 
 	const answer = page.locator('.msg.assistant').last();
-	await answer.getByRole('button', { name: 'Analysis details' }).click();
+	await answer.getByRole('button', { name: 'How this was analyzed' }).click();
 	const reveal = answer.locator('.detailtoggle');
 	await expect(reveal).toHaveAttribute('data-slot', 'button');
 	await expect(reveal).toHaveText('show the query');
@@ -4474,12 +4483,12 @@ test('a saved run keeps its own method and evidence inspectable after a later an
 	await page.getByRole('button', { name: 'Send' }).click();
 	const laterAnswer = page.locator('.msg.assistant').nth(1);
 	await expect(laterAnswer).toContainText('Scoped to C:\\FellaFixture\\northwind-sales.');
-	await laterAnswer.getByRole('button', { name: 'Analysis details' }).click();
+	await laterAnswer.getByRole('button', { name: 'How this was analyzed' }).click();
 	await laterAnswer.getByRole('button', { name: 'show the query' }).click();
 	await expect(laterAnswer).toContainText('Latest transcript-only evidence.');
 
 	const originalAnswer = page.locator('.msg.assistant').first();
-	await originalAnswer.getByRole('button', { name: 'Analysis details' }).click();
+	await originalAnswer.getByRole('button', { name: 'How this was analyzed' }).click();
 	await originalAnswer.getByRole('button', { name: 'Open saved run record' }).click();
 	const savedRunPanel = originalAnswer.locator('.saved-run-panel');
 	await expect(savedRunPanel).toContainText('compiled sql');
@@ -4535,7 +4544,7 @@ test('Replay freshness uses shared status badges and rerun buttons', async ({ pa
 
 	const answer = page.locator('.msg.assistant').last();
 	await expect(answer).toContainText('Scoped to general.');
-	await answer.getByRole('button', { name: 'Analysis details' }).click();
+	await answer.getByRole('button', { name: 'How this was analyzed' }).click();
 
 	const freshness = answer.locator('[data-slot="badge"]');
 	await expect(freshness).toHaveAttribute('class', /fella-ui-badge-warning/);
@@ -4561,7 +4570,7 @@ test('Replay freshness lookup errors use an alert and a working retry action', a
 
 	const answer = page.locator('.msg.assistant').last();
 	await expect(answer).toContainText('Scoped to general.');
-	await answer.getByRole('button', { name: 'Analysis details' }).click();
+	await answer.getByRole('button', { name: 'How this was analyzed' }).click();
 
 	const alert = answer.getByRole('alert');
 	await expect(alert).toContainText("Couldn't check freshness.");
@@ -4743,6 +4752,37 @@ test('Suggested follow-ups use shared link buttons and submit the selected quest
 
 	await expect(page.locator('.msg.user').last()).toContainText('What else stands out?');
 	await expect(page.locator('.msg.assistant').last()).toContainText('Scoped to general.');
+});
+
+test('Workspace follow-ups stay in the same Investigation and conversation', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
+	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+
+	const composer = page.getByRole('combobox', { name: 'Ask about northwind-sales' });
+	await expect(composer).toBeVisible();
+	const investigationSummary = page.getByTestId('workspace-investigation-summary');
+	await expect(investigationSummary).toContainText('No Investigation yet');
+	await composer.fill('Summarize the workspace.');
+	await page.getByRole('button', { name: 'Send' }).click();
+
+	const firstAnswer = page.locator('.msg.assistant').last();
+	await expect(firstAnswer).toContainText('Scoped to C:\\FellaFixture\\northwind-sales.');
+	const followup = firstAnswer.getByRole('button', { name: 'What else stands out?' });
+	await followup.click();
+	await expect(page.locator('.msg.user').last()).toContainText('What else stands out?');
+	await expect(page.locator('.msg.assistant').last()).toContainText('Scoped to C:\\FellaFixture\\northwind-sales.');
+	await expect.poll(() => page.evaluate(() => window.__workspaceAskCalls.length)).toBe(2);
+
+	const calls = await page.evaluate(() => window.__workspaceAskCalls);
+	expect(calls[0].investigationId).toBeTruthy();
+	expect(calls[1]).toMatchObject({
+		workspaceId: calls[0].workspaceId,
+		conversationId: calls[0].conversationId,
+		investigationId: calls[0].investigationId
+	});
+	expect(await page.evaluate(() => window.__workspaceInvestigations())).toHaveLength(1);
 });
 
 test('Workspace starter prompts use shared outline buttons and submit the selected prompt', async ({ page }) => {

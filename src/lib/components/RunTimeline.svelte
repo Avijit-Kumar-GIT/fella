@@ -155,6 +155,7 @@
 		if (answer?.clarification) return 'Waiting for your input';
 		if (answer?.status === 'needs_review') return 'Result needs review';
 		if (answer?.status === 'insufficient_data') return 'Insufficient data';
+		if (answer?.status === 'failed') return 'Verification failed';
 		if (failed) return 'Analysis did not finish';
 		if (answer) return answer.status === 'verified' ? 'Analysis checked' : 'Analysis complete';
 		if (runState) return runStateLabel(runState) ?? 'Analysis complete';
@@ -223,7 +224,7 @@
 					<span class="run-meta">
 						{steps.length} step{steps.length === 1 ? '' : 's'}{#if totalDuration != null} · {duration(totalDuration)}{/if}
 					</span>
-					<Collapsible.Trigger class="disclosure" aria-label={expanded ? 'Collapse run details' : 'Show run details'}>
+					<Collapsible.Trigger class="disclosure" aria-label={expanded ? 'Hide analysis steps' : 'Show analysis steps'}>
 						<Icon name="chevron-right" size={12} />
 					</Collapsible.Trigger>
 				</div>

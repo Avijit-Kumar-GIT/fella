@@ -280,7 +280,7 @@ async function inspectChartCards(assistant, providerId, caseId) {
 }
 
 async function captureAnalysis(assistant) {
-	const disclosure = assistant.getByRole('button', { name: 'Analysis details', exact: true });
+	const disclosure = assistant.getByRole('button', { name: 'How this was analyzed', exact: true });
 	if (await disclosure.count() === 0) {
 		return { available: false, text: '', evidence_steps: [], model_calls: [] };
 	}

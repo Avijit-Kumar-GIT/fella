@@ -4,7 +4,7 @@
 
 	let {
 		bodyId,
-		label = 'Analysis details',
+		label = 'How this was analyzed',
 		expanded = false,
 		ontoggle
 	}: {
