@@ -1185,6 +1185,9 @@ test('Workbench composes curated panels while keeping Investigation scope and co
 	await companionToggle.check();
 	await expect(companion).toBeVisible();
 	await expect(companion).toContainText('Choose a chart or source to open it beside the conversation.');
+	const investigationHeight = (await investigation.boundingBox()).height;
+	const companionHeight = (await companion.boundingBox()).height;
+	expect(companionHeight).toBeGreaterThan(investigationHeight);
 
 	const companionGroup = page.getByLabel('Group Chart or source preview');
 	await companionGroup.selectOption('conversation');

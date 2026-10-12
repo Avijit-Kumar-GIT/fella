@@ -359,13 +359,15 @@
 						<SettingsView />
 					{:else if scopedWorkspaceActive}
 						{@const hasCompanion = Boolean(session.activeChat.companionPane)}
+						{@const workbenchRowTemplate = workbenchLayout.rowTemplate(hasCompanion)}
+						{@const workbenchStackedRowTemplate = workbenchLayout.rowTemplate(hasCompanion, true)}
 						<div
 							class="workspace-preset-layout"
 							data-workspace-preset={session.workspaceLayoutPreset}
 							data-has-companion={hasCompanion}
 							data-workbench-visible-count={workbenchLayout.visibleCount(hasCompanion)}
 							data-workbench-group-count={workbenchLayout.visibleGroupCount(hasCompanion)}
-							style={`--workbench-row-count:${workbenchLayout.rowCount(hasCompanion)};--workbench-visible-count:${workbenchLayout.visibleCount(hasCompanion)};--workbench-conversation-share:${workbenchLayout.conversationShare}%`}
+							style={`--workbench-row-count:${workbenchLayout.rowCount(hasCompanion)};--workbench-visible-count:${workbenchLayout.visibleCount(hasCompanion)};--workbench-conversation-share:${workbenchLayout.conversationShare}%;--workbench-row-template:${workbenchRowTemplate};--workbench-stacked-row-template:${workbenchStackedRowTemplate}`}
 						>
 							{#each workbenchLayout.placements(hasCompanion) as panel (panel.id)}
 								{@const panelDefinition = WORKBENCH_PANELS.find((item) => item.id === panel.id)!}
@@ -543,6 +545,10 @@
 		min-height: 0;
 		overflow: hidden;
 	}
+	.workspace-preset-investigation {
+		container-name: investigation-pane;
+		container-type: inline-size;
+	}
 	.workspace-preset-panel[hidden] {
 		display: none !important;
 	}
@@ -564,7 +570,7 @@
 	}
 	.workspace-preset-layout[data-workspace-preset='workbench'] {
 		grid-template-columns: minmax(320px, min(var(--workbench-conversation-share), 60%)) 10px minmax(420px, 1fr);
-		grid-template-rows: repeat(var(--workbench-row-count), minmax(0, 1fr));
+		grid-template-rows: var(--workbench-row-template);
 	}
 	.workspace-preset-layout[data-workspace-preset='workbench'][data-workbench-group-count='1'] {
 		grid-template-columns: minmax(0, 1fr);
@@ -624,10 +630,10 @@
 			grid-template-rows: minmax(0, 1fr);
 		}
 		.workspace-preset-layout[data-workspace-preset='workbench'][data-workbench-visible-count='2'] {
-			grid-template-rows: minmax(0, 0.8fr) minmax(0, 1.2fr);
+			grid-template-rows: var(--workbench-stacked-row-template);
 		}
 		.workspace-preset-layout[data-workspace-preset='workbench'][data-workbench-visible-count='3'] {
-			grid-template-rows: repeat(3, minmax(0, 1fr));
+			grid-template-rows: var(--workbench-stacked-row-template);
 		}
 		.workspace-preset-layout[data-workspace-preset='workbench'] .workspace-preset-panel {
 			grid-column: 1;

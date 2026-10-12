@@ -2894,4 +2894,11 @@
 		.question-coverage > header { flex-direction: column; }
 		.question-coverage-counts { width: 100%; grid-template-columns: repeat(4, minmax(0, 1fr)); }
 	}
+	@container investigation-pane (max-width: 900px) {
+		.investigation-page { padding: var(--space-5) var(--space-4); }
+		.page-head { align-items: flex-start; flex-direction: column; }
+		.page-head-actions { width: 100%; justify-content: flex-start; flex-wrap: wrap; }
+		.investigation-layout { grid-template-columns: minmax(0, 1fr); gap: var(--space-4); }
+		.investigation-list { max-height: 160px; overflow: auto; }
+	}
 </style>

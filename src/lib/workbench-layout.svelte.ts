@@ -160,6 +160,33 @@ class WorkbenchLayout {
 		), 1);
 	}
 
+	rowTemplate(hasCompanion: boolean, stacked = false): string {
+		const visible = [...this.panels]
+			.filter((panel) => panelIsVisible(panel, hasCompanion))
+			.sort((a, b) =>
+				WORKBENCH_GROUPS.findIndex((group) => group.id === a.group) - WORKBENCH_GROUPS.findIndex((group) => group.id === b.group)
+				|| a.order - b.order
+			);
+		const weightFor = (id: WorkbenchPanelId): number =>
+			id === 'companion' ? 1.28 : id === 'investigation' ? 0.72 : 1;
+
+		if (stacked) {
+			return visible.map((panel) => `minmax(0, ${weightFor(panel.id)}fr)`).join(' ') || 'minmax(0, 1fr)';
+		}
+
+		const weights = Array(this.rowCount(hasCompanion)).fill(0) as number[];
+		for (const group of WORKBENCH_GROUPS) {
+			const panels = visible.filter((panel) => panel.group === group.id);
+			if (panels.length < 2) continue;
+			panels.forEach((panel, index) => {
+				weights[index] = Math.max(weights[index] ?? 0, weightFor(panel.id));
+			});
+		}
+		return weights.some((weight) => weight > 0)
+			? weights.map((weight) => `minmax(0, ${weight || 1}fr)`).join(' ')
+			: `repeat(${this.rowCount(hasCompanion)}, minmax(0, 1fr))`;
+	}
+
 	canHide(id: WorkbenchPanelId, hasCompanion: boolean): boolean {
 		const panel = this.panels.find((item) => item.id === id);
 		if (!panel || !panelIsVisible(panel, hasCompanion)) return true;

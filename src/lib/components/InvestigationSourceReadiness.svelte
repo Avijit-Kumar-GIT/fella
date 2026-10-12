@@ -613,4 +613,10 @@
 		.source-option { align-items: flex-start; flex-wrap: wrap; }
 		.source-readiness-label { margin-left: 23px; }
 	}
+	@container investigation-pane (max-width: 900px) {
+		.readiness-heading { align-items: flex-start; flex-direction: column; }
+		.catalog-meta { justify-content: flex-start; }
+		.scope-controls { align-items: flex-start; flex-direction: column; }
+		.scope-controls small { max-width: 100%; }
+	}
 </style>
