@@ -17,8 +17,8 @@
 	let error = $state('');
 	let loadedWorkspace = $state<string | null>(null);
 	let saveTimer: ReturnType<typeof setTimeout> | undefined;
+	let saveQueue: Promise<void> = Promise.resolve();
 	let loadRequest = 0;
-	let discardVersion = 0;
 
 	async function load(workspace = loadedWorkspace): Promise<void> {
 		if (!isDesktop() || !workspace) return;
@@ -27,6 +27,7 @@
 		loadFailed = false;
 		error = '';
 		try {
+			await saveQueue.catch(() => {});
 			const result = await ipc.contextFile(workspace);
 			if (request !== loadRequest || workspace !== loadedWorkspace) return;
 			path = result?.[0] ?? null;
@@ -41,29 +42,38 @@
 		}
 	}
 
-	async function save(): Promise<void> {
-		const workspace = loadedWorkspace;
-		const value = contents;
-		if (!isDesktop() || !workspace || value === savedContents || loadFailed || saving) return;
-		saving = true;
-		error = '';
+	async function saveSnapshot(workspace: string | null, value: string): Promise<void> {
+		if (!isDesktop() || !workspace || loadFailed) return;
+		const visible = workspace === loadedWorkspace;
+		if (visible) {
+			saving = true;
+			error = '';
+		}
 		try {
-			await ipc.saveContext(value, workspace);
+			const pending = saveQueue.catch(() => {}).then(() => ipc.saveContext(value, workspace));
+			saveQueue = pending;
+			await pending;
 			if (workspace === loadedWorkspace && value === contents) savedContents = value;
-			if (!path) {
+			if (workspace === loadedWorkspace && !path) {
 				const result = await ipc.contextFile(workspace);
 				if (workspace === loadedWorkspace) path = result?.[0] ?? null;
 			}
 		} catch (e) {
 			if (workspace === loadedWorkspace) error = e instanceof Error ? e.message : String(e);
 		} finally {
-			saving = false;
-			if (workspace === loadedWorkspace && contents !== savedContents && !loadFailed) scheduleSave();
+			if (visible) saving = false;
+			if (workspace === loadedWorkspace && contents !== savedContents && !loadFailed && !error) scheduleSave();
 		}
+	}
+
+	async function save(): Promise<void> {
+		if (contents === savedContents) return;
+		await saveSnapshot(loadedWorkspace, contents);
 	}
 
 	function scheduleSave(): void {
 		clearTimeout(saveTimer);
+		error = '';
 		saveTimer = setTimeout(() => void save(), 700);
 	}
 
@@ -76,6 +86,9 @@
 	$effect(() => {
 		const workspace = session.catalog.workspace;
 		if (workspace === loadedWorkspace) return;
+		if (loadedWorkspace && contents !== savedContents && !loadFailed) {
+			void saveSnapshot(loadedWorkspace, contents);
+		}
 		loadRequest += 1;
 		loading = false;
 		clearTimeout(saveTimer);
@@ -87,26 +100,9 @@
 		if (workspace) void load(workspace);
 	});
 
-	$effect(() => {
-		const workspace = loadedWorkspace;
-		const isSaving = saving;
-		const dirty = Boolean(workspace && !loading && contents !== savedContents);
-		const name = workspace?.replace(/[/\\]+$/, '').split(/[\\/]/).at(-1) ?? 'workspace';
-		session.setUnsavedDraft(`context:${workspace ?? ''}`, dirty || isSaving ? `Data & context for ${name}` : null, isSaving);
-	});
-
-	$effect(() => {
-		const version = session.discardUnsavedDraftVersion;
-		if (version === discardVersion) return;
-		discardVersion = version;
-		clearTimeout(saveTimer);
-		contents = savedContents;
-		error = '';
-	});
-
 	onDestroy(() => {
 		clearTimeout(saveTimer);
-		session.setUnsavedDraft(`context:${loadedWorkspace ?? ''}`, null);
+		if (contents !== savedContents && !loadFailed) void save();
 	});
 </script>
 
@@ -158,7 +154,7 @@
 				/>
 			{/if}
 			<div class="editor-foot">
-				<span>{error || (saving ? 'Saving to the workspace…' : contents === savedContents ? 'Saved locally in this folder' : 'Unsaved changes')}</span>
+				<span>{error || (saving ? 'Saving to the workspace…' : contents === savedContents ? 'Saved locally in this folder' : 'Changes save automatically')}</span>
 				<span>Only you can edit this file.</span>
 			</div>
 		</div>

@@ -164,6 +164,8 @@ async function installDesktopMock(
 		};
 		const archivedConversations = new Map();
 		const investigations = new Map();
+		const workspaceContextFiles = new Map();
+		const workspaceContextSaveCalls = [];
 		const analysisTurns = new Map();
 		const questionRecords = new Map();
 		const definitionRecords = new Map();
@@ -259,6 +261,8 @@ async function installDesktopMock(
 		window.__workspaceAskCalls = calls;
 		window.__workspaceInvestigationEnsureCalls = investigationEnsureCalls;
 		window.__workspaceQuestionProposalCalls = questionProposalCalls;
+		window.__workspaceContextSaveCalls = workspaceContextSaveCalls;
+		window.__workspaceContextFor = (workspaceId) => workspaceContextFiles.get(workspaceId) ?? null;
 		window.__workspaceInvestigations = () => [...investigations.values()];
 		window.__workspaceAnalysisTurns = () => [...analysisTurns.values()];
 		window.__workspaceDefinitionRecords = () => [...definitionRecords.values()];
@@ -290,12 +294,16 @@ async function installDesktopMock(
 					case 'app_ready': return 1;
 					case 'context_file':
 						if (window.__workspaceContextLoadFailure) throw new Error('Fixture context load failure');
-						return null;
+						return workspaceContextFiles.has(args.workspaceId)
+							? [`${args.workspaceId}\\fella.md`, workspaceContextFiles.get(args.workspaceId)]
+							: null;
 					case 'investigations_list':
 						if (window.__workspaceInvestigationListFailure) throw new Error('Fixture investigation list unavailable');
 						return [...investigations.values()];
 					case 'save_context':
+						workspaceContextSaveCalls.push({ ...args });
 						if (window.__workspaceContextSaveFailure) throw new Error('Fixture context save failure');
+						workspaceContextFiles.set(args.workspaceId, args.contents);
 						return null;
 					case 'investigation_ensure': {
 						investigationEnsureCalls.push(args);
@@ -1368,7 +1376,7 @@ test('workspace layout presets preserve the same Investigation, source scope, Qu
 		mode: 'selected_sources',
 		included_paths: ['sales.csv']
 	});
-	// Resolve the edited Question before switching views; navigation now protects unsaved plan drafts.
+	// Resolve the edited Question before switching views so this test isolates its source-scope update.
 	await page.getByRole('button', { name: 'Save plan' }).click();
 	await expect(page.getByRole('region', { name: 'Question plan' }).locator('.question-save')).toContainText('Plan saved');
 	await expect.poll(() => page.evaluate(() => window.__workspaceInvestigations()[0].questions[0].text)).toBe('Measure weekly net sales');
@@ -3390,7 +3398,7 @@ test('Finding revisions preserve prior versions and compare the supporting run c
 	await expect(page.getByRole('region', { name: 'Query and output evidence' }).locator('[data-evidence-id="finding-net-sales-before-refunds"]')).toBeFocused();
 });
 
-test('suggested Question breakdown stays a draft until saved as durable child records', async ({ page }) => {
+test('suggested Question breakdown autosaves as durable child records', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
 	await addSalesWorkspace(page);
@@ -3406,7 +3414,7 @@ test('suggested Question breakdown stays a draft until saved as durable child re
 	await page.getByRole('button', { name: 'Suggest breakdown' }).click();
 	await expect(page.getByRole('textbox', { name: 'Subquestion 1' })).toHaveValue('Compare conversion by channel');
 	await expect(page.getByRole('textbox', { name: 'Subquestion 2' })).toHaveValue('Check the trend over time');
-	await expect(page.getByRole('region', { name: 'Question plan' }).locator('.question-save')).toContainText('Unsaved plan');
+	await expect(page.getByRole('region', { name: 'Question plan' }).locator('.question-save')).toContainText('save automatically');
 	const afterSuggestion = await page.evaluate(() => ({
 		askCount: window.__workspaceAskCalls.length,
 		proposalCalls: window.__workspaceQuestionProposalCalls,
@@ -3415,17 +3423,8 @@ test('suggested Question breakdown stays a draft until saved as durable child re
 	expect(afterSuggestion.askCount).toBe(askCountBeforeSuggestion);
 	expect(originalRequest).toContain('Understand conversion by channel');
 	expect(afterSuggestion.proposalCalls).toHaveLength(1);
-	expect(afterSuggestion.questions).toHaveLength(1);
 	await expect(page.getByRole('button', { name: 'Open conversation', exact: true })).toBeVisible();
-	await page.getByRole('button', { name: 'Discard plan' }).click();
-	await expect(page.getByRole('region', { name: 'Question plan' }).locator('.question-save')).toContainText('Plan saved');
-	expect((await page.evaluate(() => window.__workspaceInvestigations()[0].questions)).map((item) => item.text)).toEqual([
-		'Understand conversion by channel'
-	]);
-	await page.getByRole('button', { name: 'Suggest breakdown' }).click();
-	await expect(page.getByRole('textbox', { name: 'Subquestion 1' })).toHaveValue('Compare conversion by channel');
-
-	await page.getByRole('button', { name: 'Save plan' }).click();
+	await expect.poll(() => page.evaluate(() => window.__workspaceInvestigations()[0].questions.length)).toBe(3);
 	await expect(page.getByRole('region', { name: 'Question plan' }).locator('.question-save')).toContainText('Plan saved');
 	const saved = await page.evaluate(() => window.__workspaceInvestigations()[0]);
 	expect(saved.questions.map((item) => item.text)).toEqual([
@@ -4035,7 +4034,7 @@ test('Investigation list failures stay distinct from empty state and can be retr
 	await expect(page.getByRole('heading', { name: "Couldn't load investigations" })).toHaveCount(0);
 });
 
-test('unsaved workspace context stays on cancel and is discarded only after confirmation', async ({ page }) => {
+test('workspace guide autosaves while leaving Data & context without a navigation prompt', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
 	await addSalesWorkspace(page);
@@ -4043,27 +4042,35 @@ test('unsaved workspace context stays on cancel and is discarded only after conf
 	const tabs = page.getByRole('tablist', { name: 'Workspace sections' });
 	await tabs.getByRole('tab', { name: 'Data & context' }).click();
 	const guide = page.getByRole('textbox', { name: 'Workspace guide' });
-	await page.evaluate(() => { window.__workspaceContextSaveFailure = true; });
 	await guide.fill('Unsaved analyst context');
 
 	await workspacePresetButton(page, 'Focus').click();
-	const stayDialog = page.getByRole('dialog', { name: 'Discard unsaved changes?' });
-	await expect(stayDialog).toContainText('Data & context');
-	await stayDialog.getByRole('button', { name: 'Keep editing' }).click();
-	await expect(tabs.getByRole('tab', { name: 'Data & context' })).toHaveAttribute('aria-selected', 'true');
-	await expect(guide).toHaveValue('Unsaved analyst context');
-
-	await workspacePresetButton(page, 'Focus').click();
-	const discardDialog = page.getByRole('dialog', { name: 'Discard unsaved changes?' });
-	await discardDialog.getByRole('button', { name: 'Discard and continue' }).click();
 	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
+	await expect(page.getByRole('dialog')).toHaveCount(0);
+	await expect.poll(() => page.evaluate(() => window.__workspaceContextFor('C:\\FellaFixture\\northwind-sales')))
+		.toBe('Unsaved analyst context');
 
 	await workspacePresetButton(page, 'Investigation').click();
 	await page.getByRole('tablist', { name: 'Workspace sections' }).getByRole('tab', { name: 'Data & context' }).click();
-	await expect(page.getByRole('textbox', { name: 'Workspace guide' })).toHaveValue('');
+	await expect(page.getByRole('textbox', { name: 'Workspace guide' })).toHaveValue('Unsaved analyst context');
 });
 
-test('opening another folder waits for an unsaved workspace guide decision without reporting a false open failure', async ({ page }) => {
+test('workspace guide autosave failures remain visible and can be retried', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+	await addSalesWorkspace(page);
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	await page.getByRole('tablist', { name: 'Workspace sections' }).getByRole('tab', { name: 'Data & context' }).click();
+	await page.evaluate(() => { window.__workspaceContextSaveFailure = true; });
+	await page.getByRole('textbox', { name: 'Workspace guide' }).fill('Retry this saved guide');
+	await expect(page.getByText('Fixture context save failure')).toBeVisible();
+	await page.evaluate(() => { window.__workspaceContextSaveFailure = false; });
+	await page.getByRole('button', { name: 'Retry save' }).click();
+	await expect.poll(() => page.evaluate(() => window.__workspaceContextFor('C:\\FellaFixture\\northwind-sales')))
+		.toBe('Retry this saved guide');
+});
+
+test('opening another folder saves the current workspace guide and navigates immediately', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
 	await addSalesWorkspace(page);
@@ -4071,25 +4078,17 @@ test('opening another folder waits for an unsaved workspace guide decision witho
 	const tabs = page.getByRole('tablist', { name: 'Workspace sections' });
 	await tabs.getByRole('tab', { name: 'Data & context' }).click();
 	const guide = page.getByRole('textbox', { name: 'Workspace guide' });
-	await page.evaluate(() => { window.__workspaceContextSaveFailure = true; });
 	await guide.fill('Preserve this guide while I choose a folder');
 
 	await page.getByRole('button', { name: 'Add repository' }).click();
-	const stayDialog = page.getByRole('dialog', { name: 'Discard unsaved changes?' });
-	await expect(stayDialog).toContainText('Data & context for northwind-sales');
-	await stayDialog.getByRole('button', { name: 'Keep editing' }).click();
-	await expect(guide).toHaveValue('Preserve this guide while I choose a folder');
-	await expect(tabs.getByRole('tab', { name: 'Data & context' })).toHaveAttribute('aria-selected', 'true');
-	await expect(page.getByRole('combobox', { name: 'Ask about health-journal' })).toHaveCount(0);
+	await expect(page.getByRole('combobox', { name: 'Ask about health-journal' })).toBeVisible();
+	await expect(page.getByRole('dialog')).toHaveCount(0);
 	await expect(page.getByText(/Couldn't open that folder/)).toHaveCount(0);
-
-	await page.getByRole('button', { name: 'Add repository' }).click();
-	const discardDialog = page.getByRole('dialog', { name: 'Discard unsaved changes?' });
-	await discardDialog.getByRole('button', { name: 'Discard and continue' }).click();
-	await expect(page.getByRole('combobox', { name: 'Ask about weekly-budget' })).toBeVisible();
+	await expect.poll(() => page.evaluate(() => window.__workspaceContextFor('C:\\FellaFixture\\northwind-sales')))
+		.toBe('Preserve this guide while I choose a folder');
 });
 
-test('workspace deletion waits for an explicit decision about an unsaved workspace guide', async ({ page }) => {
+test('workspace deletion keeps its destructive confirmation without blocking on a pending guide edit', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
 	await addSalesWorkspace(page);
@@ -4097,8 +4096,7 @@ test('workspace deletion waits for an explicit decision about an unsaved workspa
 	const tabs = page.getByRole('tablist', { name: 'Workspace sections' });
 	await tabs.getByRole('tab', { name: 'Data & context' }).click();
 	const guide = page.getByRole('textbox', { name: 'Workspace guide' });
-	await page.evaluate(() => { window.__workspaceContextSaveFailure = true; });
-	await guide.fill('Keep this note unless I confirm deletion');
+	await guide.fill('Save this guide before the workspace is removed');
 
 	const repository = page.locator('.repository').filter({ hasText: 'northwind-sales' });
 	await repository.hover();
@@ -4106,22 +4104,12 @@ test('workspace deletion waits for an explicit decision about an unsaved workspa
 	await page.getByRole('menuitem', { name: 'Delete workspace and conversations' }).click();
 	const deleteDialog = page.getByRole('dialog', { name: 'Delete northwind-sales?' });
 	await deleteDialog.getByRole('button', { name: 'Delete workspace and conversations' }).click();
-
-	const unsavedDialog = page.getByRole('dialog', { name: 'Discard unsaved changes?' });
-	await expect(unsavedDialog).toContainText('Data & context for northwind-sales');
-	await unsavedDialog.getByRole('button', { name: 'Keep editing' }).click();
-	await expect(deleteDialog).toBeVisible();
-	await expect(guide).toHaveValue('Keep this note unless I confirm deletion');
-	await expect(page.getByRole('button', { name: 'Open workspace northwind-sales' })).toBeVisible();
-
-	await deleteDialog.getByRole('button', { name: 'Delete workspace and conversations' }).click();
-	const confirmDiscard = page.getByRole('dialog', { name: 'Discard unsaved changes?' });
-	await confirmDiscard.getByRole('button', { name: 'Discard and continue' }).click();
+	await expect(page.getByRole('dialog', { name: 'Discard unsaved changes?' })).toHaveCount(0);
 	await expect(deleteDialog).toHaveCount(0);
 	await expect(page.getByRole('button', { name: 'Open workspace northwind-sales' })).toHaveCount(0);
 });
 
-test('unsaved Question plan stays on cancel and reverts only after confirmation', async ({ page }) => {
+test('Investigation edits autosave on exit without changing the original request', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
 	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
@@ -4134,20 +4122,26 @@ test('unsaved Question plan stays on cancel and reverts only after confirmation'
 	const mainQuestion = page.getByRole('textbox', { name: 'Main question' });
 	await expect(mainQuestion).toHaveValue(originalRequest);
 	await mainQuestion.fill('Measure weekly net sales');
+	await page.getByRole('button', { name: 'Edit brief' }).click();
+	await page.getByRole('textbox', { name: 'Audience' }).fill('Finance team');
+	await page.getByRole('button', { name: 'Add definition or assumption' }).click();
+	await page.getByRole('textbox', { name: 'Context note 1' }).fill('Exclude test transactions.');
 
 	await workspacePresetButton(page, 'Focus').click();
-	const stayDialog = page.getByRole('dialog', { name: 'Discard unsaved changes?' });
-	await expect(stayDialog).toContainText('Investigation');
-	await stayDialog.getByRole('button', { name: 'Keep editing' }).click();
-	await expect(mainQuestion).toHaveValue('Measure weekly net sales');
-
-	await workspacePresetButton(page, 'Focus').click();
-	const discardDialog = page.getByRole('dialog', { name: 'Discard unsaved changes?' });
-	await discardDialog.getByRole('button', { name: 'Discard and continue' }).click();
 	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
+	await expect(page.getByRole('dialog')).toHaveCount(0);
+	await expect.poll(() => page.evaluate(() => {
+		const investigation = window.__workspaceInvestigations()[0];
+		return [
+			investigation.questions[0].text,
+			investigation.brief.audience,
+			investigation.definitions[0]?.text
+		];
+	})).toEqual(['Measure weekly net sales', 'Finance team', 'Exclude test transactions.']);
 	await workspacePresetButton(page, 'Investigation').click();
-	await expect(page.getByRole('textbox', { name: 'Main question' })).toHaveValue(originalRequest);
-	expect((await page.evaluate(() => window.__workspaceInvestigations()[0].questions))[0].text).toBe(originalRequest);
+	await expect(page.getByRole('textbox', { name: 'Main question' })).toHaveValue('Measure weekly net sales');
+	const transcriptQuestion = page.locator('.msg.user').filter({ hasText: originalRequest });
+	await expect(transcriptQuestion).toHaveCount(1);
 });
 
 test('workspace context read failures stay distinct from a blank note and can be retried', async ({ page }) => {

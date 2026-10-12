@@ -116,7 +116,8 @@
 	let reportPreview = $state<HandoffPreview | null>(null);
 	let error = $state('');
 	let requestSerial = 0;
-	let discardVersion = 0;
+	let autosaveTimer: ReturnType<typeof setTimeout> | undefined;
+	let autosaveInProgress: Promise<void> | null = null;
 	const syncingInvestigations = new Set<string>();
 
 	let selected = $derived(investigations.find((item) => item.id === selectedId) ?? null);
@@ -243,55 +244,27 @@
 	let questionsDirty = $derived(Boolean(selected && questionsKey !== savedQuestions));
 	let definitionsKey = $derived(JSON.stringify(definitions));
 	let definitionsDirty = $derived(Boolean(selected && definitionsKey !== savedDefinitions));
-	let unsavedEditor = $derived.by(() => {
-		const proposalEdited = Boolean(pendingProposal && (
-			proposalText !== pendingProposal.text || proposalTarget !== pendingProposal.target
-		));
-		const findingDraftOpen = findingDraftTouched;
-		return dirty || questionsDirty || definitionsDirty || questionLinksDirty || proposalEdited
-			|| Boolean(editingFindingId) || findingDraftOpen;
-	});
-	let savingDraft = $derived(
-		saving || proposingQuestions || savingQuestionLinks || savingFinding || Boolean(updatingFindingId)
-	);
-
+	let observedEditableDraftKey = '';
 	$effect(() => {
-		const item = selected;
-		if (!item) return;
-		const key = `investigation:${item.id}`;
-		const label = unsavedEditor || savingDraft ? `Investigation “${item.title}”` : null;
-		session.setUnsavedDraft(key, label, savingDraft);
-		return () => session.setUnsavedDraft(key, null);
+		const key = JSON.stringify([selected?.id ?? null, briefKey, questionsKey, definitionsKey]);
+		if (key === observedEditableDraftKey) return;
+		observedEditableDraftKey = key;
+		if (error) error = '';
 	});
-
 	$effect(() => {
-		const version = session.discardUnsavedDraftVersion;
-		if (version === discardVersion) return;
-		discardVersion = version;
-		discardBrief();
-		discardQuestions();
-		discardDefinitions();
-		questionLinksDraft = openAnalysisTurnId ? questionIdsForRun(openAnalysisTurnId, selected) : [];
-		proposalText = pendingProposal?.text ?? '';
-		proposalTarget = pendingProposal?.target ?? 'goal';
-		editingFindingId = null;
-		findingClaimDraft = '';
-		findingCaveatsDraft = '';
-		findingAssumptionsDraft = '';
-		findingRevisionTargetDraft = '';
-		findingRevisionNoteDraft = '';
-		findingQuestionDraft = '';
-		findingEvidenceDraft = [];
-		findingDraftTouched = false;
-		findingClaimEditDraft = '';
-		findingCaveatsEditDraft = '';
-		findingAssumptionsEditDraft = '';
-		findingRevisionNoteEditDraft = '';
-		findingError = '';
+		const itemId = selected?.id;
+		const hasEditableChanges = dirty || questionsDirty || definitionsDirty;
+		if (!itemId || !hasEditableChanges || saving || proposingQuestions || error) return;
+		clearTimeout(autosaveTimer);
+		autosaveTimer = setTimeout(() => void saveEditableDrafts(itemId), 700);
+		return () => clearTimeout(autosaveTimer);
 	});
 
 	onDestroy(() => {
-		if (selected) session.setUnsavedDraft(`investigation:${selected.id}`, null);
+		clearTimeout(autosaveTimer);
+		if (selected && (dirty || questionsDirty || definitionsDirty)) {
+			void saveEditableDrafts(selected.id);
+		}
 	});
 	let coverage = $derived.by(() => {
 		const activeQuestions = (selected?.questions ?? []).filter((question) => question.status === 'active');
@@ -401,6 +374,9 @@
 	$effect(() => {
 		const path = session.catalog.workspace;
 		const version = session.investigationsVersion;
+		if (path !== loadedWorkspace && selected && (dirty || questionsDirty || definitionsDirty)) {
+			void saveEditableDrafts(selected.id);
+		}
 		workspacePath = path;
 		if (!path) {
 			requestSerial += 1;
@@ -512,7 +488,7 @@
 
 	async function createInvestigation(): Promise<void> {
 		if (!workspacePath || creating || !isDesktop()) return;
-		if (!session.confirmUnsavedChanges(() => void createInvestigation())) return;
+		if (selected) void saveEditableDrafts(selected.id);
 		creating = true;
 		error = '';
 		const request = currentConversationSource;
@@ -538,7 +514,7 @@
 	async function openSelectedConversation(focusTurnId?: string): Promise<boolean> {
 		const item = selected;
 		if (!item || openingConversation || !isDesktop()) return false;
-		if (!session.confirmUnsavedChanges(() => void openSelectedConversation(focusTurnId))) return false;
+		void saveEditableDrafts(item.id);
 		openingConversation = true;
 		error = '';
 		try {
@@ -586,7 +562,7 @@
 		}
 	}
 
-	async function saveBrief(): Promise<boolean> {
+	async function saveBrief(closeEditor = true): Promise<boolean> {
 		if (!selected || saving || !dirty) return !dirty;
 		saving = true;
 		error = '';
@@ -594,7 +570,7 @@
 			const updated = await ipc.investigationUpdateBrief(selected.id, currentBrief);
 			investigations = investigations.map((item) => item.id === updated.id ? updated : item);
 			savedBrief = JSON.stringify(updated.brief);
-			briefEditing = false;
+			if (closeEditor) briefEditing = false;
 			return true;
 		} catch (cause) {
 			error = cause instanceof Error ? cause.message : String(cause);
@@ -1519,6 +1495,105 @@
 		}
 	}
 
+	async function saveEditableDrafts(investigationId: string): Promise<void> {
+		if (autosaveInProgress) {
+			const pending = autosaveInProgress;
+			await pending;
+			if (!error && selected?.id === investigationId && (dirty || questionsDirty || definitionsDirty)) {
+				return saveEditableDrafts(investigationId);
+			}
+			return;
+		}
+
+		const item = investigations.find((record) => record.id === investigationId);
+		if (!item || selected?.id !== investigationId) return;
+		const brief = { ...currentBrief, constraints: [...currentBrief.constraints] };
+		const briefChanged = JSON.stringify(brief) !== savedBrief;
+		const questionSnapshot = questions.map((question) => ({ ...question }));
+		const questionsChanged = JSON.stringify(questionSnapshot) !== savedQuestions;
+		const definitionSnapshot = definitions.map((definition) => ({ ...definition }));
+		const definitionsChanged = JSON.stringify(definitionSnapshot) !== savedDefinitions;
+		if (!briefChanged && !questionsChanged && !definitionsChanged) return;
+
+		const save = async () => {
+			while (saving || proposingQuestions) {
+				await new Promise<void>((resolve) => setTimeout(resolve, 16));
+			}
+			if (briefChanged) {
+				saving = true;
+				error = '';
+				try {
+					const updated = await ipc.investigationUpdateBrief(investigationId, brief);
+					investigations = investigations.map((record) => record.id === updated.id ? updated : record);
+					if (selected?.id === investigationId) savedBrief = JSON.stringify(updated.brief);
+				} catch (cause) {
+					if (selected?.id === investigationId) error = cause instanceof Error ? cause.message : String(cause);
+					return;
+				} finally {
+					saving = false;
+				}
+			}
+			if (questionsChanged && !questionSnapshot.some((question) => !question.text.trim())) {
+				saving = true;
+				error = '';
+				try {
+					const updated = await ipc.investigationUpdateQuestions(investigationId, questionSnapshot.map((question) => ({
+						id: question.id,
+						parent_id: question.parent_id,
+						text: question.text.trim(),
+						source_selection: question.source_selection
+					})));
+					investigations = investigations.map((record) => record.id === updated.id ? updated : record);
+					if (selected?.id === investigationId) {
+						questions = (updated.questions ?? []).map((question) => ({
+							id: question.id,
+							text: question.text,
+							parent_id: question.parent_id,
+							source_selection: question.source_selection
+						}));
+						savedQuestions = JSON.stringify(questions);
+					}
+				} catch (cause) {
+					if (selected?.id === investigationId) error = cause instanceof Error ? cause.message : String(cause);
+					return;
+				} finally {
+					saving = false;
+				}
+			}
+			if (definitionsChanged && !definitionSnapshot.some((definition) => !definition.text.trim())) {
+				saving = true;
+				error = '';
+				try {
+					const updated = await ipc.investigationUpdateDefinitions(investigationId, definitionSnapshot.map((definition) => ({
+						id: definition.id,
+						kind: definition.kind,
+						text: definition.text.trim()
+					})));
+					investigations = investigations.map((record) => record.id === updated.id ? updated : record);
+					if (selected?.id === investigationId) {
+						definitions = (updated.definitions ?? []).map((definition) => ({
+							id: definition.id,
+							kind: definition.kind,
+							text: definition.text
+						}));
+						savedDefinitions = JSON.stringify(definitions);
+					}
+				} catch (cause) {
+					if (selected?.id === investigationId) error = cause instanceof Error ? cause.message : String(cause);
+				} finally {
+					saving = false;
+				}
+			}
+		};
+
+		autosaveInProgress = save();
+		try {
+			await autosaveInProgress;
+		} finally {
+			autosaveInProgress = null;
+		}
+	}
+
 	async function reviewProposal(accept: boolean): Promise<void> {
 		const item = selected;
 		const proposal = pendingProposal;
@@ -1544,8 +1619,9 @@
 	}
 
 	async function selectInvestigation(id: string): Promise<void> {
-		if (id === selectedId || saving || proposingQuestions) return;
-		if (!session.confirmUnsavedChanges(() => void selectInvestigation(id))) return;
+		if (id === selectedId) return;
+		const previousId = selectedId;
+		if (previousId) void saveEditableDrafts(previousId);
 		pendingAnalysisQuestionId = null;
 		analysisTurnError = '';
 		openAnalysisTurnId = null;
@@ -1697,7 +1773,7 @@
 					<label for="investigation-constraints">Constraints</label>
 					<Textarea id="investigation-constraints" class="brief-field constraints-field" bind:value={constraintsText} disabled={saving} placeholder="One constraint per line" />
 						<div class="brief-edit-actions">
-							<span role={error ? 'alert' : 'status'}>{error || (saving ? 'Saving…' : dirty ? 'Unsaved changes' : 'Brief saved')}</span>
+							<span role={error ? 'alert' : 'status'}>{error || (saving ? 'Saving…' : dirty ? 'Changes save automatically' : 'Brief saved')}</span>
 							<Button type="button" variant="ghost" disabled={saving} onclick={discardBrief}>{dirty ? 'Discard changes' : 'Done'}</Button>
 							<Button type="button" disabled={!dirty || saving} onclick={() => void saveBrief()}>
 								<Icon name="check" size={16} />{saving ? 'Saving…' : 'Save brief'}
@@ -1736,10 +1812,10 @@
 					<section class="definition-editor" aria-labelledby="definition-context-title">
 						<header class="question-heading">
 							<div>
-								<p>Save business meanings that should guide future runs. Each run keeps the exact versions it used.</p>
+								<p>Business meanings save automatically. Each run keeps the exact versions it used.</p>
 							</div>
 							<div class="question-save">
-								<span role={error && definitionsDirty ? 'alert' : 'status'}>{error && definitionsDirty ? error : definitionsDirty ? 'Unsaved context' : 'Context saved'}</span>
+								<span role={error && definitionsDirty ? 'alert' : 'status'}>{error && definitionsDirty ? error : saving && definitionsDirty ? 'Saving…' : definitionsDirty ? 'Changes save automatically' : 'Context saved'}</span>
 								{#if definitionsDirty}
 									<Button type="button" variant="ghost" disabled={saving} onclick={discardDefinitions}>Discard</Button>
 								{/if}
@@ -1785,10 +1861,10 @@
 						<header class="question-heading">
 							<div>
 								<h3 id="question-plan-title">Question plan</h3>
-								<p>The main request is the parent. Its subquestions are linked records; suggestions stay drafts until saved.</p>
+								<p>The main request is the parent. Its subquestions are linked Questions and save automatically.</p>
 							</div>
 							<div class="question-save">
-								<span role={error ? 'alert' : 'status'}>{error || (questionsDirty ? 'Unsaved plan' : 'Plan saved')}</span>
+								<span role={error ? 'alert' : 'status'}>{error || (saving && questionsDirty ? 'Saving…' : questionsDirty ? 'Changes save automatically' : 'Plan saved')}</span>
 								{#if selected.status === 'complete'}
 									<Button type="button" variant="outline" disabled={saving} onclick={() => void reopenInvestigation()}>
 										Reopen Investigation

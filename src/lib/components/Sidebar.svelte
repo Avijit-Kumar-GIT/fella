@@ -144,11 +144,11 @@
 
 	async function newWorkspaceChat(repo: Repository): Promise<void> {
 		if (!repo.path) {
-			if (!session.newConversation(null) && !session.unsavedNavigationOpen) session.addSystem('Could not start a new conversation.');
+			if (!session.newConversation(null)) session.addSystem('Could not start a new conversation.');
 			return;
 		}
 		if (!(await selectRepository(repo))) return;
-		if (!session.newConversation(repo.path) && !session.unsavedNavigationOpen) session.addSystem('Open the workspace before starting a conversation in it.');
+		if (!session.newConversation(repo.path)) session.addSystem('Open the workspace before starting a conversation in it.');
 	}
 
 	async function selectRepository(repo: Repository): Promise<boolean> {
@@ -195,14 +195,13 @@
 		const target = workspaceDeleteTarget;
 		const path = target?.path;
 		if (!target || !path || deletingWorkspace) return;
-		if (!session.confirmUnsavedChanges(() => void deleteWorkspaceAndConversations())) return;
 		deletingWorkspace = true;
 		workspaceDeleteError = '';
 		const deletedIds: string[] = [];
 		let prepared = false;
 		try {
 			prepared = await session.beginWorkspaceDeletion(path);
-			if (!prepared) throw new Error('Deletion could not continue: a conversation is active, a save is in progress, or you chose to keep unsaved edits.');
+			if (!prepared) throw new Error('Deletion could not continue: a conversation is active or a save is in progress.');
 
 			const archived = await ipc.conversationsList();
 			const ids = [...new Set(archived.filter((conversation) => conversation.workspace === path).map((conversation) => conversation.id))];

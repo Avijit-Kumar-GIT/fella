@@ -21,8 +21,6 @@
 	import { prefs } from '$lib/prefs.svelte';
 	import { session } from '$lib/session.svelte';
 	import { workbenchLayout, WORKBENCH_GROUPS, WORKBENCH_PANELS } from '$lib/workbench-layout.svelte';
-	import { Dialog } from '$lib/components/ui/dialog';
-	import { Button } from '$lib/components/ui/button';
 
 	let transcript = $state<Transcript | undefined>();
 	let composer = $state<Composer | undefined>();
@@ -447,53 +445,7 @@
 <CommandPalette bind:open={paletteOpen} onpick={pickCommand} />
 <ProjectDialog bind:open={projectDialogOpen} initialWorkspace={projectDialogWorkspace} />
 
-<Dialog.Root
-	open={session.unsavedNavigationOpen}
-	onOpenChange={(open) => {
-		if (!open) session.cancelUnsavedNavigation();
-	}}
->
-	<Dialog.Portal>
-		<Dialog.Overlay class="fella-ui-dialog-overlay" />
-		<Dialog.Content class="fella-ui-dialog-content unsaved-navigation-dialog">
-			<div>
-				<Dialog.Title class="unsaved-navigation-title" level={2}>
-					{session.unsavedNavigationSaving ? 'Saving changes' : 'Discard unsaved changes?'}
-				</Dialog.Title>
-				<Dialog.Description class="unsaved-navigation-description">
-					{#if session.unsavedNavigationSaving}
-						A change is still being saved. You can continue when saving finishes.
-					{:else}
-						Unsaved changes in {session.unsavedNavigationSummary}. Discard them and continue?
-					{/if}
-				</Dialog.Description>
-			</div>
-			<div class="unsaved-navigation-actions">
-				<Button variant="ghost" onclick={() => session.cancelUnsavedNavigation()}>
-					{session.unsavedNavigationSaving ? 'Wait here' : 'Keep editing'}
-				</Button>
-				<Button
-					variant="destructive"
-					disabled={session.unsavedNavigationSaving}
-					onclick={() => session.discardUnsavedChangesAndContinue()}
-				>
-					Discard and continue
-				</Button>
-			</div>
-		</Dialog.Content>
-	</Dialog.Portal>
-</Dialog.Root>
-
 <style>
-	:global(.unsaved-navigation-dialog) {
-		width: min(430px, calc(100vw - 32px));
-		display: grid;
-		gap: 18px;
-		padding: 22px;
-	}
-	:global(.unsaved-navigation-title) { margin: 0; font-size: 18px; font-weight: 650; letter-spacing: -.02em; }
-	:global(.unsaved-navigation-description) { margin-top: 6px; color: var(--text-dim); font-size: var(--fs-sm); line-height: 1.5; overflow-wrap: anywhere; }
-	:global(.unsaved-navigation-actions) { display: flex; justify-content: flex-end; gap: 8px; }
 	.shell {
 		position: relative;
 		display: flex;

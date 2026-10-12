@@ -4,7 +4,6 @@
 // Conversation tabs retain their own scope; the conversation objects remain in
 // a local live cache so in-flight work can finish safely while focus moves.
 
-import { untrack } from 'svelte';
 import { ipc, isDesktop } from './ipc';
 import type {
 	AskMode,
@@ -119,11 +118,6 @@ export interface EnvironmentPane {
 	layoutPreset?: WorkspaceLayoutPreset;
 	workspacePane?: WorkspacePane;
 	investigationId?: string | null;
-}
-
-interface UnsavedDraft {
-	label: string;
-	saving: boolean;
 }
 
 export interface WorkspaceEnvironment {
@@ -549,45 +543,8 @@ export interface ConversationAnalysisFocus {
 class Session {
 	#deletingWorkspacePaths = new Set<string>();
 	#pendingArchivesByWorkspace = new Map<string, Set<Promise<void>>>();
-	#pendingNavigation: (() => void) | null = null;
-	#confirmNavigation(continueNavigation: () => void): boolean {
-		const drafts = Object.values(this.unsavedDrafts);
-		if (!drafts.length) return true;
-		if (typeof window === 'undefined') return false;
-		if (this.unsavedNavigationOpen) return false;
-		this.#pendingNavigation = continueNavigation;
-		this.unsavedNavigationSummary = drafts.map((draft) => draft.label).join(', ');
-		this.unsavedNavigationSaving = drafts.some((draft) => draft.saving);
-		this.unsavedNavigationOpen = true;
-		return false;
-	}
-
-	confirmUnsavedChanges(continueNavigation: () => void): boolean {
-		return this.#confirmNavigation(continueNavigation);
-	}
-
-	cancelUnsavedNavigation(): void {
-		this.unsavedNavigationOpen = false;
-		this.#pendingNavigation = null;
-	}
-
-	discardUnsavedChangesAndContinue(): void {
-		if (this.unsavedNavigationSaving || Object.values(this.unsavedDrafts).some((draft) => draft.saving)) return;
-		this.unsavedDrafts = {};
-		this.discardUnsavedDraftVersion += 1;
-		this.unsavedNavigationOpen = false;
-		const continueNavigation = this.#pendingNavigation;
-		this.#pendingNavigation = null;
-		if (continueNavigation) setTimeout(continueNavigation, 0);
-	}
 
 	catalog = $state<Catalog>({ workspace: null, sources: [] });
-	/** Draft labels used to protect local editors from navigation loss. */
-	unsavedDrafts = $state<Record<string, UnsavedDraft>>({});
-	discardUnsavedDraftVersion = $state(0);
-	unsavedNavigationOpen = $state(false);
-	unsavedNavigationSummary = $state('');
-	unsavedNavigationSaving = $state(false);
 	/** Live repository mounts shared by environments. Panes reference these IDs. */
 	workspaceWindows = $state<WorkspaceWindow[]>([]);
 	activeWorkspaceId = $state<string | null>(null);
@@ -682,28 +639,6 @@ class Session {
 			}));
 		} catch {
 			/* workspace state is a convenience; a full localStorage must not block analysis */
-		}
-	}
-
-	setUnsavedDraft(key: string, label: string | null, saving = false): void {
-		const current = untrack(() => this.unsavedDrafts);
-		const existing = current[key];
-		if (label && existing?.label === label && existing.saving === saving) return;
-		if (!label && !existing) return;
-		const next = { ...current };
-		if (label) next[key] = { label, saving };
-		else delete next[key];
-		this.unsavedDrafts = next;
-		if (this.unsavedNavigationOpen) {
-			const drafts = Object.values(next);
-			if (!drafts.length) {
-				const continueNavigation = this.#pendingNavigation;
-				this.cancelUnsavedNavigation();
-				continueNavigation?.();
-			} else {
-				this.unsavedNavigationSummary = drafts.map((draft) => draft.label).join(', ');
-				this.unsavedNavigationSaving = drafts.some((draft) => draft.saving);
-			}
 		}
 	}
 
@@ -810,7 +745,6 @@ class Session {
 	}
 
 	createEnvironment(): boolean {
-		if (!this.#confirmNavigation(() => this.createEnvironment())) return false;
 		const id = `environment-${uid()}`;
 		const conversation = new Conversation();
 		conversation.model = this.model;
@@ -836,7 +770,6 @@ class Session {
 		const cleanName = name.trim();
 		const workspaces = [...new Set(workspaceIds.map((id) => id === GENERAL_WORKSPACE_ID ? null : id))];
 		if (!cleanName || workspaces.length < 2 || workspaces.length > 4) return false;
-		if (!this.#confirmNavigation(() => this.createWorkspaceEnvironment(cleanName, workspaces))) return false;
 
 		const id = `environment-${uid()}`;
 		const panes = workspaces.map((workspaceId, index): EnvironmentPane => {
@@ -882,7 +815,6 @@ class Session {
 	activateEnvironment(id: string): boolean {
 		const environment = this.environments.find((item) => item.id === id);
 		if (!environment) return false;
-		if (id !== this.activeEnvironmentId && !this.#confirmNavigation(() => this.activateEnvironment(id))) return false;
 		this.activeEnvironmentId = id;
 		this.workspaceLayout = { ...environment.layout };
 		const pane = environment.panes.find((item) => item.id === environment.activePaneId) ?? environment.panes[0];
@@ -900,7 +832,6 @@ class Session {
 		if (this.environments.length <= 1) return false;
 		const closing = this.environments.find((item) => item.id === id);
 		if (!closing) return true;
-		if (id === this.activeEnvironmentId && !this.#confirmNavigation(() => void this.closeEnvironment(id))) return false;
 		if (closing.panes.some((pane) => this.conversations.find((item) => item.id === pane.conversationId)?.busy)) return false;
 		this.environments = this.environments.filter((item) => item.id !== id);
 		if (this.activeEnvironmentId === id) this.activateEnvironment(this.environments[Math.max(0, this.environments.length - 1)].id);
@@ -921,8 +852,6 @@ class Session {
 		const environment = this.activeEnvironment;
 		const pane = environment?.panes.find((item) => item.id === paneId);
 		if (!environment || !pane) return false;
-		if ((paneId !== this.activePane?.id || pane.conversationId !== this.activeChat.id)
-			&& !this.#confirmNavigation(() => this.focusEnvironmentPane(paneId))) return false;
 		environment.activePaneId = pane.id;
 		const scope = pane.workspaceId;
 		const workspace = scope ? this.workspaceAt(scope) : null;
@@ -968,7 +897,6 @@ class Session {
 	registerWorkspace(catalog: Catalog): boolean {
 		const path = catalog.workspace;
 		if (!path) return false;
-		if (this.activeWorkspaceId !== path && !this.#confirmNavigation(() => this.registerWorkspace(catalog))) return false;
 		const existing = this.workspaceAt(path);
 		if (existing) {
 			existing.catalog = catalog;
@@ -1005,10 +933,6 @@ class Session {
 			: this.environments.find((environment) => environment.panes.some((item) => item.workspaceId === scope));
 		const targetPane = targetEnvironment?.panes.find((item) => item.workspaceId === scope);
 		const targetConversationId = conversationId ?? targetPane?.conversationId;
-		if ((targetEnvironment?.id !== this.activeEnvironmentId || scope !== this.activeWorkspaceId
-			|| (targetConversationId && targetConversationId !== this.activeChat.id))
-			&& !this.#confirmNavigation(() => this.focusWorkspace(id, conversationId))) return false;
-
 		let environment = targetEnvironment;
 		let pane = targetPane;
 		if (!environment || !pane) {
@@ -1053,7 +977,6 @@ class Session {
 	setWorkspaceConversation(id: string, conversationId: string): void {
 		const workspace = this.workspaceAt(id);
 		if (!workspace) return;
-		if (conversationId !== this.activeChat.id && !this.#confirmNavigation(() => this.setWorkspaceConversation(id, conversationId))) return;
 		workspace.conversationId = conversationId;
 		const pane = this.paneForWorkspace(id);
 		if (pane) pane.conversationId = conversationId;
@@ -1066,7 +989,6 @@ class Session {
 		const pane = environment.panes.find((item) => item.id === id || item.workspaceId === id);
 		if (!pane) return;
 		const wasActive = environment.activePaneId === pane.id;
-		if (!this.#confirmNavigation(() => void this.closeWorkspaceWindow(id))) return;
 		environment.panes = environment.panes.filter((item) => item.id !== pane.id);
 		if (!environment.panes.length) {
 			const conversation = new Conversation();
@@ -1134,8 +1056,6 @@ class Session {
 			if (conversationId) existing.conversationId = conversationId;
 			return this.focusWorkspace(path, conversationId || undefined);
 		}
-		if ((path !== this.activeWorkspaceId || (conversationId && conversationId !== this.activeChat.id))
-			&& !this.#confirmNavigation(() => this.openHistoryOnlyWorkspace(path, conversationId))) return false;
 		this.markRepositoryHistoryOnly(path);
 		this.rememberRepository(path);
 		const workspace: WorkspaceWindow = {
@@ -1286,14 +1206,11 @@ class Session {
 	createProject(name: string, workspace: string): Project | null {
 		const existing = this.projectForWorkspace(workspace);
 		if (existing) {
-			if ((existing.id !== this.activeProjectId || this.workspaceView !== 'project')
-				&& !this.#confirmNavigation(() => this.createProject(name, workspace))) return null;
 			this.activeProjectId = existing.id;
 			this.workspaceView = 'project';
 			return existing;
 		}
 
-		if (!this.#confirmNavigation(() => this.createProject(name, workspace))) return null;
 		const now = Date.now();
 		const project: Project = {
 			id: `project-${uid()}`,
@@ -1320,8 +1237,6 @@ class Session {
 
 	openProject(id: string): void {
 		if (!this.projects.some((project) => project.id === id)) return;
-		if ((id !== this.activeProjectId || this.workspaceView !== 'project')
-			&& !this.#confirmNavigation(() => this.openProject(id))) return;
 		this.activeProjectId = id;
 		this.workspaceView = 'project';
 	}
@@ -1345,7 +1260,6 @@ class Session {
 	}
 
 	setWorkspaceView(view: WorkspaceView): void {
-		if (view !== this.workspaceView && !this.#confirmNavigation(() => this.setWorkspaceView(view))) return;
 		if (view === 'workspace' && !this.catalog.workspace) {
 			this.workspaceView = 'ask';
 			this.workspaceLayoutPreset = 'focus';
@@ -1374,7 +1288,6 @@ class Session {
 
 	setWorkspaceLayoutPreset(preset: WorkspaceLayoutPreset): void {
 		if (preset !== 'focus' && !this.catalog.workspace) return;
-		if (preset !== this.workspaceLayoutPreset && !this.#confirmNavigation(() => this.setWorkspaceLayoutPreset(preset))) return;
 		this.workspaceLayoutPreset = preset;
 		if (preset === 'focus') {
 			this.workspaceView = 'ask';
@@ -1396,8 +1309,6 @@ class Session {
 			this.workspaceLayoutPreset = 'focus';
 			return;
 		}
-		if ((pane !== this.workspacePane || this.workspaceView !== 'workspace' || this.workspaceLayoutPreset === 'focus')
-			&& !this.#confirmNavigation(() => this.setWorkspacePane(pane))) return;
 		if (this.workspaceView !== 'workspace' || this.workspaceLayoutPreset === 'focus') {
 			this.workspaceLayoutPreset = 'investigation';
 		}
@@ -1415,7 +1326,6 @@ class Session {
 		const conversation = this.activeChat;
 		const workspaceId = conversation.workspaceScope;
 		if (!workspaceId || this.catalog.workspace !== workspaceId || !turnId.trim()) return false;
-		if (!this.#confirmNavigation(() => this.openInvestigationRun(turnId))) return false;
 		this.investigationNavigationTarget = {
 			workspaceId,
 			conversationId: conversation.id,
@@ -1453,7 +1363,6 @@ class Session {
 	openSourcePane(source: SourceInfo): void {
 		const workspace = this.catalog.workspace;
 		if (!workspace || !this.catalog.sources.some((item) => item.path === source.path)) return;
-		if (!this.#confirmNavigation(() => this.openSourcePane(source))) return;
 		this.activeChat.companionPane = {
 			kind: 'source',
 			path: source.path,
@@ -1478,7 +1387,6 @@ class Session {
 			!evidence ||
 			!isRenderableChartEvidence(evidence, message.answer.verification ?? [])
 		) return;
-		if (!this.#confirmNavigation(() => this.openChartPane(messageId, evidenceIndex))) return;
 		this.activeChat.companionPane = {
 			kind: 'chart',
 			messageId,
@@ -1585,7 +1493,6 @@ class Session {
 
 	// --- conversation creation inside the focused environment pane ----------
 	newConversation(workspaceId: string | null = this.activeWorkspaceId): boolean {
-		if (!this.#confirmNavigation(() => this.newConversation(workspaceId))) return false;
 		const workspace = workspaceId ? this.workspaceAt(workspaceId) : null;
 		if (workspaceId && !workspace) return false;
 		const scope = workspace?.path ?? null;
