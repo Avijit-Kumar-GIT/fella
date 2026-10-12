@@ -579,6 +579,29 @@
 		return 'default';
 	}
 
+	function investigationStatusLabel(status: Investigation['status']): string {
+		return status === 'complete' ? 'Complete' : status === 'archived' ? 'Archived' : 'Active';
+	}
+
+	function investigationCoverageSummary(investigation: Investigation): string {
+		const activeQuestions = (investigation.questions ?? []).filter((question) => question.status === 'active');
+		if (!activeQuestions.length) return 'No Questions yet';
+		const answered = activeQuestions.filter((question) => question.answer_status === 'answered').length;
+		const unresolved = activeQuestions.length - answered;
+		if (!unresolved) return `${answered}/${activeQuestions.length} answered`;
+		return `${answered}/${activeQuestions.length} answered · ${unresolved} needs attention`;
+	}
+
+	function investigationActivityLabel(updatedAt: number): string {
+		if (!Number.isFinite(updatedAt) || updatedAt <= 0) return 'No recent activity';
+		const elapsed = Math.max(0, Date.now() - updatedAt);
+		if (elapsed < 60_000) return 'Updated just now';
+		if (elapsed < 3_600_000) return `Updated ${Math.floor(elapsed / 60_000)}m ago`;
+		if (elapsed < 86_400_000) return `Updated ${Math.floor(elapsed / 3_600_000)}h ago`;
+		if (elapsed < 7 * 86_400_000) return `Updated ${Math.floor(elapsed / 86_400_000)}d ago`;
+		return `Updated ${new Date(updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
+	}
+
 	function questionCoverageReason(question: InvestigationQuestion): string {
 		if (question.answer_status_reason) return question.answer_status_reason;
 		return {
@@ -1356,8 +1379,12 @@
 						disabled={saving}
 						onclick={() => void selectInvestigation(item.id)}
 					>
-						<span>{item.title}</span>
-						<small>{new Date(item.updated_at_ms).toLocaleDateString()}</small>
+						<span class="investigation-choice-heading">
+							<span class="investigation-choice-title" title={item.title}>{item.title}</span>
+							<span class="investigation-status" data-status={item.status}>{investigationStatusLabel(item.status)}</span>
+						</span>
+						<small class="investigation-activity">{investigationActivityLabel(item.updated_at_ms)}</small>
+						<small class="investigation-coverage" data-investigation-coverage={item.id}>{investigationCoverageSummary(item)}</small>
 					</button>
 				{/each}
 			</nav>
@@ -2251,14 +2278,19 @@
 	.investigation-layout { display: grid; grid-template-columns: minmax(180px, 240px) minmax(0, 1fr); gap: var(--space-6); }
 	.investigation-list { display: flex; flex-direction: column; gap: 4px; }
 	.investigation-choice {
-		display: flex; flex-direction: column; align-items: flex-start; gap: 3px;
+		display: flex; width: 100%; flex-direction: column; align-items: stretch; gap: 5px;
 		padding: 9px 11px; border: 1px solid transparent; border-radius: var(--radius-md);
 		background: transparent; color: var(--text); text-align: left; cursor: pointer;
 	}
 	.investigation-choice:hover { background: var(--bg-inset); }
 	.investigation-choice.selected { border-color: var(--border); background: var(--bg-inset); }
-	.investigation-choice span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-sm); font-weight: 600; }
+	.investigation-choice-heading { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: var(--space-2); }
+	.investigation-choice-title { min-width: 0; overflow: hidden; color: var(--text); text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-sm); font-weight: 600; }
+	.investigation-status { flex: none; padding: 2px 6px; border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-dim); font-size: 10px; font-weight: 600; line-height: 1.3; }
+	.investigation-status[data-status='complete'] { border-color: color-mix(in srgb, var(--success, #16803c) 28%, var(--border)); color: var(--success, #16803c); }
+	.investigation-status[data-status='archived'] { color: var(--text-faint); }
 	.investigation-choice small, .status, .editor-foot { color: var(--text-faint); font-size: var(--fs-xs); }
+	.investigation-coverage { white-space: normal; line-height: 1.35; }
 	.error { margin: 0 0 var(--space-3); color: var(--danger, #b42318); font-size: var(--fs-sm); overflow-wrap: anywhere; }
 	.brief-editor { min-width: 0; border-block: 1px solid var(--border); }
 	.editor-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); padding: var(--space-3) 0; border-bottom: 1px solid var(--border); }

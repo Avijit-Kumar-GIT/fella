@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Button } from '$lib/components/ui/button';
 	import { session } from '$lib/session.svelte';
+	import { openRepository } from '$lib/commands';
 	import Icon from './Icon.svelte';
 
 	let workspacePath = $derived(session.activeChat.workspaceScope);
@@ -8,6 +9,9 @@
 		workspacePath?.replace(/[/\\]+$/, '').split(/[\\/]/).at(-1) ?? ''
 	);
 	let workspaceAvailable = $derived(workspacePath === session.catalog.workspace);
+	let historyOnly = $derived(Boolean(workspacePath && (
+		session.workspaceAt(workspacePath)?.historyOnly || session.historyOnlyRepositoryPaths.includes(workspacePath)
+	)));
 	let isWorkspaceView = $derived(
 		session.workspaceView === 'ask' ||
 		session.workspaceView === 'board' ||
@@ -24,14 +28,34 @@
 			<strong class="workspace-name" title={workspacePath}>{workspaceName}</strong>
 		</div>
 
-		{#if session.workspaceView === 'ask' || session.workspaceView === 'board'}
+		{#if (session.workspaceView === 'ask' || session.workspaceView === 'board') && workspaceAvailable}
 			<Button
 				variant="outline"
 				size="sm"
 				class="workspace-open-investigation"
-				disabled={!workspaceAvailable}
-				title={workspaceAvailable ? undefined : 'Reconnect this workspace to open its Investigation'}
 				onclick={() => session.setWorkspacePane('investigation')}
+			>
+				<Icon name="bookmark" size={14} />Open Investigation
+			</Button>
+		{:else if (session.workspaceView === 'ask' || session.workspaceView === 'board') && historyOnly}
+			<div class="workspace-history-action">
+				<span class="workspace-history-label" role="status">History only</span>
+				<Button
+					variant="outline"
+					size="sm"
+					class="workspace-open-investigation"
+					onclick={() => void openRepository(workspacePath, { reportFailure: true })}
+				>
+					<Icon name="refresh" size={14} />Reconnect folder
+				</Button>
+			</div>
+		{:else if (session.workspaceView === 'ask' || session.workspaceView === 'board')}
+			<Button
+				variant="outline"
+				size="sm"
+				class="workspace-open-investigation"
+				disabled
+				title="Wait for this workspace to finish mounting before opening its Investigation"
 			>
 				<Icon name="bookmark" size={14} />Open Investigation
 			</Button>
@@ -73,6 +97,16 @@
 		font-weight: 600;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+	}
+	.workspace-history-action {
+		display: flex;
+		flex: none;
+		align-items: center;
+		gap: var(--space-2);
+	}
+	.workspace-history-label {
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
 	}
 	:global(.workspace-open-investigation) {
 		flex: none;

@@ -930,6 +930,52 @@ test('a saved answer opens its canonical run and returns to the same conversatio
 	expect(await page.evaluate(() => window.__workspaceAskCalls.length)).toBe(2);
 });
 
+test('Investigation index summarizes work and resumes the same completed record', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
+	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	const composer = page.getByRole('combobox', { name: 'Ask about northwind-sales' });
+	await composer.fill('First return-to-work question');
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
+	const firstId = await page.evaluate(() => window.__workspaceInvestigations()[0].id);
+
+	const workspaceRow = page.getByRole('button', { name: 'Open workspace northwind-sales' });
+	await workspaceRow.hover();
+	await page.getByRole('button', { name: 'New conversation in northwind-sales' }).click();
+	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill('Second return-to-work question');
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
+	await page.locator('.workspace-context-bar').getByRole('button', { name: 'Open Investigation' }).click();
+	const choices = page.locator('.investigation-choice');
+	await expect(choices).toHaveCount(2);
+	const firstChoice = choices.filter({ hasText: 'First return-to-work question' });
+	await expect(firstChoice).toContainText('Active');
+	await expect(firstChoice).toContainText('Updated');
+	await expect(firstChoice).toContainText('0/1 answered · 1 needs attention');
+	await firstChoice.click();
+	await expect(page.locator('.editor-heading h2')).toHaveText('First return-to-work question');
+	await expect(page.getByRole('textbox', { name: 'Main question' })).toHaveValue('First return-to-work question');
+	const openConversation = page.getByRole('button', { name: 'Open conversation', exact: true });
+	await openConversation.click();
+	await expect(page.locator('.msg.user').filter({ hasText: 'First return-to-work question' })).toHaveCount(1);
+	await page.locator('.workspace-context-bar').getByRole('button', { name: 'Open Investigation' }).click();
+	await page.getByRole('button', { name: 'Analyze main Question' }).click();
+	await page.getByRole('region', { name: 'Review this run' }).getByRole('button', { name: 'Run this Question' }).click();
+	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.').last()).toBeVisible();
+	await page.locator('.workspace-context-bar').getByRole('button', { name: 'Open Investigation' }).click();
+	await page.getByRole('button', { name: 'Mark complete' }).click();
+	await expect(choices.filter({ hasText: 'First return-to-work question' })).toContainText('Complete');
+	const completedId = await page.evaluate(() => window.__workspaceInvestigations().find((item) => item.title === 'First return-to-work question').id);
+	expect(completedId).toBe(firstId);
+	await page.getByRole('button', { name: 'Reopen Investigation' }).click();
+	await expect(choices.filter({ hasText: 'First return-to-work question' })).toContainText('Active');
+	const resumed = await page.evaluate((id) => window.__workspaceInvestigations().find((item) => item.id === id), firstId);
+	expect(resumed.questions[0].text).toBe('First return-to-work question');
+	expect(resumed.questions[0].answer_status).toBe('answered');
+});
+
 test('an analyst can edit the main Question and linked subquestions without rewriting the request', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
@@ -2738,12 +2784,21 @@ test('a history-only workspace retries its folder mount and keeps history availa
 	await expect(page.getByRole('status', {
 		name: 'History only. The folder could not be opened; saved conversations remain available.'
 	})).toBeVisible();
+	const workspaceContext = page.locator('.workspace-context-bar');
+	await expect(workspaceContext).toContainText('History only');
+	const contextReconnect = workspaceContext.getByRole('button', { name: 'Reconnect folder' });
+	await expect(contextReconnect).toBeVisible();
 	const initialOpenCalls = await page.evaluate(() => window.__workspaceOpenCalls.length);
 	expect(initialOpenCalls).toBe(1);
 
-	await page.getByRole('button', { name: 'Reconnect unavailable-archive' }).click();
+	await contextReconnect.click();
 	await expect.poll(() => page.evaluate(() => window.__workspaceOpenCalls.length)).toBe(2);
-	await expect(page.getByText(/Its conversations remain in history only/)).toBeVisible();
+	await expect(page.getByText(/Its conversations remain in history only/).last()).toBeVisible();
+
+	await page.getByRole('button', { name: 'Open workspace unavailable-archive' }).hover();
+	await page.getByRole('button', { name: 'Reconnect unavailable-archive' }).click();
+	await expect.poll(() => page.evaluate(() => window.__workspaceOpenCalls.length)).toBe(3);
+	await expect(page.getByText(/Its conversations remain in history only/).last()).toBeVisible();
 	await expect(workspace).toContainText('Saved result from this folder.');
 	const reconnect = page.getByRole('button', { name: 'Reconnect unavailable-archive' });
 	await expect(reconnect).toHaveAttribute('data-slot', 'button');
