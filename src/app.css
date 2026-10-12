@@ -295,8 +295,8 @@
 	--chart-orange: #c87936;
 	--chart-green: #3f805b;
 	--chart-gold: #a27b24;
-	--radius: 8px;
-	--pad: 28px;
+	--radius: 10px;
+	--pad: 32px;
 
 	/* --- fixed --------------------------------------------------------- */
 	--sans: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
@@ -304,26 +304,26 @@
 	--mono: 'Geist Mono', ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo,
 		Consolas, 'DejaVu Sans Mono', monospace;
 	/* type scale: two small steps for chrome/dense data, two up for headings */
-	--fs: 14px;
-	--fs-sm: 13px;
+	--fs: 15px;
+	--fs-sm: 14px;
 	--fs-xs: 12px;
 	--fs-lg: 16px;
 	--fs-xl: 22px;
-	--lh: 1.55;
+	--lh: 1.6;
 
 	/* spacing scale everything vertical/inset should land on one of these */
 	--space-1: 4px;
 	--space-2: 8px;
 	--space-3: 12px;
-	--space-4: 16px;
-	--space-5: 24px;
-	--space-6: 32px;
-	--content-max: 1040px;
+	--space-4: 18px;
+	--space-5: 26px;
+	--space-6: 36px;
+	--content-max: 1120px;
 
-	--radius-sm: 6px;
-	--radius-chip: 4px;
-	--radius-conversation: 14px;
-	--radius-window: 12px;
+	--radius-sm: 8px;
+	--radius-chip: 8px;
+	--radius-conversation: 18px;
+	--radius-window: 16px;
 
 	/* soft, diffuse, layered the macOS elevation feel */
 	--shadow-sm: 0 1px 2px rgba(20, 20, 26, 0.05), 0 4px 12px rgba(20, 20, 26, 0.06);

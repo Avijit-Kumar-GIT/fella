@@ -416,12 +416,12 @@
 							{/if}
 						</div>
 					{:else}
-						<div class="ask-workbench">
+						<section class="ask-workbench" aria-label="Focus">
 							<Transcript bind:this={transcript} />
 							{#if session.activeChat.companionPane}
 								<CompanionPane />
 							{/if}
-						</div>
+						</section>
 					{/if}
 				</div>
 			</main>

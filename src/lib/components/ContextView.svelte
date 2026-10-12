@@ -117,7 +117,7 @@
 		<div class="empty-state">
 			<div class="empty-icon"><Icon name="folder" size={20} /></div>
 			<h2>Connect a folder to add workspace context</h2>
-			<p>Choose a folder and Fella will keep its workspace note beside the files it understands.</p>
+			<p>Choose a folder to add a short guide that helps Fella interpret its files.</p>
 			<Button type="button" onclick={() => void openFolder()}>Choose a folder</Button>
 		</div>
 	{:else if loadFailed}
@@ -149,7 +149,7 @@
 					class="guide-textarea"
 					bind:value={contents}
 					aria-label="Workspace guide"
-					placeholder="Tell Fella what these files mean, which fields matter, and what it should keep in mind…"
+					placeholder="Explain important fields, definitions, or context Fella should know…"
 					oninput={scheduleSave}
 				/>
 			{/if}

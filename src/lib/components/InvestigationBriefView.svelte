@@ -1637,7 +1637,7 @@
 	<header class="page-head">
 		<div>
 			<h1 id="investigation-title">Investigation</h1>
-			<p>Define the goal, review the data, and track each Question to its findings.</p>
+			<p>One request, the data behind it, and the results Fella produces.</p>
 		</div>
 		<div class="page-head-actions">
 			{#if workspacePath && investigations.length}
@@ -1650,7 +1650,7 @@
 	{#if workspacePath && !loading && !error && !selected}
 		<section class="investigation-document-section investigation-data-section" aria-labelledby="investigation-data-empty-heading">
 			<header class="investigation-document-heading">
-				<div><h2 id="investigation-data-empty-heading">Data</h2><p>Review the files available in this workspace before starting an Investigation.</p></div>
+				<div><h2 id="investigation-data-empty-heading">Data</h2><p>See which files are available to analyze.</p></div>
 			</header>
 			<InvestigationSourceReadiness
 				{workspacePath}
@@ -1679,7 +1679,7 @@
 		<div class="empty-state">
 			<Icon name="bookmark" size={20} />
 			<h2>No investigations yet</h2>
-			<p>Workspace questions start an Investigation automatically. You can also create one here before beginning.</p>
+			<p>Ask about this workspace to start one, or create an Investigation now.</p>
 			<Button type="button" disabled={creating} onclick={() => void createInvestigation()}>
 				<Icon name="plus" size={16} />{creating ? 'Opening…' : currentConversationSource ? 'Start from conversation' : 'Start from this workspace'}
 			</Button>
@@ -1712,6 +1712,14 @@
 
 			{#if selected}
 				<div class="brief-editor">
+					<nav class="investigation-nav" aria-label="Investigation sections">
+						<a href="#brief-summary-title">Brief</a>
+						<a href="#investigation-data-heading">Data</a>
+						<a href="#question-plan-title">Questions</a>
+						<a href="#investigation-analysis-heading">Analysis</a>
+						<a href="#investigation-results-heading">Results</a>
+						<a href="#investigation-share-heading">Share</a>
+					</nav>
 					<div class="editor-heading">
 						<div>
 							<h2>{selected.title}</h2>
@@ -1725,8 +1733,8 @@
 					<section class="brief-summary" aria-labelledby="brief-summary-title">
 						<header>
 							<div>
-								<h3 id="brief-summary-title">Goal</h3>
-								<p>The purpose and shape of the analysis.</p>
+								<h3 id="brief-summary-title">Brief</h3>
+								<p>Goal, audience, and delivery context.</p>
 							</div>
 							<Button type="button" variant="outline" disabled={saving} onclick={() => (briefEditing = true)}>
 								<Icon name="pencil" size={16} />Edit brief
@@ -1784,7 +1792,7 @@
 					{/if}
 					<section class="investigation-document-section investigation-data-section" aria-labelledby="investigation-data-heading">
 						<header class="investigation-document-heading">
-							<div><h3 id="investigation-data-heading">Data</h3><p>Check what is available and choose the sources eligible for future Questions.</p></div>
+							<div><h3 id="investigation-data-heading">Data</h3><p>Choose which sources this Investigation can use.</p></div>
 						</header>
 						<InvestigationSourceReadiness
 							{workspacePath}
@@ -1796,11 +1804,11 @@
 						<header class="work-plan-heading">
 							<div>
 								<h3 id="work-plan-title">Questions</h3>
-								<p>Define what this Investigation should answer. Add subquestions when they help.</p>
+								<p>Start with the request. Add smaller questions when they help.</p>
 							</div>
 						</header>
 						<div class="optional-context-heading">
-							<p>Optional context</p>
+							<p>Context (optional)</p>
 							<Button type="button" variant="ghost" size="sm" disabled={saving} onclick={startDefinition}>
 								<Icon name="plus" size={14} />Add definition or assumption
 							</Button>
@@ -1813,7 +1821,7 @@
 					<section class="definition-editor" aria-labelledby="definition-context-title">
 						<header class="question-heading">
 							<div>
-								<p>Guide future analysis; each run keeps the version it used.</p>
+								<p>Fella records the version used by each run.</p>
 							</div>
 							<div class="question-save">
 								<span role={(error || autosaveError) && definitionsDirty ? 'alert' : 'status'}>{(error || autosaveError) && definitionsDirty ? error || autosaveError : (saving || autosaving) && definitionsDirty ? 'Saving…' : definitionsDirty ? hasBlankDefinition ? 'Complete blank fields to save' : 'Changes save automatically' : 'Saved'}</span>
@@ -1848,7 +1856,7 @@
 								{/each}
 							</ol>
 						{:else}
-							<p class="definition-empty">No saved definitions or assumptions. Runs use no Investigation-specific semantic context.</p>
+							<p class="definition-empty">No saved definitions or assumptions.</p>
 						{/if}
 					</section>
 						</details>
@@ -1856,7 +1864,7 @@
 						<header class="question-heading question-plan-heading">
 							<div>
 								<h3 id="question-plan-title">Question plan</h3>
-								<p>One main Question, with optional subquestions. Changes save automatically.</p>
+								<p>The original request is the main Question. Add a breakdown only when useful.</p>
 							</div>
 							<div class="question-save">
 								<span role={error || autosaveError ? 'alert' : 'status'} title={error || autosaveError || undefined}>
@@ -2101,7 +2109,7 @@
 							<section class="run-preview" aria-labelledby="run-preview-title">
 								<header>
 									<h4 id="run-preview-title">Review this run</h4>
-									<p>No analysis has started. Confirm the Question, source scope, and definitions Fella will use.</p>
+									<p>Check the Question and included sources before running.</p>
 								</header>
 								<dl class="run-preview-facts">
 									<div><dt>Question</dt><dd>{pendingAnalysisQuestion.text.trim() || 'No Question text'}</dd></div>
@@ -2182,12 +2190,12 @@
 						<header class="investigation-document-heading">
 							<div>
 								<h3 id="investigation-analysis-heading">Analysis</h3>
-								<p>Review the work in the order it happened. Each run can use the method and checks its question requires.</p>
+								<p>Runs, recorded steps, and Findings.</p>
 							</div>
 						</header>
 					<details class="investigation-history" bind:open={historyOpen}>
 						<summary>
-							<span>Analysis history &amp; Findings</span>
+							<span>Run history &amp; Findings</span>
 							<small>{analysisRunIds(selected).length} saved run{analysisRunIds(selected).length === 1 ? '' : 's'} · {selected.findings?.length ?? 0} Finding{selected.findings?.length === 1 ? '' : 's'}</small>
 						</summary>
 						<div class="investigation-history-content">
@@ -2195,7 +2203,7 @@
 						<header class="findings-heading">
 							<div>
 								<h3 id="findings-title">Findings</h3>
-								<p>Keep the conclusions you’ll reuse, each tied to the Question, run, and evidence that supports it.</p>
+								<p>Reviewed conclusions linked to their Questions and evidence.</p>
 							</div>
 							<span>{selected.findings?.length ?? 0} saved</span>
 						</header>
@@ -2318,8 +2326,8 @@
 					<section class="analysis-runs" aria-labelledby="analysis-runs-title">
 						<header class="analysis-runs-heading">
 							<div>
-								<h3 id="analysis-runs-title">Analysis runs</h3>
-								<p>Canonical run records linked to this Investigation and its Questions.</p>
+								<h3 id="analysis-runs-title">Runs</h3>
+								<p>Each run keeps its own scope, method, and evidence.</p>
 							</div>
 							<span>{analysisRunIds(selected).length} linked</span>
 						</header>
@@ -2637,7 +2645,7 @@
 					</section>
 					<section class="investigation-document-section investigation-results-section" aria-labelledby="investigation-results-heading">
 						<header class="investigation-document-heading">
-							<div><h3 id="investigation-results-heading">Results</h3><p>Review the current answers, saved Findings, visualizations, and any remaining gaps.</p></div>
+							<div><h3 id="investigation-results-heading">Results</h3><p>Answers, charts, and questions that still need work.</p></div>
 						</header>
 						<InvestigationResultsView
 							investigation={selected}
@@ -2650,7 +2658,7 @@
 					</section>
 					<section class="investigation-document-section investigation-share-section" aria-labelledby="investigation-share-heading">
 						<header class="investigation-document-heading">
-							<div><h3 id="investigation-share-heading">Share</h3><p>Review the saved analysis and its limitations before exporting a report.</p></div>
+							<div><h3 id="investigation-share-heading">Share</h3><p>Preview the report before exporting.</p></div>
 							<Button
 								type="button"
 								variant="outline"
@@ -2802,6 +2810,40 @@
 	}
 	.page-head { margin-bottom: var(--space-5); }
 	.page-head-actions { display: flex; min-width: 0; align-items: center; justify-content: flex-end; gap: var(--space-2); }
+	.investigation-nav {
+		position: sticky;
+		top: 0;
+		z-index: 4;
+		display: flex;
+		gap: var(--space-1);
+		min-width: 0;
+		margin: 0 0 var(--space-4);
+		padding: var(--space-2) 0;
+		overflow-x: auto;
+		overscroll-behavior-inline: contain;
+		background: color-mix(in srgb, var(--bg) 90%, transparent);
+		backdrop-filter: blur(12px);
+		scrollbar-width: none;
+	}
+	.investigation-nav::-webkit-scrollbar { display: none; }
+	.investigation-nav a {
+		flex: none;
+		padding: 7px 12px;
+		border-radius: 999px;
+		color: var(--text-dim);
+		font-size: var(--fs-sm);
+		line-height: 1.2;
+		white-space: nowrap;
+		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+	}
+	.investigation-nav a:hover,
+	.investigation-nav a:focus-visible { background: var(--bg-inset); color: var(--text); text-decoration: none; }
+	#brief-summary-title,
+	#investigation-data-heading,
+	#question-plan-title,
+	#investigation-analysis-heading,
+	#investigation-results-heading,
+	#investigation-share-heading { scroll-margin-top: 62px; }
 	.report-export-status { max-width: 300px; color: var(--text-dim); font-size: var(--fs-xs); overflow-wrap: anywhere; }
 	.report-export-status[role='alert'] { color: var(--danger, #b42318); }
 	.report-export-disabled-reason { margin: var(--space-2) 0 0; color: var(--text-faint); font-size: var(--fs-xs); }
@@ -2876,24 +2918,24 @@
 	.investigation-choice small, .status { color: var(--text-faint); font-size: var(--fs-xs); }
 	.investigation-coverage { white-space: normal; line-height: 1.35; }
 	.investigation-list-hint { display: none; margin: 2px 10px 6px; color: var(--text-faint); font-size: 10px; }
-	.brief-editor { min-width: 0; border-block: 1px solid var(--border); }
-	.editor-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); padding: var(--space-3) 0; border-bottom: 1px solid var(--border); }
+	.brief-editor { min-width: 0; }
+	.editor-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); padding: var(--space-3) 0 var(--space-4); }
 	.editor-actions { display: flex; flex: none; align-items: center; gap: var(--space-2); }
-	.investigation-document-section { display: grid; min-width: 0; gap: var(--space-3); padding: var(--space-4) 0; border-top: 1px solid var(--border); }
+	.investigation-document-section { display: grid; min-width: 0; gap: var(--space-4); padding: var(--space-6) 0; }
 	.investigation-document-heading { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: var(--space-4); }
 	.investigation-document-heading > div { display: grid; min-width: 0; gap: 3px; }
 	.investigation-document-heading h2, .investigation-document-heading h3 { margin: 0; font-size: var(--fs-md); font-weight: 650; }
 	.investigation-document-heading p { color: var(--text-dim); font-size: var(--fs-xs); line-height: 1.45; }
 	.investigation-data-section :global(.source-readiness) { padding: var(--space-2) 0 0; border-bottom: 0; }
-	.investigation-analysis-section { scroll-margin-top: var(--space-4); }
+	.investigation-analysis-section { scroll-margin-top: var(--space-5); }
 	.investigation-results-section :global(.results-view) { padding: 0; }
-	.investigation-share-section { margin-bottom: var(--space-5); }
+	.investigation-share-section { margin-bottom: var(--space-6); }
 	.investigation-share-section .report-export-status { max-width: none; }
-	.brief-summary { display: grid; gap: var(--space-3); padding: var(--space-4); margin-top: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg); }
+	.brief-summary { display: grid; gap: var(--space-4); padding: var(--space-5); margin-top: var(--space-2); border: 0; border-radius: var(--radius-window); background: var(--bg-inset); }
 	.brief-summary > header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
 	.brief-summary h3, .work-plan-heading h3 { margin: 0; font-size: var(--fs-md); font-weight: 650; }
 	.brief-summary > header p, .work-plan-heading p { margin-top: 2px; color: var(--text-dim); font-size: var(--fs-xs); line-height: 1.45; }
-	.brief-summary dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3) var(--space-6); margin: 0; }
+	.brief-summary dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4) var(--space-6); margin: 0; }
 	.brief-summary dl > div { display: grid; min-width: 0; gap: 2px; }
 	.brief-summary dt { color: var(--text-faint); font-size: var(--fs-xs); }
 	.brief-summary dd { min-width: 0; margin: 0; color: var(--text); font-size: var(--fs-sm); line-height: 1.45; overflow-wrap: anywhere; }
@@ -2915,11 +2957,11 @@
 	.brief-editor :global(.brief-field) { width: 100%; min-height: 74px; resize: vertical; }
 	.brief-editor :global(.goal-field) { min-height: 112px; }
 	.brief-editor :global(.constraints-field) { min-height: 96px; }
-	.analyst-work-plan { display: grid; gap: var(--space-3); padding: var(--space-5) 0; }
+	.analyst-work-plan { display: grid; gap: var(--space-4); padding: var(--space-6) 0; }
 	.work-plan-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); }
 	.optional-context-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); color: var(--text-faint); font-size: var(--fs-xs); }
 	.optional-context-heading > p { font-weight: 600; }
-	.definition-disclosure, .investigation-history { min-width: 0; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg); }
+	.definition-disclosure, .investigation-history { min-width: 0; border: 1px solid color-mix(in srgb, var(--border) 72%, transparent); border-radius: var(--radius-window); background: var(--bg-raised); }
 	.definition-disclosure > summary, .investigation-history > summary { display: flex; min-height: 42px; align-items: center; justify-content: space-between; gap: var(--space-3); padding: 0 var(--space-3); color: var(--text); font-size: var(--fs-sm); font-weight: 600; cursor: pointer; list-style: none; }
 	.definition-disclosure > summary::-webkit-details-marker, .investigation-history > summary::-webkit-details-marker { display: none; }
 	.definition-disclosure > summary::before, .investigation-history > summary::before { content: '›'; flex: 0 0 auto; color: var(--text-faint); font-size: 1.2em; font-weight: 400; line-height: 1; transition: transform 120ms ease; }
@@ -2937,7 +2979,7 @@
 	.definition-item select { width: max-content; min-width: 140px; padding: 6px 9px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); color: var(--text); font: inherit; }
 	.brief-editor :global(.definition-field) { width: 100%; min-height: 68px; resize: vertical; }
 	.definition-empty { margin: 0; }
-	.question-editor { display: grid; gap: var(--space-3); padding: var(--space-4) 0; margin-top: var(--space-2); border-top: 1px solid var(--border); }
+	.question-editor { display: grid; gap: var(--space-4); padding: var(--space-4) 0; margin-top: var(--space-2); }
 	.question-heading, .question-save, .question-item-heading, .question-item-actions { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
 	.question-heading { align-items: center; gap: var(--space-4); }
 	.question-heading > div:first-child { min-width: 0; flex: 1; }
@@ -2946,7 +2988,7 @@
 	.question-save { min-width: 12rem; max-width: 22rem; flex: 0 1 22rem; justify-content: flex-end; }
 	.question-save > span { display: block; min-width: 0; overflow: hidden; color: var(--text-faint); font-size: var(--fs-xs); text-overflow: ellipsis; white-space: nowrap; }
 	.question-plan-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: var(--space-2); }
-	.question-coverage { display: grid; gap: var(--space-3); padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-inset); }
+	.question-coverage { display: grid; gap: var(--space-4); padding: var(--space-4); border: 0; border-radius: var(--radius-window); background: var(--bg-inset); }
 	.question-coverage > header { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-4); }
 	.question-coverage h4 { margin: 0; font-size: var(--fs-sm); font-weight: 650; }
 	.question-coverage > header p, .question-coverage-message { margin: 3px 0 0; color: var(--text-dim); font-size: var(--fs-xs); }
@@ -2966,7 +3008,7 @@
 	.question-coverage-review small { color: var(--text-faint); font-size: 11px; overflow-wrap: anywhere; }
 	.subquestion-title { margin: 0; font-size: var(--fs-sm); font-weight: 650; }
 	.question-list { display: grid; gap: var(--space-3); margin: 0; padding: 0; list-style: none; }
-	.question-item { min-width: 0; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); }
+	.question-item { min-width: 0; padding: var(--space-4); border: 1px solid color-mix(in srgb, var(--border) 72%, transparent); border-radius: var(--radius-window); background: var(--bg-raised); }
 	.question-item-heading { margin-bottom: var(--space-2); }
 	.question-item-heading label { margin: 0; font-size: var(--fs-sm); font-weight: 600; }
 	.question-parent-label { color: var(--text-faint); font-size: var(--fs-xs); }
@@ -2981,7 +3023,7 @@
 	.question-run-links { display: flex; align-items: center; gap: var(--space-1); margin: 0 0 var(--space-2); color: var(--text-faint); font-size: var(--fs-xs); }
 	.question-run-links > span { margin-right: var(--space-1); }
 	.question-run-links :global(button) { min-height: 28px; padding-inline: var(--space-2); }
-	.findings { display: grid; gap: var(--space-3); padding: var(--space-4) 0; margin-top: var(--space-4); border-top: 1px solid var(--border); }
+	.findings { display: grid; gap: var(--space-4); padding: var(--space-5) 0; margin-top: var(--space-4); }
 	.findings-heading, .finding-card-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); }
 	.findings-heading h3, .finding-card h4 { margin: 0; font-size: var(--fs-md); font-weight: 650; }
 	.findings-heading p { margin: var(--space-1) 0 0; color: var(--text-dim); font-size: var(--fs-xs); }
@@ -3029,7 +3071,7 @@
 	:global(.finding-edit-field) { width: 100%; min-height: 72px; resize: vertical; }
 	.finding-edit-actions, .finding-capture-actions { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-2); }
 	.finding-error { margin: 0; color: var(--danger, #b42318); font-size: var(--fs-xs); overflow-wrap: anywhere; }
-	.analysis-runs { display: grid; gap: var(--space-3); padding: var(--space-4) 0; margin-top: var(--space-4); border-top: 1px solid var(--border); }
+	.analysis-runs { display: grid; gap: var(--space-4); padding: var(--space-5) 0; margin-top: var(--space-4); }
 	.analysis-runs-heading, .analysis-run-detail > header { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); }
 	.analysis-runs-heading h3, .analysis-run-detail h4 { margin: 0; font-size: var(--fs-md); font-weight: 650; }
 	.analysis-runs-heading p, .analysis-run-detail > header p { margin: var(--space-1) 0 0; color: var(--text-dim); font-size: var(--fs-xs); }

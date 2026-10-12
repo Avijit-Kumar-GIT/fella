@@ -510,14 +510,14 @@
 				<Button variant="ghost" size="sm" class="workspace-reopen" onclick={() => void openRepository(unavailableWorkspacePath!, { reportFailure: true })}>Open workspace</Button>
 			</div>
 		{/if}
-		{#if session.workspaceView === 'board' && !pendingInput}
-			<div class="composer-scope-note" data-testid="composer-scope-target" aria-label={`Message target: ${boardComposerTarget}`}>
-				<span>Message target</span>
-				<strong>{boardComposerTarget}</strong>
-			</div>
-		{/if}
 		{#if !pendingInput}
 			<div class="context-row">
+				{#if session.workspaceView === 'board' || session.workspaceView === 'ask' || (session.workspaceView === 'workspace' && session.workspaceLayoutPreset === 'workbench')}
+					<div class="composer-scope-note" data-testid="composer-scope-target" aria-label={`Message target: ${boardComposerTarget}`}>
+						<span>Message target</span>
+						<strong>{boardComposerTarget}</strong>
+					</div>
+				{/if}
 				{#each contextRefs as ref (ref.kind + ':' + ref.key)}
 					<span class="ref-pill" title={ref.detail ?? ref.label}>
 							<Icon name={ref.kind === 'source' ? 'file' : 'table'} size={12} />

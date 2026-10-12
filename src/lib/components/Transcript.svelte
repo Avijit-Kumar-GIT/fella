@@ -146,14 +146,14 @@
 >
 	{#if !hasConversationTurn}
 		<div class="onboard" class:center={!hasFolder && !showSetup}>
-			{#if !hasFolder}
-				<div class="onboard-mark"><Logo size={28} /></div>
-			{/if}
-			<h1 class="hero">{hasFolder ? 'Ask about your own files' : 'New conversation'}</h1>
+			<div class="onboard-brand"><Logo size={28} /><span>Fella</span></div>
+			<h1 class="hero">
+				{!hasFolder ? 'New conversation' : fileCount ? 'What should we find out?' : 'No readable files yet.'}
+			</h1>
 
 			{#if !hasFolder}
 				<p class="lead">
-					Choose a folder to analyze your files, or try the sample workspace. You can type a question below first.
+					Ask a question about your files. Fella explores the available data, analyzes it, and shows the result with supporting evidence.
 				</p>
 				<div class="cta first-run-actions">
 					<Button class="folder-action" onclick={() => void openFolder(undefined, { focusAfterOpen: true })}>
@@ -164,21 +164,25 @@
 					</Button>
 				</div>
 				<p class="first-run-privacy">
-				Only the folder you choose is in scope. Fella reads and computes locally without modifying source files. Your chosen model provider receives prompts and relevant context or tool results, which may include document text or data rows.
+					Fella reads and computes locally. Only the folder you choose is in scope. Your chosen model provider receives prompts and relevant context or tool results.
+				</p>
+				<div class="first-run-privacy-link">
 					<Button variant="link" size="sm" class="privacy-link" onclick={() => void openExternal('https://docs.lilfella.app/developer-platform/using-fella/privacy')}>
 						Privacy and security <Icon name="arrow-up-right" size={12} />
 					</Button>
-				</p>
+				</div>
 			{:else if fileCount === 0}
 				<p class="lead"><strong>{folderName}</strong> is open, but nothing in it is readable yet.</p>
 				<p>
-					Fella works with spreadsheets, CSVs, Excel, PDFs and plain text.{#if skipped.length}
-						<code>/files</code> shows what was skipped and why.{/if}
+					Fella can read spreadsheets, CSV files, PDFs, and plain text.{#if skipped.length} Review the skipped files to see why they could not be loaded.{/if}
 				</p>
 				<div class="cta">
 					<Button class="folder-action" onclick={() => void openFolder()}>
 						<Icon name="folder" size={16} /> Choose a different folder
 					</Button>
+					{#if skipped.length}
+						<Button variant="link" onclick={() => void dispatch('/files')}>Review files</Button>
+					{/if}
 				</div>
 			{:else}
 				<p class="lead">
@@ -389,25 +393,32 @@
 		align-items: center;
 		text-align: center;
 	}
-	.onboard-mark {
+	.onboard-brand {
 		display: flex;
+		align-items: center;
 		justify-content: center;
-		margin-bottom: var(--space-2);
+		gap: var(--space-2);
+		margin-bottom: var(--space-3);
+		color: var(--text-dim);
+		font-size: var(--fs-sm);
+		font-weight: 650;
+		letter-spacing: -0.01em;
 	}
 	.hero {
-		font-size: var(--fs-xl);
-		font-weight: 600;
+		font-size: clamp(26px, 3vw, 34px);
+		font-weight: 650;
 		letter-spacing: -0.035em;
 		text-wrap: balance;
 		color: var(--text);
-		margin: 0 0 var(--space-2);
+		margin: 0 0 var(--space-3);
 	}
 	.onboard p {
 		margin: 0 0 var(--space-3);
 	}
 	.onboard .lead {
 		color: var(--text);
-		font-size: var(--fs-lg);
+		font-size: 17px;
+		line-height: 1.55;
 	}
 	.onboard .lead strong {
 		font-weight: 600;
@@ -416,12 +427,13 @@
 		justify-content: center;
 	}
 	.first-run-privacy {
-		max-width: 62ch;
+		max-width: 58ch;
 		margin: var(--space-4) 0 0 !important;
 		color: var(--text-faint);
 		font-size: var(--fs-xs);
 		line-height: 1.55;
 	}
+	.first-run-privacy-link { margin-top: var(--space-1); }
 	.first-run-privacy :global(.privacy-link) {
 		display: inline;
 		min-height: 0;

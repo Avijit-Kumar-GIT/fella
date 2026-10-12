@@ -232,7 +232,7 @@
 	<div class="board-heading">
 		<div>
 			<h2>Workspace overview</h2>
-			<p>Choose a workspace to open it. Each workspace keeps its own data and conversations.</p>
+			<p>Choose a workspace to open it. Each keeps its own files and conversations.</p>
 		</div>
 		<span>{session.activeEnvironmentPanes.length} workspaces</span>
 	</div>
@@ -328,7 +328,7 @@
 		min-height: 0;
 		display: flex;
 		flex-direction: column;
-		padding: 14px;
+		padding: var(--space-4);
 		background: var(--workspace-canvas);
 	}
 	.board-heading {
@@ -351,7 +351,7 @@
 		display: grid;
 		grid-template-columns: repeat(4, minmax(0, 1fr));
 		grid-template-rows: repeat(4, minmax(0, 1fr));
-		gap: 9px;
+		gap: var(--space-3);
 	}
 	.tile-grid.empty { place-items: center; }
 	.workspace-tile {

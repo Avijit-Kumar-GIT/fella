@@ -61,9 +61,6 @@
 			? `${answered}/${active.length} answered · ${needsAttention} need attention`
 			: `${answered}/${active.length} answered · Ready to close`;
 	});
-	let selectedPresetDescription = $derived(
-		presets.find((preset) => preset.id === session.workspaceLayoutPreset)?.description ?? ''
-	);
 	let currentInvestigationLabel = $derived(currentInvestigation?.title?.trim() || 'No Investigation yet');
 
 	function isPresetSelected(preset: (typeof presets)[number]['id']): boolean {
@@ -113,7 +110,6 @@
 		<div class="workspace-identity" role="group" aria-label={`Workspace: ${workspaceName}`}>
 			<Icon name="folder" size={16} />
 			<span class="workspace-identity-label">Workspace</span>
-			<span class="workspace-identity-separator" aria-hidden="true">/</span>
 			<strong class="workspace-name" title={workspacePath}>{workspaceName}</strong>
 		</div>
 
@@ -142,7 +138,6 @@
 				{#if session.workspaceView === 'workspace' && session.workspaceLayoutPreset === 'workbench'}
 					<WorkbenchPanelPicker />
 				{/if}
-				<span class="workspace-preset-description" aria-live="polite">{selectedPresetDescription}</span>
 			</div>
 		{:else if session.workspaceView === 'ask' && historyOnly}
 			<div class="workspace-history-action">
@@ -156,16 +151,6 @@
 					<Icon name="refresh" size={14} />Reconnect folder
 				</Button>
 			</div>
-		{:else if session.workspaceView === 'ask'}
-			<Button
-				variant="outline"
-				size="sm"
-				class="workspace-open-investigation"
-				disabled
-				title="Wait for this workspace to finish mounting before opening its Investigation"
-			>
-				<Icon name="bookmark" size={14} />Open Investigation
-			</Button>
 		{/if}
 	</div>
 {/if}
@@ -196,9 +181,10 @@
 	.workspace-identity :global(svg) {
 		flex: none;
 	}
-	.workspace-identity-label,
-	.workspace-identity-separator {
+	.workspace-identity-label {
 		flex: none;
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
 	}
 	.workspace-name {
 		min-width: 0;
@@ -289,14 +275,6 @@
 		outline: 2px solid var(--brand);
 		outline-offset: 2px;
 	}
-	.workspace-preset-description {
-		position: absolute;
-		width: 1px;
-		height: 1px;
-		overflow: hidden;
-		clip: rect(0, 0, 0, 0);
-		white-space: nowrap;
-	}
 	:global(.workspace-open-investigation) {
 		flex: none;
 		min-height: 30px;
@@ -310,10 +288,6 @@
 			gap: var(--space-2);
 			padding-inline: var(--space-2);
 		}
-		.workspace-identity-label,
-		.workspace-identity-separator {
-			display: none;
-		}
 		.workspace-preset-actions {
 			flex: 1 1 auto;
 			flex-wrap: wrap;
@@ -325,6 +299,9 @@
 		}
 		.workspace-preset-control button {
 			padding-inline: 6px;
+		}
+		.workspace-identity-label {
+			display: none;
 		}
 	}
 </style>

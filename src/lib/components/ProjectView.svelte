@@ -147,8 +147,8 @@
 			<section class="wiki-card" aria-labelledby="wiki-title">
 				<div class="card-heading">
 					<div>
-						<h1 id="wiki-title">Wiki</h1>
-						<p>A private set of notes for this repository.</p>
+						<h1 id="wiki-title">Project notes</h1>
+						<p>Private notes for this project.</p>
 					</div>
 					<span class="saved-label">Saved locally</span>
 				</div>
@@ -156,7 +156,7 @@
 					class="wiki-textarea"
 					value={body}
 					oninput={updateBody}
-					placeholder="Capture decisions, definitions, recurring questions, and anything you want Fella to remember about this workspace."
+					placeholder="Add decisions, definitions, or recurring context for this project."
 					aria-label="Project wiki"
 				/>
 			</section>

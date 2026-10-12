@@ -277,7 +277,7 @@
 
 <aside class="sidebar">
 	<div class="header">
-		<span class="logo"><Logo size={18} active={session.busy} /></span>
+		<div class="sidebar-brand"><Logo size={22} active={session.busy} /><strong>Fella</strong></div>
 		<div class="header-actions">
 			<Button
 				variant="ghost"
@@ -602,7 +602,7 @@
 	}
 	.sidebar {
 		flex: none;
-		width: 248px;
+		width: 260px;
 		display: flex;
 		flex-direction: column;
 		gap: var(--space-1);
@@ -623,12 +623,15 @@
 		height: 44px;
 		padding: 0 var(--space-2);
 	}
-	.logo {
+	.sidebar-brand {
 		display: flex;
 		align-items: center;
-		justify-content: center;
-		width: 26px;
-		height: 26px;
+		gap: var(--space-2);
+		min-width: 0;
+		color: var(--text);
+		font-size: var(--fs-sm);
+		font-weight: 650;
+		letter-spacing: -0.02em;
 	}
 	.header-actions {
 		display: flex;

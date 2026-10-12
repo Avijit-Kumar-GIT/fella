@@ -193,7 +193,7 @@
 			<div class="card-head">
 				<div>
 					<h2 id="model-title">Model</h2>
-					<p>Fella reads and computes locally. Your chosen provider receives prompts, relevant context, and tool results—which may include document text or data rows.</p>
+					<p>Analysis runs locally. The model provider receives prompts and the context or tool results needed, including relevant text or data rows.</p>
 				</div>
 			</div>
 			<div class="current-row">
@@ -243,7 +243,7 @@
 			<div class="card-head">
 				<div>
 					<h2 id="appearance-title">Appearance</h2>
-					<p>Choose the contrast that feels right for your workspace.</p>
+					<p>Choose light, dark, or system appearance.</p>
 				</div>
 			</div>
 			<div class="appearance-list">
