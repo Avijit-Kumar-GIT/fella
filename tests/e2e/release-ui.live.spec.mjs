@@ -321,7 +321,7 @@ test('G5: typed clarification replaces the composer, accepts a choice and Other,
 	}
 });
 
-test('G8: the mounted-workspace composer remains visible at the reported and compact sizes', async () => {
+test('G8: the mounted-workspace composer stays inside its conversation pane at reported and compact sizes', async () => {
 	const dataDir = await mkdtemp(join(tmpdir(), 'fella-electron-composer-layout-'));
 	const workspace = join(dataDir, 'workspace');
 	await mkdir(workspace);
@@ -333,8 +333,9 @@ test('G8: the mounted-workspace composer remains visible at the reported and com
 		await page.waitForLoadState('domcontentloaded');
 		await mountWorkspace(app, page, workspace);
 
-		const composer = page.locator('.dock .wrap');
+		const composer = page.locator('.workspace-preset-conversation .dock .wrap');
 		await expect(composer).toBeVisible();
+		await expect(page.locator('.workspace-window > .dock')).toHaveCount(0);
 		for (const viewport of [
 			{ width: 1288, height: 832 },
 			{ width: 1024, height: 640 }
@@ -364,15 +365,16 @@ test('G8: the mounted-workspace composer remains visible at the reported and com
 						clientHeight: document.documentElement.clientHeight,
 						scrollHeight: document.documentElement.scrollHeight
 					},
-					dock: rect('.dock'),
-					composer: rect('.dock .wrap'),
-					field: rect('.dock .field'),
-					context: rect('.dock .context-row'),
-					contextButton: rect('.dock .context-add'),
-					question: rect('.dock textarea'),
-					controls: rect('.dock .bottom-row'),
-					modeControl: rect('.dock .mode-trigger'),
-					modelControl: rect('.dock .model-trigger')
+					conversation: rect('.workspace-preset-conversation'),
+					dock: rect('.workspace-preset-conversation .dock'),
+					composer: rect('.workspace-preset-conversation .dock .wrap'),
+					field: rect('.workspace-preset-conversation .dock .field'),
+					context: rect('.workspace-preset-conversation .dock .context-row'),
+					contextButton: rect('.workspace-preset-conversation .dock .context-add'),
+					question: rect('.workspace-preset-conversation .dock textarea'),
+					controls: rect('.workspace-preset-conversation .dock .bottom-row'),
+					modeControl: rect('.workspace-preset-conversation .dock .mode-trigger'),
+					modelControl: rect('.workspace-preset-conversation .dock .model-trigger')
 				};
 			});
 			assert.equal(layout.viewport.width, viewport.width, 'renderer width should match the requested test viewport');
@@ -388,6 +390,10 @@ test('G8: the mounted-workspace composer remains visible at the reported and com
 				assert.ok(bounds.top >= 0 && bounds.bottom <= layout.viewport.height,
 					`${name} should remain fully inside the viewport at ${viewport.width}x${viewport.height}: ${JSON.stringify(layout)}`);
 			}
+			assert.ok(layout.composer.left >= layout.conversation.left && layout.composer.right <= layout.conversation.right,
+				`composer should remain horizontally inside its conversation pane: ${JSON.stringify(layout)}`);
+			assert.ok(layout.composer.top >= layout.conversation.top && layout.composer.bottom <= layout.conversation.bottom,
+				`composer should remain vertically inside its conversation pane: ${JSON.stringify(layout)}`);
 			assert.ok(layout.root.scrollHeight <= layout.root.clientHeight,
 				`the renderer document should not extend below its viewport at ${viewport.width}x${viewport.height}: ${JSON.stringify(layout)}`);
 		}

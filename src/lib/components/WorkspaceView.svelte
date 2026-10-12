@@ -14,12 +14,12 @@
 
 <section class="workspace" aria-label="Workspace">
 	<Tabs.Root value={pane} onValueChange={changePane} class="workspace-tabs-root">
-		<Tabs.List class="fella-ui-tabs-list workspace-tabs" aria-label="Workspace sections">
-			<Tabs.Trigger value="investigation" class="fella-ui-tabs-trigger workspace-tab">
+		<Tabs.List class="fella-ui-tabs-list fella-pill-nav workspace-tabs" aria-label="Workspace sections">
+			<Tabs.Trigger value="investigation" class="fella-ui-tabs-trigger fella-pill-nav-item workspace-tab">
 				<Icon name="bookmark" size={16} />
-				<span>Overview</span>
+				<span>Investigation</span>
 			</Tabs.Trigger>
-			<Tabs.Trigger value="context" class="fella-ui-tabs-trigger workspace-tab">
+			<Tabs.Trigger value="context" class="fella-ui-tabs-trigger fella-pill-nav-item workspace-tab">
 				<Icon name="table" size={16} />
 				<span>Data &amp; context</span>
 			</Tabs.Trigger>
@@ -46,23 +46,13 @@
 	}
 	:global(.workspace-tabs) {
 		flex: none;
-		gap: 3px;
-		max-width: var(--content-max);
-		width: 100%;
-		margin: 0 auto;
-		padding: var(--space-3) var(--pad) 0;
-		border-bottom: 1px solid var(--border);
+		gap: 2px;
+		margin: var(--space-3) auto var(--space-1);
 	}
 	:global(.workspace-tab) {
-		min-height: 34px;
+		min-height: 30px;
 		gap: 7px;
-		padding: 0 10px;
-		border-bottom: 2px solid transparent;
-		font-size: var(--fs-sm);
-		font-weight: 600;
-	}
-	:global(.workspace-tab[data-state='active']) {
-		border-bottom-color: var(--brand);
+		padding-inline: 12px;
 	}
 	:global(.workspace-tab svg) {
 		flex: none;

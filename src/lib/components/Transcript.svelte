@@ -37,8 +37,6 @@
 
 	// Show the connect panel whenever the user can't actually ask a question.
 	let showSetup = $derived(healthChecked && (rejected || !up || needModelPick));
-	let showExamples = $derived(up && !!currentModel && !needModelPick);
-
 	let services = $derived(session.providers.filter((p) => p.auth === 'key' && p.id !== 'custom'));
 
 	/** Start the in-app key entry flow without navigating away from Fella. */
@@ -53,23 +51,6 @@
 	);
 	let fileCount = $derived(session.catalog.sources.length);
 	let skipped = $derived(session.catalog.skipped ?? []);
-	let sampleWorkspace = $derived(
-		session.catalog.workspace?.replace(/[/\\]+$/, '').toLowerCase().endsWith('fella-sample-data') ?? false
-	);
-
-	const OVERVIEW_PROMPT = 'Summarize these files and suggest questions I can answer.';
-	const GENERAL_EXAMPLES = [
-		OVERVIEW_PROMPT,
-		'What changed over time in these files?',
-		'Compare the main categories in these files.'
-	];
-	const SAMPLE_EXAMPLES = [
-		OVERVIEW_PROMPT,
-		'Which channel had the largest absolute increase in signups from January to December 2025?',
-		'How did marketing spend change alongside signups?'
-	];
-	let examples = $derived(sampleWorkspace ? SAMPLE_EXAMPLES : GENERAL_EXAMPLES);
-
 	let scroller: HTMLDivElement;
 	let expanded = $state<Record<string, boolean>>({});
 
@@ -145,16 +126,14 @@
 	aria-live="off"
 >
 	{#if !hasConversationTurn}
-		<div class="onboard" class:center={!hasFolder && !showSetup}>
+		<div class="onboard" class:center={!showSetup}>
 			<div class="onboard-brand"><Logo size={28} /><span>Fella</span></div>
-			<h1 class="hero">
-				{!hasFolder ? 'New conversation' : fileCount ? 'What should we find out?' : 'No readable files yet.'}
-			</h1>
+			<h1 class="hero">New conversation</h1>
+			<p class="lead">
+				Ask a question about your files. Fella checks what’s available and shows the answer with supporting evidence.
+			</p>
 
 			{#if !hasFolder}
-				<p class="lead">
-					Ask a question about your files. Fella explores the available data, analyzes it, and shows the result with supporting evidence.
-				</p>
 				<div class="cta first-run-actions">
 					<Button class="folder-action" onclick={() => void openFolder(undefined, { focusAfterOpen: true })}>
 						<Icon name="folder" size={16} /> Choose a folder
@@ -163,6 +142,21 @@
 						Try sample data
 					</Button>
 				</div>
+			{:else if fileCount === 0}
+				<p class="onboard-note">No readable files in <strong>{folderName}</strong>.</p>
+				<div class="cta first-run-actions">
+					<Button class="folder-action" onclick={() => void openFolder()}>
+						<Icon name="folder" size={16} /> Choose a different folder
+					</Button>
+					{#if skipped.length}
+						<Button variant="outline" onclick={() => void dispatch('/files')}>Review files</Button>
+					{/if}
+				</div>
+			{:else}
+				<!-- A new chat stays quiet and consistent; source details live in Data & context. -->
+			{/if}
+
+			{#if !hasFolder}
 				<p class="first-run-privacy">
 					Fella reads and computes locally. Only the folder you choose is in scope. Your chosen model provider receives prompts and relevant context or tool results.
 				</p>
@@ -171,55 +165,6 @@
 						Privacy and security <Icon name="arrow-up-right" size={12} />
 					</Button>
 				</div>
-			{:else if fileCount === 0}
-				<p class="lead"><strong>{folderName}</strong> is open, but nothing in it is readable yet.</p>
-				<p>
-					Fella can read spreadsheets, CSV files, PDFs, and plain text.{#if skipped.length} Review the skipped files to see why they could not be loaded.{/if}
-				</p>
-				<div class="cta">
-					<Button class="folder-action" onclick={() => void openFolder()}>
-						<Icon name="folder" size={16} /> Choose a different folder
-					</Button>
-					{#if skipped.length}
-						<Button variant="link" onclick={() => void dispatch('/files')}>Review files</Button>
-					{/if}
-				</div>
-			{:else}
-				<p class="lead">
-					<strong>{folderName}</strong> · {fileCount} readable source{fileCount === 1 ? '' : 's'} available.
-				</p>
-				{#if showExamples}
-					<p class="egs">Not sure what to ask? Start here:</p>
-					<div class="examples">
-						{#each examples as q (q)}
-							<Button variant="outline" class="example" onclick={() => void dispatch(q)}>{q}</Button>
-						{/each}
-					</div>
-				{/if}
-			{/if}
-
-			{#if hasFolder}
-				<section class="file-inventory" aria-label="File inventory">
-					{#if fileCount}
-						<p class="inventory-label">Available sources</p>
-						<ul>
-							{#each session.catalog.sources.slice(0, 3) as source (`available:${source.path}:${source.name}`)}
-								<li><span>{source.name}</span></li>
-							{/each}
-						</ul>
-					{/if}
-					{#if skipped.length}
-						<p class="inventory-label">Not loaded · {skipped.length}</p>
-						<ul class="inventory-skipped">
-							{#each skipped.slice(0, 3) as file (`skipped:${file.name}`)}
-								<li><span>{file.name}</span><span>{file.reason}</span></li>
-							{/each}
-						</ul>
-					{/if}
-					{#if fileCount > 3 || skipped.length > 3}
-						<Button variant="link" size="sm" class="inventory-more" onclick={() => void dispatch('/files')}>Review all files</Button>
-					{/if}
-				</section>
 			{/if}
 
 			{#if showSetup}
@@ -270,11 +215,6 @@
 				</div>
 			{/if}
 
-			{#if hasFolder && showExamples}
-				<p class="personalize">
-					Make it yours: <code>/context</code> to tell Fella how your files are organised.
-				</p>
-			{/if}
 		</div>
 	{/if}
 	{#if session.messages.length > 0}
@@ -420,8 +360,9 @@
 		font-size: 17px;
 		line-height: 1.55;
 	}
-	.onboard .lead strong {
-		font-weight: 600;
+	.onboard-note {
+		color: var(--text-faint);
+		font-size: var(--fs-sm);
 	}
 	.first-run-actions {
 		justify-content: center;
@@ -442,50 +383,6 @@
 		font-size: inherit;
 		vertical-align: baseline;
 	}
-	.file-inventory {
-		width: 100%;
-		margin: var(--space-4) 0 var(--space-2);
-		padding-top: var(--space-3);
-		border-top: 1px solid var(--border);
-		text-align: left;
-	}
-	.inventory-label {
-		margin: 0 0 var(--space-1) !important;
-		color: var(--text-faint);
-		font-size: var(--fs-xs);
-		font-weight: 600;
-	}
-	.file-inventory ul {
-		margin: 0 0 var(--space-3);
-		padding: 0;
-		list-style: none;
-		color: var(--text-dim);
-		font-size: var(--fs-sm);
-	}
-	.file-inventory li {
-		display: flex;
-		flex-wrap: wrap;
-		gap: var(--space-1) var(--space-2);
-		padding: 2px 0;
-		overflow-wrap: anywhere;
-	}
-	.inventory-skipped li span:last-child {
-		color: var(--text-faint);
-	}
-	.file-inventory :global(.inventory-more) {
-		padding: 0;
-	}
-	.examples {
-		display: flex;
-		flex-direction: column;
-		align-items: flex-start;
-		gap: var(--space-2);
-		margin: var(--space-1) 0 0;
-	}
-	/* Keep starter prompt labels aligned to the left. */
-	.examples :global(.example) {
-		text-align: left;
-	}
 	.cta {
 		display: flex;
 		flex-wrap: wrap;
@@ -495,20 +392,6 @@
 	}
 	.onboard.center .cta {
 		justify-content: center;
-	}
-	.egs {
-		color: var(--text-faint);
-	}
-	.personalize {
-		margin-top: 22px;
-		padding-top: 18px;
-		border-top: 1px solid var(--border);
-		color: var(--text-faint);
-		font-size: var(--fs-sm);
-	}
-	.personalize code {
-		font-family: var(--mono);
-		color: var(--text-dim);
 	}
 	/* A hairline, not a boxed card echoes the divider language used
 	   elsewhere (titlebar/sidebar) rather than looking like a bolted-on form. */

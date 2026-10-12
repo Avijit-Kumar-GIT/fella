@@ -116,6 +116,53 @@
 		color: var(--text);
 	}
 
+	.fella-pill-nav {
+		display: flex;
+		align-items: center;
+		gap: 2px;
+		width: max-content;
+		max-width: 100%;
+		padding: 3px;
+		border: 1px solid var(--border);
+		border-radius: 999px;
+		background: color-mix(in srgb, var(--bg-inset) 72%, var(--bg));
+	}
+
+	.fella-pill-nav-item {
+		flex: none;
+		min-height: 30px;
+		padding: 0 12px;
+		border: 0;
+		border-radius: 999px;
+		background: transparent;
+		color: var(--text-dim);
+		font: inherit;
+		font-size: var(--fs-xs);
+		font-weight: 550;
+		line-height: 1;
+		white-space: nowrap;
+		cursor: pointer;
+		transition: background-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+	}
+
+	.fella-pill-nav-item:hover {
+		background: color-mix(in srgb, var(--bg-raised) 72%, transparent);
+		color: var(--text);
+	}
+
+	.fella-pill-nav-item[aria-selected='true'],
+	.fella-pill-nav-item[aria-pressed='true'],
+	.fella-pill-nav-item[data-state='active'] {
+		background: var(--bg-raised);
+		color: var(--text);
+		box-shadow: var(--shadow-xs);
+	}
+
+	.fella-pill-nav-item:focus-visible {
+		outline: 2px solid var(--brand);
+		outline-offset: 2px;
+	}
+
 	.fella-ui-menu-content {
 		z-index: 80;
 		min-width: 168px;

@@ -123,9 +123,10 @@
 						data-testid="workspace-investigation-summary"
 					><strong title={currentInvestigationLabel}>{currentInvestigationLabel}</strong><span class="workspace-investigation-coverage">{coverageSummary}</span></span>
 				{/if}
-				<div class="workspace-preset-control" role="group" aria-label="Workspace layout">
+				<div class="workspace-preset-control fella-pill-nav" role="group" aria-label="Workspace layout">
 					{#each presets as preset (preset.id)}
 						<button
+							class="fella-pill-nav-item"
 							type="button"
 							class:active={isPresetSelected(preset.id)}
 							aria-label={`${preset.label}: ${preset.description}`}
@@ -238,43 +239,12 @@
 		text-overflow: ellipsis;
 	}
 	.workspace-preset-control {
-		display: inline-flex;
 		flex: none;
-		align-items: center;
-		gap: 2px;
-		padding: 3px;
-		border: 1px solid var(--border);
-		border-radius: 10px;
-		background: var(--bg);
+		min-width: 0;
+		overflow-x: auto;
+		scrollbar-width: none;
 	}
-	.workspace-preset-control button {
-		min-height: 30px;
-		padding: 0 10px;
-		border: 1px solid transparent;
-		border-radius: 7px;
-		background: transparent;
-		color: var(--text-dim);
-		font: inherit;
-		font-size: var(--fs-xs);
-		font-weight: 550;
-		white-space: nowrap;
-		cursor: pointer;
-		transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease;
-	}
-	.workspace-preset-control button:hover {
-		background: var(--bg-raised);
-		color: var(--text);
-	}
-	.workspace-preset-control button.active {
-		border-color: var(--border);
-		background: var(--bg-raised);
-		color: var(--text);
-		box-shadow: var(--shadow-xs);
-	}
-	.workspace-preset-control button:focus-visible {
-		outline: 2px solid var(--brand);
-		outline-offset: 2px;
-	}
+	.workspace-preset-control::-webkit-scrollbar { display: none; }
 	:global(.workspace-open-investigation) {
 		flex: none;
 		min-height: 30px;
@@ -296,9 +266,6 @@
 		.workspace-investigation-summary {
 			flex: 1 1 120px;
 			max-width: none;
-		}
-		.workspace-preset-control button {
-			padding-inline: 6px;
 		}
 		.workspace-identity-label {
 			display: none;

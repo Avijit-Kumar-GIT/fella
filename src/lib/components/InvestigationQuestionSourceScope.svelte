@@ -182,7 +182,7 @@
 	.question-source-scope summary { width: fit-content; cursor: pointer; }
 	.question-source-panel { display: grid; gap: var(--space-2); margin-top: var(--space-2); padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); }
 	.question-source-choice, .question-source-list label { display: flex; align-items: center; gap: var(--space-2); }
-	.question-source-list { display: grid; gap: var(--space-1); max-height: 180px; overflow: auto; overscroll-behavior: contain; margin: 0; padding: 0 0 0 var(--space-5); list-style: none; }
+	.question-source-list { display: grid; gap: var(--space-1); max-height: 180px; overflow: auto; overscroll-behavior: contain; margin: 0; padding: 0 0 var(--space-1) var(--space-5); list-style: none; }
 	.question-source-list label { min-width: 0; }
 	.question-source-list label > span { min-width: 0; overflow-wrap: anywhere; }
 	.question-source-list-hint { margin: 0; color: var(--text-faint); font-size: 10px; }

@@ -399,7 +399,12 @@
 									{/if}
 									<div class="workspace-panel-body">
 										{#if panel.id === 'conversation'}
-											<Transcript bind:this={transcript} />
+							<div class="conversation-workspace">
+								<Transcript bind:this={transcript} />
+								{#if session.workspaceLayoutPreset !== 'investigation'}
+									<div class="dock"><Composer bind:this={composer} onafterrun={refreshHealth} /></div>
+								{/if}
+							</div>
 										{:else if panel.id === 'investigation'}
 											<WorkspaceView />
 										{:else}
@@ -417,7 +422,10 @@
 						</div>
 					{:else}
 						<section class="ask-workbench" aria-label="Focus">
-							<Transcript bind:this={transcript} />
+							<div class="conversation-workspace">
+								<Transcript bind:this={transcript} />
+								<div class="dock"><Composer bind:this={composer} onafterrun={refreshHealth} /></div>
+							</div>
 							{#if session.activeChat.companionPane}
 								<CompanionPane />
 							{/if}
@@ -425,11 +433,6 @@
 					{/if}
 				</div>
 			</main>
-			<div class="dock">
-				{#if activeView === 'ask' || activeView === 'board' || (activeView === 'workspace' && session.workspaceLayoutPreset === 'workbench')}
-					<Composer bind:this={composer} onafterrun={refreshHealth} />
-				{/if}
-			</div>
 		</section>
 	</div>
 </div>
@@ -601,9 +604,18 @@
 		min-height: 0;
 		overflow: hidden;
 	}
-	.workspace-preset-conversation .workspace-panel-body > :global(.transcript) {
+	.conversation-workspace {
+		display: flex;
+		flex: 1;
+		flex-direction: column;
+		min-width: 0;
+		min-height: 0;
+		overflow: hidden;
+	}
+	.conversation-workspace > :global(.transcript) {
 		flex: 1;
 		min-width: 0;
+		min-height: 0;
 	}
 	.workspace-preset-companion :global(.companion) {
 		flex: 1;
@@ -623,7 +635,7 @@
 		min-width: 0;
 		min-height: 0;
 	}
-	.ask-workbench > :global(.transcript) { flex: 1; min-width: 0; }
+	.ask-workbench > .conversation-workspace { flex: 1; }
 	@container workspace-area (max-width: 1120px) {
 		.workspace-preset-layout[data-workspace-preset='workbench'] {
 			grid-template-columns: minmax(0, 1fr);
@@ -649,10 +661,9 @@
 			border-bottom: 1px solid var(--border);
 		}
 	}
-	/* Keep the composer aligned to the shared content column. */
 	.dock {
 		flex: none;
-		padding: 0 0 var(--space-4);
+		min-width: 0;
 		background: var(--workspace-canvas);
 	}
 	.dropzone {

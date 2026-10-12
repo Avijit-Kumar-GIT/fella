@@ -53,9 +53,19 @@
 		filename: string;
 		charts: HandoffChart[];
 	};
+	type InvestigationSection = 'brief' | 'data' | 'questions' | 'analysis' | 'results' | 'share';
+	const investigationSections: { id: InvestigationSection; label: string }[] = [
+		{ id: 'brief', label: 'Brief' },
+		{ id: 'data', label: 'Data' },
+		{ id: 'questions', label: 'Questions' },
+		{ id: 'analysis', label: 'Analysis' },
+		{ id: 'results', label: 'Results' },
+		{ id: 'share', label: 'Share' }
+	];
 
 	let investigations = $state<Investigation[]>([]);
 	let selectedId = $state<string | null>(null);
+	let investigationSection = $state<InvestigationSection>('brief');
 	let workspacePath = $state<string | null>(null);
 	let loadedWorkspace = $state<string | null>(null);
 	let loadedInvestigationsVersion = -1;
@@ -380,6 +390,7 @@
 	$effect(() => {
 		const path = session.catalog.workspace;
 		const version = session.investigationsVersion;
+		if (path !== loadedWorkspace) investigationSection = 'brief';
 		if (path !== loadedWorkspace && selected && (dirty || questionsDirty || definitionsDirty)) {
 			void saveEditableDrafts(selected.id);
 		}
@@ -390,6 +401,7 @@
 			loadedInvestigationsVersion = version;
 			investigations = [];
 			selectedId = null;
+			investigationSection = 'brief';
 			loading = false;
 			return;
 		}
@@ -427,6 +439,13 @@
 			&& !(item.questions ?? []).some((question) => question.analysis_turn_ids?.includes(target.turnId))) return;
 		session.clearInvestigationNavigationTarget(target);
 		void openAnalysisRun(target.turnId);
+	});
+
+	$effect(() => {
+		const sourcePath = session.selectedSourcePath;
+		if (!sourcePath || !workspacePath) return;
+		if (!session.catalog.sources.some((source) => source.path === sourcePath)) return;
+		investigationSection = 'data';
 	});
 
 	$effect(() => {
@@ -733,7 +752,9 @@
 		}[question.answer_status];
 	}
 
-	function focusQuestion(questionId: string): void {
+	async function focusQuestion(questionId: string): Promise<void> {
+		investigationSection = 'questions';
+		await tick();
 		const field = document.getElementById(`question-${questionId}`);
 		field?.scrollIntoView({ behavior: 'smooth', block: 'center' });
 		field?.focus({ preventScroll: true });
@@ -983,6 +1004,7 @@
 	}
 
 	async function openAnalysisRun(turnId: string): Promise<void> {
+		investigationSection = 'analysis';
 		historyOpen = true;
 		openAnalysisTurnId = turnId;
 		analysisTurnError = '';
@@ -1426,6 +1448,7 @@
 	}
 
 	function startDefinition(): void {
+		investigationSection = 'questions';
 		definitionsOpen = true;
 		addDefinition();
 	}
@@ -1440,6 +1463,7 @@
 	async function addRunAssumptionToContext(text: string): Promise<void> {
 		const normalized = text.trim();
 		if (!normalized || saving || runAssumptionInContext(normalized)) return;
+		investigationSection = 'questions';
 		const id = globalThis.crypto?.randomUUID?.().replaceAll('-', '') ?? `${Date.now()}${Math.random().toString(16).slice(2)}`;
 		const definitionId = `d_${id}`;
 		definitionsOpen = true;
@@ -1627,8 +1651,29 @@
 		analysisTurnError = '';
 		openAnalysisTurnId = null;
 		questionLinksDraft = [];
+		investigationSection = 'brief';
 		selectedId = id;
 		session.setActiveInvestigation(id);
+	}
+
+	function handleInvestigationTabsKeydown(event: KeyboardEvent): void {
+		if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+		const tabList = event.currentTarget;
+		if (!(tabList instanceof HTMLElement)) return;
+		const tabs = Array.from(tabList.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
+		const currentIndex = tabs.findIndex((tab) => tab === document.activeElement);
+		if (currentIndex < 0) return;
+		event.preventDefault();
+		const nextIndex = event.key === 'Home'
+			? 0
+			: event.key === 'End'
+				? tabs.length - 1
+				: (currentIndex + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+		const nextTab = tabs[nextIndex];
+		const nextSection = investigationSections[nextIndex];
+		if (!nextTab || !nextSection) return;
+		investigationSection = nextSection.id;
+		nextTab.focus();
 	}
 </script>
 
@@ -1712,14 +1757,6 @@
 
 			{#if selected}
 				<div class="brief-editor">
-					<nav class="investigation-nav" aria-label="Investigation sections">
-						<a href="#brief-summary-title">Brief</a>
-						<a href="#investigation-data-heading">Data</a>
-						<a href="#question-plan-title">Questions</a>
-						<a href="#investigation-analysis-heading">Analysis</a>
-						<a href="#investigation-results-heading">Results</a>
-						<a href="#investigation-share-heading">Share</a>
-					</nav>
 					<div class="editor-heading">
 						<div>
 							<h2>{selected.title}</h2>
@@ -1730,6 +1767,28 @@
 							</Button>
 						</div>
 					</div>
+					<div class="investigation-nav fella-pill-nav" role="tablist" aria-label="Investigation sections" tabindex="-1" onkeydown={handleInvestigationTabsKeydown}>
+						{#each investigationSections as section (section.id)}
+							<button
+								class="fella-pill-nav-item"
+								id={`investigation-tab-${section.id}`}
+								type="button"
+								role="tab"
+								aria-selected={investigationSection === section.id}
+								aria-controls={`investigation-panel-${section.id}`}
+								tabindex={investigationSection === section.id ? 0 : -1}
+								onclick={() => (investigationSection = section.id)}
+							>{section.label}</button>
+						{/each}
+					</div>
+					<div
+						id="investigation-panel-brief"
+						class="investigation-tab-panel"
+						role="tabpanel"
+						aria-labelledby="investigation-tab-brief"
+						tabindex="0"
+						hidden={investigationSection !== 'brief'}
+					>
 					<section class="brief-summary" aria-labelledby="brief-summary-title">
 						<header>
 							<div>
@@ -1790,6 +1849,15 @@
 						</div>
 						</section>
 					{/if}
+					</div>
+					<div
+						id="investigation-panel-data"
+						class="investigation-tab-panel"
+						role="tabpanel"
+						aria-labelledby="investigation-tab-data"
+						tabindex="0"
+						hidden={investigationSection !== 'data'}
+					>
 					<section class="investigation-document-section investigation-data-section" aria-labelledby="investigation-data-heading">
 						<header class="investigation-document-heading">
 							<div><h3 id="investigation-data-heading">Data</h3><p>Choose which sources this Investigation can use.</p></div>
@@ -1800,6 +1868,15 @@
 							onUpdated={acceptInvestigationUpdate}
 						/>
 					</section>
+					</div>
+					<div
+						id="investigation-panel-questions"
+						class="investigation-tab-panel"
+						role="tabpanel"
+						aria-labelledby="investigation-tab-questions"
+						tabindex="0"
+						hidden={investigationSection !== 'questions'}
+					>
 					<section class="analyst-work-plan" aria-labelledby="work-plan-title">
 						<header class="work-plan-heading">
 							<div>
@@ -2186,6 +2263,15 @@
 						{/if}
 					</section>
 					</section>
+						</div>
+						<div
+							id="investigation-panel-analysis"
+							class="investigation-tab-panel"
+							role="tabpanel"
+							aria-labelledby="investigation-tab-analysis"
+							tabindex="0"
+							hidden={investigationSection !== 'analysis'}
+						>
 					<section class="investigation-document-section investigation-analysis-section" aria-labelledby="investigation-analysis-heading">
 						<header class="investigation-document-heading">
 							<div>
@@ -2643,6 +2729,15 @@
 						</div>
 					</details>
 					</section>
+						</div>
+						<div
+							id="investigation-panel-results"
+							class="investigation-tab-panel"
+							role="tabpanel"
+							aria-labelledby="investigation-tab-results"
+							tabindex="0"
+							hidden={investigationSection !== 'results'}
+						>
 					<section class="investigation-document-section investigation-results-section" aria-labelledby="investigation-results-heading">
 						<header class="investigation-document-heading">
 							<div><h3 id="investigation-results-heading">Results</h3><p>Answers, charts, and questions that still need work.</p></div>
@@ -2656,6 +2751,15 @@
 							onreviewquestion={reviewQuestionFromResults}
 						/>
 					</section>
+						</div>
+						<div
+							id="investigation-panel-share"
+							class="investigation-tab-panel"
+							role="tabpanel"
+							aria-labelledby="investigation-tab-share"
+							tabindex="0"
+							hidden={investigationSection !== 'share'}
+						>
 					<section class="investigation-document-section investigation-share-section" aria-labelledby="investigation-share-heading">
 						<header class="investigation-document-heading">
 							<div><h3 id="investigation-share-heading">Share</h3><p>Preview the report before exporting.</p></div>
@@ -2674,6 +2778,7 @@
 							<p class="report-export-status" role={reportExportFailed ? 'alert' : 'status'}>{reportExportStatus}</p>
 						{/if}
 					</section>
+						</div>
 				</div>
 			{/if}
 		</div>
@@ -2815,35 +2920,18 @@
 		top: 0;
 		z-index: 4;
 		display: flex;
-		gap: var(--space-1);
 		min-width: 0;
 		margin: 0 0 var(--space-4);
-		padding: var(--space-2) 0;
 		overflow-x: auto;
 		overscroll-behavior-inline: contain;
-		background: color-mix(in srgb, var(--bg) 90%, transparent);
-		backdrop-filter: blur(12px);
+		background: var(--bg);
 		scrollbar-width: none;
 	}
 	.investigation-nav::-webkit-scrollbar { display: none; }
-	.investigation-nav a {
-		flex: none;
-		padding: 7px 12px;
-		border-radius: 999px;
-		color: var(--text-dim);
-		font-size: var(--fs-sm);
-		line-height: 1.2;
-		white-space: nowrap;
-		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
-	}
-	.investigation-nav a:hover,
-	.investigation-nav a:focus-visible { background: var(--bg-inset); color: var(--text); text-decoration: none; }
-	#brief-summary-title,
-	#investigation-data-heading,
-	#question-plan-title,
-	#investigation-analysis-heading,
-	#investigation-results-heading,
-	#investigation-share-heading { scroll-margin-top: 62px; }
+	.investigation-tab-panel { min-width: 0; }
+	.investigation-tab-panel[hidden] { display: none; }
+	.investigation-tab-panel > .investigation-document-section:first-child,
+	.investigation-tab-panel > .analyst-work-plan:first-child { padding-top: var(--space-4); }
 	.report-export-status { max-width: 300px; color: var(--text-dim); font-size: var(--fs-xs); overflow-wrap: anywhere; }
 	.report-export-status[role='alert'] { color: var(--danger, #b42318); }
 	.report-export-disabled-reason { margin: var(--space-2) 0 0; color: var(--text-faint); font-size: var(--fs-xs); }
