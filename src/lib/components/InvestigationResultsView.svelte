@@ -39,6 +39,7 @@
 	let runErrors = $state<Record<string, string>>({});
 	let archivedConversationId = $state('');
 	let archivedConversationMessages = $state<Message[]>([]);
+	let findingCopyStatus = $state<Record<string, string>>({});
 	let loadedInvestigationId = '';
 	let generation = 0;
 	let transcriptMessages = $derived(
@@ -264,6 +265,32 @@
 		return investigation.questions?.find((question) => question.id === questionId);
 	}
 
+	function findingsForChart(card: {
+		run: AnalysisTurn;
+		evidence: EvidenceItem;
+		sourceEvidence: EvidenceItem | null;
+	}): InvestigationFinding[] {
+		const sourceEvidenceId = card.evidence.chart?.metadata?.source_evidence_id;
+		const evidenceIds = new Set(
+			[card.evidence.id, sourceEvidenceId, card.sourceEvidence?.id]
+				.filter((id): id is string => Boolean(id))
+		);
+		return (investigation.findings ?? []).filter((finding) =>
+			finding.analysis_turn_id === card.run.id
+				&& finding.evidence_ids.some((id) => evidenceIds.has(id))
+		);
+	}
+
+	async function copyFindingClaim(finding: InvestigationFinding): Promise<void> {
+		try {
+			if (!navigator.clipboard?.writeText) throw new Error('Clipboard access is unavailable.');
+			await navigator.clipboard.writeText(finding.claim);
+			findingCopyStatus = { ...findingCopyStatus, [finding.id]: 'Finding claim copied.' };
+		} catch {
+			findingCopyStatus = { ...findingCopyStatus, [finding.id]: 'Could not copy the Finding claim.' };
+		}
+	}
+
 	function findingEvidenceItem(finding: InvestigationFinding, evidenceId: string): EvidenceItem | undefined {
 		const run = runs[finding.analysis_turn_id];
 		return run?.result.evidence
@@ -355,8 +382,12 @@
 					{@const question = questionForFinding(finding.question_id)}
 					{@const run = runs[finding.analysis_turn_id]}
 					{@const checks = findingChecks(finding)}
-					<article class="results-finding" aria-label="Finding {index + 1}">
-						<div class="results-finding-heading"><span>Finding {index + 1}</span><small>Revision {finding.revision}</small></div>
+					<article class="results-finding" id="finding-{finding.id}" aria-label="Finding {index + 1}" data-artifact-kind="reviewed-finding">
+						<div class="results-finding-heading">
+							<span>Analyst-reviewed Finding · Revision {finding.revision}</span>
+							<Button type="button" variant="ghost" size="sm" aria-label="Copy Finding claim" onclick={() => void copyFindingClaim(finding)}>{findingCopyStatus[finding.id] === 'Finding claim copied.' ? 'Copied' : 'Copy claim'}</Button>
+						</div>
+						{#if findingCopyStatus[finding.id]}<span class="results-artifact-status" role="status">{findingCopyStatus[finding.id]}</span>{/if}
 						<p class="results-finding-claim">{finding.claim}</p>
 						{#if question}
 							<div class="results-finding-question-row">
@@ -444,16 +475,68 @@
 		{#if chartCards.length}
 			<div class="results-charts">
 				{#each chartCards as card (card.key)}
-					<article class="results-chart" aria-label="Visualization from {card.question?.text ?? 'saved analysis'}">
-						{#if card.question}<p class="results-chart-question">{card.question.text}</p>{/if}
+					{@const linkedFindings = findingsForChart(card)}
+					<article class="results-chart" aria-label="Visualization artifact from {card.question?.text ?? 'saved analysis'}" data-artifact-kind="model-visualization">
 						<Chart
 							spec={card.evidence.chart!}
 							source={sourceLabel(card.evidence)}
 							sourceEvidence={card.sourceEvidence}
 							sourceRunId={card.run.id}
 							findingSnapshot={card.evidence.chart?.metadata?.finding_snapshot}
+							originLabel="Model-produced visualization"
 						/>
-						<Button type="button" variant="ghost" size="sm" onclick={() => onopenrun(card.run.id)}>Open analysis record</Button>
+						<details class="results-artifact-lineage">
+							<summary>Lineage &amp; source scope</summary>
+							<dl>
+								<div>
+									<dt>Question</dt>
+									<dd>
+										{#if card.question}
+											{card.question.text}
+											<Button type="button" variant="ghost" size="sm" onclick={() => onreviewquestion(card.question!.id)}>Open Question</Button>
+										{:else}Question is not in the current plan{/if}
+									</dd>
+								</div>
+								<div>
+									<dt>Sources used</dt>
+									<dd>
+										{#if card.run.source_scope?.used_sources?.length}
+											{card.run.source_scope.used_sources.map((source) => source.table ? `${source.source} · ${source.table}` : source.source).join(', ')}
+										{:else}Source scope not recorded{/if}
+									</dd>
+								</div>
+								{#if card.run.source_scope?.skipped_sources?.length}
+									<div><dt>Sources skipped</dt><dd>{card.run.source_scope.skipped_sources.join(', ')}</dd></div>
+								{/if}
+								<div>
+									<dt>Visualization evidence</dt>
+									<dd>
+										{#if card.evidence.id}
+											<code>{card.evidence.id}</code>
+											<Button type="button" variant="ghost" size="sm" onclick={() => onopenrun(card.run.id, card.evidence.id)}>Open chart evidence</Button>
+										{:else}Evidence ID not recorded{/if}
+									</dd>
+								</div>
+								{#if card.sourceEvidence}
+									<div>
+										<dt>Data evidence</dt>
+										<dd>
+											<code>{card.sourceEvidence.id || card.evidence.chart?.metadata?.source_evidence_id}</code>
+											{#if card.sourceEvidence.id}<Button type="button" variant="ghost" size="sm" onclick={() => onopenrun(card.run.id, card.sourceEvidence!.id)}>Open source evidence</Button>{/if}
+										</dd>
+									</div>
+								{/if}
+								<div><dt>Canonical run</dt><dd><code>{card.run.id}</code><Button type="button" variant="ghost" size="sm" onclick={() => onopenrun(card.run.id)}>Open analysis record</Button></dd></div>
+								<div>
+									<dt>Reviewed Finding</dt>
+									<dd>
+										{#if linkedFindings.length}
+											{#each linkedFindings as finding (`${card.key}-${finding.id}`)}<a href="#finding-{finding.id}">Revision {finding.revision} · {finding.claim}</a>{/each}
+										{:else}No current Finding explicitly cites this visualization or its source evidence{/if}
+									</dd>
+								</div>
+							</dl>
+						</details>
 					</article>
 				{/each}
 			</div>
@@ -645,7 +728,8 @@
 	.results-findings, .results-questions { display: grid; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
 	.results-finding, .results-question { display: grid; min-width: 0; gap: var(--space-2); padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg); }
 	.results-finding-heading { align-items: center; color: var(--text-faint); font-size: var(--fs-xs); font-weight: 650; }
-	.results-finding-heading small { font-weight: 400; }
+	.results-finding-heading :global(button) { flex: none; }
+	.results-artifact-status { color: var(--text-faint); font-size: var(--fs-xs); }
 	.results-finding-claim { margin: 0; font-size: var(--fs-md); font-weight: 550; line-height: 1.5; overflow-wrap: anywhere; }
 	.results-finding-question-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-2); }
 	.results-finding-question, .results-empty { margin: 0; color: var(--text-dim); font-size: var(--fs-xs); overflow-wrap: anywhere; }
@@ -686,6 +770,14 @@
 	.results-chart { display: grid; min-width: 0; gap: var(--space-2); align-content: start; }
 	.results-chart-question { margin: 0; color: var(--text-dim); font-size: var(--fs-xs); }
 	.results-chart :global(.chart-card) { width: 100%; min-width: 0; }
+	.results-artifact-lineage { font-size: var(--fs-xs); }
+	.results-artifact-lineage > summary { width: fit-content; color: var(--text-faint); cursor: pointer; }
+	.results-artifact-lineage > summary:hover { color: var(--text-dim); }
+	.results-artifact-lineage dl { display: grid; gap: var(--space-2); margin: var(--space-2) 0 0; }
+	.results-artifact-lineage dl > div { display: grid; grid-template-columns: minmax(120px, auto) minmax(0, 1fr); align-items: start; gap: var(--space-2); }
+	.results-artifact-lineage dt { color: var(--text-faint); }
+	.results-artifact-lineage dd { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-2); margin: 0; color: var(--text-dim); overflow-wrap: anywhere; }
+	.results-artifact-lineage dd a { color: var(--link); overflow-wrap: anywhere; }
 	.results-historical { padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-inset); }
 	.results-historical-list { display: grid; gap: var(--space-2); }
 	.results-historical-run { display: grid; min-width: 0; gap: var(--space-2); padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); }

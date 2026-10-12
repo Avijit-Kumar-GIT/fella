@@ -22,6 +22,7 @@
 		sourceEvidence = null,
 		sourceRunId,
 		findingSnapshot,
+		originLabel = '',
 		onopen
 	}: {
 		spec: VisualizationSpec;
@@ -29,6 +30,7 @@
 		sourceEvidence?: EvidenceItem | null;
 		sourceRunId?: string;
 		findingSnapshot?: string;
+		originLabel?: string;
 		onopen?: () => void;
 	} = $props();
 	let chartDetailsOpen = $state(false);
@@ -524,13 +526,14 @@
 			.map((query, index) => ({ label: `Python input ${index + 1}`, sql: query.sql.trim() }));
 	});
 	let hasChartDetails = $derived(
-		chartDetails.length > 0 || Boolean(savedFinding) || Boolean(sourceEvidence)
+		chartDetails.length > 0 || Boolean(sourceEvidence)
 	);
 </script>
 
 <figure class="chart-card" bind:this={exportNode}>
 	<figcaption class="chart-header">
 		<div class="chart-header-copy">
+			{#if originLabel}<div class="chart-origin">{originLabel}</div>{/if}
 			<div class="chart-title">{chartTitle}</div>
 			{#if spec.unit}<div class="chart-unit">Values in {spec.unit}</div>{/if}
 			{#if showAxisSummary}
@@ -538,6 +541,12 @@
 					{#if spec.x_label && !hasSvgXAxisTitle}<span>{spec.x_label}</span>{/if}
 					{#if spec.x_label && !hasSvgXAxisTitle && spec.y_label && !hasSvgYAxisTitle}<span aria-hidden="true"> · </span>{/if}
 					{#if spec.y_label && !hasSvgYAxisTitle}<span>{spec.y_label}</span>{/if}
+				</div>
+			{/if}
+			{#if savedFinding}
+				<div class="chart-interpretation" data-interpretation-source="model">
+					<span>Model interpretation</span>
+					<p>{savedFinding}</p>
 				</div>
 			{/if}
 		</div>
@@ -778,12 +787,6 @@
 				{#if chartDetails.length > 0}
 					<dl>{#each chartDetails as [label, value] (label)}<div><dt>{label}</dt><dd>{value}</dd></div>{/each}</dl>
 				{/if}
-				{#if savedFinding}
-					<div class="chart-finding">
-						<div class="chart-finding-label">Conclusion in this run</div>
-						<p>{savedFinding}</p>
-					</div>
-				{/if}
 				{#if sourceEvidence}
 					<dl class="chart-source-result">
 						{#if sourceEvidence.result_summary}<div><dt>Result</dt><dd>{sourceEvidence.result_summary}</dd></div>{/if}
@@ -856,6 +859,10 @@
 	:global(.chart-export-menu) { min-width: 190px; }
 	.chart-export-separator { height: 1px; margin: 5px; background: var(--border); }
 	.chart-title { color: var(--text); font-weight: 600; }
+	.chart-origin { margin-bottom: 2px; color: var(--text-faint); font-size: var(--fs-xs); font-weight: 550; }
+	.chart-interpretation { display: grid; gap: 2px; margin-top: var(--space-2); padding-left: var(--space-2); border-left: 2px solid var(--border-strong, var(--border)); color: var(--text-dim); }
+	.chart-interpretation > span { color: var(--text-faint); font-size: var(--fs-xs); font-weight: 600; }
+	.chart-interpretation p { margin: 0; font-size: var(--fs-xs); line-height: 1.45; overflow-wrap: anywhere; }
 	:global(.open-beside) {
 		flex: none;
 		height: auto;
@@ -929,9 +936,8 @@
 	:global(.chart-details dl div) { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: var(--space-2); }
 	:global(.chart-details dt) { color: var(--text-faint); }
 	:global(.chart-details dd) { margin: 0; color: var(--text-dim); overflow-wrap: anywhere; }
-	.chart-finding, .chart-query { margin-top: var(--space-2); }
+	.chart-query { margin-top: var(--space-2); }
 	.chart-finding-label { color: var(--text-faint); }
-	.chart-finding p { margin: 4px 0 0; color: var(--text-dim); white-space: pre-wrap; overflow-wrap: anywhere; }
 	.chart-query pre { max-height: 240px; margin: 4px 0 0; padding: var(--space-2); overflow: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); color: var(--text-dim); white-space: pre-wrap; overflow-wrap: anywhere; }
 	@media (max-width: 560px) {
 		.chart-card { padding-inline: var(--space-3); }

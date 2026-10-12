@@ -2357,6 +2357,7 @@ test('Finding caveats and assumptions are visible, editable, and preserve proven
 });
 
 test('Investigation results summarize saved work, render linked charts, and keep open Questions visible', async ({ page }) => {
+	await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: 'http://127.0.0.1:1421' });
 	const chartSource = {
 		id: 'results-source-evidence',
 		tool: 'run_sql',
@@ -2397,7 +2398,14 @@ test('Investigation results summarize saved work, render linked charts, and keep
 	};
 	await installDesktopMock(page, {
 		chartEvidence: [chartSource, chart],
-		questionRunOutcomes: [{ status: 'answered', answer_text: 'Net sales rose 22% from January to February, then eased slightly in March.' }]
+		questionRunOutcomes: [{
+			status: 'answered',
+			answer_text: 'Net sales rose 22% from January to February, then eased slightly in March.',
+			source_scope: {
+				used_sources: [{ source: 'sales.csv', table: 'sales', evidence_ids: [chartSource.id] }],
+				skipped_sources: ['legacy_sales.csv']
+			}
+		}]
 	});
 	await page.goto('/');
 	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
@@ -2435,13 +2443,30 @@ test('Investigation results summarize saved work, render linked charts, and keep
 	await expect(results.locator('.results-finding')).toContainText('Net sales rose 22% from January to February');
 	await expect(results.locator('.results-finding')).toContainText('Answers: Explain the monthly net sales trend.');
 	const findingDetails = results.locator('.results-finding details');
+	const findingArtifact = results.getByRole('article', { name: 'Finding 1' });
+	await expect(findingArtifact).toContainText('Analyst-reviewed Finding · Revision 1');
+	await findingArtifact.getByRole('button', { name: 'Copy Finding claim' }).click();
+	await expect(findingArtifact.getByRole('status')).toHaveText('Finding claim copied.');
+	expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('Net sales rose 22% from January to February, then eased slightly in March.');
 	await findingDetails.locator('summary').click();
 	await expect(findingDetails).toContainText('March results include only the first three weeks.');
 	await expect(findingDetails).toContainText('results-chart-evidence');
 	await expect(findingDetails).toContainText('fixture-question-turn-1');
 	const resultChart = results.locator('.chart-card');
 	await expect(resultChart).toContainText('Monthly net sales');
+	await expect(resultChart).toContainText('Model-produced visualization');
+	await expect(resultChart.locator('[data-interpretation-source="model"]')).toContainText('Model interpretation');
+	await expect(resultChart.locator('[data-interpretation-source="model"]')).toContainText('Net sales rose from January to February.');
 	await expect(resultChart).toContainText('sales.csv');
+	const artifact = results.getByRole('article', { name: 'Visualization artifact from Explain the monthly net sales trend.' });
+	const lineage = artifact.locator('.results-artifact-lineage');
+	await lineage.locator('summary').click();
+	await expect(lineage).toContainText('sales.csv · sales');
+	await expect(lineage).toContainText('legacy_sales.csv');
+	await expect(lineage).toContainText('results-chart-evidence');
+	await expect(lineage).toContainText('results-source-evidence');
+	await expect(lineage).toContainText('fixture-question-turn-1');
+	await expect(lineage.getByRole('link', { name: /Revision 1 · Net sales rose 22%/ })).toHaveAttribute('href', '#finding-finding-1');
 	const openQuestion = results.locator('.results-question').filter({ hasText: 'Check whether discounts explain the March dip.' });
 	await expect(openQuestion).toContainText('Not answered');
 	await expect(openQuestion).toContainText('No analysis run is linked to this Question yet.');
@@ -2452,6 +2477,11 @@ test('Investigation results summarize saved work, render linked charts, and keep
 	await expect(savedAnswer).toBeHidden();
 	await answers.locator('details details > summary').click();
 	await expect(savedAnswer).toBeVisible();
+	const chartExport = resultChart.getByRole('button', { name: 'Export chart and data' });
+	await chartExport.click();
+	await page.getByRole('menuitem', { name: 'Copy data' }).click();
+	await expect(resultChart.getByRole('status')).toHaveText('Chart data copied to clipboard.');
+	expect(await page.evaluate(() => navigator.clipboard.readText())).toContain('Net sales');
 	await results.locator('.results-chart').getByRole('button', { name: 'Open analysis record' }).click();
 	await expect(page.getByRole('button', { name: 'Work plan', exact: true })).toHaveAttribute('aria-pressed', 'true');
 	await expect(page.getByRole('region', { name: 'Saved analysis run' })).toBeVisible();
