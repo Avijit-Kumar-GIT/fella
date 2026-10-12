@@ -167,7 +167,7 @@
 	});
 </script>
 
-<div class="msg {message.role}" data-analysis-turn-id={message.role === 'assistant' ? message.answer?.turn_id : undefined} transition:enterUp>
+<div class="msg {message.role}" data-message-id={message.id} data-analysis-turn-id={message.role === 'assistant' ? message.answer?.turn_id : undefined} transition:enterUp>
 	{#if message.role === 'user'}
 		<span class="sr-only">You asked: </span>
 		<div class="you">
@@ -190,9 +190,6 @@
 				/>
 			{/if}
 		</div>
-		{#if message.plan}
-			<div class="plan">{message.plan}</div>
-		{/if}
 		{#if split.background}
 			<div class="background">{split.background}</div>
 		{/if}
@@ -336,15 +333,6 @@
 	.msg.assistant .text :global(strong) {
 		color: var(--chat-strong);
 		font-weight: 650;
-	}
-	/* The model's one-line plan, shown dimmed while its tools run. */
-	.plan {
-		white-space: pre-wrap;
-		word-break: break-word;
-		color: var(--chat-meta);
-		font-size: 0.95em;
-		margin-bottom: 4px;
-		font-style: italic;
 	}
 	/* A "Background:" aside general knowledge, not computed from the files. */
 	.background {

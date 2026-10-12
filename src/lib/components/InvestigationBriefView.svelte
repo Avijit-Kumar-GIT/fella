@@ -27,6 +27,7 @@
 	import { findBriefProposal, type BriefProposal, type BriefProposalTarget } from '$lib/investigation-brief-proposal';
 	import Icon from './Icon.svelte';
 	import EvidenceBlock from './EvidenceBlock.svelte';
+	import RunTimeline from './RunTimeline.svelte';
 	import InvestigationSourceReadiness from './InvestigationSourceReadiness.svelte';
 	import InvestigationQuestionSourceScope from './InvestigationQuestionSourceScope.svelte';
 	import QuestionAnswerPreview from './QuestionAnswerPreview.svelte';
@@ -2247,6 +2248,11 @@
 										</section>
 									</section>
 									<div class="analysis-run-result" aria-label="Recorded answer">{openAnalysisTurn.result.text}</div>
+									<RunTimeline
+									turn={openAnalysisTurn}
+									question={analysisRunSummary(openAnalysisTurn.id)}
+									bodyId={`investigation-run-evidence-${openAnalysisTurn.id}`}
+								/>
 									<section class="analysis-run-evidence" aria-label="Query and output evidence">
 										<header>
 											<h5>Query and output evidence</h5>
@@ -2258,23 +2264,6 @@
 											expanded={true}
 										/>
 									</section>
-									<details class="analysis-run-trace">
-										<summary>Planned method and recorded execution</summary>
-										{#if openAnalysisTurn.plan.steps.length}
-											<h5>Planned steps</h5>
-											<ol>{#each openAnalysisTurn.plan.steps as step, index (`${openAnalysisTurn.id}-planned-${index}`)}<li>{step.replaceAll('_', ' ')}</li>{/each}</ol>
-										{/if}
-										<ol>
-											{#each openAnalysisTurn.trace.steps as step, index (`${openAnalysisTurn.id}-${index}`)}
-												<li>
-													<strong>{step.operation.replaceAll('_', ' ')}</strong>
-													<small>{step.success ? 'Succeeded' : 'Failed'}{#if step.duration_ms != null} · {step.duration_ms} ms{/if}</small>
-													{#if step.summary}<p>{step.summary}</p>{/if}
-													{#if step.sources.length}<p>Sources: {step.sources.join(', ')}</p>{/if}
-												</li>
-											{/each}
-										</ol>
-									</details>
 									<fieldset class="analysis-run-question-links" disabled={savingQuestionLinks || questionsDirty}>
 										<legend>Questions this run addresses</legend>
 										{#if selected.questions?.length}
@@ -2595,12 +2584,6 @@
 	.analysis-run-assumptions li > span { min-width: 0; flex: 1; font-size: var(--fs-sm); overflow-wrap: anywhere; }
 	.analysis-run-assumptions li :global(button) { flex: none; }
 	.analysis-run-result { max-height: 320px; overflow: auto; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); font-size: var(--fs-sm); line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
-	.analysis-run-trace { color: var(--text-dim); font-size: var(--fs-xs); }
-	.analysis-run-trace summary { width: fit-content; cursor: pointer; }
-	.analysis-run-trace ol { display: grid; gap: var(--space-1); margin: var(--space-2) 0 0; padding-left: var(--space-5); }
-	.analysis-run-trace h5 { margin: var(--space-3) 0 0; color: var(--text); font-size: var(--fs-xs); }
-	.analysis-run-trace li small { color: var(--text-faint); }
-	.analysis-run-trace li p { margin: 2px 0 0; color: var(--text-dim); }
 	.analysis-run-question-links { display: grid; gap: var(--space-2); min-width: 0; padding: var(--space-3); margin: 0; border: 1px solid var(--border); border-radius: var(--radius-sm); }
 	.analysis-run-question-links legend { padding: 0 var(--space-1); color: var(--text-faint); font-size: var(--fs-xs); font-weight: 600; }
 	.analysis-run-question-links label { display: flex; align-items: flex-start; gap: var(--space-2); margin: 0; font-size: var(--fs-sm); cursor: pointer; }

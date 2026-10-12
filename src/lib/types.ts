@@ -638,15 +638,25 @@ export interface RunStep {
 	started_at_ms: number;
 	finished_at_ms?: number;
 	tool?: string;
+	/** Observable tool output, not model-authored reasoning. */
+	summary?: string;
+	sources?: string[];
+	evidence_id?: string;
 }
 
 export interface Message {
 	id: string;
 	role: Role;
 	text: string;
-	/** The one-line plan the model streamed before its first tool call, kept
-	 *  visible (dimmed) while the tools run. Cleared when the answer lands. */
+	/** Legacy model preamble captured by older versions; not rendered as a plan. */
 	plan?: string;
+	/** Parent canonical run when this message is a rerun attempt. */
+	rerun_of?: string;
+	/** Archived progress snapshot for failed/clarification runs without a final trace. */
+	run_steps?: RunStep[];
+	run_state?: RuntimeTurnState;
+	run_question_id?: string;
+	run_duration_ms?: number;
 	/** Present on assistant messages once the answer is complete. */
 	answer?: Answer;
 	/** True while the assistant message is still streaming. */

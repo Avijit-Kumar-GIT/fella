@@ -262,7 +262,13 @@
 						Object.keys(shownArgs).length > 0 ||
 						!!e.output ||
 						!!(e.columns && e.rows)}
-					<li class="step" class:failed={!!e.error}>
+					<li
+						id={`${bodyId}-step-${i}`}
+						class="step"
+						class:failed={!!e.error}
+						data-evidence-id={e.id}
+						tabindex="-1"
+					>
 						<span class="line">{stepLabel(e)}</span>
 						{#if isPythonExecution(e)}<span class="language-badge">Python</span>{:else if isForecastExecution(e)}<span class="language-badge">Forecast</span>{/if}
 						{#if e.tool === 'read_prior_analysis' && e.result_summary.startsWith('retrieved prior analysis from the current workspace revision')}

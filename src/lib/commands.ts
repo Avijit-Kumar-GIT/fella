@@ -1021,7 +1021,7 @@ async function ask(
 	const analysisQuestion = questionWithInvestigationPlan(question, investigation);
 
 	const msg = conv.addAssistant('');
-	conv.startRun(question, questionRef?.questionId ?? null);
+	conv.startRun(question, questionRef?.questionId ?? null, msg.id);
 	conv.busy = true;
 	conv.activity = 'thinking…';
 
@@ -1048,15 +1048,11 @@ async function ask(
 				conv.updateRunState(e.state);
 				break;
 			case 'assistant_delta':
-				msg.text += e.text;
+				// Incremental model text can be private scratch work. The final,
+				// user-facing answer arrives through answer_done; progress is shown
+				// from observable tool and verification events instead.
 				break;
 			case 'tool_start': {
-				// The sentence the model streamed before calling a tool is its
-				// plan keep it visible (dimmed) instead of the raw answer body,
-				// so the wait shows what it's doing. Set once, from the first
-				// tool_start; later rounds just clear any stray preamble.
-				if (!msg.plan && msg.text.trim()) msg.plan = msg.text.trim();
-				msg.text = '';
 				const activity = conv.beginRunStep(e.tool);
 				conv.activity = `${activity}…`;
 				break;
@@ -1074,7 +1070,6 @@ async function ask(
 			case 'answer_done':
 				msg.answer = e.answer;
 				msg.text = e.answer.text;
-				msg.plan = undefined;
 				break;
 		}
 	};
@@ -1099,14 +1094,7 @@ async function ask(
 	} catch (e) {
 		failed = true;
 		const kind = errKind(e);
-		// If the model already streamed part of an answer, keep it rather than
-		// replacing what the user watched appear with a bare "error:".
-		const streamed = msg.text.trim();
-		if (streamed && !msg.answer) {
-			msg.text = `${streamed}\n\n(the connection dropped, so this answer may be incomplete)`;
-		} else {
-			msg.text = `error: ${errMsg(e)}`;
-		}
+		msg.text = `error: ${errMsg(e)}`;
 		if (kind === 'transient') {
 			msg.text += `\n\nType /retry to try again, or /model to switch model.`;
 		}
@@ -1116,7 +1104,6 @@ async function ask(
 	} finally {
 		clearInterval(tick);
 		msg.pending = false;
-		msg.plan = undefined;
 		conv.busy = false;
 		conv.activity = '';
 		conv.finishRun(failed);
@@ -1173,6 +1160,7 @@ export async function rerunAnalysisTurn(message: Message): Promise<void> {
 	await ensureWorkspaceInvestigation(conv);
 
 	const msg = conv.addAssistant('');
+	msg.rerun_of = turnId;
 	const messageIndex = conv.messages.indexOf(message);
 	let runQuestion = '';
 	for (let i = messageIndex - 1; i >= 0; i--) {
@@ -1181,7 +1169,7 @@ export async function rerunAnalysisTurn(message: Message): Promise<void> {
 			break;
 		}
 	}
-	conv.startRun(runQuestion);
+	conv.startRun(runQuestion, null, msg.id);
 	conv.busy = true;
 	conv.activity = 'rechecking the workspace…';
 	let failed = false;
@@ -1191,11 +1179,9 @@ export async function rerunAnalysisTurn(message: Message): Promise<void> {
 				conv.updateRunState(e.state);
 				break;
 			case 'assistant_delta':
-				msg.text += e.text;
+				// Show only the final answer, not incremental model scratch work.
 				break;
 			case 'tool_start': {
-				if (!msg.plan && msg.text.trim()) msg.plan = msg.text.trim();
-				msg.text = '';
 				const activity = conv.beginRunStep(e.tool);
 				conv.activity = `${activity}…`;
 				break;
@@ -1210,7 +1196,6 @@ export async function rerunAnalysisTurn(message: Message): Promise<void> {
 			case 'answer_done':
 				msg.answer = e.answer;
 				msg.text = e.answer.text;
-				msg.plan = undefined;
 				break;
 		}
 	};
@@ -1230,7 +1215,6 @@ export async function rerunAnalysisTurn(message: Message): Promise<void> {
 		msg.text = `error: ${errMsg(e)}`;
 	} finally {
 		msg.pending = false;
-		msg.plan = undefined;
 		conv.busy = false;
 		conv.activity = '';
 		conv.finishRun(failed);

@@ -51,6 +51,16 @@ async function expandInvestigationDefinitions(page) {
 	}
 }
 
+async function expectQuestionRunSettled(page) {
+	const timeline = page.getByRole('region', { name: 'Question run' }).last();
+	await expect(timeline).toBeVisible();
+	await expect(timeline).toHaveAttribute(
+		'data-run-state',
+		/^(accepted|needs_review|unsupported|failed|cancelled|clarify)$/
+	);
+	return timeline;
+}
+
 async function installDesktopMock(
 	page,
 	{
@@ -585,7 +595,18 @@ async function installDesktopMock(
 						? 'verified'
 						: questionOutcome.status === 'blocked' ? 'failed' : 'insufficient_data')
 					: undefined;
+				const progressEvidence = questionTurnId
+					? {
+						id: `fixture-progress-${questionTurnNumber}`,
+						tool: 'grep_files',
+						args: {},
+						result_summary: 'Found relevant passages in the available documents.',
+						ms: 4,
+						sources: []
+					}
+					: null;
 				if (questionTurnId) {
+					onEvent({ kind: 'assistant_delta', text: 'Private model scratch: test whether this text leaks into the run timeline.' });
 					onEvent({ kind: 'turn_state', turn_id: questionTurnId, state: 'interpreting' });
 					onEvent({ kind: 'turn_state', turn_id: questionTurnId, state: 'planning' });
 					onEvent({
@@ -595,14 +616,7 @@ async function installDesktopMock(
 					});
 					onEvent({
 						kind: 'tool_end',
-						item: {
-							id: `fixture-progress-${questionTurnNumber}`,
-							tool: 'grep_files',
-							args: {},
-							result_summary: 'Raw file search details must remain out of the primary timeline.',
-							ms: 4,
-							sources: []
-						}
+						item: progressEvidence
 					});
 					onEvent({ kind: 'turn_state', turn_id: questionTurnId, state: 'verifying' });
 					if (questionOutcome.delay_ms) {
@@ -631,20 +645,34 @@ async function installDesktopMock(
 					onEvent({ kind: 'turn_state', turn_id: questionTurnId, state: finalState });
 				}
 				const hasReplayEvidence = replayStatus !== null || replayStatusError;
+				const evidence = [
+					...(hasReplayEvidence
+						? [{ id: 'fixture-replay-step', tool: 'run_sql', args: {}, result_summary: 'One row inspected.', ms: 12 }]
+						: []),
+					...(Array.isArray(questionOutcome.evidence) ? questionOutcome.evidence : []),
+					...(detailEvidence ? [detailEvidence] : []),
+					...(Array.isArray(chartEvidence) ? chartEvidence : chartEvidence ? [chartEvidence] : [])
+				];
+				const answerTrace = {
+					id: `fixture-trace-${questionTurnNumber || calls.length}`,
+					turn_id: questionTurnId ?? (hasReplayEvidence ? 'fixture-turn' : `fixture-ask-${calls.length}`),
+					steps: evidence.filter((item) => item.id).map((item) => ({
+						id: item.id,
+						operation: item.tool,
+						duration_ms: item.ms ?? 4,
+						success: !item.error,
+						summary: item.result_summary,
+						sources: (item.sources ?? []).map((source) => source.table ? `${source.source} · ${source.table}` : source.source)
+					}))
+				};
 				const answer = {
 					text: questionTurnId && questionOutcome.answer_text
 						? questionOutcome.answer_text
 						: directAnswerText ?? `Scoped to ${params.workspaceId ?? 'general'}.`,
 					status: answerVerificationStatus,
 					turn_id: questionTurnId ?? (hasReplayEvidence ? 'fixture-turn' : undefined),
-					evidence: [
-						...(hasReplayEvidence
-							? [{ id: 'fixture-replay-step', tool: 'run_sql', args: {}, result_summary: 'One row inspected.', ms: 12 }]
-							: []),
-						...(Array.isArray(questionOutcome.evidence) ? questionOutcome.evidence : []),
-						...(detailEvidence ? [detailEvidence] : []),
-						...(Array.isArray(chartEvidence) ? chartEvidence : chartEvidence ? [chartEvidence] : [])
-					],
+					trace: answerTrace,
+					evidence,
 					verification: questionOutcome.checks ?? [],
 					workspace: params.workspaceId ? { path: params.workspaceId, revision: 'fixture-r1' } : null
 				};
@@ -673,12 +701,7 @@ async function installDesktopMock(
 						rerun_of: questionOutcome.rerun_of ?? questionParentTurnId,
 						state: finalState,
 						plan: questionOutcome.plan ?? { strategy: 'direct_tools', steps: ['run_sql'] },
-						trace: {
-							id: `fixture-trace-${questionTurnNumber}`,
-							turn_id: questionTurnId,
-							workspace_revision: questionWorkspaceRevision,
-							steps: [{ id: `fixture-step-${questionTurnNumber}`, operation: 'run_sql', duration_ms: 4, success: true, sources: ['sales.csv'] }]
-						},
+						trace: { ...answerTrace, workspace_revision: questionWorkspaceRevision },
 						verification: { status: verificationStatus, checks: verificationChecks },
 						result: { text: answer.text, status: verificationStatus, verification: verificationChecks, evidence: answer.evidence }
 					});
@@ -1391,7 +1414,20 @@ test('a Question can narrow its source set and launches a run linked to that Que
 test('Questions show persisted coverage states and explain incomplete, blocked, and outdated answers', async ({ page }) => {
 	await installDesktopMock(page, {
 		questionRunOutcomes: [
-			{ status: 'incomplete', reason: 'The selected files do not cover the full requested period.', delay_ms: 800 },
+			{
+				status: 'incomplete',
+				reason: 'The selected files do not cover the full requested period.',
+				delay_ms: 800,
+				evidence: [{
+					id: 'fixture-completion-output-1',
+					tool: 'run_sql',
+					note: 'Compare weekly sales',
+					result_summary: 'Weekly sales were calculated from the available period.',
+					ms: 8,
+					sources: [{ source: 'sales.csv', table: 'sales' }]
+				}],
+				checks: [{ label: 'The requested period is covered', ok: false, outcome: 'flagged' }]
+			},
 			{ status: 'blocked', reason: 'The required date field is unavailable.' },
 			{ status: 'answered' }
 		]
@@ -1413,7 +1449,7 @@ test('Questions show persisted coverage states and explain incomplete, blocked, 
 		await page.getByRole('button', { name: 'Analyze main Question' }).click();
 		await page.getByRole('region', { name: 'Review this run' }).getByRole('button', { name: 'Run this Question' }).click();
 		if (questionRunCount === 1) {
-			const timeline = page.getByRole('region', { name: 'Question run' });
+			const timeline = page.getByRole('region', { name: 'Question run' }).last();
 			await expect(timeline).toBeVisible();
 			await expect(timeline).toHaveAttribute('data-question-id', /^q-root-/);
 			await expect(timeline.locator('.run-question')).toContainText('Explain the change in weekly sales');
@@ -1424,8 +1460,17 @@ test('Questions show persisted coverage states and explain incomplete, blocked, 
 			await expect(timeline).not.toContainText('Raw file search details');
 		}
 		await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.').last()).toBeVisible();
+		const timeline = await expectQuestionRunSettled(page);
 		if (questionRunCount === 1) {
-			await expect(page.getByRole('region', { name: 'Question run' })).toBeHidden();
+			await expect(page.locator('.msg.assistant').last()).not.toContainText('Private model scratch');
+			await expect(timeline).toContainText('Found relevant passages in the available documents.');
+			await expect(timeline).toContainText('Quality checks');
+			await expect(timeline).toContainText('1 flagged');
+			await expect(timeline).not.toContainText('grep_files');
+			await timeline.getByRole('button', { name: 'Inspect output' }).click();
+			const output = page.locator('.msg.assistant').last().locator('[data-evidence-id="fixture-completion-output-1"]');
+			await expect(output).toBeVisible();
+			await expect(output).toBeFocused();
 		}
 		await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
 	};
@@ -1476,7 +1521,7 @@ test('completion follows Question coverage and keeps documented gaps visible', a
 	const runQuestion = async (buttonName) => {
 		await page.getByRole('button', { name: buttonName }).click();
 		await page.getByRole('region', { name: 'Review this run' }).getByRole('button', { name: 'Run this Question' }).click();
-		await expect(page.getByRole('region', { name: 'Question run' })).toBeHidden();
+		await expectQuestionRunSettled(page);
 		await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
 	};
 	await runQuestion('Analyze main Question');
@@ -1593,7 +1638,7 @@ test('verification outcomes stay beside their outputs and explain check limits',
 	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
 	await page.getByRole('button', { name: 'Analyze main Question' }).click();
 	await page.getByRole('region', { name: 'Review this run' }).getByRole('button', { name: 'Run this Question' }).click();
-	await expect(page.getByRole('region', { name: 'Question run' })).toBeHidden();
+	await expectQuestionRunSettled(page);
 	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.').last()).toBeVisible();
 	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
 	// The check leaves this Question partial. Its documented gap may be closed,
@@ -1661,7 +1706,7 @@ test('each Question opens its saved answer with explicit partial or complete cov
 	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
 	await page.getByRole('button', { name: 'Analyze main Question' }).click();
 	await page.getByRole('region', { name: 'Review this run' }).getByRole('button', { name: 'Run this Question' }).click();
-	await expect(page.getByRole('region', { name: 'Question run' })).toBeHidden();
+	await expectQuestionRunSettled(page);
 	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
 
 	const mainQuestion = page.locator('.root-question-item');
@@ -1681,7 +1726,7 @@ test('each Question opens its saved answer with explicit partial or complete cov
 	await page.getByRole('button', { name: 'Save plan' }).click();
 	await page.getByRole('button', { name: 'Analyze Subquestion 1' }).click();
 	await page.getByRole('region', { name: 'Review this run' }).getByRole('button', { name: 'Run this Question' }).click();
-	await expect(page.getByRole('region', { name: 'Question run' })).toBeHidden();
+	await expectQuestionRunSettled(page);
 	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
 
 	const subquestion = page.locator('.question-list .question-item').first();
@@ -1798,7 +1843,7 @@ test('a multi-question Investigation carries coverage, QA, and run links into it
 	const runQuestion = async (label) => {
 		await page.getByRole('button', { name: `Analyze ${label}` }).click();
 		await page.getByRole('region', { name: 'Review this run' }).getByRole('button', { name: 'Run this Question' }).click();
-		await expect(page.getByRole('region', { name: 'Question run' })).toBeHidden();
+		await expectQuestionRunSettled(page);
 		await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
 	};
 	await runQuestion('main Question');
@@ -1889,10 +1934,10 @@ test('saved analysis runs open from an Investigation and link to every Question 
 	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
 	await page.getByRole('button', { name: 'Analyze main Question' }).click();
 	await page.getByRole('region', { name: 'Review this run' }).getByRole('button', { name: 'Run this Question' }).click();
-	const questionRun = page.getByRole('region', { name: 'Question run' });
+	const questionRun = page.getByRole('region', { name: 'Question run' }).last();
 	await expect(questionRun).toBeVisible();
 	await expect(questionRun).toHaveAttribute('data-question-id', /^q-root-/);
-	await expect(questionRun).toBeHidden();
+	await expectQuestionRunSettled(page);
 	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.').last()).toBeVisible();
 	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
 
@@ -1942,7 +1987,7 @@ test('an analyst can review a run assumption, correct it in Investigation contex
 	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
 	await page.getByRole('button', { name: 'Analyze main Question' }).click();
 	await page.getByRole('region', { name: 'Review this run' }).getByRole('button', { name: 'Run this Question' }).click();
-	await expect(page.getByRole('region', { name: 'Question run' })).toBeHidden();
+	await expectQuestionRunSettled(page);
 	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.').last()).toBeVisible();
 	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
 
@@ -2085,7 +2130,7 @@ test('saved run review exposes its method, query output, definitions, and actual
 	await expect(page.locator('.definition-editor')).toContainText('Context saved');
 	await page.getByRole('button', { name: 'Analyze main Question' }).click();
 	await page.getByRole('region', { name: 'Review this run' }).getByRole('button', { name: 'Run this Question' }).click();
-	await expect(page.getByRole('region', { name: 'Question run' })).toBeHidden();
+	await expectQuestionRunSettled(page);
 	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
 
 	await expandInvestigationHistory(page);
@@ -2115,9 +2160,14 @@ test('saved run review exposes its method, query output, definitions, and actual
 	await expect(runContext).toContainText('All sources in the Question’s Investigation scope');
 	await expect(runContext).toContainText('sales.csv · cohort_retention');
 
-	await runDetail.locator('.analysis-run-trace > summary').click();
-	await expect(runDetail.locator('.analysis-run-trace')).toContainText('run sql');
-	await expect(runDetail.locator('.analysis-run-trace')).toContainText('Succeeded');
+	const runTimeline = runDetail.getByRole('region', { name: 'Question run' });
+	await expect(runTimeline).toBeVisible();
+	await expect(runTimeline).toContainText('Calculating from the data');
+	await expect(runTimeline).toContainText('Three monthly cohorts were returned; retention ranged from 42% to 51%.');
+	const queryTimelineStep = runTimeline.locator('.run-step').filter({
+		hasText: 'Three monthly cohorts were returned; retention ranged from 42% to 51%.'
+	});
+	await queryTimelineStep.getByRole('button', { name: 'Inspect output' }).click();
 	const evidenceReview = runDetail.getByRole('region', { name: 'Query and output evidence' });
 	await expect(evidenceReview).toContainText('Calculate retention by cohort');
 	await evidenceReview.getByRole('button', { name: 'show the query' }).click();
@@ -2190,7 +2240,7 @@ test('repeated Question runs stay chronological and preserve each attempt contex
 	const runQuestion = async () => {
 		await page.getByRole('button', { name: 'Analyze main Question' }).click();
 		await page.getByRole('region', { name: 'Review this run' }).getByRole('button', { name: 'Run this Question' }).click();
-		await expect(page.getByRole('region', { name: 'Question run' })).toBeHidden();
+		await expectQuestionRunSettled(page);
 		await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
 	};
 	await runQuestion();
@@ -2457,7 +2507,7 @@ test('Investigation report exports saved answers, Findings, QA, and source prove
 	await page.getByRole('button', { name: 'Save plan' }).click();
 	await page.getByRole('button', { name: 'Analyze main Question' }).click();
 	await page.getByRole('region', { name: 'Review this run' }).getByRole('button', { name: 'Run this Question' }).click();
-	await expect(page.getByRole('region', { name: 'Question run' })).toBeHidden();
+	await expectQuestionRunSettled(page);
 	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.').last()).toBeVisible();
 	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
 	await expandInvestigationHistory(page);
@@ -2553,7 +2603,7 @@ test('Finding revisions preserve prior versions and compare the supporting run c
 	const runQuestion = async () => {
 		await page.getByRole('button', { name: 'Analyze main Question' }).click();
 		await page.getByRole('region', { name: 'Review this run' }).getByRole('button', { name: 'Run this Question' }).click();
-		await expect(page.getByRole('region', { name: 'Question run' })).toBeHidden();
+		await expectQuestionRunSettled(page);
 		await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
 	};
 	await runQuestion();
@@ -3791,7 +3841,7 @@ test('a quick workspace question stays low-ceremony while keeping its answer evi
 	await expect(composer).toBeVisible();
 	await expect(page.getByRole('region', { name: 'Investigation', exact: true })).toHaveCount(0);
 	await expect(page.getByRole('region', { name: 'Review this run' })).toHaveCount(0);
-	await expect(page.getByRole('region', { name: 'Question run' })).toHaveCount(0);
+	await expect(page.getByRole('region', { name: 'Question run' }).last()).toBeVisible();
 
 	const details = answer.getByRole('button', { name: 'Analysis details' });
 	await details.click();
@@ -4008,6 +4058,13 @@ test('Replay freshness uses shared status badges and rerun buttons', async ({ pa
 	await expect(rerun).toHaveAttribute('data-slot', 'button');
 	await expect(rerun).toBeEnabled();
 	await expect(answer).toContainText('Rerun repeats this saved request and its recorded context.');
+	await rerun.click();
+	const failedRerun = page.getByRole('region', { name: 'Question run' }).last();
+	await expect(failedRerun).toHaveAttribute('data-run-state', 'failed');
+	await expect(failedRerun).toContainText('Rerun');
+	await expect(failedRerun).toContainText('Analysis did not finish');
+	await expect(failedRerun.locator('[data-step-state="error"]')).toHaveCount(1);
+	await expect(page.locator('.msg.assistant').last()).toContainText('Rerun is not part of this journey');
 });
 
 test('Replay freshness lookup errors use an alert and a working retry action', async ({ page }) => {

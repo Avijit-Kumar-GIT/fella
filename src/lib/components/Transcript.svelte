@@ -129,7 +129,6 @@
 	aria-label="conversation"
 	aria-live="off"
 >
-	<RunTimeline />
 	{#if session.messages.length === 0}
 		<div class="onboard" class:center={!hasFolder && !showSetup}>
 			{#if !hasFolder}
@@ -276,6 +275,16 @@
 								void dispatch(next, clarificationTurnId)}
 							onrerun={() => rerun(m)}
 						/>
+						{#if m.role === 'assistant' && (m.pending || m.answer?.trace?.steps.length || m.run_steps?.length)}
+							<RunTimeline
+								message={m}
+								question={questionFor(i)}
+								bodyId={`evidence-${m.id}`}
+								onopenevidence={() => {
+									if (!expanded[m.id]) toggle(m.id);
+								}}
+							/>
+						{/if}
 					{/each}
 					{#snippet failed(error)}
 						<pre class="boundary-err">The transcript hit a render error:

@@ -312,6 +312,7 @@ export class Conversation {
 	runState = $state<RuntimeTurnState | null>(null);
 	runStartedAt = $state<number | null>(null);
 	runDurationMs = $state<number | null>(null);
+	runMessageId = $state<string | null>(null);
 
 	/** `id` defaults to a fresh one (a genuinely new conversation). Reopening
 	 *  an archived conversation passes its real id back in, so re-archiving
@@ -359,12 +360,13 @@ export class Conversation {
 		this.contextRefs = [];
 	}
 
-	startRun(question = '', questionId: string | null = null): void {
+	startRun(question = '', questionId: string | null = null, messageId: string | null = null): void {
 		const now = Date.now();
 		this.runStartedAt = now;
 		this.runDurationMs = null;
 		this.runQuestion = question.trim();
 		this.runQuestionId = questionId;
+		this.runMessageId = messageId;
 		this.runState = 'received';
 		this.runSteps = [
 			{
@@ -425,7 +427,16 @@ export class Conversation {
 		if (index < 0) return;
 		this.runSteps = this.runSteps.map((step, i) =>
 			i === index
-				? { ...step, state: item.error ? ('error' as const) : ('complete' as const), finished_at_ms: now }
+				? {
+						...step,
+						state: item.error ? ('error' as const) : ('complete' as const),
+						finished_at_ms: now,
+						summary: item.error ? undefined : item.result_summary,
+						sources: item.sources?.map((source) =>
+							source.table ? `${source.source} · ${source.table}` : source.source
+						),
+						evidence_id: item.id
+					}
 				: step
 		);
 	}
@@ -437,9 +448,25 @@ export class Conversation {
 				? { ...step, state: error ? ('error' as const) : ('complete' as const), finished_at_ms: now }
 				: step
 		);
-		if (error) this.runState = 'failed';
+		const message = this.runMessageId
+			? this.messages.find((item) => item.id === this.runMessageId)
+			: undefined;
+		if (error || message?.answer?.status === 'failed') {
+			this.runState = 'failed';
+		} else if (!['accepted', 'clarify', 'needs_review', 'unsupported', 'failed', 'cancelled'].includes(this.runState ?? '')) {
+			if (message?.answer?.clarification) this.runState = 'clarify';
+			else if (message?.answer?.status === 'needs_review' || message?.answer?.status === 'insufficient_data') this.runState = 'needs_review';
+			else this.runState = 'accepted';
+		}
 		if (this.runStartedAt !== null) this.runDurationMs = Math.max(0, now - this.runStartedAt);
+		if (message) {
+			message.run_steps = this.runSteps.map((step) => ({ ...step }));
+			if (this.runState) message.run_state = this.runState;
+			if (this.runQuestionId) message.run_question_id = this.runQuestionId;
+			if (this.runDurationMs !== null) message.run_duration_ms = this.runDurationMs;
+		}
 		this.runStartedAt = null;
+		this.runMessageId = null;
 	}
 
 	/** Coalesce writes while a run streams; flush immediately once it settles. */
