@@ -15,7 +15,9 @@ use crate::engine::analytics::pyexec;
 use crate::engine::catalog::{self, Catalog, ColumnInfo, SourceInfo, SourceKind};
 use crate::engine::context::{ContextAssembler, ContextAssemblyAudit, ContextPacket};
 use crate::engine::error::{EngineError, EngineResult};
-use crate::engine::evidence::{Answer, AskEvent, EvidenceItem};
+use crate::engine::evidence::{
+    Answer, AskEvent, EvidenceItem, VerificationCheck, VerificationStatus,
+};
 use crate::engine::ingest::docs;
 use crate::engine::investigation::{
     self, Investigation, InvestigationBrief, InvestigationContextSnapshot, InvestigationDefinition,
@@ -28,8 +30,8 @@ use crate::engine::memory::{self, FolderMemory};
 use crate::engine::provider::{self, AuthKind, PROVIDERS};
 use crate::engine::runtime::{
     AnalysisContract, AnalysisResult, AnalysisSourceScope, AnalysisTurn, AnalysisTurnReplayStatus,
-    ClarificationReply, ContextReference, InterpretationStatus, LogicalPlan, PlanStrategy,
-    ResolvedClarification, RunLogEntry, RunLogKind, TurnState, VerificationReport,
+    ClarificationReply, ClarificationRequest, ContextReference, InterpretationStatus, LogicalPlan,
+    PlanStrategy, ResolvedClarification, RunLogEntry, RunLogKind, TurnState, VerificationReport,
     WorkspaceColumnSnapshot, WorkspaceRevisionSnapshot, WorkspaceSourceSnapshot,
 };
 use crate::engine::secrets::Secrets;
@@ -41,6 +43,10 @@ use crate::engine::tools::Registry;
 use crate::engine::workspace_model::WorkspaceModel;
 
 const MAX_ANALYSIS_TURN_LINKS_PER_UPDATE: usize = 500;
+
+/// Shared by the app-level Investigation readers and workspace-scoped ask
+/// runtimes so a live Question run is not mistaken for a process interruption.
+pub(crate) type CancelRegistry = Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>;
 
 // Full-table common-value/null/min/max statistics are useful on tiny mounts,
 // but not worth rescanning many or large tables before the first question.
@@ -85,18 +91,45 @@ fn question_answer_status(
     answer: &Answer,
     cancelled: bool,
 ) -> (InvestigationQuestionAnswerStatus, Option<String>) {
+    question_answer_status_parts(
+        answer.status,
+        answer.contract.as_ref(),
+        &answer.verification,
+        answer.clarification.as_ref(),
+        cancelled,
+    )
+}
+
+fn question_answer_status_from_turn(
+    turn: &AnalysisTurn,
+) -> (InvestigationQuestionAnswerStatus, Option<String>) {
+    question_answer_status_parts(
+        turn.result.status,
+        turn.contract.as_ref(),
+        &turn.result.verification,
+        turn.contract
+            .as_ref()
+            .and_then(|contract| contract.clarification.as_ref()),
+        turn.state == TurnState::Cancelled,
+    )
+}
+
+fn question_answer_status_parts(
+    status: VerificationStatus,
+    contract: Option<&AnalysisContract>,
+    verification: &[VerificationCheck],
+    clarification: Option<&ClarificationRequest>,
+    cancelled: bool,
+) -> (InvestigationQuestionAnswerStatus, Option<String>) {
     if cancelled {
         return (
             InvestigationQuestionAnswerStatus::Blocked,
             Some("The run was stopped before a complete answer was verified.".to_owned()),
         );
     }
-    if answer.contract.as_ref().is_some_and(|contract| {
-        contract.interpretation == crate::engine::runtime::InterpretationStatus::Unsupported
-    }) {
-        let reason = answer
-            .contract
-            .as_ref()
+    if contract.is_some_and(|contract| contract.interpretation == InterpretationStatus::Unsupported)
+    {
+        let reason = contract
             .and_then(|contract| contract.unresolved.first())
             .map(String::as_str)
             .filter(|reason| !reason.trim().is_empty())
@@ -106,7 +139,7 @@ fn question_answer_status(
             Some(compact_status_reason(reason)),
         );
     }
-    if let Some(clarification) = &answer.clarification {
+    if let Some(clarification) = clarification {
         let reason = clarification
             .reason
             .as_deref()
@@ -118,23 +151,17 @@ fn question_answer_status(
         );
     }
 
-    let check_reason = answer
-        .verification
+    let check_reason = verification
         .iter()
         .find(|check| !check.ok)
         .and_then(|check| check.detail.as_deref())
         .filter(|reason| !reason.trim().is_empty());
-    let unresolved_reason = answer
-        .contract
-        .as_ref()
+    let unresolved_reason = contract
         .and_then(|contract| contract.unresolved.first())
         .map(String::as_str);
-    match answer.status {
-        crate::engine::evidence::VerificationStatus::Verified => {
-            (InvestigationQuestionAnswerStatus::Answered, None)
-        }
-        crate::engine::evidence::VerificationStatus::NeedsReview
-        | crate::engine::evidence::VerificationStatus::InsufficientData => (
+    match status {
+        VerificationStatus::Verified => (InvestigationQuestionAnswerStatus::Answered, None),
+        VerificationStatus::NeedsReview | VerificationStatus::InsufficientData => (
             InvestigationQuestionAnswerStatus::Incomplete,
             Some(compact_status_reason(
                 check_reason
@@ -142,7 +169,7 @@ fn question_answer_status(
                     .unwrap_or("The run returned without fully answering this Question."),
             )),
         ),
-        crate::engine::evidence::VerificationStatus::Failed => (
+        VerificationStatus::Failed => (
             InvestigationQuestionAnswerStatus::Blocked,
             Some(compact_status_reason(
                 check_reason
@@ -277,7 +304,7 @@ pub struct EngineState {
     /// One stop-flag per in-flight conversation, so `/stop` in one tab doesn't
     /// cancel another tab's run. Keyed by `conversation_id`; an entry is created
     /// when `ask` starts and removed when it finishes.
-    cancel: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    cancel: CancelRegistry,
     /// Conversation IDs deleted during this process lifetime. Prevents a late
     /// frontend archive or in-flight analysis save from recreating deleted data.
     deleted_conversations: Mutex<HashSet<String>>,
@@ -1980,17 +2007,24 @@ fn scan_document_lines(
 
 impl EngineState {
     pub fn new(data_dir: &Path) -> EngineResult<Self> {
-        Self::build(data_dir, true)
+        Self::build(data_dir, true, Arc::new(Mutex::new(HashMap::new())))
     }
 
     /// Construct a workspace-scoped runtime sharing app settings, auth, and
     /// conversation persistence at `data_dir`. Only the app runtime performs
     /// one-time DB migrations and provider reconciliation.
-    pub(crate) fn new_workspace_runtime(data_dir: &Path) -> EngineResult<Self> {
-        Self::build(data_dir, false)
+    pub(crate) fn new_workspace_runtime(
+        data_dir: &Path,
+        cancel: CancelRegistry,
+    ) -> EngineResult<Self> {
+        Self::build(data_dir, false, cancel)
     }
 
-    fn build(data_dir: &Path, initialize_app_state: bool) -> EngineResult<Self> {
+    fn build(
+        data_dir: &Path,
+        initialize_app_state: bool,
+        cancel: CancelRegistry,
+    ) -> EngineResult<Self> {
         // reqwest is built with `rustls-no-provider`; install `ring` once
         // (process-global). Doing it here covers both the app and the tests.
         static CRYPTO: std::sync::Once = std::sync::Once::new();
@@ -2032,10 +2066,14 @@ impl EngineState {
             http,
             secrets,
             data_dir: data_dir.to_path_buf(),
-            cancel: Mutex::new(HashMap::new()),
+            cancel,
             deleted_conversations: Mutex::new(HashSet::new()),
             doc_cache: Mutex::new(HashMap::new()),
         })
+    }
+
+    pub(crate) fn cancel_registry(&self) -> CancelRegistry {
+        Arc::clone(&self.cancel)
     }
 
     pub(crate) fn invalidate_capability_schema_cache(&self) {
@@ -2787,26 +2825,74 @@ impl EngineState {
                         .unwrap_or_else(|error| error.into_inner())
                         .contains_key(conversation_id)
                 });
-        if conversation_is_running {
-            return Ok(investigation);
-        }
 
         for question in investigation.questions.as_deref().unwrap_or_default() {
-            if question.answer_status != InvestigationQuestionAnswerStatus::Running {
+            let is_interrupted =
+                question.answer_status == InvestigationQuestionAnswerStatus::Running;
+            let is_false_blocked = question.answer_status
+                == InvestigationQuestionAnswerStatus::Blocked
+                && question.answer_status_reason.as_deref()
+                    == Some(investigation::INTERRUPTED_QUESTION_RUN_REASON);
+            if (!is_interrupted && !is_false_blocked) || conversation_is_running {
                 continue;
             }
             if let Some(turn_id) = question.latest_analysis_turn_id.as_deref() {
-                investigation::question_run_finished(
-                    &self.data_dir,
-                    &investigation.id,
-                    &question.id,
-                    turn_id,
-                    InvestigationQuestionAnswerStatus::Blocked,
-                    Some("Fella stopped before saving an answer. Run this Question again."),
-                )?;
+                if let Some((answer_status, reason)) =
+                    self.recover_saved_question_outcome(&investigation, question, turn_id)
+                {
+                    investigation::question_run_recovered(
+                        &self.data_dir,
+                        &investigation.id,
+                        &question.id,
+                        turn_id,
+                        answer_status,
+                        reason.as_deref(),
+                    )?;
+                } else if is_interrupted {
+                    investigation::question_run_finished(
+                        &self.data_dir,
+                        &investigation.id,
+                        &question.id,
+                        turn_id,
+                        InvestigationQuestionAnswerStatus::Blocked,
+                        Some(investigation::INTERRUPTED_QUESTION_RUN_REASON),
+                    )?;
+                }
             }
         }
         investigation::load(&self.data_dir, id)
+    }
+
+    fn recover_saved_question_outcome(
+        &self,
+        investigation: &Investigation,
+        question: &crate::engine::investigation::InvestigationQuestion,
+        turn_id: &str,
+    ) -> Option<(InvestigationQuestionAnswerStatus, Option<String>)> {
+        let turn = analysis_store::load(&self.data_dir, turn_id).ok()?;
+        let context = turn.investigation_context.as_ref()?;
+        if turn.id != turn_id
+            || investigation.conversation_id.as_deref() != Some(turn.conversation_id.as_str())
+            || turn.workspace.as_deref() != Some(investigation.workspace_id.as_str())
+            || context.investigation_id != investigation.id
+            || context.question_id.as_deref() != Some(question.id.as_str())
+        {
+            return None;
+        }
+
+        let current_context = investigation::context_snapshot_for_question(
+            &self.data_dir,
+            &investigation.id,
+            Some(&question.id),
+        )
+        .ok()?;
+        if &current_context != context {
+            return Some((
+                InvestigationQuestionAnswerStatus::Outdated,
+                Some("The Question, source scope, or definitions changed during this run. Run the current Question again.".to_owned()),
+            ));
+        }
+        Some(question_answer_status_from_turn(&turn))
     }
 
     /// Recent local run metadata for Settings. This is a projection of saved
@@ -6453,6 +6539,67 @@ mod workspace_swap_tests {
 mod investigation_answer_status_tests {
     use super::*;
 
+    fn temp_data_dir(label: &str) -> PathBuf {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("fella-{label}-{nonce}"))
+    }
+
+    fn saved_question_turn(
+        turn_id: &str,
+        investigation: &Investigation,
+        question: &crate::engine::investigation::InvestigationQuestion,
+        context: InvestigationContextSnapshot,
+    ) -> AnalysisTurn {
+        let verification = vec![VerificationCheck {
+            label: "date coverage".into(),
+            ok: false,
+            outcome: Some(crate::engine::evidence::VerificationOutcome::Flagged),
+            detail: Some("Two source rows have no transaction date.".into()),
+            finding: None,
+        }];
+        AnalysisTurn {
+            id: turn_id.to_owned(),
+            conversation_id: investigation.conversation_id.clone().unwrap(),
+            question: question.text.clone(),
+            context_refs: Vec::new(),
+            prior_turn_refs: Vec::new(),
+            clarification_of: None,
+            clarification_response: None,
+            workspace: Some(investigation.workspace_id.clone()),
+            workspace_revision: Some("workspace-r1".into()),
+            workspace_snapshot: None,
+            source_scope: None,
+            investigation_context: Some(context),
+            context_audit: None,
+            provenance: None,
+            rerun_of: None,
+            state: TurnState::NeedsReview,
+            contract: None,
+            plan: LogicalPlan::default(),
+            trace: crate::engine::runtime::ExecutionTrace {
+                id: format!("trace-{turn_id}"),
+                turn_id: turn_id.to_owned(),
+                workspace_revision: Some("workspace-r1".into()),
+                mode: None,
+                model: None,
+                model_calls: Vec::new(),
+                elapsed_ms: None,
+                steps: Vec::new(),
+            },
+            verification: None,
+            result: AnalysisResult {
+                text: "The rows total 1,240, but two dates are missing.".into(),
+                status: VerificationStatus::NeedsReview,
+                usage: None,
+                verification,
+                evidence: Vec::new(),
+            },
+        }
+    }
+
     #[test]
     fn unsupported_interpretation_is_a_distinct_coverage_outcome() {
         let answer = Answer {
@@ -6496,5 +6643,114 @@ mod investigation_answer_status_tests {
             InvestigationQuestionAnswerStatus::Blocked,
             "explicit cancellation takes precedence over the model's interpretation"
         );
+    }
+
+    #[test]
+    fn app_investigation_reads_do_not_mark_a_workspace_runtime_run_interrupted() {
+        let data_dir = temp_data_dir("shared-question-run");
+        let app = EngineState::new(&data_dir).unwrap();
+        let workspace =
+            EngineState::new_workspace_runtime(&data_dir, app.cancel_registry()).unwrap();
+        let created = investigation::create(
+            &data_dir,
+            "/work/analysis",
+            "Revenue analysis",
+            Some("Explain revenue movement"),
+            None,
+            Some("conversation-analysis"),
+        )
+        .unwrap();
+        let question = created.questions.as_ref().unwrap()[0].clone();
+        investigation::question_run_started(
+            &data_dir,
+            &created.id,
+            &question.id,
+            "turn-live-question",
+        )
+        .unwrap();
+        workspace.cancel.lock().unwrap().insert(
+            "conversation-analysis".into(),
+            Arc::new(AtomicBool::new(false)),
+        );
+
+        let while_running = app.investigation_load(&created.id).unwrap();
+        assert_eq!(
+            while_running.questions.as_ref().unwrap()[0].answer_status,
+            InvestigationQuestionAnswerStatus::Running,
+            "the app runtime must see the active cancellation entry owned by the workspace runtime"
+        );
+
+        workspace
+            .cancel
+            .lock()
+            .unwrap()
+            .remove("conversation-analysis");
+        let after_interruption = app.investigation_load(&created.id).unwrap();
+        let question = &after_interruption.questions.as_ref().unwrap()[0];
+        assert_eq!(
+            question.answer_status,
+            InvestigationQuestionAnswerStatus::Blocked
+        );
+        assert_eq!(
+            question.answer_status_reason.as_deref(),
+            Some(investigation::INTERRUPTED_QUESTION_RUN_REASON)
+        );
+
+        drop(workspace);
+        drop(app);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn recovery_restores_a_saved_review_outcome_from_the_matching_turn() {
+        let data_dir = temp_data_dir("recover-question-answer");
+        let app = EngineState::new(&data_dir).unwrap();
+        let created = investigation::create(
+            &data_dir,
+            "/work/analysis",
+            "Revenue analysis",
+            Some("Explain revenue movement"),
+            None,
+            Some("conversation-analysis"),
+        )
+        .unwrap();
+        let question = created.questions.as_ref().unwrap()[0].clone();
+        let turn_id = "turn-saved-question-answer";
+        investigation::question_run_started(&data_dir, &created.id, &question.id, turn_id).unwrap();
+        let context = investigation::context_snapshot_for_question(
+            &data_dir,
+            &created.id,
+            Some(&question.id),
+        )
+        .unwrap();
+        let turn = saved_question_turn(turn_id, &created, &question, context);
+        analysis_store::create(&data_dir, &turn).unwrap();
+
+        // This reproduces the stale marker written by the earlier recovery
+        // path even though the canonical run already contains a reviewable answer.
+        investigation::question_run_finished(
+            &data_dir,
+            &created.id,
+            &question.id,
+            turn_id,
+            InvestigationQuestionAnswerStatus::Blocked,
+            Some(investigation::INTERRUPTED_QUESTION_RUN_REASON),
+        )
+        .unwrap();
+
+        let recovered = app.investigation_load(&created.id).unwrap();
+        let question = &recovered.questions.as_ref().unwrap()[0];
+        assert_eq!(
+            question.answer_status,
+            InvestigationQuestionAnswerStatus::Incomplete
+        );
+        assert_eq!(
+            question.answer_status_reason.as_deref(),
+            Some("Two source rows have no transaction date.")
+        );
+        assert_eq!(question.latest_analysis_turn_id.as_deref(), Some(turn_id));
+
+        drop(app);
+        let _ = std::fs::remove_dir_all(data_dir);
     }
 }

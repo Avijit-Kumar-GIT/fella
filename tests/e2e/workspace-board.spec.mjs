@@ -1544,6 +1544,12 @@ test('a Question runs in its linked conversation even when it has no original ch
 	const answer = page.locator('.msg.assistant').last();
 	await expect(answer).toContainText('There are 124 sales rows in the available file.');
 	await expect(answer).not.toContainText('Open the conversation linked to this Investigation');
+	const questionItem = page.locator('.question-item').first();
+	await expect(questionItem.locator('[data-question-status="answered"]')).toBeVisible();
+	const savedAnswer = page.getByRole('region', { name: 'Latest answer for Main Question' });
+	await expect(savedAnswer).toHaveAttribute('data-answer-status', 'answered');
+	await savedAnswer.getByRole('button', { name: 'View complete answer for Main Question' }).click();
+	await expect(savedAnswer).toContainText('There are 124 sales rows in the available file.');
 	const state = await page.evaluate(() => ({
 		investigations: window.__workspaceInvestigations(),
 		analysisTurns: window.__workspaceAnalysisTurns(),

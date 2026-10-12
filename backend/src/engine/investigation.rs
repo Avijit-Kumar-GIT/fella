@@ -18,6 +18,8 @@ const QUESTIONS_DIR: &str = "questions";
 const DEFINITIONS_DIR: &str = "definitions";
 const FINDINGS_DIR: &str = "findings";
 const GENERAL_WORKSPACE_SENTINEL: &str = "general";
+pub(crate) const INTERRUPTED_QUESTION_RUN_REASON: &str =
+    "Fella stopped before saving an answer. Run this Question again.";
 
 fn validate_workspace_id(workspace_id: &str) -> EngineResult<&str> {
     let workspace_id = workspace_id.trim();
@@ -719,6 +721,44 @@ pub fn question_run_finished(
         || question.status != InvestigationQuestionStatus::Active
         || question.latest_analysis_turn_id.as_deref() != Some(turn_id)
         || question.answer_status != InvestigationQuestionAnswerStatus::Running
+    {
+        return Ok(false);
+    }
+    question.answer_status_reason = normalize_answer_status_reason(answer_status.clone(), reason);
+    question.answer_status = answer_status;
+    question.updated_at_ms = now_ms().max(question.updated_at_ms.saturating_add(1));
+    write_question_record(data_dir, &question)?;
+    Ok(true)
+}
+
+/// Reconcile a Question with its matching canonical AnalysisTurn after an
+/// interruption or an earlier recovery that incorrectly marked a saved run
+/// blocked. The exact legacy recovery reason is required before replacing a
+/// terminal Blocked state; ordinary Blocked outcomes remain untouched.
+pub(crate) fn question_run_recovered(
+    data_dir: &Path,
+    investigation_id: &str,
+    question_id: &str,
+    turn_id: &str,
+    answer_status: InvestigationQuestionAnswerStatus,
+    reason: Option<&str>,
+) -> EngineResult<bool> {
+    if answer_status == InvestigationQuestionAnswerStatus::Running
+        || answer_status == InvestigationQuestionAnswerStatus::NotStarted
+    {
+        return Err(EngineError::msg(
+            "a recovered Question run must have a terminal answer status",
+        ));
+    }
+    let mut question = question_load(data_dir, question_id)?;
+    let was_marked_interrupted = question.answer_status
+        == InvestigationQuestionAnswerStatus::Running
+        || (question.answer_status == InvestigationQuestionAnswerStatus::Blocked
+            && question.answer_status_reason.as_deref() == Some(INTERRUPTED_QUESTION_RUN_REASON));
+    if question.investigation_id != investigation_id
+        || question.status != InvestigationQuestionStatus::Active
+        || question.latest_analysis_turn_id.as_deref() != Some(turn_id)
+        || !was_marked_interrupted
     {
         return Ok(false);
     }

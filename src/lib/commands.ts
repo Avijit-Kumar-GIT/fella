@@ -1120,6 +1120,7 @@ async function ask(
 		conv.busy = false;
 		conv.activity = '';
 		conv.finishRun(failed);
+		if (questionRef) session.investigationsVersion += 1;
 	}
 }
 

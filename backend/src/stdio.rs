@@ -14,6 +14,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::engine::state::CancelRegistry;
 use crate::engine::{
     AskOptions, Catalog, ClarificationReply, ContextReference, EngineError, EngineResult,
     EngineState, InvestigationDefinitionInput, InvestigationFindingInput,
@@ -121,14 +122,16 @@ const MAX_OPEN_WORKSPACES: usize = 4;
 /// are canonical local folder paths; display names are never used as keys.
 struct WorkspaceRegistry {
     data_dir: PathBuf,
+    cancel: CancelRegistry,
     open_serial: Mutex<()>,
     engines: Mutex<HashMap<PathBuf, Arc<EngineState>>>,
 }
 
 impl WorkspaceRegistry {
-    fn new(data_dir: PathBuf) -> Self {
+    fn new(data_dir: PathBuf, cancel: CancelRegistry) -> Self {
         Self {
             data_dir,
+            cancel,
             open_serial: Mutex::new(()),
             engines: Mutex::new(HashMap::new()),
         }
@@ -179,7 +182,10 @@ impl WorkspaceRegistry {
             )));
         }
 
-        let engine = Arc::new(EngineState::new_workspace_runtime(&self.data_dir)?);
+        let engine = Arc::new(EngineState::new_workspace_runtime(
+            &self.data_dir,
+            Arc::clone(&self.cancel),
+        )?);
         let catalog = engine.open_workspace_with_progress(&canonical, on_progress)?;
         self.engines
             .lock()
@@ -658,7 +664,10 @@ async fn dispatch(
 /// Run the engine as a long-lived JSON-lines child process for Electron.
 pub fn run(data_dir: &Path) -> Result<(), String> {
     let engine = Arc::new(EngineState::new(data_dir).map_err(|error| error.to_string())?);
-    let workspaces = Arc::new(WorkspaceRegistry::new(data_dir.to_path_buf()));
+    let workspaces = Arc::new(WorkspaceRegistry::new(
+        data_dir.to_path_buf(),
+        engine.cancel_registry(),
+    ));
     let output = Arc::new(Mutex::new(BufWriter::new(io::stdout())));
     let started = Instant::now();
 
@@ -747,7 +756,8 @@ mod tests {
             write_workspace(path, &[1]);
         }
 
-        let registry = WorkspaceRegistry::new(data_dir.clone());
+        let app_engine = EngineState::new(&data_dir).unwrap();
+        let registry = WorkspaceRegistry::new(data_dir.clone(), app_engine.cancel_registry());
         let first = registry
             .open_workspace_with_progress(&paths[0], |_| {})
             .unwrap();
