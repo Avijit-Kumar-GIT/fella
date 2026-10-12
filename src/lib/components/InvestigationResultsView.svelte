@@ -2,7 +2,15 @@
 	import { untrack } from 'svelte';
 	import { ipc } from '$lib/ipc';
 	import { isRenderableChartEvidence } from '$lib/workbench';
-	import type { AnalysisTurn, EvidenceItem, Investigation, InvestigationQuestion } from '$lib/types';
+	import type {
+		AnalysisTurn,
+		EvidenceItem,
+		Investigation,
+		InvestigationFinding,
+		InvestigationFindingRevision,
+		InvestigationQuestion,
+		VerificationCheck
+	} from '$lib/types';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import Chart from './Chart.svelte';
@@ -16,7 +24,7 @@
 	}: {
 		investigation: Investigation;
 		hasUnsavedEdits?: boolean;
-		onopenrun: (turnId: string) => void;
+		onopenrun: (turnId: string, evidenceId?: string) => void;
 		onreviewquestion: (questionId: string) => void;
 	} = $props();
 
@@ -154,6 +162,43 @@
 		return investigation.questions?.find((question) => question.id === questionId);
 	}
 
+	function findingEvidenceItem(finding: InvestigationFinding, evidenceId: string): EvidenceItem | undefined {
+		const run = runs[finding.analysis_turn_id];
+		return run?.result.evidence
+			.filter(isEvidenceItem)
+			.find((item) => item.id === evidenceId);
+	}
+
+	function findingChecks(finding: InvestigationFinding): VerificationCheck[] {
+		const run = runs[finding.analysis_turn_id];
+		return run?.verification?.checks ?? run?.result.verification ?? [];
+	}
+
+	function verificationOutcome(check: VerificationCheck): string {
+		const outcome = check.outcome ?? (check.ok ? 'passed' : 'flagged');
+		return outcome === 'passed' ? 'Passed' : outcome === 'not_run' ? 'Not run' : 'Flagged';
+	}
+
+	function verificationStatusLabel(run: AnalysisTurn | undefined): string {
+		if (!run) return 'Run not loaded';
+		const status = run.verification?.status ?? run.result.status;
+		return {
+			verified: 'Checked',
+			needs_review: 'Needs review',
+			insufficient_data: 'Insufficient data',
+			failed: 'Run failed'
+		}[status] ?? 'Status not recorded';
+	}
+
+	function revisionQuestionLabel(revision: InvestigationFindingRevision): string {
+		return questionForFinding(revision.question_id)?.text ?? `Question ${revision.question_id} (not in the current plan)`;
+	}
+
+	function evidenceSourceLabel(item: EvidenceItem): string {
+		return item.sources?.map((source) => source.table ? `${source.source} · ${source.table}` : source.source).join(', ')
+			|| 'Source not recorded';
+}
+
 	function sourceLabel(item: EvidenceItem): string {
 		return item.chart?.metadata?.source_label
 			|| item.sources?.map((source) => source.source).filter(Boolean).join(', ')
@@ -206,16 +251,83 @@
 			<div class="results-findings">
 				{#each investigation.findings as finding, index (finding.id)}
 					{@const question = questionForFinding(finding.question_id)}
+					{@const run = runs[finding.analysis_turn_id]}
+					{@const checks = findingChecks(finding)}
 					<article class="results-finding" aria-label="Finding {index + 1}">
 						<div class="results-finding-heading"><span>Finding {index + 1}</span><small>Revision {finding.revision}</small></div>
 						<p class="results-finding-claim">{finding.claim}</p>
-						{#if question}<p class="results-finding-question">Answers: {question.text}</p>{/if}
+						{#if question}
+							<div class="results-finding-question-row">
+								<p class="results-finding-question">Answers: {question.text}</p>
+								<Button type="button" variant="ghost" size="sm" onclick={() => onreviewquestion(question.id)}>Open Question</Button>
+							</div>
+						{/if}
 						<details class="results-supporting">
-							<summary>Supporting detail</summary>
+							<summary>Review coverage, provenance &amp; checks</summary>
 							{#if finding.caveats.length}<div><h4>Caveats</h4><ul>{#each finding.caveats as caveat (caveat)}<li>{caveat}</li>{/each}</ul></div>{/if}
 							{#if finding.assumptions.length}<div><h4>Assumptions</h4><ul>{#each finding.assumptions as assumption (assumption)}<li>{assumption}</li>{/each}</ul></div>{/if}
-							<p>Evidence: {finding.evidence_ids.length ? finding.evidence_ids.join(', ') : 'No evidence IDs recorded'} · Run <code>{finding.analysis_turn_id}</code></p>
-							<Button type="button" variant="ghost" size="sm" onclick={() => onopenrun(finding.analysis_turn_id)}>Open analysis record</Button>
+							<section class="results-finding-context" aria-label="Finding coverage and run status">
+								<div><span>Question coverage</span><strong>{question ? questionStatusLabel(question) : 'Question unavailable'}</strong></div>
+								{#if question?.answer_status_reason}<p>{question.answer_status_reason}</p>{/if}
+								{#if question && question.latest_analysis_turn_id !== finding.analysis_turn_id}
+									<p>This Finding is linked to a run other than the Question’s latest answer. Review its run before treating it as current.</p>
+								{/if}
+								<div><span>Run outcome</span><strong>{verificationStatusLabel(run)}</strong></div>
+								{#if !run && loadingRunIds.includes(finding.analysis_turn_id)}<p role="status">Loading the saved run and evidence…</p>
+								{:else if !run && runErrors[finding.analysis_turn_id]}<p role="alert">Saved run unavailable: {runErrors[finding.analysis_turn_id]}</p>
+									<Button type="button" variant="ghost" size="sm" onclick={() => retryRun(finding.analysis_turn_id)}>Retry loading run</Button>
+								{/if}
+							</section>
+							<div class="results-finding-evidence">
+								<h4>Supporting evidence</h4>
+								{#if finding.evidence_ids.length}
+									<ul>
+									{#each finding.evidence_ids as evidenceId (`${finding.id}-${evidenceId}`)}
+										{@const item = findingEvidenceItem(finding, evidenceId)}
+										<li>
+											{#if item}
+												<Button type="button" variant="ghost" size="sm" onclick={() => onopenrun(finding.analysis_turn_id, evidenceId)} aria-label="Inspect evidence: {item.result_summary}">{item.result_summary || evidenceId}</Button>
+												<small><code>{evidenceId}</code> · {evidenceSourceLabel(item)}</small>
+											{:else}<code>{evidenceId}</code><small>{run ? 'This ID is not present in the saved run evidence.' : 'Evidence details unavailable until the run loads.'}</small>{/if}
+										</li>
+									{/each}
+									</ul>
+								{:else}<p>No supporting evidence IDs were recorded.</p>{/if}
+							</div>
+							<div class="results-finding-checks" aria-label="Verification checks">
+								<h4>Checks · {verificationStatusLabel(run)}</h4>
+								{#if checks.length}
+									<ul>
+									{#each checks as check, checkIndex (`${finding.id}-check-${checkIndex}`)}
+										<li data-check-outcome={check.outcome ?? (check.ok ? 'passed' : 'flagged')}><strong>{verificationOutcome(check)} · {check.label}</strong>{#if check.detail}<span>{check.detail}</span>{/if}</li>
+									{/each}
+									</ul>
+									<p>Each check speaks only to the condition it tested; passing checks do not establish overall business correctness.</p>
+								{:else}<p>No verification checks were recorded for this run.</p>{/if}
+							</div>
+							<p>Analysis run <code>{finding.analysis_turn_id}</code> · <Button type="button" variant="ghost" size="sm" onclick={() => onopenrun(finding.analysis_turn_id)}>Open full analysis record</Button></p>
+							{#if finding.revisions.length}
+								<details class="results-finding-history">
+									<summary>Revision history · {finding.revisions.length} prior version{finding.revisions.length === 1 ? '' : 's'}</summary>
+									<ol>
+										{#each finding.revisions as revision (`${finding.id}-history-${revision.revision}`)}
+											<li>
+												<strong>Revision {revision.revision}</strong>
+												<p>{revision.claim}</p>
+												<dl>
+													<div><dt>Question</dt><dd>{revisionQuestionLabel(revision)}</dd></div>
+													<div><dt>Run</dt><dd><Button type="button" variant="ghost" size="sm" onclick={() => onopenrun(revision.analysis_turn_id)}>Open saved run · {revision.analysis_turn_id}</Button></dd></div>
+													<div><dt>Evidence</dt><dd>{#if revision.evidence_ids.length}{#each revision.evidence_ids as evidenceId (`${finding.id}-${revision.revision}-${evidenceId}`)}<Button type="button" variant="ghost" size="sm" onclick={() => onopenrun(revision.analysis_turn_id, evidenceId)} aria-label="Inspect prior evidence {evidenceId}">{evidenceId}</Button>{/each}{:else}None recorded{/if}</dd></div>
+													{#if revision.caveats.length}<div><dt>Caveats</dt><dd>{revision.caveats.join('; ')}</dd></div>{/if}
+													{#if revision.assumptions.length}<div><dt>Assumptions</dt><dd>{revision.assumptions.join('; ')}</dd></div>{/if}
+													<div><dt>Why it changed</dt><dd>{revision.revision_note || 'No reason recorded'}</dd></div>
+												</dl>
+											</li>
+										{/each}
+									</ol>
+									{#if finding.revision > 1}<p class="results-current-revision-note">Current revision note: {finding.revision_note || 'No reason recorded.'}</p>{/if}
+								</details>
+							{/if}
 						</details>
 					</article>
 				{/each}
@@ -325,6 +437,7 @@
 	.results-finding-heading { align-items: center; color: var(--text-faint); font-size: var(--fs-xs); font-weight: 650; }
 	.results-finding-heading small { font-weight: 400; }
 	.results-finding-claim { margin: 0; font-size: var(--fs-md); font-weight: 550; line-height: 1.5; overflow-wrap: anywhere; }
+	.results-finding-question-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-2); }
 	.results-finding-question, .results-empty { margin: 0; color: var(--text-dim); font-size: var(--fs-xs); overflow-wrap: anywhere; }
 	.results-supporting { min-width: 0; color: var(--text-dim); font-size: var(--fs-xs); }
 	.results-supporting > summary, .results-answer-detail > summary { width: fit-content; color: var(--brand); cursor: pointer; }
@@ -333,6 +446,32 @@
 	.results-supporting ul { margin: 0; padding-left: 1.2rem; }
 	.results-supporting > p { margin: var(--space-2) 0; overflow-wrap: anywhere; }
 	.results-supporting code { overflow-wrap: anywhere; }
+	.results-finding-context { display: grid; gap: var(--space-1); margin-top: var(--space-3); padding: var(--space-2) var(--space-3); border-left: 2px solid var(--border-strong); background: var(--bg-inset); }
+	.results-finding-context > div { display: flex; flex-wrap: wrap; gap: 0 var(--space-2); }
+	.results-finding-context > div span, .results-finding-context > p { color: var(--text-faint); }
+	.results-finding-context > div strong { color: var(--text-dim); font-weight: 600; }
+	.results-finding-context p { margin: 0; }
+	.results-finding-evidence, .results-finding-checks { margin-top: var(--space-3); }
+	.results-finding-evidence ul, .results-finding-checks ul { display: grid; gap: var(--space-1); padding: 0; list-style: none; }
+	.results-finding-evidence li { display: grid; justify-items: start; gap: 0 var(--space-2); min-width: 0; }
+	.results-finding-evidence li :global(button) { max-width: 100%; justify-content: flex-start; text-align: left; }
+	.results-finding-evidence li small { padding-left: var(--space-2); color: var(--text-faint); overflow-wrap: anywhere; }
+	.results-finding-checks li { display: grid; gap: 2px; padding-left: var(--space-2); border-left: 2px solid var(--border-strong); }
+	.results-finding-checks li[data-check-outcome='passed'] { border-color: var(--success, #15803d); }
+	.results-finding-checks li[data-check-outcome='flagged'] { border-color: var(--danger, #b42318); }
+	.results-finding-checks li strong { color: var(--text-dim); font-weight: 550; }
+	.results-finding-checks li span, .results-finding-checks > p { color: var(--text-faint); }
+	.results-finding-checks > p { margin: var(--space-2) 0 0; }
+	.results-finding-history { margin-top: var(--space-3); padding-top: var(--space-2); border-top: 1px solid var(--border); }
+	.results-finding-history > summary { width: fit-content; color: var(--brand); cursor: pointer; }
+	.results-finding-history > ol { display: grid; gap: var(--space-2); margin: var(--space-2) 0 0; padding-left: var(--space-5); }
+	.results-finding-history > ol > li { padding: var(--space-2) 0; }
+	.results-finding-history > ol > li > p { margin: var(--space-1) 0; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
+	.results-current-revision-note { margin: var(--space-2) 0 0; padding-top: var(--space-2); border-top: 1px solid var(--border); color: var(--text-faint); }
+	.results-finding-history dl { display: grid; gap: var(--space-1); margin: 0; }
+	.results-finding-history dl > div { display: grid; grid-template-columns: minmax(72px, auto) minmax(0, 1fr); gap: var(--space-2); }
+	.results-finding-history dt { color: var(--text-faint); }
+	.results-finding-history dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
 	.results-charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: var(--space-3); }
 	.results-chart { display: grid; min-width: 0; gap: var(--space-2); align-content: start; }
 	.results-chart-question { margin: 0; color: var(--text-dim); font-size: var(--fs-xs); }

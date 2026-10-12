@@ -822,10 +822,17 @@
 		detail?.focus({ preventScroll: true });
 	}
 
-	async function openRunFromResults(turnId: string): Promise<void> {
+	async function openRunFromResults(turnId: string, evidenceId?: string): Promise<void> {
 		activeView = 'brief';
 		await tick();
 		await openAnalysisRun(turnId);
+		if (!evidenceId) return;
+		await tick();
+		const body = document.getElementById(`investigation-run-evidence-${turnId}`);
+		const target = [...(body?.querySelectorAll<HTMLElement>('[data-evidence-id]') ?? [])]
+			.find((item) => item.dataset.evidenceId === evidenceId);
+		target?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+		target?.focus({ preventScroll: true });
 	}
 
 	async function reviewQuestionFromResults(questionId: string): Promise<void> {

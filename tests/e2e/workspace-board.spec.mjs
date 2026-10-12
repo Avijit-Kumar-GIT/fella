@@ -2457,6 +2457,85 @@ test('Investigation results summarize saved work, render linked charts, and keep
 	await expect(page.getByRole('region', { name: 'Saved analysis run' })).toBeVisible();
 });
 
+test('Finding Results connect partial coverage, scoped checks, provenance, and exact evidence', async ({ page }) => {
+	const evidence = {
+		id: 'finding-weekly-sales-evidence',
+		tool: 'run_sql',
+		args: { sql: 'SELECT week, SUM(net_sales) FROM sales GROUP BY week' },
+		sql: 'SELECT week, SUM(net_sales) FROM sales GROUP BY week',
+		result_summary: 'Ten weekly totals are present in sales.csv.',
+		sources: [{ source: 'sales.csv', table: 'weekly_sales' }],
+		columns: ['week', 'net_sales'],
+		rows: [['W38', 40]],
+		row_count: 10,
+		ms: 8
+	};
+	await installDesktopMock(page, {
+		questionRunOutcomes: [{
+			status: 'incomplete',
+			verification_status: 'insufficient_data',
+			reason: 'Only 10 of the requested 12 weeks are present.',
+			answer_text: 'The ten available weeks total $40.',
+			plan: { strategy: 'compiled_sql', steps: ['inspect_schema', 'run_sql'] },
+			checks: [
+				{ label: 'The complete twelve-week window is present', ok: false, outcome: 'flagged', detail: 'Only ten weeks were present.' },
+				{ label: 'The returned total matches the selected rows', ok: true, outcome: 'passed', detail: 'Ten returned rows sum to $40.' }
+			],
+			evidence: [evidence],
+			source_scope: {
+				used_sources: [{ source: 'sales.csv', table: 'weekly_sales', evidence_ids: [evidence.id] }],
+				skipped_sources: []
+			}
+		}]
+	});
+	await page.goto('/');
+	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
+	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
+	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill('Explain weekly sales for finance.');
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	await page.getByRole('button', { name: 'Analyze main Question' }).click();
+	await page.getByRole('region', { name: 'Review this run' }).getByRole('button', { name: 'Run this Question' }).click();
+	const timeline = await expectQuestionRunSettled(page);
+	await expect(timeline).toContainText('Insufficient data');
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	await expandInvestigationHistory(page);
+	await page.getByRole('button', { name: /Open saved analysis run 1: Explain weekly sales for finance\./ }).click();
+	const capture = page.getByRole('region', { name: 'Saved analysis run' }).locator('.finding-capture');
+	await capture.getByRole('textbox', { name: 'Finding claim' }).fill('The ten available weeks total $40.');
+	await capture.getByRole('textbox', { name: 'Finding caveats' }).fill('Only 10 of 12 weeks are available.');
+	await capture.getByRole('textbox', { name: 'Finding assumptions' }).fill('The available weeks use the same Monday–Sunday definition.');
+	await capture.getByRole('button', { name: 'Save Finding' }).click();
+	await page.getByRole('button', { name: 'Results' }).click();
+
+	const results = page.getByRole('region', { name: 'Current Investigation results' });
+	await expect(results).toContainText('0/1 Questions answered');
+	await expect(results.locator('.results-question')).toContainText('Partial answer');
+	await expect(results.locator('.results-question')).toContainText('Only 10 of the requested 12 weeks are present.');
+	const finding = results.getByRole('article', { name: 'Finding 1' });
+	await expect(finding).toContainText('Answers: Explain weekly sales for finance.');
+	await finding.locator('.results-supporting > summary').click();
+	await expect(finding).toContainText('Only 10 of 12 weeks are available.');
+	await expect(finding).toContainText('The available weeks use the same Monday–Sunday definition.');
+	await expect(finding.locator('[aria-label="Finding coverage and run status"]')).toContainText('Partial answer');
+	await expect(finding.locator('[aria-label="Finding coverage and run status"]')).toContainText('Only 10 of the requested 12 weeks are present.');
+	await expect(finding.locator('[aria-label="Finding coverage and run status"]')).toContainText('Insufficient data');
+	const checks = finding.locator('[aria-label="Verification checks"]');
+	await expect(checks).toContainText('Flagged · The complete twelve-week window is present');
+	await expect(checks).toContainText('Passed · The returned total matches the selected rows');
+	await expect(checks).toContainText('passing checks do not establish overall business correctness');
+	const inspectEvidence = finding.getByRole('button', { name: 'Inspect evidence: Ten weekly totals are present in sales.csv.' });
+	await expect(inspectEvidence).toBeVisible();
+	await expect(finding).toContainText('finding-weekly-sales-evidence');
+	await expect(finding).toContainText('sales.csv · weekly_sales');
+	await inspectEvidence.click();
+	await expect(page.getByRole('region', { name: 'Saved analysis run' })).toBeVisible();
+	const evidenceTarget = page.getByRole('region', { name: 'Query and output evidence' }).locator('[data-evidence-id="finding-weekly-sales-evidence"]');
+	await expect(evidenceTarget).toBeFocused();
+});
+
 test('Investigation report exports saved answers, Findings, QA, and source provenance without chat transcript', async ({ page }) => {
 	const evidence = {
 		id: 'evidence-weekly-sales-export',
@@ -2678,6 +2757,19 @@ test('Finding revisions preserve prior versions and compare the supporting run c
 	await expect(currentVersion).toContainText('returns.csv');
 	await expect(currentVersion).toContainText('Net sales include refund adjustments.');
 	await expect(currentVersion).toContainText('The refreshed export includes refund adjustments.');
+
+	await page.getByRole('button', { name: 'Results' }).click();
+	const resultsFinding = page.getByRole('region', { name: 'Current Investigation results' }).getByRole('article', { name: 'Finding 1' });
+	await resultsFinding.locator('.results-supporting > summary').click();
+	const history = resultsFinding.locator('.results-finding-history');
+	await history.locator(':scope > summary').click();
+	await expect(history).toContainText('Net sales were $120 before refunds.');
+	await expect(history).toContainText('The export is before refund adjustments.');
+	await expect(history).toContainText('Revised after reconciling the returns export.');
+	const inspectPriorEvidence = history.getByRole('button', { name: 'Inspect prior evidence finding-net-sales-before-refunds' });
+	await inspectPriorEvidence.click();
+	await expect(page.getByRole('region', { name: 'Saved analysis run' })).toBeVisible();
+	await expect(page.getByRole('region', { name: 'Query and output evidence' }).locator('[data-evidence-id="finding-net-sales-before-refunds"]')).toBeFocused();
 });
 
 test('suggested Question breakdown stays a draft until saved as durable child records', async ({ page }) => {
