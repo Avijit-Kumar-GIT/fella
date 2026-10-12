@@ -17,12 +17,14 @@
 		onnewproject,
 		onenvironmentselect,
 		onnewenvironment,
+		oncomposeenvironment,
 		oncloseenvironment
 	}: {
 		onsearch?: () => void;
 		onnewproject?: (workspace?: string | null) => void;
 		onenvironmentselect: (id: string) => void | Promise<void>;
 		onnewenvironment: () => void;
+		oncomposeenvironment: (name: string, workspaceIds: (string | null)[]) => void;
 		oncloseenvironment: (id: string) => void | Promise<void>;
 	} = $props();
 
@@ -137,25 +139,21 @@
 	});
 
 	function newChat(): void {
-		if (!session.newConversation()) {
-			session.addSystem('This environment already has four workspaces. Create or switch environments to add another.');
-		}
+		session.newConversation();
 	}
 
 	async function newWorkspaceChat(repo: Repository): Promise<void> {
 		if (!repo.path) {
-			if (!session.newConversation(null)) session.addSystem('Could not start a new conversation.');
+			if (!session.newConversation(null) && !session.unsavedNavigationOpen) session.addSystem('Could not start a new conversation.');
 			return;
 		}
 		if (!(await selectRepository(repo))) return;
-		if (!session.newConversation(repo.path)) session.addSystem('Open the workspace before starting a conversation in it.');
+		if (!session.newConversation(repo.path) && !session.unsavedNavigationOpen) session.addSystem('Open the workspace before starting a conversation in it.');
 	}
 
 	async function selectRepository(repo: Repository): Promise<boolean> {
 		if (!repo.path) {
-			const selected = session.focusWorkspace(GENERAL_WORKSPACE_ID);
-			if (!selected) session.addSystem('This environment already has four workspaces. Create or switch environments to add General.');
-			return selected;
+			return session.focusWorkspace(GENERAL_WORKSPACE_ID);
 		}
 		const workspace = session.workspaceAt(repo.path);
 		if (workspace && !workspace.historyOnly) return session.focusWorkspace(workspace.id);
@@ -178,14 +176,6 @@
 		session.setWorkspacePane('investigation');
 	}
 
-	function beginRepositoryDrag(event: DragEvent, repo: Repository): void {
-		if (!repo.path || !event.dataTransfer) return;
-		const alreadyOpen = !!session.paneForWorkspace(repo.path);
-		event.dataTransfer.effectAllowed = alreadyOpen ? 'move' : 'copy';
-		event.dataTransfer.setData('application/x-fella-workspace', repo.path);
-		if (alreadyOpen) event.dataTransfer.setData('application/x-fella-existing-workspace', repo.path);
-	}
-
 	async function addRepository(): Promise<void> {
 		await openFolder();
 	}
@@ -205,6 +195,7 @@
 		const target = workspaceDeleteTarget;
 		const path = target?.path;
 		if (!target || !path || deletingWorkspace) return;
+		if (!session.confirmUnsavedChanges(() => void deleteWorkspaceAndConversations())) return;
 		deletingWorkspace = true;
 		workspaceDeleteError = '';
 		const deletedIds: string[] = [];
@@ -305,6 +296,7 @@
 	<EnvironmentSwitcher
 		onselect={onenvironmentselect}
 		onnew={onnewenvironment}
+		oncompose={oncomposeenvironment}
 		onclose={oncloseenvironment}
 	/>
 	<nav class="nav-section" aria-label="Conversation">
@@ -324,20 +316,6 @@
 	<section class="repository-section" aria-labelledby="repositories-heading">
 		<div class="section-head">
 			<div class="nav-heading" id="repositories-heading">Workspaces</div>
-			{#if session.activeEnvironmentPanes.length > 1}
-				<Button
-					variant="ghost"
-					size="icon"
-					class="section-action"
-					type="button"
-					aria-label="Open workspace board"
-					aria-pressed={session.workspaceView === 'board'}
-					title="Open workspace board"
-					onclick={() => session.setWorkspaceView('board')}
-				>
-					<Icon name="layout-grid" size={16} />
-				</Button>
-			{/if}
 			<Button
 				variant="ghost"
 				size="icon"
@@ -373,11 +351,9 @@
 						<Button
 							variant="ghost"
 							class="repository-row"
-							draggable={!!repo.path}
 							title={repo.path ?? 'General · conversations without a mounted folder'}
 							aria-pressed={repo.current}
 							aria-label={repo.path ? `Open workspace ${repo.name}` : 'General'}
-							ondragstart={(event) => beginRepositoryDrag(event, repo)}
 							onclick={() => toggleRepository(repo)}
 						>
 							<span class="row-slot row-icon"><Icon name={repo.path ? 'repository' : 'ask'} size={16} /></span>

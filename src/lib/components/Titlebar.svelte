@@ -10,11 +10,13 @@
 		onpalette,
 		onenvironmentselect,
 		onnewenvironment,
+		oncomposeenvironment,
 		oncloseenvironment
 	}: {
 		onpalette: () => void;
 		onenvironmentselect: (id: string) => void | Promise<void>;
 		onnewenvironment: () => void;
+		oncomposeenvironment: (name: string, workspaceIds: (string | null)[]) => void;
 		oncloseenvironment: (id: string) => void | Promise<void>;
 	} = $props();
 
@@ -26,13 +28,12 @@
 	});
 
 	let displayTitle = $derived.by(() => {
-		if (session.workspaceView === 'board') return folder || 'Workspaces';
-		if (session.workspaceView === 'workspace') {
-			return `${folder || 'Workspace'} · ${session.workspacePane === 'investigation' ? 'Investigation' : 'Data & context'}`;
+		if (session.workspaceView === 'board') {
+			return session.activeEnvironment ? session.environmentLabel(session.activeEnvironment) : 'Workspace overview';
 		}
 		if (session.workspaceView === 'project') return session.activeProject?.name ?? 'Project';
 		if (session.workspaceView === 'settings') return 'Fella';
-		return folder || 'Focus';
+		return folder ? 'Fella' : 'Focus';
 	});
 
 
@@ -77,6 +78,7 @@
 				compact
 				onselect={onenvironmentselect}
 				onnew={onnewenvironment}
+				oncompose={oncomposeenvironment}
 				onclose={oncloseenvironment}
 			/>
 		{/if}

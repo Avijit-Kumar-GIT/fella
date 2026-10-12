@@ -17,7 +17,7 @@
 		<Tabs.List class="fella-ui-tabs-list workspace-tabs" aria-label="Workspace sections">
 			<Tabs.Trigger value="investigation" class="fella-ui-tabs-trigger workspace-tab">
 				<Icon name="bookmark" size={16} />
-				<span>Investigation</span>
+				<span>Overview</span>
 			</Tabs.Trigger>
 			<Tabs.Trigger value="context" class="fella-ui-tabs-trigger workspace-tab">
 				<Icon name="table" size={16} />

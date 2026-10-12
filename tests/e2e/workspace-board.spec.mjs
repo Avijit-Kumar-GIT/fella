@@ -47,6 +47,42 @@ const sampleCatalog = {
 const workspacePresetButton = (page, name) =>
 	page.locator('.workspace-preset-control').getByRole('button', { name: new RegExp(`^${name}:`) });
 
+async function addSalesWorkspace(page) {
+	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
+	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
+}
+
+async function composeEnvironment(page, name, workspaceNames) {
+	const switcher = page.locator('.sidebar .environment-switcher-trigger');
+	await switcher.click();
+	await page.getByRole('menuitem', { name: /Combine workspaces/ }).click();
+	const dialog = page.getByRole('dialog', { name: 'Combine workspaces' });
+	await dialog.getByRole('textbox', { name: 'Environment name' }).fill(name);
+	const desired = new Set(workspaceNames.map((workspace) => `Include ${workspace}`));
+	const checkboxes = dialog.getByRole('checkbox');
+	for (let index = 0; index < await checkboxes.count(); index += 1) {
+		const checkbox = checkboxes.nth(index);
+		const label = await checkbox.getAttribute('aria-label');
+		if (!desired.has(label) && (await checkbox.isChecked())) await checkbox.uncheck();
+	}
+	for (let index = 0; index < await checkboxes.count(); index += 1) {
+		const checkbox = checkboxes.nth(index);
+		if (desired.has(await checkbox.getAttribute('aria-label')) && !(await checkbox.isChecked())) await checkbox.check();
+	}
+	await expect(dialog.locator('input[type="checkbox"]:checked')).toHaveCount(workspaceNames.length);
+	await dialog.getByRole('button', { name: 'Create environment' }).click();
+	await expect(dialog).toHaveCount(0);
+	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
+	return { switcher, board: page.getByRole('region', { name: 'Workspace board' }) };
+}
+
+async function openWorkspaceOverview(page) {
+	const switcher = page.locator('.sidebar .environment-switcher-trigger');
+	await switcher.click();
+	await page.getByRole('menuitem', { name: 'Open workspace overview' }).click();
+	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
+}
+
 async function expandInvestigationHistory(page) {
 	const history = page.locator('.investigation-history');
 	if (!(await history.evaluate((element) => element.open))) {
@@ -771,13 +807,16 @@ async function installDesktopMock(
 }
 
 async function dispatchWorkspaceDrag(page, type, workspacePath, { x = 0.5, y = 0.5, existing = false } = {}) {
-	await page.evaluate(({ eventType, path, targetX, targetY, alreadyOpen }) => {
+	await page.evaluate(({ eventType, path, targetX, targetY }) => {
 		const board = document.querySelector('[aria-label="Workspace board"]');
 		if (!board) throw new Error('The workspace board is not open');
+		const saved = JSON.parse(localStorage.getItem('fella:environments') || '{}');
+		const environment = saved.environments?.find((item) => item.id === saved.active);
+		const pane = environment?.panes.find((item) => item.workspaceId === path);
+		if (!pane) throw new Error(`No pane in the active environment for ${path}`);
 		const rect = board.getBoundingClientRect();
 		const dataTransfer = new DataTransfer();
-		dataTransfer.setData('application/x-fella-workspace', path);
-		if (alreadyOpen) dataTransfer.setData('application/x-fella-existing-workspace', path);
+		dataTransfer.setData('application/x-fella-environment-pane', pane.id);
 		board.dispatchEvent(new DragEvent(eventType, {
 			bubbles: true,
 			cancelable: true,
@@ -785,7 +824,7 @@ async function dispatchWorkspaceDrag(page, type, workspacePath, { x = 0.5, y = 0
 			clientY: rect.top + rect.height * targetY,
 			dataTransfer
 		}));
-	}, { eventType: type, path: workspacePath, targetX: x, targetY: y, alreadyOpen: existing });
+	}, { eventType: type, path: workspacePath, targetX: x, targetY: y });
 }
 
 function expectSameRenderedBox(actual, expected) {
@@ -839,20 +878,35 @@ test('a question entered before folder selection remains targeted to the chosen 
 	expect(ask.investigationId).toBeTruthy();
 });
 
-test('workspace board labels its message target and keeps in-flight work in its original Workspace', async ({ page }) => {
+test('workspace overview opens only from the environment dropdown and preserves workspace scope', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
-	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
-
+	await addSalesWorkspace(page);
+	await expect(page.getByRole('region', { name: 'Workspace board' })).toHaveCount(0);
+	await composeEnvironment(page, 'Sales review', ['General', 'northwind-sales']);
 	const board = page.getByRole('region', { name: 'Workspace board' });
-	await expect(board.getByRole('heading', { name: 'Open workspaces' })).toBeVisible();
-	await expect(board).toContainText('Select a pane to set the message target.');
-	await expect(board).toContainText('Workspaces stay separate.');
+	await expect(board.getByRole('heading', { name: 'Workspace overview' })).toBeVisible();
+	await expect(board).toContainText('Choose a workspace to open it.');
+	await expect(page.locator('.sidebar .environment-switcher-trigger')).toContainText('2');
+	await expect(page.getByRole('article')).toHaveCount(2);
+
+	// Opening another folder from the sidebar switches to its own environment;
+	// it must not silently add that folder to the named environment above.
+	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
+	await expect(page.getByRole('combobox', { name: 'Ask about health-journal' })).toBeVisible();
+	const switcher = page.locator('.sidebar .environment-switcher-trigger');
+	await switcher.click();
+	const salesReviewOption = page.getByRole('menuitemradio').filter({ hasText: 'Sales review' });
+	await expect(salesReviewOption).toContainText('2 workspaces');
+	await salesReviewOption.click();
+	await expect(board).toBeVisible();
+	await expect(page.getByRole('article')).toHaveCount(2);
+	await expect(page.getByRole('article', { name: 'health-journal workspace' })).toHaveCount(0);
+
 	const salesTile = page.getByRole('article', { name: 'northwind-sales workspace' });
 	const generalTile = page.getByRole('article', { name: 'General workspace' });
 	await salesTile.locator('.tile-focus').click();
-	await expect(salesTile.locator('.pane-state')).toHaveText('Active');
-	await expect(salesTile.locator('.tile-investigation-summary')).toContainText('Investigation');
+	await expect(page.getByRole('region', { name: 'Focus' })).toBeVisible();
 	const salesComposer = page.getByRole('combobox', { name: 'Ask about northwind-sales' });
 	await expect(salesComposer).toBeVisible();
 	await expect(page.getByTestId('composer-scope-target')).toHaveText('Message target northwind-sales');
@@ -860,27 +914,23 @@ test('workspace board labels its message target and keeps in-flight work in its 
 	await page.evaluate(() => { window.__workspaceAskDelayMs = 1500; });
 	await salesComposer.fill('Summarize sales trends');
 	await page.getByRole('button', { name: 'Send' }).click();
+	await openWorkspaceOverview(page);
 	await expect(salesTile.locator('.tile-investigation-summary')).toContainText(
 		'Analysis in progress · remains in this Workspace'
 	);
 
-	await generalTile.locator('.tile-preview').click();
-	await expect(generalTile.locator('.pane-state')).toHaveText('Active');
-	await expect(salesTile.locator('.pane-state')).toHaveText('Inactive');
-	await expect(salesTile.locator('.tile-preview')).toContainText('Inactive preview · select to open');
-	await expect(salesTile.locator('.tile-investigation-summary')).toContainText(
-		'Analysis in progress · remains in this Workspace'
-	);
+	await generalTile.locator('.tile-focus').click();
+	await expect(page.getByRole('region', { name: 'Focus' })).toBeVisible();
 	await expect(page.getByRole('combobox', { name: 'Ask a question' })).toBeVisible();
 	await expect(page.getByTestId('composer-scope-target')).toHaveText('Message target General (unbound)');
 	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toHaveCount(0);
 	await expect(page.getByRole('log', { name: 'conversation' }).getByText('Scoped to C:\\FellaFixture\\northwind-sales.', { exact: true })).toHaveCount(0);
 
-	await expect(salesTile.locator('.tile-preview')).toContainText('Scoped to C:\\FellaFixture\\northwind-sales.');
 	const call = await page.evaluate(() => window.__workspaceAskCalls.at(-1));
 	expect(call.workspaceId).toBe(folders[0].path);
-	await salesTile.locator('.tile-preview').click();
-	await expect(salesTile.locator('.pane-state')).toHaveText('Active');
+	await openWorkspaceOverview(page);
+	await expect(salesTile.locator('.tile-preview')).toContainText('Scoped to C:\\FellaFixture\\northwind-sales.');
+	await salesTile.locator('.tile-focus').click();
 	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
 	await expect(page.getByTestId('composer-scope-target')).toHaveText('Message target northwind-sales');
 	await expect(page.getByRole('log', { name: 'conversation' }).getByText('Scoped to C:\\FellaFixture\\northwind-sales.', { exact: true })).toBeVisible();
@@ -910,8 +960,7 @@ test('long Investigation content remains reachable by keyboard and pointer scrol
 	await installDesktopMock(page, { fixtureFolders });
 	await page.setViewportSize({ width: 1120, height: 760 });
 	await page.goto('/');
-	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
-	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await addSalesWorkspace(page);
 	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill('Explain regional retention and conversion');
 	await page.getByRole('button', { name: 'Send' }).click();
 	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
@@ -1048,47 +1097,22 @@ test('environments compose General and repository panes while conversations reta
 	await expect(switcher).toContainText('General');
 
 	const workspaceNavigation = page.getByRole('region', { name: 'Workspaces' });
-	await workspaceNavigation.getByRole('button', { name: 'Add repository' }).click();
-	await expect(switcher).toContainText('General +1');
-	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
-	await expect(page.getByRole('article', { name: 'northwind-sales workspace' })).toBeVisible();
-	await expect(page.getByRole('article', { name: 'General workspace' })).toBeVisible();
-	await expect(page.getByRole('article')).toHaveCount(2);
+	await addSalesWorkspace(page);
+	await expect(switcher).toContainText('northwind-sales');
+	await composeEnvironment(page, 'Sales review', ['General', 'northwind-sales']);
 	const salesTile = page.getByRole('article', { name: 'northwind-sales workspace' });
-	const generalWorkspaceTile = page.getByRole('article', { name: 'General workspace' });
-	const salesFocus = salesTile.locator('.tile-focus');
-	const salesClose = salesTile.getByRole('button', { name: 'Close northwind-sales workspace' });
-	const generalPreview = generalWorkspaceTile.locator('.tile-preview');
-	await expect(salesTile).toHaveCSS('border-top-width', '2px');
-	await expect(generalWorkspaceTile).toHaveCSS('border-top-width', '1px');
-	await expect(generalPreview.locator('.preview-answer')).toContainText('Scoped to general.');
-	await expect(salesFocus).toHaveAttribute('data-slot', 'button');
-	await expect(salesClose).toHaveAttribute('data-slot', 'button');
-	await expect(salesClose).toHaveCSS('width', '26px');
-	await expect(salesClose).toHaveCSS('height', '26px');
-	await expect(generalPreview).toHaveAttribute('data-slot', 'button');
-	await generalPreview.click();
-	await expect(generalWorkspaceTile.locator('.tile-focus')).toHaveAttribute('aria-pressed', 'true');
-	await expect(generalWorkspaceTile).toHaveCSS('border-top-width', '2px');
-	await expect(salesTile).toHaveCSS('border-top-width', '1px');
-	await expect(salesTile.locator('.tile-preview')).toBeVisible();
-	await expect(page.getByRole('combobox', { name: 'Ask a question' })).toBeVisible();
-	await expect(page.locator('.workspace-context-bar')).toHaveCount(0);
-	await salesFocus.click();
-	await expect(salesFocus).toHaveAttribute('aria-pressed', 'true');
+	await expect(page.getByRole('article')).toHaveCount(2);
+	await expect(switcher).toContainText('2');
+	await salesTile.locator('.tile-focus').click();
 	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
 	await expect(page.locator('.workspace-context-bar')).toContainText('northwind-sales');
-	const salesWorkspaceRow = page.getByRole('button', { name: 'Open workspace northwind-sales' });
 	await expect(page.getByRole('button', { name: 'Open investigation brief in northwind-sales' })).toBeVisible();
-	await expect(page.getByRole('button', { name: 'Create project for northwind-sales' })).toBeVisible();
 	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
-	await expect(page.getByTestId('investigation-data-readiness').getByRole('button', { name: /sales\.csv/ })).toBeVisible();
-	await salesWorkspaceRow.click();
-	await salesWorkspaceRow.hover();
+	await expect(page.getByTestId('investigation-data-readiness').getByRole('button', { name: /sales\\.csv/ })).toBeVisible();
+	await page.getByRole('button', { name: 'Open workspace northwind-sales' }).hover();
 	await page.getByRole('button', { name: 'New conversation in northwind-sales' }).click();
-	await expect(switcher).toContainText('General +1');
+	await expect(switcher).toContainText('2');
 	const salesComposer = page.getByRole('combobox', { name: 'Ask about northwind-sales' });
-	await expect(salesComposer).toBeVisible();
 	await salesComposer.fill('Summarize sales trends');
 	await page.getByRole('button', { name: 'Send' }).click();
 	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
@@ -1102,25 +1126,18 @@ test('environments compose General and repository panes while conversations reta
 	expect(automaticInvestigation.calls[0].workspaceId).toBe(folders[0].path);
 	expect(automaticInvestigation.calls[0].conversationId).toBe(salesCall.conversationId);
 	expect(automaticInvestigation.calls[0].initialRequest).toBe('Summarize sales trends');
-	expect(automaticInvestigation.records).toHaveLength(1);
-	expect(automaticInvestigation.records[0].conversation_id).toBe(salesCall.conversationId);
 	expect(automaticInvestigation.records[0].brief.goal).toBe('Summarize sales trends');
 
-	// Starting a new conversation intentionally returns this pane to Focus.
-	// Switch the target from the sidebar rather than assuming the multi-pane
-	// board remains visible over the conversation composer.
 	await workspaceNavigation.getByRole('button', { name: 'General', exact: true }).click();
+	await expect(page.getByRole('combobox', { name: 'Ask a question' })).toBeVisible();
 	await page.getByRole('combobox', { name: 'Ask a question' }).fill('How should I compare two trend lines?');
 	await page.getByRole('button', { name: 'Send' }).click();
-	await expect(
-		page.getByRole('log', { name: 'conversation' }).locator('.msg.assistant').last().getByText('Scoped to general.', { exact: true })
-	).toBeVisible();
+	await expect(page.getByRole('log', { name: 'conversation' }).locator('.msg.assistant').last().getByText('Scoped to general.', { exact: true })).toBeVisible();
 	expect((await page.evaluate(() => window.__workspaceAskCalls.at(-1))).workspaceId).toBeNull();
 	expect(await page.evaluate(() => window.__workspaceInvestigationEnsureCalls.length)).toBe(1);
-	await expect(switcher).toContainText('General +1');
+	await expect(switcher).toContainText('2');
 
-	await salesWorkspaceRow.click();
-
+	await workspaceNavigation.getByRole('button', { name: 'Open workspace northwind-sales' }).click();
 	await page.getByRole('button', { name: 'Create project for northwind-sales' }).click();
 	await expect(page.getByRole('heading', { name: 'Create a project' })).toBeVisible();
 	await expect(page.getByLabel('Repository', { exact: true })).toHaveValue(folders[0].path);
@@ -1128,65 +1145,44 @@ test('environments compose General and repository panes while conversations reta
 	await page.getByRole('button', { name: 'Create project', exact: true }).click();
 	await expect(page.getByRole('button', { name: 'Open project Sales review' })).toBeVisible();
 
-	await salesWorkspaceRow.click();
-	await workspaceNavigation.getByRole('button', { name: 'Open workspace board' }).click();
-	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
+	await workspaceNavigation.getByRole('button', { name: 'Add repository' }).click();
+	await expect(page.getByRole('combobox', { name: 'Ask about health-journal' })).toBeVisible();
+	await workspaceNavigation.getByRole('button', { name: 'Add repository' }).click();
+	await expect(page.getByRole('combobox', { name: 'Ask about weekly-budget' })).toBeVisible();
+	await workspaceNavigation.getByRole('button', { name: 'Add repository' }).click();
+	await expect(page.getByRole('combobox', { name: 'Ask about travel-plans' })).toBeVisible();
+	await composeEnvironment(page, 'Quarterly review', ['General', 'northwind-sales', 'health-journal', 'weekly-budget']);
+	const fourWorkspaceTiles = page.getByRole('article');
+	await expect(fourWorkspaceTiles).toHaveCount(4);
+	const fourBoxes = await Promise.all([
+		page.getByRole('article', { name: 'General workspace' }),
+		page.getByRole('article', { name: 'northwind-sales workspace' }),
+		page.getByRole('article', { name: 'health-journal workspace' }),
+		page.getByRole('article', { name: 'weekly-budget workspace' })
+	].map((tile) => tile.boundingBox()));
+	expect(fourBoxes.every(Boolean)).toBe(true);
+	expect(new Set(fourBoxes.map((box) => Math.round(box.x))).size).toBe(2);
+	expect(new Set(fourBoxes.map((box) => Math.round(box.y))).size).toBe(2);
+	expect(new Set(fourBoxes.map((box) => `${Math.round(box.x)},${Math.round(box.y)}`)).size).toBe(4);
 
-	await dispatchWorkspaceDrag(page, 'dragover', folders[1].path, { x: 0.9, y: 0.5 });
-	await expect(page.locator('.placement-preview .preview-slot')).toHaveCount(3);
-	const healthTarget = page.locator('.placement-preview .preview-slot.target');
-	await expect(healthTarget).toHaveText('Drop to place');
-	const healthTargetBox = await healthTarget.boundingBox();
-	await dispatchWorkspaceDrag(page, 'drop', folders[1].path, { x: 0.9, y: 0.5 });
-	const sales = page.getByRole('article', { name: 'northwind-sales workspace' });
-	const health = page.getByRole('article', { name: 'health-journal workspace' });
-	await expect(sales).toBeVisible();
-	await expect(health).toBeVisible();
-	await expect(page.getByRole('button', { name: 'Open investigation brief in health-journal' })).toBeVisible();
-	await expect(page.getByRole('article')).toHaveCount(3);
-	await expect(page.getByRole('combobox', { name: 'Workspace arrangement' })).toHaveCount(0);
-	const healthBox = await health.boundingBox();
-	expectSameRenderedBox(healthBox, healthTargetBox);
-
-	await dispatchWorkspaceDrag(page, 'dragover', folders[2].path, { x: 0.1, y: 0.5 });
-	await expect(page.locator('.placement-preview .preview-slot')).toHaveCount(4);
-	const budgetTargetBox = await page.locator('.placement-preview .preview-slot.target').boundingBox();
-	await dispatchWorkspaceDrag(page, 'drop', folders[2].path, { x: 0.1, y: 0.5 });
-	const budget = page.getByRole('article', { name: 'weekly-budget workspace' });
-	await expect(budget).toBeVisible();
-	await expect(page.getByRole('article')).toHaveCount(4);
-	const budgetBox = await budget.boundingBox();
-	expectSameRenderedBox(budgetBox, budgetTargetBox);
-	const otherBoxes = await Promise.all([sales, health, page.getByRole('article', { name: 'General workspace' })].map((tile) => tile.boundingBox()));
-	const allFourBoxes = [budgetBox, ...otherBoxes];
-	expect(allFourBoxes.every(Boolean)).toBe(true);
-	// Four panes should occupy each cell of a balanced 2×2, regardless of
-	// which workspace identity occupies each cell after prior drag/reordering.
-	expect(new Set(allFourBoxes.map((box) => Math.round(box.x))).size).toBe(2);
-	expect(new Set(allFourBoxes.map((box) => Math.round(box.y))).size).toBe(2);
-	expect(new Set(allFourBoxes.map((box) => `${Math.round(box.x)},${Math.round(box.y)}`)).size).toBe(4);
-
-	await dispatchWorkspaceDrag(page, 'dragover', folders[0].path, { x: 0.1, y: 0.1, existing: true });
+	const salesInFour = page.getByRole('article', { name: 'northwind-sales workspace' });
+	await dispatchWorkspaceDrag(page, 'dragover', folders[0].path, { x: 0.1, y: 0.1 });
 	await expect(page.locator('.placement-preview .preview-slot')).toHaveCount(4);
 	const salesTargetBox = await page.locator('.placement-preview .preview-slot.target').boundingBox();
-	await dispatchWorkspaceDrag(page, 'drop', folders[0].path, { x: 0.1, y: 0.1, existing: true });
-	const movedSalesBox = await sales.boundingBox();
+	await dispatchWorkspaceDrag(page, 'drop', folders[0].path, { x: 0.1, y: 0.1 });
+	await openWorkspaceOverview(page);
+	const movedSalesBox = await salesInFour.boundingBox();
 	expectSameRenderedBox(movedSalesBox, salesTargetBox);
 });
 
-test('Workspace board can be reopened from Focus and restores after reload', async ({ page }) => {
+test('Workspace overview can be reopened from Focus and restores after reload', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
-	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
-	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
-
+	await addSalesWorkspace(page);
+	await composeEnvironment(page, 'Sales review', ['General', 'northwind-sales']);
 	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
-	await workspacePresetButton(page, 'Focus').click();
 	await expect(page.getByRole('region', { name: 'Focus' })).toBeVisible();
-
-	const openBoard = page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Open workspace board' });
-	await expect(openBoard).toBeVisible();
-	await openBoard.click();
+	await openWorkspaceOverview(page);
 	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
 
 	await page.reload();
@@ -1197,9 +1193,7 @@ test('an Investigation opens its canonical workspace conversation', async ({ pag
 	await installDesktopMock(page);
 	await page.goto('/');
 	await expect(page.getByRole('button', { name: /Switch environment/ })).toBeVisible();
-	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
-	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
-	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await addSalesWorkspace(page);
 	const composer = page.getByRole('combobox', { name: 'Ask about northwind-sales' });
 	await composer.fill('Summarize cohort retention');
 	await page.getByRole('button', { name: 'Send' }).click();
@@ -1231,7 +1225,7 @@ test('Investigation work plan keeps the brief concise and opens editing and hist
 	await installDesktopMock(page);
 	await page.goto('/');
 	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
-	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
 	const originalRequest = 'Explain weekly sales for the finance team';
 	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill(originalRequest);
 	await page.getByRole('button', { name: 'Send' }).click();
@@ -1274,7 +1268,7 @@ test('a saved answer opens its canonical run and returns to the same conversatio
 	});
 	await page.goto('/');
 	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
-	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
 	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill('Explain weekly sales');
 	await page.getByRole('button', { name: 'Send' }).click();
 	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
@@ -1298,7 +1292,7 @@ test('Investigation index summarizes work and resumes the same completed record'
 	await installDesktopMock(page);
 	await page.goto('/');
 	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
-	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
 	const composer = page.getByRole('combobox', { name: 'Ask about northwind-sales' });
 	await composer.fill('First return-to-work question');
 	await page.getByRole('button', { name: 'Send' }).click();
@@ -1347,7 +1341,7 @@ test('workspace layout presets preserve the same Investigation, source scope, Qu
 	});
 	await page.goto('/');
 	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
-	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
 	const originalRequest = 'Explain weekly sales in northwind-sales';
 	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill(originalRequest);
 	await page.getByRole('button', { name: 'Send' }).click();
@@ -1458,7 +1452,7 @@ test('Workbench composes curated panels while keeping Investigation scope and co
 	await installDesktopMock(page);
 	await page.goto('/');
 	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
-	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
 	const request = 'Review weekly sales performance';
 	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill(request);
 	await page.getByRole('button', { name: 'Send' }).click();
@@ -1534,7 +1528,7 @@ test('Workbench panes resize accessibly, respect minimum widths, persist, and re
 	await installDesktopMock(page);
 	await page.goto('/');
 	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
-	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
 	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill('Review weekly sales performance');
 	await page.getByRole('button', { name: 'Send' }).click();
 	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
@@ -1598,9 +1592,7 @@ test('Workbench panes resize accessibly, respect minimum widths, persist, and re
 test('an analyst can edit the main Question and linked subquestions without rewriting the request', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
-	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
-	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
-	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await addSalesWorkspace(page);
 	const composer = page.getByRole('combobox', { name: 'Ask about northwind-sales' });
 	await composer.fill('Understand conversion by channel');
 	await page.getByRole('button', { name: 'Send' }).click();
@@ -1681,9 +1673,7 @@ test('a Question can narrow its source set and launches a run linked to that Que
 		: folder);
 	await installDesktopMock(page, { fixtureFolders });
 	await page.goto('/');
-	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
-	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
-	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await addSalesWorkspace(page);
 	const composer = page.getByRole('combobox', { name: 'Ask about northwind-sales' });
 	await composer.fill('Explain changes in sales and refunds');
 	await page.getByRole('button', { name: 'Send' }).click();
@@ -1766,9 +1756,7 @@ test('Questions show persisted coverage states and explain incomplete, blocked, 
 		]
 	});
 	await page.goto('/');
-	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
-	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
-	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await addSalesWorkspace(page);
 	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill('Explain the change in weekly sales');
 	await page.getByRole('button', { name: 'Send' }).click();
 	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
@@ -1844,9 +1832,7 @@ test('completion follows Question coverage and keeps documented gaps visible', a
 		]
 	});
 	await page.goto('/');
-	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
-	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
-	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await addSalesWorkspace(page);
 	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill('Explain weekly sales and refunds');
 	await page.getByRole('button', { name: 'Send' }).click();
 	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
@@ -1971,9 +1957,7 @@ test('verification outcomes stay beside their outputs and explain check limits',
 		}]
 	});
 	await page.goto('/');
-	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
-	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
-	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await addSalesWorkspace(page);
 	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill('Explain weekly sales');
 	await page.getByRole('button', { name: 'Send' }).click();
 	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
@@ -2039,9 +2023,7 @@ test('each Question opens its saved answer with explicit partial or complete cov
 		]
 	});
 	await page.goto('/');
-	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
-	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
-	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await addSalesWorkspace(page);
 	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill('Explain weekly signup and refund patterns');
 	await page.getByRole('button', { name: 'Send' }).click();
 	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
@@ -2165,9 +2147,7 @@ test('a multi-question Investigation carries coverage, QA, and run links into it
 	});
 
 	await page.goto('/');
-	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
-	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
-	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await addSalesWorkspace(page);
 	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill(rootQuestion);
 	await page.getByRole('button', { name: 'Send' }).click();
 	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
@@ -2273,9 +2253,7 @@ test('a multi-question Investigation carries coverage, QA, and run links into it
 test('saved analysis runs open from an Investigation and link to every Question they address', async ({ page }) => {
 	await installDesktopMock(page, { questionRunOutcomes: [{ status: 'answered', delay_ms: 250 }] });
 	await page.goto('/');
-	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
-	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
-	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await addSalesWorkspace(page);
 	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill('Explain how refund rates changed');
 	await page.getByRole('button', { name: 'Send' }).click();
 	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
@@ -2326,9 +2304,7 @@ test('an analyst can review a run assumption, correct it in Investigation contex
 		]
 	});
 	await page.goto('/');
-	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
-	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
-	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await addSalesWorkspace(page);
 	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill('Explain weekly account retention');
 	await page.getByRole('button', { name: 'Send' }).click();
 	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
@@ -2371,9 +2347,7 @@ test('an analyst can review a run assumption, correct it in Investigation contex
 test('saved Investigation definitions are revisioned, attached to later asks, and removable', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
-	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
-	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
-	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await addSalesWorkspace(page);
 	const composer = page.getByRole('combobox', { name: 'Ask about northwind-sales' });
 	await composer.fill('Explain the change in weekly sales');
 	await page.getByRole('button', { name: 'Send' }).click();
@@ -2461,9 +2435,7 @@ test('saved run review exposes its method, query output, definitions, and actual
 		}]
 	});
 	await page.goto('/');
-	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
-	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
-	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await addSalesWorkspace(page);
 	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill('Compare monthly retention by signup cohort');
 	await page.getByRole('button', { name: 'Send' }).click();
 	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
@@ -2582,9 +2554,7 @@ test('repeated Question runs stay chronological and preserve each attempt contex
 		]
 	});
 	await page.goto('/');
-	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
-	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
-	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await addSalesWorkspace(page);
 	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill('Explain weekly sales');
 	await page.getByRole('button', { name: 'Send' }).click();
 	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
@@ -2660,9 +2630,7 @@ test('Finding caveats and assumptions are visible, editable, and preserve proven
 		}]
 	});
 	await page.goto('/');
-	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
-	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
-	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await addSalesWorkspace(page);
 	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill('Explain retention by signup cohort.');
 	await page.getByRole('button', { name: 'Send' }).click();
 	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
@@ -2773,9 +2741,7 @@ test('Investigation results summarize saved work, render linked charts, and keep
 		}]
 	});
 	await page.goto('/');
-	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
-	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
-	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await addSalesWorkspace(page);
 	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill('Explain the monthly net sales trend.');
 	await page.getByRole('button', { name: 'Send' }).click();
 	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
@@ -2917,9 +2883,7 @@ test('Finding and chart lineage flag artifacts from an earlier Question run', as
 		]
 	});
 	await page.goto('/');
-	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
-	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
-	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await addSalesWorkspace(page);
 	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill('Explain the monthly net sales trend.');
 	await page.getByRole('button', { name: 'Send' }).click();
 	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
@@ -2993,7 +2957,7 @@ test('Investigation Results keep transcript-only historical work outside current
 	});
 	await page.goto('/');
 	await page.getByRole('button', { name: 'Add repository' }).click();
-	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
 	const composer = page.getByRole('combobox', { name: 'Ask about northwind-sales' });
 	await composer.fill('What do the weekly sales files show?');
 	await page.getByRole('button', { name: 'Send' }).click();
@@ -3081,9 +3045,7 @@ test('Finding Results connect partial coverage, scoped checks, provenance, and e
 		}]
 	});
 	await page.goto('/');
-	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
-	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
-	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await addSalesWorkspace(page);
 	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill('Explain weekly sales for finance.');
 	await page.getByRole('button', { name: 'Send' }).click();
 	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
@@ -3185,9 +3147,7 @@ test('Investigation report exports saved answers, Findings, QA, and source prove
 		}]
 	});
 	await page.goto('/');
-	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
-	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
-	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await addSalesWorkspace(page);
 	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill('Explain weekly sales for finance');
 	await page.getByRole('button', { name: 'Send' }).click();
 	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
@@ -3327,9 +3287,7 @@ test('Finding revisions preserve prior versions and compare the supporting run c
 		]
 	});
 	await page.goto('/');
-	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
-	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
-	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await addSalesWorkspace(page);
 	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill('Explain weekly net sales.');
 	await page.getByRole('button', { name: 'Send' }).click();
 	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
@@ -3435,9 +3393,7 @@ test('Finding revisions preserve prior versions and compare the supporting run c
 test('suggested Question breakdown stays a draft until saved as durable child records', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
-	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
-	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
-	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await addSalesWorkspace(page);
 	const composer = page.getByRole('combobox', { name: 'Ask about northwind-sales' });
 	await composer.fill('Understand conversion by channel');
 	await page.getByRole('button', { name: 'Send' }).click();
@@ -3546,9 +3502,7 @@ test('Investigation shows source readiness and opens source details in place', a
 	}];
 	await installDesktopMock(page, { fixtureFolders });
 	await page.goto('/');
-	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
-	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
-	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await addSalesWorkspace(page);
 	const composer = page.getByRole('combobox', { name: 'Ask about northwind-sales' });
 	await composer.fill('Compare sales and regional notes');
 	await page.getByRole('button', { name: 'Send' }).click();
@@ -3608,59 +3562,45 @@ test('Investigation shows source readiness and opens source details in place', a
 	await expect(page.getByRole('heading', { name: 'Investigation', exact: true })).toBeVisible();
 });
 
-test('the four-pane limit is scoped to one environment and closing a pane frees its slot', async ({ page }) => {
+test('the environment composer caps named environments at four workspaces', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
 	const workspaceNavigation = page.getByRole('region', { name: 'Workspaces' });
-	await workspaceNavigation.getByRole('button', { name: 'Add repository' }).click();
-	await expect(page.getByRole('article')).toHaveCount(2); // General and northwind-sales
-	for (let index = 1; index < 3; index += 1) {
-		await dispatchWorkspaceDrag(page, 'drop', folders[index].path);
-		await expect(page.getByRole('article')).toHaveCount(index + 2);
+	for (const workspace of ['northwind-sales', 'health-journal', 'weekly-budget', 'travel-plans', 'reading-notes']) {
+		await workspaceNavigation.getByRole('button', { name: 'Add repository' }).click();
+		await expect(page.getByRole('combobox', { name: `Ask about ${workspace}` })).toBeVisible();
 	}
-	await expect(page.getByRole('article')).toHaveCount(4); // General plus three repositories
-	const fourth = folders[3];
-	const fifth = folders[4];
+	const { switcher, board } = await composeEnvironment(page, 'Quarterly review', [
+		'General', 'northwind-sales', 'health-journal', 'weekly-budget'
+	]);
+	await expect(board.getByRole('article')).toHaveCount(4);
+	await expect(board.getByRole('article', { name: 'travel-plans workspace' })).toHaveCount(0);
+	await expect(board.getByRole('article', { name: 'reading-notes workspace' })).toHaveCount(0);
+	await switcher.click();
+	await page.getByRole('menuitem', { name: /Combine workspaces/ }).click();
+	const composer = page.getByRole('dialog', { name: 'Combine workspaces' });
+	await expect(composer.getByRole('checkbox', { name: 'Include reading-notes' })).toBeDisabled();
+	await composer.getByRole('button', { name: 'Cancel' }).click();
+	await expect(composer).toHaveCount(0);
 
-	await dispatchWorkspaceDrag(page, 'dragover', fourth.path);
-	await expect(page.locator('.placement-preview .full-notice')).toContainText('Close a workspace');
-	const beforeDrop = await page.getByRole('article').count();
-	await dispatchWorkspaceDrag(page, 'drop', fourth.path);
-	await expect(page.getByText(/environment already has four workspaces/i)).toBeVisible();
-	await expect(page.getByRole('article')).toHaveCount(beforeDrop);
-
-	const closeGeneral = page.getByRole('button', { name: 'Close General workspace' });
-	await expect(closeGeneral).toHaveAttribute('data-slot', 'button');
-	await closeGeneral.click();
-	await expect(page.getByRole('article')).toHaveCount(3);
-	await dispatchWorkspaceDrag(page, 'drop', fourth.path);
-	await expect(page.getByRole('article', { name: 'travel-plans workspace' })).toBeVisible();
-	await expect(page.getByRole('article')).toHaveCount(4);
-
-	await dispatchWorkspaceDrag(page, 'drop', fifth.path);
-	await expect(page.getByText(/environment already has four workspaces/i)).toBeVisible();
-	await expect(page.getByRole('article')).toHaveCount(4);
-
-	const closeSales = page.getByRole('button', { name: 'Close northwind-sales workspace' });
-	await expect(closeSales).toHaveAttribute('data-slot', 'button');
-	await closeSales.click();
-	await expect(page.getByRole('article')).toHaveCount(3);
-	await dispatchWorkspaceDrag(page, 'drop', fifth.path);
-	await expect(page.getByRole('article', { name: 'reading-notes workspace' })).toBeVisible();
-	await expect(page.getByRole('article')).toHaveCount(4);
+	await workspaceNavigation.getByRole('button', { name: 'Open workspace reading-notes' }).click();
+	await expect(page.getByRole('combobox', { name: 'Ask about reading-notes' })).toBeVisible();
+	await switcher.click();
+	const quarterlyReview = page.getByRole('menuitemradio').filter({ hasText: 'Quarterly review' });
+	await expect(quarterlyReview).toContainText('4 workspaces');
+	await quarterlyReview.click();
+	await expect(board.getByRole('article')).toHaveCount(4);
+	await expect(board.getByRole('article', { name: 'reading-notes workspace' })).toHaveCount(0);
 
 	await page.reload();
-	await expect(page.getByRole('article')).toHaveCount(4);
-	await expect(page.getByRole('article', { name: 'health-journal workspace' })).toBeVisible();
-	await expect(page.getByRole('article', { name: 'reading-notes workspace' })).toBeVisible();
+	await expect(board).toBeVisible();
+	await expect(board.getByRole('article')).toHaveCount(4);
 });
 
 test('Composer source search filters and attaches a workspace source', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
-	const workspaceNavigation = page.getByRole('region', { name: 'Workspaces' });
-	await workspaceNavigation.getByRole('button', { name: 'Add repository' }).click();
-	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
+	await addSalesWorkspace(page);
 	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
 	await expect(page.getByTestId('investigation-data-readiness').getByRole('button', { name: /sales\.csv/ })).toBeVisible();
 	const salesWorkspaceRow = page.getByRole('button', { name: 'Open workspace northwind-sales' });
@@ -3739,39 +3679,36 @@ test('Composer command completion uses shared buttons and keeps keyboard selecti
 	await expect(page.getByRole('listbox', { name: 'completions' })).toHaveCount(0);
 });
 
-test('environment dropdown saves different workspace arrangements without leaking panes between them', async ({ page }) => {
+test('environment dropdown switches between named workspace environments without leaking panes', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
 	const navigation = page.getByRole('region', { name: 'Workspaces' });
-	await navigation.getByRole('button', { name: 'Add repository' }).click();
-	await expect(page.getByRole('article', { name: 'northwind-sales workspace' })).toBeVisible();
-
+	await addSalesWorkspace(page);
+	await composeEnvironment(page, 'Sales review', ['General', 'northwind-sales']);
+	const board = page.getByRole('region', { name: 'Workspace board' });
+	await expect(board.getByRole('article')).toHaveCount(2);
 	const switcher = page.locator('.sidebar .environment-switcher-trigger');
-	await switcher.click();
-	await page.getByRole('menuitem', { name: /New environment/ }).click();
-	await expect(switcher).toContainText('General');
 	await navigation.getByRole('button', { name: 'Add repository' }).click();
-	await expect(page.getByRole('article', { name: 'health-journal workspace' })).toBeVisible();
+	await expect(page.getByRole('combobox', { name: 'Ask about health-journal' })).toBeVisible();
 
 	await switcher.click();
-	await page.getByRole('menuitemradio').filter({ hasText: 'northwind-sales' }).click();
-	await expect(page.getByRole('article', { name: 'northwind-sales workspace' })).toBeVisible();
-	await expect(page.getByRole('article', { name: 'health-journal workspace' })).toHaveCount(0);
-	await expect(page.getByRole('article', { name: 'General workspace' })).toBeVisible();
+	const salesReview = page.getByRole('menuitemradio').filter({ hasText: 'Sales review' });
+	await expect(salesReview).toContainText('2 workspaces');
+	await salesReview.click();
+	await expect(board.getByRole('article')).toHaveCount(2);
+	await expect(board.getByRole('article', { name: 'health-journal workspace' })).toHaveCount(0);
 
 	await switcher.click();
 	await page.getByRole('menuitemradio').filter({ hasText: 'health-journal' }).click();
-	await expect(page.getByRole('article', { name: 'health-journal workspace' })).toBeVisible();
-	await expect(page.getByRole('article', { name: 'northwind-sales workspace' })).toHaveCount(0);
-	await expect(page.getByRole('article', { name: 'General workspace' })).toBeVisible();
+	await expect(page.getByRole('combobox', { name: 'Ask about health-journal' })).toBeVisible();
+	await expect(board).toHaveCount(0);
 
 	await page.reload();
 	const restoredSwitcher = page.locator('.sidebar .environment-switcher-trigger');
 	await restoredSwitcher.click();
 	await expect(page.getByRole('menuitemradio').filter({ hasText: 'health-journal' })).toHaveAttribute('aria-checked', 'true');
 	await page.keyboard.press('Escape');
-	await expect(page.getByRole('article', { name: 'health-journal workspace' })).toBeVisible();
-	await expect(page.getByRole('article', { name: 'northwind-sales workspace' })).toHaveCount(0);
+	await expect(page.getByRole('combobox', { name: 'Ask about health-journal' })).toBeVisible();
 });
 
 test('environment dropdown creates and closes the current environment', async ({ page }) => {
@@ -3896,8 +3833,8 @@ test('a history-only workspace retries its folder mount and keeps history availa
 	await page.goto('/');
 	await page.getByRole('button', { name: 'Expand unavailable-archive' }).click();
 	await page.getByRole('button', { name: 'Open conversation: Summarize the unavailable archive' }).click();
-	const workspace = page.getByRole('article', { name: 'unavailable-archive workspace' });
-	await expect(workspace).toBeVisible();
+	const unavailableComposer = page.getByRole('combobox', { name: 'Workspace unavailable: unavailable-archive' });
+	await expect(unavailableComposer).toBeDisabled();
 	await expect(page.getByRole('status', {
 		name: 'History only. The folder could not be opened; saved conversations remain available.'
 	})).toBeVisible();
@@ -3916,12 +3853,11 @@ test('a history-only workspace retries its folder mount and keeps history availa
 	await page.getByRole('button', { name: 'Reconnect unavailable-archive' }).click();
 	await expect.poll(() => page.evaluate(() => window.__workspaceOpenCalls.length)).toBe(3);
 	await expect(page.getByText(/Its conversations remain in history only/).last()).toBeVisible();
-	await expect(workspace).toContainText('Saved result from this folder.');
+	await expect(page.getByRole('log', { name: 'conversation' })).toContainText('Saved result from this folder.');
 	const reconnect = page.getByRole('button', { name: 'Reconnect unavailable-archive' });
 	await expect(reconnect).toHaveAttribute('data-slot', 'button');
 	await expect(reconnect).toHaveCSS('width', '22px');
 	await expect(reconnect).toHaveCSS('height', '22px');
-	const unavailableComposer = page.getByRole('combobox', { name: 'Workspace unavailable: unavailable-archive' });
 	await expect(unavailableComposer).toBeDisabled();
 	await expect(page.getByRole('button', { name: 'Open workspace', exact: true })).toHaveAttribute('data-slot', 'button');
 });
@@ -3932,14 +3868,15 @@ test('deleting a history-only workspace confirms and removes all of its saved co
 
 	await page.getByRole('button', { name: 'Expand unavailable-archive' }).click();
 	await page.getByRole('button', { name: 'Open conversation: Summarize the unavailable archive' }).click();
-	await expect(page.getByRole('article', { name: 'unavailable-archive workspace' })).toBeVisible();
+	await expect(page.getByRole('combobox', { name: 'Workspace unavailable: unavailable-archive' })).toBeDisabled();
 
 	await page.locator('.sidebar .environment-switcher-trigger').click();
 	await page.getByRole('menuitem', { name: 'New environment' }).click();
 	const unavailableDisclosure = page.getByRole('button', { name: /^(Expand|Collapse) unavailable-archive$/ });
 	if (await unavailableDisclosure.getAttribute('aria-expanded') === 'false') await unavailableDisclosure.click();
 	await page.getByRole('button', { name: 'Open conversation: Summarize the unavailable archive' }).click();
-	await expect(page.getByRole('article', { name: 'unavailable-archive workspace' })).toBeVisible();
+	const unavailableComposer = page.getByRole('combobox', { name: 'Workspace unavailable: unavailable-archive' });
+	await expect(unavailableComposer).toBeDisabled();
 
 	const repository = page.locator('.repository').filter({ hasText: 'unavailable-archive' });
 	await repository.hover();
@@ -3948,10 +3885,10 @@ test('deleting a history-only workspace confirms and removes all of its saved co
 	const dialog = page.getByRole('dialog', { name: 'Delete unavailable-archive?' });
 	await expect(dialog).toBeVisible();
 	await expect(dialog).toContainText('permanently removes');
-		await expect(dialog).toContainText('folder, files, and any project notes are kept');
+	await expect(dialog).toContainText('folder, files, and any project notes are kept');
 	await dialog.getByRole('button', { name: 'Cancel' }).click();
 	await expect(dialog).toHaveCount(0);
-	await expect(page.getByRole('article', { name: 'unavailable-archive workspace' })).toBeVisible();
+	await expect(unavailableComposer).toBeDisabled();
 	expect(await page.evaluate(() => window.__deletedConversationIds)).toEqual([]);
 
 	await repository.hover();
@@ -3959,7 +3896,7 @@ test('deleting a history-only workspace confirms and removes all of its saved co
 	await page.getByRole('menuitem', { name: 'Delete workspace and conversations' }).click();
 	await dialog.getByRole('button', { name: 'Delete workspace and conversations' }).click();
 	await expect(dialog).toHaveCount(0);
-	await expect(page.getByRole('article', { name: 'unavailable-archive workspace' })).toHaveCount(0);
+	await expect(unavailableComposer).toHaveCount(0);
 	await expect(page.getByRole('button', { name: 'Expand unavailable-archive' })).toHaveCount(0);
 	const deletedHistory = await page.evaluate(() => window.__deletedConversationWorkspaces);
 	expect(deletedHistory.map(({ id }) => id)).toEqual(expect.arrayContaining([
@@ -3977,7 +3914,7 @@ test('a mounted workspace can be deleted with its saved conversations while its 
 	await installDesktopMock(page, { seedUnavailableConversation: true, seedDeletionConversations: true });
 	await page.goto('/');
 	await page.getByRole('button', { name: 'Open workspace northwind-sales' }).click();
-	await expect(page.getByRole('article', { name: 'northwind-sales workspace' })).toBeVisible();
+	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
 
 	const repository = page.locator('.repository').filter({ hasText: 'northwind-sales' });
 	await repository.hover();
@@ -3988,7 +3925,7 @@ test('a mounted workspace can be deleted with its saved conversations while its 
 	await dialog.getByRole('button', { name: 'Delete workspace and conversations' }).click();
 
 	await expect(dialog).toHaveCount(0);
-	await expect(page.getByRole('article', { name: 'northwind-sales workspace' })).toHaveCount(0);
+	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toHaveCount(0);
 	await expect(page.getByRole('button', { name: 'Open workspace northwind-sales' })).toHaveCount(0);
 	const deletedHistory = await page.evaluate(() => window.__deletedConversationWorkspaces);
 	expect(deletedHistory.map(({ id }) => id)).toContain('archived-northwind-sales');
@@ -4015,12 +3952,11 @@ test('shared workspace tabs and modal/menu primitives preserve keyboard interact
 	await expect(search).toBeFocused();
 
 	const navigation = page.getByRole('region', { name: 'Workspaces' });
-	await navigation.getByRole('button', { name: 'Add repository' }).click();
-	await expect(page.getByRole('article', { name: 'northwind-sales workspace' })).toBeVisible();
+	await addSalesWorkspace(page);
 	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
 
 	const workspaceTabs = page.getByRole('tablist', { name: 'Workspace sections' });
-	const investigationTab = workspaceTabs.getByRole('tab', { name: 'Investigation' });
+	const investigationTab = workspaceTabs.getByRole('tab', { name: 'Overview' });
 	const dataContextTab = workspaceTabs.getByRole('tab', { name: 'Data & context' });
 	await expect(investigationTab).toHaveAttribute('aria-selected', 'true');
 	await expect(workspaceTabs.getByRole('tab', { name: 'Sources' })).toHaveCount(0);
@@ -4041,7 +3977,7 @@ test('shared workspace tabs and modal/menu primitives preserve keyboard interact
 	await expect(createProject).toBeFocused();
 
 	await navigation.getByRole('button', { name: 'Add repository' }).click();
-	await expect(page.getByRole('article', { name: 'health-journal workspace' })).toBeVisible();
+	await expect(page.getByRole('combobox', { name: 'Ask about health-journal' })).toBeVisible();
 	const priorRepository = page.locator('.repository').filter({ hasText: 'northwind-sales' });
 	await priorRepository.hover();
 	const repositoryActions = priorRepository.getByRole('button', { name: 'Repository actions' });
@@ -4102,7 +4038,7 @@ test('Investigation list failures stay distinct from empty state and can be retr
 test('unsaved workspace context stays on cancel and is discarded only after confirmation', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
-	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
+	await addSalesWorkspace(page);
 	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
 	const tabs = page.getByRole('tablist', { name: 'Workspace sections' });
 	await tabs.getByRole('tab', { name: 'Data & context' }).click();
@@ -4110,22 +4046,16 @@ test('unsaved workspace context stays on cancel and is discarded only after conf
 	await page.evaluate(() => { window.__workspaceContextSaveFailure = true; });
 	await guide.fill('Unsaved analyst context');
 
-	const stayPrompt = page.waitForEvent('dialog');
-	const stayClick = workspacePresetButton(page, 'Focus').click();
-	const stayDialog = await stayPrompt;
-	expect(stayDialog.type()).toBe('confirm');
-	expect(stayDialog.message()).toContain('Data & context');
-	await stayDialog.dismiss();
-	await stayClick;
+	await workspacePresetButton(page, 'Focus').click();
+	const stayDialog = page.getByRole('dialog', { name: 'Discard unsaved changes?' });
+	await expect(stayDialog).toContainText('Data & context');
+	await stayDialog.getByRole('button', { name: 'Keep editing' }).click();
 	await expect(tabs.getByRole('tab', { name: 'Data & context' })).toHaveAttribute('aria-selected', 'true');
 	await expect(guide).toHaveValue('Unsaved analyst context');
 
-	const discardPrompt = page.waitForEvent('dialog');
-	const discardClick = workspacePresetButton(page, 'Focus').click();
-	const discardDialog = await discardPrompt;
-	expect(discardDialog.type()).toBe('confirm');
-	await discardDialog.accept();
-	await discardClick;
+	await workspacePresetButton(page, 'Focus').click();
+	const discardDialog = page.getByRole('dialog', { name: 'Discard unsaved changes?' });
+	await discardDialog.getByRole('button', { name: 'Discard and continue' }).click();
 	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
 
 	await workspacePresetButton(page, 'Investigation').click();
@@ -4133,11 +4063,69 @@ test('unsaved workspace context stays on cancel and is discarded only after conf
 	await expect(page.getByRole('textbox', { name: 'Workspace guide' })).toHaveValue('');
 });
 
+test('opening another folder waits for an unsaved workspace guide decision without reporting a false open failure', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+	await addSalesWorkspace(page);
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	const tabs = page.getByRole('tablist', { name: 'Workspace sections' });
+	await tabs.getByRole('tab', { name: 'Data & context' }).click();
+	const guide = page.getByRole('textbox', { name: 'Workspace guide' });
+	await page.evaluate(() => { window.__workspaceContextSaveFailure = true; });
+	await guide.fill('Preserve this guide while I choose a folder');
+
+	await page.getByRole('button', { name: 'Add repository' }).click();
+	const stayDialog = page.getByRole('dialog', { name: 'Discard unsaved changes?' });
+	await expect(stayDialog).toContainText('Data & context for northwind-sales');
+	await stayDialog.getByRole('button', { name: 'Keep editing' }).click();
+	await expect(guide).toHaveValue('Preserve this guide while I choose a folder');
+	await expect(tabs.getByRole('tab', { name: 'Data & context' })).toHaveAttribute('aria-selected', 'true');
+	await expect(page.getByRole('combobox', { name: 'Ask about health-journal' })).toHaveCount(0);
+	await expect(page.getByText(/Couldn't open that folder/)).toHaveCount(0);
+
+	await page.getByRole('button', { name: 'Add repository' }).click();
+	const discardDialog = page.getByRole('dialog', { name: 'Discard unsaved changes?' });
+	await discardDialog.getByRole('button', { name: 'Discard and continue' }).click();
+	await expect(page.getByRole('combobox', { name: 'Ask about weekly-budget' })).toBeVisible();
+});
+
+test('workspace deletion waits for an explicit decision about an unsaved workspace guide', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+	await addSalesWorkspace(page);
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	const tabs = page.getByRole('tablist', { name: 'Workspace sections' });
+	await tabs.getByRole('tab', { name: 'Data & context' }).click();
+	const guide = page.getByRole('textbox', { name: 'Workspace guide' });
+	await page.evaluate(() => { window.__workspaceContextSaveFailure = true; });
+	await guide.fill('Keep this note unless I confirm deletion');
+
+	const repository = page.locator('.repository').filter({ hasText: 'northwind-sales' });
+	await repository.hover();
+	await repository.getByRole('button', { name: 'Repository actions' }).click();
+	await page.getByRole('menuitem', { name: 'Delete workspace and conversations' }).click();
+	const deleteDialog = page.getByRole('dialog', { name: 'Delete northwind-sales?' });
+	await deleteDialog.getByRole('button', { name: 'Delete workspace and conversations' }).click();
+
+	const unsavedDialog = page.getByRole('dialog', { name: 'Discard unsaved changes?' });
+	await expect(unsavedDialog).toContainText('Data & context for northwind-sales');
+	await unsavedDialog.getByRole('button', { name: 'Keep editing' }).click();
+	await expect(deleteDialog).toBeVisible();
+	await expect(guide).toHaveValue('Keep this note unless I confirm deletion');
+	await expect(page.getByRole('button', { name: 'Open workspace northwind-sales' })).toBeVisible();
+
+	await deleteDialog.getByRole('button', { name: 'Delete workspace and conversations' }).click();
+	const confirmDiscard = page.getByRole('dialog', { name: 'Discard unsaved changes?' });
+	await confirmDiscard.getByRole('button', { name: 'Discard and continue' }).click();
+	await expect(deleteDialog).toHaveCount(0);
+	await expect(page.getByRole('button', { name: 'Open workspace northwind-sales' })).toHaveCount(0);
+});
+
 test('unsaved Question plan stays on cancel and reverts only after confirmation', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
 	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
-	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
 	const originalRequest = 'Explain weekly sales in northwind-sales';
 	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill(originalRequest);
 	await page.getByRole('button', { name: 'Send' }).click();
@@ -4147,20 +4135,15 @@ test('unsaved Question plan stays on cancel and reverts only after confirmation'
 	await expect(mainQuestion).toHaveValue(originalRequest);
 	await mainQuestion.fill('Measure weekly net sales');
 
-	const stayPrompt = page.waitForEvent('dialog');
-	const stayClick = workspacePresetButton(page, 'Focus').click();
-	const stayDialog = await stayPrompt;
-	expect(stayDialog.type()).toBe('confirm');
-	expect(stayDialog.message()).toContain('Investigation');
-	await stayDialog.dismiss();
-	await stayClick;
+	await workspacePresetButton(page, 'Focus').click();
+	const stayDialog = page.getByRole('dialog', { name: 'Discard unsaved changes?' });
+	await expect(stayDialog).toContainText('Investigation');
+	await stayDialog.getByRole('button', { name: 'Keep editing' }).click();
 	await expect(mainQuestion).toHaveValue('Measure weekly net sales');
 
-	const discardPrompt = page.waitForEvent('dialog');
-	const discardClick = workspacePresetButton(page, 'Focus').click();
-	const discardDialog = await discardPrompt;
-	await discardDialog.accept();
-	await discardClick;
+	await workspacePresetButton(page, 'Focus').click();
+	const discardDialog = page.getByRole('dialog', { name: 'Discard unsaved changes?' });
+	await discardDialog.getByRole('button', { name: 'Discard and continue' }).click();
 	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
 	await workspacePresetButton(page, 'Investigation').click();
 	await expect(page.getByRole('textbox', { name: 'Main question' })).toHaveValue(originalRequest);
@@ -4186,7 +4169,7 @@ test('workspace context read failures stay distinct from a blank note and can be
 	await expect(page.getByRole('alert')).toHaveCount(0);
 });
 
-test('Sidebar icon actions use shared compact buttons and Add repository still opens the board', async ({ page }) => {
+test('Sidebar icon actions use shared compact buttons and Add repository opens Focus', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
 	const collapse = page.getByRole('button', { name: 'Collapse sidebar' });
@@ -4201,8 +4184,10 @@ test('Sidebar icon actions use shared compact buttons and Add repository still o
 	}
 
 	await addRepository.click();
-	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
-	await expect(page.getByRole('article', { name: 'northwind-sales workspace' })).toBeVisible();
+	await expect(page.getByRole('region', { name: 'Focus' })).toBeVisible();
+	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
+	await expect(page.getByRole('region', { name: 'Workspace board' })).toHaveCount(0);
+	await expect(page.getByRole('button', { name: 'Open workspace board' })).toHaveCount(0);
 });
 
 test('Titlebar Fella actions use shared buttons and remain clickable', async ({ page }) => {
@@ -4227,8 +4212,7 @@ test('Titlebar Fella actions use shared buttons and remain clickable', async ({ 
 test('Sidebar workspace tools use shared buttons and preserve Investigation and project actions', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
-	await page.getByRole('button', { name: 'Add repository' }).click();
-	await expect(page.getByRole('article', { name: 'northwind-sales workspace' })).toBeVisible();
+	await addSalesWorkspace(page);
 	const workspaceRow = page.getByRole('button', { name: 'Open workspace northwind-sales' });
 	await expect(workspaceRow).toHaveAttribute('data-slot', 'button');
 	const collapseWorkspace = page.getByRole('button', { name: 'Collapse northwind-sales' });
@@ -4396,7 +4380,6 @@ test('empty Investigation catalog offers a contextual folder replacement action'
 	await expect(chooseAnother).toHaveAttribute('data-slot', 'button');
 	await chooseAnother.click();
 	await expect.poll(() => page.evaluate(() => window.__workspaceOpenCalls)).toContain(folders[1].path);
-	await expect(page.getByRole('article', { name: 'health-journal workspace' })).toBeVisible();
 	await expect(page.getByRole('combobox', { name: 'Ask about health-journal' })).toBeVisible();
 });
 
@@ -4792,9 +4775,7 @@ test('a quick workspace question stays low-ceremony while keeping its answer evi
 		}
 	});
 	await page.goto('/');
-	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
-	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
-	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await addSalesWorkspace(page);
 	const composer = page.getByRole('combobox', { name: 'Ask about northwind-sales' });
 	await composer.fill(request);
 	await page.getByRole('button', { name: 'Send' }).click();
@@ -4826,7 +4807,7 @@ test('workspace-scoped analysis still auto-links its Investigation to the conver
 	await installDesktopMock(page);
 	await page.goto('/');
 	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
-	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
 	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill('Summarize sales trends');
 	await page.getByRole('button', { name: 'Send' }).click();
 	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
@@ -4942,7 +4923,7 @@ test('a saved run keeps its own method and evidence inspectable after a later an
 	});
 	await page.goto('/');
 	await page.getByRole('button', { name: 'Add repository' }).click();
-	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
 	const composer = page.getByRole('combobox', { name: 'Ask about northwind-sales' });
 	await composer.fill('Compare revenue by region.');
 	await page.getByRole('button', { name: 'Send' }).click();
@@ -5226,7 +5207,7 @@ test('Workspace follow-ups stay in the same Investigation and conversation', asy
 	await installDesktopMock(page);
 	await page.goto('/');
 	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
-	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
 
 	const composer = page.getByRole('combobox', { name: 'Ask about northwind-sales' });
 	await expect(composer).toBeVisible();

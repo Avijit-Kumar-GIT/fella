@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { openRepository } from '$lib/commands';
 	import { Button } from '$lib/components/ui/button';
 	import { ipc } from '$lib/ipc';
 	import { firstActualQuestion, session } from '$lib/session.svelte';
@@ -15,7 +14,6 @@
 	let draggingWorkspace = $state(false);
 	let dragPreference = $state<WorkspaceTilePreference>({ ...session.workspaceLayout });
 	let dragTargetIndex = $state(0);
-	let dragAddsPane = $state(false);
 	let investigationRecords = $state<Investigation[] | null>(null);
 	let investigationLoadFailed = $state(false);
 	let investigationRequest = 0;
@@ -23,10 +21,7 @@
 	let tiles = $derived(
 		resolveWorkspaceTileLayout(session.activeEnvironmentPanes.map((pane) => pane.id), session.workspaceLayout)
 	);
-	let previewIds = $derived([
-		...session.activeEnvironmentPanes.map((pane) => pane.id),
-		...(dragAddsPane ? ['__fella-drop-workspace__'] : [])
-	]);
+	let previewIds = $derived(session.activeEnvironmentPanes.map((pane) => pane.id));
 	let previewTiles = $derived(
 		draggingWorkspace && previewIds.length <= 4
 			? resolveWorkspaceTileLayout(previewIds, dragPreference)
@@ -184,13 +179,10 @@
 	function onDragOver(event: DragEvent): void {
 		const transfer = event.dataTransfer;
 		const paneDrag = transfer?.types.includes('application/x-fella-environment-pane') ?? false;
-		const workspaceDrag = transfer?.types.includes('application/x-fella-workspace') ?? false;
-		if (paneDrag || workspaceDrag) {
+		if (paneDrag) {
 			event.preventDefault();
-			dragAddsPane = workspaceDrag && !transfer?.types.includes('application/x-fella-existing-workspace');
-			transfer!.dropEffect = paneDrag || !dragAddsPane ? 'move' : 'copy';
-			const total = session.activeEnvironmentPanes.length + (dragAddsPane ? 1 : 0);
-			const proposed = placement(event, total);
+			transfer!.dropEffect = 'move';
+			const proposed = placement(event, session.activeEnvironmentPanes.length);
 			dragPreference = proposed.preference;
 			dragTargetIndex = proposed.index;
 			draggingWorkspace = true;
@@ -205,42 +197,16 @@
 
 	async function onDrop(event: DragEvent): Promise<void> {
 		const paneId = event.dataTransfer?.getData('application/x-fella-environment-pane');
-		const path = event.dataTransfer?.getData('application/x-fella-workspace');
-		if (!path && !paneId) return;
+		if (!paneId) return;
 		event.preventDefault();
 		event.stopPropagation();
 		draggingWorkspace = false;
-		const existingPane = paneId
-			? session.activeEnvironmentPanes.find((pane) => pane.id === paneId)
-			: session.paneForWorkspace(path ?? '');
-		const total = session.activeEnvironmentPanes.length + (!existingPane && !paneId ? 1 : 0);
-		if (total > 4) {
-			session.addSystem('This environment already has four workspaces. Create or switch environments to add another.');
-			return;
-		}
-		const proposed = placement(event, total);
-		if (paneId && existingPane) {
-			session.setWorkspaceLayout(proposed.preference);
-			session.placeWorkspacePane(paneId, proposed.index);
-			session.focusEnvironmentPane(paneId);
-			return;
-		}
-		if (!path) return;
-		if (existingPane) {
-			session.setWorkspaceLayout(proposed.preference);
-			session.placeWorkspacePane(existingPane.id, proposed.index);
-			session.focusEnvironmentPane(existingPane.id);
-			return;
-		}
-		const existingWorkspace = session.workspaceAt(path);
-		const opened = existingWorkspace && !existingWorkspace.historyOnly
-			? session.focusWorkspace(path)
-			: await openRepository(path);
-		if (opened) {
-			session.setWorkspaceLayout(proposed.preference);
-			const pane = session.paneForWorkspace(path);
-			if (pane) session.placeWorkspacePane(pane.id, proposed.index);
-		}
+		const pane = session.activeEnvironmentPanes.find((item) => item.id === paneId);
+		if (!pane) return;
+		const proposed = placement(event, session.activeEnvironmentPanes.length);
+		session.setWorkspaceLayout(proposed.preference);
+		session.placeWorkspacePane(paneId, proposed.index);
+		session.focusEnvironmentPane(paneId);
 	}
 
 	function startWorkspaceDrag(event: DragEvent, id: string): void {
@@ -265,10 +231,10 @@
 >
 	<div class="board-heading">
 		<div>
-			<h2>Open workspaces</h2>
-			<p>Select a pane to set the message target. Workspaces stay separate.</p>
+			<h2>Workspace overview</h2>
+			<p>Choose a workspace to open it. Each workspace keeps its own data and conversations.</p>
 		</div>
-		<span>{session.activeEnvironmentPanes.length} open</span>
+		<span>{session.activeEnvironmentPanes.length} workspaces</span>
 	</div>
 	<div class="tile-grid" class:empty={tiles.length === 0}>
 		{#each tiles as tile (tile.id)}
@@ -345,11 +311,9 @@
 				{#if previewTiles.length}
 					{#each previewTiles as preview, index (preview.id)}
 						<div class="preview-slot" class:target={index === dragTargetIndex} style={gridPlacement(preview)}>
-							{index === dragTargetIndex ? 'Drop to place' : preview.id === '__fella-drop-workspace__' ? 'Workspace' : workspaceName(preview.id)}
+							{index === dragTargetIndex ? 'Drop to place' : workspaceName(preview.id)}
 						</div>
 					{/each}
-				{:else}
-					<div class="full-notice">Close a workspace to add another.</div>
 				{/if}
 			</div>
 		{/if}
@@ -533,17 +497,6 @@
 		border: 2px dashed var(--brand);
 		background: color-mix(in srgb, var(--brand) 10%, var(--bg-raised));
 		color: var(--brand);
-	}
-	.full-notice {
-		grid-column: 1 / -1;
-		grid-row: 1 / -1;
-		display: grid;
-		place-items: center;
-		border: 1px solid var(--border);
-		border-radius: var(--radius-window);
-		background: color-mix(in srgb, var(--bg) 82%, transparent);
-		color: var(--text-dim);
-		font-size: var(--fs-xs);
 	}
 	.board.dragging .workspace-tile { opacity: .62; }
 	@media (prefers-reduced-motion: reduce) {

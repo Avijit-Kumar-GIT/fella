@@ -240,13 +240,7 @@ export async function openFolder(
 			}
 			return true;
 		}
-		if (options.reportError !== false) session.addSystem('This environment already has four workspaces. Create or switch environments to add another.');
-		return false;
-	}
-	if (!session.paneForWorkspace(chosen) && session.activeEnvironmentPanes.length >= 4) {
-		if (options.reportError !== false) {
-			session.addSystem('This environment already has four workspaces. Create or switch environments to add another.');
-		}
+		if (options.reportError !== false && !session.unsavedNavigationOpen) session.addSystem('Could not open this workspace. Try selecting it again.');
 		return false;
 	}
 	try {
@@ -261,7 +255,10 @@ export async function openFolder(
 			session.mountProgress = progress;
 		});
 		if (!session.registerWorkspace(catalog)) {
-			throw new Error('This environment already contains four workspace panes. Switch environments to add another workspace.');
+			// Registration may be waiting for an unsaved-draft decision. The
+			// deferred continuation owns the successful open in that case.
+			if (session.unsavedNavigationOpen) return false;
+			throw new Error('Fella could not open this workspace. Try again or choose another folder.');
 		}
 		if (options.focusAfterOpen) {
 			session.setWorkspaceView('ask');
@@ -304,17 +301,13 @@ export async function openRepository(
 	const openedWorkspace = session.workspaceAt(path);
 	if (openedWorkspace && !openedWorkspace.historyOnly) {
 		const focused = session.focusWorkspace(openedWorkspace.id);
-		if (!focused) session.addSystem('This environment already has four workspaces. Create or switch environments to add another.');
+		if (!focused && !session.unsavedNavigationOpen) session.addSystem('Could not open this workspace. Try selecting it again.');
 		return focused;
 	}
 	if (!isDesktop()) return openFolder(path);
-	if (!session.paneForWorkspace(path) && session.activeEnvironmentPanes.length >= 4) {
-		session.addSystem('This environment already has four workspaces. Create or switch environments to add another.');
-		return false;
-	}
 	const opened = await openFolder(path, { reportError: false });
 	if (opened) session.markRepositoryAvailable(path);
-	else if (!session.mountProgress) {
+	else if (!session.mountProgress && !session.unsavedNavigationOpen) {
 		session.markRepositoryHistoryOnly(path);
 		if (options.reportFailure) {
 			const name = path.replace(/[/\\]+$/, '').split(/[/\\]/).pop() || 'workspace';
@@ -360,17 +353,13 @@ export async function openConversation(summary: ConversationSummary): Promise<bo
 	}
 	try {
 		const workspaceId = summary.workspace ?? null;
-		if (workspaceId && !session.paneForWorkspace(workspaceId) && session.activeEnvironmentPanes.length >= 4) {
-			session.addSystem('This environment already has four workspaces. Switch environments to open this conversation.');
-			return false;
-		}
 		if (workspaceId && !session.workspaceAt(workspaceId)) {
 			if (!session.historyOnlyRepositoryPaths.includes(workspaceId)) {
 				await openRepository(workspaceId);
 			}
 			if (!session.workspaceAt(workspaceId) && session.historyOnlyRepositoryPaths.includes(workspaceId)) {
 				if (!session.openHistoryOnlyWorkspace(workspaceId, summary.id)) {
-					session.addSystem('Close a workspace to open this conversation.');
+					session.addSystem('Could not open the saved conversation in its workspace.');
 					return false;
 				}
 			}
@@ -466,7 +455,7 @@ export async function dispatch(raw: string, clarificationTurnId?: string): Promi
 		conv.addSystem(
 			session.historyOnlyRepositoryPaths.includes(origin)
 				? `“${name}” is available as history only. Reconnect its folder before continuing analysis.`
-				: `“${name}” is not open on the workspace board. Reopen it before continuing this conversation.`
+				: `“${name}” isn’t available right now. Reopen its folder before continuing this conversation.`
 		);
 		return;
 	}
@@ -572,9 +561,7 @@ async function runCommand(text: string): Promise<void> {
 
 		case '/new':
 		case '/tab': // legacy alias; conversation navigation is workspace-owned now
-			if (!session.newConversation()) {
-				session.addSystem('Close a workspace before starting a conversation.');
-			}
+			session.newConversation();
 			return;
 
 		case '/focus':

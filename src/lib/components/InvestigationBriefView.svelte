@@ -512,7 +512,7 @@
 
 	async function createInvestigation(): Promise<void> {
 		if (!workspacePath || creating || !isDesktop()) return;
-		if (!session.confirmUnsavedChanges()) return;
+		if (!session.confirmUnsavedChanges(() => void createInvestigation())) return;
 		creating = true;
 		error = '';
 		const request = currentConversationSource;
@@ -538,7 +538,7 @@
 	async function openSelectedConversation(focusTurnId?: string): Promise<boolean> {
 		const item = selected;
 		if (!item || openingConversation || !isDesktop()) return false;
-		if (!session.confirmUnsavedChanges()) return false;
+		if (!session.confirmUnsavedChanges(() => void openSelectedConversation(focusTurnId))) return false;
 		openingConversation = true;
 		error = '';
 		try {
@@ -1545,7 +1545,7 @@
 
 	async function selectInvestigation(id: string): Promise<void> {
 		if (id === selectedId || saving || proposingQuestions) return;
-		if (!session.confirmUnsavedChanges()) return;
+		if (!session.confirmUnsavedChanges(() => void selectInvestigation(id))) return;
 		pendingAnalysisQuestionId = null;
 		analysisTurnError = '';
 		openAnalysisTurnId = null;
@@ -1560,10 +1560,10 @@
 	<header class="page-head">
 		<div>
 			<h1 id="investigation-title">Investigation</h1>
-			<p>Set a goal, understand the available data, and follow the analysis through to its findings.</p>
+			<p>Define the goal, review the data, and track each Question to its findings.</p>
 		</div>
 		<div class="page-head-actions">
-			{#if workspacePath}
+			{#if workspacePath && investigations.length}
 				<Button type="button" disabled={loading || creating} onclick={() => void createInvestigation()}>
 					<Icon name="plus" size={16} />{creating ? 'Opening…' : currentConversationInvestigation ? 'Open current Investigation' : currentConversationSource ? 'Start from conversation' : 'New investigation'}
 				</Button>

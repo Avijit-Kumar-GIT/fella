@@ -46,7 +46,7 @@
 	});
 	let coverageSummary = $derived.by(() => {
 		if (summaryLoadFailed) return 'Coverage unavailable';
-		if (!currentInvestigation) return 'No Investigation yet';
+		if (!currentInvestigation) return 'Ready to start';
 		const active = (currentInvestigation.questions ?? []).filter((question) => question.status === 'active');
 		if (!active.length) return currentInvestigation.status === 'complete' ? 'Complete · no active Questions' : 'No Questions yet';
 		const answered = active.filter((question) => question.answer_status === 'answered').length;
@@ -108,7 +108,7 @@
 	});
 </script>
 
-{#if workspacePath && isWorkspaceView}
+{#if workspacePath && isWorkspaceView && session.workspaceView !== 'board'}
 	<div class="workspace-context-bar">
 		<div class="workspace-identity" role="group" aria-label={`Workspace: ${workspaceName}`}>
 			<Icon name="folder" size={16} />
@@ -117,7 +117,7 @@
 			<strong class="workspace-name" title={workspacePath}>{workspaceName}</strong>
 		</div>
 
-		{#if (session.workspaceView === 'ask' || session.workspaceView === 'workspace' || session.workspaceView === 'board') && workspaceAvailable}
+		{#if (session.workspaceView === 'ask' || session.workspaceView === 'workspace') && workspaceAvailable}
 			<div class="workspace-preset-actions">
 				{#if workspaceAvailable}
 					<span
@@ -144,7 +144,7 @@
 				{/if}
 				<span class="workspace-preset-description" aria-live="polite">{selectedPresetDescription}</span>
 			</div>
-		{:else if (session.workspaceView === 'ask' || session.workspaceView === 'board') && historyOnly}
+		{:else if session.workspaceView === 'ask' && historyOnly}
 			<div class="workspace-history-action">
 				<span class="workspace-history-label" role="status">History only</span>
 				<Button
@@ -156,7 +156,7 @@
 					<Icon name="refresh" size={14} />Reconnect folder
 				</Button>
 			</div>
-		{:else if (session.workspaceView === 'ask' || session.workspaceView === 'board')}
+		{:else if session.workspaceView === 'ask'}
 			<Button
 				variant="outline"
 				size="sm"
