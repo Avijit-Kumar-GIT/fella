@@ -10,7 +10,7 @@
 	const presets = [
 		{ id: 'focus', label: 'Focus', description: 'Conversation and current result' },
 		{ id: 'investigation', label: 'Investigation', description: 'Brief, Questions, and coverage' },
-		{ id: 'workbench', label: 'Workbench', description: 'Conversation beside the Investigation' }
+		{ id: 'workbench', label: 'Workbench', description: 'Focus beside Investigation details and an optional preview' }
 	] as const;
 
 	let workspacePath = $derived(session.activeChat.workspaceScope);

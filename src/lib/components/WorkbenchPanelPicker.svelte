@@ -21,7 +21,7 @@
 		<div class="panel-picker-heading">
 			<div>
 				<strong>Workbench panels</strong>
-				<p>Choose the surfaces you need. Workspace scope and review status stay visible.</p>
+				<p>Arrange Focus, the Investigation, and an optional chart or source preview for this Workspace.</p>
 			</div>
 			<button type="button" class="reset-layout" onclick={() => workbenchLayout.reset()}>Reset</button>
 		</div>
@@ -66,7 +66,7 @@
 				</div>
 			{/each}
 		</div>
-		<p class="panel-picker-footnote">Panels are existing Fella tools, not freeform widgets.</p>
+		<p class="panel-picker-footnote">Questions, Data &amp; context, runs, evidence, and visualizations stay linked inside the Investigation; the preview opens one chart or source from the same Workspace.</p>
 	</div>
 </details>
 

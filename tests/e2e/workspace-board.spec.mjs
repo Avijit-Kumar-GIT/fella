@@ -1286,13 +1286,18 @@ test('Workbench composes curated panels while keeping Investigation scope and co
 	await expect(conversation).toBeVisible();
 	await expect(investigation).toBeVisible();
 	await expect(companion).toBeHidden();
+	await expect(conversation).toHaveAttribute('aria-label', 'Focus');
+	await expect(page.getByRole('group', { name: 'Workspace: northwind-sales' })).toBeVisible();
+	await expect(investigation.getByRole('tab', { name: 'Data & context' })).toBeVisible();
 	const coverage = page.getByTestId('workspace-investigation-summary');
 	await expect(coverage).toContainText(investigationTitle);
 	await expect(coverage).toContainText('0/1 answered');
 	await expect(coverage).toHaveAttribute('aria-label', new RegExp(investigationTitle));
 
 	await page.locator('.workbench-panel-picker > summary').click();
-	const companionToggle = page.getByRole('checkbox', { name: 'Show Chart or source preview panel' });
+	const panelSettings = page.getByRole('region', { name: 'Workbench panel settings' });
+	await expect(panelSettings).toContainText('Questions, Data & context, runs, evidence, and visualizations stay linked inside the Investigation');
+	const companionToggle = panelSettings.getByRole('checkbox', { name: 'Show Chart or source preview panel' });
 	await expect(companionToggle).not.toBeChecked();
 	await companionToggle.check();
 	await expect(companion).toBeVisible();
@@ -1301,7 +1306,7 @@ test('Workbench composes curated panels while keeping Investigation scope and co
 	const companionHeight = (await companion.boundingBox()).height;
 	expect(companionHeight).toBeGreaterThan(investigationHeight);
 
-	const companionGroup = page.getByLabel('Group Chart or source preview');
+	const companionGroup = panelSettings.getByLabel('Group Chart or source preview');
 	await companionGroup.selectOption('conversation');
 	await expect(companion).toHaveAttribute('data-panel-group', 'conversation');
 	await page.getByRole('button', { name: 'Move Chart or source preview up' }).click();
@@ -1312,16 +1317,15 @@ test('Workbench composes curated panels while keeping Investigation scope and co
 		.map(({ id }) => id);
 	expect(orderedConversationPanels).toEqual(['companion', 'conversation']);
 
-	const conversationToggle = page.getByRole('checkbox', { name: 'Show Conversation panel' });
+	const conversationToggle = panelSettings.getByRole('checkbox', { name: 'Show Focus panel' });
 	await conversationToggle.uncheck();
 	await expect(conversation).toBeHidden();
 	await expect(investigation).toBeVisible();
-	await expect(page.getByRole('checkbox', { name: 'Show Investigation panel' })).toBeDisabled();
+	await expect(panelSettings.getByRole('checkbox', { name: 'Show Investigation panel' })).toBeDisabled();
 	await expect(coverage).toContainText(investigationTitle);
 	await expect(page.getByRole('button', { name: 'New conversation', exact: true })).toBeVisible();
 
-	const settings = page.locator('.panel-picker-popover');
-	await settings.getByRole('button', { name: 'Reset' }).click();
+	await panelSettings.getByRole('button', { name: 'Reset' }).click();
 	await expect(conversation).toBeVisible();
 	await expect(investigation).toBeVisible();
 	await expect(companion).toBeHidden();

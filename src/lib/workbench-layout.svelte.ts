@@ -23,7 +23,7 @@ const MIN_CONVERSATION_SHARE = 32;
 const MAX_CONVERSATION_SHARE = 60;
 
 export const WORKBENCH_GROUPS: { id: WorkbenchPanelGroup; label: string }[] = [
-	{ id: 'conversation', label: 'Conversation' },
+	{ id: 'conversation', label: 'Focus' },
 	{ id: 'analysis', label: 'Analysis' }
 ];
 
@@ -35,20 +35,20 @@ export const WORKBENCH_PANELS: {
 }[] = [
 	{
 		id: 'conversation',
-		label: 'Conversation',
-		description: 'The request, discussion, and analysis handoff.',
+		label: 'Focus',
+		description: 'The active conversation, question, and current answer.',
 		default: { id: 'conversation', visible: true, group: 'conversation', order: 0 }
 	},
 	{
 		id: 'investigation',
 		label: 'Investigation',
-		description: 'Brief, Questions, coverage, runs, Findings, and results.',
+		description: 'Questions, data context, run history, evidence, Findings, and visualizations.',
 		default: { id: 'investigation', visible: true, group: 'analysis', order: 0 }
 	},
 	{
 		id: 'companion',
 		label: 'Chart or source preview',
-		description: 'A chart or file opened from the conversation.',
+		description: 'One linked chart or source preview from this Workspace.',
 		default: { id: 'companion', visible: null, group: 'analysis', order: 1 }
 	}
 ];

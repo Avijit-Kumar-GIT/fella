@@ -105,6 +105,29 @@ second copy of the Investigation, imply that panes share data, or turn Fella
 into a general-purpose Jupyter kernel or unrestricted code environment.
 Detailed panel composition and customization are scoped to [#247](https://github.com/Avijit-Kumar-GIT/fella/issues/247).
 
+#### Workbench panel contract
+
+Workbench is a small, typed panel set rather than a freeform dashboard:
+
+- **Focus** shows the active Conversation, its question and current answer.
+- **Investigation** is the composite analysis panel. Its supported content
+  includes Questions and coverage, Data & context, run history and details,
+  evidence, Findings, and visualizations. These stay attached to the selected
+  Investigation instead of becoming separately cloned widgets with independent
+  state.
+- **Chart or source preview** is an optional companion panel for one artifact
+  opened from the active Conversation. It preserves the artifact's Workspace
+  and revision and reports when the current catalog differs.
+
+The default Workbench shows Focus and Investigation. The companion appears when
+the user opens a chart or source; it can be hidden or arranged with the other
+panels. Users can group, reorder, and hide panels, resize the Focus/Analysis
+split, and reset the arrangement. These preferences change presentation only.
+The Workspace and Investigation summary remain visible in the context bar, and
+empty/loading states belong to the relevant panel. The composer continues to
+target the active Workspace; it is not an independent panel or a way to combine
+Workspace data.
+
 ## How the views relate
 
 - A user can ask in Focus without choosing a view first. Fella creates or
