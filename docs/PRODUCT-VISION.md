@@ -270,7 +270,9 @@ a fixed workflow or a user-operated cell runner. The model may add, skip,
 revise, or revisit steps as the question and evidence require. The analyst can
 steer the work without having to prescribe every step or approve a routine plan
 before it proceeds. The notebook-inspired direction and its limits are
-recorded in [Stack vision](STACK-VISION.md).
+recorded in [Stack vision](STACK-VISION.md). The responsibilities and
+terminology of Focus, Investigation, and Workbench are defined in the
+[interaction model](INTERACTION-MODEL.md).
 
 ## Trust and control model
 
