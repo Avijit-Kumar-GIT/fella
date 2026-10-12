@@ -103,6 +103,56 @@ evidence, checks, visualizations, and open items visible together. The user
 should be able to correct a material interpretation and continue without
 having to reconstruct the work from a long transcript.
 
+## Notebook-style Investigation: design line items
+
+The notebook is a presentation of model-directed analysis, not a workflow
+template that determines which actions the model must take. These line items
+describe the interaction to explore; they are not a commitment to reproduce a
+Jupyter or Hex notebook.
+
+1. **Let the model choose the work.** The model selects the useful analytical
+   actions for the question and available data. It may add, omit, reorder, or
+   revisit steps; do not require every Investigation to follow the same stages.
+2. **Show the work in the order it happened.** Present meaningful analysis
+   actions and their outputs as an ordered, readable record. Distinguish work
+   already performed from a possible next action; do not display a planned step
+   as completed evidence.
+3. **Do not make steps a completion gate.** An unanswered, skipped, unsupported,
+   or inconclusive step does not by itself fail the run or suppress its answer.
+   Return the best-supported answer available, while clearly stating material
+   assumptions, uncertainty, and evidence gaps. Never imply certainty the data
+   does not support.
+4. **Give each step a concise purpose and result.** Where applicable, show what
+   the model attempted, the relevant input or source scope, the result it
+   observed or computed, and its interpretation. Keep these distinct rather
+   than blending them into one narrative claim.
+5. **Keep evidence beside the conclusion it supports.** Show useful tables,
+   values, and visualizations in context, with a direct path to the source,
+   query/calculation, execution record, and source revision behind them.
+6. **Represent checks accurately.** Show only checks that actually ran and
+   explain what each establishes. A skipped or unavailable check is a disclosed
+   limitation, not a failed checklist item; a passing execution check must not
+   be presented as proof that the business interpretation is correct.
+7. **Support steering without requiring step-by-step operation.** Let the
+   analyst correct a material assumption, ask a follow-up, or request another
+   analysis at any point. Routine steps should not require approval one by one
+   or an up-front commitment to a fixed plan.
+8. **Preserve iteration and provenance.** If the model revises or reruns work,
+   retain the relationship to prior steps and results, identify what changed,
+   and mark dependent results that need refreshing. Do not silently rewrite the
+   historical record.
+9. **Use progressive disclosure.** Keep the default step readable for a
+   non-specialist; expose query logic, parameters, detailed rows, and technical
+   checks when the user asks to inspect them. A small question should not turn
+   into a verbose procedural report.
+10. **Make the answer easy to recover.** Keep the current answer and key
+    findings readily visible, with links into the ordered work record for
+    evidence and method. The user should not have to read every step to find
+    the result or reopen the original chat to understand it.
+11. **Show useful explanations, not hidden reasoning.** Summarize actions,
+    evidence, decisions, and concise rationale. Do not expose raw internal
+    reasoning or invent a tidy step-by-step explanation after the analysis.
+
 ## Priority questions for product design
 
 1. **Continuity:** How does an analyst return after a day or a week and see the

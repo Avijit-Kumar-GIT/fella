@@ -264,10 +264,13 @@ An investigation should make the following legible and steerable:
    prior evidence is still current, what remains open, and what can be shared.
 
 This borrows the *inspectability* of notebook workflows without making Fella a
-Jupyter clone. The analyst needs control over the investigation, not a general
-kernel, arbitrary package ecosystem, or a forced cell-by-cell interface. The
-notebook-inspired direction and its limits are recorded in
-[Stack vision](STACK-VISION.md).
+Jupyter clone. The Investigation may be presented as an ordered sequence of
+analysis steps, but that sequence records work the model chose to do; it is not
+a fixed workflow or a user-operated cell runner. The model may add, skip,
+revise, or revisit steps as the question and evidence require. The analyst can
+steer the work without having to prescribe every step or approve a routine plan
+before it proceeds. The notebook-inspired direction and its limits are
+recorded in [Stack vision](STACK-VISION.md).
 
 ## Trust and control model
 
