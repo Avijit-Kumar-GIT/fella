@@ -241,11 +241,17 @@
 			investigations = all.filter((item) => item.workspace_id === path);
 			const activeConversation = session.activeChat;
 			const activeQuestion = firstActualQuestion(activeConversation.messages);
+			const navigationTarget = session.investigationNavigationTarget;
+			const navigationInvestigation = navigationTarget?.workspaceId === path
+				? investigations.find((item) => item.conversation_id === navigationTarget.conversationId)
+					?? investigations.find((item) => (item.analysis_turn_ids ?? []).includes(navigationTarget.turnId)
+						|| (item.questions ?? []).some((question) => question.analysis_turn_ids?.includes(navigationTarget.turnId)))
+				: null;
 			const linkedToConversation = investigations.find((item) =>
 				item.conversation_id === activeConversation.id ||
 				(!!activeQuestion && item.brief_source_message_id === activeQuestion.id)
 			);
-			selectedId = linkedToConversation?.id ?? investigations[0]?.id ?? null;
+			selectedId = navigationInvestigation?.id ?? linkedToConversation?.id ?? investigations[0]?.id ?? null;
 		} catch (cause) {
 			if (serial === requestSerial) error = cause instanceof Error ? cause.message : String(cause);
 		} finally {
@@ -306,6 +312,17 @@
 		const item = selected;
 		const missing = unlinkedAnalysisTurnIds;
 		if (item && missing.length && isDesktop()) void syncAnalysisTurns(item.id);
+	});
+
+	$effect(() => {
+		const target = session.investigationNavigationTarget;
+		const item = selected;
+		if (!target || !item || loading || target.workspaceId !== item.workspace_id) return;
+		if (item.conversation_id !== target.conversationId
+			&& !(item.analysis_turn_ids ?? []).includes(target.turnId)
+			&& !(item.questions ?? []).some((question) => question.analysis_turn_ids?.includes(target.turnId))) return;
+		session.clearInvestigationNavigationTarget(target);
+		void openAnalysisRun(target.turnId);
 	});
 
 	$effect(() => {
@@ -402,7 +419,7 @@
 		}
 	}
 
-	async function openSelectedConversation(): Promise<boolean> {
+	async function openSelectedConversation(focusTurnId?: string): Promise<boolean> {
 		const item = selected;
 		if (!item || openingConversation || !isDesktop()) return false;
 		if (questionsDirty || definitionsDirty) {
@@ -446,6 +463,7 @@
 				if (!(await openConversation(summary))) throw new Error('Fella could not open the linked conversation.');
 			}
 			session.setWorkspaceView('ask');
+			if (focusTurnId) session.focusConversationAnalysis(conversationId, focusTurnId);
 			return true;
 		} catch (cause) {
 			error = cause instanceof Error ? cause.message : String(cause);
@@ -1932,6 +1950,11 @@
 										<h4>Saved analysis run</h4>
 										<p>{analysisRunSummary(openAnalysisTurnId)}</p>
 									</div>
+									{#if openAnalysisTurn?.conversation_id && selected.conversation_id === openAnalysisTurn.conversation_id}
+										<Button type="button" variant="outline" size="sm" onclick={() => void openSelectedConversation(openAnalysisTurnId!)}>
+											<Icon name="ask" size={14} />Open conversation result
+										</Button>
+									{/if}
 									<Button type="button" variant="ghost" aria-label="Close saved analysis run" onclick={() => (openAnalysisTurnId = null)}>Close</Button>
 								</header>
 								{#if analysisTurnLoadingId === openAnalysisTurnId}
@@ -1971,7 +1994,15 @@
 										</div>
 									</dl>
 									<dl class="analysis-run-question-snapshot">
-										<div><dt>Question at run</dt><dd>{openAnalysisTurn.investigation_context?.question_text ?? openAnalysisTurn.question}</dd></div>
+										<div>
+											<dt>Question at run</dt>
+											<dd>
+												{openAnalysisTurn.investigation_context?.question_text ?? openAnalysisTurn.question}
+												{#if openAnalysisTurn.investigation_context?.question_id && selected.questions?.some((question) => question.id === openAnalysisTurn.investigation_context?.question_id)}
+													<Button type="button" variant="ghost" size="sm" onclick={() => focusQuestion(openAnalysisTurn.investigation_context!.question_id!)}>Go to Question</Button>
+												{/if}
+											</dd>
+										</div>
 									</dl>
 									{#if openAnalysisTurn.contract?.assumptions.length}
 										<section class="analysis-run-assumptions" aria-label="Assumptions recorded for this run">

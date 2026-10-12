@@ -484,6 +484,17 @@ export class Conversation {
 export type WorkspaceView = 'ask' | 'workspace' | 'board' | 'settings' | 'project';
 export type WorkspacePane = 'context' | 'investigation';
 
+export interface InvestigationNavigationTarget {
+	workspaceId: string;
+	conversationId: string;
+	turnId: string;
+}
+
+export interface ConversationAnalysisFocus {
+	conversationId: string;
+	turnId: string;
+}
+
 class Session {
 	#deletingWorkspacePaths = new Set<string>();
 	#pendingArchivesByWorkspace = new Map<string, Set<Promise<void>>>();
@@ -501,6 +512,9 @@ class Session {
 	workspaceView = $state<WorkspaceView>('ask');
 	/** The active pane inside Workspace. */
 	workspacePane = $state<WorkspacePane>('investigation');
+	/** Ephemeral cross-navigation between a transcript answer and its canonical run. */
+	investigationNavigationTarget = $state<InvestigationNavigationTarget | null>(null);
+	conversationAnalysisFocus = $state<ConversationAnalysisFocus | null>(null);
 	settings = $state<Settings | null>(null);
 	health = $state<ProviderHealth | null>(null);
 	/** Built-in providers from the engine, cached so the composer can hint
@@ -1099,6 +1113,31 @@ class Session {
 		}
 		this.workspacePane = pane;
 		this.workspaceView = 'workspace';
+	}
+
+	openInvestigationRun(turnId: string): boolean {
+		const conversation = this.activeChat;
+		const workspaceId = conversation.workspaceScope;
+		if (!workspaceId || this.catalog.workspace !== workspaceId || !turnId.trim()) return false;
+		this.investigationNavigationTarget = {
+			workspaceId,
+			conversationId: conversation.id,
+			turnId
+		};
+		this.setWorkspacePane('investigation');
+		return this.workspaceView === 'workspace';
+	}
+
+	clearInvestigationNavigationTarget(target: InvestigationNavigationTarget): void {
+		if (this.investigationNavigationTarget === target) this.investigationNavigationTarget = null;
+	}
+
+	focusConversationAnalysis(conversationId: string, turnId: string): void {
+		this.conversationAnalysisFocus = { conversationId, turnId };
+	}
+
+	clearConversationAnalysisFocus(target: ConversationAnalysisFocus): void {
+		if (this.conversationAnalysisFocus === target) this.conversationAnalysisFocus = null;
 	}
 
 	selectSource(path: string | null): void {

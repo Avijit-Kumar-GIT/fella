@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { tick } from 'svelte';
 	import { dispatch, openFolder, rerunAnalysisTurn } from '$lib/commands';
 	import { Button } from '$lib/components/ui/button';
 	import { session } from '$lib/session.svelte';
@@ -96,6 +97,19 @@
 		if (stick && scroller) {
 			queueMicrotask(() => scroller.scrollTo({ top: scroller.scrollHeight }));
 		}
+	});
+
+	$effect(() => {
+		const target = session.conversationAnalysisFocus;
+		if (!target || target.conversationId !== session.activeChat.id) return;
+		void tick().then(() => {
+			if (session.conversationAnalysisFocus !== target || target.conversationId !== session.activeChat.id) return;
+			const message = [...(scroller?.querySelectorAll<HTMLElement>('[data-analysis-turn-id]') ?? [])]
+				.find((element) => element.dataset.analysisTurnId === target.turnId);
+			if (!message) return;
+			message.scrollIntoView({ behavior: 'smooth', block: 'center' });
+			session.clearConversationAnalysisFocus(target);
+		});
 	});
 
 	export function collapseAll() {
@@ -255,6 +269,9 @@
 									: null
 							}
 							onopenchart={(messageId, evidenceIndex) => session.openChartPane(messageId, evidenceIndex)}
+							onopeninvestigationrun={session.activeChat.workspaceScope === session.catalog.workspace
+								? (turnId) => session.openInvestigationRun(turnId)
+								: undefined}
 							onfollowup={(next, clarificationTurnId) =>
 								void dispatch(next, clarificationTurnId)}
 							onrerun={() => rerun(m)}

@@ -904,6 +904,32 @@ test('an Investigation opens its canonical workspace conversation', async ({ pag
 	expect(await page.evaluate(() => window.__workspaceAskCalls.length)).toBe(1);
 });
 
+test('a saved answer opens its canonical run and returns to the same conversation result', async ({ page }) => {
+	await installDesktopMock(page, {
+		questionRunOutcomes: [{ answer_text: 'Weekly sales rose 12% in the saved analysis.' }]
+	});
+	await page.goto('/');
+	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
+	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
+	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill('Explain weekly sales');
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	await page.getByRole('button', { name: 'Analyze main Question' }).click();
+	await page.getByRole('region', { name: 'Review this run' }).getByRole('button', { name: 'Run this Question' }).click();
+	const answer = page.locator('.msg.assistant[data-analysis-turn-id="fixture-question-turn-1"]');
+	await expect(answer).toContainText('Weekly sales rose 12% in the saved analysis.');
+	await answer.getByRole('button', { name: 'Open in Investigation' }).click();
+	await expect(page.getByRole('region', { name: 'Saved analysis run' })).toBeVisible();
+	await expect(page.getByText('Question at run')).toBeVisible();
+	await expect(page.getByRole('button', { name: 'Go to Question' })).toBeVisible();
+	await page.getByRole('button', { name: 'Open conversation result' }).click();
+	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
+	await expect(answer).toBeVisible();
+	await expect(answer).toContainText('Weekly sales rose 12% in the saved analysis.');
+	expect(await page.evaluate(() => window.__workspaceAskCalls.length)).toBe(2);
+});
+
 test('an analyst can edit the main Question and linked subquestions without rewriting the request', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');

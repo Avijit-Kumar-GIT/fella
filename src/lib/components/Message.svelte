@@ -19,6 +19,7 @@
 		onfollowup,
 		onrerun,
 		onopenchart,
+		onopeninvestigationrun,
 		openChartIndex = null
 	}: {
 		message: Message;
@@ -29,6 +30,7 @@
 		onfollowup?: (question: string, clarificationTurnId?: string) => void;
 		onrerun?: () => Promise<void>;
 		onopenchart?: (messageId: string, evidenceIndex: number) => void;
+		onopeninvestigationrun?: (turnId: string) => void;
 		openChartIndex?: number | null;
 	} = $props();
 
@@ -165,7 +167,7 @@
 	});
 </script>
 
-<div class="msg {message.role}" transition:enterUp>
+<div class="msg {message.role}" data-analysis-turn-id={message.role === 'assistant' ? message.answer?.turn_id : undefined} transition:enterUp>
 	{#if message.role === 'user'}
 		<span class="sr-only">You asked: </span>
 		<div class="you">
@@ -242,6 +244,11 @@
 			{expanded}
 			onrerun={message.answer.turn_id ? onrerun : undefined}
 		/>
+		{#if message.answer.turn_id && onopeninvestigationrun}
+			<Button type="button" variant="ghost" size="sm" class="investigation-run-link" onclick={() => onopeninvestigationrun?.(message.answer!.turn_id!)}>
+				<Icon name="bookmark" size={14} />Open in Investigation
+			</Button>
+		{/if}
 		{#if showFollowups && onfollowup && followups.length && !message.answer.clarification}
 			<div class="followups" aria-label="Suggested follow-up questions">
 				<span class="followup-label">Continue with</span>
@@ -267,6 +274,10 @@
 		border-left: 2px solid var(--brand);
 		color: var(--text-dim);
 		font-size: var(--fs-xs);
+	}
+	.investigation-run-link {
+		margin-top: var(--space-1);
+		color: var(--text-dim);
 	}
 	.chart-reference span:first-child { color: var(--text); font-weight: 600; }
 	.msg.user {
