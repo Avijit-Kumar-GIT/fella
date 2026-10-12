@@ -104,6 +104,14 @@ async function expandInvestigationDefinitions(page) {
 	}
 }
 
+async function waitForQuestionPlanSaved(page) {
+	await expect(page.getByRole('region', { name: 'Question plan' }).locator('.question-save')).toHaveText('Saved');
+}
+
+async function waitForDefinitionsSaved(page) {
+	await expect(page.locator('.definition-editor .question-save')).toHaveText('Saved');
+}
+
 async function expectQuestionRunSettled(page) {
 	const timeline = page.getByRole('region', { name: 'Question run' }).last();
 	await expect(timeline).toBeVisible();
@@ -262,6 +270,7 @@ async function installDesktopMock(
 		window.__workspaceInvestigationEnsureCalls = investigationEnsureCalls;
 		window.__workspaceQuestionProposalCalls = questionProposalCalls;
 		window.__workspaceContextSaveCalls = workspaceContextSaveCalls;
+		window.__workspaceQuestionSaveFailure = false;
 		window.__workspaceContextFor = (workspaceId) => workspaceContextFiles.get(workspaceId) ?? null;
 		window.__workspaceInvestigations = () => [...investigations.values()];
 		window.__workspaceAnalysisTurns = () => [...analysisTurns.values()];
@@ -384,6 +393,7 @@ async function installDesktopMock(
 						throw new Error(`Unknown Investigation: ${args.investigationId}`);
 					}
 					case 'investigation_update_questions': {
+						if (window.__workspaceQuestionSaveFailure) throw new Error('Fixture question autosave failure');
 						for (const [key, record] of investigations) {
 							if (record.id === args.investigationId) {
 								const now = Date.now();
@@ -1376,9 +1386,8 @@ test('workspace layout presets preserve the same Investigation, source scope, Qu
 		mode: 'selected_sources',
 		included_paths: ['sales.csv']
 	});
-	// Resolve the edited Question before switching views so this test isolates its source-scope update.
-	await page.getByRole('button', { name: 'Save plan' }).click();
-	await expect(page.getByRole('region', { name: 'Question plan' }).locator('.question-save')).toContainText('Plan saved');
+	// Let autosave settle so this test isolates the source-scope update.
+	await waitForQuestionPlanSaved(page);
 	await expect.poll(() => page.evaluate(() => window.__workspaceInvestigations()[0].questions[0].text)).toBe('Measure weekly net sales');
 
 	await preset('Focus').click();
@@ -1619,8 +1628,7 @@ test('an analyst can edit the main Question and linked subquestions without rewr
 	await page.getByRole('textbox', { name: 'Subquestion 3' }).fill('Compare conversion by region');
 	await page.getByRole('button', { name: 'Move Subquestion 3 up' }).click();
 	await page.getByRole('button', { name: 'Remove Subquestion 1' }).click();
-	await page.getByRole('button', { name: 'Save plan' }).click();
-	await expect(page.getByRole('region', { name: 'Question plan' }).locator('.question-save')).toContainText('Plan saved');
+	await waitForQuestionPlanSaved(page);
 
 	const saved = await page.evaluate(() => window.__workspaceInvestigations()[0]);
 	expect(saved.questions.map((item) => item.text)).toEqual([
@@ -1826,7 +1834,7 @@ test('Questions show persisted coverage states and explain incomplete, blocked, 
 	await expect(page.locator('.root-question-item .question-status-reason')).toHaveCount(0);
 
 	await page.getByRole('textbox', { name: 'Main question' }).fill('Explain the change in weekly net sales');
-	await page.getByRole('button', { name: 'Save plan' }).click();
+	await waitForQuestionPlanSaved(page);
 	await expect(page.locator('.root-question-item [data-slot="badge"][data-question-status]')).toHaveText('Outdated');
 	await expect(page.locator('.root-question-item .question-status-reason')).toContainText('The Question or its source scope changed. Run it again to refresh the answer.');
 });
@@ -1852,7 +1860,7 @@ test('completion follows Question coverage and keeps documented gaps visible', a
 	await page.getByRole('textbox', { name: 'Subquestion 2' }).fill('Check the seasonal pattern');
 	await page.getByRole('button', { name: 'Add subquestion' }).click();
 	await page.getByRole('textbox', { name: 'Subquestion 3' }).fill('Inspect returns by region');
-	await page.getByRole('button', { name: 'Save plan' }).click();
+	await waitForQuestionPlanSaved(page);
 
 	const runQuestion = async (buttonName) => {
 		await page.getByRole('button', { name: buttonName }).click();
@@ -2055,7 +2063,7 @@ test('each Question opens its saved answer with explicit partial or complete cov
 
 	await page.getByRole('button', { name: 'Add subquestion' }).click();
 	await page.getByRole('textbox', { name: 'Subquestion 1' }).fill('Compare refund patterns by channel');
-	await page.getByRole('button', { name: 'Save plan' }).click();
+	await waitForQuestionPlanSaved(page);
 	await page.getByRole('button', { name: 'Analyze Subquestion 1' }).click();
 	await page.getByRole('region', { name: 'Review this run' }).getByRole('button', { name: 'Run this Question' }).click();
 	await expectQuestionRunSettled(page);
@@ -2168,7 +2176,7 @@ test('a multi-question Investigation carries coverage, QA, and run links into it
 	await page.getByRole('textbox', { name: 'Subquestion 1' }).fill(regionalQuestion);
 	await page.getByRole('button', { name: 'Add subquestion' }).click();
 	await page.getByRole('textbox', { name: 'Subquestion 2' }).fill(refundQuestion);
-	await page.getByRole('button', { name: 'Save plan' }).click();
+	await waitForQuestionPlanSaved(page);
 
 	const runQuestion = async (label) => {
 		await page.getByRole('button', { name: `Analyze ${label}` }).click();
@@ -2291,7 +2299,7 @@ test('saved analysis runs open from an Investigation and link to every Question 
 
 	await page.getByRole('button', { name: 'Add subquestion' }).click();
 	await page.getByRole('textbox', { name: 'Subquestion 1' }).fill('Compare refunds by sales channel');
-	await page.getByRole('button', { name: 'Save plan' }).click();
+	await waitForQuestionPlanSaved(page);
 	await savedRunLink.click();
 	await runDetail.locator('.analysis-run-question-links input[type="checkbox"]').nth(1).check();
 	await runDetail.getByRole('button', { name: 'Save Question links' }).click();
@@ -2335,8 +2343,7 @@ test('an analyst can review a run assumption, correct it in Investigation contex
 	const contextNote = page.getByRole('textbox', { name: 'Context note 1' });
 	await expect(contextNote).toHaveValue(recordedAssumption);
 	await contextNote.fill(correctedAssumption);
-	await page.getByRole('button', { name: 'Save context' }).click();
-	await expect(page.locator('.definition-editor')).toContainText('Context saved');
+	await waitForDefinitionsSaved(page);
 	expect((await page.evaluate(() => window.__workspaceInvestigations()[0])).definitions).toMatchObject([
 		{ kind: 'assumption', text: correctedAssumption }
 	]);
@@ -2369,8 +2376,7 @@ test('saved Investigation definitions are revisioned, attached to later asks, an
 	await page.getByRole('combobox', { name: 'Context type 1' }).selectOption('assumption');
 	const note = page.getByRole('textbox', { name: 'Context note 1' });
 	await note.fill('A missing cancellation date means the account is still active.');
-	await page.getByRole('button', { name: 'Save context' }).click();
-	await expect(page.locator('.definition-editor')).toContainText('Context saved');
+	await waitForDefinitionsSaved(page);
 
 	let saved = await page.evaluate(() => window.__workspaceInvestigations()[0]);
 	expect(saved.definitions).toHaveLength(1);
@@ -2385,7 +2391,7 @@ test('saved Investigation definitions are revisioned, attached to later asks, an
 	expect(firstRecord).toMatchObject({ id: definitionId, investigation_id: saved.id, revision: 1, history: [] });
 
 	await note.fill('A missing cancellation date is not sufficient evidence of an active account.');
-	await page.getByRole('button', { name: 'Save context' }).click();
+	await waitForDefinitionsSaved(page);
 	await expect(page.locator('.definition-item')).toContainText('Saved revision 2');
 	saved = await page.evaluate(() => window.__workspaceInvestigations()[0]);
 	const revised = await page.evaluate((id) => window.fella.invoke('investigation_definition_load', { definitionId: id }), definitionId);
@@ -2409,7 +2415,7 @@ test('saved Investigation definitions are revisioned, attached to later asks, an
 	await expandInvestigationDefinitions(page);
 	await expect(page.locator('.definition-disclosure > summary')).toContainText('Definitions & assumptions');
 	await page.getByRole('button', { name: 'Remove context note 1' }).click();
-	await page.getByRole('button', { name: 'Save context' }).click();
+	await waitForDefinitionsSaved(page);
 	await expect(page.locator('.definition-empty')).toContainText('No saved definitions or assumptions');
 	saved = await page.evaluate(() => window.__workspaceInvestigations()[0]);
 	expect(saved.definitions).toEqual([]);
@@ -2454,8 +2460,7 @@ test('saved run review exposes its method, query output, definitions, and actual
 	await expect(readiness.locator('.scope-controls legend')).toContainText('future runs');
 	await page.getByRole('button', { name: 'Add definition or assumption' }).click();
 	await page.getByRole('textbox', { name: 'Context note 1' }).fill('One row represents one signup-month cohort; retention is retained accounts divided by cohort accounts.');
-	await page.getByRole('button', { name: 'Save context' }).click();
-	await expect(page.locator('.definition-editor')).toContainText('Context saved');
+	await waitForDefinitionsSaved(page);
 	await page.getByRole('button', { name: 'Analyze main Question' }).click();
 	await page.getByRole('region', { name: 'Review this run' }).getByRole('button', { name: 'Run this Question' }).click();
 	await expectQuestionRunSettled(page);
@@ -2570,8 +2575,7 @@ test('repeated Question runs stay chronological and preserve each attempt contex
 	await page.getByRole('button', { name: 'Add definition or assumption' }).click();
 	const savedDefinition = page.getByRole('textbox', { name: 'Context note 1' });
 	await savedDefinition.fill('Net sales exclude refunds.');
-	await page.getByRole('button', { name: 'Save context' }).click();
-	await expect(page.locator('.definition-editor')).toContainText('Context saved');
+	await waitForDefinitionsSaved(page);
 
 	const runQuestion = async () => {
 		await page.getByRole('button', { name: 'Analyze main Question' }).click();
@@ -2582,7 +2586,7 @@ test('repeated Question runs stay chronological and preserve each attempt contex
 	await runQuestion();
 	await expandInvestigationDefinitions(page);
 	await savedDefinition.fill('Net sales include refunds.');
-	await page.getByRole('button', { name: 'Save context' }).click();
+	await waitForDefinitionsSaved(page);
 	await expect(page.locator('.definition-item')).toContainText('Saved revision 2');
 	await runQuestion();
 
@@ -2760,7 +2764,7 @@ test('Investigation results summarize saved work, render linked charts, and keep
 	await page.getByRole('button', { name: 'Save brief' }).click();
 	await page.getByRole('button', { name: 'Add subquestion' }).click();
 	await page.getByRole('textbox', { name: 'Subquestion 1' }).fill('Check whether discounts explain the March dip.');
-	await page.getByRole('button', { name: 'Save plan' }).click();
+	await waitForQuestionPlanSaved(page);
 	await page.getByRole('button', { name: 'Analyze main Question' }).click();
 	await page.getByRole('region', { name: 'Review this run' }).getByRole('button', { name: 'Run this Question' }).click();
 	await expect(page.getByRole('log', { name: 'conversation' }).getByText('Net sales rose 22% from January to February, then eased slightly in March.', { exact: true })).toBeVisible();
@@ -2973,7 +2977,7 @@ test('Investigation Results keep transcript-only historical work outside current
 	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
 	await page.getByRole('button', { name: 'Add subquestion' }).click();
 	await page.getByRole('textbox', { name: 'Subquestion 1' }).fill('Compare weekly sales by channel');
-	await page.getByRole('button', { name: 'Save plan' }).click();
+	await waitForQuestionPlanSaved(page);
 	await page.getByRole('button', { name: 'Analyze main Question' }).click();
 	await page.getByRole('region', { name: 'Review this run' }).getByRole('button', { name: 'Run this Question' }).click();
 	await expect(page.getByRole('log', { name: 'conversation' }).getByText('The ten available weeks total $40.', { exact: true })).toBeVisible();
@@ -3168,10 +3172,10 @@ test('Investigation report exports saved answers, Findings, QA, and source prove
 	await expect(page.locator('.brief-summary')).toContainText('A concise weekly report');
 	await page.getByRole('button', { name: 'Add definition or assumption' }).click();
 	await page.getByRole('textbox', { name: 'Context note 1' }).fill('Net sales exclude refunds.');
-	await page.getByRole('button', { name: 'Save context' }).click();
+	await waitForDefinitionsSaved(page);
 	await page.getByRole('button', { name: 'Add subquestion' }).click();
 	await page.getByRole('textbox', { name: 'Subquestion 1' }).fill('Compare sales by region.');
-	await page.getByRole('button', { name: 'Save plan' }).click();
+	await waitForQuestionPlanSaved(page);
 	await page.getByRole('button', { name: 'Analyze main Question' }).click();
 	await page.getByRole('region', { name: 'Review this run' }).getByRole('button', { name: 'Run this Question' }).click();
 	await expectQuestionRunSettled(page);
@@ -3303,8 +3307,7 @@ test('Finding revisions preserve prior versions and compare the supporting run c
 	await page.getByRole('button', { name: 'Add definition or assumption' }).click();
 	const contextNote = page.getByRole('textbox', { name: 'Context note 1' });
 	await contextNote.fill('Net sales exclude refunds.');
-	await page.getByRole('button', { name: 'Save context' }).click();
-	await expect(page.locator('.definition-editor')).toContainText('Context saved');
+	await waitForDefinitionsSaved(page);
 
 	const runQuestion = async () => {
 		await page.getByRole('button', { name: 'Analyze main Question' }).click();
@@ -3324,7 +3327,7 @@ test('Finding revisions preserve prior versions and compare the supporting run c
 
 	await expandInvestigationDefinitions(page);
 	await contextNote.fill('Net sales include refund adjustments.');
-	await page.getByRole('button', { name: 'Save context' }).click();
+	await waitForDefinitionsSaved(page);
 	await expect(page.locator('.definition-item')).toContainText('Saved revision 2');
 	await runQuestion();
 	await expandInvestigationHistory(page);
@@ -3425,7 +3428,7 @@ test('suggested Question breakdown autosaves as durable child records', async ({
 	expect(afterSuggestion.proposalCalls).toHaveLength(1);
 	await expect(page.getByRole('button', { name: 'Open conversation', exact: true })).toBeVisible();
 	await expect.poll(() => page.evaluate(() => window.__workspaceInvestigations()[0].questions.length)).toBe(3);
-	await expect(page.getByRole('region', { name: 'Question plan' }).locator('.question-save')).toContainText('Plan saved');
+	await waitForQuestionPlanSaved(page);
 	const saved = await page.evaluate(() => window.__workspaceInvestigations()[0]);
 	expect(saved.questions.map((item) => item.text)).toEqual([
 		'Understand conversion by channel',
@@ -3444,6 +3447,60 @@ test('suggested Question breakdown autosaves as durable child records', async ({
 		status: 'active'
 	});
 	await expect(page.getByRole('heading', { name: 'Investigation', exact: true })).toBeVisible();
+});
+
+test('Question autosave keeps focus and layout steady while a save is in progress', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+	await addSalesWorkspace(page);
+	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill('Understand conversion by channel');
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+
+	const questionPlan = page.getByRole('region', { name: 'Question plan' });
+	const mainQuestion = page.getByRole('textbox', { name: 'Main question' });
+	const header = questionPlan.locator('.question-plan-heading');
+	await mainQuestion.focus();
+	const before = await header.boundingBox();
+	await page.evaluate(() => {
+		const invoke = window.fella.invoke;
+		window.fella.invoke = async (command, args) => {
+			if (command === 'investigation_update_questions') await new Promise((resolve) => setTimeout(resolve, 1000));
+			return invoke(command, args);
+		};
+	});
+	await mainQuestion.fill('Measure weekly net sales with returns');
+	await expect(questionPlan.locator('.question-save')).toHaveText('Saving…');
+	await expect(mainQuestion).toBeFocused();
+	expectSameRenderedBox(await header.boundingBox(), before);
+	await expect.poll(() => page.evaluate(() => window.__workspaceInvestigations()[0].questions[0].text))
+		.toBe('Measure weekly net sales with returns');
+	await expect(mainQuestion).toBeFocused();
+	await waitForQuestionPlanSaved(page);
+	await expect(questionPlan.getByRole('button', { name: 'Save plan' })).toHaveCount(0);
+	await expect(questionPlan.getByRole('button', { name: 'Discard plan' })).toHaveCount(0);
+});
+
+test('Question autosave failures stay visible and can be retried', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+	await addSalesWorkspace(page);
+	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill('Understand conversion by channel');
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	await page.evaluate(() => { window.__workspaceQuestionSaveFailure = true; });
+
+	const questionPlan = page.getByRole('region', { name: 'Question plan' });
+	await page.getByRole('textbox', { name: 'Main question' }).fill('Measure weekly net sales');
+	await expect(questionPlan.locator('.question-save')).toContainText('Fixture question autosave failure');
+	await expect(page.getByRole('heading', { name: "Couldn't load investigations" })).toHaveCount(0);
+	await page.evaluate(() => { window.__workspaceQuestionSaveFailure = false; });
+	await questionPlan.getByRole('button', { name: 'Retry save' }).click();
+	await waitForQuestionPlanSaved(page);
+	await expect.poll(() => page.evaluate(() => window.__workspaceInvestigations()[0].questions[0].text))
+		.toBe('Measure weekly net sales');
 });
 
 test('Investigation shows source readiness and opens source details in place', async ({ page }) => {

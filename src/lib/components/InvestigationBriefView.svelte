@@ -82,6 +82,7 @@
 	let creating = $state(false);
 	let openingConversation = $state(false);
 	let saving = $state(false);
+	let autosaving = $state(false);
 	let proposingQuestions = $state(false);
 	let startingQuestionAnalysis = $state(false);
 	let analysisTurns = $state<Record<string, AnalysisTurn>>({});
@@ -115,6 +116,7 @@
 	let reportPreviewOpen = $state(false);
 	let reportPreview = $state<HandoffPreview | null>(null);
 	let error = $state('');
+	let autosaveError = $state('');
 	let requestSerial = 0;
 	let autosaveTimer: ReturnType<typeof setTimeout> | undefined;
 	let autosaveInProgress: Promise<void> | null = null;
@@ -250,11 +252,14 @@
 		if (key === observedEditableDraftKey) return;
 		observedEditableDraftKey = key;
 		if (error) error = '';
+		if (autosaveError) autosaveError = '';
 	});
 	$effect(() => {
 		const itemId = selected?.id;
-		const hasEditableChanges = dirty || questionsDirty || definitionsDirty;
-		if (!itemId || !hasEditableChanges || saving || proposingQuestions || error) return;
+		const hasEditableChanges = dirty
+			|| (questionsDirty && questions.every((question) => question.text.trim()))
+			|| (definitionsDirty && definitions.every((definition) => definition.text.trim()));
+		if (!itemId || !hasEditableChanges || saving || autosaving || proposingQuestions || autosaveError) return;
 		clearTimeout(autosaveTimer);
 		autosaveTimer = setTimeout(() => void saveEditableDrafts(itemId), 700);
 		return () => clearTimeout(autosaveTimer);
@@ -290,6 +295,7 @@
 				&& !questionsDirty
 				&& !definitionsDirty
 				&& !saving
+				&& !autosaving
 		};
 	});
 	let hasBlankQuestion = $derived(questions.some((question) => !question.text.trim()));
@@ -297,7 +303,7 @@
 	let canSuggestBreakdown = $derived(Boolean(rootQuestion?.text.trim()) && subquestions.length === 0);
 	let reportExportDisabledReason = $derived.by(() => {
 		if (!selected) return 'Select an Investigation before exporting.';
-		if (dirty || questionsDirty || definitionsDirty || saving) return 'Save the brief, Question plan, and definitions before exporting.';
+		if (dirty || questionsDirty || definitionsDirty || saving || autosaving) return 'Wait for the Investigation changes to save before exporting.';
 		if (selected.questions?.some((question) => question.status === 'active' && question.answer_status === 'running')) {
 			return 'Wait for active analysis runs to finish before exporting.';
 		}
@@ -428,6 +434,7 @@
 		const key = item ? `${item.id}:${JSON.stringify(item.brief)}` : '';
 		if (key === loadedBriefKey) return;
 		loadedBriefKey = key;
+		if (autosaving && item?.id === selectedId) return;
 		briefEditing = false;
 		if (!item) {
 			goal = '';
@@ -449,6 +456,7 @@
 		const key = item ? `${item.id}:${JSON.stringify(item.questions ?? null)}` : '';
 		if (key === loadedQuestionsKey) return;
 		loadedQuestionsKey = key;
+		if (autosaving && item?.id === selectedId) return;
 		if (!item) {
 			questions = [];
 			savedQuestions = '';
@@ -470,6 +478,7 @@
 		const key = item ? `${item.id}:${JSON.stringify(item.definitions ?? null)}` : '';
 		if (key === loadedDefinitionsKey) return;
 		loadedDefinitionsKey = key;
+		if (autosaving && item?.id === selectedId) return;
 		definitions = (item?.definitions ?? []).map((definition) => ({
 			id: definition.id,
 			kind: definition.kind,
@@ -563,11 +572,18 @@
 	}
 
 	async function saveBrief(closeEditor = true): Promise<boolean> {
-		if (!selected || saving || !dirty) return !dirty;
+		const itemId = selected?.id;
+		if (!itemId) return false;
+		await waitForEditableAutosave();
+		if (selected?.id !== itemId || saving) return false;
+		if (!dirty) {
+			if (closeEditor) briefEditing = false;
+			return true;
+		}
 		saving = true;
 		error = '';
 		try {
-			const updated = await ipc.investigationUpdateBrief(selected.id, currentBrief);
+			const updated = await ipc.investigationUpdateBrief(itemId, currentBrief);
 			investigations = investigations.map((item) => item.id === updated.id ? updated : item);
 			savedBrief = JSON.stringify(updated.brief);
 			if (closeEditor) briefEditing = false;
@@ -1342,22 +1358,6 @@
 		if (pendingAnalysisQuestionId === id) pendingAnalysisQuestionId = null;
 	}
 
-	function discardQuestions(): void {
-		const item = selected;
-		if (!item || saving || proposingQuestions) return;
-		questions = (item.questions ?? (item.brief.goal.trim()
-			? [{ id: `legacy-${item.id}`, text: item.brief.goal, parent_id: undefined, source_selection: undefined }]
-			: [])).map((question) => ({
-			id: question.id,
-			text: question.text,
-			parent_id: question.parent_id,
-			source_selection: question.source_selection
-		}));
-		savedQuestions = JSON.stringify(questions);
-		pendingAnalysisQuestionId = null;
-		error = '';
-	}
-
 	async function suggestBreakdown(): Promise<void> {
 		const item = selected;
 		const root = rootQuestion;
@@ -1382,7 +1382,11 @@
 	}
 
 	async function saveQuestions(): Promise<boolean> {
-		if (!selected || saving || !questionsDirty) return !questionsDirty;
+		const itemId = selected?.id;
+		if (!itemId) return false;
+		await waitForEditableAutosave();
+		if (selected?.id !== itemId) return false;
+		if (saving || !questionsDirty) return !questionsDirty;
 		if (hasBlankQuestion) {
 			error = 'Fill in or remove each blank Question before saving the plan.';
 			return false;
@@ -1450,20 +1454,12 @@
 		definitions = definitions.filter((definition) => definition.id !== id);
 	}
 
-	function discardDefinitions(): void {
-		const item = selected;
-		if (!item || saving) return;
-		definitions = (item.definitions ?? []).map((definition) => ({
-			id: definition.id,
-			kind: definition.kind,
-			text: definition.text
-		}));
-		savedDefinitions = JSON.stringify(definitions);
-		error = '';
-	}
-
 	async function saveDefinitions(): Promise<boolean> {
-		if (!selected || saving || !definitionsDirty) return !definitionsDirty;
+		const itemId = selected?.id;
+		if (!itemId) return false;
+		await waitForEditableAutosave();
+		if (selected?.id !== itemId) return false;
+		if (saving || !definitionsDirty) return !definitionsDirty;
 		if (hasBlankDefinition) {
 			error = 'Fill in or remove each blank definition before saving.';
 			return false;
@@ -1499,7 +1495,7 @@
 		if (autosaveInProgress) {
 			const pending = autosaveInProgress;
 			await pending;
-			if (!error && selected?.id === investigationId && (dirty || questionsDirty || definitionsDirty)) {
+			if (!autosaveError && selected?.id === investigationId && (dirty || questionsDirty || definitionsDirty)) {
 				return saveEditableDrafts(investigationId);
 			}
 			return;
@@ -1513,76 +1509,66 @@
 		const questionsChanged = JSON.stringify(questionSnapshot) !== savedQuestions;
 		const definitionSnapshot = definitions.map((definition) => ({ ...definition }));
 		const definitionsChanged = JSON.stringify(definitionSnapshot) !== savedDefinitions;
-		if (!briefChanged && !questionsChanged && !definitionsChanged) return;
+		const saveQuestionsChanged = questionsChanged && questionSnapshot.every((question) => question.text.trim());
+		const saveDefinitionsChanged = definitionsChanged && definitionSnapshot.every((definition) => definition.text.trim());
+		if (!briefChanged && !saveQuestionsChanged && !saveDefinitionsChanged) return;
 
 		const save = async () => {
 			while (saving || proposingQuestions) {
 				await new Promise<void>((resolve) => setTimeout(resolve, 16));
 			}
-			if (briefChanged) {
-				saving = true;
-				error = '';
-				try {
-					const updated = await ipc.investigationUpdateBrief(investigationId, brief);
-					investigations = investigations.map((record) => record.id === updated.id ? updated : record);
-					if (selected?.id === investigationId) savedBrief = JSON.stringify(updated.brief);
-				} catch (cause) {
-					if (selected?.id === investigationId) error = cause instanceof Error ? cause.message : String(cause);
-					return;
-				} finally {
-					saving = false;
-				}
-			}
-			if (questionsChanged && !questionSnapshot.some((question) => !question.text.trim())) {
-				saving = true;
-				error = '';
-				try {
-					const updated = await ipc.investigationUpdateQuestions(investigationId, questionSnapshot.map((question) => ({
-						id: question.id,
-						parent_id: question.parent_id,
-						text: question.text.trim(),
-						source_selection: question.source_selection
-					})));
-					investigations = investigations.map((record) => record.id === updated.id ? updated : record);
-					if (selected?.id === investigationId) {
-						questions = (updated.questions ?? []).map((question) => ({
-							id: question.id,
-							text: question.text,
-							parent_id: question.parent_id,
-							source_selection: question.source_selection
-						}));
-						savedQuestions = JSON.stringify(questions);
+			autosaving = true;
+			autosaveError = '';
+			try {
+				if (briefChanged) {
+					try {
+						const updated = await ipc.investigationUpdateBrief(investigationId, brief);
+						if (selected?.id === investigationId) {
+							loadedBriefKey = `${investigationId}:${JSON.stringify(updated.brief)}`;
+							savedBrief = JSON.stringify(brief);
+						}
+						investigations = investigations.map((record) => record.id === updated.id ? updated : record);
+					} catch (cause) {
+						if (selected?.id === investigationId) autosaveError = cause instanceof Error ? cause.message : String(cause);
+						return;
 					}
-				} catch (cause) {
-					if (selected?.id === investigationId) error = cause instanceof Error ? cause.message : String(cause);
-					return;
-				} finally {
-					saving = false;
 				}
-			}
-			if (definitionsChanged && !definitionSnapshot.some((definition) => !definition.text.trim())) {
-				saving = true;
-				error = '';
-				try {
-					const updated = await ipc.investigationUpdateDefinitions(investigationId, definitionSnapshot.map((definition) => ({
-						id: definition.id,
-						kind: definition.kind,
-						text: definition.text.trim()
-					})));
-					investigations = investigations.map((record) => record.id === updated.id ? updated : record);
-					if (selected?.id === investigationId) {
-						definitions = (updated.definitions ?? []).map((definition) => ({
+				if (saveQuestionsChanged) {
+					try {
+						const updated = await ipc.investigationUpdateQuestions(investigationId, questionSnapshot.map((question) => ({
+							id: question.id,
+							parent_id: question.parent_id,
+							text: question.text.trim(),
+							source_selection: question.source_selection
+						})));
+						if (selected?.id === investigationId) {
+							loadedQuestionsKey = `${investigationId}:${JSON.stringify(updated.questions ?? null)}`;
+							savedQuestions = JSON.stringify(questionSnapshot);
+						}
+						investigations = investigations.map((record) => record.id === updated.id ? updated : record);
+					} catch (cause) {
+						if (selected?.id === investigationId) autosaveError = cause instanceof Error ? cause.message : String(cause);
+						return;
+					}
+				}
+				if (saveDefinitionsChanged) {
+					try {
+						const updated = await ipc.investigationUpdateDefinitions(investigationId, definitionSnapshot.map((definition) => ({
 							id: definition.id,
 							kind: definition.kind,
-							text: definition.text
-						}));
-						savedDefinitions = JSON.stringify(definitions);
+							text: definition.text.trim()
+						})));
+						if (selected?.id === investigationId) {
+							loadedDefinitionsKey = `${investigationId}:${JSON.stringify(updated.definitions ?? null)}`;
+							savedDefinitions = JSON.stringify(definitionSnapshot);
+						}
+						investigations = investigations.map((record) => record.id === updated.id ? updated : record);
+					} catch (cause) {
+						if (selected?.id === investigationId) autosaveError = cause instanceof Error ? cause.message : String(cause);
 					}
-				} catch (cause) {
-					if (selected?.id === investigationId) error = cause instanceof Error ? cause.message : String(cause);
-				} finally {
-					saving = false;
 				}
+			} finally {
+				autosaving = false;
 			}
 		};
 
@@ -1592,6 +1578,21 @@
 		} finally {
 			autosaveInProgress = null;
 		}
+	}
+
+	async function waitForEditableAutosave(): Promise<void> {
+		clearTimeout(autosaveTimer);
+		const pending = autosaveInProgress;
+		if (pending) await pending;
+		clearTimeout(autosaveTimer);
+	}
+
+	function retryEditableAutosave(): void {
+		const itemId = selected?.id;
+		if (!itemId || autosaving) return;
+		autosaveError = '';
+		clearTimeout(autosaveTimer);
+		void saveEditableDrafts(itemId);
 	}
 
 	async function reviewProposal(accept: boolean): Promise<void> {
@@ -1773,7 +1774,7 @@
 					<label for="investigation-constraints">Constraints</label>
 					<Textarea id="investigation-constraints" class="brief-field constraints-field" bind:value={constraintsText} disabled={saving} placeholder="One constraint per line" />
 						<div class="brief-edit-actions">
-							<span role={error ? 'alert' : 'status'}>{error || (saving ? 'Saving…' : dirty ? 'Changes save automatically' : 'Brief saved')}</span>
+							<span role={error || autosaveError ? 'alert' : 'status'}>{error || autosaveError || (saving || autosaving ? 'Saving…' : dirty ? 'Changes save automatically' : 'Brief saved')}</span>
 							<Button type="button" variant="ghost" disabled={saving} onclick={discardBrief}>{dirty ? 'Discard changes' : 'Done'}</Button>
 							<Button type="button" disabled={!dirty || saving} onclick={() => void saveBrief()}>
 								<Icon name="check" size={16} />{saving ? 'Saving…' : 'Save brief'}
@@ -1795,11 +1796,11 @@
 						<header class="work-plan-heading">
 							<div>
 								<h3 id="work-plan-title">Questions</h3>
-								<p>Add, revise, or run the Questions that make sense for this Investigation. A breakdown is optional and can change as you learn more.</p>
+								<p>Define what this Investigation should answer. Add subquestions when they help.</p>
 							</div>
 						</header>
 						<div class="optional-context-heading">
-							<p>Optional semantic context</p>
+							<p>Optional context</p>
 							<Button type="button" variant="ghost" size="sm" disabled={saving} onclick={startDefinition}>
 								<Icon name="plus" size={14} />Add definition or assumption
 							</Button>
@@ -1812,16 +1813,10 @@
 					<section class="definition-editor" aria-labelledby="definition-context-title">
 						<header class="question-heading">
 							<div>
-								<p>Business meanings save automatically. Each run keeps the exact versions it used.</p>
+								<p>Guide future analysis; each run keeps the version it used.</p>
 							</div>
 							<div class="question-save">
-								<span role={error && definitionsDirty ? 'alert' : 'status'}>{error && definitionsDirty ? error : saving && definitionsDirty ? 'Saving…' : definitionsDirty ? 'Changes save automatically' : 'Context saved'}</span>
-								{#if definitionsDirty}
-									<Button type="button" variant="ghost" disabled={saving} onclick={discardDefinitions}>Discard</Button>
-								{/if}
-								<Button type="button" disabled={!definitionsDirty || saving || hasBlankDefinition} onclick={() => void saveDefinitions()}>
-									<Icon name="check" size={16} />{saving ? 'Saving…' : 'Save context'}
-								</Button>
+								<span role={(error || autosaveError) && definitionsDirty ? 'alert' : 'status'}>{(error || autosaveError) && definitionsDirty ? error || autosaveError : (saving || autosaving) && definitionsDirty ? 'Saving…' : definitionsDirty ? hasBlankDefinition ? 'Complete blank fields to save' : 'Changes save automatically' : 'Saved'}</span>
 							</div>
 						</header>
 						{#if definitions.length}
@@ -1857,52 +1852,53 @@
 						{/if}
 					</section>
 						</details>
-					<section class="question-editor" aria-labelledby="question-plan-title">
-						<header class="question-heading">
+					<section class="question-editor" aria-label="Question plan">
+						<header class="question-heading question-plan-heading">
 							<div>
 								<h3 id="question-plan-title">Question plan</h3>
-								<p>The main request is the parent. Its subquestions are linked Questions and save automatically.</p>
+								<p>One main Question, with optional subquestions. Changes save automatically.</p>
 							</div>
 							<div class="question-save">
-								<span role={error ? 'alert' : 'status'}>{error || (saving && questionsDirty ? 'Saving…' : questionsDirty ? 'Changes save automatically' : 'Plan saved')}</span>
-								{#if selected.status === 'complete'}
-									<Button type="button" variant="outline" disabled={saving} onclick={() => void reopenInvestigation()}>
-										Reopen Investigation
-									</Button>
-								{:else}
-									<Button
-										type="button"
-										variant="outline"
-										disabled={!coverage.canComplete || saving}
-						title="Answer each active Question or record a reason for an incomplete or unsupported result; save current edits before completing."
-										onclick={() => void markInvestigationComplete()}
-									>
-										Mark complete
-									</Button>
-								{/if}
-								{#if questionsDirty}
-									<Button type="button" variant="ghost" disabled={saving || proposingQuestions} onclick={discardQuestions}>Discard plan</Button>
-								{/if}
+								<span role={error || autosaveError ? 'alert' : 'status'} title={error || autosaveError || undefined}>
+									{error || autosaveError || ((saving || autosaving) && (dirty || questionsDirty || definitionsDirty) ? 'Saving…' : hasBlankQuestion || hasBlankDefinition ? 'Complete blank fields to save' : dirty || questionsDirty || definitionsDirty ? 'Changes save automatically' : 'Saved')}
+								</span>
+							</div>
+						</header>
+						<div class="question-plan-actions">
+							{#if selected.status === 'complete'}
+								<Button type="button" variant="outline" disabled={saving} onclick={() => void reopenInvestigation()}>
+									Reopen Investigation
+								</Button>
+							{:else}
 								<Button
 									type="button"
 									variant="outline"
-									size="sm"
-									title={subquestions.length ? 'Remove current subquestions before drafting a replacement breakdown.' : undefined}
-									disabled={!canSuggestBreakdown || saving || proposingQuestions}
-									onclick={() => void suggestBreakdown()}
+									disabled={!coverage.canComplete || saving}
+									title="Answer each active Question or document a data gap before completing."
+									onclick={() => void markInvestigationComplete()}
 								>
-									{proposingQuestions ? 'Suggesting…' : 'Suggest breakdown'}
+									Mark complete
 								</Button>
-								<Button type="button" disabled={!questionsDirty || saving || proposingQuestions || hasBlankQuestion} onclick={() => void saveQuestions()}>
-									<Icon name="check" size={16} />{saving ? 'Saving…' : 'Save plan'}
-								</Button>
-							</div>
-						</header>
+							{/if}
+							<Button
+								type="button"
+								variant="outline"
+								size="sm"
+								title={subquestions.length ? 'Remove current subquestions before drafting a replacement breakdown.' : undefined}
+								disabled={!canSuggestBreakdown || saving || proposingQuestions}
+								onclick={() => void suggestBreakdown()}
+							>
+								{proposingQuestions ? 'Suggesting…' : 'Suggest breakdown'}
+							</Button>
+							{#if autosaveError && (dirty || questionsDirty || definitionsDirty)}
+								<Button type="button" variant="ghost" disabled={autosaving} onclick={retryEditableAutosave}>Retry save</Button>
+							{/if}
+						</div>
 						<section class="question-coverage" aria-label="Question coverage" data-investigation-status={selected.status}>
 							<header>
 								<div>
 									<h4>Coverage</h4>
-									<p>Answer each active Question or record a data-coverage gap. Runtime failures and outdated results still need review.</p>
+									<p>See what’s answered and what still needs review.</p>
 								</div>
 								<dl class="question-coverage-counts">
 									<div data-coverage="answered"><dt>Answered</dt><dd>{coverage.answered}</dd></div>
@@ -1930,7 +1926,7 @@
 									<p class="question-coverage-message" role="status">Investigation fully answered. Reopen it to continue editing or analysis.</p>
 								{/if}
 							{:else if !coverage.activeQuestions.length}
-								<p class="question-coverage-message">Add at least one Question before completing this Investigation.</p>
+								<p class="question-coverage-message">Add a main Question to see coverage.</p>
 							{:else if coverage.needsReview.length}
 								{#if coverage.canComplete && coverage.documentedGaps.length}
 									<p class="question-coverage-message" role="status">Ready to close with {coverage.documentedGaps.length} documented gap{coverage.documentedGaps.length === 1 ? '' : 's'}; this does not mean every Question was fully answered.</p>
@@ -1950,7 +1946,7 @@
 									</ul>
 								</details>
 							{:else if dirty || questionsDirty || definitionsDirty}
-								<p class="question-coverage-message">Save your current brief, Question plan, and definitions before completing.</p>
+								<p class="question-coverage-message">Wait for your changes to save before completing this Investigation.</p>
 							{:else}
 								<p class="question-coverage-message" role="status">All active Questions have complete, current answers and are ready to close.</p>
 							{/if}
@@ -2094,7 +2090,12 @@
 								</ol>
 							{/if}
 						{:else}
-							<p class="question-empty">No Questions in this plan yet.</p>
+							<div class="question-empty-state">
+								<div><strong>No Questions yet</strong></div>
+								<Button type="button" onclick={addQuestion} disabled={saving || proposingQuestions}>
+									<Icon name="plus" size={16} />Add main Question
+								</Button>
+							</div>
 						{/if}
 						{#if pendingAnalysisQuestion}
 							<section class="run-preview" aria-labelledby="run-preview-title">
@@ -2170,9 +2171,11 @@
 								</div>
 							</section>
 						{/if}
-						<Button type="button" variant="outline" disabled={saving || proposingQuestions} onclick={addQuestion}>
-							<Icon name="plus" size={16} />{rootQuestion ? 'Add subquestion' : 'Add main Question'}
-						</Button>
+						{#if rootQuestion}
+							<Button type="button" variant="outline" disabled={saving || proposingQuestions} onclick={addQuestion}>
+								<Icon name="plus" size={16} />Add subquestion
+							</Button>
+						{/if}
 					</section>
 					</section>
 					<section class="investigation-document-section investigation-analysis-section" aria-labelledby="investigation-analysis-heading">
@@ -2889,7 +2892,7 @@
 	.brief-summary { display: grid; gap: var(--space-3); padding: var(--space-4); margin-top: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg); }
 	.brief-summary > header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
 	.brief-summary h3, .work-plan-heading h3 { margin: 0; font-size: var(--fs-md); font-weight: 650; }
-	.brief-summary > header p, .work-plan-heading p { margin-top: 2px; color: var(--text-dim); font-size: var(--fs-xs); }
+	.brief-summary > header p, .work-plan-heading p { margin-top: 2px; color: var(--text-dim); font-size: var(--fs-xs); line-height: 1.45; }
 	.brief-summary dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3) var(--space-6); margin: 0; }
 	.brief-summary dl > div { display: grid; min-width: 0; gap: 2px; }
 	.brief-summary dt { color: var(--text-faint); font-size: var(--fs-xs); }
@@ -2936,11 +2939,13 @@
 	.definition-empty { margin: 0; }
 	.question-editor { display: grid; gap: var(--space-3); padding: var(--space-4) 0; margin-top: var(--space-2); border-top: 1px solid var(--border); }
 	.question-heading, .question-save, .question-item-heading, .question-item-actions { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
-	.question-heading { align-items: flex-start; gap: var(--space-4); }
+	.question-heading { align-items: center; gap: var(--space-4); }
+	.question-heading > div:first-child { min-width: 0; flex: 1; }
 	.question-heading h3 { margin: 0; font-size: var(--fs-md); font-weight: 650; }
-	.question-heading p, .question-empty { margin-top: var(--space-1); color: var(--text-dim); font-size: var(--fs-xs); }
-	.question-save { flex: none; flex-wrap: wrap; justify-content: flex-end; }
-	.question-save > span { color: var(--text-faint); font-size: var(--fs-xs); }
+	.question-heading p { margin-top: var(--space-1); color: var(--text-dim); font-size: var(--fs-xs); line-height: 1.45; }
+	.question-save { min-width: 12rem; max-width: 22rem; flex: 0 1 22rem; justify-content: flex-end; }
+	.question-save > span { display: block; min-width: 0; overflow: hidden; color: var(--text-faint); font-size: var(--fs-xs); text-overflow: ellipsis; white-space: nowrap; }
+	.question-plan-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: var(--space-2); }
 	.question-coverage { display: grid; gap: var(--space-3); padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-inset); }
 	.question-coverage > header { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-4); }
 	.question-coverage h4 { margin: 0; font-size: var(--fs-sm); font-weight: 650; }
@@ -2970,7 +2975,9 @@
 	.question-item-actions { gap: 0; }
 	.question-item-actions :global(button) { min-width: 34px; min-height: 32px; padding: 4px 8px; }
 	.brief-editor :global(.question-field) { width: 100%; min-height: 68px; resize: vertical; }
-	.question-empty { margin: 0; }
+	.question-empty-state { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: var(--space-4); padding: var(--space-4); border: 1px dashed var(--border-strong, var(--border)); border-radius: var(--radius-md); background: var(--bg-inset); }
+	.question-empty-state > div { min-width: 0; }
+	.question-empty-state strong { font-size: var(--fs-sm); font-weight: 600; }
 	.question-run-links { display: flex; align-items: center; gap: var(--space-1); margin: 0 0 var(--space-2); color: var(--text-faint); font-size: var(--fs-xs); }
 	.question-run-links > span { margin-right: var(--space-1); }
 	.question-run-links :global(button) { min-height: 28px; padding-inline: var(--space-2); }
@@ -3145,5 +3152,9 @@
 		.investigation-layout { grid-template-columns: minmax(0, 1fr); gap: var(--space-4); }
 		.investigation-list { max-height: 160px; overflow: auto; overscroll-behavior: contain; }
 		.investigation-list-hint { display: block; }
+		.question-heading { align-items: flex-start; flex-direction: column; gap: var(--space-2); }
+		.question-save { width: 100%; min-width: 0; max-width: none; flex-basis: auto; justify-content: flex-start; }
+		.question-plan-actions { justify-content: flex-start; }
+		.question-empty-state { align-items: flex-start; flex-direction: column; }
 	}
 </style>
