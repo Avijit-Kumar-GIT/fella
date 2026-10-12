@@ -74,13 +74,15 @@ async function installDesktopMock(
 		detailEvidence = null,
 		directAnswerText = null,
 		savedAnalysisTurn = null,
+		projectInvestigationRecords = [],
+		projectAnalysisTurns = [],
 		questionRunOutcomes = [],
 		providerList = [],
 		providerHealth = { reachable: true, rejected: false, models: ['gpt-4.1-mini'] },
 		runLogEntries = []
 	} = {}
 ) {
-	await page.addInitScript(({ fixtureFolders, seedUnavailableConversation, seedDeletionConversations, replayStatus, replayStatusError, reindexedCatalog, chartEvidence, detailEvidence, directAnswerText, savedAnalysisTurn, questionRunOutcomes, providerList, providerHealth, runLogEntries }) => {
+	await page.addInitScript(({ fixtureFolders, seedUnavailableConversation, seedDeletionConversations, replayStatus, replayStatusError, reindexedCatalog, chartEvidence, detailEvidence, directAnswerText, savedAnalysisTurn, projectInvestigationRecords, projectAnalysisTurns, questionRunOutcomes, providerList, providerHealth, runLogEntries }) => {
 		const calls = [];
 		const reviseFinding = (finding, update) => {
 			const now = Math.max(Date.now(), (finding.updated_at_ms ?? 0) + 1);
@@ -112,6 +114,13 @@ async function installDesktopMock(
 		const questionRecords = new Map();
 		const definitionRecords = new Map();
 		const findingRecords = new Map();
+		for (const record of projectInvestigationRecords) {
+			investigations.set(JSON.stringify([record.workspace_id, record.conversation_id ?? null]), record);
+			for (const question of record.questions ?? []) questionRecords.set(question.id, question);
+			for (const definition of record.definitions ?? []) definitionRecords.set(definition.id, definition);
+			for (const finding of record.findings ?? []) findingRecords.set(finding.id, finding);
+		}
+		for (const turn of projectAnalysisTurns) analysisTurns.set(turn.id, turn);
 		const investigationEnsureCalls = [];
 		const questionProposalCalls = [];
 		const deletedConversationIds = [];
@@ -197,6 +206,7 @@ async function installDesktopMock(
 		window.__workspaceInvestigationEnsureCalls = investigationEnsureCalls;
 		window.__workspaceQuestionProposalCalls = questionProposalCalls;
 		window.__workspaceInvestigations = () => [...investigations.values()];
+		window.__workspaceAnalysisTurns = () => [...analysisTurns.values()];
 		window.__workspaceDefinitionRecords = () => [...definitionRecords.values()];
 		window.__workspaceFindingRecords = () => [...findingRecords.values()];
 		window.__workspaceSetRunLinks = (id, runIds) => {
@@ -715,7 +725,7 @@ async function installDesktopMock(
 			windowAction: async () => {},
 			pathForFile: () => ''
 		};
-	}, { fixtureFolders, seedUnavailableConversation, seedDeletionConversations, replayStatus, replayStatusError, reindexedCatalog, chartEvidence, detailEvidence, directAnswerText, savedAnalysisTurn, questionRunOutcomes, providerList, providerHealth, runLogEntries });
+	}, { fixtureFolders, seedUnavailableConversation, seedDeletionConversations, replayStatus, replayStatusError, reindexedCatalog, chartEvidence, detailEvidence, directAnswerText, savedAnalysisTurn, projectInvestigationRecords, projectAnalysisTurns, questionRunOutcomes, providerList, providerHealth, runLogEntries });
 }
 
 async function dispatchWorkspaceDrag(page, type, workspacePath, { x = 0.5, y = 0.5, existing = false } = {}) {
@@ -3954,6 +3964,111 @@ test('Projects retain stable Finding and analysis-artifact references without co
 	});
 	expect(storedProjects[0]).not.toHaveProperty('findings');
 	expect(storedProjects[0]).not.toHaveProperty('artifacts');
+});
+
+test('Projects curate Findings, visualizations, definitions, and open Questions by canonical reference', async ({ page }) => {
+	const investigation = {
+		id: 'investigation-sales-curation',
+		workspace_id: folders[0].path,
+		conversation_id: 'conversation-sales-curation',
+		title: 'Explain weekly sales',
+		brief: { goal: 'Explain weekly sales', audience: 'Finance', desired_output: 'Weekly report', constraints: [] },
+		status: 'active',
+		source_selection: { mode: 'all_sources', included_paths: [] },
+		questions: [
+			{
+				id: 'question-sales-gap', investigation_id: 'investigation-sales-curation', text: 'What explains the weekly sales increase?',
+				position: 0, status: 'active', answer_status: 'incomplete', answer_status_reason: 'Regional detail is not available.',
+				latest_analysis_turn_id: 'analysis-sales-curation', analysis_turn_ids: ['analysis-sales-curation'], created_at_ms: 1, updated_at_ms: 2
+			},
+			{
+				id: 'question-sales-answered', investigation_id: 'investigation-sales-curation', text: 'Which week had the highest sales?',
+				position: 1, status: 'active', answer_status: 'answered', latest_analysis_turn_id: 'analysis-sales-curation',
+				analysis_turn_ids: ['analysis-sales-curation'], created_at_ms: 1, updated_at_ms: 2
+			}
+		],
+		definitions: [{
+			id: 'definition-net-sales', investigation_id: 'investigation-sales-curation', kind: 'definition', text: 'Net sales exclude refunds.',
+			revision: 2, history: [{ revision: 1, kind: 'definition', text: 'Gross sales.', recorded_at_ms: 1 }], status: 'active', created_at_ms: 1, updated_at_ms: 2
+		}],
+		findings: [{
+			id: 'finding-sales-growth', investigation_id: 'investigation-sales-curation', question_id: 'question-sales-gap',
+			analysis_turn_id: 'analysis-sales-curation', evidence_ids: ['evidence-sales-chart'], claim: 'Weekly net sales rose 12% to $40.',
+			caveats: ['Only ten weeks are available.'], assumptions: [], revision: 3, revision_note: 'Pinned for finance review.',
+			revisions: [{ revision: 2, question_id: 'question-sales-gap', analysis_turn_id: 'analysis-sales-curation', evidence_ids: ['evidence-sales-chart'], claim: 'Sales rose to $35.', caveats: [], assumptions: [], revision_note: '', created_at_ms: 1, updated_at_ms: 1 }],
+			created_at_ms: 1, updated_at_ms: 2
+		}],
+		analysis_turn_ids: ['analysis-sales-curation'],
+		created_at_ms: 1,
+		updated_at_ms: 2
+	};
+	const run = {
+		id: 'analysis-sales-curation', conversation_id: 'conversation-sales-curation', question: 'What explains the weekly sales increase?',
+		workspace: folders[0].path, state: 'accepted',
+		plan: { strategy: 'compiled_sql', steps: ['Aggregate weekly sales'] },
+		trace: { id: 'trace-sales-curation', turn_id: 'analysis-sales-curation', steps: [] },
+		verification: { status: 'verified', checks: [] },
+		result: {
+			text: 'Weekly sales increased.', status: 'verified', verification: [],
+			evidence: [
+				{ id: 'evidence-sales-query', tool: 'run_sql', args: {}, result_summary: 'Weekly sales totals.', sql: 'SELECT week, SUM(net_sales) FROM sales GROUP BY week' },
+				{
+					id: 'evidence-sales-chart', tool: 'make_chart', args: {}, result_summary: 'Weekly net sales visualization.',
+					chart: { kind: 'line', title: 'Weekly net sales', labels: ['W1', 'W2'], series: [{ name: 'Net sales', values: [31, 40] }], metadata: { source_evidence_id: 'evidence-sales-query', finding_snapshot: 'Weekly sales rose 12% to $40.' } }
+				}
+			]
+		}
+	};
+	await installDesktopMock(page, { projectInvestigationRecords: [investigation], projectAnalysisTurns: [run] });
+	await page.goto('/');
+	await page.getByRole('button', { name: 'Add repository' }).click();
+	await page.getByRole('button', { name: 'Create project for northwind-sales' }).click();
+	await page.getByRole('textbox', { name: 'Name' }).fill('Sales review');
+	await page.getByRole('button', { name: 'Create project', exact: true }).click();
+	await page.getByRole('button', { name: 'Open project Sales review' }).click();
+
+	await page.getByRole('button', { name: 'Curate outputs' }).click();
+	const dialog = page.getByRole('dialog', { name: 'Curate from Investigations' });
+	await expect(dialog).toBeVisible();
+	await expect(dialog.getByRole('heading', { name: 'Explain weekly sales' })).toBeVisible();
+	await expect(dialog).toContainText('revision 3');
+	await expect(dialog).toContainText('run analysis-sales-curation');
+	await expect(dialog).not.toContainText('Which week had the highest sales?');
+
+	for (const label of [
+		'Add Definition Net sales exclude refunds. to Project',
+		'Add Open Question What explains the weekly sales increase? to Project',
+		'Add Finding Weekly net sales rose 12% to $40. to Project',
+		'Add Visualization Weekly net sales to Project'
+	]) {
+		await dialog.getByRole('button', { name: label }).click();
+	}
+	const curated = page.getByRole('list', { name: 'Project-curated Investigation references' });
+	await expect(curated.locator('li')).toHaveCount(4);
+	await expect(curated).toContainText('Explain weekly sales · revision 3 · run analysis-sales-curation');
+	await expect(curated).toContainText('Explain weekly sales · run analysis-sales-curation · evidence evidence-sales-chart');
+	await expect(curated).toContainText('Explain weekly sales · revision 2');
+	await expect(curated).toContainText('Explain weekly sales · incomplete');
+
+	let stored = await page.evaluate(() => JSON.parse(localStorage.getItem('fella:projects') ?? '[]'));
+	expect(stored).toHaveLength(1);
+	expect(stored[0].references).toEqual([
+		{ kind: 'definition', investigation_id: investigation.id, definition_id: 'definition-net-sales', definition_revision: 2 },
+		{ kind: 'question', investigation_id: investigation.id, question_id: 'question-sales-gap' },
+		{ kind: 'finding', investigation_id: investigation.id, finding_id: 'finding-sales-growth', finding_revision: 3 },
+		{ kind: 'analysis_artifact', analysis_turn_id: run.id, evidence_id: 'evidence-sales-chart' }
+	]);
+	for (const copiedField of ['findings', 'definitions', 'questions', 'analysis_turns', 'evidence']) {
+		expect(stored[0]).not.toHaveProperty(copiedField);
+	}
+
+	await dialog.getByRole('button', { name: 'Remove Open Question What explains the weekly sales increase? from Project' }).click();
+	await expect(curated.locator('li')).toHaveCount(3);
+	stored = await page.evaluate(() => JSON.parse(localStorage.getItem('fella:projects') ?? '[]'));
+	expect(stored[0].references).toHaveLength(3);
+	const sourceRecords = await page.evaluate(() => ({ investigations: window.__workspaceInvestigations(), runs: window.__workspaceAnalysisTurns() }));
+	expect(sourceRecords.investigations[0]).toEqual(investigation);
+	expect(sourceRecords.runs[0]).toEqual(run);
 });
 
 test('Project actions open Investigation data and retain navigation and delete behavior', async ({ page }) => {

@@ -7,6 +7,7 @@
 	import { session } from '$lib/session.svelte';
 	import type { ConversationSummary } from '$lib/types';
 	import Icon from './Icon.svelte';
+	import ProjectCuration from './ProjectCuration.svelte';
 
 	let project = $derived(session.activeProject);
 	let name = $state('');
@@ -172,6 +173,8 @@
 				</dl>
 			</aside>
 		</div>
+
+		<ProjectCuration {project} />
 	</section>
 {/if}
 

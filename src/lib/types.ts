@@ -875,7 +875,26 @@ export interface ProjectArtifactReference {
 	evidence_id: string;
 }
 
-export type ProjectReference = ProjectFindingReference | ProjectArtifactReference;
+/** Revision-pinned reference to an Investigation-owned definition or assumption. */
+export interface ProjectDefinitionReference {
+	kind: 'definition';
+	investigation_id: string;
+	definition_id: string;
+	definition_revision: number;
+}
+
+/** Stable reference to a current Question record; its current state remains canonical in the Investigation. */
+export interface ProjectQuestionReference {
+	kind: 'question';
+	investigation_id: string;
+	question_id: string;
+}
+
+export type ProjectReference =
+	| ProjectFindingReference
+	| ProjectArtifactReference
+	| ProjectDefinitionReference
+	| ProjectQuestionReference;
 
 /** A user-created local wiki attached to one mounted repository. */
 export interface Project {
