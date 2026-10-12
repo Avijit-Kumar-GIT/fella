@@ -116,26 +116,42 @@
 	let analysisSetupCatalogAvailable = $derived(
 		Boolean(selected && session.catalog.workspace === selected.workspace_id)
 	);
+	let analysisSetupCatalogPaths = $derived.by(() => {
+		if (!selected || !analysisSetupCatalogAvailable) return [];
+		return [...new Set(session.catalog.sources.map((source) => relativeSourcePath(source.path, selected.workspace_id)))];
+	});
+	let analysisSetupInvestigationPaths = $derived.by(() => {
+		const item = selected;
+		if (!item || !analysisSetupCatalogAvailable) return [];
+		return item.source_selection.mode === 'all_sources'
+			? analysisSetupCatalogPaths
+			: analysisSetupCatalogPaths.filter((path) => item.source_selection.included_paths.includes(path));
+	});
 	let analysisSetupIsNarrowed = $derived(
 		Boolean(pendingAnalysisQuestion?.source_selection || selected?.source_selection.mode === 'selected_sources')
 	);
 	let analysisSetupSourcePaths = $derived.by(() => {
-		const item = selected;
 		const question = pendingAnalysisQuestion;
-		if (!item || !question || !analysisSetupCatalogAvailable) return [];
-		const paths = [...new Set(session.catalog.sources.map((source) => relativeSourcePath(source.path, item.workspace_id)))];
-		const investigationPaths = item.source_selection.mode === 'all_sources'
-			? paths
-			: paths.filter((path) => item.source_selection.included_paths.includes(path));
-		if (!question.source_selection) return investigationPaths;
-		const allowed = new Set(investigationPaths);
+		if (!question || !analysisSetupCatalogAvailable) return [];
+		if (!question.source_selection) return analysisSetupInvestigationPaths;
+		const allowed = new Set(analysisSetupInvestigationPaths);
 		return question.source_selection.included_paths.filter((path) => allowed.has(path));
 	});
-	let analysisSetupExcludedPaths = $derived.by(() => {
+	let analysisSetupRequestedPaths = $derived.by(() => {
+		const item = selected;
 		const question = pendingAnalysisQuestion;
-		if (!question?.source_selection) return [];
-		const effective = new Set(analysisSetupSourcePaths);
-		return question.source_selection.included_paths.filter((path) => !effective.has(path));
+		if (question?.source_selection) return [...new Set(question.source_selection.included_paths)];
+		if (item?.source_selection.mode === 'selected_sources') return [...new Set(item.source_selection.included_paths)];
+		return [];
+	});
+	let analysisSetupMissingPaths = $derived(
+		analysisSetupRequestedPaths.filter((path) => !analysisSetupCatalogPaths.includes(path))
+	);
+	let analysisSetupOutOfScopePaths = $derived.by(() => {
+		if (!pendingAnalysisQuestion?.source_selection) return [];
+		return [...new Set(pendingAnalysisQuestion.source_selection.included_paths)].filter(
+			(path) => analysisSetupCatalogPaths.includes(path) && !analysisSetupInvestigationPaths.includes(path)
+		);
 	});
 	let analysisSetupScopeLabel = $derived.by(() => {
 		const item = selected;
@@ -143,15 +159,12 @@
 		if (!item || !question) return '';
 		if (!analysisSetupCatalogAvailable) return 'Current workspace catalog is not loaded';
 		if (question.source_selection) {
-			const count = analysisSetupSourcePaths.length;
-			return analysisSetupExcludedPaths.length
-				? `Question-specific scope · ${count} effective of ${question.source_selection.included_paths.length} mapped files`
-				: `Question-specific scope · ${count} file${count === 1 ? '' : 's'}`;
+			return `Question-specific scope · ${analysisSetupSourcePaths.length} effective of ${new Set(question.source_selection.included_paths).size} selected`;
 		}
 		if (item.source_selection.mode === 'all_sources') {
-			return `Inherit Investigation · all ${analysisSetupSourcePaths.length} available file${analysisSetupSourcePaths.length === 1 ? '' : 's'}`;
+			return `Inherit Investigation · ${analysisSetupSourcePaths.length} effective of ${analysisSetupCatalogPaths.length} cataloged`;
 		}
-		return `Inherit Investigation · ${analysisSetupSourcePaths.length} selected file${analysisSetupSourcePaths.length === 1 ? '' : 's'}`;
+		return `Inherit Investigation · ${analysisSetupSourcePaths.length} effective of ${new Set(item.source_selection.included_paths).size} selected`;
 	});
 	let subquestions = $derived(rootQuestion
 		? questions.filter((question) => question.parent_id === rootQuestion.id)
@@ -779,7 +792,8 @@
 	function sourceSelectionSummary(selection: InvestigationSourceSelection | undefined): string {
 		if (!selection) return 'No source-scope snapshot was recorded for this run.';
 		if (selection.mode === 'all_sources') return 'All sources in the Question’s Investigation scope';
-		return `${selection.included_paths.length} selected source${selection.included_paths.length === 1 ? '' : 's'}`;
+		const count = new Set(selection.included_paths).size;
+		return `${count} source${count === 1 ? '' : 's'} selected for this Question`;
 	}
 
 	async function openAnalysisRun(turnId: string): Promise<void> {
@@ -1832,9 +1846,14 @@
 										{/each}
 									</ol>
 								</details>
-								{#if analysisSetupExcludedPaths.length}
+								{#if analysisSetupMissingPaths.length}
 									<p class="run-preview-warning" role="status">
-										{analysisSetupExcludedPaths.length} mapped file{analysisSetupExcludedPaths.length === 1 ? ' is' : 's are'} outside the Investigation scope and will not be used: {analysisSetupExcludedPaths.join(', ')}.
+										{analysisSetupMissingPaths.length} selected path{analysisSetupMissingPaths.length === 1 ? ' is' : 's are'} not present in the current catalog and will not be used: {analysisSetupMissingPaths.join(', ')}. If a file was skipped, its reason appears in the unavailable-file list.
+									</p>
+								{/if}
+								{#if analysisSetupOutOfScopePaths.length}
+									<p class="run-preview-warning" role="status">
+										{analysisSetupOutOfScopePaths.length} selected source{analysisSetupOutOfScopePaths.length === 1 ? ' is' : 's are'} cataloged but outside the Investigation scope and will not be used: {analysisSetupOutOfScopePaths.join(', ')}.
 									</p>
 								{/if}
 								{#if analysisSetupCatalogAvailable && analysisSetupSourcePaths.length}
@@ -1845,7 +1864,7 @@
 								{:else if analysisSetupCatalogAvailable && analysisSetupIsNarrowed}
 									<p class="run-preview-warning" role="alert">No files are included in this Question's effective source scope. Adjust the source set before running.</p>
 								{:else if analysisSetupCatalogAvailable}
-									<p class="run-preview-empty">No sources are currently cataloged; Fella will use all files available to this Investigation.</p>
+					<p class="run-preview-empty">No sources are currently cataloged, so this preview cannot confirm which files the run can use.</p>
 								{:else}
 									<p class="run-preview-warning" role="status">The workspace catalog is not loaded, so the included file list cannot be previewed.</p>
 								{/if}
@@ -2071,6 +2090,16 @@
 										<div><dt>Method</dt><dd>{openAnalysisTurn.plan.strategy.replaceAll('_', ' ')}</dd></div>
 										<div><dt>Execution steps</dt><dd>{openAnalysisTurn.trace.steps.length}</dd></div>
 										<div><dt>Recorded evidence</dt><dd>{openAnalysisTurn.result.evidence.length} items</dd></div>
+										<div>
+											<dt>Source catalog revision</dt>
+											<dd>
+												{#if openAnalysisTurn.workspace_revision}
+													<code>{openAnalysisTurn.workspace_revision}</code>
+												{:else}
+													Not recorded for this run
+												{/if}
+											</dd>
+										</div>
 										<div><dt>Run ID</dt><dd><code>{openAnalysisTurn.id}</code></dd></div>
 										<div>
 											<dt>Attempt</dt>
@@ -2135,58 +2164,68 @@
 									{/if}
 									<section class="analysis-run-context" aria-label="Definitions and source scope used">
 										<header>
-							<h5>Inputs captured for this run</h5>
-							<p>This snapshot stays fixed even if the Investigation changes later.</p>
+										<h5>Inputs captured for this run</h5>
+										<p>This snapshot stays fixed even if the Investigation changes later.</p>
 										</header>
-										<dl class="analysis-run-context-facts">
-											<div>
-												<dt>Requested source scope</dt>
-												<dd>{sourceSelectionSummary(openAnalysisTurn.investigation_context?.source_selection)}</dd>
-											</div>
-							{#if openAnalysisTurn.investigation_context?.source_selection?.mode === 'selected_sources'}
-												<div>
-													<dt>Selected paths</dt>
-									<dd>{openAnalysisTurn.investigation_context.source_selection?.included_paths.join(', ') || 'None'}</dd>
+										<div class="analysis-run-source-provenance">
+											<section class="analysis-run-source-state" aria-label="Requested source scope">
+												<h6>Requested for this run</h6>
+												<dl class="analysis-run-context-facts">
+													<div>
+														<dt>Requested source scope</dt>
+														<dd>{sourceSelectionSummary(openAnalysisTurn.investigation_context?.source_selection)}</dd>
+													</div>
+													{#if openAnalysisTurn.investigation_context?.source_selection?.mode === 'selected_sources'}
+														<div>
+															<dt>Selected paths</dt>
+															<dd>{openAnalysisTurn.investigation_context.source_selection?.included_paths.join(', ') || 'None'}</dd>
+														</div>
+													{/if}
+												</dl>
+											</section>
+											<section class="analysis-run-source-state" aria-label="Observed source use">
+												<h6>Observed in recorded evidence</h6>
+												<dl class="analysis-run-context-facts">
+													<div>
+														<dt>Sources actually used</dt>
+														<dd>
+															{#if openAnalysisTurn.source_scope}
+																{#if openAnalysisTurn.source_scope.used_sources.length}
+																	<ul class="analysis-run-context-list">
+																		{#each openAnalysisTurn.source_scope.used_sources as source (`${source.source}-${source.table ?? ''}`)}
+																		<li>
+																			<span>{source.source}{#if source.table}{' · '}{source.table}{/if}</span>
+																			{#if source.evidence_ids.length}<small>Evidence: {source.evidence_ids.join(', ')}</small>{/if}
+																		</li>
+																	{/each}
+																</ul>
+															{:else}
+																No source was linked to the recorded evidence.
+															{/if}
+														{:else}
+															Not recorded for this run.
+														{/if}
+													</dd>
 												</div>
-											{/if}
-											<div>
-												<dt>Sources actually used</dt>
-												<dd>
-													{#if openAnalysisTurn.source_scope}
-														{#if openAnalysisTurn.source_scope.used_sources.length}
-															<ul class="analysis-run-context-list">
-																{#each openAnalysisTurn.source_scope.used_sources as source (`${source.source}-${source.table ?? ''}`)}
-																	<li>
-													<span>{source.source}{#if source.table}{' · '}{source.table}{/if}</span>
-																		{#if source.evidence_ids.length}<small>Evidence: {source.evidence_ids.join(', ')}</small>{/if}
-																	</li>
-										{/each}
-															</ul>
+												<div>
+													<dt>Skipped sources</dt>
+													<dd>
+														{#if openAnalysisTurn.source_scope}
+															{#if openAnalysisTurn.source_scope.skipped_sources.length}
+																<ul class="analysis-run-context-list">
+																	{#each openAnalysisTurn.source_scope.skipped_sources as source (source)}<li>{source}</li>{/each}
+																</ul>
+															{:else}
+																None recorded.
+															{/if}
 														{:else}
-															No source was linked to the recorded evidence.
+															Not recorded for this run.
 														{/if}
-													{:else}
-														Not recorded for this run.
-													{/if}
-												</dd>
-											</div>
-											<div>
-												<dt>Skipped sources</dt>
-												<dd>
-													{#if openAnalysisTurn.source_scope}
-														{#if openAnalysisTurn.source_scope.skipped_sources.length}
-															<ul class="analysis-run-context-list">
-																{#each openAnalysisTurn.source_scope.skipped_sources as source (source)}<li>{source}</li>{/each}
-															</ul>
-														{:else}
-															None recorded.
-														{/if}
-													{:else}
-														Not recorded for this run.
-													{/if}
-												</dd>
-											</div>
-										</dl>
+													</dd>
+												</div>
+											</dl>
+										</section>
+									</div>
 										<section class="analysis-run-context-definitions" aria-label="Definitions and assumptions at run time">
 											<h6>Definitions and assumptions</h6>
 											{#if openAnalysisTurn.investigation_context}
@@ -2538,6 +2577,10 @@
 	.analysis-run-context-list, .analysis-run-context-definitions ul { display: grid; gap: var(--space-1); margin: 0; padding-left: var(--space-4); }
 	.analysis-run-context-list li { display: grid; gap: 2px; }
 	.analysis-run-context-list small { color: var(--text-faint); font-size: 11px; }
+	.analysis-run-source-provenance { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2); }
+	.analysis-run-source-state { display: grid; align-content: start; gap: var(--space-2); min-width: 0; padding: var(--space-2) var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-inset); }
+	.analysis-run-source-state h6 { margin: 0; color: var(--text); font-size: var(--fs-xs); font-weight: 650; }
+	.analysis-run-source-state .analysis-run-context-facts > div { grid-template-columns: minmax(110px, 0.4fr) minmax(0, 1fr); }
 	.analysis-run-context-definitions { display: grid; gap: var(--space-2); padding-top: var(--space-2); border-top: 1px solid var(--border); }
 	.analysis-run-context-definitions li { display: grid; gap: 2px; }
 	.analysis-run-context-definitions strong { font-size: var(--fs-xs); font-weight: 600; }
@@ -2614,6 +2657,8 @@
 		.investigation-layout { grid-template-columns: 1fr; gap: var(--space-4); }
 		.investigation-list { max-height: 180px; overflow: auto; }
 		.brief-summary dl { grid-template-columns: 1fr; }
+		.analysis-run-source-provenance { grid-template-columns: 1fr; }
+		.analysis-run-source-state .analysis-run-context-facts > div { grid-template-columns: 1fr; gap: 2px; }
 		.question-coverage > header { flex-direction: column; }
 		.question-coverage-counts { width: 100%; grid-template-columns: repeat(4, minmax(0, 1fr)); }
 	}

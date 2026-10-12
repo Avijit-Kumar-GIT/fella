@@ -19,19 +19,41 @@
 		onChange: (selection: InvestigationSourceSelection | null) => void;
 	} = $props();
 
-	let catalogSources = $derived(
-		session.catalog.workspace === workspacePath ? session.catalog.sources : []
-	);
+	let catalogLoaded = $derived(session.catalog.workspace === workspacePath);
+	let catalogSources = $derived(catalogLoaded ? session.catalog.sources : []);
+	let catalogPaths = $derived([...new Set(catalogSources.map((source) => relativePath(source.path)))]);
 	let availablePaths = $derived.by(() => {
-		const paths = [...new Set(catalogSources.map((source) => relativePath(source.path)))];
 		return investigation.source_selection.mode === 'all_sources'
-			? paths
-			: paths.filter((path) => investigation.source_selection.included_paths.includes(path));
+			? catalogPaths
+			: catalogPaths.filter((path) => investigation.source_selection.included_paths.includes(path));
 	});
 	let selectedPaths = $derived(new Set(selection?.included_paths ?? []));
-	let unavailablePaths = $derived(
-		(selection?.included_paths ?? []).filter((path) => !availablePaths.includes(path))
+	let effectiveCount = $derived(
+		selection
+			? [...selectedPaths].filter((path) => availablePaths.includes(path)).length
+			: availablePaths.length
 	);
+	let missingPaths = $derived.by(() => {
+		const requestedPaths = selection?.included_paths ?? (
+			investigation.source_selection.mode === 'selected_sources'
+				? investigation.source_selection.included_paths
+				: []
+		);
+		return [...new Set(requestedPaths)].filter((path) => !catalogPaths.includes(path));
+	});
+	let outOfScopePaths = $derived(
+		selection
+			? [...selectedPaths].filter((path) => catalogPaths.includes(path) && !availablePaths.includes(path))
+			: []
+	);
+	let scopeSummary = $derived.by(() => {
+		const selectedLabel = selection
+			? `${selectedPaths.size} selected`
+			: 'inherit Investigation';
+		return catalogLoaded
+			? `Sources · ${selectedLabel} · ${effectiveCount} effective`
+			: `Sources · ${selectedLabel} · catalog loading`;
+	});
 
 	function relativePath(path: string): string {
 		const root = workspacePath.replace(/[/\\]+$/, '');
@@ -67,9 +89,7 @@
 
 <details class="question-source-scope">
 	<summary>
-		Sources · {selection
-			? `${selection.included_paths.length} selected`
-			: 'inherit Investigation set'}
+		{scopeSummary}
 	</summary>
 	<div class="question-source-panel">
 		<label class="question-source-choice">
@@ -92,10 +112,33 @@
 			/>
 			Use a specific source set
 		</label>
+		{#if !selection && missingPaths.length}
+			<p class="question-source-status" role="status">
+				{missingPaths.length} Investigation-selected path{missingPaths.length === 1 ? ' is' : 's are'} not present in the current catalog and cannot be used until cataloged.
+			</p>
+			<ul class="question-source-paths" aria-label="Investigation paths missing from the current catalog">
+				{#each missingPaths as path (path)}<li>{path}</li>{/each}
+			</ul>
+		{/if}
 		{#if selection}
-			{#if unavailablePaths.length}
-				<p role="status">{unavailablePaths.length} mapped file{unavailablePaths.length === 1 ? ' is' : 's are'} outside the current Investigation scope.</p>
-				<Button type="button" variant="ghost" size="sm" disabled={disabled || !availablePaths.length} onclick={resetToCurrentScope}>
+			{#if missingPaths.length}
+				<p class="question-source-status" role="status">
+					{missingPaths.length} selected path{missingPaths.length === 1 ? ' is' : 's are'} not present in the current catalog and cannot be used until cataloged. Check unavailable-file details for a skip reason.
+				</p>
+				<ul class="question-source-paths" aria-label="Question paths missing from the current catalog">
+					{#each missingPaths as path (path)}<li>{path}</li>{/each}
+				</ul>
+			{/if}
+			{#if outOfScopePaths.length}
+				<p class="question-source-status" role="status">
+					{outOfScopePaths.length} selected source{outOfScopePaths.length === 1 ? ' is' : 's are'} in the catalog but outside this Investigation’s scope.
+				</p>
+				<ul class="question-source-paths" aria-label="Question sources outside the Investigation scope">
+					{#each outOfScopePaths as path (path)}<li>{path}</li>{/each}
+				</ul>
+			{/if}
+			{#if (missingPaths.length || outOfScopePaths.length) && availablePaths.length}
+				<Button type="button" variant="ghost" size="sm" disabled={disabled} onclick={resetToCurrentScope}>
 					Reset to current Investigation sources
 				</Button>
 			{/if}
@@ -135,4 +178,6 @@
 	.question-source-list label { min-width: 0; }
 	.question-source-list span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 	.question-source-note { margin: 0; }
+	.question-source-status { margin: 0; color: var(--text-dim); line-height: 1.45; }
+	.question-source-paths { display: grid; gap: var(--space-1); max-height: 120px; overflow: auto; margin: calc(var(--space-2) * -1) 0 0; padding-left: var(--space-5); color: var(--text-faint); overflow-wrap: anywhere; }
 </style>

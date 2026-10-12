@@ -296,8 +296,16 @@
 				<p>Loading this workspace’s catalog…</p>
 			{/if}
 		</div>
-		{#if catalog?.indexed_at_ms}
-			<span class="indexed-at">Indexed {new Date(catalog.indexed_at_ms).toLocaleDateString()}</span>
+		{#if catalog}
+			<div class="catalog-meta" aria-label="Current source catalog metadata">
+				<span class="catalog-revision" data-testid="current-catalog-revision">
+					Catalog revision
+					{#if catalog.revision}<code title={catalog.revision}>{catalog.revision}</code>{:else}<span>not recorded</span>{/if}
+				</span>
+				{#if catalog.indexed_at_ms}
+					<span class="indexed-at">Indexed {new Date(catalog.indexed_at_ms).toLocaleDateString()}</span>
+				{/if}
+			</div>
 		{/if}
 	</header>
 	{#if catalog}
@@ -307,7 +315,7 @@
 	{/if}
 	{#if catalog && investigation}
 		<fieldset class="scope-controls" disabled={selectionSaving}>
-			<legend>Files for this Investigation</legend>
+			<legend>Investigation scope · future runs</legend>
 			<label>
 				<input
 					type="radio"
@@ -328,10 +336,10 @@
 			</label>
 			<span class="scope-count">
 				{investigation.source_selection.mode === 'all_sources'
-					? `${uniqueSourcePaths().length} available`
-					: `${selectedFileCount()} selected`}
+					? `${uniqueSourcePaths().length} cataloged`
+					: `${selectedFileCount()} of ${uniqueSourcePaths().length} selected`}
 			</span>
-			<small>Changes apply to future runs; previous runs keep their original file scope.</small>
+			<small>These files are eligible for future Questions. Saved runs keep their recorded scope.</small>
 		</fieldset>
 		{#if selectionError}
 			<p class="scope-error" role="alert">{selectionError}</p>
@@ -352,7 +360,11 @@
 				<span class="source-search-count">{matchingSources.length} match{matchingSources.length === 1 ? '' : 'es'}</span>
 			{/if}
 		</div>
-		<ul class="source-list" aria-label="Available data sources">
+		<div class="source-list-heading">
+			<h4>Cataloged sources</h4>
+			<span>{sources.length} cataloged</span>
+		</div>
+		<ul class="source-list" aria-label="Cataloged data sources">
 			{#each visibleSources as source (sourceKey(source))}
 				<li>
 					<div class="source-row">
@@ -540,7 +552,13 @@
 	.scope-controls small { color: var(--text-faint); }
 	.scope-count { color: var(--text-faint); }
 	.scope-error { margin: var(--space-2) 0 0; color: var(--warning, #9b6500); font-size: var(--fs-xs); }
-	.indexed-at { flex: none; color: var(--text-faint); font-size: var(--fs-xs); }
+	.catalog-meta { display: flex; flex: none; flex-wrap: wrap; justify-content: flex-end; gap: 4px var(--space-3); color: var(--text-faint); font-size: var(--fs-xs); }
+	.catalog-revision { display: inline-flex; align-items: baseline; gap: 4px; }
+	.catalog-revision code { max-width: min(42vw, 360px); color: var(--text-dim); overflow-wrap: anywhere; }
+	.indexed-at { flex: none; }
+	.source-list-heading { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); margin-top: var(--space-3); }
+	.source-list-heading h4 { margin: 0; color: var(--text); font-size: var(--fs-xs); font-weight: 650; }
+	.source-list-heading span { color: var(--text-faint); font-size: 11px; }
 	.source-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr)); gap: var(--space-2); margin: var(--space-3) 0 0; padding: 0; list-style: none; }
 	.source-search { display: flex; align-items: center; gap: var(--space-2); max-width: 520px; margin-top: var(--space-3); color: var(--text-faint); }
 	.source-search :global(input) { min-width: 0; }
@@ -590,6 +608,7 @@
 	.skipped-sources li small { grid-column: 1 / -1; color: var(--text-faint); overflow-wrap: anywhere; }
 	@media (max-width: 620px) {
 		.readiness-heading { flex-direction: column; }
+		.catalog-meta { justify-content: flex-start; }
 		.scope-controls { align-items: flex-start; flex-direction: column; }
 		.source-option { align-items: flex-start; flex-wrap: wrap; }
 		.source-readiness-label { margin-left: 23px; }

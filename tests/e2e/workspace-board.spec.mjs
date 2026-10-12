@@ -651,6 +651,8 @@ async function installDesktopMock(
 				if (questionTurnId) {
 					const investigation = [...investigations.values()].find((item) => item.id === params.investigationId);
 					const question = questionRecords.get(params.questionId);
+					const questionWorkspaceRevision = questionOutcome.workspace_revision ??
+						fixtureFolders.find((folder) => folder.path === params.workspaceId)?.catalog.revision;
 					const verificationStatus = answerVerificationStatus ?? 'verified';
 					const verificationChecks = questionOutcome.checks ?? [];
 					analysisTurns.set(questionTurnId, {
@@ -658,6 +660,7 @@ async function installDesktopMock(
 						conversation_id: params.conversationId ?? 'fixture-conversation',
 						question: params.question,
 						workspace: params.workspaceId,
+						workspace_revision: questionWorkspaceRevision,
 						contract: questionOutcome.contract,
 						source_scope: questionOutcome.source_scope,
 						investigation_context: {
@@ -673,7 +676,7 @@ async function installDesktopMock(
 						trace: {
 							id: `fixture-trace-${questionTurnNumber}`,
 							turn_id: questionTurnId,
-							workspace_revision: 'fixture-r1',
+							workspace_revision: questionWorkspaceRevision,
 							steps: [{ id: `fixture-step-${questionTurnNumber}`, operation: 'run_sql', duration_ms: 4, success: true, sources: ['sales.csv'] }]
 						},
 						verification: { status: verificationStatus, checks: verificationChecks },
@@ -1338,13 +1341,28 @@ test('a Question can narrow its source set and launches a run linked to that Que
 	await questionCard.getByText(/Sources/).click();
 	await questionCard.getByLabel('Use a specific source set').check();
 	await questionCard.getByLabel('refunds.csv').uncheck();
+	const questionScope = questionCard.locator('.question-source-scope > summary');
+	await expect(questionScope).toContainText('1 selected · 1 effective');
+
+	await page.getByLabel('Choose files').check();
+	await page.getByRole('checkbox', { name: 'Include sales.csv in this Investigation' }).uncheck();
+	await expect.poll(() => page.evaluate(() => window.__workspaceInvestigations()[0].source_selection)).toEqual({
+		mode: 'selected_sources',
+		included_paths: ['refunds.csv']
+	});
+	await expect(questionScope).toContainText('1 selected · 0 effective');
+	await expect(questionCard).toContainText('sales.csv');
+	await expect(questionCard).toContainText('outside this Investigation’s scope');
+	await page.getByLabel('All sources').check();
+	await expect(questionScope).toContainText('1 selected · 1 effective');
+
 	await page.getByRole('button', { name: 'Add definition or assumption' }).click();
 	await page.getByRole('textbox', { name: 'Context note 1' }).fill('Count a refund only when it is linked to a completed sale.');
 
 	await page.getByRole('button', { name: 'Analyze Subquestion 1' }).click();
 	const setupPreview = page.getByRole('region', { name: 'Review this run' });
 	await expect(setupPreview).toContainText('Compare refund rates with sales');
-	await expect(setupPreview).toContainText('Question-specific scope · 1 file');
+	await expect(setupPreview).toContainText('Question-specific scope · 1 effective of 1 selected');
 	await expect(setupPreview).toContainText('Your unsaved Question and context edits will be saved before this run starts.');
 	await setupPreview.locator('details.run-preview-files > summary').click();
 	await expect(setupPreview).toContainText('sales.csv');
@@ -2057,6 +2075,10 @@ test('saved run review exposes its method, query output, definitions, and actual
 	await page.getByRole('button', { name: 'Send' }).click();
 	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
 	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	const readiness = page.getByTestId('investigation-data-readiness');
+	await expect(readiness.getByTestId('current-catalog-revision')).toContainText('sales-r1');
+	await expect(readiness.getByRole('heading', { name: 'Cataloged sources' })).toBeVisible();
+	await expect(readiness.locator('.scope-controls legend')).toContainText('future runs');
 	await page.getByRole('button', { name: 'Add definition or assumption' }).click();
 	await page.getByRole('textbox', { name: 'Context note 1' }).fill('One row represents one signup-month cohort; retention is retained accounts divided by cohort accounts.');
 	await page.getByRole('button', { name: 'Save context' }).click();
@@ -2078,6 +2100,20 @@ test('saved run review exposes its method, query output, definitions, and actual
 	await expect(runContext).toContainText('legacy-retention.xlsx: encrypted workbook');
 	await expect(runContext).toContainText('Definition · revision 1');
 	await expect(runContext).toContainText('One row represents one signup-month cohort; retention is retained accounts divided by cohort accounts.');
+	await expect(runDetail.locator('.analysis-run-facts')).toContainText('Source catalog revision');
+	await expect(runDetail.locator('.analysis-run-facts')).toContainText('sales-r1');
+	await expect(runContext.locator('.analysis-run-source-provenance')).toContainText('Requested for this run');
+	await expect(runContext.locator('.analysis-run-source-provenance')).toContainText('Observed in recorded evidence');
+
+	// Changing current Investigation scope does not rewrite the saved run's snapshot.
+	await page.getByLabel('Choose files').check();
+	await page.getByRole('checkbox', { name: 'Include sales.csv in this Investigation' }).uncheck();
+	await expect.poll(() => page.evaluate(() => window.__workspaceInvestigations()[0].source_selection)).toEqual({
+		mode: 'selected_sources',
+		included_paths: []
+	});
+	await expect(runContext).toContainText('All sources in the Question’s Investigation scope');
+	await expect(runContext).toContainText('sales.csv · cohort_retention');
 
 	await runDetail.locator('.analysis-run-trace > summary').click();
 	await expect(runDetail.locator('.analysis-run-trace')).toContainText('run sql');
@@ -3567,7 +3603,7 @@ test('Investigation data catalog searches and expands large source and unavailab
 	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
 
 	const readiness = page.getByTestId('investigation-data-readiness');
-	const sourceList = readiness.getByRole('list', { name: 'Available data sources' });
+	const sourceList = readiness.getByRole('list', { name: 'Cataloged data sources' });
 	await expect(sourceList.locator('li')).toHaveCount(5);
 	await readiness.getByRole('button', { name: 'Show all 205 matching sources' }).click();
 	await expect(sourceList.locator('li')).toHaveCount(205);
