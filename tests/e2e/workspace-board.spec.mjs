@@ -44,6 +44,13 @@ async function expandInvestigationHistory(page) {
 	}
 }
 
+async function readCanonicalWorkspaceRecords(page) {
+	return page.evaluate(() => ({
+		investigations: window.__workspaceInvestigations(),
+		analysisTurns: window.__workspaceAnalysisTurns()
+	}));
+}
+
 async function expandInvestigationDefinitions(page) {
 	const definitions = page.locator('.definition-disclosure');
 	if (!(await definitions.evaluate((element) => element.open))) {
@@ -1083,7 +1090,8 @@ test('Investigation index summarizes work and resumes the same completed record'
 	expect(resumed.questions[0].answer_status).toBe('answered');
 });
 
-test('workspace layout presets preserve the same Investigation, transcript, and unsaved plan', async ({ page }) => {
+test('workspace layout presets preserve the same Investigation, source scope, Question, transcript, and saved run', async ({ page }) => {
+	await page.setViewportSize({ width: 1120, height: 900 });
 	await installDesktopMock(page, {
 		questionRunOutcomes: [{ status: 'answered', answer_text: 'Weekly sales rose 12%.' }]
 	});
@@ -1101,6 +1109,7 @@ test('workspace layout presets preserve the same Investigation, transcript, and 
 	await expect(preset('Focus')).toHaveAttribute('aria-pressed', 'true');
 	await expect(page.getByTestId('workspace-investigation-summary')).toContainText('0/1 answered');
 	await expect(page.getByTestId('workspace-investigation-summary')).toContainText('need attention');
+	await expect(page.getByRole('group', { name: 'Workspace: northwind-sales' })).toBeVisible();
 
 	const initial = await page.evaluate(() => {
 		const investigation = window.__workspaceInvestigations()[0];
@@ -1110,10 +1119,16 @@ test('workspace layout presets preserve the same Investigation, transcript, and 
 	await expect(page.getByRole('heading', { name: 'Investigation', exact: true })).toBeVisible();
 	const mainQuestion = page.getByRole('textbox', { name: 'Main question' });
 	await mainQuestion.fill('Measure weekly net sales');
+	await page.getByLabel('Choose files').check();
+	await expect.poll(() => page.evaluate(() => window.__workspaceInvestigations()[0].source_selection)).toEqual({
+		mode: 'selected_sources',
+		included_paths: ['sales.csv']
+	});
 
 	await preset('Focus').click();
 	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
 	await expect(page.locator('.msg.user').filter({ hasText: originalRequest })).toHaveCount(1);
+	await expect(page.getByRole('group', { name: 'Workspace: northwind-sales' })).toBeVisible();
 	await preset('Workbench').click();
 	await expect(page.locator('.workspace-preset-layout')).toHaveAttribute('data-workspace-preset', 'workbench');
 	await expect(preset('Workbench')).toHaveAttribute('aria-pressed', 'true');
@@ -1125,6 +1140,8 @@ test('workspace layout presets preserve the same Investigation, transcript, and 
 	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
 	await expect(page.getByRole('textbox', { name: 'Main question' })).toHaveValue('Measure weekly net sales');
 	await expect(page.getByRole('button', { name: 'Ask', exact: true })).toBeVisible();
+	// The header identifies the Investigation by its original goal; its editable Main Question is separate.
+	await expect(page.getByTestId('workspace-investigation-summary')).toContainText(originalRequest);
 	await preset('Investigation').click();
 	await expect(page.getByRole('textbox', { name: 'Main question' })).toHaveValue('Measure weekly net sales');
 	const afterLayoutChanges = await page.evaluate(() => ({
@@ -1133,6 +1150,10 @@ test('workspace layout presets preserve the same Investigation, transcript, and 
 	}));
 	expect(afterLayoutChanges.investigations).toHaveLength(1);
 	expect(afterLayoutChanges.investigations[0].id).toBe(initial.id);
+	expect(afterLayoutChanges.investigations[0].source_selection).toEqual({
+		mode: 'selected_sources',
+		included_paths: ['sales.csv']
+	});
 	expect(afterLayoutChanges.ensureCalls).toBe(1);
 	await page.getByRole('button', { name: 'Save plan' }).click();
 	await expect(page.getByRole('region', { name: 'Questions' }).locator('.question-save')).toContainText('Plan saved');
@@ -1140,10 +1161,12 @@ test('workspace layout presets preserve the same Investigation, transcript, and 
 	await page.getByRole('button', { name: 'Analyze main Question' }).click();
 	await page.getByRole('region', { name: 'Review this run' }).getByRole('button', { name: 'Run this Question' }).click();
 	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.').last()).toBeVisible();
+	await expect(page.getByTestId('workspace-investigation-summary')).toContainText(originalRequest);
 	await expect(page.getByTestId('workspace-investigation-summary')).toContainText('1/1 answered');
 
 	const finalState = await page.evaluate(() => ({
 		investigations: window.__workspaceInvestigations(),
+		analysisTurns: window.__workspaceAnalysisTurns(),
 		askCalls: window.__workspaceAskCalls.length
 	}));
 	expect(finalState.investigations).toHaveLength(1);
@@ -1152,7 +1175,30 @@ test('workspace layout presets preserve the same Investigation, transcript, and 
 	expect(finalState.investigations[0].questions[0].text).toBe('Measure weekly net sales');
 	expect(finalState.investigations[0].questions[0].answer_status).toBe('answered');
 	expect(finalState.investigations[0].analysis_turn_ids).toContain('fixture-question-turn-1');
+	expect(finalState.investigations[0].source_selection).toEqual({
+		mode: 'selected_sources',
+		included_paths: ['sales.csv']
+	});
+	expect(finalState.analysisTurns.map((run) => run.id)).toEqual(['fixture-question-turn-1']);
 	expect(finalState.askCalls).toBe(2);
+	const recordsAfterRun = await readCanonicalWorkspaceRecords(page);
+
+	await preset('Focus').click();
+	await expect(page.getByTestId('workspace-investigation-summary')).toContainText('1/1 answered');
+	await expect(page.getByRole('group', { name: 'Workspace: northwind-sales' })).toBeVisible();
+	await preset('Workbench').click();
+	await expect(page.locator('[data-panel-id="conversation"]')).toBeVisible();
+	await expect(page.locator('[data-panel-id="investigation"]')).toBeVisible();
+	await expect(page.getByTestId('workspace-investigation-summary')).toContainText('1/1 answered');
+	await preset('Investigation').click();
+	await expandInvestigationHistory(page);
+	const savedRunLink = page.getByRole('button', { name: 'Open saved analysis run 1: Measure weekly net sales' });
+	await expect(savedRunLink).toBeVisible();
+	await savedRunLink.click();
+	const savedRun = page.getByRole('region', { name: 'Saved analysis run' });
+	await expect(savedRun.locator('.analysis-run-question-snapshot')).toContainText('Measure weekly net sales');
+	await expect(savedRun.getByRole('region', { name: 'Definitions and source scope used' })).toContainText('1 source selected for this Question');
+	expect(await readCanonicalWorkspaceRecords(page)).toEqual(recordsAfterRun);
 });
 
 test('Workbench composes curated panels while keeping Investigation scope and coverage visible', async ({ page }) => {
@@ -1164,7 +1210,15 @@ test('Workbench composes curated panels while keeping Investigation scope and co
 	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill(request);
 	await page.getByRole('button', { name: 'Send' }).click();
 	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
+	await workspacePresetButton(page, 'Investigation').click();
+	await page.getByLabel('Choose files').check();
+	await expect.poll(() => page.evaluate(() => window.__workspaceInvestigations()[0].source_selection)).toEqual({
+		mode: 'selected_sources',
+		included_paths: ['sales.csv']
+	});
+	await workspacePresetButton(page, 'Focus').click();
 	const investigationTitle = await page.evaluate(() => window.__workspaceInvestigations()[0].title);
+	const canonicalBeforePanelChanges = await readCanonicalWorkspaceRecords(page);
 	await workspacePresetButton(page, 'Workbench').click();
 
 	const panels = page.locator('.workspace-preset-layout');
@@ -1215,6 +1269,7 @@ test('Workbench composes curated panels while keeping Investigation scope and co
 	await expect(companion).toBeHidden();
 	const resetLayout = await page.evaluate(() => JSON.parse(localStorage.getItem('fella:workbench-layout:v1')));
 	expect(resetLayout.panels.find(({ id }) => id === 'companion')).toMatchObject({ visible: null, group: 'analysis', order: 1 });
+	expect(await readCanonicalWorkspaceRecords(page)).toEqual(canonicalBeforePanelChanges);
 });
 
 test('Workbench panes resize accessibly, respect minimum widths, persist, and reset independently of analysis', async ({ page }) => {
@@ -1227,7 +1282,14 @@ test('Workbench panes resize accessibly, respect minimum widths, persist, and re
 	await page.getByRole('button', { name: 'Send' }).click();
 	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
 	const investigationId = await page.evaluate(() => window.__workspaceInvestigations()[0].id);
+	await workspacePresetButton(page, 'Investigation').click();
+	await page.getByLabel('Choose files').check();
+	await expect.poll(() => page.evaluate(() => window.__workspaceInvestigations()[0].source_selection)).toEqual({
+		mode: 'selected_sources',
+		included_paths: ['sales.csv']
+	});
 	await workspacePresetButton(page, 'Workbench').click();
+	const canonicalBeforeResize = await readCanonicalWorkspaceRecords(page);
 
 	const splitter = page.getByRole('separator', { name: 'Resize Conversation and Analysis panes' });
 	await expect(splitter).toBeVisible();
@@ -1259,8 +1321,9 @@ test('Workbench panes resize accessibly, respect minimum widths, persist, and re
 	const analysisWidth = (await analysis.boundingBox()).width;
 	expect(conversationWidth).toBeGreaterThanOrEqual(320);
 	expect(analysisWidth).toBeGreaterThanOrEqual(420);
-	const afterResize = await page.evaluate(() => window.__workspaceInvestigations()[0].id);
-	expect(afterResize).toBe(investigationId);
+	const recordsAfterResize = await readCanonicalWorkspaceRecords(page);
+	expect(recordsAfterResize).toEqual(canonicalBeforeResize);
+	expect(recordsAfterResize.investigations[0].id).toBe(investigationId);
 
 	await page.reload();
 	const restored = await page.evaluate(() => JSON.parse(localStorage.getItem('fella:workbench-layout:v1')));
@@ -2503,7 +2566,11 @@ test('Investigation results summarize saved work, render linked charts, and keep
 test('Investigation Results keep transcript-only historical work outside current Question coverage', async ({ page }) => {
 	await installDesktopMock(page, {
 		directAnswerText: 'The initial scan found four relevant files and no single source of truth.',
-		questionRunOutcomes: [{ status: 'answered', answer_text: 'The weekly total increased by 12%.' }],
+		questionRunOutcomes: [{
+			status: 'incomplete',
+			reason: 'Only 10 of the requested 12 weeks are present.',
+			answer_text: 'The ten available weeks total $40.'
+		}],
 		replayStatus: {
 			turn_id: 'fixture-turn',
 			same_workspace: true,
@@ -2521,25 +2588,49 @@ test('Investigation Results keep transcript-only historical work outside current
 	await page.getByRole('button', { name: 'Send' }).click();
 	await expect(page.locator('.msg.assistant').first()).toContainText('The initial scan found four relevant files');
 	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	await page.getByRole('button', { name: 'Add subquestion' }).click();
+	await page.getByRole('textbox', { name: 'Subquestion 1' }).fill('Compare weekly sales by channel');
+	await page.getByRole('button', { name: 'Save plan' }).click();
 	await page.getByRole('button', { name: 'Analyze main Question' }).click();
 	await page.getByRole('region', { name: 'Review this run' }).getByRole('button', { name: 'Run this Question' }).click();
-	await expect(page.getByText('The weekly total increased by 12%.')).toBeVisible();
+	await expect(page.getByText('The ten available weeks total $40.')).toBeVisible();
 	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	await workspacePresetButton(page, 'Focus').click();
+	const summary = page.getByTestId('workspace-investigation-summary');
+	await expect(summary).toContainText('0/2 answered');
+	await expect(summary).toContainText('2 need attention');
+	await expect(page.getByRole('group', { name: 'Workspace: northwind-sales' })).toBeVisible();
+	await workspacePresetButton(page, 'Workbench').click();
+	await expect(page.locator('[data-panel-id="investigation"]')).toBeVisible();
+	await expect(summary).toContainText('0/2 answered');
+	const coverage = page.getByRole('region', { name: 'Question coverage' });
+	await expect(coverage.locator('[data-coverage="partial"] dd')).toHaveText('1');
+	await expect(coverage.locator('[data-coverage="unanswered"] dd')).toHaveText('1');
+	await expect(coverage).toContainText('Only 10 of the requested 12 weeks are present.');
+	await expect(coverage.getByRole('button', { name: 'Review Partial answer Question: What do the weekly sales files show?' })).toBeVisible();
+	await workspacePresetButton(page, 'Investigation').click();
 	await page.getByRole('button', { name: 'Results' }).click();
 
 	const results = page.getByRole('region', { name: 'Current Investigation results' });
-	const historical = results.getByRole('region', { name: 'Historical and unassigned analysis' });
-	await expect(results).toContainText('1/1 Questions answered');
+	await expect(results).toContainText('0/2 Questions answered');
 	await expect(results.locator('.results-finding')).toHaveCount(0);
-	await expect(historical.locator('.results-historical-run')).toHaveCount(1);
-	await expect(historical).toContainText('Transcript fallback');
-	await expect(historical).toContainText('What do the weekly sales files show?');
-	await expect(historical).toContainText('The initial scan found four relevant files and no single source of truth.');
-	await expect(historical).toContainText('Not linked to a current Question');
-	await expect(historical).toContainText('not counted toward coverage or Findings');
-	await expect(historical).not.toContainText('Answers: What do the weekly sales files show?');
+	await expect(results.locator('.results-question[data-question-status="incomplete"]')).toContainText('Only 10 of the requested 12 weeks are present.');
+	const unstartedQuestion = results.locator('.results-question[data-question-status="not_started"]');
+	await expect(unstartedQuestion).toContainText('Compare weekly sales by channel');
+	await unstartedQuestion.getByRole('button', { name: 'Review Question' }).click();
+	await expect(page.getByRole('textbox', { name: 'Subquestion 1' })).toBeFocused();
+	await page.getByRole('button', { name: 'Results' }).click();
+	const returnedResults = page.getByRole('region', { name: 'Current Investigation results' });
+	const returnedHistorical = returnedResults.getByRole('region', { name: 'Historical and unassigned analysis' });
+	await expect(returnedHistorical.locator('.results-historical-run')).toHaveCount(1);
+	await expect(returnedHistorical).toContainText('Transcript fallback');
+	await expect(returnedHistorical).toContainText('What do the weekly sales files show?');
+	await expect(returnedHistorical).toContainText('The initial scan found four relevant files and no single source of truth.');
+	await expect(returnedHistorical).toContainText('Not linked to a current Question');
+	await expect(returnedHistorical).toContainText('not counted toward coverage or Findings');
+	await expect(returnedHistorical).not.toContainText('Answers: What do the weekly sales files show?');
 
-	await historical.getByRole('button', { name: 'Open transcript answer' }).click();
+	await returnedHistorical.getByRole('button', { name: 'Open transcript answer' }).click();
 	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
 	await expect(page.locator('.msg.user').first().locator('.you-copy')).toHaveText('What do the weekly sales files show?');
 	await expect(page.locator('.msg.assistant[data-analysis-turn-id="fixture-turn"]')).toContainText('The initial scan found four relevant files and no single source of truth.');
