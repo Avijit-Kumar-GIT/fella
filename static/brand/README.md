@@ -7,3 +7,5 @@
 The SVG is transparent and scales cleanly from a favicon to a large mark. Use
 the application icon assets under `electron/icons/` when a platform-specific
 PNG, ICO, or ICNS file is required.
+
+Regenerate those platform icons from the canonical SVG with `pnpm icons:build`.
