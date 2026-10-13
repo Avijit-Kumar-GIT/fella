@@ -233,14 +233,17 @@
 					data-testid="workspace-tool-investigations"
 					aria-expanded={investigationsOpen}
 					aria-controls="workspace-investigation-options"
+					aria-label={`Investigations${investigations.length ? `, ${investigations.length} available` : ''}`}
 					onclick={() => (investigationsOpen = !investigationsOpen)}
 				>
 					<span class="workspace-tool-option-icon"><Icon name="bookmark" size={16} /></span>
 					<span class="workspace-tool-option-copy">
 						<strong>Investigations</strong>
-						<small>{investigations.length ? `${investigations.length} available` : 'Open or create an Investigation'}</small>
 					</span>
-					<Icon name={investigationsOpen ? 'chevron-down' : 'chevron-right'} size={16} />
+					{#if investigations.length}
+						<span class="workspace-tool-dropdown-count" aria-hidden="true">{investigations.length}</span>
+					{/if}
+					<Icon name="chevron-right" size={14} />
 				</button>
 				{#if investigationsOpen}
 					<div class="workspace-investigation-options" id="workspace-investigation-options" role="group" aria-label="Choose an Investigation">
@@ -407,6 +410,55 @@
 	.workspace-tool-option:hover:not(:disabled) { background: var(--bg-inset); }
 	.workspace-tool-option:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 	.workspace-tool-option > :global(svg.icon) { margin-left: auto; color: var(--text-faint); }
+	.workspace-tool-dropdown-trigger {
+		min-height: 34px;
+		gap: 8px;
+		padding: 0 10px;
+		border: 1px solid var(--pane-edge);
+		border-radius: 999px;
+		background: color-mix(in srgb, var(--text) 3%, var(--sidebar-surface));
+		color: var(--text-dim);
+		transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+	}
+	.workspace-tool-dropdown-trigger:hover:not(:disabled),
+	.workspace-tool-dropdown-trigger[aria-expanded='true'] {
+		border-color: var(--border-strong);
+		background: var(--sidebar-hover);
+		color: var(--text);
+	}
+	.workspace-tool-dropdown-trigger:focus-visible {
+		outline: 2px solid var(--brand);
+		outline-offset: 2px;
+		box-shadow: none;
+	}
+	.workspace-tool-dropdown-trigger .workspace-tool-option-icon {
+		width: 16px;
+		height: 16px;
+		border-radius: 0;
+		background: transparent;
+		color: inherit;
+	}
+	.workspace-tool-dropdown-trigger .workspace-tool-option-copy {
+		display: block;
+		flex: 1;
+	}
+	.workspace-tool-dropdown-trigger > :global(svg.icon:last-child) {
+		flex: none;
+		margin-left: 0;
+		color: var(--text-faint);
+		transform: rotate(90deg);
+		transition: transform var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+	}
+	.workspace-tool-dropdown-trigger[aria-expanded='true'] > :global(svg.icon:last-child) {
+		color: var(--text-dim);
+		transform: rotate(-90deg);
+	}
+	.workspace-tool-dropdown-count {
+		flex: none;
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+		font-variant-numeric: tabular-nums;
+	}
 	.workspace-tool-option-icon {
 		display: grid;
 		width: 30px;

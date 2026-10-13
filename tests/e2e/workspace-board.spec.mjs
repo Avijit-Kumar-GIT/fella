@@ -2002,6 +2002,8 @@ test('Tools toggles the pane; empty panes and the add button show the tool choos
 	await expect(chooser.getByRole('heading', { name: 'Open a tool' })).toBeVisible();
 	await expect(page.getByTestId('workspace-tool-investigations')).toBeVisible();
 	await expect(page.getByTestId('workspace-tool-investigations')).toHaveAttribute('aria-expanded', 'false');
+	await expect(page.getByTestId('workspace-tool-investigations')).toHaveCSS('border-radius', '999px');
+	await expect(page.getByTestId('workspace-tool-investigations')).toHaveCSS('min-height', '34px');
 	await expect(page.getByTestId('workspace-tool-new-investigation')).toHaveCount(0);
 	await expect(page.getByTestId('workspace-tool-context')).toBeVisible();
 	await expect(chooser.getByRole('button', { name: /Terminal/ })).toBeDisabled();
