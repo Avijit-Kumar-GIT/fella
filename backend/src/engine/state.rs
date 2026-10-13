@@ -1615,6 +1615,7 @@ mod conversation_context_tests {
                     question_id: None,
                     question_text: None,
                     definitions: Vec::new(),
+                    question_plan: Vec::new(),
                     source_selection: selection.clone(),
                 }),
                 context_audit: None,
@@ -4946,51 +4947,43 @@ exactly, character for character, from the list below.";
             .map(|resolved| self.analysis_turn_load(&resolved.turn_id))
             .transpose()?
             .and_then(|turn| turn.investigation_context);
-        let (investigation_context, add_context_to_question) =
-            if let Some(snapshot) = saved_investigation_context {
-                (Some(snapshot), false)
-            } else if let Some(snapshot) = prior_context {
-                (Some(snapshot), false)
-            } else if let Some(id) = investigation_id {
-                let investigation = investigation::load(&self.data_dir, id)?;
-                if turn_catalog.workspace.as_deref() != Some(investigation.workspace_id.as_str()) {
-                    return Err(EngineError::msg(
-                        "the Investigation does not belong to the mounted workspace",
-                    ));
-                }
-                if investigation
-                    .conversation_id
-                    .as_deref()
-                    .is_some_and(|linked| linked != conversation_id)
-                {
-                    return Err(EngineError::msg(
-                        "the Investigation is linked to a different conversation",
-                    ));
-                }
-                (
-                    Some(investigation::context_snapshot_for_question(
-                        &self.data_dir,
-                        id,
-                        question_id,
-                    )?),
-                    true,
-                )
-            } else if question_id.is_some() {
+        let investigation_context = if let Some(snapshot) = saved_investigation_context {
+            Some(snapshot)
+        } else if let Some(snapshot) = prior_context {
+            Some(snapshot)
+        } else if let Some(id) = investigation_id {
+            let investigation = investigation::load(&self.data_dir, id)?;
+            if turn_catalog.workspace.as_deref() != Some(investigation.workspace_id.as_str()) {
                 return Err(EngineError::msg(
-                    "a Question-specific run requires its Investigation ID",
+                    "the Investigation does not belong to the mounted workspace",
                 ));
-            } else {
-                (None, false)
-            };
+            }
+            if investigation
+                .conversation_id
+                .as_deref()
+                .is_some_and(|linked| linked != conversation_id)
+            {
+                return Err(EngineError::msg(
+                    "the Investigation is linked to a different conversation",
+                ));
+            }
+            Some(investigation::context_snapshot_for_question(
+                &self.data_dir,
+                id,
+                question_id,
+            )?)
+        } else if question_id.is_some() {
+            return Err(EngineError::msg(
+                "a Question-specific run requires its Investigation ID",
+            ));
+        } else {
+            None
+        };
         let request_question = clarification
             .as_ref()
             .map(|reply| reply.original_question.as_str())
             .unwrap_or(question);
-        let analysis_question = investigation_context
-            .as_ref()
-            .filter(|_| add_context_to_question)
-            .map(|context| investigation::question_with_context(request_question, context))
-            .unwrap_or_else(|| request_question.to_owned());
+        let analysis_question = request_question.to_owned();
         let source_selection = investigation_context
             .as_ref()
             .map(|context| &context.source_selection);
@@ -5098,6 +5091,7 @@ exactly, character for character, from the list below.";
             context_refs,
             source_selection,
             cancel: cancel.clone(),
+            investigation_context: investigation_context.as_ref(),
             emit: &emit,
         })
         .await;

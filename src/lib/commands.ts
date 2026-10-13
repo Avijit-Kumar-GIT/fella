@@ -46,30 +46,6 @@ async function ensureWorkspaceInvestigation(conv: Conversation): Promise<Investi
 	}
 }
 
-function questionWithInvestigationPlan(
-	question: string,
-	investigation: Investigation | undefined
-): string {
-	const questions: InvestigationQuestion[] = investigation?.questions?.filter((item) => item.text.trim()) ?? [];
-	if (!questions.length) return question;
-	const root = questions.find((item) => !item.parent_id);
-	const plan = root
-		? [
-			`Main Question: ${root.text.trim()}`,
-			...questions
-				.filter((item) => item.parent_id === root.id)
-				.map((item, index) => `Subquestion ${index + 1}: ${item.text.trim()}`)
-		].join('\n')
-		: questions.map((item, index) => `${index + 1}. ${item.text.trim()}`).join('\n');
-	return [
-		'Use this current analyst-edited Question plan as context for the request below. Keep the immediate request primary, use the plan to understand the broader Investigation, and do not present unanswered Questions as findings.',
-		'Current Question plan:',
-		plan,
-		'Immediate request:',
-		question
-	].join('\n\n');
-}
-
 const HELP = `Ask a question in plain language and Fella answers from your files,
 showing the exact steps it took. You never need these commands, but here they are:
 
@@ -1031,8 +1007,6 @@ async function ask(
 		);
 		return;
 	}
-	const analysisQuestion = questionWithInvestigationPlan(question, investigation);
-
 	const msg = conv.addAssistant('');
 	conv.startRun(question, questionRef?.questionId ?? null, msg.id);
 	conv.busy = true;
@@ -1090,7 +1064,7 @@ async function ask(
 	try {
 		const answer = await ipc.ask(
 			conv.id,
-			analysisQuestion,
+			question,
 			onEvent,
 			conv.model || undefined,
 			conv.mode,

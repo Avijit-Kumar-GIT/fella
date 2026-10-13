@@ -259,7 +259,11 @@ function runSection(runId: string, run: AnalysisTurn | null | undefined, investi
 	if (checks.length) {
 		lines.push('', '**QA checks**');
 		for (const check of checks) {
-			const outcome = check.outcome ?? (check.ok ? 'passed' : 'flagged');
+			const informational =
+				!check.ok &&
+				check.finding?.effect === 'informational' &&
+				check.finding.code !== 'advisory';
+			const outcome = informational ? 'informational' : check.outcome ?? (check.ok ? 'passed' : 'flagged');
 			lines.push(`- ${outcome.replaceAll('_', ' ')}: ${check.label}${check.detail ? ` — ${oneLine(check.detail)}` : ''}`);
 		}
 	}

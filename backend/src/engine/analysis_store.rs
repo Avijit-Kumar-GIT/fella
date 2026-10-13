@@ -559,8 +559,22 @@ mod tests {
         canonical_turn.investigation_context = Some(InvestigationContextSnapshot {
             investigation_id: investigation.id.clone(),
             question_id: Some(root.id.clone()),
-            question_text: Some(root.text),
+            question_text: Some(root.text.clone()),
             definitions: Vec::new(),
+            question_plan: vec![
+                crate::engine::investigation::InvestigationPlanQuestionSnapshot {
+                    id: root.id.clone(),
+                    parent_id: None,
+                    text: root.text.clone(),
+                    position: root.position,
+                },
+                crate::engine::investigation::InvestigationPlanQuestionSnapshot {
+                    id: "question-channel".into(),
+                    parent_id: Some(root.id.clone()),
+                    text: "Compare refunds by channel".into(),
+                    position: 1,
+                },
+            ],
             source_selection: Default::default(),
         });
         create(&dir, &canonical_turn).unwrap();

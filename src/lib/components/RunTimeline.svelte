@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { tick } from 'svelte';
 	import { session } from '$lib/session.svelte';
-	import type { AnalysisTurn, Answer, EvidenceItem, EvidenceSource, Message, RunStep } from '$lib/types';
+	import type { AnalysisTurn, Answer, EvidenceItem, EvidenceSource, Message, RunStep, VerificationCheck } from '$lib/types';
 	import { Collapsible } from '$lib/components/ui/collapsible';
 	import { Spinner } from '$lib/components/ui/spinner';
 	import { analystStepForTool, runStateLabel } from '$lib/run-progress';
@@ -150,6 +150,10 @@
 		return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)} s`;
 	}
 
+	function isInformationalCheck(check: VerificationCheck): boolean {
+		return !check.ok && check.finding?.effect === 'informational' && check.finding.code !== 'advisory';
+	}
+
 	let statusLabel = $derived.by(() => {
 		if (running) return activeStep?.label ?? runStateLabel(chat?.runState) ?? 'Preparing the analysis';
 		if (answer?.clarification) return 'Waiting for your input';
@@ -166,9 +170,10 @@
 		const checks = answer?.verification ?? [];
 		if (!checks.length) return '';
 		const passed = checks.filter((check) => check.outcome === 'passed' || (!check.outcome && check.ok)).length;
-		const flagged = checks.filter((check) => check.outcome === 'flagged' || (!check.outcome && !check.ok)).length;
+		const informational = checks.filter(isInformationalCheck).length;
+		const flagged = checks.filter((check) => !isInformationalCheck(check) && (check.outcome === 'flagged' || (!check.outcome && !check.ok))).length;
 		const notRun = checks.filter((check) => check.outcome === 'not_run').length;
-		return [passed ? `${passed} passed` : '', flagged ? `${flagged} flagged` : '', notRun ? `${notRun} not run` : '']
+		return [passed ? `${passed} passed` : '', informational ? `${informational} info` : '', flagged ? `${flagged} flagged` : '', notRun ? `${notRun} not run` : '']
 			.filter(Boolean)
 			.join(' · ');
 	});

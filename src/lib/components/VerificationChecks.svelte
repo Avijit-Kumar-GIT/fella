@@ -100,13 +100,18 @@
 		return 'Answer blocked';
 	}
 
-	function outcome(check: VerificationCheck): 'passed' | 'flagged' | 'not_run' {
+	function outcome(check: VerificationCheck): 'passed' | 'flagged' | 'not_run' | 'informational' {
+		if (
+			!check.ok &&
+			check.finding?.effect === 'informational' &&
+			check.finding.code !== 'advisory'
+		) return 'informational';
 		return check.outcome ?? (check.ok ? 'passed' : 'flagged');
 	}
 
 	function outcomeLabel(check: VerificationCheck): string {
 		const value = outcome(check);
-		return value === 'passed' ? 'Passed' : value === 'flagged' ? 'Flagged' : 'Not run';
+		return value === 'passed' ? 'Passed' : value === 'flagged' ? 'Flagged' : value === 'not_run' ? 'Not run' : 'Info';
 	}
 </script>
 
@@ -130,7 +135,7 @@
 					{@const scope = scopeCopy(check)}
 					<li data-verification-check data-check-outcome={outcome(check)} data-verification-code={check.finding?.code ?? 'unscoped'}>
 						<div class="check-heading">
-							<span class="check-outcome" class:passed={outcome(check) === 'passed'} class:flagged={outcome(check) === 'flagged'} class:not-run={outcome(check) === 'not_run'}>
+							<span class="check-outcome" class:passed={outcome(check) === 'passed'} class:flagged={outcome(check) === 'flagged'} class:not-run={outcome(check) === 'not_run'} class:informational={outcome(check) === 'informational'}>
 								<Icon name={outcome(check) === 'passed' ? 'check' : outcome(check) === 'flagged' ? 'alert' : 'info'} size={12} />
 								{outcomeLabel(check)}
 							</span>
@@ -177,6 +182,7 @@
 	.check-outcome.passed { color: var(--ok); }
 	.check-outcome.flagged { color: var(--warn); }
 	.check-outcome.not-run { color: var(--text-faint); }
+	.check-outcome.informational { color: var(--text-faint); }
 	.check-detail, .check-target, .check-guidance { margin: 3px 0 0; color: var(--text-dim); font-size: var(--fs-xs); line-height: 1.45; overflow-wrap: anywhere; }
 	.check-scope { margin-top: var(--space-1); color: var(--text-dim); font-size: var(--fs-xs); }
 	.check-scope summary { width: fit-content; cursor: pointer; color: var(--text-faint); }

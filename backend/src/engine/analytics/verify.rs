@@ -321,7 +321,13 @@ pub fn status(
     if hard_fail(checks).is_some() {
         return VerificationStatus::Failed;
     }
-    if checks.iter().any(|check| !check.ok) {
+    if checks.iter().any(|check| {
+        !check.ok
+            && !check.finding.as_ref().is_some_and(|finding| {
+                finding.effect == VerificationEffect::Informational
+                    && finding.code != VerificationFindingCode::Advisory
+            })
+    }) {
         return VerificationStatus::NeedsReview;
     }
     let withheld_chart_without_replacement = evidence.iter().any(|item| {
@@ -778,7 +784,7 @@ pub fn contract_checks(
         check_join_usage(&mut checks, join, &sql);
     }
     if let Some(comparison) = &contract.comparison_spec {
-        check_comparison_usage(&mut checks, contract, comparison, &sql);
+        check_comparison_usage(&mut checks, contract, comparison, &sql, evidence);
         check_comparison_arithmetic(&mut checks, contract, evidence);
     }
     if contract.interpretation == InterpretationStatus::Grounded {
@@ -1394,8 +1400,9 @@ fn check_comparison_usage(
     contract: &AnalysisContract,
     comparison: &crate::engine::runtime::ContractComparison,
     sql: &[String],
+    evidence: &[EvidenceItem],
 ) {
-    let ranges_used = contract
+    let canonical_windows = contract
         .time
         .as_ref()
         .and_then(|time| time.field.as_deref())
@@ -1404,15 +1411,32 @@ fn check_comparison_usage(
                 crate::engine::planner::time_predicate(field, &comparison.current_range).ok()?,
                 crate::engine::planner::time_predicate(field, &comparison.previous_range).ok()?,
             ))
-        })
-        .is_some_and(|(current, previous)| {
-            sql.iter().any(|query| {
-                query.contains("case when")
-                    && query.contains(&current.to_ascii_lowercase())
-                    && query.contains(&previous.to_ascii_lowercase())
-            })
         });
-    let output_shape_used = contract
+    let explicit_date_windows = [
+        comparison_range_dates(&comparison.current_range),
+        comparison_range_dates(&comparison.previous_range),
+    ];
+    let uses_comparison_windows = |query: &str| {
+        if !query.contains("case when") {
+            return false;
+        }
+        let canonical_match = canonical_windows
+            .as_ref()
+            .is_some_and(|(current, previous)| {
+                query.contains(&current.to_ascii_lowercase())
+                    && query.contains(&previous.to_ascii_lowercase())
+            });
+        let between_match = explicit_date_windows.iter().all(Option::is_some)
+            && query.contains("between")
+            && explicit_date_windows
+                .iter()
+                .filter_map(|range| range.as_ref())
+                .flatten()
+                .all(|date| query.contains(&format!("'{date}'")));
+        canonical_match || between_match
+    };
+    let ranges_used = sql.iter().any(|query| uses_comparison_windows(query));
+    let output_aliases: Vec<_> = contract
         .measures
         .iter()
         .enumerate()
@@ -1424,14 +1448,49 @@ fn check_comparison_usage(
                 .enumerate()
                 .map(|(index, _)| format!("derived_{index}")),
         )
-        .all(|alias| {
-            sql.iter().any(|query| {
+        .collect();
+    let explicit_output_shape = !output_aliases.is_empty()
+        && sql.iter().any(|query| {
+            output_aliases.iter().all(|alias| {
                 query.contains(&format!("{alias}_current"))
                     && query.contains(&format!("{alias}_previous"))
                     && query.contains(&format!("{alias}_change"))
                     && query.contains(&format!("{alias}_change_pct"))
             })
         });
+    // A comparison can also be returned as one row per period rather than
+    // four synthetic `*_current/previous/change` columns. Accept that form
+    // only when the same evidence uses both typed windows and includes
+    // distinct text groups with numeric measures for both periods.
+    let grouped_period_rows = ranges_used
+        && evidence.iter().any(|item| {
+            if !item.is_accepted() || !is_sql_evidence(item) {
+                return false;
+            }
+            let Some(query) = item.sql.as_deref().map(str::to_ascii_lowercase) else {
+                return false;
+            };
+            if !query.contains("group by") || !uses_comparison_windows(&query) {
+                return false;
+            }
+            let Some(rows) = item.rows.as_deref().filter(|rows| rows.len() >= 2) else {
+                return false;
+            };
+            let distinct_text_group =
+                (0..rows.iter().map(Vec::len).min().unwrap_or(0)).any(|index| {
+                    let mut values = HashSet::new();
+                    rows.iter().all(|row| {
+                        row.get(index)
+                            .and_then(Json::as_str)
+                            .is_some_and(|value| values.insert(value.to_owned()))
+                    })
+                });
+            let numeric_measures = rows
+                .iter()
+                .all(|row| row.iter().any(|value| value.as_f64().is_some()));
+            distinct_text_group && numeric_measures
+        });
+    let output_shape_used = explicit_output_shape || grouped_period_rows;
     if ranges_used && output_shape_used {
         checks.push(ok(format!(
             "period comparison `{}` vs `{}` was used by the query",
@@ -1443,6 +1502,26 @@ fn check_comparison_usage(
             Some("the executed evidence did not carry both explicit comparison windows".into()),
         ));
     }
+}
+
+fn comparison_range_dates(range: &str) -> Option<[String; 2]> {
+    let (start, end) = range
+        .trim()
+        .split_once("..")
+        .or_else(|| range.trim().split_once(" to "))?;
+    let is_iso_date = |value: &str| {
+        let bytes = value.as_bytes();
+        bytes.len() == 10
+            && bytes[4] == b'-'
+            && bytes[7] == b'-'
+            && bytes
+                .iter()
+                .enumerate()
+                .all(|(index, byte)| matches!(index, 4 | 7) || byte.is_ascii_digit())
+    };
+    let start = start.trim();
+    let end = end.trim();
+    (is_iso_date(start) && is_iso_date(end)).then(|| [start.to_owned(), end.to_owned()])
 }
 
 fn check_comparison_arithmetic(
@@ -2799,26 +2878,152 @@ fn warn(label: impl Into<String>, detail: Option<String>) -> VerificationCheck {
 
 const AGGREGATE_VERBS: &[(&[&str], &str)] = &[
     (&["count of", "number of"], "COUNT("),
-    (&["how much", "total ", " sum of"], "SUM("),
+    (&["how much", "sum of"], "SUM("),
     (&["average", "avg "], "AVG("),
 ];
 
 /// Which SQL aggregates the question's wording implies but no query in
-/// `sql_texts` (already upper-cased) actually used. Pure so it's easy to
-/// test independent of `EvidenceItem`; `check_aggregate_verb` is the wrapper
-/// that pulls SQL text out of the evidence.
+/// `sql_texts` actually used. This pure helper is testable independently of
+/// `EvidenceItem`; `check_aggregate_verb` pulls SQL text out of the evidence.
 fn missing_aggregate_verbs<'a>(question: &str, sql_texts: &[String]) -> Vec<&'a str> {
     if sql_texts.is_empty() {
         return Vec::new();
     }
     let q = question.to_lowercase();
-    AGGREGATE_VERBS
+    let mut missing: Vec<_> = AGGREGATE_VERBS
         .iter()
         .filter(|(phrases, func)| {
-            phrases.iter().any(|p| q.contains(p)) && !sql_texts.iter().any(|s| s.contains(func))
+            phrases.iter().any(|p| q.contains(p))
+                && !sql_texts
+                    .iter()
+                    .any(|sql| sql_has_aggregate(sql, func.trim_end_matches('(')))
         })
         .map(|(_, func)| func.trim_end_matches('('))
-        .collect()
+        .collect();
+    // "Total number/count of …" asks for a row count, not a numeric SUM.
+    // Other explicit totals (including total order volume) require SUM.
+    if q.contains("total ")
+        && !q.contains("total number of")
+        && !q.contains("total count of")
+        && !sql_texts.iter().any(|sql| sql_has_aggregate(sql, "SUM"))
+    {
+        missing.push("SUM");
+    }
+    missing
+}
+
+fn sql_has_aggregate(sql: &str, name: &str) -> bool {
+    contains_function_call(sql, &name.to_ascii_lowercase())
+        || (name.eq_ignore_ascii_case("AVG") && contains_sum_count_average(sql))
+}
+
+fn function_call_bounds(sql: &str, start: usize, function: &str) -> Option<(usize, usize)> {
+    let lower = sql.to_ascii_lowercase();
+    let bytes = lower.as_bytes();
+    let end_name = start.checked_add(function.len())?;
+    if lower.get(start..end_name)? != function {
+        return None;
+    }
+    if start > 0 && (bytes[start - 1].is_ascii_alphanumeric() || bytes[start - 1] == b'_') {
+        return None;
+    }
+    let mut open = end_name;
+    while bytes.get(open).is_some_and(u8::is_ascii_whitespace) {
+        open += 1;
+    }
+    if bytes.get(open) != Some(&b'(') {
+        return None;
+    }
+
+    let mut depth = 0usize;
+    let mut index = open;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\'' | b'"' | b'`' => {
+                let quote = bytes[index];
+                index += 1;
+                while index < bytes.len() {
+                    if bytes[index] == quote {
+                        if bytes.get(index + 1) == Some(&quote) {
+                            index += 2;
+                        } else {
+                            index += 1;
+                            break;
+                        }
+                    } else {
+                        index += 1;
+                    }
+                }
+            }
+            b'(' => {
+                depth += 1;
+                index += 1;
+            }
+            b')' => {
+                depth = depth.checked_sub(1)?;
+                index += 1;
+                if depth == 0 {
+                    return Some((open, index));
+                }
+            }
+            _ => index += 1,
+        }
+    }
+    None
+}
+
+fn next_function_call(sql: &str, function: &str, mut from: usize) -> Option<(usize, usize)> {
+    let lower = sql.to_ascii_lowercase();
+    while from < lower.len() {
+        let start = from + lower[from..].find(function)?;
+        if let Some((_, end)) = function_call_bounds(&lower, start, function) {
+            return Some((start, end));
+        }
+        from = start + function.len();
+    }
+    None
+}
+
+/// Recognize the common SQL equivalent of an arithmetic mean, including the
+/// guarded `SUM(x) / NULLIF(COUNT(x), 0)` form, without treating unrelated
+/// SUM and COUNT calls elsewhere in a query as an average.
+fn contains_sum_count_average(sql: &str) -> bool {
+    let lower = sql.to_ascii_lowercase();
+    let bytes = lower.as_bytes();
+    let mut from = 0;
+    while let Some((sum_start, sum_end)) = next_function_call(&lower, "sum", from) {
+        let mut cursor = sum_end;
+        while bytes.get(cursor).is_some_and(u8::is_ascii_whitespace) {
+            cursor += 1;
+        }
+        while bytes.get(cursor) == Some(&b')') {
+            cursor += 1;
+            while bytes.get(cursor).is_some_and(u8::is_ascii_whitespace) {
+                cursor += 1;
+            }
+        }
+        if bytes.get(cursor) != Some(&b'/') {
+            from = sum_start + 3;
+            continue;
+        }
+        cursor += 1;
+        while bytes.get(cursor).is_some_and(u8::is_ascii_whitespace) {
+            cursor += 1;
+        }
+        if let Some((open, _)) = function_call_bounds(&lower, cursor, "nullif") {
+            cursor = open + 1;
+        }
+        while bytes.get(cursor).is_some_and(u8::is_ascii_whitespace)
+            || bytes.get(cursor) == Some(&b'(')
+        {
+            cursor += 1;
+        }
+        if function_call_bounds(&lower, cursor, "count").is_some() {
+            return true;
+        }
+        from = sum_start + 3;
+    }
+    false
 }
 
 /// Explicit aggregate terminology can reveal a query that selected a different
@@ -2847,14 +3052,29 @@ fn check_aggregate_verb(
         if name == "AVG" && mean_forecast {
             continue;
         }
-        out.push(warn(
-            format!("question implies {name}() but no cited query used it"),
-            Some(format!(
-                "the wording suggests {name}, but none of the queries behind this answer \
-                 contain {name}() it may come from a precomputed column or a different \
-                 aggregate than the question asked for"
-            )),
+        let label = format!("question implies {name}() but no cited query used it");
+        let detail = Some(format!(
+            "the wording suggests {name}, but none of the queries behind this answer \
+             contain {name}() it may come from a precomputed column or a different \
+             aggregate than the question asked for"
         ));
+        if name == "SUM" {
+            let evidence_ids = evidence
+                .iter()
+                .filter(|item| is_sql_evidence(item) && item.is_accepted())
+                .map(|item| item.id.clone())
+                .collect();
+            out.push(repair_claim_warning(
+                label,
+                Some("a total is required here; a row count is not a substitute for summing the requested measure".into()),
+                VerificationFindingCode::SemanticExecutionMismatch,
+                "SUM() for the requested measure",
+                evidence_ids,
+                "compute the requested total with SUM over the relevant measure, keep the requested comparison scope, and do not substitute COUNT or an unrelated sum",
+            ));
+        } else {
+            out.push(warn(label, detail));
+        }
     }
 }
 
@@ -3512,13 +3732,18 @@ fn collect_chart_numbers(data: &chart::ChartData, supported: &mut Vec<f64>) {
 fn answer_number_tokens(text: &str) -> Vec<(String, f64)> {
     let date = regex::Regex::new(r"\b(?:19|20)\d{2}(?:[-/]\d{1,2}){1,2}\b")
         .expect("ISO date pattern is valid");
+    let named_date = regex::Regex::new(
+        r"(?i)\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*(?:19|20)\d{2})?\b",
+    )
+    .expect("named date pattern is valid");
     text.lines()
         .flat_map(|line| {
             // Dates are labels/context, not standalone claims about a metric.
             // Mask common ISO forms before extracting figures so a failed chart
             // that is explained with its date does not flag the month/day.
             let line_without_dates = date.replace_all(line, " ");
-            let line = line_without_dates.as_ref();
+            let line_without_named_dates = named_date.replace_all(line_without_dates.as_ref(), " ");
+            let line = line_without_named_dates.as_ref();
             let skip_first = is_ordered_list_marker(line);
             number_tokens(line)
                 .enumerate()
@@ -4575,6 +4800,23 @@ mod tests {
             ),
             vec!["AVG"]
         );
+        assert!(missing_aggregate_verbs(
+            "How did average order value change?",
+            &sql("SELECT SUM(net_revenue) / COUNT(order_id) AS aov FROM orders")
+        )
+        .is_empty());
+        assert_eq!(
+            missing_aggregate_verbs(
+                "What was the change in total order volume between Q3 and Q4 2025?",
+                &sql("SELECT COUNT(order_id) AS order_volume FROM orders")
+            ),
+            vec!["SUM"]
+        );
+        assert!(missing_aggregate_verbs(
+            "What was the total number of orders?",
+            &sql("SELECT COUNT(order_id) AS order_count FROM orders")
+        )
+        .is_empty());
         // no run_sql evidence at all -> nothing to flag (e.g. answered from schema/no-tool)
         assert!(missing_aggregate_verbs("what is the count of books I finished?", &[]).is_empty());
         // wording doesn't imply any of these verbs -> nothing flagged
@@ -4607,6 +4849,49 @@ mod tests {
             out.is_empty(),
             "chart SQL should count as a cited aggregate: {out:?}"
         );
+    }
+
+    #[test]
+    fn total_order_volume_requires_a_sum_and_requests_targeted_repair() {
+        let evidence = vec![run_sql_ev(
+            "SELECT COUNT(order_id) AS order_volume FROM orders_2025 GROUP BY quarter",
+            &["quarter", "order_volume"],
+            vec![
+                vec![Json::from("Q3"), Json::from(103)],
+                vec![Json::from("Q4"), Json::from(102)],
+            ],
+        )];
+        let mut checks = Vec::new();
+        check_aggregate_verb(
+            "What was the change in total order volume between Q3 and Q4 2025?",
+            &evidence,
+            &mut checks,
+        );
+        assert_eq!(checks.len(), 1, "{checks:?}");
+        let finding = checks[0].finding.as_ref().unwrap();
+        assert_eq!(finding.effect, VerificationEffect::Repair);
+        assert_eq!(
+            finding.code,
+            VerificationFindingCode::SemanticExecutionMismatch
+        );
+        assert_eq!(finding.evidence_ids, vec![evidence[0].id.clone()]);
+        assert!(semantic_repair_hint(&checks).is_some());
+    }
+
+    #[test]
+    fn average_is_scoped_to_the_current_question_and_accepts_sum_over_count() {
+        let evidence = vec![run_sql_ev(
+            "SELECT SUM(net_revenue) / COUNT(order_id) AS aov FROM orders",
+            &["aov"],
+            vec![vec![Json::from(490.5)]],
+        )];
+        let mut checks = Vec::new();
+        check_aggregate_verb(
+            "How did average order value change?",
+            &evidence,
+            &mut checks,
+        );
+        assert!(checks.is_empty(), "{checks:?}");
     }
 
     #[test]
@@ -5321,6 +5606,17 @@ mod tests {
             .map(|(_, value)| value)
             .collect();
         assert_eq!(got_with_data, vec![450.0]);
+
+        let natural_dates: Vec<_> = answer_number_tokens(
+            "Orders were counted from July 1 to September 30, then October 1 to December 31.",
+        )
+        .into_iter()
+        .map(|(_, value)| value)
+        .collect();
+        assert!(
+            natural_dates.is_empty(),
+            "natural-language date components leaked into figures: {natural_dates:?}"
+        );
     }
 
     #[test]
@@ -5639,6 +5935,18 @@ mod tests {
             status(&clean, &evidence, false),
             VerificationStatus::NeedsReview,
             "a matching replay alone does not verify the user's semantic interpretation"
+        );
+        let disagreement = self_consistency_check("The answer is 12.", "The answer is 14.")
+            .expect("different second-pass figures should be recorded");
+        assert_eq!(
+            disagreement.finding.as_ref().unwrap().effect,
+            VerificationEffect::Informational
+        );
+        let with_disagreement = [clean.clone(), vec![disagreement]].concat();
+        assert_eq!(
+            status(&with_disagreement, &evidence, true),
+            VerificationStatus::Verified,
+            "a same-model disagreement is a note, not an acceptance gate"
         );
         assert_eq!(
             status(
@@ -6429,6 +6737,89 @@ mod tests {
                     .label
                     .contains("requested period comparison was not used")
         }));
+    }
+
+    #[test]
+    fn comparison_accepts_period_rows_from_between_windows() {
+        let contract = AnalysisContract {
+            measures: vec![crate::engine::runtime::ContractMeasure {
+                concept: "order volume".into(),
+                field: Some("order_id".into()),
+                operation: "sum".into(),
+                unit: None,
+            }],
+            time: Some(crate::engine::runtime::ContractTime {
+                field: Some("order_date".into()),
+                range: None,
+                bucket: None,
+                timezone: None,
+            }),
+            ..Default::default()
+        };
+        let comparison = crate::engine::runtime::ContractComparison {
+            kind: crate::engine::runtime::ComparisonKind::PeriodOverPeriod,
+            current_range: "2025-10-01..2025-12-31".into(),
+            previous_range: "2025-07-01..2025-09-30".into(),
+        };
+        let sql = "SELECT CASE WHEN order_date BETWEEN '2025-07-01' AND '2025-09-30' THEN 'Q3' WHEN order_date BETWEEN '2025-10-01' AND '2025-12-31' THEN 'Q4' END AS quarter, COUNT(order_id) AS order_volume FROM orders_2025 GROUP BY 1";
+        let evidence = vec![run_sql_ev(
+            sql,
+            &["quarter", "order_volume"],
+            vec![
+                vec![Json::from("Q3"), Json::from(103)],
+                vec![Json::from("Q4"), Json::from(102)],
+            ],
+        )];
+        let mut checks = Vec::new();
+        check_comparison_usage(
+            &mut checks,
+            &contract,
+            &comparison,
+            &[sql.to_ascii_lowercase()],
+            &evidence,
+        );
+        assert!(checks.iter().all(|check| check.ok), "{checks:?}");
+
+        let incomplete_sql = "SELECT CASE WHEN order_date BETWEEN '2025-10-01' AND '2025-12-31' THEN 'Q4' END AS quarter, COUNT(order_id) AS order_volume FROM orders_2025 GROUP BY 1";
+        let incomplete = vec![run_sql_ev(
+            incomplete_sql,
+            &["quarter", "order_volume"],
+            vec![vec![Json::from("Q4"), Json::from(102)]],
+        )];
+        let mut incomplete_checks = Vec::new();
+        check_comparison_usage(
+            &mut incomplete_checks,
+            &contract,
+            &comparison,
+            &[incomplete_sql.to_ascii_lowercase()],
+            &incomplete,
+        );
+        assert!(incomplete_checks.iter().any(|check| !check.ok));
+
+        // A complete-window query elsewhere in the run must not lend its
+        // comparison scope to rows produced by a different, incomplete query.
+        let split_evidence_sql = "SELECT CASE WHEN order_date BETWEEN '2025-10-01' AND '2025-12-31' THEN 'Q4' END AS quarter, COUNT(order_id) AS order_volume FROM orders_2025 GROUP BY 1";
+        let split_evidence = vec![run_sql_ev(
+            split_evidence_sql,
+            &["quarter", "order_volume"],
+            vec![
+                vec![Json::from("Q3"), Json::from(103)],
+                vec![Json::from("Q4"), Json::from(102)],
+            ],
+        )];
+        let unrelated_complete_query = "SELECT CASE WHEN order_date BETWEEN '2025-07-01' AND '2025-09-30' THEN 'Q3' WHEN order_date BETWEEN '2025-10-01' AND '2025-12-31' THEN 'Q4' END FROM orders_2025";
+        let mut split_checks = Vec::new();
+        check_comparison_usage(
+            &mut split_checks,
+            &contract,
+            &comparison,
+            &[
+                split_evidence_sql.to_ascii_lowercase(),
+                unrelated_complete_query.to_ascii_lowercase(),
+            ],
+            &split_evidence,
+        );
+        assert!(split_checks.iter().any(|check| !check.ok));
     }
 
     #[test]

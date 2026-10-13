@@ -270,10 +270,24 @@ pub struct InvestigationContextSnapshot {
     pub question_text: Option<String>,
     #[serde(default)]
     pub definitions: Vec<InvestigationDefinitionSnapshot>,
+    /// Active Investigation Questions supplied to the model as background.
+    /// They are deliberately kept out of `AnalysisTurn.question`, which is
+    /// the one request the current run must answer and verify.
+    #[serde(default)]
+    pub question_plan: Vec<InvestigationPlanQuestionSnapshot>,
     /// The exact source selection used by this turn. Older turns had no
     /// selection and therefore retain the historical all-sources behavior.
     #[serde(default)]
     pub source_selection: InvestigationSourceSelection,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InvestigationPlanQuestionSnapshot {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
+    pub text: String,
+    pub position: usize,
 }
 
 /// Analyst-selected input boundary for one Investigation. Paths are
@@ -1354,6 +1368,19 @@ pub fn context_snapshot_for_question(
         }
         None => investigation.source_selection.clone(),
     };
+    let question_plan = investigation
+        .questions
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .filter(|question| question.status == InvestigationQuestionStatus::Active)
+        .map(|question| InvestigationPlanQuestionSnapshot {
+            id: question.id.clone(),
+            parent_id: question.parent_id.clone(),
+            text: question.text.clone(),
+            position: question.position,
+        })
+        .collect();
     let definitions = investigation
         .definitions
         .unwrap_or_default()
@@ -1370,34 +1397,80 @@ pub fn context_snapshot_for_question(
         question_id: question_id.map(str::to_owned),
         question_text: question.map(|question| question.text.clone()),
         definitions,
+        question_plan,
         source_selection,
     })
 }
 
-/// Add only analyst-saved definitions to the prompt. They inform interpretation
-/// but are not evidence and never replace the immediate user request.
-pub fn question_with_context(question: &str, context: &InvestigationContextSnapshot) -> String {
-    if context.definitions.is_empty() {
-        return question.to_owned();
+/// Format analyst-authored meanings and the durable Question plan for the
+/// model as background context. The current user request remains a separate
+/// message so sibling Questions cannot leak into current-run verification.
+pub fn model_context(context: &InvestigationContextSnapshot) -> Option<String> {
+    let mut sections = Vec::new();
+    if !context.definitions.is_empty() {
+        let definitions = context
+            .definitions
+            .iter()
+            .map(|definition| {
+                let kind = match definition.kind {
+                    InvestigationDefinitionKind::Definition => "Definition",
+                    InvestigationDefinitionKind::Assumption => "Assumption",
+                };
+                format!(
+                    "- {kind} (revision {}): {}",
+                    definition.revision, definition.text
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        sections.push(format!(
+            "Analyst-saved definitions and assumptions (background, not evidence):\n{definitions}"
+        ));
     }
-    let definitions = context
-        .definitions
-        .iter()
-        .map(|definition| {
-            let kind = match definition.kind {
-                InvestigationDefinitionKind::Definition => "Definition",
-                InvestigationDefinitionKind::Assumption => "Assumption",
-            };
-            format!(
-                "- {kind} (revision {}): {}",
-                definition.revision, definition.text
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    format!(
-        "Saved Investigation context (use these meanings when interpreting the request; they are not evidence):\n{definitions}\n\nCurrent analyst request and plan:\n{question}"
-    )
+
+    if !context.question_plan.is_empty() {
+        let roots: Vec<_> = context
+            .question_plan
+            .iter()
+            .filter(|question| question.parent_id.is_none())
+            .collect();
+        let mut lines = Vec::new();
+        if let Some(root) = roots.first() {
+            lines.push(format!("Main Question: {}", root.text.trim()));
+            for (index, question) in context
+                .question_plan
+                .iter()
+                .filter(|question| question.parent_id.as_deref() == Some(root.id.as_str()))
+                .enumerate()
+            {
+                lines.push(format!(
+                    "Subquestion {}: {}",
+                    index + 1,
+                    question.text.trim()
+                ));
+            }
+            for question in context.question_plan.iter().filter(|question| {
+                question.parent_id.is_some()
+                    && question.parent_id.as_deref() != Some(root.id.as_str())
+            }) {
+                lines.push(format!("Related Question: {}", question.text.trim()));
+            }
+        } else {
+            lines.extend(
+                context
+                    .question_plan
+                    .iter()
+                    .enumerate()
+                    .map(|(index, question)| format!("{}. {}", index + 1, question.text.trim())),
+            );
+        }
+        sections.push(format!(
+            "Investigation Question plan (background only; answer only the immediate user request, do not combine sibling Questions):\n{}",
+            lines.join("\n")
+        ));
+    }
+
+    (!sections.is_empty()).then(|| sections.join("\n\n"))
 }
 
 fn public_record(
@@ -3092,6 +3165,25 @@ mod tests {
             Some("conversation-root"),
         )
         .unwrap();
+        update_questions(
+            &data_dir,
+            &created.id,
+            vec![
+                InvestigationQuestionInput {
+                    id: "question-revenue-root".into(),
+                    parent_id: None,
+                    text: "Explain revenue movement".into(),
+                    source_selection: None,
+                },
+                InvestigationQuestionInput {
+                    id: "question-aov".into(),
+                    parent_id: Some("question-revenue-root".into()),
+                    text: "What was average order value?".into(),
+                    source_selection: None,
+                },
+            ],
+        )
+        .unwrap();
         let other = create(
             &data_dir,
             "/work/analysis",
@@ -3128,8 +3220,12 @@ mod tests {
         let snapshot = context_snapshot(&data_dir, &created.id).unwrap();
         assert_eq!(snapshot.investigation_id, created.id);
         assert_eq!(snapshot.definitions.len(), 2);
-        assert!(question_with_context("Calculate revenue", &snapshot)
-            .contains("active customer ordered in the last 90 days"));
+        assert_eq!(snapshot.question_plan.len(), 2);
+        let background = model_context(&snapshot).unwrap();
+        assert!(background.contains("active customer ordered in the last 90 days"));
+        assert!(background.contains("Main Question: Explain revenue movement"));
+        assert!(background.contains("Subquestion 1: What was average order value?"));
+        assert!(background.contains("answer only the immediate user request"));
 
         let edited = update_definitions(
             &data_dir,

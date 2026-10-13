@@ -302,9 +302,18 @@
 		return run?.verification?.checks ?? run?.result.verification ?? [];
 	}
 
+	function verificationOutcomeValue(check: VerificationCheck): string {
+		if (
+			!check.ok &&
+			check.finding?.effect === 'informational' &&
+			check.finding.code !== 'advisory'
+		) return 'informational';
+		return check.outcome ?? (check.ok ? 'passed' : 'flagged');
+	}
+
 	function verificationOutcome(check: VerificationCheck): string {
-		const outcome = check.outcome ?? (check.ok ? 'passed' : 'flagged');
-		return outcome === 'passed' ? 'Passed' : outcome === 'not_run' ? 'Not run' : 'Flagged';
+		const outcome = verificationOutcomeValue(check);
+		return outcome === 'passed' ? 'Passed' : outcome === 'not_run' ? 'Not run' : outcome === 'informational' ? 'Info' : 'Flagged';
 	}
 
 	function verificationStatusLabel(run: AnalysisTurn | undefined): string {
@@ -408,7 +417,7 @@
 								{#if checks.length}
 									<ul>
 									{#each checks as check, checkIndex (`${finding.id}-check-${checkIndex}`)}
-										<li data-check-outcome={check.outcome ?? (check.ok ? 'passed' : 'flagged')}><strong>{verificationOutcome(check)} · {check.label}</strong>{#if check.detail}<span>{check.detail}</span>{/if}</li>
+										<li data-check-outcome={verificationOutcomeValue(check)}><strong>{verificationOutcome(check)} · {check.label}</strong>{#if check.detail}<span>{check.detail}</span>{/if}</li>
 									{/each}
 									</ul>
 									<p>Each check speaks only to the condition it tested; passing checks do not establish overall business correctness.</p>
@@ -726,6 +735,7 @@
 	.results-finding-checks li { display: grid; gap: 2px; padding-left: var(--space-2); border-left: 2px solid var(--border-strong); }
 	.results-finding-checks li[data-check-outcome='passed'] { border-color: var(--success, #15803d); }
 	.results-finding-checks li[data-check-outcome='flagged'] { border-color: var(--danger, #b42318); }
+	.results-finding-checks li[data-check-outcome='informational'] { border-color: var(--border-strong); }
 	.results-finding-checks li strong { color: var(--text-dim); font-weight: 550; }
 	.results-finding-checks li span, .results-finding-checks > p { color: var(--text-faint); }
 	.results-finding-checks > p { margin: var(--space-2) 0 0; }

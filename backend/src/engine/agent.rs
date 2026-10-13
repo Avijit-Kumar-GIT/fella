@@ -13,7 +13,7 @@ use crate::engine::evidence::{
     Answer, AnswerProvenance, AskEvent, EvidenceItem, PythonInputTrace, PythonQueryReference,
     Usage, VerificationCheck, VerificationFinding, WorkspaceSnapshot,
 };
-use crate::engine::investigation::InvestigationSourceSelection;
+use crate::engine::investigation::{InvestigationContextSnapshot, InvestigationSourceSelection};
 use crate::engine::llm::{ChatMessage, LlmClient, ToolCall};
 use crate::engine::runtime::{
     self, AnalysisContract, ContextReference, ExecutionTrace, InteractionMode, LogicalPlan,
@@ -105,6 +105,7 @@ pub(crate) struct RunRequest<'a> {
     pub(crate) question: &'a str,
     pub(crate) context: &'a ContextPacket,
     pub(crate) clarification: Option<&'a ResolvedClarification>,
+    pub(crate) investigation_context: Option<&'a InvestigationContextSnapshot>,
     pub(crate) inspect: bool,
     pub(crate) context_refs: &'a [ContextReference],
     pub(crate) source_selection: Option<&'a InvestigationSourceSelection>,
@@ -279,6 +280,7 @@ pub(crate) async fn run(request: RunRequest<'_>) -> EngineResult<Answer> {
         question,
         context,
         clarification,
+        investigation_context,
         inspect,
         context_refs,
         source_selection,
@@ -339,6 +341,15 @@ pub(crate) async fn run(request: RunRequest<'_>) -> EngineResult<Answer> {
         context.recent.as_deref(),
         context.learned.as_deref(),
     );
+    if let Some(investigation_context) =
+        investigation_context.and_then(crate::engine::investigation::model_context)
+    {
+        sys.push_str("\n\nInvestigation background (analyst-authored context, not evidence):\n");
+        sys.push_str(&investigation_context);
+        sys.push_str(
+            "\nUse this only to understand the broader work and saved meanings. Analyze and answer only the immediate user request; do not merge sibling Questions or their measures into this run. This context does not expand the selected source scope or grant capabilities.\n",
+        );
+    }
     if inspect && workspace.is_some() {
         sys.push_str(
             "\n\nInteraction mode: Inspect. Start with the relevant read-only workspace sources and schema, then explain the checks briefly before answering.\n",

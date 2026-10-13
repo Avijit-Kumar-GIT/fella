@@ -1513,7 +1513,7 @@ test('a saved answer opens its canonical run and returns to the same conversatio
 	expect(await page.evaluate(() => window.__workspaceAskCalls.length)).toBe(2);
 });
 
-test('a Question runs in its linked conversation even when it has no original chat prompt', async ({ page }) => {
+test('a Question runs in its linked conversation without merging sibling Questions into its request', async ({ page }) => {
 	await installDesktopMock(page, {
 		questionRunOutcomes: [{ status: 'answered', answer_text: 'There are 124 sales rows in the available file.' }]
 	});
@@ -1530,7 +1530,12 @@ test('a Question runs in its linked conversation even when it has no original ch
 	await page.getByRole('button', { name: 'New investigation', exact: true }).click();
 	await openInvestigationSection(page, 'Questions');
 	await page.getByRole('button', { name: 'Add main Question' }).click();
-	await page.getByRole('textbox', { name: 'Main question' }).fill('How many sales rows are available?');
+	const mainQuestion = 'How many sales rows are available?';
+	await page.getByRole('textbox', { name: 'Main question' }).fill(mainQuestion);
+	await waitForQuestionPlanSaved(page);
+	await page.getByRole('button', { name: 'Add subquestion' }).click();
+	const siblingQuestion = 'What was the average sale value?';
+	await page.getByRole('textbox', { name: 'Subquestion 1' }).fill(siblingQuestion);
 	await waitForQuestionPlanSaved(page);
 	await page.getByRole('button', { name: 'Open conversation', exact: true }).click();
 	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
@@ -1539,6 +1544,9 @@ test('a Question runs in its linked conversation even when it has no original ch
 	await openInvestigationSection(page, 'Questions');
 
 	await page.getByRole('button', { name: 'Analyze main Question' }).click();
+	const runReview = page.getByRole('region', { name: 'Review this run' });
+	await expect(runReview).toContainText(mainQuestion);
+	await expect(runReview.getByText('Review the broader Question plan (2)')).toBeVisible();
 	await page.getByRole('region', { name: 'Review this run' }).getByRole('button', { name: 'Run this Question' }).click();
 
 	const answer = page.locator('.msg.assistant').last();
@@ -1561,6 +1569,11 @@ test('a Question runs in its linked conversation even when it has no original ch
 	expect(state.analysisTurns).toHaveLength(1);
 	expect(state.analysisTurns[0].investigation_context.investigation_id).toBe(investigation.id);
 	expect(state.analysisTurns[0].investigation_context.question_id).toBe(question.id);
+	expect(state.analysisTurns[0].question).toBe(mainQuestion);
+	expect(state.analysisTurns[0].investigation_context.question_text).toBe(mainQuestion);
+	expect(state.askCalls.at(-1).question).toBe(mainQuestion);
+	expect(question.text).toBe(mainQuestion);
+	expect(investigation.questions.map((item) => item.text)).toEqual([mainQuestion, siblingQuestion]);
 	expect(state.askCalls.at(-1)).toMatchObject({
 		investigationId: investigation.id,
 		questionId: question.id
