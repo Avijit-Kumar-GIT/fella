@@ -561,6 +561,8 @@ class Session {
 	workspaceView = $state<WorkspaceView>('ask');
 	/** The active pane inside Workspace. */
 	workspacePane = $state<WorkspacePane>('investigation');
+	/** The tool chooser is a transient entry state, not a persisted workspace tool. */
+	workspaceToolChooserOpen = $state(false);
 	/** Arrangement of the same scoped conversation and Investigation surfaces. */
 	workspaceLayoutPreset = $state<WorkspaceLayoutPreset>('focus');
 	/** Ephemeral cross-navigation between a transcript answer and its canonical run. */
@@ -857,6 +859,7 @@ class Session {
 		const environment = this.activeEnvironment;
 		const pane = environment?.panes.find((item) => item.id === paneId);
 		if (!environment || !pane) return false;
+		this.workspaceToolChooserOpen = false;
 		environment.activePaneId = pane.id;
 		const scope = pane.workspaceId;
 		const workspace = scope ? this.workspaceAt(scope) : null;
@@ -1272,6 +1275,7 @@ class Session {
 	}
 
 	setWorkspaceView(view: WorkspaceView): void {
+		if (view !== 'ask') this.workspaceToolChooserOpen = false;
 		if (view === 'workspace' && !this.catalog.workspace) {
 			this.workspaceView = 'ask';
 			this.workspaceLayoutPreset = 'focus';
@@ -1326,6 +1330,7 @@ class Session {
 			this.workspaceLayoutPreset = 'focus';
 			return;
 		}
+		this.workspaceToolChooserOpen = false;
 		this.workspacePane = pane;
 		this.workspaceView = 'ask';
 		this.workspaceLayoutPreset = 'workbench';
@@ -1339,6 +1344,7 @@ class Session {
 
 	setWorkspacePaneOpen(open: boolean): void {
 		if (open && !this.catalog.workspace) return;
+		if (!open) this.workspaceToolChooserOpen = false;
 		const pane = this.activePane;
 		if (!pane) return;
 		pane.workspacePaneOpen = open;
@@ -1349,7 +1355,13 @@ class Session {
 	}
 
 	toggleWorkspacePane(): void {
-		this.setWorkspacePaneOpen(!this.workspacePaneOpen);
+		if (!this.catalog.workspace) return;
+		if (this.workspacePaneOpen) {
+			this.setWorkspacePaneOpen(false);
+			return;
+		}
+		this.workspaceToolChooserOpen = true;
+		this.setWorkspacePaneOpen(true);
 	}
 
 	openInvestigationRun(turnId: string): boolean {

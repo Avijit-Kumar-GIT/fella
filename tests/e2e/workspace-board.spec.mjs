@@ -50,7 +50,11 @@ async function setWorkspaceToolsOpen(page, open) {
 	await expect(toggle).toHaveAttribute('aria-expanded', String(open));
 }
 
-const openWorkspaceTools = (page) => setWorkspaceToolsOpen(page, true);
+async function openWorkspaceTools(page, tool = 'investigations') {
+	await setWorkspaceToolsOpen(page, true);
+	const chooser = page.getByTestId('workspace-tool-chooser');
+	if (await chooser.isVisible()) await page.getByTestId(`workspace-tool-${tool}`).click();
+}
 const closeWorkspaceTools = (page) => setWorkspaceToolsOpen(page, false);
 
 async function addSalesWorkspace(page) {
@@ -1904,6 +1908,40 @@ test('the optional workspace tools pane preserves Investigation scope, Questions
 	await expect(savedRun.locator('.analysis-run-question-snapshot')).toContainText('Measure weekly net sales');
 	await expect(savedRun.getByRole('region', { name: 'Definitions and source scope used' })).toContainText('1 source selected for this Question');
 	expect(await readCanonicalWorkspaceRecords(page)).toEqual(recordsAfterRun);
+});
+
+test('Tools opens a chooser before showing a workspace tool', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+	await addSalesWorkspace(page);
+
+	const conversation = page.getByRole('region', { name: 'Conversation' });
+	const tools = page.locator('.workspace-tools-pane');
+	await expect(conversation).toBeVisible();
+	await expect(tools).toBeHidden();
+	await page.locator('.workspace-pane-toggle').click();
+	await expect(tools).toBeVisible();
+	const chooser = page.getByTestId('workspace-tool-chooser');
+	await expect(chooser).toBeVisible();
+	await expect(chooser.getByRole('heading', { name: 'Choose a tool' })).toBeVisible();
+	await expect(page.getByTestId('workspace-tool-investigations')).toBeVisible();
+	await expect(page.getByTestId('workspace-tool-context')).toBeVisible();
+	await expect(chooser.getByRole('button', { name: /Terminal/ })).toBeDisabled();
+	await expect(tools.getByRole('heading', { name: 'Investigation', exact: true })).toHaveCount(0);
+
+	await page.getByTestId('workspace-tool-context').click();
+	await expect(chooser).toBeHidden();
+	await expect(tools.getByRole('tab', { name: 'Data & context' })).toHaveAttribute('aria-selected', 'true');
+	await expect(conversation).toBeVisible();
+
+	await page.locator('.workspace-pane-toggle').click();
+	await expect(tools).toBeHidden();
+	await page.locator('.workspace-pane-toggle').click();
+	await expect(chooser).toBeVisible();
+	await page.getByTestId('workspace-tool-investigations').click();
+	await expect(chooser).toBeHidden();
+	await expect(tools.getByRole('tab', { name: 'Investigation' })).toHaveAttribute('aria-selected', 'true');
+	await expect(conversation).toBeVisible();
 });
 
 test('workspace tools open beside the conversation and preserve the workspace Investigation', async ({ page }) => {
