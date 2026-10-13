@@ -53,16 +53,29 @@ async function setWorkspaceToolsOpen(page, open) {
 async function openWorkspaceTools(page, tool = 'investigations') {
 	await setWorkspaceToolsOpen(page, true);
 	const chooser = page.getByTestId('workspace-tool-chooser');
-	if (await chooser.isVisible()) await page.getByTestId(`workspace-tool-${tool}`).click();
+	if (await chooser.isVisible()) {
+		if (tool === 'context') await page.getByTestId('workspace-tool-context').click();
+		else await page.getByTestId('workspace-tool-investigations').click();
+	}
+}
+async function openWorkspaceContextTool(page) {
+	await setWorkspaceToolsOpen(page, true);
+	const chooser = page.getByTestId('workspace-tool-chooser');
+	if (await chooser.isVisible()) {
+		await page.getByTestId('workspace-tool-context').click();
+	} else {
+		const contextTab = page.getByRole('tab', { name: 'Data & context', exact: true });
+		if (await contextTab.count()) {
+			await contextTab.click();
+		} else {
+			await page.getByTestId('workspace-tool-add').click();
+			await page.getByTestId('workspace-tool-context').click();
+		}
+	}
+	await expect(page.getByRole('tab', { name: 'Data & context', exact: true })).toHaveAttribute('aria-selected', 'true');
 }
 async function closeWorkspaceTools(page) {
-	const toggle = page.locator('.workspace-pane-toggle');
-	if ((await toggle.getAttribute('aria-expanded')) === 'true') {
-		const chooser = page.getByTestId('workspace-tool-chooser');
-		if (await chooser.isVisible()) await toggle.click();
-		else await page.getByTestId('workspace-tools-close').click();
-	}
-	await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+	await setWorkspaceToolsOpen(page, false);
 }
 
 async function addSalesWorkspace(page) {
@@ -977,10 +990,9 @@ test('first launch offers a clear folder or sample path and discloses provider d
 	const ensured = await page.evaluate(() => window.__workspaceInvestigationEnsureCalls[0]);
 	expect(ensured.workspaceId).toBe(SAMPLE_WORKSPACE_PATH);
 	await openWorkspaceTools(page);
-	const workspaceTabs = page.getByRole('tablist', { name: 'Workspace sections' });
-	await workspaceTabs.getByRole('tab', { name: 'Investigation' }).click();
 	await openInvestigationSection(page, 'Data');
 	await expect(page.getByText('monthly_signups.csv', { exact: true })).toBeVisible();
+	await page.getByText('Files not available to Fella (1)', { exact: true }).click();
 	await expect(page.getByText('draft.tmp', { exact: true })).toBeVisible();
 });
 
@@ -1101,9 +1113,7 @@ test('sidebar conversation links restore the selected conversation without hidin
 	await expect(page.getByRole('heading', { name: 'Investigation', exact: true })).toBeVisible();
 	await expectSidebarConversationFocused(page, firstQuestion);
 
-	await openWorkspaceTools(page);
-	await page.getByRole('tablist', { name: 'Workspace sections' }).getByRole('tab', { name: 'Data & context' }).click();
-	await expect(page.getByRole('tab', { name: 'Data & context' })).toHaveAttribute('aria-selected', 'true');
+	await openWorkspaceContextTool(page);
 	await expectSidebarConversationFocused(page, secondQuestion);
 
 	await openWorkspaceTools(page);
@@ -1437,16 +1447,13 @@ test('an Investigation opens its canonical workspace conversation', async ({ pag
 	expect(await page.evaluate(() => window.__workspaceAskCalls.length)).toBe(1);
 });
 
-test('the Investigation picker creates dedicated conversations and switching keeps both views aligned', async ({ page }) => {
+test('Investigation tool tabs keep their own conversations aligned when switching', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
 	await addSalesWorkspace(page);
-	await openWorkspaceTools(page);
-	const picker = page.getByTestId('workspace-investigation-summary');
-
-	await picker.click();
-	await page.getByRole('menuitem', { name: 'New Investigation', exact: true }).click();
-	await expect(picker).toContainText('New investigation');
+	await setWorkspaceToolsOpen(page, true);
+	await page.getByTestId('workspace-tool-new-investigation').click();
+	await expect(page.locator('.editor-heading h2')).toHaveText('New investigation');
 	await expect.poll(() => page.evaluate(() => window.__workspaceInvestigations().length)).toBe(1);
 	const first = await page.evaluate(() => {
 		const record = window.__workspaceInvestigations()[0];
@@ -1465,9 +1472,10 @@ test('the Investigation picker creates dedicated conversations and switching kee
 	await openWorkspaceTools(page);
 	await expect(page.locator('.editor-heading h2')).toHaveText('New investigation');
 
-	await picker.click();
-	await page.getByRole('menuitem', { name: 'New Investigation', exact: true }).click();
-	await expect(picker).toContainText('New investigation 2');
+	await page.getByTestId('workspace-tool-add').click();
+	await expect(page.getByTestId('workspace-tool-chooser')).toBeVisible();
+	await page.getByTestId('workspace-tool-new-investigation').click();
+	await expect(page.locator('.editor-heading h2')).toHaveText('New investigation 2');
 	await expect.poll(() => page.evaluate(() => window.__workspaceInvestigations().length)).toBe(2);
 	const second = await page.evaluate(() => {
 		const record = window.__workspaceInvestigations().find((item) => item.title === 'New investigation 2');
@@ -1481,6 +1489,8 @@ test('the Investigation picker creates dedicated conversations and switching kee
 	expect(second.activeConversationId).toBe(second.conversationId);
 	await expect(page.locator('.editor-heading h2')).toHaveText('New investigation 2');
 	await expect(page.getByRole('navigation', { name: 'Workspace investigations' })).toHaveCount(0);
+	await expect(page.getByRole('tab', { name: 'New investigation', exact: true })).toBeVisible();
+	await expect(page.getByRole('tab', { name: 'New investigation 2', exact: true })).toHaveAttribute('aria-selected', 'true');
 
 	await closeWorkspaceTools(page);
 	const secondPrompt = 'Compare the second investigation dataset';
@@ -1490,8 +1500,7 @@ test('the Investigation picker creates dedicated conversations and switching kee
 	await expect(page.locator('.msg.user').filter({ hasText: firstPrompt })).toHaveCount(0);
 
 	await openWorkspaceTools(page);
-	await picker.click();
-	await page.getByRole('menuitemradio', { name: 'New investigation', exact: true }).click();
+	await page.getByRole('tab', { name: 'New investigation', exact: true }).click();
 	await expect(page.locator('.editor-heading h2')).toHaveText('New investigation');
 	await expect.poll(() => focusedWorkspaceConversationId(page, folders[0].path)).toBe(first.conversationId);
 	await closeWorkspaceTools(page);
@@ -1506,7 +1515,8 @@ test('the Investigation picker creates dedicated conversations and switching kee
 	await expect(page.locator('.msg.user').filter({ hasText: secondPrompt })).toHaveCount(1);
 	await expect(page.locator('.workspace-pane-toggle')).toHaveAttribute('aria-expanded', 'false');
 	await openWorkspaceTools(page);
-	await expect(picker).toContainText('New investigation 2');
+	await page.getByRole('tab', { name: 'New investigation 2', exact: true }).click();
+	await expect(page.locator('.editor-heading h2')).toHaveText('New investigation 2');
 	await expect.poll(() => focusedWorkspaceConversationId(page, folders[0].path)).toBe(second.conversationId);
 });
 
@@ -1624,8 +1634,8 @@ test('a Question runs in its linked conversation without merging sibling Questio
 	await page.getByRole('button', { name: 'New conversation in northwind-sales' }).click();
 	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
 	await openWorkspaceTools(page);
-	await page.getByTestId('workspace-investigation-summary').click();
-	await page.getByRole('menuitem', { name: 'New Investigation', exact: true }).click();
+	await page.getByTestId('workspace-tool-add').click();
+	await page.getByTestId('workspace-tool-new-investigation').click();
 	await expect(page.locator('.editor-heading h2')).toHaveText('New investigation');
 	await openInvestigationSection(page, 'Questions');
 	await page.getByRole('button', { name: 'Add main Question' }).click();
@@ -1755,7 +1765,7 @@ test('an Investigation restores its canonical conversation and Analyze keeps cha
 	await expect(page.locator('.msg.assistant').last()).toContainText('Weekly sales rose 12%.');
 });
 
-test('Investigation picker summarizes work and resumes the same completed record', async ({ page }) => {
+test('Investigation tool tabs resume the same completed record', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
 	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
@@ -1764,6 +1774,7 @@ test('Investigation picker summarizes work and resumes the same completed record
 	await composer.fill('First return-to-work question');
 	await page.getByRole('button', { name: 'Send' }).click();
 	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
+	await openWorkspaceTools(page);
 	const firstId = await page.evaluate(() => window.__workspaceInvestigations()[0].id);
 
 	const workspaceRow = page.getByRole('button', { name: 'Open workspace northwind-sales' });
@@ -1771,13 +1782,10 @@ test('Investigation picker summarizes work and resumes the same completed record
 	await page.getByRole('button', { name: 'New conversation in northwind-sales' }).click();
 	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill('Second return-to-work question');
 	await page.getByRole('button', { name: 'Send' }).click();
-	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
+	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.', { exact: true }).last()).toBeVisible();
 	await openWorkspaceTools(page);
-	const picker = page.getByTestId('workspace-investigation-summary');
-	await picker.click();
-	const choices = page.getByRole('menuitemradio');
-	await expect(choices).toHaveCount(2);
-	const firstChoice = page.getByRole('menuitemradio', { name: 'First return-to-work question' });
+	await page.getByTestId('workspace-tool-add').click();
+	const firstChoice = page.getByTestId(`workspace-investigation-option-${firstId}`);
 	await expect(firstChoice).toContainText('0/1 answered · 1 need attention');
 	await firstChoice.click();
 	await expect(page.locator('.editor-heading h2')).toHaveText('First return-to-work question');
@@ -1793,14 +1801,16 @@ test('Investigation picker summarizes work and resumes the same completed record
 	await expect(page.getByRole('log', { name: 'conversation' }).getByText('Scoped to C:\\FellaFixture\\northwind-sales.', { exact: true }).filter({ visible: true }).last()).toBeVisible();
 	await openWorkspaceTools(page);
 	await page.getByRole('button', { name: 'Mark complete' }).click();
-	await picker.click();
-	await expect(firstChoice).toContainText('Complete · 1/1 answered');
+	await page.getByTestId('workspace-tool-add').click();
+	const currentInvestigation = page.getByTestId('workspace-tool-investigations');
+	await expect(currentInvestigation).toContainText('Complete · 1/1');
 	const completedId = await page.evaluate(() => window.__workspaceInvestigations().find((item) => item.title === 'First return-to-work question').id);
 	expect(completedId).toBe(firstId);
-	await page.keyboard.press('Escape');
+	await currentInvestigation.click();
+	await openInvestigationSection(page, 'Questions');
 	await page.getByRole('button', { name: 'Reopen Investigation' }).click();
-	await picker.click();
-	await expect(firstChoice).toContainText('1/1 answered');
+	await page.getByTestId('workspace-tool-add').click();
+	await expect(currentInvestigation).toContainText('1/1 answered');
 	const resumed = await page.evaluate((id) => window.__workspaceInvestigations().find((item) => item.id === id), firstId);
 	expect(resumed.questions[0].text).toBe('First return-to-work question');
 	expect(resumed.questions[0].answer_status).toBe('answered');
@@ -1822,8 +1832,6 @@ test('the optional workspace tools pane preserves Investigation scope, Questions
 	await expect(toolsToggle).toHaveAttribute('aria-expanded', 'false');
 	await expect(page.getByRole('region', { name: 'Conversation' })).toBeVisible();
 	await openWorkspaceTools(page);
-	await expect(page.getByTestId('workspace-investigation-summary')).toContainText('0/1 answered');
-	await expect(page.getByTestId('workspace-investigation-summary')).toContainText('need attention');
 	await expect(page.getByRole('group', { name: 'Workspace: northwind-sales' })).toBeVisible();
 
 	const initial = await page.evaluate(() => {
@@ -1856,11 +1864,10 @@ test('the optional workspace tools pane preserves Investigation scope, Questions
 	await openInvestigationSection(page, 'Questions');
 	await expect(page.getByRole('textbox', { name: 'Main question' })).toHaveValue('Measure weekly net sales');
 	await expect(page.getByRole('button', { name: 'New conversation', exact: true })).toBeVisible();
-	// The header identifies the Investigation by its original goal; its editable Main Question is separate.
-	await expect(page.getByTestId('workspace-investigation-summary')).toContainText(originalRequest);
+	// The Investigation tab stays tied to its original goal; its editable Main Question is separate.
+	await expect(page.getByRole('tab', { name: originalRequest, exact: true })).toBeVisible();
 	await openWorkspaceTools(page);
 	await expect(page.getByRole('textbox', { name: 'Main question' })).toHaveValue('Measure weekly net sales');
-	await expect(page.getByTestId('workspace-investigation-summary')).toContainText(originalRequest);
 	const afterLayoutChanges = await page.evaluate(() => ({
 		investigations: window.__workspaceInvestigations(),
 		ensureCalls: window.__workspaceInvestigationEnsureCalls.length
@@ -1877,8 +1884,7 @@ test('the optional workspace tools pane preserves Investigation scope, Questions
 	await page.getByRole('button', { name: 'Analyze main Question' }).click();
 	await page.getByRole('region', { name: 'Review this run' }).getByRole('button', { name: 'Run this Question' }).click();
 	await expect(page.getByRole('log', { name: 'conversation' }).getByText('Scoped to C:\\FellaFixture\\northwind-sales.', { exact: true }).filter({ visible: true }).last()).toBeVisible();
-	await expect(page.getByTestId('workspace-investigation-summary')).toContainText(originalRequest);
-	await expect(page.getByTestId('workspace-investigation-summary')).toContainText('1/1 answered');
+	await expect(page.getByRole('tab', { name: originalRequest, exact: true })).toBeVisible();
 
 	const finalState = await page.evaluate(() => ({
 		investigations: window.__workspaceInvestigations(),
@@ -1906,7 +1912,6 @@ test('the optional workspace tools pane preserves Investigation scope, Questions
 	await openWorkspaceTools(page);
 	await expect(page.getByRole('region', { name: 'Conversation' })).toBeVisible();
 	await expect(page.locator('.workspace-tools-pane')).toBeVisible();
-	await expect(page.getByTestId('workspace-investigation-summary')).toContainText('1/1 answered');
 	await openInvestigationSection(page, 'Analysis');
 	await expandInvestigationHistory(page);
 	const savedRunLink = page.getByRole('button', { name: 'Open saved analysis run 1: Measure weekly net sales' });
@@ -1918,7 +1923,7 @@ test('the optional workspace tools pane preserves Investigation scope, Questions
 	expect(await readCanonicalWorkspaceRecords(page)).toEqual(recordsAfterRun);
 });
 
-test('Tools opens a chooser before showing a workspace tool', async ({ page }) => {
+test('Tools toggles the pane; empty panes and the add button show the tool chooser', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
 	await addSalesWorkspace(page);
@@ -1931,56 +1936,78 @@ test('Tools opens a chooser before showing a workspace tool', async ({ page }) =
 	await expect(tools).toBeVisible();
 	const chooser = page.getByTestId('workspace-tool-chooser');
 	await expect(chooser).toBeVisible();
-	await expect(chooser.getByRole('heading', { name: 'Choose a tool' })).toBeVisible();
+	await expect(chooser.getByRole('heading', { name: 'Open a tool' })).toBeVisible();
 	await expect(page.getByTestId('workspace-tool-investigations')).toBeVisible();
 	await expect(page.getByTestId('workspace-tool-context')).toBeVisible();
 	await expect(chooser.getByRole('button', { name: /Terminal/ })).toBeDisabled();
-	await expect(tools.getByRole('heading', { name: 'Investigation', exact: true })).toHaveCount(0);
+	await expect(tools.getByRole('tablist', { name: 'Open workspace tools' })).toHaveCount(0);
 
+	// The toggle closes the whole pane even while its chooser is open.
+	await page.locator('.workspace-pane-toggle').click();
+	await expect(tools).toBeHidden();
+	await page.locator('.workspace-pane-toggle').click();
+	await expect(chooser).toBeVisible();
+	await page.getByTestId('workspace-tool-context').click();
+	await expect(chooser).toBeHidden();
+	const dataTab = tools.getByRole('tab', { name: 'Data & context' });
+	await expect(dataTab).toHaveAttribute('aria-selected', 'true');
+	await expect(conversation).toBeVisible();
+	await expect(tools.getByRole('tabpanel', { name: 'Data & context' })).toBeVisible();
+
+	// Closing and reopening restores the active tab instead of reopening options.
+	await page.locator('.workspace-pane-toggle').click();
+	await expect(tools).toBeHidden();
+	await page.locator('.workspace-pane-toggle').click();
+	await expect(tools).toBeVisible();
+	await expect(chooser).toBeHidden();
+	await expect(dataTab).toHaveAttribute('aria-selected', 'true');
+
+	await page.getByTestId('workspace-tool-add').click();
+	await expect(chooser).toBeVisible();
+	await expect(dataTab).toHaveAttribute('aria-selected', 'true');
+	await expect(tools.getByRole('tablist', { name: 'Workspace sections' })).toHaveCount(0);
+	await page.getByTestId('workspace-tool-investigations').click();
+	await expect(chooser).toBeHidden();
+	const investigationTab = tools.getByRole('tab', { name: 'Investigation', exact: true });
+	await expect(investigationTab).toHaveAttribute('aria-selected', 'true');
+	await expect(tools.getByRole('tab', { name: 'Data & context' })).toBeVisible();
+	await expect(conversation).toBeVisible();
+
+	await page.getByTestId('workspace-tool-add').click();
+	await expect(chooser).toBeVisible();
 	await page.getByTestId('workspace-tool-context').click();
 	await expect(chooser).toBeHidden();
 	await expect(tools.getByRole('tab', { name: 'Data & context' })).toHaveAttribute('aria-selected', 'true');
-	await expect(conversation).toBeVisible();
-
-	await page.locator('.workspace-pane-toggle').click();
+	await tools.getByRole('button', { name: 'Close Data & context tab' }).click();
+	await expect(tools.getByRole('tab', { name: 'Investigation', exact: true })).toBeVisible();
+	await tools.getByRole('button', { name: 'Close Investigation tab' }).click();
 	await expect(chooser).toBeVisible();
-	await page.getByTestId('workspace-tool-investigations').click();
-	await expect(chooser).toBeHidden();
-	await expect(tools.getByRole('tab', { name: 'Investigation' })).toHaveAttribute('aria-selected', 'true');
-	await expect(conversation).toBeVisible();
-
+	await expect(page.locator('.workspace-pane-toggle')).toHaveAttribute('aria-expanded', 'true');
 	await page.locator('.workspace-pane-toggle').click();
-	await expect(chooser).toBeVisible();
-	await expect(page.getByTestId('workspace-tool-context')).toBeVisible();
-	await page.getByTestId('workspace-tool-context').click();
-	await expect(chooser).toBeHidden();
-	await page.getByRole('button', { name: 'Close workspace tools pane' }).click();
 	await expect(tools).toBeHidden();
 });
 
-test('Tools reopens the chooser when a workspace tool was restored on launch', async ({ page }) => {
+test('Tools restores its saved active tab after reload without showing the chooser', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
 	await addSalesWorkspace(page);
-	await openWorkspaceTools(page, 'investigations');
+	await openWorkspaceTools(page, 'context');
 
 	const toggle = page.locator('.workspace-pane-toggle');
 	const pane = page.locator('.workspace-tools-pane');
 	const chooser = page.getByTestId('workspace-tool-chooser');
-	await expect(pane.getByRole('tab', { name: 'Investigation' })).toHaveAttribute('aria-selected', 'true');
-	await page.reload();
-	await expect(page.getByRole('region', { name: 'Conversation' })).toBeVisible();
-	await expect(pane).toBeVisible();
-	await expect(pane.getByRole('tab', { name: 'Investigation' })).toHaveAttribute('aria-selected', 'true');
-
-	await toggle.click();
-	await expect(chooser).toBeVisible();
-	await expect(page.getByTestId('workspace-tool-investigations')).toBeVisible();
-	await expect(page.getByTestId('workspace-tool-context')).toBeVisible();
-	await expect(chooser.getByRole('button', { name: /Terminal/ })).toBeDisabled();
-	await expect(page.getByRole('region', { name: 'Conversation' })).toBeVisible();
+	await expect(pane.getByRole('tab', { name: 'Data & context' })).toHaveAttribute('aria-selected', 'true');
 	await toggle.click();
 	await expect(pane).toBeHidden();
+	await page.reload();
+	await expect(page.getByRole('region', { name: 'Conversation' })).toBeVisible();
+	await expect(pane).toBeHidden();
+	await expect(page.getByRole('region', { name: 'Conversation' })).toBeVisible();
+	await toggle.click();
+	await expect(pane).toBeVisible();
+	await expect(chooser).toBeHidden();
+	await expect(pane.getByRole('tab', { name: 'Data & context' })).toHaveAttribute('aria-selected', 'true');
+	await expect(pane.getByRole('tabpanel', { name: 'Data & context' })).toBeVisible();
 	await expect(page.getByRole('region', { name: 'Conversation' })).toBeVisible();
 });
 
@@ -2010,18 +2037,16 @@ test('workspace tools open beside the conversation and preserve the workspace In
 	const investigationTitle = await page.evaluate(() => window.__workspaceInvestigations()[0].title);
 	const canonicalBeforePanelChanges = await readCanonicalWorkspaceRecords(page);
 	await expect(page.getByRole('group', { name: 'Workspace: northwind-sales' })).toBeVisible();
-	await expect(page.getByRole('tab', { name: 'Data & context' })).toBeVisible();
-	const coverage = page.getByTestId('workspace-investigation-summary');
-	await expect(coverage).toContainText(investigationTitle);
-	await expect(coverage).toContainText('0/1 answered');
-	await expect(coverage).toHaveAttribute('aria-label', new RegExp(investigationTitle));
+	await expect(page.getByRole('tab', { name: investigationTitle, exact: true })).toBeVisible();
 
 	await closeWorkspaceTools(page);
 	await expect(tools).toBeHidden();
 	await expect(conversation).toBeVisible();
 	await expect(page.locator('.msg.user').filter({ hasText: request })).toHaveCount(1);
 	await openWorkspaceTools(page);
-	await expect(coverage).toContainText(investigationTitle);
+	await expect(page.getByRole('tab', { name: investigationTitle, exact: true })).toHaveAttribute('aria-selected', 'true');
+	await openInvestigationSection(page, 'Data');
+	await expect(page.getByLabel('Choose files')).toBeChecked();
 	expect(await readCanonicalWorkspaceRecords(page)).toEqual(canonicalBeforePanelChanges);
 });
 
@@ -3574,15 +3599,11 @@ test('Investigation Results keep transcript-only historical work outside current
 	await expect(page.getByRole('log', { name: 'conversation' }).getByText('The ten available weeks total $40.', { exact: true })).toBeVisible();
 	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
 	await closeWorkspaceTools(page);
-	const summary = page.getByTestId('workspace-investigation-summary');
-	await expect(summary).toHaveCount(0);
 	await expect(page.getByRole('group', { name: 'Workspace: northwind-sales' })).toBeVisible();
 	await openWorkspaceTools(page);
 	await expect(page.locator('.workspace-tools-pane')).toBeVisible();
-	await expect(summary).toContainText('0/2 answered');
-	await expect(summary).toContainText('2 need attention');
-	await expect(summary).toContainText('0/2 answered');
 	const coverage = page.getByRole('region', { name: 'Question coverage' });
+	await expect(coverage).toBeVisible();
 	await expect(coverage.locator('[data-coverage="partial"] dd')).toHaveText('1');
 	await expect(coverage.locator('[data-coverage="unanswered"] dd')).toHaveText('1');
 	await expect(coverage).toContainText('Only 10 of the requested 12 weeks are present.');
@@ -4619,17 +4640,20 @@ test('shared workspace tabs and modal/menu primitives preserve keyboard interact
 
 	const navigation = page.getByRole('region', { name: 'Workspaces' });
 	await addSalesWorkspace(page);
-	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	await openWorkspaceTools(page);
+	await page.getByTestId('workspace-tool-add').click();
+	await page.getByTestId('workspace-tool-new-investigation').click();
 
-	const workspaceTabs = page.getByRole('tablist', { name: 'Workspace sections' });
-	const investigationTab = workspaceTabs.getByRole('tab', { name: 'Investigation' });
-	const dataContextTab = workspaceTabs.getByRole('tab', { name: 'Data & context' });
-	await expect(investigationTab).toHaveAttribute('aria-selected', 'true');
-	await expect(workspaceTabs.getByRole('tab', { name: 'Sources' })).toHaveCount(0);
-	await investigationTab.focus();
+	const investigationTabs = page.getByRole('tablist', { name: 'Investigation sections' });
+	const briefTab = investigationTabs.getByRole('tab', { name: 'Brief' });
+	const dataTab = investigationTabs.getByRole('tab', { name: 'Data' });
+	await expect(briefTab).toHaveAttribute('aria-selected', 'true');
+	await briefTab.focus();
 	await page.keyboard.press('ArrowRight');
-	await expect(dataContextTab).toHaveAttribute('aria-selected', 'true');
-	await expect(page.getByRole('heading', { name: 'Data & context', level: 1 })).toBeVisible();
+	await expect(dataTab).toHaveAttribute('aria-selected', 'true');
+	await expect(page.getByRole('heading', { name: 'Data', exact: true })).toBeVisible();
+
+	await openWorkspaceContextTool(page);
 	await expect(page.getByRole('textbox', { name: 'Workspace guide' })).toBeVisible();
 
 	const createProject = page.getByRole('button', { name: 'Create project for northwind-sales' });
@@ -4705,9 +4729,7 @@ test('workspace guide autosaves while leaving Data & context without a navigatio
 	await installDesktopMock(page);
 	await page.goto('/');
 	await addSalesWorkspace(page);
-	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
-	const tabs = page.getByRole('tablist', { name: 'Workspace sections' });
-	await tabs.getByRole('tab', { name: 'Data & context' }).click();
+	await openWorkspaceContextTool(page);
 	const guide = page.getByRole('textbox', { name: 'Workspace guide' });
 	await guide.fill('Unsaved analyst context');
 
@@ -4718,7 +4740,6 @@ test('workspace guide autosaves while leaving Data & context without a navigatio
 		.toBe('Unsaved analyst context');
 
 	await openWorkspaceTools(page);
-	await page.getByRole('tablist', { name: 'Workspace sections' }).getByRole('tab', { name: 'Data & context' }).click();
 	await expect(page.getByRole('textbox', { name: 'Workspace guide' })).toHaveValue('Unsaved analyst context');
 });
 
@@ -4726,8 +4747,7 @@ test('workspace guide autosave failures remain visible and can be retried', asyn
 	await installDesktopMock(page);
 	await page.goto('/');
 	await addSalesWorkspace(page);
-	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
-	await page.getByRole('tablist', { name: 'Workspace sections' }).getByRole('tab', { name: 'Data & context' }).click();
+	await openWorkspaceContextTool(page);
 	await page.evaluate(() => { window.__workspaceContextSaveFailure = true; });
 	await page.getByRole('textbox', { name: 'Workspace guide' }).fill('Retry this saved guide');
 	await expect(page.getByText('Fixture context save failure')).toBeVisible();
@@ -4741,9 +4761,7 @@ test('opening another folder saves the current workspace guide and navigates imm
 	await installDesktopMock(page);
 	await page.goto('/');
 	await addSalesWorkspace(page);
-	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
-	const tabs = page.getByRole('tablist', { name: 'Workspace sections' });
-	await tabs.getByRole('tab', { name: 'Data & context' }).click();
+	await openWorkspaceContextTool(page);
 	const guide = page.getByRole('textbox', { name: 'Workspace guide' });
 	await guide.fill('Preserve this guide while I choose a folder');
 
@@ -4759,9 +4777,7 @@ test('workspace deletion keeps its destructive confirmation without blocking on 
 	await installDesktopMock(page);
 	await page.goto('/');
 	await addSalesWorkspace(page);
-	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
-	const tabs = page.getByRole('tablist', { name: 'Workspace sections' });
-	await tabs.getByRole('tab', { name: 'Data & context' }).click();
+	await openWorkspaceContextTool(page);
 	const guide = page.getByRole('textbox', { name: 'Workspace guide' });
 	await guide.fill('Save this guide before the workspace is removed');
 
@@ -4819,9 +4835,7 @@ test('workspace context read failures stay distinct from a blank note and can be
 	await page.goto('/');
 	await page.evaluate(() => { window.__workspaceContextLoadFailure = true; });
 	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
-	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
-	const tabs = page.getByRole('tablist', { name: 'Workspace sections' });
-	await tabs.getByRole('tab', { name: 'Data & context' }).click();
+	await openWorkspaceContextTool(page);
 	const alert = page.getByRole('alert');
 	await expect(alert).toContainText('Fixture context load failure');
 	await expect(alert.getByRole('button', { name: 'Retry' })).toBeVisible();
@@ -5925,8 +5939,6 @@ test('Workspace follow-ups stay in the same Investigation and conversation', asy
 
 	const composer = page.getByRole('combobox', { name: 'Ask about northwind-sales' });
 	await expect(composer).toBeVisible();
-	const investigationSummary = page.getByTestId('workspace-investigation-summary');
-	await expect(investigationSummary).toHaveCount(0);
 	await composer.fill('Summarize the workspace.');
 	await page.getByRole('button', { name: 'Send' }).click();
 
@@ -5938,7 +5950,7 @@ test('Workspace follow-ups stay in the same Investigation and conversation', asy
 	await expect(page.locator('.msg.assistant').last()).toContainText('Scoped to C:\\FellaFixture\\northwind-sales.');
 	await expect.poll(() => page.evaluate(() => window.__workspaceAskCalls.length)).toBe(2);
 	await openWorkspaceTools(page);
-	await expect(investigationSummary).toContainText('Summarize the workspace.');
+	await expect(page.getByRole('tab', { name: 'Summarize the workspace.', exact: true })).toBeVisible();
 
 	const calls = await page.evaluate(() => window.__workspaceAskCalls);
 	expect(calls[0].investigationId).toBeTruthy();

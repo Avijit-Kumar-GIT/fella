@@ -632,6 +632,7 @@
 
 	function acceptInvestigationUpdate(updated: Investigation): void {
 		investigations = investigations.map((item) => item.id === updated.id ? updated : item);
+		session.investigationsVersion += 1;
 		session.workspaceInvestigationSummaryVersion += 1;
 	}
 

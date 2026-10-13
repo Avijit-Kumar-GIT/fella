@@ -120,6 +120,18 @@ export interface EnvironmentPane {
 	/** Whether the optional workspace tools pane is open beside the conversation. */
 	workspacePaneOpen?: boolean;
 	investigationId?: string | null;
+	/** Tool surfaces opened in this workspace pane. Investigation tabs own chats. */
+	workspaceToolTabs?: WorkspaceToolTab[];
+	activeWorkspaceToolTabId?: string | null;
+}
+
+export interface WorkspaceToolTab {
+	id: string;
+	kind: WorkspacePane;
+	/** Present for an Investigation tab once its durable record is known. */
+	investigationId?: string | null;
+	/** The canonical conversation associated with this Investigation tab. */
+	conversationId?: string | null;
 }
 
 export interface WorkspaceEnvironment {
@@ -198,6 +210,37 @@ function readEnvironmentState(): SavedEnvironmentState {
 							if (!item || typeof item !== 'object') return [];
 							const pane = item as Record<string, unknown>;
 							if (pane.workspaceId !== null && typeof pane.workspaceId !== 'string') return [];
+							const legacyKind: WorkspacePane = pane.workspacePane === 'context' ? 'context' : 'investigation';
+							const legacyInvestigationId = typeof pane.investigationId === 'string' ? pane.investigationId : null;
+							const savedTabs = Array.isArray(pane.workspaceToolTabs)
+								? pane.workspaceToolTabs.flatMap((rawTab): WorkspaceToolTab[] => {
+									if (!rawTab || typeof rawTab !== 'object') return [];
+									const tab = rawTab as Record<string, unknown>;
+									if (typeof tab.id !== 'string' || !tab.id || (tab.kind !== 'context' && tab.kind !== 'investigation')) return [];
+									return [{
+										id: tab.id,
+										kind: tab.kind,
+										investigationId: typeof tab.investigationId === 'string' ? tab.investigationId : null,
+										conversationId: typeof tab.conversationId === 'string' ? tab.conversationId : null
+									}];
+								}).filter((tab, index, all) => all.findIndex((candidate) => candidate.id === tab.id) === index)
+								: [];
+							// Upgrade workspaces saved by the old single-selection pane. A closed
+							// legacy pane had no open tool tab, so its first Tools click should
+							// begin at the chooser instead of silently restoring that selection.
+							if (!savedTabs.length && (
+								pane.workspacePaneOpen === true ||
+								(legacyKind === 'investigation' && legacyInvestigationId !== null)
+							)) {
+								savedTabs.push({
+									id: legacyKind === 'context' ? 'context' : `investigation:${legacyInvestigationId ?? String(pane.conversationId ?? paneIndex)}`,
+									kind: legacyKind,
+									investigationId: legacyKind === 'investigation' ? legacyInvestigationId : null,
+									conversationId: legacyKind === 'investigation' && typeof pane.conversationId === 'string' ? pane.conversationId : null
+								});
+							}
+							const savedActiveId = typeof pane.activeWorkspaceToolTabId === 'string' ? pane.activeWorkspaceToolTabId : null;
+							const activeTabId = savedTabs.some((tab) => tab.id === savedActiveId) ? savedActiveId : savedTabs[0]?.id ?? null;
 							return [{
 								id: typeof pane.id === 'string' ? pane.id : `${env.id}:pane:${paneIndex}`,
 								workspaceId: pane.workspaceId as string | null,
@@ -205,9 +248,11 @@ function readEnvironmentState(): SavedEnvironmentState {
 								layoutPreset: pane.layoutPreset === 'focus' || pane.layoutPreset === 'investigation' || pane.layoutPreset === 'workbench'
 									? pane.layoutPreset
 									: undefined,
-								workspacePane: pane.workspacePane === 'context' ? 'context' : 'investigation',
+								workspacePane: savedTabs.find((tab) => tab.id === activeTabId)?.kind ?? legacyKind,
 								workspacePaneOpen: pane.workspacePaneOpen === true,
-								investigationId: typeof pane.investigationId === 'string' ? pane.investigationId : null
+								investigationId: typeof pane.investigationId === 'string' ? pane.investigationId : null,
+								workspaceToolTabs: savedTabs,
+								activeWorkspaceToolTabId: activeTabId
 							}];
 						}).slice(0, 4);
 						if (!panes.length) panes.push({ id: `${env.id}:general`, workspaceId: null, conversationId: '' });
@@ -652,7 +697,38 @@ class Session {
 	setActiveInvestigation(id: string | null): void {
 		this.activeInvestigationId = id;
 		const pane = this.activePane;
-		if (pane) pane.investigationId = id;
+		if (pane) {
+			pane.investigationId = id;
+			const activeTab = pane.workspaceToolTabs?.find((item) => item.id === pane.activeWorkspaceToolTabId);
+			if (id) {
+				pane.workspaceToolTabs ??= [];
+				let tab = pane.workspaceToolTabs.find((item) =>
+					item.kind === 'investigation' && (item.investigationId === id || item.conversationId === this.activeChat.id)
+				);
+				if (!tab) {
+					tab = {
+						id: `investigation:${uid()}`,
+						kind: 'investigation',
+						investigationId: id,
+						conversationId: this.activeChat.id
+					};
+					pane.workspaceToolTabs.push(tab);
+				}
+				tab.investigationId = id;
+				tab.conversationId = this.activeChat.id;
+				// A new chat must not inherit the old Investigation's selected tab.
+				// Its new Investigation becomes active; a workspace-wide Context tab
+				// remains selected when the user is already using it.
+				if (!activeTab || activeTab.kind === 'investigation') {
+					pane.activeWorkspaceToolTabId = tab.id;
+					pane.workspacePane = 'investigation';
+					this.workspacePane = 'investigation';
+					if (pane.workspacePaneOpen) this.workspaceToolChooserOpen = false;
+				}
+			} else if (activeTab?.kind === 'investigation' && activeTab.conversationId === this.activeChat.id) {
+				activeTab.investigationId = null;
+			}
+		}
 		this.#writeWorkspaceState();
 	}
 
@@ -685,6 +761,15 @@ class Session {
 
 	paneForWorkspace(workspaceId: string | null): EnvironmentPane | null {
 		return this.activeEnvironment?.panes.find((pane) => pane.workspaceId === workspaceId) ?? null;
+	}
+
+	get workspaceToolTabs(): WorkspaceToolTab[] {
+		return this.activePane?.workspaceToolTabs ?? [];
+	}
+
+	get activeWorkspaceToolTab(): WorkspaceToolTab | null {
+		const pane = this.activePane;
+		return pane?.workspaceToolTabs?.find((tab) => tab.id === pane.activeWorkspaceToolTabId) ?? null;
 	}
 
 	environmentLabel(environment: WorkspaceEnvironment): string {
@@ -859,7 +944,6 @@ class Session {
 		const environment = this.activeEnvironment;
 		const pane = environment?.panes.find((item) => item.id === paneId);
 		if (!environment || !pane) return false;
-		this.workspaceToolChooserOpen = false;
 		environment.activePaneId = pane.id;
 		const scope = pane.workspaceId;
 		const workspace = scope ? this.workspaceAt(scope) : null;
@@ -878,12 +962,17 @@ class Session {
 		if (workspace) workspace.conversationId = pane.conversationId;
 		this.activeConversationIndex = conversationIndex;
 		this.activeWorkspaceId = scope;
-		this.activeInvestigationId = pane.investigationId ?? null;
+		const activeToolTab = pane.workspaceToolTabs?.find((tab) => tab.id === pane.activeWorkspaceToolTabId) ?? null;
+		const conversationToolTab = activeToolTab?.kind === 'investigation' && activeToolTab.conversationId === pane.conversationId
+			? activeToolTab
+			: null;
+		this.activeInvestigationId = conversationToolTab?.investigationId ?? pane.investigationId ?? null;
 		this.catalog = workspace && !workspace.historyOnly ? workspace.catalog : { workspace: null, sources: [] };
 		const savedPreset = pane.layoutPreset;
 		const canRestoreWorkspaceView = Boolean(scope && workspace && !workspace.historyOnly);
 		this.workspaceLayoutPreset = canRestoreWorkspaceView ? savedPreset ?? 'focus' : 'focus';
-		this.workspacePane = pane.workspacePane ?? 'investigation';
+		this.workspacePane = activeToolTab?.kind ?? pane.workspacePane ?? 'investigation';
+		this.workspaceToolChooserOpen = pane.workspacePaneOpen === true && !activeToolTab;
 		// Legacy Focus / Investigation / Workbench layouts all restore into the
 		// same chat-first workspace. Only the explicit pane preference can open
 		// tools beside it.
@@ -978,6 +1067,15 @@ class Session {
 		}
 		if (conversationId && this.conversations.some((item) => item.id === conversationId && item.workspaceScope === scope)) {
 			pane.conversationId = conversationId;
+		}
+		if (conversationId) {
+			const activeToolTab = pane.workspaceToolTabs?.find((item) => item.id === pane.activeWorkspaceToolTabId);
+			if (activeToolTab?.kind === 'investigation' && activeToolTab.conversationId !== conversationId) {
+				const matchingTab = pane.workspaceToolTabs?.find((item) =>
+					item.kind === 'investigation' && item.conversationId === conversationId
+				);
+				pane.activeWorkspaceToolTabId = matchingTab?.id ?? null;
+			}
 		}
 		const focused = this.focusEnvironmentPane(pane.id);
 		if (focused && environment.panes.length > 1) this.workspaceView = 'ask';
@@ -1310,8 +1408,7 @@ class Session {
 		if (preset === 'focus') {
 			this.setWorkspacePaneOpen(false);
 		} else {
-			this.workspacePane = 'investigation';
-			this.setWorkspacePaneOpen(true);
+			this.setWorkspacePane('investigation');
 		}
 		this.workspaceLayoutPreset = preset;
 		this.workspaceView = 'ask';
@@ -1330,38 +1427,121 @@ class Session {
 			this.workspaceLayoutPreset = 'focus';
 			return;
 		}
-		this.workspaceToolChooserOpen = false;
-		this.workspacePane = pane;
-		this.workspaceView = 'ask';
-		this.workspaceLayoutPreset = 'workbench';
-		this.setWorkspacePaneOpen(true);
-		const activePane = this.activePane;
-		if (activePane) {
-			activePane.workspacePane = pane;
+		const tab = this.openWorkspaceToolTab(
+			pane,
+			pane === 'investigation' ? this.activeInvestigationId : null,
+			pane === 'investigation' ? this.activeChat.id : null
+		);
+		if (tab) this.activateWorkspaceToolTab(tab.id);
+	}
+
+	/** Open a workspace tool as a durable pane-level tab. Data & context is
+	 *  workspace-wide and therefore has one reusable tab; each Investigation
+	 *  keeps its own linked conversation. */
+	openWorkspaceToolTab(
+		kind: WorkspacePane,
+		investigationId: string | null = null,
+		conversationId: string | null = kind === 'investigation' ? this.activeChat.id : null
+	): WorkspaceToolTab | null {
+		const pane = this.activePane;
+		if (!pane || !this.catalog.workspace) return null;
+		pane.workspaceToolTabs ??= [];
+		let tab = kind === 'context'
+			? pane.workspaceToolTabs.find((item) => item.kind === 'context')
+			: pane.workspaceToolTabs.find((item) =>
+				item.kind === 'investigation' && (
+					(investigationId && item.investigationId === investigationId) ||
+					(!investigationId && conversationId && item.conversationId === conversationId)
+				)
+			);
+		if (!tab) {
+			tab = {
+				id: kind === 'context' ? 'context' : `investigation:${uid()}`,
+				kind,
+				investigationId: kind === 'investigation' ? investigationId : null,
+				conversationId: kind === 'investigation' ? conversationId : null
+			};
+			pane.workspaceToolTabs.push(tab);
 		}
+		if (kind === 'investigation') {
+			if (investigationId) tab.investigationId = investigationId;
+			if (conversationId) tab.conversationId = conversationId;
+		}
+		pane.activeWorkspaceToolTabId = tab.id;
+		pane.workspacePane = kind;
+		pane.investigationId = kind === 'investigation' ? tab.investigationId ?? null : null;
+		pane.workspacePaneOpen = true;
+		pane.layoutPreset = 'workbench';
+		this.workspacePane = kind;
+		this.workspaceToolChooserOpen = false;
+		this.workspaceLayoutPreset = 'workbench';
+		this.workspaceView = 'ask';
 		this.#writeWorkspaceState();
+		return tab;
+	}
+
+	activateWorkspaceToolTab(tabId: string): boolean {
+		const pane = this.activePane;
+		const tab = pane?.workspaceToolTabs?.find((item) => item.id === tabId);
+		if (!pane || !tab) return false;
+		pane.activeWorkspaceToolTabId = tab.id;
+		pane.workspacePane = tab.kind;
+		pane.investigationId = tab.kind === 'investigation' ? tab.investigationId ?? null : null;
+		pane.workspacePaneOpen = true;
+		pane.layoutPreset = 'workbench';
+		this.workspacePane = tab.kind;
+		this.workspaceToolChooserOpen = false;
+		this.workspaceLayoutPreset = 'workbench';
+		this.workspaceView = 'ask';
+		if (tab.kind === 'investigation') this.activeInvestigationId = tab.investigationId ?? null;
+		this.#writeWorkspaceState();
+		return true;
+	}
+
+	closeWorkspaceToolTab(tabId: string): boolean {
+		const pane = this.activePane;
+		if (!pane?.workspaceToolTabs) return false;
+		const index = pane.workspaceToolTabs.findIndex((item) => item.id === tabId);
+		if (index < 0) return false;
+		const wasActive = pane.activeWorkspaceToolTabId === tabId;
+		pane.workspaceToolTabs.splice(index, 1);
+		if (wasActive) {
+			const next = pane.workspaceToolTabs[Math.min(index, pane.workspaceToolTabs.length - 1)] ?? null;
+			pane.activeWorkspaceToolTabId = next?.id ?? null;
+			pane.workspacePane = next?.kind ?? 'investigation';
+			pane.investigationId = next?.kind === 'investigation' ? next.investigationId ?? null : null;
+			this.workspacePane = pane.workspacePane;
+			this.activeInvestigationId = pane.investigationId ?? null;
+		}
+		pane.workspacePaneOpen = true;
+		pane.layoutPreset = 'workbench';
+		this.workspaceToolChooserOpen = pane.workspaceToolTabs.length === 0;
+		this.workspaceLayoutPreset = 'workbench';
+		this.#writeWorkspaceState();
+		return true;
+	}
+
+	openWorkspaceToolChooser(): void {
+		if (!this.catalog.workspace || !this.activePane) return;
+		this.setWorkspacePaneOpen(true);
+		this.workspaceToolChooserOpen = true;
 	}
 
 	setWorkspacePaneOpen(open: boolean): void {
 		if (open && !this.catalog.workspace) return;
-		if (!open) this.workspaceToolChooserOpen = false;
 		const pane = this.activePane;
 		if (!pane) return;
 		pane.workspacePaneOpen = open;
 		pane.layoutPreset = open ? 'workbench' : 'focus';
 		this.workspaceLayoutPreset = open ? 'workbench' : 'focus';
 		this.workspaceView = 'ask';
+		this.workspaceToolChooserOpen = open && !this.activeWorkspaceToolTab;
 		this.#writeWorkspaceState();
 	}
 
 	toggleWorkspacePane(): void {
 		if (!this.catalog.workspace) return;
-		if (this.workspaceToolChooserOpen) {
-			this.setWorkspacePaneOpen(false);
-			return;
-		}
-		if (!this.workspacePaneOpen) this.setWorkspacePaneOpen(true);
-		this.workspaceToolChooserOpen = true;
+		this.setWorkspacePaneOpen(!this.workspacePaneOpen);
 	}
 
 	openInvestigationRun(turnId: string): boolean {
@@ -1552,6 +1732,7 @@ class Session {
 		this.conversations.push(conversation);
 		pane.conversationId = conversation.id;
 		pane.investigationId = null;
+		pane.activeWorkspaceToolTabId = null;
 		this.activeInvestigationId = null;
 		// A deliberate New conversation action starts in chat with the optional
 		// workspace tools pane closed.
