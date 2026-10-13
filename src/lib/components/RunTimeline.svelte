@@ -157,7 +157,6 @@
 	let statusLabel = $derived.by(() => {
 		if (running) return activeStep?.label ?? runStateLabel(chat?.runState) ?? 'Preparing the analysis';
 		if (answer?.clarification) return 'Waiting for your input';
-		if (answer?.status === 'needs_review') return 'Result needs review';
 		if (answer?.status === 'insufficient_data') return 'Insufficient data';
 		if (answer?.status === 'failed') return 'Verification failed';
 		if (failed) return 'Analysis did not finish';

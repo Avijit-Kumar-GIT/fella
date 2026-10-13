@@ -2347,6 +2347,16 @@ test('verification outcomes stay beside their outputs and explain check limits',
 	await page.getByRole('region', { name: 'Review this run' }).getByRole('button', { name: 'Run this Question' }).click();
 	await expectQuestionRunSettled(page);
 	await expect(page.getByRole('log', { name: 'conversation' }).getByText('Scoped to C:\\FellaFixture\\northwind-sales.', { exact: true }).filter({ visible: true }).last()).toBeVisible();
+	const answer = page.locator('.msg.assistant').last();
+	await expect(answer.getByTestId('answer-review-status')).toHaveText('Needs review');
+	await expect(answer.getByText('Needs review', { exact: true })).toHaveCount(1);
+	await expect(answer.locator('.answer-caveat')).toHaveCount(0);
+	const answerTimeline = page.getByRole('region', { name: 'Question run' }).last();
+	await expect(answerTimeline.locator('.run-status')).toContainText('Analysis complete');
+	await expect(answerTimeline).not.toContainText('Result needs review');
+	await answer.getByRole('button', { name: 'How this was analyzed' }).click();
+	await expect(answer.getByRole('region', { name: 'Verification outcome' })).toHaveCount(0);
+	await expect(answer.locator('[data-verification-check][data-check-outcome="flagged"]')).toHaveCount(2);
 	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
 	// The check leaves this Question partial. Its documented gap may be closed,
 	// but neither the Question nor Investigation may be described as fully answered.

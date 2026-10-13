@@ -121,7 +121,7 @@
 			{@const outcome = STATUS_COPY[status]}
 			<section class="verification-outcome" data-verification-status={status} aria-label="Verification outcome">
 				<div class="verification-outcome-heading">
-					<Icon name={status === 'verified' ? 'check' : 'alert'} size={14} />
+					<Icon name={status === 'verified' ? 'check' : status === 'needs_review' ? 'info' : 'alert'} size={14} />
 					<strong>{outcome.label}</strong>
 				</div>
 				<p>{outcome.explanation}</p>
@@ -165,7 +165,6 @@
 	.verification-results.compact { margin-top: var(--space-2); }
 	.verification-outcome { display: grid; gap: 3px; padding: var(--space-2) var(--space-3); border-left: 2px solid var(--border); background: var(--bg-inset); }
 	.verification-outcome[data-verification-status='verified'] { border-color: var(--ok); }
-	.verification-outcome[data-verification-status='needs_review'],
 	.verification-outcome[data-verification-status='insufficient_data'] { border-color: var(--warn); }
 	.verification-outcome[data-verification-status='failed'] { border-color: var(--danger, #b42318); }
 	.verification-outcome-heading { display: flex; align-items: center; gap: var(--space-1); color: var(--text); font-size: var(--fs-xs); }

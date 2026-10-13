@@ -10,9 +10,10 @@
 	let {
 		answer,
 		expanded = false,
+		suppressReviewStatus = false,
 		bodyId,
 		onrerun
-	}: { answer: Answer; expanded?: boolean; bodyId: string; onrerun?: () => Promise<void> } = $props();
+	}: { answer: Answer; expanded?: boolean; suppressReviewStatus?: boolean; bodyId: string; onrerun?: () => Promise<void> } = $props();
 
 	const COMPLETE_TABLE_ROWS = 100;
 	const CONTEXT_LABEL: Record<ContextSection, string> = {
@@ -245,7 +246,7 @@
 				{/if}
 			</div>
 			<VerificationChecks
-				status={answer.status}
+				status={suppressReviewStatus && answer.status === 'needs_review' ? undefined : answer.status}
 				checks={runWideChecks}
 				heading={runWideChecks.length ? 'Run-wide checks' : undefined}
 			/>

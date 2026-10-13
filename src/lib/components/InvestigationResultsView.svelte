@@ -413,7 +413,7 @@
 								{:else}<p>No supporting evidence IDs were recorded.</p>{/if}
 							</div>
 							<div class="results-finding-checks" aria-label="Verification checks">
-								<h4>Checks · {verificationStatusLabel(run)}</h4>
+								<h4>Checks</h4>
 								{#if checks.length}
 									<ul>
 									{#each checks as check, checkIndex (`${finding.id}-check-${checkIndex}`)}

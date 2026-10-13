@@ -167,11 +167,6 @@
 	});
 	let answerCaveat = $derived.by(() => {
 		switch (message.answer?.status) {
-			case 'needs_review':
-				return {
-					title: 'Result needs review',
-					body: 'A check raised a concern. The answer remains available; review the flagged details before relying on it.'
-				};
 			case 'insufficient_data':
 				return {
 					title: 'Evidence is incomplete',
@@ -200,6 +195,15 @@
 			<div class="assistant-identity">
 				<Logo size={18} active={message.pending} />
 				<strong>Fella</strong>
+				{#if message.answer?.status === 'needs_review'}
+					<span
+						class="review-status"
+						role="status"
+						aria-label="Answer status"
+						data-testid="answer-review-status"
+						data-answer-status="needs_review"
+					>Needs review</span>
+				{/if}
 				{#if message.pending}<span class="status">Working through the workspace</span>{/if}
 			</div>
 			{#if message.answer}
@@ -274,6 +278,7 @@
 			answer={message.answer}
 			bodyId={`evidence-${message.id}`}
 			{expanded}
+			suppressReviewStatus={message.answer.status === 'needs_review'}
 			onrerun={message.answer.turn_id ? onrerun : undefined}
 		/>
 		{#if message.answer.turn_id && onopeninvestigationrun}
@@ -353,6 +358,19 @@
 	.assistant-heading .status {
 		color: var(--text-faint);
 		font-size: var(--fs-xs);
+	}
+	.review-status {
+		display: inline-flex;
+		align-items: center;
+		padding: 2px 7px;
+		border: 1px solid var(--border);
+		border-radius: var(--radius-chip);
+		background: var(--bg-inset);
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+		font-weight: 500;
+		line-height: 1.35;
+		white-space: nowrap;
 	}
 	.text {
 		word-break: break-word;

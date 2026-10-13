@@ -13,7 +13,7 @@ export function runStateLabel(state: RuntimeTurnState | null | undefined): strin
 		accepted: 'Answer checked',
 		clarify: 'Waiting for your input',
 		retry: 'Refining the analysis',
-		needs_review: 'Result needs review',
+		needs_review: 'Needs review',
 		unsupported: 'This question is not supported by the available data',
 		failed: "The analysis couldn't finish",
 		cancelled: 'Analysis stopped'
