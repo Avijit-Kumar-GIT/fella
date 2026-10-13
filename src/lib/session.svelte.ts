@@ -117,6 +117,8 @@ export interface EnvironmentPane {
 	/** Last analytical presentation for this pane; absent on legacy saved layouts. */
 	layoutPreset?: WorkspaceLayoutPreset;
 	workspacePane?: WorkspacePane;
+	/** Whether the optional workspace tools pane is open beside the conversation. */
+	workspacePaneOpen?: boolean;
 	investigationId?: string | null;
 }
 
@@ -204,6 +206,7 @@ function readEnvironmentState(): SavedEnvironmentState {
 									? pane.layoutPreset
 									: undefined,
 								workspacePane: pane.workspacePane === 'context' ? 'context' : 'investigation',
+								workspacePaneOpen: pane.workspacePaneOpen === true,
 								investigationId: typeof pane.investigationId === 'string' ? pane.investigationId : null
 							}];
 						}).slice(0, 4);
@@ -582,6 +585,8 @@ class Session {
 	historyVersion = $state<number>(0);
 	/** Bumped when the ask path automatically creates/resolves an Investigation. */
 	investigationsVersion = $state<number>(0);
+	/** Bumped for Investigation record edits that update the workspace picker summary. */
+	workspaceInvestigationSummaryVersion = $state<number>(0);
 	/** Investigation currently selected in the Investigation view, scoped to the active Workspace. */
 	activeInvestigationId = $state<string | null>(null);
 	/** Source selected by global search for the contextual Investigation catalog. */
@@ -876,9 +881,10 @@ class Session {
 		const canRestoreWorkspaceView = Boolean(scope && workspace && !workspace.historyOnly);
 		this.workspaceLayoutPreset = canRestoreWorkspaceView ? savedPreset ?? 'focus' : 'focus';
 		this.workspacePane = pane.workspacePane ?? 'investigation';
-		this.workspaceView = canRestoreWorkspaceView && savedPreset
-			? savedPreset === 'focus' ? 'ask' : 'workspace'
-			: 'ask';
+		// Legacy Focus / Investigation / Workbench layouts all restore into the
+		// same chat-first workspace. Only the explicit pane preference can open
+		// tools beside it.
+		this.workspaceView = 'ask';
 		this.#writeWorkspaceState();
 		return true;
 	}
@@ -1276,6 +1282,10 @@ class Session {
 			this.workspaceLayoutPreset = 'focus';
 			return;
 		}
+		if (view === 'workspace') {
+			this.setWorkspacePane('investigation');
+			return;
+		}
 		this.workspaceView = view;
 		if (view === 'board') {
 			const pane = this.activePane;
@@ -1284,8 +1294,7 @@ class Session {
 			return;
 		}
 		if (view === 'ask') this.workspaceLayoutPreset = 'focus';
-		else if (view === 'workspace') this.workspaceLayoutPreset = 'investigation';
-		if (view === 'ask' || view === 'workspace') {
+		if (view === 'ask') {
 			const pane = this.activePane;
 			if (pane) pane.layoutPreset = this.workspaceLayoutPreset;
 			this.#writeWorkspaceState();
@@ -1294,17 +1303,19 @@ class Session {
 
 	setWorkspaceLayoutPreset(preset: WorkspaceLayoutPreset): void {
 		if (preset !== 'focus' && !this.catalog.workspace) return;
-		this.workspaceLayoutPreset = preset;
 		if (preset === 'focus') {
-			this.workspaceView = 'ask';
+			this.setWorkspacePaneOpen(false);
 		} else {
 			this.workspacePane = 'investigation';
-			this.workspaceView = 'workspace';
+			this.setWorkspacePaneOpen(true);
 		}
+		this.workspaceLayoutPreset = preset;
+		this.workspaceView = 'ask';
 		const pane = this.activePane;
 		if (pane) {
 			pane.layoutPreset = preset;
 			pane.workspacePane = this.workspacePane;
+			pane.workspacePaneOpen = preset !== 'focus';
 		}
 		this.#writeWorkspaceState();
 	}
@@ -1315,17 +1326,30 @@ class Session {
 			this.workspaceLayoutPreset = 'focus';
 			return;
 		}
-		if (this.workspaceView !== 'workspace' || this.workspaceLayoutPreset === 'focus') {
-			this.workspaceLayoutPreset = 'investigation';
-		}
 		this.workspacePane = pane;
-		this.workspaceView = 'workspace';
+		this.workspaceView = 'ask';
+		this.workspaceLayoutPreset = 'workbench';
+		this.setWorkspacePaneOpen(true);
 		const activePane = this.activePane;
 		if (activePane) {
 			activePane.workspacePane = pane;
-			activePane.layoutPreset = this.workspaceLayoutPreset;
 		}
 		this.#writeWorkspaceState();
+	}
+
+	setWorkspacePaneOpen(open: boolean): void {
+		if (open && !this.catalog.workspace) return;
+		const pane = this.activePane;
+		if (!pane) return;
+		pane.workspacePaneOpen = open;
+		pane.layoutPreset = open ? 'workbench' : 'focus';
+		this.workspaceLayoutPreset = open ? 'workbench' : 'focus';
+		this.workspaceView = 'ask';
+		this.#writeWorkspaceState();
+	}
+
+	toggleWorkspacePane(): void {
+		this.setWorkspacePaneOpen(!this.workspacePaneOpen);
 	}
 
 	openInvestigationRun(turnId: string): boolean {
@@ -1337,15 +1361,8 @@ class Session {
 			conversationId: conversation.id,
 			turnId
 		};
-		this.workspaceLayoutPreset = 'investigation';
-		this.workspacePane = 'investigation';
-		this.workspaceView = 'workspace';
-		if (this.activePane) {
-			this.activePane.layoutPreset = 'investigation';
-			this.activePane.workspacePane = 'investigation';
-		}
-		this.#writeWorkspaceState();
-		return this.workspaceView === 'workspace';
+		this.setWorkspacePane('investigation');
+		return this.workspacePaneOpen;
 	}
 
 	clearInvestigationNavigationTarget(target: InvestigationNavigationTarget): void {
@@ -1369,6 +1386,7 @@ class Session {
 	openSourcePane(source: SourceInfo): void {
 		const workspace = this.catalog.workspace;
 		if (!workspace || !this.catalog.sources.some((item) => item.path === source.path)) return;
+		this.setWorkspacePaneOpen(false);
 		this.activeChat.companionPane = {
 			kind: 'source',
 			path: source.path,
@@ -1393,6 +1411,7 @@ class Session {
 			!evidence ||
 			!isRenderableChartEvidence(evidence, message.answer.verification ?? [])
 		) return;
+		this.setWorkspacePaneOpen(false);
 		this.activeChat.companionPane = {
 			kind: 'chart',
 			messageId,
@@ -1446,6 +1465,11 @@ class Session {
 	/** The focused conversation used by the command and ask paths. */
 	get activeChat(): Conversation {
 		return this.activeConversation;
+	}
+
+	/** The optional right-side tools pane belongs to the active workspace pane. */
+	get workspacePaneOpen(): boolean {
+		return this.activePane?.workspacePaneOpen === true;
 	}
 
 	/** The active conversation's model, or the saved default when unset. */
@@ -1517,9 +1541,10 @@ class Session {
 		pane.conversationId = conversation.id;
 		pane.investigationId = null;
 		this.activeInvestigationId = null;
-		// A deliberate New conversation action should land in the composer,
-		// regardless of the analytical view previously open in this pane.
+		// A deliberate New conversation action starts in chat with the optional
+		// workspace tools pane closed.
 		pane.layoutPreset = 'focus';
+		pane.workspacePaneOpen = false;
 		this.focusEnvironmentPane(pane.id);
 		this.#writeIndex();
 		this.#writeWorkspaceState();

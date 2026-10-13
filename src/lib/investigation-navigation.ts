@@ -78,8 +78,8 @@ export async function focusInvestigationConversation(
 	if (!session.focusWorkspace(item.workspace_id, conversationId)) {
 		throw new Error('Fella could not focus the linked conversation.');
 	}
-	const restorePreset = layout === 'preserve' ? session.workspaceLayoutPreset : layout;
-	session.setWorkspaceLayoutPreset(restorePreset);
+	if (layout === 'focus') session.setWorkspacePaneOpen(false);
+	else if (layout === 'investigation' || layout === 'workbench') session.setWorkspacePane('investigation');
 	session.setActiveInvestigation(linkedInvestigation.id);
 	if (focusTurnId) session.focusConversationAnalysis(conversationId, focusTurnId);
 	return linkedInvestigation;

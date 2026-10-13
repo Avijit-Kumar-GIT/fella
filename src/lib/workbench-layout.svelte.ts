@@ -18,9 +18,9 @@ export interface WorkbenchPanelPlacement extends WorkbenchPanelPreference {
 }
 
 const STORAGE_KEY = 'fella:workbench-layout:v1';
-const DEFAULT_CONVERSATION_SHARE = 46;
-const MIN_CONVERSATION_SHARE = 32;
-const MAX_CONVERSATION_SHARE = 60;
+const DEFAULT_CONVERSATION_SHARE = 62;
+const MIN_CONVERSATION_SHARE = 42;
+const MAX_CONVERSATION_SHARE = 72;
 
 export const WORKBENCH_GROUPS: { id: WorkbenchPanelGroup; label: string }[] = [
 	{ id: 'conversation', label: 'Focus' },

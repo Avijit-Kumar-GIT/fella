@@ -346,12 +346,10 @@
 					?? investigations.find((item) => (item.analysis_turn_ids ?? []).includes(navigationTarget.turnId)
 						|| (item.questions ?? []).some((question) => question.analysis_turn_ids?.includes(navigationTarget.turnId)))
 				: null;
-			const explicitlyActive = investigations.find((item) =>
-				item.id === session.activeInvestigationId && (
-					item.conversation_id === activeConversation.id ||
-					(!!activeQuestion && item.brief_source_message_id === activeQuestion.id)
-				)
-			);
+			// The active Investigation is persisted on its workspace pane. On
+			// restore, chat may briefly be a fresh placeholder while its canonical
+			// conversation is being loaded, so the saved selection must recover it.
+			const explicitlyActive = investigations.find((item) => item.id === session.activeInvestigationId);
 			const linkedToConversation = investigations.find((item) =>
 				item.conversation_id === activeConversation.id ||
 				(!!activeQuestion && item.brief_source_message_id === activeQuestion.id)
@@ -418,9 +416,7 @@
 		const path = session.catalog.workspace;
 		const version = session.investigationsVersion;
 		const conversationId = session.activeChat.id;
-		const paneVisible = session.workspaceView === 'workspace'
-			&& session.workspacePane === 'investigation'
-			&& session.workspaceLayoutPreset !== 'focus';
+		const paneVisible = session.workspacePaneOpen && session.workspacePane === 'investigation';
 		const enteredPane = paneVisible && !investigationPaneWasVisible;
 		investigationPaneWasVisible = paneVisible;
 		const sameWorkspace = path === loadedWorkspace;
@@ -540,7 +536,7 @@
 
 	async function openSelectedConversation(
 		focusTurnId?: string,
-		layout: WorkspaceLayoutPreset = 'focus'
+		layout: WorkspaceLayoutPreset | 'preserve' = 'preserve'
 	): Promise<Investigation | null> {
 		const item = selected;
 		if (!item || openingConversation || !isDesktop()) return null;
@@ -580,7 +576,7 @@
 		error = '';
 		try {
 			const updated = await ipc.investigationUpdateBrief(itemId, currentBrief);
-			investigations = investigations.map((item) => item.id === updated.id ? updated : item);
+			acceptInvestigationUpdate(updated);
 			savedBrief = JSON.stringify(updated.brief);
 			if (closeEditor) briefEditing = false;
 			return true;
@@ -636,6 +632,7 @@
 
 	function acceptInvestigationUpdate(updated: Investigation): void {
 		investigations = investigations.map((item) => item.id === updated.id ? updated : item);
+		session.workspaceInvestigationSummaryVersion += 1;
 	}
 
 	function relativeSourcePath(path: string, rootPath: string): string {
@@ -1262,7 +1259,7 @@
 				openAnalysisTurnId,
 				questionLinksDraft
 			);
-			investigations = investigations.map((item) => item.id === updated.id ? updated : item);
+			acceptInvestigationUpdate(updated);
 			questionLinksDraft = questionIdsForRun(openAnalysisTurnId, updated);
 		} catch (cause) {
 			analysisTurnError = cause instanceof Error ? cause.message : String(cause);
@@ -1376,7 +1373,7 @@
 					source_selection: question.source_selection
 				}))
 			);
-			investigations = investigations.map((item) => item.id === updated.id ? updated : item);
+			acceptInvestigationUpdate(updated);
 			questions = (updated.questions ?? []).map((question) => ({
 				id: question.id,
 				text: question.text,
@@ -1450,7 +1447,7 @@
 					text: definition.text.trim()
 				}))
 			);
-			investigations = investigations.map((item) => item.id === updated.id ? updated : item);
+			acceptInvestigationUpdate(updated);
 			definitions = (updated.definitions ?? []).map((definition) => ({
 				id: definition.id,
 				kind: definition.kind,
@@ -1502,7 +1499,7 @@
 							loadedBriefKey = `${investigationId}:${JSON.stringify(updated.brief)}`;
 							savedBrief = JSON.stringify(brief);
 						}
-						investigations = investigations.map((record) => record.id === updated.id ? updated : record);
+						acceptInvestigationUpdate(updated);
 					} catch (cause) {
 						if (selected?.id === investigationId) autosaveError = cause instanceof Error ? cause.message : String(cause);
 						return;
@@ -1520,7 +1517,7 @@
 							loadedQuestionsKey = `${investigationId}:${JSON.stringify(updated.questions ?? null)}`;
 							savedQuestions = JSON.stringify(questionSnapshot);
 						}
-						investigations = investigations.map((record) => record.id === updated.id ? updated : record);
+						acceptInvestigationUpdate(updated);
 					} catch (cause) {
 						if (selected?.id === investigationId) autosaveError = cause instanceof Error ? cause.message : String(cause);
 						return;
@@ -1537,7 +1534,7 @@
 							loadedDefinitionsKey = `${investigationId}:${JSON.stringify(updated.definitions ?? null)}`;
 							savedDefinitions = JSON.stringify(definitionSnapshot);
 						}
-						investigations = investigations.map((record) => record.id === updated.id ? updated : record);
+						acceptInvestigationUpdate(updated);
 					} catch (cause) {
 						if (selected?.id === investigationId) autosaveError = cause instanceof Error ? cause.message : String(cause);
 					}
@@ -1585,7 +1582,7 @@
 		}
 		try {
 			const updated = await ipc.investigationUpdateBrief(item.id, nextBrief, proposal.messageId);
-			investigations = investigations.map((record) => record.id === updated.id ? updated : record);
+			acceptInvestigationUpdate(updated);
 			if (accept) savedBrief = JSON.stringify(updated.brief);
 		} catch (cause) {
 			error = cause instanceof Error ? cause.message : String(cause);

@@ -6,8 +6,8 @@
 
 	let { value = $bindable(46), oncommit }: Props = $props();
 	let drag = $state<{ pointerId: number; startX: number; startValue: number; width: number } | null>(null);
-	const minimum = 32;
-	const maximum = 60;
+	const minimum = 42;
+	const maximum = 72;
 
 	function clamp(value: number): number {
 		return Math.max(minimum, Math.min(maximum, value));
@@ -56,12 +56,12 @@
 	class="workbench-pane-splitter"
 	role="separator"
 	tabindex="0"
-	aria-label="Resize Conversation and Analysis panes"
+	aria-label="Resize conversation and workspace tools panes"
 	aria-orientation="vertical"
 	aria-valuemin={minimum}
 	aria-valuemax={maximum}
 	aria-valuenow={Math.round(value)}
-	aria-valuetext={`Conversation ${Math.round(value)}%, Analysis ${100 - Math.round(value)}%`}
+	aria-valuetext={`Conversation ${Math.round(value)}%, workspace tools ${100 - Math.round(value)}%`}
 	title="Drag to resize; use the arrow keys"
 	data-testid="workbench-pane-splitter"
 	onpointerdown={startPointer}

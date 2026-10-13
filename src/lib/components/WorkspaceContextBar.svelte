@@ -6,14 +6,7 @@
 	import { ipc } from '$lib/ipc';
 	import { focusInvestigationConversation } from '$lib/investigation-navigation';
 	import type { Investigation } from '$lib/types';
-	import WorkbenchPanelPicker from './WorkbenchPanelPicker.svelte';
 	import Icon from './Icon.svelte';
-
-	const presets = [
-		{ id: 'focus', label: 'Focus', description: 'Conversation and current result' },
-		{ id: 'investigation', label: 'Investigation', description: 'Brief, Questions, and coverage' },
-		{ id: 'workbench', label: 'Workbench', description: 'Focus beside Investigation details and an optional preview' }
-	] as const;
 
 	let workspacePath = $derived(session.activeChat.workspaceScope);
 	let workspaceName = $derived(
@@ -89,11 +82,6 @@
 		return `${title} (${duplicates.findIndex((item) => item.id === investigation.id) + 1})`;
 	}
 
-	function isPresetSelected(preset: (typeof presets)[number]['id']): boolean {
-		if (preset === 'focus') return session.workspaceView === 'ask' && session.workspaceLayoutPreset === 'focus';
-		return session.workspaceView === 'workspace' && session.workspaceLayoutPreset === preset;
-	}
-
 	async function refreshInvestigationSummary(path: string, conversationId: string): Promise<void> {
 		const request = ++summaryRequest;
 		summaryLoadFailed = false;
@@ -157,7 +145,6 @@
 	async function createInvestigation(): Promise<void> {
 		if (!workspacePath || !workspaceAvailable || investigationCreationBusy || investigationSelectionBusy) return;
 		const path = workspacePath;
-		const preset = session.workspaceLayoutPreset;
 		const request = ++selectionRequest;
 		investigationCreationBusy = true;
 		investigationError = '';
@@ -165,7 +152,7 @@
 			if (!session.newConversation(path)) throw new Error('Fella could not start a conversation in this workspace.');
 			const conversation = session.activeChat;
 			if (conversation.workspaceScope !== path) throw new Error('The new conversation does not belong to this workspace.');
-			session.setWorkspaceLayoutPreset(preset);
+			session.setWorkspacePane('investigation');
 			const record = await ipc.investigationCreate(path, nextInvestigationTitle(), undefined, undefined, conversation.id);
 			if (workspacePath === path) investigations = [record, ...investigations.filter((item) => item.id !== record.id)];
 			session.investigationsVersion += 1;
@@ -179,19 +166,16 @@
 		}
 	}
 
-	function choosePreset(preset: (typeof presets)[number]['id']): void {
-		session.setWorkspaceLayoutPreset(preset);
-		if (workspacePath && workspaceAvailable) void refreshInvestigationSummary(workspacePath, session.activeChat.id);
-	}
-
 	$effect(() => {
 		const path = workspacePath;
 		const conversationId = session.activeChat.id;
 		const messageCount = session.activeChat.messages.length;
 		const investigationsVersion = session.investigationsVersion;
+		const summaryVersion = session.workspaceInvestigationSummaryVersion;
 		const available = workspaceAvailable;
 		void messageCount;
 		void investigationsVersion;
+		void summaryVersion;
 		if (path !== observedWorkspacePath) {
 			observedWorkspacePath = path;
 			selectionRequest += 1;
@@ -217,7 +201,8 @@
 		</div>
 
 		{#if (session.workspaceView === 'ask' || session.workspaceView === 'workspace') && workspaceAvailable}
-			<div class="workspace-preset-actions">
+			<div class="workspace-context-actions">
+				{#if session.workspacePaneOpen && session.workspacePane === 'investigation' && workspaceAvailable}
 				<DropdownMenu.Root>
 					<DropdownMenu.Trigger
 						class="workspace-investigation-trigger"
@@ -268,22 +253,21 @@
 						</DropdownMenu.Content>
 					</DropdownMenu.Portal>
 				</DropdownMenu.Root>
-				<div class="workspace-preset-control fella-pill-nav" role="group" aria-label="Workspace layout">
-					{#each presets as preset (preset.id)}
-						<button
-							class="fella-pill-nav-item"
-							type="button"
-							class:active={isPresetSelected(preset.id)}
-							aria-label={`${preset.label}: ${preset.description}`}
-							aria-pressed={isPresetSelected(preset.id)}
-							title={preset.description}
-							onclick={() => choosePreset(preset.id)}
-						>{preset.label}</button>
-					{/each}
-				</div>
-				{#if session.workspaceView === 'workspace' && session.workspaceLayoutPreset === 'workbench'}
-					<WorkbenchPanelPicker />
 				{/if}
+				<Button
+					variant="ghost"
+					size="sm"
+					class="workspace-pane-toggle"
+					type="button"
+					aria-expanded={session.workspacePaneOpen}
+					aria-controls="workspace-tools-pane"
+					aria-label={session.workspacePaneOpen ? 'Hide workspace tools' : 'Show workspace tools'}
+					title={session.workspacePaneOpen ? 'Hide workspace tools' : 'Show workspace tools'}
+					onclick={() => session.toggleWorkspacePane()}
+				>
+					<Icon name="panel" size={16} />
+					<span>Tools</span>
+				</Button>
 				{#if investigationError}<span class="workspace-investigation-error" role="alert" title={investigationError}>Couldn’t switch Investigation</span>{/if}
 			</div>
 		{:else if session.workspaceView === 'ask' && historyOnly}
@@ -351,12 +335,25 @@
 		color: var(--text-faint);
 		font-size: var(--fs-xs);
 	}
-	.workspace-preset-actions {
+	.workspace-context-actions {
 		display: flex;
 		align-items: center;
 		justify-content: flex-end;
 		gap: var(--space-3);
 		min-width: 0;
+	}
+	:global(.workspace-pane-toggle) {
+		flex: none;
+		min-height: 34px;
+		gap: 7px;
+		padding-inline: 10px;
+		border-radius: var(--radius);
+		color: var(--text-dim);
+	}
+	:global(.workspace-pane-toggle:hover),
+	:global(.workspace-pane-toggle[aria-expanded='true']) {
+		background: var(--sidebar-hover);
+		color: var(--text);
 	}
 	:global(.workspace-investigation-trigger) {
 		display: flex;
@@ -465,13 +462,6 @@
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
-	.workspace-preset-control {
-		flex: none;
-		min-width: 0;
-		overflow-x: auto;
-		scrollbar-width: none;
-	}
-	.workspace-preset-control::-webkit-scrollbar { display: none; }
 	:global(.workspace-open-investigation) {
 		flex: none;
 		min-height: 30px;
@@ -485,7 +475,7 @@
 			gap: var(--space-2);
 			padding-inline: var(--space-2);
 		}
-		.workspace-preset-actions {
+		.workspace-context-actions {
 			flex: 1 1 auto;
 			flex-wrap: wrap;
 			gap: var(--space-1);

@@ -421,10 +421,10 @@
 								<div class="repository-tools" aria-label={`${repo.name} analysis tools`}>
 									<Button
 										variant="ghost"
-										class={`repository-tool${repo.current && session.workspaceView === 'workspace' && session.workspacePane === 'investigation' ? ' active' : ''}`}
+										class={`repository-tool${repo.current && session.workspacePaneOpen && session.workspacePane === 'investigation' ? ' active' : ''}`}
 										type="button"
 										aria-label={`Open investigation brief in ${repo.name}`}
-										aria-current={repo.current && session.workspaceView === 'workspace' && session.workspacePane === 'investigation' ? 'page' : undefined}
+										aria-current={repo.current && session.workspacePaneOpen && session.workspacePane === 'investigation' ? 'page' : undefined}
 										title="Open investigation briefs"
 										onclick={() => void openRepositoryWorkspace(repo)}
 									>

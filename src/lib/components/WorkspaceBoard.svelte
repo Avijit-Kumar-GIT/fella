@@ -478,7 +478,7 @@
 		display: grid;
 		grid-template-columns: repeat(4, minmax(0, 1fr));
 		grid-template-rows: repeat(4, minmax(0, 1fr));
-		gap: 9px;
+		gap: var(--space-3);
 		pointer-events: none;
 	}
 	.preview-slot {

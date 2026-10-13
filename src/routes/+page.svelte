@@ -20,7 +20,7 @@
 	import { fadeQuick } from '$lib/motion';
 	import { prefs } from '$lib/prefs.svelte';
 	import { session } from '$lib/session.svelte';
-	import { workbenchLayout, WORKBENCH_GROUPS, WORKBENCH_PANELS } from '$lib/workbench-layout.svelte';
+	import { workbenchLayout } from '$lib/workbench-layout.svelte';
 
 	let transcript = $state<Transcript | undefined>();
 	let composer = $state<Composer | undefined>();
@@ -30,6 +30,7 @@
 	let dragging = $state(false);
 
 	let activeView = $derived(session.workspaceView);
+	let showRightPane = $derived(session.workspacePaneOpen || Boolean(session.activeChat.companionPane));
 	let scopedWorkspaceActive = $derived(
 		Boolean(session.activeChat.workspaceScope && session.catalog.workspace === session.activeChat.workspaceScope)
 	);
@@ -362,74 +363,41 @@
 						<ProjectView />
 					{:else if activeView === 'settings'}
 						<SettingsView />
-					{:else if scopedWorkspaceActive}
-						{@const hasCompanion = Boolean(session.activeChat.companionPane)}
-						{@const workbenchRowTemplate = workbenchLayout.rowTemplate(hasCompanion)}
-						{@const workbenchStackedRowTemplate = workbenchLayout.rowTemplate(hasCompanion, true)}
+					{:else}
 						<div
-							class="workspace-preset-layout"
-							data-workspace-preset={session.workspaceLayoutPreset}
-							data-has-companion={hasCompanion}
-							data-workbench-visible-count={workbenchLayout.visibleCount(hasCompanion)}
-							data-workbench-group-count={workbenchLayout.visibleGroupCount(hasCompanion)}
-							style={`--workbench-row-count:${workbenchLayout.rowCount(hasCompanion)};--workbench-visible-count:${workbenchLayout.visibleCount(hasCompanion)};--workbench-conversation-share:${workbenchLayout.conversationShare}%;--workbench-row-template:${workbenchRowTemplate};--workbench-stacked-row-template:${workbenchStackedRowTemplate}`}
+							class="workspace-chat-layout"
+							data-workspace-pane-open={session.workspacePaneOpen}
+							data-has-companion={Boolean(session.activeChat.companionPane)}
+							style={`--workspace-chat-share:${workbenchLayout.conversationShare}%;`}
 						>
-							{#each workbenchLayout.placements(hasCompanion) as panel (panel.id)}
-								{@const panelDefinition = WORKBENCH_PANELS.find((item) => item.id === panel.id)!}
-								{@const visible = session.workspaceLayoutPreset === 'focus'
-									? panel.id === 'conversation' || (panel.id === 'companion' && hasCompanion)
-									: session.workspaceLayoutPreset === 'investigation'
-										? panel.id === 'investigation'
-										: panel.visibleNow}
-								{@const groupLabel = WORKBENCH_GROUPS.find((group) => group.id === panel.group)?.label ?? 'Workspace'}
-								<section
-									class="workspace-preset-panel"
-									class:workspace-preset-conversation={panel.id === 'conversation'}
-									class:workspace-preset-investigation={panel.id === 'investigation'}
-									class:workspace-preset-companion={panel.id === 'companion'}
-									data-panel-id={panel.id}
-									data-panel-group={panel.group}
-									data-visible={visible}
-									aria-label={panelDefinition.label}
-									hidden={!visible}
-									style={`--panel-column:${workbenchLayout.gridColumn(panel.group, hasCompanion)};--panel-row:${panel.groupPosition};--panel-rowspan:${panel.groupRowSpan};--panel-stack-row:${panel.stackPosition}`}
-								>
-									{#if session.workspaceLayoutPreset === 'workbench' && panel.firstInGroup}
-										<div class="workspace-panel-group">{groupLabel}</div>
-									{/if}
-									<div class="workspace-panel-body">
-										{#if panel.id === 'conversation'}
-							<div class="conversation-workspace">
-								<Transcript bind:this={transcript} />
-								{#if session.workspaceLayoutPreset !== 'investigation'}
+							<section class="workspace-conversation-pane" aria-label="Conversation">
+								<div class="conversation-workspace">
+									<Transcript bind:this={transcript} />
 									<div class="dock"><Composer bind:this={composer} onafterrun={refreshHealth} /></div>
-								{/if}
-							</div>
-										{:else if panel.id === 'investigation'}
-											<WorkspaceView />
-										{:else}
-											<CompanionPane />
-										{/if}
-									</div>
-								</section>
-							{/each}
-							{#if session.workspaceLayoutPreset === 'workbench' && workbenchLayout.visibleGroupCount(hasCompanion) > 1}
+								</div>
+							</section>
+							{#if showRightPane}
 								<WorkbenchPaneSplitter
 									bind:value={workbenchLayout.conversationShare}
 									oncommit={(value) => workbenchLayout.setConversationShare(value)}
 								/>
 							{/if}
+							<aside
+								class="workspace-tools-pane"
+								id="workspace-tools-pane"
+								aria-label={session.workspacePaneOpen ? 'Workspace tools' : 'Conversation preview'}
+								hidden={!showRightPane}
+							>
+								{#if scopedWorkspaceActive}
+									<div class="workspace-tools-content" hidden={!session.workspacePaneOpen}>
+										<WorkspaceView />
+									</div>
+								{/if}
+								{#if showRightPane && !session.workspacePaneOpen}
+									<CompanionPane />
+								{/if}
+							</aside>
 						</div>
-					{:else}
-						<section class="ask-workbench" aria-label="Focus">
-							<div class="conversation-workspace">
-								<Transcript bind:this={transcript} />
-								<div class="dock"><Composer bind:this={composer} onafterrun={refreshHealth} /></div>
-							</div>
-							{#if session.activeChat.companionPane}
-								<CompanionPane />
-							{/if}
-						</section>
 					{/if}
 				</div>
 			</main>
@@ -533,7 +501,7 @@
 		container-type: inline-size;
 		background: var(--workspace-canvas);
 	}
-	.workspace-preset-layout {
+	.workspace-chat-layout {
 		position: relative;
 		display: grid;
 		flex: 1;
@@ -541,68 +509,45 @@
 		min-height: 0;
 		grid-template-columns: minmax(0, 1fr);
 		grid-template-rows: minmax(0, 1fr);
-		grid-auto-flow: row;
 		overflow: hidden;
 		background: var(--workspace-canvas);
 	}
-	.workspace-preset-panel {
-		position: relative;
+	.workspace-conversation-pane,
+	.workspace-tools-pane {
 		display: flex;
-		flex-direction: column;
 		min-width: 0;
 		min-height: 0;
 		overflow: hidden;
 	}
-	.workspace-preset-investigation {
-		container-name: investigation-pane;
-		container-type: inline-size;
-	}
-	.workspace-preset-panel[hidden] {
-		display: none !important;
-	}
-	.workspace-preset-layout[data-workspace-preset='focus'] .workspace-preset-panel {
+	.workspace-conversation-pane {
+		grid-column: 1;
 		grid-row: 1;
 	}
-	.workspace-preset-layout[data-workspace-preset='focus'] .workspace-preset-conversation,
-	.workspace-preset-layout[data-workspace-preset='investigation'] .workspace-preset-investigation {
-		grid-column: 1;
+	.workspace-tools-pane {
+		grid-column: 3;
+		grid-row: 1;
+		border-left: 1px solid var(--border);
+		background: var(--workspace-canvas);
 	}
-	.workspace-preset-layout[data-workspace-preset='focus'][data-has-companion='true'] {
-		grid-template-columns: minmax(0, 1fr) minmax(280px, 0.42fr);
+	.workspace-tools-pane[hidden] { display: none !important; }
+	.workspace-tools-pane :global(.workspace),
+	.workspace-tools-pane :global(.companion) {
+		flex: 1;
+		width: 100%;
+		min-width: 0;
+		min-height: 0;
+		border-left: 0;
 	}
-	.workspace-preset-layout[data-workspace-preset='focus'][data-has-companion='true'] .workspace-preset-companion {
-		grid-column: 2;
-	}
-	.workspace-preset-layout[data-workspace-preset='focus'][data-has-companion='true'] .workspace-preset-conversation {
-		border-right: 1px solid var(--border);
-	}
-	.workspace-preset-layout[data-workspace-preset='workbench'] {
-		grid-template-columns: minmax(320px, min(var(--workbench-conversation-share), 60%)) 10px minmax(420px, 1fr);
-		grid-template-rows: var(--workbench-row-template);
-	}
-	.workspace-preset-layout[data-workspace-preset='workbench'][data-workbench-group-count='1'] {
-		grid-template-columns: minmax(0, 1fr);
-	}
-	.workspace-preset-layout[data-workspace-preset='workbench'] .workspace-preset-panel {
-		grid-column: var(--panel-column);
-		grid-row: var(--panel-row) / span var(--panel-rowspan);
-	}
-	.workspace-panel-group {
-		flex: none;
-		min-height: 30px;
-		padding: 7px var(--pad) 5px;
-		border-bottom: 1px solid var(--border);
-		color: var(--text-faint);
-		font-size: var(--fs-xs);
-		font-weight: 600;
-		letter-spacing: 0.01em;
-	}
-	.workspace-panel-body {
+	.workspace-tools-content {
 		display: flex;
 		flex: 1;
 		min-width: 0;
 		min-height: 0;
-		overflow: hidden;
+	}
+	.workspace-tools-content[hidden] { display: none !important; }
+	.workspace-chat-layout[data-workspace-pane-open='true'],
+	.workspace-chat-layout[data-has-companion='true'] {
+		grid-template-columns: minmax(320px, var(--workspace-chat-share)) 10px minmax(280px, 1fr);
 	}
 	.conversation-workspace {
 		display: flex;
@@ -617,48 +562,20 @@
 		min-width: 0;
 		min-height: 0;
 	}
-	.workspace-preset-companion :global(.companion) {
-		flex: 1;
-		width: 100%;
-		min-width: 0;
-		border-left: 0;
-	}
-	.workspace-preset-investigation :global(.workspace) {
-		flex: 1;
-		width: 100%;
-		height: 100%;
-	}
-	.ask-workbench {
-		position: relative;
-		display: flex;
-		flex: 1;
-		min-width: 0;
-		min-height: 0;
-	}
-	.ask-workbench > .conversation-workspace { flex: 1; }
-	@container workspace-area (max-width: 1120px) {
-		.workspace-preset-layout[data-workspace-preset='workbench'] {
+	@container workspace-area (max-width: 1000px) {
+		.workspace-chat-layout[data-workspace-pane-open='true'],
+		.workspace-chat-layout[data-has-companion='true'] {
 			grid-template-columns: minmax(0, 1fr);
+			grid-template-rows: minmax(0, 1fr) minmax(220px, 0.72fr);
 		}
-		.workspace-preset-layout[data-workspace-preset='workbench'] :global(.workbench-pane-splitter) {
+		.workspace-chat-layout :global(.workbench-pane-splitter) {
 			display: none;
 		}
-		.workspace-preset-layout[data-workspace-preset='workbench'][data-workbench-visible-count='1'] {
-			grid-template-rows: minmax(0, 1fr);
-		}
-		.workspace-preset-layout[data-workspace-preset='workbench'][data-workbench-visible-count='2'] {
-			grid-template-rows: var(--workbench-stacked-row-template);
-		}
-		.workspace-preset-layout[data-workspace-preset='workbench'][data-workbench-visible-count='3'] {
-			grid-template-rows: var(--workbench-stacked-row-template);
-		}
-		.workspace-preset-layout[data-workspace-preset='workbench'] .workspace-preset-panel {
+		.workspace-tools-pane {
 			grid-column: 1;
-			grid-row: var(--panel-stack-row) / span 1;
-		}
-		.workspace-preset-layout[data-workspace-preset='workbench'] .workspace-preset-conversation {
-			border-right: 0;
-			border-bottom: 1px solid var(--border);
+			grid-row: 2;
+			border-top: 1px solid var(--border);
+			border-left: 0;
 		}
 	}
 	.dock {
