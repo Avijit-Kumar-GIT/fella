@@ -373,6 +373,7 @@ async function installDesktopMock(
 		window.__workspaceContextFor = (workspaceId) => workspaceContextFiles.get(workspaceId) ?? null;
 		window.__workspaceInvestigations = () => [...investigations.values()];
 		window.__workspaceInvestigationListCalls = 0;
+		window.__workspaceInvestigationListPending = 0;
 		window.__workspaceConversationListCalls = 0;
 		window.__workspaceConversationListPending = 0;
 		window.__workspaceAnalysisTurns = () => [...analysisTurns.values()];
@@ -408,13 +409,19 @@ async function installDesktopMock(
 						return workspaceContextFiles.has(args.workspaceId)
 							? [`${args.workspaceId}\\fella.md`, workspaceContextFiles.get(args.workspaceId)]
 							: null;
-					case 'investigations_list':
+					case 'investigations_list': {
 						window.__workspaceInvestigationListCalls += 1;
-						if (window.__workspaceInvestigationListDelayMs) {
-							await new Promise((resolve) => setTimeout(resolve, window.__workspaceInvestigationListDelayMs));
+						window.__workspaceInvestigationListPending += 1;
+						try {
+							if (window.__workspaceInvestigationListDelayMs) {
+								await new Promise((resolve) => setTimeout(resolve, window.__workspaceInvestigationListDelayMs));
+							}
+							if (window.__workspaceInvestigationListFailure) throw new Error('Fixture investigation list unavailable');
+							return [...investigations.values()];
+						} finally {
+							window.__workspaceInvestigationListPending -= 1;
 						}
-						if (window.__workspaceInvestigationListFailure) throw new Error('Fixture investigation list unavailable');
-						return [...investigations.values()];
+					}
 					case 'save_context':
 						workspaceContextSaveCalls.push({ ...args });
 						if (window.__workspaceContextSaveFailure) throw new Error('Fixture context save failure');
@@ -1572,6 +1579,76 @@ test('Investigation tool tabs keep their own conversations aligned when switchin
 	await page.getByRole('tab', { name: 'New investigation 2', exact: true }).click();
 	await expect(page.locator('.editor-heading h2')).toHaveText('New investigation 2');
 	await expect.poll(() => focusedWorkspaceConversationId(page, folders[0].path)).toBe(second.conversationId);
+});
+
+test('rapid Investigation tab switching preserves each tab identity', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+	await addSalesWorkspace(page);
+	await setWorkspaceToolsOpen(page, true);
+	await createInvestigationFromChooser(page);
+	await expect(page.locator('.editor-heading h2')).toHaveText('New investigation');
+	const first = await page.evaluate(() => window.__workspaceInvestigations().find((item) => item.title === 'New investigation'));
+
+	await page.getByTestId('workspace-tool-add').click();
+	await createInvestigationFromChooser(page);
+	await expect(page.locator('.editor-heading h2')).toHaveText('New investigation 2');
+	const second = await page.evaluate(() => window.__workspaceInvestigations().find((item) => item.title === 'New investigation 2'));
+	expect(first?.conversation_id).toBeTruthy();
+	expect(second?.conversation_id).toBeTruthy();
+	expect(first?.conversation_id).not.toBe(second?.conversation_id);
+
+	// Overlap the Investigation view's asynchronous refreshes while switching
+	// faster than those requests can settle. Every tab must retain its own record
+	// and conversation after the stale responses have returned.
+	const listCallsBeforeSwitching = await page.evaluate(() => window.__workspaceInvestigationListCalls);
+	await page.evaluate(async () => {
+		window.__workspaceInvestigationListDelayMs = 800;
+		const tabs = [...document.querySelectorAll('[role="tab"]')];
+		const first = tabs.find((tab) => tab.textContent?.trim() === 'New investigation');
+		const second = tabs.find((tab) => tab.textContent?.trim() === 'New investigation 2');
+		if (!(first instanceof HTMLButtonElement) || !(second instanceof HTMLButtonElement)) {
+			throw new Error('Expected both Investigation tabs to be rendered.');
+		}
+		for (const tab of [first, second, first, second, first, second, first]) {
+			tab.click();
+			await new Promise((resolve) => requestAnimationFrame(resolve));
+		}
+	});
+	await expect.poll(() => page.evaluate(() => window.__workspaceInvestigationListCalls))
+		.toBeGreaterThanOrEqual(listCallsBeforeSwitching + 2);
+	await expect.poll(() => page.evaluate(() => window.__workspaceInvestigationListPending)).toBe(0, { timeout: 5000 });
+
+	await expect(page.getByRole('tab', { name: 'New investigation', exact: true })).toHaveAttribute('aria-selected', 'true');
+	await expect(page.locator('.editor-heading h2')).toHaveText('New investigation');
+	await expect.poll(() => page.evaluate((workspacePath) => {
+		const state = JSON.parse(localStorage.getItem('fella:environments') || '{}');
+		const environment = state.environments?.find((item) => item.id === state.active);
+		const pane = environment?.panes.find((item) => item.workspaceId === workspacePath);
+		const records = new Map(window.__workspaceInvestigations().map((record) => [record.id, record]));
+		const tabs = (pane?.workspaceToolTabs ?? []).filter((tab) => tab.kind === 'investigation');
+		return {
+			activeConversationId: pane?.conversationId,
+			activeInvestigationId: pane?.investigationId,
+			uniqueTabCount: new Set(tabs.map((tab) => tab.id)).size,
+			tabs: tabs
+				.map((tab) => ({
+					id: tab.id,
+					investigationId: tab.investigationId,
+					conversationId: tab.conversationId,
+					recordConversationId: records.get(tab.investigationId)?.conversation_id ?? null
+				}))
+				.sort((left, right) => String(left.investigationId).localeCompare(String(right.investigationId)))
+		};
+	}, folders[0].path)).toEqual({
+		activeConversationId: first?.conversation_id,
+		activeInvestigationId: first?.id,
+		uniqueTabCount: 2,
+		tabs: [
+			{ id: expect.any(String), investigationId: first?.id, conversationId: first?.conversation_id, recordConversationId: first?.conversation_id },
+			{ id: expect.any(String), investigationId: second?.id, conversationId: second?.conversation_id, recordConversationId: second?.conversation_id }
+		]
+	});
 });
 
 test('switching Investigation tabs stays responsive while a previous conversation is restoring', async ({ page }) => {

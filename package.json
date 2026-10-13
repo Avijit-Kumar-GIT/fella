@@ -32,6 +32,7 @@
 		"test:e2e:analysis-families:real": "playwright test --config=playwright.live.config.mjs tests/e2e/analysis-families.real.live.spec.mjs",
 		"test:chart-renderer": "node scripts/test-chart-renderer.mjs",
 		"test:workbench": "node scripts/test-workbench-layout.mjs",
+		"test:workspace-tool-tabs": "node scripts/test-workspace-tool-tabs.mjs",
 		"test:workspace-layout": "node scripts/test-workspace-layout.mjs",
 		"test:investigation-brief-proposal": "node scripts/test-investigation-brief-proposal.mjs",
 		"test:investigation-runs": "node scripts/test-investigation-runs.mjs",

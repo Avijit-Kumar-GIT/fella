@@ -695,39 +695,52 @@ class Session {
 	}
 
 	setActiveInvestigation(id: string | null): void {
-		this.activeInvestigationId = id;
 		const pane = this.activePane;
 		if (pane) {
-			pane.investigationId = id;
 			const activeTab = pane.workspaceToolTabs?.find((item) => item.id === pane.activeWorkspaceToolTabId);
 			if (id) {
-				pane.workspaceToolTabs ??= [];
-				let tab = pane.workspaceToolTabs.find((item) =>
-					item.kind === 'investigation' && (item.investigationId === id || item.conversationId === this.activeChat.id)
+				const conversationId = this.activeChat.id;
+				const tabByInvestigation = pane.workspaceToolTabs?.find((item) =>
+					item.kind === 'investigation' && item.investigationId === id
 				);
-				if (!tab) {
-					tab = {
-						id: `investigation:${uid()}`,
-						kind: 'investigation',
-						investigationId: id,
-						conversationId: this.activeChat.id
-					};
-					pane.workspaceToolTabs.push(tab);
+				// Ignore a late selection that no longer belongs to the focused chat
+				// or to the selected Investigation tab. Never let an old view refresh
+				// transfer a durable tab to whichever conversation happens to be active.
+				if (
+					(activeTab?.kind === 'investigation' && (
+						(activeTab.investigationId && activeTab.investigationId !== id) ||
+						(activeTab.conversationId && activeTab.conversationId !== conversationId)
+					)) ||
+					(tabByInvestigation?.conversationId && tabByInvestigation.conversationId !== conversationId)
+				) return;
+
+				let tab = activeTab?.kind === 'investigation'
+					? activeTab
+					: tabByInvestigation ?? pane.workspaceToolTabs?.find((item) =>
+						item.kind === 'investigation' &&
+						item.conversationId === conversationId &&
+						!item.investigationId
+					);
+				if (tab) {
+					if (!tab.investigationId) tab.investigationId = id;
+					if (!tab.conversationId) tab.conversationId = conversationId;
 				}
-				tab.investigationId = id;
-				tab.conversationId = this.activeChat.id;
+				this.activeInvestigationId = id;
+				pane.investigationId = id;
 				// A new chat must not inherit the old Investigation's selected tab.
-				// Its new Investigation becomes active; a workspace-wide Context tab
-				// remains selected when the user is already using it.
-				if (!activeTab || activeTab.kind === 'investigation') {
+				// A workspace-wide Context tab also stays selected while its chat is active.
+				if (tab && (!activeTab || activeTab === tab)) {
 					pane.activeWorkspaceToolTabId = tab.id;
 					pane.workspacePane = 'investigation';
 					this.workspacePane = 'investigation';
 					if (pane.workspacePaneOpen) this.workspaceToolChooserOpen = false;
 				}
-			} else if (activeTab?.kind === 'investigation' && activeTab.conversationId === this.activeChat.id) {
-				activeTab.investigationId = null;
+			} else {
+				this.activeInvestigationId = null;
+				pane.investigationId = null;
 			}
+		} else {
+			this.activeInvestigationId = id;
 		}
 		this.#writeWorkspaceState();
 	}
@@ -1445,15 +1458,33 @@ class Session {
 	): WorkspaceToolTab | null {
 		const pane = this.activePane;
 		if (!pane || !this.catalog.workspace) return null;
+		if (kind === 'investigation' && conversationId && conversationId !== this.activeChat.id) return null;
 		pane.workspaceToolTabs ??= [];
-		let tab = kind === 'context'
-			? pane.workspaceToolTabs.find((item) => item.kind === 'context')
-			: pane.workspaceToolTabs.find((item) =>
-				item.kind === 'investigation' && (
-					(investigationId && item.investigationId === investigationId) ||
-					(!investigationId && conversationId && item.conversationId === conversationId)
-				)
-			);
+		const activeTab = pane.workspaceToolTabs.find((item) => item.id === pane.activeWorkspaceToolTabId);
+		const tabByInvestigation = investigationId
+			? pane.workspaceToolTabs.find((item) => item.kind === 'investigation' && item.investigationId === investigationId)
+			: null;
+		const tabByConversation = conversationId
+			? pane.workspaceToolTabs.find((item) => item.kind === 'investigation' && item.conversationId === conversationId)
+			: null;
+		// A blank Investigation tab may acquire its durable record from the chat.
+		// A tab already owned by a different Investigation is never a fallback.
+		let tab: WorkspaceToolTab | null | undefined;
+		if (kind === 'context') {
+			tab = pane.workspaceToolTabs.find((item) => item.kind === 'context');
+		} else {
+			tab = tabByInvestigation;
+			if (!tab && tabByConversation && (!investigationId || !tabByConversation.investigationId)) {
+				tab = tabByConversation;
+			}
+		}
+		if (
+			kind === 'investigation' && investigationId &&
+			activeTab?.kind === 'investigation' &&
+			activeTab.conversationId === conversationId &&
+			activeTab.investigationId &&
+			activeTab.investigationId !== investigationId
+		) return null;
 		if (!tab) {
 			tab = {
 				id: kind === 'context' ? 'context' : `investigation:${uid()}`,
@@ -1464,7 +1495,7 @@ class Session {
 			pane.workspaceToolTabs.push(tab);
 		}
 		if (kind === 'investigation') {
-			if (investigationId) tab.investigationId = investigationId;
+			if (investigationId && !tab.investigationId) tab.investigationId = investigationId;
 			if (conversationId) tab.conversationId = conversationId;
 		}
 		pane.activeWorkspaceToolTabId = tab.id;
