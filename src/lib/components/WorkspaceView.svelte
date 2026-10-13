@@ -16,9 +16,12 @@
 	let chooserError = $state('');
 	let listRequest = 0;
 	let selectionRequest = 0;
-	let restoringTabKey = '';
+	const restoringTabKeys = new Set<string>();
 	let activeTab = $derived(session.activeWorkspaceToolTab);
 	let currentInvestigation = $derived.by(() => {
+		if (activeTab?.kind === 'investigation' && activeTab.investigationId) {
+			return investigations.find((item) => item.id === activeTab.investigationId) ?? null;
+		}
 		const linkedToChat = investigations.find((item) => item.conversation_id === session.activeChat.id);
 		if (linkedToChat) return linkedToChat;
 		if (activeTab?.kind === 'investigation' && activeTab.conversationId === session.activeChat.id && activeTab.investigationId) {
@@ -62,8 +65,8 @@
 		const item = records.find((record) => record.id === tab.investigationId);
 		if (!item || (session.activeChat.id === tab.conversationId && session.activeInvestigationId === item.id)) return;
 		const key = `${path}:${tab.id}`;
-		if (restoringTabKey === key) return;
-		restoringTabKey = key;
+		if (restoringTabKeys.has(key)) return;
+		restoringTabKeys.add(key);
 		void focusInvestigationConversation(
 			item,
 			'preserve',
@@ -76,7 +79,7 @@
 		}).catch((cause) => {
 			if (session.activeWorkspaceToolTab?.id === tab.id) chooserError = cause instanceof Error ? cause.message : String(cause);
 		}).finally(() => {
-			if (restoringTabKey === key) restoringTabKey = '';
+			restoringTabKeys.delete(key);
 		});
 	});
 
@@ -158,18 +161,21 @@
 		}
 	}
 
-	async function activateTab(tab: WorkspaceToolTab): Promise<void> {
-		if (tab.kind === 'context') {
-			session.activateWorkspaceToolTab(tab.id);
-			return;
-		}
-		const item = investigations.find((record) => record.id === tab.investigationId);
-		if (item) {
-			await openInvestigation(item, tab.id);
-			return;
-		}
+	function activateTab(tab: WorkspaceToolTab): void {
+		// Tab selection is synchronous navigation. A pending chooser restore must
+		// not lock out later clicks or steal focus when it finishes.
+		selectionRequest += 1;
+		investigationBusy = false;
+		chooserError = '';
 		session.activateWorkspaceToolTab(tab.id);
-		if (tab.conversationId && session.activeChat.id !== tab.conversationId && workspacePath) {
+		if (
+			tab.conversationId &&
+			session.activeChat.id !== tab.conversationId &&
+			workspacePath &&
+			session.conversations.some((conversation) =>
+				conversation.id === tab.conversationId && conversation.workspaceScope === workspacePath
+			)
+		) {
 			session.focusWorkspace(workspacePath, tab.conversationId);
 		}
 	}

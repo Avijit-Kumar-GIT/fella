@@ -217,6 +217,7 @@ async function installDesktopMock(
 		directAnswerText = null,
 		savedAnalysisTurn = null,
 		projectInvestigationRecords = [],
+		projectConversationArchives = [],
 		projectAnalysisTurns = [],
 		questionRunOutcomes = [],
 		providerList = [],
@@ -225,7 +226,7 @@ async function installDesktopMock(
 		sampleWorkspacePath = SAMPLE_WORKSPACE_PATH
 	} = {}
 ) {
-	await page.addInitScript(({ fixtureFolders, seedUnavailableConversation, seedDeletionConversations, replayStatus, replayStatusError, reindexedCatalog, chartEvidence, detailEvidence, directAnswerText, savedAnalysisTurn, projectInvestigationRecords, projectAnalysisTurns, questionRunOutcomes, providerList, providerHealth, runLogEntries, sampleWorkspacePath, sampleCatalog }) => {
+	await page.addInitScript(({ fixtureFolders, seedUnavailableConversation, seedDeletionConversations, replayStatus, replayStatusError, reindexedCatalog, chartEvidence, detailEvidence, directAnswerText, savedAnalysisTurn, projectInvestigationRecords, projectConversationArchives, projectAnalysisTurns, questionRunOutcomes, providerList, providerHealth, runLogEntries, sampleWorkspacePath, sampleCatalog }) => {
 		const calls = [];
 		const reviseFinding = (finding, update) => {
 			const now = Math.max(Date.now(), (finding.updated_at_ms ?? 0) + 1);
@@ -264,6 +265,23 @@ async function installDesktopMock(
 			for (const question of record.questions ?? []) questionRecords.set(question.id, question);
 			for (const definition of record.definitions ?? []) definitionRecords.set(definition.id, definition);
 			for (const finding of record.findings ?? []) findingRecords.set(finding.id, finding);
+		}
+		for (const saved of projectConversationArchives) {
+			const firstQuestion = saved.messages?.find((message) =>
+				message.role === 'user' && message.text?.trim() && !message.text.trimStart().startsWith('/')
+			);
+			archivedConversations.set(saved.id, {
+				saved,
+				summary: {
+					id: saved.id,
+					saved_at_ms: saved.saved_at_ms ?? 1,
+					workspace: saved.workspace ?? null,
+					first_question_message_id: firstQuestion?.id,
+					preview: firstQuestion?.text ?? 'New conversation',
+					message_count: saved.messages?.length ?? 0,
+					title: saved.title ?? null
+				}
+			});
 		}
 		for (const turn of projectAnalysisTurns) analysisTurns.set(turn.id, turn);
 		const investigationEnsureCalls = [];
@@ -355,6 +373,8 @@ async function installDesktopMock(
 		window.__workspaceContextFor = (workspaceId) => workspaceContextFiles.get(workspaceId) ?? null;
 		window.__workspaceInvestigations = () => [...investigations.values()];
 		window.__workspaceInvestigationListCalls = 0;
+		window.__workspaceConversationListCalls = 0;
+		window.__workspaceConversationListPending = 0;
 		window.__workspaceAnalysisTurns = () => [...analysisTurns.values()];
 		window.__workspaceDefinitionRecords = () => [...definitionRecords.values()];
 		window.__workspaceFindingRecords = () => [...findingRecords.values()];
@@ -730,8 +750,18 @@ async function installDesktopMock(
 						truncated: false
 					};
 					case 'last_workspace_path': return null;
-					case 'conversations_list':
-						return [...archivedConversations.values()].map(({ summary }) => summary);
+					case 'conversations_list': {
+						window.__workspaceConversationListCalls += 1;
+						window.__workspaceConversationListPending += 1;
+						try {
+							if (window.__workspaceConversationListDelayMs) {
+								await new Promise((resolve) => setTimeout(resolve, window.__workspaceConversationListDelayMs));
+							}
+							return [...archivedConversations.values()].map(({ summary }) => summary);
+						} finally {
+							window.__workspaceConversationListPending -= 1;
+						}
+					}
 					case 'archive_conversation': {
 						const saved = JSON.parse(args.body);
 						const firstQuestion = saved.messages?.find((message) =>
@@ -954,7 +984,7 @@ async function installDesktopMock(
 			windowAction: async () => {},
 			pathForFile: () => ''
 		};
-	}, { fixtureFolders, seedUnavailableConversation, seedDeletionConversations, replayStatus, replayStatusError, reindexedCatalog, chartEvidence, detailEvidence, directAnswerText, savedAnalysisTurn, projectInvestigationRecords, projectAnalysisTurns, questionRunOutcomes, providerList, providerHealth, runLogEntries, sampleWorkspacePath, sampleCatalog });
+	}, { fixtureFolders, seedUnavailableConversation, seedDeletionConversations, replayStatus, replayStatusError, reindexedCatalog, chartEvidence, detailEvidence, directAnswerText, savedAnalysisTurn, projectInvestigationRecords, projectConversationArchives, projectAnalysisTurns, questionRunOutcomes, providerList, providerHealth, runLogEntries, sampleWorkspacePath, sampleCatalog });
 }
 
 async function dispatchWorkspaceDrag(page, type, workspacePath, { x = 0.5, y = 0.5, existing = false } = {}) {
@@ -1542,6 +1572,67 @@ test('Investigation tool tabs keep their own conversations aligned when switchin
 	await page.getByRole('tab', { name: 'New investigation 2', exact: true }).click();
 	await expect(page.locator('.editor-heading h2')).toHaveText('New investigation 2');
 	await expect.poll(() => focusedWorkspaceConversationId(page, folders[0].path)).toBe(second.conversationId);
+});
+
+test('switching Investigation tabs stays responsive while a previous conversation is restoring', async ({ page }) => {
+	const legacyConversationId = 'conversation-legacy-investigation';
+	const legacyMessageId = 'message-legacy-investigation';
+	const legacy = {
+		id: 'investigation-legacy',
+		workspace_id: folders[0].path,
+		title: 'Legacy investigation',
+		brief: { goal: 'Review the archived investigation', audience: '', desired_output: '', constraints: [] },
+		brief_source_message_id: legacyMessageId,
+		questions: [],
+		definitions: [],
+		findings: [],
+		source_selection: { mode: 'all_sources', included_paths: [] },
+		analysis_turn_ids: [],
+		status: 'active',
+		created_at_ms: 1,
+		updated_at_ms: 1
+	};
+	const archivedConversation = {
+		id: legacyConversationId,
+		workspace: folders[0].path,
+		title: 'Archived investigation conversation',
+		saved_at_ms: 1,
+		messages: [{ id: legacyMessageId, role: 'user', text: 'Review the archived investigation', ts: 1 }]
+	};
+	await installDesktopMock(page, {
+		projectInvestigationRecords: [legacy],
+		projectConversationArchives: [archivedConversation]
+	});
+	await page.goto('/');
+	await addSalesWorkspace(page);
+	await setWorkspaceToolsOpen(page, true);
+	await createInvestigationFromChooser(page);
+	await expect(page.locator('.editor-heading h2')).toHaveText('New investigation');
+	const first = await page.evaluate(() => window.__workspaceInvestigations().find((item) => item.title === 'New investigation'));
+	await page.getByTestId('workspace-tool-add').click();
+	await createInvestigationFromChooser(page);
+	await expect(page.locator('.editor-heading h2')).toHaveText('New investigation 2');
+	const second = await page.evaluate(() => window.__workspaceInvestigations().find((item) => item.title === 'New investigation 2'));
+	expect(first?.conversation_id).toBeTruthy();
+	expect(second?.conversation_id).toBeTruthy();
+
+	await page.evaluate(() => { window.__workspaceConversationListDelayMs = 700; });
+	const conversationListCalls = await page.evaluate(() => window.__workspaceConversationListCalls);
+	await page.getByTestId('workspace-tool-add').click();
+	await openInvestigationsDropdown(page);
+	await page.getByTestId('workspace-investigation-option-investigation-legacy').click();
+	await expect.poll(() => page.evaluate(() => window.__workspaceConversationListCalls)).toBeGreaterThan(conversationListCalls);
+
+	const firstTab = page.getByRole('tab', { name: 'New investigation', exact: true });
+	await firstTab.click();
+	await expect(firstTab).toHaveAttribute('aria-selected', 'true');
+	await expect(page.locator('.editor-heading h2')).toHaveText('New investigation');
+	await expect.poll(() => focusedWorkspaceConversationId(page, folders[0].path)).toBe(first.conversation_id);
+	await expect.poll(() => page.evaluate(() => window.__workspaceConversationListPending)).toBe(0);
+	await expect(firstTab).toHaveAttribute('aria-selected', 'true');
+	await expect.poll(() => focusedWorkspaceConversationId(page, folders[0].path)).toBe(first.conversation_id);
+	expect(await page.evaluate(() => window.__workspaceInvestigationEnsureCalls.some((call) => call.conversationId === 'conversation-legacy-investigation'))).toBe(false);
+	await expect(page.getByRole('tab', { name: 'New investigation 2', exact: true })).toHaveAttribute('aria-selected', 'false');
 });
 
 test('Investigation work plan keeps the brief concise and opens editing and history on demand', async ({ page }) => {
