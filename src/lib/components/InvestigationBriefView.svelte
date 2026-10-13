@@ -8,6 +8,7 @@
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { ipc, isDesktop } from '$lib/ipc';
 	import { analysisTurnIdsAfterSourceMessage } from '$lib/investigation-runs';
+	import { investigationQuestionStatusDetail } from '$lib/investigation-question-status';
 	import { focusInvestigationConversation } from '$lib/investigation-navigation';
 	import { buildInvestigationReport, investigationReportFilename, type InvestigationReportRuns } from '$lib/investigation-report';
 	import { renderMarkdown } from '$lib/markdown';
@@ -278,18 +279,20 @@
 		const activeQuestions = (selected?.questions ?? []).filter((question) => question.status === 'active');
 		const answered = activeQuestions.filter((question) => question.answer_status === 'answered').length;
 		const partial = activeQuestions.filter((question) => question.answer_status === 'incomplete').length;
-		const unsupported = activeQuestions.filter((question) => question.answer_status === 'unsupported').length;
-		const unanswered = activeQuestions.length - answered - partial - unsupported;
+		const dataGaps = activeQuestions.filter((question) =>
+			question.answer_status === 'unsupported' || question.answer_status === 'insufficient_data'
+		).length;
+		const needsAttention = activeQuestions.length - answered - partial - dataGaps;
 		const documentedGaps = activeQuestions.filter((question) =>
-			(question.answer_status === 'incomplete' || question.answer_status === 'unsupported')
+			(['incomplete', 'unsupported', 'insufficient_data'].includes(question.answer_status))
 			&& Boolean(question.answer_status_reason?.trim())
 		);
 		return {
 			activeQuestions,
 			answered,
 			partial,
-			unsupported,
-			unanswered,
+			dataGaps,
+			needsAttention,
 			documentedGaps,
 			needsReview: activeQuestions.filter((question) => question.answer_status !== 'answered'),
 			canComplete: activeQuestions.length > 0
@@ -674,6 +677,9 @@
 			answered: 'Complete answer',
 			incomplete: 'Partial answer',
 			unsupported: 'Unsupported',
+			insufficient_data: 'Insufficient data',
+			needs_review: 'Needs review',
+			waiting_for_input: 'Waiting for your input',
 			blocked: 'Blocked',
 			outdated: 'Outdated'
 		}[status];
@@ -686,21 +692,12 @@
 	function questionAnswerStatusVariant(status: InvestigationQuestionAnswerStatus): 'default' | 'success' | 'warning' | 'destructive' {
 		if (status === 'answered') return 'success';
 		if (status === 'blocked') return 'destructive';
-		if (status === 'incomplete' || status === 'unsupported' || status === 'outdated') return 'warning';
+		if (status === 'incomplete' || status === 'unsupported' || status === 'insufficient_data' || status === 'outdated') return 'warning';
 		return 'default';
 	}
 
 	function questionCoverageReason(question: InvestigationQuestion): string {
-		if (question.answer_status_reason) return question.answer_status_reason;
-		return {
-			not_started: 'No analysis run is linked to this Question yet.',
-			running: 'Analysis is still running.',
-			answered: 'This Question has a complete answer.',
-			incomplete: 'The latest run returned a partial answer.',
-			unsupported: 'The available data or analysis tools do not support this Question.',
-			blocked: 'The latest run could not produce a complete answer.',
-			outdated: 'The Question or its analysis context changed after the latest run.'
-		}[question.answer_status];
+		return investigationQuestionStatusDetail(question);
 	}
 
 	async function focusQuestion(questionId: string): Promise<void> {
@@ -712,7 +709,9 @@
 	}
 
 	function questionAnswerReason(questionId: string): string | undefined {
-		return selected?.questions?.find((question) => question.id === questionId)?.answer_status_reason;
+		const question = selected?.questions?.find((item) => item.id === questionId);
+		if (!question || ['answered', 'not_started', 'running'].includes(question.answer_status)) return undefined;
+		return investigationQuestionStatusDetail(question);
 	}
 
 	function questionRunIdsFor(question: InvestigationQuestion): string[] {
@@ -1867,7 +1866,7 @@
 									type="button"
 									variant="outline"
 									disabled={!coverage.canComplete || saving}
-									title="Answer each active Question or document a data gap before completing."
+									title="Answer each active Question or document a data gap. Review flagged results and resolve them before completing."
 									onclick={() => void markInvestigationComplete()}
 								>
 									Mark complete
@@ -1891,13 +1890,13 @@
 							<header>
 								<div>
 									<h4>Coverage</h4>
-									<p>See what’s answered and what still needs review.</p>
+									<p>See what’s answered, where data is missing, and what needs attention.</p>
 								</div>
 								<dl class="question-coverage-counts">
 									<div data-coverage="answered"><dt>Answered</dt><dd>{coverage.answered}</dd></div>
 									<div data-coverage="partial"><dt>Partial</dt><dd>{coverage.partial}</dd></div>
-									<div data-coverage="unanswered"><dt>Unanswered</dt><dd>{coverage.unanswered}</dd></div>
-									<div data-coverage="unsupported"><dt>Unsupported</dt><dd>{coverage.unsupported}</dd></div>
+									<div data-coverage="unanswered"><dt>Needs attention</dt><dd>{coverage.needsAttention}</dd></div>
+									<div data-coverage="unsupported"><dt>Data gaps</dt><dd>{coverage.dataGaps}</dd></div>
 								</dl>
 							</header>
 							{#if selected.status === 'complete'}
@@ -1925,7 +1924,7 @@
 									<p class="question-coverage-message" role="status">Ready to close with {coverage.documentedGaps.length} documented gap{coverage.documentedGaps.length === 1 ? '' : 's'}; this does not mean every Question was fully answered.</p>
 								{/if}
 								<details class="question-coverage-review" open>
-									<summary>{coverage.needsReview.length} Question{coverage.needsReview.length === 1 ? '' : 's'} need an answer or review</summary>
+									<summary>{coverage.needsReview.length} Question{coverage.needsReview.length === 1 ? '' : 's'} need attention</summary>
 									<ul>
 										{#each coverage.needsReview as question (question.id)}
 											<li>
@@ -2763,7 +2762,7 @@
 								<ul class="handoff-open-questions" aria-label="Unresolved Question links">
 									{#each unresolvedHandoffQuestions as question (question.id)}
 										<li>
-											<div><strong>{question.text}</strong><small>{question.answer_status.replaceAll('_', ' ')}{question.answer_status_reason ? ` · ${question.answer_status_reason}` : ' · no reason recorded'}</small></div>
+											<div><strong>{question.text}</strong><small>{questionAnswerStatusLabel(question.answer_status)} · {questionCoverageReason(question)}</small></div>
 											{#if question.latest_analysis_turn_id}<Button type="button" variant="ghost" size="sm" onclick={() => void openHandoffReference(question.latest_analysis_turn_id!)}>Open supporting run</Button>{/if}
 										</li>
 									{/each}
@@ -2987,8 +2986,9 @@
 	.question-coverage-review ul { display: grid; max-height: 240px; gap: var(--space-1); overflow: auto; overscroll-behavior: contain; margin: var(--space-2) 0 0; padding: 0; list-style: none; }
 	.question-coverage-review button { display: grid; width: 100%; min-width: 0; justify-items: start; gap: 2px; padding: var(--space-2); border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent; color: var(--text); text-align: left; cursor: pointer; }
 	.question-coverage-review button:hover { border-color: var(--border); background: var(--bg); }
-	.coverage-question-status { color: var(--warn); font-size: 10px; font-weight: 650; }
-	.coverage-question-status[data-question-status='unsupported'], .coverage-question-status[data-question-status='blocked'] { color: var(--err); }
+	.coverage-question-status { color: var(--text-dim); font-size: 10px; font-weight: 650; }
+	.coverage-question-status[data-question-status='incomplete'], .coverage-question-status[data-question-status='unsupported'], .coverage-question-status[data-question-status='insufficient_data'], .coverage-question-status[data-question-status='outdated'] { color: var(--warn); }
+	.coverage-question-status[data-question-status='blocked'] { color: var(--err); }
 	.question-coverage-review strong { min-width: 0; font-size: var(--fs-xs); font-weight: 600; overflow-wrap: anywhere; }
 	.question-coverage-review small { color: var(--text-faint); font-size: 11px; overflow-wrap: anywhere; }
 	.subquestion-title { margin: 0; font-size: var(--fs-sm); font-weight: 650; }
@@ -2997,7 +2997,7 @@
 	.question-item-heading { margin-bottom: var(--space-2); }
 	.question-item-heading label { margin: 0; font-size: var(--fs-sm); font-weight: 600; }
 	.question-parent-label { color: var(--text-faint); font-size: var(--fs-xs); }
-	.question-status-reason { margin: 0 0 var(--space-2); color: var(--warn); font-size: var(--fs-xs); overflow-wrap: anywhere; }
+	.question-status-reason { margin: 0 0 var(--space-2); color: var(--text-dim); font-size: var(--fs-xs); overflow-wrap: anywhere; }
 	.question-status-reason[data-question-status='blocked'] { color: var(--err); }
 	.question-item-actions { gap: 0; }
 	.question-item-actions :global(button) { min-width: 34px; min-height: 32px; padding: 4px 8px; }

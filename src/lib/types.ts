@@ -476,6 +476,9 @@ export type InvestigationQuestionAnswerStatus =
 	| 'answered'
 	| 'incomplete'
 	| 'unsupported'
+	| 'insufficient_data'
+	| 'needs_review'
+	| 'waiting_for_input'
 	| 'blocked'
 	| 'outdated';
 

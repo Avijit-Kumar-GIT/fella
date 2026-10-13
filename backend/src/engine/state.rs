@@ -146,7 +146,7 @@ fn question_answer_status_parts(
             .filter(|reason| !reason.trim().is_empty())
             .unwrap_or(&clarification.question);
         return (
-            InvestigationQuestionAnswerStatus::Incomplete,
+            InvestigationQuestionAnswerStatus::WaitingForInput,
             Some(compact_status_reason(reason)),
         );
     }
@@ -158,15 +158,24 @@ fn question_answer_status_parts(
         .filter(|reason| !reason.trim().is_empty());
     let unresolved_reason = contract
         .and_then(|contract| contract.unresolved.first())
-        .map(String::as_str);
+        .map(String::as_str)
+        .filter(|reason| !reason.trim().is_empty());
     match status {
         VerificationStatus::Verified => (InvestigationQuestionAnswerStatus::Answered, None),
-        VerificationStatus::NeedsReview | VerificationStatus::InsufficientData => (
-            InvestigationQuestionAnswerStatus::Incomplete,
+        VerificationStatus::NeedsReview => (
+            InvestigationQuestionAnswerStatus::NeedsReview,
             Some(compact_status_reason(
-                check_reason
-                    .or(unresolved_reason)
-                    .unwrap_or("The run returned without fully answering this Question."),
+                check_reason.or(unresolved_reason).unwrap_or(
+                    "The run produced an answer, but its verification is not conclusive.",
+                ),
+            )),
+        ),
+        VerificationStatus::InsufficientData => (
+            InvestigationQuestionAnswerStatus::InsufficientData,
+            Some(compact_status_reason(
+                check_reason.or(unresolved_reason).unwrap_or(
+                    "The run did not produce enough accepted evidence to answer this Question.",
+                ),
             )),
         ),
         VerificationStatus::Failed => (
@@ -2834,7 +2843,15 @@ impl EngineState {
                 == InvestigationQuestionAnswerStatus::Blocked
                 && question.answer_status_reason.as_deref()
                     == Some(investigation::INTERRUPTED_QUESTION_RUN_REASON);
-            if (!is_interrupted && !is_false_blocked) || conversation_is_running {
+            // Older releases collapsed clarification, verification review,
+            // and insufficient evidence into `incomplete`. Re-project those
+            // terminal records from the canonical AnalysisTurn so stale local
+            // Questions stop claiming every such result is a partial answer.
+            let is_legacy_incomplete =
+                question.answer_status == InvestigationQuestionAnswerStatus::Incomplete;
+            if (!is_interrupted && !is_false_blocked && !is_legacy_incomplete)
+                || conversation_is_running
+            {
                 continue;
             }
             if let Some(turn_id) = question.latest_analysis_turn_id.as_deref() {
@@ -6640,6 +6657,61 @@ mod investigation_answer_status_tests {
     }
 
     #[test]
+    fn question_answer_status_separates_review_insufficient_data_and_clarification() {
+        let no_checks = Vec::new();
+        assert_eq!(
+            question_answer_status_parts(
+                VerificationStatus::NeedsReview,
+                None,
+                &no_checks,
+                None,
+                false,
+            ),
+            (
+                InvestigationQuestionAnswerStatus::NeedsReview,
+                Some("The run produced an answer, but its verification is not conclusive.".into())
+            ),
+            "a run-wide verification concern is not proof of partial coverage"
+        );
+        assert_eq!(
+            question_answer_status_parts(
+                VerificationStatus::InsufficientData,
+                None,
+                &no_checks,
+                None,
+                false,
+            ),
+            (
+                InvestigationQuestionAnswerStatus::InsufficientData,
+                Some(
+                    "The run did not produce enough accepted evidence to answer this Question."
+                        .into()
+                )
+            )
+        );
+
+        let clarification = crate::engine::runtime::ClarificationRequest {
+            question: "Which date range should I use?".into(),
+            options: vec!["Calendar year".into(), "Fiscal year".into()],
+            reason: Some("The source includes both calendar and fiscal periods.".into()),
+        };
+        assert_eq!(
+            question_answer_status_parts(
+                VerificationStatus::NeedsReview,
+                None,
+                &no_checks,
+                Some(&clarification),
+                false,
+            ),
+            (
+                InvestigationQuestionAnswerStatus::WaitingForInput,
+                Some("The source includes both calendar and fiscal periods.".into())
+            ),
+            "a decision requested from the user should not be presented as a partial answer"
+        );
+    }
+
+    #[test]
     fn app_investigation_reads_do_not_mark_a_workspace_runtime_run_interrupted() {
         let data_dir = temp_data_dir("shared-question-run");
         let app = EngineState::new(&data_dir).unwrap();
@@ -6736,13 +6808,62 @@ mod investigation_answer_status_tests {
         let question = &recovered.questions.as_ref().unwrap()[0];
         assert_eq!(
             question.answer_status,
-            InvestigationQuestionAnswerStatus::Incomplete
+            InvestigationQuestionAnswerStatus::NeedsReview
         );
         assert_eq!(
             question.answer_status_reason.as_deref(),
             Some("Two source rows have no transaction date.")
         );
         assert_eq!(question.latest_analysis_turn_id.as_deref(), Some(turn_id));
+
+        drop(app);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn legacy_incomplete_question_status_is_reclassified_from_its_saved_turn() {
+        let data_dir = temp_data_dir("migrate-legacy-incomplete-question");
+        let app = EngineState::new(&data_dir).unwrap();
+        let created = investigation::create(
+            &data_dir,
+            "/work/analysis",
+            "Revenue analysis",
+            Some("Explain revenue movement"),
+            None,
+            Some("conversation-analysis"),
+        )
+        .unwrap();
+        let question = created.questions.as_ref().unwrap()[0].clone();
+        let turn_id = "turn-legacy-incomplete-question";
+        investigation::question_run_started(&data_dir, &created.id, &question.id, turn_id).unwrap();
+        let context = investigation::context_snapshot_for_question(
+            &data_dir,
+            &created.id,
+            Some(&question.id),
+        )
+        .unwrap();
+        let turn = saved_question_turn(turn_id, &created, &question, context);
+        analysis_store::create(&data_dir, &turn).unwrap();
+        investigation::question_run_finished(
+            &data_dir,
+            &created.id,
+            &question.id,
+            turn_id,
+            InvestigationQuestionAnswerStatus::Incomplete,
+            Some("The run returned without fully answering this Question."),
+        )
+        .unwrap();
+
+        let migrated = app.investigation_load(&created.id).unwrap();
+        let question = &migrated.questions.as_ref().unwrap()[0];
+        assert_eq!(
+            question.answer_status,
+            InvestigationQuestionAnswerStatus::NeedsReview
+        );
+        assert_eq!(
+            question.answer_status_reason.as_deref(),
+            Some("Two source rows have no transaction date.")
+        );
 
         drop(app);
         let _ = std::fs::remove_dir_all(data_dir);

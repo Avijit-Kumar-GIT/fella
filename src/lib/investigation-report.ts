@@ -6,6 +6,10 @@ import type {
 	InvestigationQuestion,
 	VisualizationSpec
 } from '$lib/types';
+import {
+	investigationQuestionStatusLabel,
+	investigationQuestionStatusNextStep
+} from '$lib/investigation-question-status';
 import { isRenderableChartEvidence } from '$lib/workbench';
 
 export type InvestigationReportRuns = Record<string, AnalysisTurn | null | undefined>;
@@ -15,15 +19,7 @@ function oneLine(value: string | undefined): string {
 }
 
 function questionStatusLabel(question: InvestigationQuestion): string {
-	const status = {
-		not_started: 'Not started',
-		running: 'Running',
-		answered: 'Answered',
-		incomplete: 'Partial answer',
-		unsupported: 'Unsupported',
-		blocked: 'Blocked',
-		outdated: 'Outdated'
-	}[question.answer_status];
+	const status = investigationQuestionStatusLabel(question.answer_status);
 	return question.status === 'removed' ? `${status} · removed from the active plan` : status;
 }
 
@@ -349,6 +345,8 @@ export function buildInvestigationReport(
 			);
 			if (question.answer_status_reason) lines.push(`**Coverage note:** ${question.answer_status_reason}`, '');
 			else if (question.answer_status !== 'answered') lines.push('**Coverage note:** No reason was recorded for this unresolved status.', '');
+			const nextStep = investigationQuestionStatusNextStep(question.answer_status);
+			if (nextStep) lines.push(`**Next step:** ${nextStep}`, '');
 			if (question.source_selection) {
 				lines.push(`**Question source scope:** ${question.source_selection.mode === 'all_sources'
 					? 'All Investigation sources.'

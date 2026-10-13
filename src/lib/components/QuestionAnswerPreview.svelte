@@ -28,8 +28,11 @@
 			not_started: 'Not answered',
 			running: 'Running',
 			answered: 'Complete answer',
-			incomplete: 'Partial answer · needs review',
+			incomplete: 'Partial answer',
 			unsupported: 'Unsupported by available data',
+			insufficient_data: 'Insufficient data',
+			needs_review: 'Needs review',
+			waiting_for_input: 'Waiting for your input',
 			blocked: 'No complete answer',
 			outdated: 'Previous answer · outdated'
 		}[status];
@@ -42,6 +45,9 @@
 			answered: 'View complete answer',
 			incomplete: 'View partial answer',
 			unsupported: 'View run response',
+			insufficient_data: 'View run response',
+			needs_review: 'View saved answer',
+			waiting_for_input: 'View clarification',
 			blocked: 'View run response',
 			outdated: 'View previous answer'
 		}[status];

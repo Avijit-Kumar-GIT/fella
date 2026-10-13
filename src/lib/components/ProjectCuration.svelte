@@ -5,6 +5,10 @@
 	import { ipc, isDesktop } from '$lib/ipc';
 	import { session } from '$lib/session.svelte';
 	import { isRenderableChartEvidence } from '$lib/workbench';
+	import {
+		investigationQuestionStatusDetail,
+		investigationQuestionStatusLabel
+	} from '$lib/investigation-question-status';
 	import type {
 		AnalysisTurn,
 		EvidenceItem,
@@ -146,8 +150,8 @@
 			reference,
 			kind: 'Open Question',
 			title: question.text,
-			provenance: `${investigation.title} · ${question.answer_status.replaceAll('_', ' ')}`,
-			detail: question.answer_status_reason
+			provenance: `${investigation.title} · ${investigationQuestionStatusLabel(question.answer_status)}`,
+			detail: investigationQuestionStatusDetail(question)
 		};
 	}
 
@@ -246,8 +250,8 @@
 				return {
 					key, reference, kind: 'Question',
 					title: question?.text ?? 'Question unavailable',
-					provenance: `${investigation?.title ?? reference.investigation_id} · ${question?.answer_status.replaceAll('_', ' ') ?? 'state unavailable'}`,
-					detail: question?.answer_status_reason,
+					provenance: `${investigation?.title ?? reference.investigation_id} · ${question ? investigationQuestionStatusLabel(question.answer_status) : 'state unavailable'}`,
+					detail: question ? investigationQuestionStatusDetail(question) : undefined,
 					available: Boolean(question)
 				};
 			}

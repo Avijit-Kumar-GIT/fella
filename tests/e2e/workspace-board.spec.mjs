@@ -442,10 +442,10 @@ async function installDesktopMock(
 							if (record.id !== args.investigationId) continue;
 						const questions = (record.questions ?? []).filter((question) => question.status === 'active');
 						const hasRecordedGap = (question) =>
-							['incomplete', 'unsupported'].includes(question.answer_status)
+							['incomplete', 'unsupported', 'insufficient_data'].includes(question.answer_status)
 							&& Boolean(question.answer_status_reason?.trim());
 						if (!questions.length || questions.some((question) => question.answer_status !== 'answered' && !hasRecordedGap(question))) {
-							throw new Error('Every active Question needs an answer, a documented data gap, or review before this Investigation can be completed.');
+							throw new Error('Every active Question needs an answer or a documented data gap before this Investigation can be completed.');
 						}
 						const updated = { ...record, status: 'complete', updated_at_ms: Date.now() };
 						investigations.set(key, updated);
@@ -771,9 +771,15 @@ async function installDesktopMock(
 					}
 				}
 				const answerVerificationStatus = questionTurnId
-					? questionOutcome.verification_status ?? (questionOutcome.status === 'answered'
-						? 'verified'
-						: questionOutcome.status === 'blocked' ? 'failed' : 'insufficient_data')
+					? questionOutcome.verification_status ?? ({
+						answered: 'verified',
+						needs_review: 'needs_review',
+						waiting_for_input: 'needs_review',
+						incomplete: 'insufficient_data',
+						insufficient_data: 'insufficient_data',
+						unsupported: 'failed',
+						blocked: 'failed'
+					}[questionOutcome.status] ?? 'needs_review')
 					: undefined;
 				const progressEvidence = questionTurnId
 					? {
@@ -2274,6 +2280,68 @@ test('Questions show persisted coverage states and explain incomplete, blocked, 
 	await expect(page.locator('.root-question-item .question-status-reason')).toContainText('The Question or its source scope changed. Run it again to refresh the answer.');
 });
 
+test('clarification, verification review, and insufficient data have distinct Question states', async ({ page }) => {
+	await installDesktopMock(page, {
+		questionRunOutcomes: [
+			{
+				status: 'needs_review',
+				verification_status: 'needs_review',
+				answer_text: 'The result is available, but its interpretation is not confirmed.'
+			},
+			{
+				status: 'waiting_for_input',
+				verification_status: 'needs_review',
+				reason: 'Should the comparison use calendar or fiscal years?',
+				answer_text: 'Which year definition should I use?'
+			},
+			{
+				status: 'insufficient_data',
+				verification_status: 'insufficient_data',
+				reason: 'No accepted source rows were available for this period.',
+				answer_text: 'There is not enough source data to calculate this period.'
+			}
+		]
+	});
+	await page.goto('/');
+	await addSalesWorkspace(page);
+	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill('Explain revenue changes');
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
+	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	await openInvestigationSection(page, 'Questions');
+	await page.getByRole('button', { name: 'Add subquestion' }).click();
+	await page.getByRole('textbox', { name: 'Subquestion 1' }).fill('Compare calendar-year revenue');
+	await page.getByRole('button', { name: 'Add subquestion' }).click();
+	await page.getByRole('textbox', { name: 'Subquestion 2' }).fill('Compare fiscal-year revenue');
+	await waitForQuestionPlanSaved(page);
+
+	const runQuestion = async (label) => {
+		await page.getByRole('button', { name: `Analyze ${label}` }).click();
+		await page.getByRole('region', { name: 'Review this run' }).getByRole('button', { name: 'Run this Question' }).click();
+		await expectQuestionRunSettled(page);
+		await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
+	};
+	await runQuestion('main Question');
+	await runQuestion('Subquestion 1');
+	await runQuestion('Subquestion 2');
+
+	const root = page.locator('.root-question-item');
+	const firstSubquestion = page.locator('.question-list .question-item').nth(0);
+	const secondSubquestion = page.locator('.question-list .question-item').nth(1);
+	await expect(root.locator('[data-slot="badge"][data-question-status]')).toHaveText('Needs review');
+	await expect(root.locator('.question-status-reason')).toContainText('Review the saved run and its evidence');
+	await expect(firstSubquestion.locator('[data-slot="badge"][data-question-status]')).toHaveText('Waiting for your input');
+	await expect(firstSubquestion.locator('.question-status-reason')).toContainText('Answer the clarification in the linked conversation');
+	await expect(secondSubquestion.locator('[data-slot="badge"][data-question-status]')).toHaveText('Insufficient data');
+	await expect(secondSubquestion.locator('.question-status-reason')).toContainText('No accepted source rows were available');
+
+	const coverage = page.getByRole('region', { name: 'Question coverage' });
+	await expect(coverage.locator('[data-coverage="partial"] dd')).toHaveText('0');
+	await expect(coverage.locator('[data-coverage="unanswered"] dd')).toHaveText('2');
+	await expect(coverage.locator('[data-coverage="unsupported"] dd')).toHaveText('1');
+	await expect(page.getByRole('button', { name: 'Mark complete' })).toBeDisabled();
+});
+
 test('completion follows Question coverage and keeps documented gaps visible', async ({ page }) => {
 	await installDesktopMock(page, {
 		questionRunOutcomes: [
@@ -2347,7 +2415,7 @@ test('completion follows Question coverage and keeps documented gaps visible', a
 	await expect(coverage).toHaveAttribute('data-investigation-status', 'active');
 });
 
-test('verification outcomes stay beside their outputs and explain check limits', async ({ page }) => {
+test('verification concerns remain review states rather than data gaps (coverage semantics v2)', async ({ page }) => {
 	const queryEvidence = {
 		id: 'evidence-weekly-sales',
 		tool: 'run_sql',
@@ -2400,7 +2468,7 @@ test('verification outcomes stay beside their outputs and explain check limits',
 	];
 	await installDesktopMock(page, {
 		questionRunOutcomes: [{
-			status: 'incomplete',
+			status: 'needs_review',
 			reason: 'The available result does not support every claim; review the flagged $50 figure.',
 			verification_status: 'needs_review',
 			answer_text: 'Weekly sales were 40.',
@@ -2430,21 +2498,19 @@ test('verification outcomes stay beside their outputs and explain check limits',
 	await expect(answer.getByRole('region', { name: 'Verification outcome' })).toHaveCount(0);
 	await expect(answer.locator('[data-verification-check][data-check-outcome="flagged"]')).toHaveCount(2);
 	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
-	// The check leaves this Question partial. Its documented gap may be closed,
-	// but neither the Question nor Investigation may be described as fully answered.
+	// Coverage semantics v2: a verification concern is not automatically evidence
+	// of partial data coverage and cannot be closed as a documented data gap.
 	const affectedQuestion = page.locator('.root-question-item');
-	await expect(affectedQuestion.locator('[data-slot="badge"][data-question-status]')).toHaveText('Partial answer');
+	await expect(affectedQuestion.locator('[data-slot="badge"][data-question-status]')).toHaveText('Needs review');
 	await expect(affectedQuestion.locator('.question-status-reason')).toContainText(
 		'The available result does not support every claim; review the flagged $50 figure.'
 	);
 	const coverage = page.getByRole('region', { name: 'Question coverage' });
-	await expect(coverage).toContainText(
-		'Ready to close with 1 documented gap; this does not mean every Question was fully answered.'
-	);
-	await expect(page.getByRole('button', { name: 'Mark complete' })).toBeEnabled();
-	await page.getByRole('button', { name: 'Mark complete' }).click();
-	await expect(coverage).toContainText('Investigation closed with documented gaps. It is not fully answered');
-	await expect(coverage).not.toContainText('Investigation fully answered.');
+	await expect(coverage.locator('[data-coverage="partial"] dd')).toHaveText('0');
+	await expect(coverage.locator('[data-coverage="unanswered"] dd')).toHaveText('1');
+	await expect(coverage.locator('[data-coverage="unsupported"] dd')).toHaveText('0');
+	await expect(coverage).not.toContainText('Ready to close with');
+	await expect(page.getByRole('button', { name: 'Mark complete' })).toBeDisabled();
 	await openInvestigationSection(page, 'Analysis');
 	await expandInvestigationHistory(page);
 	await page.getByRole('button', { name: 'Open saved analysis run 1: Explain weekly sales' }).click();

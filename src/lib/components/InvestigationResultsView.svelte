@@ -2,6 +2,7 @@
 	import { untrack } from 'svelte';
 	import { ipc } from '$lib/ipc';
 	import { isRenderableChartEvidence } from '$lib/workbench';
+	import { investigationQuestionStatusDetail } from '$lib/investigation-question-status';
 	import type {
 		AnalysisTurn,
 		EvidenceItem,
@@ -242,22 +243,22 @@
 			answered: 'Answered',
 			incomplete: 'Partial answer',
 			unsupported: 'Unsupported',
+			insufficient_data: 'Insufficient data',
+			needs_review: 'Needs review',
+			waiting_for_input: 'Waiting for your input',
 			blocked: 'Blocked',
 			outdated: 'Outdated'
 		}[question.answer_status];
 	}
 
 	function questionReason(question: InvestigationQuestion): string {
-		if (question.answer_status_reason?.trim()) return question.answer_status_reason;
-		return {
-			not_started: 'No analysis run is linked to this Question yet.',
-			running: 'Analysis is still running.',
-			answered: 'This Question has a complete, current answer.',
-			incomplete: 'The latest run returned a partial answer.',
-			unsupported: 'The available data or analysis tools do not support this Question.',
-			blocked: 'The latest run could not produce a complete answer.',
-			outdated: 'The Question or its analysis context changed after the latest run.'
-		}[question.answer_status];
+		return investigationQuestionStatusDetail(question);
+	}
+
+	function questionStatusVariant(question: InvestigationQuestion): 'default' | 'warning' | 'destructive' {
+		if (question.answer_status === 'blocked') return 'destructive';
+		if (['incomplete', 'unsupported', 'insufficient_data', 'outdated'].includes(question.answer_status)) return 'warning';
+		return 'default';
 	}
 
 	function questionForFinding(questionId: string): InvestigationQuestion | undefined {
@@ -386,7 +387,7 @@
 							<section class="results-finding-context" aria-label="Finding coverage and run status">
 								<div><span>Question coverage</span><strong>{question ? questionStatusLabel(question) : 'Question unavailable'}</strong></div>
 								{#if run}<div><span>Source catalog revision</span><strong>{run.workspace_revision ?? 'Not recorded for this run'}</strong></div>{/if}
-								{#if question?.answer_status_reason}<p>{question.answer_status_reason}</p>{/if}
+								{#if question && question.answer_status !== 'answered'}<p>{questionReason(question)}</p>{/if}
 								{#if question && question.latest_analysis_turn_id !== finding.analysis_turn_id}
 									<p>This Finding is linked to a run other than the Question’s latest answer. Review its run before treating it as current.</p>
 								{/if}
@@ -639,12 +640,12 @@
 	{/if}
 
 	<section class="results-section" aria-labelledby="results-questions-title">
-		<header class="results-section-heading"><div><h3 id="results-questions-title">Questions to resolve</h3><p>Open Questions and answers that need review remain visible, even when the Investigation is closed.</p></div><span>{unresolvedQuestions.length}</span></header>
+		<header class="results-section-heading"><div><h3 id="results-questions-title">Questions to resolve</h3><p>Unresolved Questions and their answers remain visible, even when the Investigation is closed.</p></div><span>{unresolvedQuestions.length}</span></header>
 		{#if unresolvedQuestions.length}
 			<ul class="results-questions">
 				{#each unresolvedQuestions as question (question.id)}
 					<li class="results-question" data-question-status={question.answer_status}>
-						<div class="results-question-heading"><Badge variant={question.answer_status === 'blocked' ? 'destructive' : 'warning'}>{questionStatusLabel(question)}</Badge><strong>{question.text}</strong></div>
+						<div class="results-question-heading"><Badge variant={questionStatusVariant(question)}>{questionStatusLabel(question)}</Badge><strong>{question.text}</strong></div>
 						<p>{questionReason(question)}</p>
 						<div class="results-question-actions">
 							{#if question.latest_analysis_turn_id && loadingRunIds.includes(question.latest_analysis_turn_id)}

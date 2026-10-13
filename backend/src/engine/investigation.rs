@@ -112,6 +112,9 @@ pub enum InvestigationQuestionAnswerStatus {
     Answered,
     Incomplete,
     Unsupported,
+    InsufficientData,
+    NeedsReview,
+    WaitingForInput,
     Blocked,
     Outdated,
 }
@@ -746,9 +749,10 @@ pub fn question_run_finished(
 }
 
 /// Reconcile a Question with its matching canonical AnalysisTurn after an
-/// interruption or an earlier recovery that incorrectly marked a saved run
-/// blocked. The exact legacy recovery reason is required before replacing a
-/// terminal Blocked state; ordinary Blocked outcomes remain untouched.
+/// interruption, an earlier recovery that incorrectly marked a saved run
+/// blocked, or migration from the legacy ambiguous `Incomplete` state. The
+/// exact legacy recovery reason is required before replacing a terminal
+/// Blocked state; ordinary Blocked outcomes remain untouched.
 pub(crate) fn question_run_recovered(
     data_dir: &Path,
     investigation_id: &str,
@@ -769,10 +773,12 @@ pub(crate) fn question_run_recovered(
         == InvestigationQuestionAnswerStatus::Running
         || (question.answer_status == InvestigationQuestionAnswerStatus::Blocked
             && question.answer_status_reason.as_deref() == Some(INTERRUPTED_QUESTION_RUN_REASON));
+    let was_legacy_incomplete =
+        question.answer_status == InvestigationQuestionAnswerStatus::Incomplete;
     if question.investigation_id != investigation_id
         || question.status != InvestigationQuestionStatus::Active
         || question.latest_analysis_turn_id.as_deref() != Some(turn_id)
-        || !was_marked_interrupted
+        || (!was_marked_interrupted && !was_legacy_incomplete)
     {
         return Ok(false);
     }
@@ -788,11 +794,11 @@ fn normalize_answer_status_reason(
     reason: Option<&str>,
 ) -> Option<String> {
     let fallback = match status {
-        InvestigationQuestionAnswerStatus::Incomplete => {
-            Some("The run returned without fully answering this Question.")
-        }
         InvestigationQuestionAnswerStatus::Unsupported => {
             Some("The available data or analysis tools do not support this Question.")
+        }
+        InvestigationQuestionAnswerStatus::InsufficientData => {
+            Some("The run did not produce enough accepted evidence to answer this Question.")
         }
         InvestigationQuestionAnswerStatus::Blocked => {
             Some("The run could not complete this Question.")
@@ -2497,6 +2503,7 @@ fn question_has_documented_gap(question: &InvestigationQuestion) -> bool {
         &question.answer_status,
         InvestigationQuestionAnswerStatus::Incomplete
             | InvestigationQuestionAnswerStatus::Unsupported
+            | InvestigationQuestionAnswerStatus::InsufficientData
     ) && question
         .answer_status_reason
         .as_deref()
@@ -2505,8 +2512,9 @@ fn question_has_documented_gap(question: &InvestigationQuestion) -> bool {
 
 /// Close an Investigation when every active Question has either a verified
 /// answer or a persisted reason that its data coverage is incomplete or
-/// unsupported. Runtime failures, stale results, and unfinished runs remain
-/// open work rather than being silently accepted as data gaps.
+/// unsupported. Verification concerns, clarification requests, runtime
+/// failures, stale results, and unfinished runs remain open work rather than
+/// being silently accepted as data gaps.
 pub fn mark_complete(data_dir: &Path, id: &str) -> EngineResult<Investigation> {
     let mut record = load(data_dir, id)?;
     let questions: Vec<_> = record
@@ -2530,7 +2538,7 @@ pub fn mark_complete(data_dir: &Path, id: &str) -> EngineResult<Investigation> {
         .count();
     if remaining > 0 {
         return Err(EngineError::msg(format!(
-			"cannot complete this Investigation: {remaining} active Question(s) still need an answer, a documented data gap, or review"
+            "cannot complete this Investigation: {remaining} active Question(s) still need an answer or a documented data gap"
 		)));
     }
     if record.status != InvestigationStatus::Complete {
@@ -3998,6 +4006,31 @@ mod tests {
             None,
         )
         .unwrap();
+        question_run_started(
+            &data_dir,
+            &created.id,
+            child_id,
+            "turn-child-undocumented-gap",
+        )
+        .unwrap();
+        question_run_finished(
+            &data_dir,
+            &created.id,
+            child_id,
+            "turn-child-undocumented-gap",
+            InvestigationQuestionAnswerStatus::Incomplete,
+            None,
+        )
+        .unwrap();
+        assert!(question_load(&data_dir, child_id)
+            .unwrap()
+            .answer_status_reason
+            .is_none());
+        assert!(mark_complete(&data_dir, &created.id)
+            .unwrap_err()
+            .to_string()
+            .contains("1 active Question(s)"));
+
         question_run_started(&data_dir, &created.id, child_id, "turn-child-unsupported").unwrap();
         question_run_finished(
             &data_dir,
@@ -4019,6 +4052,41 @@ mod tests {
         );
         let completed_with_gap = mark_complete(&data_dir, &created.id).unwrap();
         assert_eq!(completed_with_gap.status, InvestigationStatus::Complete);
+
+        reopen(&data_dir, &created.id).unwrap();
+        question_run_started(&data_dir, &created.id, child_id, "turn-child-review").unwrap();
+        question_run_finished(
+            &data_dir,
+            &created.id,
+            child_id,
+            "turn-child-review",
+            InvestigationQuestionAnswerStatus::NeedsReview,
+            Some("A verification check did not support one claim."),
+        )
+        .unwrap();
+        assert!(
+            mark_complete(&data_dir, &created.id)
+                .unwrap_err()
+                .to_string()
+                .contains("1 active Question(s)"),
+            "a review note is not a documented data gap"
+        );
+
+        question_run_started(&data_dir, &created.id, child_id, "turn-child-insufficient").unwrap();
+        question_run_finished(
+            &data_dir,
+            &created.id,
+            child_id,
+            "turn-child-insufficient",
+            InvestigationQuestionAnswerStatus::InsufficientData,
+            Some("No accepted source rows were available for the requested period."),
+        )
+        .unwrap();
+        let completed_with_insufficient_data = mark_complete(&data_dir, &created.id).unwrap();
+        assert_eq!(
+            completed_with_insufficient_data.status,
+            InvestigationStatus::Complete
+        );
 
         reopen(&data_dir, &created.id).unwrap();
         question_run_started(&data_dir, &created.id, child_id, "turn-child-blocked").unwrap();
