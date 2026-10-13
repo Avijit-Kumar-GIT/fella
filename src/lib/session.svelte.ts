@@ -1356,12 +1356,12 @@ class Session {
 
 	toggleWorkspacePane(): void {
 		if (!this.catalog.workspace) return;
-		if (this.workspacePaneOpen) {
+		if (this.workspaceToolChooserOpen) {
 			this.setWorkspacePaneOpen(false);
 			return;
 		}
+		if (!this.workspacePaneOpen) this.setWorkspacePaneOpen(true);
 		this.workspaceToolChooserOpen = true;
-		this.setWorkspacePaneOpen(true);
 	}
 
 	openInvestigationRun(turnId: string): boolean {

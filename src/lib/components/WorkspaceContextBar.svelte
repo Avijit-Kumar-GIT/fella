@@ -261,8 +261,8 @@
 					type="button"
 					aria-expanded={session.workspacePaneOpen}
 					aria-controls="workspace-tools-pane"
-					aria-label={session.workspacePaneOpen ? 'Hide workspace tools' : 'Show workspace tools'}
-					title={session.workspacePaneOpen ? 'Hide workspace tools' : 'Show workspace tools'}
+					aria-label={session.workspaceToolChooserOpen ? 'Close workspace tools' : session.workspacePaneOpen ? 'Choose a workspace tool' : 'Open workspace tools'}
+					title={session.workspaceToolChooserOpen ? 'Close workspace tools' : session.workspacePaneOpen ? 'Choose a workspace tool' : 'Open workspace tools'}
 					onclick={() => session.toggleWorkspacePane()}
 				>
 					<Icon name="panel" size={16} />

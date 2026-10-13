@@ -62,16 +62,28 @@
 		</div>
 	</div>
 	<Tabs.Root value={pane} onValueChange={changePane} class="workspace-tabs-root" hidden={session.workspaceToolChooserOpen}>
-		<Tabs.List class="fella-ui-tabs-list fella-pill-nav workspace-tabs" aria-label="Workspace sections">
-			<Tabs.Trigger value="investigation" class="fella-ui-tabs-trigger fella-pill-nav-item workspace-tab">
-				<Icon name="bookmark" size={16} />
-				<span>Investigation</span>
-			</Tabs.Trigger>
-			<Tabs.Trigger value="context" class="fella-ui-tabs-trigger fella-pill-nav-item workspace-tab">
-				<Icon name="table" size={16} />
-				<span>Data &amp; context</span>
-			</Tabs.Trigger>
-		</Tabs.List>
+		<div class="workspace-tabs-bar">
+			<Tabs.List class="fella-ui-tabs-list fella-pill-nav workspace-tabs" aria-label="Workspace sections">
+				<Tabs.Trigger value="investigation" class="fella-ui-tabs-trigger fella-pill-nav-item workspace-tab">
+					<Icon name="bookmark" size={16} />
+					<span>Investigation</span>
+				</Tabs.Trigger>
+				<Tabs.Trigger value="context" class="fella-ui-tabs-trigger fella-pill-nav-item workspace-tab">
+					<Icon name="table" size={16} />
+					<span>Data &amp; context</span>
+				</Tabs.Trigger>
+			</Tabs.List>
+			<button
+				class="workspace-tools-close"
+				type="button"
+				aria-label="Close workspace tools pane"
+				title="Close tools"
+				data-testid="workspace-tools-close"
+				onclick={() => session.setWorkspacePaneOpen(false)}
+			>
+				<Icon name="x" size={16} />
+			</button>
+		</div>
 
 		<Tabs.Content value="investigation" class="workspace-content"><InvestigationBriefView /></Tabs.Content>
 		<Tabs.Content value="context" class="workspace-content"><ContextView /></Tabs.Content>
@@ -176,6 +188,36 @@
 		color: var(--text-dim);
 		cursor: not-allowed;
 	}
+	.workspace-tabs-bar {
+		position: relative;
+		display: flex;
+		flex: none;
+		align-items: center;
+		justify-content: center;
+		min-height: 44px;
+		padding: 6px 44px 4px;
+	}
+	.workspace-tools-close {
+		position: absolute;
+		right: 12px;
+		display: grid;
+		width: 28px;
+		height: 28px;
+		place-items: center;
+		border: 0;
+		border-radius: var(--radius-sm);
+		background: transparent;
+		color: var(--text-faint);
+		cursor: pointer;
+	}
+	.workspace-tools-close:hover {
+		background: var(--sidebar-hover);
+		color: var(--text);
+	}
+	.workspace-tools-close:focus-visible {
+		outline: none;
+		box-shadow: var(--focus-ring);
+	}
 	.workspace-terminal-icon {
 		font-family: var(--mono);
 		font-size: 15px;
@@ -191,7 +233,7 @@
 	:global(.workspace-tabs) {
 		flex: none;
 		gap: 2px;
-		margin: var(--space-3) auto var(--space-1);
+		margin: 0;
 	}
 	:global(.workspace-tab) {
 		min-height: 30px;

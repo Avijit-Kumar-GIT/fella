@@ -55,7 +55,15 @@ async function openWorkspaceTools(page, tool = 'investigations') {
 	const chooser = page.getByTestId('workspace-tool-chooser');
 	if (await chooser.isVisible()) await page.getByTestId(`workspace-tool-${tool}`).click();
 }
-const closeWorkspaceTools = (page) => setWorkspaceToolsOpen(page, false);
+async function closeWorkspaceTools(page) {
+	const toggle = page.locator('.workspace-pane-toggle');
+	if ((await toggle.getAttribute('aria-expanded')) === 'true') {
+		const chooser = page.getByTestId('workspace-tool-chooser');
+		if (await chooser.isVisible()) await toggle.click();
+		else await page.getByTestId('workspace-tools-close').click();
+	}
+	await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+}
 
 async function addSalesWorkspace(page) {
 	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
@@ -1935,13 +1943,45 @@ test('Tools opens a chooser before showing a workspace tool', async ({ page }) =
 	await expect(conversation).toBeVisible();
 
 	await page.locator('.workspace-pane-toggle').click();
-	await expect(tools).toBeHidden();
-	await page.locator('.workspace-pane-toggle').click();
 	await expect(chooser).toBeVisible();
 	await page.getByTestId('workspace-tool-investigations').click();
 	await expect(chooser).toBeHidden();
 	await expect(tools.getByRole('tab', { name: 'Investigation' })).toHaveAttribute('aria-selected', 'true');
 	await expect(conversation).toBeVisible();
+
+	await page.locator('.workspace-pane-toggle').click();
+	await expect(chooser).toBeVisible();
+	await expect(page.getByTestId('workspace-tool-context')).toBeVisible();
+	await page.getByTestId('workspace-tool-context').click();
+	await expect(chooser).toBeHidden();
+	await page.getByRole('button', { name: 'Close workspace tools pane' }).click();
+	await expect(tools).toBeHidden();
+});
+
+test('Tools reopens the chooser when a workspace tool was restored on launch', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+	await addSalesWorkspace(page);
+	await openWorkspaceTools(page, 'investigations');
+
+	const toggle = page.locator('.workspace-pane-toggle');
+	const pane = page.locator('.workspace-tools-pane');
+	const chooser = page.getByTestId('workspace-tool-chooser');
+	await expect(pane.getByRole('tab', { name: 'Investigation' })).toHaveAttribute('aria-selected', 'true');
+	await page.reload();
+	await expect(page.getByRole('region', { name: 'Conversation' })).toBeVisible();
+	await expect(pane).toBeVisible();
+	await expect(pane.getByRole('tab', { name: 'Investigation' })).toHaveAttribute('aria-selected', 'true');
+
+	await toggle.click();
+	await expect(chooser).toBeVisible();
+	await expect(page.getByTestId('workspace-tool-investigations')).toBeVisible();
+	await expect(page.getByTestId('workspace-tool-context')).toBeVisible();
+	await expect(chooser.getByRole('button', { name: /Terminal/ })).toBeDisabled();
+	await expect(page.getByRole('region', { name: 'Conversation' })).toBeVisible();
+	await toggle.click();
+	await expect(pane).toBeHidden();
+	await expect(page.getByRole('region', { name: 'Conversation' })).toBeVisible();
 });
 
 test('workspace tools open beside the conversation and preserve the workspace Investigation', async ({ page }) => {
