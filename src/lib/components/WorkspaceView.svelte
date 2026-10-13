@@ -11,6 +11,7 @@
 	let investigations = $state<Investigation[]>([]);
 	let investigationsUnavailable = $state(false);
 	let investigationBusy = $state(false);
+	let investigationsOpen = $state(false);
 	let chooserError = $state('');
 	let listRequest = 0;
 	let selectionRequest = 0;
@@ -99,6 +100,7 @@
 
 	async function openInvestigation(item: Investigation, tabId?: string): Promise<void> {
 		if (investigationBusy || !workspacePath || item.workspace_id !== workspacePath) return;
+		investigationsOpen = false;
 		const request = ++selectionRequest;
 		const path = workspacePath;
 		investigationBusy = true;
@@ -124,17 +126,15 @@
 	}
 
 	function openCurrentInvestigation(): void {
-		if (currentInvestigation) {
-			void openInvestigation(currentInvestigation);
-			return;
-		}
-		const tab = session.openWorkspaceToolTab('investigation', session.activeInvestigationId, session.activeChat.id);
+		investigationsOpen = false;
+		const tab = session.openWorkspaceToolTab('investigation', null, session.activeChat.id);
 		if (tab) session.activateWorkspaceToolTab(tab.id);
 	}
 
 	async function createInvestigation(): Promise<void> {
 		const path = workspacePath;
 		if (!path || investigationBusy) return;
+		investigationsOpen = false;
 		const request = ++selectionRequest;
 		investigationBusy = true;
 		chooserError = '';
@@ -227,49 +227,83 @@
 					<p>Choose what to keep beside this conversation.</p>
 				</header>
 			<div class="workspace-tool-list" aria-label="Available workspace tools">
-				<div class="workspace-tool-group-label">Investigations</div>
 				<button
-					class="workspace-tool-option"
+					class="workspace-tool-option workspace-tool-dropdown-trigger"
 					type="button"
 					data-testid="workspace-tool-investigations"
-					disabled={investigationBusy}
-					onclick={openCurrentInvestigation}
+					aria-expanded={investigationsOpen}
+					aria-controls="workspace-investigation-options"
+					onclick={() => (investigationsOpen = !investigationsOpen)}
 				>
 					<span class="workspace-tool-option-icon"><Icon name="bookmark" size={16} /></span>
 					<span class="workspace-tool-option-copy">
-						<strong>{currentInvestigation?.title || 'Current conversation'}</strong>
-						<small>{currentInvestigation ? investigationCoverage(currentInvestigation) : 'Open its Investigation workspace'}</small>
+						<strong>Investigations</strong>
+						<small>{investigations.length ? `${investigations.length} available` : 'Open or create an Investigation'}</small>
 					</span>
-					<Icon name="chevron-right" size={16} />
+					<Icon name={investigationsOpen ? 'chevron-down' : 'chevron-right'} size={16} />
 				</button>
-				{#each otherInvestigations as item (item.id)}
-					<button
-						class="workspace-tool-option workspace-tool-option-compact"
-						type="button"
-						data-testid={`workspace-investigation-option-${item.id}`}
-						disabled={investigationBusy}
-						onclick={() => void openInvestigation(item)}
-					>
-						<span class="workspace-tool-option-icon"><Icon name="bookmark" size={14} /></span>
-						<span class="workspace-tool-option-copy">
-							<strong>{item.title || 'Untitled Investigation'}</strong>
-							<small>{investigationCoverage(item)}</small>
-						</span>
-					</button>
-				{/each}
-				{#if investigationsUnavailable}
-					<p class="workspace-tool-list-note" role="status">Investigations are unavailable right now.</p>
+				{#if investigationsOpen}
+					<div class="workspace-investigation-options" id="workspace-investigation-options" role="group" aria-label="Choose an Investigation">
+						{#if currentInvestigation}
+							<button
+								class="workspace-tool-option workspace-tool-option-compact"
+								type="button"
+								data-testid={`workspace-investigation-option-${currentInvestigation.id}`}
+								disabled={investigationBusy}
+								onclick={() => void openInvestigation(currentInvestigation)}
+							>
+								<span class="workspace-tool-option-icon"><Icon name="bookmark" size={14} /></span>
+								<span class="workspace-tool-option-copy">
+									<strong>{currentInvestigation.title || 'Untitled Investigation'}</strong>
+									<small>{investigationCoverage(currentInvestigation)}</small>
+								</span>
+							</button>
+						{:else}
+							<button
+								class="workspace-tool-option workspace-tool-option-compact"
+								type="button"
+								data-testid="workspace-tool-current-conversation"
+								onclick={openCurrentInvestigation}
+							>
+								<span class="workspace-tool-option-icon"><Icon name="ask" size={14} /></span>
+								<span class="workspace-tool-option-copy">
+									<strong>Current conversation</strong>
+									<small>Open its Investigation workspace</small>
+								</span>
+							</button>
+						{/if}
+						{#each otherInvestigations as item (item.id)}
+							<button
+								class="workspace-tool-option workspace-tool-option-compact"
+								type="button"
+								data-testid={`workspace-investigation-option-${item.id}`}
+								disabled={investigationBusy}
+								onclick={() => void openInvestigation(item)}
+							>
+								<span class="workspace-tool-option-icon"><Icon name="bookmark" size={14} /></span>
+								<span class="workspace-tool-option-copy">
+									<strong>{item.title || 'Untitled Investigation'}</strong>
+									<small>{investigationCoverage(item)}</small>
+								</span>
+							</button>
+						{/each}
+						{#if investigationsUnavailable}
+							<p class="workspace-tool-list-note" role="status">Investigations are unavailable right now.</p>
+						{:else if !investigations.length}
+							<p class="workspace-tool-list-note">No saved Investigations yet.</p>
+						{/if}
+						<button
+							class="workspace-tool-option workspace-tool-option-compact workspace-tool-new"
+							type="button"
+							data-testid="workspace-tool-new-investigation"
+							disabled={investigationBusy}
+							onclick={() => void createInvestigation()}
+						>
+							<span class="workspace-tool-option-icon"><Icon name="plus" size={14} /></span>
+							<span class="workspace-tool-option-copy"><strong>New Investigation</strong></span>
+						</button>
+					</div>
 				{/if}
-				<button
-					class="workspace-tool-option workspace-tool-new"
-					type="button"
-					data-testid="workspace-tool-new-investigation"
-					disabled={investigationBusy}
-					onclick={() => void createInvestigation()}
-				>
-					<span class="workspace-tool-option-icon"><Icon name="plus" size={16} /></span>
-					<span class="workspace-tool-option-copy"><strong>New Investigation</strong></span>
-				</button>
 				<div class="workspace-tool-group-label workspace-tool-group-secondary">Workspace</div>
 				<button
 					class="workspace-tool-option"
@@ -394,6 +428,14 @@
 	.workspace-tool-option-copy small { color: var(--text-faint); font-size: var(--fs-xs); }
 	.workspace-tool-option-compact { min-height: 42px; padding-left: 14px; }
 	.workspace-tool-option-compact .workspace-tool-option-icon { width: 26px; height: 26px; }
+	.workspace-investigation-options {
+		display: grid;
+		gap: 2px;
+		margin: 2px 0 8px 12px;
+		padding: 4px 0 4px 8px;
+		border-left: 1px solid var(--border);
+	}
+	.workspace-tool-option-compact .workspace-tool-option-icon { background: transparent; }
 	.workspace-tool-new { color: var(--text-dim); }
 	.workspace-tool-option:disabled { color: var(--text-faint); cursor: not-allowed; }
 	.workspace-tool-list-note,

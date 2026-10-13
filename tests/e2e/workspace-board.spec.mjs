@@ -55,8 +55,24 @@ async function openWorkspaceTools(page, tool = 'investigations') {
 	const chooser = page.getByTestId('workspace-tool-chooser');
 	if (await chooser.isVisible()) {
 		if (tool === 'context') await page.getByTestId('workspace-tool-context').click();
-		else await page.getByTestId('workspace-tool-investigations').click();
+		else {
+			await openInvestigationsDropdown(page);
+			const currentConversation = page.getByTestId('workspace-tool-current-conversation');
+			if (await currentConversation.isVisible()) await currentConversation.click();
+			else {
+				const current = page.getByTestId(/workspace-investigation-option-/).first();
+				await current.click();
+			}
+		}
 	}
+}
+async function openInvestigationsDropdown(page) {
+	const dropdown = page.getByTestId('workspace-tool-investigations');
+	if ((await dropdown.getAttribute('aria-expanded')) !== 'true') await dropdown.click();
+}
+async function createInvestigationFromChooser(page) {
+	await openInvestigationsDropdown(page);
+	await page.getByTestId('workspace-tool-new-investigation').click();
 }
 async function openWorkspaceContextTool(page) {
 	await setWorkspaceToolsOpen(page, true);
@@ -338,6 +354,7 @@ async function installDesktopMock(
 		window.__workspaceQuestionSaveFailure = false;
 		window.__workspaceContextFor = (workspaceId) => workspaceContextFiles.get(workspaceId) ?? null;
 		window.__workspaceInvestigations = () => [...investigations.values()];
+		window.__workspaceInvestigationListCalls = 0;
 		window.__workspaceAnalysisTurns = () => [...analysisTurns.values()];
 		window.__workspaceDefinitionRecords = () => [...definitionRecords.values()];
 		window.__workspaceFindingRecords = () => [...findingRecords.values()];
@@ -372,6 +389,10 @@ async function installDesktopMock(
 							? [`${args.workspaceId}\\fella.md`, workspaceContextFiles.get(args.workspaceId)]
 							: null;
 					case 'investigations_list':
+						window.__workspaceInvestigationListCalls += 1;
+						if (window.__workspaceInvestigationListDelayMs) {
+							await new Promise((resolve) => setTimeout(resolve, window.__workspaceInvestigationListDelayMs));
+						}
 						if (window.__workspaceInvestigationListFailure) throw new Error('Fixture investigation list unavailable');
 						return [...investigations.values()];
 					case 'save_context':
@@ -1452,7 +1473,7 @@ test('Investigation tool tabs keep their own conversations aligned when switchin
 	await page.goto('/');
 	await addSalesWorkspace(page);
 	await setWorkspaceToolsOpen(page, true);
-	await page.getByTestId('workspace-tool-new-investigation').click();
+	await createInvestigationFromChooser(page);
 	await expect(page.locator('.editor-heading h2')).toHaveText('New investigation');
 	await expect.poll(() => page.evaluate(() => window.__workspaceInvestigations().length)).toBe(1);
 	const first = await page.evaluate(() => {
@@ -1474,7 +1495,10 @@ test('Investigation tool tabs keep their own conversations aligned when switchin
 
 	await page.getByTestId('workspace-tool-add').click();
 	await expect(page.getByTestId('workspace-tool-chooser')).toBeVisible();
-	await page.getByTestId('workspace-tool-new-investigation').click();
+	await expect(page.getByTestId(`workspace-investigation-option-${first.id}`)).toHaveCount(0);
+	await openInvestigationsDropdown(page);
+	await expect(page.getByTestId(`workspace-investigation-option-${first.id}`)).toBeVisible();
+	await createInvestigationFromChooser(page);
 	await expect(page.locator('.editor-heading h2')).toHaveText('New investigation 2');
 	await expect.poll(() => page.evaluate(() => window.__workspaceInvestigations().length)).toBe(2);
 	const second = await page.evaluate(() => {
@@ -1620,6 +1644,42 @@ test('a saved answer opens its canonical run and returns to the same conversatio
 	expect(await page.evaluate(() => window.__workspaceAskCalls.length)).toBe(2);
 });
 
+test('refreshing a Question answer keeps the Investigation page mounted instead of showing a loading screen', async ({ page }) => {
+	await installDesktopMock(page, {
+		questionRunOutcomes: [{ status: 'answered', answer_text: 'Weekly sales rose 12%.' }]
+	});
+	await page.goto('/');
+	await addSalesWorkspace(page);
+	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill('Explain weekly sales');
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
+	await openWorkspaceTools(page);
+	await openInvestigationSection(page, 'Questions');
+	await page.getByRole('button', { name: 'Analyze main Question' }).click();
+	const review = page.getByRole('region', { name: 'Review this run' });
+	await expect(review).toBeVisible();
+	const listCallsBeforeRun = await page.evaluate(() => window.__workspaceInvestigationListCalls);
+	await page.evaluate(() => {
+		window.__workspaceInvestigationListDelayMs = 1000;
+		window.__investigationLoadingSeen = false;
+		const root = document.querySelector('.investigation-page');
+		window.__investigationLoadingObserver = new MutationObserver(() => {
+			if (root?.querySelector('[role="status"]')?.textContent?.includes('Loading investigations')) {
+				window.__investigationLoadingSeen = true;
+			}
+		});
+		if (root) window.__investigationLoadingObserver.observe(root, { childList: true, subtree: true, characterData: true });
+	});
+	await review.getByRole('button', { name: 'Run this Question' }).click();
+	await expect(page.locator('.msg.assistant').last()).toContainText('Weekly sales rose 12%.');
+	await expect.poll(() => page.evaluate(() => window.__workspaceInvestigationListCalls)).toBeGreaterThan(listCallsBeforeRun);
+	await page.waitForTimeout(100);
+	expect(await page.evaluate(() => window.__investigationLoadingSeen)).toBe(false);
+	await expect(page.getByRole('tablist', { name: 'Investigation sections' })).toBeVisible();
+	await expect(page.getByRole('tab', { name: 'Questions', exact: true })).toHaveAttribute('aria-selected', 'true');
+	await page.evaluate(() => window.__investigationLoadingObserver.disconnect());
+});
+
 test('a Question runs in its linked conversation without merging sibling Questions into its request', async ({ page }) => {
 	await installDesktopMock(page, {
 		questionRunOutcomes: [{ status: 'answered', answer_text: 'There are 124 sales rows in the available file.' }]
@@ -1635,7 +1695,7 @@ test('a Question runs in its linked conversation without merging sibling Questio
 	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
 	await openWorkspaceTools(page);
 	await page.getByTestId('workspace-tool-add').click();
-	await page.getByTestId('workspace-tool-new-investigation').click();
+	await createInvestigationFromChooser(page);
 	await expect(page.locator('.editor-heading h2')).toHaveText('New investigation');
 	await openInvestigationSection(page, 'Questions');
 	await page.getByRole('button', { name: 'Add main Question' }).click();
@@ -1785,6 +1845,7 @@ test('Investigation tool tabs resume the same completed record', async ({ page }
 	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.', { exact: true }).last()).toBeVisible();
 	await openWorkspaceTools(page);
 	await page.getByTestId('workspace-tool-add').click();
+	await openInvestigationsDropdown(page);
 	const firstChoice = page.getByTestId(`workspace-investigation-option-${firstId}`);
 	await expect(firstChoice).toContainText('0/1 answered · 1 need attention');
 	await firstChoice.click();
@@ -1802,7 +1863,8 @@ test('Investigation tool tabs resume the same completed record', async ({ page }
 	await openWorkspaceTools(page);
 	await page.getByRole('button', { name: 'Mark complete' }).click();
 	await page.getByTestId('workspace-tool-add').click();
-	const currentInvestigation = page.getByTestId('workspace-tool-investigations');
+	await openInvestigationsDropdown(page);
+	const currentInvestigation = page.getByTestId(`workspace-investigation-option-${firstId}`);
 	await expect(currentInvestigation).toContainText('Complete · 1/1');
 	const completedId = await page.evaluate(() => window.__workspaceInvestigations().find((item) => item.title === 'First return-to-work question').id);
 	expect(completedId).toBe(firstId);
@@ -1810,6 +1872,7 @@ test('Investigation tool tabs resume the same completed record', async ({ page }
 	await openInvestigationSection(page, 'Questions');
 	await page.getByRole('button', { name: 'Reopen Investigation' }).click();
 	await page.getByTestId('workspace-tool-add').click();
+	await openInvestigationsDropdown(page);
 	await expect(currentInvestigation).toContainText('1/1 answered');
 	const resumed = await page.evaluate((id) => window.__workspaceInvestigations().find((item) => item.id === id), firstId);
 	expect(resumed.questions[0].text).toBe('First return-to-work question');
@@ -1938,6 +2001,8 @@ test('Tools toggles the pane; empty panes and the add button show the tool choos
 	await expect(chooser).toBeVisible();
 	await expect(chooser.getByRole('heading', { name: 'Open a tool' })).toBeVisible();
 	await expect(page.getByTestId('workspace-tool-investigations')).toBeVisible();
+	await expect(page.getByTestId('workspace-tool-investigations')).toHaveAttribute('aria-expanded', 'false');
+	await expect(page.getByTestId('workspace-tool-new-investigation')).toHaveCount(0);
 	await expect(page.getByTestId('workspace-tool-context')).toBeVisible();
 	await expect(chooser.getByRole('button', { name: /Terminal/ })).toBeDisabled();
 	await expect(tools.getByRole('tablist', { name: 'Open workspace tools' })).toHaveCount(0);
@@ -1966,7 +2031,13 @@ test('Tools toggles the pane; empty panes and the add button show the tool choos
 	await expect(chooser).toBeVisible();
 	await expect(dataTab).toHaveAttribute('aria-selected', 'true');
 	await expect(tools.getByRole('tablist', { name: 'Workspace sections' })).toHaveCount(0);
+	await openInvestigationsDropdown(page);
+	await expect(page.getByTestId('workspace-tool-current-conversation')).toBeVisible();
+	await expect(page.getByTestId('workspace-tool-new-investigation')).toBeVisible();
 	await page.getByTestId('workspace-tool-investigations').click();
+	await expect(page.getByTestId('workspace-tool-current-conversation')).toBeHidden();
+	await openInvestigationsDropdown(page);
+	await page.getByTestId('workspace-tool-current-conversation').click();
 	await expect(chooser).toBeHidden();
 	const investigationTab = tools.getByRole('tab', { name: 'Investigation', exact: true });
 	await expect(investigationTab).toHaveAttribute('aria-selected', 'true');
@@ -1975,6 +2046,7 @@ test('Tools toggles the pane; empty panes and the add button show the tool choos
 
 	await page.getByTestId('workspace-tool-add').click();
 	await expect(chooser).toBeVisible();
+	await expect(page.getByTestId('workspace-tool-investigations')).toHaveAttribute('aria-expanded', 'false');
 	await page.getByTestId('workspace-tool-context').click();
 	await expect(chooser).toBeHidden();
 	await expect(tools.getByRole('tab', { name: 'Data & context' })).toHaveAttribute('aria-selected', 'true');
@@ -4642,7 +4714,7 @@ test('shared workspace tabs and modal/menu primitives preserve keyboard interact
 	await addSalesWorkspace(page);
 	await openWorkspaceTools(page);
 	await page.getByTestId('workspace-tool-add').click();
-	await page.getByTestId('workspace-tool-new-investigation').click();
+	await createInvestigationFromChooser(page);
 
 	const investigationTabs = page.getByRole('tablist', { name: 'Investigation sections' });
 	const briefTab = investigationTabs.getByRole('tab', { name: 'Brief' });

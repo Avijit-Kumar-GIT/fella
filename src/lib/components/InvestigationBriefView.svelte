@@ -134,6 +134,8 @@
 	let autosaveTimer: ReturnType<typeof setTimeout> | undefined;
 	let autosaveInProgress: Promise<void> | null = null;
 	let investigationPaneWasVisible = false;
+	let quietRefreshInProgress = false;
+	let quietRefreshPending = $state(false);
 	const syncingInvestigations = new Set<string>();
 
 	let selected = $derived(investigations.find((item) => item.id === selectedId) ?? null);
@@ -382,6 +384,50 @@
 		}
 	}
 
+	async function refreshWorkspace(path: string): Promise<void> {
+		if (path !== session.catalog.workspace) return;
+		if (quietRefreshInProgress) {
+			quietRefreshPending = true;
+			return;
+		}
+		if (loading || dirty || questionsDirty || definitionsDirty || saving || autosaving || proposingQuestions) {
+			quietRefreshPending = true;
+			return;
+		}
+		quietRefreshInProgress = true;
+		const serial = ++requestSerial;
+		const conversationId = session.activeChat.id;
+		const previousSelectedId = selectedId;
+		try {
+			const records = await ipc.investigationsList();
+			if (serial !== requestSerial || path !== session.catalog.workspace || conversationId !== session.activeChat.id) return;
+			const refreshed = records.filter((item) => item.workspace_id === path);
+			const activeConversation = session.activeChat;
+			const activeQuestion = firstActualQuestion(activeConversation.messages);
+			const retainedSelection = refreshed.find((item) => item.id === previousSelectedId);
+			const activeSelection = refreshed.find((item) => item.id === session.activeInvestigationId);
+			const linkedToConversation = refreshed.find((item) =>
+				item.conversation_id === activeConversation.id ||
+				(!!activeQuestion && item.brief_source_message_id === activeQuestion.id)
+			);
+			const nextSelection = retainedSelection ?? activeSelection ?? linkedToConversation ?? null;
+			investigations = refreshed;
+			selectedId = nextSelection?.id ?? null;
+			if (session.activeInvestigationId !== selectedId) session.setActiveInvestigation(selectedId);
+			investigationLoadError = '';
+		} catch (cause) {
+			if (serial === requestSerial && investigations.length === 0) {
+				investigationLoadError = cause instanceof Error ? cause.message : String(cause);
+			}
+		} finally {
+			quietRefreshInProgress = false;
+			if (quietRefreshPending) {
+				quietRefreshPending = false;
+				void refreshWorkspace(path);
+			}
+		}
+	}
+
 	async function syncAnalysisTurns(investigationId: string): Promise<void> {
 		if (syncingInvestigations.has(investigationId)) return;
 		syncingInvestigations.add(investigationId);
@@ -421,6 +467,7 @@
 		investigationPaneWasVisible = paneVisible;
 		const sameWorkspace = path === loadedWorkspace;
 		const conversationChanged = conversationId !== loadedConversationId;
+		const versionChanged = version !== loadedInvestigationsVersion;
 		if (path !== loadedWorkspace || conversationChanged) investigationSection = 'brief';
 		if (path !== loadedWorkspace && selected && (dirty || questionsDirty || definitionsDirty)) {
 			void saveEditableDrafts(selected.id);
@@ -431,17 +478,32 @@
 			loadedWorkspace = null;
 			loadedConversationId = null;
 			loadedInvestigationsVersion = version;
+			quietRefreshPending = false;
 			investigations = [];
 			selectedId = null;
 			investigationSection = 'brief';
 			loading = false;
 			return;
 		}
-		if (path === loadedWorkspace && conversationId === loadedConversationId && version === loadedInvestigationsVersion && !enteredPane) return;
+		if (sameWorkspace && !conversationChanged && !versionChanged && !enteredPane) return;
+		if (sameWorkspace && !conversationChanged) {
+			loadedInvestigationsVersion = version;
+			quietRefreshPending = true;
+			return;
+		}
 		loadedWorkspace = path;
 		loadedConversationId = conversationId;
 		loadedInvestigationsVersion = version;
 		void loadWorkspace(path, sameWorkspace);
+	});
+
+	$effect(() => {
+		if (!quietRefreshPending) return;
+		const path = workspacePath;
+		const blocked = loading || dirty || questionsDirty || definitionsDirty || saving || autosaving || proposingQuestions;
+		if (!path || blocked || quietRefreshInProgress) return;
+		quietRefreshPending = false;
+		void refreshWorkspace(path);
 	});
 
 	$effect(() => {
