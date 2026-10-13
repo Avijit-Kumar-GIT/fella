@@ -44,7 +44,9 @@
 		investigationsUnavailable = false;
 		void ipc.investigationsList().then((records) => {
 			if (request !== listRequest || path !== workspacePath) return;
-			investigations = records.filter((item) => item.workspace_id === path)
+			const workspaceInvestigations = records.filter((item) => item.workspace_id === path);
+			session.reconcileWorkspaceToolTabs(workspaceInvestigations);
+			investigations = workspaceInvestigations
 				.sort((left, right) => right.updated_at_ms - left.updated_at_ms);
 		}).catch(() => {
 			if (request !== listRequest) return;

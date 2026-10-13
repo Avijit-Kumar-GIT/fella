@@ -745,6 +745,42 @@ class Session {
 		this.#writeWorkspaceState();
 	}
 
+	/** Repair a saved tab label from its canonical conversation when that link is
+	 *  unambiguous. Conversation ownership is the source of truth if an older
+	 *  stale selection overwrote the tab's Investigation ID. */
+	reconcileWorkspaceToolTabs(records: readonly { id: string; conversation_id?: string | null }[]): void {
+		const pane = this.activePane;
+		if (!pane?.workspaceToolTabs?.length) return;
+		const investigationByConversation = new Map<string, string | null>();
+		for (const record of records) {
+			const conversationId = record.conversation_id;
+			if (!conversationId) continue;
+			if (investigationByConversation.has(conversationId)) {
+				investigationByConversation.set(conversationId, null);
+			} else {
+				investigationByConversation.set(conversationId, record.id);
+			}
+		}
+
+		let changed = false;
+		for (const tab of pane.workspaceToolTabs) {
+			if (tab.kind !== 'investigation' || !tab.conversationId) continue;
+			const investigationId = investigationByConversation.get(tab.conversationId);
+			if (investigationId && tab.investigationId !== investigationId) {
+				tab.investigationId = investigationId;
+				changed = true;
+			}
+		}
+		if (!changed) return;
+
+		const activeTab = pane.workspaceToolTabs.find((tab) => tab.id === pane.activeWorkspaceToolTabId);
+		if (activeTab?.kind === 'investigation') {
+			pane.investigationId = activeTab.investigationId ?? null;
+			this.activeInvestigationId = pane.investigationId;
+		}
+		this.#writeWorkspaceState();
+	}
+
 	get pendingWorkspacePaths(): string[] {
 		return (this.activeEnvironment?.panes ?? [])
 			.map((pane) => pane.workspaceId)

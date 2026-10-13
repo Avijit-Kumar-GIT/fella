@@ -77,6 +77,16 @@ test('a stale Investigation selection cannot rebind or steal another tab', () =>
 		);
 		assert.deepEqual(pane.workspaceToolTabs, originalTabs);
 		assert.equal(pane.activeWorkspaceToolTabId, secondTab.id);
+
+		// If a prior app version already changed only the saved Investigation ID,
+		// recover it from the durable conversation-to-Investigation relationship.
+		secondTab.investigationId = 'investigation-1';
+		session.reconcileWorkspaceToolTabs([
+			{ id: 'investigation-1', conversation_id: 'conversation-1' },
+			{ id: 'investigation-2', conversation_id: 'conversation-2' }
+		]);
+		assert.equal(secondTab.investigationId, 'investigation-2');
+		assert.equal(session.activeInvestigationId, 'investigation-2');
 	} finally {
 		Object.assign(session, previous);
 	}
