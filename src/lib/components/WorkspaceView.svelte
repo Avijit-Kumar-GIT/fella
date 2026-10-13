@@ -3,6 +3,7 @@
 	import { focusInvestigationConversation } from '$lib/investigation-navigation';
 	import { session, type WorkspaceToolTab } from '$lib/session.svelte';
 	import type { Investigation } from '$lib/types';
+	import { DropdownMenu } from '$lib/components/ui/dropdown-menu';
 	import Icon from './Icon.svelte';
 	import ContextView from './ContextView.svelte';
 	import InvestigationBriefView from './InvestigationBriefView.svelte';
@@ -25,7 +26,6 @@
 		}
 		return null;
 	});
-	let otherInvestigations = $derived(investigations.filter((item) => item.id !== currentInvestigation?.id));
 
 	$effect(() => {
 		const path = workspacePath;
@@ -88,6 +88,10 @@
 		if (item.status === 'archived') return `Archived · ${answered}/${active.length} answered`;
 		if (item.status === 'complete') return open ? `Closed with gaps · ${open}` : `Complete · ${answered}/${active.length}`;
 		return open ? `${answered}/${active.length} answered · ${open} need attention` : `${answered}/${active.length} answered`;
+	}
+
+	function setInvestigationsOpen(open: boolean): void {
+		investigationsOpen = open;
 	}
 
 	function nextInvestigationTitle(): string {
@@ -227,86 +231,85 @@
 					<p>Choose what to keep beside this conversation.</p>
 				</header>
 			<div class="workspace-tool-list" aria-label="Available workspace tools">
-				<button
-					class="workspace-tool-option workspace-tool-dropdown-trigger"
-					type="button"
-					data-testid="workspace-tool-investigations"
-					aria-expanded={investigationsOpen}
-					aria-controls="workspace-investigation-options"
-					aria-label={`Investigations${investigations.length ? `, ${investigations.length} available` : ''}`}
-					onclick={() => (investigationsOpen = !investigationsOpen)}
-				>
-					<span class="workspace-tool-option-icon"><Icon name="bookmark" size={16} /></span>
-					<span class="workspace-tool-option-copy">
-						<strong>Investigations</strong>
-					</span>
-					{#if investigations.length}
-						<span class="workspace-tool-dropdown-count" aria-hidden="true">{investigations.length}</span>
-					{/if}
-					<Icon name="chevron-right" size={14} />
-				</button>
-				{#if investigationsOpen}
-					<div class="workspace-investigation-options" id="workspace-investigation-options" role="group" aria-label="Choose an Investigation">
-						{#if currentInvestigation}
-							<button
-								class="workspace-tool-option workspace-tool-option-compact"
-								type="button"
-								data-testid={`workspace-investigation-option-${currentInvestigation.id}`}
-								disabled={investigationBusy}
-								onclick={() => void openInvestigation(currentInvestigation)}
-							>
-								<span class="workspace-tool-option-icon"><Icon name="bookmark" size={14} /></span>
-								<span class="workspace-tool-option-copy">
-									<strong>{currentInvestigation.title || 'Untitled Investigation'}</strong>
-									<small>{investigationCoverage(currentInvestigation)}</small>
-								</span>
-							</button>
-						{:else}
-							<button
-								class="workspace-tool-option workspace-tool-option-compact"
-								type="button"
-								data-testid="workspace-tool-current-conversation"
-								onclick={openCurrentInvestigation}
-							>
-								<span class="workspace-tool-option-icon"><Icon name="ask" size={14} /></span>
-								<span class="workspace-tool-option-copy">
-									<strong>Current conversation</strong>
-									<small>Open its Investigation workspace</small>
-								</span>
-							</button>
+				<DropdownMenu.Root open={investigationsOpen} onOpenChange={setInvestigationsOpen}>
+					<DropdownMenu.Trigger
+						class="workspace-tool-option workspace-tool-dropdown-trigger"
+						type="button"
+						data-testid="workspace-tool-investigations"
+						aria-label={`Investigations${investigations.length ? `, ${investigations.length} available` : ''}`}
+						aria-controls="workspace-investigations-menu"
+					>
+						<span class="workspace-tool-option-icon"><Icon name="bookmark" size={16} /></span>
+						<span class="workspace-tool-option-copy"><strong>Investigations</strong></span>
+						{#if investigations.length}
+							<span class="workspace-tool-dropdown-count" aria-hidden="true">{investigations.length}</span>
 						{/if}
-						{#each otherInvestigations as item (item.id)}
-							<button
-								class="workspace-tool-option workspace-tool-option-compact"
-								type="button"
-								data-testid={`workspace-investigation-option-${item.id}`}
-								disabled={investigationBusy}
-								onclick={() => void openInvestigation(item)}
-							>
-								<span class="workspace-tool-option-icon"><Icon name="bookmark" size={14} /></span>
-								<span class="workspace-tool-option-copy">
-									<strong>{item.title || 'Untitled Investigation'}</strong>
-									<small>{investigationCoverage(item)}</small>
-								</span>
-							</button>
-						{/each}
-						{#if investigationsUnavailable}
-							<p class="workspace-tool-list-note" role="status">Investigations are unavailable right now.</p>
-						{:else if !investigations.length}
-							<p class="workspace-tool-list-note">No saved Investigations yet.</p>
-						{/if}
-						<button
-							class="workspace-tool-option workspace-tool-option-compact workspace-tool-new"
-							type="button"
-							data-testid="workspace-tool-new-investigation"
-							disabled={investigationBusy}
-							onclick={() => void createInvestigation()}
+						<Icon name="chevron-right" size={14} />
+					</DropdownMenu.Trigger>
+					<DropdownMenu.Portal>
+						<DropdownMenu.Content
+							id="workspace-investigations-menu"
+							class="fella-ui-menu-content workspace-investigations-menu"
+							side="bottom"
+							align="start"
+							sideOffset={6}
 						>
-							<span class="workspace-tool-option-icon"><Icon name="plus" size={14} /></span>
-							<span class="workspace-tool-option-copy"><strong>New Investigation</strong></span>
-						</button>
-					</div>
-				{/if}
+							{#if !currentInvestigation}
+								<DropdownMenu.Item
+									class="fella-ui-menu-item workspace-investigation-menu-item"
+									data-testid="workspace-tool-current-conversation"
+									onSelect={openCurrentInvestigation}
+								>
+									<Icon name="ask" size={14} />
+									<span class="workspace-investigation-menu-copy">
+										<strong>Current conversation</strong>
+										<small>Open its Investigation workspace</small>
+									</span>
+								</DropdownMenu.Item>
+							{/if}
+							{#if investigations.length}
+								{#if !currentInvestigation}<div class="workspace-investigation-menu-separator" role="separator"></div>{/if}
+								<DropdownMenu.RadioGroup
+									value={currentInvestigation?.id ?? ''}
+									onValueChange={(id) => {
+										const item = investigations.find((record) => record.id === id);
+										if (item) void openInvestigation(item);
+									}}
+								>
+									{#each investigations as item (item.id)}
+										<DropdownMenu.RadioItem
+											class="fella-ui-menu-item workspace-investigation-menu-item"
+											value={item.id}
+											data-testid={`workspace-investigation-option-${item.id}`}
+											disabled={investigationBusy}
+										>
+											<Icon name="bookmark" size={14} />
+											<span class="workspace-investigation-menu-copy">
+												<strong>{item.title || 'Untitled Investigation'}</strong>
+												<small>{investigationCoverage(item)}</small>
+											</span>
+											{#if item.id === currentInvestigation?.id}<Icon name="check" size={14} />{/if}
+										</DropdownMenu.RadioItem>
+									{/each}
+								</DropdownMenu.RadioGroup>
+							{:else if investigationsUnavailable}
+								<div class="workspace-investigation-menu-note" role="status">Investigations are unavailable right now.</div>
+							{:else}
+								<div class="workspace-investigation-menu-note">No saved Investigations yet.</div>
+							{/if}
+							<div class="workspace-investigation-menu-separator" role="separator"></div>
+							<DropdownMenu.Item
+								class="fella-ui-menu-item workspace-investigation-menu-item workspace-investigation-menu-new"
+								data-testid="workspace-tool-new-investigation"
+								disabled={investigationBusy}
+								onSelect={() => void createInvestigation()}
+							>
+								<Icon name="plus" size={14} />
+								<strong>New Investigation</strong>
+							</DropdownMenu.Item>
+						</DropdownMenu.Content>
+					</DropdownMenu.Portal>
+				</DropdownMenu.Root>
 				<div class="workspace-tool-group-label workspace-tool-group-secondary">Workspace</div>
 				<button
 					class="workspace-tool-option"
@@ -410,7 +413,11 @@
 	.workspace-tool-option:hover:not(:disabled) { background: var(--bg-inset); }
 	.workspace-tool-option:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 	.workspace-tool-option > :global(svg.icon) { margin-left: auto; color: var(--text-faint); }
-	.workspace-tool-dropdown-trigger {
+	:global(.workspace-tool-dropdown-trigger) {
+		display: flex;
+		width: 100%;
+		min-width: 0;
+		align-items: center;
 		min-height: 34px;
 		gap: 8px;
 		padding: 0 10px;
@@ -418,38 +425,41 @@
 		border-radius: 999px;
 		background: color-mix(in srgb, var(--text) 3%, var(--sidebar-surface));
 		color: var(--text-dim);
+		font: inherit;
+		text-align: left;
+		cursor: pointer;
 		transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 	}
-	.workspace-tool-dropdown-trigger:hover:not(:disabled),
-	.workspace-tool-dropdown-trigger[aria-expanded='true'] {
+	:global(.workspace-tool-dropdown-trigger:hover:not(:disabled)),
+	:global(.workspace-tool-dropdown-trigger[data-state='open']) {
 		border-color: var(--border-strong);
 		background: var(--sidebar-hover);
 		color: var(--text);
 	}
-	.workspace-tool-dropdown-trigger:focus-visible {
+	:global(.workspace-tool-dropdown-trigger:focus-visible) {
 		outline: 2px solid var(--brand);
 		outline-offset: 2px;
 		box-shadow: none;
 	}
-	.workspace-tool-dropdown-trigger .workspace-tool-option-icon {
+	:global(.workspace-tool-dropdown-trigger .workspace-tool-option-icon) {
 		width: 16px;
 		height: 16px;
 		border-radius: 0;
 		background: transparent;
 		color: inherit;
 	}
-	.workspace-tool-dropdown-trigger .workspace-tool-option-copy {
+	:global(.workspace-tool-dropdown-trigger .workspace-tool-option-copy) {
 		display: block;
 		flex: 1;
 	}
-	.workspace-tool-dropdown-trigger > :global(svg.icon:last-child) {
+	:global(.workspace-tool-dropdown-trigger > svg.icon:last-child) {
 		flex: none;
 		margin-left: 0;
 		color: var(--text-faint);
 		transform: rotate(90deg);
 		transition: transform var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 	}
-	.workspace-tool-dropdown-trigger[aria-expanded='true'] > :global(svg.icon:last-child) {
+	:global(.workspace-tool-dropdown-trigger[aria-expanded='true'] > svg.icon:last-child) {
 		color: var(--text-dim);
 		transform: rotate(-90deg);
 	}
@@ -478,19 +488,57 @@
 		white-space: nowrap;
 	}
 	.workspace-tool-option-copy small { color: var(--text-faint); font-size: var(--fs-xs); }
-	.workspace-tool-option-compact { min-height: 42px; padding-left: 14px; }
-	.workspace-tool-option-compact .workspace-tool-option-icon { width: 26px; height: 26px; }
-	.workspace-investigation-options {
-		display: grid;
-		gap: 2px;
-		margin: 2px 0 8px 12px;
-		padding: 4px 0 4px 8px;
-		border-left: 1px solid var(--border);
+	:global(.workspace-investigations-menu) {
+		width: min(320px, calc(100vw - 24px));
+		max-height: min(420px, calc(100vh - 24px));
+		overflow-y: auto;
 	}
-	.workspace-tool-option-compact .workspace-tool-option-icon { background: transparent; }
-	.workspace-tool-new { color: var(--text-dim); }
+	:global(.workspace-investigation-menu-item) {
+		min-height: 44px;
+		gap: 9px;
+		padding: 7px 9px;
+	}
+	:global(.workspace-investigation-menu-item > svg:first-child) {
+		flex: none;
+		color: var(--text-faint);
+	}
+	:global(.workspace-investigation-menu-item > svg:last-child) {
+		flex: none;
+		margin-left: auto;
+		color: var(--text-dim);
+	}
+	:global(.workspace-investigation-menu-copy) {
+		display: grid;
+		flex: 1;
+		min-width: 0;
+		gap: 2px;
+	}
+	:global(.workspace-investigation-menu-copy > strong) {
+		overflow: hidden;
+		color: var(--text);
+		font-size: var(--fs-sm);
+		font-weight: 550;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	:global(.workspace-investigation-menu-copy > small) {
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+	}
+	:global(.workspace-investigation-menu-note) {
+		padding: 8px 9px;
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+	}
+	:global(.workspace-investigation-menu-separator) {
+		height: 1px;
+		margin: 4px 5px;
+		background: var(--border);
+	}
+	:global(.workspace-investigation-menu-new) {
+		color: var(--text-dim);
+	}
 	.workspace-tool-option:disabled { color: var(--text-faint); cursor: not-allowed; }
-	.workspace-tool-list-note,
 	.workspace-tool-error { margin: 6px 10px; color: var(--text-faint); font-size: var(--fs-xs); }
 	.workspace-tool-error { color: var(--danger, #b42318); }
 	.workspace-tool-option-unavailable { min-height: 44px; }

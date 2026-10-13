@@ -2008,6 +2008,14 @@ test('Tools toggles the pane; empty panes and the add button show the tool choos
 	await expect(page.getByTestId('workspace-tool-context')).toBeVisible();
 	await expect(chooser.getByRole('button', { name: /Terminal/ })).toBeDisabled();
 	await expect(tools.getByRole('tablist', { name: 'Open workspace tools' })).toHaveCount(0);
+	await page.getByTestId('workspace-tool-investigations').click();
+	const investigationsMenu = page.getByRole('menu');
+	await expect(investigationsMenu).toBeVisible();
+	expect(await investigationsMenu.evaluate((menu) => menu.closest('[data-testid="workspace-tool-chooser"]'))).toBeNull();
+	await expect(investigationsMenu.getByTestId('workspace-tool-new-investigation')).toBeVisible();
+	await page.keyboard.press('Escape');
+	await expect(investigationsMenu).toHaveCount(0);
+	await expect(page.getByTestId('workspace-tool-investigations')).toBeFocused();
 
 	// The toggle closes the whole pane even while its chooser is open.
 	await page.locator('.workspace-pane-toggle').click();
@@ -2036,7 +2044,7 @@ test('Tools toggles the pane; empty panes and the add button show the tool choos
 	await openInvestigationsDropdown(page);
 	await expect(page.getByTestId('workspace-tool-current-conversation')).toBeVisible();
 	await expect(page.getByTestId('workspace-tool-new-investigation')).toBeVisible();
-	await page.getByTestId('workspace-tool-investigations').click();
+	await page.keyboard.press('Escape');
 	await expect(page.getByTestId('workspace-tool-current-conversation')).toBeHidden();
 	await openInvestigationsDropdown(page);
 	await page.getByTestId('workspace-tool-current-conversation').click();
