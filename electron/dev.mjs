@@ -5,7 +5,9 @@ import { fileURLToPath } from 'node:url';
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const windows = process.platform === 'win32';
 const pnpm = windows ? 'pnpm.cmd' : 'pnpm';
-const devUrl = process.env.FELLA_ELECTRON_URL || 'http://localhost:1420';
+// Use an explicit loopback IP: Electron's Chromium can apply Windows system
+// proxy settings differently from Node's readiness fetch for `localhost`.
+const devUrl = process.env.FELLA_ELECTRON_URL || 'http://127.0.0.1:1420/';
 const env = { ...process.env, FELLA_ELECTRON_URL: devUrl };
 const pnpmOptions = {
 	cwd: root,
