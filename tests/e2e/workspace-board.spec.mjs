@@ -1413,6 +1413,76 @@ test('an Investigation opens its canonical workspace conversation', async ({ pag
 	expect(await page.evaluate(() => window.__workspaceAskCalls.length)).toBe(1);
 });
 
+test('the Investigation picker creates dedicated conversations and switching keeps both views aligned', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+	await addSalesWorkspace(page);
+	const picker = page.getByTestId('workspace-investigation-summary');
+
+	await picker.click();
+	await page.getByRole('menuitem', { name: 'New Investigation', exact: true }).click();
+	await expect(picker).toContainText('New investigation');
+	await expect.poll(() => page.evaluate(() => window.__workspaceInvestigations().length)).toBe(1);
+	const first = await page.evaluate(() => {
+		const record = window.__workspaceInvestigations()[0];
+		const state = JSON.parse(localStorage.getItem('fella:environments') || '{}');
+		const environment = state.environments?.find((item) => item.id === state.active);
+		const pane = environment?.panes.find((item) => item.workspaceId === record.workspace_id);
+		return { id: record.id, conversationId: record.conversation_id, activeConversationId: pane?.conversationId };
+	});
+	expect(first.conversationId).toBeTruthy();
+	expect(first.activeConversationId).toBe(first.conversationId);
+
+	const firstPrompt = 'Review the first investigation dataset';
+	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill(firstPrompt);
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(page.locator('.msg.user').filter({ hasText: firstPrompt })).toHaveCount(1);
+	await workspacePresetButton(page, 'Investigation').click();
+	await expect(page.locator('.editor-heading h2')).toHaveText('New investigation');
+
+	await picker.click();
+	await page.getByRole('menuitem', { name: 'New Investigation', exact: true }).click();
+	await expect(picker).toContainText('New investigation 2');
+	await expect.poll(() => page.evaluate(() => window.__workspaceInvestigations().length)).toBe(2);
+	const second = await page.evaluate(() => {
+		const record = window.__workspaceInvestigations().find((item) => item.title === 'New investigation 2');
+		const state = JSON.parse(localStorage.getItem('fella:environments') || '{}');
+		const environment = state.environments?.find((item) => item.id === state.active);
+		const pane = environment?.panes.find((item) => item.workspaceId === record.workspace_id);
+		return { id: record.id, conversationId: record.conversation_id, activeConversationId: pane?.conversationId };
+	});
+	expect(second.conversationId).toBeTruthy();
+	expect(second.conversationId).not.toBe(first.conversationId);
+	expect(second.activeConversationId).toBe(second.conversationId);
+	await expect(page.locator('.editor-heading h2')).toHaveText('New investigation 2');
+	await expect(page.getByRole('navigation', { name: 'Workspace investigations' })).toHaveCount(0);
+
+	await workspacePresetButton(page, 'Focus').click();
+	const secondPrompt = 'Compare the second investigation dataset';
+	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill(secondPrompt);
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(page.locator('.msg.user').filter({ hasText: secondPrompt })).toHaveCount(1);
+	await expect(page.locator('.msg.user').filter({ hasText: firstPrompt })).toHaveCount(0);
+
+	await workspacePresetButton(page, 'Investigation').click();
+	await picker.click();
+	await page.getByRole('menuitemradio', { name: 'New investigation', exact: true }).click();
+	await expect(page.locator('.editor-heading h2')).toHaveText('New investigation');
+	await expect.poll(() => focusedWorkspaceConversationId(page, folders[0].path)).toBe(first.conversationId);
+	await workspacePresetButton(page, 'Focus').click();
+	await expect(page.locator('.msg.user').filter({ hasText: firstPrompt })).toHaveCount(1);
+	await expect(page.locator('.msg.user').filter({ hasText: secondPrompt })).toHaveCount(0);
+
+	await workspacePresetButton(page, 'Investigation').click();
+	await expect(page.locator('.editor-heading h2')).toHaveText('New investigation');
+	await expect(page.getByRole('button', { name: `Open conversation: ${secondPrompt}` })).toBeVisible();
+	await page.getByRole('button', { name: `Open conversation: ${secondPrompt}` }).click();
+	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
+	await expect(page.locator('.msg.user').filter({ hasText: secondPrompt })).toHaveCount(1);
+	await expect(picker).toContainText('New investigation 2');
+	await expect.poll(() => focusedWorkspaceConversationId(page, folders[0].path)).toBe(second.conversationId);
+});
+
 test('Investigation work plan keeps the brief concise and opens editing and history on demand', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
@@ -1527,7 +1597,9 @@ test('a Question runs in its linked conversation without merging sibling Questio
 	await page.getByRole('button', { name: 'New conversation in northwind-sales' }).click();
 	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
 	await workspacePresetButton(page, 'Investigation').click();
-	await page.getByRole('button', { name: 'New investigation', exact: true }).click();
+	await page.getByTestId('workspace-investigation-summary').click();
+	await page.getByRole('menuitem', { name: 'New Investigation', exact: true }).click();
+	await expect(page.locator('.editor-heading h2')).toHaveText('New investigation');
 	await openInvestigationSection(page, 'Questions');
 	await page.getByRole('button', { name: 'Add main Question' }).click();
 	const mainQuestion = 'How many sales rows are available?';

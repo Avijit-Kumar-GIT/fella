@@ -8,6 +8,7 @@
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { ipc, isDesktop } from '$lib/ipc';
 	import { analysisTurnIdsAfterSourceMessage } from '$lib/investigation-runs';
+	import { focusInvestigationConversation } from '$lib/investigation-navigation';
 	import { buildInvestigationReport, investigationReportFilename, type InvestigationReportRuns } from '$lib/investigation-report';
 	import { renderMarkdown } from '$lib/markdown';
 	import { handleScrollRegionKeydown } from '$lib/scroll-region';
@@ -16,7 +17,6 @@
 	import type {
 		AnalysisTurn,
 		Answer,
-		ConversationSummary,
 		EvidenceItem,
 		Investigation,
 		InvestigationBrief,
@@ -68,6 +68,7 @@
 	let investigationSection = $state<InvestigationSection>('brief');
 	let workspacePath = $state<string | null>(null);
 	let loadedWorkspace = $state<string | null>(null);
+	let loadedConversationId: string | null = null;
 	let loadedInvestigationsVersion = -1;
 	let goal = $state('');
 	let audience = $state('');
@@ -89,7 +90,6 @@
 	let proposalTarget = $state<BriefProposalTarget>('goal');
 	let pendingAnalysisQuestionId = $state<string | null>(null);
 	let loading = $state(false);
-	let creating = $state(false);
 	let openingConversation = $state(false);
 	let saving = $state(false);
 	let autosaving = $state(false);
@@ -216,16 +216,6 @@
 	let subquestions = $derived(rootQuestion
 		? questions.filter((question) => question.parent_id === rootQuestion.id)
 		: []);
-	let currentConversationSource = $derived.by(() => {
-		const conversation = session.activeChat;
-		if (!workspacePath || conversation.workspaceScope !== workspacePath) return undefined;
-		return firstActualQuestion(conversation.messages);
-	});
-	let currentConversationInvestigation = $derived(
-		currentConversationSource
-			? investigations.find((item) => item.workspace_id === workspacePath && (item.conversation_id === session.activeChat.id || item.brief_source_message_id === currentConversationSource?.id)) ?? null
-			: null
-	);
 	let unlinkedAnalysisTurnIds = $derived.by(() => {
 		const item = selected;
 		const conversation = session.activeChat;
@@ -323,88 +313,6 @@
 		return '';
 	});
 
-	async function focusInvestigationConversation(
-		item: Investigation,
-		layout: WorkspaceLayoutPreset | 'preserve' = 'preserve',
-		focusTurnId?: string,
-		isCurrent: () => boolean = () => true
-	): Promise<Investigation | null> {
-		let conversationId = item.conversation_id;
-		let linkedInvestigation = item;
-		let summary: ConversationSummary | null = null;
-
-		if (!conversationId && item.brief_source_message_id) {
-			const summaries = await ipc.conversationsList();
-			if (!isCurrent()) return null;
-			summary = summaries.find((candidate) =>
-				candidate.workspace === item.workspace_id &&
-				candidate.first_question_message_id === item.brief_source_message_id
-			) ?? null;
-			conversationId = summary?.id;
-			if (conversationId) {
-				linkedInvestigation = await ipc.investigationEnsure(
-					item.workspace_id,
-					conversationId,
-					item.brief.goal,
-					item.brief_source_message_id
-				);
-				if (!isCurrent()) return null;
-				investigations = investigations.map((record) => record.id === linkedInvestigation.id ? linkedInvestigation : record);
-			}
-		}
-		if (!conversationId) throw new Error('This Investigation has no linked conversation yet.');
-
-		const existingConversation = session.conversations.find((conversation) => conversation.id === conversationId);
-		if (existingConversation && existingConversation.workspaceScope !== item.workspace_id) {
-			throw new Error('The linked conversation belongs to a different workspace.');
-		}
-		const loadedIndex = session.conversations.findIndex((conversation) =>
-			conversation.id === conversationId && conversation.workspaceScope === item.workspace_id
-		);
-		if (loadedIndex < 0) {
-			summary ??= (await ipc.conversationsList()).find((candidate) =>
-				candidate.id === conversationId && candidate.workspace === item.workspace_id
-			) ?? null;
-			if (!isCurrent()) return null;
-			if (summary) {
-				const saved = JSON.parse(await ipc.conversationLoad(conversationId)) as {
-					workspace?: string | null;
-					messages?: unknown;
-					title?: string | null;
-					companionPane?: unknown;
-				};
-				if (!isCurrent()) return null;
-				if (saved.workspace && saved.workspace !== item.workspace_id) {
-					throw new Error('The linked conversation belongs to a different workspace.');
-				}
-				const messages = Array.isArray(saved.messages) ? saved.messages as Message[] : [];
-				session.loadConversation(conversationId, messages, saved.title ?? null, item.workspace_id, saved.companionPane);
-			} else {
-				const hasRecordedAnalysis = Boolean(
-					item.brief_source_message_id ||
-					item.analysis_turn_ids?.length ||
-					item.findings?.length ||
-					item.questions?.some((question) => question.latest_analysis_turn_id || question.analysis_turn_ids?.length)
-				);
-				if (hasRecordedAnalysis) throw new Error('The linked conversation is missing from local history.');
-				// Empty chats are intentionally omitted from conversation history. The
-				// durable Investigation still owns this ID, so restore that same blank
-				// conversation rather than creating a different one in Focus.
-				session.loadConversation(conversationId, [], null, item.workspace_id);
-			}
-		}
-
-		if (!isCurrent()) return null;
-		if (!session.focusWorkspace(item.workspace_id, conversationId)) {
-			throw new Error('Fella could not focus the linked conversation.');
-		}
-		const restorePreset = layout === 'preserve' ? session.workspaceLayoutPreset : layout;
-		session.setWorkspaceLayoutPreset(restorePreset);
-		session.setActiveInvestigation(linkedInvestigation.id);
-		if (focusTurnId) session.focusConversationAnalysis(conversationId, focusTurnId);
-		return linkedInvestigation;
-	}
-
 	async function loadWorkspace(path: string, preserveDrafts = false): Promise<void> {
 		const serial = ++requestSerial;
 		const draft = preserveDrafts ? selected : null;
@@ -435,15 +343,18 @@
 					?? investigations.find((item) => (item.analysis_turn_ids ?? []).includes(navigationTarget.turnId)
 						|| (item.questions ?? []).some((question) => question.analysis_turn_ids?.includes(navigationTarget.turnId)))
 				: null;
+			const explicitlyActive = investigations.find((item) =>
+				item.id === session.activeInvestigationId && (
+					item.conversation_id === activeConversation.id ||
+					(!!activeQuestion && item.brief_source_message_id === activeQuestion.id)
+				)
+			);
 			const linkedToConversation = investigations.find((item) =>
 				item.conversation_id === activeConversation.id ||
 				(!!activeQuestion && item.brief_source_message_id === activeQuestion.id)
 			);
-			const rememberedInvestigation = investigations.find((item) =>
-				item.id === session.activeInvestigationId && item.workspace_id === path
-			);
-			const conversationInvestigation = navigationInvestigation ?? rememberedInvestigation ?? linkedToConversation;
-			selectedId = conversationInvestigation?.id ?? investigations[0]?.id ?? null;
+			const conversationInvestigation = navigationInvestigation ?? explicitlyActive ?? linkedToConversation;
+			selectedId = conversationInvestigation?.id ?? null;
 			const selectedInvestigation = investigations.find((item) => item.id === selectedId);
 			if (isDesktop() && conversationInvestigation && selectedInvestigation && (selectedInvestigation.conversation_id || selectedInvestigation.brief_source_message_id)) {
 				try {
@@ -454,7 +365,10 @@
 						() => serial === requestSerial && path === session.catalog.workspace && selectedId === selectedInvestigation.id
 					);
 					if (serial !== requestSerial) return;
-					if (linked) selectedId = linked.id;
+					if (linked) {
+						selectedId = linked.id;
+						investigations = investigations.map((record) => record.id === linked.id ? linked : record);
+					}
 				} catch (cause) {
 					if (serial === requestSerial) conversationError = cause instanceof Error ? cause.message : String(cause);
 				}
@@ -500,13 +414,15 @@
 	$effect(() => {
 		const path = session.catalog.workspace;
 		const version = session.investigationsVersion;
+		const conversationId = session.activeChat.id;
 		const paneVisible = session.workspaceView === 'workspace'
 			&& session.workspacePane === 'investigation'
 			&& session.workspaceLayoutPreset !== 'focus';
 		const enteredPane = paneVisible && !investigationPaneWasVisible;
 		investigationPaneWasVisible = paneVisible;
 		const sameWorkspace = path === loadedWorkspace;
-		if (path !== loadedWorkspace) investigationSection = 'brief';
+		const conversationChanged = conversationId !== loadedConversationId;
+		if (path !== loadedWorkspace || conversationChanged) investigationSection = 'brief';
 		if (path !== loadedWorkspace && selected && (dirty || questionsDirty || definitionsDirty)) {
 			void saveEditableDrafts(selected.id);
 		}
@@ -514,6 +430,7 @@
 		if (!path) {
 			requestSerial += 1;
 			loadedWorkspace = null;
+			loadedConversationId = null;
 			loadedInvestigationsVersion = version;
 			investigations = [];
 			selectedId = null;
@@ -521,8 +438,9 @@
 			loading = false;
 			return;
 		}
-		if (path === loadedWorkspace && version === loadedInvestigationsVersion && !enteredPane) return;
+		if (path === loadedWorkspace && conversationId === loadedConversationId && version === loadedInvestigationsVersion && !enteredPane) return;
 		loadedWorkspace = path;
+		loadedConversationId = conversationId;
 		loadedInvestigationsVersion = version;
 		void loadWorkspace(path, sameWorkspace);
 	});
@@ -617,40 +535,6 @@
 		proposalTarget = proposal?.target ?? 'goal';
 	});
 
-	async function createInvestigation(): Promise<void> {
-		if (!workspacePath || creating || !isDesktop()) return;
-		if (selected) void saveEditableDrafts(selected.id);
-		creating = true;
-		error = '';
-		conversationError = '';
-		const request = currentConversationSource;
-		try {
-			if (session.activeChat.workspaceScope !== workspacePath && !session.focusWorkspace(workspacePath)) {
-				throw new Error('Fella could not open a conversation in this workspace.');
-			}
-			const conversation = session.activeChat;
-			if (conversation.workspaceScope !== workspacePath) {
-				throw new Error('The active conversation belongs to a different workspace.');
-			}
-			const record = request
-				? await ipc.investigationEnsure(workspacePath, conversation.id, request.text, request.id)
-			: await ipc.investigationCreate(
-					workspacePath,
-					'New investigation',
-					undefined,
-					undefined,
-					conversation.id
-				);
-			investigations = [record, ...investigations.filter((item) => item.id !== record.id)];
-			selectedId = record.id;
-			session.setActiveInvestigation(record.id);
-		} catch (cause) {
-			error = cause instanceof Error ? cause.message : String(cause);
-		} finally {
-			creating = false;
-		}
-	}
-
 	async function openSelectedConversation(
 		focusTurnId?: string,
 		layout: WorkspaceLayoutPreset = 'focus'
@@ -658,15 +542,20 @@
 		const item = selected;
 		if (!item || openingConversation || !isDesktop()) return null;
 		void saveEditableDrafts(item.id);
+		const sourceConversationId = session.activeChat.id;
 		openingConversation = true;
 		conversationError = '';
 		try {
-			return await focusInvestigationConversation(
+			const linked = await focusInvestigationConversation(
 				item,
 				layout,
 				focusTurnId,
-				() => selectedId === item.id && session.catalog.workspace === item.workspace_id
+				() => selectedId === item.id &&
+					session.catalog.workspace === item.workspace_id &&
+					session.activeChat.id === sourceConversationId
 			);
+			if (linked) investigations = investigations.map((record) => record.id === linked.id ? linked : record);
+			return linked;
 		} catch (cause) {
 			conversationError = cause instanceof Error ? cause.message : String(cause);
 			return null;
@@ -799,29 +688,6 @@
 		if (status === 'blocked') return 'destructive';
 		if (status === 'incomplete' || status === 'unsupported' || status === 'outdated') return 'warning';
 		return 'default';
-	}
-
-	function investigationStatusLabel(status: Investigation['status']): string {
-		return status === 'complete' ? 'Complete' : status === 'archived' ? 'Archived' : 'Active';
-	}
-
-	function investigationCoverageSummary(investigation: Investigation): string {
-		const activeQuestions = (investigation.questions ?? []).filter((question) => question.status === 'active');
-		if (!activeQuestions.length) return 'No Questions yet';
-		const answered = activeQuestions.filter((question) => question.answer_status === 'answered').length;
-		const unresolved = activeQuestions.length - answered;
-		if (!unresolved) return `${answered}/${activeQuestions.length} answered`;
-		return `${answered}/${activeQuestions.length} answered · ${unresolved} needs attention`;
-	}
-
-	function investigationActivityLabel(updatedAt: number): string {
-		if (!Number.isFinite(updatedAt) || updatedAt <= 0) return 'No recent activity';
-		const elapsed = Math.max(0, Date.now() - updatedAt);
-		if (elapsed < 60_000) return 'Updated just now';
-		if (elapsed < 3_600_000) return `Updated ${Math.floor(elapsed / 60_000)}m ago`;
-		if (elapsed < 86_400_000) return `Updated ${Math.floor(elapsed / 3_600_000)}h ago`;
-		if (elapsed < 7 * 86_400_000) return `Updated ${Math.floor(elapsed / 86_400_000)}d ago`;
-		return `Updated ${new Date(updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
 	}
 
 	function questionCoverageReason(question: InvestigationQuestion): string {
@@ -1729,39 +1595,6 @@
 		}
 	}
 
-	async function selectInvestigation(id: string): Promise<void> {
-		const wasSelected = id === selectedId;
-		if (wasSelected && session.activeInvestigationId === id) return;
-		const previousId = selectedId;
-		if (!wasSelected) {
-			if (previousId) void saveEditableDrafts(previousId);
-			pendingAnalysisQuestionId = null;
-			analysisTurnError = '';
-			openAnalysisTurnId = null;
-			questionLinksDraft = [];
-			investigationSection = 'brief';
-			selectedId = id;
-		}
-		conversationError = '';
-		const item = investigations.find((record) => record.id === id);
-		if (isDesktop() && item && (item.conversation_id || item.brief_source_message_id)) {
-			try {
-				const linked = await focusInvestigationConversation(
-					item,
-					'preserve',
-					undefined,
-					() => selectedId === id && session.catalog.workspace === item.workspace_id
-				);
-				if (linked && selectedId === id) selectedId = linked.id;
-			} catch (cause) {
-				conversationError = cause instanceof Error ? cause.message : String(cause);
-				session.setActiveInvestigation(id);
-			}
-		} else {
-			session.setActiveInvestigation(id);
-		}
-	}
-
 	function handleInvestigationTabsKeydown(event: KeyboardEvent): void {
 		if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
 		const tabList = event.currentTarget;
@@ -1789,13 +1622,6 @@
 		<div>
 			<h1 id="investigation-title">Investigation</h1>
 			<p>One request, the data behind it, and the results Fella produces.</p>
-		</div>
-		<div class="page-head-actions">
-			{#if workspacePath && investigations.length}
-				<Button type="button" disabled={loading || creating} onclick={() => void createInvestigation()}>
-					<Icon name="plus" size={16} />{creating ? 'Opening…' : currentConversationInvestigation ? 'Open current Investigation' : currentConversationSource ? 'Start from conversation' : 'New investigation'}
-				</Button>
-			{/if}
 		</div>
 	</header>
 	{#if workspacePath && !loading && !investigationLoadError && !selected}
@@ -1830,39 +1656,11 @@
 		<div class="empty-state">
 			<Icon name="bookmark" size={20} />
 			<h2>No investigations yet</h2>
-			<p>Ask about this workspace to start one, or create an Investigation now.</p>
-			{#if error}<p class="analysis-run-error" role="alert">{error}</p>{/if}
-			<Button type="button" disabled={creating} onclick={() => void createInvestigation()}>
-				<Icon name="plus" size={16} />{creating ? 'Opening…' : currentConversationSource ? 'Start from conversation' : 'Start from this workspace'}
-			</Button>
+			<p>Choose “New Investigation” from the workspace menu above to start one. Each Investigation opens its own conversation.</p>
 		</div>
 	{:else}
-		<div class="investigation-layout">
-			<!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
-			<nav class="investigation-list" aria-label="Workspace investigations" tabindex="0" onkeydown={handleScrollRegionKeydown}>
-				{#each investigations as item (item.id)}
-					<button
-						class="investigation-choice"
-						class:selected={item.id === selectedId}
-						type="button"
-						aria-current={item.id === selectedId ? 'true' : undefined}
-						disabled={saving}
-						onclick={() => void selectInvestigation(item.id)}
-					>
-						<span class="investigation-choice-heading">
-							<span class="investigation-choice-title" title={item.title}>{item.title}</span>
-							<span class="investigation-status" data-status={item.status}>{investigationStatusLabel(item.status)}</span>
-						</span>
-						<small class="investigation-activity">{investigationActivityLabel(item.updated_at_ms)}</small>
-						<small class="investigation-coverage" data-investigation-coverage={item.id}>{investigationCoverageSummary(item)}</small>
-					</button>
-				{/each}
-				{#if investigations.length > 2}
-					<p class="investigation-list-hint">Scroll to browse all {investigations.length} Investigations.</p>
-				{/if}
-			</nav>
-
-			{#if selected}
+		{#if selected}
+			<div class="investigation-content">
 				<div class="brief-editor">
 					<div class="editor-heading">
 						<div>
@@ -2890,8 +2688,14 @@
 					</section>
 						</div>
 				</div>
-			{/if}
-		</div>
+			</div>
+		{:else}
+			<div class="empty-state" data-testid="investigation-not-selected">
+				<Icon name="bookmark" size={20} />
+				<h2>Choose an Investigation</h2>
+				<p>Select one from the workspace menu above to open its conversation and analysis.</p>
+			</div>
+		{/if}
 	{/if}
 
 	<Dialog.Root bind:open={reportPreviewOpen}>
@@ -3024,7 +2828,6 @@
 		gap: var(--space-4);
 	}
 	.page-head { margin-bottom: var(--space-5); }
-	.page-head-actions { display: flex; min-width: 0; align-items: center; justify-content: flex-end; gap: var(--space-2); }
 	.investigation-nav {
 		position: sticky;
 		top: 0;
@@ -3099,23 +2902,7 @@
 	h1, h2, p { margin: 0; }
 	h1 { font-size: clamp(24px, 3vw, 32px); font-weight: 650; letter-spacing: -0.03em; }
 	.page-head p { margin-top: var(--space-1); color: var(--text-dim); }
-	.investigation-layout { display: grid; grid-template-columns: minmax(180px, 240px) minmax(0, 1fr); gap: var(--space-6); }
-	.investigation-list { display: flex; flex-direction: column; gap: 4px; }
-	.investigation-choice {
-		display: flex; width: 100%; flex-direction: column; align-items: stretch; gap: 5px;
-		padding: 9px 11px; border: 1px solid transparent; border-radius: var(--radius-md);
-		background: transparent; color: var(--text); text-align: left; cursor: pointer;
-	}
-	.investigation-choice:hover { background: var(--bg-inset); }
-	.investigation-choice.selected { border-color: var(--border); background: var(--bg-inset); }
-	.investigation-choice-heading { display: flex; min-width: 0; align-items: flex-start; justify-content: space-between; gap: var(--space-2); }
-	.investigation-choice-title { min-width: 0; color: var(--text); overflow-wrap: anywhere; font-size: var(--fs-sm); font-weight: 600; }
-	.investigation-status { flex: none; padding: 2px 6px; border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-dim); font-size: 10px; font-weight: 600; line-height: 1.3; }
-	.investigation-status[data-status='complete'] { border-color: color-mix(in srgb, var(--success, #16803c) 28%, var(--border)); color: var(--success, #16803c); }
-	.investigation-status[data-status='archived'] { color: var(--text-faint); }
-	.investigation-choice small, .status { color: var(--text-faint); font-size: var(--fs-xs); }
-	.investigation-coverage { white-space: normal; line-height: 1.35; }
-	.investigation-list-hint { display: none; margin: 2px 10px 6px; color: var(--text-faint); font-size: 10px; }
+	.investigation-content { min-width: 0; }
 	.brief-editor { min-width: 0; }
 	.editor-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); padding: var(--space-3) 0 var(--space-4); }
 	.editor-actions { display: flex; flex: none; align-items: center; gap: var(--space-2); }
@@ -3375,9 +3162,6 @@
 	.empty-state h2 { font-size: var(--fs-lg); }
 	.empty-state p { color: var(--text-dim); }
 	@media (max-width: 720px) {
-		.investigation-layout { grid-template-columns: 1fr; gap: var(--space-4); }
-		.investigation-list { max-height: 180px; overflow: auto; overscroll-behavior: contain; }
-		.investigation-list-hint { display: block; }
 		.brief-summary dl { grid-template-columns: 1fr; }
 		.analysis-run-source-provenance { grid-template-columns: 1fr; }
 		.analysis-run-source-state .analysis-run-context-facts > div { grid-template-columns: 1fr; gap: 2px; }
@@ -3387,11 +3171,7 @@
 	@container investigation-pane (max-width: 900px) {
 		.investigation-page { padding: var(--space-5) var(--space-4); }
 		.page-head { align-items: flex-start; flex-direction: column; }
-		.page-head-actions { width: 100%; justify-content: flex-start; flex-wrap: wrap; }
 		.investigation-document-heading { align-items: flex-start; flex-direction: column; }
-		.investigation-layout { grid-template-columns: minmax(0, 1fr); gap: var(--space-4); }
-		.investigation-list { max-height: 160px; overflow: auto; overscroll-behavior: contain; }
-		.investigation-list-hint { display: block; }
 		.question-heading { align-items: flex-start; flex-direction: column; gap: var(--space-2); }
 		.question-save { width: 100%; min-width: 0; max-width: none; flex-basis: auto; justify-content: flex-start; }
 		.question-plan-actions { justify-content: flex-start; }

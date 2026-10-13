@@ -957,6 +957,12 @@ class Session {
 			this.activeEnvironmentId = environment.id;
 			this.workspaceLayout = {};
 		}
+		if (conversationId && pane.conversationId !== conversationId) {
+			// A pane's selected Investigation belongs to its conversation. Clear the
+			// old selection during ordinary navigation; Investigation activation
+			// sets the new one after focusing its canonical conversation.
+			pane.investigationId = null;
+		}
 		if (environment.id !== this.activeEnvironmentId) {
 			this.activeEnvironmentId = environment.id;
 			this.workspaceLayout = { ...environment.layout };
@@ -1534,7 +1540,10 @@ class Session {
 			if (conversation.workspaceScope === undefined) conversation.workspaceScope = workspace;
 			conversation.companionPane = parseCompanionPane(companionPane) ?? conversation.companionPane;
 			const pane = this.paneForWorkspace(workspace ?? null);
-			if (pane) pane.conversationId = id;
+			if (pane) {
+				if (pane.conversationId !== id) pane.investigationId = null;
+				pane.conversationId = id;
+			}
 			const owner = workspace ? this.workspaceAt(workspace) : null;
 			if (owner) owner.conversationId = id;
 			this.activeConversationIndex = existing;
@@ -1549,7 +1558,10 @@ class Session {
 		conversation.messages = messages.map((m) => (m.pending ? { ...m, pending: false } : m));
 		this.conversations.push(conversation);
 		const pane = this.paneForWorkspace(workspace ?? null);
-		if (pane) pane.conversationId = id;
+		if (pane) {
+			if (pane.conversationId !== id) pane.investigationId = null;
+			pane.conversationId = id;
+		}
 		const owner = workspace ? this.workspaceAt(workspace) : null;
 		if (owner) owner.conversationId = id;
 		this.activeConversationIndex = this.conversations.length - 1;
