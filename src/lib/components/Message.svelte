@@ -288,7 +288,6 @@
 		{/if}
 		{#if showFollowups && onfollowup && followups.length && !message.answer.clarification}
 			<div class="followups" aria-label="Suggested follow-up questions">
-				<span class="followup-label">Continue with</span>
 				{#each followups as next (next)}
 					<Button variant="link" size="sm" class="followup-action" onclick={() => onfollowup?.(next)}>
 						{next}<Icon name="arrow-up-right" size={12} />
@@ -440,11 +439,6 @@
 		margin-top: var(--space-3);
 		padding-top: var(--space-3);
 		border-top: 1px solid var(--border);
-	}
-	.followup-label {
-		color: var(--text-faint);
-		font-size: var(--fs-xs);
-		margin-right: 2px;
 	}
 	.followups :global(.followup-action) {
 		display: inline-flex;

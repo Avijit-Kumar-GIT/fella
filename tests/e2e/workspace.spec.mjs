@@ -2401,6 +2401,7 @@ test('Questions show persisted coverage states and explain incomplete, blocked, 
 			await expect(timeline).toBeVisible();
 			await expect(timeline).toHaveAttribute('data-question-id', /^q-root-/);
 			await expect(timeline.locator('.run-question')).toContainText('Explain the change in weekly sales');
+			await expect(timeline.locator('.run-question span')).toHaveCount(0);
 			await expect(timeline).toContainText('Checking the result');
 			await expect(timeline).toContainText('Finding relevant passages');
 			await expect(timeline).not.toContainText('grep_files');
@@ -2666,6 +2667,8 @@ test('verification concerns remain review states rather than data gaps (coverage
 	await expect(answer.locator('.answer-caveat')).toHaveCount(0);
 	const answerTimeline = page.getByRole('region', { name: 'Question run' }).last();
 	await expect(answerTimeline.locator('.run-status')).toContainText('Analysis complete');
+	await expect(answerTimeline.locator('.run-question strong')).toBeVisible();
+	await expect(answerTimeline.locator('.run-question span')).toHaveCount(0);
 	await expect(answerTimeline).not.toContainText('Result needs review');
 	await answer.getByRole('button', { name: 'How this was analyzed' }).click();
 	await expect(answer.getByRole('region', { name: 'Verification outcome' })).toHaveCount(0);
@@ -6014,6 +6017,7 @@ test('Suggested follow-ups use shared link buttons and submit the selected quest
 
 	const firstAnswer = page.locator('.msg.assistant').last();
 	await expect(firstAnswer).toContainText('Scoped to general.');
+	await expect(firstAnswer).not.toContainText('Continue with');
 	const followup = firstAnswer.getByRole('button', { name: 'What else stands out?' });
 	await expect(followup).toHaveAttribute('data-slot', 'button');
 	await followup.click();

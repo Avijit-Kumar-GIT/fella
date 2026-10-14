@@ -235,7 +235,6 @@
 			</div>
 			{#if running ? chat?.runQuestion : displayQuestion}
 				<p class="run-question" title={running ? chat?.runQuestion : displayQuestion}>
-					<span>Question</span>
 					<strong>{running ? chat?.runQuestion : displayQuestion}</strong>
 				</p>
 			{/if}
@@ -334,8 +333,7 @@
 	.run-kind { flex: none; padding: 2px 7px; border-radius: var(--radius-chip); background: var(--bg-inset); color: var(--text-faint); font-size: var(--fs-xs); }
 	.timeline-tools { flex: none; gap: var(--space-2); }
 	.run-meta { color: var(--text-faint); font-size: var(--fs-xs); white-space: nowrap; }
-	.run-question { display: flex; align-items: flex-start; gap: var(--space-2); max-width: 76ch; margin: var(--space-1) 0 var(--space-2) 24px; color: var(--text-faint); font-size: var(--fs-xs); }
-	.run-question span { flex: none; }
+	.run-question { display: block; max-width: 76ch; margin: var(--space-1) 0 var(--space-2) 24px; color: var(--text-faint); font-size: var(--fs-xs); }
 	.run-question strong { min-width: 0; color: var(--text-dim); font-weight: 500; overflow-wrap: anywhere; }
 	:global(.disclosure) { display: grid; place-items: center; width: 24px; height: 24px; border-radius: var(--radius-chip); color: var(--text-faint); transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease); }
 	:global(.disclosure:hover) { background: var(--bg-inset); color: var(--text); }
