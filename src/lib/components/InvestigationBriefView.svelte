@@ -764,8 +764,27 @@
 		investigationSection = 'questions';
 		await tick();
 		const field = document.getElementById(`question-${questionId}`);
-		field?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-		field?.focus({ preventScroll: true });
+		if (!(field instanceof HTMLElement)) return;
+		field.focus({ preventScroll: true });
+
+		// Keep the review jump inside this Investigation. scrollIntoView() may
+		// scroll every ancestor, including the workspace/tool chrome around this
+		// pane, which can leave the section tabs underneath those bars.
+		const scroller = field.closest<HTMLElement>('.investigation-page');
+		if (!scroller) return;
+		const scrollport = scroller.getBoundingClientRect();
+		const scrollportTop = scrollport.top + scroller.clientTop;
+		const scrollportBottom = scrollportTop + scroller.clientHeight;
+		const stickyTabs = scroller.querySelector<HTMLElement>('.investigation-nav');
+		const visibleTop = Math.max(
+			scrollportTop,
+			stickyTabs?.getBoundingClientRect().bottom ?? scrollportTop
+		);
+		const visibleHeight = Math.max(0, scrollportBottom - visibleTop);
+		const fieldRect = field.getBoundingClientRect();
+		const centeredOffset = Math.max(0, (visibleHeight - fieldRect.height) / 2);
+		const targetScrollTop = scroller.scrollTop + fieldRect.top - visibleTop - centeredOffset;
+		scroller.scrollTo({ top: Math.max(0, targetScrollTop), behavior: 'smooth' });
 	}
 
 	function questionAnswerReason(questionId: string): string | undefined {

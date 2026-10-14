@@ -130,6 +130,29 @@ async function openInvestigationSection(page, name) {
 	return panel;
 }
 
+async function investigationChromeBounds(page) {
+	return page.evaluate(() => {
+		const bounds = (selector) => {
+			const element = document.querySelector(selector);
+			if (!element) return null;
+			const rect = element.getBoundingClientRect();
+			return { top: rect.top, bottom: rect.bottom };
+		};
+		return {
+			workspace: bounds('.workspace-context-bar'),
+			tools: bounds('.workspace-tabs-bar'),
+			investigation: bounds('.investigation-nav'),
+			pane: bounds('.workspace-tools-pane'),
+			focusedQuestion: (() => {
+				const element = document.activeElement?.closest('.question-field');
+				if (!element) return null;
+				const rect = element.getBoundingClientRect();
+				return { top: rect.top, bottom: rect.bottom };
+			})()
+		};
+	});
+}
+
 async function expandInvestigationHistory(page) {
 	await openInvestigationSection(page, 'Analysis');
 	const history = page.locator('.investigation-history');
@@ -3711,9 +3734,28 @@ test('Investigation Results keep transcript-only historical work outside current
 	await expect(results.locator('.results-question[data-question-status="incomplete"]')).toContainText('Only 10 of the requested 12 weeks are present.');
 	const unstartedQuestion = results.locator('.results-question[data-question-status="not_started"]');
 	await expect(unstartedQuestion).toContainText('Compare weekly sales by channel');
+	const chromeBeforeReview = await investigationChromeBounds(page);
 	await unstartedQuestion.getByRole('button', { name: 'Review Question' }).click();
 	await expect(page.getByRole('textbox', { name: 'Subquestion 1' })).toBeFocused();
-	await expect(page.getByRole('tab', { name: 'Questions' })).toHaveAttribute('aria-selected', 'true');
+	const questionsTab = page.getByRole('tab', { name: 'Questions' });
+	await expect(questionsTab).toHaveAttribute('aria-selected', 'true');
+	await expect.poll(async () => {
+		const bounds = await investigationChromeBounds(page);
+		return Boolean(
+			chromeBeforeReview.workspace && bounds.workspace &&
+			chromeBeforeReview.tools && bounds.tools && bounds.investigation && bounds.pane &&
+			bounds.focusedQuestion &&
+			Math.abs(bounds.workspace.top - chromeBeforeReview.workspace.top) < 1 &&
+			Math.abs(bounds.workspace.bottom - chromeBeforeReview.workspace.bottom) < 1 &&
+			Math.abs(bounds.tools.top - chromeBeforeReview.tools.top) < 1 &&
+			Math.abs(bounds.tools.bottom - chromeBeforeReview.tools.bottom) < 1 &&
+			bounds.investigation.top >= Math.max(bounds.workspace.bottom, bounds.tools.bottom) - 1 &&
+			bounds.investigation.top >= bounds.pane.top &&
+			bounds.investigation.bottom <= bounds.pane.bottom &&
+			bounds.focusedQuestion.top >= bounds.investigation.bottom - 1 &&
+			bounds.focusedQuestion.bottom <= bounds.pane.bottom
+		);
+	}).toBe(true);
 	await openInvestigationSection(page, 'Results');
 	const returnedResults = page.getByRole('region', { name: 'Current Investigation results' });
 	await expect(returnedResults).toBeVisible();
