@@ -58,13 +58,6 @@
 		expanded = { ...expanded, [id]: !expanded[id] };
 	}
 
-	function questionFor(index: number): string {
-		for (let i = index - 1; i >= 0; i--) {
-			if (session.messages[i]?.role === 'user') return session.messages[i].text;
-		}
-		return '';
-	}
-
 	function rerun(message: import('$lib/types').Message): Promise<void> {
 		return rerunAnalysisTurn(message);
 	}
@@ -257,8 +250,6 @@
 							message={m}
 							expanded={!!expanded[m.id]}
 							ontoggle={() => toggle(m.id)}
-							question={questionFor(i)}
-							showFollowups={i === session.messages.length - 1 && !m.pending}
 							openChartIndex={
 								session.activeChat.companionPane?.kind === 'chart' &&
 								session.activeChat.companionPane.messageId === m.id
@@ -269,14 +260,11 @@
 							onopeninvestigationrun={session.activeChat.workspaceScope === session.catalog.workspace
 								? (turnId) => session.openInvestigationRun(turnId)
 								: undefined}
-							onfollowup={(next, clarificationTurnId) =>
-								void dispatch(next, clarificationTurnId)}
 							onrerun={() => rerun(m)}
 						/>
 						{#if m.role === 'assistant' && (m.pending || m.answer?.trace?.steps.length || m.run_steps?.length)}
 							<RunTimeline
 								message={m}
-								question={questionFor(i)}
 								bodyId={`evidence-${m.id}`}
 								onopenevidence={() => {
 									if (!expanded[m.id]) toggle(m.id);

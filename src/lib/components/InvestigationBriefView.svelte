@@ -2618,10 +2618,9 @@
 										<small>This is the answer saved with this run. Analyst-reviewed Findings are identified separately.</small>
 									</section>
 									<RunTimeline
-									turn={openAnalysisTurn}
-									question={analysisRunSummary(openAnalysisTurn.id)}
-									bodyId={`investigation-run-evidence-${openAnalysisTurn.id}`}
-								/>
+										turn={openAnalysisTurn}
+										bodyId={`investigation-run-evidence-${openAnalysisTurn.id}`}
+									/>
 									<section class="analysis-run-evidence" aria-label="Query and output evidence">
 										<header>
 											<h5>Query and output evidence</h5>

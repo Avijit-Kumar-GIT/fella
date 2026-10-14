@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { Answer, EvidenceItem, Message } from '$lib/types';
+	import type { EvidenceItem, Message } from '$lib/types';
 	import { Button } from '$lib/components/ui/button';
 	import EvidenceBlock from './EvidenceBlock.svelte';
 	import EvidenceSummary from './EvidenceSummary.svelte';
@@ -14,9 +14,6 @@
 		message,
 		expanded = false,
 		ontoggle,
-		question = '',
-		showFollowups = false,
-		onfollowup,
 		onrerun,
 		onopenchart,
 		onopeninvestigationrun,
@@ -25,9 +22,6 @@
 		message: Message;
 		expanded?: boolean;
 		ontoggle?: () => void;
-		question?: string;
-		showFollowups?: boolean;
-		onfollowup?: (question: string, clarificationTurnId?: string) => void;
 		onrerun?: () => Promise<void>;
 		onopenchart?: (messageId: string, evidenceIndex: number) => void;
 		onopeninvestigationrun?: (turnId: string) => void;
@@ -124,37 +118,6 @@
 		if (answerSources.length > 1) return `Based on ${answerSources.length} sources`;
 		return message.answer?.workspace ? 'Based on this workspace' : 'Based on the available evidence';
 	});
-	function followupQuestions(text: string, answer: Answer): string[] {
-		const q = text.toLowerCase();
-		const suggestions: string[] = [];
-		const add = (value: string) => {
-			if (!suggestions.includes(value)) suggestions.push(value);
-		};
-		if (/\b(change|trend|over time|year|month|week|daily|monthly)\b/.test(q)) {
-			add('What explains the biggest change?');
-			add('Break this down by category');
-		} else if (/\b(total|how much|how many|average|mean|count|sum)\b/.test(q)) {
-			add('Show this over time');
-			add('Break this down by category');
-		} else {
-			add('What else stands out?');
-			add('Show this over time');
-		}
-		if (!answer.evidence.some((item) =>
-			item.tool === 'make_chart' &&
-			item.chart &&
-			!item.error &&
-			item.verifier_disposition?.state !== 'excluded' &&
-			!(item.verifier_disposition?.state === 'artifact_withheld' && item.verifier_disposition.artifact === 'chart')
-		)) {
-			add('Show this as a chart');
-		}
-		return suggestions.slice(0, 3);
-	}
-
-	let followups = $derived(
-		message.answer && question ? followupQuestions(question, message.answer) : []
-	);
 	let detailsLabel = $derived.by(() => {
 		switch (message.answer?.trace?.mode) {
 			case 'model_only':
@@ -285,15 +248,6 @@
 			<Button type="button" variant="ghost" size="sm" class="investigation-run-link" onclick={() => onopeninvestigationrun?.(message.answer!.turn_id!)}>
 				<Icon name="bookmark" size={14} />Open in Investigation
 			</Button>
-		{/if}
-		{#if showFollowups && onfollowup && followups.length && !message.answer.clarification}
-			<div class="followups" aria-label="Suggested follow-up questions">
-				{#each followups as next (next)}
-					<Button variant="link" size="sm" class="followup-action" onclick={() => onfollowup?.(next)}>
-						{next}<Icon name="arrow-up-right" size={12} />
-					</Button>
-				{/each}
-			</div>
 		{/if}
 	{/if}
 </div>
@@ -431,33 +385,6 @@
 	.answer-supporting {
 		margin-top: var(--space-3);
 	}
-	.followups {
-		display: flex;
-		align-items: center;
-		flex-wrap: wrap;
-		gap: var(--space-3);
-		margin-top: var(--space-3);
-		padding-top: var(--space-3);
-		border-top: 1px solid var(--border);
-	}
-	.followups :global(.followup-action) {
-		display: inline-flex;
-		align-items: center;
-		gap: 5px;
-		height: auto;
-		min-height: 0;
-		flex-shrink: 1;
-		padding: 0;
-		border-radius: 0;
-		font-size: var(--fs-sm);
-		text-align: left;
-		white-space: normal;
-		transition: color var(--dur-fast) var(--ease);
-	}
-	.followups :global(.followup-action:hover) {
-		color: var(--text);
-	}
-	.followups :global(.followup-action svg) { width: 12px; height: 12px; }
 	.clarification-transcript-note {
 		margin: 0;
 		color: var(--chat-meta);

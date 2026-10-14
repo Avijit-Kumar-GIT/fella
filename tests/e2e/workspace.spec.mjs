@@ -2400,8 +2400,7 @@ test('Questions show persisted coverage states and explain incomplete, blocked, 
 			const timeline = page.getByRole('region', { name: 'Question run' }).last();
 			await expect(timeline).toBeVisible();
 			await expect(timeline).toHaveAttribute('data-question-id', /^q-root-/);
-			await expect(timeline.locator('.run-question')).toContainText('Explain the change in weekly sales');
-			await expect(timeline.locator('.run-question span')).toHaveCount(0);
+			await expect(timeline.locator('.run-question')).toHaveCount(0);
 			await expect(timeline).toContainText('Checking the result');
 			await expect(timeline).toContainText('Finding relevant passages');
 			await expect(timeline).not.toContainText('grep_files');
@@ -2667,8 +2666,7 @@ test('verification concerns remain review states rather than data gaps (coverage
 	await expect(answer.locator('.answer-caveat')).toHaveCount(0);
 	const answerTimeline = page.getByRole('region', { name: 'Question run' }).last();
 	await expect(answerTimeline.locator('.run-status')).toContainText('Analysis complete');
-	await expect(answerTimeline.locator('.run-question strong')).toBeVisible();
-	await expect(answerTimeline.locator('.run-question span')).toHaveCount(0);
+	await expect(answerTimeline.locator('.run-question')).toHaveCount(0);
 	await expect(answerTimeline).not.toContainText('Result needs review');
 	await answer.getByRole('button', { name: 'How this was analyzed' }).click();
 	await expect(answer.getByRole('region', { name: 'Verification outcome' })).toHaveCount(0);
@@ -6009,7 +6007,7 @@ test('Chart disclosures use Collapsible and Open beside preserves the chart in t
 });
 
 
-test('Suggested follow-ups use shared link buttons and submit the selected question', async ({ page }) => {
+test('Generated answers omit the suggested follow-up section', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
 	await page.getByRole('combobox', { name: 'Ask a question' }).fill('Summarize the workspace.');
@@ -6017,17 +6015,12 @@ test('Suggested follow-ups use shared link buttons and submit the selected quest
 
 	const firstAnswer = page.locator('.msg.assistant').last();
 	await expect(firstAnswer).toContainText('Scoped to general.');
-	await expect(firstAnswer).not.toContainText('Continue with');
-	const followup = firstAnswer.getByRole('button', { name: 'What else stands out?' });
-	await expect(followup).toHaveAttribute('data-slot', 'button');
-	await followup.click();
-
-	await expect(page.locator('.msg.user').last()).toContainText('What else stands out?');
-	await expect(page.locator('.msg.assistant').last()).toContainText('Scoped to general.');
+	await expect(firstAnswer.locator('.followups')).toHaveCount(0);
+	await expect(firstAnswer.getByRole('button', { name: 'What else stands out?' })).toHaveCount(0);
 });
 
 
-test('Workspace follow-ups stay in the same Investigation and conversation', async ({ page }) => {
+test('Workspace answers omit the suggested follow-up section', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
 	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
@@ -6040,21 +6033,15 @@ test('Workspace follow-ups stay in the same Investigation and conversation', asy
 
 	const firstAnswer = page.locator('.msg.assistant').last();
 	await expect(firstAnswer).toContainText('Scoped to C:\\FellaFixture\\northwind-sales.');
-	const followup = firstAnswer.getByRole('button', { name: 'What else stands out?' });
-	await followup.click();
-	await expect(page.locator('.msg.user').last()).toContainText('What else stands out?');
-	await expect(page.locator('.msg.assistant').last()).toContainText('Scoped to C:\\FellaFixture\\northwind-sales.');
-	await expect.poll(() => page.evaluate(() => window.__workspaceAskCalls.length)).toBe(2);
+	await expect(firstAnswer.locator('.followups')).toHaveCount(0);
+	await expect(firstAnswer.getByRole('button', { name: 'What else stands out?' })).toHaveCount(0);
+	await expect.poll(() => page.evaluate(() => window.__workspaceAskCalls.length)).toBe(1);
 	await openWorkspaceTools(page);
 	await expect(page.getByRole('tab', { name: 'Summarize the workspace.', exact: true })).toBeVisible();
 
 	const calls = await page.evaluate(() => window.__workspaceAskCalls);
 	expect(calls[0].investigationId).toBeTruthy();
-	expect(calls[1]).toMatchObject({
-		workspaceId: calls[0].workspaceId,
-		conversationId: calls[0].conversationId,
-		investigationId: calls[0].investigationId
-	});
+	expect(calls).toHaveLength(1);
 	expect(await page.evaluate(() => window.__workspaceInvestigations())).toHaveLength(1);
 });
 

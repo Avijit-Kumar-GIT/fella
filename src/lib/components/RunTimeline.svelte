@@ -20,13 +20,11 @@
 	let {
 		message,
 		turn,
-		question = '',
 		bodyId,
 		onopenevidence
 	}: {
 		message?: Message;
 		turn?: AnalysisTurn;
-		question?: string;
 		bodyId: string;
 		onopenevidence?: () => void;
 	} = $props();
@@ -190,7 +188,6 @@
 	let totalDuration = $derived(
 		message?.run_duration_ms ?? answer?.trace?.elapsed_ms ?? chat?.runDurationMs ?? null
 	);
-	let displayQuestion = $derived(question || turn?.question || '');
 	let runQuestionId = $derived(message?.run_question_id ?? (running ? chat?.runQuestionId : undefined) ?? turn?.id);
 	let rerunOf = $derived(message?.rerun_of ?? turn?.rerun_of);
 	let hasTimeline = $derived(running || steps.length > 0 || Boolean(answer?.clarification) || Boolean(runState));
@@ -233,12 +230,6 @@
 					</Collapsible.Trigger>
 				</div>
 			</div>
-			{#if running ? chat?.runQuestion : displayQuestion}
-				<p class="run-question" title={running ? chat?.runQuestion : displayQuestion}>
-					<strong>{running ? chat?.runQuestion : displayQuestion}</strong>
-				</p>
-			{/if}
-
 			<Collapsible.Content class="run-details">
 				{#if methodLabel}
 					<div class="run-method"><span>Method</span><strong>{methodLabel}</strong></div>
@@ -333,8 +324,6 @@
 	.run-kind { flex: none; padding: 2px 7px; border-radius: var(--radius-chip); background: var(--bg-inset); color: var(--text-faint); font-size: var(--fs-xs); }
 	.timeline-tools { flex: none; gap: var(--space-2); }
 	.run-meta { color: var(--text-faint); font-size: var(--fs-xs); white-space: nowrap; }
-	.run-question { display: block; max-width: 76ch; margin: var(--space-1) 0 var(--space-2) 24px; color: var(--text-faint); font-size: var(--fs-xs); }
-	.run-question strong { min-width: 0; color: var(--text-dim); font-weight: 500; overflow-wrap: anywhere; }
 	:global(.disclosure) { display: grid; place-items: center; width: 24px; height: 24px; border-radius: var(--radius-chip); color: var(--text-faint); transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease); }
 	:global(.disclosure:hover) { background: var(--bg-inset); color: var(--text); }
 	:global(.disclosure svg) { transition: transform var(--dur-fast) var(--ease); }
